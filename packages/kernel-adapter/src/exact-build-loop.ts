@@ -249,6 +249,8 @@ function* buildDocumentHistorySteps(
     sketchBases: new Map(),
     datumFrames: new Map(),
     datumAxes: new Map(),
+    datumPoints: new Map(),
+    datumCsys: new Map(),
     consumed: new Set(),
     importedStepDiagnostics: new Map(),
     meshBodies: new Set(),

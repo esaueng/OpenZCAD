@@ -35,6 +35,12 @@ import { kernelPayloadCount, readKernelPayload } from './kernel-refusal';
 const MAX_INPUT_BYTES = 128 * 1024 * 1024;
 const MAX_ENTITIES = 2_000_000;
 
+/** The same hostile-input budgets, for the other exact translators (IGES). */
+export const EXACT_IMPORT_BUDGETS = {
+  maxInputBytes: MAX_INPUT_BYTES,
+  maxEntities: MAX_ENTITIES
+} as const;
+
 /** What the reader saw in the file, as data rather than as bytes. */
 export interface StepImportReport {
   /** Solid roots the reader produced. */
@@ -100,6 +106,18 @@ export interface StepImportOutcome {
   report: StepImportReport;
 }
 
+/**
+ * The imported-STEP cache key for a source: its checksum, qualified by the
+ * reader that numbers its solids, so a structured and a flat import of the
+ * same file never share a cached document (their solid orders differ).
+ */
+export function importedStepCacheKey(
+  checksum: string,
+  data: { stepReader?: 'structure' }
+): string {
+  return data.stepReader === 'structure' ? `${checksum}#structure` : checksum;
+}
+
 /** The kernel methods this module needs, so a test can supply a double. */
 interface DeserializingKernel {
   deserializeSolids(document: Uint8Array): Uint32Array;
@@ -157,4 +175,151 @@ export function stepImportEmptyReason(report: StepImportReport): string {
     );
   }
   return 'STEP file contains no solids.';
+}
+
+/** One product occurrence of a structured STEP read (I02). */
+export interface StepStructureNode {
+  /** The product's name. */
+  name: string;
+  /** Index of the enclosing node; null for a root product. */
+  parent: number | null;
+}
+
+/** What the structure reader says about one placed solid. */
+export interface StepStructureSolid {
+  /** Index of its product node; null for a solid no product reaches. */
+  node: number | null;
+  /** The solid's own B-rep name, when the file gives one. */
+  name: string | null;
+  /** Its surface colour, `#rrggbb`. */
+  color: string | null;
+  /** The one colour every face carries, when they all agree. */
+  faceColor: string | null;
+}
+
+export interface StepStructure {
+  nodes: StepStructureNode[];
+  /** One entry per solid, in the order of the solid document. */
+  solids: StepStructureSolid[];
+}
+
+export interface StepStructureImportOutcome extends StepImportOutcome {
+  structure: StepStructure;
+}
+
+/** `[r, g, b]` sRGB in [0, 1] as `#rrggbb`, or null when it is not one. */
+function hexColor(raw: unknown): string | null {
+  if (!Array.isArray(raw) || raw.length !== 3) return null;
+  const channels = raw.map((value) =>
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 1
+      ? Math.round(value * 255)
+      : null
+  );
+  if (channels.some((value) => value === null)) return null;
+  return `#${channels.map((value) => value!.toString(16).padStart(2, '0')).join('')}`;
+}
+
+/**
+ * The structure part of `importStepStructure`'s report. Nodes and solids are
+ * checked one by one: a parent that does not point at an earlier node, or a
+ * solid list whose length disagrees with the solid count, refuses the whole
+ * structure rather than filing bodies under the wrong product.
+ */
+export function readStepStructure(
+  raw: unknown,
+  solidCount: number
+): StepStructure {
+  const payload = readKernelPayload(raw, 'STEP structure import');
+  const structure = payload['structure'];
+  if (typeof structure !== 'object' || structure === null) {
+    throw new Error('The STEP structure report has no structure.');
+  }
+  const record = structure as Record<string, unknown>;
+  const rawNodes = Array.isArray(record['nodes']) ? record['nodes'] : [];
+  const nodes: StepStructureNode[] = rawNodes.map((entry, index) => {
+    const node = (entry ?? {}) as Record<string, unknown>;
+    const parent = node['parent'];
+    if (
+      parent !== null &&
+      !(
+        Number.isInteger(parent) &&
+        (parent as number) >= 0 &&
+        (parent as number) < index
+      )
+    ) {
+      throw new Error(`STEP structure node ${index} has an invalid parent.`);
+    }
+    return {
+      name: typeof node['name'] === 'string' ? node['name'] : '',
+      parent: parent as number | null
+    };
+  });
+  const rawSolids = Array.isArray(record['solids']) ? record['solids'] : [];
+  if (rawSolids.length !== solidCount) {
+    throw new Error(
+      `The STEP structure report describes ${rawSolids.length} solids for ${solidCount}.`
+    );
+  }
+  const solids: StepStructureSolid[] = rawSolids.map((entry, index) => {
+    const solid = (entry ?? {}) as Record<string, unknown>;
+    const node = solid['node'];
+    if (
+      node !== null &&
+      !(
+        Number.isInteger(node) &&
+        (node as number) >= 0 &&
+        (node as number) < nodes.length
+      )
+    ) {
+      throw new Error(`STEP structure solid ${index} names no node.`);
+    }
+    const name = solid['name'];
+    return {
+      node: node as number | null,
+      name: typeof name === 'string' && name.trim() ? name : null,
+      color: hexColor(solid['color']),
+      faceColor: hexColor(solid['faceColor'])
+    };
+  });
+  return { nodes, solids };
+}
+
+/**
+ * Read a STEP file with its product structure (I02): every placed
+ * occurrence is its own solid, in product-tree order, with its product node,
+ * name and colour. Same budgets and document contract as
+ * {@link importStepWithOwnBudget}; the solid order differs from it whenever
+ * the file has an assembly.
+ */
+export function importStepStructureWithOwnBudget(
+  kernel: DeserializingKernel,
+  bytes: Uint8Array
+): StepStructureImportOutcome {
+  const result = remusTranslators().importStepStructure(
+    bytes,
+    MAX_INPUT_BYTES,
+    MAX_ENTITIES
+  );
+  let document: Uint8Array;
+  let report: StepImportReport;
+  let structure: StepStructure;
+  try {
+    document = result.solids;
+    report = readStepImportReport(result.report);
+    structure = readStepStructure(result.report, report.solidCount);
+  } finally {
+    result.free();
+  }
+  return {
+    document,
+    solids:
+      document.length === 0
+        ? new Uint32Array()
+        : kernel.deserializeSolids(document),
+    report,
+    structure
+  };
 }

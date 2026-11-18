@@ -59,6 +59,16 @@ import type { DrawingViewId } from './drawings';
  *
  * Schema v82 (D02) adds the arc angle (an arc's included angle at its
  * centre) and the three-point angle (at a vertex point between two others).
+ *
+ * Schema v98 (D07) adds geometric tolerancing: datum feature symbols and
+ * feature control frames (ASME Y14.5-2018 and ISO 1101 symbols), each
+ * pointing at an edge with a leader or attached to the dimension of a
+ * feature of size (a datum symbol may also hang from a frame). Like every
+ * annotation they store intent only, and break by name rather than rebind.
+ *
+ * Schema v105 (D07 slice B) adds an ISO 286 fit class and an ISO 965 / UN
+ * thread class on a diameter, and the general-tolerance block on the paper
+ * (ISO 2768-1 classes, or a stated decimal-place block).
  */
 
 export type DrawingAnnotationId = Brand<string, 'DrawingAnnotationId'>;
@@ -269,7 +279,86 @@ export interface DrawingRadialDimension extends DrawingDimensionBase {
    * model each time it is drawn ("2× Ø6 THRU, CSK Ø12 × 90°").
    */
   countersink?: DrawingEdgeRef;
+  /**
+   * v105 (D07): an ISO 286 fit class on a diameter ("H7", "g6"): the
+   * diameter prints it with the limit deviations its tables state for the
+   * measured size. It replaces a tolerance, and a hole's callout.
+   */
+  fit?: DrawingFitClass;
+  /**
+   * v105 (D07): a tapped hole's thread class on its callout: ISO 965
+   * ("6H") for a metric thread, UN ("2B") for an inch one, printed after
+   * the designation ("M6×1-6H").
+   */
+  threadClass?: DrawingThreadClass;
 }
+
+/**
+ * v105: the ISO 286 fit classes a diameter may state: holes F, G, H and JS,
+ * shafts f, g, h, js, k, m, n and p, grades 5 to 11, whose limits ISO 286-1
+ * tables state without the Δ correction or subdivided size ranges.
+ */
+export const DRAWING_FIT_CLASS_PATTERN =
+  /^(?:F|G|H|JS|f|g|h|js|k|m|n|p)(?:[5-9]|10|11)$/;
+export type DrawingFitClass = string;
+
+/** v105: internal thread classes, ISO 965-1 then UN (ASME B1.1). */
+export const DRAWING_THREAD_CLASSES = [
+  '4H',
+  '5H',
+  '6H',
+  '7H',
+  '8H',
+  '4G',
+  '5G',
+  '6G',
+  '7G',
+  '8G',
+  '1B',
+  '2B',
+  '3B'
+] as const;
+export type DrawingThreadClass = (typeof DRAWING_THREAD_CLASSES)[number];
+
+/** v105: ISO 2768-1 linear and angular classes, fine to very coarse. */
+export const DRAWING_ISO_LINEAR_CLASSES = ['f', 'm', 'c', 'v'] as const;
+export type DrawingIsoLinearClass = (typeof DRAWING_ISO_LINEAR_CLASSES)[number];
+/** v105: ISO 2768-2 geometric classes. */
+export const DRAWING_ISO_GEOMETRIC_CLASSES = ['H', 'K', 'L'] as const;
+export type DrawingIsoGeometricClass =
+  (typeof DRAWING_ISO_GEOMETRIC_CLASSES)[number];
+
+/** v105: a stated block's tolerance for values written to `decimals` places. */
+export interface DrawingDecimalTolerance {
+  decimals: number;
+  /** ± amount, in the units the sheet prints in. */
+  amount: number;
+}
+
+/**
+ * v105 (D07): the sheet's general tolerances, a ruled block on the paper
+ * that states what an untoleranced dimension may deviate: ISO 2768-1 class
+ * (`linearClass`, with an ISO 2768-2 `geometricClass`), its table printed
+ * from the standard, or (`decimal`) a block stating ± per number of
+ * decimals written and for angles, as a title block's tolerance box does.
+ */
+export type DrawingGeneralTolerance = DrawingAnnotationBase & {
+  kind: 'general-tolerance';
+  /** On the paper, never in a view: the validator refuses one. */
+  viewId?: DrawingViewId;
+} & (
+    | {
+        scheme: 'iso-2768';
+        linearClass: DrawingIsoLinearClass;
+        geometricClass?: DrawingIsoGeometricClass;
+      }
+    | {
+        scheme: 'decimal';
+        places: DrawingDecimalTolerance[];
+        /** ± on angles, degrees. */
+        angle?: number;
+      }
+  );
 
 /**
  * v49: a revolved blend's radius, read from its torus face seen side-on,
@@ -440,6 +529,205 @@ export interface DrawingBalloon extends DrawingAnnotationBase {
   componentId: string;
 }
 
+/**
+ * v92: a picture on the paper (a logo, a photograph of the part, a sketch
+ * from the shop): one of the project's reference images (I05), named by
+ * its id, so the pixels stay in the content-addressed store and travel the
+ * way reference images do. `placementMm` is its centre from the paper's
+ * corner and `widthMm` its printed width; its height keeps the picture's
+ * aspect. A picture deleted from the project leaves the image broken
+ * (`image-missing`) until it is pointed at another one or deleted.
+ */
+export interface DrawingSheetImage extends DrawingAnnotationBase {
+  kind: 'image';
+  /** On the paper, never in a view: the validator refuses one. */
+  viewId?: DrawingViewId;
+  referenceImageId: string;
+  widthMm: number;
+}
+
+/** v92: the narrowest and widest a sheet image prints, paper mm. */
+export const MIN_DRAWING_IMAGE_WIDTH_MM = 2;
+export const MAX_DRAWING_IMAGE_WIDTH_MM = 1200;
+
+/**
+ * v98 (D07): the geometric characteristics a feature control frame states,
+ * in the ASME Y14.5-2018 / ISO 1101 order: form, profile, orientation,
+ * location, runout. Concentricity and symmetry are ISO 1101's; Y14.5-2018
+ * dropped them, so a sheet in that standard states position or profile
+ * instead (the UI says so; the schema keeps both).
+ */
+export const DRAWING_GEOMETRIC_CHARACTERISTICS = [
+  'straightness',
+  'flatness',
+  'circularity',
+  'cylindricity',
+  'profile-line',
+  'profile-surface',
+  'parallelism',
+  'perpendicularity',
+  'angularity',
+  'position',
+  'concentricity',
+  'symmetry',
+  'circular-runout',
+  'total-runout'
+] as const;
+export type DrawingGeometricCharacteristic =
+  (typeof DRAWING_GEOMETRIC_CHARACTERISTICS)[number];
+
+/** v98: each characteristic's name, for lists, labels and STEP. */
+export const DRAWING_CHARACTERISTIC_LABELS: Readonly<
+  Record<DrawingGeometricCharacteristic, string>
+> = {
+  straightness: 'Straightness',
+  flatness: 'Flatness',
+  circularity: 'Circularity',
+  cylindricity: 'Cylindricity',
+  'profile-line': 'Profile of a line',
+  'profile-surface': 'Profile of a surface',
+  parallelism: 'Parallelism',
+  perpendicularity: 'Perpendicularity',
+  angularity: 'Angularity',
+  position: 'Position',
+  concentricity: 'Concentricity',
+  symmetry: 'Symmetry',
+  'circular-runout': 'Circular runout',
+  'total-runout': 'Total runout'
+};
+
+/** v98: form tolerances, which control a feature alone and take no datum. */
+export const DRAWING_FORM_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  ['straightness', 'flatness', 'circularity', 'cylindricity'];
+
+/**
+ * v98: characteristics that are meaningless without a datum: orientation
+ * is to a datum, runout about one, and concentricity and symmetry to one.
+ */
+export const DRAWING_DATUM_REQUIRED_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  [
+    'parallelism',
+    'perpendicularity',
+    'angularity',
+    'concentricity',
+    'symmetry',
+    'circular-runout',
+    'total-runout'
+  ];
+
+/**
+ * v98: characteristics whose zone may be cylindrical (a Ø before the
+ * tolerance): those that can control an axis.
+ */
+export const DRAWING_DIAMETER_ZONE_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  [
+    'straightness',
+    'parallelism',
+    'perpendicularity',
+    'angularity',
+    'position',
+    'concentricity'
+  ];
+
+/**
+ * v98: characteristics whose tolerance may carry a material condition
+ * modifier (Ⓜ, Ⓛ): those that may apply to a feature of size and are not
+ * defined regardless of feature size by the standard.
+ */
+export const DRAWING_MATERIAL_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  ['straightness', 'parallelism', 'perpendicularity', 'angularity', 'position'];
+
+/** v98: characteristics whose datum references may carry Ⓜ or Ⓛ. */
+export const DRAWING_DATUM_MATERIAL_CHARACTERISTICS: readonly DrawingGeometricCharacteristic[] =
+  [
+    'parallelism',
+    'perpendicularity',
+    'angularity',
+    'position',
+    'profile-line',
+    'profile-surface'
+  ];
+
+/** v98: maximum (Ⓜ) or least (Ⓛ) material condition. */
+export type DrawingMaterialCondition = 'mmc' | 'lmc';
+
+/** v98: a datum reference in a frame: its letter and an optional modifier. */
+export interface DrawingDatumReference {
+  letter: string;
+  material?: DrawingMaterialCondition;
+}
+
+/**
+ * v98: datum letters. Both standards skip I, O and Q (they read as 1, 0
+ * and a circle); after Z, letters double (AA, AB, …).
+ */
+export const DRAWING_DATUM_LETTER_PATTERN = /^[A-HJ-NPR-Z]{1,2}$/;
+
+/** v98: a frame names a primary, secondary and tertiary datum at most. */
+export const MAX_DRAWING_DATUM_REFERENCES = 3;
+
+/**
+ * v98: what a datum symbol or frame applies to. A leader to an edge points
+ * at a surface (seen edge-on) or a feature's outline; `attachedTo` names
+ * the dimension of a feature of size (a frame below its value, a datum
+ * symbol on it) or, for a datum symbol, the frame it hangs from. Exactly
+ * one of the two is stored; the host is on the same view, and a missing
+ * one leaves the annotation broken (`host-missing`), never reattached.
+ */
+interface DrawingToleranceAnnotationBase extends DrawingAnnotationBase {
+  viewId: DrawingViewId;
+  leader?: DrawingEdgeRef;
+  attachedTo?: DrawingAnnotationId;
+}
+
+/** v98: a datum feature symbol: its letter in a frame, on a triangle. */
+export interface DrawingDatumFeature extends DrawingToleranceAnnotationBase {
+  kind: 'datum-feature';
+  letter: string;
+}
+
+/**
+ * v98: a feature control frame: the characteristic's symbol, the tolerance
+ * (a cylindrical zone's Ø, then the amount and any material modifier),
+ * then up to three datum references in order of precedence. `amount`, the
+ * tolerance zone's size, is in the units the sheet prints in, like a
+ * dimension's tolerance.
+ */
+export interface DrawingFeatureControlFrame extends DrawingToleranceAnnotationBase {
+  kind: 'feature-control-frame';
+  characteristic: DrawingGeometricCharacteristic;
+  amount: number;
+  diameterZone?: true;
+  material?: DrawingMaterialCondition;
+  datums?: DrawingDatumReference[];
+}
+
+/** v98: the geometric tolerancing annotations. */
+export type DrawingToleranceAnnotation =
+  DrawingDatumFeature | DrawingFeatureControlFrame;
+
+export function isDrawingToleranceAnnotation(
+  annotation: DrawingAnnotation
+): annotation is DrawingToleranceAnnotation {
+  return (
+    annotation.kind === 'datum-feature' ||
+    annotation.kind === 'feature-control-frame'
+  );
+}
+
+/**
+ * v98: the annotation kinds each tolerancing kind may attach to: a frame to
+ * a dimension; a datum symbol to a dimension or a frame. A datum symbol is
+ * never a host, so attachments nest at most two deep and never cycle.
+ */
+export function drawingToleranceHostAllowed(
+  kind: DrawingToleranceAnnotation['kind'],
+  host: DrawingAnnotation
+): boolean {
+  if (isDrawingDimension(host)) return true;
+  return kind === 'datum-feature' && host.kind === 'feature-control-frame';
+}
+
 /** v73: the annotations that mark geometry rather than state a value. */
 export type DrawingGeometryAnnotation =
   DrawingCenterMark | DrawingIntersectionMark | DrawingCenterline;
@@ -465,6 +753,10 @@ export function isDrawingDimension(
     annotation.kind !== 'note' &&
     annotation.kind !== 'bom-table' &&
     annotation.kind !== 'balloon' &&
+    annotation.kind !== 'image' &&
+    annotation.kind !== 'datum-feature' &&
+    annotation.kind !== 'feature-control-frame' &&
+    annotation.kind !== 'general-tolerance' &&
     !isDrawingGeometryAnnotation(annotation)
   );
 }
@@ -484,7 +776,10 @@ export type DrawingAnnotation =
   | DrawingNote
   | DrawingGeometryAnnotation
   | DrawingBomTable
-  | DrawingBalloon;
+  | DrawingBalloon
+  | DrawingSheetImage
+  | DrawingToleranceAnnotation
+  | DrawingGeneralTolerance;
 
 export type DrawingAnnotationKind = DrawingAnnotation['kind'];
 
@@ -845,6 +1140,238 @@ function affixError(value: unknown, name: string): string | null {
   return null;
 }
 
+const DATUM_FEATURE_KEYS = new Set([
+  'annotationId',
+  'kind',
+  'placementMm',
+  'viewId',
+  'leader',
+  'attachedTo',
+  'letter'
+]);
+const FEATURE_CONTROL_FRAME_KEYS = new Set([
+  'annotationId',
+  'kind',
+  'placementMm',
+  'viewId',
+  'leader',
+  'attachedTo',
+  'characteristic',
+  'amount',
+  'diameterZone',
+  'material',
+  'datums'
+]);
+
+function isMaterialCondition(value: unknown): boolean {
+  return value === 'mmc' || value === 'lmc';
+}
+
+/** v105: a diameter's fit or thread class, or why it is malformed. */
+function fitError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  if (value.kind !== 'diameter' || value.edge === undefined)
+    return `${where} states a fit or thread class, which only a diameter of a circular edge takes.`;
+  if (value.fit !== undefined) {
+    if (
+      typeof value.fit !== 'string' ||
+      !DRAWING_FIT_CLASS_PATTERN.test(value.fit)
+    )
+      return `${where} states a fit other than an ISO 286 hole F, G, H or JS or shaft f, g, h, js, k, m, n or p class, grade 5 to 11.`;
+    if (value.tolerance !== undefined)
+      return `${where} states both a fit and a tolerance; the fit is its tolerance.`;
+    if (value.reference !== undefined)
+      return `${where} is a reference dimension, which takes no fit.`;
+    if (value.threadClass !== undefined)
+      return `${where} states both a fit and a thread class.`;
+  }
+  if (value.threadClass !== undefined) {
+    if (
+      !(DRAWING_THREAD_CLASSES as readonly unknown[]).includes(
+        value.threadClass
+      )
+    )
+      return `${where} states a thread class other than an ISO 965 internal (4H–8H, 4G–8G) or UN internal (1B–3B) class.`;
+    if (value.tolerance !== undefined)
+      return `${where} states a thread class on a toleranced diameter, which shows no callout.`;
+  }
+  if (value.counterbore !== undefined || value.countersink !== undefined)
+    return `${where} is a counterbore or countersink callout, which takes no fit or thread class.`;
+  return null;
+}
+
+const GENERAL_TOLERANCE_KEYS: Readonly<Record<string, readonly string[]>> = {
+  'iso-2768': ['linearClass', 'geometricClass'],
+  decimal: ['places', 'angle']
+};
+
+/** v105: why a general-tolerance block is malformed, or null. */
+function generalToleranceError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  const own = GENERAL_TOLERANCE_KEYS[value.scheme as string];
+  if (!own)
+    return `${where} is a general-tolerance block with an unknown scheme.`;
+  const extra = Object.keys(value).find(
+    (key) =>
+      !['annotationId', 'kind', 'placementMm', 'scheme', ...own].includes(key)
+  );
+  if (extra !== undefined)
+    return `${where} is a general-tolerance block, which has no ${extra}.`;
+  if (value.scheme === 'iso-2768') {
+    if (
+      !(DRAWING_ISO_LINEAR_CLASSES as readonly unknown[]).includes(
+        value.linearClass
+      )
+    )
+      return `${where} names an ISO 2768-1 class other than f, m, c or v.`;
+    if (
+      value.geometricClass !== undefined &&
+      !(DRAWING_ISO_GEOMETRIC_CLASSES as readonly unknown[]).includes(
+        value.geometricClass
+      )
+    )
+      return `${where} names an ISO 2768-2 class other than H, K or L.`;
+    return null;
+  }
+  const places = value.places;
+  if (!Array.isArray(places) || places.length === 0 || places.length > 4)
+    return `${where} states one to four decimal-place tolerances.`;
+  const seen = new Set<number>();
+  for (const place of places as unknown[]) {
+    if (
+      !isRecord(place) ||
+      Object.keys(place).length !== 2 ||
+      !Number.isSafeInteger(place.decimals) ||
+      (place.decimals as number) < 0 ||
+      (place.decimals as number) > 4 ||
+      !isDeviation(place.amount) ||
+      place.amount <= 0
+    )
+      return `${where} states a decimal-place tolerance that is not 0–4 places and a positive amount of at most six decimals.`;
+    if (seen.has(place.decimals as number))
+      return `${where} states ${place.decimals as number} decimal places twice.`;
+    seen.add(place.decimals as number);
+  }
+  if (
+    value.angle !== undefined &&
+    (!isDeviation(value.angle) || value.angle <= 0 || value.angle >= 90)
+  )
+    return `${where} states an angle tolerance that is not a positive amount under 90°.`;
+  return null;
+}
+
+/** v98: why a datum symbol or frame is malformed, or null. */
+function toleranceAnnotationError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  const datum = value.kind === 'datum-feature';
+  const name = datum ? 'datum feature symbol' : 'feature control frame';
+  const known = datum ? DATUM_FEATURE_KEYS : FEATURE_CONTROL_FRAME_KEYS;
+  const extra = Object.keys(value).find((key) => !known.has(key));
+  if (extra !== undefined)
+    return `${where} is a ${name}, which has no ${extra}.`;
+  if (value.viewId === undefined)
+    return `${where} is a ${name} that belongs to no view.`;
+  if ((value.leader === undefined) === (value.attachedTo === undefined))
+    return `${where} is a ${name} that needs either a leader to an edge or a dimension to attach to, not both.`;
+  if (value.leader !== undefined) {
+    const error = edgeRefError(value.leader);
+    if (error) return `${where} ${error}.`;
+  }
+  if (
+    value.attachedTo !== undefined &&
+    (typeof value.attachedTo !== 'string' ||
+      !value.attachedTo.startsWith(DRAWING_ANNOTATION_ID_PREFIX) ||
+      value.attachedTo.length > 64 ||
+      value.attachedTo === value.annotationId)
+  )
+    return `${where} is a ${name} attached to an invalid annotation id.`;
+  return toleranceFieldsError(value, where);
+}
+
+/**
+ * v98: a datum symbol's letter, or a frame's characteristic, amount, zone,
+ * modifier and datum references, or why they are malformed. Shared by the
+ * drawing annotations and (v106) the model's PMI.
+ */
+export function toleranceFieldsError(
+  value: Record<string, unknown>,
+  where: string
+): string | null {
+  const datum = value.kind === 'datum-feature';
+  if (datum) {
+    if (
+      typeof value.letter !== 'string' ||
+      !DRAWING_DATUM_LETTER_PATTERN.test(value.letter)
+    )
+      return `${where} is a datum feature symbol whose letter is not one or two capitals other than I, O and Q.`;
+    return null;
+  }
+  const characteristic = value.characteristic as DrawingGeometricCharacteristic;
+  if (!DRAWING_GEOMETRIC_CHARACTERISTICS.includes(characteristic))
+    return `${where} is a feature control frame with an unknown characteristic.`;
+  if (!isDeviation(value.amount) || value.amount <= 0)
+    return `${where} is a feature control frame whose tolerance is not a positive amount of at most six decimals.`;
+  if (value.diameterZone !== undefined) {
+    if (value.diameterZone !== true)
+      return `${where} is a feature control frame with a malformed Ø zone.`;
+    if (!DRAWING_DIAMETER_ZONE_CHARACTERISTICS.includes(characteristic))
+      return `${where} states ${characteristic} in a cylindrical (Ø) zone, which it cannot have.`;
+  }
+  if (value.material !== undefined) {
+    if (!isMaterialCondition(value.material))
+      return `${where} is a feature control frame with an unknown material condition.`;
+    if (!DRAWING_MATERIAL_CHARACTERISTICS.includes(characteristic))
+      return `${where} modifies ${characteristic} by a material condition, which it cannot take.`;
+  }
+  const datums = value.datums;
+  if (datums !== undefined) {
+    if (
+      !Array.isArray(datums) ||
+      datums.length === 0 ||
+      datums.length > MAX_DRAWING_DATUM_REFERENCES
+    )
+      return `${where} is a feature control frame with other than one to ${MAX_DRAWING_DATUM_REFERENCES} datum references.`;
+    const letters = new Set<string>();
+    for (const reference of datums as unknown[]) {
+      if (
+        !isRecord(reference) ||
+        typeof reference.letter !== 'string' ||
+        !DRAWING_DATUM_LETTER_PATTERN.test(reference.letter) ||
+        Object.keys(reference).some(
+          (key) => key !== 'letter' && key !== 'material'
+        )
+      )
+        return `${where} is a feature control frame with a malformed datum reference.`;
+      if (letters.has(reference.letter))
+        return `${where} references datum ${reference.letter} twice.`;
+      letters.add(reference.letter);
+      if (reference.material !== undefined) {
+        if (!isMaterialCondition(reference.material))
+          return `${where} is a feature control frame with an unknown datum material condition.`;
+        if (!DRAWING_DATUM_MATERIAL_CHARACTERISTICS.includes(characteristic))
+          return `${where} modifies a datum of ${characteristic} by a material condition, which it cannot take.`;
+      }
+    }
+  }
+  if (
+    datums !== undefined &&
+    DRAWING_FORM_CHARACTERISTICS.includes(characteristic)
+  )
+    return `${where} states ${characteristic}, a form tolerance, which takes no datum.`;
+  if (
+    datums === undefined &&
+    DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(characteristic)
+  )
+    return `${where} states ${characteristic}, which needs at least one datum.`;
+  return null;
+}
+
 /**
  * Why `value` is not a valid annotation of a sheet whose views are
  * `viewIds`, or null. Shape only: the edges may be gone from the model.
@@ -892,6 +1419,42 @@ export function drawingAnnotationError(
     return `${where} has a Ø prefix, which only a linear dimension takes.`;
   const counted = countError(value.count, value.kind, where);
   if (counted) return counted;
+  if (value.kind === 'image') {
+    if (
+      [
+        'decimals',
+        'reference',
+        'tolerance',
+        'prefix',
+        'suffix',
+        'provenance'
+      ].some((key) => value[key] !== undefined)
+    )
+      return `${where} is an image, which states no measured value.`;
+    if (value.viewId !== undefined)
+      return `${where} is an image, which sits on the paper, not in a view.`;
+    if (
+      !isShortText(value.referenceImageId, 128) ||
+      !value.referenceImageId.startsWith('rimg_')
+    )
+      return `${where} is an image that names no reference image.`;
+    if (
+      typeof value.widthMm !== 'number' ||
+      !Number.isFinite(value.widthMm) ||
+      value.widthMm < MIN_DRAWING_IMAGE_WIDTH_MM ||
+      value.widthMm > MAX_DRAWING_IMAGE_WIDTH_MM
+    )
+      return `${where} is an image ${MIN_DRAWING_IMAGE_WIDTH_MM}–${MAX_DRAWING_IMAGE_WIDTH_MM} mm wide at most.`;
+    return null;
+  }
+  if (value.kind === 'datum-feature' || value.kind === 'feature-control-frame')
+    return toleranceAnnotationError(value, where);
+  if (value.kind === 'general-tolerance')
+    return generalToleranceError(value, where);
+  if (value.fit !== undefined || value.threadClass !== undefined) {
+    const error = fitError(value, where);
+    if (error) return error;
+  }
   if (value.kind === 'bom-table' || value.kind === 'balloon') {
     if (
       [
@@ -1215,9 +1778,14 @@ export function drawingAnnotationReferences(
     case 'note':
       return annotation.leader ? [annotation.leader] : [];
     case 'bom-table':
+    case 'image':
+    case 'general-tolerance':
       return [];
     case 'balloon':
       return [annotation.leader];
+    case 'datum-feature':
+    case 'feature-control-frame':
+      return annotation.leader ? [annotation.leader] : [];
     case 'distance':
       return [
         ...distanceTargetReferences(annotation.from),
@@ -1254,6 +1822,15 @@ export function drawingAnnotationCenterlines(
         'centerline' in target ? [target.centerline] : []
       )
     : [];
+}
+
+/** v98: the dimension or frame a tolerancing annotation is attached to. */
+export function drawingAnnotationHost(
+  annotation: DrawingAnnotation
+): DrawingAnnotationId | undefined {
+  return isDrawingToleranceAnnotation(annotation)
+    ? annotation.attachedTo
+    : undefined;
 }
 
 /** v73: the marks an annotation measures to, by id. */

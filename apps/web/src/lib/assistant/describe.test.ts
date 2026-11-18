@@ -80,6 +80,36 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     featureId: toFeatureId('feat_3'),
     name: 'Lid'
   },
+  update_feature: {
+    kind: 'update_feature',
+    featureId: toFeatureId('feat_3'),
+    data: { distance: 'width / 2' },
+    clearData: ['symmetric']
+  },
+  add_custom_feature: {
+    kind: 'add_custom_feature',
+    name: 'Tray',
+    targetBodyId: 'body_1',
+    script: {
+      id: 'acme/tray',
+      version: '1.0.0',
+      api: 1,
+      source: 'script "acme/tray" "1.0.0" api 1 {}',
+      digest: '0'
+    },
+    inputs: {}
+  },
+  reorder_feature: {
+    kind: 'reorder_feature',
+    featureId: toFeatureId('feat_3'),
+    toIndex: 0
+  },
+  update_sketch_object: {
+    kind: 'update_sketch_object',
+    sketchId: toSketchId('sketch_1'),
+    objectId: 'ent_1',
+    data: { objectKind: 'circle', centerX: 0, centerY: 0, radius: 4 }
+  },
   add_sketch: {
     kind: 'add_sketch',
     name: 'Profile',
@@ -397,6 +427,21 @@ describe('patch operation descriptions', () => {
     );
     expect(describeOperation(SAMPLES.add_datum_split)).toBe(
       'Split at lid — split Plate in two at Lid'
+    );
+  });
+
+  it('describes the history text operations (L15)', () => {
+    expect(describeOperation(SAMPLES.update_feature)).toBe(
+      'Edit distance, no symmetric on feat_3'
+    );
+    expect(describeOperation(SAMPLES.add_custom_feature)).toBe(
+      'Tray — acme/tray 1.0.0 on body_1'
+    );
+    expect(describeOperation(SAMPLES.reorder_feature)).toBe(
+      'Move feat_3 to step 1'
+    );
+    expect(describeOperation(SAMPLES.update_sketch_object)).toBe(
+      'Edit sketch object ent_1'
     );
   });
 

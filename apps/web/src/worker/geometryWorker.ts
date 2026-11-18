@@ -88,7 +88,16 @@ import { KernelSessionPersistence } from './kernelSessionPersistence';
  * `svg` draws one saved sketch's exact curves and requires a `sketchId`.
  */
 export type GeometryExportFormat =
-  'step' | 'stl' | 'dxf' | 'svg' | 'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply';
+  | 'step'
+  | 'iges'
+  | 'stl'
+  | 'dxf'
+  | 'svg'
+  | 'stl-binary'
+  | '3mf'
+  | 'obj'
+  | 'glb'
+  | 'ply';
 
 /** The export formats whose payload crosses back as transferred bytes. */
 export type GeometryBinaryExportFormat = Extract<
@@ -186,6 +195,8 @@ export type GeometryWorkerRequest =
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
       fileName?: string;
+      /** I04, 'obj' only: return a ZIP of `<stem>.obj` and `<stem>.mtl`. */
+      objMaterials?: { stem: string };
       /** 'step' only: the application protocol to state; AP214 when unset. */
       stepProtocol?: StepProtocol;
       /**
@@ -429,7 +440,7 @@ export type GeometryExportResult =
       type: 'export';
       ok: true;
       requestId: string;
-      format: 'step' | 'stl' | 'dxf' | 'svg';
+      format: 'step' | 'iges' | 'stl' | 'dxf' | 'svg';
       text: string;
       warnings: string[];
     }
@@ -1579,10 +1590,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       const exportBodyIds = request.allShownBodies
         ? await exact.documentExportBodyIds(document)
         : request.bodyIds;
-      if (request.format !== 'step' && request.format !== 'stl') {
+      if (
+        request.format !== 'step' &&
+        request.format !== 'stl' &&
+        request.format !== 'iges'
+      ) {
         const data = await exact.exportMesh(document, exportBodyIds, {
           format: request.format,
           deflection: request.deflection ?? DEFAULT_EXPORT_DEFLECTION,
+          ...(request.objMaterials
+            ? { objMaterials: request.objMaterials }
+            : {}),
           ...(request.units ? { units: request.units } : {}),
           ...(request.angularTolerance !== undefined
             ? { angularTolerance: request.angularTolerance }
@@ -1611,12 +1629,22 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                 ? { protocol: request.stepProtocol }
                 : {})
             })
-          : await exact.exportStl(document, exportBodyIds, request.deflection, {
-              ...(request.units ? { units: request.units } : {}),
-              ...(request.angularTolerance !== undefined
-                ? { angularTolerance: request.angularTolerance }
-                : {})
-            });
+          : request.format === 'iges'
+            ? await exact.exportIges(document, exportBodyIds, {
+                ...(request.units ? { units: request.units } : {}),
+                ...(request.fileName ? { fileName: request.fileName } : {})
+              })
+            : await exact.exportStl(
+                document,
+                exportBodyIds,
+                request.deflection,
+                {
+                  ...(request.units ? { units: request.units } : {}),
+                  ...(request.angularTolerance !== undefined
+                    ? { angularTolerance: request.angularTolerance }
+                    : {})
+                }
+              );
       const result: GeometryExportResult = {
         type: 'export',
         ok: true,

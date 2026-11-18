@@ -107,7 +107,7 @@ def load_sql(data: bytes):
 
 
 # Migrations above 0050 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57, 58, 59})
+REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57, 58, 59, 60, 61})
 
 
 def required_objects(db):
@@ -115,7 +115,7 @@ def required_objects(db):
     if 'd1_migrations' not in tables:
         raise SnapshotError('SQL export has no migration ledger.')
     migrations = [row[0] for row in db.execute('SELECT name FROM d1_migrations ORDER BY name')]
-    if not migrations or any(not re.fullmatch(r'00[0-5][0-9]_[a-z0-9_]+\.sql', name) for name in migrations):
+    if not migrations or any(not re.fullmatch(r'00[0-9][0-9]_[a-z0-9_]+\.sql', name) for name in migrations):
         raise SnapshotError('Unsupported migration ledger.')
     # 0047 adds only glimpse_account_consent.version: no stored objects or keys.
     # 0048 adds only e2ee_mls_commits.sender_signature: no stored objects or keys.
@@ -139,6 +139,11 @@ def required_objects(db):
     # names in D1 rows, deleted with their project): no stored objects or keys.
     # 0059 adds project_share_links.allow_comments (a flag) and
     # project_comments.share_link_id (a link id): no stored objects or keys.
+    # 0060 adds e2ee_project_comment_logs (encrypted comment envelopes stored
+    # inline as text, like e2ee_project_envelopes): no stored objects or keys.
+    # 0061 adds e2ee_share_comment_grants (signed public statements) and
+    # e2ee_share_comments (encrypted visitor comment envelopes stored inline
+    # as text): no stored objects or keys.
     # 0051-0052 are intentionally unused.
     if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
            for name in migrations):

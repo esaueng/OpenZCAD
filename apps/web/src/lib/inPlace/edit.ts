@@ -177,6 +177,8 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
     case 'loft':
     case 'sweep':
     case 'helical-sweep':
+    case 'rib':
+    case 'wrap':
     case 'hole':
     case 'thread':
     case 'shell':
@@ -210,6 +212,19 @@ export function inPlaceToolForFeature(data: FeatureData): InPlaceToolId | null {
       if (scale !== undefined && !data.axisRotation) return 'scale';
       return null;
     }
+    // R01 (schema v99): a point typed from the world origin, and a system
+    // placed at a typed origin, reopen their tool with the drag handles.
+    case 'datum-point':
+      return data.definition.kind === 'offset' &&
+        data.definition.from.type === 'point' &&
+        zeroVector(data.definition.from.point)
+        ? 'datum-point'
+        : null;
+    case 'datum-csys':
+      return data.definition.kind === 'placement' &&
+        data.definition.origin.type === 'point'
+        ? 'datum-csys'
+        : null;
     default:
       return null;
   }
@@ -389,6 +404,38 @@ export function inPlaceEditSeed(
         ? curves(data.guide.sketchId, data.guide.entityIds, 'guide')
         : [];
       seed.options.mode = data.mode;
+      const build = data.construction === 'in-place' ? 'exact' : 'sampled';
+      seed.options.saved = build;
+      seed.options.build = build;
+      break;
+    }
+    case 'rib': {
+      seed.slots.path = inOrder(
+        data.profile.entityIds.map((entityId) => {
+          if (ctx.curve(data.profile.sketchId, entityId))
+            return { sketchId: data.profile.sketchId, entityId };
+          missing.push('path');
+          return null;
+        }),
+        'path'
+      );
+      body(data.targetBodyId);
+      value('thickness', data.thickness);
+      seed.options.direction = data.direction;
+      seed.options.side = data.thicknessSide;
+      seed.options.flip = data.flip ? 'flipped' : 'as-drawn';
+      break;
+    }
+    case 'wrap': {
+      for (const reference of data.profiles)
+        profile({ sketchId: data.sketchId, profile: reference });
+      const face = ctx.face(data.targetBodyId, data.faceReference.currentHash, data.faceReference);
+      if (face) seed.slots.faces.push(face);
+      else missing.push('face');
+      value('depth', data.depth);
+      value('rotation', data.rotationDeg);
+      value('offset', data.axialOffset);
+      seed.options.mode = data.mode;
       break;
     }
     case 'helical-sweep': {
@@ -433,8 +480,31 @@ export function inPlaceEditSeed(
       } else {
         seed.options.size = 'pitch';
       }
+      const build = data.construction === 'in-place' ? 'exact' : 'sampled';
+      seed.options.saved = build;
+      seed.options.build = build;
       break;
     }
+    case 'datum-point':
+      if (data.definition.kind === 'offset') {
+        value('x', data.definition.offset.x);
+        value('y', data.definition.offset.y);
+        value('z', data.definition.offset.z);
+      }
+      break;
+    case 'datum-csys':
+      if (
+        data.definition.kind === 'placement' &&
+        data.definition.origin.type === 'point'
+      ) {
+        value('ox', data.definition.origin.point.x);
+        value('oy', data.definition.origin.point.y);
+        value('oz', data.definition.origin.point.z);
+        value('rx', data.definition.rotationDeg.x);
+        value('ry', data.definition.rotationDeg.y);
+        value('rz', data.definition.rotationDeg.z);
+      }
+      break;
     case 'hole': {
       const face = ctx.face(
         data.targetBodyId,
@@ -1125,9 +1195,71 @@ export function inPlaceFeatureUpdate(
                   entityIds: request.guide.entityIds
                 } as Extract<FeatureData, { featureKind: 'sweep' }>['path']
               }
+            : {}),
+          ...(request.construction
+            ? { construction: request.construction }
             : {})
         },
-        ...(request.guide ? {} : { clearData: ['guide'] })
+        ...(request.guide && request.construction
+          ? {}
+          : {
+              clearData: [
+                ...(request.guide ? [] : ['guide']),
+                ...(request.construction ? [] : ['construction'])
+              ]
+            })
+      };
+    case 'datum-point':
+    case 'datum-csys':
+      if (saved.featureKind !== request.tool) return null;
+      return {
+        featureId,
+        name,
+        data: { featureKind: request.tool, definition: request.definition }
+      } as FeatureUpdateInput;
+    case 'rib':
+      if (saved.featureKind !== 'rib') return null;
+      return {
+        featureId,
+        name,
+        data: {
+          featureKind: 'rib',
+          targetBodyId: request.targetBodyId,
+          profile: {
+            sketchId: request.profile.sketchId,
+            entityIds: request.profile.entityIds
+          } as Extract<FeatureData, { featureKind: 'rib' }>['profile'],
+          thickness: request.thickness,
+          thicknessSide: request.thicknessSide,
+          direction: request.direction,
+          ...(request.flip ? { flip: true } : {})
+        },
+        ...(request.flip ? {} : { clearData: ['flip'] })
+      };
+    case 'wrap':
+      if (saved.featureKind !== 'wrap') return null;
+      return {
+        featureId,
+        name,
+        data: {
+          featureKind: 'wrap',
+          targetBodyId: request.targetBodyId,
+          faceReference: request.faceReference,
+          sketchId: request.sketchId,
+          profiles: request.profiles,
+          depth: request.depth,
+          mode: request.mode,
+          ...(request.rotationDeg === undefined
+            ? {}
+            : { rotationDeg: request.rotationDeg }),
+          ...(request.axialOffset === undefined
+            ? {}
+            : { axialOffset: request.axialOffset })
+        },
+        clearData: [
+          ...(request.rotationDeg === undefined ? ['rotationDeg'] : []),
+          ...(request.axialOffset === undefined ? ['axialOffset'] : [])
+        ]
       };
     case 'gear': {
       if (saved.featureKind !== 'gear') return null;
@@ -1378,6 +1510,10 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
       ];
     case 'helical-sweep':
       return [data.profile.sketchId];
+    case 'rib':
+      return [data.profile.sketchId];
+    case 'wrap':
+      return [data.sketchId];
     // M16: the blank's sketch, and each bend line's.
     case 'sheet-metal':
       return [
@@ -1408,6 +1544,8 @@ const SINGLE_LINEAGE_KINDS = new Set<FeatureData['featureKind']>([
   'draft',
   'thicken',
   'solid-offset',
+  'rib',
+  'wrap',
   'split',
   'transform',
   'mirror',

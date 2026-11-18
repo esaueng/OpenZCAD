@@ -227,3 +227,45 @@ their sampled fallback behavior must not be reused for the sketch subset.
 Roadmap evidence for this design belongs on D04. Runtime implementation,
 worker/UI wiring, DXF import, and sheet flattening remain separate follow-up
 work.
+
+## DXF ellipse and spline import (D04)
+
+DXF sketch import lowers ELLIPSE and SPLINE onto the sketch's exact ellipse
+and control-spline objects (I01) instead of refusing them, and only where the
+sketch object is the same curve:
+
+- **ELLIPSE.** Its centre and major-axis end are world coordinates and its
+  parameters run counter-clockwise about its extrusion. The major axis gives
+  `radiusX` and `rotationDeg`, the axis ratio `radiusY`, and the parameter
+  range the elliptical arc in degrees of the same eccentric anomaly. A -Z
+  ellipse, seen from +Z, runs the other way: the sketch parameter is the
+  file's negated, so its arc runs from −end to −start. A range within 1e-9 rad
+  of a whole turn is the full ellipse (writers store 2π rounded, and the
+  sketch reads a sweep that close to a turn as closed anyway); a zero range,
+  a zero axis ratio or no major axis refuses the file as malformed; a tilted
+  ellipse is counted off the XY plane.
+- **SPLINE.** A sketch control spline is the clamped uniform B-spline of
+  degree 2 or 3 over its points, or the uniform periodic one over a closed
+  list. A SPLINE maps when its knots are exactly those up to an affine change
+  of parameter (which does not change the curve), its interior knots matched
+  within 1e-9 of the knot range, the rounding a writer's decimal knots carry.
+  A periodic SPLINE is recognised by evenly spaced knots throughout and its
+  last `degree` control points repeating its first. Equal weights cancel out
+  of the rational form; a degree-1 SPLINE is the polyline through its control
+  points. Unequal weights, other knot vectors, degrees above 3, more than 64
+  control points and fit-point-only splines (whose curve is the writer's own
+  interpolation) are counted by name, never approximated. Mismatched declared
+  counts, decreasing knots, a wrong knot count and non-positive weights refuse
+  the file as malformed.
+- **Clamped loops.** The sketch fills a single curve that returns to its
+  start only when that curve is periodic, so a clamped SPLINE whose first and
+  last control points coincide is split at its middle interior knot (or
+  mid-span when it has one span) by knot insertion to full multiplicity. Both
+  halves keep evenly spaced knots, so each is a sketch control spline; the
+  new control points carry only the insertion's floating-point rounding, and
+  the halves share their meeting points exactly.
+
+The DXF writer is still R12, which has neither entity, so a sketch with an
+ellipse or spline still exports as SVG only; an R2000 writer is the open
+follow-up. A sketch's history menu gains **Export DXF…**, which opens the
+export dialog on that sketch with DXF chosen.

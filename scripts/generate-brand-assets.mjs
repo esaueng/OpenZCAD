@@ -78,6 +78,14 @@ const assets = new Map([
     )
   ],
   [
+    'apps/ipad/Resources/AppIcon.svg',
+    svg(
+      '0 0 1024 1024',
+      `<rect width="1024" height="1024" fill="${mark.colors.tile}"/>\n<g transform="translate(152 152) scale(7.2)">\n${colorPaths}\n</g>`,
+      'OpenZCAD iPad app icon'
+    )
+  ],
+  [
     'apps/web/public/favicon.svg',
     svg(mark.compactViewBox, colorPaths, 'OpenZCAD')
   ]
@@ -148,6 +156,16 @@ if (!check) {
     copyFileSync(
       join(temporary, 'touch', '180x180.png'),
       join(root, 'apps/web/public/apple-touch-icon.png')
+    );
+    render('apps/ipad/Resources/AppIcon.svg', join(temporary, 'ipad'), [1024]);
+    const ipadIconDirectory = join(
+      root,
+      'apps/ipad/Resources/Assets.xcassets/AppIcon.appiconset'
+    );
+    mkdirSync(ipadIconDirectory, { recursive: true });
+    copyFileSync(
+      join(temporary, 'ipad', '1024x1024.png'),
+      join(ipadIconDirectory, 'AppIcon.png')
     );
   } finally {
     rmSync(temporary, { recursive: true, force: true });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Trash2 } from 'lucide-react';
 import type { AnyCommand } from '@openzcad/command-system';
+import { listFeaturesInOrder } from '@openzcad/document-core';
 import type {
   BodyId,
   DatumAxisEdgeSource,
@@ -38,6 +39,7 @@ import {
   datumVertexFromEdgePick,
   datumVertexKey,
   datumVertexOption,
+  datumPointOptions,
   faceSourceOption,
   requireResolvedDatums,
   type DatumPointDraft,
@@ -67,6 +69,8 @@ export interface DatumAxisFormProps {
   initial: DatumAxisFormState;
   /** Principal planes, earlier datum planes and any offered face. */
   planes: readonly DatumSourceOption[];
+  /** R01 (schema v99): earlier coordinate systems, for a System axis. */
+  systems?: readonly { featureId: FeatureId; name: string }[];
   scope: Record<string, number>;
   units?: UnitSystem;
   editing?: boolean;
@@ -94,7 +98,8 @@ const MODES: readonly DatumAxisMode[] = [
   'two-point',
   'edge',
   'cylinder',
-  'plane-intersection'
+  'plane-intersection',
+  'csys-axis'
 ];
 
 /**
@@ -106,6 +111,7 @@ const MODES: readonly DatumAxisMode[] = [
 export function DatumAxisForm({
   initial,
   planes,
+  systems = [],
   scope,
   units,
   editing = false,
@@ -378,7 +384,12 @@ export function DatumAxisForm({
         />
       </label>
       <div className="plane-chips" role="group" aria-label="Axis type">
-        {MODES.map((mode) => (
+        {[
+          ...MODES,
+          // Schema v108: only for an axis that holds a face (picked in place
+          // with a point); the card cannot pick one.
+          ...(state.mode === 'face-normal' ? (['face-normal'] as const) : [])
+        ].map((mode) => (
           <button
             key={mode}
             type="button"
@@ -410,6 +421,51 @@ export function DatumAxisForm({
             ? `Axis of ${faceLabel ?? 'the picked face'}`
             : 'Pick a cylindrical or conical face in the viewport.'}
         </p>
+      ) : state.mode === 'face-normal' ? (
+        <>
+          <p className="muted" aria-live="polite">
+            {state.face
+              ? `Square to ${faceLabel ?? 'the picked face'}`
+              : 'Pick the face with the Axis tool in the viewport.'}
+          </p>
+          {pointSlot(0, 'At point')}
+        </>
+      ) : state.mode === 'csys-axis' ? (
+        <>
+          <label className="field">
+            <span>Coordinate system</span>
+            <select
+              value={state.csys ?? ''}
+              aria-label="Coordinate system"
+              onChange={(event) =>
+                replace({
+                  ...state,
+                  csys: (event.target.value || null) as FeatureId | null
+                })
+              }
+            >
+              <option value="">Choose a system…</option>
+              {systems.map((system) => (
+                <option key={system.featureId} value={system.featureId}>
+                  {system.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="plane-chips" role="group" aria-label="System axis">
+            {(['X', 'Y', 'Z'] as const).map((axis) => (
+              <button
+                key={axis}
+                type="button"
+                className="plane-chip"
+                aria-pressed={state.csysAxis === axis}
+                onClick={() => replace({ ...state, csysAxis: axis })}
+              >
+                {axis}
+              </button>
+            ))}
+          </div>
+        </>
       ) : (
         <>
           {planeSlot('sourceA', 'Plane A')}
@@ -581,9 +637,16 @@ export function DatumAxisWorkspaceCard({
     editing?.featureId ?? null,
     ownFaces
   );
-  const ownVertices = initial.points.flatMap((point) =>
-    point?.type === 'vertex' ? [datumVertexOption(document, point.source)] : []
-  );
+  const datumPoints = datumPointOptions(document, editing?.featureId ?? null);
+  const ownVertices = [
+    ...datumPoints,
+    ...initial.points.flatMap((point) =>
+      point?.type === 'vertex' &&
+      !datumPoints.some((option) => option.key === datumVertexKey(point.source))
+        ? [datumVertexOption(document, point.source)]
+        : []
+    )
+  ];
   const current = () => app.managerRef.current?.document ?? null;
   const preflight = async (
     submission: DatumAxisSubmission
@@ -722,6 +785,20 @@ export function DatumAxisWorkspaceCard({
           key={editing?.featureId ?? 'new'}
           initial={initial}
           planes={planes}
+          systems={listFeaturesInOrder(document)
+            .slice(
+              0,
+              editing
+                ? listFeaturesInOrder(document).findIndex(
+                    (feature) => feature.featureId === editing.featureId
+                  )
+                : undefined
+            )
+            .filter((feature) => feature.data.featureKind === 'datum-csys')
+            .map((feature) => ({
+              featureId: feature.featureId,
+              name: feature.name
+            }))}
           scope={scope}
           units={document.units}
           editing={editing !== null}

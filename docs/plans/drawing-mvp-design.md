@@ -44,15 +44,18 @@ keep source references immutable enough to detect a changed model:
 ```ts
 type DrawingViewKind = 'front' | 'top' | 'right' | 'iso';
 type DrawingProjection = {
-  origin: Vector3;       // model-space projection origin
-  direction: Vector3;    // camera-to-model, normalized at validation
-  xAxis: Vector3;        // in-plane horizontal axis
+  origin: Vector3; // model-space projection origin
+  direction: Vector3; // camera-to-model, normalized at validation
+  xAxis: Vector3; // in-plane horizontal axis
 };
 type DrawingSheet = {
   id: EntityId;
   name: string;
   modelUnits: UnitSystem;
-  paper: { size: 'A4' | 'A3' | 'letter'; orientation: 'portrait' | 'landscape' };
+  paper: {
+    size: 'A4' | 'A3' | 'letter';
+    orientation: 'portrait' | 'landscape';
+  };
   scale: { numerator: number; denominator: number }; // 1:1, 1:2, 2:1; positive integers
   modelSnapshot: {
     projectId: ProjectId;
@@ -121,12 +124,12 @@ right-handed plane normal is `x × y = -view`; positive page-up is the returned
 `y` coordinate, and `direction` points from camera into the model. D01 must
 preserve that sign in both preview and PDF. The standard frame contract is:
 
-| View | direction | xAxis | positive page-up (`y = x × direction`) |
-| --- | --- | --- | --- |
-| front | `(0,0,1)` | `(1,0,0)` | model `-Y` |
-| top | `(0,1,0)` | `(1,0,0)` | model `+Z` |
-| right | `(1,0,0)` | `(0,1,0)` | model `-Z` |
-| iso | `(1,1,1)` | `(1,-1,0)` | `(-1,-1,2)/√6` |
+| View  | direction | xAxis      | positive page-up (`y = x × direction`) |
+| ----- | --------- | ---------- | -------------------------------------- |
+| front | `(0,0,1)` | `(1,0,0)`  | model `-Y`                             |
+| top   | `(0,1,0)` | `(1,0,0)`  | model `+Z`                             |
+| right | `(1,0,0)` | `(0,1,0)`  | model `-Z`                             |
+| iso   | `(1,1,1)` | `(1,-1,0)` | `(-1,-1,2)/√6`                         |
 
 For each returned point `(u, v)` in model units, convert to page millimetres by
 
@@ -166,16 +169,16 @@ test is at `crates/wasm/src/bindings/operations.rs`.
 An independent Node probe against the checked-out pinned package exercised two
 synthetic solids with `deflection = 0.1`:
 
-| Part/view | Expected oracle | Observed |
-| --- | --- | --- |
-| 20×10×6 box / front | bounds `[0,-10,20,0]`; hidden set empty | 12 visible, 0 hidden; exact bounds |
-| 20×10×6 box / top | bounds `[0,0,20,6]`; hidden set empty | 12 visible, 0 hidden; exact bounds |
-| 20×10×6 box / right | bounds `[0,-6,10,0]`; hidden set empty | 12 visible, 0 hidden; exact bounds |
-| same box / iso `(1,1,1)` | visible + hidden; finite bounds | 9 visible, 3 hidden; bounds `[-7.0711,-12.2474,14.1421,4.8990]` |
-| 20×10×6 plate with Ø4 through-hole / front | outer bounds unchanged; finite line runs | 14 visible, 0 hidden; bounds `[0,-10,20,0]` |
-| same drilled plate / top | outer bounds unchanged; finite line runs | 14 visible, 0 hidden; bounds `[0,0,20,6]` |
-| same drilled plate / right | outer bounds unchanged; finite line runs | 14 visible, 0 hidden; bounds `[0,-6,10,0]` |
-| same drilled plate / iso | visible + hidden; finite bounds | 11 visible, 3 hidden; bounds `[-7.0711,-12.2474,14.1421,4.8990]` |
+| Part/view                                  | Expected oracle                          | Observed                                                         |
+| ------------------------------------------ | ---------------------------------------- | ---------------------------------------------------------------- |
+| 20×10×6 box / front                        | bounds `[0,-10,20,0]`; hidden set empty  | 12 visible, 0 hidden; exact bounds                               |
+| 20×10×6 box / top                          | bounds `[0,0,20,6]`; hidden set empty    | 12 visible, 0 hidden; exact bounds                               |
+| 20×10×6 box / right                        | bounds `[0,-6,10,0]`; hidden set empty   | 12 visible, 0 hidden; exact bounds                               |
+| same box / iso `(1,1,1)`                   | visible + hidden; finite bounds          | 9 visible, 3 hidden; bounds `[-7.0711,-12.2474,14.1421,4.8990]`  |
+| 20×10×6 plate with Ø4 through-hole / front | outer bounds unchanged; finite line runs | 14 visible, 0 hidden; bounds `[0,-10,20,0]`                      |
+| same drilled plate / top                   | outer bounds unchanged; finite line runs | 14 visible, 0 hidden; bounds `[0,0,20,6]`                        |
+| same drilled plate / right                 | outer bounds unchanged; finite line runs | 14 visible, 0 hidden; bounds `[0,-6,10,0]`                       |
+| same drilled plate / iso                   | visible + hidden; finite bounds          | 11 visible, 3 hidden; bounds `[-7.0711,-12.2474,14.1421,4.8990]` |
 
 The box bounds are independent analytic oracles from the primitive extents and
 the stated view bases. The drilled plate's bounds are an independent outer
@@ -415,6 +418,7 @@ notes to D01 sheets:
   document, its edit history or a drawing command that declares v67 or
   older. Drawing-level units, precision and decimal separator remain the
   next D02 slice.
+
 ## Drawing DXF export (D04)
 
 - **What.** Export DXF writes the composed sheet — the same `SheetPage` the
@@ -574,6 +578,56 @@ notes to D01 sheets:
   picks its columns. Balloon (O): pick an edge of an assembly part, then
   place the balloon. Both are offered once the assembly has parts.
 - **Schema.** v80, built on v78 (v79 went unused), with a content gate below it.
+
+## Title-block layouts (D02, schema v94)
+
+- **Shape.** `DrawingSheet.titleBlockLayout`: absent is the compact block
+  (title, drawing number, revision, scale and size, sheet, drawn by, date,
+  units, projection), unchanged byte for byte; `shop` adds the fields a
+  shop print carries — material, finish, checked and approved by, the
+  company and a general-tolerance note — as optional `DrawingTitleBlock`
+  text. They are stored whatever the layout, so switching back and forth
+  loses nothing, and only the shop layout prints them.
+- **Page.** The shop block is 52 mm high: the title, then four rows (the
+  compact block's numbers row; material, finish, units, projection; drawn,
+  checked, approved, date; company and the tolerance note across the rest).
+  The view area above it shrinks to match, so fitting keeps views clear of
+  it. It goes through the one page model to preview, PDF, SVG and DXF.
+- **Editing.** Sheet Properties choose the layout (Compact or Shop) and
+  list the shop fields while it is chosen.
+- **Schema.** v94, built on v93, gated below it (an older client would
+  refuse the unknown title-block fields).
+
+## Sheet images (D02, schema v92)
+
+- **Shape.** A `kind: 'image'` annotation on the paper (never in a view):
+  `referenceImageId` names one of the project's reference images (I05),
+  `placementMm` is its centre from the paper's corner and `widthMm` its
+  printed width (2–1200 mm); its height keeps the picture's aspect. The
+  pixels never enter the document or its edit history: they stay in the
+  content-addressed source blob store and travel the way reference images
+  already do (backup, cloud copy, E2EE content blobs), so this slice adds
+  no new storage path.
+- **Breaks.** A picture deleted from the project leaves the image broken by
+  name (`image-missing`), kept in place, until another picture is chosen in
+  Properties or it is deleted; export refuses while it is broken, as for
+  any broken annotation. Nothing rebinds to another picture.
+- **Page.** The page model gains `images` (lower-left corner, size, the
+  bytes' checksum and type), drawn beneath every stroke and text; a sheet
+  without one composes and exports byte-identical. An image wholly off the
+  paper is not drawn.
+- **Writers.** SVG embeds the picture as a data URL of its own type. PDF
+  draws it as an image XObject with `DCTDecode`: a JPEG's bytes as they are
+  (its size and components read from its frame header), a PNG drawn onto
+  white and encoded as JPEG at quality 0.92 in the browser — the export's
+  one approximation; on white paper transparent parts print as before. One
+  object per distinct picture. DXF R12 cannot embed a picture: it is left
+  out and the status says so. A picture not on this device yet refuses the
+  SVG or PDF export by name rather than leaving a hole.
+- **Tool.** Image (I), usable once the project has a picture (Insert image
+  in Build): a click on the paper places the newest picture 40 mm wide;
+  Properties chooses the picture and the width.
+- **Schema.** v92, built on v91, gated below it.
 
 ## Finishing-body update repair
 
@@ -758,7 +812,57 @@ principal view. Detail views remain open.
   and a click on one side places the section seen from that side in third
   angle (the other in first angle), as an auxiliary view is.
 - **Schema.** v91, built on v90 (F06 slice 4a), gated below it.
-- **Open.** Stepped section lines, and lineage for cut edges.
+- **Open.** Nothing on the drawing side: stepped lines followed in v93 and cut-edge lineage after them.
+
+## Cut-edge lineage (D03)
+
+A section's edges are published with ADR-013 references where they can be
+verified, so a dimension on one follows a model edit through the sheet's
+Update the way one on the model does, and never by proximity. No schema
+change: references are derived each time the section is cut.
+
+- **Unchanged edges.** An edge the cut leaves exactly as it was — its
+  witness equal to exactly one source edge's — carries that source edge's
+  verified reference.
+- **Cut edges.** An edge lying wholly in one of the section's planes is the
+  plane's trace on the one model face beside it. The cut solid's faces are
+  named from the source's by the boolean carrier rule; when exactly one of
+  the edge's two faces is named, the edge is named
+  `section.edge.<face name>@<plane index>` under that face's producing
+  feature.
+- **Fail closed.** A name two edges would share (a plane crossing one
+  cylinder twice) is given to neither, and a body with no source lineage
+  names nothing: those edges stay hash-only, broken by an edit that moves
+  them, as before. References written before this change are hash-only and
+  behave as they did.
+
+## Stepped sections (D03, schema v93)
+
+- **Shape.** `DrawingSectionCut.steps` on an aligned section: ascending
+  `{ at, depth }` pairs, at most eight. The line runs at `depth` and, from
+  each step's `at` along it (the source's u for a horizontal line, v for a
+  vertical one, model units), at that step's own `depth`. A free section
+  takes none; validation refuses unordered, non-finite or too many steps.
+- **Cut.** The geometry worker removes one strip per segment: an
+  axis-aligned box over the part in front of the segment's depth, between
+  its steps along the line. At a step the shallower strip's box runs on
+  past it (what it removes there the deeper one removes too), so only the
+  deeper box makes the jog face and no two tool faces meet on the part. Cut
+  faces are those in any segment's plane, all hatched. A cut the kernel
+  refuses refuses the view by name: a stepped section has no single plane
+  for the tessellation fallback.
+- **Drawing.** The section view draws no line where the cut steps (ISO
+  128-44: the jog faces are seen edge-on): edges lying wholly in a step's
+  plane are left out of the drawn edges, while the cut body's edge topology
+  keeps them for dimensions (the jog's height can be dimensioned).
+- **Page.** On the source, the cutting-plane line jogs at each step, thick
+  at its ends and at every change of direction, with its arrows and letters
+  at the ends as before.
+- **Editing.** The section's Properties list its steps (where each starts,
+  its own cut); Add step puts one half-way along the rest of the line at the
+  last depth, ready to edit; Remove takes one away.
+- **Schema.** v93, built on v92,
+  gated below it.
 
 ### Drawing entry and visibility (2026-11-01)
 

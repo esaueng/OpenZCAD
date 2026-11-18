@@ -456,7 +456,9 @@ function faceFilterAccepts(
 ): boolean {
   if (filter === undefined || face.surfaceType === undefined) return true;
   const surface = face.surfaceType.toLowerCase();
-  return filter === 'planar' ? surface === 'plane' : surface === 'cylinder';
+  if (filter === 'planar') return surface === 'plane';
+  if (filter === 'revolution') return surface === 'cylinder' || surface === 'cone';
+  return surface === 'cylinder';
 }
 
 export function useInPlaceCommand(
@@ -557,6 +559,8 @@ export function useInPlaceCommand(
         optionsRef.current.imagePlaneBasis?.(plane) ?? null,
       sketchPoints: (sketchId) =>
         optionsRef.current.sketchPoints?.(sketchId) ?? [],
+      curveMiddle: (sketchId, entityId) =>
+        optionsRef.current.curveMiddle?.(sketchId, entityId) ?? null,
       holeFeature: (featureId) =>
         optionsRef.current.holeFeature?.(featureId) ?? null,
       ...(options.units ? { units: options.units } : {})
@@ -1461,8 +1465,13 @@ export function useInPlaceCommand(
     if (committingRef.current) return;
     setSession((current) => {
       if (!current) return current;
-      // While Options say so, clicks build a sweep's guide rail instead.
-      const slot = current.options.curves === 'guide' ? 'guide' : 'path';
+      // While Options say so, clicks build a sweep's guide rail instead
+      // (only a sampled sweep takes one; an exact sweep has no rail).
+      const slot =
+        current.options.curves === 'guide' &&
+        current.options.build === 'sampled'
+          ? 'guide'
+          : 'path';
       const path = current.slots[slot];
       const picked = path.some(
         (other) =>

@@ -32,7 +32,15 @@ import { verticesReadAs } from '../../apps/web/src/lib/importUnits';
  */
 
 export type SolidExchangeFormat =
-  'step' | 'step-ap242' | 'stl-binary' | 'stl' | '3mf' | 'obj' | 'ply' | 'glb';
+  | 'step'
+  | 'step-ap242'
+  | 'iges'
+  | 'stl-binary'
+  | 'stl'
+  | '3mf'
+  | 'obj'
+  | 'ply'
+  | 'glb';
 
 /** Whether a solid exchange format is STEP, in either protocol. */
 export const isStepFormat = (format: SolidExchangeFormat) =>
@@ -78,6 +86,11 @@ export async function exportSolids(
       })
     );
   }
+  if (format === 'iges') {
+    return new TextEncoder().encode(
+      await adapter.exportIges(document, bodyIds, { units })
+    );
+  }
   const meshFormat: MeshExportFormat = format === 'stl' ? 'stl-ascii' : format;
   return adapter.exportMesh(document, bodyIds, {
     format: meshFormat,
@@ -96,6 +109,24 @@ function stepDeclaredUnits(step: string): UnitSystem | null {
     );
   if (!si) return null;
   return si[1] === '.MILLI.' ? 'mm' : si[1] === '.CENTI.' ? 'cm' : 'm';
+}
+
+/** The length unit an IGES global section states (unit flag and name). */
+function igesDeclaredUnits(iges: string): UnitSystem | null {
+  const global = iges
+    .split('\n')
+    .filter((line) => line[72] === 'G')
+    .map((line) => line.slice(0, 72).trimEnd())
+    .join('');
+  const name = /,\d+,\d+H(MM|CM|M|INCH|IN),/.exec(global)?.[1];
+  if (!name) return null;
+  return name === 'MM'
+    ? 'mm'
+    : name === 'CM'
+      ? 'cm'
+      : name === 'M'
+        ? 'm'
+        : 'inch';
 }
 
 const THREE_MF_UNITS: Record<string, UnitSystem> = {
@@ -175,10 +206,12 @@ export async function reimportSolids(
   const bodyNames = (options.bodyNames ?? []).some((name) =>
     labels ? labels.some((label) => label.name === name) : text.includes(name)
   );
-  if (isStepFormat(format)) {
+  if (isStepFormat(format) || format === 'iges') {
     const kernel = new RemusKernel();
     const io = await loadRemusTranslators();
-    const solids = [...kernel.deserializeSolids(io.importStep(bytes))];
+    // IGES reads as the exact STEP it restates to, as the app imports it.
+    const step = format === 'iges' ? io.igesBrepAsStep(bytes) : bytes;
+    const solids = [...kernel.deserializeSolids(io.importStep(step))];
     const min: [number, number, number] = [Infinity, Infinity, Infinity];
     const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
     let volume = 0;
@@ -198,12 +231,16 @@ export async function reimportSolids(
     }
     return {
       bodyCount: solids.length,
-      fileObjects: (text.match(/MANIFOLD_SOLID_BREP/g) ?? []).length,
+      fileObjects:
+        format === 'iges'
+          ? text.split('\n').filter((line) => /^186,/.test(line)).length
+          : (text.match(/MANIFOLD_SOLID_BREP/g) ?? []).length,
       bounds: { min, max },
       volume,
       watertight: valid,
       exactFaces,
-      declaredUnits: stepDeclaredUnits(text),
+      declaredUnits:
+        format === 'iges' ? igesDeclaredUnits(text) : stepDeclaredUnits(text),
       bodyNames,
       bodyColors: /COLOUR_RGB|STYLED_ITEM/.test(text),
       triangles: null,

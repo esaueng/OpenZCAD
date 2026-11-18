@@ -19,6 +19,112 @@ export function assertMinimumProjectSchema(
     throw new Error(`${content} require project schema v${minimum} or newer.`);
 }
 
+/** R01 datum points and coordinate systems (schema v99). */
+export function assertDatumPointCsysSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    99,
+    'Datum points and coordinate systems'
+  );
+}
+
+/**
+ * Whether `value` holds R01 v99 content anywhere: a datum point or
+ * coordinate system feature, a datum-point or coordinate-system source, an
+ * axis along a coordinate system, or a Move aligned by them. An older client
+ * would fail to resolve every one of them, so a document holding one refuses.
+ */
+export function hasDatumPointCsysContent(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const item = pending.pop();
+    if (typeof item !== 'object' || item === null || seen.has(item)) continue;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const child of item as unknown[]) pending.push(child);
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (
+      entry.featureKind === 'datum-point' ||
+      entry.featureKind === 'datum-csys' ||
+      entry.type === 'datum-point' ||
+      entry.type === 'datum-csys' ||
+      entry.kind === 'csys-axis' ||
+      entry.csysAlign !== undefined
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** M06 ribs (schema v106). */
+export function assertRibSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 101, 'Ribs');
+}
+
+/** R01 reference constructors (schema v108). */
+export function assertDatumReferenceConstructorSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    108,
+    'Datum planes square to an edge or at an angle, and axes square to a face,'
+  );
+}
+
+/**
+ * Whether a datum plane or axis definition is an R01 v108 constructor: a
+ * plane square to an edge, a plane through an edge at an angle, or an axis
+ * square to a face. An older client cannot resolve them.
+ */
+export function hasDatumReferenceConstructorContent(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const data = value as { featureKind?: unknown; definition?: unknown };
+  const kind =
+    typeof data.definition === 'object' && data.definition !== null
+      ? (data.definition as { kind?: unknown }).kind
+      : undefined;
+  return (
+    (data.featureKind === 'datum-plane' &&
+      (kind === 'normal-to-edge' || kind === 'edge-angle')) ||
+    (data.featureKind === 'datum-axis' && kind === 'face-normal')
+  );
+}
+
+/**
+ * Whether a command payload (a new datum or an edit) holds a v108 datum
+ * definition anywhere. The three kind names are used by nothing else.
+ */
+export function hasDatumReferenceConstructorKind(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const item = pending.pop();
+    if (typeof item !== 'object' || item === null || seen.has(item)) continue;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const child of item as unknown[]) pending.push(child);
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (
+      entry.kind === 'normal-to-edge' ||
+      entry.kind === 'edge-angle' ||
+      entry.kind === 'face-normal'
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** M12 wraps (schema v111). */
+export function assertWrapSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 111, 'Wraps');
+}
+
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
 export function assertSlotSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 59, 'Sketch slots');
@@ -43,6 +149,14 @@ export function assertAssemblyCouplingSchema(version: unknown): void {
  */
 export function assertPrintClearanceSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 60, 'A print clearance');
+}
+
+/**
+ * D07 model-based definition (schema v106): `pmi` and its commands. An
+ * older reader would drop the section on save.
+ */
+export function assertModelPmiSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 106, 'Model PMI');
 }
 
 /**
@@ -153,6 +267,32 @@ export function assertPatternContentSchema(
  * reader would drill one hole at the stored position, or drop the size, in
  * their place.
  */
+export const STEP_STRUCTURE_SCHEMA_VERSION = 96;
+
+/** I02: an import numbered by the product-structure reader needs v96. */
+export function assertImportedStepContentSchema(
+  data: unknown,
+  version: unknown
+): void {
+  if (record(data) && data.stepReader !== undefined)
+    assertMinimumProjectSchema(
+      version,
+      STEP_STRUCTURE_SCHEMA_VERSION,
+      'Structured STEP imports'
+    );
+}
+
+/** L15: custom features need the schema that declares them. */
+export const CUSTOM_FEATURE_SCHEMA_VERSION = 110;
+
+export function assertCustomFeatureSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    CUSTOM_FEATURE_SCHEMA_VERSION,
+    'Custom features'
+  );
+}
+
 export function assertHoleContentSchema(data: unknown, version: unknown): void {
   if (!record(data)) return;
   if (data.points !== undefined)
@@ -385,6 +525,64 @@ export function hasDrawingBom(value: unknown): boolean {
   return false;
 }
 
+/** D07 datum feature symbols and feature control frames (schema v98). */
+export function assertDrawingToleranceSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 98, 'Geometric tolerancing');
+}
+
+/** Whether `value` holds a v98 datum feature symbol or feature control frame. */
+export function hasDrawingTolerance(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.kind === 'datum-feature' || entry.kind === 'feature-control-frame')
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D07 fit and thread classes and general-tolerance blocks (schema v105). */
+export function assertDrawingFitSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 105, 'Fits and general tolerances');
+}
+
+/** Whether `value` holds a v105 fit, thread class or general-tolerance block. */
+export function hasDrawingFit(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.annotationId === 'string' &&
+      (entry.kind === 'general-tolerance' ||
+        entry.fit !== undefined ||
+        entry.threadClass !== undefined)
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
 /** D03 auxiliary views (schema v81). */
 export function assertDrawingAuxiliarySchema(version: unknown): void {
   assertMinimumProjectSchema(version, 81, 'Auxiliary views');
@@ -404,6 +602,108 @@ export function hasDrawingAuxiliary(value: unknown): boolean {
     }
     const entry = next as Record<string, unknown>;
     if (typeof entry.viewId === 'string' && entry.auxiliary !== undefined)
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D02 title-block layouts and shop fields (schema v94). */
+export function assertDrawingTitleBlockLayoutSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 94, 'Title-block layouts');
+}
+
+const SHOP_TITLE_FIELDS = [
+  'company',
+  'material',
+  'finish',
+  'checkedBy',
+  'approvedBy',
+  'tolerances'
+];
+
+/** Whether `value` holds a v94 title-block layout or shop field. */
+export function hasDrawingTitleBlockLayout(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    // A layout, or (in an update) its clearing to null.
+    if (entry.titleBlockLayout !== undefined) return true;
+    const block = entry.titleBlock;
+    if (
+      typeof block === 'object' &&
+      block !== null &&
+      SHOP_TITLE_FIELDS.some((key) => key in block)
+    )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D03 stepped sections (schema v93). */
+export function assertDrawingSteppedSectionSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 93, 'Stepped sections');
+}
+
+/** Whether `value` holds a v93 stepped section (a section with steps). */
+export function hasDrawingSteppedSection(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      typeof entry.sourceViewId === 'string' &&
+      typeof entry.depth === 'number' &&
+      Array.isArray(entry.steps) &&
+      entry.steps.length > 0
+    )
+      return true;
+    // A view update's `sectionSteps`, setting or clearing them.
+    if (Array.isArray(entry.sectionSteps)) return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** D02 sheet images (schema v92). */
+export function assertDrawingImageSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 92, 'Sheet images');
+}
+
+/** Whether `value` holds a v92 sheet image annotation. */
+export function hasDrawingImage(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (
+      entry.kind === 'image' &&
+      typeof entry.annotationId === 'string' &&
+      entry.referenceImageId !== undefined
+    )
       return true;
     pending.push(...Object.values(entry));
   }
@@ -571,10 +871,28 @@ export function assertDocumentContentCommandSchema(
       assertComponentConfigurationSchema(document.schemaVersion);
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (
+      command.kind === 'feature.datum-point' ||
+      command.kind === 'feature.datum-csys' ||
+      (typeof command.kind === 'string' &&
+        command.kind.startsWith('feature.') &&
+        hasDatumPointCsysContent(command.payload))
+    )
+      assertDatumPointCsysSchema(document.schemaVersion);
+    if (command.kind === 'feature.rib') assertRibSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('feature.') &&
+      hasDatumReferenceConstructorKind(command.payload)
+    )
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
+    if (command.kind === 'feature.wrap') assertWrapSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
+    if (typeof command.kind === 'string' && command.kind.startsWith('pmi.'))
+      assertModelPmiSchema(document.schemaVersion);
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('configuration.')
@@ -625,6 +943,24 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingImage(command.payload)
+    )
+      assertDrawingImageSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingSteppedSection(command.payload)
+    )
+      assertDrawingSteppedSectionSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingTitleBlockLayout(command.payload)
+    )
+      assertDrawingTitleBlockLayoutSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingDetail(command.payload)
     )
       assertDrawingDetailSchema(document.schemaVersion);
@@ -634,6 +970,18 @@ export function assertDocumentContentCommandSchema(
       hasDrawingBom(command.payload)
     )
       assertDrawingBomSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingTolerance(command.payload)
+    )
+      assertDrawingToleranceSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingFit(command.payload)
+    )
+      assertDrawingFitSchema(document.schemaVersion);
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
@@ -649,6 +997,10 @@ export function assertDocumentContentCommandSchema(
       assertSlotSchema(document.schemaVersion);
     if (command.kind === 'feature.thread')
       assertThreadContentSchema(command.payload, document.schemaVersion);
+    if (command.kind === 'import.step')
+      assertImportedStepContentSchema(command.payload, document.schemaVersion);
+    if (command.kind === 'feature.custom-feature')
+      assertCustomFeatureSchema(document.schemaVersion);
     if (command.kind === 'feature.pattern')
       assertPatternContentSchema(command.payload, document.schemaVersion);
     if (command.kind === 'feature.hole')
@@ -729,6 +1081,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertObjectFolderSchema(document.schemaVersion);
+  if (document.pmi !== undefined) assertModelPmiSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'pmi' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertModelPmiSchema(document.schemaVersion);
   if (document.printClearance !== undefined)
     assertPrintClearanceSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
@@ -807,10 +1167,58 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
           hasDrawingFreeSection(change.after))
       )
         assertDrawingFreeSectionSchema(document.schemaVersion);
+  if (hasDrawingImage(document.drawings))
+    assertDrawingImageSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingImage(change.before) || hasDrawingImage(change.after))
+      )
+        assertDrawingImageSchema(document.schemaVersion);
+  if (hasDrawingSteppedSection(document.drawings))
+    assertDrawingSteppedSectionSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingSteppedSection(change.before) ||
+          hasDrawingSteppedSection(change.after))
+      )
+        assertDrawingSteppedSectionSchema(document.schemaVersion);
+  if (hasDrawingTitleBlockLayout(document.drawings))
+    assertDrawingTitleBlockLayoutSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingTitleBlockLayout(change.before) ||
+          hasDrawingTitleBlockLayout(change.after))
+      )
+        assertDrawingTitleBlockLayoutSchema(document.schemaVersion);
   if (hasDrawingDetail(document.drawings))
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
     assertDrawingBomSchema(document.schemaVersion);
+  if (hasDrawingTolerance(document.drawings))
+    assertDrawingToleranceSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingTolerance(change.before) ||
+          hasDrawingTolerance(change.after))
+      )
+        assertDrawingToleranceSchema(document.schemaVersion);
+  if (hasDrawingFit(document.drawings))
+    assertDrawingFitSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingFit(change.before) || hasDrawingFit(change.after))
+      )
+        assertDrawingFitSchema(document.schemaVersion);
   if (hasDrawingAuxiliary(document.drawings))
     assertDrawingAuxiliarySchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
@@ -873,12 +1281,27 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
+      assertImportedStepContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')
+      assertCustomFeatureSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'pattern')
       assertPatternContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'hole')
       assertHoleContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (node.kind === 'feature' && hasDatumPointCsysContent(node.data))
+      assertDatumPointCsysSchema(document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'rib')
+      assertRibSchema(document.schemaVersion);
+    if (
+      node.kind === 'feature' &&
+      hasDatumReferenceConstructorContent(node.data)
+    )
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'wrap')
+      assertWrapSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'standard-part')
       assertStandardPartSchema(document.schemaVersion, node.data);
     if (

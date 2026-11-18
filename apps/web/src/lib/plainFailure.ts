@@ -276,5 +276,5 @@ export function unsupportedImportMessage(fileName: string): string {
   const freecad = /^fcstd$/i.test(extension ?? '')
     ? ' In FreeCAD, use File › Export to save it as STEP first.'
     : '';
-  return `OpenZCAD can’t import ${what}. It imports STEP, STL, 3MF, OBJ, GLB, PLY, DXF, or a .shapr + STEP pair.${freecad}`;
+  return `OpenZCAD can’t import ${what}. It imports STEP, IGES (B-rep solids), STL, 3MF, OBJ, GLB, PLY, DXF, or a .shapr + STEP pair.${freecad}`;
 }

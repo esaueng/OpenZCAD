@@ -479,6 +479,23 @@
   }
 }
 
+/* Two exports on one line (STEP and IGES), so the File menu gains a format
+   without gaining a row. */
+.topbar-menu-item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px;
+}
+
+.topbar-menu-item-compact {
+  width: auto;
+  grid-template-columns: auto auto;
+}
+
+.topbar-menu-item.topbar-menu-item-compact svg {
+  grid-row: auto;
+}
+
 .topbar-menu-item:hover:not(:disabled) {
   background: var(--color-surface-hover);
 }

@@ -4,6 +4,7 @@ import {
 } from './exact-reference-resolution';
 import { edgeSelectionKey } from './exact-edge-selection-transport';
 import { upstreamSnapshot } from './exact-carry-edit-gate';
+import { buildCustomFeature } from './exact-custom-feature';
 import { buildGearFeature } from './exact-gear';
 import { buildSheetMetalFeature } from './exact-sheet-metal';
 import { buildStandardPartFeature } from './exact-standard-part';
@@ -45,7 +46,16 @@ import {
 import { throughAllSpan, unionBounds } from './through-all';
 import { toFaceSweepFeature } from './extrude-options';
 import {
+  axisPlaneDatumPoint,
   axisRotationMatrix,
+  csysAlignMatrix,
+  csysDatumAxis,
+  offsetDatumPoint,
+  placementDatumCsys,
+  planeDatumCsys,
+  threePointDatumCsys,
+  WORLD_CSYS,
+  type DatumCsys,
   geometryTolerance,
   midDatumPlane,
   offsetDatumPlane,
@@ -149,9 +159,12 @@ import {
   formatMeasuredVolume,
   importMeshSolid,
   inheritMeshOrigin,
-  resolveParametricPoint
+  resolveParametricPoint,
+  validateGeneratedSolid
 } from './exact-shape-utils';
 import {
+  importedStepCacheKey,
+  importStepStructureWithOwnBudget,
   importStepWithOwnBudget,
   stepImportEmptyReason
 } from './kernel-step-import';
@@ -261,11 +274,18 @@ import {
   buildProfileSweep,
   buildHelicalSweep,
   resolveDatumAxisRefAtHistory,
+  resolveDatumCsysRefAtHistory,
+  resolveDatumPointEdgeAtHistory,
+  resolveEdgeAngleDatumPlaneAtHistory,
+  resolveFaceNormalDatumAxisAtHistory,
+  resolveNormalToEdgeDatumPlaneAtHistory,
   resolveDatumAxisSourceAtHistory,
   resolveDatumPointAtHistory,
   resolvePlaneRefAtHistory,
   resolveSketchBasisAtHistory
 } from './exact-profile-builders';
+import { buildRibSolid } from './exact-rib';
+import { buildWrapSolids, resolveWrapFrame } from './exact-wrap';
 import { applyDirectEdit } from './exact-direct-edit-ops';
 import { resolveSketchProjectionsAtHistory } from './exact-sketch-projection';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
@@ -488,9 +508,10 @@ function buildImportedStepFeature(
     importedSteps
   } = ctx;
   if (feature.bodyId) {
+    const structured = data.stepReader === 'structure';
     const checksum =
-      data.stepText === undefined
-        ? data.stepSourceRef?.checksumSha256
+      data.stepText === undefined && data.stepSourceRef
+        ? importedStepCacheKey(data.stepSourceRef.checksumSha256, data)
         : undefined;
     const cached = checksum ? importedSteps?.lookup(checksum) : undefined;
     let solids: number[];
@@ -519,7 +540,10 @@ function buildImportedStepFeature(
         }
         sourceBytes = resolved;
       }
-      const imported = importStepWithOwnBudget(kernel, sourceBytes);
+      // I02: a structured import numbers its solids by placed occurrence.
+      const imported = structured
+        ? importStepStructureWithOwnBudget(kernel, sourceBytes)
+        : importStepWithOwnBudget(kernel, sourceBytes);
       const declared = Array.from(imported.solids);
       if (declared.length === 0) {
         // The reader's report, not a guess from the byte count: a file whose
@@ -1212,7 +1236,30 @@ function resolveTransformFeature(
       z: resolveParamValue(pivot.z, scope, 'pivot Z', document.units)
     }
   );
-  const matrix = axisTurn ? composeAffine(authored, axisTurn) : authored;
+  // R01 (schema v99): the coordinate-system alignment applies before the
+  // axis turn and the authored transform.
+  const align =
+    data.csysAlign &&
+    affineMatrix(
+      csysAlignMatrix(
+        data.csysAlign.from
+          ? resolveDatumCsysRefAtHistory(
+              document,
+              data.csysAlign.from,
+              `Move "${feature.name}"`,
+              result
+            )
+          : WORLD_CSYS,
+        resolveDatumCsysRefAtHistory(
+          document,
+          data.csysAlign.to,
+          `Move "${feature.name}"`,
+          result
+        )
+      )
+    );
+  const turned = axisTurn ? composeAffine(authored, axisTurn) : authored;
+  const matrix = align ? composeAffine(turned, align) : turned;
   // Both primitive planners convert world-space drags through uniform scale.
   const allowUniformScale = ['cylinder', 'box'].includes(
     modifierChainRootPrimitive(document, data.targetBodyId) ?? ''
@@ -1236,7 +1283,7 @@ function buildTransformFeature(
   );
   result.shapes.set(resultBodyId, transformed);
   try {
-    if (data.axisRotation) ctx.idleLineageView?.abandon();
+    if (data.axisRotation || data.csysAlign) ctx.idleLineageView?.abandon();
     else
       ctx.idleLineageView?.transform(
         kernel,
@@ -1263,7 +1310,7 @@ export function completePreparedFeatureLineage(
   try {
     const data = feature.data;
     if (data.featureKind === 'transform') {
-      if (data.axisRotation) return view.abandon();
+      if (data.axisRotation || data.csysAlign) return view.abandon();
       const { resultBodyId, matrix, allowUniformScale } =
         resolveTransformFeature(ctx, feature, data);
       const transformed = ctx.result.shapes.get(resultBodyId);
@@ -1386,6 +1433,43 @@ function buildDatumPlaneFeature(
         definition.reverseNormal
       );
       break;
+    case 'normal-to-edge':
+      frame = resolveNormalToEdgeDatumPlaneAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.edge,
+        'point' in definition.at
+          ? { point: point(definition.at.point) }
+          : {
+              fraction: resolveParamValue(
+                definition.at.fraction,
+                ctx.scope,
+                'datum plane position along the edge',
+                ctx.document.units
+              )
+            },
+        feature.name,
+        ctx.result,
+        definition.reverseNormal
+      );
+      break;
+    case 'edge-angle':
+      frame = resolveEdgeAngleDatumPlaneAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.edge,
+        source(definition.reference),
+        resolveParamValue(
+          definition.angleDeg,
+          ctx.scope,
+          'datum plane angle',
+          ctx.document.units
+        ),
+        feature.name,
+        ctx.result,
+        definition.reverseNormal
+      );
+      break;
   }
   ctx.result.datumFrames.set(feature.featureId, frame);
 }
@@ -1420,6 +1504,25 @@ function buildDatumAxisFeature(
       );
       break;
     }
+    case 'face-normal':
+      axis = resolveFaceNormalDatumAxisAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.source,
+        resolveDatumPointAtHistory(
+          ctx.kernel,
+          ctx.document,
+          definition.point,
+          feature.name,
+          ctx.result,
+          ctx.scope,
+          'Datum axis'
+        ),
+        feature.name,
+        ctx.result,
+        definition.reverseDirection
+      );
+      break;
     case 'edge':
     case 'cylinder':
       axis = resolveDatumAxisSourceAtHistory(
@@ -1448,8 +1551,147 @@ function buildDatumAxisFeature(
       );
       break;
     }
+    case 'csys-axis':
+      axis = csysDatumAxis(
+        resolveDatumCsysRefAtHistory(
+          ctx.document,
+          definition.csys,
+          `Datum axis "${feature.name}"`,
+          ctx.result
+        ),
+        definition.axis,
+        definition.reverseDirection
+      );
+      break;
   }
   ctx.result.datumAxes.set(feature.featureId, axis);
+}
+
+/**
+ * R01 (schema v99): resolves a datum point once at its history position, for
+ * every later plane, axis, coordinate system and point built from it. It
+ * makes no body.
+ */
+function buildDatumPointFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'datum-point'>
+): void {
+  const { definition } = data;
+  const value = (v: ParamValue, name: string) =>
+    resolveParamValue(v, ctx.scope, `datum point ${name}`, ctx.document.units);
+  let point: Vec3;
+  switch (definition.kind) {
+    case 'offset':
+      point = offsetDatumPoint(
+        resolveDatumPointAtHistory(
+          ctx.kernel,
+          ctx.document,
+          definition.from,
+          feature.name,
+          ctx.result,
+          ctx.scope,
+          'Datum point'
+        ),
+        {
+          x: value(definition.offset.x, 'X offset'),
+          y: value(definition.offset.y, 'Y offset'),
+          z: value(definition.offset.z, 'Z offset')
+        }
+      );
+      break;
+    case 'edge-midpoint':
+    case 'arc-center':
+      point = resolveDatumPointEdgeAtHistory(
+        ctx.kernel,
+        ctx.document,
+        definition.source,
+        definition.kind,
+        feature.name,
+        ctx.result
+      );
+      break;
+    case 'axis-plane':
+      point = axisPlaneDatumPoint(
+        resolveDatumAxisRefAtHistory(
+          ctx.document,
+          definition.axis,
+          `Datum point "${feature.name}"`,
+          ctx.result
+        ),
+        resolvePlaneRefAtHistory(
+          ctx.kernel,
+          ctx.document,
+          definition.plane,
+          { kind: 'Datum point', name: feature.name },
+          ctx.result,
+          ctx.scope
+        )
+      );
+      break;
+  }
+  (ctx.result.datumPoints ??= new Map()).set(feature.featureId, point);
+}
+
+/**
+ * R01 (schema v99): resolves a coordinate system once at its history
+ * position, for the planes, axes and Moves that use it. It makes no body.
+ */
+function buildDatumCsysFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'datum-csys'>
+): void {
+  const { definition } = data;
+  const point = (source: DatumPointSource) =>
+    resolveDatumPointAtHistory(
+      ctx.kernel,
+      ctx.document,
+      source,
+      feature.name,
+      ctx.result,
+      ctx.scope,
+      'Coordinate system'
+    );
+  let csys: DatumCsys;
+  switch (definition.kind) {
+    case 'three-point':
+      csys = threePointDatumCsys(
+        point(definition.points[0]),
+        point(definition.points[1]),
+        point(definition.points[2])
+      );
+      break;
+    case 'plane':
+      csys = planeDatumCsys(
+        resolvePlaneRefAtHistory(
+          ctx.kernel,
+          ctx.document,
+          definition.source,
+          { kind: 'Coordinate system', name: feature.name },
+          ctx.result,
+          ctx.scope
+        ),
+        definition.origin ? point(definition.origin) : undefined
+      );
+      break;
+    case 'placement': {
+      const angle = (v: ParamValue, name: string) =>
+        resolveParamValue(
+          v,
+          ctx.scope,
+          `coordinate system ${name}`,
+          ctx.document.units
+        );
+      csys = placementDatumCsys(point(definition.origin), {
+        x: angle(definition.rotationDeg.x, 'X rotation'),
+        y: angle(definition.rotationDeg.y, 'Y rotation'),
+        z: angle(definition.rotationDeg.z, 'Z rotation')
+      });
+      break;
+    }
+  }
+  (ctx.result.datumCsys ??= new Map()).set(feature.featureId, csys);
 }
 
 function buildMirrorFeature(
@@ -2077,6 +2319,116 @@ function buildShellFeature(
           'shell',
           `No kept, rim or inner face passed the exact carrier and uniqueness checks, or a body has more than ${SHELL_DRAFT_LINEAGE_FACE_LIMIT} faces.`
         )
+  });
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/**
+ * M06 (schema v101): the rib's exact material (see `exact-rib.ts`), united
+ * with the body it braces through the same checked union a Boolean takes.
+ */
+function buildRibFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'rib'>
+): void {
+  const { kernel, result } = ctx;
+  if (!feature.bodyId) throw new Error('Rib has no result body.');
+  const target = result.shapes.get(data.targetBodyId);
+  if (!target || target.solids.length !== 1) {
+    throw new Error('Rib target body is unavailable.');
+  }
+  const basis = result.sketchBases.get(data.profile.sketchId);
+  if (!basis) {
+    throw new Error(
+      'The rib profile sketch plane did not resolve at its history position.'
+    );
+  }
+  const rib = buildRibSolid(
+    kernel,
+    ctx.document,
+    data,
+    target.solids[0]!,
+    basis,
+    ctx.scope,
+    (message) => raiseFeatureWarning(result, feature, message, 'advisory')
+  );
+  const { solid } = fuseUniformSolidChecked(
+    kernel,
+    [target.solids[0]!, rib],
+    [`body of "${feature.name}"`, `rib "${feature.name}"`]
+  );
+  result.consumed.add(data.targetBodyId);
+  result.shapes.set(feature.bodyId, {
+    solids: [solid],
+    lineage: remusHashOnlyLineage(
+      'rib',
+      'Rib topology has no verified output evolution relation.'
+    )
+  });
+  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/**
+ * M12 (schema v111): the wrap's exact material (see `exact-wrap.ts`), united
+ * with the body (emboss) or cut from it (engrave): one body either way.
+ */
+function buildWrapFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'wrap'>
+): void {
+  const { kernel, result } = ctx;
+  if (!feature.bodyId) throw new Error('Wrap has no result body.');
+  const target = result.shapes.get(data.targetBodyId);
+  if (!target || target.solids.length !== 1) {
+    throw new Error('Wrap target body is unavailable.');
+  }
+  const basis = result.sketchBases.get(data.sketchId);
+  if (!basis) {
+    throw new Error('The wrap sketch plane did not resolve at its history position.');
+  }
+  const frame = resolveWrapFrame(
+    kernel,
+    ctx.document,
+    data,
+    target,
+    basis,
+    ctx.scope,
+    feature.name
+  );
+  const pieces = buildWrapSolids(
+    kernel,
+    ctx.document,
+    data,
+    frame,
+    basis,
+    ctx.scope,
+    (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
+    feature.name
+  );
+  let solid: number;
+  if (data.mode === 'emboss') {
+    solid = fuseUniformSolidChecked(
+      kernel,
+      [target.solids[0]!, ...pieces],
+      [`body of "${feature.name}"`, ...pieces.map(() => `wrap "${feature.name}"`)]
+    ).solid;
+  } else {
+    solid = target.solids[0]!;
+    for (const piece of pieces) {
+      const cut = kernel.cut(solid, piece);
+      kernel.deleteSolid(piece);
+      solid = validateGeneratedSolid(kernel, cut, `Engrave "${feature.name}"`);
+    }
+  }
+  result.consumed.add(data.targetBodyId);
+  result.shapes.set(feature.bodyId, {
+    solids: [solid],
+    lineage: remusHashOnlyLineage(
+      'wrap',
+      'Wrap topology has no verified output evolution relation.'
+    )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
@@ -4294,6 +4646,12 @@ function buildFeatureByKind(
     case 'solid-offset':
       buildSolidOffsetFeature(ctx, feature, feature.data);
       break;
+    case 'rib':
+      buildRibFeature(ctx, feature, feature.data);
+      break;
+    case 'wrap':
+      buildWrapFeature(ctx, feature, feature.data);
+      break;
     case 'draft':
       buildDraftFeature(ctx, feature, feature.data);
       break;
@@ -4316,5 +4674,18 @@ function buildFeatureByKind(
     case 'datum-axis':
       buildDatumAxisFeature(ctx, feature, feature.data);
       break;
+    case 'datum-point':
+      buildDatumPointFeature(ctx, feature, feature.data);
+      break;
+    case 'datum-csys':
+      buildDatumCsysFeature(ctx, feature, feature.data);
+      break;
+    case 'custom-feature':
+      buildCustomFeature(ctx, feature, feature.data, buildFeature);
+      break;
+    default:
+      // A new feature kind must say how it builds; one that fell through
+      // here would publish no body and no refusal.
+      feature.data satisfies never;
   }
 }

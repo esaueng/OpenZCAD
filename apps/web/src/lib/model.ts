@@ -203,16 +203,21 @@ export const FEATURE_KIND_LABELS: Record<FeatureKind, string> = {
   thread: 'Thread',
   shell: 'Shell',
   'solid-offset': 'Solid offset',
+  rib: 'Rib',
+  wrap: 'Wrap',
   draft: 'Draft',
   thicken: 'Thicken',
   fillet: 'Fillet',
   chamfer: 'Chamfer',
+  'custom-feature': 'Custom feature',
   pattern: 'Pattern',
   'direct-edit': 'Direct edit',
   'imported-step': 'Imported STEP',
   'imported-mesh': 'Imported mesh',
   'datum-plane': 'Datum plane',
-  'datum-axis': 'Datum axis'
+  'datum-axis': 'Datum axis',
+  'datum-point': 'Datum point',
+  'datum-csys': 'Coordinate system'
 };
 
 /**

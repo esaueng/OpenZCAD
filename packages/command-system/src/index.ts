@@ -122,6 +122,7 @@ import {
   type SketchReferenceLabelPositionInput,
   archiveHistorySources,
   renameCheckpoint,
+  setShareLinkSheets,
   type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
   assertNoNewHistoryFork,
@@ -133,6 +134,11 @@ import {
   addSketchFeature,
   addSketchObjects,
   addDatumAxis,
+  addDatumCsys,
+  addDatumPoint,
+  validateDatumCsysDefinition,
+  validateCsysAlign,
+  validateDatumPointDefinition,
   addDatumPlane,
   addSplitFeature,
   appendRevision,
@@ -146,6 +152,8 @@ import {
   createSketchFeatureIds,
   createSplitFeatureIds,
   type DatumAxisInput,
+  type DatumCsysInput,
+  type DatumPointInput,
   type DatumPlaneInput,
   deleteFeature,
   deleteParameter,
@@ -156,6 +164,7 @@ import {
   draftBody,
   type DraftInput,
   type EdgeModifierInput,
+  type CustomFeatureInput,
   evaluateExpression,
   type ExtrudeInput,
   extrudeSketch,
@@ -163,6 +172,7 @@ import {
   type FeatureMoveInput,
   type FeatureUpdateInput,
   filletEdges,
+  customFeatureBody,
   findFeature,
   findParameterReferences,
   findSketch,
@@ -296,6 +306,12 @@ import {
   type ReferenceImageAddInput,
   type ReferenceImageUpdateInput,
   type ReferenceImageDeleteInput,
+  addModelPmi,
+  updateModelPmi,
+  deleteModelPmi,
+  type ModelPmiAddInput,
+  type ModelPmiUpdateInput,
+  type ModelPmiDeleteInput,
   resolveParamValue,
   resolvedSketchDocument,
   resolveSketchInput,
@@ -309,6 +325,10 @@ import {
   setSketchDimensionLabelPosition,
   shellBody,
   type ShellInput,
+  ribBody,
+  type RibInput,
+  wrapBody,
+  type WrapInput,
   type ShaprGuidedImportInput,
   type SketchConstraintAddInput,
   type SketchConstraintDeleteInput,
@@ -362,6 +382,7 @@ import {
   type CadDatumAxisDefinition,
   type CadPatchProposal
 } from '@openzcad/ai-contracts';
+import { compileScript, customFeatureScriptError } from '@openzcad/scripting';
 import {
   computeSketchProfileAnalysis,
   computeSketchRegions,
@@ -399,12 +420,16 @@ export type CommandKind =
   | 'feature.split'
   | 'feature.datum-plane'
   | 'feature.datum-axis'
+  | 'feature.datum-point'
+  | 'feature.datum-csys'
   | 'feature.hole'
   | 'feature.gear'
   | 'feature.sheet-metal'
   | 'feature.standard-part'
   | 'feature.thread'
   | 'feature.shell'
+  | 'feature.rib'
+  | 'feature.wrap'
   | 'feature.solid-offset'
   | 'feature.draft'
   | 'feature.thicken'
@@ -412,6 +437,7 @@ export type CommandKind =
   | 'feature.fillet'
   | 'feature.chamfer'
   | 'feature.pattern'
+  | 'feature.custom-feature'
   | 'feature.update'
   | 'feature.delete'
   | 'feature.reorder'
@@ -466,7 +492,10 @@ export type CommandKind =
   | 'drawing.annotation.delete'
   | 'reference-image.add'
   | 'reference-image.update'
-  | 'reference-image.delete';
+  | 'reference-image.delete'
+  | 'pmi.add'
+  | 'pmi.update'
+  | 'pmi.delete';
 
 /**
  * The feature kind each feature-creating command creates: every
@@ -594,7 +623,10 @@ export type AnyCommand =
   | CommandDefinition<DrawingAnnotationDeleteInput>
   | CommandDefinition<ReferenceImageAddInput>
   | CommandDefinition<ReferenceImageUpdateInput>
-  | CommandDefinition<ReferenceImageDeleteInput>;
+  | CommandDefinition<ReferenceImageDeleteInput>
+  | CommandDefinition<ModelPmiAddInput>
+  | CommandDefinition<ModelPmiUpdateInput>
+  | CommandDefinition<ModelPmiDeleteInput>;
 
 function makeCommand<TPayload>(
   kind: CommandKind,
@@ -981,6 +1013,46 @@ function validateFeatureHistoryPosition(
         `"${feature.name}" would run before the sketch it uses exists.`
       );
     }
+  }
+}
+
+/**
+ * L15: a custom feature's script must match its pin, compile, and take the
+ * inputs given; and a published version is immutable, so every other
+ * instance of the same id and version in the document carries the same
+ * source. `featureId` is the instance being edited, or null for a new one.
+ */
+function validateCustomFeature(
+  document: ProjectDocument,
+  input: Pick<CustomFeatureInput, 'script' | 'inputs'>,
+  featureId: FeatureId | null
+): void {
+  const problem = customFeatureScriptError(input.script);
+  if (problem) throw new Error(problem);
+  const compiled = compileScript(input.script.source).script!;
+  const declared = new Set(compiled.inputs.map((entry) => entry.name));
+  for (const name of Object.keys(input.inputs)) {
+    if (!declared.has(name))
+      throw new Error(`Script ${input.script.id} has no input \`${name}\`.`);
+  }
+  for (const entry of compiled.inputs) {
+    if (entry.defaultValue === null && !Object.hasOwn(input.inputs, entry.name))
+      throw new Error(
+        `Input \`${entry.name}\` of ${input.script.id} has no default; give it a value.`
+      );
+  }
+  for (const node of Object.values(document.nodes)) {
+    if (
+      node.kind === 'feature' &&
+      node.featureId !== featureId &&
+      node.data.featureKind === 'custom-feature' &&
+      node.data.script.id === input.script.id &&
+      node.data.script.version === input.script.version &&
+      node.data.script.digest !== input.script.digest
+    )
+      throw new Error(
+        `${input.script.id} ${input.script.version} is already published in this project with other source; publish the change as a new version.`
+      );
   }
 }
 
@@ -2252,6 +2324,32 @@ function validateShellInput(
   }
 }
 
+/** M06: a rib braces an existing body with a positive thickness. */
+function validateRibInput(document: ProjectDocument, input: RibInput): void {
+  validateBodyTarget(document, input.targetBodyId);
+  validatePositiveModelingValue(document, 'Rib thickness', input.thickness);
+  const sketch = findSketch(document, input.profile.sketchId);
+  if (!sketch) throw new Error('The rib profile sketch no longer exists.');
+  if (
+    input.profile.entityIds.length === 0 ||
+    input.profile.entityIds.some((id) => !sketch.objectIds.includes(id))
+  ) {
+    throw new Error('The rib profile names a curve its sketch does not hold.');
+  }
+}
+
+/** M12: a wrap's body, face and regions exist, and its depth is positive. */
+function validateWrapInput(document: ProjectDocument, input: WrapInput): void {
+  validateBodyTarget(document, input.targetBodyId);
+  validatePositiveModelingValue(document, 'Wrap depth', input.depth);
+  if (!findSketch(document, input.sketchId))
+    throw new Error('The wrap sketch no longer exists.');
+  if (input.profiles.length === 0)
+    throw new Error('A wrap needs at least one sketch region.');
+  if (input.faceReference?.kind !== 'face')
+    throw new Error('A wrap needs its cylindrical face by lineage.');
+}
+
 function validateModelingFeatureUpdate(
   document: ProjectDocument,
   input: FeatureUpdateInput
@@ -2461,6 +2559,23 @@ function validateModelingFeatureUpdate(
       validateStandardPartInput(preview, { name: feature.name, ...part });
       break;
     }
+    case 'custom-feature': {
+      validateBodyTarget(preview, feature.data.targetBodyId);
+      validateCustomFeature(preview, feature.data, feature.featureId);
+      // The instance being edited is a publication too: its own version
+      // may not take other source in place.
+      const before = findFeature(document, input.featureId)?.data;
+      if (
+        before?.featureKind === 'custom-feature' &&
+        before.script.id === feature.data.script.id &&
+        before.script.version === feature.data.script.version &&
+        before.script.digest !== feature.data.script.digest
+      )
+        throw new Error(
+          `${before.script.id} ${before.script.version} is already published in this project with other source; publish the change as a new version.`
+        );
+      break;
+    }
     case 'shell':
       validateShellInput(preview, {
         name: feature.name,
@@ -2470,6 +2585,16 @@ function validateModelingFeatureUpdate(
         thickness: feature.data.thickness
       });
       break;
+    case 'rib': {
+      const { featureKind: _kind, ...rib } = feature.data;
+      validateRibInput(preview, { name: feature.name, ...rib });
+      break;
+    }
+    case 'wrap': {
+      const { featureKind: _kind, ...wrap } = feature.data;
+      validateWrapInput(preview, { name: feature.name, ...wrap });
+      break;
+    }
     case 'solid-offset':
       validateBodyTarget(preview, feature.data.targetBodyId);
       validatePositiveModelingValue(
@@ -2969,6 +3094,7 @@ export const commandFactories = {
         }
         if (payload.axisRotation)
           validateDatumAxisRef(document, payload.axisRotation.axis, null);
+        validateCsysAlign(document, payload.csysAlign, null);
       }
     );
   },
@@ -3000,7 +3126,9 @@ export const commandFactories = {
         offset: 'Add offset plane',
         midplane: 'Add midplane',
         'three-point': 'Add three-point plane',
-        'parallel-point': 'Add parallel plane'
+        'parallel-point': 'Add parallel plane',
+        'normal-to-edge': 'Add plane square to an edge',
+        'edge-angle': 'Add plane through an edge at an angle'
       }[payload.definition.kind],
       withIds,
       (document) => addDatumPlane(document, withIds).document,
@@ -3016,12 +3144,41 @@ export const commandFactories = {
         'two-point': 'Add axis through two points',
         edge: 'Add axis along edge',
         cylinder: 'Add cylinder axis',
-        'plane-intersection': 'Add axis where planes meet'
+        'plane-intersection': 'Add axis where planes meet',
+        'csys-axis': 'Add coordinate system axis',
+        'face-normal': 'Add axis square to a face'
       }[payload.definition.kind],
       withIds,
       (document) => addDatumAxis(document, withIds).document,
       (document) =>
         validateDatumAxisDefinition(document, withIds.definition, null)
+    );
+  },
+  addDatumPoint(payload: DatumPointInput): CommandDefinition<DatumPointInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    return makeCommand(
+      'feature.datum-point',
+      {
+        offset: 'Add point',
+        'edge-midpoint': 'Add point at edge midpoint',
+        'arc-center': 'Add point at arc centre',
+        'axis-plane': 'Add point where axis meets plane'
+      }[payload.definition.kind],
+      withIds,
+      (document) => addDatumPoint(document, withIds).document,
+      (document) =>
+        validateDatumPointDefinition(document, withIds.definition, null)
+    );
+  },
+  addDatumCsys(payload: DatumCsysInput): CommandDefinition<DatumCsysInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createFeatureOnlyIds() };
+    return makeCommand(
+      'feature.datum-csys',
+      'Add coordinate system',
+      withIds,
+      (document) => addDatumCsys(document, withIds).document,
+      (document) =>
+        validateDatumCsysDefinition(document, withIds.definition, null)
     );
   },
   holeBody(payload: HoleInput): CommandDefinition<HoleInput> {
@@ -3099,6 +3256,26 @@ export const commandFactories = {
       withIds,
       (document) => threadBody(document, withIds).document,
       (document) => validateThreadInput(document, withIds)
+    );
+  },
+  ribBody(payload: RibInput): CommandDefinition<RibInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.rib',
+      'Add rib',
+      withIds,
+      (document) => ribBody(document, withIds).document,
+      (document) => validateRibInput(document, withIds)
+    );
+  },
+  wrapBody(payload: WrapInput): CommandDefinition<WrapInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.wrap',
+      payload.mode === 'emboss' ? 'Emboss onto cylinder' : 'Engrave into cylinder',
+      withIds,
+      (document) => wrapBody(document, withIds).document,
+      (document) => validateWrapInput(document, withIds)
     );
   },
   shellBody(payload: ShellInput): CommandDefinition<ShellInput> {
@@ -3197,6 +3374,22 @@ export const commandFactories = {
         validateBodyTarget(document, payload.targetBodyId);
         validateEdgeReferences(payload);
         validateEdgeModifierBlend(document, 'chamfer', payload);
+      }
+    );
+  },
+  /** L15: a custom feature running an embedded, pinned script. */
+  customFeature(
+    payload: CustomFeatureInput
+  ): CommandDefinition<CustomFeatureInput> {
+    const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
+    return makeCommand(
+      'feature.custom-feature',
+      `Add ${payload.name}`,
+      withIds,
+      (document) => customFeatureBody(document, withIds).document,
+      (document) => {
+        validateBodyTarget(document, payload.targetBodyId);
+        validateCustomFeature(document, payload, null);
       }
     );
   },
@@ -3778,6 +3971,32 @@ export const commandFactories = {
       payload,
       (document) => deleteReferenceImage(document, payload)
     );
+  },
+  /** D07 (v106): a datum feature or feature control frame on the model. */
+  addModelPmi(payload: ModelPmiAddInput): CommandDefinition<ModelPmiAddInput> {
+    return makeCommand(
+      'pmi.add',
+      payload.annotation.kind === 'datum-feature'
+        ? `Add datum ${payload.annotation.letter}`
+        : 'Add feature control frame',
+      payload,
+      (document) => addModelPmi(document, payload)
+    );
+  },
+  updateModelPmi(
+    payload: ModelPmiUpdateInput,
+    label = 'Edit PMI'
+  ): CommandDefinition<ModelPmiUpdateInput> {
+    return makeCommand('pmi.update', label, payload, (document) =>
+      updateModelPmi(document, payload)
+    );
+  },
+  deleteModelPmi(
+    payload: ModelPmiDeleteInput
+  ): CommandDefinition<ModelPmiDeleteInput> {
+    return makeCommand('pmi.delete', 'Delete PMI', payload, (document) =>
+      deleteModelPmi(document, payload)
+    );
   }
 };
 
@@ -4354,6 +4573,8 @@ class LocalBodyScope {
           break;
         case 'shell':
         case 'solid-offset':
+        case 'rib':
+        case 'wrap':
         case 'draft':
         case 'fillet':
         case 'chamfer':
@@ -4995,7 +5216,10 @@ export function commandsForCadPatch(
       case 'set_parameter':
         return commandFactories.setParameter({
           name: operation.name,
-          expression: operation.expression
+          expression: operation.expression,
+          ...(operation.quantity !== undefined
+            ? { quantity: operation.quantity }
+            : {})
         });
       case 'rename_parameter':
         return commandFactories.renameParameter({
@@ -5062,6 +5286,34 @@ export function commandsForCadPatch(
           name: operation.name
         });
       }
+      case 'update_feature': {
+        if (!findFeature(projectedDocument, operation.featureId)) {
+          throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        return commandFactories.updateFeature({
+          featureId: operation.featureId,
+          ...(Object.keys(operation.data).length > 0
+            ? { data: deepClone(operation.data) }
+            : {}),
+          ...(operation.clearData.length > 0
+            ? { clearData: [...operation.clearData] }
+            : {})
+        });
+      }
+      case 'reorder_feature':
+        if (!findFeature(projectedDocument, operation.featureId)) {
+          throw new Error(`Feature ${operation.featureId} not found.`);
+        }
+        return commandFactories.moveFeature({
+          featureId: operation.featureId,
+          toIndex: operation.toIndex
+        });
+      case 'update_sketch_object':
+        return commandFactories.updateSketchObject({
+          sketchId: operation.sketchId,
+          objectId: operation.objectId as EntityId,
+          data: deepClone(operation.data)
+        });
       case 'add_sketch': {
         const ids = createSketchFeatureIds(operation.objects.length);
         const analysis = computeSketchProfileAnalysis(
@@ -5538,6 +5790,19 @@ export function commandsForCadPatch(
           ids
         });
       }
+      case 'add_custom_feature': {
+        const ids = createBodyFeatureIds();
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], 'custom-feature');
+        return commandFactories.customFeature({
+          name: operation.name,
+          targetBodyId,
+          script: deepClone(operation.script),
+          inputs: { ...operation.inputs },
+          ids
+        });
+      }
       case 'add_solid_offset': {
         const ids = createBodyFeatureIds();
         const targetBodyId = resolveBody(operation.targetBodyId);
@@ -5905,6 +6170,23 @@ export function isReferenceImageCommandKind(kind: string): boolean {
   return kind.startsWith('reference-image.');
 }
 
+/** D07: a command that edits the model's PMI and never its geometry. */
+export function isModelPmiCommandKind(kind: string): boolean {
+  return kind.startsWith('pmi.');
+}
+
+function modelPmiOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  return sectionOnly(entry, isModelPmiCommandKind, 'pmi');
+}
+
+/**
+ * A command that edits reference images (I05) or the model's PMI (D07),
+ * never the geometry: the workspace keeps its ready geometry for it.
+ */
+export function isGeometryFreeCommandKind(kind: string): boolean {
+  return isReferenceImageCommandKind(kind) || isModelPmiCommandKind(kind);
+}
+
 /** Whether a history entry edits reference images and nothing else. */
 function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isReferenceImageCommandKind, 'referenceImages');
@@ -5913,7 +6195,7 @@ function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
 function sectionOnly(
   entry: DocumentHistoryEntry | undefined,
   isSectionKind: (kind: string) => boolean,
-  field: 'drawings' | 'referenceImages' | 'assembly'
+  field: 'drawings' | 'referenceImages' | 'assembly' | 'pmi'
 ): boolean {
   if (!entry?.commandKinds?.length) return false;
   if (!entry.commandKinds.every(isSectionKind)) return false;
@@ -6109,6 +6391,23 @@ export class CommandManager {
     return referenceImageOnly(this.history?.entries[this.history.cursor]);
   }
   /**
+   * Whether undo would revert reference-image or PMI edits only, which
+   * leave the model's geometry alone.
+   */
+  get undoIsGeometryFree(): boolean {
+    return this.undoIsReferenceImageOnly || this.undoIsModelPmiOnly;
+  }
+  get redoIsGeometryFree(): boolean {
+    return this.redoIsReferenceImageOnly || this.redoIsModelPmiOnly;
+  }
+  /** D07: whether undo would revert PMI edits only, leaving the geometry. */
+  get undoIsModelPmiOnly(): boolean {
+    return modelPmiOnly(this.history?.entries[(this.history?.cursor ?? 0) - 1]);
+  }
+  get redoIsModelPmiOnly(): boolean {
+    return modelPmiOnly(this.history?.entries[this.history.cursor]);
+  }
+  /**
    * Whether undo would revert assembly edits only (placements, joints,
    * motion studies), which leave the model and its geometry alone.
    */
@@ -6204,6 +6503,18 @@ export class CommandManager {
     });
     if (next !== this.document)
       this.document = appendRevision(next, 'Archive imported source');
+    return this.document;
+  }
+
+  /**
+   * L08: chooses the drawing sheets share links show; a forward write with
+   * no undo entry. See `setShareLinkSheets`.
+   */
+  setShareLinkSheets(sheetIds: readonly string[]): ProjectDocument {
+    const next = setShareLinkSheets(this.document, sheetIds);
+    if (next === this.document) return this.document;
+    assertDocumentTextBudget(next);
+    this.document = next;
     return this.document;
   }
 
@@ -6486,6 +6797,12 @@ export function replayCommands(
       case 'feature.datum-axis':
         next = addDatumAxis(next, command.payload as DatumAxisInput).document;
         break;
+      case 'feature.datum-point':
+        next = addDatumPoint(next, command.payload as DatumPointInput).document;
+        break;
+      case 'feature.datum-csys':
+        next = addDatumCsys(next, command.payload as DatumCsysInput).document;
+        break;
       case 'feature.hole':
         next = holeBody(next, command.payload as HoleInput).document;
         break;
@@ -6509,6 +6826,12 @@ export function replayCommands(
         break;
       case 'feature.shell':
         next = shellBody(next, command.payload as ShellInput).document;
+        break;
+      case 'feature.rib':
+        next = ribBody(next, command.payload as RibInput).document;
+        break;
+      case 'feature.wrap':
+        next = wrapBody(next, command.payload as WrapInput).document;
         break;
       case 'feature.solid-offset':
         next = offsetSolidBody(
@@ -6539,6 +6862,12 @@ export function replayCommands(
         break;
       case 'feature.pattern':
         next = patternBody(next, command.payload as PatternInput).document;
+        break;
+      case 'feature.custom-feature':
+        next = customFeatureBody(
+          next,
+          command.payload as CustomFeatureInput
+        ).document;
         break;
       case 'feature.update':
         next = updateFeature(next, command.payload as FeatureUpdateInput);
@@ -6827,6 +7156,15 @@ export function replayCommands(
           next,
           command.payload as ReferenceImageDeleteInput
         );
+        break;
+      case 'pmi.add':
+        next = addModelPmi(next, command.payload as ModelPmiAddInput);
+        break;
+      case 'pmi.update':
+        next = updateModelPmi(next, command.payload as ModelPmiUpdateInput);
+        break;
+      case 'pmi.delete':
+        next = deleteModelPmi(next, command.payload as ModelPmiDeleteInput);
         break;
       default:
         // Unknown kinds are skipped (not fatal) so documents written by newer

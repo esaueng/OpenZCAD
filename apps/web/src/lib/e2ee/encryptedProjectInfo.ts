@@ -282,6 +282,7 @@ export interface ProjectFilesDeps {
 export const EXPORT_ARTIFACT_KINDS: ReadonlySet<ArtifactKind> =
   new Set<ArtifactKind>([
     'step-export',
+    'iges-export',
     'stl-export',
     '3mf-export',
     'obj-export',

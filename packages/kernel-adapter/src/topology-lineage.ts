@@ -60,6 +60,8 @@ export type TopologyLineageOperation =
   | 'hole'
   | 'shell'
   | 'solid-offset'
+  | 'rib'
+  | 'wrap'
   | 'draft'
   | 'thicken'
   | 'pattern'
@@ -132,6 +134,18 @@ const OPERATION_CAPABILITIES: Readonly<
     fallback: 'hash-only',
     reason:
       'Solid-offset lineage is bridge-gated until every offset and generated face has a complete output relation.'
+  },
+  rib: {
+    status: 'unsupported',
+    fallback: 'hash-only',
+    reason:
+      'Rib lineage is hash-only until the union with the braced body has a complete output relation.'
+  },
+  wrap: {
+    status: 'unsupported',
+    fallback: 'hash-only',
+    reason:
+      'Wrap lineage is hash-only until the boolean with the wrapped body has a complete output relation.'
   },
   draft: {
     status: 'unsupported',

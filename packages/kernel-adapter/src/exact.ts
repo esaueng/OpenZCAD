@@ -80,6 +80,8 @@ import {
   getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
+  listObjectFolders,
+  objectFolderOfBody,
   rigidImportedSource
 } from '@openzcad/document-core';
 import { writeDxf, type DxfEntity } from '@openzcad/io-dxf';
@@ -222,9 +224,13 @@ import {
   projectRemusLineageDiagnostic
 } from './exact-shape-utils';
 import {
+  EXACT_IMPORT_BUDGETS,
+  importedStepCacheKey,
+  importStepStructureWithOwnBudget,
   importStepWithOwnBudget,
   stepImportEmptyReason,
-  type StepImportReport
+  type StepImportReport,
+  type StepStructure
 } from './kernel-step-import';
 import {
   buildDocumentHistoryCooperatively,
@@ -280,7 +286,9 @@ import {
   sanitizeThreeMf,
   sanitizeThreeMfModel
 } from './mesh-export-sanitize';
-import { orientGlbForGltf } from './glb-scene';
+import { zipSync } from 'fflate';
+import { mergeGlbBodies, orientGlbForGltf } from './glb-scene';
+import { mergeObjBodies } from './obj-labels';
 import { labelThreeMfObjects } from './three-mf-labels';
 import {
   declareStepLengthUnit,
@@ -296,9 +304,11 @@ import {
   stepTimestamp,
   stepWriterOptions,
   type StepBodiesExport,
+  type StepExportAssembly,
   type StepExportMetadata,
   type StepExportOptions
 } from './step-export-metadata';
+import type { StepPmiEntry } from './step-pmi';
 export {
   type StepBodiesExport,
   type StepBodySkipReason,
@@ -828,6 +838,22 @@ export interface ExactKernelAdapter {
     options?: StepExportOptions
   ): Promise<string>;
   /**
+   * I06: the bodies' solids as exact IGES 5.3 manifold solid B-rep objects
+   * (type 186), in `options.units` (millimetres when unset), which the
+   * file's global section states. Names and colours are not written.
+   */
+  exportIges(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options?: ExportUnitOptions & { fileName?: string }
+  ): Promise<string>;
+  /**
+   * I06: an IGES file's 186 solids restated as ISO 10303-21 text in
+   * millimetres, the exact source the STEP import path then reads. Refuses
+   * surface models and entities outside the qualified IGES subset by name.
+   */
+  igesAsStep(data: ArrayBuffer): Promise<Uint8Array>;
+  /**
    * The same STEP as {@link exportStep}, of every body the document shows
    * that has an exact solid, with how many solids each body wrote — in file
    * order, so a reader can tell which declared solids came from which body.
@@ -900,6 +926,11 @@ export interface ExactKernelAdapter {
     options: {
       format: MeshExportFormat;
       deflection: number;
+      /**
+       * I04, OBJ only: write the body colours as a material library too, and
+       * return a ZIP holding `<stem>.obj` and `<stem>.mtl`.
+       */
+      objMaterials?: { stem: string };
     } & MeshExportTolerances
   ): Promise<Uint8Array<ArrayBuffer>>;
   /**
@@ -980,10 +1011,14 @@ export interface ExactKernelAdapter {
     options?: { anchor?: SketchSolveAnchor }
   ): Promise<SketchSolveOutcome>;
   /**
-   * The exact, kernel-computed cross-section at one plane — section CURVES,
-   * not the viewport's display caps. Refusals are reported per body rather
+   * The kernel-computed cross-section at one plane — section CURVES, not
+   * the viewport's display caps. Refusals are reported per body rather
    * than thrown: a plane that cuts one body and misses another is an
    * ordinary section, not a failure.
+   *
+   * Each region says whether its `boundary` is `exact` or `approximate`:
+   * the kernel cuts curved faces into straight chords, and a region holding
+   * any is a polygon with a polygon's area, not the true section.
    *
    * `bodyIds` names exactly what to section. Omitting it falls back to the
    * document's own visibility, which is NOT what a viewport is showing —
@@ -996,8 +1031,10 @@ export interface ExactKernelAdapter {
     bodyIds?: BodyId[]
   ): Promise<SectionOutlineReport>;
   /**
-   * The same exact section written as a DXF R12 drawing in millimetres (or
-   * `options.units`, which the header then declares).
+   * The same section written as a DXF R12 drawing in millimetres (or
+   * `options.units`, which the header then declares). Edges are written as
+   * the kernel holds them, so a region `sectionOutline` reports as
+   * `approximate` is written as straight segments, not arcs.
    * Fails closed: a body the plane cuts but the kernel cannot section
    * refuses the whole export rather than quietly dropping a region.
    *
@@ -1044,7 +1081,10 @@ export interface ExactKernelAdapter {
   sketchPlanarOperation(
     operation: SketchPlanarOperation
   ): Promise<SketchPlanarResult>;
-  inspectStep(data: string | ArrayBuffer): Promise<{
+  inspectStep(
+    data: string | ArrayBuffer,
+    options?: { structure?: boolean }
+  ): Promise<{
     solid: boolean;
     valid: boolean;
     volume: number;
@@ -1056,6 +1096,10 @@ export interface ExactKernelAdapter {
      * come back through the value.
      */
     reason?: string;
+    /** I02: the product structure, when the indices number its solids. */
+    structure?: StepStructure;
+    /** I02: why the structure reader refused, when the flat one stood in. */
+    structureRefusal?: string;
   }>;
   /**
    * On-demand per-face recognition of one imported STEP face (Phase D of the
@@ -1283,6 +1327,108 @@ function exportSolidLabels(
 }
 
 /**
+ * I02: the Objects folders holding the written bodies, as the STEP product
+ * tree; null when no written body sits in a folder.
+ */
+function exportAssembly(
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId; solids: number[] }[]
+): StepExportAssembly | null {
+  const all = new Map(
+    listObjectFolders(document).map((folder) => [folder.id, folder])
+  );
+  const index = new Map<string, number>();
+  const folders: { name: string; parent: number | null }[] = [];
+  const add = (id: string): number => {
+    const known = index.get(id);
+    if (known !== undefined) return known;
+    const folder = all.get(id)!;
+    const parent = folder.parentId === null ? null : add(folder.parentId);
+    folders.push({ name: folder.name, parent });
+    index.set(id, folders.length - 1);
+    return folders.length - 1;
+  };
+  const names = new Map(
+    listNodesByKind(document, 'body').map((body) => [body.bodyId, body.name])
+  );
+  const placed = bodies.map(({ bodyId, solids }) => {
+    const folderId = objectFolderOfBody(document, bodyId);
+    return {
+      name: names.get(bodyId) ?? '',
+      solidCount: solids.length,
+      folder: folderId !== null && all.has(folderId) ? add(folderId) : null
+    };
+  });
+  return folders.length > 0 ? { folders, bodies: placed } : null;
+}
+
+/**
+ * D07: the model's PMI as the STEP writer will place it: each entry's face
+ * resolved on its body's built solid (lineage, then hash; fail-closed) and
+ * located by its index in that solid's faces, which is the order the writer
+ * walks its shell. An entry is left out when its body is not written, has
+ * more than one solid, or its face no longer resolves (the workspace shows
+ * it broken); a frame's tolerance is restated in the export's unit.
+ */
+function stepPmiEntries(
+  kernel: RemusKernel,
+  build: ExactBuildResult,
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId; solids: number[] }[],
+  units: UnitSystem
+): StepPmiEntry[] {
+  const annotations = document.pmi?.annotations ?? [];
+  if (annotations.length === 0) return [];
+  const firstSolid = new Map<BodyId, number>();
+  let count = 0;
+  for (const { bodyId, solids } of bodies) {
+    if (solids.length === 1) firstSolid.set(bodyId, count);
+    count += solids.length;
+  }
+  const scale = exportLengthScale(document.units, units);
+  const entries: StepPmiEntry[] = [];
+  for (const annotation of annotations) {
+    const bodyId = annotation.face.bodyId;
+    const solidIndex = firstSolid.get(bodyId);
+    const shape = build.shapes.get(bodyId);
+    if (solidIndex === undefined || !shape || shape.solids.length !== 1)
+      continue;
+    const solid = shape.solids[0]!;
+    let handle: number;
+    try {
+      handle = resolveDirectEditFace(kernel, shape, solid, {
+        faceHash: annotation.face.hash,
+        ...(annotation.face.reference
+          ? { faceReference: annotation.face.reference }
+          : {})
+      }).face;
+    } catch {
+      continue;
+    }
+    const faceIndex = [...kernel.getSolidFaces(solid)].indexOf(handle);
+    if (faceIndex < 0) continue;
+    const face = {
+      solid: solidIndex,
+      face: faceIndex,
+      surface: String(kernel.getSurfaceType(handle))
+    };
+    if (annotation.kind === 'datum-feature')
+      entries.push({ kind: 'datum', letter: annotation.letter, face });
+    else
+      entries.push({
+        kind: 'frame',
+        characteristic: annotation.characteristic,
+        amount: Number((annotation.amount * scale).toPrecision(12)),
+        diameterZone: annotation.diameterZone === true,
+        ...(annotation.material ? { material: annotation.material } : {}),
+        datums: (annotation.datums ?? []).map((datum) => ({ ...datum })),
+        face
+      });
+  }
+  return entries;
+}
+
+/**
  * One STEP of the given bodies' solids, each named after its body and styled
  * in its display colour.
  */
@@ -1291,8 +1437,14 @@ function writeStepBodies(
   io: RemusIo,
   document: ProjectDocument,
   bodies: readonly { bodyId: BodyId; solids: number[] }[],
-  options: StepExportOptions
+  options: StepExportOptions,
+  /** The build the bodies came from, where the model's PMI faces resolve. */
+  build?: ExactBuildResult
 ): string {
+  const pmi =
+    build && options.protocol === 'ap242'
+      ? stepPmiEntries(kernel, build, document, bodies, options.units ?? 'mm')
+      : [];
   const metadata: StepExportMetadata = {
     productName: document.name,
     fileName: options.fileName ?? `${document.name}.step`,
@@ -1300,6 +1452,9 @@ function writeStepBodies(
     solids: exportSolidLabels(document, bodies),
     ...(options.protocol ? { protocol: options.protocol } : {})
   };
+  const assembly = exportAssembly(document, bodies);
+  if (assembly) metadata.assembly = assembly;
+  if (pmi.length > 0) metadata.pmi = pmi;
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its
   // own MANIFOLD_SOLID_BREP inside one shape representation, so the
@@ -1319,6 +1474,12 @@ function writeStepBodies(
     metadata
   );
 }
+
+export type {
+  StepStructure,
+  StepStructureNode,
+  StepStructureSolid
+} from './kernel-step-import';
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
   readonly kind = 'remus' as const;
@@ -3018,6 +3179,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         sourceName: string;
         stepText?: string;
         vertices?: number[];
+        stepReader?: 'structure';
       };
       if (
         !ref ||
@@ -3036,8 +3198,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         continue;
       }
       if (!mesh) {
-        pinned.add(ref.checksumSha256);
-        if (this.importedSteps.lookup(ref.checksumSha256)) {
+        const key = importedStepCacheKey(ref.checksumSha256, data);
+        pinned.add(key);
+        if (this.importedSteps.lookup(key)) {
           continue;
         }
       }
@@ -4951,6 +5114,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.datumAxes.size > 0
           ? { datumAxes: Object.fromEntries(build.datumAxes) }
           : {}),
+        ...(build.datumPoints?.size
+          ? { datumPoints: Object.fromEntries(build.datumPoints) }
+          : {}),
+        ...(build.datumCsys?.size
+          ? { datumCsys: Object.fromEntries(build.datumCsys) }
+          : {}),
         ...(build.sketchProjections?.size
           ? { sketchProjections: Object.fromEntries(build.sketchProjections) }
           : {}),
@@ -5151,6 +5320,52 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     });
   }
 
+  async exportIges(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: ExportUnitOptions & { fileName?: string } = {}
+  ): Promise<string> {
+    const units = options.units ?? 'mm';
+    const io = await loadRemusTranslators();
+    return this.withExportBuild(document, (kernel, build) => {
+      const bodies = this.exportBodySolidsFor(
+        kernel,
+        build,
+        document,
+        bodyIds,
+        units
+      );
+      const unit = { mm: 'MM', cm: 'CM', m: 'M', inch: 'IN' }[units];
+      const stamp = new Date()
+        .toISOString()
+        .replace(/[-:]/g, '')
+        .replace('T', '.')
+        .slice(0, 15);
+      return decodeText(
+        io.exportIgesBrep(
+          kernel.serializeSolids(
+            new Uint32Array(bodies.flatMap(({ solids }) => solids))
+          ),
+          JSON.stringify({
+            fileName: options.fileName ?? `${document.name}.igs`,
+            productName: document.name,
+            timestamp: stamp,
+            unit
+          })
+        )
+      );
+    });
+  }
+
+  async igesAsStep(data: ArrayBuffer): Promise<Uint8Array> {
+    const io = await loadRemusTranslators();
+    return io.igesBrepAsStep(
+      new Uint8Array(data),
+      EXACT_IMPORT_BUDGETS.maxInputBytes,
+      EXACT_IMPORT_BUDGETS.maxEntities
+    );
+  }
+
   async exportStep(
     document: ProjectDocument,
     bodyIds: BodyId[],
@@ -5164,7 +5379,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         io,
         document,
         this.exportBodySolidsFor(kernel, build, document, bodyIds, units),
-        options
+        options,
+        build
       )
     );
   }
@@ -5227,7 +5443,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         units
       );
       return {
-        text: writeStepBodies(kernel, io, document, bodies, options),
+        text: writeStepBodies(kernel, io, document, bodies, options, build),
         bodies: bodies.map(({ bodyId, solids }) => ({
           bodyId,
           solidCount: solids.length
@@ -5407,6 +5623,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         regions.push({
           bodyId,
           area: outcome.area,
+          boundary: outcome.boundary,
           loops: outcome.loops,
           positions: outcome.positions,
           indices: outcome.indices
@@ -5461,7 +5678,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           );
         }
         for (const solid of shape.solids) {
-          const outcome = exactSolidSection(kernel, solid, plane);
+          // Only the faces are wanted: each edge is written as the kernel
+          // holds it, whatever a check of the boundary would say.
+          const outcome = exactSolidSection(kernel, solid, plane, {
+            skipBoundaryCheck: true
+          });
           if (outcome.status === 'ok') {
             faces.push(...outcome.faces);
             cut += 1;
@@ -5741,6 +5962,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     options: {
       format: MeshExportFormat;
       deflection: number;
+      /**
+       * I04, OBJ only: write the body colours as a material library too, and
+       * return a ZIP holding `<stem>.obj` and `<stem>.mtl`.
+       */
+      objMaterials?: { stem: string };
     } & MeshExportTolerances
   ): Promise<Uint8Array<ArrayBuffer>> {
     const { format, deflection } = options;
@@ -5796,6 +6022,42 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 angular
               )
             }));
+      // I04: glTF and OBJ carry each body as its own named, coloured object,
+      // so they are written body by body and merged.
+      if (format === 'glb' || format === 'obj') {
+        const labels = exportSolidLabels(
+          document,
+          grouped.map(({ bodyId }) => ({ bodyId, solids: [0] }))
+        );
+        const parts = grouped.map(({ solids }, index) => {
+          const document = kernel.serializeSolids(new Uint32Array(solids));
+          return {
+            bytes:
+              format === 'glb'
+                ? io.exportGlb(document, unitDeflection)
+                : io.exportObj(document, unitDeflection),
+            name: labels[index]!.name,
+            color: labels[index]!.color
+          };
+        });
+        if (format === 'glb') return orientGlbForGltf(mergeGlbBodies(parts));
+        const stem = options.objMaterials?.stem;
+        const merged = mergeObjBodies(
+          parts.map((part) => ({ ...part, text: decodeText(part.bytes) })),
+          stem ? `${stem}.mtl` : ''
+        );
+        const encoder = new TextEncoder();
+        if (!stem) {
+          // Without its library a material names nothing: names only.
+          return encoder.encode(
+            merged.obj.replace(/^(mtllib|usemtl) .*\n/gm, '')
+          );
+        }
+        return zipSync({
+          [`${stem}.obj`]: encoder.encode(merged.obj),
+          [`${stem}.mtl`]: encoder.encode(merged.mtl)
+        });
+      }
       const exportSolids = grouped.flatMap(({ solids }) => solids);
       const bodies = kernel.serializeSolids(new Uint32Array(exportSolids));
       // Every writer takes the whole arena document: bodies stay distinct
@@ -5806,15 +6068,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const bytes =
         format === '3mf'
           ? io.export3mf(bodies, unitDeflection)
-          : format === 'obj'
-            ? io.exportObj(bodies, unitDeflection)
-            : format === 'glb'
-              ? io.exportGlb(bodies, unitDeflection)
-              : format === 'ply'
-                ? io.exportPly(bodies, unitDeflection)
-                : io.exportStl(bodies, unitDeflection);
-      // glTF is metres and +Y up; the tessellation is model millimetres,
-      // +Z up, which the GLB states through its root node (glb-scene.ts).
+          : format === 'ply'
+            ? io.exportPly(bodies, unitDeflection)
+            : io.exportStl(bodies, unitDeflection);
       // 3MF objects carry their body's name and display colour.
       return format === '3mf'
         ? sanitizeThreeMf(bytes, (model) =>
@@ -5825,11 +6081,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           )
         : format === 'stl-binary'
           ? sanitizeBinaryStl(bytes)
-          : format === 'ply'
-            ? sanitizeBinaryPly(bytes)
-            : format === 'glb'
-              ? orientGlbForGltf(bytes)
-              : (bytes as Uint8Array<ArrayBuffer>);
+          : sanitizeBinaryPly(bytes);
     });
   }
 
@@ -6152,13 +6404,27 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * so a file whose only shell is open reports no solid and no volume instead
    * of the divergence integral over the faces it happens to have.
    */
-  async inspectStep(data: string | ArrayBuffer): Promise<{
+  async inspectStep(
+    data: string | ArrayBuffer,
+    options: {
+      /**
+       * I02: read the product structure (placed occurrences, names,
+       * colours). When the structure reader refuses the file, the flat
+       * reader's result is returned with `structureRefusal` saying why.
+       */
+      structure?: boolean;
+    } = {}
+  ): Promise<{
     solid: boolean;
     valid: boolean;
     volume: number;
     /** Accepted indices in the original kernel import order, before rejection filtering. */
     solidIndices: number[];
     reason?: string;
+    /** Present when the indices number the structure reader's solids. */
+    structure?: StepStructure;
+    /** Why the structure reader refused, when the flat reader stood in. */
+    structureRefusal?: string;
   }> {
     await loadRemusTranslators();
     const kernel = new RemusKernel();
@@ -6167,12 +6433,32 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         typeof data === 'string'
           ? new TextEncoder().encode(data)
           : new Uint8Array(data);
-      let declared: number[];
-      let report: StepImportReport;
+      let declared: number[] = [];
+      let report: StepImportReport = {
+        solidCount: 0,
+        sheetCount: 0,
+        diagnostics: [],
+        diagnosticCount: 0
+      };
+      let structure: StepStructure | undefined;
+      let structureRefusal: string | undefined;
+      if (options.structure) {
+        try {
+          const imported = importStepStructureWithOwnBudget(kernel, bytes);
+          structure = imported.structure;
+          declared = Array.from(imported.solids);
+          report = imported.report;
+        } catch (error) {
+          structureRefusal =
+            error instanceof Error ? error.message : String(error);
+        }
+      }
       try {
-        const imported = importStepWithOwnBudget(kernel, bytes);
-        declared = Array.from(imported.solids);
-        report = imported.report;
+        if (structure === undefined) {
+          const imported = importStepWithOwnBudget(kernel, bytes);
+          declared = Array.from(imported.solids);
+          report = imported.report;
+        }
       } catch (error) {
         return {
           solid: false,
@@ -6192,6 +6478,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         verdict.kind === 'not-a-solid' ? [verdict.reason] : []
       );
       return {
+        ...(structure ? { structure } : {}),
+        ...(structureRefusal !== undefined ? { structureRefusal } : {}),
         solid: accepted.length > 0,
         solidIndices: declared.flatMap((_, index) =>
           verdicts[index]!.kind !== 'not-a-solid' ? [index] : []
@@ -6483,3 +6771,4 @@ function shownExportBodies(
   }
   return { written, skipped };
 }
+export { wrapOrientationProbe } from './exact-wrap';

@@ -1,3 +1,18 @@
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
+
+/**
+ * L15: what a non-assistant patch brings to the app's apply path: its undo
+ * label, the edit-permission action, its status wording, and the document
+ * version it was written against (a moved document refuses it). Supplied by
+ * the lazily loaded caller, so none of it sits in the entry bundle.
+ */
+export interface PatchSource {
+  label: string;
+  action: string;
+  checking: string;
+  moved: string;
+  baseVersion: number;
+}
 import type { LocalHistoryAppend } from '../../lib/localHistoryAppend';
 import type { ReactNode } from 'react';
 import type {
@@ -13,6 +28,7 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import type { DiagnosticRow } from '../../lib/diagnosticsRows';
+import type { AnyCommand } from '@openzcad/command-system';
 import type { HistoryRowActions } from '../HistoryTimeline';
 import type { ObjectFolderActions } from './ObjectsPanel';
 import type { BodyAppearancePreview } from '../ModelViewer';
@@ -46,6 +62,13 @@ export interface ModelPanelSource {
    * Defaults to `geometryPending`.
    */
   geometryPendingShown?: boolean;
+  /**
+   * The pending analysis is only an uncommitted live preview's (a face
+   * offset held or under validation). History rows cannot change before it
+   * commits, so they show no "preparing" glyph for it (#1598); Objects still
+   * says its details are incomplete.
+   */
+  previewPending?: boolean;
   selectedFeatureNodeId: string | null;
   selectedSketchProfileId: string | null;
   selectedBodyIds: string[];
@@ -57,6 +80,20 @@ export interface ModelPanelSource {
    * Absent, Items lists no planes.
    */
   document?: ProjectDocument;
+  /**
+   * L15: why the history text cannot be applied right now (View mode, a
+   * viewer's seat, …), or null when it can. Absent reads as editable.
+   */
+  historyTextEditBlocked?: string | null;
+  /**
+   * L15: checks an edited history text's proposal on the exact kernel and
+   * commits it as one undo step, refusing a text printed from another
+   * version. Absent, the history text is read only.
+   */
+  onApplyHistoryText?(
+    proposal: CadPatchProposal,
+    source: PatchSource
+  ): Promise<boolean>;
   /** Datum planes hidden by their eye toggle: view state, as sketches' is. */
   hiddenDatumIds?: ReadonlySet<string>;
   onHiddenDatumIdsChange?(hidden: ReadonlySet<string>): void;
@@ -67,6 +104,11 @@ export interface ModelPanelSource {
   selectedReferenceImageId?: string | null;
   /** Opens a reference image's card. */
   onSelectReferenceImage?(imageId: string): void;
+  /**
+   * D07: runs a PMI command behind the edit guard (the workspace's own
+   * command runner); absent, Objects lists no PMI.
+   */
+  onPmiCommand?(command: AnyCommand): boolean;
   warnings: DiagnosticRow[];
   historyDetails?: ReactNode;
   /**

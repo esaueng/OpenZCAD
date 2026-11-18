@@ -4,6 +4,7 @@ import { objectFolderSetError } from './object-folders';
 import { printClearanceError } from './print-clearance';
 import { assemblySetError } from './assembly';
 import { configurationSetError } from './configurations';
+import { modelPmiSetError } from './model-pmi';
 import {
   documentFeatureKinds,
   historyChangeIdentifierError,
@@ -40,7 +41,8 @@ export const HISTORY_FIELDS = [
   'referenceImages',
   'assembly',
   'printClearance',
-  'configurations'
+  'configurations',
+  'pmi'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
@@ -199,6 +201,15 @@ export function isDocumentHistory(
             [change.before, change.after].some(
               (side) =>
                 side !== undefined && objectFolderSetError(side) !== null
+            ))
+        )
+          return false;
+        // The same holds for the model's PMI (D07).
+        if (
+          change.field === 'pmi' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) => side !== undefined && modelPmiSetError(side) !== null
             ))
         )
           return false;

@@ -64,11 +64,28 @@ export interface SheetText {
   angleDeg?: number;
 }
 
+/**
+ * D02 (v92): a picture on the page, its lower-left corner at (x, y) in paper
+ * millimetres (y up), stretched to `width` × `height` (the picture's own
+ * aspect). The pixels are the reference image's bytes, by checksum: a writer
+ * is handed them, the page model never holds them.
+ */
+export interface SheetImage {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  checksumSha256: string;
+  contentType: 'image/png' | 'image/jpeg';
+}
+
 export interface SheetPage {
   widthMm: number;
   heightMm: number;
   strokes: SheetStroke[];
   texts: SheetText[];
+  /** D02 (v92): pictures, drawn beneath every stroke and text. */
+  images?: SheetImage[];
   /**
    * D02 (schema v70): the sheet's own print weights, by stroke kind; absent
    * kinds (and a page without any) use {@link SHEET_STROKE_WIDTH_MM}.
@@ -124,6 +141,15 @@ export const SHEET_STROKE_ORDER: readonly SheetStrokeKind[] = [
 
 export const SHEET_MARGIN_MM = 10;
 export const TITLE_BLOCK_HEIGHT_MM = 32;
+/** D02 (v94): the shop layout's height: the title and four rows. */
+export const SHOP_TITLE_BLOCK_HEIGHT_MM = 52;
+
+/** A sheet's title-block height, by its layout. */
+function titleBlockHeight(sheet: Pick<DrawingSheet, 'titleBlockLayout'>) {
+  return sheet.titleBlockLayout === 'shop'
+    ? SHOP_TITLE_BLOCK_HEIGHT_MM
+    : TITLE_BLOCK_HEIGHT_MM;
+}
 const TITLE_BLOCK_MAX_WIDTH_MM = 170;
 
 /**
@@ -355,7 +381,9 @@ export function viewPageBox(
 }
 
 /** The title block's box on paper: bottom-right, inside the border. */
-export function titleBlockBox(sheet: Pick<DrawingSheet, 'paper'>): {
+export function titleBlockBox(
+  sheet: Pick<DrawingSheet, 'paper' | 'titleBlockLayout'>
+): {
   x: number;
   y: number;
   width: number;
@@ -370,19 +398,21 @@ export function titleBlockBox(sheet: Pick<DrawingSheet, 'paper'>): {
     x: paper.width - SHEET_MARGIN_MM - width,
     y: SHEET_MARGIN_MM,
     width,
-    height: TITLE_BLOCK_HEIGHT_MM
+    height: titleBlockHeight(sheet)
   };
 }
 
 /** The drawable area above the title block, for fitting views. */
-export function sheetViewArea(sheet: Pick<DrawingSheet, 'paper'>): {
+export function sheetViewArea(
+  sheet: Pick<DrawingSheet, 'paper' | 'titleBlockLayout'>
+): {
   x: number;
   y: number;
   width: number;
   height: number;
 } {
   const paper = drawingPaperMm(sheet.paper);
-  const bottom = SHEET_MARGIN_MM + TITLE_BLOCK_HEIGHT_MM;
+  const bottom = SHEET_MARGIN_MM + titleBlockHeight(sheet);
   return {
     x: SHEET_MARGIN_MM,
     y: bottom,
@@ -457,18 +487,15 @@ function titleBlock(
   ];
   const texts: SheetText[] = [];
   const rowHeight = 10;
+  const shop = sheet.titleBlockLayout === 'shop';
+  const rowCount = shop ? 4 : 2;
   const titleTop = box.y + box.height;
-  const titleBottom = titleTop - (box.height - 2 * rowHeight);
-  strokes.push(
-    {
-      kind: 'thin',
-      points: [box.x, titleBottom, box.x + box.width, titleBottom]
-    },
-    {
-      kind: 'thin',
-      points: [box.x, box.y + rowHeight, box.x + box.width, box.y + rowHeight]
-    }
-  );
+  const titleBottom = titleTop - (box.height - rowCount * rowHeight);
+  // A rule under the title and between each row of cells.
+  for (let row = 0; row < rowCount; row += 1) {
+    const y = titleBottom - row * rowHeight;
+    strokes.push({ kind: 'thin', points: [box.x, y, box.x + box.width, y] });
+  }
   const block = sheet.titleBlock;
   const title = sheetSafeText(block.title ?? context.projectName);
   texts.push({
@@ -485,35 +512,63 @@ function titleBlock(
     m: 'Metres',
     inch: 'Inches'
   }[sheet.format?.units ?? context.units];
-  const rows: [string, string][][] = [
+  const projection =
+    sheet.projectionAngle === 'first' ? 'First angle' : 'Third angle';
+  const numbers: [string, string][] = [
+    ['DWG NO.', block.drawingNumber ?? ''],
+    ['REV', block.revision ?? ''],
     [
-      ['DWG NO.', block.drawingNumber ?? ''],
-      ['REV', block.revision ?? ''],
-      [
-        'SCALE · SIZE',
-        `${formatDrawingScale(sheet.scale)} · ${titleBlockSizeText(sheet.paper)}`
-      ],
-      ['SHEET', titleBlockSheetText(sheet, context.sheetNumber)]
+      'SCALE · SIZE',
+      `${formatDrawingScale(sheet.scale)} · ${titleBlockSizeText(sheet.paper)}`
     ],
-    [
-      ['DRAWN', block.author ?? ''],
-      ['DATE', block.date ?? context.date ?? ''],
-      ['UNITS', unitLabel],
-      [
-        'PROJECTION',
-        sheet.projectionAngle === 'first' ? 'First angle' : 'Third angle'
-      ]
-    ]
+    ['SHEET', titleBlockSheetText(sheet, context.sheetNumber)]
   ];
+  const date = block.date ?? context.date ?? '';
+  // D02 (v94): the shop layout adds the material and finish, who checked
+  // and approved it, the company and the general-tolerance note.
+  const rows: [string, string][][] =
+    sheet.titleBlockLayout === 'shop'
+      ? [
+          numbers,
+          [
+            ['MATERIAL', block.material ?? ''],
+            ['FINISH', block.finish ?? ''],
+            ['UNITS', unitLabel],
+            ['PROJECTION', projection]
+          ],
+          [
+            ['DRAWN', block.author ?? ''],
+            ['CHECKED', block.checkedBy ?? ''],
+            ['APPROVED', block.approvedBy ?? ''],
+            ['DATE', date]
+          ],
+          [
+            ['COMPANY', block.company ?? ''],
+            ['GENERAL TOLERANCES', block.tolerances ?? '']
+          ]
+        ]
+      : [
+          numbers,
+          [
+            ['DRAWN', block.author ?? ''],
+            ['DATE', date],
+            ['UNITS', unitLabel],
+            ['PROJECTION', projection]
+          ]
+        ];
   // REV and DATE each hold a full ISO date ("2026-10-28" is about 21.4 mm
   // at 3 mm text). Every paper, A4 portrait included, is wide enough to give
   // the block its full TITLE_BLOCK_MAX_WIDTH_MM, so these widths hold on all.
   const columns = [0.3, 0.18, 0.22, 0.3];
+  // The shop layout's last row: the company, and the tolerance note across
+  // the rest.
+  const twoColumns = [0.3, 0.7];
   rows.forEach((cells, rowIndex) => {
     const top = titleBottom - rowIndex * rowHeight;
     let x = box.x;
+    const widths = cells.length === 2 ? twoColumns : columns;
     cells.forEach(([label, value], column) => {
-      const width = box.width * columns[column]!;
+      const width = box.width * widths[column]!;
       if (column > 0)
         strokes.push({ kind: 'thin', points: [x, top, x, top - rowHeight] });
       texts.push({ x: x + 1.5, y: top - 3, sizeMm: 1.8, text: label });
@@ -631,7 +686,11 @@ export function composeSheetPage(
   views: readonly ComposedView[],
   context: SheetPageContext,
   /** D02 dimensions and notes, already laid out on this page. */
-  annotations?: { strokes: SheetStroke[]; texts: SheetText[] }
+  annotations?: {
+    strokes: SheetStroke[];
+    texts: SheetText[];
+    images?: SheetImage[];
+  }
 ): SheetPage {
   const marks = composeSectionMarks(sheet, views, context.units);
   const details = composeDetailMarks(sheet, views, context.units);
@@ -684,12 +743,22 @@ export function composeSheetPage(
     maxY: paper.height
   };
   const weights = sheet.format?.lineWidthsMm;
+  // D02 (v92): a picture is kept whole while any of it is on the paper (the
+  // writers clip to the page); one wholly off it is not drawn.
+  const images = (annotations?.images ?? []).filter(
+    (image) =>
+      image.x < paper.width &&
+      image.y < paper.height &&
+      image.x + image.width > 0 &&
+      image.y + image.height > 0
+  );
   return {
     widthMm: paper.width,
     heightMm: paper.height,
     ...(weights && Object.keys(weights).length > 0
       ? { strokeWidthsMm: { ...weights } }
       : {}),
+    ...(images.length > 0 ? { images } : {}),
     strokes: [
       ...strokes,
       ...marks.strokes,
@@ -838,6 +907,8 @@ export function sectionLineOnPage(
   from: [number, number];
   to: [number, number];
   sight: [number, number];
+  /** D03 (v93): a stepped line's corners, from `from` to `to`. */
+  points?: [number, number][];
 } | null {
   const bounds = source.projection.bounds;
   if (!section.section || !bounds) return null;
@@ -885,6 +956,49 @@ export function sectionLineOnPage(
   if (!line) return null;
   const toPage = viewPageTransform(source.view, bounds, sheet, units);
   const overrun = SECTION_LINE_OVERRUN_MM;
+  const steps = section.section.steps ?? [];
+  if (steps.length > 0) {
+    // D03 (v93): the line runs at each segment's depth and jogs at each
+    // step, on the source at ±depth (one sign for every segment).
+    const sign = drawingSectionLine(
+      source.view.orientation,
+      section.orientation,
+      1
+    )!.at;
+    const across = (depth: number) => (depth === 0 ? 0 : sign * depth);
+    const horizontal = line.axis === 'horizontal';
+    const [low, high] = horizontal
+      ? [bounds.minU, bounds.maxU]
+      : [bounds.minV, bounds.maxV];
+    const model: [number, number][] = [];
+    const point = (along: number, at: number): [number, number] =>
+      horizontal ? [along, at] : [at, along];
+    let depth = section.section.depth;
+    model.push(point(low, across(depth)));
+    for (const step of steps) {
+      model.push(point(step.at, across(depth)));
+      depth = step.depth;
+      model.push(point(step.at, across(depth)));
+    }
+    model.push(point(high, across(depth)));
+    const points = model.map(([u, v]) => toPage(u, v));
+    const unit = horizontal ? [1, 0] : [0, 1];
+    points[0] = [
+      points[0]![0] - unit[0]! * overrun,
+      points[0]![1] - unit[1]! * overrun
+    ];
+    const last = points.length - 1;
+    points[last] = [
+      points[last]![0] + unit[0]! * overrun,
+      points[last]![1] + unit[1]! * overrun
+    ];
+    return {
+      from: points[0],
+      to: points[last],
+      sight: line.sight,
+      points
+    };
+  }
   if (line.axis === 'horizontal') {
     const [x0, y] = toPage(bounds.minU, line.at);
     const [x1] = toPage(bounds.maxU, line.at);
@@ -920,16 +1034,42 @@ export function composeSectionMarks(
     const line = source && sectionLineOnPage(sheet, view, source, units);
     if (line) {
       const { from, to, sight } = line;
-      strokes.push({ kind: 'chain', points: [...from, ...to] });
+      const path = line.points ?? [from, to];
+      strokes.push({ kind: 'chain', points: path.flat() });
+      const direction = (a: [number, number], b: [number, number]) => {
+        const length = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        return [(b[0] - a[0]) / length, (b[1] - a[1]) / length] as [
+          number,
+          number
+        ];
+      };
       const length = Math.hypot(to[0] - from[0], to[1] - from[1]);
-      const along: [number, number] = [
-        (to[0] - from[0]) / length,
-        (to[1] - from[1]) / length
-      ];
       const end = Math.min(SECTION_END_MM, length / 3);
+      // D03 (v93): a stepped line is thick where it changes direction too.
+      for (let i = 1; i + 1 < path.length; i += 1) {
+        const corner = path[i]!;
+        for (const neighbour of [path[i - 1]!, path[i + 1]!]) {
+          const span = Math.hypot(
+            neighbour[0] - corner[0],
+            neighbour[1] - corner[1]
+          );
+          if (span === 0) continue;
+          const toward = direction(corner, neighbour);
+          const reach = Math.min(end / 2, span / 2);
+          strokes.push({
+            kind: 'cutting',
+            points: [
+              corner[0],
+              corner[1],
+              corner[0] + toward[0] * reach,
+              corner[1] + toward[1] * reach
+            ]
+          });
+        }
+      }
       for (const [point, inward] of [
-        [from, along],
-        [to, [-along[0], -along[1]] as [number, number]]
+        [from, direction(path[0]!, path[1]!)],
+        [to, direction(path[path.length - 1]!, path[path.length - 2]!)]
       ] as const) {
         strokes.push({
           kind: 'cutting',

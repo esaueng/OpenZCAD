@@ -1,0 +1,5 @@
+script "openzcad.contract/chamfered-lid" "1.0.0" api 1 {
+  input bevel: length = `1.5 mm`
+  pick rim: edges 4 = edges().max("z")
+  step chamfer { edges: #rim, distance: `bevel` }
+}

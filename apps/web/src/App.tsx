@@ -64,12 +64,14 @@ import { exactWarningBaseline } from './lib/exactWarnings';
 import {
   beginDatumVertexRepair,
   datumAxisSourceFailed,
+  datumPlaneEdgeFailed,
   datumFaceAttachFailed,
   datumVertexRepairSlots,
   datumVertexSourceFailed,
   earlierDatumPlanes
 } from './lib/datumPlaneDisplay';
 import type { DatumVertexRepairSession } from './lib/datumVertexRepair';
+import type { DatumFeatureKind } from './lib/datumPlanes';
 import {
   referenceImageDisplays,
   referenceImageInsertPlane,
@@ -99,7 +101,6 @@ import type {
 } from './lib/parameterVisualPreview';
 import type { AdoptLocalProjectResult } from './lib/projectIdentityTransfer';
 import { LatestTask } from './lib/latestTask';
-import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import {
   bodyIsolationState,
@@ -214,7 +215,7 @@ import {
   isConfigurationTableOnlyCommand,
   isDrawingCommand,
   isObjectFolderCommandKind,
-  isReferenceImageCommandKind,
+  isGeometryFreeCommandKind,
   type AnyCommand
 } from '@openzcad/command-system';
 import type {
@@ -222,6 +223,7 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
+import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
   appendRevision,
   createCheckpoint,
@@ -297,6 +299,7 @@ import type {
   ProjectCheckpoint,
   ProjectComment,
   ProjectCommentAnchor,
+  CreateProjectCommentRequest,
   PlaneId,
   ProjectDocument,
   ProjectOrganization,
@@ -563,6 +566,7 @@ import {
   type CadBinaryExportFormat,
   type DesktopMenuCommand
 } from './lib/desktopBridge';
+import type { MeshExportPackage } from './lib/meshExportPackage';
 import {
   cloudFunctionsAreEnabled,
   setCloudFunctionsEnabled
@@ -573,10 +577,6 @@ import {
   PROJECT_TOO_LARGE_FOR_ACCOUNT,
   type WorkspaceSaveState
 } from './lib/cloudProjectAutosave';
-import {
-  applyAccountProjectRefresh,
-  loadAccountRefresh
-} from './lib/accountProjectRefresh';
 import {
   decideProjectSync,
   shouldPollForFreshness
@@ -653,8 +653,9 @@ import {
   LIVE_SESSION_CONNECTING,
   LiveSessionNotice
 } from './components/LiveSessionNotice';
-import type { CommentPin } from './components/ModelViewer';
 import { ENCRYPTED_COMMENTS_UNAVAILABLE } from './lib/commentsAvailability';
+import type { MemberCommentContext } from './lib/memberComments';
+import type { LinkCommentsAccess } from './lib/e2ee/shareComments';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -745,6 +746,7 @@ import type {
   SlicerTarget
 } from './components/ExportDialog';
 import type {
+  ImageExportKind,
   PngExportOptions,
   SvgExportOptions
 } from './components/ImageExportDialog';
@@ -1499,7 +1501,7 @@ const LazySharedLinkCopyDialog = lazyWithStaleChunkNotice(() =>
 // The comment client and the save-state preview notice load on the gesture
 // that needs them (opening Comments, previewing a save state), not with the
 // workspace.
-const loadCommentsApi = () => import('./lib/projectCommentsApi');
+const loadCommentsApi = () => import('./lib/memberComments');
 const LazySaveStatePreviewNotice = lazyWithStaleChunkNotice(() =>
   import('./components/SaveStatePreviewNotice').then((module) => ({
     default: module.SaveStatePreviewNotice
@@ -1940,6 +1942,7 @@ import {
   inPlaceFaceMode,
   takesFeatureFaces,
   toggledPatternSkip,
+  patternCopyChip,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -1973,6 +1976,7 @@ import {
   parseCurveCandidateId,
   sketchCurveCandidates,
   sketchPointCandidates,
+  sketchCurveMiddle,
   sketchPointSpots
 } from './lib/inPlace/curves';
 import { datumAxisChoices } from './lib/datumAxisChoices';
@@ -2869,6 +2873,11 @@ export function App() {
     encryptedMode?: 'view' | 'tweak';
     /** L08: a plaintext commenter link; its visitor may comment. */
     comments?: boolean;
+    /**
+     * L08 (plan decisions 2 and 3a): an encrypted commenter link, whose
+     * owner-signed comment grant this browser verified.
+     */
+    encryptedComments?: LinkCommentsAccess | null;
   } | null>(null);
   const shareSessionRef = useRef(shareSession);
   shareSessionRef.current = shareSession;
@@ -3252,11 +3261,16 @@ export function App() {
   const importUnitsAnswerRef = useRef<
     ((units: UnitSystem | null) => void) | null
   >(null);
-  /** The view's size when Export image… opened; null while it is closed. */
+  /**
+   * The view's size when Export image… opened; null while it is closed.
+   * A sketch's own Export DXF… (D04) also names the sketch and the kind.
+   */
   const [imageExportView, setImageExportView] = useState<{
     width: number;
     height: number;
     maxSide: number;
+    sketchId?: string;
+    kind?: ImageExportKind;
   } | null>(null);
   /** M16: the sheet-metal feature the flat-pattern view opened on. */
   const [flatPatternFeatureId, setFlatPatternFeatureId] =
@@ -3531,6 +3545,8 @@ export function App() {
     first?: TopologySelection;
     /** Requested vertex roles are staged without touching the document. */
     vertices?: DatumVertexRepairSession;
+    /** Schema v108: the edge of a plane on an edge is re-picked. */
+    edge?: true;
   } | null>(null);
   /** Null means the active tool decides what picking is narrowed to. */
   const [manualSelectionFilter, setManualSelectionFilter] =
@@ -3663,14 +3679,15 @@ export function App() {
   // left over from a fillet silently swallowed every face click while the
   // prompt still said "click a planar face". The manual choice survives and
   // takes over again once the sketch has a plane.
-  const selectionFilter = datumRepair?.vertices
-    ? 'edge'
-    : tool === 'sketch' || (inPlaceFeaturePick && !manualSelectionFilter)
-      ? 'face'
-      : effectiveSelectionFilter(
-          manualSelectionFilter,
-          tool ?? inPlaceEdgeTool
-        );
+  const selectionFilter =
+    datumRepair?.vertices || datumRepair?.edge
+      ? 'edge'
+      : tool === 'sketch' || (inPlaceFeaturePick && !manualSelectionFilter)
+        ? 'face'
+        : effectiveSelectionFilter(
+            manualSelectionFilter,
+            tool ?? inPlaceEdgeTool
+          );
   const [statusEntry, setStatusEntry] = useState<StatusEntry>(() => ({
     text: cloudFunctionsEnabled
       ? LIBRARY_MODE_STATUS.checking
@@ -6855,8 +6872,12 @@ export function App() {
   // D01: drawings read the account's document, which a shared link does not
   // carry as an editable copy; read-only seats may still open and export
   // sheets, with sheet edits refused by the project guard.
+  // L08: a link shows the sheets its project chose for links, read only;
+  // a link that carries none has no Draw workspace to open.
   const drawingModeDisabledReason = shareSession
-    ? 'Drawings are not available on a shared link'
+    ? doc?.drawings?.sheets.length
+      ? null
+      : 'This link shares no drawings'
     : null;
   // AS01: Assemble edits the document's assembly section, so whatever locks
   // Build locks it too; a shared link carries no assembly to edit.
@@ -6864,9 +6885,12 @@ export function App() {
     ? 'Assemblies are not available on a shared link'
     : buildModeDisabledReason;
   const resolvedWorkspaceMode: WorkspaceMode = shareSession
-    ? panelState.workspaceMode === 'view' || shareLinkViewOnly
-      ? 'view'
-      : 'tweak'
+    ? panelState.workspaceMode === 'drawing' &&
+      drawingModeDisabledReason === null
+      ? 'drawing'
+      : panelState.workspaceMode === 'view' || shareLinkViewOnly
+        ? 'view'
+        : 'tweak'
     : buildModeDisabledReason !== null
       ? panelState.workspaceMode === 'drawing'
         ? 'drawing'
@@ -7067,8 +7091,11 @@ export function App() {
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
   // must not edit sheets either.
-  const drawingEditDisabledReason =
-    !projectOpenElsewhere && (viewMode || tweakMode || assembleMode)
+  const drawingEditDisabledReason = shareSession
+    ? // L08: the sheets a link shows are the project's, read only here;
+      // exporting them needs no edit.
+      'Drawings on a shared link are read only — Make a copy to edit them'
+    : !projectOpenElsewhere && (viewMode || tweakMode || assembleMode)
       ? editDisabledReason
       : projectEditDisabledReason;
   // AS01 assembly edits answer to the project's own locks in Assemble and
@@ -7136,6 +7163,8 @@ export function App() {
   drawingEditDisabledReasonRef.current = drawingEditDisabledReason;
   const assemblyEditDisabledReasonRef = useRef(assemblyEditDisabledReason);
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
+  const projectEditDisabledReasonRef = useRef(projectEditDisabledReason);
+  projectEditDisabledReasonRef.current = projectEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
   // L03: a preview whose geometry something else replaced, or whose project
@@ -7985,7 +8014,14 @@ export function App() {
           // raised by the write that gets fenced rather than guessed at here.
           return;
         }
-        const fetched = await loadAccountRefresh(() =>
+        // Loaded only when a pull is due, outside the entry chunk. Offline
+        // with a stale chunk, this tick is skipped like an outage; the next
+        // poll tries again.
+        const refresh = await import('./lib/accountProjectRefresh').catch(
+          () => null
+        );
+        if (!refresh || cancelled) return;
+        const fetched = await refresh.loadAccountRefresh(() =>
           api.loadProject(current.projectId)
         );
         if (
@@ -8012,7 +8048,7 @@ export function App() {
         ) {
           return;
         }
-        const outcome = await applyAccountProjectRefresh({
+        const outcome = await refresh.applyAccountProjectRefresh({
           before: current,
           remote,
           current: () => managerRef.current?.document ?? null,
@@ -11191,7 +11227,7 @@ export function App() {
       // Drawings, images and folders edit presentation without rebuilding.
       if (
         isDrawingCommand(command) ||
-        isReferenceImageCommandKind(command.kind) ||
+        isGeometryFreeCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind) ||
         isAssemblyOnlyCommand(command) ||
         isConfigurationTableOnlyCommand(command, beforeDocument)
@@ -11842,7 +11878,7 @@ export function App() {
         if (!seed || !document || inPlaceRef.current.tool !== tool) return;
         const ref =
           seed.kind === 'face'
-            ? picks.faceRef(document, seed, kinds)
+            ? picks.faceRef(document, seed, kinds, at)
             : picks.edgeRef(document, seed, at, kinds, 0);
         if (!('reason' in ref)) inPlaceRef.current.pickRef(ref);
       });
@@ -12020,7 +12056,7 @@ export function App() {
     derived: ProjectDocument['derived'],
     featureId: FeatureId,
     name: string,
-    kind: 'datum-plane' | 'datum-axis'
+    kind: DatumFeatureKind
   ): void {
     const picks = datumPicksRef.current;
     if (picks && base) {
@@ -12030,7 +12066,11 @@ export function App() {
     const resolved =
       kind === 'datum-plane'
         ? derived.datumFrames?.[featureId]
-        : derived.datumAxes?.[featureId];
+        : kind === 'datum-axis'
+          ? derived.datumAxes?.[featureId]
+          : kind === 'datum-point'
+            ? derived.datumPoints?.[featureId]
+            : derived.datumCsys?.[featureId];
     if (!resolved) throw new Error(`${name} did not resolve.`);
   }
 
@@ -12673,6 +12713,18 @@ export function App() {
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(cylinder ? { cylinder } : {}),
+      ...(geometry?.surfaceType.toLowerCase() === 'cone' &&
+      geometry.apex &&
+      geometry.axis &&
+      geometry.halfAngle !== undefined
+        ? {
+            cone: {
+              apex: geometry.apex,
+              axis: geometry.axis,
+              halfAngle: geometry.halfAngle
+            }
+          }
+        : {}),
       ...(point ? { point } : {})
     };
   }
@@ -15016,7 +15068,8 @@ export function App() {
 
   async function handleDeleteCloudData(
     scope: AccountDeletionScope,
-    confirmation: string
+    confirmation: string,
+    acknowledgedEncryptedProjectCount?: number
   ) {
     const departingSession = sessionRef.current;
     setSettingsBusy(true);
@@ -15041,7 +15094,12 @@ export function App() {
       }
       if (sessionRef.current !== departingSession)
         throw new Error('The signed-in account changed. Try deleting again.');
-      const erase = () => api.deleteAccountData(scope, confirmation);
+      const erase = () =>
+        api.deleteAccountData(
+          scope,
+          confirmation,
+          acknowledgedEncryptedProjectCount
+        );
       const eraseProfile = () =>
         import('./lib/e2ee/accountErasure').then(
           ({ eraseAccountWithKeyCleanup }) =>
@@ -15886,6 +15944,7 @@ export function App() {
           document: ProjectDocument;
           encryptedMode?: 'view' | 'tweak';
           comments?: boolean;
+          encryptedComments?: LinkCommentsAccess | null;
         } | null;
         if (isEncryptedShareLink(pendingShareToken)) {
           // End to end encrypted (ADR-024 slice 5-11): verified in the ADR's
@@ -15900,7 +15959,8 @@ export function App() {
           shared = opened && {
             name: opened.name,
             document: opened.document,
-            encryptedMode: opened.mode
+            encryptedMode: opened.mode,
+            encryptedComments: opened.comments
           };
         } else {
           const { loadSharedProject } =
@@ -15950,7 +16010,12 @@ export function App() {
         // whatever this browser knew about the account before.
         setCloudAvailable(false);
         const opened = shared.encryptedMode
-          ? { token: pendingShareToken, encryptedMode: shared.encryptedMode }
+          ? {
+              token: pendingShareToken,
+              encryptedMode: shared.encryptedMode,
+              comments: !!shared.encryptedComments,
+              encryptedComments: shared.encryptedComments
+            }
           : {
               token: pendingShareToken,
               ...(shared.comments ? { comments: true } : {})
@@ -17165,6 +17230,9 @@ export function App() {
         setStatus('The project changed while loading that save. Please retry.');
         return;
       }
+      // Loaded on the restore itself, not with the workspace.
+      const { prepareSaveStateRestore } =
+        await import('./lib/saveStateRestore');
       const next = await prepareSaveStateRestore(
         current,
         repairLegacyBracketSaveState(
@@ -17206,6 +17274,27 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  /**
+   * L08: chooses the drawing sheets share links show. A forward write (no
+   * undo entry) that syncs like any edit; the next snapshot a link serves
+   * carries the chosen sheets.
+   */
+  function handleShareLinkSheets(sheetIds: string[]) {
+    const manager = managerRef.current;
+    if (!manager || projectEditDisabledReasonRef.current !== null) return;
+    const before = manager.document;
+    const next = manager.setShareLinkSheets(sheetIds);
+    if (next === before) return;
+    geometry.retainReadyGeometry(next);
+    setDoc(next);
+    const count = next.shareLinkSheetIds?.length ?? 0;
+    setStatus(
+      count === 0
+        ? 'Share links show no drawings.'
+        : `Share links show ${count} drawing ${count === 1 ? 'sheet' : 'sheets'}.`
+    );
   }
 
   /** Branches the open project's save state into a project of its own. */
@@ -17439,7 +17528,7 @@ export function App() {
     const parametersOnly = managerRef.current.undoIsParameterOnly;
     const drawingOnly = managerRef.current.undoIsDrawingOnly;
     const folderOnly = managerRef.current.undoIsObjectFolderOnly;
-    const imageOnly = managerRef.current.undoIsReferenceImageOnly;
+    const imageOnly = managerRef.current.undoIsGeometryFree;
     const assemblyOnly = managerRef.current.undoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
@@ -17521,7 +17610,7 @@ export function App() {
     const parametersOnly = managerRef.current.redoIsParameterOnly;
     const drawingOnly = managerRef.current.redoIsDrawingOnly;
     const folderOnly = managerRef.current.redoIsObjectFolderOnly;
-    const imageOnly = managerRef.current.redoIsReferenceImageOnly;
+    const imageOnly = managerRef.current.redoIsGeometryFree;
     const assemblyOnly = managerRef.current.redoIsAssemblyOnly;
     if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
@@ -18397,13 +18486,21 @@ export function App() {
     }
   }
 
-  async function applyPatch(proposal: CadPatchProposal): Promise<boolean> {
+  async function applyPatch(
+    proposal: CadPatchProposal,
+    /** L15 history text: its wording, label and version fence. */
+    source?: PatchSource
+  ): Promise<boolean> {
     if (isDrawingProposal(proposal)) return applyDrawingPatch(proposal);
-    if (!ensureCanEdit('apply this AI proposal')) {
+    if (!ensureCanEdit(source?.action ?? 'apply this AI proposal')) {
       return false;
     }
     const current = managerRef.current?.document;
     if (!current) {
+      return false;
+    }
+    if (source && current.version !== source.baseVersion) {
+      setStatus(source.moved);
       return false;
     }
     setBusy(true);
@@ -18416,7 +18513,9 @@ export function App() {
       typeof window !== 'undefined';
     if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = true;
     try {
-      setStatus('Checking the AI change against exact geometry…');
+      setStatus(
+        source?.checking ?? 'Checking the AI change against exact geometry…'
+      );
       let preflight: Awaited<ReturnType<typeof preflightCadPatch>>;
       if (e2eApplyGate) {
         const pending = preflightCadPatch(
@@ -18439,10 +18538,14 @@ export function App() {
         live.version !== current.version
       ) {
         throw new Error(
-          'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
+          source?.moved ??
+            'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
         );
       }
-      const applied = executeTransaction('Apply AI patch', preflight.commands);
+      const applied = executeTransaction(
+        source?.label ?? 'Apply AI patch',
+        preflight.commands
+      );
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
@@ -18603,7 +18706,7 @@ export function App() {
       }
       return;
     }
-    if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
+    if (!/\.(?:stl|step|stp|igs|iges|3mf|obj|glb|ply)$/i.test(file.name)) {
       refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
       return;
     }
@@ -18847,7 +18950,7 @@ export function App() {
       return;
     }
 
-    if (!/\.(?:step|stp)$/i.test(file.name)) {
+    if (!/\.(?:step|stp|igs|iges)$/i.test(file.name)) {
       // 3MF, OBJ, glTF binary and PLY. The kernel's own translators read them
       // into the same triangles an STL import produces, in a worker that is
       // terminated with the import, and the result becomes the same
@@ -18907,11 +19010,13 @@ export function App() {
       return;
     }
 
-    const { runStepImport } = await stepImportRun();
+    const { runCadFileImport } = await stepImportRun();
     const abort = startImportAbort();
-    await runStepImport({
+    // I06: an IGES B-rep is imported as the exact STEP it restates to.
+    await runCadFileImport({
       file,
       contentType,
+      refuse: (message) => refuseImportOnCard(file.name, message),
       archive: archiveArtifact,
       validatedFeature,
       signal: abort.signal,
@@ -19472,13 +19577,7 @@ export function App() {
     bodyId: string;
     topologyId: string;
   }) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try exporting again when it finishes.'
-      );
-      return;
-    }
-    if (!doc) {
+    if (exportBlockedByUpdate() || !doc) {
       return;
     }
     const face = representations[target.bodyId as BodyId]?.topology?.faces.find(
@@ -19496,10 +19595,7 @@ export function App() {
         doc,
         [target.bodyId as BodyId],
         {
-          units: resolveExportUnits(
-            appSettingsRef.current.files.exportUnits,
-            doc.units
-          ),
+          units: exportUnitsFor(doc.units),
           face: {
             bodyId: target.bodyId as BodyId,
             faceHash: face.hash,
@@ -19542,13 +19638,14 @@ export function App() {
     setFlatPatternFeatureId(target.featureId);
   }
 
-  function openImageExport() {
+  function openImageExport(sketch?: { sketchId: string; kind: 'svg' | 'dxf' }) {
     const source = viewportImageRef.current;
     const size = source?.viewSize();
     setImageExportView({
       width: size && size.width > 0 ? size.width : 1280,
       height: size && size.height > 0 ? size.height : 720,
-      maxSide: source?.maxSide ?? 4096
+      maxSide: source?.maxSide ?? 4096,
+      ...(sketch ?? {})
     });
   }
 
@@ -20042,19 +20139,38 @@ export function App() {
     );
   }
 
-  async function handleExportStep(rowId: string | null = null) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try exporting again when it finishes.'
-      );
-      return;
+  /** Whether an export must wait for the model to finish updating, said in the status. */
+  function exportBlockedByUpdate() {
+    if (currentGeometrySnapshot === null) return false;
+    setStatus(
+      'The model is still updating. Try exporting again when it finishes.'
+    );
+    return true;
+  }
+
+  /** The unit an export writes: the setting, or the document's own. */
+  function exportUnitsFor(documentUnits: UnitSystem) {
+    return resolveExportUnits(
+      appSettingsRef.current.files.exportUnits,
+      documentUnits
+    );
+  }
+
+  /**
+   * The export scope for `rowId` when an export can start now, or null
+   * once the status says why not: the model is still updating, the
+   * configuration cannot be exported, or there is nothing to export.
+   */
+  function readyExportTarget(rowId: string | null) {
+    if (exportBlockedByUpdate()) {
+      return null;
     }
     let target: ReturnType<typeof exportTarget>;
     try {
       target = exportTarget(rowId);
     } catch (error) {
       setStatus(errorMessage(error, 'That configuration cannot be exported.'));
-      return;
+      return null;
     }
     if (
       !doc ||
@@ -20062,6 +20178,33 @@ export function App() {
       (!target.allShownBodies && target.bodyIds.length === 0)
     ) {
       setStatus(emptyExportReason);
+      return null;
+    }
+    return target;
+  }
+
+  /** I06: File › Export IGES, run from its lazy module. */
+  function handleExportIges() {
+    const target = readyExportTarget(null);
+    if (!target || !doc) return;
+    const { version, units } = doc;
+    const fileName = `${exportStemFor(null)}.igs`;
+    void import('./lib/igesImport').then((lazy) =>
+      lazy.exportIges({
+        target,
+        fileName,
+        version,
+        documentUnits: units,
+        units: exportUnitsFor(units),
+        runExportJob,
+        exportModel: geometry.exportModel
+      })
+    );
+  }
+
+  async function handleExportStep(rowId: string | null = null) {
+    const target = readyExportTarget(rowId);
+    if (!target || !doc) {
       return;
     }
     const { document: exported, bodyIds, allShownBodies, rowName } = target;
@@ -20088,10 +20231,7 @@ export function App() {
           ...options,
           ...(allShownBodies ? { allShownBodies: true } : {}),
           fileName,
-          units: resolveExportUnits(
-            appSettingsRef.current.files.exportUnits,
-            doc.units
-          ),
+          units: exportUnitsFor(doc.units),
           stepProtocol: appSettingsRef.current.files.stepProtocol
         });
         if (!('text' in result)) {
@@ -20114,75 +20254,29 @@ export function App() {
   function handleExportMesh(
     format: MeshExportDialogFormat,
     deflection: number,
-    tolerances: { angularTolerance?: number } = {}
+    tolerances: { angularTolerance?: number } & MeshExportPackage = {}
   ) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try exporting again when it finishes.'
-      );
+    const target = readyExportTarget(exportRowId);
+    if (!target || !doc) {
       return;
     }
-    let target: ReturnType<typeof exportTarget>;
-    try {
-      target = exportTarget(exportRowId);
-    } catch (error) {
-      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
-      return;
-    }
-    if (
-      !doc ||
-      !target ||
-      (!target.allShownBodies && target.bodyIds.length === 0)
-    ) {
-      setStatus(emptyExportReason);
-      return;
-    }
-    const { document: exported, bodyIds, allShownBodies, rowName } = target;
-    const info = MESH_EXPORT_FILE_INFO[format];
-    const fileName = `${exportStemFor(rowName)}.${info.extension}`;
-    void runExportJob({
-      fileName,
-      label: rowName ? `${info.label} of ${rowName}` : info.label,
-      kind: info.kind,
-      contentType: info.contentType,
-      metadata: {
-        bodyIds: bodyIds.join(','),
-        documentVersion: doc.version,
-        units: doc.units,
+    const { version, units } = doc;
+    void import('./lib/meshExportPackage').then((lazy) =>
+      lazy.exportMesh({
         format,
-        deflectionMm: deflection,
-        ...(rowName ? { configuration: rowName } : {})
-      },
-      ...(rowName
-        ? {
-            completed: () => `Exported configuration ${rowName} to ${fileName}.`
-          }
-        : {}),
-      produce: async (options) => {
-        const result = await geometry.exportModel(format, exported, bodyIds, {
-          deflection,
-          ...tolerances,
-          ...(allShownBodies ? { allShownBodies: true } : {}),
-          units: resolveExportUnits(
-            appSettingsRef.current.files.exportUnits,
-            doc.units
-          ),
-          ...options
-        });
-        return 'data' in result
-          ? {
-              body: new Blob([result.data], { type: info.contentType }),
-              save: () =>
-                saveCadBinaryFile(fileName, info.binaryFormat, result.data),
-              warnings: result.warnings.length
-            }
-          : {
-              body: new Blob([result.text], { type: info.contentType }),
-              save: () => saveCadTextFile(fileName, 'stl', result.text),
-              warnings: result.warnings.length
-            };
-      }
-    });
+        deflection,
+        options: tolerances,
+        target,
+        info: MESH_EXPORT_FILE_INFO[format],
+        version,
+        documentUnits: units,
+        units: exportUnitsFor(units),
+        stemOf: exportStemFor,
+        setStatus,
+        runExportJob,
+        exportModel: geometry.exportModel
+      })
+    );
   }
 
   /**
@@ -20196,23 +20290,8 @@ export function App() {
     deflection: number,
     tolerances: { angularTolerance?: number } = {}
   ) {
-    if (currentGeometrySnapshot !== null) {
-      setStatus('The model is still updating. Try again when it finishes.');
-      return;
-    }
-    let written: ReturnType<typeof exportTarget>;
-    try {
-      written = exportTarget(exportRowId);
-    } catch (error) {
-      setStatus(errorMessage(error, 'That configuration cannot be exported.'));
-      return;
-    }
-    if (
-      !doc ||
-      !written ||
-      (!written.allShownBodies && written.bodyIds.length === 0)
-    ) {
-      setStatus(emptyExportReason);
+    const written = readyExportTarget(exportRowId);
+    if (!written || !doc) {
       return;
     }
     const { document: exported, bodyIds, allShownBodies, rowName } = written;
@@ -20243,10 +20322,7 @@ export function App() {
           deflection,
           ...tolerances,
           ...(allShownBodies ? { allShownBodies: true } : {}),
-          units: resolveExportUnits(
-            appSettingsRef.current.files.exportUnits,
-            doc.units
-          ),
+          units: exportUnitsFor(doc.units),
           ...options
         });
         if (!('data' in result)) {
@@ -20765,47 +20841,44 @@ export function App() {
         ? null
         : 'This link does not take comments.'
       : isEncryptedProject(doc.projectId)
-        ? ENCRYPTED_COMMENTS_UNAVAILABLE
+        ? // L08 encrypted comments (held, #1667): signed, encrypted logs.
+          session
+          ? null
+          : ENCRYPTED_COMMENTS_UNAVAILABLE
         : !session || !activeProjectIsCloud
           ? 'Save this project to your account to comment on it.'
           : null;
   const commentRole: ProjectAccessRole =
-    collaboration.role ??
-    (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer');
+    doc && isEncryptedProject(doc.projectId)
+      ? // An encrypted thread is resolved by its author or the owner
+        // (`mergeCommentLogs`), so the panel offers no more.
+        session && doc.ownerUserId === session.userId
+        ? 'owner'
+        : 'viewer'
+      : (collaboration.role ??
+        (session && doc?.ownerUserId === session.userId ? 'owner' : 'viewer'));
+  /** Who a member's comment change acts for (L08 slice 8). */
+  function commentContext(): MemberCommentContext {
+    return {
+      ownerUserId: managerRef.current?.document.ownerUserId ?? '',
+      authorName: sessionRef.current?.displayName || 'A member'
+    };
+  }
   const shownComments =
     doc && projectComments?.projectId === doc.projectId
       ? projectComments.comments
       : [];
-  const commentPins: CommentPin[] = shownComments
-    .filter((comment) => comment.parentId === null)
-    .flatMap((comment, index) =>
-      comment.anchor
-        ? [
-            {
-              id: comment.commentId,
-              label: String(index + 1),
-              description: `Comment ${index + 1} by ${comment.authorName}: ${comment.text}`,
-              point: {
-                x: comment.anchor.point[0],
-                y: comment.anchor.point[1],
-                z: comment.anchor.point[2]
-              },
-              resolved: comment.resolvedAt !== null,
-              active: comment.commentId === activeCommentId
-            }
-          ]
-        : []
-    );
   const loadComments = useCallback(async (projectId: string) => {
     try {
       const link = shareSessionRef.current;
-      const { linkCommentsApi, projectCommentsApi } = await loadCommentsApi();
-      const comments = link?.comments
-        ? await linkCommentsApi.list(link.token)
-        : await projectCommentsApi.list(projectId);
+      const { visitorComments, memberComments } = await loadCommentsApi();
+      const { comments, warning } = link?.comments
+        ? { comments: await visitorComments.list(link), warning: null }
+        : await memberComments.list(projectId, commentContext());
       if (managerRef.current?.document.projectId !== projectId) return;
       setProjectComments({ projectId, comments });
-      setCommentsError(null);
+      // An encrypted project's member log left out is said, not hidden.
+      setCommentsError(warning);
     } catch (error) {
       setCommentsError(errorMessage(error, 'Comments could not be loaded.'));
     }
@@ -20824,6 +20897,20 @@ export function App() {
     setCommentsOpen(true);
   }
   /** Runs one comment change, then reloads the list; false when it failed. */
+  /** A new comment: a link visitor's, or a member's (L08). */
+  function postComment(
+    projectId: string,
+    {
+      visitorComments,
+      memberComments
+    }: Awaited<ReturnType<typeof loadCommentsApi>>,
+    input: CreateProjectCommentRequest
+  ): Promise<{ commentId: string } | null> {
+    const link = shareSessionRef.current;
+    return link
+      ? visitorComments.create(link, commentVisitorName, input)
+      : memberComments.create(projectId, commentContext(), input);
+  }
   async function runCommentAction(
     action: (
       projectId: string,
@@ -20907,7 +20994,7 @@ export function App() {
             : 0;
         return pickDatumRef((picks, document) =>
           picked.kind === 'face'
-            ? picks.faceRef(document, picked, kinds)
+            ? picks.faceRef(document, picked, kinds, at)
             : picks.edgeRef(document, picked, at, kinds, points)
         );
       }
@@ -21203,6 +21290,34 @@ export function App() {
                   'That pick cannot replace this datum vertex.'
                 ),
                 { sticky: true }
+              );
+            }
+          }
+        );
+        return;
+      }
+      if (datumRepair.edge) {
+        void import('./lib/datumPlanes').then(
+          ({ datumPlaneEdgeRepairEdit }) => {
+            if (withdrawn()) return;
+            try {
+              const edit = datumPlaneEdgeRepairEdit(
+                base,
+                repair.featureId,
+                selection
+              );
+              void validatedFeature.runTransaction([edit.command], {
+                label: edit.label,
+                cancelled: withdrawn,
+                targets: affectedFeatureTargets(base, repair.featureId),
+                validateDerived: edit.validateDerived,
+                successMessage: `"${repair.name}" follows the re-picked edge.`,
+                onSuccess: () => setDatumRepair(null),
+                onFailure: (message) => setStatus(message)
+              });
+            } catch (error) {
+              setStatus(
+                errorMessage(error, 'That pick cannot carry this plane.')
               );
             }
           }
@@ -25485,7 +25600,39 @@ export function App() {
                   entityIds: request.guide.entityIds as EntityId[]
                 }
               }
-            : {})
+            : {}),
+          ...(request.construction === undefined
+            ? {}
+            : { construction: request.construction })
+        });
+      case 'rib':
+        return commandFactories.ribBody({
+          name,
+          targetBodyId: request.targetBodyId,
+          profile: {
+            sketchId: request.profile.sketchId,
+            entityIds: request.profile.entityIds as EntityId[]
+          },
+          thickness: request.thickness,
+          thicknessSide: request.thicknessSide,
+          direction: request.direction,
+          ...(request.flip ? { flip: true } : {})
+        });
+      case 'wrap':
+        return commandFactories.wrapBody({
+          name,
+          targetBodyId: request.targetBodyId,
+          faceReference: request.faceReference,
+          sketchId: request.sketchId,
+          profiles: request.profiles,
+          depth: request.depth,
+          mode: request.mode,
+          ...(request.rotationDeg === undefined
+            ? {}
+            : { rotationDeg: request.rotationDeg }),
+          ...(request.axialOffset === undefined
+            ? {}
+            : { axialOffset: request.axialOffset })
         });
       case 'helical-sweep':
         return commandFactories.helicalSweepProfile({
@@ -25623,6 +25770,16 @@ export function App() {
           name,
           definition: request.definition
         });
+      case 'datum-point':
+        return commandFactories.addDatumPoint({
+          name,
+          definition: request.definition
+        });
+      case 'datum-csys':
+        return commandFactories.addDatumCsys({
+          name,
+          definition: request.definition
+        });
       case 'reference-image':
         return commandFactories.addReferenceImage({ image: request.image });
     }
@@ -25631,8 +25788,13 @@ export function App() {
   function inPlaceDatum(
     request: InPlaceRequest,
     command: AnyCommand
-  ): { featureId: FeatureId; kind: 'datum-plane' | 'datum-axis' } | null {
-    if (request.tool !== 'datum-plane' && request.tool !== 'datum-axis')
+  ): { featureId: FeatureId; kind: DatumFeatureKind } | null {
+    if (
+      request.tool !== 'datum-plane' &&
+      request.tool !== 'datum-axis' &&
+      request.tool !== 'datum-point' &&
+      request.tool !== 'datum-csys'
+    )
       return null;
     const featureId = (
       command.payload as { ids?: { featureId?: FeatureId } } | undefined
@@ -25854,6 +26016,16 @@ export function App() {
             sketchValueResolver(parameterScope.scope, doc.units)
           )
         : [],
+    curveMiddle: (sketchId, entityId) =>
+      doc
+        ? sketchCurveMiddle(
+            doc,
+            availableSketchViews,
+            sketchId,
+            entityId,
+            sketchValueResolver(parameterScope.scope, doc.units)
+          )
+        : null,
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
     // M17 (schema v71): the hole a standard part is inserted into.
     holeFeature: (featureId) =>
@@ -25896,13 +26068,33 @@ export function App() {
     buildCommand: (request, title, edit) => {
       if (edit) {
         const command = inPlaceEditCommand(request, edit);
+        // R01: an edited point or system has no body; its own resolution,
+        // and every datum built on it, is the proof, as for a new one.
+        const datumKind =
+          edit.data.featureKind === 'datum-point' ||
+          edit.data.featureKind === 'datum-csys'
+            ? edit.data.featureKind
+            : null;
+        const base = managerRef.current?.document;
         return {
           validate: (document) => command.validate(document),
           // A suppressed feature previews built, so its edit is checked by
           // the same rebuild that would refuse it once turned back on.
           apply: (document) =>
             withFeatureBuilt(command.apply(document), edit.featureId),
-          resultBodyId: inPlaceEditResultBodyId(request, edit)
+          resultBodyId: inPlaceEditResultBodyId(request, edit),
+          ...(datumKind
+            ? {
+                check: (derived: ProjectDocument['derived']) =>
+                  checkNewDatum(
+                    base,
+                    derived,
+                    edit.featureId,
+                    edit.name,
+                    datumKind
+                  )
+              }
+            : {})
         };
       }
       // A pattern's frame is named as its commit names it, so Done can land
@@ -26766,15 +26958,14 @@ export function App() {
       inPlace.handles.map((handle) => {
         if (handle.kind === 'instance') {
           // M02: a copy's skip toggle reads its label, and whether it is in.
-          const { label, skipped } = handle.params;
+          // A Point pattern copy's label is a sketch point's id, kept as the
+          // skip key; it reads and is announced by its name (UX-008).
+          const chip = patternCopyChip(handle.params);
           return {
             ...handle,
-            value: skipped ? 1 : 0,
-            format: () => label,
-            describe: () =>
-              skipped
-                ? `Copy ${label}, skipped · bring it back`
-                : `Copy ${label} · skip it`
+            value: handle.params.skipped ? 1 : 0,
+            format: () => chip.text,
+            describe: () => chip.name
           };
         }
         const valueSpec = inPlaceSpec?.values.find(
@@ -32827,10 +33018,43 @@ export function App() {
             ];
           })()
         : []),
+      // Schema v108: a plane on an edge whose edge was lost or cannot carry it.
+      ...(feature.data.featureKind === 'datum-plane' &&
+      (feature.data.definition.kind === 'normal-to-edge' ||
+        feature.data.definition.kind === 'edge-angle') &&
+      !isFeatureSuppressed(feature) &&
+      !doc?.derived.datumFrames?.[feature.featureId] &&
+      datumPlaneEdgeFailed(
+        feature,
+        doc && featureAttribution?.derived === doc.derived
+          ? featureAttribution.featureWarnings
+          : []
+      )
+        ? [
+            {
+              item: {
+                id: 'repair-datum-plane-edge',
+                label: 'Re-pick source edge…',
+                icon: <Crosshair size={13} aria-hidden="true" />
+              },
+              run: () => {
+                if (!ensureCanEdit('repair a feature')) return;
+                setTool(null);
+                clearSelection();
+                setFaceRepair(null);
+                setDatumRepair({ feature, slot: 0, edge: true });
+                setStatus(
+                  `Re-pick the edge for "${feature.name}": click an edge · Esc cancels.`
+                );
+              }
+            }
+          ]
+        : []),
       // R01: an axis along an edge or a cylinder whose source was lost.
       ...(feature.data.featureKind === 'datum-axis' &&
       (feature.data.definition.kind === 'edge' ||
-        feature.data.definition.kind === 'cylinder') &&
+        feature.data.definition.kind === 'cylinder' ||
+        feature.data.definition.kind === 'face-normal') &&
       !isFeatureSuppressed(feature) &&
       !doc?.derived.datumAxes?.[feature.featureId] &&
       datumAxisSourceFailed(
@@ -32856,7 +33080,7 @@ export function App() {
                 setFaceRepair(null);
                 setDatumRepair({ feature, slot: 0 });
                 setStatus(
-                  `Re-pick the source for "${feature.name}": click ${feature.data.featureKind === 'datum-axis' && feature.data.definition.kind === 'edge' ? 'a straight edge' : 'a cylindrical or conical face'} · Esc cancels.`
+                  `Re-pick the source for "${feature.name}": click ${feature.data.featureKind === 'datum-axis' && feature.data.definition.kind === 'edge' ? 'a straight edge' : feature.data.featureKind === 'datum-axis' && feature.data.definition.kind === 'face-normal' ? 'a face' : 'a cylindrical or conical face'} · Esc cancels.`
                 );
               }
             }
@@ -32887,6 +33111,15 @@ export function App() {
                 icon: <Eye size={13} aria-hidden="true" />
               },
               run: () => toggleSketchVisibility(sketchId)
+            },
+            // D04: the sketch's own export, opened on it as DXF.
+            {
+              item: {
+                id: 'sketch-export-dxf',
+                label: 'Export DXF…',
+                icon: <Download size={13} aria-hidden="true" />
+              },
+              run: () => openImageExport({ sketchId, kind: 'dxf' })
             }
           ]
         : []),
@@ -34824,7 +35057,7 @@ export function App() {
       group: 'File',
       keywords: ['png', 'svg', 'image', 'screenshot', 'picture', 'sketch'],
       icon: <Download size={16} aria-hidden="true" />,
-      run: openImageExport
+      run: () => openImageExport()
     },
     {
       // The support exports left the File menu for Settings › Advanced; the
@@ -35558,6 +35791,7 @@ export function App() {
       failedFeatureIds={failedHistoryFeatureIds}
       geometryPending={panelGeometryPending}
       geometryPendingShown={panelGeometryPendingShown}
+      previewPending={!currentGeometrySnapshot}
       relatedFeatureIds={historyRelatedFeatureIds}
       selectedFeatureNodeId={selectedFeatureNodeId}
       localAppend={
@@ -35569,6 +35803,8 @@ export function App() {
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       document={doc}
+      historyTextEditBlocked={editDisabledReason}
+      onApplyHistoryText={applyPatch}
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
       hiddenReferenceImageIds={hiddenReferenceImageIds}
@@ -35579,6 +35815,7 @@ export function App() {
       onSelectReferenceImage={(imageId) =>
         openReferenceImage(imageId as ReferenceImageId)
       }
+      onPmiCommand={executeCommand}
       warnings={diagnostics}
       pendingHistoryStep={pendingHistoryStepFor(commandSession)}
       editingHistoryFeatureId={editedFeatureIdFor(interaction, offsetPlanEdit)}
@@ -35965,8 +36202,9 @@ export function App() {
           onSaveAs={openSaveNameDialog}
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
+          onExportIges={() => void handleExportIges()}
           onOpenMeshExport={() => setMeshExportOpen(true)}
-          onOpenImageExport={openImageExport}
+          onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal
             ? {
                 onOpenFlatPattern: () =>
@@ -36539,9 +36777,10 @@ export function App() {
                   ))
             }
             commentPlacing={commentPlacing}
-            {...(commentsOpen && commentPins.length
+            {...(commentsOpen && shownComments.length
               ? {
-                  commentPins,
+                  comments: shownComments,
+                  activeCommentId,
                   onCommentPinClick: (id: string) => setActiveCommentId(id)
                 }
               : {})}
@@ -37749,6 +37988,7 @@ export function App() {
           <ErrorBoundary label="Drawings" resetKey={doc.projectId}>
             <Suspense fallback={<WorkspacePending />}>
               <LazyDrawingWorkspace
+                loadReferenceImage={loadReferenceImage}
                 document={doc}
                 bodies={doc.derived.bodyRepresentations}
                 geometryPending={!geometry.isReadyFor(doc)}
@@ -38479,52 +38719,38 @@ export function App() {
                 : {})}
               onPostThread={(text) =>
                 commentDraft
-                  ? runCommentAction(
-                      async (
-                        projectId,
-                        { linkCommentsApi, projectCommentsApi }
-                      ) => {
-                        const input = { anchor: commentDraft, text };
-                        const created = shareSession
-                          ? await linkCommentsApi.create(
-                              shareSession.token,
-                              commentVisitorName,
-                              input
-                            )
-                          : await projectCommentsApi.create(projectId, input);
-                        setCommentDraft(null);
-                        setActiveCommentId(created.commentId);
-                      }
-                    )
+                  ? runCommentAction(async (projectId, api) => {
+                      const created = await postComment(projectId, api, {
+                        anchor: commentDraft,
+                        text
+                      });
+                      setCommentDraft(null);
+                      setActiveCommentId(created?.commentId ?? null);
+                    })
                   : Promise.resolve(false)
               }
               onCancelDraft={() => setCommentDraft(null)}
               onReply={(threadId, text) =>
-                runCommentAction(
-                  (projectId, { linkCommentsApi, projectCommentsApi }) =>
-                    (shareSession
-                      ? linkCommentsApi.create(
-                          shareSession.token,
-                          commentVisitorName,
-                          { parentId: threadId, text }
-                        )
-                      : projectCommentsApi.create(projectId, {
-                          parentId: threadId,
-                          text
-                        })
-                    ).then(() => undefined)
+                runCommentAction((projectId, api) =>
+                  postComment(projectId, api, {
+                    parentId: threadId,
+                    text
+                  }).then(() => undefined)
                 )
               }
               onResolve={(threadId, resolved) =>
-                void runCommentAction((projectId, { projectCommentsApi }) =>
-                  projectCommentsApi
-                    .resolve(projectId, threadId, resolved)
-                    .then(() => undefined)
+                void runCommentAction((projectId, { memberComments }) =>
+                  memberComments.resolve(
+                    projectId,
+                    commentContext(),
+                    threadId,
+                    resolved
+                  )
                 )
               }
               onDelete={(commentId) =>
-                void runCommentAction((projectId, { projectCommentsApi }) =>
-                  projectCommentsApi.remove(projectId, commentId)
+                void runCommentAction((projectId, { memberComments }) =>
+                  memberComments.remove(projectId, commentContext(), commentId)
                 )
               }
               onClose={() => {
@@ -38542,6 +38768,14 @@ export function App() {
                 projectId={doc.projectId}
                 projectName={doc.name}
                 configurations={doc.configurations?.rows ?? []}
+                drawingSheets={(doc.drawings?.sheets ?? []).map((sheet) => ({
+                  id: sheet.sheetId,
+                  name: sheet.name
+                }))}
+                sharedSheetIds={doc.shareLinkSheetIds ?? []}
+                {...(projectEditDisabledReason === null
+                  ? { onSharedSheetsChange: handleShareLinkSheets }
+                  : {})}
                 localProject={!activeProjectIsCloud}
                 localImportSourceNames={localOnlySources.map(
                   (source) => source.sourceName
@@ -38907,14 +39141,20 @@ export function App() {
                   : null
               }
               sketches={sketchOptions}
-              initialSketchId={initialImageSketchId({
-                editing:
-                  interaction.mode === 'sketch'
-                    ? interaction.session.sketchId
-                    : null,
-                selected: selectedSketch?.sketchId ?? null,
-                profiles: selectedProfiles.map((profile) => profile.sketchId)
-              })}
+              initialSketchId={
+                imageExportView.sketchId ??
+                initialImageSketchId({
+                  editing:
+                    interaction.mode === 'sketch'
+                      ? interaction.session.sketchId
+                      : null,
+                  selected: selectedSketch?.sketchId ?? null,
+                  profiles: selectedProfiles.map((profile) => profile.sketchId)
+                })
+              }
+              {...(imageExportView.kind
+                ? { initialKind: imageExportView.kind }
+                : {})}
               initialShowGrid={viewerSettings.showGrid}
               units={doc.units}
               onClose={() => setImageExportView(null)}

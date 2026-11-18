@@ -27,6 +27,7 @@ import {
   type DrawingAnnotation,
   type DrawingAnnotationId,
   type DrawingLinearDimension,
+  type DrawingEdgeRef,
   type DrawingSheet,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -1724,6 +1725,170 @@ describe('DrawingWorkspace', () => {
       ).not.toHaveProperty('tolerance');
     });
 
+    it('states a frame’s characteristic, tolerance and datums (D07 v98)', async () => {
+      const sheet = dimensioned();
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      const edge = linear.from as { edge: DrawingEdgeRef };
+      sheet.annotations = [
+        linear,
+        {
+          annotationId: 'dann_a' as DrawingAnnotationId,
+          kind: 'datum-feature',
+          viewId: linear.viewId,
+          leader: edge.edge,
+          letter: 'A',
+          placementMm: { x: 0, y: -30 }
+        },
+        {
+          annotationId: 'dann_f' as DrawingAnnotationId,
+          kind: 'feature-control-frame',
+          viewId: linear.viewId,
+          attachedTo: linear.annotationId,
+          characteristic: 'flatness',
+          amount: 0.1,
+          placementMm: { x: 0, y: 0 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      await within(canvas).findByRole('button', {
+        name: 'Datum feature A'
+      });
+      const frame = await within(canvas).findByRole('button', {
+        name: 'Feature control frame Flatness | 0.1'
+      });
+      expect(
+        [...canvas.querySelectorAll('text')].map((text) => text.textContent)
+      ).toEqual(expect.arrayContaining(['0.1', 'A']));
+      await userEvent.click(frame);
+      // Flatness is a form tolerance: no Ø zone, no modifier, no datums.
+      expect(
+        screen.getByRole('checkbox', { name: 'Cylindrical zone (Ø)' })
+      ).toBeDisabled();
+      expect(
+        screen.getByRole('combobox', { name: 'Material condition' })
+      ).toBeDisabled();
+      expect(
+        screen.getByText(/A form tolerance controls the feature alone/)
+      ).toBeInTheDocument();
+      // Perpendicularity needs a datum: the declared A is named.
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Characteristic' }),
+        'perpendicularity'
+      );
+      let command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(command.payload).toMatchObject({
+        annotation: {
+          characteristic: 'perpendicularity',
+          datums: [{ letter: 'A' }]
+        }
+      });
+      // A tolerance that is not positive is refused and reverts.
+      const calls = onCommand.mock.calls.length;
+      const amount = screen.getByRole<HTMLInputElement>('spinbutton', {
+        name: 'Frame tolerance'
+      });
+      await userEvent.clear(amount);
+      await userEvent.type(amount, '-1{Enter}');
+      expect(onCommand.mock.calls.length).toBe(calls);
+      expect(amount.value).toBe('0.1');
+      await userEvent.clear(amount);
+      await userEvent.type(amount, '0.05{Enter}');
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.payload).toMatchObject({ annotation: { amount: 0.05 } });
+    });
+
+    it('prints a general-tolerance block and switches its scheme (D07 v105)', async () => {
+      const sheet = dimensioned();
+      sheet.annotations = [
+        ...sheet.annotations!,
+        {
+          annotationId: 'dann_g' as DrawingAnnotationId,
+          kind: 'general-tolerance',
+          scheme: 'iso-2768',
+          linearClass: 'm',
+          placementMm: { x: 20, y: 120 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      const canvas = screen.getByRole('application', {
+        name: 'Sheet Sheet 1'
+      });
+      const block = await within(canvas).findByRole('button', {
+        name: 'General tolerances ISO 2768-m'
+      });
+      expect(
+        [...canvas.querySelectorAll('text')].map((text) => text.textContent)
+      ).toEqual(
+        expect.arrayContaining(['ISO 2768-m (mm)', 'over 0.5 to 3', '±0.1'])
+      );
+      await userEvent.click(block);
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Linear and angular class' }),
+        'f'
+      );
+      let command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      expect(command.payload).toMatchObject({
+        annotation: { scheme: 'iso-2768', linearClass: 'f' }
+      });
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Scheme' }),
+        'decimal'
+      );
+      command = onCommand.mock.calls.at(-1)![0];
+      expect(command.payload).toEqual({
+        sheetId: sheet.sheetId,
+        annotation: {
+          annotationId: 'dann_g',
+          kind: 'general-tolerance',
+          placementMm: { x: 20, y: 120 },
+          scheme: 'decimal',
+          places: [
+            { decimals: 1, amount: 0.1 },
+            { decimals: 2, amount: 0.05 }
+          ],
+          angle: 0.5
+        }
+      });
+    });
+
+    it('drops a thread class when a diameter is toleranced instead (D07 v105)', async () => {
+      const sheet = dimensioned();
+      const linear = sheet.annotations![0] as DrawingLinearDimension;
+      sheet.annotations = [
+        {
+          annotationId: 'dann_d' as DrawingAnnotationId,
+          kind: 'diameter',
+          viewId: linear.viewId,
+          edge: { bodyId, hash: 210 },
+          threadClass: '6H',
+          placementMm: { x: 0, y: -15 }
+        }
+      ];
+      const { onCommand } = setup({ sheet });
+      await userEvent.click(
+        await screen.findByRole('option', {
+          name: 'Diameter dimension (broken)'
+        })
+      );
+      await userEvent.selectOptions(
+        screen.getByRole('combobox', { name: 'Tolerance' }),
+        'symmetric'
+      );
+      const command = onCommand.mock.calls.at(-1)![0];
+      expect(command.kind).toBe('drawing.annotation.update');
+      const annotation = (command.payload as { annotation: DrawingAnnotation })
+        .annotation;
+      expect(annotation).toMatchObject({
+        tolerance: { kind: 'symmetric', value: 0.1 }
+      });
+      expect(annotation).not.toHaveProperty('threadClass');
+    });
+
     it('keeps a broken dimension in place, refuses export and offers a re-pick', async () => {
       const { onCommand } = setup({ sheet: dimensioned(999) });
       const canvas = screen.getByRole('application', {
@@ -2749,6 +2914,126 @@ describe('DrawingWorkspace geometry annotations (D02 v73)', () => {
       .annotation;
     expect(annotation.kind).toBe('intersection-mark');
     expect(annotation.viewId).toBe(front.viewId);
+  });
+});
+
+describe('DrawingWorkspace geometric tolerancing (D07 v98)', () => {
+  it('previews a datum symbol with the letter it commits', async () => {
+    resetRetainedProjections();
+    const starterSheet = starter(
+      drawingSourceFingerprint({ [bodyId]: straightCube() }, [bodyId])!
+    );
+    const front = starterSheet.views.find(
+      (view) => view.orientation === 'front'
+    )!;
+    // Datum A is declared already (on an edge this cube need not have).
+    const sheet: DrawingSheet = {
+      ...starterSheet,
+      annotations: [
+        {
+          annotationId: 'dann_a' as DrawingAnnotationId,
+          kind: 'datum-feature',
+          viewId: front.viewId,
+          leader: { bodyId, hash: 999_999 },
+          letter: 'A',
+          placementMm: { x: 0, y: -40 }
+        }
+      ]
+    };
+    const { onCommand } = setup({ sheet, straightEdges: true });
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    Object.defineProperty(canvas, 'getScreenCTM', {
+      configurable: true,
+      value: () => ({
+        a: 1,
+        b: 0,
+        c: 0,
+        d: 1,
+        e: 0,
+        f: 0,
+        inverse: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 })
+      })
+    });
+    await userEvent.keyboard('q');
+    const surface = canvas.querySelector('.drawing-pick-surface')!;
+    const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
+    const client = (u: number, v: number) => ({
+      clientX: front.centerMm.x + (u - 5) * k,
+      clientY: 297 - (front.centerMm.y + (v - 5) * k),
+      button: 0,
+      pointerId: 1
+    });
+    const letters = () =>
+      [...canvas.querySelectorAll('text')].filter(
+        (text) => text.textContent === 'B'
+      ).length;
+    expect(letters()).toBe(0);
+    // The top edge, then the pointer above it: the preview says B.
+    fireEvent.pointerDown(surface, client(5, 10));
+    fireEvent.pointerMove(surface, client(5, 10 + 20 / k));
+    expect(letters()).toBe(1);
+    fireEvent.pointerDown(surface, client(5, 10 + 20 / k));
+    const added = onCommand.mock.calls
+      .map(([command]) => command)
+      .find((command) => command.kind === 'drawing.annotation.add');
+    expect(
+      (added!.payload as { annotation: DrawingAnnotation }).annotation
+    ).toMatchObject({ kind: 'datum-feature', letter: 'B' });
+  });
+
+  it('never offers to clear the primary datum a characteristic needs', async () => {
+    const sheet = starter(
+      drawingSourceFingerprint({ [bodyId]: cube() }, [bodyId])!
+    );
+    const front = sheet.views.find((view) => view.orientation === 'front')!;
+    const edge = { bodyId, hash: 210 };
+    sheet.annotations = [
+      ...(['A', 'B'] as const).map((letter, index): DrawingAnnotation => ({
+        annotationId: `dann_${letter}` as DrawingAnnotationId,
+        kind: 'datum-feature',
+        viewId: front.viewId,
+        leader: edge,
+        letter,
+        placementMm: { x: 20 * index, y: -30 }
+      })),
+      {
+        annotationId: 'dann_f' as DrawingAnnotationId,
+        kind: 'feature-control-frame',
+        viewId: front.viewId,
+        leader: edge,
+        characteristic: 'parallelism',
+        amount: 0.1,
+        datums: [{ letter: 'A' }, { letter: 'B' }],
+        placementMm: { x: 30, y: 0 }
+      }
+    ];
+    setup({ sheet });
+    const canvas = screen.getByRole('application', {
+      name: 'Sheet Sheet 1'
+    });
+    await userEvent.click(
+      await within(canvas).findByRole('button', {
+        name: 'Feature control frame Parallelism | 0.1 | A | B'
+      })
+    );
+    const primary = screen.getByRole<HTMLSelectElement>('combobox', {
+      name: 'Primary'
+    });
+    expect(
+      [...primary.options].find((option) => option.value === '')!.disabled
+    ).toBe(true);
+    // A later datum may still be cleared.
+    const secondary = screen.getByRole<HTMLSelectElement>('combobox', {
+      name: 'Secondary'
+    });
+    expect(
+      [...secondary.options].find((option) => option.value === '')!.disabled
+    ).toBe(false);
   });
 });
 

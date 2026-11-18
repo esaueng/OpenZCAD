@@ -29,7 +29,11 @@ import {
   Scissors,
   StickyNote,
   MessageCircle,
+  Anchor,
+  Columns3,
+  Diff,
   TableProperties,
+  ImageIcon,
   Sun,
   Trash2,
   TriangleRight,
@@ -60,13 +64,34 @@ import {
   MAX_DRAWING_DIMENSION_COUNT,
   drawingToleranceError,
   MAX_DRAWING_DIMENSION_DECIMALS,
+  MAX_DRAWING_TOLERANCE,
+  MAX_DRAWING_IMAGE_WIDTH_MM,
+  MAX_DRAWING_SECTION_STEPS,
   MAX_DRAWING_NOTE_LENGTH,
+  MIN_DRAWING_IMAGE_WIDTH_MM,
   type DrawingAnnotation,
   type DrawingTolerance,
   type DrawingDetail,
   type DrawingDimension,
   isDrawingDimension,
   isDrawingGeometryAnnotation,
+  drawingToleranceHostAllowed,
+  DRAWING_GEOMETRIC_CHARACTERISTICS,
+  DRAWING_DATUM_REQUIRED_CHARACTERISTICS,
+  DRAWING_DIAMETER_ZONE_CHARACTERISTICS,
+  DRAWING_FORM_CHARACTERISTICS,
+  DRAWING_MATERIAL_CHARACTERISTICS,
+  DRAWING_DATUM_MATERIAL_CHARACTERISTICS,
+  MAX_DRAWING_DATUM_REFERENCES,
+  DRAWING_THREAD_CLASSES,
+  DRAWING_ISO_GEOMETRIC_CLASSES,
+  type DrawingThreadClass,
+  type DrawingRadialDimension,
+  type DrawingIsoLinearClass,
+  type DrawingIsoGeometricClass,
+  type DrawingGeometricCharacteristic,
+  type DrawingMaterialCondition,
+  type UnitSystem,
   type DrawingLineClass,
   type DrawingSheetFormat,
   DRAWING_LINE_CLASSES,
@@ -83,6 +108,7 @@ import {
   drawingPaperMm,
   drawingPaperPerModelUnit,
   drawingSectionOrientations,
+  drawingSectionCut,
   drawingSectionPlane,
   drawingViewAlignment,
   formatDrawingScale,
@@ -94,11 +120,11 @@ import {
   type DrawingSheet,
   type DrawingSheetId,
   type DrawingTitleBlock,
+  type DrawingSectionStep,
   type DrawingView,
   type DrawingViewId,
   type DrawingViewOrientation,
   type ProjectDocument,
-  type Vector3,
   hasDraftDisplay
 } from '@openzcad/shared';
 import {
@@ -165,11 +191,18 @@ import {
 } from '../lib/drawing/sheetZoom';
 import {
   drawingExportFileName,
+  SheetPictureUnavailableError,
   sheetPageToPdf,
   sheetPageToDxf,
   sheetPageToSvg,
   sheetTextStart
 } from '../lib/drawing/sheetExport';
+import {
+  loadPagePictures,
+  pagePictures,
+  pictureDataUrl,
+  pictureJpegBytes
+} from '../lib/drawing/sheetPictures';
 import {
   annotationAnchor,
   composeSheetAnnotations,
@@ -179,12 +212,17 @@ import {
   sheetNumberFormat,
   type DrawingNumberFormat,
   markHiddenLeaders,
+  markBrokenHosts,
   sheetBom,
+  sheetPictures,
   balloonComponent,
   previewAnnotationLayer,
   resolveSheetAnnotations,
+  drawingDatumLetters,
+  type DatumLetters,
   holeCalloutLookup,
   type HoleCalloutLookup,
+  type SheetPictureLookup,
   sectionBodyKey,
   type AnnotationBox,
   type AnnotationResolution
@@ -204,6 +242,8 @@ import {
   draftAnnotation,
   draftRefusal,
   isGeometryTool,
+  isToleranceTool,
+  nextDatumLetter,
   drawingViewSignature,
   drawnLines,
   drawnOutlines,
@@ -220,6 +260,8 @@ import {
   type PickableEdge,
   type PickableFace
 } from '../lib/drawing/annotationPicking';
+import { CHARACTERISTIC_LABELS } from '../lib/drawing/toleranceFrames';
+import { FIT_GRADES, FIT_LETTERS } from '../lib/drawing/isoTolerances';
 import {
   createStarterSheet,
   defaultDrawingPaper,
@@ -280,6 +322,11 @@ import { drawingBodyReplacements } from '../lib/drawing/bodySuccessors';
  */
 export interface DrawingWorkspaceProps {
   document: ProjectDocument;
+  /**
+   * D02 (v92): a reference image's bytes by checksum, from the project's
+   * content-addressed store, for sheet images. Absent: none can be shown.
+   */
+  loadReferenceImage?: (checksumSha256: string) => Promise<Blob | null>;
   /** The last completed projection of the model; it may lag `document`. */
   bodies: Readonly<Record<string, BodyRepresentation | undefined>>;
   /**
@@ -322,7 +369,8 @@ export interface DrawingWorkspaceProps {
   requestSection?: (
     document: ProjectDocument,
     bodyIds: BodyId[],
-    plane: { normal: Vector3; depth: number },
+    /** v93: with a stepped section's steps. */
+    plane: ReturnType<typeof drawingSectionCut>,
     signal: AbortSignal
   ) => Promise<Record<string, SectionBodyInput>>;
   /** Why drawing edits are refused, or null. */
@@ -421,6 +469,11 @@ function viewIntentKey(view: DrawingView): string {
               .map((v) => `${v.x},${v.y},${v.z}`)
               .join('|')}`
           : ''
+      }${
+        // v93: a stepped section's steps.
+        view.section.steps?.length
+          ? `|steps:${view.section.steps.map((step) => `${step.at}@${step.depth}`).join(',')}`
+          : ''
       }`
     : '';
   // D03 (v81): an auxiliary view projects in its own frame.
@@ -506,6 +559,13 @@ function keptDrawingsFor(
 }
 
 /** Forgets the retained projections and kept drawings; for tests. */
+// D07: the PMI labels draw frames with the drawing's own geometry, loaded
+// with this chunk rather than shared out of it.
+export {
+  datumFeatureLayout,
+  featureControlFrameLayout
+} from '../lib/drawing/toleranceFrames';
+
 export function resetRetainedProjections(): void {
   retainedProjections = null;
 }
@@ -621,7 +681,7 @@ function useViewProjections(
     const cuts = new Map<
       string,
       {
-        plane: { normal: Vector3; depth: number };
+        plane: ReturnType<typeof drawingSectionCut>;
         row: string | null;
         bodyIds: Set<BodyId>;
         views: DrawingView[];
@@ -636,7 +696,13 @@ function useViewProjections(
       const row = projectionViewRow(view);
       if (planeKey && view.section) {
         const cut = cuts.get(planeKey) ?? {
-          plane: drawingSectionPlane({ ...view, section: view.section }),
+          // v93: a stepped section's steps go with its plane.
+          plane: drawingSectionCut(
+            { ...view, section: view.section },
+            sheet.views.find(
+              (entry) => entry.viewId === view.section!.sourceViewId
+            )?.orientation
+          ),
           row,
           bodyIds: new Set<BodyId>(),
           views: []
@@ -1084,7 +1150,11 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'centerline',
   'circle-centerline',
   'balloon',
-  'parts-list'
+  'parts-list',
+  'image',
+  'datum-feature',
+  'feature-control-frame',
+  'general-tolerance'
 ];
 
 const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
@@ -1105,7 +1175,11 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     centerline: SeparatorVertical,
     'circle-centerline': CircleDashed,
     balloon: MessageCircle,
-    'parts-list': TableProperties
+    'parts-list': TableProperties,
+    image: ImageIcon,
+    'datum-feature': Anchor,
+    'feature-control-frame': Columns3,
+    'general-tolerance': Diff
   };
 
 /** One key per tool, live while Draw is open and focus is not in a field. */
@@ -1126,7 +1200,22 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   centerline: 'L',
   'circle-centerline': 'B',
   balloon: 'O',
-  'parts-list': 'P'
+  'parts-list': 'P',
+  image: 'I',
+  'datum-feature': 'Q',
+  'feature-control-frame': 'F',
+  'general-tolerance': 'W'
+};
+
+/**
+ * D07 (v98): a new frame's tolerance, by the units the sheet prints in:
+ * about a tenth of a millimetre, a round number in each.
+ */
+const DEFAULT_FRAME_AMOUNT: Readonly<Record<UnitSystem, number>> = {
+  mm: 0.1,
+  cm: 0.01,
+  m: 0.0001,
+  inch: 0.004
 };
 
 /** D03: the section view tool's key, beside the annotation tools'. */
@@ -1135,6 +1224,9 @@ const SECTION_TOOL_KEY = 'S';
 const DETAIL_TOOL_KEY = 'K';
 /** D03 (v81): the auxiliary view tool's key. */
 const AUXILIARY_TOOL_KEY = 'U';
+
+/** D02 (v92): how long before an unavailable sheet picture is asked again. */
+const PICTURE_RETRY_MS = 15_000;
 
 const DARK_PAPER_STORAGE_KEY = 'openzcad.drawing.darkPaper';
 
@@ -1188,7 +1280,11 @@ const ANNOTATION_KIND_LABELS: Readonly<
   'intersection-mark': 'Intersection mark',
   centerline: 'Centreline',
   'bom-table': 'Parts list',
-  balloon: 'Balloon'
+  balloon: 'Balloon',
+  image: 'Image',
+  'datum-feature': 'Datum feature',
+  'feature-control-frame': 'Feature control frame',
+  'general-tolerance': 'General tolerances'
 };
 
 function annotationTitle(annotation: DrawingAnnotation): string {
@@ -1203,6 +1299,9 @@ function annotationTitle(annotation: DrawingAnnotation): string {
     : annotation.kind === 'note' ||
         annotation.kind === 'bom-table' ||
         annotation.kind === 'balloon' ||
+        annotation.kind === 'datum-feature' ||
+        annotation.kind === 'feature-control-frame' ||
+        annotation.kind === 'general-tolerance' ||
         isDrawingGeometryAnnotation(annotation)
       ? ANNOTATION_KIND_LABELS[annotation.kind]
       : `${ANNOTATION_KIND_LABELS[annotation.kind]} dimension`;
@@ -1366,6 +1465,108 @@ function AnnotationList(props: {
           values from the model and follow the sheet&apos;s Update.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * D03 (v93): where along its line a stepped section's steps may go: the
+ * source's extent along the line (its u for a horizontal line, v for a
+ * vertical one), in model units.
+ */
+function sectionStepRange(
+  source: DrawingView,
+  section: DrawingView,
+  drawn: ViewState | undefined
+): [number, number] | null {
+  if (drawn?.state !== 'ready' || !drawn.projection.bounds) return null;
+  const alignment = drawingViewAlignment(
+    source.orientation,
+    section.orientation
+  );
+  if (alignment === null) return null;
+  const bounds = drawn.projection.bounds;
+  return alignment === 'column'
+    ? [bounds.minU, bounds.maxU]
+    : [bounds.minV, bounds.maxV];
+}
+
+/** D03 (v93): a section's steps: where each starts and its own cut. */
+function SectionStepFields(props: {
+  steps: readonly DrawingSectionStep[];
+  firstDepth: number;
+  /** World coordinate per stored depth, as the Cut at field shows it. */
+  sign: number;
+  axisLabel: string;
+  units: string;
+  /** The source's extent along the line; null while it is not drawn. */
+  bounds: [number, number] | null;
+  editable: boolean;
+  onCommit: (steps: DrawingSectionStep[]) => void;
+}) {
+  const { steps, sign } = props;
+  const commit = (next: DrawingSectionStep[]) =>
+    props.onCommit([...next].sort((a, b) => a.at - b.at));
+  const add = () => {
+    if (!props.bounds) return;
+    const [low, high] = props.bounds;
+    const last = steps.at(-1);
+    const from = last ? last.at : low;
+    const at = Math.round(((from + high) / 2) * 10) / 10;
+    commit([...steps, { at, depth: last ? last.depth : props.firstDepth }]);
+  };
+  return (
+    <div className="drawing-section-steps">
+      {steps.map((step, index) => (
+        <div key={index} className="drawing-field-row">
+          <NumberField
+            label={`Step ${index + 1} at (${props.units})`}
+            value={step.at}
+            disabled={!props.editable}
+            onCommit={(at) =>
+              commit(
+                steps.map((entry, i) =>
+                  i === index ? { ...entry, at } : entry
+                )
+              )
+            }
+          />
+          <NumberField
+            label={`Step ${index + 1} cut at ${props.axisLabel} (${props.units})`}
+            value={step.depth * sign}
+            disabled={!props.editable}
+            onCommit={(value) =>
+              commit(
+                steps.map((entry, i) =>
+                  i === index ? { ...entry, depth: value * sign } : entry
+                )
+              )
+            }
+          />
+          <button
+            type="button"
+            className="secondary"
+            disabled={!props.editable}
+            aria-label={`Remove step ${index + 1}`}
+            onClick={() => commit(steps.filter((_, i) => i !== index))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="secondary"
+        disabled={
+          !props.editable ||
+          !props.bounds ||
+          steps.length >= MAX_DRAWING_SECTION_STEPS
+        }
+        onClick={add}
+        title="Step the cutting line to another depth along its run"
+      >
+        Add step
+      </button>
     </div>
   );
 }
@@ -1683,6 +1884,10 @@ function AnnotationProperties(props: {
   /** The sheet's number format: its printed units and default precision. */
   numberFormat: DrawingNumberFormat;
   resolutions: ReadonlyMap<DrawingAnnotationId, AnnotationResolution>;
+  /** D02 (v92): the project's pictures a sheet image may show. */
+  pictures: SheetPictureLookup;
+  /** D07 (v98): datum letters declared across the drawing. */
+  datumLetters: DatumLetters;
   onTool: (tool: AnnotationTool | null) => void;
   onDeselect: () => void;
   onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
@@ -1702,7 +1907,10 @@ function AnnotationProperties(props: {
         </p>
       ) : resolution && !resolution.ok ? (
         <p className="drawing-annotation-status" role="alert">
-          Broken: {resolution.message} Re-pick what it measures, or delete it.
+          Broken: {resolution.message}{' '}
+          {selected.kind === 'image'
+            ? 'Choose another picture, or delete it.'
+            : 'Re-pick what it measures, or delete it.'}
         </p>
       ) : resolution?.ok && isDrawingDimension(selected) ? (
         <p className="drawing-annotation-value">
@@ -1726,11 +1934,78 @@ function AnnotationProperties(props: {
           editable={editable}
           onUpdate={props.onUpdate}
         />
+      ) : selected.kind === 'image' ? (
+        <>
+          <label className="drawing-field">
+            <span>Picture</span>
+            <select
+              value={
+                props.pictures.has(selected.referenceImageId)
+                  ? selected.referenceImageId
+                  : ''
+              }
+              disabled={!editable}
+              onChange={(event) =>
+                event.target.value &&
+                props.onUpdate(
+                  { ...selected, referenceImageId: event.target.value },
+                  'Change sheet image'
+                )
+              }
+            >
+              {props.pictures.has(selected.referenceImageId) ? null : (
+                <option value="">Deleted picture</option>
+              )}
+              {[...props.pictures].map(([id, picture]) => (
+                <option key={id} value={id}>
+                  {picture.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <NumberField
+            label="Width (mm)"
+            value={selected.widthMm}
+            disabled={!editable}
+            onCommit={(value) =>
+              props.onUpdate(
+                {
+                  ...selected,
+                  widthMm: Math.min(
+                    MAX_DRAWING_IMAGE_WIDTH_MM,
+                    Math.max(MIN_DRAWING_IMAGE_WIDTH_MM, value)
+                  )
+                },
+                'Resize sheet image'
+              )
+            }
+          />
+          <p className="drawing-hint">
+            One of the project&apos;s pictures (Insert image in Build), printed
+            at this width; its height keeps the picture&apos;s shape.
+          </p>
+        </>
       ) : selected.kind === 'balloon' ? (
         <p className="drawing-hint">
           Names the item number its part has in the assembly&apos;s parts list;
           it follows the list&apos;s numbering.
         </p>
+      ) : selected.kind === 'general-tolerance' ? (
+        <GeneralToleranceFields
+          selected={selected}
+          editable={editable}
+          numberFormat={props.numberFormat}
+          onUpdate={props.onUpdate}
+        />
+      ) : selected.kind === 'datum-feature' ||
+        selected.kind === 'feature-control-frame' ? (
+        <ToleranceAnnotationFields
+          selected={selected}
+          editable={editable}
+          datumLetters={props.datumLetters}
+          numberFormat={props.numberFormat}
+          onUpdate={props.onUpdate}
+        />
       ) : selected.kind === 'note' ? (
         <TextField
           label="Text"
@@ -1796,6 +2071,8 @@ function AnnotationProperties(props: {
       )}
       <div className="drawing-field-row">
         {selected.kind !== 'bom-table' &&
+          selected.kind !== 'image' &&
+          selected.kind !== 'general-tolerance' &&
           (selected.kind !== 'note' || selected.leader) && (
             <button
               type="button"
@@ -1825,6 +2102,349 @@ function AnnotationProperties(props: {
         </button>
       </div>
     </div>
+  );
+}
+
+/** D07 (v98): the single datum letters, A to Z without I, O and Q. */
+const DATUM_LETTERS = [...'ABCDEFGHJKLMNPRSTUVWXYZ'];
+
+const MATERIAL_LABELS: Readonly<Record<DrawingMaterialCondition, string>> = {
+  mmc: 'MMC (M)',
+  lmc: 'LMC (L)'
+};
+
+const DATUM_PRECEDENCE = ['Primary', 'Secondary', 'Tertiary'] as const;
+
+/**
+ * D07 (v98): a datum symbol's letter, or a frame's characteristic,
+ * tolerance, zone, modifier and datum references. Choices the standard
+ * forbids for the characteristic are disabled, and changing it drops what
+ * it no longer takes, so every update is one the schema accepts.
+ */
+function ToleranceAnnotationFields(props: {
+  selected: Extract<
+    DrawingAnnotation,
+    { kind: 'datum-feature' | 'feature-control-frame' }
+  >;
+  editable: boolean;
+  datumLetters: DatumLetters;
+  numberFormat: DrawingNumberFormat;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable, datumLetters } = props;
+  if (selected.kind === 'datum-feature') {
+    const free = DATUM_LETTERS.filter(
+      (letter) =>
+        letter === selected.letter || (datumLetters.get(letter) ?? 0) === 0
+    );
+    return (
+      <>
+        <label className="drawing-field">
+          <span>Letter</span>
+          <select
+            value={selected.letter}
+            disabled={!editable}
+            onChange={(event) =>
+              props.onUpdate(
+                { ...selected, letter: event.target.value },
+                'Change datum letter'
+              )
+            }
+          >
+            {free.includes(selected.letter) ? null : (
+              <option value={selected.letter}>{selected.letter}</option>
+            )}
+            {free.map((letter) => (
+              <option key={letter} value={letter}>
+                {letter}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="drawing-hint">
+          Declares datum {selected.letter} for the drawing. Frames that name it
+          break if it is renamed or deleted.
+        </p>
+      </>
+    );
+  }
+  const frame = selected;
+  const declared = [...datumLetters]
+    .filter(([, count]) => count > 0)
+    .map(([letter]) => letter)
+    .sort((a, b) => a.length - b.length || a.localeCompare(b));
+  const datums = frame.datums ?? [];
+  const takesDatums = !DRAWING_FORM_CHARACTERISTICS.includes(
+    frame.characteristic
+  );
+  const datumModifiers = DRAWING_DATUM_MATERIAL_CHARACTERISTICS.includes(
+    frame.characteristic
+  );
+  const update = (
+    next: Extract<DrawingAnnotation, { kind: 'feature-control-frame' }>,
+    label: string
+  ) => props.onUpdate(next, label);
+  const withDatums = (
+    list: { letter: string; material?: DrawingMaterialCondition }[]
+  ) => {
+    const { datums: _previous, ...rest } = frame;
+    return list.length ? { ...rest, datums: list } : rest;
+  };
+  const chooseCharacteristic = (
+    characteristic: DrawingGeometricCharacteristic
+  ) => {
+    const { diameterZone, material, datums: previous, ...rest } = frame;
+    const keepModifiers =
+      DRAWING_DATUM_MATERIAL_CHARACTERISTICS.includes(characteristic);
+    const nextDatums = DRAWING_FORM_CHARACTERISTICS.includes(characteristic)
+      ? []
+      : (previous ?? []).map((reference) =>
+          keepModifiers ? reference : { letter: reference.letter }
+        );
+    // Orientation, runout, concentricity and symmetry need a datum: the
+    // first declared one, until another is chosen.
+    if (
+      nextDatums.length === 0 &&
+      DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(characteristic) &&
+      declared[0]
+    )
+      nextDatums.push({ letter: declared[0] });
+    update(
+      {
+        ...rest,
+        characteristic,
+        ...(diameterZone &&
+        DRAWING_DIAMETER_ZONE_CHARACTERISTICS.includes(characteristic)
+          ? { diameterZone }
+          : {}),
+        ...(material &&
+        DRAWING_MATERIAL_CHARACTERISTICS.includes(characteristic)
+          ? { material }
+          : {}),
+        ...(nextDatums.length ? { datums: nextDatums } : {})
+      },
+      'Change frame characteristic'
+    );
+  };
+  return (
+    <>
+      <label className="drawing-field">
+        <span>Characteristic</span>
+        <select
+          value={frame.characteristic}
+          disabled={!editable}
+          onChange={(event) =>
+            chooseCharacteristic(
+              event.target.value as DrawingGeometricCharacteristic
+            )
+          }
+        >
+          {DRAWING_GEOMETRIC_CHARACTERISTICS.map((characteristic) => (
+            <option
+              key={characteristic}
+              value={characteristic}
+              disabled={
+                declared.length === 0 &&
+                DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(characteristic)
+              }
+            >
+              {CHARACTERISTIC_LABELS[characteristic]}
+              {characteristic === 'concentricity' ||
+              characteristic === 'symmetry'
+                ? ' (ISO 1101)'
+                : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      <FrameAmountField
+        value={frame.amount}
+        units={props.numberFormat.units}
+        disabled={!editable}
+        onCommit={(amount) =>
+          update({ ...frame, amount }, 'Change frame tolerance')
+        }
+      />
+      <label className="drawing-check">
+        <input
+          type="checkbox"
+          checked={frame.diameterZone === true}
+          disabled={
+            !editable ||
+            !DRAWING_DIAMETER_ZONE_CHARACTERISTICS.includes(
+              frame.characteristic
+            )
+          }
+          onChange={(event) => {
+            const { diameterZone: _previous, ...rest } = frame;
+            update(
+              event.target.checked ? { ...rest, diameterZone: true } : rest,
+              'Change frame zone'
+            );
+          }}
+        />
+        Cylindrical zone (Ø)
+      </label>
+      <label className="drawing-field">
+        <span>Material condition</span>
+        <select
+          value={frame.material ?? ''}
+          disabled={
+            !editable ||
+            !DRAWING_MATERIAL_CHARACTERISTICS.includes(frame.characteristic)
+          }
+          onChange={(event) => {
+            const { material: _previous, ...rest } = frame;
+            const value = event.target.value as DrawingMaterialCondition | '';
+            update(
+              value ? { ...rest, material: value } : rest,
+              'Change frame modifier'
+            );
+          }}
+        >
+          <option value="">Regardless of size</option>
+          <option value="mmc">{MATERIAL_LABELS.mmc}</option>
+          <option value="lmc">{MATERIAL_LABELS.lmc}</option>
+        </select>
+      </label>
+      {takesDatums ? (
+        <fieldset className="drawing-bodies">
+          <legend>Datums</legend>
+          {Array.from({ length: MAX_DRAWING_DATUM_REFERENCES }, (_, index) => {
+            const reference = datums[index];
+            // A later datum waits for the earlier ones.
+            const reachable = index <= datums.length;
+            const others = datums
+              .filter((_, other) => other !== index)
+              .map((entry) => entry.letter);
+            // Clearing the primary clears every datum, which a
+            // characteristic that needs one cannot take.
+            const required = DRAWING_DATUM_REQUIRED_CHARACTERISTICS.includes(
+              frame.characteristic
+            );
+            return (
+              <div key={index} className="drawing-field-row">
+                <label className="drawing-field">
+                  <span>{DATUM_PRECEDENCE[index]}</span>
+                  <select
+                    value={reference?.letter ?? ''}
+                    disabled={!editable || !reachable}
+                    onChange={(event) => {
+                      const letter = event.target.value;
+                      const next = letter
+                        ? datums.length > index
+                          ? datums.map((entry, at) =>
+                              at === index ? { ...entry, letter } : entry
+                            )
+                          : [...datums, { letter }]
+                        : datums.slice(0, index);
+                      update(withDatums(next), 'Change frame datums');
+                    }}
+                  >
+                    <option value="" disabled={index === 0 && required}>
+                      None
+                    </option>
+                    {reference && !declared.includes(reference.letter) ? (
+                      <option value={reference.letter}>
+                        {reference.letter} (undeclared)
+                      </option>
+                    ) : null}
+                    {declared
+                      .filter((letter) => !others.includes(letter))
+                      .map((letter) => (
+                        <option key={letter} value={letter}>
+                          {letter}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                {datumModifiers ? (
+                  <label className="drawing-field">
+                    <span>Modifier</span>
+                    <select
+                      value={reference?.material ?? ''}
+                      disabled={!editable || !reference}
+                      onChange={(event) => {
+                        const value = event.target.value as
+                          DrawingMaterialCondition | '';
+                        update(
+                          withDatums(
+                            datums.map((entry, at) =>
+                              at === index
+                                ? value
+                                  ? { letter: entry.letter, material: value }
+                                  : { letter: entry.letter }
+                                : entry
+                            )
+                          ),
+                          'Change frame datums'
+                        );
+                      }}
+                    >
+                      <option value="">RMB</option>
+                      <option value="mmc">MMB (M)</option>
+                      <option value="lmc">LMB (L)</option>
+                    </select>
+                  </label>
+                ) : null}
+              </div>
+            );
+          })}
+          {declared.length === 0 ? (
+            <p className="drawing-hint">
+              Place a datum feature symbol (Q) to declare a datum.
+            </p>
+          ) : null}
+        </fieldset>
+      ) : (
+        <p className="drawing-hint">
+          A form tolerance controls the feature alone and names no datum.
+        </p>
+      )}
+    </>
+  );
+}
+
+/** D07 (v98): a frame's tolerance, positive, in the sheet's printed units. */
+function FrameAmountField(props: {
+  value: number;
+  units: UnitSystem;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(props.value));
+  useEffect(() => setDraft(String(props.value)), [props.value]);
+  const commit = () => {
+    const value = Number(draft);
+    if (
+      draft.trim() !== '' &&
+      Number.isFinite(value) &&
+      value > 0 &&
+      value <= MAX_DRAWING_TOLERANCE &&
+      Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) === value &&
+      value !== props.value
+    )
+      props.onCommit(value);
+    setDraft(String(props.value));
+  };
+  return (
+    <label className="drawing-field">
+      <span>Tolerance ({props.units === 'inch' ? 'in' : props.units})</span>
+      <input
+        type="number"
+        step="any"
+        min={0}
+        value={draft}
+        disabled={props.disabled}
+        aria-label="Frame tolerance"
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(String(props.value));
+        }}
+      />
+    </label>
   );
 }
 
@@ -1934,9 +2554,20 @@ function DimensionFormat(props: {
             // A reference dimension is stated for information and takes no
             // tolerance (v68): marking one drops it.
             const marked = flag('reference', event.target.checked);
-            if (event.target.checked && 'tolerance' in marked) {
-              const { tolerance: _dropped, ...rest } = marked;
-              props.onUpdate(rest, 'Format dimension');
+            if (
+              event.target.checked &&
+              ('tolerance' in marked || 'fit' in marked)
+            ) {
+              // v105: nor a fit, which is a tolerance.
+              const {
+                tolerance: _dropped,
+                fit: _fit,
+                ...rest
+              } = marked as unknown as Record<string, unknown>;
+              props.onUpdate(
+                rest as unknown as DrawingAnnotation,
+                'Format dimension'
+              );
             } else props.onUpdate(marked, 'Format dimension');
           }}
         />
@@ -1964,12 +2595,318 @@ function DimensionFormat(props: {
           props.onUpdate(affixed(selected, 'suffix', text), 'Format dimension')
         }
       />
+      {selected.kind === 'diameter' &&
+        'edge' in selected &&
+        !selected.counterbore &&
+        !selected.countersink && (
+          <FitFields
+            selected={selected}
+            editable={editable}
+            onUpdate={props.onUpdate}
+          />
+        )}
       <ToleranceFields
         selected={selected}
         editable={editable}
         onUpdate={props.onUpdate}
       />
     </>
+  );
+}
+
+/**
+ * D07 (v105): a diameter's ISO 286 fit class, which is its tolerance, and a
+ * tapped hole's thread class on its callout. A fit replaces any tolerance
+ * and the callout, so choosing one drops them.
+ */
+function FitFields(props: {
+  selected: DrawingRadialDimension;
+  editable: boolean;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable } = props;
+  return (
+    <>
+      <label className="drawing-field">
+        <span>Fit (ISO 286)</span>
+        <select
+          value={selected.fit ?? ''}
+          disabled={!editable || selected.reference === true}
+          onChange={(event) => {
+            const {
+              fit: _fit,
+              tolerance: _tolerance,
+              threadClass: _thread,
+              ...rest
+            } = selected;
+            const fit = event.target.value;
+            props.onUpdate(
+              fit
+                ? { ...rest, fit }
+                : {
+                    ...rest,
+                    ...(selected.threadClass
+                      ? { threadClass: selected.threadClass }
+                      : {})
+                  },
+              'Fit diameter'
+            );
+          }}
+        >
+          <option value="">None</option>
+          <optgroup label="Hole">
+            {FIT_LETTERS.hole.flatMap((letter) =>
+              FIT_GRADES.map((grade) => (
+                <option key={letter + grade} value={`${letter}${grade}`}>
+                  {letter}
+                  {grade}
+                </option>
+              ))
+            )}
+          </optgroup>
+          <optgroup label="Shaft">
+            {FIT_LETTERS.shaft.flatMap((letter) =>
+              FIT_GRADES.map((grade) => (
+                <option key={letter + grade} value={`${letter}${grade}`}>
+                  {letter}
+                  {grade}
+                </option>
+              ))
+            )}
+          </optgroup>
+        </select>
+      </label>
+      <label className="drawing-field">
+        <span>Thread class</span>
+        <select
+          value={selected.threadClass ?? ''}
+          disabled={!editable || selected.fit !== undefined}
+          onChange={(event) => {
+            const {
+              threadClass: _previous,
+              tolerance: _tolerance,
+              ...rest
+            } = selected;
+            const value = event.target.value as DrawingThreadClass | '';
+            props.onUpdate(
+              value ? { ...rest, threadClass: value } : rest,
+              'Class thread'
+            );
+          }}
+        >
+          <option value="">None</option>
+          <optgroup label="ISO 965 (metric)">
+            {DRAWING_THREAD_CLASSES.filter((c) => !c.endsWith('B')).map(
+              (threadClass) => (
+                <option key={threadClass} value={threadClass}>
+                  {threadClass}
+                </option>
+              )
+            )}
+          </optgroup>
+          <optgroup label="UN (inch)">
+            {DRAWING_THREAD_CLASSES.filter((c) => c.endsWith('B')).map(
+              (threadClass) => (
+                <option key={threadClass} value={threadClass}>
+                  {threadClass}
+                </option>
+              )
+            )}
+          </optgroup>
+        </select>
+      </label>
+    </>
+  );
+}
+
+/**
+ * D07 (v105): a general-tolerance block's scheme: an ISO 2768-1 class (and
+ * ISO 2768-2 class), or ± per number of decimals written and on angles.
+ */
+function GeneralToleranceFields(props: {
+  selected: Extract<DrawingAnnotation, { kind: 'general-tolerance' }>;
+  editable: boolean;
+  numberFormat: DrawingNumberFormat;
+  onUpdate: (annotation: DrawingAnnotation, label?: string) => void;
+}) {
+  const { selected, editable } = props;
+  const base = {
+    annotationId: selected.annotationId,
+    kind: 'general-tolerance' as const,
+    placementMm: selected.placementMm
+  };
+  const update = (next: DrawingAnnotation) =>
+    props.onUpdate(next, 'Format general tolerances');
+  const inch = props.numberFormat.units === 'inch';
+  return (
+    <>
+      <label className="drawing-field">
+        <span>Scheme</span>
+        <select
+          value={selected.scheme}
+          disabled={!editable}
+          onChange={(event) =>
+            update(
+              event.target.value === 'decimal'
+                ? {
+                    ...base,
+                    scheme: 'decimal',
+                    // The usual stated block, in the sheet's units.
+                    places: inch
+                      ? [
+                          { decimals: 2, amount: 0.01 },
+                          { decimals: 3, amount: 0.005 }
+                        ]
+                      : [
+                          { decimals: 1, amount: 0.1 },
+                          { decimals: 2, amount: 0.05 }
+                        ],
+                    angle: 0.5
+                  }
+                : { ...base, scheme: 'iso-2768', linearClass: 'm' }
+            )
+          }
+        >
+          <option value="iso-2768">ISO 2768</option>
+          <option value="decimal">By decimal places</option>
+        </select>
+      </label>
+      {selected.scheme === 'iso-2768' ? (
+        <>
+          <label className="drawing-field">
+            <span>Linear and angular class</span>
+            <select
+              value={selected.linearClass}
+              disabled={!editable}
+              onChange={(event) =>
+                update({
+                  ...selected,
+                  linearClass: event.target.value as DrawingIsoLinearClass
+                })
+              }
+            >
+              <option value="f">f (fine)</option>
+              <option value="m">m (medium)</option>
+              <option value="c">c (coarse)</option>
+              <option value="v">v (very coarse)</option>
+            </select>
+          </label>
+          <label className="drawing-field">
+            <span>Geometric class (ISO 2768-2)</span>
+            <select
+              value={selected.geometricClass ?? ''}
+              disabled={!editable}
+              onChange={(event) => {
+                const { geometricClass: _previous, ...rest } = selected;
+                const value = event.target.value as
+                  DrawingIsoGeometricClass | '';
+                update(value ? { ...rest, geometricClass: value } : rest);
+              }}
+            >
+              <option value="">None</option>
+              {DRAWING_ISO_GEOMETRIC_CLASSES.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
+            </select>
+          </label>
+        </>
+      ) : (
+        <>
+          {[1, 2, 3, 4].map((decimals) => {
+            const place = selected.places.find(
+              (entry) => entry.decimals === decimals
+            );
+            const others = selected.places.filter(
+              (entry) => entry.decimals !== decimals
+            );
+            return (
+              <OptionalAmountField
+                key={decimals}
+                label={`X.${'X'.repeat(decimals)} ±`}
+                value={place?.amount}
+                // The last stated place cannot be cleared.
+                required={others.length === 0}
+                disabled={!editable}
+                onCommit={(amount) =>
+                  update({
+                    ...selected,
+                    places: [
+                      ...others,
+                      ...(amount === undefined ? [] : [{ decimals, amount }])
+                    ].sort((a, b) => a.decimals - b.decimals)
+                  })
+                }
+              />
+            );
+          })}
+          <OptionalAmountField
+            label="Angles ± (°)"
+            value={selected.angle}
+            required={false}
+            max={89}
+            disabled={!editable}
+            onCommit={(angle) => {
+              const { angle: _previous, ...rest } = selected;
+              update(angle === undefined ? rest : { ...rest, angle });
+            }}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+/** D07 (v105): a positive amount, or blank for none unless `required`. */
+function OptionalAmountField(props: {
+  label: string;
+  value: number | undefined;
+  required: boolean;
+  max?: number;
+  disabled: boolean;
+  onCommit: (value: number | undefined) => void;
+}) {
+  const shown = props.value === undefined ? '' : String(props.value);
+  const [draft, setDraft] = useState(shown);
+  useEffect(() => setDraft(shown), [shown]);
+  const commit = () => {
+    const text = draft.trim();
+    if (text === '') {
+      if (!props.required && props.value !== undefined)
+        props.onCommit(undefined);
+      setDraft(shown);
+      return;
+    }
+    const value = Number(text);
+    if (
+      Number.isFinite(value) &&
+      value > 0 &&
+      value <= (props.max ?? MAX_DRAWING_TOLERANCE) &&
+      Number(value.toFixed(MAX_DRAWING_DIMENSION_DECIMALS)) === value &&
+      value !== props.value
+    )
+      props.onCommit(value);
+    setDraft(shown);
+  };
+  return (
+    <label className="drawing-field">
+      <span>{props.label}</span>
+      <input
+        type="number"
+        step="any"
+        min={0}
+        value={draft}
+        placeholder="None"
+        disabled={props.disabled}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit();
+          if (event.key === 'Escape') setDraft(shown);
+        }}
+      />
+    </label>
   );
 }
 
@@ -2009,7 +2946,13 @@ function ToleranceFields(props: {
   if (callout) return null;
   const tolerance = selected.tolerance;
   const set = (next: DrawingTolerance | null) => {
-    const { tolerance: _previous, ...rest } = selected;
+    // v105: a toleranced diameter states its diameter, not a hole's
+    // callout, so a thread class goes with the callout.
+    const { tolerance: _previous, ...kept } = selected;
+    const rest =
+      next && 'threadClass' in kept
+        ? (({ threadClass: _thread, ...other }) => other)(kept)
+        : kept;
     if (next && drawingToleranceError(next)) return;
     props.onUpdate(
       next ? { ...rest, tolerance: next } : rest,
@@ -2019,6 +2962,12 @@ function ToleranceFields(props: {
   if (selected.reference)
     return (
       <p className="drawing-hint">A reference dimension takes no tolerance.</p>
+    );
+  if ('fit' in selected && selected.fit)
+    return (
+      <p className="drawing-hint">
+        The fit states this diameter&apos;s tolerance.
+      </p>
     );
   return (
     <>
@@ -2199,7 +3148,10 @@ function DrawingToolRail(props: {
     ['radius', 'diameter', 'chamfer'],
     ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
-    ['note', 'balloon', 'parts-list']
+    ['note', 'balloon', 'parts-list', 'image'],
+    // The general-tolerance block is placed from Sheet Properties (and W):
+    // a phone-width rail has no row to spare.
+    ['datum-feature', 'feature-control-frame']
   ];
   return (
     <div
@@ -2228,6 +3180,9 @@ function DrawingToolRail(props: {
               kind === 'note' ||
               kind === 'balloon' ||
               kind === 'parts-list' ||
+              kind === 'image' ||
+              kind === 'general-tolerance' ||
+              isToleranceTool(kind) ||
               isGeometryTool(kind)
                 ? ANNOTATION_TOOL_LABELS[kind]
                 : `${ANNOTATION_TOOL_LABELS[kind]} dimension`;
@@ -2313,6 +3268,16 @@ const TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
   { key: 'revision', label: 'Revision' },
   { key: 'author', label: 'Drawn by' },
   { key: 'date', label: 'Date' }
+];
+
+/** D02 (v94): the fields only the shop title block prints. */
+const SHOP_TITLE_FIELDS: { key: keyof DrawingTitleBlock; label: string }[] = [
+  { key: 'material', label: 'Material' },
+  { key: 'finish', label: 'Finish' },
+  { key: 'checkedBy', label: 'Checked by' },
+  { key: 'approvedBy', label: 'Approved by' },
+  { key: 'company', label: 'Company' },
+  { key: 'tolerances', label: 'General tolerances' }
 ];
 
 const NO_SHEETS: readonly DrawingSheet[] = [];
@@ -2969,6 +3934,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // this document, so a drawing kept with it keeps reading it.
   // D02 v80: the assembly's BOM table, which parts lists and balloons read.
   const bomTable = useMemo(() => sheetBom(document), [document]);
+  // D02 v92: the project's pictures, which sheet images show.
+  const pictures = useMemo(() => sheetPictures(document), [document]);
+  // D07 v98: datum letters across every sheet, which frames may name.
+  const datumLetters = useMemo(
+    () => drawingDatumLetters(document.drawings?.sheets ?? []),
+    [document.drawings]
+  );
   const liveHoleCallouts = useMemo(
     () => holeCalloutLookup(document),
     [document]
@@ -3134,21 +4106,37 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const resolutions = useMemo(
     () =>
       shownSheet
-        ? markHiddenLeaders(
+        ? // v98: a frame whose leader is hidden leaves what hangs from it
+          // with nowhere to be drawn.
+          markBrokenHosts(
             shownSheet,
-            resolveSheetAnnotations(
+            markHiddenLeaders(
               shownSheet,
-              drawBodies,
+              resolveSheetAnnotations(
+                shownSheet,
+                drawBodies,
+                document.units,
+                holeCallouts,
+                bomTable,
+                pictures,
+                datumLetters
+              ),
+              drawnViews,
               document.units,
-              holeCallouts,
-              bomTable
-            ),
-            drawnViews,
-            document.units,
-            drawBodies
+              drawBodies
+            )
           )
         : new Map<DrawingAnnotationId, AnnotationResolution>(),
-    [shownSheet, drawBodies, document.units, drawnViews, holeCallouts, bomTable]
+    [
+      shownSheet,
+      drawBodies,
+      document.units,
+      drawnViews,
+      holeCallouts,
+      bomTable,
+      pictures,
+      datumLetters
+    ]
   );
   /** Drawn and usable: matches the model, or keeps its earlier drawing. */
   const sheetReady = status?.kind === 'ready' || keptDrawing !== null;
@@ -3257,24 +4245,29 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   // so a ready sheet with no views still takes one.
   const canAnnotate = sheetReady && editable && (sheet?.views.length ?? 0) > 0;
   const hasParts = (bomTable?.rows.length ?? 0) > 0;
+  const hasPictures = pictures.size > 0;
   const canUseTool = (kind: AnnotationToolKind) =>
-    kind === 'parts-list'
-      ? sheetReady && editable && hasParts
-      : kind === 'balloon'
-        ? canAnnotate && hasParts
-        : kind === 'note'
-          ? sheetReady && editable
-          : canAnnotate;
+    kind === 'image'
+      ? sheetReady && editable && hasPictures
+      : kind === 'parts-list'
+        ? sheetReady && editable && hasParts
+        : kind === 'balloon'
+          ? canAnnotate && hasParts
+          : kind === 'note' || kind === 'general-tolerance'
+            ? sheetReady && editable
+            : canAnnotate;
   const toolDisabledReason = (kind: AnnotationToolKind) =>
     !editable
       ? (editDisabledReason ?? 'Drawing edits are unavailable.')
       : !sheetReady
         ? 'Update the sheet to annotate it.'
-        : (kind === 'parts-list' || kind === 'balloon') && !hasParts
-          ? 'Add parts to the assembly (Assemble) to list or balloon them.'
-          : kind === 'note' || kind === 'parts-list'
-            ? 'Notes are unavailable.'
-            : 'Add a view to dimension it.';
+        : kind === 'image' && !hasPictures
+          ? 'Add a picture to the project (Insert image in Build) to place it on the sheet.'
+          : (kind === 'parts-list' || kind === 'balloon') && !hasParts
+            ? 'Add parts to the assembly (Assemble) to list or balloon them.'
+            : kind === 'note' || kind === 'parts-list'
+              ? 'Notes are unavailable.'
+              : 'Add a view to dimension it.';
   const chooseTool = (next: AnnotationTool | null) => {
     setTool(next && pinnedTool(next));
     setSectionTool(null);
@@ -3690,23 +4683,57 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     );
     const fileName = drawingExportFileName(document.name, sheet.name, format);
     try {
+      // D02 (v92): the pictures the page shows, read from the project's
+      // store for this export only. DXF leaves them out (R12 has no
+      // embedded image), and says so.
+      const pictureCount = pagePictures(page.images).size;
+      const pdfPictures =
+        format === 'pdf'
+          ? await loadPagePictures(
+              page.images,
+              props.loadReferenceImage,
+              pictureJpegBytes
+            )
+          : null;
+      const svgPictures =
+        format === 'svg'
+          ? await loadPagePictures(
+              page.images,
+              props.loadReferenceImage,
+              pictureDataUrl
+            )
+          : null;
+      if (
+        pictureCount > 0 &&
+        ((format === 'pdf' && !pdfPictures) ||
+          (format === 'svg' && !svgPictures))
+      )
+        throw new SheetPictureUnavailableError();
       const saved =
         format === 'pdf'
           ? await saveCadBinaryFile(
               fileName,
               'pdf',
-              sheetPageToPdf(page, sheet.name) as Uint8Array<ArrayBuffer>
+              sheetPageToPdf(
+                page,
+                sheet.name,
+                pdfPictures ?? undefined
+              ) as Uint8Array<ArrayBuffer>
             )
           : await saveCadTextFile(
               fileName,
               format,
               format === 'dxf'
                 ? sheetPageToDxf(page)
-                : sheetPageToSvg(page, sheet.name)
+                : sheetPageToSvg(page, sheet.name, svgPictures ?? undefined)
             );
       props.onStatus(
         saved
-          ? `Exported the drawing to ${fileName}.`
+          ? `Exported the drawing to ${fileName}${
+              format === 'dxf' && pictureCount > 0
+                ? ' (its pictures are left out: DXF R12 cannot embed them)'
+                : ''
+            }.`
           : 'Drawing export cancelled.'
       );
     } catch (error) {
@@ -3894,6 +4921,56 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     autoDate
   ]);
   const page: SheetPage | null = composed?.page ?? null;
+  // D02 (v92): object URLs for the pictures the page shows, loaded from the
+  // project's store once each and released with the workspace.
+  const [pictureUrls, setPictureUrls] = useState<ReadonlyMap<string, string>>(
+    () => new Map()
+  );
+  const pictureUrlsRef = useRef(new Map<string, string>());
+  const pictureKey = [...pagePictures(page?.images).keys()].sort().join(',');
+  const loadPicture = props.loadReferenceImage;
+  // A picture not on this device yet (still downloading, offline) is asked
+  // for again a little later, so its placeholder does not stay for good.
+  const [pictureRetry, setPictureRetry] = useState(0);
+  useEffect(() => {
+    if (!loadPicture || !pictureKey) return;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const wanted = pictureKey
+      .split(',')
+      .filter((checksum) => !pictureUrlsRef.current.has(checksum));
+    void (async () => {
+      let missing = false;
+      for (const checksum of wanted) {
+        const blob = await loadPicture(checksum).catch(() => null);
+        if (cancelled) return;
+        if (!blob) {
+          missing = true;
+          continue;
+        }
+        if (pictureUrlsRef.current.has(checksum)) continue;
+        pictureUrlsRef.current.set(checksum, URL.createObjectURL(blob));
+        setPictureUrls(new Map(pictureUrlsRef.current));
+      }
+      if (missing && !cancelled)
+        retry = setTimeout(
+          () => setPictureRetry((count) => count + 1),
+          PICTURE_RETRY_MS
+        );
+    })();
+    return () => {
+      cancelled = true;
+      if (retry) clearTimeout(retry);
+    };
+  }, [pictureKey, loadPicture, pictureRetry]);
+  useEffect(
+    () => () => {
+      for (const url of pictureUrlsRef.current.values())
+        URL.revokeObjectURL(url);
+      pictureUrlsRef.current.clear();
+    },
+    []
+  );
   // Each view's projected extent: the drawn one once it is ready, the
   // model's estimate before. The canvas outlines, the placement flags and
   // "Fit views to sheet" all read the same one.
@@ -4111,6 +5188,34 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     return hitFace(faces, point, pickTolerance(pxPerMm), outlines);
   };
   /**
+   * v98: the healthy dimension (or, for a datum symbol, frame) whose box
+   * holds `point`: what a datum symbol or frame may attach to.
+   */
+  const toleranceHostAt = (
+    point: [number, number],
+    kind: AnnotationToolKind
+  ): DrawingAnnotation | null => {
+    if (!composed || composed.ghost || !shownSheet) return null;
+    for (const annotation of shownSheet.annotations ?? []) {
+      if (
+        (kind !== 'datum-feature' && kind !== 'feature-control-frame') ||
+        !drawingToleranceHostAllowed(kind, annotation) ||
+        !resolutions.get(annotation.annotationId)?.ok
+      )
+        continue;
+      const box = composed.boxes.get(annotation.annotationId);
+      if (
+        box &&
+        point[0] >= box.x &&
+        point[0] <= box.x + box.width &&
+        point[1] >= box.y &&
+        point[1] <= box.y + box.height
+      )
+        return annotation;
+    }
+    return null;
+  };
+  /**
    * v73: the centre or intersection mark (or, v75, the straight centreline)
    * whose box holds `point`, if any.
    */
@@ -4181,6 +5286,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   };
   const pickTolerance = (pxPerMm: number) => Math.max(0.8, 8 / pxPerMm);
 
+  /**
+   * v98: a new datum symbol takes the drawing's next free letter, and a new
+   * frame about a tenth of a millimetre in the sheet's printed units.
+   */
+  const toleranceDefaults = () => ({
+    letter: nextDatumLetter(datumLetters.keys()),
+    amount:
+      DEFAULT_FRAME_AMOUNT[sheetNumberFormat(sheet ?? {}, document.units).units]
+  });
   const commitAnnotation = (finished: AnnotationTool, at: [number, number]) => {
     if (!sheet) return;
     const view = finished.viewId
@@ -4206,12 +5320,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         return;
       }
     }
+    // v92: an image shows the project's newest picture until another is
+    // chosen in Properties.
+    const placed =
+      finished.kind === 'image' && !finished.pictureId
+        ? { ...finished, pictureId: [...pictures.keys()].at(-1) }
+        : finished;
     const annotation = draftAnnotation(
-      finished,
+      placed,
       createDrawingAnnotationId(),
       placementMm,
       undefined,
-      componentId
+      componentId,
+      toleranceDefaults()
     );
     if (!annotation) return;
     const refusal = draftRefusal(
@@ -4237,21 +5358,39 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     ) {
       setSelectedAnnotationId(annotation.annotationId);
       setSelectedViewId(null);
-      if (finished.kind === 'note') setPropertiesOpen(true);
+      if (
+        finished.kind === 'note' ||
+        finished.kind === 'image' ||
+        finished.kind === 'feature-control-frame' ||
+        finished.kind === 'general-tolerance'
+      )
+        setPropertiesOpen(true);
       props.onStatus(
         finished.kind === 'note'
           ? 'Note added. Edit its text in Properties.'
-          : isGeometryTool(finished.kind) ||
-              finished.kind === 'balloon' ||
-              finished.kind === 'parts-list'
-            ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
-            : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
+          : finished.kind === 'image'
+            ? 'Image added. Choose its picture and width in Properties.'
+            : finished.kind === 'general-tolerance'
+              ? 'General tolerances added (ISO 2768-m). Choose the class or a stated block in Properties.'
+              : finished.kind === 'feature-control-frame'
+                ? 'Feature control frame added. Choose its characteristic, tolerance and datums in Properties.'
+                : finished.kind === 'datum-feature'
+                  ? `Datum ${annotation.kind === 'datum-feature' ? annotation.letter : ''} added.`
+                  : isGeometryTool(finished.kind) ||
+                      finished.kind === 'balloon' ||
+                      finished.kind === 'parts-list'
+                    ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
+                    : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
       );
       // A note is placed and then typed; dimensions keep their tool for the
       // next one.
       setTool(
-        finished.kind === 'note' || finished.kind === 'parts-list'
+        finished.kind === 'note' ||
+          finished.kind === 'parts-list' ||
+          finished.kind === 'image' ||
+          finished.kind === 'feature-control-frame' ||
+          finished.kind === 'general-tolerance'
           ? null
           : startAnnotationTool(finished.kind)
       );
@@ -4314,6 +5453,36 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     if (pickedEnough(tool)) {
       commitAnnotation(tool, at.point);
       return;
+    }
+    // v98: a datum symbol or frame attaches to a size dimension (a datum
+    // symbol also to a frame) clicked before any edge is picked.
+    if (
+      isToleranceTool(tool.kind) &&
+      tool.edges.length === 0 &&
+      tool.hostId === undefined
+    ) {
+      const host = toleranceHostAt(at.point, tool.kind);
+      if (host) {
+        const next: AnnotationTool = {
+          ...tool,
+          hostId: host.annotationId,
+          viewId: host.viewId
+        };
+        if (next.repairId) {
+          if (tool.viewId && tool.viewId !== host.viewId) {
+            props.onStatus('Re-pick in the view this annotation belongs to.');
+            return;
+          }
+          commitRepair(next);
+          return;
+        }
+        setTool(pinnedTool(next));
+        setHover({ edge: null, face: null, point: at.point });
+        props.onStatus(
+          `${ANNOTATION_TOOL_LABELS[tool.kind]}: click where it goes.`
+        );
+        return;
+      }
     }
     const hit = edgeAt(at.point, at.pxPerMm);
     const result = applyAnnotationPick(
@@ -5014,10 +6183,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           y: hover.point[1] - view.centerMm.y
         }
       : { x: hover.point[0], y: hover.point[1] };
+    // The same defaults the placement commits, so the preview shows it.
     const draft = draftAnnotation(
       tool,
       'dann_preview' as DrawingAnnotationId,
-      placementMm
+      placementMm,
+      undefined,
+      undefined,
+      toleranceDefaults()
     );
     if (!draft) return null;
     return previewAnnotationLayer(
@@ -5363,6 +6536,32 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               width={paper.width}
               height={paper.height}
             />
+            {/* D02 (v92): sheet images, beneath the lines. */}
+            {(page.images ?? []).map((image, index) => {
+              const href = pictureUrls.get(image.checksumSha256);
+              const y = paper.height - image.y - image.height;
+              return href ? (
+                <image
+                  key={index}
+                  className="drawing-sheet-image"
+                  href={href}
+                  x={image.x}
+                  y={y}
+                  width={image.width}
+                  height={image.height}
+                  preserveAspectRatio="none"
+                />
+              ) : (
+                <rect
+                  key={index}
+                  className="drawing-sheet-image-pending"
+                  x={image.x}
+                  y={y}
+                  width={image.width}
+                  height={image.height}
+                />
+              );
+            })}
             {SHEET_STROKE_ORDER.map((kind) => (
               <g key={kind} className={`drawing-strokes is-${kind}`}>
                 {page.strokes
@@ -5896,8 +7095,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             editable={editable}
             numberFormat={sheetNumberFormat(sheet, document.units)}
             resolutions={resolutions}
+            pictures={pictures}
             onTool={chooseTool}
             onDeselect={deselect}
+            datumLetters={datumLetters}
             onUpdate={updateAnnotation}
             onDelete={deleteAnnotation}
           />
@@ -5980,6 +7181,39 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                         )
                       }
                     />
+                    {!free && source && (
+                      <SectionStepFields
+                        steps={section.steps ?? []}
+                        firstDepth={section.depth}
+                        sign={sign}
+                        axisLabel={axis.toUpperCase()}
+                        units={document.units}
+                        bounds={
+                          projections.get(source.viewId)?.state === 'ready'
+                            ? (sectionStepRange(
+                                source,
+                                selectedView,
+                                projections.get(source.viewId)
+                              ) ?? null)
+                            : null
+                        }
+                        editable={editable}
+                        onCommit={(steps) =>
+                          run(
+                            commandFactories.updateDrawingView(
+                              {
+                                sheetId: sheet.sheetId,
+                                viewId: selectedView.viewId,
+                                sectionSteps: steps
+                              },
+                              steps.length > 0
+                                ? 'Edit section steps'
+                                : 'Remove section steps'
+                            )
+                          )
+                        }
+                      />
+                    )}
                     <p className="drawing-hint">
                       Cut from the{' '}
                       {source
@@ -6434,8 +7668,50 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               }
             />
             <div className="drawing-panel-section">
+              <h3>General tolerances</h3>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!canUseTool('general-tolerance')}
+                title="Place a block stating ISO 2768 or per-decimal general tolerances (W)"
+                onClick={() =>
+                  chooseTool(startAnnotationTool('general-tolerance'))
+                }
+              >
+                <Diff size={13} aria-hidden="true" /> Add general tolerances
+              </button>
+            </div>
+            <div className="drawing-panel-section">
               <h3>Title block</h3>
-              {TITLE_FIELDS.map(({ key, label }) => (
+              <label className="drawing-field">
+                <span>Layout</span>
+                <select
+                  value={sheet.titleBlockLayout ?? ''}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    updateSheet(
+                      {
+                        titleBlockLayout:
+                          event.target.value === 'shop' ? 'shop' : null
+                      },
+                      'Change title-block layout'
+                    )
+                  }
+                >
+                  <option value="">Compact</option>
+                  <option value="shop">Shop</option>
+                </select>
+              </label>
+              {sheet.titleBlockLayout === 'shop' && (
+                <p className="drawing-hint">
+                  Adds material, finish, checked and approved, the company and a
+                  general-tolerance note.
+                </p>
+              )}
+              {[
+                ...TITLE_FIELDS,
+                ...(sheet.titleBlockLayout === 'shop' ? SHOP_TITLE_FIELDS : [])
+              ].map(({ key, label }) => (
                 <TextField
                   key={key}
                   label={label}

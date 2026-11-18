@@ -5,10 +5,13 @@ import {
   Box,
   Cog,
   Cone,
+  Crosshair,
   Cylinder,
   Drill,
+  Grip,
   FlipHorizontal2,
   ImagePlus,
+  LocateFixed,
   Move3d,
   PenLine,
   Radius,
@@ -17,7 +20,8 @@ import {
   SquaresIntersect,
   SquaresSubtract,
   SquaresUnite,
-  Torus
+  Torus,
+  WrapText
 } from 'lucide-react';
 import {
   chamferGlyph,
@@ -54,6 +58,8 @@ export type ToolId =
   | 'sketch'
   | 'datum-plane'
   | 'datum-axis'
+  | 'datum-point'
+  | 'datum-csys'
   | 'reference-image'
   | 'extrude'
   | 'revolve'
@@ -69,6 +75,8 @@ export type ToolId =
   | 'mirror'
   | 'split'
   | 'shell'
+  | 'rib'
+  | 'wrap'
   | 'solid-offset'
   | 'draft'
   | 'thicken'
@@ -147,6 +155,18 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: icon(<Axis3d size={16} aria-hidden="true" />),
     group: 'create',
     hint: 'Axis along an edge, cylinder or two points'
+  },
+  'datum-point': {
+    label: 'Point',
+    icon: icon(<Crosshair size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'A point at coordinates, an edge end, midpoint or arc centre'
+  },
+  'datum-csys': {
+    label: 'Coordinate system',
+    icon: icon(<LocateFixed size={16} aria-hidden="true" />),
+    group: 'create',
+    hint: 'A named frame from three points, a plane, or a placement'
   },
   'reference-image': {
     label: 'Image',
@@ -281,6 +301,18 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     group: 'edges-faces',
     hint: 'Hollow a body, opening faces'
   },
+  rib: {
+    label: 'Rib',
+    icon: icon(<Grip size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'A rib or web from an open sketch profile'
+  },
+  wrap: {
+    label: 'Wrap',
+    icon: icon(<WrapText size={16} aria-hidden="true" />),
+    group: 'edges-faces',
+    hint: 'Emboss or engrave sketch regions onto a cylinder'
+  },
   draft: {
     label: 'Draft',
     icon: draftGlyph,
@@ -392,6 +424,8 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'sketch',
         'datum-plane',
         'datum-axis',
+        'datum-point',
+        'datum-csys',
         'reference-image',
         ...PRIMITIVE_TOOLS,
         'gear',
@@ -421,6 +455,8 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'gear-teeth',
         'bend',
         'shell',
+        'rib',
+        'wrap',
         'draft',
         'thicken',
         'solid-offset'
@@ -581,6 +617,8 @@ export function toolDisabledReason(
       tool === 'split' ||
       tool === 'shell' ||
       tool === 'solid-offset' ||
+      tool === 'rib' ||
+      tool === 'wrap' ||
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||
@@ -627,6 +665,8 @@ export function toolDisabledReason(
       tool === 'split' ||
       tool === 'shell' ||
       tool === 'solid-offset' ||
+      tool === 'rib' ||
+      tool === 'wrap' ||
       tool === 'draft' ||
       tool === 'thicken' ||
       tool === 'hole' ||

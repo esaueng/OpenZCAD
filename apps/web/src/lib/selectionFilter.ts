@@ -22,6 +22,8 @@ const FILTER_BY_TOOL: Partial<Record<ToolId, SelectionFilter>> = {
   mirror: 'body',
   shell: 'face',
   'solid-offset': 'body',
+  rib: 'any',
+  wrap: 'any',
   draft: 'face',
   thicken: 'face',
   'linear-pattern': 'body',

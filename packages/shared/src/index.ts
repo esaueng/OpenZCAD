@@ -58,6 +58,7 @@ import type {
 export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
+export * from './model-pmi';
 export * from './e2ee-project-groups';
 export * from './e2ee-project-authority';
 export * from './e2ee-project-documents';
@@ -71,6 +72,7 @@ export * from './e2ee-share-links';
 export * from './share-link-token';
 export * from './e2ee-project-migrations';
 import type { ReferenceImageSet } from './reference-images';
+import type { ModelPmiSet } from './model-pmi';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
 
 export type ProjectId = Brand<string, 'ProjectId'>;
@@ -390,7 +392,61 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // a section cut by a plane at any angle across its source, seen square to
 // it and placed freely. An older client would cut a principal plane at the
 // stored depth instead, so it must refuse. Builds on v90 (F06 slice 4a).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 91 as const;
+// v92 adds D02 sheet images (`kind: 'image'` drawing annotations): one of
+// the project's reference images printed on the paper. An older client
+// would refuse the unknown kind, so it must refuse the document. Builds on
+// v91.
+// v93 adds D03 stepped sections (`steps` on a drawing view's `section`): an
+// aligned section whose cutting line steps to other depths along its run.
+// An older client would cut one plane at the first depth, so it must
+// refuse. Builds on v92.
+// v94 adds D02 title-block layouts (`titleBlockLayout: 'shop'` on a drawing
+// sheet) and the shop fields (company, material, finish, checked, approved,
+// general tolerances). An older client would refuse the unknown title-block
+// fields, so it must refuse the document. Builds on v93.
+// v96 adds I02 structured STEP imports (`stepReader: 'structure'` on an
+// imported STEP): its solid indices number the product-structure reader's
+// placed occurrences, not the flat reader's unplaced definitions. An older
+// client would rebuild the wrong solids, so it must refuse. Builds on v94.
+// v98 adds D07 geometric tolerancing (`datum-feature` and
+// `feature-control-frame` drawing annotations): datum feature symbols and
+// feature control frames on a leader or attached to a dimension. An older
+// client would refuse the unknown kinds, so it must refuse the document.
+// Builds on v96 (v97 was claimed by #1719, which then landed after it).
+// v99 adds R01 datum points and coordinate systems: `datum-point` and
+// `datum-csys` features, datum-point sources for planes, axes and systems,
+// a system's principal planes as datum plane sources, axes along a system's
+// X/Y/Z, and Moves aligned from one system onto another. An older client
+// cannot resolve any of them, so it must refuse. Builds on v98 (v95 and v97
+// were left unused when I02 and D07 landed first).
+// v101 adds M06 ribs (`rib` features): an older client cannot build one, so
+// it must refuse. Builds on v99 (v100 is claimed by D07's #1737).
+// v105 adds D07 fits and general tolerances: an ISO 286 `fit` and a thread
+// `threadClass` on a diameter dimension, and the `general-tolerance` block
+// on the paper. An older client would print the diameter without its fit
+// and refuse the unknown kind, so it must refuse the document. Builds on
+// v101 (v100 was left unused when M06 landed first; v102-v104 are claimed by
+// #1740, #1741 and #1732).
+// v106 adds D07 model-based definition (`pmi`): datum features and feature
+// control frames stored on the model's faces. An older client would drop
+// the unknown section on save, so it must refuse the document. Builds on
+// v105.
+// v108 adds the R01 reference constructors: a datum plane square to an edge
+// (at a fraction along it, or through a point), a plane through a straight
+// edge at an angle to a reference plane, and a datum axis square to a face
+// at a point. An older client cannot resolve them, so it must refuse.
+// Builds on v106 (v102 was left unused when D07 landed first; v107 is
+// claimed by #1732).
+// v110 adds L15 custom features (`featureKind: 'custom-feature'`): a step
+// that runs an embedded, versioned script on its target body. An older
+// client cannot build it, so it must refuse the document. Builds on v108
+// (v109 is claimed by #1741; v104 and v107 were L15's earlier claims, left
+// unused when other lanes landed first).
+// v111 adds M12 wraps (`wrap` features: sketch regions embossed onto or
+// engraved into a cylinder or cone): an older client cannot build one, so
+// it must refuse. Builds on v110 (v109 was left unused when L15 landed
+// first).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 111 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -449,6 +505,8 @@ export type FeatureKind =
   | 'mirror'
   | 'shell'
   | 'solid-offset'
+  | 'rib'
+  | 'wrap'
   | 'draft'
   | 'thicken'
   | 'fillet'
@@ -464,7 +522,10 @@ export type FeatureKind =
   | 'imported-step'
   | 'imported-mesh'
   | 'datum-plane'
-  | 'datum-axis';
+  | 'datum-axis'
+  | 'datum-point'
+  | 'datum-csys'
+  | 'custom-feature';
 export type SketchObjectKind =
   | 'rectangle'
   | 'circle'
@@ -743,6 +804,29 @@ export interface DatumAxisRef {
   type: 'datum-axis';
   datumFeatureId: FeatureId;
 }
+
+/**
+ * Schema v99: a reference to an R01 datum point by the feature that defines
+ * it. The point resolves once, at its own history position; every consumer
+ * reads that position and never re-derives it from final topology.
+ */
+export interface DatumPointRef {
+  type: 'datum-point';
+  datumFeatureId: FeatureId;
+}
+
+/**
+ * Schema v99: a reference to an R01 coordinate system by the feature that
+ * defines it, resolved once at its own history position like every datum.
+ */
+export interface DatumCsysRef {
+  type: 'datum-csys';
+  datumFeatureId: FeatureId;
+}
+
+/** One of a coordinate system's three principal planes or axes. */
+export type CsysPlaneName = 'XY' | 'YZ' | 'ZX';
+export type CsysAxisName = 'X' | 'Y' | 'Z';
 
 export type FaceDistanceMoveMode =
   'symmetric' | 'one-sided-first' | 'one-sided-second';
@@ -1119,8 +1203,19 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
  */
 export type ExtrudeToFaceTarget = FacePlaneSource;
 
+/**
+ * Schema v99: a principal plane of a coordinate system, as a datum source.
+ * XY keeps the system's X as u and Y as v (normal Z); YZ takes Y and Z
+ * (normal X); ZX takes Z and X (normal Y). Its origin is the system's.
+ */
+export interface CsysPlaneSource {
+  type: 'datum-csys';
+  datumFeatureId: FeatureId;
+  plane: CsysPlaneName;
+}
+
 export type DatumPlaneSource =
-  CanonicalPlaneSource | DatumPlaneRef | FacePlaneSource;
+  CanonicalPlaneSource | DatumPlaneRef | FacePlaneSource | CsysPlaneSource;
 
 /**
  * Schema v25: a model vertex, named as one end of an open edge whose
@@ -1142,7 +1237,10 @@ export interface EdgeVertexPointSource {
  * coordinates in document units, or a model vertex by reference.
  */
 export type DatumPointSource =
-  { type: 'point'; point: ParametricVector3 } | EdgeVertexPointSource;
+  | { type: 'point'; point: ParametricVector3 }
+  | EdgeVertexPointSource
+  /** Schema v99: an earlier datum point, by reference. */
+  | DatumPointRef;
 
 export type DatumPlaneDefinition =
   | {
@@ -1179,7 +1277,41 @@ export type DatumPlaneDefinition =
       source: DatumPlaneSource;
       point: DatumPointSource;
       reverseNormal?: boolean;
+    }
+  | {
+      /**
+       * Schema v108: the plane square to an edge. Its normal is the edge's
+       * tangent, in the sense from the edge's end 0 toward its end 1.
+       *
+       * - `at: { fraction }` places it on the edge (a curve or a line) at
+       *   that fraction from end 0: of the length for a line or arc, of the
+       *   parameter span for any other curve. The plane's u runs toward the
+       *   centre of an arc and is canonical otherwise.
+       * - `at: { point }` passes it through a point; the edge must then be
+       *   straight, its direction the normal.
+       */
+      kind: 'normal-to-edge';
+      edge: DatumAxisEdgeSource;
+      at: DatumEdgePosition;
+      reverseNormal?: boolean;
+    }
+  | {
+      /**
+       * Schema v108: the plane through a straight edge, turned `angleDeg`
+       * about it (right hand about end 0 → end 1) from the plane through the
+       * edge parallel to `reference`. The edge must be parallel to the
+       * reference plane. Its origin is the edge's end 0 and its u the edge.
+       */
+      kind: 'edge-angle';
+      edge: DatumAxisEdgeSource;
+      reference: DatumPlaneSource;
+      angleDeg: ParamValue;
+      reverseNormal?: boolean;
     };
+
+/** Schema v108: where on (or through) an edge a datum is placed. */
+export type DatumEdgePosition =
+  { fraction: ParamValue } | { point: DatumPointSource };
 
 /**
  * Schema v28: a straight model edge, by its schema-v5 lineage, that a datum
@@ -1242,7 +1374,158 @@ export type DatumAxisDefinition =
       kind: 'plane-intersection';
       sources: [DatumPlaneSource, DatumPlaneSource];
       reverseDirection?: boolean;
+    }
+  | {
+      /**
+       * Schema v99: one of an earlier coordinate system's axes, through its
+       * origin along its X, Y or Z.
+       */
+      kind: 'csys-axis';
+      csys: DatumCsysRef;
+      axis: CsysAxisName;
+      reverseDirection?: boolean;
+    }
+  | {
+      /**
+       * Schema v108: the axis square to a face where a point drops onto it.
+       * The point is carried to the nearest point of the face's surface;
+       * the axis starts there and runs along the face's outward normal. A
+       * point whose foot falls off the face, or at a point with no normal
+       * (a cone's apex), is refused.
+       */
+      kind: 'face-normal';
+      source: DatumAxisFaceSource;
+      point: DatumPointSource;
+      reverseDirection?: boolean;
     };
+
+/**
+ * Schema v99: how a datum point is placed. Each is refused by name rather
+ * than guessed when it has no single position: an edge that is not straight
+ * (midpoint) or not circular (centre), an axis parallel to the plane it
+ * should pierce, a source missing at the point's history position.
+ */
+export type DatumPointDefinition =
+  | {
+      /**
+       * At `offset` (world X, Y, Z in document units, expressions allowed)
+       * from a point source: typed coordinates, a model vertex or an earlier
+       * datum point. A zero offset is the source itself.
+       */
+      kind: 'offset';
+      from: DatumPointSource;
+      offset: ParametricVector3;
+    }
+  | {
+      /** Halfway along a straight edge, by its schema-v5 lineage. */
+      kind: 'edge-midpoint';
+      source: DatumAxisEdgeSource;
+    }
+  | {
+      /** The centre of a circular edge (an arc or a whole circle). */
+      kind: 'arc-center';
+      source: DatumAxisEdgeSource;
+    }
+  | {
+      /** Where an earlier datum axis pierces a plane source. */
+      kind: 'axis-plane';
+      axis: DatumAxisRef;
+      plane: DatumPlaneSource;
+    };
+
+/**
+ * Schema v99: how a coordinate system is placed. Every one is right-handed
+ * and orthonormal; degenerate inputs (coincident or collinear points) are
+ * refused by name, never repaired.
+ */
+export type DatumCsysDefinition =
+  | {
+      /**
+       * Origin at the first point, X toward the second, Y in the plane of
+       * the three, on the third's side; Z = X × Y.
+       */
+      kind: 'three-point';
+      points: [DatumPointSource, DatumPointSource, DatumPointSource];
+    }
+  | {
+      /**
+       * A plane source's own frame (u as X, v as Y, normal as Z), with its
+       * origin moved to `origin`'s foot on the plane when one is given.
+       */
+      kind: 'plane';
+      source: DatumPlaneSource;
+      origin?: DatumPointSource;
+    }
+  | {
+      /**
+       * At a point, turned from the world axes by `rotationDeg`: about world
+       * X first, then world Y, then world Z (right-handed, degrees).
+       */
+      kind: 'placement';
+      origin: DatumPointSource;
+      rotationDeg: ParametricVector3;
+    };
+
+/** The point sources a datum point definition reads, in role order. */
+export function datumPointDefinitionPointSources(
+  definition: DatumPointDefinition
+): DatumPointSource[] {
+  return definition.kind === 'offset' ? [definition.from] : [];
+}
+
+/** The plane sources a datum point definition reads, in role order. */
+export function datumPointDefinitionPlaneSources(
+  definition: DatumPointDefinition
+): DatumPlaneSource[] {
+  return definition.kind === 'axis-plane' ? [definition.plane] : [];
+}
+
+/** The point sources a coordinate system definition reads, in role order. */
+export function datumCsysPointSources(
+  definition: DatumCsysDefinition
+): DatumPointSource[] {
+  switch (definition.kind) {
+    case 'three-point':
+      return [...definition.points];
+    case 'plane':
+      return definition.origin ? [definition.origin] : [];
+    case 'placement':
+      return [definition.origin];
+  }
+}
+
+/** The plane sources a coordinate system definition reads, in role order. */
+export function datumCsysPlaneSources(
+  definition: DatumCsysDefinition
+): DatumPlaneSource[] {
+  return definition.kind === 'plane' ? [definition.source] : [];
+}
+
+/** The bodies whose topology a datum point reads directly. */
+export function datumPointSourceBodyIds(
+  definition: DatumPointDefinition
+): BodyId[] {
+  const bodies = new Set<BodyId>();
+  if (definition.kind === 'edge-midpoint' || definition.kind === 'arc-center')
+    bodies.add(definition.source.bodyId);
+  for (const point of datumPointDefinitionPointSources(definition))
+    if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  for (const source of datumPointDefinitionPlaneSources(definition))
+    if (source.type === 'face') bodies.add(source.bodyId);
+  return [...bodies];
+}
+
+/** The bodies whose topology a coordinate system reads directly. */
+export function datumCsysSourceBodyIds(
+  definition: DatumCsysDefinition
+): BodyId[] {
+  const bodies = new Set<BodyId>();
+  for (const point of datumCsysPointSources(definition))
+    if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  for (const source of datumCsysPlaneSources(definition))
+    if (source.type === 'face') bodies.add(source.bodyId);
+  return [...bodies];
+}
 
 /** The plane sources a datum axis definition reads, in role order. */
 export function datumAxisPlaneSources(
@@ -1257,6 +1540,7 @@ export function datumAxisPlaneSources(
 export function datumAxisPointSources(
   definition: DatumAxisDefinition
 ): DatumPointSource[] {
+  if (definition.kind === 'face-normal') return [definition.point];
   return definition.kind === 'two-point' ? [...definition.points] : [];
 }
 
@@ -1265,7 +1549,11 @@ export function datumAxisSourceBodyIds(
   definition: DatumAxisDefinition
 ): BodyId[] {
   const bodies = new Set<BodyId>();
-  if (definition.kind === 'edge' || definition.kind === 'cylinder')
+  if (
+    definition.kind === 'edge' ||
+    definition.kind === 'cylinder' ||
+    definition.kind === 'face-normal'
+  )
     bodies.add(definition.source.bodyId);
   for (const source of datumAxisPlaneSources(definition))
     if (source.type === 'face') bodies.add(source.bodyId);
@@ -1279,6 +1567,70 @@ export function datumAxisSourceBodyIds(
  * `axisRef` and a Move's `axisRotation`. Suppressed features count; their
  * references are still live.
  */
+/**
+ * Every coordinate system a feature's data reads: a datum axis or plane
+ * built on one, and a Move aligned by them. Suppressed features count.
+ */
+export function featureDatumCsysRefs(data: FeatureData): FeatureId[] {
+  const ids: FeatureId[] = [];
+  const planes = (sources: readonly DatumPlaneSource[]) => {
+    for (const source of sources)
+      if (source.type === 'datum-csys') ids.push(source.datumFeatureId);
+  };
+  switch (data.featureKind) {
+    case 'datum-plane':
+      planes(datumPlaneSources(data.definition));
+      break;
+    case 'datum-axis':
+      if (data.definition.kind === 'csys-axis')
+        ids.push(data.definition.csys.datumFeatureId);
+      planes(datumAxisPlaneSources(data.definition));
+      break;
+    case 'datum-point':
+      planes(datumPointDefinitionPlaneSources(data.definition));
+      break;
+    case 'datum-csys':
+      planes(datumCsysPlaneSources(data.definition));
+      break;
+    case 'transform':
+      if (data.csysAlign) {
+        if (data.csysAlign.from) ids.push(data.csysAlign.from.datumFeatureId);
+        ids.push(data.csysAlign.to.datumFeatureId);
+      }
+      break;
+    default:
+      break;
+  }
+  return ids;
+}
+
+/**
+ * Every datum point a feature's data reads, by reference. Suppressed
+ * features count.
+ */
+export function featureDatumPointRefs(data: FeatureData): FeatureId[] {
+  let points: DatumPointSource[];
+  switch (data.featureKind) {
+    case 'datum-plane':
+      points = datumPointSources(data.definition);
+      break;
+    case 'datum-axis':
+      points = datumAxisPointSources(data.definition);
+      break;
+    case 'datum-point':
+      points = datumPointDefinitionPointSources(data.definition);
+      break;
+    case 'datum-csys':
+      points = datumCsysPointSources(data.definition);
+      break;
+    default:
+      points = [];
+  }
+  return points.flatMap((point) =>
+    point.type === 'datum-point' ? [point.datumFeatureId] : []
+  );
+}
+
 export function featureDatumAxisRefs(data: FeatureData): DatumAxisRef[] {
   switch (data.featureKind) {
     case 'revolve':
@@ -1286,6 +1638,10 @@ export function featureDatumAxisRefs(data: FeatureData): DatumAxisRef[] {
       return data.axisRef ? [data.axisRef] : [];
     case 'transform':
       return data.axisRotation ? [data.axisRotation.axis] : [];
+    case 'datum-point':
+      return data.definition.kind === 'axis-plane'
+        ? [data.definition.axis]
+        : [];
     default:
       return [];
   }
@@ -1301,7 +1657,10 @@ export function datumPlaneSources(
       return [definition.source];
     case 'midplane':
       return [...definition.sources];
+    case 'edge-angle':
+      return [definition.reference];
     case 'three-point':
+    case 'normal-to-edge':
       return [];
   }
 }
@@ -1315,9 +1674,21 @@ export function datumPointSources(
       return [...definition.points];
     case 'parallel-point':
       return [definition.point];
+    case 'normal-to-edge':
+      return 'point' in definition.at ? [definition.at.point] : [];
     default:
       return [];
   }
+}
+
+/** Schema v108: the edge a datum plane definition reads, if any. */
+export function datumPlaneEdgeSource(
+  definition: DatumPlaneDefinition
+): DatumAxisEdgeSource | undefined {
+  return definition.kind === 'normal-to-edge' ||
+    definition.kind === 'edge-angle'
+    ? definition.edge
+    : undefined;
 }
 
 /**
@@ -1331,6 +1702,8 @@ export function datumSourceBodyIds(definition: DatumPlaneDefinition): BodyId[] {
     if (source.type === 'face') bodies.add(source.bodyId);
   for (const point of datumPointSources(definition))
     if (point.type === 'edge-vertex') bodies.add(point.bodyId);
+  const edge = datumPlaneEdgeSource(definition);
+  if (edge) bodies.add(edge.bodyId);
   return [...bodies];
 }
 
@@ -1866,6 +2239,22 @@ export function isTransformCopy(data: FeatureData): data is Extract<
   return data.featureKind === 'transform' && data.copy === true;
 }
 
+/**
+ * L15: a published custom-feature script, embedded in each instance so a
+ * project is self-contained. A version is immutable: every instance of the
+ * same `id` and `version` in a document carries the same `source`, and
+ * `digest` is the SHA-256 of `source` (UTF-8, lower-case hex).
+ */
+export interface CustomFeatureScript {
+  id: string;
+  /** Semantic version, `major.minor.patch`. */
+  version: string;
+  /** The scripting contract the source is written against. */
+  api: 1;
+  source: string;
+  digest: string;
+}
+
 export type FeatureData =
   | {
       /**
@@ -1878,12 +2267,44 @@ export type FeatureData =
     }
   | {
       /**
+       * L15 (schema v110): a custom feature. It runs the embedded script on
+       * its target body, in the kernel worker, as the script's steps would
+       * run one after another, and replaces the target with the result. The
+       * script's picks are queries evaluated on every build; nothing here is
+       * a face index or hash.
+       */
+      featureKind: 'custom-feature';
+      targetBodyId: BodyId;
+      script: CustomFeatureScript;
+      /** The script's inputs this instance sets; the rest take defaults. */
+      inputs: Record<string, ParamValue>;
+    }
+  | {
+      /**
        * R01 (schema v28): a datum axis. Like a datum plane it owns no body;
        * its resolved line is published at its history position for the
        * revolves, circular patterns and Moves that turn about it.
        */
       featureKind: 'datum-axis';
       definition: DatumAxisDefinition;
+    }
+  | {
+      /**
+       * R01 (schema v99): a datum point. It owns no body; its resolved
+       * position is published at its history position for the planes, axes,
+       * coordinate systems and points built from it.
+       */
+      featureKind: 'datum-point';
+      definition: DatumPointDefinition;
+    }
+  | {
+      /**
+       * R01 (schema v99): a named coordinate system. It owns no body; its
+       * resolved frame is published at its history position for the planes,
+       * axes and Moves that use it.
+       */
+      featureKind: 'datum-csys';
+      definition: DatumCsysDefinition;
     }
   | {
       featureKind: 'primitive';
@@ -2030,6 +2451,18 @@ export type FeatureData =
        * adapter refuses anything wider by name.
        */
       guide?: SketchPathReference;
+      /**
+       * M04 `'in-place'`: the profile stays where it is and is carried by the
+       * path's rigid motions (a line moves it along, an arc turns it about
+       * the arc's axis) as exact surfaces — planes, cylinders, cones, tori
+       * and rational NURBS, never facets (the kernel's `sweepExact`). The
+       * path must be tangent-continuous; a corner, a guide rail or a profile
+       * that would fold is refused by name, never sampled instead. `mode`
+       * is kept but builds nothing. Absent means the unchanged sampled
+       * `sweepWithOptions`/`sweepAlongEdges` call every sweep authored before
+       * this field existed took, so those documents replay identically.
+       */
+      construction?: 'in-place';
     }
   | {
       featureKind: 'helical-sweep';
@@ -2085,6 +2518,13 @@ export type FeatureData =
        * Move every older document holds.
        */
       axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
+      /**
+       * R01 (schema v99): carry the body from coordinate system `from` (the
+       * world axes when absent) onto `to`, before `axisRotation` and
+       * `transform` apply: a point at (x, y, z) in `from` lands at (x, y, z)
+       * in `to`. Absent is the Move every older document holds.
+       */
+      csysAlign?: { from?: DatumCsysRef; to: DatumCsysRef };
     }
   | {
       featureKind: 'mirror';
@@ -2504,6 +2944,52 @@ export type FeatureData =
       distance: ParamValue;
     }
   | {
+      /**
+       * M06 (schema v101): a rib or web from an open profile, joined to the
+       * body it braces. `parallel` fills from the profile to the body within
+       * the sketch plane, its thickness across the plane; `normal` thickens
+       * the profile within the plane and runs it along the sketch normal
+       * until it meets the body. The material is exactly the region the
+       * profile and the body close off: one that never closes (the profile
+       * does not reach the body) is refused by name, never extended to a
+       * guess.
+       */
+      featureKind: 'rib';
+      targetBodyId: BodyId;
+      /** An open chain of lines and arcs in one sketch. */
+      profile: SketchPathReference;
+      thickness: ParamValue;
+      /** Where the thickness lies: about the profile, or wholly to a side. */
+      thicknessSide: 'symmetric' | 'first' | 'second';
+      direction: 'parallel' | 'normal';
+      /**
+       * Absent: the side of the profile (`parallel`) or the way along the
+       * sketch normal (`normal`) that closes against the body, the left or
+       * along the normal when both do. True: the other one.
+       */
+      flip?: boolean;
+    }
+  | {
+      /**
+       * M12 (schema v111): sketch regions wrapped onto a cylindrical face,
+       * preserving arc length, and embossed out of it or engraved into it,
+       * leaving one body. The sketch lies in a plane parallel to the face's
+       * axis; a region lands on the cylinder under where it is drawn, turned
+       * about the axis by `rotationDeg` and moved along it by `axialOffset`.
+       */
+      featureKind: 'wrap';
+      targetBodyId: BodyId;
+      /** The cylindrical face, by its schema-v5 lineage. */
+      faceReference: FaceTopologyReferenceV5;
+      sketchId: SketchId;
+      profiles: SketchProfileReference[];
+      /** Radial depth: how far an emboss stands out or an engrave cuts in. */
+      depth: ParamValue;
+      mode: 'emboss' | 'engrave';
+      rotationDeg?: ParamValue;
+      axialOffset?: ParamValue;
+    }
+  | {
       featureKind: 'draft';
       targetBodyId: BodyId;
       faceHashes: number[];
@@ -2699,6 +3185,14 @@ export type FeatureData =
        * still dropped with the usual warning.
        */
       solidIndices?: number[];
+      /**
+       * I02 (schema v96): which reader numbers `solidIndices`. Absent is the
+       * flat body reader every earlier import used: one solid per B-rep
+       * definition, unplaced. `'structure'` is the product-structure reader:
+       * one solid per placed occurrence, in product-tree order, so an
+       * assembly's parts land where it places them.
+       */
+      stepReader?: 'structure';
       /** Exact, measured separation of raised planar lettering. Source bytes
        * remain immutable; every rebuild re-verifies the selected footprints. */
       planarEmboss?: {
@@ -4006,6 +4500,14 @@ export interface DatumAxisLine {
   direction: Vector3;
 }
 
+/** Schema v99: a resolved coordinate system, right-handed and orthonormal. */
+export interface DatumCsysFrame {
+  origin: Vector3;
+  x: Vector3;
+  y: Vector3;
+  z: Vector3;
+}
+
 export interface DerivedState {
   editAnalysis?: EditAnalysisRequest;
   bodyRepresentations: Record<BodyId, BodyRepresentation>;
@@ -4025,6 +4527,16 @@ export interface DerivedState {
    * own history position. A datum axis that failed or is suppressed is absent.
    */
   datumAxes?: Record<FeatureId, DatumAxisLine>;
+  /**
+   * R01 (schema v99): each datum point as the exact build resolved it at its
+   * own history position. A failed or suppressed one is absent.
+   */
+  datumPoints?: Record<FeatureId, Vector3>;
+  /**
+   * R01 (schema v99): each coordinate system as the exact build resolved it
+   * at its own history position. A failed or suppressed one is absent.
+   */
+  datumCsys?: Record<FeatureId, DatumCsysFrame>;
   /**
    * I01 (schema v33): each linked sketch projection's state as the exact
    * build found it at its sketch's history position, keyed by object id.
@@ -4106,6 +4618,12 @@ export interface ProjectDocument {
    */
   referenceImages?: ReferenceImageSet;
   /**
+   * D07 model-based definition (schema v106): datum features and feature
+   * control frames on the model's faces. Never read by a rebuild. Absent
+   * means the model carries none.
+   */
+  pmi?: ModelPmiSet;
+  /**
    * AS01/AS02 assembly (schema v54): components, grounding, joints, saved
    * positions and motion studies. Never read by a rebuild. Absent means the
    * project has no assembly.
@@ -4126,6 +4644,13 @@ export interface ProjectDocument {
    * `configurations.ts`. Absent means the document has no configurations.
    */
   configurations?: ConfigurationSet;
+  /**
+   * L08: the drawing sheets this project's share links show, by sheet id.
+   * Absent shows none, as before. Not a schema change: an older client keeps
+   * the list and shares no sheets. See `share-link-sheets.ts` in
+   * document-core.
+   */
+  shareLinkSheetIds?: string[];
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -4168,6 +4693,8 @@ export interface ArtifactRecord {
      */
     | 'reference-image'
     | 'step-export'
+    /** I06: an exact IGES B-rep export. */
+    | 'iges-export'
     | 'stl-export'
     | '3mf-export'
     | 'obj-export'
@@ -6025,11 +6552,25 @@ export interface AccountDeletionPreview {
   revisionBytes: number;
   revisionCount: number;
   collaboratorCount: number;
+  /**
+   * Owned end-to-end encrypted cloud projects, trashed ones included. A
+   * profile deletion keeps them but erases the only account keys that open
+   * them, so the account cannot open their cloud copies again, even after
+   * signing in and setting encryption up anew. Absent from older servers.
+   */
+  encryptedProjectCount?: number;
 }
 
 export interface DeleteAccountDataRequest {
   scope: AccountDeletionScope;
   confirmation: string;
+  /**
+   * How many owned encrypted projects the dialog told the person would
+   * become unreadable (`AccountDeletionPreview.encryptedProjectCount`). A
+   * profile deletion is refused, before anything is deleted, when the
+   * account owns more than this.
+   */
+  acknowledgedEncryptedProjectCount?: number;
 }
 
 export interface DeleteAccountDataResponse {
@@ -6148,10 +6689,13 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   mirror: '#a78bfa',
   shell: '#14b8a6',
   'solid-offset': '#06b6d4',
+  rib: '#0e7490',
+  wrap: '#0f766e',
   draft: '#0d9488',
   thicken: '#0891b2',
   fillet: '#f59e0b',
   chamfer: '#fb7185',
+  'custom-feature': '#a78bfa',
   pattern: '#38bdf8',
   split: '#f472b6',
   hole: '#fb923c',
@@ -6163,7 +6707,9 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
   'imported-step': '#d6a653',
   'imported-mesh': '#7aa3ff',
   'datum-plane': '#9aa5b8',
-  'datum-axis': '#9aa5b8'
+  'datum-axis': '#9aa5b8',
+  'datum-point': '#9aa5b8',
+  'datum-csys': '#9aa5b8'
 };
 
 export const featureColor = (kind: FeatureKind): string =>

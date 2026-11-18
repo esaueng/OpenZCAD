@@ -8,13 +8,19 @@ import {
 } from '@openzcad/document-core';
 import {
   computeSketchProfileAnalysis,
+  csysPlaneFrame,
+  edgeAngleDatumPlane,
   edgeDatumAxis,
+  edgeMidpointDatumPoint,
+  faceNormalDatumAxis,
   frameForPlaneRef,
   geometryTolerance,
   mergeAdjacentProfiles,
+  normalToEdgeDatumPlane,
   requireRevolveAxisInPlane,
   surfaceDatumAxis,
   type DatumAxis,
+  type DatumCsys,
   type PlaneBasis,
   type RegionCurve,
   type SketchRegion,
@@ -33,7 +39,9 @@ import {
   type SketchId,
   type ParamValue,
   type SketchNode,
+  type CsysPlaneSource,
   type DatumAxisEdgeSource,
+  type FeatureId,
   type DatumAxisFaceSource,
   type DatumAxisRef,
   type DatumPointSource,
@@ -45,6 +53,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { ExactBuildResult, ExactShape } from './exact-types';
+import { edgeEndPoint } from './topology-fingerprint';
 import {
   addFaceCarrierRole,
   buildExtrudeLineage,
@@ -99,6 +108,9 @@ import {
 import {
   resolveDatumAxisEdge,
   resolveDatumAxisFace,
+  resolveDatumAxisNormalFace,
+  resolveDatumPlaneEdge,
+  resolveDatumPointEdge,
   resolveEdgeVertex,
   resolveFaceAttachment,
   type DatumOwnerKind
@@ -300,9 +312,16 @@ export function resolveSketchBasisAtHistory(
 export function resolvePlaneRefAtHistory(
   kernel: RemusKernel,
   document: ProjectDocument,
-  planeRef: SketchPlaneRef,
+  planeRef: SketchPlaneRef | CsysPlaneSource,
   ownerRef: {
-    kind: 'Sketch' | 'Datum plane' | 'Datum axis' | 'Mirror' | 'Split';
+    kind:
+      | 'Sketch'
+      | 'Datum plane'
+      | 'Datum axis'
+      | 'Datum point'
+      | 'Coordinate system'
+      | 'Mirror'
+      | 'Split';
     name: string;
   },
   result: ExactBuildResult,
@@ -312,6 +331,12 @@ export function resolvePlaneRefAtHistory(
     ownerRef.kind === 'Mirror' || ownerRef.kind === 'Split'
       ? ownerRef.kind
       : `${ownerRef.kind} "${ownerRef.name}"`;
+  if (planeRef.type === 'datum-csys') {
+    return csysPlaneFrame(
+      resolveDatumCsysRefAtHistory(document, planeRef, owner, result),
+      planeRef.plane
+    );
+  }
   if (planeRef.type === 'datum') {
     const frame = result.datumFrames.get(planeRef.datumFeatureId);
     if (!frame) {
@@ -387,6 +412,18 @@ export function resolveDatumPointAtHistory(
   scope: Record<string, number>,
   ownerKind: DatumOwnerKind = 'Datum plane'
 ): Vec3 {
+  if (point.type === 'datum-point') {
+    const at = result.datumPoints?.get(point.datumFeatureId);
+    if (!at) {
+      const datum = listFeaturesInOrder(document).find(
+        (candidate) => candidate.featureId === point.datumFeatureId
+      );
+      throw new Error(
+        `${ownerKind} "${datumName}" cannot use datum point "${datum?.name ?? point.datumFeatureId}" because it is unavailable at this point in history.`
+      );
+    }
+    return at;
+  }
   if (point.type === 'point') {
     const axis = (value: ParamValue, name: string) =>
       resolveParamValue(value, scope, `datum point ${name}`, document.units);
@@ -459,6 +496,397 @@ export function resolveDatumAxisSourceAtHistory(
     sourceFeatureName
   });
   return surfaceDatumAxis(axis.point, axis.direction, reverseDirection);
+}
+
+/**
+ * R01 (schema v99): the coordinate system a reference resolved to earlier in
+ * this build. One that failed, is suppressed or comes later is refused by
+ * name; nothing stands in for it.
+ */
+export function resolveDatumCsysRefAtHistory(
+  document: ProjectDocument,
+  ref: { datumFeatureId: FeatureId },
+  owner: string,
+  result: ExactBuildResult
+): DatumCsys {
+  const csys = result.datumCsys?.get(ref.datumFeatureId);
+  if (!csys) {
+    const datum = listFeaturesInOrder(document).find(
+      (candidate) => candidate.featureId === ref.datumFeatureId
+    );
+    throw new Error(
+      `${owner} cannot use coordinate system "${datum?.name ?? ref.datumFeatureId}" because it is unavailable at this point in history.`
+    );
+  }
+  return csys;
+}
+
+/**
+ * R01 (schema v99): a datum point's edge source at the point's history
+ * position, read exactly: the midpoint of a straight edge, or the centre of
+ * a circular one (the circumcentre of three of its points, checked against
+ * a fourth). Re-found through verified lineage; refused by name otherwise.
+ */
+export function resolveDatumPointEdgeAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource,
+  kind: 'edge-midpoint' | 'arc-center',
+  datumName: string,
+  result: ExactBuildResult
+): Vec3 {
+  const shape = result.shapes.get(source.bodyId);
+  if (!shape) {
+    throw new Error(
+      `Datum point "${datumName}" cannot use an edge of body ${source.bodyId} because it is unavailable at the point's history position.`
+    );
+  }
+  const sourceFeatureName =
+    listFeaturesInOrder(document).find(
+      (candidate) =>
+        candidate.featureId === source.edgeReference.producingFeatureId
+    )?.name ?? String(source.edgeReference.producingFeatureId);
+  if (kind === 'edge-midpoint') {
+    const [start, end] = resolveDatumAxisEdge({
+      reference: source.edgeReference,
+      candidates: edgeVertexCandidatesForShape(kernel, shape),
+      datumName,
+      sourceFeatureName
+    });
+    return edgeMidpointDatumPoint(start, end);
+  }
+  const candidate = resolveDatumPointEdge({
+    reference: source.edgeReference,
+    candidates: edgeVertexCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  const fail = (detail: string) =>
+    new Error(
+      `Datum point "${datumName}" cannot take the centre of an edge of source feature "${sourceFeatureName}": ${detail}`
+    );
+  const edge = candidate.value;
+  if (typeof edge !== 'number') throw fail('the edge has no exact data.');
+  const type = kernel.getEdgeCurveType(edge).toLowerCase();
+  if (type !== 'circle') {
+    throw fail(`the edge is a ${type}, not a circular arc or circle.`);
+  }
+  return exactCircleCentre(kernel, edge, fail);
+}
+
+/**
+ * The centre of a circular kernel edge, read exactly: the circumcentre of
+ * three of its points, checked against a fourth.
+ */
+function exactCircleCentre(
+  kernel: RemusKernel,
+  edge: number,
+  fail: (detail: string) => Error
+): Vec3 {
+  const [t0, t1] = kernel.getEdgeParamSpan(edge);
+  const at = (f: number): Vec3 => {
+    const p = kernel.evaluateEdgeCurve(edge, t0! + (t1! - t0!) * f);
+    return { x: p[0]!, y: p[1]!, z: p[2]! };
+  };
+  const [a, b, c, d] = [at(0), at(1 / 3), at(2 / 3), at(0.5)];
+  const center = circumcenter(a, b, c);
+  if (!center) throw fail('its points do not define a circle.');
+  const radius = distance3(center, a);
+  if (
+    Math.abs(distance3(center, d) - radius) >
+    geometryTolerance(Math.max(radius, distance3(center, { x: 0, y: 0, z: 0 })))
+  ) {
+    throw fail('its points do not lie on one circle.');
+  }
+  return center;
+}
+
+function sourceFeatureNameOf(
+  document: ProjectDocument,
+  reference: { producingFeatureId: FeatureId }
+): string {
+  return (
+    listFeaturesInOrder(document).find(
+      (candidate) => candidate.featureId === reference.producingFeatureId
+    )?.name ?? String(reference.producingFeatureId)
+  );
+}
+
+function plainVector(v: { x: number; y: number; z: number }): Vec3 {
+  return { x: v.x, y: v.y, z: v.z };
+}
+
+/**
+ * Schema v108: a datum plane square to an edge, read exactly from the edge
+ * its lineage re-finds at the plane's history position. At a fraction, the
+ * point and tangent are the kernel's own evaluation of the edge curve at
+ * that fraction of its span from end 0 (of the length on a line or arc); an
+ * arc also gives the plane's u, toward its centre. Through a point, the edge
+ * must be straight.
+ */
+export function resolveNormalToEdgeDatumPlaneAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource,
+  at: { fraction: number } | { point: Vec3 },
+  datumName: string,
+  result: ExactBuildResult,
+  reverseNormal: boolean | undefined
+): PlaneBasis {
+  const shape = result.shapes.get(source.bodyId);
+  if (!shape) {
+    throw new Error(
+      `Datum plane "${datumName}" cannot use an edge of body ${source.bodyId} because it is unavailable at the plane's history position.`
+    );
+  }
+  const sourceFeatureName = sourceFeatureNameOf(document, source.edgeReference);
+  const fail = (detail: string) =>
+    new Error(
+      `Datum plane "${datumName}" cannot stand square to an edge of source feature "${sourceFeatureName}": ${detail}`
+    );
+  const candidate = resolveDatumPlaneEdge({
+    reference: source.edgeReference,
+    candidates: edgeVertexCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  const start = plainVector(edgeEndPoint(candidate.endpoints!, 0));
+  const end = plainVector(edgeEndPoint(candidate.endpoints!, 1));
+  const type = candidate.witness.curveType.toLowerCase();
+  if ('point' in at) {
+    if (type !== 'line') {
+      throw fail(
+        `the edge is a ${type}; a plane through a point square to an edge needs a straight edge.`
+      );
+    }
+    return normalToEdgeDatumPlane(
+      at.point,
+      subtract(end, start),
+      undefined,
+      reverseNormal
+    );
+  }
+  if (!(at.fraction >= 0 && at.fraction <= 1)) {
+    throw fail(`the fraction ${at.fraction} is not between 0 and 1.`);
+  }
+  const edge = candidate.value;
+  if (typeof edge !== 'number') throw fail('the edge has no exact data.');
+  const [t0, t1] = kernel.getEdgeParamSpan(edge);
+  const first = kernel.evaluateEdgeCurve(edge, t0!);
+  const p0 = { x: first[0]!, y: first[1]!, z: first[2]! };
+  // The curve's own parameter may run from end 1 to end 0.
+  const forward = distance3(p0, start) <= distance3(p0, end);
+  const t = forward
+    ? t0! + (t1! - t0!) * at.fraction
+    : t1! - (t1! - t0!) * at.fraction;
+  const d1 = kernel.evaluateEdgeCurveD1(edge, t);
+  const point = { x: d1[0]!, y: d1[1]!, z: d1[2]! };
+  const sense = forward ? 1 : -1;
+  const tangent = { x: d1[3]! * sense, y: d1[4]! * sense, z: d1[5]! * sense };
+  const centre =
+    type === 'circle' ? exactCircleCentre(kernel, edge, fail) : undefined;
+  try {
+    return normalToEdgeDatumPlane(point, tangent, centre, reverseNormal);
+  } catch (error) {
+    throw fail(errorText(error));
+  }
+}
+
+/**
+ * Schema v108: the straight edge a plane at an angle turns about, end 0
+ * first, re-found through verified lineage at the plane's history position.
+ */
+export function resolveEdgeAngleDatumPlaneAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource,
+  reference: PlaneBasis,
+  angleDeg: number,
+  datumName: string,
+  result: ExactBuildResult,
+  reverseNormal: boolean | undefined
+): PlaneBasis {
+  const shape = result.shapes.get(source.bodyId);
+  if (!shape) {
+    throw new Error(
+      `Datum plane "${datumName}" cannot use an edge of body ${source.bodyId} because it is unavailable at the plane's history position.`
+    );
+  }
+  const sourceFeatureName = sourceFeatureNameOf(document, source.edgeReference);
+  const candidate = resolveDatumPlaneEdge({
+    reference: source.edgeReference,
+    candidates: edgeVertexCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  const type = candidate.witness.curveType.toLowerCase();
+  if (type !== 'line') {
+    throw new Error(
+      `Datum plane "${datumName}" cannot turn about an edge of source feature "${sourceFeatureName}": the edge is a ${type}, not a straight edge.`
+    );
+  }
+  const start = plainVector(edgeEndPoint(candidate.endpoints!, 0));
+  const end = plainVector(edgeEndPoint(candidate.endpoints!, 1));
+  try {
+    return edgeAngleDatumPlane(start, end, reference, angleDeg, reverseNormal);
+  } catch (error) {
+    throw new Error(
+      `Datum plane "${datumName}" cannot turn about an edge of source feature "${sourceFeatureName}": ${errorText(error)}`,
+      { cause: error }
+    );
+  }
+}
+
+/**
+ * Schema v108: the axis square to a face where `point` drops onto it, read
+ * exactly: the kernel carries the point to the nearest point of the face's
+ * surface and evaluates the outward normal there. A foot that does not lie
+ * on the body's boundary has fallen off the face and is refused.
+ */
+export function resolveFaceNormalDatumAxisAtHistory(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  source: DatumAxisFaceSource,
+  point: Vec3,
+  datumName: string,
+  result: ExactBuildResult,
+  reverseDirection: boolean | undefined
+): DatumAxis {
+  const shape = result.shapes.get(source.bodyId);
+  if (!shape) {
+    throw new Error(
+      `Datum axis "${datumName}" cannot use a face of body ${source.bodyId} because it is unavailable at the axis's history position.`
+    );
+  }
+  const sourceFeatureName = sourceFeatureNameOf(document, source.faceReference);
+  const fail = (detail: string) =>
+    new Error(
+      `Datum axis "${datumName}" cannot stand square to a face of source feature "${sourceFeatureName}": ${detail}`
+    );
+  const candidate = resolveDatumAxisNormalFace({
+    reference: source.faceReference,
+    candidates: faceAttachmentCandidatesForShape(kernel, shape),
+    datumName,
+    sourceFeatureName
+  });
+  const face = candidate.value;
+  if (typeof face !== 'number') throw fail('the face has no exact data.');
+  const owner = shape.solids.find((solid) =>
+    Array.from(kernel.getSolidFaces(solid)).includes(face)
+  );
+  if (owner === undefined) throw fail('the face belongs to no solid.');
+  const projected = kernel.projectPointOnSurface(
+    face,
+    point.x,
+    point.y,
+    point.z
+  );
+  const [u, v] = [projected[0]!, projected[1]!];
+  const foot = { x: projected[2]!, y: projected[3]!, z: projected[4]! };
+  if (![u, v, foot.x, foot.y, foot.z].every(Number.isFinite)) {
+    throw fail('the point does not drop onto the face.');
+  }
+  const scaleOf = Math.max(1, Math.hypot(foot.x, foot.y, foot.z));
+  const tolerance = geometryTolerance(scaleOf);
+  let raw: Float64Array;
+  try {
+    raw = kernel.evaluateSurfaceNormal(face, u, v);
+  } catch (error) {
+    throw fail(`the face has no normal there (${errorText(error)}).`);
+  }
+  const normal = { x: raw[0]!, y: raw[1]!, z: raw[2]! };
+  // Off a plane, (u, v) must give back the foot itself; a plane's normal is
+  // the same everywhere, and the kernel evaluates a plane in its own frame.
+  if (candidate.witness.surfaceType.toLowerCase() !== 'plane') {
+    const back = kernel.evaluateSurface(face, u, v);
+    if (
+      distance3({ x: back[0]!, y: back[1]!, z: back[2]! }, foot) >
+      10 * tolerance
+    ) {
+      throw fail('the face cannot be evaluated where the point drops onto it.');
+    }
+  }
+  // On the face: the foot is on the body's boundary, or (where the kernel's
+  // classifier reads a face's own edge or corner as outside) a point ten
+  // tolerances from it, along the face, is.
+  const length = Math.hypot(normal.x, normal.y, normal.z);
+  if (!(length > 0)) throw fail('the face has no normal there.');
+  const n = scale(normal, 1 / length);
+  const seed =
+    Math.abs(n.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const t1 = normalized(cross(n, seed));
+  if (!t1) throw fail('the face has no normal there.');
+  const t2 = cross(n, t1);
+  const step = 10 * tolerance;
+  const probes = [
+    foot,
+    ...(
+      [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+        [1, 1],
+        [1, -1],
+        [-1, 1],
+        [-1, -1]
+      ] as const
+    ).map(([a, b]) => ({
+      x: foot.x + (t1.x * a + t2.x * b) * step,
+      y: foot.y + (t1.y * a + t2.y * b) * step,
+      z: foot.z + (t1.z * a + t2.z * b) * step
+    }))
+  ];
+  if (
+    !probes.some(
+      (p) =>
+        kernel.classifyPoint(owner, p.x, p.y, p.z, tolerance) === 'boundary'
+    )
+  ) {
+    throw fail(
+      "the point drops onto the face's surface beyond the face itself."
+    );
+  }
+  try {
+    return faceNormalDatumAxis(foot, normal, reverseDirection);
+  } catch (error) {
+    throw fail(errorText(error));
+  }
+}
+
+function distance3(a: Vec3, b: Vec3): number {
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+
+/** The centre of the circle through three points, or null when collinear. */
+function circumcenter(a: Vec3, b: Vec3, c: Vec3): Vec3 | null {
+  const ab = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  const ac = { x: c.x - a.x, y: c.y - a.y, z: c.z - a.z };
+  const n = {
+    x: ab.y * ac.z - ab.z * ac.y,
+    y: ab.z * ac.x - ab.x * ac.z,
+    z: ab.x * ac.y - ab.y * ac.x
+  };
+  const nn = n.x * n.x + n.y * n.y + n.z * n.z;
+  if (!(nn > 0)) return null;
+  const ab2 = ab.x * ab.x + ab.y * ab.y + ab.z * ab.z;
+  const ac2 = ac.x * ac.x + ac.y * ac.y + ac.z * ac.z;
+  // ((|ab|² ac − |ac|² ab) × n) / (2 |n|²)
+  const w = {
+    x: ab2 * ac.x - ac2 * ab.x,
+    y: ab2 * ac.y - ac2 * ab.y,
+    z: ab2 * ac.z - ac2 * ab.z
+  };
+  const cross = {
+    x: w.y * n.z - w.z * n.y,
+    y: w.z * n.x - w.x * n.z,
+    z: w.x * n.y - w.y * n.x
+  };
+  return {
+    x: a.x + cross.x / (2 * nn),
+    y: a.y + cross.y / (2 * nn),
+    z: a.z + cross.z / (2 * nn)
+  };
 }
 
 /**
@@ -1815,7 +2243,13 @@ export function sweepPathEdges(
   document: ProjectDocument,
   path: SketchPathReference,
   scope: Record<string, number>,
-  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  /**
+   * Split an arc wider than a quarter turn into quarter-turn pieces, as the
+   * sampled sweeps always have. The exact sweep takes each arc whole: one
+   * motion, one face per profile edge.
+   */
+  splitArcs = true
 ): number[] {
   const sketch = findSketch(document, path.sketchId);
   if (!sketch) {
@@ -1895,7 +2329,9 @@ export function sweepPathEdges(
       throw new Error('Sweep path arc must have a non-zero sweep.');
     }
     const center = planePoint3(basis, center2);
-    const pieces = Math.max(1, Math.ceil(sweep / (Math.PI / 2)));
+    const pieces = splitArcs
+      ? Math.max(1, Math.ceil(sweep / (Math.PI / 2)))
+      : 1;
     return Array.from({ length: pieces }, (_, index) => {
       const angleA = start + (sweep * index) / pieces;
       const angleB = start + (sweep * (index + 1)) / pieces;
@@ -2140,6 +2576,38 @@ function guidedSweepSolid(
   return guided;
 }
 
+/**
+ * M04: the exact in-place sweep. The profile stays where it is and the
+ * kernel carries it along the path's lines and whole arcs as exact surfaces
+ * (`sweepExact`); a corner, a fold or a self-crossing is refused by name and
+ * never sampled instead. A guide rail has no exact construction, so it is
+ * refused rather than rebuilt as facets.
+ */
+function exactSweepSolid(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  face: number,
+  path: SketchPathReference,
+  guided: boolean,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+): number {
+  if (guided) {
+    throw new Error(
+      'A guide rail has no exact sweep construction: the rail turns the profile in a way no exact surface follows, so the sweep would be built from facets. Clear the guide rail.'
+    );
+  }
+  const edges = sweepPathEdges(
+    kernel,
+    document,
+    path,
+    scope,
+    sketchBases,
+    false
+  );
+  return kernel.sweepExact(face, Uint32Array.from(edges));
+}
+
 export function buildProfileSweep(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -2169,6 +2637,29 @@ export function buildProfileSweep(
   );
   const guide = feature.data.guide;
   const guided = guide !== undefined;
+  if (feature.data.construction === 'in-place') {
+    return {
+      solids: [
+        validateGeneratedSolid(
+          kernel,
+          exactSweepSolid(
+            kernel,
+            document,
+            face,
+            feature.data.path,
+            guided,
+            scope,
+            sketchBases
+          ),
+          'Sweep'
+        )
+      ],
+      lineage: remusHashOnlyLineage(
+        'sweep',
+        'Profile sweep topology has no verified output evolution relation.'
+      )
+    };
+  }
   const solid = guided
     ? guidedSweepSolid(
         kernel,
@@ -2372,10 +2863,7 @@ function promotedDefaultProfile(
       return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
     })
   );
-  const aliases = resolveSketchPromotionBoundaryTokens(
-    [promotion],
-    allObjects
-  );
+  const aliases = resolveSketchPromotionBoundaryTokens([promotion], allObjects);
   const edges = promotion.edgeIds.map((id) => {
     const data = allObjects.get(id);
     if (data?.objectKind !== 'line')

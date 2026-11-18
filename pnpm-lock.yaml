@@ -102,6 +102,8 @@ importers:
         specifier: ^2.12.4
         version: 2.12.4
 
+  apps/ipad: {}
+
   apps/web:
     dependencies:
       '@fontsource/geist-mono':
@@ -149,6 +151,9 @@ importers:
       '@openzcad/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@openzcad/scripting':
+        specifier: workspace:*
+        version: link:../../packages/scripting
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -219,6 +224,9 @@ importers:
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core
+      '@openzcad/scripting':
+        specifier: workspace:*
+        version: link:../scripting
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
@@ -255,6 +263,9 @@ importers:
       '@openzcad/geometry':
         specifier: workspace:*
         version: link:../geometry
+      '@openzcad/scripting':
+        specifier: workspace:*
+        version: link:../scripting
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
@@ -315,6 +326,9 @@ importers:
       '@openzcad/io-stl':
         specifier: workspace:*
         version: link:../io-stl
+      '@openzcad/scripting':
+        specifier: workspace:*
+        version: link:../scripting
       '@openzcad/shared':
         specifier: workspace:*
         version: link:../shared
@@ -322,16 +336,28 @@ importers:
         specifier: 0.8.3
         version: 0.8.3
       remus-wasm:
-        specifier: github:esaueng/remus#ae6a04b83af054e35f760850b67c420a4b874840&path:/crates/wasm/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/ae6a04b83af054e35f760850b67c420a4b874840#path:/crates/wasm/pkg
+        specifier: github:esaueng/remus#88de02388774102a1aaa2d7a2978c04b0dfe7325&path:/crates/wasm/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/88de02388774102a1aaa2d7a2978c04b0dfe7325#path:/crates/wasm/pkg
       remus-wasm-io:
-        specifier: github:esaueng/remus#ae6a04b83af054e35f760850b67c420a4b874840&path:/crates/wasm-io/pkg
-        version: https://codeload.github.com/esaueng/remus/tar.gz/ae6a04b83af054e35f760850b67c420a4b874840#path:/crates/wasm-io/pkg
+        specifier: github:esaueng/remus#88de02388774102a1aaa2d7a2978c04b0dfe7325&path:/crates/wasm-io/pkg
+        version: https://codeload.github.com/esaueng/remus/tar.gz/88de02388774102a1aaa2d7a2978c04b0dfe7325#path:/crates/wasm-io/pkg
 
   packages/mls: {}
 
   packages/persistence:
     dependencies:
+      '@openzcad/document-core':
+        specifier: workspace:*
+        version: link:../document-core
+      '@openzcad/shared':
+        specifier: workspace:*
+        version: link:../shared
+
+  packages/scripting:
+    dependencies:
+      '@openzcad/ai-contracts':
+        specifier: workspace:*
+        version: link:../ai-contracts
       '@openzcad/document-core':
         specifier: workspace:*
         version: link:../document-core
@@ -1954,13 +1980,13 @@ packages:
     resolution: {integrity: sha512-6tDA8g98We0zd0GvVeMT9arEOnTw9qM03L9cJXaCjrip1OO764RDBLBfrB4cwzNGDj5OA5ioymC9GkizgWJDUg==}
     engines: {node: '>=8'}
 
-  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/ae6a04b83af054e35f760850b67c420a4b874840#path:/crates/wasm-io/pkg:
-    resolution: {path: /crates/wasm-io/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/ae6a04b83af054e35f760850b67c420a4b874840}
-    version: 2026.1.145
+  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/88de02388774102a1aaa2d7a2978c04b0dfe7325#path:/crates/wasm-io/pkg:
+    resolution: {path: /crates/wasm-io/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/88de02388774102a1aaa2d7a2978c04b0dfe7325}
+    version: 2026.1.150
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/ae6a04b83af054e35f760850b67c420a4b874840#path:/crates/wasm/pkg:
-    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/ae6a04b83af054e35f760850b67c420a4b874840}
-    version: 2026.1.145
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/88de02388774102a1aaa2d7a2978c04b0dfe7325#path:/crates/wasm/pkg:
+    resolution: {path: /crates/wasm/pkg, tarball: https://codeload.github.com/esaueng/remus/tar.gz/88de02388774102a1aaa2d7a2978c04b0dfe7325}
+    version: 2026.1.150
 
   rolldown@1.2.14:
     resolution: {integrity: sha512-eTBTTqMR6uHKLgcUqpJP8ntzDI6V4LYA8negAMBEI7gkgVvOdrx6VsvS2Ym+83KhOPdLCHWJu0w7UQFJZhHKNw==}
@@ -3645,9 +3671,9 @@ snapshots:
       indent-string: 4.0.0
       strip-indent: 3.0.0
 
-  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/ae6a04b83af054e35f760850b67c420a4b874840#path:/crates/wasm-io/pkg: {}
+  remus-wasm-io@https://codeload.github.com/esaueng/remus/tar.gz/88de02388774102a1aaa2d7a2978c04b0dfe7325#path:/crates/wasm-io/pkg: {}
 
-  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/ae6a04b83af054e35f760850b67c420a4b874840#path:/crates/wasm/pkg: {}
+  remus-wasm@https://codeload.github.com/esaueng/remus/tar.gz/88de02388774102a1aaa2d7a2978c04b0dfe7325#path:/crates/wasm/pkg: {}
 
   rolldown@1.2.14:
     dependencies:

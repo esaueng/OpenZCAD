@@ -52,11 +52,14 @@ export function replacedInputBodyId(data: FeatureData): BodyId | null {
     case 'hole':
     case 'shell':
     case 'solid-offset':
+    case 'rib':
+    case 'wrap':
     case 'draft':
     case 'fillet':
     case 'chamfer':
     case 'pattern':
     case 'thread':
+    case 'custom-feature':
       return data.targetBodyId;
     case 'gear':
       // Teeth cut into a body replace it; a new gear has no input body.
@@ -86,6 +89,8 @@ export function replacedInputBodyId(data: FeatureData): BodyId | null {
     case 'imported-step':
     case 'datum-plane':
     case 'datum-axis':
+    case 'datum-point':
+    case 'datum-csys':
       return null;
     default: {
       const unhandled: never = data;

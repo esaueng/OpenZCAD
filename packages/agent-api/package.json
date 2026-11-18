@@ -9,6 +9,7 @@
     "@openzcad/ai-contracts": "workspace:*",
     "@openzcad/command-system": "workspace:*",
     "@openzcad/document-core": "workspace:*",
+    "@openzcad/scripting": "workspace:*",
     "@openzcad/shared": "workspace:*"
   }
 }

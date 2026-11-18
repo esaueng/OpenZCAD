@@ -9,6 +9,7 @@ import type {
   DatumAxisDefinition,
   FeatureId,
   SketchId,
+  SketchProfileReference,
   Vector3
 } from '@openzcad/shared';
 import { TOOL_META } from '../tools';
@@ -28,6 +29,7 @@ import {
   inPlaceFaceMode,
   takesFeatureFaces,
   toggledPatternSkip,
+  patternCopyChip,
   valueInRange,
   valueRangeSentence,
   type BodyPick,
@@ -1676,6 +1678,28 @@ describe('M02 feature patterns and skipped copies', () => {
       ['p_a', { x: 40, y: 5, z: 2 }],
       ['p_b', { x: 10, y: 35, z: 2 }]
     ]);
+    // UX-008: the chips read and are announced by the pick order, never by
+    // the point's entity id, which stays the skip key (`instance:<id>`, and
+    // `skippedInstances` in the saved feature).
+    const chips = spec
+      .handles(slots, {}, ctx, { skip: 'p_b' })
+      .flatMap((handle) =>
+        handle.kind === 'instance'
+          ? [{ valueId: handle.valueId, ...patternCopyChip(handle.params) }]
+          : []
+      );
+    expect(chips).toEqual([
+      {
+        valueId: 'instance:p_a',
+        text: 'Point 1',
+        name: 'Copy at Point 1 · skip it'
+      },
+      {
+        valueId: 'instance:p_b',
+        text: 'Point 2',
+        name: 'Copy at Point 2, skipped · bring it back'
+      }
+    ]);
     // An edit keeps the reference it stored, wherever the body is now.
     expect(
       spec.request(
@@ -1702,6 +1726,13 @@ describe('M02 feature patterns and skipped copies', () => {
       )
     ).toMatchObject({
       points: { pointIds: ['p_a', 'p_ref', 'p_b'], referencePointId: 'p_a' }
+    });
+  });
+
+  it('names a positional copy by its key', () => {
+    expect(patternCopyChip({ label: '3', skipped: false })).toEqual({
+      text: '3',
+      name: 'Copy 3 · skip it'
     });
   });
 
@@ -1993,7 +2024,7 @@ describe('review: loft, sweep and counts', () => {
     });
   });
 
-  it('a sweep carries its mode, and a guide rail', () => {
+  it('a new sweep is exact; a saved sampled one kept sampled carries its mode and rail', () => {
     const curve = (entityId: string) => ({
       sketchId: 's2' as SketchId,
       entityId
@@ -2004,15 +2035,25 @@ describe('review: loft, sweep and counts', () => {
       profiles: [section('s1', 1)],
       path: [curve('p1')]
     };
-    expect(sweep.request(base, {}, { mode: 'smooth' }, CTX)).toMatchObject({
-      mode: 'smooth'
-    });
+    // M04: built in place from exact surfaces, with no mode or rail.
+    const exact = sweep.request(base, {}, {}, CTX);
+    expect(exact).toMatchObject({ construction: 'in-place' });
+    expect(exact).not.toHaveProperty('guide');
+    const sampled = { saved: 'sampled', build: 'sampled' };
     expect(
-      sweep.request({ ...base, guide: [curve('g1'), curve('g2')] }, {}, {}, CTX)
-    ).toMatchObject({
+      sweep.request(base, {}, { ...sampled, mode: 'smooth' }, CTX)
+    ).toMatchObject({ mode: 'smooth' });
+    const railed = sweep.request(
+      { ...base, guide: [curve('g1'), curve('g2')] },
+      {},
+      sampled,
+      CTX
+    );
+    expect(railed).toMatchObject({
       mode: 'standard',
       guide: { sketchId: 's2', entityIds: ['g1', 'g2'] }
     });
+    expect(railed).not.toHaveProperty('construction');
   });
 
   it('pattern counts are whole numbers', () => {
@@ -2766,5 +2807,33 @@ describe('a new primitive over a model that has bodies', () => {
     expect(cylinder.hint(EMPTY, {}, ctx(['box']))).toBe(
       'Drag a footprint on the ground or a face · Done adds it as a separate body where it shows'
     );
+  });
+});
+
+describe('Wrap in place', () => {
+  const wrap = IN_PLACE_TOOL_SPECS.wrap;
+  const region = (sketchId: string, regionFingerprint: number) => ({
+    sketchId: sketchId as SketchId,
+    reference: { regionFingerprint } as unknown as SketchProfileReference,
+    regionFingerprint
+  });
+  const side: FacePick = {
+    ...TOP,
+    surfaceType: 'cylinder',
+    reference: { kind: 'face' } as unknown as FacePick['reference']
+  };
+
+  it('wraps the regions of one sketch together', () => {
+    const slots = { ...EMPTY, profiles: [region('s1', 1), region('s1', 2)], faces: [side] };
+    expect(wrap.ready(slots)).toBe(true);
+    const request = wrap.request(slots, {}, {}, CTX);
+    expect(request?.tool === 'wrap' && request.profiles).toHaveLength(2);
+  });
+
+  it('refuses regions of two sketches instead of dropping one', () => {
+    const slots = { ...EMPTY, profiles: [region('s1', 1), region('s2', 2)], faces: [side] };
+    expect(wrap.ready(slots)).toBe(false);
+    expect(wrap.request(slots, {}, {}, CTX)).toBeNull();
+    expect(wrap.hint(slots, {}, {} as never)).toMatch(/one sketch/);
   });
 });

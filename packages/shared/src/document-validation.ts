@@ -353,6 +353,26 @@ const FEATURE_ENUM_FIELDS = {
     mode: valuesOf<FeatureDataOf<'sweep'>['mode']>({
       standard: true,
       smooth: true
+    }),
+    construction: valuesOf<
+      NonNullable<FeatureDataOf<'sweep'>['construction']>
+    >({ 'in-place': true })
+  },
+  rib: {
+    thicknessSide: valuesOf<FeatureDataOf<'rib'>['thicknessSide']>({
+      symmetric: true,
+      first: true,
+      second: true
+    }),
+    direction: valuesOf<FeatureDataOf<'rib'>['direction']>({
+      parallel: true,
+      normal: true
+    })
+  },
+  wrap: {
+    mode: valuesOf<FeatureDataOf<'wrap'>['mode']>({
+      emboss: true,
+      engrave: true
     })
   },
   'helical-sweep': {
@@ -410,7 +430,12 @@ const FEATURE_ENUM_FIELDS = {
     thread: new Set<string>(STANDARD_PART_THREADS)
   },
   fillet: { radiusLaw: RADIUS_LAWS },
-  'imported-mesh': { assumedUnits: UNIT_SYSTEMS }
+  'imported-mesh': { assumedUnits: UNIT_SYSTEMS },
+  'imported-step': {
+    stepReader: valuesOf<
+      NonNullable<FeatureDataOf<'imported-step'>['stepReader']>
+    >({ structure: true })
+  }
 } satisfies {
   [K in FeatureKind]?: {
     [F in keyof FeatureDataOf<K> & string]?: ReadonlySet<string>;
@@ -525,6 +550,8 @@ const FEATURE_KINDS = valuesOf<FeatureKind>({
   mirror: true,
   shell: true,
   'solid-offset': true,
+  rib: true,
+  wrap: true,
   draft: true,
   thicken: true,
   fillet: true,
@@ -540,7 +567,10 @@ const FEATURE_KINDS = valuesOf<FeatureKind>({
   'imported-step': true,
   'imported-mesh': true,
   'datum-plane': true,
-  'datum-axis': true
+  'datum-axis': true,
+  'datum-point': true,
+  'datum-csys': true,
+  'custom-feature': true
 });
 
 /**
@@ -566,6 +596,8 @@ export const COMMAND_FEATURE_KINDS = {
   'feature.split': 'split',
   'feature.datum-plane': 'datum-plane',
   'feature.datum-axis': 'datum-axis',
+  'feature.datum-point': 'datum-point',
+  'feature.datum-csys': 'datum-csys',
   'feature.hole': 'hole',
   'feature.gear': 'gear',
   'feature.thread': 'thread',
@@ -573,12 +605,15 @@ export const COMMAND_FEATURE_KINDS = {
   'feature.standard-part': 'standard-part',
   'feature.shell': 'shell',
   'feature.solid-offset': 'solid-offset',
+  'feature.rib': 'rib',
+  'feature.wrap': 'wrap',
   'feature.draft': 'draft',
   'feature.thicken': 'thicken',
   'feature.direct-edit': 'direct-edit',
   'feature.fillet': 'fillet',
   'feature.chamfer': 'chamfer',
   'feature.pattern': 'pattern',
+  'feature.custom-feature': 'custom-feature',
   'import.mesh': 'imported-mesh',
   'import.step': 'imported-step'
 } as const satisfies Readonly<Record<string, FeatureKind>>;
@@ -623,7 +658,7 @@ const FEATURE_UPDATE_FALLBACK_ENUMS: ReadonlyMap<
  */
 const FEATURE_UPDATE_NON_STRING_FIELDS = valuesOf<
   Extract<NonStringFields<FeatureData>, FeatureEnumField>
->({ axis: true, operation: true, profile: true });
+>({ axis: true, direction: true, operation: true, profile: true });
 
 /** The enums the document itself defines. */
 const DOCUMENT_ENUMS = enumsOf<ProjectDocument>({ units: UNIT_SYSTEMS });
@@ -779,6 +814,8 @@ const FIELD_POSITIONS: Readonly<
     bodyRepresentations: ID_MAP,
     datumFrames: ID_MAP,
     datumAxes: ID_MAP,
+    datumPoints: ID_MAP,
+    datumCsys: ID_MAP,
     sketchProjections: ID_MAP,
     sketchGeometry: { shape: 'sketchGeometry' }
   },

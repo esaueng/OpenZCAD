@@ -88,6 +88,21 @@ describe('saveFile', () => {
     expect(click).not.toHaveBeenCalled();
   });
 
+  it('hands a native iPad export to its download delegate', async () => {
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+    const { win, share } = touchWindow();
+    Object.defineProperty(win, 'location', {
+      value: { protocol: 'zcad-ipad:' }
+    });
+    expect(await saveFile('part.step', new Blob(['model']), win)).toBe(
+      'downloaded'
+    );
+    expect(click).toHaveBeenCalledOnce();
+    expect(share).not.toHaveBeenCalled();
+  });
+
   it('saves nothing when the sheet is dismissed, and downloads when it is refused', async () => {
     const click = vi
       .spyOn(HTMLAnchorElement.prototype, 'click')

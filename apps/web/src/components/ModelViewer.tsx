@@ -478,7 +478,17 @@ import {
   ReferenceTextureCache,
   type ReferenceTextureRequest
 } from './viewer/referenceImageRig';
-import type { DatumAxisDisplay } from '../lib/datumAxisDisplay';
+import type {
+  DatumAxisDisplay,
+  DatumCsysDisplay,
+  DatumPointDisplay
+} from '../lib/datumAxisDisplay';
+import {
+  buildDatumMarkerRig,
+  type DatumCsysRigInput,
+  type DatumMarkerRig,
+  type DatumPointRigInput
+} from './viewer/datumMarkerRig';
 import {
   requiredValueResolver,
   sketchValueResolver
@@ -846,7 +856,13 @@ export type CommandHandleView = (
   | {
       /** M02: a pattern copy's skip toggle, where the copy stands. */
       kind: 'instance';
-      params: { anchor: HandleVec3; label: string; skipped: boolean };
+      params: {
+        anchor: HandleVec3;
+        /** The skip key handed back on a toggle; never shown. */
+        label: string;
+        display?: string;
+        skipped: boolean;
+      };
     }
 ) & {
   valueId: string;
@@ -1054,12 +1070,28 @@ export interface CommentPin {
   active?: boolean;
 }
 
+/** D07: one model PMI label, as the PMI module draws it. */
+export interface ViewerPmiLabel {
+  pmiId: string;
+  anchor: { x: number; y: number; z: number };
+  /** Standalone SVG markup the PMI module generated (escaped text). */
+  svg: string;
+  name: string;
+  broken: boolean;
+  selected: boolean;
+}
+
 export interface ModelViewerProps {
   parameterVisualPreview?: ParameterVisualPreview | null;
   bodies: GeometryBodyRepresentation[];
   sketches: SketchOverlay[];
   /** Runtime-only View-mode measurements rendered above exact geometry. */
   measurementAnnotations: MeasurementViewportAnnotation[];
+  /**
+   * D07: the model's PMI, each a frame or datum symbol (SVG drawn by the
+   * PMI module) anchored at a point on its face; broken ones show amber.
+   */
+  pmiLabels?: readonly ViewerPmiLabel[];
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
   selectedTopology: TopologySelection | null;
@@ -1452,6 +1484,14 @@ export interface ModelViewerProps {
    * resolved. Hidden, suppressed and unresolved axes are simply absent.
    */
   datumAxes?: readonly DatumAxisDisplay[];
+  /**
+   * Committed R01 (schema v99) datum points and coordinate systems, at the
+   * positions and frames the exact build resolved.
+   */
+  datumMarkers?: {
+    points: readonly DatumPointDisplay[];
+    systems: readonly DatumCsysDisplay[];
+  };
   /**
    * I05 reference images, laid on their planes. Hidden images and images
    * whose plane has not resolved are simply absent.
@@ -2402,11 +2442,14 @@ function startRequestedView(
   );
 }
 
+const NO_PMI_LABELS: readonly ViewerPmiLabel[] = [];
+
 export function ModelViewer({
   bodies: suppliedBodies,
   parameterVisualPreview = null,
   sketches,
   measurementAnnotations,
+  pmiLabels = NO_PMI_LABELS,
   selectedBodyIds: incomingSelectedBodyIds,
   selectedTopology: incomingSelectedTopology,
   previewFaceHighlights: incomingPreviewFaceHighlights,
@@ -2493,6 +2536,7 @@ export function ModelViewer({
   onFootprint,
   datumPlanes,
   datumAxes,
+  datumMarkers,
   referenceImages,
   loadReferenceImage,
   planePickerOffset,
@@ -2915,6 +2959,7 @@ export function ModelViewer({
   planePickerOffsetRef.current = planePickerOffset;
   const datumPlaneRigRef = useRef<DatumPlaneRig | null>(null);
   const datumAxisRigRef = useRef<DatumAxisRig | null>(null);
+  const datumMarkerRigRef = useRef<DatumMarkerRig | null>(null);
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
@@ -3003,6 +3048,7 @@ export function ModelViewer({
   > | null>(null);
   /** Separate from direct-edit overlays so body rebuilds do not erase it. */
   const measurementGroupRef = useRef<THREE.Group | null>(null);
+  const pmiGroupRef = useRef<THREE.Group | null>(null);
   /**
    * Live dimension graphics with the world points they span.
    *
@@ -3463,6 +3509,7 @@ export function ModelViewer({
       const datumColor = readDatumColor(host);
       datumPlaneRigRef.current?.setColor(datumColor);
       datumAxisRigRef.current?.setColor(datumColor);
+      datumMarkerRigRef.current?.setColor(datumColor);
       planePickerRigRef.current?.setBackdrop(
         readStagePalette(host).backdropMiddle
       );
@@ -3499,6 +3546,10 @@ export function ModelViewer({
     measurementGroup.name = 'measurements';
     scene.add(measurementGroup);
     measurementGroupRef.current = measurementGroup;
+    const pmiGroup = new THREE.Group();
+    pmiGroup.name = 'pmi';
+    scene.add(pmiGroup);
+    pmiGroupRef.current = pmiGroup;
 
     const gizmoGroup = new THREE.Group();
     gizmoGroup.name = 'direct-modeling-gizmo';
@@ -12900,6 +12951,7 @@ export function ModelViewer({
       // than a backdrop as the camera dollies.
       datumPlaneRigRef.current?.setScale(worldPerPixelAtDepth);
       datumAxisRigRef.current?.setScale(worldPerPixelAtDepth);
+      datumMarkerRigRef.current?.setScale(worldPerPixelAtDepth);
       const planePicker = planePickerRigRef.current;
       if (planePicker) {
         // Scale first: the offset is expressed in world units and has to be
@@ -13536,6 +13588,7 @@ export function ModelViewer({
       clearGroup(sketchGroup);
       clearGroup(overlayGroup);
       clearGroup(measurementGroup);
+      clearGroup(pmiGroup);
       clearGroup(gizmoGroup);
       clearGroup(moveGizmoGroup);
       for (const disposable of [
@@ -13620,6 +13673,37 @@ export function ModelViewer({
     selectedTopology,
     selectionFilter
   ]);
+
+  // D07: the model's PMI labels, one CSS2D label each at its anchor, the
+  // frame offset up and right of a dot on the face so it never hides it.
+  useEffect(() => {
+    const context = contextRef.current;
+    const group = pmiGroupRef.current;
+    if (!context || !group) return;
+    clearGroup(group);
+    for (const entry of pmiLabels) {
+      const element = document.createElement('div');
+      element.className = `pmi-label${entry.selected ? ' selected' : ''}${
+        entry.broken ? ' is-broken' : ''
+      }`;
+      element.setAttribute('role', 'img');
+      element.setAttribute(
+        'aria-label',
+        `${entry.name}${entry.broken ? ' (broken)' : ''}`
+      );
+      element.title = entry.name;
+      const frame = document.createElement('div');
+      frame.className = 'pmi-label-frame';
+      // Generated by the PMI module from validated fields, its text escaped.
+      frame.innerHTML = entry.svg;
+      element.append(frame);
+      const label = new CSS2DObject(element);
+      label.name = 'pmi-label';
+      label.position.set(entry.anchor.x, entry.anchor.y, entry.anchor.z);
+      group.add(label);
+    }
+    context.requestRender();
+  }, [pmiLabels]);
 
   // Measurements are session-owned overlays. They use their own group so an
   // exact body refresh cannot remove a pinned result between React commits.
@@ -16277,6 +16361,52 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [datumAxisKey]);
+
+  // Committed datum points and coordinate systems (viewer/datumMarkerRig),
+  // rebuilt when the set, a position or frame, or the selection changes.
+  const datumMarkerKey = JSON.stringify({
+    points: (datumMarkers?.points ?? []).map(
+      ({ featureId, point, selected }) => ({ featureId, point, selected })
+    ),
+    systems: (datumMarkers?.systems ?? []).map(
+      ({ featureId, frame, selected }) => ({ featureId, frame, selected })
+    )
+  });
+  useEffect(() => {
+    const context = contextRef.current;
+    const { points, systems } = JSON.parse(datumMarkerKey) as {
+      points: DatumPointRigInput[];
+      systems: DatumCsysRigInput[];
+    };
+    if (!context || (points.length === 0 && systems.length === 0)) {
+      return;
+    }
+    const canvas = context.renderer.domElement;
+    const rig = buildDatumMarkerRig(points, systems, {
+      color: readDatumColor(canvas),
+      resolution: context.fatLineResolution()
+    });
+    rig.setScale(() => 0.05);
+    context.scene.add(rig.group);
+    datumMarkerRigRef.current = rig;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      canvas.dataset.e2eDatumPoints = JSON.stringify(
+        points.map(({ featureId, point }) => ({ featureId, ...point }))
+      );
+      canvas.dataset.e2eDatumCsys = JSON.stringify(
+        systems.map(({ featureId, frame }) => ({ featureId, ...frame }))
+      );
+    }
+    context.requestRender();
+    return () => {
+      context.scene.remove(rig.group);
+      rig.dispose();
+      if (datumMarkerRigRef.current === rig) datumMarkerRigRef.current = null;
+      delete canvas.dataset.e2eDatumPoints;
+      delete canvas.dataset.e2eDatumCsys;
+      context.requestRender();
+    };
+  }, [datumMarkerKey]);
 
   // A footprint drag outlives no command: one canceled under the pointer,
   // or replaced by another (even of the same tool, in the same render),

@@ -44,12 +44,15 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'thread':
     case 'shell':
     case 'solid-offset':
+    case 'rib':
+    case 'wrap':
     case 'draft':
     case 'thicken':
     case 'fillet':
     case 'chamfer':
     case 'pattern':
     case 'direct-edit':
+    case 'custom-feature':
       return [data.targetBodyId];
     case 'mirror':
     case 'primitive':
@@ -64,6 +67,8 @@ function inputBodyIds(feature: FeatureNode): BodyId[] {
     case 'imported-mesh':
     case 'datum-plane':
     case 'datum-axis':
+    case 'datum-point':
+    case 'datum-csys':
       return [];
   }
 }

@@ -404,12 +404,22 @@ export function featureValueSummary(
       return length(data.thickness);
     case 'solid-offset':
       return length(data.distance);
+    case 'rib':
+      return `${length(data.thickness) ?? '?'} ${data.direction === 'normal' ? 'along normal' : 'in plane'}`;
+    case 'wrap':
+      return `${data.mode} ${length(data.depth) ?? '?'}`;
     case 'datum-plane': {
       const flip = data.definition.reverseNormal ? ' flipped' : '';
       if (data.definition.kind === 'midplane') return `midplane${flip}`;
       if (data.definition.kind === 'three-point') return `3 points${flip}`;
       if (data.definition.kind === 'parallel-point')
         return `through point${flip}`;
+      if (data.definition.kind === 'normal-to-edge')
+        return `square to edge${flip}`;
+      if (data.definition.kind === 'edge-angle') {
+        const angle = evalParamValue(data.definition.angleDeg, scope);
+        return `${angle === null ? String(data.definition.angleDeg) : formatNumber(angle)}° to edge${flip}`;
+      }
       // A length, so a unit-bearing offset ("1 in") still summarises.
       const offset = lengthValue(data.definition.offset);
       return offset === null ? null : `${offset} ${unit}${flip}`;
@@ -421,10 +431,25 @@ export function featureValueSummary(
           'two-point': '2 points',
           edge: 'along edge',
           cylinder: 'cylinder axis',
-          'plane-intersection': 'planes meet'
+          'plane-intersection': 'planes meet',
+          'csys-axis': `${data.definition.kind === 'csys-axis' ? data.definition.axis : ''} axis`,
+          'face-normal': 'square to face'
         }[data.definition.kind]
       }${reversed}`;
     }
+    case 'datum-point':
+      return {
+        offset: 'at point',
+        'edge-midpoint': 'edge midpoint',
+        'arc-center': 'arc centre',
+        'axis-plane': 'axis meets plane'
+      }[data.definition.kind];
+    case 'datum-csys':
+      return {
+        'three-point': '3 points',
+        plane: 'on plane',
+        placement: 'placed'
+      }[data.definition.kind];
     case 'draft': {
       const angle = num(data.angleDeg);
       return angle === null ? null : `${angle}°`;

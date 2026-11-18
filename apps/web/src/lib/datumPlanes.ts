@@ -14,10 +14,19 @@ import {
   datumAxisSourceBodyIds,
   datumPlaneSources,
   datumSourceBodyIds,
+  datumCsysPlaneSources,
+  datumCsysSourceBodyIds,
+  datumPointDefinitionPlaneSources,
+  datumPointSourceBodyIds,
+  featureDatumAxisRefs,
+  featureDatumCsysRefs,
+  featureDatumPointRefs,
   isFeatureSuppressed,
   type BodyId,
+  type DatumAxisEdgeSource,
   type DatumPlaneDefinition,
   type DatumPlaneSource,
+  type DatumPointRef,
   type DatumPointSource,
   type EdgeVertexPointSource,
   type FacePlaneSource,
@@ -57,7 +66,8 @@ export type DatumPlaneMode = DatumPlaneDefinition['kind'];
  * as three expressions (lengths in document units).
  */
 export type DatumPointDraft =
-  | { type: 'vertex'; source: EdgeVertexPointSource }
+  /** A model vertex, or (schema v99) an earlier datum point. */
+  | { type: 'vertex'; source: EdgeVertexPointSource | DatumPointRef }
   | { type: 'typed'; x: string; y: string; z: string };
 
 export type DatumPointDrafts = [
@@ -84,19 +94,34 @@ export interface DatumPlaneFormState {
    */
   points: DatumPointDrafts;
   reverseNormal: boolean;
+  /**
+   * Schema v108: the edge a plane stands square to, or turns about. Picked
+   * in place; a reopened card keeps the stored one.
+   */
+  edge?: DatumAxisEdgeSource | null;
+  /** Square to an edge: at a fraction along it, or through the first point. */
+  edgeAt?: 'fraction' | 'point';
+  /** The fraction along the edge from its end 0, as typed. */
+  position?: string;
+  /** The angle about the edge from the plane parallel to source A, as typed. */
+  angle?: string;
 }
 
 /** A vertex the card can offer for a point slot. */
 export interface DatumPointOption {
   key: string;
   label: string;
-  source: EdgeVertexPointSource;
+  source: EdgeVertexPointSource | DatumPointRef;
 }
 
 const NO_POINTS: DatumPointDrafts = [null, null, null];
 
 /** A stable identity for a vertex source, so a select can hold it. */
-export function datumVertexKey(source: EdgeVertexPointSource): string {
+export function datumVertexKey(
+  source: EdgeVertexPointSource | DatumPointRef
+): string {
+  if (source.type === 'datum-point')
+    return `datum-point:${source.datumFeatureId}`;
   const { producingFeatureId, lineageName } = source.edgeReference;
   return `vertex:${source.bodyId}:${producingFeatureId}:${lineageName}:${source.end}`;
 }
@@ -176,9 +201,16 @@ export function datumVertexFromEdgePick(
 /** The option for a vertex source, labelled with where it is. */
 export function datumVertexOption(
   document: ProjectDocument,
-  source: EdgeVertexPointSource,
+  source: EdgeVertexPointSource | DatumPointRef,
   label = 'Vertex'
 ): DatumPointOption {
+  if (source.type === 'datum-point') {
+    return {
+      key: datumVertexKey(source),
+      label: datumPointLabel(document, source),
+      source
+    };
+  }
   const end = edgeEnds(source.edgeReference.witness)?.[source.end];
   const body = ownEntry(
     document.derived.bodyRepresentations,
@@ -193,7 +225,7 @@ export function datumVertexOption(
 
 /** The draft a stored point source reopens as. */
 function pointDraft(source: DatumPointSource): DatumPointDraft {
-  return source.type === 'edge-vertex'
+  return source.type !== 'point'
     ? { type: 'vertex', source }
     : {
         type: 'typed',
@@ -228,6 +260,12 @@ export function datumPointLabel(
     const body = ownEntry(document.derived.bodyRepresentations, source.bodyId);
     return `a vertex of ${body?.name ?? 'a missing body'}`;
   }
+  if (source.type === 'datum-point') {
+    const point = listFeaturesInOrder(document).find(
+      (feature) => feature.featureId === source.datumFeatureId
+    );
+    return point ? `point "${point.name}"` : 'a missing datum point';
+  }
   const axis = (value: string | number) => {
     const resolved = evalParamValue(value, scope, {
       documentUnits: units,
@@ -255,7 +293,34 @@ export function datumSourceKey(source: DatumPlaneSource): string {
       return `datum:${source.datumFeatureId}`;
     case 'face':
       return `face:${source.bodyId}:${source.faceHash}`;
+    case 'datum-csys':
+      return `datum-csys:${source.datumFeatureId}:${source.plane}`;
   }
+}
+
+/**
+ * R01 (schema v99): the datum points defined before `beforeFeatureId` (all
+ * of them for a new feature), as point-slot options.
+ */
+export function datumPointOptions(
+  document: ProjectDocument,
+  beforeFeatureId: FeatureId | null
+): DatumPointOption[] {
+  const options: DatumPointOption[] = [];
+  for (const feature of listFeaturesInOrder(document)) {
+    if (feature.featureId === beforeFeatureId) break;
+    if (feature.data.featureKind !== 'datum-point') continue;
+    const source: DatumPointRef = {
+      type: 'datum-point',
+      datumFeatureId: feature.featureId
+    };
+    options.push({
+      key: datumVertexKey(source),
+      label: `Point "${feature.name}"`,
+      source
+    });
+  }
+  return options;
 }
 
 function datumFeature(
@@ -287,6 +352,12 @@ export function datumSourceLabel(
         source.bodyId
       );
       return `a face of ${body?.name ?? 'a missing body'}`;
+    }
+    case 'datum-csys': {
+      const system = listFeaturesInOrder(document).find(
+        (feature) => feature.featureId === source.datumFeatureId
+      );
+      return `the ${source.plane} plane of ${system ? `"${system.name}"` : 'a missing coordinate system'}`;
     }
   }
 }
@@ -390,6 +461,27 @@ export function datumFormStateFromFeature(
         sourceA: definition.source,
         points: [pointDraft(definition.point), null, null]
       };
+    case 'normal-to-edge':
+      return 'point' in definition.at
+        ? {
+            ...base,
+            edge: definition.edge,
+            edgeAt: 'point',
+            points: [pointDraft(definition.at.point), null, null]
+          }
+        : {
+            ...base,
+            edge: definition.edge,
+            edgeAt: 'fraction',
+            position: String(definition.at.fraction)
+          };
+    case 'edge-angle':
+      return {
+        ...base,
+        edge: definition.edge,
+        sourceA: definition.reference,
+        angle: String(definition.angleDeg)
+      };
   }
 }
 
@@ -445,6 +537,56 @@ export function datumFormValidation(
 ): { kind: 'missing' | 'invalid'; reason: string } | null {
   if (!state.name.trim()) {
     return { kind: 'invalid', reason: 'Name the plane.' };
+  }
+  if (state.mode === 'normal-to-edge' || state.mode === 'edge-angle') {
+    if (!state.edge) {
+      return {
+        kind: 'missing',
+        reason: 'Pick the edge with the Plane tool in the viewport.'
+      };
+    }
+    if (state.mode === 'normal-to-edge') {
+      if (state.edgeAt === 'point')
+        return pointValidation(state.points[0], 'through', scope, units);
+      const preview = previewExpression(state.position ?? '', scope);
+      if (!preview.ok || preview.value === undefined) {
+        return {
+          kind: 'invalid',
+          reason:
+            preview.text === 'required'
+              ? 'Enter a position along the edge.'
+              : `Position: ${preview.text}`
+        };
+      }
+      if (!(preview.value >= 0 && preview.value <= 1)) {
+        return {
+          kind: 'invalid',
+          reason: 'The position is a fraction of the edge, from 0 to 1.'
+        };
+      }
+      return null;
+    }
+    if (!state.sourceA) {
+      return {
+        kind: 'missing',
+        reason: 'Choose the plane the angle is measured from.'
+      };
+    }
+    const preview = previewExpression(
+      state.angle ?? '',
+      scope,
+      units ? { documentUnits: units, dimension: 'angle' } : undefined
+    );
+    if (!preview.ok || preview.value === undefined) {
+      return {
+        kind: 'invalid',
+        reason:
+          preview.text === 'required'
+            ? 'Enter an angle.'
+            : `Angle: ${preview.text}`
+      };
+    }
+    return null;
   }
   if (state.mode === 'three-point') {
     for (let index = 0; index < 3; index += 1) {
@@ -511,6 +653,39 @@ export function buildDatumPlaneDefinition(
   state: DatumPlaneFormState
 ): DatumPlaneDefinition {
   const reverse = state.reverseNormal ? { reverseNormal: true } : {};
+  if (state.mode === 'normal-to-edge') {
+    if (!state.edge)
+      throw new Error('A plane square to an edge needs the edge.');
+    if (state.edgeAt === 'point') {
+      if (!state.points[0])
+        throw new Error('A plane square to an edge through a point needs it.');
+      return {
+        kind: 'normal-to-edge',
+        edge: state.edge,
+        at: { point: pointSource(state.points[0]) },
+        ...reverse
+      };
+    }
+    return {
+      kind: 'normal-to-edge',
+      edge: state.edge,
+      at: { fraction: coerceParamValue((state.position ?? '0.5').trim()) },
+      ...reverse
+    };
+  }
+  if (state.mode === 'edge-angle') {
+    if (!state.edge || !state.sourceA)
+      throw new Error(
+        'A plane through an edge at an angle needs the edge and a plane.'
+      );
+    return {
+      kind: 'edge-angle',
+      edge: state.edge,
+      reference: state.sourceA,
+      angleDeg: coerceParamValue((state.angle ?? '0').trim()),
+      ...reverse
+    };
+  }
   if (state.mode === 'three-point') {
     if (state.points.some((point) => !point))
       throw new Error('A three-point plane needs three points.');
@@ -576,6 +751,26 @@ export function datumPlaneDescription(
     const [a, b] = definition.sources;
     return `Midway between ${datumSourceLabel(document, a)} and ${datumSourceLabel(document, b)}${flipped}`;
   }
+  if (definition.kind === 'normal-to-edge') {
+    const edge = datumEdgeSourceLabel(document, definition.edge);
+    if ('point' in definition.at)
+      return `Square to ${edge} through ${datumPointLabel(document, definition.at.point, scope, units)}${flipped}`;
+    const fraction = evalParamValue(definition.at.fraction, scope);
+    const at =
+      fraction === null
+        ? String(definition.at.fraction)
+        : `${formatNumber(fraction * 100)}%`;
+    return `Square to ${edge}, ${at} along it${flipped}`;
+  }
+  if (definition.kind === 'edge-angle') {
+    const angle = evalParamValue(definition.angleDeg, scope, {
+      documentUnits: units,
+      dimension: 'angle'
+    });
+    const turned =
+      angle === null ? String(definition.angleDeg) : `${formatNumber(angle)}°`;
+    return `Through ${datumEdgeSourceLabel(document, definition.edge)} at ${turned} to ${datumSourceLabel(document, definition.reference)}${flipped}`;
+  }
   const value = evalParamValue(definition.offset, scope, {
     documentUnits: units,
     dimension: 'length'
@@ -585,6 +780,16 @@ export function datumPlaneDescription(
       ? String(definition.offset)
       : `${formatNumber(value)} ${units === 'inch' ? 'in' : units}`;
   return `${distance} from ${datumSourceLabel(document, definition.source)}${flipped}`;
+}
+
+/** Schema v108: an edge source in words, by its body. */
+export function datumEdgeSourceLabel(
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource
+): string {
+  const body = ownEntry(document.derived.bodyRepresentations, source.bodyId);
+  const curve = source.edgeReference.witness.curveType.toLowerCase();
+  return `${curve === 'line' ? 'an edge' : `a ${curve} edge`} of ${body?.name ?? 'a missing body'}`;
 }
 
 export interface DatumPlaneRow {
@@ -677,12 +882,16 @@ export function datumPlaneCommand(
  * no body to prove it built, so its published frame is the proof. A failure
  * the build attributed to it is reported in the build's own words.
  */
+/** R01: every kind of datum feature. */
+export type DatumFeatureKind =
+  'datum-plane' | 'datum-axis' | 'datum-point' | 'datum-csys';
+
 export function requireResolvedDatum(
   derived: ProjectDocument['derived'],
   featureId: FeatureId,
   name: string,
-  /** R01 axes publish a line, not a frame. */
-  kind: 'datum-plane' | 'datum-axis' = 'datum-plane'
+  /** R01 axes publish a line, points a position, systems a frame. */
+  kind: DatumFeatureKind = 'datum-plane'
 ): void {
   const failure = derived.featureWarnings?.find(
     (warning) =>
@@ -693,6 +902,18 @@ export function requireResolvedDatum(
   if (kind === 'datum-axis') {
     if (!derived.datumAxes?.[featureId]) {
       throw new Error(`${name} did not resolve to an axis.`);
+    }
+    return;
+  }
+  if (kind === 'datum-point') {
+    if (!derived.datumPoints?.[featureId]) {
+      throw new Error(`${name} did not resolve to a point.`);
+    }
+    return;
+  }
+  if (kind === 'datum-csys') {
+    if (!derived.datumCsys?.[featureId]) {
+      throw new Error(`${name} did not resolve to a coordinate system.`);
     }
     return;
   }
@@ -727,24 +948,41 @@ export function downstreamDatumIds(
     }
     if (!after) continue;
     const data = feature.data;
-    const planeSources =
-      data.featureKind === 'datum-plane'
-        ? datumPlaneSources(data.definition)
-        : data.featureKind === 'datum-axis'
-          ? datumAxisPlaneSources(data.definition)
-          : null;
-    if (!planeSources) continue;
-    const bodyIds =
-      data.featureKind === 'datum-plane'
-        ? datumSourceBodyIds(data.definition)
-        : data.featureKind === 'datum-axis'
-          ? datumAxisSourceBodyIds(data.definition)
-          : [];
+    let planeSources: DatumPlaneSource[];
+    let bodyIds: BodyId[];
+    switch (data.featureKind) {
+      case 'datum-plane':
+        planeSources = datumPlaneSources(data.definition);
+        bodyIds = datumSourceBodyIds(data.definition);
+        break;
+      case 'datum-axis':
+        planeSources = datumAxisPlaneSources(data.definition);
+        bodyIds = datumAxisSourceBodyIds(data.definition);
+        break;
+      case 'datum-point':
+        planeSources = datumPointDefinitionPlaneSources(data.definition);
+        bodyIds = datumPointSourceBodyIds(data.definition);
+        break;
+      case 'datum-csys':
+        planeSources = datumCsysPlaneSources(data.definition);
+        bodyIds = datumCsysSourceBodyIds(data.definition);
+        break;
+      default:
+        continue;
+    }
+    // Points, systems and axes read by reference move with them too.
+    const refs = [
+      ...featureDatumPointRefs(data),
+      ...featureDatumCsysRefs(data),
+      ...featureDatumAxisRefs(data).map((ref) => ref.datumFeatureId)
+    ];
     if (
       planeSources.some(
         (source) =>
-          source.type === 'datum' && affected.has(source.datumFeatureId)
+          (source.type === 'datum' || source.type === 'datum-csys') &&
+          affected.has(source.datumFeatureId)
       ) ||
+      refs.some((id) => affected.has(id)) ||
       bodyIds.some((bodyId) => affected.has(bodyId))
     ) {
       affected.add(feature.featureId);
@@ -765,16 +1003,26 @@ export function requireResolvedDatums(
   featureId: FeatureId,
   name: string,
   /** What `featureId` is; read from `before` when absent (a new datum is not there). */
-  kind?: 'datum-plane' | 'datum-axis'
+  kind?: DatumFeatureKind
 ): void {
-  const kindOf = (id: FeatureId) =>
-    listFeaturesInOrder(before).find((feature) => feature.featureId === id)
-      ?.data.featureKind === 'datum-axis'
-      ? ('datum-axis' as const)
-      : ('datum-plane' as const);
+  const kindOf = (id: FeatureId): DatumFeatureKind => {
+    const featureKind = listFeaturesInOrder(before).find(
+      (feature) => feature.featureId === id
+    )?.data.featureKind;
+    return featureKind === 'datum-axis' ||
+      featureKind === 'datum-point' ||
+      featureKind === 'datum-csys'
+      ? featureKind
+      : 'datum-plane';
+  };
   requireResolvedDatum(derived, featureId, name, kind ?? kindOf(featureId));
   for (const id of downstreamDatumIds(before, featureId)) {
-    if (!before.derived.datumFrames?.[id] && !before.derived.datumAxes?.[id])
+    if (
+      !before.derived.datumFrames?.[id] &&
+      !before.derived.datumAxes?.[id] &&
+      !before.derived.datumPoints?.[id] &&
+      !before.derived.datumCsys?.[id]
+    )
       continue;
     const datum = listFeaturesInOrder(before).find(
       (feature) => feature.featureId === id
@@ -826,6 +1074,80 @@ export function datumFaceSourceFromPick(
   return ref as FacePlaneSource;
 }
 
+/**
+ * Schema v108: the edit that re-attaches a plane square to an edge, or turned
+ * about one, to the edge picked now. Only the edge changes. A plane at an
+ * angle needs a straight edge; the edge must be open and carry an identity a
+ * rebuild can find again.
+ */
+export function datumPlaneEdgeRepairEdit(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  selection: TopologySelection
+): {
+  command: AnyCommand;
+  label: string;
+  validateDerived(derived: ProjectDocument['derived']): void;
+} {
+  const feature = listFeaturesInOrder(document).find(
+    (candidate) => candidate.featureId === featureId
+  );
+  if (
+    feature?.data.featureKind !== 'datum-plane' ||
+    (feature.data.definition.kind !== 'normal-to-edge' &&
+      feature.data.definition.kind !== 'edge-angle')
+  ) {
+    throw new Error('Only a plane on an edge can have its edge re-picked.');
+  }
+  if (selection.kind !== 'edge') {
+    throw new Error(`Click an edge for "${feature.name}".`);
+  }
+  const reference = ownEntry(
+    document.derived.bodyRepresentations,
+    selection.bodyId
+  )?.topology?.edges.find(
+    (candidate) => candidate.hash === selection.hash
+  )?.reference;
+  if (!reference) {
+    throw new Error(
+      'This edge has no identity a rebuild can find again, so a plane cannot follow it.'
+    );
+  }
+  if (reference.witness.closed) {
+    throw new Error(
+      'A plane on an edge needs an open edge; this one is closed.'
+    );
+  }
+  const { definition } = feature.data;
+  const straight = /^line$/i.test(reference.witness.curveType);
+  const needsStraight =
+    definition.kind === 'edge-angle' || 'point' in definition.at;
+  if (needsStraight && !straight) {
+    throw new Error(
+      `"${feature.name}" needs a straight edge; this edge is curved.`
+    );
+  }
+  const edge = {
+    type: 'edge' as const,
+    bodyId: selection.bodyId,
+    edgeReference: reference
+  };
+  const repaired: DatumPlaneDefinition = { ...definition, edge };
+  const label = `Re-pick edge for ${feature.name}`;
+  return {
+    label,
+    command: commandFactories.updateFeature(
+      {
+        featureId,
+        data: { featureKind: 'datum-plane', definition: repaired }
+      },
+      label
+    ),
+    validateDerived: (derived) =>
+      requireResolvedDatums(document, derived, featureId, feature.name)
+  };
+}
+
 export function datumFaceRepairEdit(
   document: ProjectDocument,
   featureId: FeatureId,
@@ -848,6 +1170,7 @@ export function datumFaceRepairEdit(
   if (
     feature?.data.featureKind !== 'datum-plane' ||
     feature.data.definition.kind === 'three-point' ||
+    feature.data.definition.kind === 'normal-to-edge' ||
     (feature.data.definition.kind !== 'midplane' &&
       (slot !== 0 || otherSelection !== undefined))
   ) {
@@ -860,15 +1183,19 @@ export function datumFaceRepairEdit(
   const label = `Re-pick face for ${feature.name}`;
   const { definition } = feature.data;
   const repaired: DatumPlaneDefinition =
-    definition.kind !== 'midplane'
-      ? { ...definition, source }
-      : {
-          ...definition,
-          sources:
-            slot === 0
-              ? [source, other ?? definition.sources[1]]
-              : [other ?? definition.sources[0], source]
-        };
+    definition.kind === 'edge-angle'
+      ? { ...definition, reference: source }
+      : definition.kind === 'offset' || definition.kind === 'parallel-point'
+        ? { ...definition, source }
+        : definition.kind !== 'midplane'
+          ? definition
+          : {
+              ...definition,
+              sources:
+                slot === 0
+                  ? [source, other ?? definition.sources[1]]
+                  : [other ?? definition.sources[0], source]
+            };
   return {
     label,
     command: commandFactories.updateFeature(

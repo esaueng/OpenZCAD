@@ -142,6 +142,8 @@ export function createProjectDiagnosticBundle(
         !command.kind.startsWith('drawing.') &&
         !command.kind.startsWith('objectFolder.') &&
         !command.kind.startsWith('reference-image.') &&
+        // D07 PMI is annotation, which no rebuild reads.
+        !command.kind.startsWith('pmi.') &&
         // Assembly component, joint and study names are the user's words,
         // and no rebuild reads the assembly.
         !command.kind.startsWith('assembly.') &&
@@ -171,6 +173,7 @@ export function createProjectDiagnosticBundle(
   // Folder names are the user's own words and no rebuild reads them.
   delete diagnosticDocument.objectFolders;
   delete diagnosticDocument.referenceImages;
+  delete diagnosticDocument.pmi;
   // Component and joint names are the user's own words; no rebuild reads them.
   delete diagnosticDocument.assembly;
   // F06: row names are the user's words; the table itself stays, since the

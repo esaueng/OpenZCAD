@@ -82,7 +82,26 @@ export function sheetTextStart(text: SheetText): { x: number; y: number } {
 }
 
 /** One SVG user unit is one paper millimetre; y is flipped to SVG's down. */
-export function sheetPageToSvg(page: SheetPage, title: string): string {
+/** Why a page's picture cannot be written: its bytes are not at hand. */
+export class SheetPictureUnavailableError extends Error {
+  override name = 'SheetPictureUnavailableError';
+  constructor() {
+    super(
+      'A picture on this sheet is not available on this device yet; open it in Build once it has downloaded, then export.'
+    );
+  }
+}
+
+/**
+ * D02 (v92): `pictures` holds each page picture's bytes as a data URL, by
+ * checksum; a page with pictures and none at hand refuses rather than
+ * leaving a hole in the print.
+ */
+export function sheetPageToSvg(
+  page: SheetPage,
+  title: string,
+  pictures?: ReadonlyMap<string, string>
+): string {
   const h = page.heightMm;
   const lines: string[] = [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -92,6 +111,13 @@ export function sheetPageToSvg(page: SheetPage, title: string): string {
     `<title>${escapeXml(sheetSafeText(title))}</title>`,
     `<rect width="${num(page.widthMm)}" height="${num(h)}" fill="#ffffff"/>`
   ];
+  for (const image of page.images ?? []) {
+    const href = pictures?.get(image.checksumSha256);
+    if (!href) throw new SheetPictureUnavailableError();
+    lines.push(
+      `<image x="${num(image.x)}" y="${num(h - image.y - image.height)}" width="${num(image.width)}" height="${num(image.height)}" preserveAspectRatio="none" href="${escapeXml(href)}"/>`
+    );
+  }
   for (const kind of SHEET_STROKE_ORDER) {
     const strokes = page.strokes.filter((stroke) => stroke.kind === kind);
     if (strokes.length === 0) continue;
@@ -139,6 +165,55 @@ export function sheetPageToSvg(page: SheetPage, title: string): string {
 
 const PT_PER_MM = 72 / 25.4;
 
+/**
+ * D02 (v92): a JPEG's size and colour components, read from its first
+ * start-of-frame marker, so a PDF can carry the bytes as they are
+ * (DCTDecode). Refuses anything that is not a JPEG with a frame header.
+ */
+export function jpegInfo(bytes: Uint8Array): {
+  width: number;
+  height: number;
+  components: 1 | 3 | 4;
+} {
+  const refuse = () =>
+    new Error('A picture on this sheet is not a readable JPEG.');
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) throw refuse();
+  let at = 2;
+  while (at + 4 <= bytes.length) {
+    if (bytes[at] !== 0xff) throw refuse();
+    const marker = bytes[at + 1]!;
+    // Fill bytes before a marker.
+    if (marker === 0xff) {
+      at += 1;
+      continue;
+    }
+    const length = (bytes[at + 2]! << 8) | bytes[at + 3]!;
+    // Start of frame: any SOFn but DHT (C4), JPG (C8) and DAC (CC).
+    if (
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      marker !== 0xc4 &&
+      marker !== 0xc8 &&
+      marker !== 0xcc
+    ) {
+      if (at + 9 >= bytes.length) throw refuse();
+      const height = (bytes[at + 5]! << 8) | bytes[at + 6]!;
+      const width = (bytes[at + 7]! << 8) | bytes[at + 8]!;
+      const components = bytes[at + 9]!;
+      if (
+        width === 0 ||
+        height === 0 ||
+        (components !== 1 && components !== 3 && components !== 4)
+      )
+        throw refuse();
+      return { width, height, components };
+    }
+    if (marker === 0xd9 || marker === 0xda) break;
+    at += 2 + length;
+  }
+  throw refuse();
+}
+
 /** A PDF literal string for WinAnsi text: Latin-1 bytes, escaped. */
 function pdfString(text: string): string {
   let out = '(';
@@ -158,7 +233,12 @@ function pdfString(text: string): string {
  * the base-14 Helvetica faces with WinAnsi encoding (not embedded — every
  * reader supplies them). Coordinates convert from paper millimetres to points.
  */
-export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
+export function sheetPageToPdf(
+  page: SheetPage,
+  title: string,
+  /** D02 (v92): each page picture as baseline JPEG bytes, by checksum. */
+  pictures?: ReadonlyMap<string, Uint8Array>
+): Uint8Array {
   const pt = (mm: number) => num(mm * PT_PER_MM);
   // Clipped to the page: the composed page already drops what lies past the
   // paper, and this keeps any glyph that runs over its edge on it too.
@@ -166,6 +246,30 @@ export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
     `0 0 ${pt(page.widthMm)} ${pt(page.heightMm)} re W n`,
     '1 J 1 j 0 0 0 RG 0 0 0 rg'
   ];
+  // D02 (v92): pictures first, beneath the lines, each an image XObject
+  // drawn into its box (one object per distinct picture).
+  const xobjects: { name: string; object: string }[] = [];
+  const named = new Map<string, string>();
+  for (const image of page.images ?? []) {
+    const bytes = pictures?.get(image.checksumSha256);
+    if (!bytes) throw new SheetPictureUnavailableError();
+    let name = named.get(image.checksumSha256);
+    if (!name) {
+      const info = jpegInfo(bytes);
+      name = `Im${named.size + 1}`;
+      named.set(image.checksumSha256, name);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000)
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      xobjects.push({
+        name,
+        object: `<< /Type /XObject /Subtype /Image /Width ${info.width} /Height ${info.height} /ColorSpace /${info.components === 1 ? 'DeviceGray' : info.components === 4 ? 'DeviceCMYK' : 'DeviceRGB'} /BitsPerComponent 8 /Filter /DCTDecode${info.components === 4 ? ' /Decode [1 0 1 0 1 0 1 0]' : ''} /Length ${bytes.length} >>\nstream\n${binary}\nendstream`
+      });
+    }
+    content.push(
+      `q ${pt(image.width)} 0 0 ${pt(image.height)} ${pt(image.x)} ${pt(image.y)} cm /${name} Do Q`
+    );
+  }
   for (const kind of SHEET_STROKE_ORDER) {
     const strokes = page.strokes.filter((stroke) => stroke.kind === kind);
     if (strokes.length === 0) continue;
@@ -196,13 +300,18 @@ export function sheetPageToPdf(page: SheetPage, title: string): Uint8Array {
     );
   }
   const stream = content.join('\n');
+  // Pictures follow the fonts (objects 7…); the info dictionary stays last.
+  const pictureRefs = xobjects
+    .map((entry, index) => `/${entry.name} ${7 + index} 0 R`)
+    .join(' ');
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pt(page.widthMm)} ${pt(page.heightMm)}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>`,
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pt(page.widthMm)} ${pt(page.heightMm)}] /Resources << /Font << /F1 5 0 R /F2 6 0 R >>${pictureRefs ? ` /XObject << ${pictureRefs} >>` : ''} >> /Contents 4 0 R >>`,
     `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
+    ...xobjects.map((entry) => entry.object),
     `<< /Title ${pdfString(sheetSafeText(title))} /Producer (OpenZCAD) >>`
   ];
   // Every character is one Latin-1 byte (strings escape the rest), so byte

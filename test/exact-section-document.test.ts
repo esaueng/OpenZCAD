@@ -12,6 +12,11 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { buildDemoDocument, DEMO_DEFINITIONS } from '../apps/web/src/lib/demos';
+import {
+  describeSectionOutline,
+  sectionOutlineFromReport
+} from '../apps/web/src/lib/sectionOutline';
 
 /**
  * The document-level exact section: what the app asks for when the section
@@ -165,6 +170,12 @@ describe('sectionOutline', () => {
     const region = report.regions[0]!;
     expect(region.area).toBeGreaterThan(180);
     expect(region.area).toBeLessThan(200);
+    // The verdict on the boundary crosses out of the build with the region:
+    // the bore is chords here, and the report says so.
+    expect(region.boundary).toBe('approximate');
+    // A verdict only: no figure for how far off the polygon is.
+    expect(region).not.toHaveProperty('boundaryDeviation');
+    expect(region).not.toHaveProperty('areaUncertainty');
     expect(region.loops.map((loop) => loop.kind)).toEqual(['outer', 'inner']);
     for (const loop of region.loops) {
       for (const point of loop.points) {
@@ -287,6 +298,57 @@ describe('sectionOutline', () => {
     expect(report.refusals).toHaveLength(1);
     expect(report.refusals[0]!.reason).toBe('plane-misses-body');
   }, 120_000);
+});
+
+describe('the demo bracket cut at 4 mm (UX-013)', () => {
+  /**
+   * The cut the design review made: Mounting Bracket, Top (XY), 4 mm — the
+   * 80 x 40 base plate through its two radius-3 mounting holes. The rail
+   * said "Exact" and 3143.54 mm² over a DXF of 132 LINEs: each hole a
+   * 64-sided polygon, where the true area is 80*40 - 2*pi*3² = 3143.4513.
+   *
+   * Two outcomes are honest, and this holds whichever the paired kernel
+   * gives: the section keeps the holes as circles and reports the analytic
+   * area, or it says it is approximate. A polygon called exact is neither.
+   */
+  it('is exact only with circles and the analytic area', async () => {
+    const exact = await kernel();
+    const bracket = await buildDemoDocument(
+      DEMO_DEFINITIONS.find((candidate) => candidate.key === 'bracket')!,
+      toUserId('user_section'),
+      (candidate) => exact.syncDocument(candidate)
+    );
+    const cut = { origin: [0, 0, 4], normal: [0, 0, 1] } as const;
+
+    const report = await exact.sectionOutline(bracket, cut);
+    expect(report.refusals).toEqual([]);
+    expect(report.regions).toHaveLength(1);
+    const region = report.regions[0]!;
+    const analytic = 80 * 40 - 2 * Math.PI * 3 ** 2;
+    const areaError = Math.abs(region.area - analytic);
+
+    const drawn = groups(await exact.exportSectionDxf(bracket, cut))
+      .filter(([group]) => group === 0)
+      .map(([, value]) => value);
+    const count = (kind: string) =>
+      drawn.filter((value) => value === kind).length;
+    // The outline is four lines either way; the holes are what differ.
+    expect(count('LINE')).toBeGreaterThanOrEqual(4);
+    const analyticSection =
+      count('CIRCLE') === 2 &&
+      count('LINE') === 4 &&
+      areaError <= analytic * 1e-6;
+
+    const status = describeSectionOutline(
+      sectionOutlineFromReport(report),
+      bracket.units
+    );
+    expect(region.boundary).toBe(analyticSection ? 'exact' : 'approximate');
+    expect(status.kind).toBe(analyticSection ? 'exact' : 'approximate');
+    // An approximate area is quoted as "about", with no tolerance beside it.
+    expect(status.detail.startsWith('About ')).toBe(!analyticSection);
+    expect(status.detail).not.toMatch(/±|within/);
+  }, 240_000);
 });
 
 describe('exportSectionDxf', () => {

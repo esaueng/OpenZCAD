@@ -24,7 +24,9 @@ import type {
   EditAnalysisRequest,
   FaceGeometry,
   FaceTopologyReferenceV5,
+  CustomFeatureScript,
   FeatureId,
+  ParameterKind,
   PatternKind,
   ParametricPlane,
   ParametricVector3,
@@ -298,6 +300,48 @@ export type CadPatchOperation =
       kind: 'set_parameter';
       name: string;
       expression: string;
+      /**
+       * L15 history text only (the model's schema never offers it): the
+       * parameter's F05 quantity, `null` to clear it. Absent leaves it as is.
+       */
+      quantity?: ParameterKind | null;
+    }
+  | {
+      /**
+       * L15, app- and agent-compiled (never in the model's schema): a partial
+       * patch of one feature's stored data, compiled to `feature.update` and
+       * validated per kind by the command system. `clearData` removes
+       * optional keys (only `FEATURE_DATA_CLEARABLE_KEYS`).
+       */
+      kind: 'update_feature';
+      featureId: FeatureId;
+      data: Record<string, unknown>;
+      clearData: string[];
+    }
+  | {
+      /**
+       * L15, app- and agent-compiled: a custom feature on one body, running
+       * an embedded script pinned by its SHA-256 digest.
+       */
+      kind: 'add_custom_feature';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      script: CustomFeatureScript;
+      inputs: Record<string, ParamValue>;
+    }
+  | {
+      /** L15, app- and agent-compiled: `feature.reorder` to a 0-based index. */
+      kind: 'reorder_feature';
+      featureId: FeatureId;
+      toIndex: number;
+    }
+  | {
+      /** L15, app- and agent-compiled: replaces one sketch object's data. */
+      kind: 'update_sketch_object';
+      sketchId: SketchId;
+      objectId: string;
+      data: SketchObjectData;
     }
   | {
       kind: 'rename_parameter';
@@ -4563,7 +4607,12 @@ export function parseCadPatchProposal(
       case 'set_parameter':
         if (
           typeof operation.name !== 'string' ||
-          typeof operation.expression !== 'string'
+          typeof operation.expression !== 'string' ||
+          (operation.quantity !== undefined &&
+            operation.quantity !== null &&
+            operation.quantity !== 'length' &&
+            operation.quantity !== 'angle' &&
+            operation.quantity !== 'number')
         ) {
           throw new Error('Invalid set_parameter operation.');
         }
@@ -4629,6 +4678,59 @@ export function parseCadPatchProposal(
           typeof operation.name !== 'string'
         ) {
           throw new Error('Invalid rename_feature operation.');
+        }
+        break;
+      case 'update_feature':
+        if (
+          typeof operation.featureId !== 'string' ||
+          !operation.data ||
+          typeof operation.data !== 'object' ||
+          Array.isArray(operation.data) ||
+          'featureKind' in operation.data ||
+          !Array.isArray(operation.clearData) ||
+          !operation.clearData.every((key) => typeof key === 'string') ||
+          (Object.keys(operation.data).length === 0 &&
+            operation.clearData.length === 0)
+        ) {
+          throw new Error('Invalid update_feature operation.');
+        }
+        break;
+      case 'add_custom_feature': {
+        const script = record(operation.script);
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          typeof script.id !== 'string' ||
+          typeof script.version !== 'string' ||
+          script.api !== 1 ||
+          typeof script.source !== 'string' ||
+          typeof script.digest !== 'string' ||
+          !operation.inputs ||
+          typeof operation.inputs !== 'object' ||
+          Array.isArray(operation.inputs) ||
+          !Object.values(operation.inputs).every(isScalar)
+        ) {
+          throw new Error('Invalid add_custom_feature operation.');
+        }
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      }
+      case 'reorder_feature':
+        if (
+          typeof operation.featureId !== 'string' ||
+          !Number.isSafeInteger(operation.toIndex) ||
+          Number(operation.toIndex) < 0
+        ) {
+          throw new Error('Invalid reorder_feature operation.');
+        }
+        break;
+      case 'update_sketch_object':
+        if (
+          typeof operation.sketchId !== 'string' ||
+          typeof operation.objectId !== 'string' ||
+          !isSketchObjects([operation.data])
+        ) {
+          throw new Error('Invalid update_sketch_object operation.');
         }
         break;
       case 'add_sketch': {
@@ -6473,6 +6575,14 @@ export function describeCadPatchOperation(
       return `Create ${operation.primitiveKind} ${operation.name}`;
     case 'delete_feature':
       return `Delete feature ${operation.featureId}`;
+    case 'update_feature':
+      return `Edit ${[...Object.keys(operation.data), ...operation.clearData].join(', ')} on feature ${operation.featureId}`;
+    case 'reorder_feature':
+      return `Move feature ${operation.featureId} to step ${operation.toIndex + 1}`;
+    case 'add_custom_feature':
+      return `Create ${operation.name} from ${operation.script.id} ${operation.script.version}`;
+    case 'update_sketch_object':
+      return `Edit sketch object ${operation.objectId}`;
     case 'rename_feature':
       return `Rename feature ${operation.featureId} to ${operation.name}`;
     case 'add_sketch':

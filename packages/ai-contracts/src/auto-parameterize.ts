@@ -237,6 +237,9 @@ function suppressedScopeSource(feature: FeatureNode): BodyId | null {
     case 'chamfer':
     case 'pattern':
     case 'thread':
+    case 'rib':
+    case 'custom-feature':
+    case 'wrap':
       source = data.targetBodyId;
       break;
     case 'gear':
@@ -272,6 +275,8 @@ function suppressedScopeSource(feature: FeatureNode): BodyId | null {
     case 'imported-step':
     case 'datum-plane':
     case 'datum-axis':
+    case 'datum-point':
+    case 'datum-csys':
       return null;
     default:
       data satisfies never;
@@ -367,6 +372,14 @@ function featureScopeForBodies(
       case 'helical-sweep':
         neededSketches.add(data.profile.sketchId);
         break;
+      case 'rib':
+        neededSketches.add(data.profile.sketchId);
+        neededBodies.add(data.targetBodyId);
+        break;
+      case 'wrap':
+        neededSketches.add(data.sketchId);
+        neededBodies.add(data.targetBodyId);
+        break;
       case 'gear':
         if (data.targetBodyId !== undefined)
           neededBodies.add(data.targetBodyId);
@@ -387,6 +400,7 @@ function featureScopeForBodies(
       case 'chamfer':
       case 'pattern':
       case 'direct-edit':
+      case 'custom-feature':
         neededBodies.add(data.targetBodyId);
         break;
       case 'primitive':
@@ -395,6 +409,8 @@ function featureScopeForBodies(
       case 'imported-mesh':
       case 'datum-plane':
       case 'datum-axis':
+      case 'datum-point':
+      case 'datum-csys':
         // A datum consumes no body; its own dimensions are not proposed yet.
         break;
       default:
@@ -662,6 +678,9 @@ function nativeCandidates(
       case 'gear':
       case 'thread':
       case 'standard-part':
+      case 'rib':
+      case 'custom-feature':
+      case 'wrap':
         // In scope so the walk reaches the bodies they consume, but their
         // own dimensions are not proposed yet, like the group above.
         break;
@@ -671,6 +690,8 @@ function nativeCandidates(
       case 'imported-mesh':
       case 'datum-plane':
       case 'datum-axis':
+      case 'datum-point':
+      case 'datum-csys':
         break;
       default:
         data satisfies never;

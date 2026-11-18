@@ -64,13 +64,13 @@ const CHECK = process.argv.includes('--check');
 // a few more KB of App wiring. Export diagnostics now loads on its gesture
 // beside it. The tripwire stays a tripwire.
 //
-// 2026-11-17: raised by 8 KiB at the maintainer's direction. Main sat a few
-// hundred bytes under the edge, and steadying the reload, open and
-// return-home transitions (account listing pending state, unreachable account
-// copies kept offline, viewport warm-up on open) adds under 1 KB of App
-// wiring. The tripwire stays a tripwire: the next raise should come with a
-// split.
-const DEFAULT_RAW_BUDGET = (1024 + 32) * 1024;
+// 2026-11-17: raised by 24 KiB at the maintainer's direction for the R01,
+// M06 and M12 modeling features. Main stood at 1,073,121 bytes, 31 under the
+// edge; datum points and coordinate systems add about 4.8 KB of in-place tool
+// and App wiring, and the rib and wrap tools follow with a few KB each. The
+// remaining large entry code is the in-place tool system, which App reads
+// synchronously. The tripwire stays a tripwire.
+const DEFAULT_RAW_BUDGET = (1024 + 48) * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/three-.*\.js$/,
@@ -91,8 +91,13 @@ const APPROVED_LAZY_ASSETS = [
     reason: 'Exact geometry kernel, loaded only for non-empty geometry'
   },
   {
+    // 2026-11-17: raised from 4 MiB to 4.5 MiB at the maintainer's
+    // direction. Remus 2026.1.147 is 4,227,738 bytes: the STEP product
+    // structure reader (I02) and the exact IGES B-rep reader and writer (I06)
+    // took it 32 KiB past 4 MiB. It is still fetched only around an import
+    // or export, never at start-up.
     pattern: TRANSLATOR_WASM_ASSET_PATTERN,
-    maxBytes: 4 * 1024 * 1024,
+    maxBytes: 4.5 * 1024 * 1024,
     reason:
       'Remus file-format translators, loaded only around an import or export'
   },

@@ -634,7 +634,8 @@
   max-height: min(80vh, 640px);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(240px, 1fr);
+  grid-auto-rows: auto;
   gap: var(--sp-3);
   padding: var(--sp-4);
   color: var(--color-text);
@@ -742,6 +743,121 @@
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
+}
+
+/* ── L15 history as text (HistoryTextDialog) ── */
+.history-text-dialog {
+  width: min(760px, 100%);
+  max-height: calc(88vh - 16px);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.history-text-dialog h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+
+.history-text-dialog p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.history-text-dialog .history-text-error {
+  color: var(--color-error-text);
+}
+
+.history-text-body {
+  width: 100%;
+  min-height: 0;
+  height: 100%;
+  resize: none;
+  margin: 0;
+  padding: var(--sp-3);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.history-text-stale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-md);
+}
+
+.history-text-diagnostics,
+.history-text-changes {
+  max-height: 160px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font-size: var(--fs-sm);
+}
+
+.history-text-diagnostics li {
+  display: flex;
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: 2px 0;
+  color: var(--color-error-text);
+}
+
+.history-text-diagnostics li[data-severity='warning'] {
+  color: var(--color-text-muted);
+}
+
+.history-text-diagnostics button {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  color: inherit;
+  text-decoration: underline;
+}
+
+.history-text-changes li {
+  padding: 2px 0;
+  color: var(--color-text-muted);
+}
+
+.history-text-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.history-text-status {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
 }
 
 /* ── Delete or suppress a feature other features build on ── */
@@ -1607,6 +1723,25 @@
   line-height: 1.4;
 }
 
+/* L08: the drawing sheets share links show. */
+.share-link-drawings-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-link-drawings-sheet {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 28px;
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
 .sharing-hint {
   margin: 0;
   color: var(--color-text-muted);
@@ -1770,8 +1905,12 @@
   list-style: none;
 }
 
+/* A row wraps its buttons onto a second line rather than squeeze its text to
+   nothing: an encrypted share link's Allow comments, Copy and Revoke leave no
+   room for the name and expiry in a 390px dialog. */
 .sharing-list > li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   min-height: 32px;
@@ -1830,7 +1969,7 @@
 }
 
 .sharing-row-text {
-  flex: 1;
+  flex: 1 1 8rem;
   min-width: 0;
   display: grid;
 }

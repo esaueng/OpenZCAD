@@ -153,3 +153,37 @@
     display: none;
   }
 }
+
+/* A narrow window with a mouse or trackpad (UX-002). phone-stage.css places
+   the card between the rails for touch only, so a fine pointer kept the
+   296px card at the lane's corner (116px): 92px off a 320px window and 22px
+   off a 390px one, its text, Next and Skip cut. It takes the stage between
+   the two rails as touch does, at its own height. Kept here rather than in
+   phone-stage.css, which is reserved for upright touch phones. */
+@media (pointer: fine) and (max-width: 520px) {
+  .workspace.column-layout .workspace-tour {
+    left: calc(var(--column-w) + var(--island-gap) * 2);
+    right: var(--lane-end);
+    width: auto;
+    max-width: none;
+  }
+
+  /* That stage is the phone panel lane too (quiet-stage.css), and at the
+     same layer the open panel stood over the card: Objects took the
+     minimized guide's Expand. The panel ends above the card instead, by
+     the height the card publishes (useStageFootClaim), expanded or
+     minimized, so neither covers the other. The selector outranks the
+     lane's own rule, which loads later. */
+  .viewer-area:has(.workspace-tour) .stage-right:has(> .panel-lane-float) {
+    --tour-lane-bottom: max(
+      calc(var(--lane-base) + 40px),
+      calc(var(--workspace-tour-claim, 0px) + var(--island-gap))
+    );
+
+    bottom: var(--tour-lane-bottom);
+    max-height: min(
+      40dvh,
+      calc(100% - var(--stage-top) - var(--tour-lane-bottom))
+    );
+  }
+}

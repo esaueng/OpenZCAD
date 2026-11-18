@@ -43,6 +43,7 @@ const DIFFERENCE_LABELS: Record<ProjectWorkDifference, string> = {
   referenceImages: 'the reference images',
   objectFolders: 'the object folders',
   assembly: 'the assembly',
+  pmi: 'the model’s tolerancing (PMI)',
   edits: 'the edit history',
   savePoints: 'the save points',
   undoHistory: 'the undo history',

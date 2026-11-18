@@ -8,6 +8,10 @@ import type {
 import {
   datumAxisPlaneSources,
   datumAxisPointSources,
+  datumCsysPlaneSources,
+  datumCsysPointSources,
+  datumPointDefinitionPlaneSources,
+  datumPointDefinitionPointSources,
   datumPlaneSources,
   datumPointSources
 } from '@openzcad/shared';
@@ -144,6 +148,10 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       const definition = data.definition;
       if (definition.kind === 'offset')
         fields(definition, ['offset'], rewrite, 'length');
+      if (definition.kind === 'edge-angle')
+        fields(definition, ['angleDeg'], rewrite, 'angle');
+      if (definition.kind === 'normal-to-edge' && 'fraction' in definition.at)
+        fields(definition.at, ['fraction'], rewrite, null);
       for (const source of datumPlaneSources(definition))
         if (source.type === 'canonical')
           fields(source, ['offset'], rewrite, 'length');
@@ -262,6 +270,13 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
     case 'thicken':
       fields(data, ['thickness'], rewrite, 'length');
       return;
+    case 'rib':
+      fields(data, ['thickness'], rewrite, 'length');
+      return;
+    case 'wrap':
+      fields(data, ['depth', 'axialOffset'], rewrite, 'length');
+      fields(data, ['rotationDeg'], rewrite, 'angle');
+      return;
     case 'solid-offset':
       fields(data, ['distance'], rewrite, 'length');
       return;
@@ -293,11 +308,38 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       for (const point of datumAxisPointSources(data.definition))
         if (point.type === 'point') vector(point.point, rewrite, 'length');
       return;
+    case 'datum-point': {
+      const definition = data.definition;
+      if (definition.kind === 'offset')
+        vector(definition.offset, rewrite, 'length');
+      for (const source of datumPointDefinitionPlaneSources(definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumPointDefinitionPointSources(definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
+      return;
+    }
+    case 'datum-csys': {
+      const definition = data.definition;
+      if (definition.kind === 'placement')
+        vector(definition.rotationDeg, rewrite, 'angle');
+      for (const source of datumCsysPlaneSources(definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumCsysPointSources(definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
+      return;
+    }
     case 'standard-part':
       fields(data, ['length'], rewrite, 'length');
       vector(data.origin, rewrite, 'length');
       vector(data.axis, rewrite, null);
       vector(data.xDirection, rewrite, null);
+      return;
+    case 'custom-feature':
+      // L15: each input is an expression; its quantity is the script's to
+      // declare, and the build checks it against that.
+      fields(data.inputs, Object.keys(data.inputs), rewrite, null);
       return;
     case 'sketch':
     case 'sweep':

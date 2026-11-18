@@ -199,6 +199,58 @@ export interface E2eeSharedSnapshotMetadata {
   delegation: E2eeSignedStatement;
   /** The owner's identity public key (65 bytes). */
   ownerIdentityKey: string;
+  /**
+   * L08 (plan decision 3a): the owner-signed comment grant that lets this
+   * link's visitors comment, when there is one. A visitor checks it against
+   * the devices the delegation names; older builds ignore it.
+   */
+  commentGrant?: E2eeSignedStatement;
+}
+
+/** Most visitor comments one commenter link of an encrypted project keeps. */
+export const MAX_E2EE_LINK_COMMENTS = 500;
+
+/**
+ * One commenter-link visitor's comment on an encrypted project (L08, plan
+ * decision 2): an unsigned `share-comment` envelope whose key is wrapped
+ * under the link's share key (`share-comment-key`). The server never reads
+ * it; members and the link's visitors open it with the share key.
+ */
+export interface E2eeShareCommentRecord {
+  shareId: string;
+  /** The envelope's version id, which its key wrap binds. */
+  commentId: string;
+  /** base64url envelope. */
+  envelope: string;
+  /** base64url `share-comment-key` wrap (41 bytes). */
+  wrappedVersionKey: string;
+  createdAt: string;
+}
+
+/** `GET/POST /api/e2ee/share/comments` (token header): the link's comments. */
+export interface E2eeLinkCommentsResponse {
+  comments: E2eeShareCommentRecord[];
+}
+
+/** `POST /api/e2ee/share/comments`: a visitor's new comment. */
+export interface E2eeCreateLinkCommentRequest {
+  commentId: string;
+  envelope: string;
+  wrappedVersionKey: string;
+}
+
+/**
+ * `GET /api/e2ee/projects/:id/share-comments`: every link's visitor
+ * comments, with each commenter link's grant for members to check.
+ */
+export interface E2eeShareCommentsResponse {
+  comments: E2eeShareCommentRecord[];
+  grants: { shareId: string; grant: E2eeSignedStatement }[];
+}
+
+/** `PUT /api/e2ee/projects/:id/share-links/:shareId/comment-grant`. */
+export interface E2eePutCommentGrantRequest {
+  grant: E2eeSignedStatement;
 }
 
 /** The `versionId` a share snapshot's key wraps bind (ADR-024 slice 5-10). */
@@ -250,6 +302,29 @@ export interface E2eeShareLinksApi {
   putDelegation(
     delegation: E2eeSignedStatement
   ): Promise<E2eeShareDelegationResponse>;
+  /**
+   * L08 (plan decision 3a): stores the owner's comment grant for a link.
+   * Optional so test doubles of older shape still fit.
+   */
+  putCommentGrant?(
+    projectId: string,
+    shareId: string,
+    grant: E2eeSignedStatement
+  ): Promise<{ ok: true }>;
+  /** L08: every commenter link's visitor comments, for members. */
+  shareComments?(projectId: string): Promise<E2eeShareCommentsResponse>;
+  /** L08: the owner hides (deletes) a visitor's comment. */
+  hideShareComment?(
+    projectId: string,
+    commentId: string
+  ): Promise<{ ok: true }>;
+  /** L08: a commenter link's comments, for its visitor; null on 404. */
+  linkComments?(token: string): Promise<E2eeLinkCommentsResponse | null>;
+  /** L08: a commenter link's visitor adds a comment. */
+  postLinkComment?(
+    token: string,
+    request: E2eeCreateLinkCommentRequest
+  ): Promise<E2eeLinkCommentsResponse>;
   /** The anonymous read; null when the link serves nothing (404). */
   shared(token: string): Promise<{
     metadata: E2eeSharedSnapshotMetadata;
@@ -319,6 +394,40 @@ export function createE2eeShareLinksApi(fetcher: Fetch): E2eeShareLinksApi {
       });
       if (!response.ok) throw await refusal(response);
       return (await response.json()) as E2eeShareLinkResponse;
+    },
+    putCommentGrant: (projectId, shareId, grant) =>
+      call(`${link(projectId, shareId)}/comment-grant`, 'PUT', { grant }),
+    shareComments: (projectId) =>
+      call(
+        `/api/e2ee/projects/${encodeURIComponent(projectId)}/share-comments`
+      ),
+    hideShareComment: (projectId, commentId) =>
+      call(
+        `/api/e2ee/projects/${encodeURIComponent(projectId)}/share-comments/${encodeURIComponent(commentId)}`,
+        'DELETE'
+      ),
+    async linkComments(token) {
+      const response = await fetcher('/api/e2ee/share/comments', {
+        method: 'GET',
+        credentials: 'omit',
+        headers: { [SHARE_LINK_TOKEN_HEADER]: token }
+      });
+      if (response.status === 404) return null;
+      if (!response.ok) throw await refusal(response);
+      return (await response.json()) as E2eeLinkCommentsResponse;
+    },
+    async postLinkComment(token, request) {
+      const response = await fetcher('/api/e2ee/share/comments', {
+        method: 'POST',
+        credentials: 'omit',
+        headers: {
+          [SHARE_LINK_TOKEN_HEADER]: token,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify(request)
+      });
+      if (!response.ok) throw await refusal(response);
+      return (await response.json()) as E2eeLinkCommentsResponse;
     },
     delegation: () => call('/api/e2ee/share-delegation'),
     putDelegation: (delegation) =>

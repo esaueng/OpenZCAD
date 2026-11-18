@@ -16,7 +16,12 @@ import {
   datumPlaneDisplays,
   shiftedDatumFrame
 } from '../lib/datumPlaneDisplay';
-import { datumAxisDisplays } from '../lib/datumAxisDisplay';
+import {
+  datumAxisDisplays,
+  datumMarkerDisplays
+} from '../lib/datumAxisDisplay';
+import { commentPinsOf } from '../lib/commentPins';
+import type { ProjectComment } from '@openzcad/shared';
 import { useAssemblyView } from '../lib/assembly/useAssemblyView';
 import type { ReferenceImageDisplay } from '../lib/referenceImageDisplay';
 import type { AutoFrameRequest } from '../lib/autoFrame';
@@ -35,7 +40,6 @@ import {
   type FaceResizeCommit,
   type ModelViewerProps,
   type ViewportContextMenuOptions,
-  type CommentPin,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
@@ -43,7 +47,8 @@ import {
   type RegionHandleTarget,
   type SketchModeState,
   type SketchViewData,
-  type OffsetHandleTarget
+  type OffsetHandleTarget,
+  type ViewerPmiLabel
 } from './ModelViewer';
 import type {
   DisplayMode,
@@ -380,8 +385,12 @@ interface ViewerShellProps {
   /** See `ModelViewer`: the plane an empty click lands on, and where. */
   placementPlane?: { origin: Vector3; normal: Vector3 } | null;
   onPlacementClick?(point: Vector3): void;
-  /** L08: review comment pins, as `ModelViewer` draws them. */
-  commentPins?: readonly CommentPin[];
+  /**
+   * L08: the review comments shown, whose threads `ModelViewer` draws as
+   * numbered pins (`commentPinsOf`), and the one open in the panel.
+   */
+  comments?: readonly ProjectComment[];
+  activeCommentId?: string | null;
   onCommentPinClick?(id: string): void;
   commentPlacing?: boolean;
   /**
@@ -616,7 +625,8 @@ export function ViewerShell({
   onPickDatum,
   placementPlane = null,
   onPlacementClick,
-  commentPins,
+  comments,
+  activeCommentId = null,
   onCommentPinClick,
   commentPlacing = false,
   onDatumOffsetDrag,
@@ -658,6 +668,11 @@ export function ViewerShell({
   sectionOutline,
   runSurfaceAnalysis
 }: ViewerShellProps) {
+  // L08: the shown threads' pins, built here rather than in the workspace.
+  const commentPins = useMemo(
+    () => (comments ? commentPinsOf(comments, activeCommentId) : undefined),
+    [comments, activeCommentId]
+  );
   const { bodies, standIns: parameterVisualPreview } = view;
   // M09 analysis overlays: the analysis the Display menu switched on, run on
   // the bodies drawn as built. A stand-in or a body drawn somewhere else
@@ -711,6 +726,56 @@ export function ViewerShell({
   }, [onSectionOverlapNote, sectionOverlapText]);
   // Assemble's posed view of the same document; null outside Assemble.
   const assemblyView = useAssemblyView(view.document);
+  // D07: the selected face, for Objects' PMI rows (a click keeps its point).
+  // Loaded on demand: none of the PMI code is in an eagerly loaded chunk.
+  useEffect(() => {
+    const face =
+      selectedTopology?.kind === 'face' && selectedTopology.hash !== undefined
+        ? { bodyId: selectedTopology.bodyId, hash: selectedTopology.hash }
+        : null;
+    void import('../lib/pmi/pmiSelection').then((store) =>
+      store.setPmiFace(face)
+    );
+  }, [selectedTopology]);
+  // D07: the entry open in Objects, which its label shows selected.
+  const [selectedPmiId, setSelectedPmiId] = useState<string | null>(null);
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+    void import('../lib/pmi/pmiSelection').then((store) => {
+      if (cancelled) return;
+      const read = () => setSelectedPmiId(store.pmiSelection().selectedPmiId);
+      read();
+      unsubscribe = store.subscribePmiSelection(read);
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+  // D07: the model's PMI labels, drawn by an on-demand module.
+  const modelPmi = view.document?.pmi;
+  const pmiBodies = view.document?.derived.bodyRepresentations;
+  const [pmiLabels, setPmiLabels] = useState<readonly ViewerPmiLabel[]>([]);
+  useEffect(() => {
+    if (!modelPmi || !pmiBodies) {
+      setPmiLabels((current) => (current.length ? [] : current));
+      return;
+    }
+    let cancelled = false;
+    void Promise.all([
+      import('../lib/pmi/modelPmi'),
+      import('./DrawingWorkspace')
+    ]).then(([module, layouts]) => {
+      if (!cancelled)
+        setPmiLabels(
+          module.pmiViewportLabels(modelPmi, pmiBodies, selectedPmiId, layouts)
+        );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [modelPmi, pmiBodies, selectedPmiId]);
   /**
    * The section as this drawing may show it. An exact section describes the
    * document's own geometry, and while a stand-in is up the viewport is not
@@ -895,6 +960,7 @@ export function ViewerShell({
         parameterVisualPreview={parameterVisualPreview}
         sketches={sketches}
         measurementAnnotations={placedMeasurements}
+        pmiLabels={pmiLabels}
         selectedBodyIds={selectedBodyIds}
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}
@@ -933,7 +999,28 @@ export function ViewerShell({
         scaleIndicatorRef={scaleIndicatorRef}
         sketchGridReadoutRef={sketchGridReadoutRef}
         frameStatsRef={frameStatsRef}
-        onSelectTopology={onSelectTopology}
+        onSelectTopology={(selection, additive, detail) => {
+          // D07: a new PMI entry's leader lands where its face was clicked.
+          if (
+            selection?.kind === 'face' &&
+            selection.hash !== undefined &&
+            detail?.point
+          ) {
+            const face = {
+              bodyId: selection.bodyId,
+              hash: selection.hash,
+              point: {
+                x: detail.point.x,
+                y: detail.point.y,
+                z: detail.point.z
+              }
+            };
+            void import('../lib/pmi/pmiSelection').then((store) =>
+              store.setPmiFace(face)
+            );
+          }
+          onSelectTopology(selection, additive, detail);
+        }}
         topologyPicksHeld={topologyPicksHeld}
         onSelectEdgeChain={onSelectEdgeChain}
         selectionFilter={selectionFilter}
@@ -1056,6 +1143,15 @@ export function ViewerShell({
                 selectedFeatureId
               )
             : []
+        }
+        datumMarkers={
+          datumDocument
+            ? datumMarkerDisplays(
+                datumDocument,
+                hiddenDatumIds ?? new Set(),
+                selectedFeatureId
+              )
+            : { points: [], systems: [] }
         }
         {...(referenceImages ? { referenceImages } : {})}
         {...(loadReferenceImage ? { loadReferenceImage } : {})}

@@ -1,9 +1,13 @@
+import { Suspense, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { PanelId } from '../../lib/panelLayout';
+import { lazyWithStaleChunkNotice } from '../../lib/staleChunk';
 import { DiagnosticsPanel, diagnosticCount } from './DiagnosticsPanel';
 import {
   HistoryFindToggle,
   HistoryPanel,
   HistoryRepairChip,
+  HistoryTextToggle,
   historyCount,
   useHistoryRepair
 } from './HistoryPanel';
@@ -17,6 +21,11 @@ import {
   revisionCount,
   useRevisionCheckpoints
 } from './RevisionsPanel';
+
+/** L15: loaded with the scripting package only when it is first opened. */
+const HistoryTextDialog = lazyWithStaleChunkNotice(
+  () => import('../HistoryTextDialog')
+);
 
 export interface ModelPanelProps extends ModelPanelSource {
   id: PanelId;
@@ -70,11 +79,28 @@ function ParametersFrame(props: ModelPanelProps) {
 }
 
 function ObjectsFrame(props: ModelPanelProps) {
+  // `geometryPendingShown` defaults to `geometryPending`.
+  const preparing =
+    props.geometryPending && props.geometryPendingShown !== false;
   return (
     <PanelFrame
       id="bodies"
       count={objectCount(props)}
       controls={props.controls}
+      actions={
+        // In the header's fixed row, not above the list: in-flow there it
+        // pushed every row (and the panel docked below) down a line and
+        // back as a held preview's analysis came and went (#1598).
+        preparing ? (
+          <span
+            className="model-panel-status"
+            role="status"
+            aria-label="Preparing model details…"
+          >
+            Preparing…
+          </span>
+        ) : undefined
+      }
     >
       <ObjectsPanel {...props} view={props.views.objects} />
     </PanelFrame>
@@ -84,6 +110,8 @@ function ObjectsFrame(props: ModelPanelProps) {
 function HistoryFrame(props: ModelPanelProps) {
   const find = props.views.historyFind;
   const repair = useHistoryRepair(props);
+  const [textOpen, setTextOpen] = useState(false);
+  const document = props.document;
   return (
     <PanelFrame
       id="history"
@@ -97,12 +125,33 @@ function HistoryFrame(props: ModelPanelProps) {
               selectedFeatureNodeId={props.selectedFeatureNodeId}
               onSelectFeature={props.onSelectFeature}
             />
+            {document && (
+              <HistoryTextToggle
+                open={textOpen}
+                onToggle={() => setTextOpen((open) => !open)}
+              />
+            )}
             <HistoryFindToggle find={find} />
           </>
         ) : undefined
       }
     >
       <HistoryPanel {...props} find={find} repair={repair} />
+      {textOpen &&
+        document &&
+        createPortal(
+          <Suspense fallback={null}>
+            <HistoryTextDialog
+              document={document}
+              editBlocked={props.historyTextEditBlocked ?? null}
+              {...(props.onApplyHistoryText
+                ? { onApply: props.onApplyHistoryText }
+                : {})}
+              onClose={() => setTextOpen(false)}
+            />
+          </Suspense>,
+          window.document.body
+        )}
     </PanelFrame>
   );
 }

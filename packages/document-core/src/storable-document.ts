@@ -16,6 +16,7 @@ import {
   objectFolderSetError,
   printClearanceError,
   configurationSetError,
+  modelPmiSetError,
   assemblySetError,
   referenceImageSetError,
   reservedIdentifierError,
@@ -296,7 +297,8 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
       record.configurations === undefined
         ? null
         : configurationSetError(record.configurations)
-    ]
+    ],
+    ['pmi', record.pmi === undefined ? null : modelPmiSetError(record.pmi)]
   ] as const) {
     if (error)
       throw new UnstorableDocumentError(`"document.${section}": ${error}`);

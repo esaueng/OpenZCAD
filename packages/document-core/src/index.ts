@@ -2,6 +2,13 @@ import { listFeaturesInOrder } from './feature-order';
 export { listFeaturesInOrder } from './feature-order';
 export { withoutDerivedProjection } from './document-projection';
 export { sharedProjectSnapshotDocument } from './shared-snapshot';
+import { isShareLinkSheetIds, withShareLinkSheets } from './share-link-sheets';
+export {
+  MAX_SHARE_LINK_SHEETS,
+  isShareLinkSheetIds,
+  shareLinkSheets,
+  withShareLinkSheets
+} from './share-link-sheets';
 export {
   diffSaveStates,
   type SaveStateDiff,
@@ -20,7 +27,11 @@ import {
   rewriteNodeExpressions,
   type ExpressionFieldDimension
 } from './parameter-expressions';
-export type { ExpressionFieldDimension } from './parameter-expressions';
+export type {
+  ExpressionFieldDimension,
+  ExpressionFieldSite
+} from './parameter-expressions';
+export { rewriteNodeExpressions } from './parameter-expressions';
 import { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import { mergeJsonRecords } from './collaboration-merge';
@@ -60,6 +71,10 @@ export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-depende
 import {
   assertDocumentContentSchema,
   assertSheetMetalSchema,
+  assertDatumPointCsysSchema,
+  assertRibSchema,
+  assertDatumReferenceConstructorSchema,
+  assertWrapSchema,
   assertStandardPartSchema,
   assertPatternContentSchema,
   assertHoleContentSchema,
@@ -79,6 +94,7 @@ export * from './hole-callout';
 export * from './print-clearance';
 export * from './configurations';
 export * from './reference-images';
+export * from './model-pmi';
 export * from './body-consumption';
 export {
   constantRigidTransform,
@@ -122,11 +138,13 @@ import {
   millimetresPerUnit,
   documentNodesWithHistory,
   type ProjectId,
+  type CustomFeatureScript,
   createId,
   deepClone,
   assertDrawingSet,
   assertObjectFolderSet,
   assertAssemblySet,
+  assertModelPmiSet,
   assertReferenceImageSet,
   featureColor,
   isProjectCheckpoint,
@@ -147,9 +165,19 @@ import {
   toSketchId,
   datumAxisPlaneSources,
   datumAxisPointSources,
+  datumCsysPlaneSources,
+  datumCsysPointSources,
   datumPlaneSources,
+  datumPointDefinitionPlaneSources,
+  datumPointDefinitionPointSources,
   datumPointSources,
   featureDatumAxisRefs,
+  featureDatumCsysRefs,
+  featureDatumPointRefs,
+  type DatumAxisEdgeSource,
+  type DatumCsysDefinition,
+  type DatumCsysRef,
+  type DatumPointDefinition,
   isDatumPlaneRef,
   type BodyId,
   type DatumAxisDefinition,
@@ -485,6 +513,8 @@ export interface SweepInput {
   mode: 'standard' | 'smooth';
   /** Rail the profile's up-vector tracks along the path; omitted by default. */
   guide?: SketchPathReference;
+  /** See the sweep `FeatureData`; omitted is the legacy sampled sweep. */
+  construction?: 'in-place';
   ids?: BodyFeatureIds;
 }
 
@@ -546,6 +576,8 @@ export interface TransformInput {
   bodyName?: string;
   /** R01 (schema v28): first turn the body about an earlier datum axis. */
   axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
+  /** R01 (schema v99): see the transform `FeatureData`. */
+  csysAlign?: { from?: DatumCsysRef; to: DatumCsysRef };
   ids?: FeatureOnlyIds | BodyFeatureIds;
 }
 
@@ -565,6 +597,20 @@ export interface DatumPlaneInput {
 export interface DatumAxisInput {
   name: string;
   definition: DatumAxisDefinition;
+  ids?: FeatureOnlyIds;
+}
+
+/** R01 (schema v99): a datum point. */
+export interface DatumPointInput {
+  name: string;
+  definition: DatumPointDefinition;
+  ids?: FeatureOnlyIds;
+}
+
+/** R01 (schema v99): a named coordinate system. */
+export interface DatumCsysInput {
+  name: string;
+  definition: DatumCsysDefinition;
   ids?: FeatureOnlyIds;
 }
 
@@ -663,6 +709,32 @@ export interface ShellInput {
   openingFaceHashes: number[];
   openingFaceReferences?: FaceTopologyReferenceV5[];
   thickness: ParamValue;
+  ids?: BodyFeatureIds;
+}
+
+/** M06 (schema v106): a rib from an open profile, joined to its body. */
+export interface RibInput {
+  name: string;
+  targetBodyId: BodyId;
+  profile: SketchPathReference;
+  thickness: ParamValue;
+  thicknessSide: 'symmetric' | 'first' | 'second';
+  direction: 'parallel' | 'normal';
+  flip?: boolean;
+  ids?: BodyFeatureIds;
+}
+
+/** M12 (schema v111): regions wrapped onto a cylinder, embossed or engraved. */
+export interface WrapInput {
+  name: string;
+  targetBodyId: BodyId;
+  faceReference: FaceTopologyReferenceV5;
+  sketchId: SketchId;
+  profiles: SketchProfileReference[];
+  depth: ParamValue;
+  mode: 'emboss' | 'engrave';
+  rotationDeg?: ParamValue;
+  axialOffset?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -785,6 +857,8 @@ export interface ImportedStepInput {
   stepSourceRef?: ImportedSourceReference;
   /** Partial import: declared-order solid indices to keep; absent = all. */
   solidIndices?: number[];
+  /** I02: number `solidIndices` by the product-structure reader. */
+  stepReader?: 'structure';
   planarEmboss?: Extract<
     FeatureData,
     { featureKind: 'imported-step' }
@@ -1077,6 +1151,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   assertObjectFolderSet(document.objectFolders);
   // Schema v54 assemblies: the same.
   assertAssemblySet(document.assembly);
+  // Schema v106 model PMI: the same.
+  assertModelPmiSet(document.pmi);
   assertDocumentContentSchema(document);
   for (const node of documentNodesWithHistory(document)) {
     if (node.kind === 'sketch') {
@@ -1173,8 +1249,15 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
+  // L08: a malformed share-link sheet list shares nothing rather than
+  // failing the document.
+  const { shareLinkSheetIds, ...unshared } = document;
+  const sheetChoice =
+    shareLinkSheetIds === undefined || isShareLinkSheetIds(shareLinkSheetIds)
+      ? document
+      : unshared;
   return {
-    ...document,
+    ...sheetChoice,
     schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION,
     ...(persistedDerived !== document.derived
       ? { derived: persistedDerived }
@@ -2829,7 +2912,12 @@ export function sweepProfile(
       mode: input.mode,
       // Written only when asked for; an absent rail is the rotation-minimizing
       // frame every sweep authored before guide rails existed swept with.
-      ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) })
+      ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) }),
+      // Written only when asked for; absent is the sampled sweep every one
+      // authored before the exact in-place construction existed was built as.
+      ...(input.construction === undefined
+        ? {}
+        : { construction: input.construction })
     },
     suppliedIds(input.ids),
     input.bodyName
@@ -2948,7 +3036,8 @@ export function booleanBodies(
 function datumFeaturesBefore(
   document: ProjectDocument,
   beforeFeatureId: FeatureId | null,
-  kind: 'datum-plane' | 'datum-axis' = 'datum-plane'
+  kind:
+    'datum-plane' | 'datum-axis' | 'datum-point' | 'datum-csys' = 'datum-plane'
 ): Set<FeatureId> {
   const datums = new Set<FeatureId>();
   for (const feature of listFeaturesInOrder(document)) {
@@ -3007,6 +3096,44 @@ function sameSource(a: DatumPlaneSource, b: DatumPlaneSource): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/**
+ * R01 (schema v99): a datum point or coordinate system reference names an
+ * existing datum of that kind defined earlier in history, and nothing else.
+ */
+function requireEarlierDatumOf(
+  document: ProjectDocument,
+  kind: 'datum-point' | 'datum-csys',
+  datumFeatureId: FeatureId,
+  ownFeatureId: FeatureId | null
+): void {
+  const label = kind === 'datum-point' ? 'datum point' : 'coordinate system';
+  if (datumFeatureId === ownFeatureId) {
+    throw new Error(`A ${label} cannot be built from itself.`);
+  }
+  const node = listFeaturesInOrder(document).find(
+    (feature) => feature.featureId === datumFeatureId
+  );
+  if (!node || node.data.featureKind !== kind) {
+    throw new Error(`No ${label} ${datumFeatureId} exists.`);
+  }
+  if (!datumFeaturesBefore(document, ownFeatureId, kind).has(datumFeatureId)) {
+    throw new Error(
+      `${label[0]!.toUpperCase()}${label.slice(1)} "${node.name}" comes later in history; a feature can only use an earlier one.`
+    );
+  }
+}
+
+function requireRefOnly(ref: object, extra: readonly string[] = []): void {
+  if (
+    Object.keys(ref).some(
+      (key) =>
+        key !== 'type' && key !== 'datumFeatureId' && !extra.includes(key)
+    )
+  ) {
+    throw new Error('A datum reference carries only the datum id.');
+  }
+}
+
 function samePoint(a: DatumPointSource, b: DatumPointSource): boolean {
   if (a.type === 'edge-vertex' && b.type === 'edge-vertex')
     return (
@@ -3016,6 +3143,26 @@ function samePoint(a: DatumPointSource, b: DatumPointSource): boolean {
       a.edgeReference.producingFeatureId === b.edgeReference.producingFeatureId
     );
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Schema v108: an open model edge named by a qualified lineage reference. */
+function requireOpenEdgeSource(
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource | undefined,
+  label: string
+): void {
+  if (
+    source?.type !== 'edge' ||
+    source.edgeReference?.kind !== 'edge' ||
+    source.edgeReference.witness?.closed !== false
+  ) {
+    throw new Error(
+      `${label} needs an open edge with a qualified lineage reference.`
+    );
+  }
+  if (!document.bodyOrder.includes(source.bodyId)) {
+    throw new Error(`The edge's body ${source.bodyId} does not exist.`);
+  }
 }
 
 function requireFiniteLiteral(value: ParamValue, label: string): void {
@@ -3052,13 +3199,57 @@ export function validateDatumPlaneDefinition(
       if (!definition.source || !definition.point)
         throw new Error('A parallel plane needs a plane and a point.');
       break;
+    case 'normal-to-edge': {
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
+      requireOpenEdgeSource(
+        document,
+        definition.edge,
+        'A plane square to an edge'
+      );
+      const at: unknown = definition.at;
+      const fraction =
+        typeof at === 'object' && at !== null && 'fraction' in at;
+      const point = typeof at === 'object' && at !== null && 'point' in at;
+      if (fraction === point || Object.keys(at as object).length !== 1) {
+        throw new Error(
+          'A plane square to an edge is placed at a fraction along it or through a point.'
+        );
+      }
+      if ('fraction' in definition.at) {
+        const value = definition.at.fraction;
+        if (typeof value === 'number' && !(value >= 0 && value <= 1)) {
+          throw new Error(
+            'A plane square to an edge sits at a fraction from 0 to 1 along it.'
+          );
+        }
+      }
+      break;
+    }
+    case 'edge-angle':
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
+      requireOpenEdgeSource(
+        document,
+        definition.edge,
+        'A plane through an edge'
+      );
+      if (!definition.reference)
+        throw new Error(
+          'A plane through an edge at an angle needs a reference plane.'
+        );
+      if (
+        typeof definition.angleDeg === 'number' &&
+        !Number.isFinite(definition.angleDeg)
+      ) {
+        throw new Error('The plane angle must be a finite number of degrees.');
+      }
+      break;
     default:
       throw new Error(
-        'A datum plane is an offset plane, a midplane, a three-point plane or a parallel plane through a point.'
+        'A datum plane is an offset plane, a midplane, a three-point plane, a parallel plane through a point, a plane square to an edge or a plane through an edge at an angle.'
       );
   }
   validateDatumPlaneSources(document, sources, ownFeatureId);
-  validateDatumPointSources(document, points);
+  validateDatumPointSources(document, points, ownFeatureId);
   if (definition.kind === 'midplane' && sameSource(sources[0]!, sources[1]!)) {
     throw new Error('A midplane needs two different source planes.');
   }
@@ -3106,15 +3297,32 @@ function validateDatumPlaneSources(
           );
         }
         break;
+      case 'datum-csys':
+        if (!['XY', 'YZ', 'ZX'].includes(source.plane)) {
+          throw new Error(
+            `A coordinate system plane is XY, YZ or ZX, not "${String(source.plane)}".`
+          );
+        }
+        requireRefOnly(source, ['plane']);
+        requireEarlierDatumOf(
+          document,
+          'datum-csys',
+          source.datumFeatureId,
+          ownFeatureId
+        );
+        break;
       default:
-        throw new Error('A datum plane source is a plane, a datum or a face.');
+        throw new Error(
+          'A datum plane source is a plane, a datum, a face or a coordinate system plane.'
+        );
     }
   }
 }
 
 function validateDatumPointSources(
   document: ProjectDocument,
-  points: readonly DatumPointSource[]
+  points: readonly DatumPointSource[],
+  ownFeatureId: FeatureId | null
 ): void {
   for (const point of points) {
     switch (point?.type) {
@@ -3139,8 +3347,19 @@ function validateDatumPointSources(
           throw new Error(`The vertex's body ${point.bodyId} does not exist.`);
         }
         break;
+      case 'datum-point':
+        requireRefOnly(point);
+        requireEarlierDatumOf(
+          document,
+          'datum-point',
+          point.datumFeatureId,
+          ownFeatureId
+        );
+        break;
       default:
-        throw new Error('A datum point is a position or a vertex.');
+        throw new Error(
+          'A datum point source is a position, a vertex or an earlier datum point.'
+        );
     }
   }
 }
@@ -3254,13 +3473,44 @@ export function validateDatumAxisDefinition(
       if (sources.length !== 2)
         throw new Error('An axis where two planes meet needs two planes.');
       break;
+    case 'face-normal':
+      assertDatumReferenceConstructorSchema(document.schemaVersion);
+      if (
+        definition.source?.type !== 'face' ||
+        definition.source.faceReference?.kind !== 'face'
+      ) {
+        throw new Error(
+          'An axis square to a face needs a face with a qualified lineage reference.'
+        );
+      }
+      if (!document.bodyOrder.includes(definition.source.bodyId)) {
+        throw new Error(
+          `The face's body ${definition.source.bodyId} does not exist.`
+        );
+      }
+      if (!definition.point)
+        throw new Error('An axis square to a face needs a point.');
+      break;
+    case 'csys-axis':
+      if (!['X', 'Y', 'Z'].includes(definition.axis))
+        throw new Error('A coordinate system axis is X, Y or Z.');
+      if (definition.csys?.type !== 'datum-csys')
+        throw new Error('An axis along a coordinate system names the system.');
+      requireRefOnly(definition.csys);
+      requireEarlierDatumOf(
+        document,
+        'datum-csys',
+        definition.csys.datumFeatureId,
+        ownFeatureId
+      );
+      break;
     default:
       throw new Error(
-        'A datum axis runs through two points, along an edge, along a cylinder or cone, or where two planes meet.'
+        'A datum axis runs through two points, along an edge, along a cylinder or cone, where two planes meet, along a coordinate system axis, or square to a face at a point.'
       );
   }
   validateDatumPlaneSources(document, sources, ownFeatureId);
-  validateDatumPointSources(document, points);
+  validateDatumPointSources(document, points, ownFeatureId);
   if (definition.kind === 'two-point' && samePoint(points[0]!, points[1]!)) {
     throw new Error('An axis through two points needs two different points.');
   }
@@ -3295,6 +3545,12 @@ export function datumPlaneDependents(
       uses = datumPlaneSources(data.definition).some(usesDatum);
     } else if (data.featureKind === 'datum-axis') {
       uses = datumAxisPlaneSources(data.definition).some(usesDatum);
+    } else if (data.featureKind === 'datum-point') {
+      // R01 (schema v99): a point where an axis pierces this plane.
+      uses = datumPointDefinitionPlaneSources(data.definition).some(usesDatum);
+    } else if (data.featureKind === 'datum-csys') {
+      // R01 (schema v99): a system on this plane's frame.
+      uses = datumCsysPlaneSources(data.definition).some(usesDatum);
     } else if (data.featureKind === 'mirror' || data.featureKind === 'split') {
       uses = usesDatum(data.plane);
     } else if (data.featureKind === 'sketch') {
@@ -3323,6 +3579,218 @@ export function datumAxisDependents(
       )
     )
     .map((feature) => feature.name);
+}
+
+function validateEdgeSource(
+  document: ProjectDocument,
+  source: DatumAxisEdgeSource,
+  what: string
+): void {
+  if (source?.type !== 'edge' || source.edgeReference?.kind !== 'edge') {
+    throw new Error(
+      `${what} needs an edge with a qualified lineage reference.`
+    );
+  }
+  if (!document.bodyOrder.includes(source.bodyId)) {
+    throw new Error(`The edge's body ${String(source.bodyId)} does not exist.`);
+  }
+}
+
+/**
+ * Structural checks on a datum point definition at its history position.
+ * Geometric ones (a straight or circular edge, an axis that pierces the
+ * plane, a resolvable source) need the exact build and are refused there.
+ */
+export function validateDatumPointDefinition(
+  document: ProjectDocument,
+  definition: DatumPointDefinition,
+  ownFeatureId: FeatureId | null
+): void {
+  switch (definition?.kind) {
+    case 'offset':
+      for (const axis of ['x', 'y', 'z'] as const)
+        requireFiniteLiteral(
+          definition.offset?.[axis] ?? Number.NaN,
+          `The point's ${axis.toUpperCase()} offset`
+        );
+      break;
+    case 'edge-midpoint':
+      validateEdgeSource(document, definition.source, 'A midpoint');
+      if (definition.source.edgeReference.witness?.closed !== false)
+        throw new Error('A midpoint needs an open edge.');
+      break;
+    case 'arc-center':
+      validateEdgeSource(document, definition.source, 'A centre point');
+      break;
+    case 'axis-plane':
+      validateDatumAxisRef(document, definition.axis, ownFeatureId);
+      break;
+    default:
+      throw new Error(
+        'A datum point sits at an offset from a point, at an edge midpoint, at an arc centre, or where an axis meets a plane.'
+      );
+  }
+  validateDatumPointSources(
+    document,
+    datumPointDefinitionPointSources(definition),
+    ownFeatureId
+  );
+  validateDatumPlaneSources(
+    document,
+    datumPointDefinitionPlaneSources(definition),
+    ownFeatureId
+  );
+}
+
+/**
+ * Structural checks on a coordinate system definition at its history
+ * position; degenerate geometry (collinear points) is refused by the build.
+ */
+export function validateDatumCsysDefinition(
+  document: ProjectDocument,
+  definition: DatumCsysDefinition,
+  ownFeatureId: FeatureId | null
+): void {
+  const points = datumCsysPointSources(definition ?? ({} as never));
+  switch (definition?.kind) {
+    case 'three-point':
+      if (points.length !== 3)
+        throw new Error(
+          'A coordinate system through three points needs three points.'
+        );
+      for (const [a, b] of [
+        [0, 1],
+        [0, 2],
+        [1, 2]
+      ] as const)
+        if (samePoint(points[a]!, points[b]!))
+          throw new Error(
+            'A coordinate system through three points needs three different points.'
+          );
+      break;
+    case 'plane':
+      if (!definition.source)
+        throw new Error('A coordinate system on a plane needs the plane.');
+      break;
+    case 'placement':
+      for (const axis of ['x', 'y', 'z'] as const)
+        requireFiniteLiteral(
+          definition.rotationDeg?.[axis] ?? Number.NaN,
+          `The ${axis.toUpperCase()} rotation`
+        );
+      break;
+    default:
+      throw new Error(
+        'A coordinate system is placed through three points, on a plane, or at a point with a rotation.'
+      );
+  }
+  validateDatumPointSources(document, points, ownFeatureId);
+  validateDatumPlaneSources(
+    document,
+    datumCsysPlaneSources(definition),
+    ownFeatureId
+  );
+}
+
+/** A Move's coordinate-system alignment names earlier systems only. */
+export function validateCsysAlign(
+  document: ProjectDocument,
+  align: { from?: DatumCsysRef; to: DatumCsysRef } | undefined,
+  ownFeatureId: FeatureId | null
+): void {
+  if (!align) return;
+  const refs = align.from === undefined ? [align.to] : [align.from, align.to];
+  for (const ref of refs) {
+    if (ref?.type !== 'datum-csys')
+      throw new Error('A Move aligns from and to coordinate systems.');
+    requireRefOnly(ref);
+    requireEarlierDatumOf(
+      document,
+      'datum-csys',
+      ref.datumFeatureId,
+      ownFeatureId
+    );
+  }
+  if (align.from && align.from.datumFeatureId === align.to.datumFeatureId)
+    throw new Error('A Move aligns between two different coordinate systems.');
+}
+
+/** The names of everything built on datum point `datumFeatureId`. */
+export function datumPointDependents(
+  document: ProjectDocument,
+  datumFeatureId: FeatureId
+): string[] {
+  return listFeaturesInOrder(document)
+    .filter((feature) =>
+      featureDatumPointRefs(feature.data).includes(datumFeatureId)
+    )
+    .map((feature) => feature.name);
+}
+
+/** The names of everything built on coordinate system `datumFeatureId`. */
+export function datumCsysDependents(
+  document: ProjectDocument,
+  datumFeatureId: FeatureId
+): string[] {
+  return listFeaturesInOrder(document)
+    .filter((feature) =>
+      featureDatumCsysRefs(feature.data).includes(datumFeatureId)
+    )
+    .map((feature) => feature.name);
+}
+
+function addDatumFeature(
+  document: ProjectDocument,
+  name: string,
+  data: Extract<FeatureData, { featureKind: 'datum-point' | 'datum-csys' }>,
+  ids: FeatureOnlyIds | undefined
+): { document: ProjectDocument; featureId: FeatureId } {
+  assertDatumPointCsysSchema(document.schemaVersion);
+  const next = cloneDocument(document);
+  const { featureId, featureNodeId } =
+    suppliedIds(ids) ?? createFeatureOnlyIds();
+  next.nodes[featureNodeId] = {
+    id: featureNodeId,
+    kind: 'feature',
+    name,
+    parentId: next.activePartId,
+    revisionId: null,
+    featureId,
+    featureKind: data.featureKind,
+    data: deepClone(data)
+  };
+  next.featureOrder.push(featureId);
+  attachToPart(next, featureNodeId);
+  next.version += 1;
+  return { document: next, featureId };
+}
+
+/** Adds an R01 datum point (schema v99) at the end of history; it owns no body. */
+export function addDatumPoint(
+  document: ProjectDocument,
+  input: DatumPointInput
+): { document: ProjectDocument; featureId: FeatureId } {
+  validateDatumPointDefinition(document, input.definition, null);
+  return addDatumFeature(
+    document,
+    input.name,
+    { featureKind: 'datum-point', definition: input.definition },
+    input.ids
+  );
+}
+
+/** Adds an R01 coordinate system (schema v99) at the end of history; it owns no body. */
+export function addDatumCsys(
+  document: ProjectDocument,
+  input: DatumCsysInput
+): { document: ProjectDocument; featureId: FeatureId } {
+  validateDatumCsysDefinition(document, input.definition, null);
+  return addDatumFeature(
+    document,
+    input.name,
+    { featureKind: 'datum-csys', definition: input.definition },
+    input.ids
+  );
 }
 
 /** Adds an R01 datum axis at the end of history; it owns no body. */
@@ -3411,6 +3879,7 @@ export function transformBody(
     ...(input.scale !== undefined ? { scale: input.scale } : {}),
     ...(input.pivot !== undefined ? { pivot: deepClone(input.pivot) } : {})
   };
+  validateCsysAlign(document, input.csysAlign, null);
   if (input.copy) {
     return transformCopyBody(document, input, transform);
   }
@@ -3430,7 +3899,8 @@ export function transformBody(
       featureKind: 'transform',
       targetBodyId: input.targetBodyId,
       transform,
-      ...axisRotationField(input)
+      ...axisRotationField(input),
+      ...csysAlignField(input)
     }
   };
 
@@ -3438,6 +3908,23 @@ export function transformBody(
   attachToPart(next, featureNodeId);
   next.version += 1;
   return { document: next, bodyId: input.targetBodyId };
+}
+
+/** R01 (schema v99): a Move's stored alignment, written only when asked for. */
+function csysAlignField(input: TransformInput): {
+  csysAlign?: { from?: DatumCsysRef; to: DatumCsysRef };
+} {
+  if (!input.csysAlign) return {};
+  const ref = (r: DatumCsysRef): DatumCsysRef => ({
+    type: 'datum-csys',
+    datumFeatureId: r.datumFeatureId
+  });
+  return {
+    csysAlign: {
+      ...(input.csysAlign.from ? { from: ref(input.csysAlign.from) } : {}),
+      to: ref(input.csysAlign.to)
+    }
+  };
 }
 
 /** R01: the stored axis rotation of a Move, written only when asked for. */
@@ -3499,7 +3986,8 @@ function transformCopyBody(
       targetBodyId: input.targetBodyId,
       transform,
       copy: true,
-      ...axisRotationField(input)
+      ...axisRotationField(input),
+      ...csysAlignField(input)
     }
   };
   const source = findBodyNode(document, input.targetBodyId);
@@ -3593,11 +4081,14 @@ function addBodyResultFeature(
     | 'standard-part'
     | 'shell'
     | 'solid-offset'
+    | 'rib'
+    | 'wrap'
     | 'loft'
     | 'sweep'
     | 'helical-sweep'
     | 'draft'
-    | 'thicken',
+    | 'thicken'
+    | 'custom-feature',
   data: Extract<
     FeatureData,
     {
@@ -3613,11 +4104,14 @@ function addBodyResultFeature(
         | 'standard-part'
         | 'shell'
         | 'solid-offset'
+        | 'rib'
+        | 'wrap'
         | 'loft'
         | 'sweep'
         | 'helical-sweep'
         | 'draft'
-        | 'thicken';
+        | 'thicken'
+        | 'custom-feature';
     }
   >,
   ids?: BodyFeatureIds,
@@ -3896,6 +4390,64 @@ export function shellBody(
   );
 }
 
+/** Adds an M06 rib (schema v106); it replaces the body it braces. */
+export function ribBody(
+  document: ProjectDocument,
+  input: RibInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  assertRibSchema(document.schemaVersion);
+  if (input.profile.entityIds.length === 0) {
+    throw new Error('A rib needs a profile of at least one sketch curve.');
+  }
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'rib',
+    {
+      featureKind: 'rib',
+      targetBodyId: input.targetBodyId,
+      profile: deepClone(input.profile),
+      thickness: input.thickness,
+      thicknessSide: input.thicknessSide,
+      direction: input.direction,
+      ...(input.flip ? { flip: true } : {})
+    },
+    suppliedIds(input.ids)
+  );
+}
+
+/** Adds an M12 wrap (schema v111); it replaces the body it is wrapped on. */
+export function wrapBody(
+  document: ProjectDocument,
+  input: WrapInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  assertWrapSchema(document.schemaVersion);
+  if (input.profiles.length === 0) {
+    throw new Error('A wrap needs at least one sketch region.');
+  }
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'wrap',
+    {
+      featureKind: 'wrap',
+      targetBodyId: input.targetBodyId,
+      faceReference: deepClone(input.faceReference),
+      sketchId: input.sketchId,
+      profiles: deepClone(input.profiles),
+      depth: input.depth,
+      mode: input.mode,
+      ...(input.rotationDeg === undefined
+        ? {}
+        : { rotationDeg: input.rotationDeg }),
+      ...(input.axialOffset === undefined
+        ? {}
+        : { axialOffset: input.axialOffset })
+    },
+    suppliedIds(input.ids)
+  );
+}
+
 export function offsetSolidBody(
   document: ProjectDocument,
   input: SolidOffsetInput
@@ -3952,6 +4504,38 @@ export function thickenFace(
         ? { faceReference: deepClone(input.faceReference) }
         : {}),
       thickness: input.thickness
+    },
+    suppliedIds(input.ids)
+  );
+}
+
+/** L15: a custom feature on one body (see `customFeatureBody`). */
+export interface CustomFeatureInput {
+  name: string;
+  targetBodyId: BodyId;
+  script: CustomFeatureScript;
+  inputs: Record<string, ParamValue>;
+  ids?: BodyFeatureIds;
+}
+
+/**
+ * L15: adds a custom feature that runs `script` on the target body and
+ * replaces it, like an edge modifier. The script is embedded as given; the
+ * command system checks its pin and inputs before this runs.
+ */
+export function customFeatureBody(
+  document: ProjectDocument,
+  input: CustomFeatureInput
+): { document: ProjectDocument; bodyId: BodyId } {
+  return addBodyResultFeature(
+    document,
+    input.name,
+    'custom-feature',
+    {
+      featureKind: 'custom-feature',
+      targetBodyId: input.targetBodyId,
+      script: deepClone(input.script),
+      inputs: { ...input.inputs }
     },
     suppliedIds(input.ids)
   );
@@ -4304,6 +4888,7 @@ export function importStepBody(
       ...(input.solidIndices !== undefined
         ? { solidIndices: [...input.solidIndices] }
         : {}),
+      ...(input.stepReader ? { stepReader: input.stepReader } : {}),
       ...(input.planarEmboss
         ? { planarEmboss: deepClone(input.planarEmboss) }
         : {})
@@ -5011,7 +5596,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
   loft: ['sections', 'mode', 'endPoint'],
-  sweep: ['profile', 'path', 'mode', 'guide'],
+  sweep: ['profile', 'path', 'mode', 'guide', 'construction'],
   'helical-sweep': [
     'profile',
     'axisOrigin',
@@ -5022,10 +5607,12 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'construction'
   ],
   boolean: ['operation', 'targetBodyIds', 'keepOriginals'],
-  transform: ['targetBodyId', 'transform', 'axisRotation'],
+  transform: ['targetBodyId', 'transform', 'axisRotation', 'csysAlign'],
   mirror: ['targetBodyId', 'plane'],
   'datum-plane': ['definition'],
   'datum-axis': ['definition'],
+  'datum-point': ['definition'],
+  'datum-csys': ['definition'],
   'sheet-metal': [
     'sketchId',
     'profiles',
@@ -5103,6 +5690,24 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'thickness'
   ],
   'solid-offset': ['targetBodyId', 'distance'],
+  rib: [
+    'targetBodyId',
+    'profile',
+    'thickness',
+    'thicknessSide',
+    'direction',
+    'flip'
+  ],
+  wrap: [
+    'targetBodyId',
+    'faceReference',
+    'sketchId',
+    'profiles',
+    'depth',
+    'mode',
+    'rotationDeg',
+    'axialOffset'
+  ],
   draft: [
     'targetBodyId',
     'faceHashes',
@@ -5120,6 +5725,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'endRadius',
     'radiusLaw'
   ],
+  'custom-feature': ['targetBodyId', 'script', 'inputs'],
   chamfer: [
     'targetBodyId',
     'edgeHashes',
@@ -5186,6 +5792,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'stepText',
     'stepSourceRef',
     'solidIndices',
+    'stepReader',
     'planarEmboss'
   ],
   'imported-mesh': [
@@ -5432,6 +6039,20 @@ export function updateFeature(
       feature.data.definition,
       feature.featureId
     );
+  } else if (feature.data.featureKind === 'datum-point') {
+    validateDatumPointDefinition(
+      next,
+      feature.data.definition,
+      feature.featureId
+    );
+  } else if (feature.data.featureKind === 'datum-csys') {
+    validateDatumCsysDefinition(
+      next,
+      feature.data.definition,
+      feature.featureId
+    );
+  } else if (feature.data.featureKind === 'transform') {
+    validateCsysAlign(next, feature.data.csysAlign, feature.featureId);
   } else if (
     feature.data.featureKind === 'mirror' ||
     feature.data.featureKind === 'split'
@@ -5828,6 +6449,26 @@ export function deleteFeature(
       );
     }
   }
+  if (feature.data.featureKind === 'datum-point') {
+    const dependents = datumPointDependents(next, feature.featureId);
+    if (dependents.length > 0) {
+      throw new Error(
+        `Cannot delete datum point "${feature.name}": ${dependents.join(', ')} ${
+          dependents.length === 1 ? 'is' : 'are'
+        } built on it. Delete those or rebuild them on another point first.`
+      );
+    }
+  }
+  if (feature.data.featureKind === 'datum-csys') {
+    const dependents = datumCsysDependents(next, feature.featureId);
+    if (dependents.length > 0) {
+      throw new Error(
+        `Cannot delete coordinate system "${feature.name}": ${dependents.join(', ')} ${
+          dependents.length === 1 ? 'uses' : 'use'
+        } it. Delete those or move them to another coordinate system first.`
+      );
+    }
+  }
 
   const removedNodeIds = new Set<string>([feature.id]);
 
@@ -6085,6 +6726,21 @@ export function withEchoedSavePoints(
       )
     ].slice(-MAX_PROJECT_CHECKPOINTS)
   };
+}
+
+/**
+ * L08: chooses the drawing sheets this project's share links show. A forward
+ * write like a save point: one revision, the version advanced, no undo entry,
+ * so it syncs like any edit and the next snapshot a link serves carries it.
+ */
+export function setShareLinkSheets(
+  document: ProjectDocument,
+  sheetIds: readonly string[]
+): ProjectDocument {
+  const next = withShareLinkSheets(document, sheetIds);
+  return next === document
+    ? document
+    : appendRevision(next, 'Choose drawings for share links');
 }
 
 /**

@@ -636,8 +636,13 @@
    (HistoryTimeline sets the custom properties), so they stay on the rows
    whatever their height. */
 
+/* One column, the panel's width. An auto column grew to the search row's
+   min-content (the field's intrinsic width plus both chips), 345px in a
+   294px body, so the body scrolled sideways and tabbing to a row's More
+   actions shifted every row 51px left (UX-006). */
 .history-timeline {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -793,11 +798,15 @@
   white-space: nowrap;
 }
 
+/* The chips wrap under the field when the panel is too narrow for both;
+   the field keeps a readable minimum rather than shrinking to nothing. */
 .history-find {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
+  gap: 4px 6px;
+  min-width: 0;
+  padding: 3px 8px;
   color: var(--color-text-subtle);
   background: var(--color-surface-2);
   border-radius: var(--radius-md);
@@ -805,9 +814,10 @@
 }
 
 .history-find input {
-  flex: 1;
+  flex: 1 1 96px;
   min-width: 0;
-  height: 26px;
+  width: 0;
+  height: 20px;
   padding: 0;
   border: 0;
   background: transparent;

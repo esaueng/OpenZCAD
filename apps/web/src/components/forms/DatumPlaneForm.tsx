@@ -31,6 +31,7 @@ import {
   datumVertexFromEdgePick,
   datumVertexKey,
   datumVertexOption,
+  datumPointOptions,
   faceSourceOption,
   newDatumPlaneFormState,
   nextDatumPlaneName,
@@ -449,7 +450,15 @@ export function DatumPlaneForm({
             ['offset', 'Offset plane'],
             ['midplane', 'Midplane'],
             ['three-point', 'Three points'],
-            ['parallel-point', 'Parallel at point']
+            ['parallel-point', 'Parallel at point'],
+            // Schema v108: only for a plane that holds an edge (picked in
+            // place); the card cannot pick one.
+            ...(state.edge
+              ? ([
+                  ['normal-to-edge', 'Square to edge'],
+                  ['edge-angle', 'Edge at angle']
+                ] as const)
+              : [])
           ] as const
         ).map(([mode, text]) => (
           <button
@@ -489,6 +498,54 @@ export function DatumPlaneForm({
           {pointSlot(0, 'Point 1')}
           {pointSlot(1, 'Point 2')}
           {pointSlot(2, 'Point 3')}
+        </>
+      ) : state.mode === 'normal-to-edge' ? (
+        <>
+          <div className="plane-chips" role="group" aria-label="Place on edge">
+            {(
+              [
+                ['fraction', 'Along the edge'],
+                ['point', 'Through a point']
+              ] as const
+            ).map(([edgeAt, text]) => (
+              <button
+                key={edgeAt}
+                type="button"
+                className="plane-chip"
+                aria-pressed={(state.edgeAt ?? 'fraction') === edgeAt}
+                onClick={() => replace({ ...state, edgeAt })}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+          {(state.edgeAt ?? 'fraction') === 'fraction' ? (
+            <ExprInput
+              label="Position"
+              value={state.position ?? '0.5'}
+              scope={scope}
+              onChange={(position) => replace({ ...state, position })}
+            />
+          ) : (
+            pointSlot(0, 'Through point')
+          )}
+        </>
+      ) : state.mode === 'edge-angle' ? (
+        <>
+          {slot(
+            'sourceA',
+            'Angle from',
+            'The plane the angle is measured from'
+          )}
+          <ExprInput
+            label="Angle"
+            value={state.angle ?? '0'}
+            scope={scope}
+            {...(units
+              ? { quantity: { documentUnits: units, dimension: 'angle' } }
+              : {})}
+            onChange={(angle) => replace({ ...state, angle })}
+          />
         </>
       ) : (
         <>
@@ -649,13 +706,20 @@ export function DatumPlaneCard({
     editing?.featureId ?? null,
     ownFaces
   );
-  const ownVertices = editing
-    ? initial.points.flatMap((point) =>
-        point?.type === 'vertex'
-          ? [datumVertexOption(document, point.source)]
-          : []
-      )
-    : [];
+  const datumPoints = datumPointOptions(document, editing?.featureId ?? null);
+  const ownVertices = [
+    ...datumPoints,
+    ...(editing
+      ? initial.points.flatMap((point) =>
+          point?.type === 'vertex' &&
+          !datumPoints.some(
+            (option) => option.key === datumVertexKey(point.source)
+          )
+            ? [datumVertexOption(document, point.source)]
+            : []
+        )
+      : [])
+  ];
   return (
     <DatumPlaneForm
       initial={initial}

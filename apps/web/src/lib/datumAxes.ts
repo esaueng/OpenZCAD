@@ -53,6 +53,9 @@ export interface DatumAxisFormState {
   /** Planes A and B of an axis where two planes meet. */
   sourceA: DatumPlaneSource | null;
   sourceB: DatumPlaneSource | null;
+  /** R01 (schema v99): the coordinate system and axis it runs along. */
+  csys: FeatureId | null;
+  csysAxis: 'X' | 'Y' | 'Z';
   reverseDirection: boolean;
 }
 
@@ -60,7 +63,9 @@ export const DATUM_AXIS_MODE_LABELS: Record<DatumAxisMode, string> = {
   'two-point': 'Two points',
   edge: 'Along edge',
   cylinder: 'Cylinder axis',
-  'plane-intersection': 'Two planes'
+  'plane-intersection': 'Two planes',
+  'csys-axis': 'System axis',
+  'face-normal': 'Square to face'
 };
 
 export function newDatumAxisFormState(name: string): DatumAxisFormState {
@@ -72,6 +77,8 @@ export function newDatumAxisFormState(name: string): DatumAxisFormState {
     face: null,
     sourceA: null,
     sourceB: null,
+    csys: null,
+    csysAxis: 'X',
     reverseDirection: false
   };
 }
@@ -107,6 +114,18 @@ export function datumAxisFormStateFromFeature(
         ...base,
         sourceA: definition.sources[0],
         sourceB: definition.sources[1]
+      };
+    case 'csys-axis':
+      return {
+        ...base,
+        csys: definition.csys.datumFeatureId,
+        csysAxis: definition.axis
+      };
+    case 'face-normal':
+      return {
+        ...base,
+        face: definition.source,
+        points: [datumPointDraftOf(definition.point), null]
       };
   }
 }
@@ -160,6 +179,17 @@ export function datumAxisFormValidation(
             kind: 'missing',
             reason: 'Pick a cylindrical or conical face in the viewport.'
           };
+    case 'csys-axis':
+      return state.csys
+        ? null
+        : { kind: 'missing', reason: 'Choose a coordinate system.' };
+    case 'face-normal':
+      if (!state.face)
+        return {
+          kind: 'missing',
+          reason: 'Pick the face with the Axis tool in the viewport.'
+        };
+      return datumPointValidation(state.points[0], 'through', scope, units);
     case 'plane-intersection':
       if (!state.sourceA) return { kind: 'missing', reason: 'Choose plane A.' };
       if (!state.sourceB) return { kind: 'missing', reason: 'Choose plane B.' };
@@ -202,6 +232,24 @@ export function buildDatumAxisDefinition(
       return {
         kind: 'plane-intersection',
         sources: [state.sourceA, state.sourceB],
+        ...reverse
+      };
+    case 'csys-axis':
+      if (!state.csys)
+        throw new Error('An axis along a coordinate system needs the system.');
+      return {
+        kind: 'csys-axis',
+        csys: { type: 'datum-csys', datumFeatureId: state.csys },
+        axis: state.csysAxis,
+        ...reverse
+      };
+    case 'face-normal':
+      if (!state.face || !state.points[0])
+        throw new Error('An axis square to a face needs the face and a point.');
+      return {
+        kind: 'face-normal',
+        source: state.face,
+        point: datumPointSourceOf(state.points[0]),
         ...reverse
       };
   }
@@ -269,6 +317,31 @@ export function datumAxisFaceFromPick(
   };
 }
 
+/**
+ * Schema v108: any face a viewport pick gives an axis square to a face, or
+ * why it cannot be one (no identity a rebuild can find again).
+ */
+export function datumAxisAnyFaceFromPick(
+  document: ProjectDocument,
+  selection: { kind: string; bodyId: BodyId; hash?: number }
+): DatumAxisFaceSource | { reason: string } {
+  const face = ownEntry(
+    document.derived.bodyRepresentations,
+    selection.bodyId
+  )?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
+  if (!face?.reference) {
+    return {
+      reason:
+        'This face has no identity a rebuild can find again, so an axis cannot stand on it.'
+    };
+  }
+  return {
+    type: 'face',
+    bodyId: selection.bodyId,
+    faceReference: face.reference
+  };
+}
+
 function bodyName(document: ProjectDocument, bodyId: BodyId): string {
   return (
     ownEntry(document.derived.bodyRepresentations, bodyId)?.name ??
@@ -325,6 +398,14 @@ export function datumAxisDescription(
       const [a, b] = definition.sources;
       return `Where ${datumSourceLabel(document, a)} meets ${datumSourceLabel(document, b)}${reversed}`;
     }
+    case 'csys-axis': {
+      const system = listFeaturesInOrder(document).find(
+        (candidate) => candidate.featureId === definition.csys.datumFeatureId
+      );
+      return `The ${definition.axis} axis of ${system ? `"${system.name}"` : 'a missing coordinate system'}${reversed}`;
+    }
+    case 'face-normal':
+      return `Square to ${datumAxisFaceLabel(document, definition.source)} at ${datumPointLabel(document, definition.point, scope, units)}${reversed}`;
   }
 }
 
@@ -431,13 +512,21 @@ export function datumAxisSourceRepairEdit(
   if (
     feature?.data.featureKind !== 'datum-axis' ||
     (feature.data.definition.kind !== 'edge' &&
-      feature.data.definition.kind !== 'cylinder')
+      feature.data.definition.kind !== 'cylinder' &&
+      feature.data.definition.kind !== 'face-normal')
   ) {
     throw new Error('Only an axis along an edge or a face can be re-picked.');
   }
   const { definition } = feature.data;
   let repaired: DatumAxisDefinition;
-  if (definition.kind === 'edge') {
+  if (definition.kind === 'face-normal') {
+    if (selection.kind !== 'face') {
+      throw new Error(`Click a face for "${feature.name}".`);
+    }
+    const source = datumAxisAnyFaceFromPick(document, selection);
+    if ('reason' in source) throw new Error(source.reason);
+    repaired = { ...definition, source };
+  } else if (definition.kind === 'edge') {
     if (selection.kind !== 'edge') {
       throw new Error(`Click a straight edge for "${feature.name}".`);
     }

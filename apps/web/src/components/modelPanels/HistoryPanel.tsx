@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { AlertTriangle, Search } from 'lucide-react';
+import { AlertTriangle, FileCode2, Search } from 'lucide-react';
 import { isFeatureSuppressed } from '@openzcad/shared';
 import type { FeatureId, FeatureNode } from '@openzcad/shared';
 import { HistoryTimeline, type HistoryRevealRequest } from '../HistoryTimeline';
@@ -25,6 +25,32 @@ export function HistoryFindToggle({ find }: { find: HistoryFind }) {
       onClick={find.toggle}
     >
       <Search size={12} aria-hidden="true" />
+    </button>
+  );
+}
+
+/**
+ * The header's History-as-text button (L15). It shares the Find toggle's
+ * look and touch sizing, which its class carries.
+ */
+export function HistoryTextToggle({
+  open,
+  onToggle
+}: {
+  open: boolean;
+  onToggle(): void;
+}) {
+  return (
+    <button
+      type="button"
+      className="history-find-toggle"
+      title="History as text"
+      aria-label="History as text"
+      aria-haspopup="dialog"
+      aria-pressed={open}
+      onClick={onToggle}
+    >
+      <FileCode2 size={12} aria-hidden="true" />
     </button>
   );
 }
@@ -159,6 +185,7 @@ export type HistoryPanelProps = Pick<
   | 'relatedFeatureIds'
   | 'geometryPending'
   | 'geometryPendingShown'
+  | 'previewPending'
   | 'selectedFeatureNodeId'
   | 'hiddenBodyIds'
   | 'hiddenSketchIds'
@@ -190,6 +217,7 @@ export function HistoryPanel({
   relatedFeatureIds,
   geometryPending = false,
   geometryPendingShown = geometryPending,
+  previewPending = false,
   selectedFeatureNodeId,
   hiddenBodyIds,
   hiddenSketchIds,
@@ -226,7 +254,7 @@ export function HistoryPanel({
         revealRequest={repair.reveal}
         relatedFeatureIds={relatedFeatureIds}
         geometryPending={geometryPending}
-        geometryPendingShown={geometryPendingShown}
+        geometryPendingShown={geometryPendingShown && !previewPending}
         selectedFeatureNodeId={selectedFeatureNodeId}
         hiddenBodyIds={hiddenBodyIds}
         hiddenSketchIds={hiddenSketchIds}

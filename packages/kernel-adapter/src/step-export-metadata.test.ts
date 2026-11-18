@@ -24,6 +24,9 @@ const WRITTEN = [
   "#7 = MECHANICAL_CONTEXT('', #6, 'mechanical');",
   "#8 = APPLICATION_PROTOCOL_DEFINITION('international standard', 'config_control_design', 1994, #6);",
   "#9 = PRODUCT('Bracket', 'Bracket', '', (#7));",
+  "#15 = PRODUCT_DEFINITION_FORMATION('', '', #9);",
+  "#16 = PRODUCT_DEFINITION_CONTEXT('part definition', #6, 'design');",
+  "#17 = PRODUCT_DEFINITION('design', '', #15, #16);",
   "#10 = CARTESIAN_POINT('', (-7.34788079488411875E-16, -6.00000000000000000E0, 2.66999999999999993E1));",
   "#11 = DIRECTION('', (0., -1.26687599911795176E-16, 1.00000000000000000E0));",
   "#12 = VECTOR('', #11, 8.69999999999999929E0);",
@@ -226,5 +229,60 @@ describe('finishStepExport', () => {
         solids: [{ name: 'A', color: 'red' }, METADATA.solids[1]!]
       })
     ).toThrow(/not #rrggbb/);
+  });
+});
+
+describe('finishStepExport assembly (I02)', () => {
+  const assembly = {
+    folders: [
+      { name: 'Fasteners', parent: null },
+      { name: 'Spares', parent: 0 }
+    ],
+    bodies: [
+      { name: "Owner's plate", solidCount: 1, folder: null },
+      { name: 'Pin', solidCount: 1, folder: 1 }
+    ]
+  };
+  const finished = finishStepExport(WRITTEN, { ...METADATA, assembly });
+  const count = (pattern: RegExp) => (finished.match(pattern) ?? []).length;
+
+  it('places a geometry-free root, folder assemblies and one part per body', () => {
+    expect(line(finished, '#31')).toMatch(
+      /^#31 = SHAPE_REPRESENTATION\('Bracket', \(#\d+\), #5\);$/
+    );
+    // Two folders and two bodies, each placed once.
+    expect(count(/NEXT_ASSEMBLY_USAGE_OCCURRENCE\(/g)).toBe(4);
+    expect(count(/CONTEXT_DEPENDENT_SHAPE_REPRESENTATION\(/g)).toBe(4);
+    expect(count(/ITEM_DEFINED_TRANSFORMATION\(/g)).toBe(4);
+    expect(count(/PRODUCT\('/g)).toBe(5);
+    // Every new shape has its own context, a copy of the writer's.
+    expect(count(/GEOMETRIC_REPRESENTATION_CONTEXT\(3\)/g)).toBe(5);
+    expect(finished).toContain(
+      "ADVANCED_BREP_SHAPE_REPRESENTATION('Pin', (#30, "
+    );
+    expect(finished).toContain("PRODUCT('Spares', 'Spares', '', (#7))");
+    // The solids and their styles are unchanged.
+    expect(line(finished, '#20')).toBe(
+      "#20 = MANIFOLD_SOLID_BREP('Owner''s plate', #19);"
+    );
+    expect(count(/STYLED_ITEM\(/g)).toBe(2);
+  });
+
+  it('writes no assembly without folders, and refuses a solid count it cannot place', () => {
+    expect(
+      finishStepExport(WRITTEN, {
+        ...METADATA,
+        assembly: { folders: [], bodies: assembly.bodies }
+      })
+    ).toBe(finishStepExport(WRITTEN, METADATA));
+    expect(() =>
+      finishStepExport(WRITTEN, {
+        ...METADATA,
+        assembly: {
+          ...assembly,
+          bodies: [{ name: 'All', solidCount: 3, folder: 0 }]
+        }
+      })
+    ).toThrow(/names 3 solids for 2 written/);
   });
 });

@@ -16,6 +16,8 @@ import {
   type BooleanKeepOriginals,
   type BooleanOperation,
   type DatumAxisDefinition,
+  type DatumCsysDefinition,
+  type DatumPointDefinition,
   type DatumAxisLine,
   type DatumAxisRef,
   type EdgeTopologyReferenceV5,
@@ -64,7 +66,14 @@ import {
   primitiveBuild,
   type PlacementPick
 } from './primitives';
-import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
+import {
+  datumAxis,
+  datumCsys,
+  datumPlane,
+  datumPoint,
+  type RefKind,
+  type RefPick
+} from './datums';
 import { faceSpan, threadSpec, type ThreadRequest } from './thread';
 import { referenceImage, type ImageSlot } from './image';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
@@ -99,6 +108,8 @@ export type InPlaceToolId =
   | 'bend'
   | 'standard-part'
   | 'shell'
+  | 'rib'
+  | 'wrap'
   | 'thicken'
   | 'solid-offset'
   | 'draft'
@@ -118,6 +129,8 @@ export type InPlaceToolId =
   | PrimitiveKind
   | 'datum-plane'
   | 'datum-axis'
+  | 'datum-point'
+  | 'datum-csys'
   | 'reference-image';
 
 export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
@@ -133,6 +146,8 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'bend',
   'standard-part',
   'shell',
+  'rib',
+  'wrap',
   'thicken',
   'solid-offset',
   'draft',
@@ -156,6 +171,8 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'torus',
   'datum-plane',
   'datum-axis',
+  'datum-point',
+  'datum-csys',
   'reference-image'
 ];
 
@@ -202,6 +219,8 @@ export interface FacePick {
   center?: Vector3;
   /** Where the click landed on it (a hole goes there). */
   point?: Vector3;
+  /** M12: a cone's apex, unit axis and remus half-angle (radial plane to generator). */
+  cone?: { apex: Vector3; axis: Vector3; halfAngle: number };
   /**
    * A cylinder's axis through the trimmed face, end to end, and its radius:
    * where a thread on it starts, how long it may run, and what it is sized
@@ -450,6 +469,11 @@ export interface InPlaceContext {
    * a pattern on sketch points; empty when the sketch has none.
    */
   sketchPoints?(sketchId: SketchId): readonly SketchPointSpot[];
+  /** M06: a sketch curve's middle in the world and its plane's normal. */
+  curveMiddle?(
+    sketchId: SketchId,
+    entityId: string
+  ): { at: Vector3; normal: Vector3 } | null;
   /**
    * M17 (schema v71): an M01 hole feature's stored data and its entry
    * face's outward normal, for a part inserted into it; null when the
@@ -529,6 +553,30 @@ export type InPlaceRequest =
       path: { sketchId: SketchId; entityIds: string[] };
       mode: 'standard' | 'smooth';
       guide?: { sketchId: SketchId; entityIds: string[] };
+      /** See the sweep `FeatureData`; absent is the legacy sampled sweep. */
+      construction?: 'in-place';
+    }
+  | {
+      /** M06 (schema v101): a rib from an open profile, joined to a body. */
+      tool: 'rib';
+      targetBodyId: BodyId;
+      profile: { sketchId: SketchId; entityIds: string[] };
+      thickness: ParamValue;
+      thicknessSide: 'symmetric' | 'first' | 'second';
+      direction: 'parallel' | 'normal';
+      flip?: true;
+    }
+  | {
+      /** M12 (schema v111): regions wrapped onto a cylindrical face. */
+      tool: 'wrap';
+      targetBodyId: BodyId;
+      faceReference: FaceTopologyReferenceV5;
+      sketchId: SketchId;
+      profiles: SketchProfileReference[];
+      depth: ParamValue;
+      mode: 'emboss' | 'engrave';
+      rotationDeg?: ParamValue;
+      axialOffset?: ParamValue;
     }
   | {
       tool: 'helical-sweep';
@@ -635,6 +683,8 @@ export type InPlaceRequest =
     }
   | { tool: 'datum-plane'; definition: DatumPlaneDefinition }
   | { tool: 'datum-axis'; definition: DatumAxisDefinition }
+  | { tool: 'datum-point'; definition: DatumPointDefinition }
+  | { tool: 'datum-csys'; definition: DatumCsysDefinition }
   | {
       /** The picture as Done adds it: placed, scaled, turned. */
       tool: 'reference-image';
@@ -764,7 +814,13 @@ export type HandleSpec = (
       valueId: string;
       kind: 'instance';
       key: string;
-      params: { anchor: Vector3; label: string; skipped: boolean };
+      /** `label` is the skip key; `display`, when set, is its name. */
+      params: {
+        anchor: Vector3;
+        label: string;
+        display?: string;
+        skipped: boolean;
+      };
     }
 ) & {
   /**
@@ -858,7 +914,8 @@ export interface InPlaceToolSpec {
     values: Record<string, number>;
   };
   /** `planar` refuses curved faces; `cylindrical` takes cylinders only. */
-  faceFilter?: 'planar' | 'cylindrical';
+  /** `revolution` takes a cylinder or a cone. */
+  faceFilter?: 'planar' | 'cylindrical' | 'revolution';
   /**
    * While this option has this value (a pattern's Repeat: Features), the
    * command takes faces, many on one body, each naming the feature that made
@@ -1466,6 +1523,48 @@ function loftApex(
   };
 }
 
+/**
+ * M04: how a sweep is built. A new sweep is exact (`'in-place'`): the
+ * profile is carried along the path's lines and arcs as exact surfaces, and
+ * the kernel refuses a corner, a fold or a rail by name instead of sampling.
+ * Only a sweep saved before that existed is `'sampled'`; editing one offers
+ * Exact as an explicit rebuild, with its Mode and Rail rows kept while it
+ * stays sampled. `saved` is never shown: it records which kind was opened.
+ */
+const SWEEP_BUILD_OPTIONS: OptionSpec[] = [
+  {
+    id: 'saved',
+    label: 'Saved as',
+    choices: [
+      { value: 'exact', label: 'Exact' },
+      { value: 'sampled', label: 'Sampled' }
+    ],
+    initial: 'exact',
+    when: () => false
+  },
+  {
+    id: 'build',
+    label: 'Build',
+    choices: [
+      {
+        value: 'exact',
+        label: 'Exact',
+        tip: 'Exact surfaces; a corner is mitred between straight lines only'
+      },
+      {
+        value: 'sampled',
+        label: 'Sampled',
+        tip: 'As saved: built from flat facets'
+      }
+    ],
+    initial: 'exact',
+    when: (state) => state.options.saved === 'sampled'
+  }
+];
+
+const sampledSweep = (state: InPlacePanelState) =>
+  state.options.build === 'sampled';
+
 const sweep: InPlaceToolSpec = {
   id: 'sweep',
   title: 'Sweep',
@@ -1474,8 +1573,10 @@ const sweep: InPlaceToolSpec = {
   wantsPath: true,
   values: [],
   options: [
+    ...SWEEP_BUILD_OPTIONS,
     {
       id: 'mode',
+      when: sampledSweep,
       label: 'Mode',
       choices: [
         { value: 'standard', label: 'Standard' },
@@ -1490,6 +1591,7 @@ const sweep: InPlaceToolSpec = {
     },
     {
       id: 'curves',
+      when: sampledSweep,
       label: 'Picking',
       // A guide rail is the profile's up-vector track: curve clicks add to
       // it instead of the path while this is chosen.
@@ -1506,7 +1608,7 @@ const sweep: InPlaceToolSpec = {
   ],
   hint(slots, options) {
     if (slots.profiles.length === 0) return 'Pick a profile';
-    if (options?.curves === 'guide') {
+    if (options?.build === 'sampled' && options.curves === 'guide') {
       return slots.guide.length === 0
         ? 'Pick the rail curves'
         : `Rail of ${slots.guide.length}${
@@ -1521,6 +1623,19 @@ const sweep: InPlaceToolSpec = {
     const pick = slots.profiles[0];
     const first = slots.path[0];
     if (!pick || !first) return null;
+    if (options.build !== 'sampled') {
+      // Exact: no rail and no sampling mode, both of which only sample.
+      return {
+        tool: 'sweep',
+        profile: section(pick),
+        path: {
+          sketchId: first.sketchId,
+          entityIds: slots.path.map((curve) => curve.entityId)
+        },
+        mode: 'standard',
+        construction: 'in-place'
+      };
+    }
     const rail = slots.guide[0];
     return {
       tool: 'sweep',
@@ -1728,14 +1843,18 @@ function axisFoot(
 }
 
 /**
- * How the coil is built: an edited helix keeps the construction it was made
- * with, whatever is changed; a new one is wound in place (see the
- * helical-sweep `FeatureData`).
+ * How the coil is built: a new one is wound in place (see the helical-sweep
+ * `FeatureData`), and so is an edited one built that way. A faceted helix
+ * saved before stays faceted unless its edit chooses Build: Exact, which
+ * winds it in place from the profile (M04: an explicit, undoable rebuild).
  */
-function coilConstruction(ctx: InPlaceContext): 'in-place' | undefined {
-  return ctx.saved?.featureKind === 'helical-sweep'
-    ? ctx.saved.construction
-    : 'in-place';
+function coilConstruction(
+  ctx: InPlaceContext,
+  options: Readonly<Record<string, string>>
+): 'in-place' | undefined {
+  if (ctx.saved?.featureKind !== 'helical-sweep') return 'in-place';
+  if (ctx.saved.construction === 'in-place') return 'in-place';
+  return options.build === 'exact' ? 'in-place' : undefined;
 }
 
 /**
@@ -1760,7 +1879,7 @@ function coilPath(
   startDirection: Vector3;
   radius: number;
 } | null {
-  if (coilConstruction(ctx) === 'in-place') {
+  if (coilConstruction(ctx, options) === 'in-place') {
     const off = profileOffAxis(outline, axisLine);
     if (!off?.toward || off.crosses || !(off.distance > 0)) return null;
     return {
@@ -1843,7 +1962,12 @@ const helicalSweep: InPlaceToolSpec = {
     },
     ...TYPED_AXIS_VALUES
   ],
-  options: [HELIX_SIZE_OPTION, HELIX_GROW_OPTION, AXIS_MODE_OPTION],
+  options: [
+    HELIX_SIZE_OPTION,
+    HELIX_GROW_OPTION,
+    AXIS_MODE_OPTION,
+    ...SWEEP_BUILD_OPTIONS
+  ],
   layout: [
     { items: ['size', 'grow', 'height', 'pitch', 'turns'] },
     {
@@ -1954,7 +2078,7 @@ const helicalSweep: InPlaceToolSpec = {
     // radius it stores (one made before, or elsewhere, may differ); wound in
     // place, the radius is only a record, so it is measured afresh (or kept
     // when the profile cannot be read).
-    const construction = coilConstruction(ctx);
+    const construction = coilConstruction(ctx, options);
     const off =
       saved && construction !== 'in-place'
         ? null
@@ -3950,6 +4074,292 @@ const shell: InPlaceToolSpec = {
   handles: (slots) => normalHandle('thickness', slots.faces[0], -1)
 };
 
+/**
+ * M06 (schema v101): Rib in place. Its profile is clicks on sketch curves
+ * (an open chain of lines and arcs), the body it braces a body click; the
+ * thickness drags along the sketch's normal from the profile's middle.
+ * `parallel` fills from the profile to the body in the sketch plane;
+ * `normal` runs the thickened profile along the sketch normal to the body.
+ */
+const rib: InPlaceToolSpec = {
+  id: 'rib',
+  title: 'Rib',
+  profileMode: 'none',
+  bodyMode: 'one',
+  wantsAxis: false,
+  wantsPath: true,
+  values: [
+    {
+      id: 'thickness',
+      label: 'Thickness',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true
+    }
+  ],
+  options: [
+    {
+      id: 'direction',
+      label: 'Fills',
+      choices: [
+        {
+          value: 'parallel',
+          label: 'In the plane',
+          tip: 'From the profile to the body, across the sketch plane'
+        },
+        {
+          value: 'normal',
+          label: 'Along the normal',
+          tip: 'The thickened profile runs along the sketch normal to the body'
+        }
+      ],
+      initial: 'parallel'
+    },
+    {
+      id: 'side',
+      label: 'Thickness',
+      choices: [
+        { value: 'symmetric', label: 'Centred' },
+        { value: 'first', label: 'One side' },
+        { value: 'second', label: 'Other side' }
+      ],
+      initial: 'symmetric'
+    },
+    {
+      id: 'flip',
+      label: 'Side',
+      choices: [
+        {
+          value: 'as-drawn',
+          label: 'Closing',
+          tip: 'The side or way that closes against the body'
+        },
+        { value: 'flipped', label: 'Other', tip: 'The other side or way' }
+      ],
+      initial: 'as-drawn'
+    }
+  ],
+  hint(slots) {
+    if (slots.path.length === 0) return 'Pick the rib profile curves';
+    if (slots.bodies.length === 0)
+      return `Profile of ${slots.path.length} · click the body to brace`;
+    return `Profile of ${slots.path.length} · drag the thickness`;
+  },
+  ready: (slots) => slots.path.length > 0 && slots.bodies.length > 0,
+  request(slots, values, options) {
+    const first = slots.path[0];
+    const body = slots.bodies[0];
+    if (!first || !body) return null;
+    return {
+      tool: 'rib',
+      targetBodyId: body.bodyId,
+      profile: {
+        sketchId: first.sketchId,
+        entityIds: slots.path.map((curve) => curve.entityId)
+      },
+      thickness: values.thickness ?? 2,
+      thicknessSide:
+        options.side === 'first' || options.side === 'second'
+          ? options.side
+          : 'symmetric',
+      direction: options.direction === 'normal' ? 'normal' : 'parallel',
+      ...(options.flip === 'flipped' ? { flip: true as const } : {})
+    };
+  },
+  handles(slots, _values, ctx) {
+    const first = slots.path[0];
+    if (!first) return [];
+    const middle = ctx.curveMiddle?.(first.sketchId, first.entityId);
+    if (!middle) return [];
+    return [
+      {
+        valueId: 'thickness',
+        kind: 'linear',
+        key: `rib:${first.sketchId}:${first.entityId}:${middle.at.x}:${middle.at.y}:${middle.at.z}`,
+        params: { origin: middle.at, direction: unit(middle.normal) }
+      }
+    ];
+  }
+};
+
+/** Whether every picked region is in the first one's sketch. */
+function oneSketch(profiles: readonly { sketchId: string }[]): boolean {
+  return profiles.every((pick) => pick.sketchId === profiles[0]?.sketchId);
+}
+
+/**
+ * M12 (schema v111): Wrap in place. Regions of a sketch drawn on a plane
+ * parallel to a cylinder are clicked, then the cylinder's face; the depth
+ * drags out of the face (emboss) or into it (engrave), the turn rides a
+ * ring about the axis and the offset slides along it. Done embosses or
+ * engraves the wrapped regions into the body, leaving one body.
+ */
+const wrap: InPlaceToolSpec = {
+  id: 'wrap',
+  title: 'Wrap',
+  profileMode: 'many',
+  faceMode: 'one',
+  faceFilter: 'revolution',
+  wantsAxis: false,
+  wantsPath: false,
+  values: [
+    {
+      id: 'depth',
+      label: 'Depth',
+      unit: 'length',
+      initial: 1,
+      min: 0,
+      exclusive: true
+    },
+    { id: 'rotation', label: 'Turn', unit: 'angle', initial: 0 },
+    { id: 'offset', label: 'Along', unit: 'length', initial: 0 }
+  ],
+  options: [
+    {
+      id: 'mode',
+      label: 'Wrap',
+      choices: [
+        { value: 'emboss', label: 'Emboss', tip: 'Stand the regions out' },
+        { value: 'engrave', label: 'Engrave', tip: 'Cut the regions in' }
+      ],
+      initial: 'emboss'
+    }
+  ],
+  hint(slots) {
+    if (slots.profiles.length === 0) return 'Click the sketch regions to wrap';
+    if (!oneSketch(slots.profiles))
+      return 'Regions of one sketch wrap together · keep the regions of one sketch';
+    if (slots.faces.length === 0)
+      return `${slots.profiles.length} region${slots.profiles.length === 1 ? '' : 's'} · click the cylinder or cone`;
+    return 'Drag the depth, turn or slide along';
+  },
+  ready: (slots) =>
+    slots.profiles.length > 0 &&
+    oneSketch(slots.profiles) &&
+    slots.faces.length === 1 &&
+    slots.faces[0]!.reference !== undefined,
+  request(slots, values, options) {
+    const face = slots.faces[0];
+    const first = slots.profiles[0];
+    // A wrap reads one sketch: regions of another are refused, never
+    // dropped.
+    if (!face?.reference || !first || !oneSketch(slots.profiles)) return null;
+    return {
+      tool: 'wrap',
+      targetBodyId: face.bodyId,
+      faceReference: face.reference,
+      sketchId: first.sketchId,
+      profiles: slots.profiles.map((pick) => pick.reference),
+      depth: values.depth ?? 1,
+      mode: options.mode === 'engrave' ? 'engrave' : 'emboss',
+      ...(values.rotation ? { rotationDeg: values.rotation } : {}),
+      ...(values.offset ? { axialOffset: values.offset } : {})
+    };
+  },
+  handles(slots, values, _ctx, options) {
+    const face = slots.faces[0];
+    const at = face?.point ?? face?.centroid;
+    if (!face || !at) return [];
+    // The axis, the axis foot under the click, the click's point on the
+    // face and the face's outward normal there.
+    let axis: Vector3;
+    let foot: Vector3;
+    let surface: Vector3;
+    let normal: Vector3;
+    let reach: number;
+    if (face.cylinder) {
+      const cylinder = face.cylinder;
+      axis = unit({
+        x: cylinder.axisEnd.x - cylinder.axisStart.x,
+        y: cylinder.axisEnd.y - cylinder.axisStart.y,
+        z: cylinder.axisEnd.z - cylinder.axisStart.z
+      });
+      const along =
+        (at.x - cylinder.axisStart.x) * axis.x +
+        (at.y - cylinder.axisStart.y) * axis.y +
+        (at.z - cylinder.axisStart.z) * axis.z;
+      foot = {
+        x: cylinder.axisStart.x + axis.x * along,
+        y: cylinder.axisStart.y + axis.y * along,
+        z: cylinder.axisStart.z + axis.z * along
+      };
+      normal = unit({ x: at.x - foot.x, y: at.y - foot.y, z: at.z - foot.z });
+      surface = {
+        x: foot.x + normal.x * cylinder.radius,
+        y: foot.y + normal.y * cylinder.radius,
+        z: foot.z + normal.z * cylinder.radius
+      };
+      reach = cylinder.radius;
+    } else if (face.cone) {
+      const { apex, halfAngle } = face.cone;
+      axis = unit(face.cone.axis);
+      const toward = {
+        x: at.x - apex.x,
+        y: at.y - apex.y,
+        z: at.z - apex.z
+      };
+      // Into the cone, toward the face.
+      if (toward.x * axis.x + toward.y * axis.y + toward.z * axis.z < 0)
+        axis = scaled(axis, -1);
+      const along = toward.x * axis.x + toward.y * axis.y + toward.z * axis.z;
+      foot = {
+        x: apex.x + axis.x * along,
+        y: apex.y + axis.y * along,
+        z: apex.z + axis.z * along
+      };
+      const radial = unit({ x: at.x - foot.x, y: at.y - foot.y, z: at.z - foot.z });
+      const [sin, cos] = [Math.sin(halfAngle), Math.cos(halfAngle)];
+      normal = unit({
+        x: radial.x * sin - axis.x * cos,
+        y: radial.y * sin - axis.y * cos,
+        z: radial.z * sin - axis.z * cos
+      });
+      surface = at;
+      reach = Math.hypot(at.x - foot.x, at.y - foot.y, at.z - foot.z);
+    } else {
+      return [];
+    }
+    const radial = unit({
+      x: surface.x - foot.x,
+      y: surface.y - foot.y,
+      z: surface.z - foot.z
+    });
+    // Out of the face is away from its material: toward the axis in a bore,
+    // when the pick says which way the face looks.
+    const bore =
+      face.normal !== undefined &&
+      face.normal.x * radial.x + face.normal.y * radial.y + face.normal.z * radial.z < 0;
+    const inward = (options.mode === 'engrave') !== bore ? -1 : 1;
+    const key = `wrap:${face.bodyId}:${face.hash}`;
+    return [
+      {
+        valueId: 'depth',
+        kind: 'linear',
+        key: `${key}:depth:${inward}`,
+        params: { origin: surface, direction: scaled(normal, inward) }
+      },
+      {
+        valueId: 'rotation',
+        kind: 'angle',
+        key: `${key}:turn`,
+        params: {
+          center: foot,
+          axis,
+          startDirection: radial,
+          radius: reach * 1.3 + (values.depth ?? 1)
+        }
+      },
+      {
+        valueId: 'offset',
+        kind: 'linear',
+        key: `${key}:along`,
+        params: { origin: surface, direction: axis }
+      }
+    ];
+  }
+};
+
 const thicken: InPlaceToolSpec = {
   id: 'thicken',
   title: 'Thicken',
@@ -5287,7 +5697,17 @@ function turnedAbout(
 }
 
 interface PatternCopySpot {
+  /**
+   * The copy's key: what the skip list stores (`skippedInstances`) and the
+   * handle's value id carries. A sketch point's entity id for Point pattern,
+   * so it must not be changed for display.
+   */
   label: string;
+  /**
+   * What the chip reads and is announced by, when the key is no name for a
+   * person: Point pattern's keys are `ent_<uuid>` ids (UX-008).
+   */
+  display?: string;
   point: Vector3;
 }
 
@@ -5315,6 +5735,25 @@ function gridCopies(
   return copies;
 }
 
+/**
+ * What a copy's skip chip reads and is announced by. A copy with a name
+ * (Point pattern's "Point 2") reads that name; one keyed by its position
+ * along the pattern ("3", "1-2") reads the key. The key itself is never
+ * the name of an entity id (UX-008).
+ */
+export function patternCopyChip(params: {
+  label: string;
+  display?: string;
+  skipped: boolean;
+}): { text: string; name: string } {
+  const { label, display, skipped } = params;
+  const copy = display ? `Copy at ${display}` : `Copy ${label}`;
+  return {
+    text: display ?? label,
+    name: skipped ? `${copy}, skipped · bring it back` : `${copy} · skip it`
+  };
+}
+
 /** A skip toggle on every copy, where it stands. */
 function instanceHandles(
   seed: BodyPick,
@@ -5323,14 +5762,20 @@ function instanceHandles(
 ): HandleSpec[] {
   if (copies.length > MAX_INSTANCE_TOGGLES) return [];
   const skipped = new Set(skippedPatternLabels(options));
-  return copies.map(({ label, point }) => {
+  return copies.map(({ label, display, point }) => {
     const off = skipped.has(label);
     return {
       valueId: `instance:${label}`,
       kind: 'instance' as const,
-      // The chip is drawn anew when it is skipped or brought back.
-      key: `${bodyKey(seed)}:instance:${label}:${off ? 'skipped' : 'kept'}`,
-      params: { anchor: point, label, skipped: off }
+      // The chip is drawn anew when it is skipped or brought back, or when
+      // its name moves (an earlier point picked again).
+      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}:${off ? 'skipped' : 'kept'}`,
+      params: {
+        anchor: point,
+        label,
+        ...(display ? { display } : {}),
+        skipped: off
+      }
     };
   });
 }
@@ -5683,8 +6128,10 @@ function pointPatternPlan(
       pointIds: [reference.id, ...picked.map((spot) => spot.id)],
       referencePointId: reference.id
     },
-    copies: picked.map((spot) => ({
+    // Named in the order they were picked; the id stays the skip key.
+    copies: picked.map((spot, index) => ({
       label: spot.id,
+      display: `Point ${index + 1}`,
       point: offset(
         middle,
         {
@@ -6370,6 +6817,8 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   bend: bendSpec,
   'standard-part': standardPartSpec,
   shell,
+  rib,
+  wrap,
   thicken,
   'solid-offset': solidOffset,
   draft,
@@ -6393,6 +6842,8 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   torus: primitiveSpec('torus'),
   'datum-plane': datumPlane,
   'datum-axis': datumAxis,
+  'datum-point': datumPoint,
+  'datum-csys': datumCsys,
   'reference-image': referenceImage
 };
 

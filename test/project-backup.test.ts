@@ -10,7 +10,11 @@ import {
   importStepBody,
   setParameter
 } from '@openzcad/document-core';
-import { toArtifactId, toUserId } from '@openzcad/shared';
+import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  toArtifactId,
+  toUserId
+} from '@openzcad/shared';
 import {
   backupFileBytes,
   MAX_PROJECT_BACKUP_BYTES,
@@ -127,8 +131,9 @@ describe('complete project backups', () => {
       backup.version = 99 as 1;
     },
     (backup: ProjectBackup) => {
-      backup.document.schemaVersion =
-        99 as typeof backup.document.schemaVersion;
+      // A version from the future: always one past the current schema.
+      backup.document.schemaVersion = (PROJECT_DOCUMENT_SCHEMA_VERSION +
+        1) as typeof backup.document.schemaVersion;
     },
     (backup: ProjectBackup) => {
       delete backup.document.nodes[backup.document.rootNodeId];

@@ -4,6 +4,8 @@ import {
   drawingAnnotationError,
   drawingAnnotationCenterlines,
   drawingAnnotationMarks,
+  drawingToleranceHostAllowed,
+  isDrawingToleranceAnnotation,
   MAX_DRAWING_ANNOTATIONS,
   type DrawingAnnotation
 } from './drawing-annotations';
@@ -281,15 +283,44 @@ export interface DrawingTitleBlock {
   revision?: string;
   author?: string;
   date?: string;
+  /**
+   * D02 (schema v94): the shop layout's fields. Stored with any layout, so
+   * switching back and forth loses nothing; only the shop layout prints them.
+   */
+  company?: string;
+  material?: string;
+  finish?: string;
+  checkedBy?: string;
+  approvedBy?: string;
+  /** The general-tolerance note ("UNLESS STATED ±0.1 mm, ±0.5°"). */
+  tolerances?: string;
 }
+
+/** v94: the title-block fields only the shop layout prints. */
+export const DRAWING_TITLE_BLOCK_SHOP_FIELDS = [
+  'company',
+  'material',
+  'finish',
+  'checkedBy',
+  'approvedBy',
+  'tolerances'
+] as const satisfies readonly (keyof DrawingTitleBlock)[];
 
 export const DRAWING_TITLE_BLOCK_FIELDS = [
   'title',
   'drawingNumber',
   'revision',
   'author',
-  'date'
+  'date',
+  ...DRAWING_TITLE_BLOCK_SHOP_FIELDS
 ] as const satisfies readonly (keyof DrawingTitleBlock)[];
+
+/**
+ * D02 (schema v94): a sheet's title-block layout. Absent is the compact
+ * block; `shop` adds material, finish, checked and approved, the company
+ * and a general-tolerance note.
+ */
+export type DrawingTitleBlockLayout = 'shop';
 
 export const MAX_DRAWING_TEXT_LENGTH = 120;
 export const MAX_DRAWING_SHEETS = 50;
@@ -447,6 +478,72 @@ export interface DrawingSectionCut {
    * to a principal direction and the view stays aligned with its source.
    */
   frame?: DrawingSectionFrame;
+  /**
+   * D03 (schema v93): a stepped (offset) section of an aligned one. The
+   * cutting line on the source runs at `depth` and steps, at each `at`
+   * along it (the source's u for a horizontal line, v for a vertical one,
+   * model units, ascending), to that step's own `depth`; each segment cuts
+   * its own strip. Absent or empty: one plane. A free section takes none.
+   */
+  steps?: DrawingSectionStep[];
+}
+
+/** One step of a stepped section (D03, schema v93). */
+export interface DrawingSectionStep {
+  at: number;
+  depth: number;
+}
+
+export const MAX_DRAWING_SECTION_STEPS = 8;
+
+/**
+ * D03 (v93): the world axis a stepped section's line runs along on its
+ * source (the source's page-right for a horizontal line, page-up for a
+ * vertical one), so each step's `at` is a coordinate on it. Null when the
+ * two views do not fold.
+ */
+export function drawingSectionStepAxis(
+  source: DrawingViewOrientation,
+  section: DrawingViewOrientation
+): Vector3 | null {
+  const alignment = drawingViewAlignment(source, section);
+  if (alignment === null) return null;
+  const frame = DRAWING_VIEW_FRAMES[source];
+  // A column pair shares page-up, so the line across it is horizontal.
+  return { ...(alignment === 'column' ? frame.x : frame.up) };
+}
+
+/**
+ * A section view's whole cut for the geometry worker: its plane, and
+ * (v93) its steps with the axis they are measured along. `source` is the
+ * view it is cut from (its orientation places the steps).
+ */
+export function drawingSectionCut(
+  view: Pick<DrawingView, 'orientation'> & {
+    section: Pick<DrawingSectionCut, 'depth' | 'frame' | 'steps'>;
+  },
+  source: DrawingViewOrientation | undefined
+): {
+  normal: Vector3;
+  depth: number;
+  steps?: { along: Vector3; at: number; depth: number }[];
+} {
+  const plane = drawingSectionPlane(view);
+  const steps = view.section.steps ?? [];
+  const along =
+    steps.length > 0 && source && !view.section.frame
+      ? drawingSectionStepAxis(source, view.orientation)
+      : null;
+  return along
+    ? {
+        ...plane,
+        steps: steps.map((step) => ({
+          along: { ...along },
+          at: step.at,
+          depth: step.depth
+        }))
+      }
+    : plane;
 }
 
 /** A free section's frame (D03, schema v91), unit and square. */
@@ -636,6 +733,8 @@ export interface DrawingSheet {
   scale: DrawingScale;
   projectionAngle: DrawingProjectionAngle;
   titleBlock: DrawingTitleBlock;
+  /** D02 (schema v94): absent is the compact title block. */
+  titleBlockLayout?: DrawingTitleBlockLayout;
   source: DrawingSheetSource;
   views: DrawingView[];
   /**
@@ -746,10 +845,35 @@ function drawingViewError(view: unknown, where: string): string | null {
       !Number.isFinite(section.depth) ||
       Math.abs(section.depth) > MAX_DRAWING_SECTION_DEPTH ||
       Object.keys(section).some(
-        (key) => !['sourceViewId', 'label', 'depth', 'frame'].includes(key)
+        (key) =>
+          !['sourceViewId', 'label', 'depth', 'frame', 'steps'].includes(key)
       )
     )
       return `${where} has an invalid section.`;
+    if (section.steps !== undefined) {
+      const steps = section.steps;
+      if (
+        !Array.isArray(steps) ||
+        steps.length > MAX_DRAWING_SECTION_STEPS ||
+        !steps.every(
+          (step) =>
+            isRecord(step) &&
+            Object.keys(step).length === 2 &&
+            [step.at, step.depth].every(
+              (value) =>
+                typeof value === 'number' &&
+                Number.isFinite(value) &&
+                Math.abs(value) <= MAX_DRAWING_SECTION_DEPTH
+            )
+        )
+      )
+        return `${where} has invalid section steps (at most ${MAX_DRAWING_SECTION_STEPS}).`;
+      const ats = (steps as DrawingSectionStep[]).map((step) => step.at);
+      if (ats.some((at, index) => index > 0 && !(at > ats[index - 1]!)))
+        return `${where} has section steps out of order along the line.`;
+      if (section.frame !== undefined && steps.length > 0)
+        return `${where} is a free section, which takes no steps.`;
+    }
     if (section.frame !== undefined) {
       const frame = section.frame;
       const unit = (value: unknown) =>
@@ -955,6 +1079,8 @@ export function drawingSheetError(value: unknown): string | null {
     )
       return `${where} has an invalid title-block field "${key}".`;
   }
+  if (value.titleBlockLayout !== undefined && value.titleBlockLayout !== 'shop')
+    return `${where} has an unknown title-block layout.`;
   if (
     !isRecord(value.source) ||
     typeof value.source.fingerprint !== 'string' ||
@@ -1159,6 +1285,20 @@ export function drawingSheetError(value: unknown): string | null {
         )
           return `${where} annotation ${annotation.annotationId} measures to ${markId}, which is not a mark on its view.`;
       }
+    // v98: a datum symbol or frame is attached to a dimension (a datum
+    // symbol also to a frame) on its own view. A missing host is not
+    // refused here: deleting it leaves the attachment broken, like a mark.
+    for (const annotation of annotations) {
+      if (!isDrawingToleranceAnnotation(annotation)) continue;
+      const hostId = annotation.attachedTo;
+      const host = hostId ? byId.get(hostId) : undefined;
+      if (
+        host &&
+        (!drawingToleranceHostAllowed(annotation.kind, host) ||
+          host.viewId !== annotation.viewId)
+      )
+        return `${where} annotation ${annotation.annotationId} is attached to ${hostId}, which is not a dimension${annotation.kind === 'datum-feature' ? ' or feature control frame' : ''} on its view.`;
+    }
     // v75: a centreline measured to is a straight one on the same view.
     for (const annotation of annotations)
       for (const lineId of drawingAnnotationCenterlines(annotation)) {

@@ -7,8 +7,13 @@ import {
   handleEncryptedSharedSnapshot,
   isEncryptedSharedBlobPath,
   isEncryptedSharedSnapshotPath,
+  shareLinkTokenHash,
   type SharedBlobGuard
 } from './e2eeShareLinks';
+import {
+  handleEncryptedLinkComments,
+  isEncryptedLinkCommentsPath
+} from './e2eeShareComments';
 import { blobBucket } from './e2eeContentBlobs';
 import type { E2eeInvitationHost } from './e2eeInvitations';
 import { withEncryptedProjectInfo } from './e2eeProjectDocuments';
@@ -1274,6 +1279,31 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return json(
       { comment: await createLinkComment(env.DB!, link, name, input) },
       201
+    );
+  }
+
+  // L08 (plan decisions 2 and 3a): a commenter link's visitor reads and
+  // writes the link's encrypted comments. The token is the authorization,
+  // as for the plaintext route above, and only a link whose owner signed a
+  // comment grant takes them; every other token answers the opaque 404.
+  if (
+    (request.method === 'GET' || request.method === 'POST') &&
+    isEncryptedLinkCommentsPath(pathname)
+  ) {
+    const open =
+      isCloudflareFeatureEnabled(env, 'E2EE_PROJECTS_ENABLED') &&
+      projectCollaborationRollout(env).sharingEnabled;
+    if (open && env.ENVIRONMENT !== 'development') {
+      const address = await publicRequestBucket(request, env, 'share');
+      await enforceWorkersCeiling(env, 'SHARE_READ_CEILING_LIMITER', address);
+      await enforceRequestLimit(env, 'SHARE_LINK_LIMITER', address);
+    }
+    return handleEncryptedLinkComments(
+      request,
+      pathname,
+      env.DB,
+      open,
+      shareLinkTokenHash
     );
   }
 

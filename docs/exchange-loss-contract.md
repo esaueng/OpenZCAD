@@ -46,25 +46,41 @@ disabled. Show a body in the viewport to include it in the file.
 
 ## Solid formats
 
-| Format       | Keeps                                                                                                                                                                    | Drops                                                                        |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
-| STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                      |
-| STEP (AP242) | Same as AP214: the protocol changes only the file's schema and application-context statements                                                                            | History                                                                      |
-| STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours        |
-| STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                      |
-| 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package, named after the body and coloured in its display colour                             | Body separation **on reimport** (the import merges the objects), exact faces |
-| OBJ          | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours (no MTL)                  |
-| PLY (binary) | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours                           |
-| glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node                                                                                                 | Body separation (one merged mesh), exact faces, export unit, names, colours  |
+| Format       | Keeps                                                                                                                                                                    | Drops                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| STEP (AP214) | Each body as its own solid named after the body and styled in its display colour, the document as the product, exact analytic faces, bounds, volume, closed shells, unit | History                                                                                         |
+| STEP (AP242) | Same as AP214, plus the model's datum features and feature control frames as semantic PMI on their faces                                                                 | History                                                                                         |
+| IGES (B-rep) | Each body as its own type 186 solid, exact analytic and B-spline faces, bounds, volume, closed shells, cavities, the stated unit                                         | Names, colours, history                                                                         |
+| STL (binary) | Bounds and volume within the chord tolerance, a closed surface                                                                                                           | Body separation (one facet stream), exact faces, unit, names, colours                           |
+| STL (ASCII)  | Same as binary STL                                                                                                                                                       | Same as binary STL; every body shares one `solid` block                                         |
+| 3MF          | Bounds, volume, a closed surface, declared unit, one object per body in the package, named after the body and coloured in its display colour                             | Body separation **on reimport** (the import merges the objects), exact faces                    |
+| OBJ          | Bounds, volume, a closed surface, one object per body named after it (`o`); with _OBJ colors_, a material per display colour in the MTL beside it                        | Body separation **on reimport**, exact faces, unit, colours in a single OBJ (they need the MTL) |
+| PLY (binary) | Bounds, volume, a closed surface                                                                                                                                         | Body separation, exact faces, unit, names, colours                                              |
+| glTF (GLB)   | Bounds, volume, a closed surface; metres and +Y up through its root node; one node and mesh per body, named after it, in a material of its display colour                | Body separation **on reimport** (the import merges the meshes), exact faces, export unit        |
 
-STEP body names and colours are in the file for other CAD to read; OpenZCAD's
-own STEP import does not yet apply them to the bodies it creates (I02).
+**STEP structure (I02).** Export writes Objects folders as an assembly: the
+project is the root product, each folder a sub-assembly and each body a part
+named after it, every one placed with an identity transform, so a reader that
+ignores products still reads the same solids. Import reads a file's product
+structure: every placed occurrence of a part becomes its own body, where the
+assembly places it, named after its part (or after its solid, when the file
+names it), coloured as the file colours it, and filed in folders that follow
+the assembly tree (a file with one product stays at the top level). An
+OpenZCAD project exported and imported again comes back with the same body
+names, colours and folders, inside one folder named after the project.
+Repeated parts become independent bodies (no shared definition), occurrence
+names and per-occurrence colour overrides are not read, and a face coloured
+differently from its body keeps only the body's colour. A file whose structure
+cannot be read (mapped-item assemblies, for one) is still imported with the
+flat reader, at each part's own origin, and the import says so.
 
 **STEP protocol:** Settings → General → _STEP protocol_ picks what File ›
 STEP states: AP214 (automotive design, the default and what every STEP export
 wrote before the choice existed) or AP242 edition 1 (managed model-based 3D
-engineering). Both files hold the same entities after the header; Insert
-project always travels as AP214.
+engineering). Both files hold the same geometry and presentation entities
+after the header; an AP242 file also carries the model's PMI (D07) as
+semantic datum features, datums and geometric tolerances, each tied to the
+exact face it applies to. Insert project always travels as AP214.
 
 3MF names and colours use only the 3MF core format: each `<object>` carries
 its body's `name`, and one core `<basematerials>` group holds a `<base>` per
@@ -81,6 +97,25 @@ slicers do with it, read from their public 3MF importers (2026-11-15):
 None of this was confirmed in a running slicer; it is what each importer's
 source does with these elements. OpenZCAD's own 3MF import still merges the
 objects into one body and does not read names or colours back.
+
+**Mesh export package (I04).** The mesh export dialog can write _one file
+per body_, _also export_ the same scope in further formats, and add _OBJ
+colors (.mtl)_. Whenever that makes more than one file, they download
+together as one `.zip` (an OBJ with colours is its `.obj` and `.mtl`). Body
+files are named after the project and the body. The dialog remembers its
+format and package choices in this browser for the next export.
+
+**IGES (I06).** File › Export IGES writes the shown bodies as IGES 5.3
+manifold solid B-rep objects (type 186) in the export unit: planes,
+cylinders, cones, spheres and tori as their exact IGES surfaces, B-spline
+faces as 128, no names or colours. Import CAD files reads `.igs`/`.iges`
+files of 186 solids through the same exact path: the Remus translator
+restates the B-rep as STEP, and that STEP text is what the project stores,
+archives and rebuilds from, under the IGES file's name. A file of trimmed
+surfaces with no 186 solid (a surface model) is refused, naming how many
+surfaces it holds; so are entity types outside that family and non-rigid
+transformations, and a body whose closed edge has no carrier (the torus
+primitive) is refused on export. The legacy preview reader is not used.
 
 **Insert project…** (File menu) copies another project's shown bodies into
 the open one as one undoable step: each keeps its name, chosen colour and

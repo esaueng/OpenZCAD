@@ -26,6 +26,8 @@ export function drawingBodyReplacements(
       case 'thread':
       case 'shell':
       case 'solid-offset':
+      case 'rib':
+      case 'wrap':
       case 'draft': {
         const targets = successors.get(data.targetBodyId) ?? [];
         targets.push(node.bodyId);

@@ -141,9 +141,29 @@ export function datumAxisSourceFailed(
       [
         'run along an edge',
         'follow a face',
+        'stand square to a face',
         'use an edge of body',
         'use a face of body'
       ].some((failure) => warning.message.includes(prefix + failure))
+  );
+}
+
+/**
+ * Schema v108: true when the build reports that the edge a datum plane
+ * stands square to, or turns about, could not be found or used: a re-picked
+ * edge can repair it.
+ */
+export function datumPlaneEdgeFailed(
+  feature: FeatureNode,
+  warnings: readonly FeatureWarning[]
+): boolean {
+  const prefix = `Datum plane "${feature.name}" cannot `;
+  return warnings.some(
+    (warning) =>
+      warning.featureId === feature.featureId &&
+      ['stand square to an edge', 'turn about an edge', 'use an edge of'].some(
+        (failure) => warning.message.includes(prefix + failure)
+      )
   );
 }
 

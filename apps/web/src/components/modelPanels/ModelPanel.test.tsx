@@ -274,6 +274,23 @@ describe('ModelPanel', () => {
       screen.getByRole('button', { name: 'Original' })
     ).toBeInTheDocument();
   });
+  it('says Objects details are preparing in its header, not above its rows (#1598)', () => {
+    const { container, rerender } = renderPanels(['bodies'], {
+      geometryPending: true,
+      geometryPendingShown: true
+    });
+    const status = screen.getByText('Preparing…');
+    expect(status).toHaveAttribute('role', 'status');
+    expect(status).toHaveAccessibleName('Preparing model details…');
+    // The header's fixed row: nothing joins the list, so no row moves.
+    expect(status.closest('.model-panel-header')).not.toBeNull();
+    expect(container.querySelector('.feature-list [role="status"]')).toBeNull();
+    rerender({ geometryPending: true, geometryPendingShown: false });
+    expect(screen.queryByText('Preparing…')).toBeNull();
+    rerender({ geometryPending: false, geometryPendingShown: false });
+    expect(screen.queryByText('Preparing…')).toBeNull();
+  });
+
   it('gives the empty Objects message list-item semantics', () => {
     renderPanels(['bodies']);
     expect(
@@ -556,6 +573,34 @@ describe('ModelPanel', () => {
       )
     ).toBeVisible();
     expect(screen.getByText('No warnings in this model.')).toBeVisible();
+  });
+
+  it('opens the history as text from the History header (L15)', async () => {
+    const user = userEvent.setup();
+    const document = createProjectDocument('Text', toUserId('owner'));
+    renderPanels(['history'], { document });
+    const region = within(screen.getByRole('region', { name: 'History' }));
+    const toggle = region.getByRole('button', { name: 'History as text' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    const dialog = await screen.findByRole('dialog', {
+      name: 'History as text'
+    });
+    expect(
+      within(dialog).getByLabelText<HTMLTextAreaElement>(/History text/).value
+    ).toMatch(/^openzcad history 1/);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'History as text' })
+    ).toBeNull();
+  });
+
+  it('offers no history text without a document', () => {
+    renderPanels(['history']);
+    expect(
+      screen.queryByRole('button', { name: 'History as text' })
+    ).toBeNull();
   });
 
   it('offers Pin and Close in the header, and no Pop out or fold', async () => {

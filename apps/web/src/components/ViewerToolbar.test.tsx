@@ -138,20 +138,55 @@ describe('the section panel', () => {
     expect(
       screen.getByText(/release the slider for section curves/)
     ).toBeTruthy();
-    expect(
-      screen.getByLabelText('Export the exact section as DXF')
-    ).toHaveProperty('disabled', true);
+    expect(screen.getByLabelText('Export the section as DXF')).toHaveProperty(
+      'disabled',
+      true
+    );
   });
 
   it('names the exact section, shows its area, and exports it', () => {
     const onExportSectionDxf = vi.fn();
     renderToolbar(
-      { kind: 'exact', regions: [], area: 187.4538, missed: 0, unsectioned: 0 },
+      {
+        kind: 'exact',
+        regions: [],
+        area: 187.4538,
+        boundary: 'exact',
+        missed: 0,
+        unsectioned: 0
+      },
       { onExportSectionDxf }
     );
     expect(screen.getByText('Exact')).toBeTruthy();
     expect(screen.getByText('187.45 mm² of material')).toBeTruthy();
-    const button = screen.getByLabelText('Export the exact section as DXF');
+    const button = screen.getByLabelText('Export the section as DXF');
+    expect(button).toHaveProperty('disabled', false);
+    fireEvent.click(button);
+    expect(onExportSectionDxf).toHaveBeenCalledOnce();
+  });
+
+  it('names a chorded section approximate, quotes no tolerance, and still exports it', () => {
+    const onExportSectionDxf = vi.fn();
+    renderToolbar(
+      {
+        kind: 'exact',
+        regions: [],
+        area: 3143.5421,
+        boundary: 'approximate',
+        missed: 0,
+        unsectioned: 0
+      },
+      { onExportSectionDxf }
+    );
+    // UX-013: two holes cut into 64-sided polygons were labelled Exact.
+    expect(screen.queryByText('Exact')).toBeNull();
+    expect(screen.getByText('Approximate')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'About 3143.54 mm² of material. Curved edges are cut as straight segments.'
+      )
+    ).toBeTruthy();
+    const button = screen.getByLabelText('Export the section as DXF');
     expect(button).toHaveProperty('disabled', false);
     fireEvent.click(button);
     expect(onExportSectionDxf).toHaveBeenCalledOnce();
@@ -162,6 +197,7 @@ describe('the section panel', () => {
       kind: 'exact',
       regions: [],
       area: 540,
+      boundary: 'exact',
       missed: 1,
       unsectioned: 0
     });
@@ -170,15 +206,23 @@ describe('the section panel', () => {
     ).toBeTruthy();
     // The exporter treats a plane that misses a body as an ordinary section,
     // so the drawing is complete and the button stays live.
-    expect(
-      screen.getByLabelText('Export the exact section as DXF')
-    ).toHaveProperty('disabled', false);
+    expect(screen.getByLabelText('Export the section as DXF')).toHaveProperty(
+      'disabled',
+      false
+    );
   });
 
   it('shuts the export when a body the plane cuts has no exact section', () => {
     const onExportSectionDxf = vi.fn();
     renderToolbar(
-      { kind: 'exact', regions: [], area: 540, missed: 0, unsectioned: 1 },
+      {
+        kind: 'exact',
+        regions: [],
+        area: 540,
+        boundary: 'exact',
+        missed: 0,
+        unsectioned: 1
+      },
       { onExportSectionDxf }
     );
     // The kernel section IS on screen for the body that came out exact, so
@@ -190,7 +234,7 @@ describe('the section panel', () => {
         '540 mm² of material, 1 body has no exact section, so there is no drawing to export'
       )
     ).toBeTruthy();
-    const button = screen.getByLabelText('Export the exact section as DXF');
+    const button = screen.getByLabelText('Export the section as DXF');
     expect(button).toHaveProperty('disabled', true);
     fireEvent.click(button);
     expect(onExportSectionDxf).not.toHaveBeenCalled();
@@ -205,9 +249,10 @@ describe('the section panel', () => {
     expect(
       screen.getByText('The section plane does not pass through this body.')
     ).toBeTruthy();
-    expect(
-      screen.getByLabelText('Export the exact section as DXF')
-    ).toHaveProperty('disabled', true);
+    expect(screen.getByLabelText('Export the section as DXF')).toHaveProperty(
+      'disabled',
+      true
+    );
   });
 
   it('asks for the exact cut when the slider is released, not while dragging', () => {
@@ -1179,5 +1224,85 @@ describe("the viewer bar's groups", () => {
     // bar as one surface.
     expect(edit.nextElementSibling).toHaveClass('rail-group-break');
     expect(edit.nextElementSibling?.nextElementSibling).toBe(view);
+  });
+});
+
+/**
+ * UX-009: a command card holding the right lane (Measure's workbench among
+ * them) hides the section panel by CSS. The button announced the controls
+ * expanded while they were display: none; now it says what is on screen,
+ * and pressing it while measuring puts Measure away for the controls.
+ */
+describe('the section button under a card that holds the lane', () => {
+  function renderInLane({
+    measuring,
+    onMeasure = vi.fn()
+  }: {
+    measuring: boolean;
+    onMeasure?: (next: boolean) => void;
+  }) {
+    const noop = () => undefined;
+    const view = render(
+      <div className="viewer-area has-command">
+        <div className="instrument-rail">
+          <ViewerToolbar
+            settings={settings}
+            projection="perspective"
+            canUndo={false}
+            canRedo={false}
+            sectionRange={{ min: 0, max: 6 }}
+            onUndo={noop}
+            onRedo={noop}
+            onToggleGrid={noop}
+            onFit={noop}
+            onView={noop}
+            onDisplayMode={noop}
+            onToggleXray={noop}
+            onToggleProjection={noop}
+            onToggleSection={noop}
+            onSectionPlane={noop}
+            onSectionOffset={noop}
+            onSectionCommit={noop}
+            onExportSectionDxf={noop}
+            sectionOutline={{ kind: 'clipping' }}
+            measuring={measuring}
+            onMeasure={onMeasure}
+            units="mm"
+          />
+        </div>
+      </div>
+    );
+    const viewer = view.container.querySelector('.viewer-area')!;
+    const section = () => screen.getByRole('button', { name: /^Section view/ });
+    return { ...view, viewer, section, onMeasure };
+  }
+
+  it('is not expanded while the lane hides its controls', () => {
+    const { section } = renderInLane({ measuring: true });
+    expect(section()).toHaveAttribute('aria-expanded', 'false');
+    expect(section()).not.toHaveClass('open');
+  });
+
+  it('expands again when the card gives the lane back', async () => {
+    const { viewer, section } = renderInLane({ measuring: false });
+    expect(section()).toHaveAttribute('aria-expanded', 'false');
+    await act(async () => {
+      viewer.classList.remove('has-command');
+    });
+    expect(section()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('puts Measure away when pressed for the controls', () => {
+    const { section, onMeasure } = renderInLane({ measuring: true });
+    fireEvent.click(section());
+    expect(onMeasure).toHaveBeenCalledWith(false);
+  });
+
+  it('leaves a command card alone and says the controls wait for it', () => {
+    const onMeasure = vi.fn();
+    const { section } = renderInLane({ measuring: false, onMeasure });
+    fireEvent.click(section());
+    expect(onMeasure).not.toHaveBeenCalled();
+    expect(section()).toHaveAttribute('aria-expanded', 'false');
   });
 });

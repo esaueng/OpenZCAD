@@ -122,7 +122,7 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   [String.raw`/^\/api\/e2ee\/assistant-consents\/([^/]+)\/members$/`]: [
     ['/api/e2ee/assistant-consents/proj_inv/members', 'none']
   ],
-  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|blobs(?:\/.*)?)$/`]:
+  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(?:document|versions|revisions(?:\/[^/]+)?|info|measurements|view-states(?:\/[^/]+)?|comments|share-comments(?:\/[^/]+)?|blobs(?:\/.*)?)$/`]:
     [
       `${E}/document`,
       `${E}/versions`,
@@ -130,6 +130,8 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
       `${E}/info`,
       `${E}/measurements`,
       `${E}/view-states/view_1`,
+      `${E}/comments`,
+      `${E}/share-comments/lcm_1`,
       `${E}/blobs/uploads`
     ].map((path) => [path, 'none'] as const),
   [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations(?:\/[^/]+\/acceptance)?|key-packages(?:\/claim)?)$/`]:
@@ -151,8 +153,9 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
       `${E}/key-packages`,
       `${E}/welcome`
     ].map((path) => [path, 'none'] as const),
-  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(measurements|view-states|view-states\/[^/]+)$/`]:
-    [`${E}/measurements`, `${E}/view-states`].map(
+  // L08 encrypted comment logs travel as signed ciphertext, like these.
+  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(measurements|view-states|view-states\/[^/]+|comments)$/`]:
+    [`${E}/measurements`, `${E}/view-states`, `${E}/comments`].map(
       (path) => [path, 'none'] as const
     ),
   [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/(mls\/commits|mls\/group-info|mls\/leaves|mls\/proposals|keys|keys\/archives|authority)$/`]:
@@ -195,10 +198,20 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
   [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/revocation-cutoffs$/`]: [
     [`${E}/revocation-cutoffs`, 'none']
   ],
-  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/share-links(?:\/([^/]+)(?:\/(keys|authority|snapshot))?)?$/`]:
-    [`${E}/share-links`, `${E}/share-links/link_1/snapshot`].map(
+  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/share-links(?:\/([^/]+)(?:\/(keys|authority|snapshot|comment-grant))?)?$/`]:
+    [
+      `${E}/share-links`,
+      `${E}/share-links/link_1/snapshot`,
+      `${E}/share-links/link_1/comment-grant`
+    ].map((path) => [path, 'none'] as const),
+  // L08 commenter links on encrypted projects: ciphertext and signed grants.
+  [String.raw`/^\/api\/e2ee\/projects\/([^/]+)\/share-comments(?:\/([^/]+))?$/`]:
+    [`${E}/share-comments`, `${E}/share-comments/lcm_1`].map(
       (path) => [path, 'none'] as const
     ),
+  [String.raw`/^\/api\/e2ee\/share\/([^/]+)\/comments$/`]: [
+    ['/api/e2ee/share/share_1/comments', 'none', ['POST']]
+  ],
   [String.raw`/^\/api\/e2ee\/share\/([^/]+)$/`]: [
     ['/api/e2ee/share/share_1', 'read']
   ],
@@ -300,6 +313,7 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
     ['/api/share/share_1/comments', 'none', ['POST']]
   ],
   '/api/share/comments': [['/api/share/comments', 'none', ['POST']]],
+  '/api/e2ee/share/comments': [['/api/e2ee/share/comments', 'none', ['POST']]],
   [String.raw`/^\/api\/share\/([^/]+)\/assets\/([^/]+)$/`]: [
     ['/api/share/share_1/assets/asset_1', 'read']
   ],

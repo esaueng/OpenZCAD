@@ -640,7 +640,7 @@ function downloadBlobFile(
 
 export async function saveCadTextFile(
   suggestedName: string,
-  format: 'step' | 'stl' | 'dxf' | 'svg',
+  format: 'step' | 'igs' | 'stl' | 'dxf' | 'svg',
   contents: string
 ): Promise<boolean> {
   if (!isDesktopApp()) {
@@ -649,11 +649,13 @@ export async function saveCadTextFile(
       contents,
       format === 'step'
         ? 'model/step'
-        : format === 'dxf'
-          ? 'image/vnd.dxf'
-          : format === 'svg'
-            ? 'image/svg+xml'
-            : 'model/stl'
+        : format === 'igs'
+          ? 'model/iges'
+          : format === 'dxf'
+            ? 'image/vnd.dxf'
+            : format === 'svg'
+              ? 'image/svg+xml'
+              : 'model/stl'
     );
     return true;
   }

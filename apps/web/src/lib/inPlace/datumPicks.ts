@@ -18,7 +18,8 @@ import {
   datumVertexFromEdgePick,
   datumVertexKey,
   edgeEnds,
-  requireResolvedDatums
+  requireResolvedDatums,
+  type DatumFeatureKind
 } from '../datumPlanes';
 import { edgeClickIsEnd, type RefPick } from './datums';
 import type { RevolveAxisCandidate } from './revolve';
@@ -110,7 +111,8 @@ export function revolutionRef(
 export function faceRef(
   document: ProjectDocument,
   selection: TopologySelection,
-  kinds: readonly RefPick['kind'][]
+  kinds: readonly RefPick['kind'][],
+  click: Vector3 | null = null
 ): RefPick | Refused {
   const face = ownEntry(
     document.derived.bodyRepresentations,
@@ -119,6 +121,29 @@ export function faceRef(
   const type = face?.geometry?.surfaceType.toLowerCase();
   if ((type === 'cylinder' || type === 'cone') && kinds.includes('revolution'))
     return revolutionRef(document, selection);
+  // Schema v108: any other curved face, for an Axis square to it where it
+  // was clicked.
+  if (type !== 'plane' && kinds.includes('surface')) {
+    if (!face?.reference) {
+      return {
+        reason:
+          'This face has no identity a rebuild can find again, so an axis cannot stand on it.'
+      };
+    }
+    if (!click)
+      return { reason: 'Click the face where the axis should stand.' };
+    const source = {
+      type: 'face' as const,
+      bodyId: selection.bodyId,
+      faceReference: face.reference
+    };
+    return {
+      kind: 'surface',
+      key: `surface:${JSON.stringify(source)}:${click.x}:${click.y}:${click.z}`,
+      source,
+      at: { ...click }
+    };
+  }
   if (kinds.includes('plane')) return facePlaneRef(document, selection);
   return { reason: 'Pick a flat face.' };
 }
@@ -145,6 +170,46 @@ export function edgeRef(
   const straight = Boolean(
     witness && !witness.closed && /^line$/i.test(witness.curveType)
   );
+  // R01 (schema v99): a circle or arc clicked away from its ends is its
+  // centre, for a datum point.
+  if (
+    kinds.includes('circle') &&
+    witness &&
+    /circle/i.test(witness.curveType) &&
+    edge?.reference &&
+    (ends === null || !edgeClickIsEnd(ends, click, true, 8))
+  ) {
+    const source = {
+      type: 'edge' as const,
+      bodyId: selection.bodyId,
+      edgeReference: edge.reference
+    };
+    return { kind: 'circle', key: `circle:${JSON.stringify(source)}`, source };
+  }
+  // Schema v108: an open edge clicked away from its ends, for a Plane square
+  // to it (a straight one also takes a point or a plane).
+  if (
+    kinds.includes('curve') &&
+    witness &&
+    !witness.closed &&
+    edge?.reference &&
+    ends !== null &&
+    pointsPicked === 0 &&
+    !edgeClickIsEnd(ends, click, true, straight ? 4 : 8)
+  ) {
+    const source = {
+      type: 'edge' as const,
+      bodyId: selection.bodyId,
+      edgeReference: edge.reference
+    };
+    return {
+      kind: 'curve',
+      key: `curve:${JSON.stringify(source)}`,
+      source,
+      ends,
+      straight
+    };
+  }
   const asEnd =
     !kinds.includes('edge') ||
     pointsPicked > 0 ||
@@ -172,7 +237,7 @@ export function requireNewDatum(
   derived: ProjectDocument['derived'],
   featureId: FeatureId,
   name: string,
-  kind: 'datum-plane' | 'datum-axis'
+  kind: DatumFeatureKind
 ): void {
   requireResolvedDatums(base, derived, featureId, name, kind);
 }

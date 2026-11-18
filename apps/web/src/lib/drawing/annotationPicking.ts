@@ -546,7 +546,14 @@ export type AnnotationToolKind =
   | 'circle-centerline'
   /** v80: a part's item number, and the assembly's parts list. */
   | 'balloon'
-  | 'parts-list';
+  | 'parts-list'
+  /** v92: one of the project's pictures, placed on the paper. */
+  | 'image'
+  /** v98 (D07): a datum feature symbol and a feature control frame. */
+  | 'datum-feature'
+  | 'feature-control-frame'
+  /** v105 (D07): the sheet's general-tolerance block, on the paper. */
+  | 'general-tolerance';
 
 /** v73: tools that mark geometry, made as soon as their picks are in. */
 export const GEOMETRY_TOOL_KINDS: readonly AnnotationToolKind[] = [
@@ -579,8 +586,20 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   centerline: 'Centreline',
   'circle-centerline': 'Circular centreline',
   balloon: 'Balloon',
-  'parts-list': 'Parts list'
+  'parts-list': 'Parts list',
+  image: 'Image',
+  'datum-feature': 'Datum feature',
+  'feature-control-frame': 'Feature control frame',
+  'general-tolerance': 'General tolerances'
 };
+
+/** v98: the tools that point at an edge or attach to a dimension. */
+export function isToleranceTool(kind: AnnotationToolKind): boolean {
+  return kind === 'datum-feature' || kind === 'feature-control-frame';
+}
+
+/** v92: how wide a newly placed sheet image prints, paper mm. */
+export const DEFAULT_DRAWING_IMAGE_WIDTH_MM = 40;
 
 /** What each tool asks for next, by how many picks it has. */
 export function annotationToolHint(tool: AnnotationTool): string {
@@ -588,7 +607,11 @@ export function annotationToolHint(tool: AnnotationTool): string {
   if (pickedEnough(tool))
     return tool.repairId
       ? `${label}: done.`
-      : `${label}: click where the ${tool.kind === 'note' ? 'note' : 'dimension'} goes.`;
+      : isToleranceTool(tool.kind)
+        ? tool.hostId && tool.kind === 'feature-control-frame'
+          ? `${label}: click anywhere to place it under its dimension.`
+          : `${label}: click where it goes.`
+        : `${label}: click where the ${tool.kind === 'note' ? 'note' : 'dimension'} goes.`;
   switch (tool.kind) {
     case 'horizontal':
     case 'vertical':
@@ -635,6 +658,14 @@ export function annotationToolHint(tool: AnnotationTool): string {
       return 'Balloon: pick an edge of an assembly part for its leader.';
     case 'parts-list':
       return 'Parts list: click where its top-left corner goes.';
+    case 'image':
+      return 'Image: click where its centre goes.';
+    case 'datum-feature':
+      return 'Datum feature: pick the edge of the datum surface, or a size dimension (or its frame) to attach it to.';
+    case 'feature-control-frame':
+      return 'Feature control frame: pick the edge of the toleranced surface, or a size dimension to put the frame under.';
+    case 'general-tolerance':
+      return 'General tolerances: click where the block’s top-left corner goes.';
   }
 }
 
@@ -655,6 +686,13 @@ export interface AnnotationTool {
   placed?: { x: number; y: number };
   /** Re-picking the references of this broken annotation. */
   repairId?: DrawingAnnotationId;
+  /** v92: the reference image an Image tool places. */
+  pictureId?: string;
+  /**
+   * v98: the dimension (or, for a datum symbol, the frame) picked to attach
+   * to, instead of an edge.
+   */
+  hostId?: DrawingAnnotationId;
   /**
    * What the view drew when the tool was pinned to it (see
    * {@link drawingViewSignature}); picks are only good while it holds.
@@ -724,7 +762,12 @@ export function pickedEnough(tool: AnnotationTool): boolean {
     case 'balloon':
       return tool.edges.length === 1;
     case 'parts-list':
+    case 'image':
+    case 'general-tolerance':
       return tool.placed !== undefined;
+    case 'datum-feature':
+    case 'feature-control-frame':
+      return tool.edges.length === 1 || tool.hostId !== undefined;
   }
 }
 
@@ -847,8 +890,12 @@ export function applyAnnotationPick(
   } | null = null
 ): PickResult {
   if (pickedEnough(tool)) return { ok: true, tool };
-  // A parts list sits on the paper: any click places it.
-  if (tool.kind === 'parts-list')
+  // A parts list (and, v92, an image) sits on the paper: any click places it.
+  if (
+    tool.kind === 'parts-list' ||
+    tool.kind === 'image' ||
+    tool.kind === 'general-tolerance'
+  )
     return {
       ok: true,
       tool: { ...tool, placed: { x: point[0], y: point[1] } }
@@ -961,7 +1008,8 @@ export function applyAnnotationPick(
     tool.kind !== 'diameter' &&
     tool.kind !== 'center-mark' &&
     tool.kind !== 'arc-angle' &&
-    tool.kind !== 'balloon'
+    tool.kind !== 'balloon' &&
+    !isToleranceTool(tool.kind)
   )
     return {
       ok: false,
@@ -1133,6 +1181,8 @@ export function applyAnnotationPick(
       return { ok: true, tool: { ...next, edges: [ref] } };
     case 'note':
     case 'balloon':
+    case 'datum-feature':
+    case 'feature-control-frame':
       return { ok: true, tool: { ...next, edges: [ref] } };
     case 'center-mark':
       if (!isFaceOnCircle(view, hit.edge))
@@ -1303,7 +1353,12 @@ export function draftAnnotation(
   placementMm: { x: number; y: number },
   text = 'NOTE',
   /** v80: the assembly component a balloon's edge belongs to. */
-  componentId?: string
+  componentId?: string,
+  /**
+   * v98: a new datum symbol's letter and a new frame's tolerance amount
+   * (in the sheet's printed units); the Properties panel edits the rest.
+   */
+  tolerancing: { letter: string; amount: number } = { letter: 'A', amount: 0.1 }
 ): DrawingAnnotation | null {
   if (!pickedEnough(tool)) return null;
   const base = { annotationId, placementMm };
@@ -1424,7 +1479,62 @@ export function draftAnnotation(
         : null;
     case 'parts-list':
       return { ...base, kind: 'bom-table' };
+    case 'general-tolerance':
+      // ISO 2768-m, the usual default; Properties chooses another.
+      return {
+        ...base,
+        kind: 'general-tolerance',
+        scheme: 'iso-2768',
+        linearClass: 'm'
+      };
+    case 'image':
+      return tool.pictureId
+        ? {
+            ...base,
+            kind: 'image',
+            referenceImageId: tool.pictureId,
+            widthMm: DEFAULT_DRAWING_IMAGE_WIDTH_MM
+          }
+        : null;
+    case 'datum-feature':
+    case 'feature-control-frame': {
+      const target = tool.hostId
+        ? { attachedTo: tool.hostId }
+        : { leader: tool.edges[0]! };
+      // A new frame states flatness, which needs no datum, so it is valid
+      // as placed; Properties chooses the characteristic and datums.
+      return tool.kind === 'datum-feature'
+        ? {
+            ...base,
+            kind: 'datum-feature',
+            viewId: tool.viewId!,
+            ...target,
+            letter: tolerancing.letter
+          }
+        : {
+            ...base,
+            kind: 'feature-control-frame',
+            viewId: tool.viewId!,
+            ...target,
+            characteristic: 'flatness',
+            amount: tolerancing.amount
+          };
+    }
   }
+}
+
+/**
+ * v98: the first datum letter the drawing does not use yet: A, B, C, …
+ * (skipping I, O and Q), then AA, AB, ….
+ */
+export function nextDatumLetter(used: Iterable<string>): string {
+  const taken = new Set(used);
+  const singles = [...'ABCDEFGHJKLMNPRSTUVWXYZ'];
+  for (const letter of singles) if (!taken.has(letter)) return letter;
+  for (const first of singles)
+    for (const second of singles)
+      if (!taken.has(first + second)) return first + second;
+  return 'A';
 }
 
 /**
@@ -1455,6 +1565,20 @@ export function repairedAnnotation(
   if (!draft || draft.kind !== previous.kind) return null;
   if (previous.kind === 'note' && draft.kind === 'note')
     return { ...previous, ...(draft.leader ? { leader: draft.leader } : {}) };
+  // v98: a re-pick changes only what it points at or hangs from.
+  if (
+    (previous.kind === 'datum-feature' && draft.kind === 'datum-feature') ||
+    (previous.kind === 'feature-control-frame' &&
+      draft.kind === 'feature-control-frame')
+  ) {
+    const { leader: _leader, attachedTo: _host, ...kept } = previous;
+    return {
+      ...kept,
+      ...(draft.attachedTo !== undefined
+        ? { attachedTo: draft.attachedTo }
+        : { leader: draft.leader! })
+    };
+  }
   // A re-pick keeps the format (decimals, count, Ø, reference, and v68's
   // tolerance, prefix and suffix) but makes the
   // dimension the person's own: it no longer carries generated provenance.
@@ -1501,6 +1625,9 @@ export function draftRefusal(
   /** v80: the assembly's BOM, for parts lists and balloons. */
   bom?: SheetBom
 ): string | null {
+  // v92: an image measures nothing; its picture was chosen from the
+  // project's own, so there is nothing to refuse.
+  if (annotation.kind === 'image') return null;
   const resolution = resolveDrawingAnnotation(
     annotation,
     view,

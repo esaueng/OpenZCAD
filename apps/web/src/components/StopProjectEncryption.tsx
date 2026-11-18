@@ -38,6 +38,7 @@ function phaseLabel(progress: MigrationProgress): string {
       return 'Decrypting files and details…';
     case 'checking':
     case 'members':
+    case 'comments':
     case 'readding':
       return 'Checking…';
     case 'cutover':

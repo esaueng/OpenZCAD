@@ -61,9 +61,14 @@ export function sectionPlaneKey(
   if (!view.section) return null;
   // D03 (v91): a free section's plane is named by its normal.
   const frame = view.section.frame;
+  // v93: a stepped section's cut includes its steps, and its source: the
+  // steps run along an axis the source's orientation sets.
+  const steps = view.section.steps?.length
+    ? `+${view.section.sourceViewId}:${view.section.steps.map((step) => `${step.at}@${step.depth}`).join(',')}`
+    : '';
   return frame
     ? `${frame.direction.x},${frame.direction.y},${frame.direction.z}@${view.section.depth}`
-    : `${view.orientation}@${view.section.depth}`;
+    : `${view.orientation}@${view.section.depth}${steps}`;
 }
 
 /** The projection input key of one body cut by a section view's plane. */

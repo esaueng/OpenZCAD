@@ -1,4 +1,12 @@
-import type { EdgeTopology, Vector3 } from '@openzcad/shared';
+import type {
+  EdgeTopology,
+  EdgeTopologyReferenceV5,
+  FaceTopologyReferenceV5,
+  FeatureId,
+  Vector3
+} from '@openzcad/shared';
+import { deriveRemusBooleanCarrierLineage } from './remus-lineage';
+import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import type { RemusKernel } from './remus-runtime';
 import type { ExactShape } from './exact-types';
 import { displayTessellationForExtents } from './display-tessellation';
@@ -10,7 +18,7 @@ import {
 } from './exact-brep';
 import { edgeToFaceMapOf } from './exact-sync-memo';
 import { edgeWitnessOf } from './exact-witnesses';
-import { topologyHashOfWitness } from './topology-lineage';
+import { topologyHashOfWitness, topologyWitnessKey } from './topology-lineage';
 import {
   drawingTessellationOfShape,
   type DrawingBodyTessellation,
@@ -52,6 +60,12 @@ import {
 export interface DrawingSectionPlane {
   normal: Vector3;
   depth: number;
+  /**
+   * D03 (v93): a stepped section. From each step's `at` along `along` (a
+   * principal axis square to the normal) onward, the plane sits at that
+   * step's `depth`; before the first, at `depth`. Ascending `at`.
+   */
+  steps?: { along: Vector3; at: number; depth: number }[];
 }
 
 export interface DrawingSectionBody extends DrawingBodyTessellation {
@@ -207,13 +221,18 @@ function cutSolids(
   plane: DrawingSectionPlane
 ): {
   solids: number[];
+  /** The source solid each of `solids` came from. */
+  origins: number[];
   /** Behind or across the plane, uncut: what a fallback cuts from its mesh. */
   uncut: number[];
   cut: boolean;
   refusal: string | null;
 } {
   const principal = principalAxis(plane.normal);
+  if (plane.steps?.length) return steppedCut(kernel, shape, plane);
   const solids: number[] = [];
+  /** The source solid each kept solid was cut from (or is). */
+  const origins: number[] = [];
   const uncut: number[] = [];
   let cut = false;
   let refusal: string | null = null;
@@ -225,6 +244,7 @@ function cutSolids(
       uncut.push(solid);
       if (behind || tool === null) {
         solids.push(solid);
+        origins.push(solid);
         continue;
       }
       cut = true;
@@ -240,6 +260,7 @@ function cutSolids(
         continue;
       }
       solids.push(result);
+      origins.push(solid);
       continue;
     }
     const { axis, sign } = principal;
@@ -261,6 +282,7 @@ function cutSolids(
     uncut.push(solid);
     if (nearest >= plane.depth - flush) {
       solids.push(solid);
+      origins.push(solid);
       continue;
     }
     cut = true;
@@ -297,18 +319,285 @@ function cutSolids(
       continue;
     }
     solids.push(result);
+    origins.push(solid);
   }
-  return { solids, uncut, cut, refusal };
+  return { solids, origins, uncut, cut, refusal };
+}
+
+/**
+ * D03 (v93): the solids of `shape` behind a stepped section's planes. Each
+ * segment of the line removes its own strip: an axis-aligned box over the
+ * part in front of its depth, between its two steps along the line. At a
+ * step the shallower strip's box runs on past it (what it removes there the
+ * deeper one removes anyway), so the deeper box alone makes the jog face and
+ * no two tool faces meet on the part. A refused cut refuses the view: a
+ * stepped section has no single plane for the mesh fallback to clip by.
+ */
+function steppedCut(
+  kernel: RemusKernel,
+  shape: ExactShape,
+  plane: DrawingSectionPlane
+): ReturnType<typeof cutSolids> {
+  const normal = principalAxis(plane.normal);
+  const steps = plane.steps!;
+  const lateral = principalAxis(steps[0]!.along);
+  if (
+    !normal ||
+    !lateral ||
+    lateral.axis === normal.axis ||
+    steps.some((step) => principalAxis(step.along)?.axis !== lateral.axis)
+  )
+    throw new DrawingSectionError(
+      'A stepped section needs a principal plane and a line along a principal axis.'
+    );
+  // Segments as [from, to) along the lateral axis (in its signed sense)
+  // with their depths.
+  const segments: { from: number; to: number; depth: number }[] = [];
+  let from = -Infinity;
+  let depth = plane.depth;
+  for (const step of steps) {
+    segments.push({ from, to: step.at, depth });
+    from = step.at;
+    depth = step.depth;
+  }
+  segments.push({ from, to: Infinity, depth });
+  const solids: number[] = [];
+  /** The source solid each kept solid was cut from (or is). */
+  const origins: number[] = [];
+  const uncut: number[] = [];
+  let cut = false;
+  for (const solid of shape.solids) {
+    const box = kernel.boundingBox(solid);
+    const span = Math.max(
+      box[3]! - box[0]!,
+      box[4]! - box[1]!,
+      box[5]! - box[2]!,
+      1e-9
+    );
+    const margin = span;
+    const flush = span * 1e-9;
+    // A coordinate's range on an axis in its signed sense.
+    const range = (axis: 0 | 1 | 2, sign: 1 | -1) =>
+      sign > 0
+        ? ([box[axis]!, box[axis + 3]!] as const)
+        : ([-box[axis + 3]!, -box[axis]!] as const);
+    const [nLow, nHigh] = range(normal.axis, normal.sign);
+    const [lLow, lHigh] = range(lateral.axis, lateral.sign);
+    // Wholly in front of every segment's plane that reaches it: dropped.
+    const reached = segments.filter(
+      (segment) => segment.to > lLow && segment.from < lHigh
+    );
+    if (reached.every((segment) => nHigh <= segment.depth + flush)) continue;
+    uncut.push(solid);
+    let current = solid;
+    let touched = false;
+    for (const [index, segment] of segments.entries()) {
+      if (!(segment.to > lLow && segment.from < lHigh)) continue;
+      if (nLow >= segment.depth - flush) continue;
+      // Past a step into a deeper neighbour, this strip runs on into it,
+      // but never through it: half its run at most (a margin into an
+      // endless one), so it never reaches a step beyond. Into a shallower
+      // neighbour it stops at the step.
+      const before = segments[index - 1];
+      const after = segments[index + 1];
+      const into = (neighbour: { from: number; to: number }) =>
+        Math.min(margin, (neighbour.to - neighbour.from) / 2);
+      const start =
+        before && before.depth >= segment.depth
+          ? segment.from - into(before)
+          : Math.max(segment.from, lLow - margin);
+      const end =
+        after && after.depth >= segment.depth
+          ? segment.to + into(after)
+          : Math.min(segment.to, lHigh + margin);
+      const low = [box[0]! - margin, box[1]! - margin, box[2]! - margin];
+      const high = [box[3]! + margin, box[4]! + margin, box[5]! + margin];
+      // Signed ranges back to world coordinates on each axis.
+      const place = (axis: 0 | 1 | 2, sign: 1 | -1, a: number, b: number) => {
+        if (sign > 0) {
+          low[axis] = a;
+          high[axis] = b;
+        } else {
+          low[axis] = -b;
+          high[axis] = -a;
+        }
+      };
+      place(normal.axis, normal.sign, nLow - margin, segment.depth);
+      place(
+        lateral.axis,
+        lateral.sign,
+        Number.isFinite(start) ? start : lLow - margin,
+        Number.isFinite(end) ? end : lHigh + margin
+      );
+      const tool = kernel.makeBox(
+        high[0]! - low[0]!,
+        high[1]! - low[1]!,
+        high[2]! - low[2]!
+      );
+      kernel.transformSolid(tool, translation(low[0]!, low[1]!, low[2]!));
+      let result: number;
+      try {
+        result = kernel.cut(current, tool);
+      } catch (error) {
+        throw new DrawingSectionError(
+          `The kernel could not cut this stepped section exactly (${error instanceof Error ? error.message : String(error)}).`
+        );
+      }
+      if (kernel.validateSolidRelaxed(result) !== 0)
+        throw new DrawingSectionError(
+          'The kernel cut this stepped section into an invalid solid.'
+        );
+      current = result;
+      touched = true;
+    }
+    if (touched) cut = true;
+    solids.push(current);
+    origins.push(solid);
+  }
+  return { solids, origins, uncut, cut, refusal: null };
+}
+
+/**
+ * D03: lineage for a section's edges, so a dimension on one follows a model
+ * edit the way one on the model does (ADR-013), never by proximity:
+ *
+ * - An edge the cut left exactly as it was (its witness equal to one source
+ *   edge's) carries that edge's verified reference.
+ * - An edge the cut made — lying wholly in one of the section's planes —
+ *   is the plane's trace on the one model face beside it: when exactly one
+ *   of its faces carries a face name (the boolean carrier rule names the
+ *   cut solid's faces from the source's), it is named
+ *   `section.edge.<face name>@<plane>` under that face's feature.
+ *
+ * A name two edges would share (a plane crossing one cylinder twice) is
+ * given to neither, and a body with no source lineage names nothing: both
+ * stay hash-only, as before.
+ */
+function sectionEdgeReferences(
+  kernel: RemusKernel,
+  shape: ExactShape,
+  solid: number,
+  origin: number,
+  planes: readonly DrawingSectionPlane[],
+  /** Each edge's sampled points, flat xyz. */
+  samples: ReadonlyMap<number, ArrayLike<number>>
+): Map<number, EdgeTopologyReferenceV5> {
+  const out = new Map<number, EdgeTopologyReferenceV5>();
+  const lineage = shape.lineage;
+  if (!lineage) return out;
+  const sourceCandidates = topologyCandidatesForSolid(kernel, origin);
+  const resultCandidates = topologyCandidatesForSolid(kernel, solid);
+  // Unchanged edges: the source's verified edge references, by witness.
+  const sourceEdges = sourceCandidates.filter(
+    (candidate) => candidate.kind === 'edge'
+  );
+  // Indexed once by witness, keeping every source edge per key, so a key
+  // two source edges share still reads as ambiguous (never a pick).
+  const sourceByWitness = new Map<string, typeof sourceEdges>();
+  for (const source of sourceEdges) {
+    const key = topologyWitnessKey('edge', source.witness);
+    sourceByWitness.set(key, [...(sourceByWitness.get(key) ?? []), source]);
+  }
+  const faces = deriveRemusBooleanCarrierLineage({
+    producingFeatureId: 'drawing-section' as FeatureId,
+    operands: [{ lineage, candidates: sourceCandidates, role: 'target' }],
+    resultCandidates
+  });
+  // The carrier rule names a result face `boolean.face.target.<source name>`;
+  // the source reference is what the section's edge names come from.
+  const sourceFaceByName = new Map(
+    [...lineage.faceReferences.values()].map((reference) => [
+      reference.lineageName,
+      reference
+    ])
+  );
+  const faceSource = new Map<number, FaceTopologyReferenceV5>();
+  for (const [handle, reference] of faces.faceReferences) {
+    const name = reference.lineageName.replace(/^boolean\.face\.target\./, '');
+    const source = sourceFaceByName.get(name);
+    if (source) faceSource.set(handle, source);
+  }
+  const edgeToFaces = edgeToFaceMapOf(kernel, solid);
+  const generated = new Map<string, number[]>();
+  const named = new Map<number, EdgeTopologyReferenceV5>();
+  for (const candidate of resultCandidates) {
+    if (candidate.kind !== 'edge') continue;
+    const handle = candidate.handle;
+    const witness = candidate.witness as EdgeTopologyReferenceV5['witness'];
+    const hash = topologyHashOfWitness('edge', witness);
+    const unchanged =
+      sourceByWitness.get(topologyWitnessKey('edge', candidate.witness)) ?? [];
+    if (unchanged.length === 1) {
+      const reference = lineage.edgeReferences.get(unchanged[0]!.handle);
+      if (reference && reference.currentHash === hash) {
+        named.set(handle, { ...reference });
+        continue;
+      }
+    }
+    const plane = planeHolding(samples.get(handle), planes);
+    if (plane === null) continue;
+    const beside = (edgeToFaces[String(handle)] ?? []).flatMap((face) => {
+      const source = faceSource.get(face);
+      return source ? [source] : [];
+    });
+    if (beside.length !== 1) continue;
+    const face = beside[0]!;
+    const lineageName = `section.edge.${face.lineageName}@${plane}`;
+    const key = `${face.producingFeatureId}\u0000${lineageName}`;
+    generated.set(key, [...(generated.get(key) ?? []), handle]);
+    named.set(handle, {
+      kind: 'edge',
+      producingFeatureId: face.producingFeatureId,
+      lineageName,
+      currentHash: hash,
+      witnessVersion: 1,
+      witness
+    });
+  }
+  // A generated name two edges share is no one's.
+  for (const handles of generated.values())
+    if (handles.length > 1) for (const handle of handles) named.delete(handle);
+  for (const [handle, reference] of named) out.set(handle, reference);
+  return out;
+}
+
+/** The index of the section plane an edge lies wholly in, or null. */
+function planeHolding(
+  samples: ArrayLike<number> | undefined,
+  planes: readonly DrawingSectionPlane[]
+): number | null {
+  if (!samples || samples.length < 6) return null;
+  let extent = 1;
+  for (let i = 0; i < samples.length; i += 1)
+    extent = Math.max(extent, Math.abs(samples[i]!));
+  // The samples are the kernel's own points on the edge, to its precision.
+  const tolerance = extent * 1e-9;
+  const index = planes.findIndex((plane) => {
+    const n = plane.normal;
+    for (let i = 0; i + 2 < samples.length; i += 3) {
+      const d =
+        n.x * samples[i]! + n.y * samples[i + 1]! + n.z * samples[i + 2]!;
+      if (Math.abs(d - plane.depth) > tolerance) return false;
+    }
+    return true;
+  });
+  return index < 0 ? null : index;
 }
 
 /** The edges of `solids` as edge topology, numbered like a body's. */
 function sectionEdgeTopology(
   kernel: RemusKernel,
-  solids: readonly number[]
+  solids: readonly number[],
+  /** D03: lineage, when the source has it: the shape, origins and planes. */
+  naming?: {
+    shape: ExactShape;
+    origins: readonly number[];
+    planes: readonly DrawingSectionPlane[];
+  }
 ): EdgeTopology[] {
   const out: EdgeTopology[] = [];
   let nextVertexId = 0;
-  for (const solid of solids) {
+  for (const [solidIndex, solid] of solids.entries()) {
     const box = kernel.boundingBox(solid);
     const tess = displayTessellationForExtents(
       box[3]! - box[0]!,
@@ -334,8 +623,24 @@ function sectionEdgeTopology(
         throw new DrawingSectionError(
           'The section edges did not sample consistently.'
         );
-      for (const [index, edge] of handles.entries()) {
-        const points = positions.slice(offsets[index], offsets[index + 1]);
+      const sampled = new Map(
+        handles.map(
+          (edge, index) =>
+            [edge, positions.slice(offsets[index], offsets[index + 1])] as const
+        )
+      );
+      const references = naming
+        ? sectionEdgeReferences(
+            kernel,
+            naming.shape,
+            solid,
+            naming.origins[solidIndex]!,
+            naming.planes,
+            sampled
+          )
+        : new Map<number, EdgeTopologyReferenceV5>();
+      for (const edge of handles) {
+        const points = sampled.get(edge)!;
         const hash = topologyHashOfWitness('edge', edgeWitnessOf(kernel, edge));
         out.push({
           topologyId: `edge:${hash}`,
@@ -353,7 +658,8 @@ function sectionEdgeTopology(
             kernel.getEdgeVertexHandles(edge),
             vertexIdByHandle
           ),
-          points
+          points,
+          ...(references.has(edge) ? { reference: references.get(edge)! } : {})
         });
       }
     } finally {
@@ -393,6 +699,25 @@ function facesInPlane(
   return out;
 }
 
+/** Whether a sampled edge lies wholly in one step's jog plane. */
+function onStep(
+  edge: ArrayLike<number>,
+  steps: NonNullable<DrawingSectionPlane['steps']>
+): boolean {
+  let extent = 1;
+  for (let i = 0; i < edge.length; i += 1)
+    extent = Math.max(extent, Math.abs(edge[i]!));
+  const tolerance = extent * 1e-6;
+  return steps.some((step) => {
+    const a = step.along;
+    for (let i = 0; i + 2 < edge.length; i += 3) {
+      const at = a.x * edge[i]! + a.y * edge[i + 1]! + a.z * edge[i + 2]!;
+      if (Math.abs(at - step.at) > tolerance) return false;
+    }
+    return edge.length >= 6;
+  });
+}
+
 /**
  * One body behind a section plane: its canonical drawing tessellation, the
  * faces the plane cut and the edges a dimension can use. Null when the body
@@ -424,10 +749,29 @@ export function drawingSectionOfShape(
     { solids: kept.solids },
     budget
   );
+  const steps = plane.steps ?? [];
+  const planes = [
+    plane,
+    ...steps.map((step) => ({ ...plane, depth: step.depth }))
+  ];
+  const cutFaces = kept.cut
+    ? [...new Set(planes.flatMap((entry) => facesInPlane(mesh, entry)))].sort(
+        (a, b) => a - b
+      )
+    : [];
   return {
     ...mesh,
-    cutFaces: kept.cut ? facesInPlane(mesh, plane) : [],
-    edgeTopology: sectionEdgeTopology(kernel, kept.solids),
+    // D03 (v93): a stepped section draws no line where it steps (the jog
+    // faces are seen edge-on): edges lying wholly in a step's plane go.
+    ...(steps.length > 0
+      ? { edges: mesh.edges.filter((edge) => !onStep(edge, steps)) }
+      : {}),
+    cutFaces,
+    edgeTopology: sectionEdgeTopology(kernel, kept.solids, {
+      shape,
+      origins: kept.origins,
+      planes
+    }),
     cut: kept.cut
   };
 }
