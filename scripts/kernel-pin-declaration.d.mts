@@ -4,3 +4,11 @@ export function checkDeclaration(
   head: string,
   options: { event: string; headRef?: string; labels?: string[] }
 ): { previous: string; current: string };
+export function kernelComparisonBase(
+  eventName: string | undefined,
+  event: {
+    pull_request?: { base?: { sha?: string }; head?: { sha?: string } };
+    merge_group?: { base_sha?: string };
+  },
+  checkedCommit: string
+): string;
