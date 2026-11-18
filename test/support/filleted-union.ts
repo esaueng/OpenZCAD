@@ -38,34 +38,44 @@ export function unionEndFace(body: BodyRepresentation) {
 
 /**
  * Authored native geometry with an R5 junction blend and a later height edit.
- * Options vary the box width, blend radius and whether the height edit is
+ * Options vary the body dimensions, blend radius and whether the height edit is
  * appended; the defaults are the documented public surrogate.
  */
 export async function filletedUnion(
   adapter: ExactKernelAdapter,
   {
     width = 30,
+    height = 18,
+    depth = 26,
+    cylinder = { radius: 6, height: 35 },
     radius = 5,
     heightEdit = true
-  }: { width?: number; radius?: number; heightEdit?: boolean } = {}
+  }: {
+    width?: number;
+    height?: number;
+    depth?: number;
+    cylinder?: { radius: number; height: number };
+    radius?: number;
+    heightEdit?: boolean;
+  } = {}
 ) {
   const box = addPrimitiveFeature(
     createProjectDocument('Filleted union', toUserId('user_filleted_union')),
     {
       name: 'Box',
       primitiveKind: 'box',
-      dimensions: { width, height: 18, depth: 26 }
+      dimensions: { width, height, depth }
     }
   );
-  const cylinder = addPrimitiveFeature(box, {
+  const withCylinder = addPrimitiveFeature(box, {
     name: 'Cylinder',
     primitiveKind: 'cylinder',
-    dimensions: { radius: 6, height: 35 }
+    dimensions: cylinder
   });
-  const joined = booleanBodies(cylinder, {
+  const joined = booleanBodies(withCylinder, {
     name: 'Union',
     operation: 'union',
-    targetBodyIds: [cylinder.bodyOrder[1]!, box.bodyOrder[0]!]
+    targetBodyIds: [withCylinder.bodyOrder[1]!, box.bodyOrder[0]!]
   });
   const base = await adapter.syncDocument(joined.document);
   if (base.warnings.length) throw new Error(base.warnings.join('\n'));
