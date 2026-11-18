@@ -65,7 +65,11 @@ import {
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
 import { sketchObjectsInBox } from '../lib/sketch/boxSelect';
-import { createSketchCurve, SKETCH_CURVE_WIDTH } from './viewer/sketchCurve';
+import {
+  createSketchCurve,
+  SKETCH_COLOR,
+  SKETCH_CURVE_WIDTH
+} from './viewer/sketchCurve';
 import { pointerSlack } from '../lib/pointerSlack';
 import { renderChipText, setElementText } from '../lib/domText';
 import { TouchLoupe } from './viewer/touchLoupe';
@@ -2289,7 +2293,6 @@ function noteE2ERender() {
     counts.ModelViewer = (counts.ModelViewer ?? 0) + 1;
   }
 }
-const SKETCH_COLOR = 0x6798ff;
 /**
  * How far inside the canvas edge a new body must sit to count as on screen,
  * in normalized device units per side: a body touching the edge reads as

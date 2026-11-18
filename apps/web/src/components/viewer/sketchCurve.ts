@@ -3,6 +3,7 @@ import { createFatLine } from '@openzcad/viewport';
 
 /** CSS pixels, independent of zoom and display density. */
 export const SKETCH_CURVE_WIDTH = 2.2;
+export const SKETCH_COLOR = 0x6798ff;
 
 /** Sketch state colours must not wash out under the solid's tone mapping. */
 export function createSketchCurve(

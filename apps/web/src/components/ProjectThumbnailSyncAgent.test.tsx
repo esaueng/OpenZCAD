@@ -1,9 +1,22 @@
 import { act, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { toArtifactId, toProjectId } from '@openzcad/shared';
+import { createProjectDocument } from '@openzcad/document-core';
+import { toArtifactId, toProjectId, toUserId } from '@openzcad/shared';
 import { ProjectThumbnailSyncAgent } from './ProjectThumbnailSyncAgent';
 import { createThumbnailCapture } from '../lib/projectThumbnailCapture';
 import { settleThumbnailUploads } from '../lib/thumbnailUploads';
+
+function thumbnailDocument(
+  projectId: string,
+  version: number,
+  updatedAt: string
+) {
+  const document = createProjectDocument('Thumbnail', toUserId('owner'));
+  document.projectId = toProjectId(projectId);
+  document.version = version;
+  document.derived.updatedAt = updatedAt;
+  return document;
+}
 
 function transportPublishing(artifactId: ReturnType<typeof toArtifactId>) {
   return {
@@ -28,10 +41,11 @@ describe('ProjectThumbnailSyncAgent', () => {
 
     render(
       <ProjectThumbnailSyncAgent
-        projectId={toProjectId('project_thumbnail')}
-        version={7}
-        updatedAt="2026-08-08T12:00:00.000Z"
-        bodyRepresentations={{}}
+        document={thumbnailDocument(
+          'project_thumbnail',
+          7,
+          '2026-08-08T12:00:00.000Z'
+        )}
         publishToCloud
         transport={transport}
         loadThumbnail={vi.fn().mockResolvedValue({
@@ -80,10 +94,11 @@ describe('ProjectThumbnailSyncAgent', () => {
     const capture = createThumbnailCapture({ idleMs: 0 });
     render(
       <ProjectThumbnailSyncAgent
-        projectId={toProjectId('project_tracked')}
-        version={3}
-        updatedAt="2026-08-08T12:00:00.000Z"
-        bodyRepresentations={{}}
+        document={thumbnailDocument(
+          'project_tracked',
+          3,
+          '2026-08-08T12:00:00.000Z'
+        )}
         publishToCloud
         transport={transport}
         loadThumbnail={vi.fn().mockResolvedValue({
@@ -126,10 +141,11 @@ describe('ProjectThumbnailSyncAgent', () => {
 
     render(
       <ProjectThumbnailSyncAgent
-        projectId={toProjectId('project_thumbnail')}
-        version={3}
-        updatedAt="2026-09-04T21:00:03.000Z"
-        bodyRepresentations={{}}
+        document={thumbnailDocument(
+          'project_thumbnail',
+          3,
+          '2026-09-04T21:00:03.000Z'
+        )}
         publishToCloud={false}
         transport={transportPublishing(toArtifactId('artifact_unused'))}
         loadThumbnail={vi.fn().mockResolvedValue(null)}
@@ -155,10 +171,11 @@ describe('ProjectThumbnailSyncAgent', () => {
 
     render(
       <ProjectThumbnailSyncAgent
-        projectId={toProjectId('project_thumbnail')}
-        version={7}
-        updatedAt="2026-08-08T12:00:00.000Z"
-        bodyRepresentations={{}}
+        document={thumbnailDocument(
+          'project_thumbnail',
+          7,
+          '2026-08-08T12:00:00.000Z'
+        )}
         publishToCloud
         transport={transport}
         loadThumbnail={vi.fn().mockResolvedValue({

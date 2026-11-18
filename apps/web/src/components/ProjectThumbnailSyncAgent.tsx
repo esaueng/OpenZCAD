@@ -1,9 +1,5 @@
 import { useEffect } from 'react';
-import type {
-  ArtifactId,
-  BodyRepresentation,
-  ProjectId
-} from '@openzcad/shared';
+import type { ArtifactId, ProjectDocument } from '@openzcad/shared';
 import type { ProjectThumbnailRecord } from '../lib/localProjectStore';
 import {
   uploadCloudThumbnail,
@@ -15,10 +11,7 @@ import { sharedThumbnailCapture } from '../lib/sharedThumbnailCapture';
 import { trackThumbnailUpload } from '../lib/thumbnailUploads';
 
 interface ProjectThumbnailSyncAgentProps {
-  projectId: ProjectId;
-  version: number;
-  updatedAt: string;
-  bodyRepresentations: Record<string, BodyRepresentation>;
+  document: ProjectDocument;
   publishToCloud: boolean;
   transport: ThumbnailCloudTransport;
   loadThumbnail(projectId: string): Promise<ProjectThumbnailRecord | null>;
@@ -44,10 +37,7 @@ interface ProjectThumbnailSyncAgentProps {
  * weight to the launcher that displays the cards.
  */
 export function ProjectThumbnailSyncAgent({
-  projectId,
-  version,
-  updatedAt,
-  bodyRepresentations,
+  document,
   publishToCloud,
   transport,
   loadThumbnail,
@@ -55,6 +45,8 @@ export function ProjectThumbnailSyncAgent({
   capture = sharedThumbnailCapture
 }: ProjectThumbnailSyncAgentProps) {
   useEffect(() => {
+    const { projectId, version, derived } = document;
+    const { updatedAt, bodyRepresentations } = derived;
     const unsubscribe = capture.subscribe((captured) => {
       if (
         captured.projectId !== projectId ||
@@ -89,7 +81,8 @@ export function ProjectThumbnailSyncAgent({
         updatedAt,
         bodies: Object.values(bodyRepresentations).filter(
           (body) => !body.consumed
-        )
+        ),
+        sketchDocument: document
       },
       {
         render: renderThumbnailFrame,
@@ -100,15 +93,12 @@ export function ProjectThumbnailSyncAgent({
     );
     return unsubscribe;
   }, [
-    bodyRepresentations,
     capture,
+    document,
     loadThumbnail,
-    projectId,
     publishToCloud,
     saveThumbnail,
-    transport,
-    updatedAt,
-    version
+    transport
   ]);
 
   return null;

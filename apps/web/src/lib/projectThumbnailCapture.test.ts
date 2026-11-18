@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  addSketchFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
+import {
   toArtifactId,
   toProjectId,
+  toUserId,
   type BodyRepresentation
 } from '@openzcad/shared';
 import {
@@ -125,7 +130,7 @@ describe('createThumbnailCapture', () => {
     expect(h.render).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(h.render).toHaveBeenCalledWith([BOX]);
+    expect(h.render).toHaveBeenCalledWith([BOX], undefined);
     expect(h.save).toHaveBeenCalledWith(PROJECT, {
       source: 'data:image/webp;base64,1',
       version: 3,
@@ -154,6 +159,59 @@ describe('createThumbnailCapture', () => {
     expect(h.save.mock.calls[0]?.[1]).toMatchObject({ version: 3 });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(h.render).toHaveBeenCalledTimes(1);
+  });
+
+  it('replaces a matching legacy no-geometry card for a sketch-only project', async () => {
+    const { document } = addSketchFeature(
+      createProjectDocument('Sketch', toUserId('owner')),
+      {
+        name: 'Sketch',
+        objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 20, y2: 10 }]
+      }
+    );
+    const entry = { ...staged(document.version, []), sketchDocument: document };
+    const source = 'data:image/webp;base64,SKETCH';
+    const capture = createThumbnailCapture();
+    const h = host();
+    h.load.mockResolvedValue({
+      projectId: PROJECT,
+      updatedAt: entry.updatedAt,
+      version: entry.version,
+      source: null
+    });
+    h.render.mockReturnValue(source);
+
+    capture.stage(entry, h);
+    await capture.flush();
+
+    expect(h.render).toHaveBeenCalledWith([], document);
+    expect(h.save).toHaveBeenCalledWith(PROJECT, {
+      source,
+      version: entry.version,
+      updatedAt: entry.updatedAt
+    });
+  });
+
+  it('reuses a matching no-geometry card for an empty sketch', async () => {
+    const { document } = addSketchFeature(
+      createProjectDocument('Sketch', toUserId('owner')),
+      { name: 'Sketch', objects: [] }
+    );
+    const entry = { ...staged(document.version, []), sketchDocument: document };
+    const capture = createThumbnailCapture();
+    const h = host();
+    h.load.mockResolvedValue({
+      projectId: PROJECT,
+      updatedAt: entry.updatedAt,
+      version: entry.version,
+      source: null
+    });
+
+    capture.stage(entry, h);
+    await capture.flush();
+
+    expect(h.render).not.toHaveBeenCalled();
+    expect(h.save).not.toHaveBeenCalled();
   });
 
   it.each(['activity', 'busy'] as const)(

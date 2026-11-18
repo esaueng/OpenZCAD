@@ -95,7 +95,6 @@ import type {
   ArtifactId,
   BodyRepresentation,
   PlaneId,
-  ProjectId,
   SketchObjectData,
   TopologySelection
 } from '@openzcad/shared';
@@ -142,10 +141,7 @@ type MeasurementCloudSyncState = readonly [
 ];
 
 type ProjectThumbnailSyncState = readonly [
-  projectId: ProjectId,
-  version: number,
-  updatedAt: string,
-  bodyRepresentations: Record<string, BodyRepresentation>,
+  document: ProjectDocument,
   publishToCloud: boolean,
   transport: ThumbnailCloudTransport,
   loadThumbnail: (projectId: string) => Promise<ProjectThumbnailRecord | null>,
@@ -933,14 +929,11 @@ export function ViewerShell({
     >
       {projectThumbnailSync ? (
         <ProjectThumbnailSyncAgent
-          projectId={projectThumbnailSync[0]}
-          version={projectThumbnailSync[1]}
-          updatedAt={projectThumbnailSync[2]}
-          bodyRepresentations={projectThumbnailSync[3]}
-          publishToCloud={projectThumbnailSync[4]}
-          transport={projectThumbnailSync[5]}
-          loadThumbnail={projectThumbnailSync[6]}
-          saveThumbnail={projectThumbnailSync[7]}
+          document={projectThumbnailSync[0]}
+          publishToCloud={projectThumbnailSync[1]}
+          transport={projectThumbnailSync[2]}
+          loadThumbnail={projectThumbnailSync[3]}
+          saveThumbnail={projectThumbnailSync[4]}
         />
       ) : null}
       {cloudEnabled ? (

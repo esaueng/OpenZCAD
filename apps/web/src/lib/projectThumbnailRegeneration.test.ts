@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
+  addSketchFeature,
   createProjectDocument
 } from '@openzcad/document-core';
 import {
@@ -89,7 +90,7 @@ describe('regenerateProjectThumbnails', () => {
 
     expect(result).toEqual({ redrawn: 1, skipped: 0 });
     expect(regenerate.rebuild).not.toHaveBeenCalled();
-    expect(regenerate.render).toHaveBeenCalledWith([{ consumed: false }]);
+    expect(regenerate.render).toHaveBeenCalledWith([{ consumed: false }], copy);
     expect(regenerate.save).toHaveBeenCalledWith(copy.projectId, {
       source: 'data:image/webp;base64,CARD',
       version: 4,
@@ -174,7 +175,10 @@ describe('regenerateProjectThumbnails', () => {
     await regenerateProjectThumbnails([summary(account)], regenerate);
 
     expect(regenerate.rebuild).toHaveBeenCalledWith(account);
-    expect(regenerate.render).toHaveBeenCalledWith([{ consumed: false }]);
+    expect(regenerate.render).toHaveBeenCalledWith(
+      [{ consumed: false }],
+      expect.objectContaining({ projectId: account.projectId })
+    );
     expect(regenerate.save).toHaveBeenCalledTimes(1);
   });
 
@@ -237,6 +241,36 @@ describe('regenerateProjectThumbnails', () => {
       source: null,
       version: empty.version,
       updatedAt: empty.derived.updatedAt
+    });
+  });
+
+  it('redraws a rebuilt sketch-only project with its sketch geometry', async () => {
+    const { document } = addSketchFeature(
+      createProjectDocument('Sketch', owner),
+      {
+        name: 'Sketch',
+        objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 20, y2: 10 }]
+      }
+    );
+    const derived = {
+      ...document.derived,
+      updatedAt: '2026-11-05T10:00:00.000Z'
+    };
+    const regenerate = host({
+      loadLocal: vi.fn().mockResolvedValue(document),
+      rebuild: vi.fn().mockResolvedValue(derived)
+    });
+
+    await regenerateProjectThumbnails([summary(document)], regenerate);
+
+    expect(regenerate.render).toHaveBeenCalledWith([], {
+      ...document,
+      derived
+    });
+    expect(regenerate.save).toHaveBeenCalledWith(document.projectId, {
+      source: 'data:image/webp;base64,CARD',
+      version: document.version,
+      updatedAt: derived.updatedAt
     });
   });
 
