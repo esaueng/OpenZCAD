@@ -498,6 +498,12 @@ test('checks the open project version before fetching a changed document', async
   const project = api.project!;
   const readsBefore = api.projectLoadAttempts;
   let catalogueReads = 0;
+  let versionReplies = 0;
+  const versionPath = `/api/projects/${project.projectId}/version`;
+  page.on('response', (response) => {
+    if (new URL(response.url()).pathname === versionPath && response.ok())
+      versionReplies++;
+  });
   page.on('request', (request) => {
     if (
       request.method() === 'GET' &&
@@ -507,11 +513,19 @@ test('checks the open project version before fetching a changed document', async
     }
   });
   const checkOnFocus = async () => {
-    const read = page.waitForResponse((response) =>
-      new URL(response.url()).pathname.endsWith(`/${project.projectId}/version`)
-    );
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    expect((await read).ok()).toBeTruthy();
+    const before = versionReplies;
+    // The browser can receive the previous response before the app finishes
+    // processing it. Focus again if that check was still in flight.
+    await expect
+      .poll(
+        async () => {
+          if (versionReplies === before)
+            await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+          return versionReplies;
+        },
+        { timeout: 5_000 }
+      )
+      .toBe(before + 1);
   };
   await checkOnFocus();
   expect(api.projectLoadAttempts).toBe(readsBefore);

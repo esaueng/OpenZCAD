@@ -109,18 +109,22 @@ describe('watchLibraryFreshness', () => {
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
-  it('never refreshes a hidden tab', async () => {
-    const fake = fakeHost();
-    const refresh = vi.fn(async () => undefined);
-    watchLibraryFreshness(refresh, fake.host);
+  it.each([0, LIBRARY_REFRESH_MIN_GAP_MS])(
+    'never refreshes a hidden tab with a %i ms gap',
+    async (minimumGapMs) => {
+      const fake = fakeHost();
+      const refresh = vi.fn(async () => undefined);
+      watchLibraryFreshness(refresh, fake.host, { minimumGapMs });
 
-    fake.setVisibility('hidden');
-    fake.advance(LIBRARY_REFRESH_INTERVAL_MS);
-    fake.tick();
-    await settle();
+      fake.setVisibility('hidden');
+      fake.advance(LIBRARY_REFRESH_INTERVAL_MS);
+      fake.tick();
+      fake.online();
+      await settle();
 
-    expect(refresh).not.toHaveBeenCalled();
-  });
+      expect(refresh).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not overlap a refresh still in flight', async () => {
     const fake = fakeHost();
@@ -241,40 +245,43 @@ describe('watchLibraryFreshness', () => {
     expect(refresh).toHaveBeenCalledTimes(4);
   });
 
-  it('honours Retry-After on a rejected 429 and ignores other failures', async () => {
-    const fake = fakeHost();
-    const limited = new ApiError(
-      429,
-      'API request limit reached.',
-      undefined,
-      undefined,
-      5 * 60_000
-    );
-    const failures: Error[] = [limited, new TypeError('offline')];
-    const refresh = vi.fn(async () => {
-      const failure = failures.shift();
-      if (failure) throw failure;
-    });
-    watchLibraryFreshness(refresh, fake.host);
+  it.each([0, LIBRARY_REFRESH_MIN_GAP_MS])(
+    'honours Retry-After on a rejected 429 with a %i ms gap',
+    async (minimumGapMs) => {
+      const fake = fakeHost();
+      const limited = new ApiError(
+        429,
+        'API request limit reached.',
+        undefined,
+        undefined,
+        5 * 60_000
+      );
+      const failures: Error[] = [limited, new TypeError('offline')];
+      const refresh = vi.fn(async () => {
+        const failure = failures.shift();
+        if (failure) throw failure;
+      });
+      watchLibraryFreshness(refresh, fake.host, { minimumGapMs });
 
-    fake.advance(LIBRARY_REFRESH_MIN_GAP_MS);
-    fake.focus();
-    await settle();
-    fake.advance(5 * 60_000 - 1);
-    fake.tick();
-    await settle();
-    expect(refresh).toHaveBeenCalledTimes(1);
-    fake.advance(1);
-    fake.tick();
-    await settle();
-    expect(refresh).toHaveBeenCalledTimes(2);
+      fake.advance(minimumGapMs);
+      fake.focus();
+      await settle();
+      fake.advance(5 * 60_000 - 1);
+      fake.tick();
+      await settle();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      fake.advance(1);
+      fake.tick();
+      await settle();
+      expect(refresh).toHaveBeenCalledTimes(2);
 
-    // A network failure is not a reason to wait longer.
-    fake.advance(LIBRARY_REFRESH_MIN_GAP_MS);
-    fake.focus();
-    await settle();
-    expect(refresh).toHaveBeenCalledTimes(3);
-  });
+      // A network failure is not a reason to wait longer.
+      fake.advance(minimumGapMs);
+      fake.focus();
+      await settle();
+      expect(refresh).toHaveBeenCalledTimes(3);
+    }
+  );
 });
 
 describe('watchLibraryFreshness requestNow', () => {
