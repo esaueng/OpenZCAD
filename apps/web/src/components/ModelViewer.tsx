@@ -340,6 +340,7 @@ import {
   REGION_IDLE_OPACITY,
   REGION_SELECTED_OPACITY,
   buildRegionMesh,
+  regionsInBox,
   triangulateRegionGeometry,
   type RegionPickData
 } from './viewer/regionOverlay';
@@ -1410,6 +1411,7 @@ export interface ModelViewerProps {
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
+  onBoxSelectRegions?(regions: RegionPickData[], additive: boolean): void;
   onHoverRegion(region: RegionPickData | null): void;
   /**
    * The Sketch tool is armed and waiting for a plane: show the three ghost
@@ -2562,6 +2564,7 @@ export function ModelViewer({
   selectedProfileIds,
   profileSelectionMode,
   onSelectRegion,
+  onBoxSelectRegions,
   onHoverRegion,
   planePickerArmed,
   footprintPicker = null,
@@ -3062,6 +3065,8 @@ export function ModelViewer({
   const commandSetterRef = commandSetterRefProp ?? ownCommandSetterRef;
   const profileSelectionModeRef = useRef(profileSelectionMode);
   profileSelectionModeRef.current = profileSelectionMode;
+  const onBoxSelectRegionsRef = useRef(onBoxSelectRegions);
+  onBoxSelectRegionsRef.current = onBoxSelectRegions;
   const profilePickTargetsRef = useRef<ProfilePickTarget[]>([]);
   /** Group holding region-detected sketch rendering (curves + fills). */
   const regionGroupRef = useRef<THREE.Group | null>(null);
@@ -4013,6 +4018,8 @@ export function ModelViewer({
       faceGrab?: boolean;
       /** Under a sketch's Select: the sweep takes sketch entities. */
       sketch?: boolean;
+      /** Extrude was taking closed regions when the sweep started. */
+      regions?: boolean;
     } | null = null;
     /**
      * A press on the offset handle while its release validates. Held to its
@@ -5054,7 +5061,8 @@ export function ModelViewer({
       boxSelect = {
         pointerId: event.pointerId,
         startX: event.clientX,
-        startY: event.clientY
+        startY: event.clientY,
+        regions: onBoxSelectRegionsRef.current !== undefined
       };
       gestures.capture(event, 'crosshair');
     }
@@ -11920,6 +11928,7 @@ export function ModelViewer({
       // dragging — the legacy box resize would fight the gesture. So does an
       // armed command whose handles have not been drawn yet.
       if (
+        onBoxSelectRegionsRef.current ||
         dragsHeldByCommandRef.current ||
         cylinderRadiusRigRef.current ||
         offsetRigRef.current ||
@@ -12121,6 +12130,18 @@ export function ModelViewer({
           width: host.clientWidth,
           height: host.clientHeight
         };
+        if (started.regions) {
+          onBoxSelectRegionsRef.current?.(
+            regionsInBox(
+              profilePickTargetsRef.current,
+              rect,
+              sweepMode,
+              projectionOptions
+            ),
+            togglesSelection(event)
+          );
+          return;
+        }
         const liveBodies = bodiesRef.current.filter((body) => !body.consumed);
         const filter = selectionFilterRef.current;
         const onTopology = onBoxSelectTopologyRef.current;

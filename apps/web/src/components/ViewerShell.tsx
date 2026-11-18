@@ -354,6 +354,7 @@ interface ViewerShellProps {
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
+  onBoxSelectRegions?: ModelViewerProps['onBoxSelectRegions'];
   onHoverRegion(region: RegionPickData | null): void;
   planePickerArmed: boolean;
   planePickerOffset: number;
@@ -603,6 +604,7 @@ export function ViewerShell({
   selectedProfileIds,
   profileSelectionMode,
   onSelectRegion,
+  onBoxSelectRegions,
   onHoverRegion,
   planePickerArmed,
   planePickerOffset,
@@ -1103,6 +1105,7 @@ export function ViewerShell({
         selectedProfileIds={selectedProfileIds}
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
+        onBoxSelectRegions={onBoxSelectRegions}
         onHoverRegion={onHoverRegion}
         planePickerArmed={planePickerArmed}
         planePickerOffset={planePickerOffset}

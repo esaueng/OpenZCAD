@@ -1167,6 +1167,23 @@ function localBlendGroupBoss(
   );
 }
 
+function regionPickForSketch(
+  sketchId: string,
+  region: Omit<RegionPickData, 'sketchId'>
+): RegionPickData {
+  return {
+    sketchId,
+    profileId: region.profileId,
+    regionFingerprint: region.regionFingerprint,
+    samplePoint: region.samplePoint,
+    centroid: region.centroid,
+    boundingBox: region.boundingBox,
+    sourceEntityIds: region.sourceEntityIds,
+    sourceBoundaryLoops: region.sourceBoundaryLoops,
+    area: region.area
+  };
+}
+
 /** The interaction machine's view of one picked region. */
 function regionTargetFor(region: RegionPickData): RegionTarget {
   return {
@@ -11603,17 +11620,8 @@ export function App() {
       (candidate) => candidate.sketchId === sketchId
     );
     const available =
-      view?.regions.map((region): RegionPickData => ({
-        sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      })) ?? [];
+      view?.regions.map((region) => regionPickForSketch(sketchId, region)) ??
+      [];
     if (available.length === 0) {
       setStatus(
         extrudeSketchGuidance([
@@ -11682,7 +11690,8 @@ export function App() {
     dispatchInteraction({
       type: 'select-region',
       target: regionTargetFor(anchor),
-      group: chosen.map(regionTargetFor)
+      group: chosen.map(regionTargetFor),
+      boxSelectProfiles: true
     });
     setStatus(
       chosen.length === 1
@@ -13059,11 +13068,10 @@ export function App() {
     // captured `interaction` predates both. Reading it live is what lets the
     // disarm below actually fire for the handle the right-click just armed.
     const liveInteraction = interactionRef.current;
-    // A toolbar command owns the next gesture. Preserve the body selection
-    // that pre-fills Move/boolean forms, but disarm any selection-first face or
-    // edge handle so two manipulators can never claim the same pointer.
+    // A toolbar command owns the next gesture. Keep the body selection for
+    // Move/boolean forms and release any armed handles or Extrude profile picks.
     cancelDirectManipulationRef.current?.();
-    if (liveInteraction.mode !== 'idle') {
+    if (liveInteraction.mode !== 'idle' || liveInteraction.boxSelectProfiles) {
       cylinderRadiusPreview.clear();
       clearEdgePreview();
       dispatchInteraction({ type: 'clear' });
@@ -13110,21 +13118,25 @@ export function App() {
       if (sketchId) {
         startExtrude(sketchId);
       } else {
-        // No sketch to resolve, and there is no picking mode any more: a
-        // click on any shaded closed profile arms the drag-arrow rig
-        // directly, so the hint is the whole flow — and it names any sketch
-        // that has no closed profile to shade.
-        setStatus(
-          extrudeSketchGuidance(
-            sketchOptions.map((option) => ({
-              name: option.name,
-              closed: Boolean(
-                sketchViews.find(
-                  (candidate) => candidate.sketchId === option.sketchId
-                )?.regions.length
-              )
-            }))
+        const sketches = sketchOptions.map((option) => ({
+          name: option.name,
+          closed: Boolean(
+            sketchViews.find((view) => view.sketchId === option.sketchId)
+              ?.regions.length
           )
+        }));
+        const canPick = sketches.some(({ closed }) => closed);
+        if (canPick) {
+          setTool(null);
+          setExtrudeCreateGeneration((current) => current + 1);
+          extrudeReturnRef.current = null;
+          dispatchInteraction({ type: 'pick-extrude-profiles' });
+        }
+        const guidance = extrudeSketchGuidance(sketches);
+        setStatus(
+          canPick
+            ? `${guidance} You can also drag a box around profiles.`
+            : guidance
         );
       }
       return true;
@@ -13240,6 +13252,10 @@ export function App() {
 
   /** Closes the feature panel alone, leaving the selection where it is. */
   function closeFeaturePanel() {
+    const current = interactionRef.current;
+    if (current.mode === 'idle' && current.boxSelectProfiles) {
+      dispatchInteraction({ type: 'clear' });
+    }
     // An in-place command is the panel it replaced: whatever closes panels
     // (another tool, a workspace switch, Measure) ends it too, quietly,
     // since the action that closed it says what happened.
@@ -13549,7 +13565,10 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
   }
@@ -21904,7 +21923,10 @@ export function App() {
     // manipulation target belongs to that old face or edge, so retaining it
     // would leave a handle capable of editing geometry that is no longer
     // selected.
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
     setSelectedSketchProfileId(null);
@@ -22050,7 +22072,10 @@ export function App() {
       const faces = inPlaceFacesFor(selections);
       if (inPlaceRef.current.addFaces(faces) !== null) return;
     }
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
     const bodyIds = [...new Set(selections.map((face) => face.bodyId))];
@@ -27897,21 +27922,7 @@ export function App() {
                 Math.max(selected.area * 0.01, 1e-9)
           ) ??
           (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return profile
-          ? [
-              {
-                sketchId: selected.sketchId,
-                profileId: profile.profileId,
-                regionFingerprint: profile.regionFingerprint,
-                samplePoint: profile.samplePoint,
-                centroid: profile.centroid,
-                boundingBox: profile.boundingBox,
-                sourceEntityIds: profile.sourceEntityIds,
-                sourceBoundaryLoops: profile.sourceBoundaryLoops,
-                area: profile.area
-              }
-            ]
-          : [];
+        return profile ? [regionPickForSketch(selected.sketchId, profile)] : [];
       });
       const unchanged =
         remapped.length === current.length &&
@@ -28023,17 +28034,7 @@ export function App() {
             new Map(objects.map(({ id, data }) => [id, data]))
           )
         }
-      ).map((region) => ({
-        sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      }));
+      ).map((region) => regionPickForSketch(sketchId, region));
     } catch {
       return null;
     }
@@ -28041,15 +28042,15 @@ export function App() {
 
   function selectRegionFromViewer(
     region: RegionPickData,
-    modifiers: { additive: boolean; toggle: boolean }
-  ) {
-    // A glyph stands for its whole text object: the commit builds the whole
-    // word, so the pick selects, arms and previews the whole word too.
-    const group = profilesBuiltWith(
+    modifiers: { additive: boolean; toggle: boolean },
+    group: readonly RegionPickData[] = profilesBuiltWith(
       region,
       regionPicksForSketch(region.sketchId),
       entityWideProfileSource
-    );
+    )
+  ) {
+    // A glyph stands for its whole text object: the commit builds the whole
+    // word, so the pick selects, arms and previews the whole word too.
     const nextProfiles = updateProfileSelection(
       selectedProfiles,
       region,
@@ -28088,23 +28089,67 @@ export function App() {
     );
   }
 
+  function handleBoxSelectRegions(
+    regions: RegionPickData[],
+    additive: boolean
+  ) {
+    // As with Extrude's selection of a whole sketch, leave the inner cells
+    // that represent openings out of a bulk pick. They still take clicks.
+    const eligible = new Map(
+      [...new Set(regions.map(({ sketchId }) => sketchId))].map((sketchId) => [
+        sketchId,
+        new Set(
+          regionsOutsideHoles(
+            sketchViews.find((view) => view.sketchId === sketchId)?.regions ??
+              []
+          ).map(({ profileId }) => profileId)
+        )
+      ])
+    );
+    const hits = regions.filter(({ sketchId, profileId }) =>
+      eligible.get(sketchId)?.has(profileId)
+    );
+    const current = interactionRef.current;
+    const currentSketch =
+      current.mode === 'region'
+        ? hits.filter(({ sketchId }) => sketchId === current.target.sketchId)
+        : [];
+    const picked = currentSketch.length > 0 ? currentSketch : hits;
+    const first = picked[0];
+    if (!first) {
+      setStatus('No closed sketch profiles in the box.');
+      return;
+    }
+    if (picked.some((region) => region.sketchId !== first.sketchId)) {
+      setStatus('Extrude profiles from one sketch at a time.');
+      return;
+    }
+    const allowed = eligible.get(first.sketchId)!;
+    const available = regionPicksForSketch(first.sketchId).filter(
+      ({ profileId }) => allowed.has(profileId)
+    );
+    const group = new Map<string, RegionPickData>();
+    for (const region of picked) {
+      for (const member of profilesBuiltWith(
+        region,
+        available,
+        entityWideProfileSource
+      )) {
+        group.set(member.profileId, member);
+      }
+    }
+    selectRegionFromViewer(first, { additive, toggle: false }, [
+      ...group.values()
+    ]);
+  }
+
   /** Every detected region of one sketch view, as pick data. */
   function regionPicksForSketch(sketchId: string): RegionPickData[] {
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === sketchId
     );
     return (
-      view?.regions.map((candidate) => ({
-        sketchId,
-        profileId: candidate.profileId,
-        regionFingerprint: candidate.regionFingerprint,
-        samplePoint: candidate.samplePoint,
-        centroid: candidate.centroid,
-        boundingBox: candidate.boundingBox,
-        sourceEntityIds: candidate.sourceEntityIds,
-        sourceBoundaryLoops: candidate.sourceBoundaryLoops,
-        area: candidate.area
-      })) ?? []
+      view?.regions.map((region) => regionPickForSketch(sketchId, region)) ?? []
     );
   }
 
@@ -28116,7 +28161,7 @@ export function App() {
         setStatus('Closed sketch profile — click to select.');
       return;
     }
-    if (tool === 'extrude') {
+    if (interaction.mode === 'idle' && interaction.boxSelectProfiles) {
       setStatus(
         selectedProfiles.length > 0
           ? `${selectedProfiles.length} profile${selectedProfiles.length === 1 ? '' : 's'} selected.`
@@ -31239,17 +31284,9 @@ export function App() {
       const perReference = references.map((reference) =>
         regionsForReference(view, reference)
       );
-      const highlighted = perReference.flat().map((region) => ({
-        sketchId: extrudeData.sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      }));
+      const highlighted = perReference
+        .flat()
+        .map((region) => regionPickForSketch(extrudeData.sketchId, region));
       setSelectedProfiles(highlighted);
       // Only with a rendered view to resolve against. A consumed sketch is
       // hidden by default, and a face-attached one drops out of `sketchViews`
@@ -34033,7 +34070,12 @@ export function App() {
             return;
           }
           event.preventDefault();
-          if (tool || selectedFeatureNodeId || interaction.mode !== 'idle') {
+          if (
+            tool ||
+            selectedFeatureNodeId ||
+            interaction.mode !== 'idle' ||
+            interaction.boxSelectProfiles
+          ) {
             cancelPanel();
           } else if (
             toolFold.commandFoldOpen &&
@@ -36972,12 +37014,30 @@ export function App() {
             // region under the preview solid is still how a profile is
             // retargeted, or a Loft's next section picked.
             profileSelectionMode={
-              tool === 'extrude' ||
+              (tool === null &&
+                interaction.mode === 'idle' &&
+                Boolean(interaction.boxSelectProfiles)) ||
               (inPlace.active &&
                 inPlaceSpec !== null &&
                 inPlaceSpec.profileMode !== 'none')
             }
             onSelectRegion={handleSelectRegion}
+            onBoxSelectRegions={
+              !modelingLocked &&
+              tool === null &&
+              !inPlace.active &&
+              !extrudeEditFeature &&
+              !toFacePick &&
+              !keypad &&
+              (selectionFilter === 'any' || selectionFilter === 'sketch') &&
+              ((interaction.mode === 'idle' && interaction.boxSelectProfiles) ||
+                (interaction.mode === 'region' &&
+                  interaction.boxSelectProfiles &&
+                  (interaction.phase === 'armed' ||
+                    interaction.phase === 'failed')))
+                ? handleBoxSelectRegions
+                : undefined
+            }
             onHoverRegion={handleHoverRegion}
             planePickerArmed={
               !modelingLocked &&

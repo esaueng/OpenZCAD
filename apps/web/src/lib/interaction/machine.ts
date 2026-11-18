@@ -428,7 +428,7 @@ interface OperationLifecycle {
 }
 
 export type InteractionState =
-  | { mode: 'idle' }
+  | { mode: 'idle'; boxSelectProfiles?: true }
   | ({
       mode: 'face';
       target: FaceTarget;
@@ -457,12 +457,15 @@ export type InteractionState =
        */
       targets: RegionTarget[];
       extrudeChoice?: ExtrudeChoice;
+      /** An explicit Extrude launch gives sweeps to profiles. */
+      boxSelectProfiles?: true;
     } & OperationLifecycle)
   | { mode: 'sketch'; session: SketchSessionState };
 
 export type InteractionEvent =
   | { type: 'select-face'; target: FaceTarget }
   | { type: 'select-edge'; selection: TopologySelection; additive: boolean }
+  | { type: 'pick-extrude-profiles' }
   | {
       type: 'select-region';
       target: RegionTarget;
@@ -479,6 +482,7 @@ export type InteractionEvent =
        * stands for itself alone.
        */
       group?: RegionTarget[];
+      boxSelectProfiles?: true;
     }
   | { type: 'set-extrude-choice'; choice: ExtrudeChoice }
   | { type: 'drag-engage' }
@@ -723,7 +727,7 @@ export function escapeTarget(
   | 'exit-sketch'
   | 'none' {
   if (state.mode === 'idle') {
-    return 'none';
+    return state.boxSelectProfiles ? 'clear-selection' : 'none';
   }
   if (state.mode === 'sketch') {
     // A held object drag is the innermost rung of all: one press drops the
@@ -903,6 +907,10 @@ function reduceInteraction(
         ...ARMED
       };
     }
+    case 'pick-extrude-profiles':
+      return state.mode === 'sketch'
+        ? state
+        : { mode: 'idle', boxSelectProfiles: true };
     case 'select-region': {
       if (state.mode === 'sketch') {
         return state;
@@ -916,6 +924,10 @@ function reduceInteraction(
       const sameSketch =
         state.mode === 'region' &&
         state.target.sketchId === event.target.sketchId;
+      const boxSelectProfiles =
+        event.boxSelectProfiles ||
+        ((state.mode === 'idle' || state.mode === 'region') &&
+          state.boxSelectProfiles);
       const targets = nextRegionTargets(
         event.additive && sameSketch ? state.targets : [],
         regionPickGroup(event.target, event.group)
@@ -929,6 +941,7 @@ function reduceInteraction(
           targets.find((target) => sameRegion(target, event.target)) ??
           targets[targets.length - 1]!,
         targets,
+        ...(boxSelectProfiles ? { boxSelectProfiles } : {}),
         ...(sameSketch ? { extrudeChoice: state.extrudeChoice } : {}),
         ...ARMED
       };

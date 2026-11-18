@@ -1556,6 +1556,28 @@ describe('multi-region selection', () => {
       ? state.targets.map((target) => target.regionFingerprint)
       : [];
 
+  it('gives sweeps to profiles only after an explicit Extrude launch', () => {
+    const ordinary = interactionReducer(IDLE, {
+      type: 'select-region',
+      target: region
+    });
+    expect(ordinary).not.toHaveProperty('boxSelectProfiles');
+    const picking = interactionReducer(IDLE, { type: 'pick-extrude-profiles' });
+    expect(picking).toEqual({ mode: 'idle', boxSelectProfiles: true });
+    expect(interactionReducer(picking, { type: 'escape' })).toBe(IDLE);
+    const chosen = interactionReducer(picking, {
+      type: 'select-region',
+      target: region
+    });
+    expect(chosen).toMatchObject({ mode: 'region', boxSelectProfiles: true });
+    const toggled = interactionReducer(chosen, {
+      type: 'select-region',
+      target: region,
+      additive: true
+    });
+    expect(toggled).toBe(IDLE);
+  });
+
   it('adds a region on Shift and counts every selected one', () => {
     let state = interactionReducer(IDLE, {
       type: 'select-region',
