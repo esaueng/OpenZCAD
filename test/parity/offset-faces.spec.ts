@@ -459,3 +459,160 @@ describe('offset a face set', { timeout: 180_000 }, () => {
     );
   });
 });
+
+describe(
+  'offset a face set across planes, at the edges of tolerance',
+  {
+    timeout: 180_000
+  },
+  () => {
+    let adapter: RemusKernelAdapter;
+    beforeAll(() => {
+      adapter = new RemusKernelAdapter();
+    });
+    afterAll(() => {
+      adapter.dispose();
+    });
+
+    /**
+     * The slotted block, built by the kernel: `depth` deep, the whole body
+     * raised `lift` in z, the slot's floor tilted `tiltDeg` about y.
+     */
+    async function slotted(depth: number, lift = 0, tiltDeg = 0) {
+      const kernel = new RemusKernel();
+      const io = await loadRemusTranslators();
+      let step: string;
+      try {
+        const block = kernel.makeBox(X, Y, Z);
+        const slot = kernel.makeBox(SLOT_WIDTH, Y + 4, depth + 2);
+        const t = (tiltDeg * Math.PI) / 180;
+        const [c, s] = [Math.cos(t), Math.sin(t)];
+        kernel.transformSolid(
+          slot,
+          Float64Array.of(
+            c,
+            0,
+            s,
+            (X - SLOT_WIDTH) / 2,
+            0,
+            1,
+            0,
+            -2,
+            -s,
+            0,
+            c,
+            Z - depth,
+            0,
+            0,
+            0,
+            1
+          )
+        );
+        const body = kernel.cut(block, slot);
+        kernel.transformSolid(body, translation(0, 0, lift));
+        step = new TextDecoder().decode(
+          io.exportStep(kernel.serializeSolids(Uint32Array.of(body)))
+        );
+      } finally {
+        kernel.free();
+      }
+      const imported = importStepBody(
+        createProjectDocument('Slotted block', toUserId('user_offset_faces')),
+        {
+          name: 'Block',
+          sourceName: 'block.step',
+          artifactId: 'artifact_slotted_edge',
+          stepText: step
+        }
+      );
+      const derived = await adapter.syncDocument(imported.document);
+      expect(derived.warnings).toEqual([]);
+      const ups = derived.bodyRepresentations[
+        imported.bodyId
+      ]!.topology!.faces.filter(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.normal!.z > 0.999
+      ).sort((a, b) => b.geometry!.center.z - a.geometry!.center.z);
+      expect(ups).toHaveLength(3);
+      return {
+        document: imported.document,
+        bodyId: imported.bodyId,
+        tops: ups.slice(0, 2),
+        floor: ups[2]!
+      };
+    }
+
+    function offsetFaces(
+      body: Awaited<ReturnType<typeof slotted>>,
+      offset: number,
+      sourceNormal?: { x: number; y: number; z: number }
+    ) {
+      const [first, ...rest] = [...body.tops, body.floor].map((face) => ({
+        faceHash: face.hash,
+        ...(face.reference ? { faceReference: face.reference } : {}),
+        sourceSurfaceType: 'plane' as const,
+        sourceArea: face.geometry!.area,
+        sourceCenter: face.geometry!.center,
+        sourceNormal: sourceNormal ?? face.geometry!.normal!
+      }));
+      return commandFactories
+        .directEditBody({
+          name: 'Offset Faces',
+          targetBodyId: body.bodyId,
+          operation: {
+            kind: 'offset-faces',
+            ...first!,
+            offset,
+            additionalFaces: rest
+          }
+        })
+        .apply(body.document);
+    }
+
+    it('refuses a floor tilted within the replay tolerance', async () => {
+      // 0.05° passes the cosine a stored normal is held to, but the chain's
+      // separate steps would move two planes that are not parallel.
+      const body = await slotted(SLOT_DEPTH, 0, 0.05);
+      const derived = await adapter.syncDocument(offsetFaces(body, 2));
+      expect(derived.warnings.join('\n')).toContain(
+        'the selected faces face different directions'
+      );
+    });
+
+    it('tells a shallow step apart however far the body sits from the origin', async () => {
+      for (const lift of [0, 100_000]) {
+        const body = await slotted(0.0005, lift);
+        const derived = await adapter.syncDocument(offsetFaces(body, 0.0001));
+        expect(derived.warnings).toEqual([]);
+        expect(
+          derived.bodyRepresentations[body.bodyId]!.bbox.max.z
+        ).toBeCloseTo(lift + Z + 0.0001, 6);
+      }
+    });
+
+    it('groups and orders by the body, not by slightly stale stored normals', async () => {
+      // Stored normals tilted 0.05° about y, within the replay tolerance:
+      // projected on them the two tops would differ by more than the step.
+      const body = await slotted(0.005);
+      const t = (0.05 * Math.PI) / 180;
+      const shapes = [];
+      for (const normal of [
+        undefined,
+        { x: Math.sin(t), y: 0, z: Math.cos(t) }
+      ]) {
+        const derived = await adapter.syncDocument(
+          offsetFaces(body, 0.01, normal)
+        );
+        expect(derived.warnings).toEqual([]);
+        const built = derived.bodyRepresentations[body.bodyId]!;
+        expect(built.bbox.max.z).toBeCloseTo(Z + 0.01, 9);
+        shapes.push({
+          volume: built.volume.toFixed(6),
+          faces: built.topology!.faces.length
+        });
+      }
+      expect(shapes[1]).toEqual(shapes[0]);
+    });
+  }
+);

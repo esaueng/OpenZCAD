@@ -73,6 +73,7 @@ import {
   DIRECT_EDIT_TOLERANCE,
   GEOMETRY_EPSILON,
   add,
+  cross,
   dot,
   length,
   normalized,
@@ -1593,6 +1594,15 @@ function removeFaces(
 const OFFSET_SET_PARALLEL = 1 - 1e-6;
 
 /**
+ * Largest sine between the measured normals of two planes a chain moves in
+ * separate steps. One `moveFaces` group is held to coplanarity by the
+ * kernel; separate steps are not, so the chain itself requires the planes
+ * to be parallel to construction precision rather than to the replay
+ * tolerance above (a 0.05° tilt passes that one).
+ */
+const OFFSET_SET_CHAIN_PARALLEL_SINE = 1e-9;
+
+/**
  * The refusal for a face set whose faces point opposite ways, such as a top
  * and the bottom under it: one signed offset would thicken one and thin the
  * other.
@@ -1648,33 +1658,36 @@ interface OffsetSetFace {
   readonly center: Vector3;
   /** Its measured outward unit normal. */
   readonly normal: Vector3;
-  /** Its recorded outward unit normal. */
-  readonly recordedNormal: Vector3;
 }
 
 /**
  * The faces of an offset set grouped by the plane they lie on, in the order
  * the chained move takes them. A group is moved by one `moveFaces` call.
  *
- * The order depends only on the geometry, never on the order the faces were
- * picked or stored, so a shuffled set rebuilds the same solid. Groups are
- * ordered by their recorded normal (lexicographically, so the direction
- * classes of a later slice sort the same way every time), then by plane
- * offset along it with the plane the move leads with first: the outermost
- * for a positive offset, the innermost for a negative one. A face therefore
- * moves into room the face ahead of it has already left, and a stepped top
- * offset by more than its step height still rebuilds.
+ * The order depends only on the body's current geometry, never on the order
+ * the faces were picked or stored, nor on the normals recorded when they
+ * were picked (those may lag the body within the replay tolerance), so a
+ * shuffled set rebuilds the same solid. The faces share one direction class
+ * in this slice (the recorded normals were checked before), so the groups
+ * are ordered by plane offset along the faces' measured normal, with the
+ * plane the move leads with first: the outermost for a positive offset, the
+ * innermost for a negative one. A face therefore moves into room the face
+ * ahead of it has already left, and a stepped top offset by more than its
+ * step height still rebuilds.
+ *
+ * Planes are told apart by a fixed distance, not one scaled by how far the
+ * body sits from the origin: translating a body must not merge two planes
+ * the kernel would see as distinct.
  */
 function offsetSetGroups(
   faces: readonly OffsetSetFace[],
   offset: number
 ): OffsetSetFace[][] {
-  const recordedSum = faces
-    .map((face) => face.recordedNormal)
-    .slice()
+  const measuredSum = faces
+    .map((face) => face.normal)
     .sort(compareVectors)
     .reduce((sum, normal) => add(sum, normal), { x: 0, y: 0, z: 0 });
-  const axis = normalized(recordedSum);
+  const axis = normalized(measuredSum);
   if (!axis) {
     throw new Error(OFFSET_FACES_MIXED_DIRECTIONS);
   }
@@ -1682,8 +1695,7 @@ function offsetSetGroups(
   const sorted = faces
     .slice()
     .sort((a, b) => height(a) - height(b) || a.source - b.source);
-  const scaleOf = Math.max(1, ...sorted.map((face) => Math.abs(height(face))));
-  const planeTolerance = Math.max(DIRECT_EDIT_TOLERANCE, scaleOf * 1e-8);
+  const planeTolerance = DIRECT_EDIT_TOLERANCE;
   const groups: OffsetSetFace[][] = [];
   for (const face of sorted) {
     const last = groups.at(-1);
@@ -1696,8 +1708,7 @@ function offsetSetGroups(
       groups.push([face]);
     }
   }
-  // One direction class in this slice, so the normal key ties; the plane
-  // key orders the groups, leading plane first.
+  // Leading plane first.
   if (offset > 0) groups.reverse();
   for (const group of groups) group.sort((a, b) => a.source - b.source);
   return groups;
@@ -1802,8 +1813,7 @@ function offsetFaces(
       label: 1,
       source: face,
       center: geometry.center,
-      normal,
-      recordedNormal
+      normal
     }
   ];
   for (const [index, snapshot] of operation.additionalFaces.entries()) {
@@ -1846,14 +1856,11 @@ function offsetFaces(
       throw new Error(OFFSET_FACES_OPPOSITE_NORMALS);
     }
     if (cosine < OFFSET_SET_PARALLEL) mixed = true;
-    const recorded = normalized(snapshot.sourceNormal);
-    if (!recorded) throw offsetSetFaceDrifted(label);
     setFaces.push({
       label,
       source: resolved.face,
       center: other.center,
-      normal: other.normal,
-      recordedNormal: recorded
+      normal: other.normal
     });
   }
   const handles = setFaces.map((entry) => entry.source);
@@ -1882,6 +1889,16 @@ function offsetFaces(
     : topologyCandidatesForSolid(kernel, solid);
   const sourceCensus = censusOfSolids(faceCensus, [solid]);
   const groups = offsetSetGroups(setFaces, offset);
+  const leadNormal = groups[0]![0]!.normal;
+  for (const group of groups.slice(1)) {
+    for (const entry of group) {
+      if (
+        length(cross(leadNormal, entry.normal)) > OFFSET_SET_CHAIN_PARALLEL_SINE
+      ) {
+        throw new Error(OFFSET_FACES_MIXED_DIRECTIONS);
+      }
+    }
+  }
   // Each source face's handle on the current solid, carried step by step.
   const current = new Map(
     setFaces.map((entry) => [entry.source, entry.source])
