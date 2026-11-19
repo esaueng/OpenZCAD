@@ -153,6 +153,7 @@ const OFFSET_FACE_ICON = <ArrowUpFromDot size={14} aria-hidden="true" />;
 const RESIZE_DIAMETER_ICON = <Diameter size={14} aria-hidden="true" />;
 const DIRECT_EDIT_ICONS: Record<string, ReactNode> = {
   'offset-face': OFFSET_FACE_ICON,
+  'offset-faces': OFFSET_FACE_ICON,
   'set-face-distance': OFFSET_FACE_ICON,
   'resize-cylindrical-face': RESIZE_DIAMETER_ICON,
   'resize-through-hole': RESIZE_DIAMETER_ICON,

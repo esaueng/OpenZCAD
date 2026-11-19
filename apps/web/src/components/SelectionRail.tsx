@@ -80,6 +80,7 @@ function verbIcon(verb: SelectionCalloutVerb): ReactNode {
       <SquarePen size={16} aria-hidden="true" />
     );
   }
+  if (verb.id === 'offset-faces') return ACTION_ICONS['offset-face'];
   if (verb.id === 'text-on-face') {
     return <Type size={16} aria-hidden="true" />;
   }

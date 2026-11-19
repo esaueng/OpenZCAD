@@ -36,6 +36,10 @@ export function useOffsetFaceHandle(
     : undefined;
   const profile = useMemo(() => {
     if (!target) return null;
+    // A face set's offset (M07) moves every face of the set: a mesh preview
+    // of the handle's face alone would show one face moving. Only the exact
+    // preview draws it.
+    const single = !target.offsetFaceSet;
     const total =
       document && target.hash !== undefined && !target.localFaceOffset
         ? faceOffsetBaseline(
@@ -46,6 +50,7 @@ export function useOffsetFaceHandle(
           )
         : undefined;
     const profile =
+      single &&
       document &&
       target.hash !== undefined &&
       primitiveCylinderHeightAncestor(
@@ -57,6 +62,7 @@ export function useOffsetFaceHandle(
         ? cylinderPreviewProfile(body)
         : null;
     const boxProfile =
+      single &&
       document &&
       !target.localFaceOffset &&
       target.hash !== undefined &&
@@ -79,18 +85,18 @@ export function useOffsetFaceHandle(
     // A cached pick must still name the exact face installed for this revision.
     if (!pickedFace?.geometry) return null;
     const gearProfile =
-      !profile && !boxProfile && document
+      single && !profile && !boxProfile && document
         ? gearHeightPreviewProfile(document, body, pickedFace)
         : null;
     const terminalProfile =
-      !profile && !boxProfile && !gearProfile
+      single && !profile && !boxProfile && !gearProfile
         ? capPreviewProfile(body, pickedFace)
         : null;
     const linearProfile = boxProfile ?? terminalProfile;
     // Any other planar face: move it with its blends and stretch the walls
     // they meet, when that is what the exact move would do.
     const stepProfile =
-      !profile && !linearProfile && !gearProfile && !exactFaceDrag
+      single && !profile && !linearProfile && !gearProfile && !exactFaceDrag
         ? stepPreviewProfile(body, pickedFace)
         : null;
     return {

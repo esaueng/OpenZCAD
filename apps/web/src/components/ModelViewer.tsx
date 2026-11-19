@@ -5931,6 +5931,10 @@ export function ModelViewer({
           select?: boolean;
           /** Where on the face the click lands; the face's centroid if absent. */
           point?: { x: number; y: number; z: number };
+          /** Of the matching faces, the one whose centre is nearest this. */
+          near?: { x: number; y: number; z: number };
+          /** A Shift pick: adds the face to a held face set. */
+          additive?: boolean;
           resolve?: (
             face: { hasReference: boolean; lineageName?: string } | null
           ) => void;
@@ -5949,18 +5953,32 @@ export function ModelViewer({
           !candidate.consumed &&
           (!detail?.bodyId || candidate.bodyId === detail.bodyId)
       );
-      const face = body?.topology?.faces.find((candidate) => {
-        const normal = candidate.geometry?.normal;
-        return (
-          candidate.geometry?.surfaceType === 'plane' &&
-          normal !== undefined &&
-          (detail.lineageName === undefined ||
-            candidate.reference?.lineageName === detail.lineageName) &&
-          new THREE.Vector3(normal.x, normal.y, normal.z)
-            .normalize()
-            .distanceTo(wanted) < 1e-6
-        );
-      });
+      const matches =
+        body?.topology?.faces.filter((candidate) => {
+          const normal = candidate.geometry?.normal;
+          return (
+            candidate.geometry?.surfaceType === 'plane' &&
+            normal !== undefined &&
+            (detail.lineageName === undefined ||
+              candidate.reference?.lineageName === detail.lineageName) &&
+            new THREE.Vector3(normal.x, normal.y, normal.z)
+              .normalize()
+              .distanceTo(wanted) < 1e-6
+          );
+        }) ?? [];
+      const near = detail.near;
+      const face = near
+        ? matches
+            .map((candidate) => ({
+              candidate,
+              distance: Math.hypot(
+                candidate.geometry!.center.x - near.x,
+                candidate.geometry!.center.y - near.y,
+                candidate.geometry!.center.z - near.z
+              )
+            }))
+            .sort((a, b) => a.distance - b.distance)[0]?.candidate
+        : matches[0];
       if (!body || !face?.geometry?.normal) {
         detail?.resolve?.(null);
         return;
@@ -5978,7 +5996,7 @@ export function ModelViewer({
             topologyId: face.topologyId,
             hash: face.hash
           },
-          false,
+          detail?.additive === true,
           {
             point: { x: anchor.x, y: anchor.y, z: anchor.z },
             normal: {
