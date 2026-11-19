@@ -868,6 +868,7 @@ export function ViewerShell({
     };
   }, [datumHandleKey]);
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
+  const normalToSketchRef = useRef<(() => void) | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
   const frameStatsRef = useRef<FrameStatsSink | null>(null);
@@ -899,6 +900,9 @@ export function ViewerShell({
       onTouchModifiersChange={setTouchModifiers}
       onToggleGrid={onToggleGrid}
       onFit={onFit}
+      onNormalToSketch={
+        sketchMode ? () => normalToSketchRef.current?.() : undefined
+      }
       measuring={measuring}
       {...(onMeasure ? { onMeasure } : {})}
       onView={onView}
@@ -997,6 +1001,7 @@ export function ViewerShell({
         onWheelDeviceLearned={onWheelDeviceLearned}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
+        normalToSketchRef={normalToSketchRef}
         scaleIndicatorRef={scaleIndicatorRef}
         sketchGridReadoutRef={sketchGridReadoutRef}
         frameStatsRef={frameStatsRef}

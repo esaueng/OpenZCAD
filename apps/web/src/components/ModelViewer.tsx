@@ -12,6 +12,7 @@ import { spaceMouseAction } from '../lib/spaceMouseActions';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -1241,6 +1242,7 @@ export interface ModelViewerProps {
   orientationRef: MutableRefObject<OrientationLink | null>;
   /** Imperative bridge from the SVG view cube into the live camera rig. */
   orientationDragRef: MutableRefObject<OrientationDragControls | null>;
+  normalToSketchRef: MutableRefObject<(() => void) | null>;
   /** Imperative sink for the zoom-aware scale without React frame updates. */
   scaleIndicatorRef: MutableRefObject<
     ((scale: ViewportScale | null) => void) | null
@@ -1734,6 +1736,8 @@ export interface SceneContext {
   setRotationLocked(locked: boolean): void;
   /** Target-to-camera direction the view is settling on (a glide's end). */
   viewDirection(): THREE.Vector3;
+  /** Whether the current glide still owns this completion callback. */
+  hasTweenCompletion(onComplete: () => void): boolean;
   /** Starts a glide toward a new pose; user input cancels it. */
   startCameraTween(
     pose: CameraPose,
@@ -2518,6 +2522,7 @@ export function ModelViewer({
   onWheelDeviceLearned,
   orientationRef,
   orientationDragRef,
+  normalToSketchRef,
   scaleIndicatorRef,
   sketchGridReadoutRef,
   frameStatsRef,
@@ -3819,6 +3824,8 @@ export function ModelViewer({
       refreshNavigation: () => cameraRig.refreshNavigationPreferences(),
       setRotationLocked: (locked) => cameraRig.setRotationLocked(locked),
       viewDirection: () => cameraRig.viewDirection(),
+      hasTweenCompletion: (onComplete) =>
+        cameraRig.hasTweenCompletion(onComplete),
       startCameraTween: (pose, onComplete, glide) =>
         cameraRig.startTween(pose, onComplete, glide),
       captureView: () => cameraRig.capture(),
@@ -7466,6 +7473,8 @@ export function ModelViewer({
               objects: SketchModeState['objects'];
               textPreview: { loops: number; origin: SketchPoint } | null;
               screen: SketchPoint[];
+              target: [number, number, number];
+              projection: ProjectionMode;
             } | null
           ) => void;
         }>
@@ -7492,7 +7501,9 @@ export function ModelViewer({
           ? {
               objects: mode.objects,
               textPreview: sketchRigRef.current?.textPreviewState() ?? null,
-              screen
+              screen,
+              target: context.controls.target.toArray(),
+              projection: context.projection
             }
           : null
       );
@@ -16848,6 +16859,37 @@ export function ModelViewer({
   // frame rides a ref for the same reason: the entry glide wants the frame
   // as it was at entry, not a re-run per sketch edit.
   const sketchBasis = sketchMode?.basis ?? null;
+  const finishSketchEntryRef = useRef<(() => void) | null>(null);
+  useImperativeHandle(
+    normalToSketchRef,
+    () => () => {
+      const context = contextRef.current;
+      if (!context || !sketchBasis) return;
+      const { camera, controls } = context;
+      const target = controls.target.clone();
+      const { position, up } = sketchEntryPose(
+        { ...sketchBasis, origin: target },
+        camera.position.distanceTo(target)
+      );
+      const finishEntry = finishSketchEntryRef.current;
+      context.startCameraTween(
+        {
+          position: new THREE.Vector3(position.x, position.y, position.z),
+          target,
+          near: camera.near,
+          far: camera.far,
+          ...(up ? { up: new THREE.Vector3(up.x, up.y, up.z) } : {})
+        },
+        // A return during entry replaces that glide and takes over its
+        // pending projection switch. Later returns keep the live projection.
+        finishEntry && context.hasTweenCompletion(finishEntry)
+          ? finishEntry
+          : undefined,
+        { ease: viewJumpEase }
+      );
+    },
+    [sketchBasis]
+  );
   const sketchDimensions = sketchMode?.dimensions;
   useEffect(() => {
     const context = contextRef.current;
@@ -17089,6 +17131,12 @@ export function ModelViewer({
     })();
     const distance = Math.max(context.camera.position.distanceTo(origin), 40);
     const pose = sketchEntryPose(sketchBasis, distance);
+    const finishEntry = () => {
+      finishSketchEntryRef.current = null;
+      context.applyProjection('orthographic');
+      context.syncOrthographic(true);
+    };
+    finishSketchEntryRef.current = finishEntry;
     context.setRotationLocked(true);
     context.startCameraTween(
       // A user already looking at the plane has chosen its framing and roll.
@@ -17116,14 +17164,12 @@ export function ModelViewer({
             far: context.camera.far,
             ...(sketchUp ? { up: sketchUp } : {})
           }),
-      () => {
-        context.applyProjection('orthographic');
-        context.syncOrthographic(true);
-      },
+      finishEntry,
       { ease: sketchGlideEase, durationMs: SKETCH_GLIDE_MS }
     );
     context.requestRender();
     return () => {
+      finishSketchEntryRef.current = null;
       resetSketchSlotRef.current?.();
       rig.dispose();
       if (sketchRigRef.current === rig) {

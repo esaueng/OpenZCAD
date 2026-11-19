@@ -537,6 +537,10 @@ export class CameraController {
     return this.tween !== null;
   }
 
+  hasTweenCompletion(onComplete: () => void): boolean {
+    return this.tween?.onComplete === onComplete;
+  }
+
   private aspect(): number {
     const { host } = this.options;
     return host.clientWidth / Math.max(host.clientHeight, 1);

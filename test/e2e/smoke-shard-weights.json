@@ -128,6 +128,7 @@
   "sheet-metal.spec.ts": 95,
   "shoulder-cap-offset.spec.ts": 668,
   "share-link-drawings.spec.ts": 20,
+  "sketch-face-orientation.spec.ts": 14,
   "sketch-guides.spec.ts": 14,
   "sketch-inference.spec.ts": 18,
   "sketch-modify-tools.spec.ts": 12,
