@@ -5822,7 +5822,8 @@ export function ModelViewer({
       event: PointerEvent | MouseEvent
     ): PickCandidate[] | null {
       const surfaces = facePickSurfacesRef.current;
-      if (!surfaces) return null;
+      // A comment being placed takes the surface in front, hover and click.
+      if (!surfaces || commentPlacingRef.current) return null;
       const stack = picker.pickAll(event);
       // Only through a body: a sketch region or curve in front is a pick of
       // its own (Wrap takes a sketch as well as the cylinder behind it).
@@ -7676,7 +7677,7 @@ export function ModelViewer({
       gestureReleases[1] = false;
       const facesOnly = facePickOnlyRef.current;
       const stack =
-        (commentPlacingRef.current ? null : acceptedFacesUnder(event)) ??
+        acceptedFacesUnder(event) ??
         (facesOnly
           ? picker
               .pickAll(event)
