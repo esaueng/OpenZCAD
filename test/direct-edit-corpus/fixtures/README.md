@@ -18,7 +18,15 @@ Rules the corpus enforces:
   after the stem and looks the pin up by `fixture.name`; a mismatch would let a
   pin silently apply to nothing.
 - `format` must be `openzcad-direct-edit-fixture` and `formatVersion` must be
-  `1` or `2` (version 2 added `feature-build`).
+  `1`, `2` or `3` (version 2 added `feature-build`; version 3 added the
+  `offset-faces` op and `edit.additionalFaces`).
+
+A face set's offset (M07) is captured as `offset-faces`: `edit.face` is the
+edit's first face and `edit.additionalFaces` the rest, in order, and replay
+rebuilds the whole set as one `offset-faces` edit. A saved reproduction of a
+refused `offset-faces` build records the same faces and distance beside its
+document, and the corpus checks that they name the feature it replays.
+
 - A fixture whose `document` is `null` (imported geometry, whose source
   metadata the export does not sanitize) is skipped with its
   `documentOmitted` reason rather than failing.

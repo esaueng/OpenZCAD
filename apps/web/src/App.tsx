@@ -4752,11 +4752,9 @@ export function App() {
     if (!document) {
       return;
     }
-    // The corpus replays a one-face offset: a face set's attempt would be
-    // replayed as a different edit, so it is not recorded.
-    if (interaction.mode === 'face' && interaction.target.offsetFaceSet) {
-      return;
-    }
+    // A face set's offset is recorded as the `offset-faces` edit it builds:
+    // the handle's face first, then the set's other faces in pick order. The
+    // log's module names the op and reads each face's reference itself.
     const pick =
       interaction.mode === 'face'
         ? {
@@ -4768,7 +4766,8 @@ export function App() {
                 ? { hash: interaction.target.hash }
                 : {}),
               hasReference: interaction.target.reference !== undefined
-            }
+            },
+            additionalFaces: interaction.target.offsetFaceSet
           }
         : interaction.mode === 'edges' && interaction.edges[0]
           ? {
@@ -27598,8 +27597,7 @@ export function App() {
                   : (value: number) => `${round(value)} ${label.toLowerCase()}`
                 : (value: number) =>
                     `${label} ${round(value)} ${inPlaceUnits}`.trim();
-        const value =
-          inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
+        const value = inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
         // A refused value the kept preview did not build from: its arrow
         // stands on the value that built, at the model, under the refusal.
         const kept = inPlace.keptValues?.[handle.valueId];

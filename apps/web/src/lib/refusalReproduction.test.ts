@@ -2,6 +2,7 @@ import {
   addPrimitiveFeature,
   booleanBodies,
   createProjectDocument,
+  directEditBody,
   importStepBody,
   listFeaturesInOrder,
   setNodeMetadata,
@@ -10,13 +11,16 @@ import {
 } from '@openzcad/document-core';
 import {
   toUserId,
+  type FaceTopologyReferenceV5,
   type FeatureWarning,
   type ProjectDocument
 } from '@openzcad/shared';
 import { describe, expect, it } from 'vitest';
 import {
   DIRECT_EDIT_FIXTURE_FORMAT,
-  DIRECT_EDIT_FIXTURE_FORMAT_VERSION
+  DIRECT_EDIT_FIXTURE_FORMAT_VERSION,
+  DIRECT_EDIT_FIXTURE_READABLE_VERSIONS,
+  type DirectEditFixture
 } from './directEditFixture';
 import {
   REPRODUCTION_DOCUMENT_NAME,
@@ -311,5 +315,101 @@ describe('refusal reproduction sanitizer', () => {
         .map((f) => f.featureId)
     );
     expect(trimmed.bodyOrder).toHaveLength(document.bodyOrder.length - 1);
+  });
+
+  it('records every face and the distance of a refused offset-faces build (M07)', () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Slotted plate', toUserId('user_secret_owner')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 40, depth: 10, height: 20 }
+      }
+    );
+    const bodyId = base.bodyOrder[0]!;
+    const face = (x: number, hash: number, reference: boolean) => ({
+      faceHash: hash,
+      ...(reference
+        ? {
+            // Only its presence is read here; the rebuild is not run.
+            faceReference: {
+              kind: 'face',
+              lineageName: `primitive.box.face.${hash}`
+            } as unknown as FaceTopologyReferenceV5
+          }
+        : {}),
+      sourceSurfaceType: 'plane' as const,
+      sourceArea: 150,
+      sourceCenter: { x, y: 10, z: 10 },
+      sourceNormal: { x: 0, y: 0, z: 1 }
+    });
+    const document = directEditBody(base, {
+      name: 'Offset 3 faces',
+      targetBodyId: bodyId,
+      operation: {
+        kind: 'offset-faces',
+        ...face(7.5, 11, true),
+        offset: -2.5,
+        additionalFaces: [face(32.5, 22, true), face(20, 33, false)]
+      }
+    }).document;
+    const feature = listFeaturesInOrder(document).at(-1)!;
+    const fixture = buildRefusalReproduction({
+      document,
+      warning: {
+        featureId: feature.featureId,
+        featureName: feature.name,
+        message:
+          'Feature "Offset 3 faces": Face 2 of the offset set no longer matches the body. Select the faces again.',
+        kind: 'build-failed'
+      },
+      kernel: KERNEL,
+      capturedAt: CAPTURED_AT
+    });
+
+    const recorded = (x: number, hash: number, hasReference: boolean) => ({
+      surfaceType: 'plane',
+      center: { x, y: 10, z: 10 },
+      normal: { x: 0, y: 0, z: 1 },
+      area: 150,
+      hash,
+      hasReference
+    });
+    expect(fixture.edit).toEqual({
+      op: 'feature-build',
+      targetBodyId: bodyId,
+      featureId: feature.featureId,
+      featureKind: 'direct-edit',
+      operationKind: 'offset-faces',
+      value: -2.5,
+      face: recorded(7.5, 11, true),
+      additionalFaces: [recorded(32.5, 22, true), recorded(20, 33, false)]
+    });
+    // One face of the set without a reference makes the set hash-only.
+    expect(fixture.observed.lineage).toBe('hash-only');
+
+    // The file the user saves reads back as the same fixture, in a format
+    // version the corpus accepts, and its document still holds the whole set.
+    const reread = JSON.parse(
+      `${JSON.stringify(fixture, null, 2)}\n`
+    ) as DirectEditFixture;
+    expect(reread).toEqual(fixture);
+    expect(DIRECT_EDIT_FIXTURE_READABLE_VERSIONS).toContain(
+      reread.formatVersion
+    );
+    const replayed = listFeaturesInOrder(reread.document!).at(-1)!;
+    expect(replayed.data).toMatchObject({
+      featureKind: 'direct-edit',
+      operation: {
+        kind: 'offset-faces',
+        faceHash: 11,
+        offset: -2.5,
+        additionalFaces: [{ faceHash: 22 }, { faceHash: 33 }]
+      }
+    });
+  });
+
+  it('reads the earlier fixture versions', () => {
+    expect(DIRECT_EDIT_FIXTURE_READABLE_VERSIONS).toEqual([1, 2, 3]);
   });
 });
