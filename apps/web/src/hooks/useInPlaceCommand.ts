@@ -2314,10 +2314,10 @@ export function useInPlaceCommand(
       entryRefusal || refusal === null || refusalInputs.length === 0
         ? null
         : refusalInputs.join(' and '),
+    // An entry refused meanwhile (a 0 typed over the refused radius) leaves
+    // the refused request and its kept frame as they were: the arrow stays.
     keptValues:
-      entryRefusal || refusal === null || refusalInputs.length === 0
-        ? null
-        : keptValues,
+      refusal === null || refusalInputs.length === 0 ? null : keptValues,
     canFinish,
     edit,
     start,
