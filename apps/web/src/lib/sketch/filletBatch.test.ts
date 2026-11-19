@@ -113,7 +113,7 @@ describe('batch sketch fillet', () => {
         ) {
           throw new Error('Finite endpoint-retention guard exceeded.');
         }
-        return Reflect.apply(push, this, items) as number;
+        return Reflect.apply<unknown[], unknown[], number>(push, this, items);
       };
       try {
         const corners = listSketchFilletCorners(document, sketch, resolve);
@@ -151,14 +151,19 @@ describe('batch sketch fillet', () => {
         'This sketch has too many nearby endpoints to check safely.'
       );
       calls = 0;
-      expect(
-        planSketchFilletBatch(document, sketch, ['not-a-corner'], 2, resolve)
-      ).toMatchObject({
-        status: 'refuse',
-        reason: expect.stringContaining(
-          'This sketch has too many nearby endpoints to check safely.'
-        )
-      });
+      const plan = planSketchFilletBatch(
+        document,
+        sketch,
+        ['not-a-corner'],
+        2,
+        resolve
+      );
+      expect(plan.status).toBe('refuse');
+      if (plan.status !== 'refuse')
+        throw new Error('Expected catalog refusal.');
+      expect(plan.reason).toContain(
+        'This sketch has too many nearby endpoints to check safely.'
+      );
     } finally {
       Math.hypot = hypot;
     }
