@@ -108,7 +108,7 @@
   "multi-region-extrude.spec.ts": 27,
   "objects-folders.spec.ts": 20,
   "offline-startup.spec.ts": 6,
-  "offset-face-set.spec.ts": 50,
+  "offset-face-set.spec.ts": 75,
   "open-in-slicer.spec.ts": 16,
   "orbit-mode-setting.spec.ts": 16,
   "overlay-reach.spec.ts": 5,

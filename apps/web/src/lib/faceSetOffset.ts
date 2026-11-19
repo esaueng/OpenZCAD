@@ -14,40 +14,34 @@ import type { OffsetFaceSetMember } from './interaction/machine';
 import { resolveSelectionTopology } from './selectionFeature';
 
 /**
- * M07: a picked set of faces that all face the same way, offset together as
- * one replayable `offset-faces` direct edit. The set's Offset verb arms the
- * single-face offset handle on the last-picked face and carries the other
- * faces with it; this module checks the set, names its refusals, and builds
- * the edit. Faces on parallel planes at different heights (a slot's floor
- * and the top beside it) are a chained move: the kernel moves them one plane
- * at a time, and each face moves along its own normal by the one distance.
+ * M07: a picked set of flat faces offset together as one replayable
+ * `offset-faces` direct edit. The set's Offset verb arms the single-face
+ * offset handle on the last-picked face and carries the other faces with it;
+ * this module checks the set, names its refusals, and builds the edit. Faces
+ * on several planes (a slot's floor and the top beside it, a pocket's floor
+ * and its walls) are a chained move: the kernel moves them one plane at a
+ * time, and each face moves along its own normal by the one distance. Only
+ * faces that face opposite ways are refused.
  */
 
 /** The most faces one `offset-faces` edit takes (the kernel's own bound). */
 export const MAX_OFFSET_SET_FACES = 64;
 
 /**
- * The refusal for a set whose faces do not all face the same way, said
- * before any handle appears, in the kernel's own words.
+ * The refusal for a set two of whose faces face opposite ways, said before
+ * any handle appears, in the kernel's own words.
  */
-export const OFFSET_SET_NOT_SAME_NORMAL =
-  'Offset moves a set of faces together only when they all face the same way, and the selected faces face different directions. Offset them one at a time.';
+export const OFFSET_SET_OPPOSITE_NORMALS =
+  'The selected faces face opposite ways, so one offset would thicken one and thin the other. Offset them separately.';
 
-/**
- * Two faces of a set lie on one plane when their heights along the shared
- * normal differ by no more than this: the kernel's own fixed plane
- * tolerance (`DIRECT_EDIT_TOLERANCE`), never one scaled by the body's
- * distance from the origin.
- */
-const PLANE_TOLERANCE = 1e-6;
-
+/** The kernel's cosine for two normals facing one way (or opposite ways). */
 const NORMAL_TOLERANCE = 1e-6;
 
-function dot(a: Vector3, b: Vector3): number {
+export function dot(a: Vector3, b: Vector3): number {
   return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-function unit(vector: Vector3): Vector3 | null {
+export function unit(vector: Vector3): Vector3 | null {
   const length = Math.hypot(vector.x, vector.y, vector.z);
   return length > 1e-12
     ? { x: vector.x / length, y: vector.y / length, z: vector.z / length }
@@ -137,10 +131,11 @@ export interface FaceSetOffsetStart {
 }
 
 /**
- * Checks that a picked set all faces one way and returns the face the shared
- * handle arms on (the last picked) with the rest. Throws the kernel's own
- * refusal for faces that face different ways. Parallel faces at different
- * heights arm: they are a chained move (see `faceSetOffsetLead`).
+ * Checks a picked set and returns the face the shared handle arms on (the
+ * last picked) with the rest. Throws the kernel's own refusal when any two
+ * faces face opposite ways. Faces on several planes, parallel or facing
+ * different directions, arm: they are a chained move (see
+ * `faceSetOffsetChain.ts`).
  */
 export function faceSetOffsetStart(
   document: ProjectDocument,
@@ -153,9 +148,11 @@ export function faceSetOffsetStart(
   const resolved = resolveSet(body, selections);
   if (typeof resolved === 'string') throw new Error(resolved);
   const handle = resolved[resolved.length - 1]!;
-  for (const entry of resolved) {
-    if (dot(entry.normal, handle.normal) < 1 - NORMAL_TOLERANCE) {
-      throw new Error(OFFSET_SET_NOT_SAME_NORMAL);
+  for (const [index, a] of resolved.entries()) {
+    for (const b of resolved.slice(index + 1)) {
+      if (dot(a.normal, b.normal) <= NORMAL_TOLERANCE - 1) {
+        throw new Error(OFFSET_SET_OPPOSITE_NORMALS);
+      }
     }
   }
   return {
@@ -182,7 +179,9 @@ export interface FaceSetOffsetFacesInput {
  * The armed set's planar faces on its body now, the handle's face first and
  * then the others in pick order; null when one no longer resolves.
  */
-function setFaces(input: FaceSetOffsetFacesInput): FaceTopology[] | null {
+export function setFaces(
+  input: FaceSetOffsetFacesInput
+): FaceTopology[] | null {
   const body = ownEntry(
     input.document.derived.bodyRepresentations,
     input.bodyId
@@ -208,43 +207,6 @@ function setFaces(input: FaceSetOffsetFacesInput): FaceTopology[] | null {
 }
 
 /**
- * The faces of an armed set grouped by the plane they lie on, in the order
- * the kernel's chained move takes them: the plane the move leads with first
- * (the outermost for a positive offset, the innermost for a negative one),
- * the faces of a plane in the set's own order. One group is one plane: a
- * coplanar set, which needs no chain. Null when a face no longer resolves.
- */
-export function faceSetOffsetPlanes(
-  input: FaceSetOffsetFacesInput,
-  offset: number
-): FaceTopology[][] | null {
-  const faces = setFaces(input);
-  if (!faces) return null;
-  const axis = unit(faces[0]!.geometry!.normal!)!;
-  const height = (face: FaceTopology) => dot(axis, face.geometry!.center);
-  const sorted = faces
-    .map((face, order) => ({ face, order }))
-    .sort((a, b) => height(a.face) - height(b.face) || a.order - b.order);
-  const groups: { face: FaceTopology; order: number }[][] = [];
-  for (const entry of sorted) {
-    const last = groups.at(-1);
-    if (
-      last &&
-      Math.abs(height(entry.face) - height(last.at(-1)!.face)) <=
-        PLANE_TOLERANCE
-    ) {
-      last.push(entry);
-    } else {
-      groups.push([entry]);
-    }
-  }
-  if (offset > 0) groups.reverse();
-  return groups.map((group) =>
-    group.sort((a, b) => a.order - b.order).map((entry) => entry.face)
-  );
-}
-
-/**
  * Where each face of an armed set sits and which way it moves, for its
  * direction tick: every face of the set, in pick order with the handle's
  * face last, at its centre on its own outward unit normal. Empty when a
@@ -260,49 +222,6 @@ export function faceSetOffsetTicks(
     point: face.geometry!.center,
     normal: unit(face.geometry!.normal!)!
   }));
-}
-
-/**
- * A chained set's drag preview of its leading plane alone (M07): the faces
- * the chain moves first, at `offset`, on the source body. Its kernel move is
- * the chain's own first step, so a drag can show it from a prepared move
- * every frame while the whole chain is rebuilt at a coarse rate. Display
- * only: it never authors a commit, which replays the whole set. Null for a
- * set on one plane (nothing to chain) or a face that no longer resolves.
- */
-export function buildOffsetFaceSetLead(
-  input: FaceSetOffsetFacesInput & { offset: number }
-): AnyCommand | null {
-  const planes = faceSetOffsetPlanes(input, input.offset);
-  if (!planes || planes.length < 2) return null;
-  const [first, ...rest] = planes[0]!;
-  const firstSnapshot = snapshot(first!);
-  if (!firstSnapshot) return null;
-  const offset = Math.round(input.offset * 1000) / 1000;
-  if (rest.length === 0) {
-    // One face leads: the same move as an `offset-face` of it.
-    return commandFactories.directEditBody({
-      name: offsetFacesName(planes.flat().length),
-      targetBodyId: input.bodyId,
-      operation: { kind: 'offset-face', ...firstSnapshot, offset }
-    });
-  }
-  const additionalFaces: OffsetFaceSnapshot[] = [];
-  for (const face of rest) {
-    const entry = snapshot(face);
-    if (!entry) return null;
-    additionalFaces.push(entry);
-  }
-  return commandFactories.directEditBody({
-    name: offsetFacesName(planes.flat().length),
-    targetBodyId: input.bodyId,
-    operation: {
-      kind: 'offset-faces',
-      ...firstSnapshot,
-      offset,
-      additionalFaces
-    }
-  });
 }
 
 /** "Offset 3 faces": the History name of a face set's offset. */
@@ -324,7 +243,7 @@ export function offsetFacesCommitMessage(
   return `Offset ${count} faces by ${signedHundredths(offset)} ${units}.`;
 }
 
-function snapshot(face: FaceTopology): OffsetFaceSnapshot | null {
+export function snapshot(face: FaceTopology): OffsetFaceSnapshot | null {
   const geometry = face.geometry;
   if (geometry?.surfaceType !== 'plane' || !geometry.normal) return null;
   return {

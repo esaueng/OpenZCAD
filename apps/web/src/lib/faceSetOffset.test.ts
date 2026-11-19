@@ -10,16 +10,18 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import {
-  OFFSET_SET_NOT_SAME_NORMAL,
-  buildOffsetFaceSetLead,
+  OFFSET_SET_OPPOSITE_NORMALS,
   buildOffsetFaces,
-  faceSetOffsetPlanes,
   faceSetOffsetStart,
   faceSetOffsetTicks,
   faceSetOffsetUnavailable,
   offsetFacesCommitMessage,
   offsetFacesName
 } from './faceSetOffset';
+import {
+  buildOffsetFaceSetLead,
+  faceSetOffsetPlanes
+} from './faceSetOffsetChain';
 
 const BODY = 'body_block' as BodyId;
 const UP = { x: 0, y: 0, z: 1 };
@@ -40,7 +42,18 @@ function plane(
 const leftTop = plane(1, { x: 7.5, y: 10, z: 10 });
 const rightTop = plane(2, { x: 32.5, y: 10, z: 10 });
 const floor = plane(3, { x: 20, y: 10, z: 5 }, UP, 200);
+// The slot's two walls face each other across it.
 const wall = plane(4, { x: 15, y: 10, z: 7.5 }, { x: 1, y: 0, z: 0 }, 100);
+const otherWall = plane(
+  7,
+  { x: 25, y: 10, z: 7.5 },
+  { x: -1, y: 0, z: 0 },
+  100
+);
+// The block's outer side wall, facing away from the slot's wall like it.
+const side = plane(8, { x: 40, y: 10, z: 5 }, { x: 1, y: 0, z: 0 }, 200);
+// The block's front, facing -y.
+const front = plane(9, { x: 20, y: 0, z: 5 }, { x: 0, y: -1, z: 0 }, 400);
 const bore = {
   topologyId: 'face:5',
   hash: 5,
@@ -65,7 +78,16 @@ function slottedBlock(): ProjectDocument {
           bodyId: BODY,
           consumed: false,
           topology: {
-            faces: [leftTop, rightTop, floor, wall, bore],
+            faces: [
+              leftTop,
+              rightTop,
+              floor,
+              wall,
+              bore,
+              otherWall,
+              side,
+              front
+            ],
             edges: []
           }
         }
@@ -101,10 +123,26 @@ describe('face set offset', () => {
     expect(start.members).toEqual([{ topologyId: 'face:1', hash: 1 }]);
   });
 
-  it('refuses faces that face different ways before any handle appears', () => {
+  it('arms faces that face different directions, on the last-picked face', () => {
+    const start = faceSetOffsetStart(slottedBlock(), [pick(floor), pick(wall)]);
+    expect(start.face.hash).toBe(wall.hash);
+    expect(start.normal).toEqual({ x: 1, y: 0, z: 0 });
+    expect(start.members).toEqual([{ topologyId: 'face:3', hash: 3 }]);
+  });
+
+  it('refuses faces that face opposite ways before any handle appears', () => {
     expect(() =>
-      faceSetOffsetStart(slottedBlock(), [pick(leftTop), pick(wall)])
-    ).toThrow(OFFSET_SET_NOT_SAME_NORMAL);
+      faceSetOffsetStart(slottedBlock(), [pick(wall), pick(otherWall)])
+    ).toThrow(OFFSET_SET_OPPOSITE_NORMALS);
+    // Any two of the set, not only against the handle's face: the floor
+    // faces neither wall's opposite way, yet the walls face each other.
+    expect(() =>
+      faceSetOffsetStart(slottedBlock(), [
+        pick(wall),
+        pick(otherWall),
+        pick(floor)
+      ])
+    ).toThrow(OFFSET_SET_OPPOSITE_NORMALS);
   });
 
   it('orders a chained set by plane, the plane the move leads with first', () => {
@@ -141,6 +179,76 @@ describe('face set offset', () => {
         2
       )
     ).toBeNull();
+  });
+
+  it('orders faces facing different directions as the kernel does: z, then y, then x', () => {
+    const input = {
+      document: slottedBlock(),
+      bodyId: BODY,
+      // Picked x-facing first, so pick order never decides.
+      face: { topologyId: side.topologyId, hash: side.hash },
+      members: [wall, front, leftTop, floor].map((face) => ({
+        topologyId: face.topologyId,
+        hash: face.hash
+      }))
+    };
+    const hashes = (planes: FaceTopology[][] | null) =>
+      planes?.map((group) => group.map((face) => face.hash));
+    // Up-facing faces first, then the +x walls (y = 0) before the -y front
+    // (y = -1); within a direction the leading plane goes first.
+    expect(hashes(faceSetOffsetPlanes(input, 2))).toEqual([
+      [1],
+      [3],
+      [8],
+      [4],
+      [9]
+    ]);
+    expect(hashes(faceSetOffsetPlanes(input, -2))).toEqual([
+      [3],
+      [1],
+      [4],
+      [8],
+      [9]
+    ]);
+    // Rounding noise on a zero component never decides the order: a z of
+    // -1e-12 does not put this +y face after the +x wall.
+    const noisy = plane(
+      10,
+      { x: 20, y: 20, z: 5 },
+      { x: 1e-12, y: 1, z: -1e-12 },
+      400
+    );
+    const document = slottedBlock();
+    document.derived.bodyRepresentations[BODY]!.topology!.faces.push(noisy);
+    expect(
+      hashes(
+        faceSetOffsetPlanes(
+          {
+            document,
+            bodyId: BODY,
+            face: { topologyId: wall.topologyId, hash: wall.hash },
+            members: [{ topologyId: noisy.topologyId, hash: noisy.hash }]
+          },
+          2
+        )
+      )
+    ).toEqual([[10], [4]]);
+  });
+
+  it('previews a different-direction set’s leading plane alone', () => {
+    const operation = buildOffsetFaceSetLead({
+      document: slottedBlock(),
+      bodyId: BODY,
+      face: { topologyId: wall.topologyId, hash: wall.hash },
+      members: [{ topologyId: floor.topologyId, hash: floor.hash }],
+      offset: 1
+    })?.payload as { operation?: DirectEditOperation } | undefined;
+    // The floor faces up, so it leads, whichever face the handle is on.
+    expect(operation?.operation).toMatchObject({
+      kind: 'offset-face',
+      faceHash: 3,
+      offset: 1
+    });
   });
 
   it('previews a chained set’s leading plane alone, and nothing for one plane', () => {

@@ -46,6 +46,7 @@ import {
   trackKernelRefusal
 } from './lib/analytics';
 import type { RefusalCapture } from './lib/refusalHarvest';
+import type * as FaceSetOffsetChain from './lib/faceSetOffsetChain';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
   checkpointLabel,
@@ -2037,9 +2038,7 @@ import {
 } from './lib/interaction/blendPreview';
 import { errorMessage } from './lib/errors';
 import {
-  buildOffsetFaceSetLead,
   buildOffsetFaces,
-  faceSetOffsetPlanes,
   faceSetOffsetStart,
   faceSetOffsetTicks,
   faceSetOffsetUnavailable,
@@ -5956,6 +5955,8 @@ export function App() {
    * checks.
    */
   const offsetChainedRef = useRef(false);
+  /** The chain's ordering (`faceSetOffsetChain`), loaded when a set arms. */
+  const offsetChainRef = useRef<typeof FaceSetOffsetChain | null>(null);
   const shownOffsetLaneRef = useRef<'full' | 'lead' | null>(null);
   const offsetLeadPreview = useRef(
     new LivePreview<OffsetPreviewCandidate, GeometryReadyState>({
@@ -5971,7 +5972,7 @@ export function App() {
         ) {
           return null;
         }
-        const command = buildOffsetFaceSetLead({
+        const command = offsetChainRef.current?.buildOffsetFaceSetLead({
           document: base,
           bodyId: current.target.bodyId as BodyId,
           face: {
@@ -27598,8 +27599,7 @@ export function App() {
                   : (value: number) => `${round(value)} ${label.toLowerCase()}`
                 : (value: number) =>
                     `${label} ${round(value)} ${inPlaceUnits}`.trim();
-        const value =
-          inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
+        const value = inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
         // A refused value the kept preview did not build from: its arrow
         // stands on the value that built, at the model, under the refusal.
         const kept = inPlace.keptValues?.[handle.valueId];
@@ -30641,7 +30641,7 @@ export function App() {
     const set = current.target.offsetFaceSet;
     const planes =
       base && set && current.target.hash !== undefined
-        ? faceSetOffsetPlanes(
+        ? offsetChainRef.current?.faceSetOffsetPlanes(
             {
               document: base,
               bodyId: current.target.bodyId as BodyId,
@@ -30974,6 +30974,9 @@ export function App() {
       });
       return;
     }
+    void import('./lib/faceSetOffsetChain').then((chain) => {
+      offsetChainRef.current = chain;
+    });
     const center = start.face.geometry!.center;
     const point: [number, number, number] = [center.x, center.y, center.z];
     dispatchInteraction({

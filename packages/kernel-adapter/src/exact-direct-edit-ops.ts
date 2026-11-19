@@ -1614,21 +1614,12 @@ const OFFSET_SET_DIRECTION_ORDER_TOLERANCE = 1e-9;
 /**
  * The refusal for a face set two of whose faces point opposite ways, such as
  * a top and the bottom under it: one signed offset would thicken one and thin
- * the other.
+ * the other. The workspace refuses such a set up front in these words
+ * (`OFFSET_SET_OPPOSITE_NORMALS`, pinned to this by
+ * `test/offset-faces-workspace.test.ts`).
  */
 export const OFFSET_FACES_OPPOSITE_NORMALS =
   'The selected faces face opposite ways, so one offset would thicken one and thin the other. Offset them separately.';
-
-/**
- * The words for a face set whose faces face different directions. The
- * kernel no longer refuses such a set: since the adjacent-face slice it
- * chains one plane per step, each face along its own normal, and refuses
- * only opposite normals. The workspace still gates different-direction sets
- * up front in these words (`OFFSET_SET_NOT_SAME_NORMAL`, pinned to this by
- * `test/offset-faces-workspace.test.ts`) until its own slice lifts the gate.
- */
-export const OFFSET_FACES_MIXED_DIRECTIONS =
-  'Offset moves a set of faces together only when they all face the same way, and the selected faces face different directions. Offset them one at a time.';
 
 /** Face N (1-based, N ≥ 2) of an offset set no longer resolves as picked. */
 function offsetSetFaceDrifted(index: number, cause?: unknown): Error {
