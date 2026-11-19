@@ -5360,6 +5360,13 @@ export function booleanOperationSwitch(
     : null;
 }
 
+const BOOLEAN_ORIGINAL_CHOICES = [
+  { value: 'none', label: 'None' },
+  { value: 'target', label: 'Base body' },
+  { value: 'tools', label: 'Tool bodies' },
+  { value: 'all', label: 'All bodies' }
+];
+
 function booleanSpec(
   id: 'union' | 'subtract' | 'intersect',
   title: string
@@ -5388,17 +5395,12 @@ function booleanSpec(
       },
       {
         id: 'keepOriginals',
-        label: 'Keep',
-        choices: [
-          { value: 'none', label: 'None' },
-          { value: 'target', label: 'First' },
-          { value: 'tools', label: 'Others' },
-          { value: 'all', label: 'All' }
-        ],
+        label: 'Keep originals',
+        choices: BOOLEAN_ORIGINAL_CHOICES,
         initial: 'none'
       }
     ],
-    hint(slots) {
+    hint(slots, options) {
       if (slots.bodies.length === 0) {
         return id === 'subtract'
           ? 'Click the body to cut from'
@@ -5409,7 +5411,10 @@ function booleanSpec(
           ? 'Click the bodies to cut away'
           : 'Click the next body';
       }
-      return `${slots.bodies.length} bodies · pick more`;
+      const keep = BOOLEAN_ORIGINAL_CHOICES.find(
+        (choice) => choice.value === options?.keepOriginals
+      );
+      return `${slots.bodies.length} bodies · Keep originals: ${keep?.label ?? 'None'} · pick more`;
     },
     ready: (slots) => slots.bodies.length >= 2,
     request(slots, _values, options) {

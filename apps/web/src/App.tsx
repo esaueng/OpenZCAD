@@ -38704,6 +38704,15 @@ export function App() {
                   actions={inPlaceActions}
                   onAction={runInPlaceAction}
                   picks={inPlacePicks}
+                  booleanOperands={
+                    inPlaceBooleanRunning
+                      ? {
+                          bodies: inPlace.slots.bodies,
+                          name: (id) => representations[id]?.name,
+                          remove: inPlace.pickBody
+                        }
+                      : undefined
+                  }
                   onRemovePick={(id) => {
                     const edge = inPlace.slots.edges.find(
                       (candidate) => String(candidate.hash) === id
