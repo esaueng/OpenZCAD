@@ -4309,7 +4309,11 @@ const wrap: InPlaceToolSpec = {
         y: apex.y + axis.y * along,
         z: apex.z + axis.z * along
       };
-      const radial = unit({ x: at.x - foot.x, y: at.y - foot.y, z: at.z - foot.z });
+      const radial = unit({
+        x: at.x - foot.x,
+        y: at.y - foot.y,
+        z: at.z - foot.z
+      });
       const [sin, cos] = [Math.sin(halfAngle), Math.cos(halfAngle)];
       normal = unit({
         x: radial.x * sin - axis.x * cos,
@@ -4330,7 +4334,10 @@ const wrap: InPlaceToolSpec = {
     // when the pick says which way the face looks.
     const bore =
       face.normal !== undefined &&
-      face.normal.x * radial.x + face.normal.y * radial.y + face.normal.z * radial.z < 0;
+      face.normal.x * radial.x +
+        face.normal.y * radial.y +
+        face.normal.z * radial.z <
+        0;
     const inward = (options.mode === 'engrave') !== bore ? -1 : 1;
     const key = `wrap:${face.bodyId}:${face.hash}`;
     return [
@@ -5467,6 +5474,32 @@ export function inPlaceFaceMode(
   if (!spec) return undefined;
   if (takesFeatureFaces(spec, options)) return 'many';
   return spec.faceMode;
+}
+
+const CYLINDER_SURFACES = ['cylinder'] as const;
+const REVOLUTION_SURFACES = ['cylinder', 'cone'] as const;
+
+/**
+ * The surfaces a command waiting for faces takes, for the viewport to pick
+ * through what it does not: a click on a host's top over a bore gives Thread
+ * the bore's wall behind it. Null when the command takes no faces now, or
+ * any face. A flat face is never picked through: Hole places itself where
+ * the click lands, and a hidden face would take it out of sight. The arrays
+ * are shared, so a host passing one keeps its identity.
+ */
+export function inPlaceFacePickSurfaces(
+  spec: InPlaceToolSpec | null | undefined,
+  options: Readonly<Record<string, string>> | undefined
+): readonly string[] | null {
+  if (!spec?.faceFilter || !inPlaceFaceMode(spec, options)) return null;
+  switch (spec.faceFilter) {
+    case 'cylindrical':
+      return CYLINDER_SURFACES;
+    case 'revolution':
+      return REVOLUTION_SURFACES;
+    case 'planar':
+      return null;
+  }
 }
 
 /** The bodies a command takes as its options now stand. */

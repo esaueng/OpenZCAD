@@ -1964,6 +1964,7 @@ import {
   booleanOperationSwitch,
   inPlaceBodyMode,
   inPlaceFaceMode,
+  inPlaceFacePickSurfaces,
   takesFeatureFaces,
   toggledPatternSkip,
   patternCopyChip,
@@ -37465,6 +37466,11 @@ export function App() {
                 }
               : {})}
             facePickOnly={toFacePick !== null}
+            facePickSurfaces={
+              inPlace.active
+                ? inPlaceFacePickSurfaces(inPlaceSpec, inPlace.options)
+                : null
+            }
             faceSetPickBodyId={
               tool === null && interaction.mode !== 'sketch'
                 ? heldFaceSetBody(heldFaces)
