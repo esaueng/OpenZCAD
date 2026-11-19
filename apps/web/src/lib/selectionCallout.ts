@@ -44,13 +44,17 @@ export type SelectionCalloutVerbId =
  * open and the word pinned where the face was picked. It shares the Sketch
  * verb's availability, since it is a sketch on the same face.
  */
-function textOnFaceVerb(sketch: SelectionCalloutVerb): SelectionCalloutVerb {
+function textOnFaceVerb(
+  sketch: SelectionCalloutVerb,
+  note: string | undefined
+): SelectionCalloutVerb {
+  const title = 'Sketch text on this face, centred where you picked it';
   return {
     id: 'text-on-face',
     label: 'Text',
-    title: sketch.disabled
-      ? sketch.title
-      : 'Sketch text on this face, centred where you picked it',
+    // What Sketch says about where its sketch will lie (a fixed plane on a
+    // face a rebuild cannot find again) holds for the text's sketch too.
+    title: sketch.disabled ? sketch.title : note ? `${title}. ${note}` : title,
     disabled: sketch.disabled,
     pressed: false
   };
@@ -58,7 +62,8 @@ function textOnFaceVerb(sketch: SelectionCalloutVerb): SelectionCalloutVerb {
 
 /** `verbs` with Text after the face's Sketch verb, when it has one. */
 function withTextAfterSketch(
-  verbs: SelectionCalloutVerb[]
+  verbs: SelectionCalloutVerb[],
+  sketchNote?: string
 ): SelectionCalloutVerb[] {
   const at = verbs.findIndex(
     (verb) => verb.id === 'tool:sketch' || verb.id === 'action:sketch-on-face'
@@ -67,7 +72,7 @@ function withTextAfterSketch(
     ? verbs
     : [
         ...verbs.slice(0, at + 1),
-        textOnFaceVerb(verbs[at]!),
+        textOnFaceVerb(verbs[at]!, sketchNote),
         ...verbs.slice(at + 1)
       ];
 }
@@ -359,7 +364,10 @@ export function selectionCalloutVerbs(
       const verbs = withTextAfterSketch(
         capabilities.map((capability) =>
           actionVerb(capability, input.pressedAction)
-        )
+        ),
+        capabilities.find(
+          (capability) => capability.action === 'sketch-on-face'
+        )?.note
       );
       if (input.resizeBody) {
         // The switch the column-top chip carried as "Resize body | Offset

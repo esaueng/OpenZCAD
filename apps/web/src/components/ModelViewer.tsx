@@ -1070,6 +1070,12 @@ export interface ViewportContextMenuOptions {
    * on as it stands rather than re-picking (a multi-selection stays whole).
    */
   keyboard?: boolean;
+  /**
+   * Where a right-click landed on a face, for a menu verb that works at a
+   * point (Text on face). The menu's own pick carries no detail, so it never
+   * arms a drag handle the way a click does.
+   */
+  faceHit?: PickDetail;
 }
 
 type AnalysisOverlayModule = typeof AnalysisOverlayTypes;
@@ -7984,16 +7990,33 @@ export function ModelViewer({
           ? stackedPickEntries(event).length
           : 0;
       const point = { clientX: event.clientX, clientY: event.clientY, count };
+      const candidate = pick(event);
+      const hit = candidate?.hit.point;
+      const normal = candidate?.faceNormal;
+      const faceHit: PickDetail | undefined =
+        candidate?.kind === 'face' && hit
+          ? {
+              point: { x: hit.x, y: hit.y, z: hit.z },
+              ...(normal
+                ? { normal: { x: normal.x, y: normal.y, z: normal.z } }
+                : {})
+            }
+          : undefined;
       onContextMenuRef.current(
         event.clientX,
         event.clientY,
-        pick(event)?.selection ?? null,
-        count >= 2
+        candidate?.selection ?? null,
+        count >= 2 || faceHit
           ? {
-              selectOther: {
-                count,
-                open: () => openSelectOtherFromMenu(point)
-              }
+              ...(count >= 2
+                ? {
+                    selectOther: {
+                      count,
+                      open: () => openSelectOtherFromMenu(point)
+                    }
+                  }
+                : {}),
+              ...(faceHit ? { faceHit } : {})
             }
           : undefined
       );

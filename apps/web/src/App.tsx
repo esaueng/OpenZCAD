@@ -4604,6 +4604,11 @@ export function App() {
   const lastPickDetailRef = useRef<PickDetail | null>(null);
   /** The topology that click landed on, so its point is only reused there. */
   const lastPickTopologyRef = useRef<TopologySelection | null>(null);
+  /** Where the latest right-click landed on a face, and on which face. */
+  const menuFaceHitRef = useRef<{
+    selection: TopologySelection;
+    detail: PickDetail;
+  } | null>(null);
   /** Selection-first direct-manipulation mode machine (behind experiment flag). */
   const [interaction, dispatchInteraction] = useReducer(
     interactionReducer,
@@ -20690,6 +20695,30 @@ export function App() {
    * other way (a History row, a filter sweep) is taken at its centroid.
    */
   function selectedPlanarFaceTarget(): FaceTarget | null {
+    const target = selectedPlanarFace();
+    // A right-click on the face since it was picked: that is the point meant.
+    const menuHit = menuFaceHitRef.current;
+    if (
+      !target ||
+      !menuHit ||
+      !sameFacePick(menuHit.selection, {
+        bodyId: target.bodyId as BodyId,
+        kind: 'face',
+        topologyId: target.topologyId,
+        hash: target.hash
+      })
+    ) {
+      return target;
+    }
+    const { point, normal } = menuHit.detail;
+    return {
+      ...target,
+      point: [point.x, point.y, point.z],
+      ...(normal ? { normal: [normal.x, normal.y, normal.z] } : {})
+    };
+  }
+
+  function selectedPlanarFace(): FaceTarget | null {
     if (interaction.mode === 'face') {
       return interaction.target.surfaceType === 'planar'
         ? interaction.target
@@ -21551,6 +21580,7 @@ export function App() {
     // handles; stashed for the direct-manipulation flow.
     lastPickDetailRef.current = detail ?? null;
     lastPickTopologyRef.current = detail ? (selection ?? null) : null;
+    menuFaceHitRef.current = null;
     setSelectedSketchProfileId(null);
     if (!selection) {
       if (!additive) {
@@ -32579,10 +32609,16 @@ export function App() {
     // owns the question first; a menu here would act on the old selection.
     // The keyboard's menu is for the selection as it stands, so it picks
     // nothing (a multi-selection stays whole).
-    if (
+    const landing =
       !options.keyboard &&
-      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
-    ) {
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y });
+    // After the pick, which forgets every earlier hit point: the menu's
+    // point-taking verbs (Text on face) start where this right-click landed.
+    menuFaceHitRef.current =
+      options.faceHit && selection?.kind === 'face'
+        ? { selection, detail: options.faceHit }
+        : null;
+    if (landing) {
       setContextMenu(null);
       return;
     }

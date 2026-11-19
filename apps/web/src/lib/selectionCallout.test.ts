@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { selectionCapabilities } from './interaction/capabilities';
+import { UNSTABLE_FACE_SKETCH_REASON } from './faceSketchAttachment';
 import { LIVE_DIAMETER_ATTRIBUTE } from './liveLabels';
 import {
   editFaceVerb,
@@ -356,6 +357,20 @@ describe('selectionCalloutVerbs', () => {
       disabled: false,
       title: 'Sketch text on this face, centred where you picked it'
     });
+    // A face a rebuild cannot find again: Text says, as Sketch does, that
+    // its sketch lands on a fixed plane.
+    const unstable = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: planarFace,
+      availability: READY
+    });
+    const unstableSketch = unstable.find(
+      (verb) => verb.id === 'action:sketch-on-face'
+    )!;
+    expect(unstableSketch.title).toBe(UNSTABLE_FACE_SKETCH_REASON);
+    expect(unstable.find((verb) => verb.id === 'text-on-face')?.title).toBe(
+      `Sketch text on this face, centred where you picked it. ${UNSTABLE_FACE_SKETCH_REASON}`
+    );
     // Not on a face no sketch can lie on.
     for (const faceSurface of ['cylindrical', 'conical', 'other'] as const) {
       expect(

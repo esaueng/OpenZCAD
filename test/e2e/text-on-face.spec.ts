@@ -117,6 +117,7 @@ async function projected(
 
 interface LiveSketchState {
   objects: { id: string; data: SketchObjectData }[];
+  textPreview: { loops: number; origin: { x: number; y: number } } | null;
   screen: { x: number; y: number }[];
 }
 
@@ -174,6 +175,15 @@ for (const directManipulation of [true, false]) {
       const pick = await projected(canvas, PICK);
       await page.mouse.move(pick.x + 120, pick.y + 60, { steps: 4 });
       await page.mouse.move(pick.x - 90, pick.y - 40, { steps: 4 });
+      // The live outline, not only what Place stores, is still at the pick.
+      const live = await readLiveSketch(canvas);
+      expect(live.textPreview?.loops ?? 0).toBeGreaterThan(0);
+      const [outline] = (
+        await readLiveSketch(canvas, [live.textPreview!.origin])
+      ).screen;
+      expect(Math.hypot(outline!.x - pick.x, outline!.y - pick.y)).toBeLessThan(
+        2
+      );
       await card.getByRole('button', { name: 'Place' }).click();
       await expect(page.getByRole('form', { name: 'Edit text' })).toBeVisible();
 
@@ -215,4 +225,39 @@ test('Sketch on a picked face sketches on it with direct manipulation off', asyn
   await expect(page.getByRole('contentinfo')).toContainText(
     'Sketching on the selected face'
   );
+});
+
+test('Text on face from a right-click places the word where the right-click landed', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const canvas = await openDocument(page, puck());
+  await setSelectionFilter(page, 'Face');
+  // Picked at one point, then right-clicked at another on the same face.
+  await clickWorldPoint(page, PICK);
+  await expect(
+    page
+      .locator('.selection-rail')
+      .getByRole('button', { name: 'Selection: Text' })
+  ).toBeEnabled({ timeout: 60_000 });
+  const OTHER: [number, number, number] = [-9, -7, 10];
+  await waitForStillViewport(page);
+  const other = await projected(canvas, OTHER);
+  await page.mouse.click(other.x, other.y, { button: 'right' });
+  await page.getByRole('menuitem', { name: 'Text on face' }).click();
+  const card = page.getByRole('form', { name: 'Place text' });
+  await expect(card.getByLabel('Text', { exact: true })).toBeFocused();
+  await page.keyboard.type('Hi');
+  await card.getByRole('button', { name: 'Place' }).click();
+  await expect(page.getByRole('form', { name: 'Edit text' })).toBeVisible();
+  const placed = (await readLiveSketch(canvas)).objects.flatMap(({ data }) =>
+    data.objectKind === 'text' ? [data] : []
+  );
+  expect(placed).toHaveLength(1);
+  const [origin] = (
+    await readLiveSketch(canvas, [{ x: placed[0]!.x, y: placed[0]!.y }])
+  ).screen;
+  const now = await projected(canvas, OTHER);
+  expect(Math.hypot(origin!.x - now.x, origin!.y - now.y)).toBeLessThan(2);
 });
