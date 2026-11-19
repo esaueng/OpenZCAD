@@ -155,6 +155,7 @@
   "tangent-edge-setting.spec.ts": 40,
   "tapped-holes.spec.ts": 12,
   "text-authoring.spec.ts": 6,
+  "text-on-face.spec.ts": 30,
   "three-mf-names-colors.spec.ts": 16,
   "through-hole-chamfer-resize.spec.ts": 37,
   "toast-outcomes.spec.ts": 12,

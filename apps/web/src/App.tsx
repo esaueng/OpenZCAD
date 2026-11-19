@@ -4604,6 +4604,11 @@ export function App() {
   const lastPickDetailRef = useRef<PickDetail | null>(null);
   /** The topology that click landed on, so its point is only reused there. */
   const lastPickTopologyRef = useRef<TopologySelection | null>(null);
+  /** Where the latest right-click landed on a face, and on which face. */
+  const menuFaceHitRef = useRef<{
+    selection: TopologySelection;
+    detail: PickDetail;
+  } | null>(null);
   /** Selection-first direct-manipulation mode machine (behind experiment flag). */
   const [interaction, dispatchInteraction] = useReducer(
     interactionReducer,
@@ -10590,6 +10595,18 @@ export function App() {
       setEditFaceKey((current) =>
         current === selectionKey ? null : selectionKey
       );
+    } else if (id === 'text-on-face' || id === 'tool:sketch') {
+      // Both follow the pick: the face picked is the face sketched on. With
+      // no flat face to take, Sketch asks for a plane as the tool does.
+      const target = selectedPlanarFaceTarget();
+      if (!target) {
+        if (id === 'tool:sketch') launchTool('sketch');
+        else setStatus('Pick a flat face to put text on.');
+        return;
+      }
+      if (!requireExactGeometryReady()) return;
+      if (id === 'text-on-face') startTextOnFace(target);
+      else startSketchOnFace(target);
     } else if (id.startsWith('action:')) {
       handleSelectionAction(id.slice('action:'.length) as SelectionActionId);
     } else {
@@ -20671,7 +20688,112 @@ export function App() {
     }
   }
 
-  function startSketchOnFace(target: FaceTarget): boolean {
+  /**
+   * The picked flat face as a sketch target, whichever way it was picked:
+   * the face the drag handle is armed on, or (direct manipulation off) the
+   * selected face, at the point its click landed on. A face picked some
+   * other way (a History row, a filter sweep) is taken at its centroid.
+   */
+  function selectedPlanarFaceTarget(): FaceTarget | null {
+    const target = selectedPlanarFace();
+    // A right-click on the face since it was picked: that is the point meant.
+    const menuHit = menuFaceHitRef.current;
+    if (
+      !target ||
+      !menuHit ||
+      !sameFacePick(menuHit.selection, {
+        bodyId: target.bodyId as BodyId,
+        kind: 'face',
+        topologyId: target.topologyId,
+        hash: target.hash
+      })
+    ) {
+      return target;
+    }
+    const { point, normal } = menuHit.detail;
+    return {
+      ...target,
+      point: [point.x, point.y, point.z],
+      ...(normal ? { normal: [normal.x, normal.y, normal.z] } : {})
+    };
+  }
+
+  function selectedPlanarFace(): FaceTarget | null {
+    if (interaction.mode === 'face') {
+      return interaction.target.surfaceType === 'planar'
+        ? interaction.target
+        : null;
+    }
+    const selection = selectedTopology;
+    if (
+      selection?.kind !== 'face' ||
+      !selection.topologyId ||
+      selection.hash === undefined
+    ) {
+      return null;
+    }
+    const face = representations[selection.bodyId]?.topology?.faces.find(
+      (candidate) => candidate.topologyId === selection.topologyId
+    );
+    const geometry = face?.geometry;
+    if (geometry?.surfaceType !== 'plane' || !geometry.normal) return null;
+    const detail =
+      lastPickTopologyRef.current &&
+      sameFacePick(lastPickTopologyRef.current, selection)
+        ? lastPickDetailRef.current
+        : null;
+    const point = detail?.point ?? geometry.centroid ?? geometry.center;
+    const normal = detail?.normal ?? geometry.normal;
+    return {
+      bodyId: selection.bodyId,
+      topologyId: selection.topologyId,
+      hash: selection.hash,
+      ...(face?.reference ? { reference: face.reference } : {}),
+      point: [point.x, point.y, point.z],
+      normal: [normal.x, normal.y, normal.z],
+      surfaceType: 'planar'
+    };
+  }
+
+  /**
+   * A sketch on the face with the text card open, the word pinned where the
+   * face was picked: what Text on a face's rail does in one step instead of
+   * Sketch, then T, then a click.
+   */
+  function startTextOnFace(target: FaceTarget): void {
+    const current = managerRef.current?.document;
+    const planeRef = current ? startSketchOnFace(target) : null;
+    if (!current || !planeRef) return;
+    let anchor: { x: number; y: number } | undefined;
+    try {
+      const basis = resolvedSketchPlaneBasis(
+        current,
+        planeRef,
+        sketchValueResolver(parameterScope.scope, current.units),
+        'Sketch'
+      );
+      const offset = {
+        x: target.point[0] - basis.origin.x,
+        y: target.point[1] - basis.origin.y,
+        z: target.point[2] - basis.origin.z
+      };
+      const dot = (axis: { x: number; y: number; z: number }) =>
+        offset.x * axis.x + offset.y * axis.y + offset.z * axis.z;
+      anchor = { x: dot(basis.u), y: dot(basis.v) };
+    } catch {
+      // A plane that does not resolve yet: the outline follows the pointer,
+      // as T in any sketch does.
+      anchor = undefined;
+    }
+    dispatchInteraction({
+      type: 'sketch-tool',
+      tool: 'text',
+      ...(anchor ? { textAnchor: anchor } : {})
+    });
+  }
+
+  /** Starts a sketch on the face; the plane it took, or null if refused. */
+  function startSketchOnFace(target: FaceTarget): SketchPlaneRef | null {
     const faceTopology = representations[
       target.bodyId as BodyId
     ]?.topology?.faces.find((face) => face.topologyId === target.topologyId);
@@ -20682,7 +20804,7 @@ export function App() {
     });
     if (!attachment.ok) {
       setStatus(attachment.reason);
-      return false;
+      return null;
     }
     dispatchInteraction({
       type: 'enter-sketch',
@@ -20703,7 +20825,7 @@ export function App() {
         : 'Sketching on the selected face · Finish Sketch when done.',
       { sticky: true }
     );
-    return true;
+    return attachment.planeRef;
   }
 
   /** Whether a face or edge pick names topology the current derived state holds. */
@@ -21458,6 +21580,7 @@ export function App() {
     // handles; stashed for the direct-manipulation flow.
     lastPickDetailRef.current = detail ?? null;
     lastPickTopologyRef.current = detail ? (selection ?? null) : null;
+    menuFaceHitRef.current = null;
     setSelectedSketchProfileId(null);
     if (!selection) {
       if (!additive) {
@@ -32486,10 +32609,16 @@ export function App() {
     // owns the question first; a menu here would act on the old selection.
     // The keyboard's menu is for the selection as it stands, so it picks
     // nothing (a multi-selection stays whole).
-    if (
+    const landing =
       !options.keyboard &&
-      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
-    ) {
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y });
+    // After the pick, which forgets every earlier hit point: the menu's
+    // point-taking verbs (Text on face) start where this right-click landed.
+    menuFaceHitRef.current =
+      options.faceHit && selection?.kind === 'face'
+        ? { selection, detail: options.faceHit }
+        : null;
+    if (landing) {
       setContextMenu(null);
       return;
     }

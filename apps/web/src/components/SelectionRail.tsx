@@ -9,7 +9,8 @@ import {
   ListChecks,
   Ruler,
   SquarePen,
-  SquareX
+  SquareX,
+  Type
 } from 'lucide-react';
 import {
   useCallback,
@@ -78,6 +79,9 @@ function verbIcon(verb: SelectionCalloutVerb): ReactNode {
       <SquarePen size={16} aria-hidden="true" />
     );
   }
+  if (verb.id === 'text-on-face') {
+    return <Type size={16} aria-hidden="true" />;
+  }
   if (verb.id.startsWith('tool:')) {
     return TOOL_META[verb.id.slice('tool:'.length) as ToolId].icon;
   }
@@ -144,9 +148,7 @@ export function useHeldPick(
   });
   const last = !present && holding ? lastHeld.current : null;
   const held =
-    last &&
-    Object.is(last.revision, revision) &&
-    (isLive?.(last.pick) ?? true)
+    last && Object.is(last.revision, revision) && (isLive?.(last.pick) ?? true)
       ? last.pick
       : null;
   // A guard that failed ends the hold for good: the revision only moves on,

@@ -617,6 +617,36 @@ describe('text tool composing', () => {
     expect(composingTextDraft(state)?.text).toBe('Boa');
   });
 
+  it('a text started from a face pick is pinned there and centred', () => {
+    const sketching = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    let state = interactionReducer(sketching, {
+      type: 'sketch-tool',
+      tool: 'text',
+      textAnchor: { x: 12, y: -4 }
+    });
+    expect(composingTextDraft(state)).toMatchObject({
+      text: '',
+      align: 'center',
+      anchor: { x: 12, y: -4 }
+    });
+    // Typing keeps the pin; T again keeps the draft, pin and all.
+    state = interactionReducer(state, {
+      type: 'sketch-text-draft',
+      patch: { text: 'Boa' }
+    });
+    state = interactionReducer(state, { type: 'sketch-tool', tool: 'text' });
+    expect(composingTextDraft(state)).toMatchObject({
+      text: 'Boa',
+      anchor: { x: 12, y: -4 }
+    });
+    // A plain T starts the usual unpinned, left-aligned draft.
+    expect(
+      composingTextDraft(
+        interactionReducer(sketching, { type: 'sketch-tool', tool: 'text' })
+      )
+    ).not.toHaveProperty('anchor');
+  });
+
   it('ignores draft edits when no card is open', () => {
     const sketching = interactionReducer(IDLE, { type: 'enter-sketch', plane });
     expect(

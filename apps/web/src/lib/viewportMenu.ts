@@ -45,6 +45,7 @@ export interface ViewportMenuState extends ContextMenuState {
 const MENU_LABELS: Partial<Record<SelectionCalloutVerb['id'], string>> = {
   'action:sketch-on-face': 'Sketch on face',
   'tool:sketch': 'Sketch on face',
+  'text-on-face': 'Text on face',
   'action:offset-face': 'Push/pull face',
   'action:resize-body': 'Resize body',
   'action:resize-radial-face': 'Change radius',
