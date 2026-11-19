@@ -566,6 +566,36 @@ describe('featureValueSummary', () => {
     ).toBe('+2 mm');
   });
 
+  it('reads a face set offset as its signed distance', () => {
+    const set = (value: number | string) =>
+      feature({
+        featureKind: 'direct-edit',
+        targetBodyId: 'body_block',
+        operation: {
+          kind: 'offset-faces',
+          faceHash: 1,
+          sourceSurfaceType: 'plane',
+          sourceArea: 1,
+          sourceCenter: { x: 0, y: 0, z: 0 },
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          offset: value,
+          additionalFaces: [
+            {
+              faceHash: 2,
+              sourceSurfaceType: 'plane',
+              sourceArea: 1,
+              sourceCenter: { x: 1, y: 0, z: 0 },
+              sourceNormal: { x: 0, y: 0, z: 1 }
+            }
+          ]
+        }
+      } as unknown as Partial<FeatureData> & Pick<FeatureData, 'featureKind'>);
+    // The row's name counts the faces: "Offset 2 faces · +2 mm".
+    expect(featureValueSummary(set(2), {}, 'mm')).toBe('+2 mm');
+    expect(featureValueSummary(set(-1.5), {}, 'mm')).toBe('−1.5 mm');
+    expect(featureValueSummary(set('lift'), { lift: 3 }, 'mm')).toBe('+3 mm');
+  });
+
   it('returns null for kinds without one driving value', () => {
     expect(
       featureValueSummary(feature({ featureKind: 'sketch' }), {}, 'mm')

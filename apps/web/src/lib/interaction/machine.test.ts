@@ -90,6 +90,27 @@ const region: RegionTarget = {
 const plane: SketchPlaneRef = { type: 'canonical', plane: 'XY', offset: 0 };
 
 describe('interactionReducer', () => {
+  it('names a face set offset and keys it apart from its last face alone', () => {
+    const single = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ localFaceOffset: true })
+    });
+    const set = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({
+        localFaceOffset: true,
+        offsetFaceSet: [{ topologyId: 'face:7', hash: 7 }]
+      })
+    });
+    expect(set.mode === 'face' && set.op).toBe('offset-face');
+    expect(toolCardFor(set)?.title).toBe('Offset Faces');
+    expect(toolCardFor(single)?.title).toBe('Offset Face');
+    // A preview or plan made for the face alone says nothing about the set.
+    expect(faceOffsetPlanKey(set)).not.toBe(faceOffsetPlanKey(single));
+    expect(faceOffsetPlanKey(set)).toContain('face:7');
+    expect(operationSelectionKey(set)).not.toBe(operationSelectionKey(single));
+  });
+
   it('distinguishes body resize from an explicitly chosen face extrusion', () => {
     const resize = interactionReducer(IDLE, {
       type: 'select-face',
