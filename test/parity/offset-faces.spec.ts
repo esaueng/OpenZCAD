@@ -972,5 +972,13 @@ describe('offset a face set across directions', { timeout: 300_000 }, () => {
       "Offsetting face 2 after the others would change the body's topology. Offset fewer faces, or a smaller distance."
     );
     expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(before, 6);
+    // Stored the other way round, the geometry still leads with the top, so
+    // the wall is still the later step that refuses: now face 1.
+    const reversed = await adapter.syncDocument(
+      offsetFaces([pocketWallX, bossTop], 16)
+    );
+    expect(reversed.warnings.join('\n')).toContain(
+      "Offsetting face 1 after the others would change the body's topology. Offset fewer faces, or a smaller distance."
+    );
   });
 });

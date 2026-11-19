@@ -1769,10 +1769,15 @@ function compareDirections(a: Vector3, b: Vector3): number {
   return 0;
 }
 
-/** Refuses by name when any two of the normals point opposite ways. */
+/**
+ * Refuses by name when any two of the normals point opposite ways. Each is
+ * normalized first, so a stored normal's length within the guard's slack
+ * never decides the refusal, nor makes it depend on which face is first.
+ */
 function requireNoOppositeNormals(normals: readonly Vector3[]): void {
-  for (const [index, a] of normals.entries()) {
-    for (const b of normals.slice(index + 1)) {
+  const units = normals.map((normal) => normalized(normal) ?? normal);
+  for (const [index, a] of units.entries()) {
+    for (const b of units.slice(index + 1)) {
       if (dot(a, b) <= -OFFSET_SET_PARALLEL) {
         throw new Error(OFFSET_FACES_OPPOSITE_NORMALS);
       }
