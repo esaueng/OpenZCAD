@@ -30974,9 +30974,13 @@ export function App() {
       });
       return;
     }
-    void import('./lib/faceSetOffsetChain').then((chain) => {
-      offsetChainRef.current = chain;
-    });
+    // Optional: unloaded, a drag previews the whole chain alone.
+    import('./lib/faceSetOffsetChain').then(
+      (chain) => {
+        offsetChainRef.current = chain;
+      },
+      () => {}
+    );
     const center = start.face.geometry!.center;
     const point: [number, number, number] = [center.x, center.y, center.z];
     dispatchInteraction({

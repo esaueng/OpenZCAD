@@ -74,7 +74,8 @@ export function faceSetOffsetPlanes(
     .map((face, order) => ({
       face,
       order,
-      normal: unit(face.geometry!.normal!)!,
+      // As measured, unnormalized, as the kernel compares them.
+      normal: face.geometry!.normal!,
       center: face.geometry!.center
     }))
     .sort(
