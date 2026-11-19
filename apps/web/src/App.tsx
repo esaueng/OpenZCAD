@@ -2037,8 +2037,11 @@ import {
 } from './lib/interaction/blendPreview';
 import { errorMessage } from './lib/errors';
 import {
+  buildOffsetFaceSetLead,
   buildOffsetFaces,
+  faceSetOffsetPlanes,
   faceSetOffsetStart,
+  faceSetOffsetTicks,
   faceSetOffsetUnavailable,
   offsetFacesCommitMessage
 } from './lib/faceSetOffset';
@@ -2357,6 +2360,12 @@ const CYLINDER_RADIUS_REST_MS = 250;
 const EDGE_BLEND_REST_MS = 250;
 /** Check a generic face's viewport deformation once the hand rests. */
 const OFFSET_FACE_REST_MS = 250;
+/**
+ * M07: the coarse rate of a chained face set's whole-chain drag preview.
+ * Its leading plane follows the hand every frame from a prepared move; the
+ * whole chain is rebuilt at most this often, and once the hand rests.
+ */
+const OFFSET_SET_CHAIN_PREVIEW_MS = 250;
 /**
  * Where the inspector floats over the stage rather than beside it (the
  * phone and narrow-tablet lanes in quiet-stage.css).
@@ -5871,10 +5880,15 @@ export function App() {
       },
       isCurrent: previewSelectionIsCurrent,
       ...GEOMETRY_PREVIEW_SCHEDULING,
+      minIntervalMs: () =>
+        offsetChainedRef.current
+          ? OFFSET_SET_CHAIN_PREVIEW_MS
+          : GEOMETRY_PREVIEW_SCHEDULING.minIntervalMs,
       presentationTimeMs: () => previewPresentationMs.current,
       publish: (preview) => {
         if (!preview) {
           reusableOffsetPreviewRef.current = null;
+          shownOffsetLaneRef.current = null;
           setPreviewDoc(null);
           setFaceGeometryPreview(null);
           setRenderedOffsetPreview(null);
@@ -5882,13 +5896,23 @@ export function App() {
         }
         traceFaceDragPublish(preview.document.offset, preview.document);
         reusableOffsetPreviewRef.current = { candidate: preview.document };
-        setPreviewDoc(null);
-        setFaceGeometryPreview({
-          ...preview.document,
-          document: preview.document.document,
-          geometry: preview.derived
-        });
-        setRenderedOffsetPreview(preview.document.offset);
+        // A chained set's coarse whole-chain frame for a value the hand has
+        // left would put its leading plane back behind the hand: it still
+        // answers for its value, and the display waits for the hand's own.
+        const handLeft =
+          offsetChainedRef.current &&
+          preview.document.offset !== offsetPreviewValueRef.current &&
+          shownOffsetLaneRef.current === 'lead';
+        if (!handLeft) {
+          shownOffsetLaneRef.current = 'full';
+          setPreviewDoc(null);
+          setFaceGeometryPreview({
+            ...preview.document,
+            document: preview.document.document,
+            geometry: preview.derived
+          });
+          setRenderedOffsetPreview(preview.document.offset);
+        }
         setLastValidPreview(preview.document.offset);
         setPreviewVerdict({ value: preview.document.offset, status: 'built' });
         recoverPreviewInteraction();
@@ -5915,6 +5939,113 @@ export function App() {
           value: offsetPreviewValueRef.current ?? 0
         });
       }
+    })
+  ).current;
+
+  /**
+   * M07: whether the armed face set offset is a chained move (its faces on
+   * parallel planes at different heights), and which lane drew the frame on
+   * screen. A chained set previews in two lanes: `offsetLeadPreview` shows
+   * the chain's leading plane alone every frame, from the kernel's prepared
+   * move, and `offsetPreview` rebuilds the whole chain at a coarse rate
+   * (`OFFSET_SET_CHAIN_PREVIEW_MS`). Only the whole-chain lane gives a
+   * verdict, names a refusal or hands a release its candidate; a lead frame
+   * is display only, and release always replays the whole set with full
+   * checks.
+   */
+  const offsetChainedRef = useRef(false);
+  const shownOffsetLaneRef = useRef<'full' | 'lead' | null>(null);
+  const offsetLeadPreview = useRef(
+    new LivePreview<OffsetPreviewCandidate, GeometryReadyState>({
+      build: (offset) => {
+        const base = managerRef.current?.document;
+        const current = interactionRef.current;
+        if (
+          !base ||
+          current.mode !== 'face' ||
+          current.op !== 'offset-face' ||
+          !current.target.offsetFaceSet ||
+          current.target.hash === undefined
+        ) {
+          return null;
+        }
+        const command = buildOffsetFaceSetLead({
+          document: base,
+          bodyId: current.target.bodyId as BodyId,
+          face: {
+            topologyId: current.target.topologyId,
+            hash: current.target.hash
+          },
+          members: current.target.offsetFaceSet,
+          offset
+        });
+        if (!command) return null;
+        return {
+          selectionKey: faceOffsetPlanKey(current) ?? '',
+          document: command.apply(base),
+          offset,
+          bodyId: current.target.bodyId as BodyId,
+          command,
+          label: command.label,
+          successMessage: '',
+          baseProjectId: base.projectId,
+          baseVersion: base.version
+        };
+      },
+      derive: async (candidate, signal) => {
+        const derived = await geometry.previewGeometry(candidate.document, {
+          signal,
+          deferTopology: true
+        });
+        const rejection = offsetPreviewRejection({
+          label: candidate.label,
+          bodyId: candidate.bodyId,
+          command: candidate.command,
+          derived,
+          documentMoved: !previewBaseIsCurrent(candidate)
+        });
+        if (rejection) throw new PreviewRefusalError(rejection);
+        return derived;
+      },
+      isCurrent: previewSelectionIsCurrent,
+      ...GEOMETRY_PREVIEW_SCHEDULING,
+      presentationTimeMs: () => previewPresentationMs.current,
+      publish: (preview) => {
+        if (!preview) {
+          // Cleared: take its frame down only while it is the one shown.
+          if (shownOffsetLaneRef.current === 'lead') {
+            shownOffsetLaneRef.current = null;
+            setFaceGeometryPreview(null);
+          }
+          return;
+        }
+        // Only the hand's own value, and never over the whole chain's frame
+        // for that same value.
+        if (
+          preview.document.offset !== offsetPreviewValueRef.current ||
+          (shownOffsetLaneRef.current === 'full' &&
+            reusableOffsetPreviewRef.current?.candidate.offset ===
+              preview.document.offset)
+        ) {
+          return;
+        }
+        shownOffsetLaneRef.current = 'lead';
+        setPreviewDoc(null);
+        setFaceGeometryPreview({
+          ...preview.document,
+          document: preview.document.document,
+          geometry: preview.derived
+        });
+      },
+      // Silent: its move is the chain's first step, so the whole-chain lane
+      // names the same refusal for the same value, on the card.
+      onFailure: ({ error, value }) =>
+        traceFaceDrag('refusal', {
+          value,
+          message: errorMessage(error, 'Leading plane preview failed.')
+        }),
+      acceptValue: (offset) =>
+        Number.isFinite(offset) && Math.abs(offset) > 1e-9
     })
   ).current;
 
@@ -6175,6 +6306,7 @@ export function App() {
       stopCylinderRadiusRestCheck();
       cylinderRadiusPreview.stop();
       offsetPreview.stop();
+      offsetLeadPreview.stop();
       const document = managerRef.current?.document;
       pendingDirectEditRef.current = document
         ? {
@@ -6228,7 +6360,10 @@ export function App() {
         acceptedOffset.selectionKey ===
           faceOffsetPlanKey(pending.interaction) &&
         previewSelectionIsCurrent(acceptedOffset) &&
+        // A chained set's display-only lead frame is not the accepted shape.
+        shownOffsetLaneRef.current !== 'lead' &&
         !isStaleSelectionError(diagnostic);
+      offsetLeadPreview.clear();
       if (retainOffset) {
         offsetPreview.stop();
       } else {
@@ -6280,6 +6415,7 @@ export function App() {
       }
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      offsetLeadPreview.clear();
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
@@ -22374,17 +22510,25 @@ export function App() {
     () => () => {
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      offsetLeadPreview.clear();
     },
-    [doc?.projectId, doc?.version, cylinderRadiusPreview, offsetPreview]
+    [
+      doc?.projectId,
+      doc?.version,
+      cylinderRadiusPreview,
+      offsetPreview,
+      offsetLeadPreview
+    ]
   );
 
   const offsetInteractionKey = faceOffsetPlanKey(interaction);
   useEffect(() => {
     offsetPreview.clear();
+    offsetLeadPreview.clear();
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
     setLastValidPreview(null);
-  }, [offsetInteractionKey, offsetPreview]);
+  }, [offsetInteractionKey, offsetPreview, offsetLeadPreview]);
 
   // An Extrude keypad belongs to the value as it left it. Once anything else
   // changes that value (Reverse, a drag, the arrow) or stops offering it (an
@@ -28820,6 +28964,29 @@ export function App() {
     keypad?.kind === 'offset' ? offsetPreviewValueRef.current : null
   );
 
+  // M07: the armed face set's faces, for their direction ticks.
+  const offsetSetTarget =
+    interaction.mode === 'face' &&
+    interaction.op === 'offset-face' &&
+    interaction.target.offsetFaceSet
+      ? interaction.target
+      : null;
+  const offsetSetTicks = useMemo(() => {
+    if (!doc || !offsetSetTarget || offsetSetTarget.hash === undefined) {
+      return null;
+    }
+    const ticks = faceSetOffsetTicks({
+      document: doc,
+      bodyId: offsetSetTarget.bodyId as BodyId,
+      face: {
+        topologyId: offsetSetTarget.topologyId,
+        hash: offsetSetTarget.hash
+      },
+      members: offsetSetTarget.offsetFaceSet!
+    });
+    return ticks.length > 0 ? ticks : null;
+  }, [doc, offsetSetTarget]);
+
   const cylinderRadiusHandleTarget = useMemo(() => {
     // Validation keeps the handle, locked where it was let go, as the offset
     // handle does: retiring it there faded it out and back in on a refusal.
@@ -30439,6 +30606,7 @@ export function App() {
     offsetPreviewValueRef.current = offset;
     if (!exactGeometry) {
       offsetPreview.clear();
+      offsetLeadPreview.clear();
       setPreviewDeferred(false);
       setPreviewVerdict({ value: offset, status: 'unchecked' });
       recoverPreviewInteraction();
@@ -30461,10 +30629,34 @@ export function App() {
     }
     if (Math.abs(offset) <= 1e-9) {
       offsetPreview.clear();
+      offsetLeadPreview.clear();
       setPreviewDeferred(false);
       setPreviewVerdict({ value: offset, status: 'unchecked' });
       recoverPreviewInteraction();
       return;
+    }
+    const base = managerRef.current?.document;
+    const set = current.target.offsetFaceSet;
+    const planes =
+      base && set && current.target.hash !== undefined
+        ? faceSetOffsetPlanes(
+            {
+              document: base,
+              bodyId: current.target.bodyId as BodyId,
+              face: {
+                topologyId: current.target.topologyId,
+                hash: current.target.hash
+              },
+              members: set
+            },
+            offset
+          )
+        : null;
+    offsetChainedRef.current = (planes?.length ?? 0) > 1;
+    if (offsetChainedRef.current) {
+      // M07: a chained set's leading plane follows the hand; the whole
+      // chain catches up at a coarse rate (its lane's `minIntervalMs`).
+      offsetLeadPreview.request(offset);
     }
     // A value the preview turns away (a slow gesture past its budget) gets
     // no verdict to wait for: the commit checks it exactly instead.
@@ -30480,8 +30672,10 @@ export function App() {
       // A set-aside release lands at the value already on screen: keep its
       // exact frame up until the commit replaces it, as after a release.
       offsetPreview.stop();
+      offsetLeadPreview.stop();
     } else {
       offsetPreview.clear();
+      offsetLeadPreview.clear();
       setRenderedOffsetPreview(null);
       setLastValidPreview(null);
     }
@@ -30515,6 +30709,7 @@ export function App() {
     stopOffsetRestCheck();
     regionExtrudePreview.clear();
     offsetPreview.clear();
+    offsetLeadPreview.clear();
     cylinderRadiusPreview.clear();
     cylinderRadiusRestCheck.clear();
     if (cylinderRadiusRestTimer.current !== null) {
@@ -30545,7 +30740,8 @@ export function App() {
     cylinderRadiusRestCheck,
     edgePreview,
     edgeRestCheck,
-    stopOffsetRestCheck
+    stopOffsetRestCheck,
+    offsetLeadPreview
   ]);
 
   // A preview must never outlive the command that made it. Whatever returns
@@ -31094,6 +31290,9 @@ export function App() {
         ? candidate
         : null;
     offsetPreview.stop();
+    // A chained set's lead frame stays on screen until the commit replaces
+    // it; it never authors the commit, which replays the whole set.
+    offsetLeadPreview.stop();
     offsetPreviewValueRef.current = null;
     // Let go where the set-aside release was, it commits from the rebuild
     // already running for it; anywhere else, the new value replaces it.
@@ -37329,6 +37528,7 @@ export function App() {
                 ? null
                 : offsetHandleTarget
             }
+            offsetSetTicks={offsetSetTicks}
             offsetDragTarget={
               interaction.mode === 'face' && interaction.op === 'offset-face'
                 ? interaction.target

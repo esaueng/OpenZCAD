@@ -141,6 +141,9 @@ import {
   edgeRunSelections,
   edgeBlendFrame,
   offsetHandlePlacement,
+  createFaceSetTicks,
+  type FaceSetTickFace,
+  type FaceSetTicks,
   screenDragAxis,
   screenDragValue,
   type ScreenDragAxis,
@@ -1345,6 +1348,12 @@ export interface ModelViewerProps {
   onSelectEdgeChain(selections: TopologySelection[]): void;
   /** Armed face-offset handle (selection-first direct manipulation). */
   offsetHandle: OffsetHandleTarget | null;
+  /**
+   * M07: an armed face set offset's faces, each drawn with a small tick on
+   * its own normal that rides the handle's value, so the user sees which
+   * way every face moves. Drawn only while `offsetHandle` is.
+   */
+  offsetSetTicks?: readonly FaceSetTickFace[] | null;
   /** Semantic selection remains available while geometry temporarily withdraws the handle. */
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   /** Streamed signed offset; App coalesces exact rebuilds. */
@@ -2592,6 +2601,7 @@ export function ModelViewer({
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
   tangentEdges = DEFAULT_TANGENT_EDGE_STYLE,
   offsetHandle: incomingOffsetHandle,
+  offsetSetTicks = null,
   offsetDragTarget,
   onOffsetPreview,
   onOffsetCommit,
@@ -3316,6 +3326,8 @@ export function ModelViewer({
   } | null>(null);
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<DragRig | null>(null);
+  /** M07: the armed face set's direction ticks; see `offsetSetTicks`. */
+  const offsetSetTicksRef = useRef<FaceSetTicks | null>(null);
   /** The handle the live offset rig was built from. */
   const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(null);
   const offsetDragActiveRef = useRef(false);
@@ -13671,6 +13683,11 @@ export function ModelViewer({
       if (stepRegionFollowers(dt * 1000)) {
         rigsAnimating = true;
       }
+      // A face set's ticks ride the handle's value at a screen-constant size.
+      offsetSetTicksRef.current?.update(
+        offsetRigRef.current?.value() ?? 0,
+        worldPerPixelAt
+      );
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
         const rigScale =
@@ -16318,6 +16335,34 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [regionHandle, sketchViews]);
+
+  // M07: one direction tick per face of an armed face set offset.
+  const ticksShown = offsetHandle !== null && (offsetSetTicks?.length ?? 0) > 0;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !ticksShown || !offsetSetTicks) {
+      return;
+    }
+    const ticks = createFaceSetTicks(offsetSetTicks);
+    context.scene.add(ticks.object);
+    offsetSetTicksRef.current = ticks;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      context.renderer.domElement.dataset.e2eOffsetSetTicks = String(
+        ticks.count
+      );
+    }
+    context.requestRender();
+    return () => {
+      ticks.dispose();
+      if (offsetSetTicksRef.current === ticks) {
+        offsetSetTicksRef.current = null;
+      }
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        delete context.renderer.domElement.dataset.e2eOffsetSetTicks;
+      }
+      context.requestRender();
+    };
+  }, [offsetSetTicks, ticksShown]);
 
   // The picked regions' Extrude card opens at the head of the right lane,
   // over the stage's right third, and a profile there — where Finish Sketch

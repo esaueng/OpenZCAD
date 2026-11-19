@@ -280,6 +280,8 @@ interface ViewerShellProps {
   /** See `ModelViewerProps.topologyPicksHeld`. */
   topologyPicksHeld?: boolean;
   offsetHandle: OffsetHandleTarget | null;
+  /** See `ModelViewerProps.offsetSetTicks`. */
+  offsetSetTicks?: ModelViewerProps['offsetSetTicks'];
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   onOffsetCommit: ModelViewerProps['onOffsetCommit'];
@@ -558,6 +560,7 @@ export function ViewerShell({
   onBoxSelect,
   onBoxSelectTopology,
   offsetHandle,
+  offsetSetTicks,
   offsetDragTarget,
   onOffsetPreview,
   onOffsetCommit,
@@ -1041,6 +1044,8 @@ export function ViewerShell({
         {...(xrayOpacity !== undefined ? { xrayOpacity } : {})}
         {...(tangentEdges !== undefined ? { tangentEdges } : {})}
         offsetHandle={offsetHandle ?? datumOffsetTarget}
+        // A datum's offset handle is never a face set's.
+        offsetSetTicks={offsetHandle ? offsetSetTicks : null}
         offsetDragTarget={offsetDragTarget ?? datumOffsetTarget}
         onOffsetPreview={
           datumOffsetTarget && datumHandle
