@@ -98,6 +98,11 @@ export interface InPlaceCommandBarProps {
   locked?: boolean;
   /** Shown instead of the hint while a refusal stands, in the warning tone. */
   refusal?: string | null;
+  /**
+   * The input whose change the kernel refused ("Draft angle"), named ahead
+   * of the refusal so it says what to change, not only that it failed.
+   */
+  refusalInput?: string | null;
   /** The document's length unit, after each size a refusal quotes. */
   unitLabel?: string | null;
   /**
@@ -191,6 +196,7 @@ export function InPlaceCommandBar({
   previewPending = false,
   locked = false,
   refusal = null,
+  refusalInput = null,
   unitLabel = null,
   onTrySize,
   recovery,
@@ -295,9 +301,13 @@ export function InPlaceCommandBar({
         )
       )
     : null;
-  const shown =
+  const sentence =
     refusalSummary ??
     (plain ? blendRefusalText(plain.message, unitLabel) : null);
+  // Named after translation: a kernel sentence is rewritten whole, which
+  // would drop a prefix written ahead of it.
+  const shown =
+    sentence && refusalInput ? `${refusalInput}: ${sentence}` : sentence;
   const technical = refusalSummary || plain?.detail ? refusal : null;
   const smaller = refusal && onTrySize ? smallerSizeIn(refusal) : null;
   const hintRef = useRef<HTMLSpanElement>(null);

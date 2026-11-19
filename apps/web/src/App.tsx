@@ -38812,6 +38812,15 @@ export function App() {
                 <ExtrudeCommand
                   previewPending={regionExtrudeChecking}
                   resolvedChoice={regionExtrudeResolution?.inference}
+                  // The kernel's refusal is said in the bar, after the input
+                  // that caused it; the last preview that built stays up.
+                  // Withdrawn while a newer value is checked, which it is
+                  // not about. A lost region is no value's fault.
+                  {...(interaction.error && !regionExtrudeChecking
+                    ? isStaleSelectionError(interaction.error)
+                      ? { note: interaction.error.message }
+                      : { valueRefusal: interaction.error.message }
+                    : {})}
                   onShowFullModel={
                     extrudeHiddenBySection ? turnSectionViewOff : undefined
                   }
