@@ -16,6 +16,7 @@ import {
   filletEdges,
   chamferEdges,
   listFeaturesInOrder,
+  setParameter,
   transformBody,
   updateFeature
 } from '@openzcad/document-core';
@@ -26,6 +27,7 @@ import type {
   BodyRepresentation,
   DerivedState,
   FaceTopology,
+  ParamValue,
   ProjectDocument
 } from '@openzcad/shared';
 
@@ -41,6 +43,7 @@ import type {
   DirectEditFixtureEdit,
   DirectEditFixtureObservation
 } from '../../apps/web/src/lib/directEditFixture';
+import { replayFixture } from './replay';
 import { faceSelector } from './resolve';
 
 const USER = toUserId('user_direct_edit_corpus');
@@ -471,7 +474,7 @@ function opposedCapsFeature(
   document: ProjectDocument,
   bodyId: BodyId,
   faces: readonly FaceTopology[],
-  offset: number
+  offset: ParamValue
 ): ProjectDocument {
   const [first, ...rest] = faces.map((face) => {
     const geometry = face.geometry!;
@@ -494,6 +497,47 @@ function opposedCapsFeature(
       additionalFaces: rest
     }
   }).document;
+}
+
+/**
+ * "Save reproduction" of the opposed caps refused as one `offset-faces`
+ * feature: the file carries that feature in its document and records every
+ * face of the set with the distance; replay is the rebuild of that feature.
+ */
+async function opposedCapsReproduction(
+  adapter: ExactKernelAdapter,
+  name: string,
+  offset: ParamValue
+): Promise<DirectEditFixture> {
+  const plate = await opposedCapsOfPlate(adapter, name);
+  const document =
+    typeof offset === 'string'
+      ? setParameter(plate.document, { name: offset, expression: '2' })
+      : plate.document;
+  const refused = opposedCapsFeature(
+    document,
+    plate.bodyId,
+    plate.faces,
+    offset
+  );
+  const feature = listFeaturesInOrder(refused).at(-1)!;
+  const derived = await adapter.syncDocument(refused);
+  const warning = derived.featureWarnings?.find(
+    (entry) => entry.featureId === feature.featureId
+  );
+  if (!warning) {
+    throw new Error(
+      `${name}: the opposed caps built without a feature warning. ` +
+        `Warnings: ${JSON.stringify(derived.warnings)}`
+    );
+  }
+  const reproduction = buildRefusalReproduction({
+    document: { ...refused, derived },
+    warning,
+    kernel: kernelInfo(adapter),
+    capturedAt: AUTHORED_AT
+  });
+  return { ...reproduction, name, origin: 'authored' };
 }
 
 export interface AuthoredScenario {
@@ -714,32 +758,23 @@ export const AUTHORED_SCENARIOS: AuthoredScenario[] = [
     // face of the set with the distance; replay is the rebuild of that
     // feature, judged on the kernel's own refusal record.
     name: 'plate-opposed-caps-offset-faces-reproduction',
-    async build(adapter) {
-      const name = 'plate-opposed-caps-offset-faces-reproduction';
-      const { document, bodyId, faces } = await opposedCapsOfPlate(
+    build: (adapter) =>
+      opposedCapsReproduction(
         adapter,
-        name
-      );
-      const refused = opposedCapsFeature(document, bodyId, faces, 2);
-      const feature = listFeaturesInOrder(refused).at(-1)!;
-      const derived = await adapter.syncDocument(refused);
-      const warning = derived.featureWarnings?.find(
-        (entry) => entry.featureId === feature.featureId
-      );
-      if (!warning) {
-        throw new Error(
-          `${name}: the opposed caps built without a feature warning. ` +
-            `Warnings: ${JSON.stringify(derived.warnings)}`
-        );
-      }
-      const reproduction = buildRefusalReproduction({
-        document: { ...refused, derived },
-        warning,
-        kernel: kernelInfo(adapter),
-        capturedAt: AUTHORED_AT
-      });
-      return { ...reproduction, name, origin: 'authored' };
-    }
+        'plate-opposed-caps-offset-faces-reproduction',
+        2
+      )
+  },
+  {
+    // The same, with the distance a typed expression: the document keeps
+    // `travel`, the header records 0, and the replay still refuses.
+    name: 'plate-opposed-caps-offset-faces-expression-reproduction',
+    build: (adapter) =>
+      opposedCapsReproduction(
+        adapter,
+        'plate-opposed-caps-offset-faces-expression-reproduction',
+        'travel'
+      )
   }
 ];
 
@@ -765,6 +800,42 @@ export interface AuthoredReplayCheck {
  * measured separately from the replay corpus.
  */
 export const AUTHORED_REPLAY_CHECKS: AuthoredReplayCheck[] = [
+  {
+    name: 'union-plate-tops-offset-faces-rounded-distance',
+    description:
+      'A face set replayed from the log moves by the distance the app built, ' +
+      'rounded to 0.001 mm, not by the raw value recorded.',
+    async run(adapter) {
+      const scenario = 'union-plate-tops-offset-faces-rounded-distance';
+      const { document, bodyId } = unionDocument();
+      const derived = await adapter.syncDocument(document);
+      const body = requireBody(derived, bodyId, scenario);
+      const tops = plateTopsOfUnion(body);
+      const result = await replayFixture(
+        adapter,
+        offsetFacesFixture(
+          adapter,
+          scenario,
+          document,
+          bodyId,
+          body,
+          tops,
+          1.2344,
+          'committed'
+        )
+      );
+      const area = tops.reduce(
+        (sum, face) => sum + (face.geometry?.area ?? 0),
+        0
+      );
+      return {
+        rejection: result.outcome === 'refused' ? (result.message ?? '') : null,
+        volume: result.volumeAfter ?? Number.NaN,
+        expectedVolume: body.volume + 1.234 * area,
+        warnings: result.warnings
+      };
+    }
+  },
   {
     name: 'union-offset-then-upstream-width-change',
     description:

@@ -20,7 +20,6 @@ import type {
   FaceTopology,
   FeatureNode,
   FeatureWarning,
-  OffsetFaceSnapshot,
   ProjectDocument
 } from '@openzcad/shared';
 
@@ -30,7 +29,10 @@ import type {
   DirectEditFixture,
   DirectEditFixtureEdge
 } from '../../apps/web/src/lib/directEditFixture';
-import { offsetFacesName } from '../../apps/web/src/lib/faceSetOffset';
+import {
+  buildOffsetFaces,
+  offsetFacesName
+} from '../../apps/web/src/lib/faceSetOffset';
 import { planFaceOffset } from '../../apps/web/src/lib/interaction/faceOffsetPlan';
 import { resolveFixtureEdges, resolveFixtureFace } from './resolve';
 
@@ -285,9 +287,11 @@ function buildCommand(
       };
     }
     case 'offset-faces': {
-      // The set as the app builds it (`buildOffsetFaces`): the first face,
-      // then the others in the recorded order, each found again by geometry
-      // and pinned the way the capture says it was.
+      // The set through the app's own builder (`buildOffsetFaces`), so the
+      // distance is rounded and each face pinned exactly as the app does:
+      // the first face, then the others in the recorded order, each found
+      // again by geometry. A face the capture recorded without a reference
+      // is offered to the builder without one, so it replays hash-only.
       const recorded = [
         requireFacePick(fixture),
         ...(edit.additionalFaces ?? [])
@@ -297,35 +301,49 @@ function buildCommand(
           `Fixture "${fixture.name}": an offset-faces needs two or more recorded faces.`
         );
       }
-      const [first, ...rest] = recorded.map((pick): OffsetFaceSnapshot => {
+      const resolved = recorded.map((pick) => {
         const face = resolveFixtureFace(body, pick);
-        const geometry = requireFaceGeometry(face);
-        if (geometry.surfaceType !== 'plane' || !geometry.normal) {
-          throw new Error('An offset needs an exact planar normal.');
-        }
-        const reference = referenceFor(face.reference, pick.hasReference);
-        return {
-          faceHash: face.hash,
-          ...(reference ? { faceReference: reference } : {}),
-          sourceSurfaceType: 'plane',
-          sourceArea: geometry.area,
-          sourceCenter: geometry.center,
-          sourceNormal: geometry.normal
-        };
+        requireFaceGeometry(face);
+        return pick.hasReference ? face : withoutReference(face);
       });
-      const name = offsetFacesName(recorded.length);
-      return {
-        command: commandFactories.directEditBody({
-          name,
-          targetBodyId,
-          operation: {
-            kind: 'offset-faces',
-            ...first!,
-            offset: edit.value,
-            additionalFaces: rest
+      const [first, ...rest] = resolved;
+      const picked = new Map(resolved.map((face) => [face.topologyId, face]));
+      const command = buildOffsetFaces({
+        document: {
+          ...document,
+          derived: {
+            ...document.derived,
+            bodyRepresentations: {
+              ...document.derived.bodyRepresentations,
+              [targetBodyId]: {
+                ...body,
+                topology: {
+                  ...body.topology!,
+                  faces: body.topology!.faces.map(
+                    (face) => picked.get(face.topologyId) ?? face
+                  )
+                }
+              }
+            }
           }
-        }),
-        featureName: name,
+        },
+        bodyId: targetBodyId,
+        face: first!,
+        members: rest.map((face) => ({
+          topologyId: face.topologyId,
+          hash: face.hash
+        })),
+        offset: edit.value
+      });
+      if (!command) {
+        throw new Error(
+          `Fixture "${fixture.name}": the set builder refused the picks — ` +
+            'every face must be planar with an exact normal.'
+        );
+      }
+      return {
+        command,
+        featureName: offsetFacesName(recorded.length),
         resultBodyId: targetBodyId,
         gate: 'direct-edit'
       };

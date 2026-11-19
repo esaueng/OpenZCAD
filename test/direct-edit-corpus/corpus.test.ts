@@ -83,7 +83,11 @@ function assertRecordedSet(fixture: DirectEditFixture): void {
   expect(recorded.map((face) => face?.center)).toEqual(
     stored.map((face) => face.sourceCenter)
   );
-  expect(fixture.edit.value).toBe(operation.offset);
+  // A typed expression stays in the document, which is what replays; the
+  // header can only restate a plain distance and records 0 otherwise.
+  expect(fixture.edit.value).toBe(
+    typeof operation.offset === 'number' ? operation.offset : 0
+  );
 }
 
 /**
