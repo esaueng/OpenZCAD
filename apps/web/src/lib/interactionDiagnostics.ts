@@ -48,6 +48,8 @@ export interface BuildDirectEditFixtureInput {
   targetBodyId: string;
   /** Face pick, when the op targets a face. */
   face?: InteractionDiagnosticPick;
+  /** `offset-faces` only: the set's other faces, in the edit's order. */
+  additionalFaces?: InteractionDiagnosticPick[];
   /** Edge picks, when the op targets edges. */
   edges?: InteractionDiagnosticPick[];
   value: number;
@@ -224,12 +226,17 @@ export function buildDirectEditFixture(
   const face = input.face
     ? fixtureFace(findFace(topology?.faces ?? [], input.face), input.face)
     : undefined;
+  const additionalFaces = input.additionalFaces?.map((pick) =>
+    fixtureFace(findFace(topology?.faces ?? [], pick), pick)
+  );
   const edges = input.edges?.map((pick) =>
     fixtureEdge(findEdge(topology?.edges ?? [], pick), pick)
   );
 
+  // A face set is semantic only when every face in it carried a reference.
   const semantic =
-    face?.hasReference === true ||
+    (face?.hasReference === true &&
+      (additionalFaces ?? []).every((entry) => entry.hasReference)) ||
     (edges !== undefined &&
       edges.length > 0 &&
       edges.every((edge) => edge.hasReference));
@@ -238,6 +245,7 @@ export function buildDirectEditFixture(
     op: input.op,
     targetBodyId: input.targetBodyId,
     face,
+    ...(additionalFaces ? { additionalFaces } : {}),
     edges,
     value: input.value
   };

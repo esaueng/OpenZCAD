@@ -20,6 +20,7 @@ import type {
   FaceTopology,
   FeatureNode,
   FeatureWarning,
+  OffsetFaceSnapshot,
   ProjectDocument
 } from '@openzcad/shared';
 
@@ -29,6 +30,7 @@ import type {
   DirectEditFixture,
   DirectEditFixtureEdge
 } from '../../apps/web/src/lib/directEditFixture';
+import { offsetFacesName } from '../../apps/web/src/lib/faceSetOffset';
 import { planFaceOffset } from '../../apps/web/src/lib/interaction/faceOffsetPlan';
 import { resolveFixtureEdges, resolveFixtureFace } from './resolve';
 
@@ -280,6 +282,52 @@ function buildCommand(
         resultBodyId: targetBodyId,
         gate: 'direct-edit',
         route: 'direct-edit'
+      };
+    }
+    case 'offset-faces': {
+      // The set as the app builds it (`buildOffsetFaces`): the first face,
+      // then the others in the recorded order, each found again by geometry
+      // and pinned the way the capture says it was.
+      const recorded = [
+        requireFacePick(fixture),
+        ...(edit.additionalFaces ?? [])
+      ];
+      if (recorded.length < 2) {
+        throw new Error(
+          `Fixture "${fixture.name}": an offset-faces needs two or more recorded faces.`
+        );
+      }
+      const [first, ...rest] = recorded.map((pick): OffsetFaceSnapshot => {
+        const face = resolveFixtureFace(body, pick);
+        const geometry = requireFaceGeometry(face);
+        if (geometry.surfaceType !== 'plane' || !geometry.normal) {
+          throw new Error('An offset needs an exact planar normal.');
+        }
+        const reference = referenceFor(face.reference, pick.hasReference);
+        return {
+          faceHash: face.hash,
+          ...(reference ? { faceReference: reference } : {}),
+          sourceSurfaceType: 'plane',
+          sourceArea: geometry.area,
+          sourceCenter: geometry.center,
+          sourceNormal: geometry.normal
+        };
+      });
+      const name = offsetFacesName(recorded.length);
+      return {
+        command: commandFactories.directEditBody({
+          name,
+          targetBodyId,
+          operation: {
+            kind: 'offset-faces',
+            ...first!,
+            offset: edit.value,
+            additionalFaces: rest
+          }
+        }),
+        featureName: name,
+        resultBodyId: targetBodyId,
+        gate: 'direct-edit'
       };
     }
     case 'resize-cylinder-radius': {

@@ -54,11 +54,45 @@ function routeOf(result: ReplayResult): string {
 }
 
 /**
+ * A saved reproduction of a face set's offset records the set beside the
+ * document that replays it. The two must name the same faces, in the same
+ * order, and the same distance, or the file misdescribes what it replays.
+ */
+function assertRecordedSet(fixture: DirectEditFixture): void {
+  if (fixture.edit.op !== 'feature-build' || !fixture.edit.additionalFaces) {
+    return;
+  }
+  const feature = Object.values(fixture.document?.nodes ?? {}).find(
+    (node) =>
+      node.kind === 'feature' && node.featureId === fixture.edit.featureId
+  );
+  expect(feature?.kind === 'feature' && feature.data.featureKind).toBe(
+    'direct-edit'
+  );
+  const operation =
+    feature?.kind === 'feature' && feature.data.featureKind === 'direct-edit'
+      ? feature.data.operation
+      : undefined;
+  expect(operation?.kind).toBe('offset-faces');
+  if (operation?.kind !== 'offset-faces') return;
+  const recorded = [fixture.edit.face, ...fixture.edit.additionalFaces];
+  const stored = [operation, ...operation.additionalFaces];
+  expect(recorded.map((face) => face?.hash)).toEqual(
+    stored.map((face) => face.faceHash)
+  );
+  expect(recorded.map((face) => face?.center)).toEqual(
+    stored.map((face) => face.sourceCenter)
+  );
+  expect(fixture.edit.value).toBe(operation.offset);
+}
+
+/**
  * Both directions. A pinned fixture must still refuse with the pinned
  * sentence; an unpinned one must commit, and an offset must move volume the
  * way its sign says.
  */
 function assertOutcome(fixture: DirectEditFixture, result: ReplayResult): void {
+  assertRecordedSet(fixture);
   const pin = pinFor(fixture.name);
   if (pin) {
     expect(
@@ -79,7 +113,7 @@ function assertOutcome(fixture: DirectEditFixture, result: ReplayResult): void {
     `${fixture.name} refused with: ${result.message ?? '(no message)'} ` +
       `(${routeOf(result)})`
   ).toBe('committed');
-  if (fixture.edit.op === 'offset-face') {
+  if (fixture.edit.op === 'offset-face' || fixture.edit.op === 'offset-faces') {
     expect(result.volumeAfter).toBeDefined();
     if (fixture.edit.value > 0) {
       expect(result.volumeAfter).toBeGreaterThan(result.volumeBefore);

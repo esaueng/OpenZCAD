@@ -4743,15 +4743,24 @@ export function App() {
     if (!document) {
       return;
     }
-    // The corpus replays a one-face offset: a face set's attempt would be
-    // replayed as a different edit, so it is not recorded.
-    if (interaction.mode === 'face' && interaction.target.offsetFaceSet) {
-      return;
-    }
+    // A face set's offset is recorded as the `offset-faces` edit it builds:
+    // the handle's face first, then the set's other faces in pick order, each
+    // with a reference exactly when `buildOffsetFaces` would have pinned one.
+    const offsetFaceSet =
+      interaction.mode === 'face'
+        ? interaction.target.offsetFaceSet
+        : undefined;
+    const setFaces =
+      interaction.mode === 'face' && offsetFaceSet
+        ? (ownEntry(
+            document.derived.bodyRepresentations,
+            interaction.target.bodyId as BodyId
+          )?.topology?.faces ?? [])
+        : [];
     const pick =
       interaction.mode === 'face'
         ? {
-            op: interaction.op,
+            op: offsetFaceSet ? ('offset-faces' as const) : interaction.op,
             targetBodyId: interaction.target.bodyId,
             face: {
               topologyId: interaction.target.topologyId,
@@ -4759,7 +4768,21 @@ export function App() {
                 ? { hash: interaction.target.hash }
                 : {}),
               hasReference: interaction.target.reference !== undefined
-            }
+            },
+            ...(offsetFaceSet
+              ? {
+                  additionalFaces: offsetFaceSet.map((member) => ({
+                    topologyId: member.topologyId,
+                    hash: member.hash,
+                    hasReference:
+                      setFaces.find(
+                        (face) =>
+                          face.topologyId === member.topologyId &&
+                          face.hash === member.hash
+                      )?.reference !== undefined
+                  }))
+                }
+              : {})
           }
         : interaction.mode === 'edges' && interaction.edges[0]
           ? {

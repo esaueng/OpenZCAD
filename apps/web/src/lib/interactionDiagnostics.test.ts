@@ -13,7 +13,10 @@ import type {
   ProjectDocument
 } from '@openzcad/shared';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { DirectEditFixture } from './directEditFixture';
+import {
+  DIRECT_EDIT_FIXTURE_FORMAT_VERSION,
+  type DirectEditFixture
+} from './directEditFixture';
 import { createProjectDiagnosticBundle } from './projectDiagnostics';
 import {
   INTERACTION_DIAGNOSTICS_MAX_BYTES,
@@ -172,6 +175,57 @@ describe('buildDirectEditFixture', () => {
     expect(fixture.observed.producingFeatureKind).toBe('primitive');
     expect(fixture.observed.upstreamFeatureKinds).toEqual(['primitive']);
     expect(fixture.observed.documentVersion).toBe(document.version);
+  });
+
+  it('captures a face set offset as offset-faces with every face (M07)', () => {
+    const { document, bodyId } = boxDocument();
+    const derived = boxDerived(bodyId);
+    derived.bodyRepresentations[bodyId]!.topology!.faces.push({
+      topologyId: 'face-bottom',
+      hash: 333,
+      triangleStart: 2,
+      triangleCount: 2,
+      geometry: {
+        surfaceType: 'plane',
+        area: 960,
+        center: { x: 20, y: 12, z: 0 },
+        normal: { x: 0, y: 0, z: -1 }
+      }
+    });
+    const fixture = buildDirectEditFixture({
+      document,
+      derived,
+      op: 'offset-faces',
+      targetBodyId: bodyId,
+      face: { topologyId: 'face-top', hash: 111, hasReference: true },
+      additionalFaces: [
+        { topologyId: 'face-bottom', hash: 333, hasReference: false }
+      ],
+      value: -1.5,
+      outcome: 'refused',
+      kernel: KERNEL,
+      capturedAt: '2026-01-01T00:00:00.000Z'
+    });
+
+    expect(fixture.formatVersion).toBe(DIRECT_EDIT_FIXTURE_FORMAT_VERSION);
+    expect(fixture.name).toBe('offset-faces-refused-20260101000000000');
+    expect(fixture.edit).toMatchObject({
+      op: 'offset-faces',
+      value: -1.5,
+      face: { center: { x: 20, y: 12, z: 10 }, hash: 111 },
+      additionalFaces: [
+        {
+          surfaceType: 'plane',
+          center: { x: 20, y: 12, z: 0 },
+          normal: { x: 0, y: 0, z: -1 },
+          area: 960,
+          hash: 333,
+          hasReference: false
+        }
+      ]
+    });
+    // One face without a reference makes the whole set hash-only.
+    expect(fixture.observed.lineage).toBe('hash-only');
   });
 
   it('reports semantic lineage and resolves edges by hash', () => {
