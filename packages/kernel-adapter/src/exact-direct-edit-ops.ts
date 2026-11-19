@@ -1594,37 +1594,41 @@ function removeFaces(
 const OFFSET_SET_PARALLEL = 1 - 1e-6;
 
 /**
- * Largest sine between the measured normals of two planes a chain moves in
- * separate steps. One `moveFaces` group is held to coplanarity by the
- * kernel; separate steps are not, so the chain itself requires the planes
- * to be parallel to construction precision rather than to the replay
- * tolerance above (a 0.05° tilt passes that one).
+ * Largest sine between the measured normals of two faces the chain counts as
+ * facing one way. Faces within it are grouped by plane and moved leading
+ * plane first; faces beyond it face different directions and each moves
+ * along its own normal in a step of its own. The replay cosine above is far
+ * too loose for this (a 0.05° tilt passes it), and one `moveFaces` group is
+ * held to coplanarity by the kernel, so two planes merged into one direction
+ * must be parallel to construction precision.
  */
 const OFFSET_SET_CHAIN_PARALLEL_SINE = 1e-9;
 
 /**
- * The refusal for a face set whose faces point opposite ways, such as a top
- * and the bottom under it: one signed offset would thicken one and thin the
- * other.
+ * Two direction components closer than this compare equal when the chain
+ * orders its direction classes, so rounding noise on a zero component never
+ * decides the order.
+ */
+const OFFSET_SET_DIRECTION_ORDER_TOLERANCE = 1e-9;
+
+/**
+ * The refusal for a face set two of whose faces point opposite ways, such as
+ * a top and the bottom under it: one signed offset would thicken one and thin
+ * the other.
  */
 export const OFFSET_FACES_OPPOSITE_NORMALS =
   'The selected faces face opposite ways, so one offset would thicken one and thin the other. Offset them separately.';
 
 /**
- * The refusal for a face set whose faces are not parallel and meet nowhere,
- * such as a top and a side wall. The faces of one set must all face the same
- * way; they may sit on different parallel planes.
+ * The words for a face set whose faces face different directions. The
+ * kernel no longer refuses such a set: since the adjacent-face slice it
+ * chains one plane per step, each face along its own normal, and refuses
+ * only opposite normals. The workspace still gates different-direction sets
+ * up front in these words (`OFFSET_SET_NOT_SAME_NORMAL`, pinned to this by
+ * `test/offset-faces-workspace.test.ts`) until its own slice lifts the gate.
  */
 export const OFFSET_FACES_MIXED_DIRECTIONS =
   'Offset moves a set of faces together only when they all face the same way, and the selected faces face different directions. Offset them one at a time.';
-
-/**
- * The refusal for a face set whose faces are not parallel and share an edge,
- * such as a pocket's floor and wall. Moving faces that meet re-limits their
- * shared edge twice; that is not supported yet.
- */
-export const OFFSET_FACES_SHARE_AN_EDGE =
-  'Offset moves a set of faces together only when they all face the same way, and the selected faces meet at an edge and face different directions. Offset them one at a time.';
 
 /** Face N (1-based, N ≥ 2) of an offset set no longer resolves as picked. */
 function offsetSetFaceDrifted(index: number, cause?: unknown): Error {
@@ -1667,13 +1671,24 @@ interface OffsetSetFace {
  * The order depends only on the body's current geometry, never on the order
  * the faces were picked or stored, nor on the normals recorded when they
  * were picked (those may lag the body within the replay tolerance), so a
- * shuffled set rebuilds the same solid. The faces share one direction class
- * in this slice (the recorded normals were checked before), so the groups
- * are ordered by plane offset along the faces' measured normal, with the
- * plane the move leads with first: the outermost for a positive offset, the
- * innermost for a negative one. A face therefore moves into room the face
- * ahead of it has already left, and a stepped top offset by more than its
- * step height still rebuilds.
+ * shuffled set rebuilds the same solid.
+ *
+ * 1. Direction classes. Faces whose measured normals are parallel to
+ *    construction precision (`OFFSET_SET_CHAIN_PARALLEL_SINE`) face one way.
+ *    The classes are taken in descending order of their normal's z, then y,
+ *    then x component (components within
+ *    `OFFSET_SET_DIRECTION_ORDER_TOLERANCE` compare equal): tops before side
+ *    walls before bottoms-facing faces. Opposite normals were refused before.
+ * 2. Planes within a class. The planes are ordered by offset along the
+ *    class's normal, with the plane the move leads with first: the outermost
+ *    for a positive offset, the innermost for a negative one. A face
+ *    therefore moves into room the face ahead of it has already left, and a
+ *    stepped top offset by more than its step height still rebuilds.
+ *
+ * Every step rebuilds the edges a moved face shares with its neighbours from
+ * the neighbours' current surfaces, so when every step succeeds two moved
+ * faces that meet end on the edge where both moved planes meet, whatever the
+ * class order. The order can decide only whether a middle step refuses.
  *
  * Planes are told apart by a fixed distance, not one scaled by how far the
  * body sits from the origin: translating a body must not merge two planes
@@ -1683,35 +1698,86 @@ function offsetSetGroups(
   faces: readonly OffsetSetFace[],
   offset: number
 ): OffsetSetFace[][] {
-  const measuredSum = faces
-    .map((face) => face.normal)
-    .sort(compareVectors)
-    .reduce((sum, normal) => add(sum, normal), { x: 0, y: 0, z: 0 });
-  const axis = normalized(measuredSum);
-  if (!axis) {
-    throw new Error(OFFSET_FACES_MIXED_DIRECTIONS);
-  }
-  const height = (face: OffsetSetFace) => dot(axis, face.center);
-  const sorted = faces
+  // Seed the classes in a geometry-only order so their membership never
+  // depends on the stored order.
+  const seeded = faces
     .slice()
-    .sort((a, b) => height(a) - height(b) || a.source - b.source);
-  const planeTolerance = DIRECT_EDIT_TOLERANCE;
+    .sort(
+      (a, b) =>
+        compareVectors(a.normal, b.normal) ||
+        compareVectors(a.center, b.center) ||
+        a.source - b.source
+    );
+  const classes: OffsetSetFace[][] = [];
+  for (const face of seeded) {
+    const home = classes.find(
+      (members) =>
+        length(cross(members[0]!.normal, face.normal)) <=
+          OFFSET_SET_CHAIN_PARALLEL_SINE &&
+        dot(members[0]!.normal, face.normal) > 0
+    );
+    if (home) home.push(face);
+    else classes.push([face]);
+  }
+  const directions = classes.map((members) => {
+    const axis = normalized(
+      members
+        .map((face) => face.normal)
+        .reduce((sum, normal) => add(sum, normal), { x: 0, y: 0, z: 0 })
+    );
+    if (!axis) throw new Error(OFFSET_FACES_OPPOSITE_NORMALS);
+    return { axis, members };
+  });
+  directions.sort((a, b) => compareDirections(a.axis, b.axis));
   const groups: OffsetSetFace[][] = [];
-  for (const face of sorted) {
-    const last = groups.at(-1);
-    if (
-      last &&
-      Math.abs(height(face) - height(last.at(-1)!)) <= planeTolerance
-    ) {
-      last.push(face);
-    } else {
-      groups.push([face]);
+  for (const { axis, members } of directions) {
+    const height = (face: OffsetSetFace) => dot(axis, face.center);
+    const sorted = members
+      .slice()
+      .sort((a, b) => height(a) - height(b) || a.source - b.source);
+    const planes: OffsetSetFace[][] = [];
+    for (const face of sorted) {
+      const last = planes.at(-1);
+      if (
+        last &&
+        Math.abs(height(face) - height(last.at(-1)!)) <= DIRECT_EDIT_TOLERANCE
+      ) {
+        last.push(face);
+      } else {
+        planes.push([face]);
+      }
+    }
+    // Leading plane first.
+    if (offset > 0) planes.reverse();
+    for (const plane of planes) plane.sort((a, b) => a.source - b.source);
+    groups.push(...planes);
+  }
+  return groups;
+}
+
+/**
+ * Descending by z, then y, then x, with components within
+ * `OFFSET_SET_DIRECTION_ORDER_TOLERANCE` equal.
+ */
+function compareDirections(a: Vector3, b: Vector3): number {
+  for (const key of ['z', 'y', 'x'] as const) {
+    const difference = b[key] - a[key];
+    if (Math.abs(difference) > OFFSET_SET_DIRECTION_ORDER_TOLERANCE) {
+      return difference;
     }
   }
-  // Leading plane first.
-  if (offset > 0) groups.reverse();
-  for (const group of groups) group.sort((a, b) => a.source - b.source);
-  return groups;
+  return 0;
+}
+
+/** Refuses by name when any two of the normals point opposite ways. */
+function requireNoOppositeNormals(normals: readonly Vector3[]): void {
+  for (const [index, a] of normals.entries()) {
+    for (const b of normals.slice(index + 1)) {
+      if (dot(a, b) <= -OFFSET_SET_PARALLEL) {
+        throw new Error(OFFSET_FACES_OPPOSITE_NORMALS);
+      }
+    }
+  }
 }
 
 function compareVectors(a: Vector3, b: Vector3): number {
@@ -1719,34 +1785,20 @@ function compareVectors(a: Vector3, b: Vector3): number {
 }
 
 /**
- * Whether any two of the faces share an edge on the solid. Compared by edge
- * handle: two faces of one solid that meet bound the same edge.
- */
-function anyFacesShareAnEdge(
-  kernel: RemusKernel,
-  faces: readonly number[]
-): boolean {
-  const owner = new Map<number, number>();
-  for (const face of faces) {
-    for (const edge of new Set(kernel.getFaceEdges(face))) {
-      const other = owner.get(edge);
-      if (other !== undefined && other !== face) return true;
-      owner.set(edge, face);
-    }
-  }
-  return false;
-}
-
-/**
- * Push or pull a set of faces of one body that all face the same way,
- * together, by one signed distance along each face's own outward normal.
+ * Push or pull a set of planar faces of one body together, by one signed
+ * distance along each face's own outward normal. The faces may sit on
+ * parallel planes at different heights and may face different directions,
+ * including faces that meet at an edge (a pocket's walls, a boss's sides);
+ * no two may face opposite ways.
  *
  * The faces are grouped by the plane they lie on. A group on one plane is
  * the kernel's coherent planar group move — the one Set Face Distance makes
  * — so its faces' neighbours are re-limited once, together. Remus refuses
- * one `moveFaces` call on parallel planes at different heights, so a set
- * that spans several planes is a chain: one exact journaled move per plane,
- * in the order `offsetSetGroups` gives. The later groups' faces are carried
+ * one `moveFaces` call on faces that are not coplanar, so a set that spans
+ * several planes is a chain: one exact journaled move per plane, in the
+ * order `offsetSetGroups` gives. Each move rebuilds a moved face's edges
+ * from its neighbours' current surfaces, so an edge two moved faces share
+ * ends where both moved planes meet. The later groups' faces are carried
  * to each intermediate solid through that step's exact journal face map,
  * never by matching geometry or hashes on the intermediate; a step without
  * an exact map for a face still to move refuses. Only the final solid is
@@ -1757,8 +1809,8 @@ function anyFacesShareAnEdge(
  * re-pick repairs it). Every other face is resolved on the same source solid
  * and checked against its recorded surface, normal, area and centre; one
  * that has drifted refuses and asks for the faces again rather than moving
- * a different face. Faces that face opposite or different ways are refused
- * by name before the kernel is asked. None of the single-face special cases
+ * a different face. Faces that face opposite ways are refused by name
+ * before the kernel is asked. None of the single-face special cases
  * (analytic cylinder caps, hole-mouth carry, the sweep past a collision)
  * apply: a one-face set is an `offset-face`.
  */
@@ -1799,14 +1851,10 @@ function offsetFaces(
   }
   // By name, from the recorded normals alone, before any face is resolved:
   // faces that point opposite ways never move together, whatever the body.
-  let mixed = false;
-  for (const snapshot of operation.additionalFaces) {
-    const cosine = dot(recordedNormal, snapshot.sourceNormal);
-    if (cosine <= -OFFSET_SET_PARALLEL) {
-      throw new Error(OFFSET_FACES_OPPOSITE_NORMALS);
-    }
-    if (cosine < OFFSET_SET_PARALLEL) mixed = true;
-  }
+  requireNoOppositeNormals([
+    recordedNormal,
+    ...operation.additionalFaces.map((snapshot) => snapshot.sourceNormal)
+  ]);
   const normal = geometry.normal;
   const setFaces: OffsetSetFace[] = [
     {
@@ -1822,14 +1870,10 @@ function offsetFaces(
     try {
       resolved = resolveDirectEditFace(kernel, target, solid, snapshot);
     } catch (error) {
-      if (mixed) {
-        throw new Error(OFFSET_FACES_MIXED_DIRECTIONS, { cause: error });
-      }
       throw offsetSetFaceDrifted(label, error);
     }
     const other = measureFaceGeometry(kernel, resolved.face);
     if (other?.surfaceType !== 'plane' || !other.normal) {
-      if (mixed) throw new Error(OFFSET_FACES_MIXED_DIRECTIONS);
       throw offsetSetFaceDrifted(label);
     }
     if (!resolved.viaLineage) {
@@ -1843,19 +1887,12 @@ function offsetFaces(
         Math.abs(other.area - snapshot.sourceArea) > tolerance ||
         length(subtract(other.center, snapshot.sourceCenter)) > centerTolerance
       ) {
-        if (mixed) throw new Error(OFFSET_FACES_MIXED_DIRECTIONS);
         throw offsetSetFaceDrifted(label);
       }
     }
     if (Math.abs(dot(other.normal, snapshot.sourceNormal)) < 1 - 1e-6) {
-      if (mixed) throw new Error(OFFSET_FACES_MIXED_DIRECTIONS);
       throw offsetSetFaceDrifted(label);
     }
-    const cosine = dot(other.normal, normal);
-    if (cosine <= -OFFSET_SET_PARALLEL) {
-      throw new Error(OFFSET_FACES_OPPOSITE_NORMALS);
-    }
-    if (cosine < OFFSET_SET_PARALLEL) mixed = true;
     setFaces.push({
       label,
       source: resolved.face,
@@ -1869,13 +1906,8 @@ function offsetFaces(
       'Two of the selected faces resolve to the same face. Select the faces again.'
     );
   }
-  if (mixed) {
-    throw new Error(
-      anyFacesShareAnEdge(kernel, handles)
-        ? OFFSET_FACES_SHARE_AN_EDGE
-        : OFFSET_FACES_MIXED_DIRECTIONS
-    );
-  }
+  // And from the body's own normals, which a stored set may lag.
+  requireNoOppositeNormals(setFaces.map((entry) => entry.normal));
   const offset = resolveParamValue(operation.offset, scope, 'offset');
   if (!Number.isFinite(offset) || Math.abs(offset) <= GEOMETRY_EPSILON) {
     throw new Error('Face offset must be a non-zero distance.');
@@ -1889,16 +1921,6 @@ function offsetFaces(
     : topologyCandidatesForSolid(kernel, solid);
   const sourceCensus = censusOfSolids(faceCensus, [solid]);
   const groups = offsetSetGroups(setFaces, offset);
-  const leadNormal = groups[0]![0]!.normal;
-  for (const group of groups.slice(1)) {
-    for (const entry of group) {
-      if (
-        length(cross(leadNormal, entry.normal)) > OFFSET_SET_CHAIN_PARALLEL_SINE
-      ) {
-        throw new Error(OFFSET_FACES_MIXED_DIRECTIONS);
-      }
-    }
-  }
   // Each source face's handle on the current solid, carried step by step.
   const current = new Map(
     setFaces.map((entry) => [entry.source, entry.source])
@@ -1933,7 +1955,7 @@ function offsetFaces(
           error
         );
       }
-      // Mixed sets were refused by name above; whatever the kernel still
+      // Opposite sets were refused by name above; whatever the kernel still
       // refuses is typed from its error, never read as prose.
       const message = error instanceof Error ? error.message : String(error);
       throw (

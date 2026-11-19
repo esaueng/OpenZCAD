@@ -931,11 +931,13 @@ export type DirectEditOperation =
     }
   | {
       /**
-       * Push or pull several faces of one body that all face the same way,
-       * together, by one signed distance along each face's own outward
-       * normal. Faces on one plane move in one Remus `moveFaces` group;
-       * faces on parallel planes at different heights (a stepped top) move
-       * as a chain of such groups, one per plane. The face fields name the
+       * Push or pull several planar faces of one body together, by one
+       * signed distance along each face's own outward normal. The faces may
+       * lie on parallel planes at different heights (a stepped top) and may
+       * face different directions, meeting at edges or apart (a pocket's
+       * walls, a boss's sides); no two may face opposite ways. Faces on one
+       * plane move in one Remus `moveFaces` group; a set that spans several
+       * planes moves as a chain of such groups, one per plane. The face fields name the
        * first face, as every direct edit names one; `additionalFaces` are the
        * rest, each pinned the same way. A separate kind from `offset-face`
        * so an older build refuses it instead of moving only the first face.
@@ -946,7 +948,7 @@ export type DirectEditOperation =
       sourceSurfaceType: 'plane';
       sourceArea: number;
       sourceCenter: Vector3;
-      /** The first face's outward unit normal; every face in the set faces this way. */
+      /** The first face's outward unit normal when picked. */
       sourceNormal: Vector3;
       /** Signed distance along each face's normal; positive adds material. */
       offset: ParamValue;
@@ -1039,9 +1041,9 @@ export interface RemovedFaceSnapshot {
 export interface OffsetFaceSnapshot extends RemovedFaceSnapshot {
   sourceSurfaceType: 'plane';
   /**
-   * Its own outward unit normal when picked. It points the same way as the
-   * first face's, within tolerance, though the face may lie on a different
-   * parallel plane; a face pointing the opposite or another way is refused.
+   * Its own outward unit normal when picked, which it moves along. It may
+   * point another way than the other faces' normals, but a set with two
+   * faces pointing opposite ways is refused.
    */
   sourceNormal: Vector3;
 }
