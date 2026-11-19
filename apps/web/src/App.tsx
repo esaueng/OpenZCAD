@@ -4753,23 +4753,12 @@ export function App() {
       return;
     }
     // A face set's offset is recorded as the `offset-faces` edit it builds:
-    // the handle's face first, then the set's other faces in pick order, each
-    // with a reference exactly when `buildOffsetFaces` would have pinned one.
-    const offsetFaceSet =
-      interaction.mode === 'face'
-        ? interaction.target.offsetFaceSet
-        : undefined;
-    const setFaces =
-      interaction.mode === 'face' && offsetFaceSet
-        ? (ownEntry(
-            document.derived.bodyRepresentations,
-            interaction.target.bodyId as BodyId
-          )?.topology?.faces ?? [])
-        : [];
+    // the handle's face first, then the set's other faces in pick order. The
+    // log's module names the op and reads each face's reference itself.
     const pick =
       interaction.mode === 'face'
         ? {
-            op: offsetFaceSet ? ('offset-faces' as const) : interaction.op,
+            op: interaction.op,
             targetBodyId: interaction.target.bodyId,
             face: {
               topologyId: interaction.target.topologyId,
@@ -4778,20 +4767,7 @@ export function App() {
                 : {}),
               hasReference: interaction.target.reference !== undefined
             },
-            ...(offsetFaceSet
-              ? {
-                  additionalFaces: offsetFaceSet.map((member) => ({
-                    topologyId: member.topologyId,
-                    hash: member.hash,
-                    hasReference:
-                      setFaces.find(
-                        (face) =>
-                          face.topologyId === member.topologyId &&
-                          face.hash === member.hash
-                      )?.reference !== undefined
-                  }))
-                }
-              : {})
+            additionalFaces: interaction.target.offsetFaceSet
           }
         : interaction.mode === 'edges' && interaction.edges[0]
           ? {
@@ -27621,8 +27597,7 @@ export function App() {
                   : (value: number) => `${round(value)} ${label.toLowerCase()}`
                 : (value: number) =>
                     `${label} ${round(value)} ${inPlaceUnits}`.trim();
-        const value =
-          inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
+        const value = inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
         // A refused value the kept preview did not build from: its arrow
         // stands on the value that built, at the model, under the refusal.
         const kept = inPlace.keptValues?.[handle.valueId];

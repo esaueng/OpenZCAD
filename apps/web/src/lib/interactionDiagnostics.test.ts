@@ -228,6 +228,59 @@ describe('buildDirectEditFixture', () => {
     expect(fixture.observed.lineage).toBe('hash-only');
   });
 
+  it('reads a set face’s reference from the body when the caller leaves it out (M07)', () => {
+    const { document, bodyId } = boxDocument();
+    const derived = boxDerived(bodyId);
+    const faces = derived.bodyRepresentations[bodyId]!.topology!.faces;
+    const plane = (z: number, normalZ: number) => ({
+      surfaceType: 'plane' as const,
+      area: 960,
+      center: { x: 20, y: 12, z },
+      normal: { x: 0, y: 0, z: normalZ }
+    });
+    faces.push(
+      {
+        topologyId: 'face-bottom',
+        hash: 333,
+        triangleStart: 2,
+        triangleCount: 2,
+        geometry: plane(0, -1),
+        // Only its presence matters to the log.
+        reference: {} as NonNullable<(typeof faces)[number]['reference']>
+      },
+      {
+        topologyId: 'face-step',
+        hash: 444,
+        triangleStart: 4,
+        triangleCount: 2,
+        geometry: plane(5, 1)
+      }
+    );
+    const capture = (topologyId: string, hash: number) =>
+      buildDirectEditFixture({
+        document,
+        derived,
+        // The workspace's pick as it stands: a face op with its set.
+        op: 'offset-face',
+        targetBodyId: bodyId,
+        face: { topologyId: 'face-top', hash: 111, hasReference: true },
+        additionalFaces: [{ topologyId, hash }],
+        value: 2,
+        outcome: 'refused',
+        kernel: KERNEL,
+        capturedAt: '2026-01-01T00:00:00.000Z'
+      });
+
+    const pinned = capture('face-bottom', 333);
+    expect(pinned.edit.op).toBe('offset-faces');
+    expect(pinned.name).toMatch(/^offset-faces-refused-/);
+    expect(pinned.edit.additionalFaces?.[0]?.hasReference).toBe(true);
+    expect(pinned.observed.lineage).toBe('semantic');
+    const unpinned = capture('face-step', 444);
+    expect(unpinned.edit.additionalFaces?.[0]?.hasReference).toBe(false);
+    expect(unpinned.observed.lineage).toBe('hash-only');
+  });
+
   it('reports semantic lineage and resolves edges by hash', () => {
     const { document, bodyId } = boxDocument();
     const fixture = buildDirectEditFixture({

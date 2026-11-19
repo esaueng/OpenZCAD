@@ -48,8 +48,15 @@ export interface BuildDirectEditFixtureInput {
   targetBodyId: string;
   /** Face pick, when the op targets a face. */
   face?: InteractionDiagnosticPick;
-  /** `offset-faces` only: the set's other faces, in the edit's order. */
-  additionalFaces?: InteractionDiagnosticPick[];
+  /**
+   * `offset-faces` only: the set's other faces, in the edit's order. Given
+   * with an `offset-face` op, the capture is recorded as `offset-faces`, so
+   * the workspace can pass its face pick as it stands. A face whose
+   * `hasReference` is left out has it read from the face it resolves to.
+   */
+  additionalFaces?: (Omit<InteractionDiagnosticPick, 'hasReference'> & {
+    hasReference?: boolean;
+  })[];
   /** Edge picks, when the op targets edges. */
   edges?: InteractionDiagnosticPick[];
   value: number;
@@ -217,6 +224,10 @@ export function buildDirectEditFixture(
   input: BuildDirectEditFixtureInput
 ): DirectEditFixture {
   const capturedAt = input.capturedAt ?? new Date().toISOString();
+  const op: DirectEditFixtureOp =
+    input.additionalFaces && input.op === 'offset-face'
+      ? 'offset-faces'
+      : input.op;
   const representation = ownEntry(
     input.derived.bodyRepresentations,
     toBodyId(input.targetBodyId)
@@ -226,9 +237,17 @@ export function buildDirectEditFixture(
   const face = input.face
     ? fixtureFace(findFace(topology?.faces ?? [], input.face), input.face)
     : undefined;
-  const additionalFaces = input.additionalFaces?.map((pick) =>
-    fixtureFace(findFace(topology?.faces ?? [], pick), pick)
-  );
+  const additionalFaces = input.additionalFaces?.map((member) => {
+    const pick = {
+      ...member,
+      hasReference: member.hasReference ?? false
+    };
+    const found = findFace(topology?.faces ?? [], pick);
+    return fixtureFace(found, {
+      ...pick,
+      hasReference: member.hasReference ?? found?.reference !== undefined
+    });
+  });
   const edges = input.edges?.map((pick) =>
     fixtureEdge(findEdge(topology?.edges ?? [], pick), pick)
   );
@@ -242,7 +261,7 @@ export function buildDirectEditFixture(
       edges.every((edge) => edge.hasReference));
 
   const edit: DirectEditFixtureEdit = {
-    op: input.op,
+    op,
     targetBodyId: input.targetBodyId,
     face,
     ...(additionalFaces ? { additionalFaces } : {}),
@@ -264,7 +283,7 @@ export function buildDirectEditFixture(
   return {
     format: DIRECT_EDIT_FIXTURE_FORMAT,
     formatVersion: DIRECT_EDIT_FIXTURE_FORMAT_VERSION,
-    name: `${input.op}-${input.outcome}-${timestampSlug(capturedAt)}`,
+    name: `${op}-${input.outcome}-${timestampSlug(capturedAt)}`,
     capturedAt,
     origin: 'captured',
     kernel: { ...input.kernel },
