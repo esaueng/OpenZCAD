@@ -304,3 +304,67 @@ export function chipPanelDodge(
     EDGE_CHIP_MARGIN_PX
   );
 }
+
+/** A refused face offset's line, as the control that refused it says it. */
+export interface OffsetRefusalReading {
+  /** The refusal: its message, and the limit the kernel named, if any. */
+  error: { message: string; headline?: string; limit?: number };
+  /** The way out's label ("Keep −18.99 mm"), when there is one. */
+  keepLabel: string | null;
+}
+
+/**
+ * U11: a refused face offset said in the Total reading, while exact entry
+ * takes a Total. The kernel and the way out speak in the offset the edit
+ * records ("shrink to nothing past 19 · Try a smaller offset", "Keep
+ * −18.99 mm"), which beside a Total of 5 reads as a second, unrelated
+ * number: a smaller offset is a larger Total when the face moves in. The
+ * limit is restated as the Total it leaves (as the chip's "min 5.01 mm"
+ * is), the remedy as the way the Total must go, and Keep names the Total it
+ * keeps. The offset stays in the cause, since that is what History records.
+ */
+export function offsetRefusalInTotal<T extends OffsetRefusalReading['error']>(
+  error: T,
+  keep: number | null,
+  reading: {
+    /** The span before this edit: the keypad's `totalBaseline`. */
+    baseline: number;
+    sense: number;
+    units: string;
+  }
+): { error: T & { headline?: string }; keepLabel: string | null } {
+  const { baseline, sense, units } = reading;
+  const total = (offset: number) =>
+    formatNumber(Math.round((baseline + sense * offset) * 100) / 100);
+  const keepLabel =
+    keep === null ? null : `Keep Total ${total(keep)} ${units}`.trim();
+  const limit = error.limit;
+  if (limit === undefined || !Number.isFinite(limit) || limit === 0) {
+    return {
+      error: {
+        ...error,
+        message: error.message.replace(
+          /Try a smaller offset\./,
+          `Try a Total nearer ${total(0)} ${units}.`
+        )
+      },
+      keepLabel
+    };
+  }
+  const shrinks = sense * limit < 0;
+  const bound = `${total(limit)} ${units}`;
+  const move = `${formatNumber(Math.round(Math.abs(limit) * 100) / 100)} ${units}`;
+  return {
+    error: {
+      ...error,
+      headline: `Total can’t go ${shrinks ? 'below' : 'past'} ${bound} here`,
+      message: error.message.replace(
+        /past -?[\d.]+(?:e-?\d+)?\. Try a smaller offset\./,
+        `once the face moves ${move} (a Total of ${bound}). Try a ${
+          shrinks ? 'larger' : 'smaller'
+        } Total.`
+      )
+    },
+    keepLabel
+  };
+}

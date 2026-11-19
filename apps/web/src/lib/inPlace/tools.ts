@@ -1046,6 +1046,13 @@ export interface InPlaceToolSpec {
     ctx: InPlaceContext,
     options: Record<string, string>
   ): HandleSpec[];
+  /**
+   * U11: the bar inputs, by the names they carry in the bar, that a refused
+   * request changed from the last one that built, so a kernel refusal says
+   * what to change back or again. A tool with this keeps that last built
+   * frame on screen under the refusal instead of taking it down.
+   */
+  refusedInputs?(built: InPlaceRequest, refused: InPlaceRequest): string[];
 }
 
 function section(pick: ProfilePick): SketchSectionReference {
@@ -6465,6 +6472,58 @@ function edgeEndChip(valueId: string, slots: InPlaceSlots): HandleSpec[] {
   ];
 }
 
+/** Two stored values the same: a number, or the expression it was typed as. */
+function sameParam(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * The inputs an edge tool's refused request changed from the last one that
+ * built, in the bar's order: the picked edges, the option that changes which
+ * values apply, then each value by its bar label. A value an option brought
+ * in or took away is the option's change, not the value's.
+ */
+export function edgeRefusedInputs(
+  built: InPlaceRequest,
+  refused: InPlaceRequest
+): string[] {
+  if (built.tool !== 'edge-modifier' || refused.tool !== 'edge-modifier') {
+    return [];
+  }
+  const inputs: string[] = [];
+  if (
+    built.targetBodyId !== refused.targetBodyId ||
+    !sameParam(built.edgeHashes, refused.edgeHashes)
+  ) {
+    inputs.push('Edges');
+  }
+  const field = (key: keyof typeof refused, label: string) => {
+    if (!sameParam(built[key], refused[key])) inputs.push(label);
+  };
+  if (refused.kind === 'fillet') {
+    const lawChanged =
+      (built.radiusLaw ?? null) !== (refused.radiusLaw ?? null);
+    if (lawChanged) inputs.push('Radius');
+    field('size', 'R');
+    if (!lawChanged) field('endRadius', 'End R');
+    return inputs;
+  }
+  const shape = (request: typeof refused) =>
+    request.angleDeg !== undefined
+      ? 'angle'
+      : request.distance2 !== undefined
+        ? 'two'
+        : 'equal';
+  const shapeChanged = shape(built) !== shape(refused);
+  if (shapeChanged) inputs.push('Shape');
+  field('size', 'Distance');
+  if (!shapeChanged) {
+    field('angleDeg', 'Angle');
+    field('distance2', 'Second distance');
+  }
+  return inputs;
+}
+
 const VARIABLE_RADIUS_NOTE = 'Experimental · R at the start, End R at the end';
 
 const fillet: InPlaceToolSpec = {
@@ -6472,6 +6531,7 @@ const fillet: InPlaceToolSpec = {
   title: 'Fillet',
   profileMode: 'none',
   edgeMode: 'many',
+  refusedInputs: edgeRefusedInputs,
   wantsAxis: false,
   wantsPath: false,
   values: [
@@ -6547,6 +6607,7 @@ const chamfer: InPlaceToolSpec = {
   title: 'Chamfer',
   profileMode: 'none',
   edgeMode: 'many',
+  refusedInputs: edgeRefusedInputs,
   wantsAxis: false,
   wantsPath: false,
   values: [

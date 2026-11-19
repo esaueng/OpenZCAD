@@ -306,6 +306,12 @@ export interface InPlaceCommand {
   request: InPlaceRequest | null;
   hint: string;
   refusal: string | null;
+  /**
+   * U11: the input (or inputs) the kernel's refusal is about, named ahead of
+   * it in the bar: what changed since the last request that built, which
+   * stays on screen. Null for an entry refusal, which names its own value.
+   */
+  refusalInput: string | null;
   canFinish: boolean;
   /** Re-arms the command that made a stored feature, seeded from it. */
   edit(tool: InPlaceToolId, seed: InPlaceEditSeed): void;
@@ -457,7 +463,8 @@ function faceFilterAccepts(
   if (filter === undefined || face.surfaceType === undefined) return true;
   const surface = face.surfaceType.toLowerCase();
   if (filter === 'planar') return surface === 'plane';
-  if (filter === 'revolution') return surface === 'cylinder' || surface === 'cone';
+  if (filter === 'revolution')
+    return surface === 'cylinder' || surface === 'cone';
   return surface === 'cylinder';
 }
 
@@ -466,6 +473,11 @@ export function useInPlaceCommand(
 ): InPlaceCommand {
   const [session, setSession] = useState<Session | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  /**
+   * U11: the inputs the refused request changed from the last one that
+   * built, by their bar names, for a tool that names them.
+   */
+  const [refusalInputs, setRefusalInputs] = useState<readonly string[]>([]);
   const [previewAdvisory, setPreviewAdvisory] = useState<string | null>(null);
   // A typed value the tool refused: it stands until the next accepted
   // value, and Done waits with it, since the chip went back to the value
@@ -781,9 +793,39 @@ export function useInPlaceCommand(
         /** The base version the frame was built on. */
         base: number | null | undefined;
         built: InPlaceBuiltCommand;
+        request: InPlaceRequest;
       }
     >()
   ).current;
+  /**
+   * The last request that built in this session, and the base it built on:
+   * what a refusal is measured against, and, for a tool that names the
+   * refused input, the frame left on screen under it.
+   */
+  const lastBuilt = useRef<{
+    session: number | undefined;
+    base: number | null | undefined;
+    request: InPlaceRequest;
+  } | null>(null);
+  /**
+   * A refused request: a tool that names what changed keeps the last frame
+   * that built on screen (it is no longer this request's, and the bar says
+   * which input to change back), else the preview comes down.
+   */
+  const showRefused = (refused: InPlaceRequest | null) => {
+    const tool = specRef.current;
+    const kept = lastBuilt.current;
+    const inputs =
+      tool?.refusedInputs &&
+      refused &&
+      kept &&
+      kept.session === sessionRef.current?.id &&
+      kept.base === optionsRef.current.baseVersion
+        ? tool.refusedInputs(kept.request, refused)
+        : [];
+    setRefusalInputs(inputs);
+    if (inputs.length === 0) optionsRef.current.publishPreview(null);
+  };
   /** The last frame published as valid; see {@link InPlacePreviewedFrame}. */
   const lastValidFrame = useRef<
     (InPlacePreviewedFrame & { key: string }) | null
@@ -808,7 +850,8 @@ export function useInPlaceCommand(
           base: optionsRef.current.baseVersion,
           key: JSON.stringify(current),
           bodyId: command.resultBodyId,
-          built: command
+          built: command,
+          request: current
         });
         return built;
       },
@@ -876,8 +919,16 @@ export function useInPlaceCommand(
               }
             : null;
         if (!result) return;
+        if (valid && frame) {
+          lastBuilt.current = {
+            session: sessionRef.current?.id,
+            base: frame.base,
+            request: frame.request
+          };
+        }
         if (valid) {
           setRefusal(null);
+          setRefusalInputs([]);
           const key = (warning: { featureId: string; message: string }) =>
             JSON.stringify([warning.featureId, warning.message]);
           const known = new Set(
@@ -903,8 +954,9 @@ export function useInPlaceCommand(
         } else {
           setPreviewAdvisory(null);
           // The last frame that built is not this request: left on screen
-          // under the refusal, it reads as the value that was refused.
-          optionsRef.current.publishPreview(null);
+          // under a bare refusal, it reads as the value that was refused, so
+          // only a tool that names the changed input keeps it.
+          showRefused(frame?.request ?? null);
           setRefusal(
             fresh ??
               unresolved ??
@@ -919,7 +971,7 @@ export function useInPlaceCommand(
         lastValidFrame.current = null;
         setPreviewValid(false);
         setPreviewAdvisory(null);
-        optionsRef.current.publishPreview(null);
+        showRefused(requestRef.current);
         setRefusal(
           error instanceof Error ? error.message : 'Unable to preview this.'
         );
@@ -945,6 +997,7 @@ export function useInPlaceCommand(
       preview.clear();
       setPreviewValid(false);
       setRefusal(null);
+      setRefusalInputs([]);
       optionsRef.current.publishPreview(null);
       return;
     }
@@ -1194,10 +1247,12 @@ export function useInPlaceCommand(
   const end = useCallback(() => {
     commitToken.current += 1;
     lastValidFrame.current = null;
+    lastBuilt.current = null;
     preview.clear();
     setSession(null);
     setCommitting(false);
     setRefusal(null);
+    setRefusalInputs([]);
     setEntryRefusals([]);
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
@@ -2212,6 +2267,10 @@ export function useInPlaceCommand(
           .join(' · ')
       : '',
     refusal: entryRefusal?.message ?? refusal,
+    refusalInput:
+      entryRefusal || refusal === null || refusalInputs.length === 0
+        ? null
+        : refusalInputs.join(' and '),
     canFinish,
     edit,
     start,
