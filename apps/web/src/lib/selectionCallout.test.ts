@@ -140,6 +140,30 @@ describe('selectionCalloutVerbs', () => {
     expect(verbs.map((verb) => verb.id)).not.toContain('tool:hole');
   });
 
+  it('names a cylinder’s edit by the quantity it enters, Diameter or Radius', () => {
+    const radial = (mode?: 'diameter' | 'radius') =>
+      selectionCalloutVerbs({
+        kind: 'face',
+        faceCapabilities: selectionCapabilities(
+          {
+            kind: 'face',
+            target: { surfaceType: 'cylindrical', hash: 8, radius: 5 }
+          },
+          mode
+        ),
+        availability: READY
+      }).find((verb) => verb.id === 'action:resize-radial-face');
+    expect(radial()).toMatchObject({
+      label: 'Diameter',
+      title: 'Adjust Diameter'
+    });
+    expect(radial('diameter')?.label).toBe('Diameter');
+    expect(radial('radius')).toMatchObject({
+      label: 'Radius',
+      title: 'Adjust Radius'
+    });
+  });
+
   it('greys Thread on a cylinder with the reason while it cannot run', () => {
     const thread = selectionCalloutVerbs({
       kind: 'face',

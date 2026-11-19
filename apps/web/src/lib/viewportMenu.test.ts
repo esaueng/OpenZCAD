@@ -65,6 +65,15 @@ describe('viewport menu (I18, I19)', () => {
     ]);
   });
 
+  it('names a cylinder’s menu edit by the quantity the rail says it enters', () => {
+    expect(
+      faceVerbMenuItems([
+        verb('action:resize-radial-face', 'Diameter'),
+        verb('action:resize-radial-face', 'Radius')
+      ]).map((item) => item.label)
+    ).toEqual(['Change diameter', 'Change radius']);
+  });
+
   it('puts the face’s verbs after Select other and before the body actions', () => {
     const shown = withFaceVerbs(menu(true), face, VERBS, {
       disabledReason: null,

@@ -57,6 +57,23 @@ for (const dimension of ['radius', 'height', 'bottom-height'] as const) {
             ? -value
             : original + value;
       await select();
+      if (dimension === 'radius') {
+        // The rail names the quantity the drag and keypad enter: Ø by
+        // default, so the wall's edit reads Diameter, not Radius.
+        const selection = page.getByRole('toolbar', { name: 'Feature tools' });
+        await expect(
+          selection.getByRole('button', {
+            name: 'Selection: Diameter',
+            exact: true
+          })
+        ).toBeVisible();
+        await expect(
+          selection.getByRole('button', {
+            name: 'Selection: Radius',
+            exact: true
+          })
+        ).toHaveCount(0);
+      }
       await fitClearOfCard(page, canvas);
       const originalBounds = await rendered(canvas);
 

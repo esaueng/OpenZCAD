@@ -80,10 +80,18 @@ test('round-trips diameter entry and edits a cylinder cap by total height', asyn
   const valueChip = page.getByTestId('direct-manipulation-value');
   await expect(valueChip).toHaveText('Ø 28 mm');
 
+  // The rail's verb follows the chip's Ø/R switch: it names what is edited.
+  const selection = page.getByRole('toolbar', { name: 'Feature tools' });
+  const radialVerb = (name: 'Diameter' | 'Radius') =>
+    selection.getByRole('button', { name: `Selection: ${name}`, exact: true });
+  await expect(radialVerb('Diameter')).toBeVisible();
   await page.getByRole('button', { name: 'Switch to radius entry' }).click();
   await expect(valueChip).toHaveText('R 14 mm');
+  await expect(radialVerb('Radius')).toBeVisible();
+  await expect(radialVerb('Diameter')).toHaveCount(0);
   await page.getByRole('button', { name: 'Switch to diameter entry' }).click();
   await expect(valueChip).toHaveText('Ø 28 mm');
+  await expect(radialVerb('Diameter')).toBeVisible();
 
   await page.locator('.handle-label-chip').click();
   const radialKeypad = page.getByRole('dialog');

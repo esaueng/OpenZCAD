@@ -226,9 +226,16 @@ export interface SelectionCalloutVerbInput {
 const ACTION_LABELS: Partial<Record<SelectionActionId, string>> = {
   'resize-body': 'Resize',
   'offset-face': 'Offset',
-  'sketch-on-face': 'Sketch',
-  'resize-radial-face': 'Radius'
+  'sketch-on-face': 'Sketch'
 };
+
+/**
+ * A cylinder's own edit is named by the quantity its drag and keypad enter:
+ * Diameter by default, Radius once the value chip is switched to R.
+ */
+function radialFaceLabel(capability: SelectionCapability): string {
+  return capability.valueKind === 'radius' ? 'Radius' : 'Diameter';
+}
 
 function actionVerb(
   capability: SelectionCapability,
@@ -236,7 +243,10 @@ function actionVerb(
 ): SelectionCalloutVerb {
   return {
     id: `action:${capability.action}`,
-    label: ACTION_LABELS[capability.action] ?? capability.label,
+    label:
+      capability.action === 'resize-radial-face'
+        ? radialFaceLabel(capability)
+        : (ACTION_LABELS[capability.action] ?? capability.label),
     title: capability.disabledReason ?? capability.note ?? capability.label,
     disabled: !capability.enabled,
     pressed: pressedAction === capability.action
