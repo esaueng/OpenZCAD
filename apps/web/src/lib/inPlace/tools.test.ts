@@ -27,6 +27,7 @@ import {
   stepTotal,
   inPlaceBodyMode,
   inPlaceFaceMode,
+  inPlaceFacePickSurfaces,
   takesFeatureFaces,
   toggledPatternSkip,
   patternCopyChip,
@@ -1504,6 +1505,22 @@ describe('M02 feature patterns and skipped copies', () => {
     expect(inPlaceFaceMode(IN_PLACE_TOOL_SPECS.shell, {})).toBe('many');
   });
 
+  it('picks through to the curved faces Thread, Gear teeth and Wrap take', () => {
+    const surfaces = (id: keyof typeof IN_PLACE_TOOL_SPECS) =>
+      inPlaceFacePickSurfaces(IN_PLACE_TOOL_SPECS[id], {});
+    expect(surfaces('thread')).toEqual(['cylinder']);
+    expect(surfaces('gear-teeth')).toEqual(['cylinder']);
+    expect(surfaces('wrap')).toEqual(['cylinder', 'cone']);
+    // One shared array: the viewport prop keeps its identity across renders.
+    expect(surfaces('thread')).toBe(surfaces('gear-teeth'));
+    // Hole lands where the click does, so a hidden flat face never takes it;
+    // a command that takes any face, or none, picks as usual.
+    expect(surfaces('hole')).toBeNull();
+    expect(surfaces('shell')).toBeNull();
+    expect(surfaces('linear-pattern')).toBeNull();
+    expect(inPlaceFacePickSurfaces(null, {})).toBeNull();
+  });
+
   it('repeats the picked feature on its body, once however many faces name it', () => {
     const spec = IN_PLACE_TOOL_SPECS['linear-pattern'];
     const slots = {
@@ -2823,14 +2840,22 @@ describe('Wrap in place', () => {
   };
 
   it('wraps the regions of one sketch together', () => {
-    const slots = { ...EMPTY, profiles: [region('s1', 1), region('s1', 2)], faces: [side] };
+    const slots = {
+      ...EMPTY,
+      profiles: [region('s1', 1), region('s1', 2)],
+      faces: [side]
+    };
     expect(wrap.ready(slots)).toBe(true);
     const request = wrap.request(slots, {}, {}, CTX);
     expect(request?.tool === 'wrap' && request.profiles).toHaveLength(2);
   });
 
   it('refuses regions of two sketches instead of dropping one', () => {
-    const slots = { ...EMPTY, profiles: [region('s1', 1), region('s2', 2)], faces: [side] };
+    const slots = {
+      ...EMPTY,
+      profiles: [region('s1', 1), region('s2', 2)],
+      faces: [side]
+    };
     expect(wrap.ready(slots)).toBe(false);
     expect(wrap.request(slots, {}, {}, CTX)).toBeNull();
     expect(wrap.hint(slots, {}, {} as never)).toMatch(/one sketch/);

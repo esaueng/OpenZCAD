@@ -1559,6 +1559,14 @@ export interface ModelViewerProps {
    */
   facePickOnly?: boolean;
   /**
+   * The surfaces (`plane`, `cylinder`, ...) a running command takes when it
+   * takes only some: hover and click go to the nearest such face under the
+   * pointer, through anything in front of it, so a bore's wall is reached
+   * through the host's top. Where none is under the pointer, both behave
+   * as usual and the command explains what it wants.
+   */
+  facePickSurfaces?: readonly string[] | null;
+  /**
    * The body whose faces the host holds as a face set, when a Shift pick
    * adds to it. A Shift pick on that body then takes the face under the
    * pointer ahead of its boundary edge (`facesAheadOfEdges`).
@@ -2614,6 +2622,7 @@ export function ModelViewer({
   regionHandle,
   modelPanelsHidden = false,
   facePickOnly = false,
+  facePickSurfaces = null,
   faceSetPickBodyId = null,
   sketchMode,
   sketchFillet,
@@ -2717,6 +2726,8 @@ export function ModelViewer({
   onSelectTopologyRef.current = onSelectTopology;
   const facePickOnlyRef = useRef(facePickOnly);
   facePickOnlyRef.current = facePickOnly;
+  const facePickSurfacesRef = useRef(facePickSurfaces);
+  facePickSurfacesRef.current = facePickSurfaces;
   const faceSetPickBodyIdRef = useRef(faceSetPickBodyId);
   faceSetPickBodyIdRef.current = faceSetPickBodyId;
   const topologyPicksHeldRef = useRef(topologyPicksHeld);
@@ -5812,6 +5823,38 @@ export function ModelViewer({
     }
 
     /**
+     * The faces under the pointer a running command takes, nearest first,
+     * when it takes only some surfaces (Thread a cylinder): what it wants,
+     * picked through the host in front. Null when it takes any pick, or
+     * nothing it takes is under the pointer.
+     */
+    function acceptedFacesUnder(
+      event: PointerEvent | MouseEvent
+    ): PickCandidate[] | null {
+      const surfaces = facePickSurfacesRef.current;
+      // A comment being placed takes the surface in front, hover and click.
+      if (!surfaces || commentPlacingRef.current) return null;
+      const stack = picker.pickAll(event);
+      // Only through a body: a sketch region or curve in front is a pick of
+      // its own (Wrap takes a sketch as well as the cylinder behind it).
+      if (!stack[0]?.selection) return null;
+      const accepted = stack.filter((candidate) => {
+        const picked = candidate.selection;
+        if (picked?.kind !== 'face') return false;
+        const face = bodiesRef.current
+          .find((body) => body.bodyId === picked.bodyId && !body.consumed)
+          ?.topology?.faces.find((entry) =>
+            picked.topologyId !== undefined
+              ? entry.topologyId === picked.topologyId
+              : entry.hash === picked.hash
+          );
+        const surface = face?.geometry?.surfaceType.toLowerCase();
+        return surface !== undefined && surfaces.includes(surface);
+      });
+      return accepted.length > 0 ? accepted : null;
+    }
+
+    /**
      * Everything under the pointer, with a held face set's face ahead of its
      * edge when this pick adds to the set; otherwise `pickAll` as it is.
      */
@@ -7643,11 +7686,13 @@ export function ModelViewer({
       // The release that got here was a click, not the end of a gesture.
       gestureReleases[1] = false;
       const facesOnly = facePickOnlyRef.current;
-      const stack = facesOnly
-        ? picker
-            .pickAll(event)
-            .filter((candidate) => candidate.selection?.kind === 'face')
-        : shiftPickStack(event);
+      const stack =
+        acceptedFacesUnder(event) ??
+        (facesOnly
+          ? picker
+              .pickAll(event)
+              .filter((candidate) => candidate.selection?.kind === 'face')
+          : shiftPickStack(event));
       const stepped = cycleDepthPick(
         stack,
         depthCycle,
@@ -8152,10 +8197,12 @@ export function ModelViewer({
       // on it, not select the face.
       const ghost = pickGhostPlane(event);
       // Shift over a held face set's body shows the face the click will add.
+      // A command taking only some faces shows the one its click would take,
+      // drawn through the host by the hover's x-ray pass.
       const solid =
         addsToSelection(event) && faceSetPickBodyIdRef.current
           ? (shiftPickStack(event)[0] ?? null)
-          : pick(event);
+          : (acceptedFacesUnder(event)?.[0] ?? pick(event));
       if (ghost && ghostPlaneTakesPick(ghost.distance, solid)) {
         planePickerRigRef.current?.setHover(ghost.plane);
         applyHover(null);

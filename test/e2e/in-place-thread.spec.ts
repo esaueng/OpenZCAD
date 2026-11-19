@@ -366,6 +366,49 @@ test(
 );
 
 test(
+  'Thread takes a bore wall hidden behind the host, through the face in front',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    await openDocument(page, bore());
+    // Deep on the bore's far wall: from this view the stock's flat top is
+    // in front of it, so an ordinary click takes the top.
+    const HIDDEN_WALL: [number, number, number] = [0, 2.5, 0.4];
+    await setSelectionFilter(page, 'Face');
+    await clickWorldPoint(page, HIDDEN_WALL);
+    const rail = page.locator('.selection-rail');
+    await expect(
+      rail.getByRole('button', { name: 'Selection: Sketch' })
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(
+      rail.getByRole('button', { name: 'Selection: Thread' })
+    ).toHaveCount(0);
+    // A second click on the same spot would step down through what is under
+    // it; a click elsewhere first keeps the next one a plain pick.
+    await clickWorldPoint(page, [-8, -5, 8]);
+    await page.keyboard.press('Escape');
+
+    // Thread waits for a cylinder: the same click goes through the top to
+    // the wall behind it, and the bore is sized at once.
+    const moreTools = page.getByRole('button', { name: /^More tools/ });
+    if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
+      await moreTools.click();
+    }
+    await pressTool(page, /^Thread\b/);
+    const bar = page.getByRole('group', { name: 'Thread command' });
+    await expect(bar).toBeVisible();
+    await clickWorldPoint(page, HIDDEN_WALL);
+    await expect(bar.getByRole('status')).toContainText(
+      'Internal thread · Ø6 mm nominal · 1 mm pitch'
+    );
+    await bar.getByRole('button', { name: 'Cancel' }).click();
+    await expect(bar).toHaveCount(0);
+    expect(await storedThreads(page)).toEqual([]);
+  }
+);
+
+test(
   'M6 printing advice stays visible while Done accepts a thread to the far end',
   { tag: '@ci-smoke' },
   async ({ page }) => {

@@ -419,6 +419,8 @@ interface ViewerShellProps {
   modelPanelsHidden?: boolean;
   /** F01: a click picks only a body face (see `ModelViewer`). */
   facePickOnly?: boolean;
+  /** The surfaces a running command takes, picked through others (see `ModelViewer`). */
+  facePickSurfaces?: readonly string[] | null;
   /** Shift adds faces of this body to a held face set (see `ModelViewer`). */
   faceSetPickBodyId?: string | null;
   onSelectSketchProfile(sketchId: string): void;
@@ -642,6 +644,7 @@ export function ViewerShell({
   regionHandle,
   modelPanelsHidden,
   facePickOnly,
+  facePickSurfaces,
   faceSetPickBodyId = null,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -1179,6 +1182,7 @@ export function ViewerShell({
         regionHandle={regionHandle}
         modelPanelsHidden={modelPanelsHidden}
         {...(facePickOnly ? { facePickOnly } : {})}
+        {...(facePickSurfaces ? { facePickSurfaces } : {})}
         faceSetPickBodyId={faceSetPickBodyId}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}
