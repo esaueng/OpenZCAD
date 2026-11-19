@@ -27414,9 +27414,15 @@ export function App() {
                   : (value: number) => `${round(value)} ${label.toLowerCase()}`
                 : (value: number) =>
                     `${label} ${round(value)} ${inPlaceUnits}`.trim();
+        const value =
+          inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
+        // A refused value the kept preview did not build from: its arrow
+        // stands on the value that built, at the model, under the refusal.
+        const kept = inPlace.keptValues?.[handle.valueId];
         return {
           ...handle,
-          value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
+          value,
+          ...(kept === undefined || kept === value ? {} : { drawnValue: kept }),
           ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
           ...(handle.max === undefined && valueSpec?.max === undefined
             ? {}
@@ -27428,7 +27434,13 @@ export function App() {
       }),
     // The viewer keys its rigs on `key`, so a value change here only moves
     // a chip-only value's text; it never rebuilds a rig.
-    [inPlace.handles, inPlace.values, inPlaceSpec, inPlaceUnits]
+    [
+      inPlace.handles,
+      inPlace.values,
+      inPlace.keptValues,
+      inPlaceSpec,
+      inPlaceUnits
+    ]
   );
   /**
    * U09: the in-place Extrude's back arrow and draft rig, beside the

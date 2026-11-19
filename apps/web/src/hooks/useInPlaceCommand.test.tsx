@@ -3034,6 +3034,10 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
     });
     await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
     expect(hook.result.current.refusalInput).toBe('R');
+    // The arrow stands on the radius the kept frame built from, at the
+    // edge, while the value held (and the chip's text) is the refused one.
+    expect(hook.result.current.keptValues?.radius).toBe(2);
+    expect(hook.result.current.values.radius).toBe(30);
     expect(hook.result.current.canFinish).toBe(false);
     // Not taken down: the radius 2 fillet is still what the model shows.
     expect(publishPreview).not.toHaveBeenLastCalledWith(null);
@@ -3056,6 +3060,7 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
     expect(hook.result.current.refusal).toBeNull();
     expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
   });
 
   it("names a chamfer's shape and picked edges", async () => {
@@ -3103,6 +3108,7 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
     );
     await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
     expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
     expect(publishPreview).toHaveBeenLastCalledWith(null);
   });
 });
