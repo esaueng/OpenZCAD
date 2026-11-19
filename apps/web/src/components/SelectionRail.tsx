@@ -7,6 +7,7 @@ import {
   Eraser,
   Info,
   ListChecks,
+  Radius,
   Ruler,
   SquarePen,
   SquareX,
@@ -81,6 +82,10 @@ function verbIcon(verb: SelectionCalloutVerb): ReactNode {
   }
   if (verb.id === 'text-on-face') {
     return <Type size={16} aria-hidden="true" />;
+  }
+  // The cylinder's edit draws the quantity it enters: Ø or R.
+  if (verb.id === 'action:resize-radial-face' && verb.label === 'Radius') {
+    return <Radius size={16} aria-hidden="true" />;
   }
   if (verb.id.startsWith('tool:')) {
     return TOOL_META[verb.id.slice('tool:'.length) as ToolId].icon;

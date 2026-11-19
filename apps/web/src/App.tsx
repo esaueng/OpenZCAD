@@ -10631,7 +10631,10 @@ export function App() {
             : null;
   const calloutFaceCapabilities =
     interaction.mode === 'face'
-      ? selectionCapabilities({ kind: 'face', target: interaction.target })
+      ? selectionCapabilities(
+          { kind: 'face', target: interaction.target },
+          cylinderDimensionMode
+        )
       : null;
   const calloutPressedAction: SelectionActionId | null =
     interaction.mode === 'edges'
