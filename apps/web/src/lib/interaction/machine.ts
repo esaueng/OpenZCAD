@@ -287,16 +287,31 @@ export interface SketchTextDraft {
   /** Em size: the layout scales the face by `size / unitsPerEm`. */
   size: ParamValue;
   align: TextAlign;
+  /**
+   * Where a text started from a face pick goes: the picked point in the
+   * plane's coordinates. The outline stays on it while the pointer travels
+   * to the card, and Place puts the text there; a click on the plane still
+   * places it where clicked. Absent, the outline follows the pointer.
+   */
+  anchor?: { x: number; y: number };
 }
 
-/** A fresh, empty draft in the default face (Open Sans) at em size 10. */
-export function newSketchTextDraft(): SketchTextDraft {
+/**
+ * A fresh, empty draft in the default face (Open Sans) at em size 10. With
+ * an anchor (text started from a face pick) the word is centred on it, so it
+ * grows evenly about the point that was picked.
+ */
+export function newSketchTextDraft(anchor?: {
+  x: number;
+  y: number;
+}): SketchTextDraft {
   return {
     text: '',
     fontFamily: 'open-sans',
     fontStyle: 'regular',
     size: 10,
-    align: 'left'
+    align: anchor ? 'center' : 'left',
+    ...(anchor ? { anchor } : {})
   };
 }
 
@@ -519,7 +534,12 @@ export type InteractionEvent =
   | { type: 'recover' }
   | { type: 'reset-value' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
-  | { type: 'sketch-tool'; tool: SketchToolId }
+  | {
+      type: 'sketch-tool';
+      tool: SketchToolId;
+      /** Text only: a new draft pinned here (see `SketchTextDraft.anchor`). */
+      textAnchor?: { x: number; y: number };
+    }
   | { type: 'sketch-circle-mode'; mode: SketchCircleMode }
   | { type: 'sketch-rectangle-mode'; mode: SketchRectangleMode }
   | { type: 'sketch-polygon-sides'; sides: number }
@@ -1148,7 +1168,9 @@ function reduceInteraction(
           // key again keeps what is being typed. Any other tool drops it.
           textDraft:
             event.tool === 'text'
-              ? (composingTextDraft(state) ?? newSketchTextDraft())
+              ? event.textAnchor
+                ? newSketchTextDraft(event.textAnchor)
+                : (composingTextDraft(state) ?? newSketchTextDraft())
               : null
         }
       };

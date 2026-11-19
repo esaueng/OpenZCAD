@@ -34,7 +34,43 @@ import { activeKeymap, toolCommandId } from './keymap';
  * blend), which have no History step to open them from.
  */
 export type SelectionCalloutVerbId =
-  `action:${SelectionActionId}` | `tool:${ToolId}` | 'edit-face';
+  | `action:${SelectionActionId}`
+  | `tool:${ToolId}`
+  | 'edit-face'
+  | 'text-on-face';
+
+/**
+ * Text on a flat face, in one step: a sketch on the face with the text card
+ * open and the word pinned where the face was picked. It shares the Sketch
+ * verb's availability, since it is a sketch on the same face.
+ */
+function textOnFaceVerb(sketch: SelectionCalloutVerb): SelectionCalloutVerb {
+  return {
+    id: 'text-on-face',
+    label: 'Text',
+    title: sketch.disabled
+      ? sketch.title
+      : 'Sketch text on this face, centred where you picked it',
+    disabled: sketch.disabled,
+    pressed: false
+  };
+}
+
+/** `verbs` with Text after the face's Sketch verb, when it has one. */
+function withTextAfterSketch(
+  verbs: SelectionCalloutVerb[]
+): SelectionCalloutVerb[] {
+  const at = verbs.findIndex(
+    (verb) => verb.id === 'tool:sketch' || verb.id === 'action:sketch-on-face'
+  );
+  return at < 0
+    ? verbs
+    : [
+        ...verbs.slice(0, at + 1),
+        textOnFaceVerb(verbs[at]!),
+        ...verbs.slice(at + 1)
+      ];
+}
 
 /**
  * An imported face with no edit of its own (a blind hole, a boss, a pocket):
@@ -271,7 +307,7 @@ function edgeVerb(
 /**
  * The verbs for a pick, in the order they are usually reached for (U09 §5):
  * a face offers its own edit (Resize and Offset on a primitive, Offset, or
- * Radius on a cylinder) and the tools that take it — Sketch, Hole, Shell,
+ * Radius on a cylinder) and the tools that take it — Sketch, Text, Hole, Shell,
  * Draft, Thicken and Plane for a flat face, Thread, Axis and Shell for a
  * cylinder, Axis and Shell for a cone;
  * several faces (a box sweep) Shell and Draft; edges Fillet, Chamfer and
@@ -298,13 +334,15 @@ export function selectionCalloutVerbs(
         const byKind = (() => {
           switch (input.faceSurface) {
             case 'planar':
-              return tools(
-                'sketch',
-                'hole',
-                'shell',
-                'draft',
-                'thicken',
-                'datum-plane'
+              return withTextAfterSketch(
+                tools(
+                  'sketch',
+                  'hole',
+                  'shell',
+                  'draft',
+                  'thicken',
+                  'datum-plane'
+                )
               );
             case 'cylindrical':
               return tools('thread', 'datum-axis', 'shell');
@@ -318,8 +356,10 @@ export function selectionCalloutVerbs(
         })();
         return [...byKind, ...faceEdgeVerbs(input)];
       }
-      const verbs = capabilities.map((capability) =>
-        actionVerb(capability, input.pressedAction)
+      const verbs = withTextAfterSketch(
+        capabilities.map((capability) =>
+          actionVerb(capability, input.pressedAction)
+        )
       );
       if (input.resizeBody) {
         // The switch the column-top chip carried as "Resize body | Offset

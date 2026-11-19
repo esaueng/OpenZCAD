@@ -10354,7 +10354,9 @@ export function ModelViewer({
         requestRender();
         return;
       }
-      if (mode.tool === 'text') {
+      // A text started from a face pick stays where the face was picked: the
+      // pointer crossing the plane on its way to the card must not take it.
+      if (mode.tool === 'text' && !mode.textDraft?.anchor) {
         // The outline follows the pointer: a pure slide in the plane, laid
         // out again only when the draft changes.
         textAnchorRef.current = point;
@@ -17437,7 +17439,10 @@ export function ModelViewer({
     } else {
       const resolve = sketchModeResolver(sketchMode);
       rig.setTextPreview(
-        textObjectFromPoint(textAnchorRef.current ?? { x: 0, y: 0 }, draft),
+        textObjectFromPoint(
+          draft.anchor ?? textAnchorRef.current ?? { x: 0, y: 0 },
+          draft
+        ),
         sketchMode.objects,
         resolve,
         sketchMode.textDraftBudgetError ?? sketchMode.textOutlineBudgetError
