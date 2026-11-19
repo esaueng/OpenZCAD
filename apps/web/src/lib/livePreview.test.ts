@@ -787,6 +787,44 @@ describe('bounded progressive gestures', () => {
     }
   });
 
+  it('reads a spacing function after each build, so one previewer can slow down', async () => {
+    vi.useFakeTimers();
+    try {
+      const starts: number[] = [];
+      let spacing = 32;
+      const begin = Date.now();
+      const preview = new LivePreview<Doc, string>({
+        build: (value) => {
+          starts.push(Date.now() - begin);
+          return { value };
+        },
+        derive: async () => 'exact geometry',
+        publish: () => {},
+        publishIntermediate: true,
+        minIntervalMs: () => spacing,
+        now: () => Date.now()
+      });
+      preview.request(1);
+      await vi.advanceTimersByTimeAsync(1);
+      // A coarse rate from the next build on: the newest held value waits
+      // it out.
+      spacing = 250;
+      preview.request(2);
+      await vi.advanceTimersByTimeAsync(40);
+      expect(starts).toEqual([0, 32]);
+      preview.request(3);
+      await vi.advanceTimersByTimeAsync(200);
+      preview.request(4);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(starts).toEqual([0, 32]);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(starts).toEqual([0, 32, 282]);
+      preview.clear();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('advances during continuous input with one rebuild and one pending value', async () => {
     vi.useFakeTimers();
     try {
