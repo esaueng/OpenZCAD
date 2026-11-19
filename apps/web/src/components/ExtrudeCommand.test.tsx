@@ -257,6 +257,81 @@ describe('in-place Extrude bar', () => {
     expect(commandRef.current?.text('distance')).toBe('-4');
   });
 
+  // #1769 follow-up: the model marks the chip of the value the bar names,
+  // not the distance's whatever was refused, and none for an option.
+  it('reports the value the bar names a refusal after, for its chip', () => {
+    const refusal = 'Extrude preview did not produce an exact result body.';
+    const onRefusedValue = vi.fn<(valueId: string | null) => void>();
+    const { commandRef, update } = setup({
+      initial: { name: 'Extrude', sketchId, distance: -4 },
+      onRefusedValue
+    });
+    const last = () => onRefusedValue.mock.lastCall?.[0];
+    expect(last()).toBeNull();
+
+    act(() => commandRef.current?.setValue('draftAngle', '40'));
+    update({ onRefusedValue, valueRefusal: refusal });
+    expect(last()).toBe('draftAngle');
+
+    // Withdrawn while a newer value is checked: no chip is marked.
+    act(() => commandRef.current?.setValue('distance', '-3'));
+    update({ onRefusedValue, valueRefusal: null, previewPending: true });
+    expect(last()).toBeNull();
+    update({ onRefusedValue, valueRefusal: refusal });
+    expect(last()).toBe('distance');
+
+    // The bar's own refusal names no value the kernel refused.
+    update({
+      onRefusedValue,
+      valueRefusal: refusal,
+      entryRefusal: 'Distance: Unexpected end of expression.'
+    });
+    expect(last()).toBeNull();
+    update({ onRefusedValue, valueRefusal: refusal });
+    expect(last()).toBe('distance');
+  });
+
+  it('marks no chip for a refusal named after an option', async () => {
+    const user = userEvent.setup();
+    const refusal = 'Extrude preview did not produce an exact result body.';
+    const onRefusedValue = vi.fn<(valueId: string | null) => void>();
+    const { update } = setup({
+      initial: { name: 'Extrude', sketchId, distance: -4 },
+      onRefusedValue
+    });
+    await openOptions(user);
+    await user.click(choice('Operation', 'Cut'));
+    update({ onRefusedValue, valueRefusal: refusal });
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `Operation: ${refusal}`
+    );
+    expect(onRefusedValue.mock.lastCall?.[0]).toBeNull();
+  });
+
+  // #1769 follow-up: an edit's refusal is named as a new extrude's is. Its
+  // preview may refuse at once, in the same words as the refusal before:
+  // that is the newer change's.
+  it('names the input an edit refusal is about, even in the same words', () => {
+    const refusal =
+      'Extrude 1: Extrude preview did not produce an exact result body.';
+    const onPreview = vi.fn((): string | null => null);
+    const { commandRef, update } = setup({
+      editing: true,
+      initial: { name: 'Extrude 1', sketchId, distance: -4 },
+      onPreview
+    });
+    const status = screen.getByRole('status');
+
+    act(() => commandRef.current?.setValue('draftAngle', '40'));
+    update({ onPreview, valueRefusal: refusal });
+    expect(status).toHaveTextContent(`Draft angle: ${refusal}`);
+
+    onPreview.mockReturnValueOnce(refusal);
+    act(() => commandRef.current?.setValue('distance', '-3'));
+    update({ onPreview, valueRefusal: refusal });
+    expect(status).toHaveTextContent(`Distance: ${refusal}`);
+  });
+
   it('says a kernel refusal plainly when no input has changed, and leaves its own refusals unprefixed', () => {
     const refusal = 'Extrude preview did not produce an exact result body.';
     const { commandRef, update } = setup({

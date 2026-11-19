@@ -5927,6 +5927,12 @@ export function App() {
   /** U09: the in-place Extrude's bar, for Enter, its keypad and handles. */
   const regionExtrudeCommandRef = useRef<ExtrudeCommandHandle | null>(null);
   /**
+   * The Extrude value its bar names a kernel refusal after: its chip on the
+   * model, and no other, is marked refused. Null when the bar names none.
+   */
+  const [extrudeRefusedValue, setExtrudeRefusedValue] =
+    useState<ExtrudeValueId | null>(null);
+  /**
    * U09: the extrude a History row re-armed the in-place Extrude on, by its
    * feature; each arming is its own session (`generation`).
    */
@@ -6451,14 +6457,25 @@ export function App() {
     requestedFeatureNodeId
   ]);
 
+  /**
+   * An Extrude edit's refusal as its bar says it: the bar's title already
+   * names the edited feature, so its own name is not repeated ahead of the
+   * input's. A later feature's refusal keeps the name of that feature.
+   */
+  function ownExtrudeRefusal(message: string, name: string): string {
+    const prefix = `${name}: `;
+    return message.startsWith(prefix) ? message.slice(prefix.length) : message;
+  }
+
+  /** Previews an Extrude edit; returns the refusal known at once, if any. */
   function previewExtrudeForm(
     feature: FeatureNode,
     value: ExtrudeFormValue | null
-  ) {
+  ): string | null {
     setFeatureFormError(null);
     if (!value || geometryBusy || !feature.bodyId || !managerRef.current) {
       edgeFormPreview.clear();
-      return;
+      return null;
     }
     try {
       const command = extrudeEditCommand(feature, value);
@@ -6475,10 +6492,11 @@ export function App() {
       );
     } catch (error) {
       edgeFormPreview.clear();
-      setFeatureFormError(
-        errorMessage(error, 'Unable to preview this extrusion.')
-      );
+      const message = errorMessage(error, 'Unable to preview this extrusion.');
+      setFeatureFormError(message);
+      return message;
     }
+    return null;
   }
 
   function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
@@ -27482,8 +27500,12 @@ export function App() {
       state,
       loops.holes,
       edited !== null
-    ).map((handle) =>
-      handle.valueId === 'draftAngle'
+    ).map((shape) => {
+      const handle = {
+        ...shape,
+        warning: extrudeRefusedValue === shape.valueId
+      };
+      return handle.valueId === 'draftAngle'
         ? {
             ...handle,
             value: state.draftAngle,
@@ -27504,9 +27526,10 @@ export function App() {
               min: 0,
               format: (value: number) =>
                 `Back ${formatNumber(value)} ${inPlaceUnits}`
-            }
-    );
+            };
+    });
   }, [
+    extrudeRefusedValue,
     regionExtrudeTarget,
     regionExtrudeLastValue,
     regionExtrudeState,
@@ -37164,7 +37187,13 @@ export function App() {
               );
             }}
             onOffsetCancel={handleViewerOffsetCancel}
-            offsetPreviewInvalid={holdsRefusal(interaction)}
+            // A new extrude's arrow is its distance: marked only when the
+            // bar names the distance, not for a draft angle's refusal.
+            offsetPreviewInvalid={
+              holdsRefusal(interaction) &&
+              (interaction.mode !== 'region' ||
+                extrudeRefusedValue === 'distance')
+            }
             offsetPreviewLimit={
               holdsRefusal(interaction) &&
               interaction.mode === 'face' &&
@@ -38950,7 +38979,13 @@ export function App() {
                   )}
                   bodies={availableExtrudeTargets}
                   disabled={geometryBusy}
-                  note={featureFormError}
+                  // As a new extrude's: the kernel's refusal is said after the
+                  // input changed when it arrived.
+                  valueRefusal={
+                    featureFormError &&
+                    ownExtrudeRefusal(featureFormError, extrudeEditFeature.name)
+                  }
+                  onRefusedValue={setExtrudeRefusedValue}
                   entryRefusal={
                     keypad?.kind === 'extrude' && regionExtrudeEntryError
                       ? `${keypad.label}: ${regionExtrudeEntryError}.`
@@ -38979,12 +39014,16 @@ export function App() {
                   name={extrudeEditFeature.name}
                   // The feature's name as it is now: a rename since the
                   // edit opened is never written back over.
-                  onPreview={(value) =>
-                    previewExtrudeForm(
+                  onPreview={(value) => {
+                    const refused = previewExtrudeForm(
                       extrudeEditFeature,
                       value && { ...value, name: extrudeEditFeature.name }
-                    )
-                  }
+                    );
+                    return (
+                      refused &&
+                      ownExtrudeRefusal(refused, extrudeEditFeature.name)
+                    );
+                  }}
                   onSubmit={(value) =>
                     applyExtrudeForm(extrudeEditFeature, {
                       ...value,
@@ -39006,6 +39045,7 @@ export function App() {
                       ? { note: interaction.error.message }
                       : { valueRefusal: interaction.error.message }
                     : {})}
+                  onRefusedValue={setExtrudeRefusedValue}
                   onShowFullModel={
                     extrudeHiddenBySection ? turnSectionViewOff : undefined
                   }
