@@ -26,16 +26,17 @@ import {
 import { assertDirectEditOperation } from '../packages/kernel-adapter/src/exact-direct-edit-guards';
 
 /**
- * Multi-face Offset: a set of faces that all face the same way pushed or
- * pulled together by one distance along each face's outward normal
- * (`offset-faces`). Faces on one plane move as one group; parallel faces at
- * different heights move as a chain of groups, one per plane.
+ * Multi-face Offset: a set of planar faces pushed or pulled together by one
+ * distance along each face's own outward normal (`offset-faces`). Faces on
+ * one plane move as one group; any other set moves as a chain of groups,
+ * one per plane, whether its faces are parallel, meet at an edge or lie
+ * apart. Faces pointing opposite ways are refused.
  *
  * The body is a 40 x 20 x 5 plate with two 10 x 10 posts standing on it,
  * each `POST_HEIGHT` tall, fused into one solid. The two post tops are
  * coplanar and face +z; the plate's own top also faces +z, lower. The
- * plate's bottom faces the opposite way, and a post's side wall another
- * way: the faces a set must not mix with them.
+ * plate's bottom faces the opposite way, which a set must not mix with
+ * them; a post's side walls face other ways, which a set may.
  */
 const PLATE_VOLUME = 40 * 20 * 5;
 const POST_AREA = 10 * 10;
@@ -334,9 +335,9 @@ describe('offsetting a face set', () => {
     );
   }, 60_000);
 
-  it('refuses faces that meet at an edge by name', async () => {
-    // A post's top and its own side wall: the pocket-wall case, not yet
-    // supported.
+  it('moves a post top with its own side wall: faces that meet at an edge', async () => {
+    // The shared edge ends where the raised top meets the moved wall: the
+    // post becomes 12 wide and 12 tall, whatever order the steps take.
     const { document, bodyId } = await built();
     const tops = postTops(document, bodyId, 5 + POST_HEIGHT);
     const first = tops.find((face) => face.geometry!.center.x < 20)!;
@@ -346,18 +347,45 @@ describe('offsetting a face set', () => {
       (face) => Math.abs(face.geometry!.center.x - 15) < 1e-9
     );
     expect(wall).toHaveLength(1);
-    const derived = await edit(
-      document,
-      bodyId,
-      offsetFaces([first, wall[0]!], 2)
+    const shapes = [];
+    for (const order of [
+      [first, wall[0]!],
+      [wall[0]!, first]
+    ]) {
+      const derived = await edit(document, bodyId, offsetFaces(order, 2));
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId]!;
+      expect(body.volume).toBeCloseTo(
+        PLATE_VOLUME + POST_AREA * POST_HEIGHT + 12 * 10 * 12,
+        6
+      );
+      expect(body.bbox.max.z).toBeCloseTo(17, 9);
+      shapes.push(
+        body.topology!.edges.map((edge) => edge.length!.toFixed(6)).sort()
+      );
+    }
+    expect(shapes[1]).toEqual(shapes[0]);
+    // The moved wall's top edge, 10 long, now sits at x = 17, z = 17.
+    const corner = planar(
+      facesOf(
+        {
+          ...document,
+          derived: await edit(
+            document,
+            bodyId,
+            offsetFaces([first, wall[0]!], 2)
+          )
+        },
+        bodyId
+      ),
+      { x: 1, y: 0, z: 0 },
+      (face) => Math.abs(face.geometry!.center.x - 17) < 1e-9
     );
-    expect(derived.warnings).toHaveLength(1);
-    expect(derived.warnings[0]).toContain(
-      'the selected faces meet at an edge and face different directions'
-    );
+    expect(corner).toHaveLength(1);
+    expect(corner[0]!.geometry!.area).toBeCloseTo(10 * 12, 9);
   }, 60_000);
 
-  it('refuses faces that face different directions by name', async () => {
+  it('moves faces that face different directions and are apart', async () => {
     // Post 1's top and post 2's side wall: not parallel, and apart.
     const { document, bodyId } = await built();
     const tops = postTops(document, bodyId, 5 + POST_HEIGHT);
@@ -373,9 +401,46 @@ describe('offsetting a face set', () => {
       bodyId,
       offsetFaces([first, wall[0]!], 2)
     );
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[bodyId]!;
+    expect(body.volume).toBeCloseTo(
+      // Post 1 grows 2 up, post 2 grows 2 toward +x: 2 × 100 each.
+      PLATE_VOLUME + 2 * POST_AREA * POST_HEIGHT + 4 * POST_AREA,
+      6
+    );
+    expect(body.bbox.max.x).toBeCloseTo(40, 9);
+  }, 60_000);
+
+  it('refuses two later faces that face opposite ways, whatever the first', async () => {
+    // Post 1's top, then post 1's two x walls: neither wall is opposite the
+    // top, but they are opposite each other.
+    const { document, bodyId } = await built();
+    const tops = postTops(document, bodyId, 5 + POST_HEIGHT);
+    const first = tops.find((face) => face.geometry!.center.x < 20)!;
+    const plus = planar(
+      facesOf(document, bodyId),
+      { x: 1, y: 0, z: 0 },
+      (face) => Math.abs(face.geometry!.center.x - 15) < 1e-9
+    );
+    const minus = planar(
+      facesOf(document, bodyId),
+      { x: -1, y: 0, z: 0 },
+      (face) => Math.abs(face.geometry!.center.x - 5) < 1e-9
+    );
+    expect(plus).toHaveLength(1);
+    expect(minus).toHaveLength(1);
+    const derived = await edit(
+      document,
+      bodyId,
+      offsetFaces([first, plus[0]!, minus[0]!], 2)
+    );
     expect(derived.warnings).toHaveLength(1);
     expect(derived.warnings[0]).toContain(
-      'Offset moves a set of faces together only when they all face the same way, and the selected faces face different directions.'
+      'The selected faces face opposite ways, so one offset would thicken one and thin the other. Offset them separately.'
+    );
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      PLATE_VOLUME + 2 * POST_AREA * POST_HEIGHT,
+      6
     );
   }, 60_000);
 
