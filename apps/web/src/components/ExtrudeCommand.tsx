@@ -69,6 +69,12 @@ export interface ExtrudeCommandHandle {
   setValue(valueId: ExtrudeValueId, text: string): void;
   /** The text a value holds now, as the keypad opens on it. */
   text(valueId: ExtrudeValueId): string;
+  /**
+   * A value moved in the model ahead of being set: the region's arrow
+   * previews each frame under the hand and sets the distance only on
+   * release, so a refusal meanwhile is about this value.
+   */
+  holdValue(valueId: ExtrudeValueId): void;
   /** Whether anything has changed since the command opened. */
   touched(): boolean;
 }
@@ -349,6 +355,7 @@ export function ExtrudeCommand({
     submit,
     setValue,
     text: (valueId) => draftRef.current[valueId],
+    holdValue: (valueId) => setLastInput(VALUE_LABELS[valueId]),
     touched: () =>
       JSON.stringify(draftRef.current) !== JSON.stringify(openedDraft.current)
   };
@@ -364,6 +371,7 @@ export function ExtrudeCommand({
       submit: () => handle.current?.submit() ?? false,
       setValue: (valueId, text) => handle.current?.setValue(valueId, text),
       text: (valueId) => handle.current?.text(valueId) ?? '',
+      holdValue: (valueId) => handle.current?.holdValue(valueId),
       touched: () => handle.current?.touched() ?? false
     };
     return () => {

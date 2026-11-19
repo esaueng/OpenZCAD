@@ -241,6 +241,22 @@ describe('in-place Extrude bar', () => {
     expect(status).toHaveTextContent(/^Preview: Cut · Plate/);
   });
 
+  // Review of #1769: the region's arrow sets the distance only on release,
+  // so a frame refused under the hand must still be the distance's.
+  it('names the distance for a refusal under a held arrow drag', () => {
+    const refusal = 'Extrude preview did not produce an exact result body.';
+    const { commandRef, update } = setup({
+      initial: { name: 'Extrude', sketchId, distance: -4 }
+    });
+    act(() => commandRef.current?.setValue('draftAngle', '2'));
+    act(() => commandRef.current?.holdValue('distance'));
+    update({ valueRefusal: refusal });
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `Distance: ${refusal}`
+    );
+    expect(commandRef.current?.text('distance')).toBe('-4');
+  });
+
   it('says a kernel refusal plainly when no input has changed, and leaves its own refusals unprefixed', () => {
     const refusal = 'Extrude preview did not produce an exact result body.';
     const { commandRef, update } = setup({
