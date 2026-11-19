@@ -1731,14 +1731,9 @@ function offsetFaces(
       false
     );
   } catch (error) {
+    // Mixed or non-coplanar sets were refused by name above; whatever the
+    // kernel still refuses is typed from its error, never read as prose.
     const message = error instanceof Error ? error.message : String(error);
-    // Defence in depth: the checks above refuse these sets first.
-    if (/do not have the same outward normal/.test(message)) {
-      throw new Error(OFFSET_FACES_NOT_SAME_NORMAL, { cause: error });
-    }
-    if (/not coplanar/.test(message)) {
-      throw new Error(OFFSET_FACES_NOT_COPLANAR, { cause: error });
-    }
     throw (
       offsetFaceRefusalOf(error, offset) ??
       modelingOperationRefusal('offset_face', error, message, 'direct-edit')
