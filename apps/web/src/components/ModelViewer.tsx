@@ -7026,8 +7026,15 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           includeBodies?: boolean;
+          /** Also report `upHeights`. */
+          includeUpHeights?: boolean;
           resolve?: (value: {
             bodies?: readonly GeometryBodyRepresentation[];
+            /**
+             * The distinct heights (4 decimals) of the drawn +z-facing
+             * triangles: which flat tops a preview frame shows where.
+             */
+            upHeights?: number[];
             offsetWorldObjects: string[];
             offsetVeilVisible: boolean;
             sectionCaps: {
@@ -7091,8 +7098,35 @@ export function ModelViewer({
         polygonOffsetUnits: number;
         renderOrder: number;
       }[] = [];
+      const upHeights = new Set<number>();
+      const corner = [0, 1, 2].map(() => new THREE.Vector3());
+      const facing = new THREE.Vector3();
       forEachMesh(bodyGroup, (mesh) => {
         mesh.updateWorldMatrix(true, false);
+        const position = mesh.geometry.getAttribute('position');
+        const index = mesh.geometry.index;
+        const count = index?.count ?? position?.count ?? 0;
+        for (
+          let start = 0;
+          detail.includeUpHeights && position && start + 2 < count;
+          start += 3
+        ) {
+          corner.forEach((point, k) =>
+            point
+              .fromBufferAttribute(
+                position,
+                index ? index.getX(start + k) : start + k
+              )
+              .applyMatrix4(mesh.matrixWorld)
+          );
+          facing
+            .subVectors(corner[1]!, corner[0]!)
+            .cross(new THREE.Vector3().subVectors(corner[2]!, corner[0]!))
+            .normalize();
+          if (facing.z > 0.999) {
+            upHeights.add(Math.round(corner[0]!.z * 1e4) / 1e4);
+          }
+        }
         const worldBounds = mesh.geometry.boundingBox
           ?.clone()
           .applyMatrix4(mesh.matrixWorld);
@@ -7210,6 +7244,9 @@ export function ModelViewer({
         }
       });
       detail.resolve({
+        ...(detail.includeUpHeights
+          ? { upHeights: [...upHeights].sort((a, b) => a - b) }
+          : {}),
         offsetWorldObjects,
         offsetVeilVisible: Boolean(
           offsetGhost?.object.getObjectByName('offset-body-ghost-veil-fill')

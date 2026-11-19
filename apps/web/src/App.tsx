@@ -5923,6 +5923,8 @@ export function App() {
       onFailure: ({ error, value }) => {
         const message = errorMessage(error, 'Exact offset preview failed.');
         traceFaceDrag('refusal', { value, message });
+        // A chained set's lead frame never stands beside a refusal.
+        offsetLeadPreview.clear();
         reportPreviewFailure(
           error instanceof PreviewRefusalError ? error.diagnostic : message,
           value
@@ -31254,7 +31256,13 @@ export function App() {
     // A refused value is not committed from a failed card; the value the
     // last passing preview showed is, and validation judges it again. A
     // release on a refused frame reads the drag before its release renders.
-    if (holdsRefusal(current) && !options?.keepingLastValid) {
+    if (
+      holdsRefusal(current) &&
+      !options?.keepingLastValid &&
+      // A chained set's coarse lane can still hold an older value's refusal
+      // when the hand lets go elsewhere: validation judges that value.
+      !(current.target.offsetFaceSet && current.lastValue !== offset)
+    ) {
       setStatus(
         current.error?.message ?? 'The current offset preview is invalid.'
       );

@@ -459,3 +459,143 @@ test('names a chained set’s kernel refusal on its card', async ({ page }) => {
   ).toBeDisabled();
   await expect(page.locator('.feature-row')).toHaveCount(1);
 });
+
+test('a release away from an older refusal of a chained set is validated, not refused', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  // Holds every preview rebuild once set, so no preview can answer for the
+  // value the hand lets go at; the release's own validation still runs.
+  await page.addInitScript(() => {
+    const scope = window as typeof window & { holdPreviews?: boolean };
+    const send = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message, transfer) {
+      if (
+        scope.holdPreviews &&
+        (message as { type?: string } | null)?.type === 'preview-geometry'
+      ) {
+        return;
+      }
+      return send.call(this, message, transfer as StructuredSerializeOptions);
+    };
+  });
+  const canvas = await openSlottedBlock(page, 'Release past a refusal');
+  const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+  const leftTopAt = { x: (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z };
+  await expect
+    .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+      timeout: 30_000
+    })
+    .not.toBeNull();
+  await planarFace(canvas, { normal: UP, near: leftTopAt, additive: true });
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const at = (units: number) => ({
+    x: bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * units,
+    y: bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * units
+  });
+  const chip = page.getByTestId('direct-manipulation-value');
+  await page.mouse.move(at(0).x, at(0).y);
+  await page.mouse.down();
+  // Pulled in 6 the floor would pass through the block's bottom: held
+  // until the whole chain refuses it.
+  await page.mouse.move(at(-6).x, at(-6).y, { steps: 3 });
+  await expect(chip).toHaveAttribute('data-state', 'warning', {
+    timeout: 30_000
+  });
+  // Back to a value that builds, let go before any preview answers for it:
+  // the older refusal must not stand for it.
+  await page.evaluate(() => {
+    (window as typeof window & { holdPreviews?: boolean }).holdPreviews = true;
+  });
+  await page.mouse.move(at(-2).x, at(-2).y);
+  const released = Number(
+    (await chip.innerText()).match(/[+\-−]?([\d.]+) mm/)?.[1]
+  );
+  expect(released).toBeGreaterThan(0);
+  await page.mouse.up();
+  const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await expect(row).toContainText(`−${released} mm`);
+});
+
+test('a refusal never leaves a chained set’s leading plane moved alone', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const canvas = await openSlottedBlock(page, 'Refusal after a lead frame');
+  const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+  const leftTopAt = { x: (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z };
+  await expect
+    .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+      timeout: 30_000
+    })
+    .not.toBeNull();
+  await planarFace(canvas, { normal: UP, near: leftTopAt, additive: true });
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const at = (units: number) => ({
+    x: bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * units,
+    y: bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * units
+  });
+  // The heights of the flat tops on screen, preview frames included.
+  const upHeights = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<number[]>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                includeUpHeights: true,
+                resolve: (state: { upHeights?: number[] }) =>
+                  resolve(state.upHeights ?? [])
+              }
+            })
+          );
+        })
+    );
+  await page.mouse.move(at(0).x, at(0).y);
+  await page.mouse.down();
+  // Pulled in, the floor leads the chain: its lead frame moves it alone
+  // until the whole chain catches up. Then on past what builds.
+  await page.mouse.move(at(-1).x, at(-1).y, { steps: 4 });
+  await expect
+    .poll(upHeights, { timeout: 30_000 })
+    .not.toContain(Z - SLOT_DEPTH);
+  await page.mouse.move(at(-2).x, at(-2).y);
+  await page.mouse.move(at(-6).x, at(-6).y, { steps: 2 });
+  const chip = page.getByTestId('direct-manipulation-value');
+  await expect(chip).toHaveAttribute('data-state', 'warning', {
+    timeout: 30_000
+  });
+  // Whatever stands beside the refusal moves both faces alike: the floor
+  // is back at its height, or the left top went down with it. A floor moved
+  // under an unmoved left top (beside the unpicked right top at the same
+  // height) is the leading plane's display-only frame.
+  const heights = await upHeights();
+  const floorStayed = heights.includes(Z - SLOT_DEPTH);
+  const leftTopMoved = heights.some((z) => z < Z - 1e-4 && z > Z - SLOT_DEPTH);
+  expect(floorStayed || leftTopMoved).toBe(true);
+  await page.mouse.up();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+});
