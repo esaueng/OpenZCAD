@@ -899,6 +899,8 @@ export type CommandHandleView = (
   max?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
   format(value: number): string;
+  /** The command names this value in a refusal: its chip says so. */
+  warning?: boolean;
   /**
    * The chip's accessible name for a value, in words: "Radius 12 mm".
    * Without it the chip is named by its visible text.
@@ -907,6 +909,19 @@ export type CommandHandleView = (
 };
 
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
+
+/**
+ * Marks a command chip refused, or clears the mark: in the warning tone the
+ * region arrow's chip uses, and on its rig. Touched only on a change, as the
+ * frame loop calls it every frame.
+ */
+function markCommandChipWarning(entry: CommandRigEntry, warning: boolean) {
+  const state = warning ? 'warning' : 'ready';
+  if (entry.chip.dataset.state === state) return;
+  entry.chip.dataset.state = state;
+  entry.chip.setAttribute('aria-invalid', String(warning));
+  entry.rig?.setWarning?.(warning);
+}
 /** How far inside the canvas edge a command chip is kept, in CSS pixels. */
 const COMMAND_CHIP_MARGIN_PX = 12;
 /** How far an axis name tag sits along its line from the line's origin. */
@@ -5392,7 +5407,7 @@ export function ModelViewer({
         );
         if (!view) continue;
         const shownValue = entry.rig ? entry.rig.value() : view.value;
-        const text = view.format(shownValue);
+        const text = `${view.warning ? '⚠ ' : ''}${view.format(shownValue)}`;
         setElementText(entry.chip, text);
         nameCommandChip(entry.chip, view.describe?.(shownValue));
         entry.chip.hidden = false;
@@ -5556,9 +5571,11 @@ export function ModelViewer({
                 topbarBottom
               )
             : { dx: 0, dy: 0 };
-        const text = view.format(value);
+        const warning = view.warning === true;
+        const text = `${warning ? '⚠ ' : ''}${view.format(value)}`;
         setElementText(entry.chip, text);
         nameCommandChip(entry.chip, view.describe?.(value));
+        markCommandChipWarning(entry, warning);
         shown.push({
           valueId,
           entry,

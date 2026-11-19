@@ -66,7 +66,7 @@
   "extrude-cold-load.spec.ts": 15,
   "extrude-edit-in-place.spec.ts": 11,
   "extrude-in-place.spec.ts": 42,
-  "extrude-refused-value.spec.ts": 10,
+  "extrude-refused-value.spec.ts": 14,
   "extrude-section-recovery.spec.ts": 16,
   "extrude-through-all.spec.ts": 9,
   "face-drag-continuity.spec.ts": 18,

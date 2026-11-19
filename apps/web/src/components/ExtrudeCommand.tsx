@@ -121,8 +121,17 @@ interface ExtrudeCommandProps {
   onOpenValue(valueId: ExtrudeValueId, at: { x: number; y: number }): void;
   /** Every change, valid or not: what the preview and handles read. */
   onDraft(state: ExtrudeCommandState): void;
-  /** Every change: the extrude to preview, or null while it cannot apply. */
-  onPreview(value: ExtrudeFormValue | null): void;
+  /**
+   * Every change: the extrude to preview, or null while it cannot apply.
+   * A refusal known at once (the draft does not validate) may be returned:
+   * it is this change's, even when it reads the same as the one before.
+   */
+  onPreview(value: ExtrudeFormValue | null): string | null | void;
+  /**
+   * The value the bar names a kernel refusal after, or null when it names
+   * none: the model marks that value's chip, and no other, as refused.
+   */
+  onRefusedValue?(valueId: ExtrudeValueId | null): void;
   onSubmit(value: ExtrudeFormValue): void;
   onCancel(): void;
 }
@@ -196,6 +205,7 @@ export function ExtrudeCommand({
   onOpenValue,
   onDraft,
   onPreview,
+  onRefusedValue,
   onSubmit,
   onCancel
 }: ExtrudeCommandProps) {
@@ -270,7 +280,12 @@ export function ExtrudeCommand({
     if (patch.distance !== undefined) setDistanceEdited(true);
     setDraft(next);
     onDraft(stateOf(next));
-    onPreview(extrudeDraftValue(next, ctx));
+    const known = onPreview(extrudeDraftValue(next, ctx));
+    // The parent withdraws and re-sets such a refusal in one render, which
+    // the comparison below cannot tell from the standing one.
+    if (typeof known === 'string') {
+      setRefused({ message: known, input: input ?? lastInput });
+    }
   }
 
   // An edit opens on a stored extrude whose handles stand on what it stores.
@@ -383,6 +398,21 @@ export function ExtrudeCommand({
   const ownRefusal = entryRefusal ?? (draftRefusal || null) ?? note;
   const refusal = ownRefusal ?? valueRefusal;
   const canFinish = !disabled && !entryRefusal && draftRefusal === null;
+  const namedInput =
+    ownRefusal === null && valueRefusal && !toFacePicking?.armed
+      ? refusedInput
+      : null;
+  const refusedValue =
+    (Object.keys(VALUE_LABELS) as ExtrudeValueId[]).find(
+      (valueId) => VALUE_LABELS[valueId] === namedInput
+    ) ?? null;
+  const reportRefusedValue = useRef(onRefusedValue);
+  reportRefusedValue.current = onRefusedValue;
+  useEffect(() => {
+    reportRefusedValue.current?.(refusedValue);
+  }, [refusedValue]);
+  // A command that closes takes its mark with it.
+  useEffect(() => () => reportRefusedValue.current?.(null), []);
   const toFaceInfo =
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
   const regions = profileCount > 1 ? ` · ${profileCount} profiles` : '';
