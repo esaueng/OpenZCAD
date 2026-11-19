@@ -55,6 +55,18 @@ function assertRemovedFaceSnapshot(
   assertDirectEditVector(value.sourceCenter, `${label} center`);
 }
 
+/** A face an `offset-faces` edit moves: a pinned plane with its normal. */
+function assertOffsetFaceSnapshot(
+  value: Record<string, unknown>,
+  label: string
+): void {
+  if (value.sourceSurfaceType !== 'plane') {
+    throw new Error(`Direct-edit offset ${label} must be planar.`);
+  }
+  assertRemovedFaceSnapshot(value, label);
+  assertDirectEditVector(value.sourceNormal, `${label} normal`);
+}
+
 export function assertDirectEditOperation(
   operation: DirectEditOperation
 ): void {
@@ -340,6 +352,42 @@ export function assertDirectEditOperation(
       }
       if (hashes.size !== value.additionalFaces.length + 1) {
         throw new Error('Direct-edit face removal names a face twice.');
+      }
+      return;
+    }
+    case 'offset-faces': {
+      assertOffsetFaceSnapshot(value, 'face 1');
+      assertDirectEditParam(value.offset, 'offset');
+      if (
+        !Array.isArray(value.additionalFaces) ||
+        value.additionalFaces.length === 0
+      ) {
+        throw new Error('Direct-edit face set offset needs at least two faces.');
+      }
+      if (value.additionalFaces.length + 1 > MAX_REMOVED_FACES) {
+        throw new Error(
+          `Direct-edit face set offset takes at most ${MAX_REMOVED_FACES} faces.`
+        );
+      }
+      const hashes = new Set<unknown>([value.faceHash]);
+      for (const [index, entry] of (
+        value.additionalFaces as unknown[]
+      ).entries()) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          throw new Error(`Direct-edit face ${index + 2} is invalid.`);
+        }
+        const face = entry as Record<string, unknown>;
+        if (
+          typeof face.faceHash !== 'number' ||
+          !Number.isSafeInteger(face.faceHash)
+        ) {
+          throw new Error('Direct-edit face hash must be a safe integer.');
+        }
+        assertOffsetFaceSnapshot(face, `face ${index + 2}`);
+        hashes.add(face.faceHash);
+      }
+      if (hashes.size !== value.additionalFaces.length + 1) {
+        throw new Error('Direct-edit face set offset names a face twice.');
       }
       return;
     }

@@ -117,6 +117,7 @@ const DIRECT_EDIT_DIMENSION_FIELDS: Readonly<
   Record<string, readonly string[]>
 > = {
   'offset-face': ['offset'],
+  'offset-faces': ['offset'],
   'set-face-distance': ['distance', 'parameterBinding'],
   'resize-cylindrical-face': ['radius'],
   'resize-blend': ['newRadius', 'parameterBinding']

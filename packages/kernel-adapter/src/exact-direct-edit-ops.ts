@@ -1586,6 +1586,219 @@ function removeFaces(
   return output;
 }
 
+/** The refusal for a face set whose faces do not share one outward normal. */
+export const OFFSET_FACES_NOT_SAME_NORMAL =
+  'Offset moves a set of faces together only when they lie on one plane, and the selected faces face different directions. Offset them one at a time.';
+
+/** The refusal for parallel faces of a set that sit at different heights. */
+export const OFFSET_FACES_NOT_COPLANAR =
+  'Offset moves a set of faces together only when they lie on one plane, and the selected faces are parallel but at different heights. Offset them one at a time.';
+
+/** Face N (1-based, N ≥ 2) of an offset set no longer resolves as picked. */
+function offsetSetFaceDrifted(index: number, cause?: unknown): Error {
+  return new Error(
+    `Face ${index} of the offset set no longer matches the body. Select the faces again.`,
+    cause === undefined ? undefined : { cause }
+  );
+}
+
+/**
+ * Push or pull a set of coplanar faces of one body together, by one signed
+ * distance along their shared outward normal, through one `moveFaces` call
+ * on the whole group. That is the kernel's coherent planar group move — the
+ * one Set Face Distance makes — so the faces' neighbours are re-limited
+ * once, together, instead of by a chain of single-face moves.
+ *
+ * The first face is pinned exactly as an `offset-face` pins its face (a
+ * re-pick repairs it). Every other face is resolved on the same source solid
+ * and checked against its recorded surface, normal, area and centre; one
+ * that has drifted refuses and asks for the faces again rather than moving
+ * a different face. Faces that face different ways, or are parallel at
+ * different heights, are refused by name before the kernel is asked. None of
+ * the single-face special cases (analytic cylinder caps, hole-mouth carry,
+ * the sweep past a collision) apply: a one-face set is an `offset-face`.
+ */
+function offsetFaces(
+  kernel: RemusKernel,
+  target: ExactShape,
+  solid: number,
+  face: number,
+  geometry: FaceGeometry | undefined,
+  viaLineage: boolean,
+  operation: Extract<DirectEditOperation, { kind: 'offset-faces' }>,
+  scope: Record<string, number>,
+  producingFeatureId: FeatureId | undefined,
+  deferOutputLineage: boolean,
+  onAdvisory?: (message: string) => void
+): ExactShape {
+  if (geometry?.surfaceType !== 'plane' || !geometry.normal) {
+    throw new Error('The selected face is no longer planar.');
+  }
+  const areaTolerance = Math.max(operation.sourceArea * 1e-5, 1e-9);
+  if (
+    !viaLineage &&
+    Math.abs(geometry.area - operation.sourceArea) > areaTolerance
+  ) {
+    throw new Error(
+      'The selected face no longer matches its recorded measurements.'
+    );
+  }
+  if (Math.abs(dot(geometry.normal, operation.sourceNormal)) < 1 - 1e-6) {
+    throw new Error(
+      'The selected face no longer matches its recorded orientation.'
+    );
+  }
+  const normal = geometry.normal;
+  const recordedNormal = normalized(operation.sourceNormal);
+  const planeOffset = dot(normal, geometry.center);
+  const planeTolerance = Math.max(
+    DIRECT_EDIT_TOLERANCE,
+    Math.max(1, Math.abs(planeOffset)) * 1e-8
+  );
+  const handles = [face];
+  const centers = [geometry.center];
+  for (const [index, snapshot] of operation.additionalFaces.entries()) {
+    const label = index + 2;
+    if (
+      !recordedNormal ||
+      dot(recordedNormal, snapshot.sourceNormal) < 1 - 1e-6
+    ) {
+      throw new Error(OFFSET_FACES_NOT_SAME_NORMAL);
+    }
+    let resolved: { face: number; viaLineage: boolean };
+    try {
+      resolved = resolveDirectEditFace(kernel, target, solid, snapshot);
+    } catch (error) {
+      throw offsetSetFaceDrifted(label, error);
+    }
+    const other = measureFaceGeometry(kernel, resolved.face);
+    if (other?.surfaceType !== 'plane' || !other.normal) {
+      throw offsetSetFaceDrifted(label);
+    }
+    if (!resolved.viaLineage) {
+      // The same pins `remove-faces` holds each of its faces to.
+      const tolerance = Math.max(snapshot.sourceArea * 1e-5, 1e-9);
+      const centerTolerance = Math.max(
+        DIRECT_EDIT_TOLERANCE,
+        Math.sqrt(Math.max(snapshot.sourceArea, 1)) * 1e-6
+      );
+      if (
+        Math.abs(other.area - snapshot.sourceArea) > tolerance ||
+        length(subtract(other.center, snapshot.sourceCenter)) > centerTolerance
+      ) {
+        throw offsetSetFaceDrifted(label);
+      }
+    }
+    if (Math.abs(dot(other.normal, snapshot.sourceNormal)) < 1 - 1e-6) {
+      throw offsetSetFaceDrifted(label);
+    }
+    if (dot(other.normal, normal) < 1 - 1e-6) {
+      throw new Error(OFFSET_FACES_NOT_SAME_NORMAL);
+    }
+    if (Math.abs(dot(normal, other.center) - planeOffset) > planeTolerance) {
+      throw new Error(OFFSET_FACES_NOT_COPLANAR);
+    }
+    handles.push(resolved.face);
+    centers.push(other.center);
+  }
+  if (new Set(handles).size !== handles.length) {
+    throw new Error(
+      'Two of the selected faces resolve to the same face. Select the faces again.'
+    );
+  }
+  const offset = resolveParamValue(operation.offset, scope, 'offset');
+  if (!Number.isFinite(offset) || Math.abs(offset) <= GEOMETRY_EPSILON) {
+    throw new Error('Face offset must be a non-zero distance.');
+  }
+  const faceCensus = {
+    getSolidFaces: (body: number) => kernel.getSolidFaces(body),
+    getSurfaceType: (handle: number) => surfaceTypeOf(kernel, handle)
+  };
+  const sourceCandidates = deferOutputLineage
+    ? []
+    : topologyCandidatesForSolid(kernel, solid);
+  const sourceCensus = censusOfSolids(faceCensus, [solid]);
+  const faces = Uint32Array.from(handles);
+  let moved: ReturnType<typeof journaledMove>;
+  try {
+    moved = journaledMove(
+      kernel,
+      solid,
+      faces,
+      offset,
+      deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null,
+      true
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Defence in depth: the checks above refuse these sets first.
+    if (/do not have the same outward normal/.test(message)) {
+      throw new Error(OFFSET_FACES_NOT_SAME_NORMAL, { cause: error });
+    }
+    if (/not coplanar/.test(message)) {
+      throw new Error(OFFSET_FACES_NOT_COPLANAR, { cause: error });
+    }
+    throw (
+      offsetFaceRefusalOf(error, offset) ??
+      modelingOperationRefusal('offset_face', error, message, 'direct-edit')
+    );
+  }
+  const output = moved.solid;
+  if (kernel.validateSolidRelaxed(output) !== 0) {
+    throw new Error(
+      `Offsetting the ${handles.length} faces by ${offset} does not produce a valid solid.`
+    );
+  }
+  const facetFallback = directEditFacetFallbackWarning({
+    operands: sourceCensus,
+    result: censusOfSolids(faceCensus, [output])
+  });
+  if (facetFallback) {
+    throw new Error(facetFallback);
+  }
+  if (moved.approximateCapJoin) {
+    onAdvisory?.('The upper rim was rebuilt with approximate corner surfaces.');
+  }
+  if (deferOutputLineage) return { solids: [output] };
+  if (!moved.relation || moved.relation.inferred) {
+    // Each face moves along the shared current outward normal — the
+    // direction the kernel moves it — by the offset.
+    return predictedCarrierEdit(
+      kernel,
+      target,
+      sourceCandidates,
+      output,
+      new Map(
+        handles.map((handle, index) => [
+          handle,
+          planeCarrier(normal, add(centers[index]!, scale(normal, offset)))
+        ])
+      ),
+      producingFeatureId,
+      moved.relation?.retiredPlacements
+    );
+  }
+  const lineage = deriveRemusMoveFacesDirectEditLineage({
+    source: target.lineage,
+    sourceCandidates,
+    resultCandidates: topologyCandidatesForSolid(kernel, output),
+    relation: moved.relation
+  });
+  return {
+    solids: [output],
+    ...(lineage && producingFeatureId
+      ? {
+          lineage: withBoundaryEdgeLineage(
+            kernel,
+            output,
+            producingFeatureId,
+            lineage
+          )
+        }
+      : {})
+  };
+}
+
 function formatBlend(blend: RecordedBlendCarrier): string {
   return `R${Number(blend.radius.toPrecision(6))} ${blend.surfaceClass} blend`;
 }
@@ -1808,6 +2021,11 @@ export function applyDirectEdit(
   if (operation.kind === 'offset-face' && target.solids.length > 1) {
     return offsetCompoundFace(kernel, target, operation, scope, onAdvisory);
   }
+  if (operation.kind === 'offset-faces' && target.solids.length > 1) {
+    throw new Error(
+      'Offset moves a set of faces on a body made of one solid. Offset the faces one at a time.'
+    );
+  }
   const solid = collapseShape(kernel, target);
   const resolved =
     operation.kind === 'set-face-distance'
@@ -2014,6 +2232,22 @@ export function applyDirectEdit(
       output,
       new Map(),
       producingFeatureId
+    );
+  }
+
+  if (operation.kind === 'offset-faces') {
+    return offsetFaces(
+      kernel,
+      target,
+      solid,
+      face,
+      geometry,
+      viaLineage,
+      operation,
+      scope,
+      producingFeatureId,
+      deferOutputLineage,
+      onAdvisory
     );
   }
 

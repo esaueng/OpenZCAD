@@ -448,7 +448,12 @@ function buildDirectEditFeature(
   }
   const deferOutputLineage =
     ctx.deferredDirectEditFeatureId === feature.featureId &&
-    ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
+    [
+        'offset-face',
+        'offset-faces',
+        'resize-blend',
+        'resize-cylindrical-face'
+      ].includes(
       data.operation.kind
     ) &&
     target.solids.length === 1;
