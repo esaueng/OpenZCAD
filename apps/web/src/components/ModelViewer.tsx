@@ -5936,7 +5936,11 @@ export function ModelViewer({
           /** A Shift pick: adds the face to a held face set. */
           additive?: boolean;
           resolve?: (
-            face: { hasReference: boolean; lineageName?: string } | null
+            face: {
+              hasReference: boolean;
+              lineageName?: string;
+              center: { x: number; y: number; z: number };
+            } | null
           ) => void;
         }>
       ).detail;
@@ -6011,7 +6015,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      const { center } = face.geometry;
       detail?.resolve?.({
+        center: { x: center.x, y: center.y, z: center.z },
         hasReference:
           face.reference !== undefined &&
           face.reference.currentHash === face.hash,

@@ -132,6 +132,41 @@ test(
     await expect(page.getByRole('contentinfo')).toContainText(
       '2 faces selected'
     );
+    // Each side of the slot on its own: the highest point alone would pass
+    // with only one of the two faces moved.
+    const sideZ = (x: number) =>
+      canvas.evaluate(
+        (element, input) =>
+          new Promise<number | null>((resolve) => {
+            let answered = false;
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-planar-face', {
+                detail: {
+                  normal: { x: 0, y: 0, z: 1 },
+                  near: { x: input.x, y: input.y, z: input.z },
+                  select: false,
+                  resolve: (face: { center: { z: number } } | null) => {
+                    answered = true;
+                    resolve(face?.center.z ?? null);
+                  }
+                }
+              })
+            );
+            if (!answered) setTimeout(() => resolve(null), 50);
+          }),
+        // At the faces' old height: a face that stayed is the nearest.
+        { x, y: Y / 2, z: Z }
+      );
+    const leftX = (X - SLOT_WIDTH) / 4;
+    const rightX = X - leftX;
+    const bothSidesAt = async (z: number) => {
+      await expect
+        .poll(() => sideZ(leftX), { timeout: 30_000 })
+        .toBeCloseTo(z, 4);
+      await expect
+        .poll(() => sideZ(rightX), { timeout: 30_000 })
+        .toBeCloseTo(z, 4);
+    };
 
     await page
       .getByRole('button', { name: 'Selection: Offset', exact: true })
@@ -151,6 +186,7 @@ test(
     await expect(row).toBeVisible({ timeout: 30_000 });
     await expect(row).toContainText('+2 mm');
     await expect.poll(topZ, { timeout: 30_000 }).toBeCloseTo(Z + 2, 4);
+    await bothSidesAt(Z + 2);
     await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
     // Reopened from History, the step's distance is changed and rebuilt.
@@ -163,6 +199,7 @@ test(
     await form.getByRole('button', { name: 'Apply offset' }).click();
     await expect(row).toContainText('+3 mm', { timeout: 30_000 });
     await expect.poll(topZ, { timeout: 30_000 }).toBeCloseTo(Z + 3, 4);
+    await bothSidesAt(Z + 3);
     await expect(page.locator('.feature-row')).toHaveCount(2);
     expect(errors).toEqual([]);
   }
