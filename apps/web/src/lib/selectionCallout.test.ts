@@ -289,6 +289,41 @@ describe('selectionCalloutVerbs', () => {
     ).toEqual(['Shell', 'Draft']);
   });
 
+  it('offers a face set its Offset, disabled with the reason it cannot move', () => {
+    const offered = selectionCalloutVerbs({
+      kind: 'faces',
+      faceSetOffset: { disabledReason: null, pressed: false },
+      availability: READY
+    });
+    expect(offered.map((verb) => verb.label)).toEqual([
+      'Offset',
+      'Shell',
+      'Draft'
+    ]);
+    expect(offered[0]).toMatchObject({
+      id: 'offset-faces',
+      disabled: false,
+      pressed: false
+    });
+    const reason = 'Offset moves flat faces together. Select only flat faces.';
+    const [refused] = selectionCalloutVerbs({
+      kind: 'faces',
+      faceSetOffset: { disabledReason: reason, pressed: false },
+      availability: READY
+    });
+    expect(refused).toMatchObject({
+      id: 'offset-faces',
+      disabled: true,
+      title: reason
+    });
+    const [armed] = selectionCalloutVerbs({
+      kind: 'faces',
+      faceSetOffset: { disabledReason: null, pressed: true },
+      availability: READY
+    });
+    expect(armed?.pressed).toBe(true);
+  });
+
   it('disables a datum verb on a pick no datum can follow, and says why', () => {
     const reason = 'An axis runs along a straight edge; this edge is curved.';
     const axis = selectionCalloutVerbs({

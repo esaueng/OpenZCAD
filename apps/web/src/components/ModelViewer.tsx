@@ -895,6 +895,12 @@ export type CommandHandleView = (
   valueId: string;
   key: string;
   value: number;
+  /**
+   * Where the rig stands when that is not {@link value}: a refused value's
+   * arrow stays on the last value that built (the preview still on screen),
+   * at the model, while its chip and keypad read the refused value.
+   */
+  drawnValue?: number;
   min?: number;
   max?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
@@ -945,6 +951,20 @@ interface CommandRigEntry {
   rig: DragRig | null;
   anchor: THREE.Vector3 | null;
   chip: HTMLDivElement;
+}
+
+/**
+ * The value a command chip reads: its rig's, which a drag moves, unless the
+ * rig is drawn elsewhere (see {@link CommandHandleView.drawnValue}) and is
+ * not in the hand.
+ */
+function commandChipValue(
+  entry: CommandRigEntry | undefined,
+  view: CommandHandleView | undefined,
+  dragging: boolean
+): number | undefined {
+  if (view && view.drawnValue !== undefined && !dragging) return view.value;
+  return entry?.rig ? entry.rig.value() : view?.value;
 }
 
 export interface SketchViewData {
@@ -5406,7 +5426,11 @@ export function ModelViewer({
           (handle) => handle.valueId === valueId
         );
         if (!view) continue;
-        const shownValue = entry.rig ? entry.rig.value() : view.value;
+        const shownValue = commandChipValue(
+          entry,
+          view,
+          commandDragRef.current?.valueId === valueId
+        )!;
         const text = `${view.warning ? '⚠ ' : ''}${view.format(shownValue)}`;
         setElementText(entry.chip, text);
         nameCommandChip(entry.chip, view.describe?.(shownValue));
@@ -5430,7 +5454,11 @@ export function ModelViewer({
           (handle) => handle.valueId === valueId
         );
         if (!view) continue;
-        const value = entry.rig ? entry.rig.value() : view.value;
+        const value = commandChipValue(
+          entry,
+          view,
+          commandDragRef.current?.valueId === valueId
+        )!;
         const scale =
           (entry.rig?.group.userData.gizmoScale as number | undefined) ?? 1;
         // A chip-only value's anchor is read live: it may follow another
@@ -5593,7 +5621,8 @@ export function ModelViewer({
           e2eHandles[valueId] = {
             x: rect.left + ((grip.x + 1) / 2) * rect.width,
             y: rect.top + ((1 - grip.y) / 2) * rect.height,
-            value
+            // Where the rig stands, which a refused value is not.
+            value: entry.rig ? entry.rig.value() : value
           };
         }
       }
@@ -5931,8 +5960,16 @@ export function ModelViewer({
           select?: boolean;
           /** Where on the face the click lands; the face's centroid if absent. */
           point?: { x: number; y: number; z: number };
+          /** Of the matching faces, the one whose centre is nearest this. */
+          near?: { x: number; y: number; z: number };
+          /** A Shift pick: adds the face to a held face set. */
+          additive?: boolean;
           resolve?: (
-            face: { hasReference: boolean; lineageName?: string } | null
+            face: {
+              hasReference: boolean;
+              lineageName?: string;
+              center: { x: number; y: number; z: number };
+            } | null
           ) => void;
         }>
       ).detail;
@@ -5949,18 +5986,32 @@ export function ModelViewer({
           !candidate.consumed &&
           (!detail?.bodyId || candidate.bodyId === detail.bodyId)
       );
-      const face = body?.topology?.faces.find((candidate) => {
-        const normal = candidate.geometry?.normal;
-        return (
-          candidate.geometry?.surfaceType === 'plane' &&
-          normal !== undefined &&
-          (detail.lineageName === undefined ||
-            candidate.reference?.lineageName === detail.lineageName) &&
-          new THREE.Vector3(normal.x, normal.y, normal.z)
-            .normalize()
-            .distanceTo(wanted) < 1e-6
-        );
-      });
+      const matches =
+        body?.topology?.faces.filter((candidate) => {
+          const normal = candidate.geometry?.normal;
+          return (
+            candidate.geometry?.surfaceType === 'plane' &&
+            normal !== undefined &&
+            (detail.lineageName === undefined ||
+              candidate.reference?.lineageName === detail.lineageName) &&
+            new THREE.Vector3(normal.x, normal.y, normal.z)
+              .normalize()
+              .distanceTo(wanted) < 1e-6
+          );
+        }) ?? [];
+      const near = detail.near;
+      const face = near
+        ? matches
+            .map((candidate) => ({
+              candidate,
+              distance: Math.hypot(
+                candidate.geometry!.center.x - near.x,
+                candidate.geometry!.center.y - near.y,
+                candidate.geometry!.center.z - near.z
+              )
+            }))
+            .sort((a, b) => a.distance - b.distance)[0]?.candidate
+        : matches[0];
       if (!body || !face?.geometry?.normal) {
         detail?.resolve?.(null);
         return;
@@ -5978,7 +6029,7 @@ export function ModelViewer({
             topologyId: face.topologyId,
             hash: face.hash
           },
-          false,
+          detail?.additive === true,
           {
             point: { x: anchor.x, y: anchor.y, z: anchor.z },
             normal: {
@@ -5993,7 +6044,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      const { center } = face.geometry;
       detail?.resolve?.({
+        center: { x: center.x, y: center.y, z: center.z },
         hasReference:
           face.reference !== undefined &&
           face.reference.currentHash === face.hash,
@@ -16598,11 +16651,12 @@ export function ModelViewer({
     }
     for (const handle of wanted) {
       if (rigs.has(handle.valueId)) continue;
+      const drawn = handle.drawnValue ?? handle.value;
       const rig =
         handle.kind === 'angle'
           ? buildAngleHandle({
               ...handle.params,
-              angleDeg: handle.value,
+              angleDeg: drawn,
               // The rig shares the value's domain, so a sub-degree revolve
               // is drawn and labelled as the angle that is stored.
               ...(handle.min === undefined ? {} : { minDeg: handle.min }),
@@ -16611,14 +16665,14 @@ export function ModelViewer({
           : handle.kind === 'linear'
             ? buildLinearHandle({
                 ...handle.params,
-                value: handle.value,
+                value: drawn,
                 ...(handle.min === undefined ? {} : { min: handle.min }),
                 ...(handle.max === undefined ? {} : { max: handle.max })
               })
             : handle.kind === 'coil'
               ? buildCoilHandle({
                   ...handle.params,
-                  turns: handle.value,
+                  turns: drawn,
                   // A count above zero: the rig keeps a sliver of a turn.
                   ...(handle.min === undefined || handle.min <= 0
                     ? {}
@@ -16638,7 +16692,11 @@ export function ModelViewer({
         const view = commandHandlesRef.current.find(
           (candidate) => candidate.valueId === valueId
         );
-        const value = entry?.rig ? entry.rig.value() : view?.value;
+        const value = commandChipValue(
+          entry,
+          view,
+          commandDragRef.current?.valueId === valueId
+        );
         if (value !== undefined)
           onOpenCommandKeypadRef.current?.(valueId, value);
       };
@@ -16689,7 +16747,8 @@ export function ModelViewer({
     for (const handle of commandHandles) {
       if (commandDragRef.current?.valueId === handle.valueId) continue;
       const rig = commandRigsRef.current.get(handle.valueId)?.rig;
-      if (rig && rig.value() !== handle.value) rig.setValue(handle.value);
+      const drawn = handle.drawnValue ?? handle.value;
+      if (rig && rig.value() !== drawn) rig.setValue(drawn);
     }
     contextRef.current?.requestRender();
   }, [commandHandles]);

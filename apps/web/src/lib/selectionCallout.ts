@@ -37,7 +37,8 @@ export type SelectionCalloutVerbId =
   | `action:${SelectionActionId}`
   | `tool:${ToolId}`
   | 'edit-face'
-  | 'text-on-face';
+  | 'text-on-face'
+  | 'offset-faces';
 
 /**
  * Text on a flat face, in one step: a sketch on the face with the text card
@@ -207,6 +208,12 @@ export interface SelectionCalloutVerbInput {
   /** The selection action already armed, drawn pressed. */
   pressedAction?: SelectionActionId | null;
   /**
+   * A face set's Offset (M07): offered on two or more picked faces, disabled
+   * with the reason when the set cannot move together (faces on several
+   * bodies, a curved face), and drawn pressed while its handle is armed.
+   */
+  faceSetOffset?: { disabledReason: string | null; pressed: boolean };
+  /**
    * Why the pick cannot be a datum's source (Plane on a flat face, Axis on
    * a round face or an edge): a face or edge with no identity a rebuild can
    * find again, or a curved edge. The datum verb is then disabled with it.
@@ -325,7 +332,7 @@ function edgeVerb(
  * Radius on a cylinder) and the tools that take it — Sketch, Text, Hole, Shell,
  * Draft, Thicken and Plane for a flat face, Thread, Axis and Shell for a
  * cylinder, Axis and Shell for a cone;
- * several faces (a box sweep) Shell and Draft; edges Fillet, Chamfer and
+ * several faces (a box sweep or Shift picks) Offset, Shell and Draft; edges Fillet, Chamfer and
  * Axis; a body Move, Rotate, Scale, Mirror, Split, Pattern and Solid
  * offset; several bodies the booleans and Move; a sketch region Extrude,
  * Revolve, Sweep and Loft. The verb rail shows them all, in this order.
@@ -413,7 +420,22 @@ export function selectionCalloutVerbs(
       return verbs;
     }
     case 'faces':
-      return tools('shell', 'draft');
+      return [
+        ...(input.faceSetOffset
+          ? [
+              {
+                id: 'offset-faces' as const,
+                label: 'Offset',
+                title:
+                  input.faceSetOffset.disabledReason ??
+                  'Push or pull these faces together by one distance',
+                disabled: input.faceSetOffset.disabledReason !== null,
+                pressed: input.faceSetOffset.pressed
+              }
+            ]
+          : []),
+        ...tools('shell', 'draft')
+      ];
     case 'edges':
       return [
         edgeVerb('fillet', input),

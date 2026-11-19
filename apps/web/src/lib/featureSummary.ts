@@ -115,15 +115,24 @@ function directEditSummary(
   num: (value: ParamValue | undefined) => string | null,
   unit: string
 ): string | null {
+  const signedOffset = (value: ParamValue): string | null => {
+    const offset = num(value);
+    if (offset === null) return null;
+    return offset.startsWith('-')
+      ? `−${offset.slice(1)}`
+      : offset === '0'
+        ? offset
+        : `+${offset}`;
+  };
   switch (operation.kind) {
+    case 'offset-faces': {
+      // "Offset 3 faces · +2 mm": the row's name already counts the faces.
+      const signed = signedOffset(operation.offset);
+      return signed === null ? null : `${signed} ${unit}`;
+    }
     case 'offset-face': {
-      const offset = num(operation.offset);
-      if (offset === null) return null;
-      const signed = offset.startsWith('-')
-        ? `−${offset.slice(1)}`
-        : offset === '0'
-          ? offset
-          : `+${offset}`;
+      const signed = signedOffset(operation.offset);
+      if (signed === null) return null;
       const face = faceDirectionName(
         operation.sourceNormal,
         operation.faceReference?.lineageName

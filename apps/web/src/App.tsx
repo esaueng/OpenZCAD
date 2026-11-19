@@ -2036,6 +2036,12 @@ import {
   newBlendValidationTarget
 } from './lib/interaction/blendPreview';
 import { errorMessage } from './lib/errors';
+import {
+  buildOffsetFaces,
+  faceSetOffsetStart,
+  faceSetOffsetUnavailable,
+  offsetFacesCommitMessage
+} from './lib/faceSetOffset';
 import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
@@ -4737,6 +4743,11 @@ export function App() {
     if (!document) {
       return;
     }
+    // The corpus replays a one-face offset: a face set's attempt would be
+    // replayed as a different edit, so it is not recorded.
+    if (interaction.mode === 'face' && interaction.target.offsetFaceSet) {
+      return;
+    }
     const pick =
       interaction.mode === 'face'
         ? {
@@ -5597,7 +5608,9 @@ export function App() {
       previewBaseIsCurrent(candidate) &&
       current.mode === 'face' &&
       candidate.selectionKey ===
-        `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`
+        // An offset's key also names a face set's other faces.
+        (faceOffsetPlanKey(current) ??
+          `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`)
     );
   }
   /**
@@ -5788,7 +5801,7 @@ export function App() {
           setPreviewVerdict({ value: offset, status: 'unchecked' });
         return base && plan && candidate && current.mode === 'face'
           ? {
-              selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
+              selectionKey: faceOffsetPlanKey(current) ?? '',
               document: candidate,
               offset,
               bodyId: plan.bodyId,
@@ -6213,7 +6226,7 @@ export function App() {
         pending.document.projectId === acceptedOffset.baseProjectId &&
         pending.document.version === acceptedOffset.baseVersion &&
         acceptedOffset.selectionKey ===
-          `${pending.interaction.op}:${pending.interaction.target.bodyId}:${pending.interaction.target.topologyId}:${Boolean(pending.interaction.target.localFaceOffset)}` &&
+          faceOffsetPlanKey(pending.interaction) &&
         previewSelectionIsCurrent(acceptedOffset) &&
         !isStaleSelectionError(diagnostic);
       if (retainOffset) {
@@ -6276,6 +6289,18 @@ export function App() {
       if (!directEditOwnsSelection(pending)) return;
       setSelectedEdges([]);
       if (
+        pending?.interaction.mode === 'face' &&
+        pending.interaction.op === 'offset-face' &&
+        pending.interaction.target.offsetFaceSet
+      ) {
+        // A face set's offset ends with nothing picked: its faces were
+        // renumbered by the move, and re-arming the handle on one of them
+        // would offer a one-face offset where a set was moved. Its History
+        // row is where the distance is changed again.
+        dispatchInteraction({ type: 'commit-complete' });
+        setSelectedTopology(null);
+        setSelectedBodyIds([]);
+      } else if (
         pending?.interaction.mode === 'face' &&
         pending.interaction.op === 'offset-face'
       ) {
@@ -10632,6 +10657,8 @@ export function App() {
       if (!requireExactGeometryReady()) return;
       if (id === 'text-on-face') startTextOnFace(target);
       else startSketchOnFace(target);
+    } else if (id === 'offset-faces') {
+      handleOffsetFaceSet();
     } else if (id.startsWith('action:')) {
       handleSelectionAction(id.slice('action:'.length) as SelectionActionId);
     } else {
@@ -10797,6 +10824,20 @@ export function App() {
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
+            ...(calloutKind === 'faces' && boxSelectedFaces && doc
+              ? {
+                  faceSetOffset: {
+                    disabledReason: faceSetOffsetUnavailable(
+                      doc,
+                      boxSelectedFaces
+                    ),
+                    pressed:
+                      interaction.mode === 'face' &&
+                      interaction.op === 'offset-face' &&
+                      interaction.target.offsetFaceSet !== undefined
+                  }
+                }
+              : {}),
             datumRefusal: calloutDatumRefusal,
             faceSurface: calloutFaceSurface,
             availability: shownAvailability
@@ -22337,10 +22378,7 @@ export function App() {
     [doc?.projectId, doc?.version, cylinderRadiusPreview, offsetPreview]
   );
 
-  const offsetInteractionKey =
-    interaction.mode === 'face' && interaction.op === 'offset-face'
-      ? `${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
-      : null;
+  const offsetInteractionKey = faceOffsetPlanKey(interaction);
   useEffect(() => {
     offsetPreview.clear();
     setPreviewDeferred(false);
@@ -27414,9 +27452,15 @@ export function App() {
                   : (value: number) => `${round(value)} ${label.toLowerCase()}`
                 : (value: number) =>
                     `${label} ${round(value)} ${inPlaceUnits}`.trim();
+        const value =
+          inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
+        // A refused value the kept preview did not build from: its arrow
+        // stands on the value that built, at the model, under the refusal.
+        const kept = inPlace.keptValues?.[handle.valueId];
         return {
           ...handle,
-          value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
+          value,
+          ...(kept === undefined || kept === value ? {} : { drawnValue: kept }),
           ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
           ...(handle.max === undefined && valueSpec?.max === undefined
             ? {}
@@ -27428,7 +27472,13 @@ export function App() {
       }),
     // The viewer keys its rigs on `key`, so a value change here only moves
     // a chip-only value's text; it never rebuilds a rig.
-    [inPlace.handles, inPlace.values, inPlaceSpec, inPlaceUnits]
+    [
+      inPlace.handles,
+      inPlace.values,
+      inPlace.keptValues,
+      inPlaceSpec,
+      inPlaceUnits
+    ]
   );
   /**
    * U09: the in-place Extrude's back arrow and draft rig, beside the
@@ -30699,6 +30749,56 @@ export function App() {
   }
 
   /**
+   * M07: the face set's Offset. The single-face offset handle and keypad arm
+   * on the last-picked face, carrying the other faces, and its edit moves
+   * them all as one `offset-faces` step. A set that is not one plane is
+   * refused here, by name, before any handle appears.
+   */
+  function handleOffsetFaceSet() {
+    const faces = boxSelectedFaces;
+    const base = managerRef.current?.document;
+    if (!faces || !base || !requireExactGeometryReady()) return;
+    if (interaction.mode === 'face' && interaction.phase === 'validating') {
+      return;
+    }
+    if (interaction.mode === 'face' && interaction.target.offsetFaceSet) {
+      // Pressed again: put the handle away and keep the faces picked.
+      handleOffsetCancel();
+      dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    let start: ReturnType<typeof faceSetOffsetStart>;
+    try {
+      start = faceSetOffsetStart(base, faces);
+    } catch (error) {
+      setStatus(errorMessage(error, 'These faces cannot be offset together.'), {
+        sticky: true
+      });
+      return;
+    }
+    const center = start.face.geometry!.center;
+    const point: [number, number, number] = [center.x, center.y, center.z];
+    dispatchInteraction({
+      type: 'select-face',
+      target: {
+        bodyId: start.bodyId,
+        topologyId: start.face.topologyId,
+        hash: start.face.hash,
+        ...(start.face.reference ? { reference: start.face.reference } : {}),
+        point,
+        normal: [start.normal.x, start.normal.y, start.normal.z],
+        surfaceCenter: point,
+        surfaceType: 'planar',
+        localFaceOffset: true,
+        offsetFaceSet: start.members
+      }
+    });
+    setStatus(
+      `Drag the arrow to offset ${faces.length} faces together, or type a value.`
+    );
+  }
+
+  /**
    * A cap drag on a cylinder means "make it this tall", not "push this disc".
    * Once the rim is filleted the blend belongs to the edge, so offsetting the
    * flat remainder alone leaves a step where the part should simply have
@@ -30737,6 +30837,31 @@ export function App() {
     }
     const target = current.target;
     const bodyId = target.bodyId as BodyId;
+    if (target.offsetFaceSet) {
+      // A face set moves as one `offset-faces` edit, never as a resize of
+      // whatever built the handle's face.
+      if (target.hash === undefined) return null;
+      const command = buildOffsetFaces({
+        document: base,
+        bodyId,
+        face: { topologyId: target.topologyId, hash: target.hash },
+        members: target.offsetFaceSet,
+        offset,
+        ...(exact === undefined ? {} : { exact })
+      });
+      return command
+        ? {
+            command,
+            bodyId,
+            editedFeatureId: null,
+            successMessage: offsetFacesCommitMessage(
+              target.offsetFaceSet.length + 1,
+              offset,
+              base.units
+            )
+          }
+        : null;
+    }
     const face = ownEntry(
       base.derived.bodyRepresentations,
       bodyId
@@ -30980,7 +31105,9 @@ export function App() {
     // A plain face offset released from a Total reading names that Total
     // beside the change its history row records.
     const successMessage =
-      plan.editedFeatureId === null && options?.total !== undefined
+      plan.editedFeatureId === null &&
+      options?.total !== undefined &&
+      !current.target.offsetFaceSet
         ? offsetFaceCommitMessage(
             offset,
             managerRef.current?.document.units ?? '',
@@ -38635,6 +38762,28 @@ export function App() {
                     feature.bodyId ?? value.targetBodyId
                   )
                 }
+                onApplyDirectEditOffset={(feature, offset) => {
+                  if (
+                    feature.data.featureKind !== 'direct-edit' ||
+                    feature.data.operation.kind !== 'offset-faces'
+                  ) {
+                    return;
+                  }
+                  applyValidatedFeature(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        data: {
+                          operation: { ...feature.data.operation, offset }
+                        }
+                      },
+                      `Edit ${feature.name}`
+                    ),
+                    feature,
+                    feature.name,
+                    feature.data.targetBodyId
+                  );
+                }}
                 onResizeThroughHole={handleResizeThroughHole}
                 onRemoveFaceFeature={handleRemoveFaceFeature}
                 onPinFeature={(feature) =>

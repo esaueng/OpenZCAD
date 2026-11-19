@@ -59,6 +59,13 @@ export interface FaceTarget extends FaceCapabilityTarget {
   /** Explicit local extrusion instead of the default source-body resize. */
   localFaceOffset?: boolean;
   /**
+   * The other faces of a picked face set that move with this one (M07): set
+   * only by the face set's Offset verb, which arms the one shared handle on
+   * the last-picked face. The offset is then a single `offset-faces` edit of
+   * every face together, never a primitive resize or a one-face move.
+   */
+  offsetFaceSet?: OffsetFaceSetMember[];
+  /**
    * The face this one is, moved: set only when a committed face offset
    * re-selects the face it moved (which renumbers it), so what the chip was
    * switched to on that face carries over to it, and to no other face.
@@ -67,6 +74,19 @@ export interface FaceTarget extends FaceCapabilityTarget {
   blendSurfaceClass?: 'torus' | 'cylinder';
   blendCenter?: [number, number, number];
   blendAxis?: [number, number, number];
+}
+
+/** A face of a picked face set, as the face set's Offset carries it. */
+export interface OffsetFaceSetMember {
+  topologyId: string;
+  hash: number;
+}
+
+/** The faces a face target's set offset names, as a key fragment. */
+function offsetFaceSetKey(target: FaceTarget): string {
+  return target.offsetFaceSet
+    ? target.offsetFaceSet.map((face) => face.topologyId).join(',')
+    : '';
 }
 
 export interface RegionTarget {
@@ -614,7 +634,8 @@ export function operationSelectionKey(state: InteractionState): string | null {
         state.op,
         state.target.bodyId,
         state.target.topologyId,
-        Boolean(state.target.localFaceOffset)
+        Boolean(state.target.localFaceOffset),
+        offsetFaceSetKey(state.target)
       ]);
     case 'edges':
       return JSON.stringify([state.mode, state.op, state.edges]);
@@ -1568,9 +1589,10 @@ function commandIdentityFor(state: InteractionState): CommandIdentity | null {
             : {
                 id: 'offset-face',
                 icon: 'offset-face',
-                title:
-                  state.target.resizeBodyFeatureId &&
-                  !state.target.localFaceOffset
+                title: state.target.offsetFaceSet
+                  ? 'Offset Faces'
+                  : state.target.resizeBodyFeatureId &&
+                      !state.target.localFaceOffset
                     ? 'Resize Body'
                     : 'Offset Face',
                 eyebrow: 'direct'
@@ -1654,7 +1676,8 @@ export function commandSessionFor(
  */
 export function faceOffsetPlanKey(state: InteractionState): string | null {
   if (state.mode !== 'face' || state.op !== 'offset-face') return null;
-  return `${state.op}:${state.target.bodyId}:${state.target.topologyId}:${Boolean(state.target.localFaceOffset)}`;
+  const set = offsetFaceSetKey(state.target);
+  return `${state.op}:${state.target.bodyId}:${state.target.topologyId}:${Boolean(state.target.localFaceOffset)}${set ? `:${set}` : ''}`;
 }
 
 /** What the latest face-offset plan for a selection does to history. */
