@@ -930,6 +930,28 @@ export type DirectEditOperation =
       additionalFaces: RemovedFaceSnapshot[];
     }
   | {
+      /**
+       * Push or pull several faces of one body that lie on one plane,
+       * together, by one signed distance along their shared outward normal
+       * (Remus's `moveFaces` on the whole group). The face fields name the
+       * first face, as every direct edit names one; `additionalFaces` are the
+       * rest, each pinned the same way. A separate kind from `offset-face`
+       * so an older build refuses it instead of moving only the first face.
+       */
+      kind: 'offset-faces';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceSurfaceType: 'plane';
+      sourceArea: number;
+      sourceCenter: Vector3;
+      /** Outward unit normal every face in the set shares. */
+      sourceNormal: Vector3;
+      /** Signed distance along sourceNormal; positive adds material. */
+      offset: ParamValue;
+      /** The other faces moved with the first; at least one. */
+      additionalFaces: OffsetFaceSnapshot[];
+    }
+  | {
       kind: 'offset-face';
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
@@ -1009,6 +1031,13 @@ export interface RemovedFaceSnapshot {
   sourceSurfaceType: string;
   sourceArea: number;
   sourceCenter: Vector3;
+}
+
+/** One face an `offset-faces` edit moves, pinned as it was when picked. */
+export interface OffsetFaceSnapshot extends RemovedFaceSnapshot {
+  sourceSurfaceType: 'plane';
+  /** Its outward unit normal when picked; the first face's, within tolerance. */
+  sourceNormal: Vector3;
 }
 
 /** Exact analytic carrier of one blend band, as `resize-blend` records it. */

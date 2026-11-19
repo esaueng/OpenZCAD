@@ -2120,9 +2120,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const deferredDirectEditFeatureId =
       deferTerminalFaceLineage &&
       terminal?.data.featureKind === 'direct-edit' &&
-      ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
-        terminal.data.operation.kind
-      )
+      [
+        'offset-face',
+        'offset-faces',
+        'resize-blend',
+        'resize-cylindrical-face'
+      ].includes(terminal.data.operation.kind)
         ? terminal.featureId
         : undefined;
     // A drag preview builds display-only from the edit it drags on. A
@@ -2166,9 +2169,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // blends display-only, then replay them checked again on release.
     const terminalOffset =
       terminal?.data.featureKind === 'direct-edit' &&
-      ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
-        terminal.data.operation.kind
-      );
+      [
+        'offset-face',
+        'offset-faces',
+        'resize-blend',
+        'resize-cylindrical-face'
+      ].includes(terminal.data.operation.kind);
     const sourceCheckpointIndices = tailCheckpointIndices(
       historyCheckpointIndices(features.length, this.maxHistoryCheckpoints),
       features.length - (terminalOffset ? 2 : 1),
@@ -4183,7 +4189,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         deferTopology &&
         !fullDisplayQuality &&
         terminalEdit?.featureKind === 'direct-edit' &&
-        terminalEdit.operation.kind === 'offset-face';
+        (terminalEdit.operation.kind === 'offset-face' ||
+          terminalEdit.operation.kind === 'offset-faces');
       this.coarseFaceMoveFrame = faceMoveFrame;
       const dragMesh =
         faceMoveFrame || (hasPreparedGroupEdit(kernel) && !fullDisplayQuality);
@@ -6716,6 +6723,7 @@ function draftDisplayCandidate(
     isFeatureSuppressed(terminal) ||
     data?.featureKind !== 'direct-edit' ||
     (data.operation.kind !== 'offset-face' &&
+      data.operation.kind !== 'offset-faces' &&
       data.operation.kind !== 'resize-cylindrical-face')
   )
     return null;

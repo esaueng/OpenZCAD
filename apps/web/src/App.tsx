@@ -33023,6 +33023,7 @@ export function App() {
   function faceRepairPickHint(repair: StaleDirectEditFaceRepair): string {
     switch (repair.operationKind) {
       case 'offset-face':
+      case 'offset-faces':
         return 'planar face';
       case 'resize-cylindrical-face':
         return 'cylindrical face';

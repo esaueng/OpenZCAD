@@ -83,6 +83,7 @@ function directEdit(data: DirectEditOperation, rewrite: Rewrite): void {
       fields(data, ['angleRadians'], rewrite, 'number');
       return;
     case 'offset-face':
+    case 'offset-faces':
       fields(data, ['offset'], rewrite, 'length');
       return;
     case 'set-face-distance':

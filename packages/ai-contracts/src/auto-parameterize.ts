@@ -668,7 +668,10 @@ function nativeCandidates(
           add(featureCandidate(feature, 'radius', data.operation.radius));
         } else if (data.operation.kind === 'resize-blend') {
           add(featureCandidate(feature, 'newRadius', data.operation.newRadius));
-        } else if (data.operation.kind === 'offset-face') {
+        } else if (
+          data.operation.kind === 'offset-face' ||
+          data.operation.kind === 'offset-faces'
+        ) {
           add(featureCandidate(feature, 'offset', data.operation.offset));
         }
         break;

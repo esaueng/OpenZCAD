@@ -6180,10 +6180,14 @@ export function extrudeToFaceUnresolved(
 
 /** Direct-edit kinds whose source pins a re-picked face can fully refresh. */
 export type RepairableDirectEditKind =
-  'offset-face' | 'resize-cylindrical-face' | 'resize-through-hole';
+  | 'offset-face'
+  | 'offset-faces'
+  | 'resize-cylindrical-face'
+  | 'resize-through-hole';
 
 const REPAIRABLE_DIRECT_EDIT_KINDS: readonly RepairableDirectEditKind[] = [
   'offset-face',
+  'offset-faces',
   'resize-cylindrical-face',
   'resize-through-hole'
 ];
@@ -6323,6 +6327,39 @@ export function repairedDirectEditOperation(
         sourceCenter: vec(geometry.center),
         sourceNormal: vec(geometry.normal),
         offset: deepClone(operation.offset)
+      };
+    }
+    case 'offset-faces': {
+      // A re-pick refreshes the first face only. The other faces keep their
+      // pins; one that has drifted too refuses at the rebuild and asks for
+      // the faces again, rather than this repair guessing which face it was.
+      if (
+        geometry?.surfaceType !== 'plane' ||
+        !geometry.normal ||
+        !Number.isFinite(geometry.area) ||
+        geometry.area <= 0
+      ) {
+        throw new Error(
+          'Pick a planar face with exact measurements to repair this offset.'
+        );
+      }
+      const pickedHashes = operation.additionalFaces.map(
+        (entry) => entry.faceHash
+      );
+      if (pickedHashes.includes(face.hash)) {
+        throw new Error(
+          'That face is already in the offset set. Pick the face this offset lost.'
+        );
+      }
+      return {
+        kind: 'offset-faces',
+        ...identity,
+        sourceSurfaceType: 'plane',
+        sourceArea: geometry.area,
+        sourceCenter: vec(geometry.center),
+        sourceNormal: vec(geometry.normal),
+        offset: deepClone(operation.offset),
+        additionalFaces: deepClone(operation.additionalFaces)
       };
     }
     case 'resize-cylindrical-face': {

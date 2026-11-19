@@ -1116,7 +1116,8 @@ function validateDirectEditReference(input: DirectEditInput): void {
     faceReference?: { kind: string; currentHash: number };
   }[] = [
     input.operation,
-    ...(input.operation.kind === 'remove-faces'
+    ...(input.operation.kind === 'remove-faces' ||
+    input.operation.kind === 'offset-faces'
       ? input.operation.additionalFaces
       : [])
   ];
@@ -4370,7 +4371,10 @@ function assertOperationExpressions(
           operation.operation.angleRadians,
           documentUnits
         );
-      } else if (operation.operation.kind === 'offset-face') {
+      } else if (
+        operation.operation.kind === 'offset-face' ||
+        operation.operation.kind === 'offset-faces'
+      ) {
         assertEvaluableExpression(
           scope,
           `${operation.name} offset`,
@@ -5966,7 +5970,8 @@ export function commandsForCadPatch(
             (edit.kind === 'set-face-distance' && field === 'distance') ||
             (edit.kind === 'resize-cylindrical-face' && field === 'radius') ||
             (edit.kind === 'resize-blend' && field === 'newRadius') ||
-            (edit.kind === 'offset-face' && field === 'offset');
+            ((edit.kind === 'offset-face' || edit.kind === 'offset-faces') &&
+              field === 'offset');
           if (editable) {
             return commandFactories.updateFeature({
               featureId: feature.featureId,
