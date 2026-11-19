@@ -815,6 +815,17 @@ export function useInPlaceCommand(
   const showRefused = (refused: InPlaceRequest | null) => {
     const tool = specRef.current;
     const kept = lastBuilt.current;
+    // A refusal of a request since replaced (a value put back while the
+    // refused one still built) is no input's to name, and the newer
+    // request's own frame decides what is shown.
+    if (
+      tool?.refusedInputs &&
+      refused &&
+      JSON.stringify(refused) !== requestKeyRef.current
+    ) {
+      setRefusalInputs([]);
+      return;
+    }
     const inputs =
       tool?.refusedInputs &&
       refused &&
@@ -998,6 +1009,8 @@ export function useInPlaceCommand(
       setPreviewValid(false);
       setRefusal(null);
       setRefusalInputs([]);
+      // The frame comes down, so none is left to keep under a later refusal.
+      lastBuilt.current = null;
       optionsRef.current.publishPreview(null);
       return;
     }

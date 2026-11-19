@@ -3074,6 +3074,27 @@ describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
     await waitFor(() => expect(hook.result.current.refusalInput).toBe('Edges'));
   });
 
+  // Review of #1771: a frame taken down with an emptied pick is not there to
+  // keep, so a refusal after it is said plainly and shows the body bare.
+  it('keeps nothing once the picks were emptied', async () => {
+    const { hook, publishPreview, refuse } = refusing();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(1)] })
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.pickEdge(edge(1));
+    });
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    refuse(true);
+    act(() => {
+      hook.result.current.pickEdge(edge(2));
+    });
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
   it('refuses a first request plainly, with nothing built to keep', async () => {
     const { hook, publishPreview, refuse } = refusing();
     refuse(true);
