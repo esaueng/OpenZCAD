@@ -18,6 +18,7 @@ import {
 } from '@openzcad/shared';
 import {
   ExtrudeCommand,
+  extrudeChangedInput,
   extrudeShownValues,
   type ExtrudeCommandHandle,
   type ExtrudeCommandState
@@ -200,6 +201,136 @@ describe('in-place Extrude bar', () => {
       }
     });
     expect(status).toHaveTextContent(/^Preview: New body/);
+  });
+
+  // U11: a value the kernel refuses is said in the bar after the input that
+  // must change; the readout of the last built preview returns with a value
+  // that builds.
+  it('names the input a kernel refusal is about, and keeps it named', () => {
+    const cut = {
+      operation: 'cut',
+      targetBodyId: plate,
+      reason: 'enclosed',
+      tolerance: 1e-6
+    } as const;
+    const refusal = 'Extrude preview did not produce an exact result body.';
+    const { commandRef, update } = setup({
+      initial: { name: 'Extrude', sketchId, distance: -4 },
+      resolvedChoice: cut
+    });
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(/^Preview: Cut · Plate/);
+
+    act(() => commandRef.current?.setValue('draftAngle', '40'));
+    update({ valueRefusal: refusal });
+    expect(status).toHaveTextContent(`Draft angle: ${refusal}`);
+    expect(status).not.toHaveTextContent('Preview: Cut');
+
+    // A later change does not take the blame for a refusal it did not cause.
+    act(() => commandRef.current?.setValue('distance', '-3'));
+    update({ valueRefusal: refusal });
+    expect(status).toHaveTextContent(`Draft angle: ${refusal}`);
+
+    // The same refusal again, after the newer value is checked, is its own.
+    update({ valueRefusal: null, previewPending: true });
+    expect(status).toHaveTextContent('Auto · Checking preview…');
+    update({ valueRefusal: refusal });
+    expect(status).toHaveTextContent(`Distance: ${refusal}`);
+
+    update({ valueRefusal: null, resolvedChoice: cut });
+    expect(status).toHaveTextContent(/^Preview: Cut · Plate/);
+  });
+
+  // Review of #1769: the region's arrow sets the distance only on release,
+  // so a frame refused under the hand must still be the distance's.
+  it('names the distance for a refusal under a held arrow drag', () => {
+    const refusal = 'Extrude preview did not produce an exact result body.';
+    const { commandRef, update } = setup({
+      initial: { name: 'Extrude', sketchId, distance: -4 }
+    });
+    act(() => commandRef.current?.setValue('draftAngle', '2'));
+    act(() => commandRef.current?.holdValue('distance'));
+    update({ valueRefusal: refusal });
+    expect(screen.getByRole('status')).toHaveTextContent(
+      `Distance: ${refusal}`
+    );
+    expect(commandRef.current?.text('distance')).toBe('-4');
+  });
+
+  it('says a kernel refusal plainly when no input has changed, and leaves its own refusals unprefixed', () => {
+    const refusal = 'Extrude preview did not produce an exact result body.';
+    const { commandRef, update } = setup({
+      initial: { name: 'Extrude', sketchId, distance: -4 },
+      valueRefusal: refusal
+    });
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent(new RegExp(`^${refusal}$`));
+
+    act(() => commandRef.current?.setValue('draftAngle', '40'));
+    update({
+      valueRefusal: refusal,
+      entryRefusal: 'Draft angle: Unexpected end of expression.'
+    });
+    expect(status).toHaveTextContent(
+      /^Draft angle: Unexpected end of expression\.$/
+    );
+    update({ valueRefusal: refusal, note: 'This cut did not build.' });
+    expect(status).toHaveTextContent(/^This cut did not build\.$/);
+  });
+
+  it('names the input a change set by the bar label it carries', () => {
+    const base = {
+      name: 'Extrude',
+      distance: '10',
+      symmetric: false,
+      backDistance: '0',
+      choice: { operation: 'automatic' },
+      endCondition: 'blind',
+      throughAllSide: 'forward',
+      draftAngle: '0'
+    } as const;
+    expect(extrudeChangedInput(base, base)).toBeNull();
+    // A value that also leaves an extent or Symmetric is named for itself.
+    expect(
+      extrudeChangedInput(base, {
+        ...base,
+        distance: '5',
+        endCondition: 'through-all'
+      })
+    ).toBe('Distance');
+    expect(
+      extrudeChangedInput(
+        { ...base, symmetric: true },
+        { ...base, backDistance: '2' }
+      )
+    ).toBe('Back distance');
+    expect(extrudeChangedInput(base, { ...base, draftAngle: '3' })).toBe(
+      'Draft angle'
+    );
+    expect(
+      extrudeChangedInput(base, {
+        ...base,
+        choice: { operation: 'cut', targetBodyId: plate }
+      })
+    ).toBe('Operation');
+    expect(
+      extrudeChangedInput(
+        { ...base, choice: { operation: 'cut', targetBodyId: plate } },
+        {
+          ...base,
+          choice: { operation: 'cut', targetBodyId: toBodyId('lid') }
+        }
+      )
+    ).toBe('Target body');
+    expect(
+      extrudeChangedInput(base, { ...base, endCondition: 'through-all' })
+    ).toBe('Extent');
+    expect(extrudeChangedInput(base, { ...base, throughAllSide: 'both' })).toBe(
+      'Direction'
+    );
+    expect(extrudeChangedInput(base, { ...base, symmetric: true })).toBe(
+      'Sides'
+    );
   });
 
   it('keeps an explicit 10 mm New body draft separate from an inferred target', async () => {

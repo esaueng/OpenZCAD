@@ -143,6 +143,30 @@ describe('InPlaceCommandBar', () => {
     }
   );
 
+  // U11: a kernel refusal names the input to change, ahead of the sentence
+  // its translation writes (a prefix on the raw text would be rewritten away).
+  it('names the refused input ahead of a translated kernel sentence', () => {
+    const diagnostic =
+      'Remus draft refused: the draft moves a corner of curved face 139; re-trimming a curved neighbour against the taper is not implemented';
+    render(
+      <InPlaceCommandBar
+        title="Draft"
+        hint="Pick faces"
+        refusal={diagnostic}
+        refusalInput="Draft angle"
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status').textContent).toBe(
+      "Draft angle: A face next to this one is curved, and re-trimming a curved face to fit isn't supported yet. Try faces that only meet flat faces."
+    );
+    expect(
+      screen.getByText('Technical details').closest('details')?.textContent
+    ).toContain(diagnostic);
+  });
+
   it('shows an adapter sentence as it is, with nothing to disclose', () => {
     const sentence =
       'Fillet could not be created on 1 selected edge with radius 30. Try a smaller radius: radius 15 builds here.';

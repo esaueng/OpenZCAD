@@ -30335,6 +30335,9 @@ export function App() {
         ? offset
         : Math.round(offset * 1000) / 1000;
       regionDragDistance.current = distance;
+      // The bar sets the distance on release; a refusal before then is
+      // still the distance's to change.
+      regionExtrudeCommandRef.current?.holdValue('distance');
       if (Math.abs(distance) <= 1e-9) {
         regionExtrudePreview.clear();
         setPreviewDeferred(false);
@@ -38994,6 +38997,15 @@ export function App() {
                 <ExtrudeCommand
                   previewPending={regionExtrudeChecking}
                   resolvedChoice={regionExtrudeResolution?.inference}
+                  // The kernel's refusal is said in the bar, after the input
+                  // that caused it; the last preview that built stays up.
+                  // Withdrawn while a newer value is checked, which it is
+                  // not about. A lost region is no value's fault.
+                  {...(interaction.error && !regionExtrudeChecking
+                    ? isStaleSelectionError(interaction.error)
+                      ? { note: interaction.error.message }
+                      : { valueRefusal: interaction.error.message }
+                    : {})}
                   onShowFullModel={
                     extrudeHiddenBySection ? turnSectionViewOff : undefined
                   }

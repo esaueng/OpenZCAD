@@ -69,6 +69,12 @@ export interface ExtrudeCommandHandle {
   setValue(valueId: ExtrudeValueId, text: string): void;
   /** The text a value holds now, as the keypad opens on it. */
   text(valueId: ExtrudeValueId): string;
+  /**
+   * A value moved in the model ahead of being set: the region's arrow
+   * previews each frame under the hand and sets the distance only on
+   * release, so a refusal meanwhile is about this value.
+   */
+  holdValue(valueId: ExtrudeValueId): void;
   /** Whether anything has changed since the command opened. */
   touched(): boolean;
 }
@@ -88,6 +94,12 @@ interface ExtrudeCommandProps {
   editing?: boolean;
   /** Why the last preview or Done was refused, said where the hint is. */
   note?: string | null;
+  /**
+   * The kernel refused the draft as it now stands (a preview or a Done):
+   * said where the hint is, after the input last changed, which is the one
+   * to change back or again. The last preview that built stays on screen.
+   */
+  valueRefusal?: string | null;
   /** The current draft is replacing the preview still on screen. */
   previewPending?: boolean;
   /** The current draft's accepted exact operation, while Auto is selected. */
@@ -139,6 +151,30 @@ const VALUE_LABELS: Record<ExtrudeValueId, string> = {
   draftAngle: 'Draft angle'
 };
 
+/**
+ * The bar input a change set, by the name it carries in the bar, or null
+ * when nothing changed. A change that moves several fields is named for the
+ * one the user set: a picked face (which also sets the reach), a value
+ * (which may also leave an extent or Symmetric), then an option.
+ */
+export function extrudeChangedInput(
+  previous: ExtrudeDraft,
+  next: ExtrudeDraft
+): string | null {
+  if (next.toFace !== previous.toFace) return 'Face';
+  for (const valueId of ['distance', 'backDistance', 'draftAngle'] as const) {
+    if (next[valueId] !== previous[valueId]) return VALUE_LABELS[valueId];
+  }
+  if (next.choice.operation !== previous.choice.operation) return 'Operation';
+  if (JSON.stringify(next.choice) !== JSON.stringify(previous.choice)) {
+    return 'Target body';
+  }
+  if (next.endCondition !== previous.endCondition) return 'Extent';
+  if (next.throughAllSide !== previous.throughAllSide) return 'Direction';
+  if (next.symmetric !== previous.symmetric) return 'Sides';
+  return null;
+}
+
 export function ExtrudeCommand({
   scope,
   units,
@@ -148,6 +184,7 @@ export function ExtrudeCommand({
   disabled,
   editing = false,
   note = null,
+  valueRefusal = null,
   previewPending = false,
   resolvedChoice = null,
   onShowFullModel,
@@ -172,6 +209,19 @@ export function ExtrudeCommand({
   // A new extrude opens at zero until the user drags or types a distance,
   // so the zero-distance refusal waits for that edit (or a Done).
   const [distanceEdited, setDistanceEdited] = useState(false);
+  // The input the last change set, and the one a kernel refusal is named
+  // for: the input changed when that refusal arrived. A later change must
+  // not take the blame for a refusal it did not cause.
+  const [lastInput, setLastInput] = useState<string | null>(null);
+  const [refused, setRefused] = useState<{
+    message: string | null;
+    input: string | null;
+  }>({ message: null, input: null });
+  if (refused.message !== valueRefusal) {
+    setRefused({ message: valueRefusal, input: valueRefusal && lastInput });
+  }
+  const refusedInput =
+    refused.message === valueRefusal ? refused.input : lastInput;
   const ctx: ExtrudeDraftContext = {
     scope,
     units,
@@ -212,8 +262,11 @@ export function ExtrudeCommand({
     ) {
       toFacePicking.cancel();
     }
-    const next = { ...draftRef.current, ...patch };
+    const previous = draftRef.current;
+    const next = { ...previous, ...patch };
     draftRef.current = next;
+    const input = extrudeChangedInput(previous, next);
+    if (input) setLastInput(input);
     if (patch.distance !== undefined) setDistanceEdited(true);
     setDraft(next);
     onDraft(stateOf(next));
@@ -302,6 +355,7 @@ export function ExtrudeCommand({
     submit,
     setValue,
     text: (valueId) => draftRef.current[valueId],
+    holdValue: (valueId) => setLastInput(VALUE_LABELS[valueId]),
     touched: () =>
       JSON.stringify(draftRef.current) !== JSON.stringify(openedDraft.current)
   };
@@ -317,6 +371,7 @@ export function ExtrudeCommand({
       submit: () => handle.current?.submit() ?? false,
       setValue: (valueId, text) => handle.current?.setValue(valueId, text),
       text: (valueId) => handle.current?.text(valueId) ?? '',
+      holdValue: (valueId) => handle.current?.holdValue(valueId),
       touched: () => handle.current?.touched() ?? false
     };
     return () => {
@@ -325,7 +380,8 @@ export function ExtrudeCommand({
   }, [commandRef]);
 
   const draftRefusal = extrudeDraftRefusal(draft, ctx, distanceEdited);
-  const refusal = entryRefusal ?? (draftRefusal || null) ?? note;
+  const ownRefusal = entryRefusal ?? (draftRefusal || null) ?? note;
+  const refusal = ownRefusal ?? valueRefusal;
   const canFinish = !disabled && !entryRefusal && draftRefusal === null;
   const toFaceInfo =
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
@@ -529,6 +585,7 @@ export function ExtrudeCommand({
       title={editing ? `Edit ${name ?? initial.name}` : 'Extrude'}
       hint={hint}
       refusal={toFacePicking?.armed ? null : refusal}
+      refusalInput={ownRefusal === null ? refusedInput : null}
       canFinish={canFinish}
       previewPending={checking}
       recovery={recovery}
