@@ -263,7 +263,7 @@ test('refuses a face set that is not one plane, by name', async ({ page }) => {
     .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'the selected faces are parallel but at different heights'
+    'are parallel but at different heights'
   );
   await expect(
     page.getByRole('region', { name: 'Offset Faces operation' })

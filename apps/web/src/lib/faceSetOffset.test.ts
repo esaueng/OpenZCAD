@@ -90,7 +90,7 @@ describe('face set offset', () => {
     expect(start.members).toEqual([{ topologyId: 'face:1', hash: 1 }]);
   });
 
-  it('refuses a set that is not one plane in the kernel’s own words', () => {
+  it('refuses a set that is not one plane before any handle appears', () => {
     const document = slottedBlock();
     expect(() =>
       faceSetOffsetStart(document, [pick(leftTop), pick(floor)])

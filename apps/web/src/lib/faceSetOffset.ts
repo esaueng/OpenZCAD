@@ -24,13 +24,17 @@ import { resolveSelectionTopology } from './selectionFeature';
 export const MAX_OFFSET_SET_FACES = 64;
 
 /**
- * The kernel's refusals for a set that is not one plane, word for word, so
- * the verb refuses up front in the words a rebuild would use.
+ * Refusals for a set the workspace does not offset together, said before any
+ * handle appears. A set whose faces do not all face the same way is refused
+ * in the kernel's own words. Parallel faces at different heights the kernel
+ * now chains (M07), but the workspace keeps them to one plane until its
+ * shared handle and preview cover a chained move, so that refusal is the
+ * workspace's own.
  */
 export const OFFSET_SET_NOT_SAME_NORMAL =
-  'Offset moves a set of faces together only when they lie on one plane, and the selected faces face different directions. Offset them one at a time.';
+  'Offset moves a set of faces together only when they all face the same way, and the selected faces face different directions. Offset them one at a time.';
 export const OFFSET_SET_NOT_COPLANAR =
-  'Offset moves a set of faces together only when they lie on one plane, and the selected faces are parallel but at different heights. Offset them one at a time.';
+  'The selected faces are parallel but at different heights. Offsetting them together is not in the workspace yet; offset them one at a time.';
 
 const NORMAL_TOLERANCE = 1e-6;
 
