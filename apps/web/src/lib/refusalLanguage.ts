@@ -327,7 +327,8 @@ const TRANSLATIONS: readonly Translation[] = [
   // M04 exact sweeps (`sweepExact`): each refusal names its cause; nothing
   // is sampled in their place.
   {
-    pattern: /sweep path turns a corner of ([\d.]+)° at joint \d+, next to an arc/i,
+    pattern:
+      /sweep path turns a corner of ([\d.]+)° at joint \d+, next to an arc/i,
     sentence: (match) =>
       `The sweep path has a ${Math.round(Number(match[1]) * 10) / 10}° corner next to an arc. An exact sweep mitres corners only between straight lines: join the arc tangentially.`
   },
@@ -512,9 +513,12 @@ export function plainRefusal(
   // and why: "it is non-manifold" there is the importer's diagnosis, not the
   // kernel's, and a partial import that succeeded read as "The resulting
   // body wouldn't be valid." The importer does not escape quotes in a body
-  // name, so the name is matched up to the last `" imported, but`.
+  // name, so the name is matched up to the last `" imported, but`. A face
+  // set offset's later step names its face by its place in the set
+  // ("Offsetting face 2 after the others…"), which reads as a kernel entity
+  // number but is the adapter's own sentence.
   if (
-    /no longer exists|^parse error:|^STEP file contains no |^Body ".*" imported, but /.test(
+    /no longer exists|^parse error:|^STEP file contains no |^Body ".*" imported, but |^Offsetting face \d+ after the others /.test(
       sentence
     )
   ) {

@@ -61,4 +61,34 @@ describe('createFaceSetTicks', () => {
     ticks.dispose();
     expect(ticks.object.parent).toBeNull();
   });
+
+  it('turns each wall’s tick onto that wall’s own way of travel', () => {
+    // A pocket's floor and walls facing every side way, -y included: the
+    // one direction opposite the tick's own +Y.
+    const faces = [
+      { point: { x: 20, y: 10, z: 5 }, normal: { x: 0, y: 0, z: 1 } },
+      { point: { x: 15, y: 10, z: 7.5 }, normal: { x: 1, y: 0, z: 0 } },
+      { point: { x: 25, y: 10, z: 7.5 }, normal: { x: -1, y: 0, z: 0 } },
+      { point: { x: 20, y: 5, z: 7.5 }, normal: { x: 0, y: 1, z: 0 } },
+      { point: { x: 20, y: 15, z: 7.5 }, normal: { x: 0, y: -1, z: 0 } }
+    ];
+    const ticks = createFaceSetTicks(faces);
+    for (const offset of [1, -1]) {
+      ticks.update(offset, () => 0.1);
+      ticks.object.children.forEach((tick, index) => {
+        const { normal, point } = faces[index]!;
+        const along = new THREE.Vector3(0, 1, 0).applyQuaternion(
+          tick.quaternion
+        );
+        expect(along.x).toBeCloseTo(normal.x * offset, 12);
+        expect(along.y).toBeCloseTo(normal.y * offset, 12);
+        expect(along.z).toBeCloseTo(normal.z * offset, 12);
+        // Carried along its own normal, not the handle's.
+        expect(tick.position.x).toBeCloseTo(point.x + normal.x * offset, 12);
+        expect(tick.position.y).toBeCloseTo(point.y + normal.y * offset, 12);
+        expect(tick.position.z).toBeCloseTo(point.z + normal.z * offset, 12);
+      });
+    }
+    ticks.dispose();
+  });
 });

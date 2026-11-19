@@ -4,13 +4,16 @@
  * both together as one `offset-faces` step, its History row reads "Offset 2
  * faces · +2 mm", and reopening that row changes the distance again.
  *
- * Parallel faces at different heights (a slot's floor and the top beside
- * it) arm the same handle as a chained move: each face moves along its own
- * normal by the one distance.
+ * Faces on several planes, parallel at different heights (a slot's floor
+ * and the top beside it) or facing different directions (a pocket's floor
+ * and its wall), arm the same handle as a chained move: each face moves
+ * along its own normal by the one distance. Only faces that face opposite
+ * ways are refused.
  *
  * The body is the parity corpus's slotted block: a 40 × 20 × 10 block with a
  * 10 wide, 5 deep slot cut across its top, imported from STEP, so its top is
  * two coplanar 15 × 20 faces and the slot's floor is parallel 5 below them.
+ * The pocketed block has a 10 × 10 × 5 pocket in its top instead.
  */
 import { createProjectDocument, importStepBody } from '@openzcad/document-core';
 import type { Locator, Page } from '@playwright/test';
@@ -30,15 +33,22 @@ const SLOT_DEPTH = 5;
 const translation = (x: number, y: number, z: number) =>
   Float64Array.of(1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1);
 
-async function slottedBlockStep(): Promise<string> {
+/** The slot's (or the pocket's) left wall, facing +x into it. */
+const WALL_X = (X - SLOT_WIDTH) / 2;
+/** The pocket's extent along y: 10, centred. */
+const POCKET_Y = 10;
+
+async function slottedBlockStep(pocket = false): Promise<string> {
   const kernel = new RemusKernel();
   const io = await loadRemusTranslators();
   try {
     const block = kernel.makeBox(X, Y, Z);
-    const slot = kernel.makeBox(SLOT_WIDTH, Y + 4, SLOT_DEPTH + 2);
+    const slot = pocket
+      ? kernel.makeBox(SLOT_WIDTH, POCKET_Y, SLOT_DEPTH + 2)
+      : kernel.makeBox(SLOT_WIDTH, Y + 4, SLOT_DEPTH + 2);
     kernel.transformSolid(
       slot,
-      translation((X - SLOT_WIDTH) / 2, -2, Z - SLOT_DEPTH)
+      translation(WALL_X, pocket ? (Y - POCKET_Y) / 2 : -2, Z - SLOT_DEPTH)
     );
     return new TextDecoder().decode(
       io.exportStep(
@@ -181,15 +191,15 @@ test(
   }
 );
 
-/** Opens the slotted block in a new project. */
-async function openSlottedBlock(page: Page, name: string) {
+/** Opens the slotted (or the pocketed) block in a new project. */
+async function openSlottedBlock(page: Page, name: string, pocket = false) {
   const document = importStepBody(
     createProjectDocument('Slotted block', toUserId('user_offset_faces')),
     {
       name: 'Block',
       sourceName: 'block.step',
       artifactId: 'artifact_slotted_block',
-      stepText: await slottedBlockStep()
+      stepText: await slottedBlockStep(pocket)
     }
   ).document;
   await stubApi(page);
@@ -327,25 +337,26 @@ test(
   }
 );
 
-test('refuses a face set whose faces face different ways, by name', async ({
+test('refuses a face set whose faces face opposite ways, by name', async ({
   page
 }) => {
   test.setTimeout(120_000);
   const canvas = await openSlottedBlock(page, 'Offset face set refusal');
-  // A top face and the slot's wall beside it: they face different ways.
+  // The slot's two walls face each other across it: one offset would
+  // thicken one side and thin the other.
   await expect
     .poll(
       () =>
         planarFace(canvas, {
-          normal: UP,
-          near: { x: (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z }
+          normal: { x: 1, y: 0, z: 0 },
+          near: { x: WALL_X, y: Y / 2, z: Z - SLOT_DEPTH / 2 }
         }),
       { timeout: 30_000 }
     )
     .not.toBeNull();
   await planarFace(canvas, {
-    normal: { x: 1, y: 0, z: 0 },
-    near: { x: (X - SLOT_WIDTH) / 2, y: Y / 2, z: Z - SLOT_DEPTH / 2 },
+    normal: { x: -1, y: 0, z: 0 },
+    near: { x: WALL_X + SLOT_WIDTH, y: Y / 2, z: Z - SLOT_DEPTH / 2 },
     additive: true
   });
   await expect(page.getByRole('contentinfo')).toContainText('2 faces selected');
@@ -353,11 +364,153 @@ test('refuses a face set whose faces face different ways, by name', async ({
     .getByRole('button', { name: 'Selection: Offset', exact: true })
     .click();
   await expect(page.getByRole('contentinfo')).toContainText(
-    'the selected faces face different directions'
+    'The selected faces face opposite ways'
   );
   await expect(
     page.getByRole('region', { name: 'Offset Faces operation' })
   ).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+});
+
+const PLUS_X: Vec = { x: 1, y: 0, z: 0 };
+
+test(
+  'offsets a pocket’s floor and wall together, each along its own normal',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const canvas = await openSlottedBlock(page, 'Offset pocket faces', true);
+    const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+    const wallAt = { x: WALL_X, y: Y / 2, z: Z - SLOT_DEPTH / 2 };
+    const oppositeAt = {
+      x: WALL_X + SLOT_WIDTH,
+      y: Y / 2,
+      z: Z - SLOT_DEPTH / 2
+    };
+    // The pocket's floor, then its +x wall with Shift: the handle arms on
+    // the wall, pointing across the pocket.
+    await expect
+      .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+        timeout: 30_000
+      })
+      .not.toBeNull();
+    await planarFace(canvas, { normal: PLUS_X, near: wallAt, additive: true });
+    await expect(page.getByRole('contentinfo')).toContainText(
+      '2 faces selected'
+    );
+    // Read at each face's old place: a face that stayed is the nearest.
+    const near = (normal: Vec, at: Vec) => () =>
+      planarFace(canvas, { normal, near: at, select: false });
+    const expectMoved = async (offset: number) => {
+      // The floor rises along +z, the wall moves along +x: each along its
+      // own normal by the one distance.
+      await expect
+        .poll(async () => (await near(UP, floorAt)())?.z ?? null, {
+          timeout: 30_000
+        })
+        .toBeCloseTo(Z - SLOT_DEPTH + offset, 4);
+      await expect
+        .poll(async () => (await near(PLUS_X, wallAt)())?.x ?? null, {
+          timeout: 30_000
+        })
+        .toBeCloseTo(WALL_X + offset, 4);
+      // The opposite wall was never picked: it stays.
+      await expect
+        .poll(
+          async () =>
+            (await near({ x: -1, y: 0, z: 0 }, oppositeAt)())?.x ?? null,
+          { timeout: 30_000 }
+        )
+        .toBeCloseTo(WALL_X + SLOT_WIDTH, 4);
+    };
+
+    await page
+      .getByRole('button', { name: 'Selection: Offset', exact: true })
+      .click();
+    await expect(
+      page.getByRole('region', { name: 'Offset Faces operation' })
+    ).toBeVisible();
+    // The shared handle points along the wall's normal, the last pick.
+    const handle = await canvas.evaluate((element) => ({
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy)
+    }));
+    expect(Math.hypot(handle.dx, handle.dy)).toBeGreaterThan(0);
+    await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+    await page.getByTestId('direct-manipulation-value').click();
+    const keypad = page.getByRole('dialog', { name: 'Offset value' });
+    await keypad.getByRole('textbox').fill('1');
+    await expect(
+      keypad.getByRole('button', { name: 'Apply offset' })
+    ).toBeEnabled({ timeout: 30_000 });
+    await keypad.getByRole('button', { name: 'Apply offset' }).click();
+
+    const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toContainText('+1 mm');
+    await expectMoved(1);
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expect(canvas).not.toHaveAttribute('data-e2e-offset-set-ticks', /.*/);
+
+    // Reopened from History, the distance changes and both faces rebuild
+    // along their own normals.
+    await row.locator('.feature-row-main').click();
+    const form = page.getByRole('form', { name: 'Offset faces' });
+    await expect(form).toBeVisible();
+    const field = form.getByRole('textbox');
+    await expect(field).toHaveValue('1');
+    await field.fill('2');
+    await form.getByRole('button', { name: 'Apply offset' }).click();
+    await expect(row).toContainText('+2 mm', { timeout: 30_000 });
+    await expectMoved(2);
+    await expect(page.locator('.feature-row')).toHaveCount(2);
+    expect(errors).toEqual([]);
+  }
+);
+
+test('names a later step of a different-direction set that refuses, on its card', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const canvas = await openSlottedBlock(page, 'Refused pocket faces', true);
+  // The pocket's +x wall, then the block's top with Shift: the top holds
+  // the handle (face 1) and leads the chain; the wall is face 2.
+  await expect
+    .poll(
+      () =>
+        planarFace(canvas, {
+          normal: PLUS_X,
+          near: { x: WALL_X, y: Y / 2, z: Z - SLOT_DEPTH / 2 }
+        }),
+      { timeout: 30_000 }
+    )
+    .not.toBeNull();
+  await planarFace(canvas, {
+    normal: UP,
+    // Over the pocket at the top's height: the top (around the pocket) is
+    // nearer than the floor 5 below.
+    near: { x: X / 2, y: Y / 2, z: Z },
+    additive: true
+  });
+  await expect(page.getByRole('contentinfo')).toContainText('2 faces selected');
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Offset value' });
+  // The top rises 11 alone; the wall, pushed 11 across the 10-wide pocket,
+  // is the later step that refuses.
+  await keypad.getByRole('textbox').fill('11');
+  await expect(keypad.getByRole('alert')).toContainText(
+    "Offsetting face 2 after the others would change the body's topology.",
+    { timeout: 30_000 }
+  );
+  await expect(
+    keypad.getByRole('button', { name: 'Apply offset' })
+  ).toBeDisabled();
   await expect(page.locator('.feature-row')).toHaveCount(1);
 });
 
@@ -422,6 +575,82 @@ test('a drag on a chained set releases into the whole set at the dragged distanc
   await expect
     .poll(zNear(leftTopAt), { timeout: 30_000 })
     .toBeCloseTo(Z + dragged, 4);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(errors).toEqual([]);
+});
+
+test('a drag on a different-direction set releases into the whole set', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const canvas = await openSlottedBlock(page, 'Drag pocket faces', true);
+  const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+  const wallAt = { x: WALL_X, y: Y / 2, z: Z - SLOT_DEPTH / 2 };
+  await expect
+    .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+      timeout: 30_000
+    })
+    .not.toBeNull();
+  await planarFace(canvas, { normal: PLUS_X, near: wallAt, additive: true });
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const readChip = async () =>
+    Number(
+      (await page.getByTestId('direct-manipulation-value').innerText()).match(
+        /([+-]?[\d.]+) mm/
+      )?.[1]
+    );
+  const resting = await readChip();
+  // Along the wall's normal, faster than the whole chain rebuilds: the
+  // floor (the chain's first step) follows each move, the chain catches up.
+  await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
+  await page.mouse.down();
+  for (const units of [0.25, 0.5, 0.75, 1, 1.25, 1.5]) {
+    await page.mouse.move(
+      bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * units,
+      bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * units
+    );
+  }
+  const dragged = (await readChip()) - resting;
+  expect(dragged).toBeGreaterThan(0);
+  await page.mouse.up();
+
+  const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await expect(row).toContainText(`+${dragged} mm`);
+  await expect
+    .poll(
+      async () =>
+        (await planarFace(canvas, { normal: UP, near: floorAt, select: false }))
+          ?.z ?? null,
+      { timeout: 30_000 }
+    )
+    .toBeCloseTo(Z - SLOT_DEPTH + dragged, 4);
+  await expect
+    .poll(
+      async () =>
+        (
+          await planarFace(canvas, {
+            normal: PLUS_X,
+            near: wallAt,
+            select: false
+          })
+        )?.x ?? null,
+      { timeout: 30_000 }
+    )
+    .toBeCloseTo(WALL_X + dragged, 4);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
   expect(errors).toEqual([]);
 });
