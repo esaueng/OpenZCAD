@@ -53,8 +53,12 @@ export interface LivePreviewOptions<TDocument, TDerived> {
   /** Advance within a gesture even when the pointer has requested a newer value. */
   publishIntermediate?: boolean;
   isCurrent?(document: TDocument): boolean;
-  /** Minimum spacing between exact builds; zero preserves existing consumers. */
-  minIntervalMs?: number;
+  /**
+   * Minimum spacing between exact builds; zero preserves existing consumers.
+   * A function is read after each build, so one previewer can slow down for
+   * an edit that rebuilds more (a chained face set, M07).
+   */
+  minIntervalMs?: number | (() => number);
   /** Last measured viewport installation cost, without a React state update. */
   presentationTimeMs?(): number;
   /**
@@ -349,7 +353,8 @@ export class LivePreview<TDocument, TDerived> {
       this.runningGeneration = null;
       this.abort = null;
       if (current()) {
-        const interval = this.options.minIntervalMs ?? 0;
+        const spacing = this.options.minIntervalMs ?? 0;
+        const interval = typeof spacing === 'function' ? spacing() : spacing;
         // Leave a bounded presentation/input yield, not another rebuild-sized
         // pause. Exact work runs in a worker: doubling its elapsed time made
         // a 150 ms edit with a 45 ms installation advance only every 390 ms.

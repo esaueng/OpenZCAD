@@ -1,6 +1,6 @@
 import type { BodyId, FeatureId, ProjectDocument } from '@openzcad/shared';
 import type { AffectedFeatureTarget } from '../affectedFeatureTargets';
-import type { InteractionState } from './machine';
+import { faceOffsetPlanKey, type InteractionState } from './machine';
 
 export function blendPreviewSelectionKey(
   state: InteractionState
@@ -17,8 +17,9 @@ export function blendPreviewSelectionKey(
 /**
  * The selection a disposable geometry preview (no volume, no distance
  * proofs) is shown for. Blend drags are keyed by their edges or blend face;
- * face drags by the dragged face. A preview published under one key never
- * shows while the interaction reads as another.
+ * face drags by the dragged face (and a face set's offset by its other
+ * faces too, as its previews are keyed). A preview published under one key
+ * never shows while the interaction reads as another.
  */
 export function geometryPreviewSelectionKey(
   state: InteractionState
@@ -26,7 +27,10 @@ export function geometryPreviewSelectionKey(
   const blend = blendPreviewSelectionKey(state);
   if (blend !== null) return blend;
   if (state.mode !== 'face') return null;
-  return `${state.op}:${state.target.bodyId}:${state.target.topologyId}:${Boolean(state.target.localFaceOffset)}`;
+  return (
+    faceOffsetPlanKey(state) ??
+    `${state.op}:${state.target.bodyId}:${state.target.topologyId}:${Boolean(state.target.localFaceOffset)}`
+  );
 }
 
 export interface BlendPreviewIdentity {

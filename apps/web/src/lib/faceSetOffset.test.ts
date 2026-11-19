@@ -10,10 +10,12 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import {
-  OFFSET_SET_NOT_COPLANAR,
   OFFSET_SET_NOT_SAME_NORMAL,
+  buildOffsetFaceSetLead,
   buildOffsetFaces,
+  faceSetOffsetPlanes,
   faceSetOffsetStart,
+  faceSetOffsetTicks,
   faceSetOffsetUnavailable,
   offsetFacesCommitMessage,
   offsetFacesName
@@ -90,14 +92,128 @@ describe('face set offset', () => {
     expect(start.members).toEqual([{ topologyId: 'face:1', hash: 1 }]);
   });
 
-  it('refuses a set that is not one plane before any handle appears', () => {
-    const document = slottedBlock();
+  it('arms parallel faces at different heights as one chained set', () => {
+    const start = faceSetOffsetStart(slottedBlock(), [
+      pick(leftTop),
+      pick(floor)
+    ]);
+    expect(start.face.hash).toBe(floor.hash);
+    expect(start.members).toEqual([{ topologyId: 'face:1', hash: 1 }]);
+  });
+
+  it('refuses faces that face different ways before any handle appears', () => {
     expect(() =>
-      faceSetOffsetStart(document, [pick(leftTop), pick(floor)])
-    ).toThrow(OFFSET_SET_NOT_COPLANAR);
-    expect(() =>
-      faceSetOffsetStart(document, [pick(leftTop), pick(wall)])
+      faceSetOffsetStart(slottedBlock(), [pick(leftTop), pick(wall)])
     ).toThrow(OFFSET_SET_NOT_SAME_NORMAL);
+  });
+
+  it('orders a chained set by plane, the plane the move leads with first', () => {
+    const input = {
+      document: slottedBlock(),
+      bodyId: BODY,
+      face: { topologyId: floor.topologyId, hash: floor.hash },
+      members: [leftTop, rightTop].map((face) => ({
+        topologyId: face.topologyId,
+        hash: face.hash
+      }))
+    };
+    const hashes = (planes: FaceTopology[][] | null) =>
+      planes?.map((group) => group.map((face) => face.hash));
+    // Pushed out, the top moves first and the floor follows into its room;
+    // pulled in, the floor leads.
+    expect(hashes(faceSetOffsetPlanes(input, 2))).toEqual([[1, 2], [3]]);
+    expect(hashes(faceSetOffsetPlanes(input, -2))).toEqual([[3], [1, 2]]);
+    expect(
+      hashes(
+        faceSetOffsetPlanes(
+          {
+            ...input,
+            face: { topologyId: rightTop.topologyId, hash: rightTop.hash },
+            members: [{ topologyId: leftTop.topologyId, hash: leftTop.hash }]
+          },
+          2
+        )
+      )
+    ).toEqual([[2, 1]]);
+    expect(
+      faceSetOffsetPlanes(
+        { ...input, members: [{ topologyId: 'face:99', hash: 99 }] },
+        2
+      )
+    ).toBeNull();
+  });
+
+  it('previews a chained set’s leading plane alone, and nothing for one plane', () => {
+    const input = {
+      document: slottedBlock(),
+      bodyId: BODY,
+      face: { topologyId: floor.topologyId, hash: floor.hash },
+      members: [leftTop, rightTop].map((face) => ({
+        topologyId: face.topologyId,
+        hash: face.hash
+      }))
+    };
+    const operation = (command: ReturnType<typeof buildOffsetFaceSetLead>) =>
+      (command?.payload as { operation?: DirectEditOperation } | undefined)
+        ?.operation;
+    const out = operation(buildOffsetFaceSetLead({ ...input, offset: 2 }));
+    expect(out).toMatchObject({
+      kind: 'offset-faces',
+      faceHash: 1,
+      offset: 2,
+      additionalFaces: [{ faceHash: 2 }]
+    });
+    // The floor leads a cut alone: the one-face move of it.
+    expect(
+      operation(buildOffsetFaceSetLead({ ...input, offset: -2.00049 }))
+    ).toEqual({
+      kind: 'offset-face',
+      faceHash: 3,
+      sourceSurfaceType: 'plane',
+      sourceArea: 200,
+      sourceCenter: floor.geometry!.center,
+      sourceNormal: UP,
+      offset: -2
+    });
+    expect(
+      buildOffsetFaceSetLead({
+        ...input,
+        face: { topologyId: rightTop.topologyId, hash: rightTop.hash },
+        members: [{ topologyId: leftTop.topologyId, hash: leftTop.hash }],
+        offset: 2
+      })
+    ).toBeNull();
+  });
+
+  it('places a direction tick on every face of the set, the handle’s last', () => {
+    const tilted = plane(6, { x: 1, y: 2, z: 3 }, { x: 0, y: 0, z: 4 });
+    const document = slottedBlock();
+    const body = document.derived.bodyRepresentations[BODY]!;
+    body.topology!.faces.push(tilted);
+    expect(
+      faceSetOffsetTicks({
+        document,
+        bodyId: BODY,
+        face: { topologyId: floor.topologyId, hash: floor.hash },
+        members: [
+          { topologyId: leftTop.topologyId, hash: leftTop.hash },
+          { topologyId: tilted.topologyId, hash: tilted.hash }
+        ]
+      })
+    ).toEqual([
+      { point: leftTop.geometry!.center, normal: UP },
+      // Unit length, whatever the stored normal's length.
+      { point: tilted.geometry!.center, normal: UP },
+      { point: floor.geometry!.center, normal: UP }
+    ]);
+    expect(
+      faceSetOffsetTicks({
+        document,
+        bodyId: BODY,
+        face: { topologyId: floor.topologyId, hash: floor.hash },
+        members: [{ topologyId: bore.topologyId, hash: bore.hash }]
+      })
+    ).toEqual([]);
   });
 
   it('withholds the verb, with the reason, from sets that cannot move together', () => {
@@ -105,7 +221,7 @@ describe('face set offset', () => {
     expect(
       faceSetOffsetUnavailable(document, [pick(leftTop), pick(rightTop)])
     ).toBeNull();
-    // Flat but not one plane: offered, then refused by name when chosen.
+    // Flat and parallel at another height: offered, and it arms.
     expect(
       faceSetOffsetUnavailable(document, [pick(leftTop), pick(floor)])
     ).toBeNull();
