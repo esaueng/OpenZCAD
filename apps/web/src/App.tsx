@@ -2125,7 +2125,11 @@ import {
   type ToastModel
 } from './lib/toasts';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
-import { keptOffsetValue, offsetFaceCommitMessage } from './lib/offsetChip';
+import {
+  keptOffsetValue,
+  offsetFaceCommitMessage,
+  offsetRefusalInTotal
+} from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
@@ -31271,6 +31275,38 @@ export function App() {
       : null;
 
   /**
+   * U11: the refusal as the open keypad reads it. A face offset entered as
+   * a Total hears its limit, its remedy and its Keep as Totals too; the
+   * kernel's offset numbers stay in the cause and the technical details.
+   */
+  function keypadRefusalOperation(
+    operation: SelectionCalloutOperation,
+    request: KeypadRequest
+  ): SelectionCalloutOperation {
+    if (
+      request.kind !== 'offset' ||
+      request.totalBaseline === undefined ||
+      !operation.error
+    ) {
+      return operation;
+    }
+    const read = offsetRefusalInTotal(
+      operation.error,
+      operation.keepLastValidLabel ? keepValue : null,
+      {
+        baseline: request.totalBaseline,
+        sense: request.totalSense ?? 1,
+        units: doc?.units ?? ''
+      }
+    );
+    return {
+      ...operation,
+      error: read.error,
+      keepLastValidLabel: read.keepLabel ?? undefined
+    };
+  }
+
+  /**
    * A selection-first pick's operation rides the selection chip: its phase,
    * its refusal and the way out, with the chip's pressed verbs as its
    * switch. The column-top chip that said the same was one more surface lit
@@ -37895,7 +37931,10 @@ export function App() {
                       refusal={
                         calloutWithOperation?.operation?.error
                           ? {
-                              operation: calloutWithOperation.operation,
+                              operation: keypadRefusalOperation(
+                                calloutWithOperation.operation,
+                                keypad
+                              ),
                               onPickAnother: pickAnotherAfterRefusal,
                               pickAnotherLabel:
                                 interaction.mode === 'edges'
@@ -38878,6 +38917,9 @@ export function App() {
                   }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
+                  // U11: a kernel refusal says the input it is about; the
+                  // last request that built stays on screen meanwhile.
+                  refusalInput={inPlace.refusalInput}
                   unitLabel={displayLengthName(doc.units)}
                   onTrySize={(dimension, size) => {
                     commitInPlacePanelValue(dimension, formatNumber(size));
