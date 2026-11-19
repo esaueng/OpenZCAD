@@ -430,6 +430,36 @@ describe('the offset-faces contract', () => {
     ).toThrow(/does not match its legacy face hash/);
   });
 
+  it('refuses on replay a reference that names another face than its hash', () => {
+    // Authoring refuses this pair; a stored document is checked again, or
+    // the reference (resolved first, pins skipped) would move another face.
+    const reference = {
+      kind: 'face',
+      currentHash: 3,
+      witnessVersion: 1
+    };
+    expect(() =>
+      assertDirectEditOperation({
+        ...valid(),
+        additionalFaces: [{ ...face(2), faceReference: reference }]
+      } as unknown as DirectEditOperation)
+    ).toThrow(/face 2 reference does not match its face hash/);
+    expect(() =>
+      assertDirectEditOperation({
+        ...valid(),
+        faceReference: reference
+      } as unknown as DirectEditOperation)
+    ).toThrow(/face 1 reference does not match its face hash/);
+    expect(() =>
+      assertDirectEditOperation({
+        ...valid(),
+        additionalFaces: [
+          { ...face(2), faceReference: { ...reference, currentHash: 2 } }
+        ]
+      } as unknown as DirectEditOperation)
+    ).not.toThrow();
+  });
+
   it('repairs only the first face and keeps the others pinned', () => {
     const operation = { ...valid(), offset: 'lift' };
     const repaired = repairedDirectEditOperation(operation, {

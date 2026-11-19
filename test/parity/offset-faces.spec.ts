@@ -26,6 +26,7 @@ import {
   RemusKernel,
   loadRemusTranslators
 } from '../../packages/kernel-adapter/src/remus-runtime';
+import { shoulderCapStep } from '../support/shoulder-cap';
 
 const X = 40;
 const Y = 20;
@@ -255,6 +256,73 @@ describe('offset a coplanar face set', { timeout: 180_000 }, () => {
     );
     expect(derived.bodyRepresentations[source.bodyId]!.volume).toBeCloseTo(
       SOURCE_VOLUME,
+      6
+    );
+  });
+  it('refuses a set the kernel can move only with approximate surfaces', async () => {
+    // The R5-filleted shoulder of the shoulder-cap fixture, beside a post
+    // bridged to it whose top is on the shoulder's plane. Raised 5 together,
+    // the shoulder's rim can be rebuilt only by the sampled cap join a
+    // single offset discloses; a set stays exact and takes the refusal.
+    const height = 19.1;
+    const io = await loadRemusTranslators();
+    const kernel = new RemusKernel();
+    let step: string;
+    try {
+      let solid = kernel.deserializeSolids(
+        io.importStep(await shoulderCapStep())
+      )[0]!;
+      const bridge = kernel.makeBox(14, 20, 5);
+      kernel.transformSolid(bridge, translation(31, 0, 0));
+      const post = kernel.makeBox(10, 20, height);
+      kernel.transformSolid(post, translation(40, 0, 0));
+      solid = kernel.fuse(kernel.fuse(solid, bridge), post);
+      step = new TextDecoder().decode(
+        io.exportStep(kernel.serializeSolids(Uint32Array.of(solid)))
+      );
+    } finally {
+      kernel.free();
+    }
+    const imported = importStepBody(
+      createProjectDocument('Shoulder and post', toUserId('user_offset_faces')),
+      {
+        name: 'Shoulder',
+        sourceName: 'shoulder.step',
+        artifactId: 'artifact_shoulder_post',
+        stepText: step
+      }
+    );
+    const derived = await adapter.syncDocument(imported.document);
+    expect(derived.warnings).toEqual([]);
+    const before = derived.bodyRepresentations[imported.bodyId]!;
+    const tops = before.topology!.faces.filter(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        face.geometry.normal!.z > 0.999 &&
+        Math.abs(face.geometry.center.z - height) < 1e-6
+    );
+    expect(tops).toHaveLength(2);
+    const [first, ...rest] = tops.map(snapshot);
+    const candidate = commandFactories
+      .directEditBody({
+        name: 'Offset Faces',
+        targetBodyId: imported.bodyId,
+        operation: {
+          kind: 'offset-faces',
+          ...first!,
+          offset: 5,
+          additionalFaces: rest
+        }
+      })
+      .apply(imported.document);
+    const edited = await adapter.syncDocument(candidate);
+    expect(edited.warnings).toHaveLength(1);
+    expect(edited.warnings[0]).not.toContain('approximate');
+    expect(
+      (edited.featureWarnings ?? []).map((warning) => warning.kind)
+    ).toEqual(['build-failed']);
+    expect(edited.bodyRepresentations[imported.bodyId]!.volume).toBeCloseTo(
+      before.volume,
       6
     );
   });

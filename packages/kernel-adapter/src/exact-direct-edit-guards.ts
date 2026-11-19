@@ -65,6 +65,23 @@ function assertOffsetFaceSnapshot(
   }
   assertRemovedFaceSnapshot(value, label);
   assertDirectEditVector(value.sourceNormal, `${label} normal`);
+  // A reference resolves before the hash, and a lineage-resolved face skips
+  // the measurement pins, so a reference naming another face's hash would
+  // move that face. Authoring refuses the pair; so does replay.
+  const reference = value.faceReference;
+  if (reference !== undefined) {
+    const named = reference as Record<string, unknown> | null;
+    if (
+      !named ||
+      typeof named !== 'object' ||
+      named.kind !== 'face' ||
+      named.currentHash !== value.faceHash
+    ) {
+      throw new Error(
+        `Direct-edit offset ${label} reference does not match its face hash.`
+      );
+    }
+  }
 }
 
 export function assertDirectEditOperation(

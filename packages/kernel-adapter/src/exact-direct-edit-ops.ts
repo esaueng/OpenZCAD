@@ -1628,8 +1628,7 @@ function offsetFaces(
   operation: Extract<DirectEditOperation, { kind: 'offset-faces' }>,
   scope: Record<string, number>,
   producingFeatureId: FeatureId | undefined,
-  deferOutputLineage: boolean,
-  onAdvisory?: (message: string) => void
+  deferOutputLineage: boolean
 ): ExactShape {
   if (geometry?.surfaceType !== 'plane' || !geometry.normal) {
     throw new Error('The selected face is no longer planar.');
@@ -1727,7 +1726,9 @@ function offsetFaces(
       faces,
       offset,
       deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null,
-      true
+      // Exact only: a set never takes the sampled cap join a single
+      // offset may disclose and keep; the kernel's exact refusal stands.
+      false
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1755,9 +1756,6 @@ function offsetFaces(
   });
   if (facetFallback) {
     throw new Error(facetFallback);
-  }
-  if (moved.approximateCapJoin) {
-    onAdvisory?.('The upper rim was rebuilt with approximate corner surfaces.');
   }
   if (deferOutputLineage) return { solids: [output] };
   if (!moved.relation || moved.relation.inferred) {
@@ -2246,8 +2244,7 @@ export function applyDirectEdit(
       operation,
       scope,
       producingFeatureId,
-      deferOutputLineage,
-      onAdvisory
+      deferOutputLineage
     );
   }
 
