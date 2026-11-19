@@ -195,7 +195,9 @@ for (const directManipulation of [true, false]) {
       expect(placed[0]).toMatchObject({ text: 'Hi', align: 'center' });
       // Its baseline origin is the picked point, on screen as in the model.
       const [origin] = (
-        await readLiveSketch(canvas, [{ x: placed[0]!.x, y: placed[0]!.y }])
+        await readLiveSketch(canvas, [
+          { x: Number(placed[0]!.x), y: Number(placed[0]!.y) }
+        ])
       ).screen;
       const now = await projected(canvas, PICK);
       expect(Math.hypot(origin!.x - now.x, origin!.y - now.y)).toBeLessThan(2);
@@ -257,7 +259,9 @@ test(
     );
     expect(placed).toHaveLength(1);
     const [origin] = (
-      await readLiveSketch(canvas, [{ x: placed[0]!.x, y: placed[0]!.y }])
+      await readLiveSketch(canvas, [
+        { x: Number(placed[0]!.x), y: Number(placed[0]!.y) }
+      ])
     ).screen;
     const now = await projected(canvas, OTHER);
     expect(Math.hypot(origin!.x - now.x, origin!.y - now.y)).toBeLessThan(2);
