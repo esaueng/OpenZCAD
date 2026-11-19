@@ -15,8 +15,7 @@
 import {
   PIPE_THREAD_TAPER,
   millimetresPerUnit,
-  isoMetricThreadForBore,
-  nearestIsoMetricThread,
+  metricThreadSizeOnFace,
   pipeThreadOnFace,
   threadSpanOnFace,
   type FeatureId,
@@ -248,16 +247,13 @@ export function resolveThread(
     return resolvePipeThread(data, data.profile, values, face, mm);
   }
   const { kind, radius, faceLength } = face;
-  const typedMajor = values.optional(data.majorDiameter, 'major diameter');
-  const typedPitch = values.optional(data.pitch, 'pitch');
-  // The face's ISO size, when the feature leaves the diameter to it.
-  const fromFace =
-    kind === 'external'
-      ? nearestIsoMetricThread(2 * radius * mm)
-      : isoMetricThreadForBore(2 * radius * mm);
-  const nominal =
-    typedMajor ?? (kind === 'external' ? 2 * radius : fromFace.nominal / mm);
-  const pitch = typedPitch ?? nearestIsoMetricThread(nominal * mm).pitch / mm;
+  const { nominal, pitch } = metricThreadSizeOnFace(
+    kind,
+    2 * radius,
+    mm,
+    values.optional(data.majorDiameter, 'major diameter'),
+    values.optional(data.pitch, 'pitch')
+  );
   const form =
     data.profile === 'custom'
       ? {

@@ -6867,6 +6867,26 @@ export function isoMetricThreadForBore(boreMm: number): IsoMetricThreadSize {
   );
 }
 
+/** The nominal size before fit clearance or crest truncation, in document units. */
+export function metricThreadSizeOnFace(
+  kind: 'external' | 'internal',
+  diameter: number,
+  mmPerUnit: number,
+  majorDiameter?: number,
+  pitch?: number
+): { nominal: number; pitch: number } {
+  const nominal =
+    majorDiameter ??
+    (kind === 'external'
+      ? diameter
+      : isoMetricThreadForBore(diameter * mmPerUnit).nominal / mmPerUnit);
+  return {
+    nominal,
+    pitch:
+      pitch ?? nearestIsoMetricThread(nominal * mmPerUnit).pitch / mmPerUnit
+  };
+}
+
 /** `M6×1`: a metric thread's callout from its diameter and pitch in mm. */
 export function isoMetricThreadLabel(
   nominalMm: number,

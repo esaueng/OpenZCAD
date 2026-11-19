@@ -1,9 +1,11 @@
 import {
   ISO_METRIC_COARSE_THREADS,
   PIPE_THREAD_SIZES,
+  displayLengthName,
   millimetresPerUnit,
   isPipeThreadSize,
   isoMetricThreadLabel,
+  metricThreadSizeOnFace,
   pipeThreadForFace,
   pipeThreadLabel,
   pipeThreadOnFace,
@@ -17,6 +19,7 @@ import {
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
+import { formatNumber } from '../model';
 import type {
   FacePick,
   HandleSpec,
@@ -205,6 +208,50 @@ function pipeSpecFor(
         2 * geometry.radius * millimetresPerUnit(units)
       )
     : null;
+}
+
+function threadSizeHint(
+  face: FacePick,
+  geometry: ThreadFace,
+  request: ThreadRequest,
+  ctx: InPlaceContext | undefined
+): string | null {
+  const kind = threadFaceKnownKind(face);
+  if (!kind) return null;
+  const type = kind === 'external' ? 'External thread' : 'Internal thread';
+  const units = ctx?.units ?? 'mm';
+  const mm = millimetresPerUnit(units);
+  const length = (value: number) => {
+    const text =
+      units === 'mm' ? formatNumber(value) : Number(value.toPrecision(6));
+    return `${text} ${displayLengthName(units)}`;
+  };
+  const standard = pipeStandard(request.profile);
+  if (standard) {
+    const spec = pipeSpecFor(standard, request.pipeSize, face, units);
+    return spec
+      ? `${type} · ${pipeThreadLabel(standard, spec.size, kind)} · ${length(spec.pitch / mm)} pitch`
+      : type;
+  }
+  const evaluate = (value: ParamValue | undefined) =>
+    typeof value === 'string' ? (ctx?.evaluate?.(value) ?? null) : value;
+  const major = evaluate(request.majorDiameter);
+  const pitch = evaluate(request.pitch);
+  if (
+    major === null ||
+    pitch === null ||
+    (major !== undefined && (!Number.isFinite(major) || major <= 0)) ||
+    (pitch !== undefined && (!Number.isFinite(pitch) || pitch <= 0))
+  )
+    return type;
+  const size = metricThreadSizeOnFace(
+    kind,
+    2 * geometry.radius,
+    mm,
+    major,
+    pitch
+  );
+  return `${type} · Ø${length(size.nominal)} nominal · ${length(size.pitch)} pitch`;
 }
 
 /**
@@ -1340,14 +1387,19 @@ export const threadSpec: InPlaceToolSpec = {
         ) ?? null)
       : { length };
   },
-  hint(slots: InPlaceSlots) {
+  hint(slots, _options, ctx, request) {
     const face = slots.faces[0];
     if (!face) {
       return 'Pick a cylindrical face or hole, near the end the thread starts at';
     }
-    return threadFace(face)
-      ? 'Drag the arrow to stop the thread short · Enter to finish'
-      : 'Enter to finish';
+    const geometry = threadFace(face);
+    if (!geometry) return 'Enter to finish';
+    const size =
+      request?.tool === 'thread'
+        ? threadSizeHint(face, geometry, request.thread, ctx)
+        : null;
+    const action = 'Drag the arrow to stop the thread short · Enter to finish';
+    return size ? `${size} · ${action}` : action;
   },
   ready: (slots: InPlaceSlots) => slots.faces.length > 0,
   request(

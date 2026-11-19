@@ -360,6 +360,78 @@ const numbersOf = (values: Record<string, ParamValue>) =>
   ) as Record<string, number>;
 
 describe('in-place thread: picks and the dragged end (U11)', () => {
+  it.each([
+    [true, 2.45, 'External thread · Ø4.9 mm nominal · 0.8 mm pitch'],
+    [false, 2.5, 'Internal thread · Ø6 mm nominal · 1 mm pitch']
+  ])(
+    'reads the resolved nominal and pitch for boss=%s',
+    (boss, radius, label) => {
+      const slots = {
+        ...SLOTS,
+        faces: [{ ...BOSS, cylinder: { ...BOSS.cylinder!, boss, radius } }]
+      };
+      const options = defaults();
+      const request = threadSpec.request(slots, initialValues(), options, CTX);
+      expect(threadSpec.hint(slots, options, CTX, request)).toContain(label);
+    }
+  );
+
+  it('reads explicit values and expressions in document units without guessing an unknown side', () => {
+    const face = { ...BOSS, cylinder: { ...BOSS.cylinder!, boss: true } };
+    const slots = { ...SLOTS, faces: [face] };
+    const options = defaults({ size: 'custom' });
+    const ctx = {
+      ...CTX,
+      units: 'inch' as const,
+      evaluate: (value: ParamValue) => (value === 'tpiPitch' ? 0.05 : null)
+    };
+    const request = threadSpec.request(
+      slots,
+      initialValues({ majorDiameter: 0.25, pitch: 'tpiPitch' }),
+      options,
+      ctx
+    );
+    expect(threadSpec.hint(slots, options, ctx, request)).toContain(
+      'External thread · Ø0.25 in nominal · 0.05 in pitch'
+    );
+    expect(threadSpec.hint(slots, options, CTX, request)).toBe(
+      'External thread · Drag the arrow to stop the thread short · Enter to finish'
+    );
+    expect(
+      threadSpec.hint({ ...SLOTS, faces: [BOSS] }, options, ctx, request)
+    ).toBe('Drag the arrow to stop the thread short · Enter to finish');
+  });
+
+  it('keeps different pitches distinct in metre documents', () => {
+    const ctx = { ...CTX, units: 'm' as const };
+    const options = defaults();
+    const hint = (radius: number) => {
+      const face = {
+        ...BOSS,
+        cylinder: { ...BOSS.cylinder!, boss: true, radius }
+      };
+      const slots = { ...SLOTS, faces: [face] };
+      const request = threadSpec.request(slots, initialValues(), options, ctx);
+      return threadSpec.hint(slots, options, ctx, request);
+    };
+    expect(hint(0.005)).toContain('Ø0.01 m nominal · 0.0015 m pitch');
+    expect(hint(0.006)).toContain('Ø0.012 m nominal · 0.00175 m pitch');
+  });
+
+  it('shows a pipe designation with pitch converted to inches', () => {
+    const ctx = { ...CTX, units: 'inch' as const };
+    const face = {
+      ...BOSS,
+      cylinder: { ...BOSS.cylinder!, boss: true, radius: 0.27 }
+    };
+    const slots = { ...SLOTS, faces: [face] };
+    const options = defaults({ profile: 'npt' });
+    const request = threadSpec.request(slots, initialValues(), options, ctx);
+    expect(threadSpec.hint(slots, options, ctx, request)).toContain(
+      'External thread · 1/4-18 NPT · 0.0555556 in pitch'
+    );
+  });
+
   it('reads the picked cylinder: its ends, axis, length and the side clicked', () => {
     const near = threadFace({ ...BOSS, point: { x: 0, y: -3, z: 10 } });
     expect(near).toMatchObject({
