@@ -259,6 +259,74 @@ test(
   }
 );
 
+for (const directManipulation of [true, false]) {
+  test(
+    `A picked shaft offers Thread on its card, starting at the picked end (direct manipulation ${directManipulation ? 'on' : 'off'})`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      await stubApi(page, { panelLayout: MODEL_ONLY });
+      await page.addInitScript((enabled) => {
+        const key = 'openzcad-app-settings:v1';
+        const stored = JSON.parse(localStorage.getItem(key) ?? '{}') as {
+          experiments?: Record<string, unknown>;
+        };
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            ...stored,
+            experiments: {
+              ...stored.experiments,
+              directManipulation: enabled
+            }
+          })
+        );
+      }, directManipulation);
+      const canvas = await openDocument(page, boss());
+      // No tool first: the wall is picked near its top, and its card
+      // names what it is for.
+      await setSelectionFilter(page, 'Face');
+      await clickWorldPoint(page, [0, -6, 10]);
+      const card = page.locator('.selection-rail');
+      const thread = card.getByRole('button', { name: 'Selection: Thread' });
+      await expect(thread).toBeEnabled({ timeout: 60_000 });
+      // A curved wall takes no sketch and no hole.
+      await expect(
+        card.getByRole('button', { name: 'Selection: Sketch' })
+      ).toHaveCount(0);
+      await expect(
+        card.getByRole('button', { name: 'Selection: Hole' })
+      ).toHaveCount(0);
+
+      // The pick is the thread's face: no second click, sized at once.
+      await thread.click();
+      const bar = page.getByRole('group', { name: 'Thread command' });
+      await expect(bar).toBeVisible();
+      await expect(bar).not.toContainText('near the end the thread starts at');
+      await expect(page.getByTestId('command-handle-length')).toHaveText(
+        'Length 12 mm'
+      );
+      // It starts at the top, where the wall was clicked: the arrow on its
+      // free end stands at the bottom.
+      await waitForStillViewport(page);
+      await expect
+        .poll(async () => (await commandHandles(canvas)).length?.value ?? 0)
+        .toBeCloseTo(12, 6);
+      const grip = (await commandHandles(canvas)).length!;
+      const top = await projected(canvas, [0, -6, 12]);
+      const bottom = await projected(canvas, [0, -6, 0]);
+      expect(Math.hypot(grip.x - bottom.x, grip.y - bottom.y)).toBeLessThan(
+        Math.hypot(grip.x - top.x, grip.y - top.y)
+      );
+      await bar.locator('summary').click();
+      await expect(bar).toContainText('Sized from the Ø12 mm face');
+      await bar.getByRole('button', { name: 'Cancel' }).click();
+      await expect(bar).toHaveCount(0);
+      expect(await storedThreads(page)).toEqual([]);
+    }
+  );
+}
+
 test(
   'Thread readout shows the bore’s inferred nominal and pitch through History',
   { tag: '@ci-smoke' },

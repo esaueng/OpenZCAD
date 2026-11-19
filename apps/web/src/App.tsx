@@ -865,7 +865,11 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
-import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
+import {
+  heldFaceSetBody,
+  sameFacePick,
+  toggleFaceInSet
+} from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import { facePickCylinder, facePickKey } from './lib/inPlace/cylinderSide';
 import {
@@ -4598,6 +4602,8 @@ export function App() {
   const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
   const lastPickDetailRef = useRef<PickDetail | null>(null);
+  /** The topology that click landed on, so its point is only reused there. */
+  const lastPickTopologyRef = useRef<TopologySelection | null>(null);
   /** Selection-first direct-manipulation mode machine (behind experiment flag). */
   const [interaction, dispatchInteraction] = useReducer(
     interactionReducer,
@@ -10721,9 +10727,8 @@ export function App() {
       ?.geometry?.surfaceType.toLowerCase();
     if (!surface) return undefined;
     if (surface === 'plane') return 'planar';
-    return surface === 'cylinder' || surface === 'cone'
-      ? 'cylindrical'
-      : 'other';
+    if (surface === 'cylinder') return 'cylindrical';
+    return surface === 'cone' ? 'conical' : 'other';
   })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
@@ -11805,13 +11810,19 @@ export function App() {
           )
         : // A face picked with direct manipulation off never arms the
           // machine: the selection itself names it (a hole then starts at
-          // the face's middle, there being no click point to keep).
+          // the face's middle). A thread starts at the end nearer the click,
+          // so the click that picked this face keeps its point for Thread;
+          // a face selected another way has none to keep.
           selectedTopology?.kind === 'face'
           ? inPlaceFacePick(
               selectedTopology.bodyId,
               selectedTopology.topologyId,
               selectedTopology.hash,
-              undefined
+              tool === 'thread' &&
+                lastPickTopologyRef.current &&
+                sameFacePick(lastPickTopologyRef.current, selectedTopology)
+                ? (lastPickDetailRef.current?.point ?? undefined)
+                : undefined
             )
           : null;
     // Faces a box swept first are a face-list command's faces, on one body;
@@ -21446,6 +21457,7 @@ export function App() {
     // The pick detail (click point + normal) anchors selection-first drag
     // handles; stashed for the direct-manipulation flow.
     lastPickDetailRef.current = detail ?? null;
+    lastPickTopologyRef.current = detail ? (selection ?? null) : null;
     setSelectedSketchProfileId(null);
     if (!selection) {
       if (!additive) {
@@ -34921,6 +34933,8 @@ export function App() {
     edgeCount: selectedEdges.length,
     ...(edgeSelectionNaming ? { edgeNoun: edgeSelectionNaming.noun } : {}),
     faceSelected: renderedSelectedTopology?.kind === 'face',
+    // The kind the selection card already read for its verbs.
+    cylindricalFace: calloutFaceSurface === 'cylindrical',
     bodyCount: selectedBodyIds.length,
     regionCount: selectedProfiles.length
   };

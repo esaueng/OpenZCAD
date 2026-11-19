@@ -79,6 +79,11 @@ export interface CommandSelection {
    */
   edgeNoun?: string;
   faceSelected: boolean;
+  /**
+   * The picked face is a cylinder wall: a shaft or a bore. It cannot carry
+   * a sketch, and its tool is Thread, which threads the picked wall.
+   */
+  cylindricalFace?: boolean;
   bodyCount: number;
   regionCount: number;
 }
@@ -139,9 +144,27 @@ export function commandContextKind(
   return 'idle';
 }
 
+/**
+ * A cylinder wall is what Thread and Gear teeth cut, as the shaft in the
+ * reference recording offered Thread on the pick. Sketch needs a flat face
+ * and Hole drills into one, so a curved wall matches neither. Its datum is
+ * the axis it turns about, not a plane. Its own verbs (Radius, then Thread)
+ * lead on the selection rail, so no rail primary is lit beside them.
+ */
+const CYLINDRICAL_FACE: {
+  primary: ToolId | null;
+  applies: readonly ToolId[];
+} = {
+  primary: null,
+  applies: ['thread', 'gear-teeth', 'datum-axis', 'draft', 'thicken', 'shell']
+};
+
 export function commandContextFor(selection: CommandSelection): CommandContext {
   const kind = commandContextKind(selection);
-  const { primary, applies } = CONTEXTS[kind];
+  const { primary, applies } =
+    kind === 'face' && selection.cylindricalFace
+      ? CYLINDRICAL_FACE
+      : CONTEXTS[kind];
   return { kind, primary, applies: applies ? new Set(applies) : null };
 }
 
@@ -169,7 +192,7 @@ export function commandContextLabel(
     case 'edges':
       return selection.edgeNoun ?? plural(selection.edgeCount, 'edge', 'edges');
     case 'face':
-      return '1 face';
+      return selection.cylindricalFace ? '1 cylindrical face' : '1 face';
     case 'region':
       return plural(selection.regionCount, 'region', 'regions');
     case 'bodies':

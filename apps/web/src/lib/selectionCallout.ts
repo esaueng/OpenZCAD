@@ -175,8 +175,9 @@ export interface SelectionCalloutVerbInput {
    * The picked face's kind, read from its topology: what the tools are
    * chosen by when the machine does not hold the face (direct manipulation
    * off). Absent, a face is offered the tools any face takes a start from.
+   * A cone turns about an axis as a cylinder does, but takes no thread.
    */
-  faceSurface?: 'planar' | 'cylindrical' | 'other';
+  faceSurface?: 'planar' | 'cylindrical' | 'conical' | 'other';
   availability: ToolAvailability;
 }
 
@@ -271,7 +272,8 @@ function edgeVerb(
  * The verbs for a pick, in the order they are usually reached for (U09 §5):
  * a face offers its own edit (Resize and Offset on a primitive, Offset, or
  * Radius on a cylinder) and the tools that take it — Sketch, Hole, Shell,
- * Draft, Thicken and Plane for a flat face, Axis and Shell for a round one;
+ * Draft, Thicken and Plane for a flat face, Thread, Axis and Shell for a
+ * cylinder, Axis and Shell for a cone;
  * several faces (a box sweep) Shell and Draft; edges Fillet, Chamfer and
  * Axis; a body Move, Rotate, Scale, Mirror, Split, Pattern and Solid
  * offset; several bodies the booleans and Move; a sketch region Extrude,
@@ -305,6 +307,8 @@ export function selectionCalloutVerbs(
                 'datum-plane'
               );
             case 'cylindrical':
+              return tools('thread', 'datum-axis', 'shell');
+            case 'conical':
               return tools('datum-axis', 'shell');
             case 'other':
               return tools('shell');
@@ -345,7 +349,8 @@ export function selectionCalloutVerbs(
           (capability) => capability.action === 'resize-radial-face'
         )
       ) {
-        verbs.push(...tools('datum-axis', 'shell'));
+        // A shaft or bore is what Thread is for: it leads the tools.
+        verbs.push(...tools('thread', 'datum-axis', 'shell'));
       }
       return verbs;
     }
