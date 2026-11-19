@@ -931,9 +931,11 @@ export type DirectEditOperation =
     }
   | {
       /**
-       * Push or pull several faces of one body that lie on one plane,
-       * together, by one signed distance along their shared outward normal
-       * (Remus's `moveFaces` on the whole group). The face fields name the
+       * Push or pull several faces of one body that all face the same way,
+       * together, by one signed distance along each face's own outward
+       * normal. Faces on one plane move in one Remus `moveFaces` group;
+       * faces on parallel planes at different heights (a stepped top) move
+       * as a chain of such groups, one per plane. The face fields name the
        * first face, as every direct edit names one; `additionalFaces` are the
        * rest, each pinned the same way. A separate kind from `offset-face`
        * so an older build refuses it instead of moving only the first face.
@@ -944,9 +946,9 @@ export type DirectEditOperation =
       sourceSurfaceType: 'plane';
       sourceArea: number;
       sourceCenter: Vector3;
-      /** Outward unit normal every face in the set shares. */
+      /** The first face's outward unit normal; every face in the set faces this way. */
       sourceNormal: Vector3;
-      /** Signed distance along sourceNormal; positive adds material. */
+      /** Signed distance along each face's normal; positive adds material. */
       offset: ParamValue;
       /** The other faces moved with the first; at least one. */
       additionalFaces: OffsetFaceSnapshot[];
@@ -1036,7 +1038,11 @@ export interface RemovedFaceSnapshot {
 /** One face an `offset-faces` edit moves, pinned as it was when picked. */
 export interface OffsetFaceSnapshot extends RemovedFaceSnapshot {
   sourceSurfaceType: 'plane';
-  /** Its outward unit normal when picked; the first face's, within tolerance. */
+  /**
+   * Its own outward unit normal when picked. It points the same way as the
+   * first face's, within tolerance, though the face may lie on a different
+   * parallel plane; a face pointing the opposite or another way is refused.
+   */
   sourceNormal: Vector3;
 }
 

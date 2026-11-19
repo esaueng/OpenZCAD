@@ -304,7 +304,7 @@ export function journaledMove(
  * their original sources even where only one leg saw the merge, so a source
  * the journal refused can never ride the unchanged-witness fallback.
  */
-function composeMoveFacesRelations(
+export function composeMoveFacesRelations(
   first: RemusMoveFacesRelation | null,
   second: RemusMoveFacesRelation | null
 ): RemusMoveFacesRelation | null {

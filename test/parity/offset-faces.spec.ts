@@ -1,13 +1,16 @@
 /**
- * Multi-face Offset (`offset-faces`): faces on one plane pushed or pulled
- * together by one distance through a single Remus `moveFaces` call.
+ * Multi-face Offset (`offset-faces`): faces that all face the same way
+ * pushed or pulled together by one distance. Faces on one plane move in a
+ * single Remus `moveFaces` call; parallel faces at different heights move as
+ * a chain of such calls, one per plane, each later face carried through the
+ * step's exact journal face map.
  *
  * The body: a 40 × 20 × 10 block with a 10 wide, 5 deep slot cut across its
  * top, imported from STEP so its faces carry no construction names. The slot
  * splits the top into two coplanar 15 × 20 faces; the slot's floor is
  * parallel to them, 5 lower. Kept beside the parity corpus because a kernel
- * refresh can move the group move, its refusals, or the drag preview's
- * prepared path, and each would otherwise ship silently.
+ * refresh can move the group move, its refusals, the chain's face maps, or
+ * the drag preview's prepared path, and each would otherwise ship silently.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -47,7 +50,7 @@ interface Built {
 const translation = (x: number, y: number, z: number) =>
   Float64Array.of(1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1);
 
-describe('offset a coplanar face set', { timeout: 180_000 }, () => {
+describe('offset a face set', { timeout: 180_000 }, () => {
   let adapter: RemusKernelAdapter;
   let source: {
     document: ProjectDocument;
@@ -186,22 +189,151 @@ describe('offset a coplanar face set', { timeout: 180_000 }, () => {
     });
   }
 
-  it('refuses a top with the slot floor: parallel, not coplanar', async () => {
+  /** A body's shape, as plain data two builds can be compared by. */
+  function shapeOf(body: GeometryBodyRepresentation & { volume?: number }) {
+    const topology = body.topology!;
+    return {
+      faces: topology.faces.length,
+      edges: topology.edges.length,
+      edgeLengths: topology.edges
+        .map((edge) => Number(edge.length!.toFixed(6)))
+        .sort((a, b) => a - b),
+      vertices: (topology.vertices ?? [])
+        .map(({ point }) =>
+          [point.x, point.y, point.z].map((value) => value.toFixed(6)).join()
+        )
+        .sort()
+    };
+  }
+
+  /**
+   * The same moves made as single `offset-face` features, one after another:
+   * each face found again on the body the previous feature built.
+   */
+  async function singleOffsets(
+    picks: ((face: FaceTopology) => boolean)[],
+    offset: number
+  ) {
+    let document = source.document;
+    let derived = await adapter.syncDocument(document);
+    for (const pick of picks) {
+      const face =
+        derived.bodyRepresentations[source.bodyId]!.topology!.faces.find(pick);
+      expect(face).toBeDefined();
+      document = commandFactories
+        .directEditBody({
+          name: 'Offset Face',
+          targetBodyId: source.bodyId,
+          operation: { kind: 'offset-face', ...snapshot(face!), offset }
+        })
+        .apply(document);
+      derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+    }
+    return derived.bodyRepresentations[source.bodyId]!;
+  }
+
+  for (const offset of [2, -2, 6]) {
+    it(`moves both tops and the slot floor by ${offset}, as single offsets would`, async () => {
+      // Two planes, three faces: the tops move as one group, the floor as
+      // another, leading plane first. At +6 the floor ends above the tops'
+      // old height, which only that order reaches.
+      const floorArea = source.floor.geometry!.area;
+      const candidate = offsetFaces([...source.tops, source.floor], offset);
+      const built = await builds(candidate);
+      for (const derived of built) {
+        expect(derived.warnings).toEqual([]);
+        const body = derived.bodyRepresentations[source.bodyId]!;
+        if (body.volume !== undefined) {
+          expect(body.volume).toBeCloseTo(
+            SOURCE_VOLUME + (2 * TOP_AREA + floorArea) * offset,
+            6
+          );
+        }
+        expect(body.bbox.max.z).toBeCloseTo(Z + offset, 9);
+      }
+      const chained = built[1]!.bodyRepresentations[source.bodyId]!;
+      const floorAt = (z: number) => (face: FaceTopology) =>
+        face.geometry?.surfaceType === 'plane' &&
+        face.geometry.normal!.z > 0.999 &&
+        Math.abs(face.geometry.center.z - z) < 1e-6 &&
+        Math.abs(face.geometry.center.x - X / 2) < 1e-6;
+      const topAt = (side: 1 | -1, z: number) => (face: FaceTopology) =>
+        face.geometry?.surfaceType === 'plane' &&
+        face.geometry.normal!.z > 0.999 &&
+        Math.abs(face.geometry.center.z - z) < 1e-6 &&
+        Math.sign(face.geometry.center.x - X / 2) === side;
+      const tops = [topAt(-1, Z), topAt(1, Z)];
+      const floor = floorAt(Z - SLOT_DEPTH);
+      const single = await singleOffsets(
+        offset > 0 ? [...tops, floor] : [floor, ...tops],
+        offset
+      );
+      expect(chained.volume).toBeCloseTo(single.volume, 6);
+      expect(shapeOf(chained)).toEqual(shapeOf(single));
+      const step = await adapter.exportStep(candidate, [source.bodyId]);
+      const inspected = await adapter.inspectStep(step);
+      expect(inspected).toMatchObject({ solid: true, valid: true });
+      expect(inspected.volume).toBeCloseTo(single.volume, 4);
+    });
+  }
+
+  it('builds the same solid whatever order the faces are stored in', async () => {
+    const [a, b] = source.tops as [FaceTopology, FaceTopology];
+    const shapes = [];
+    for (const order of [
+      [a, b, source.floor],
+      [source.floor, b, a],
+      [b, source.floor, a]
+    ]) {
+      const derived = await adapter.syncDocument(offsetFaces(order, 3));
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[source.bodyId]!;
+      shapes.push({ volume: body.volume.toFixed(6), ...shapeOf(body) });
+    }
+    expect(shapes[1]).toEqual(shapes[0]);
+    expect(shapes[2]).toEqual(shapes[0]);
+  });
+
+  it('refuses a top with the bottom: opposite normals', async () => {
+    const bottom = (
+      await adapter.syncDocument(source.document)
+    ).bodyRepresentations[source.bodyId]!.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        face.geometry.normal!.z < -0.999
+    );
+    expect(bottom).toBeDefined();
     for (const derived of await builds(
-      offsetFaces([source.tops[0]!, source.floor], 2)
+      offsetFaces([source.tops[0]!, bottom!], 2)
     )) {
       expect(derived.warnings.join('\n')).toContain(
-        'the selected faces are parallel but at different heights'
+        'The selected faces face opposite ways, so one offset would thicken one and thin the other. Offset them separately.'
       );
     }
   });
 
-  it('refuses a top with a slot wall: different normals', async () => {
+  it('refuses a later step that would run into a face left behind', async () => {
+    // One top leads up by 6; the slot floor follows to 11, past the other
+    // top, still at 10 and not in the set.
     const derived = await adapter.syncDocument(
-      offsetFaces([source.tops[0]!, source.wall], 2)
+      offsetFaces([source.tops[0]!, source.floor], 6)
     );
     expect(derived.warnings.join('\n')).toContain(
-      'the selected faces face different directions'
+      "Offsetting face 2 after the others would change the body's topology. Offset fewer faces, or a smaller distance."
+    );
+    expect(derived.bodyRepresentations[source.bodyId]!.volume).toBeCloseTo(
+      SOURCE_VOLUME,
+      6
+    );
+  });
+
+  it('refuses the slot floor with a slot wall: faces that share an edge', async () => {
+    const derived = await adapter.syncDocument(
+      offsetFaces([source.floor, source.wall], 2)
+    );
+    expect(derived.warnings.join('\n')).toContain(
+      'the selected faces meet at an edge and face different directions'
     );
     expect(derived.bodyRepresentations[source.bodyId]!.volume).toBeCloseTo(
       SOURCE_VOLUME,

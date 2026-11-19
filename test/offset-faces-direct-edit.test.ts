@@ -15,7 +15,8 @@ import {
   type DirectEditOperation,
   type FaceTopology,
   type OffsetFaceSnapshot,
-  type ProjectDocument
+  type ProjectDocument,
+  type Vector3
 } from '@openzcad/shared';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
@@ -25,18 +26,21 @@ import {
 import { assertDirectEditOperation } from '../packages/kernel-adapter/src/exact-direct-edit-guards';
 
 /**
- * Multi-face Offset: a set of faces on one plane pushed or pulled together
- * by one distance along their shared outward normal (`offset-faces`).
+ * Multi-face Offset: a set of faces that all face the same way pushed or
+ * pulled together by one distance along each face's outward normal
+ * (`offset-faces`). Faces on one plane move as one group; parallel faces at
+ * different heights move as a chain of groups, one per plane.
  *
  * The body is a 40 x 20 x 5 plate with two 10 x 10 posts standing on it,
  * each `POST_HEIGHT` tall, fused into one solid. The two post tops are
- * coplanar and face +z: the set the edit moves. The plate's own top, also
- * facing +z but lower, and a post's side wall are the faces a set must not
- * mix with them.
+ * coplanar and face +z; the plate's own top also faces +z, lower. The
+ * plate's bottom faces the opposite way, and a post's side wall another
+ * way: the faces a set must not mix with them.
  */
 const PLATE_VOLUME = 40 * 20 * 5;
 const POST_AREA = 10 * 10;
 const POST_HEIGHT = 10;
+const PLATE_TOP_AREA = 40 * 20 - 2 * POST_AREA;
 
 let adapter: ExactKernelAdapter | undefined;
 afterAll(() => adapter?.dispose());
@@ -118,6 +122,28 @@ function postTops(document: ProjectDocument, bodyId: BodyId, z: number) {
   return tops;
 }
 
+function plateTopOf(document: ProjectDocument, bodyId: BodyId): FaceTopology {
+  const tops = planar(
+    facesOf(document, bodyId),
+    { x: 0, y: 0, z: 1 },
+    (face) => Math.abs(face.geometry!.center.z - 5) < 1e-9
+  );
+  expect(tops).toHaveLength(1);
+  expect(tops[0]!.geometry!.area).toBeCloseTo(PLATE_TOP_AREA, 9);
+  return tops[0]!;
+}
+
+/** The body's vertices, rounded and sorted: its edges' end positions. */
+function vertexPoints(body: {
+  topology?: { vertices?: { point: Vector3 }[] };
+}) {
+  return (body.topology?.vertices ?? [])
+    .map(({ point }) =>
+      [point.x, point.y, point.z].map((v) => v.toFixed(6)).join(',')
+    )
+    .sort();
+}
+
 function snapshot(face: FaceTopology): OffsetFaceSnapshot {
   return {
     faceHash: face.hash,
@@ -166,7 +192,7 @@ async function edit(
   return adapter!.syncDocument(withEdit(document, bodyId, operation));
 }
 
-describe('offsetting a coplanar face set', () => {
+describe('offsetting a face set', () => {
   it('grows and shrinks both post tops together, exactly', async () => {
     const { document, bodyId } = await built();
     const tops = postTops(document, bodyId, 5 + POST_HEIGHT);
@@ -202,48 +228,154 @@ describe('offsetting a coplanar face set', () => {
     );
   }, 60_000);
 
-  it('refuses parallel faces at different heights by name', async () => {
+  it('moves parallel faces at different heights together, exactly', async () => {
+    // A post top and the plate's own top: parallel, 10 apart. The chain
+    // moves the leading plane first, so the plate top never meets the
+    // post top it rises towards.
     const { document, bodyId } = await built();
     const [top] = postTops(document, bodyId, 5 + POST_HEIGHT);
-    const plateTop = planar(
-      facesOf(document, bodyId),
-      { x: 0, y: 0, z: 1 },
-      (face) => Math.abs(face.geometry!.center.z - 5) < 1e-9
-    );
-    expect(plateTop).toHaveLength(1);
+    const plateTop = plateTopOf(document, bodyId);
+    for (const offset of [2, -2]) {
+      const derived = await edit(
+        document,
+        bodyId,
+        offsetFaces([top!, plateTop], offset)
+      );
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[bodyId]!;
+      expect(body.volume).toBeCloseTo(
+        PLATE_VOLUME +
+          2 * POST_AREA * POST_HEIGHT +
+          (POST_AREA + PLATE_TOP_AREA) * offset,
+        6
+      );
+      // Post 2, not in the set, stays at its height.
+      expect(body.bbox.max.z).toBeCloseTo(
+        5 + POST_HEIGHT + Math.max(offset, 0),
+        9
+      );
+      const upAt = (z: number) =>
+        planar(
+          body.topology!.faces,
+          { x: 0, y: 0, z: 1 },
+          (face) => Math.abs(face.geometry!.center.z - z) < 1e-9
+        );
+      expect(upAt(5 + offset)).toHaveLength(1);
+      expect(upAt(5 + POST_HEIGHT + offset)).toHaveLength(1);
+      expect(upAt(5 + POST_HEIGHT)).toHaveLength(1);
+    }
+  }, 60_000);
+
+  it('builds the same solid whatever order the faces are stored in', async () => {
+    const { document, bodyId } = await built();
+    const tops = postTops(document, bodyId, 5 + POST_HEIGHT);
+    const plateTop = plateTopOf(document, bodyId);
+    const orders = [
+      [tops[0]!, tops[1]!, plateTop],
+      [plateTop, tops[1]!, tops[0]!],
+      [tops[1]!, plateTop, tops[0]!]
+    ];
+    const results = [];
+    for (const order of orders) {
+      const derived = await edit(document, bodyId, offsetFaces(order, 3));
+      expect(derived.warnings).toEqual([]);
+      results.push(derived.bodyRepresentations[bodyId]!);
+    }
+    for (const body of results) {
+      expect(body.volume).toBeCloseTo(
+        PLATE_VOLUME + 2 * POST_AREA * POST_HEIGHT + 3 * 40 * 20,
+        6
+      );
+      expect(body.topology!.faces).toHaveLength(
+        results[0]!.topology!.faces.length
+      );
+      expect(vertexPoints(body)).toEqual(vertexPoints(results[0]!));
+    }
+  }, 60_000);
+
+  it('refuses faces that face opposite ways by name', async () => {
+    const { document, bodyId } = await built();
+    const [top] = postTops(document, bodyId, 5 + POST_HEIGHT);
+    const bottom = planar(facesOf(document, bodyId), { x: 0, y: 0, z: -1 });
+    expect(bottom).toHaveLength(1);
     const derived = await edit(
       document,
       bodyId,
-      offsetFaces([top!, plateTop[0]!], 2)
+      offsetFaces([top!, bottom[0]!], 2)
     );
     expect(derived.warnings).toHaveLength(1);
     expect(derived.warnings[0]).toContain(
-      'the selected faces are parallel but at different heights'
+      'The selected faces face opposite ways, so one offset would thicken one and thin the other. Offset them separately.'
     );
-    // A refused edit leaves the body as the history built it.
     expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
       PLATE_VOLUME + 2 * POST_AREA * POST_HEIGHT,
       6
     );
   }, 60_000);
 
-  it('refuses faces that face different directions by name', async () => {
+  it('refuses a later step that would run into a face left behind', async () => {
+    // Post 1's top leads up by 12; the plate top then follows it to 17,
+    // past post 2's top at 15, which is not in the set.
     const { document, bodyId } = await built();
-    const [top] = postTops(document, bodyId, 5 + POST_HEIGHT);
-    const sides = planar(
-      facesOf(document, bodyId),
-      { x: 1, y: 0, z: 0 },
-      (face) => Math.abs(face.geometry!.area - 10 * POST_HEIGHT) < 1e-6
-    );
-    expect(sides.length).toBeGreaterThan(0);
+    const tops = postTops(document, bodyId, 5 + POST_HEIGHT);
+    const first = tops.find((face) => face.geometry!.center.x < 20)!;
     const derived = await edit(
       document,
       bodyId,
-      offsetFaces([top!, sides[0]!], 2)
+      offsetFaces([first, plateTopOf(document, bodyId)], 12)
     );
     expect(derived.warnings).toHaveLength(1);
     expect(derived.warnings[0]).toContain(
-      'the selected faces face different directions'
+      "Offsetting face 2 after the others would change the body's topology. Offset fewer faces, or a smaller distance."
+    );
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      PLATE_VOLUME + 2 * POST_AREA * POST_HEIGHT,
+      6
+    );
+  }, 60_000);
+
+  it('refuses faces that meet at an edge by name', async () => {
+    // A post's top and its own side wall: the pocket-wall case, not yet
+    // supported.
+    const { document, bodyId } = await built();
+    const tops = postTops(document, bodyId, 5 + POST_HEIGHT);
+    const first = tops.find((face) => face.geometry!.center.x < 20)!;
+    const wall = planar(
+      facesOf(document, bodyId),
+      { x: 1, y: 0, z: 0 },
+      (face) => Math.abs(face.geometry!.center.x - 15) < 1e-9
+    );
+    expect(wall).toHaveLength(1);
+    const derived = await edit(
+      document,
+      bodyId,
+      offsetFaces([first, wall[0]!], 2)
+    );
+    expect(derived.warnings).toHaveLength(1);
+    expect(derived.warnings[0]).toContain(
+      'the selected faces meet at an edge and face different directions'
+    );
+  }, 60_000);
+
+  it('refuses faces that face different directions by name', async () => {
+    // Post 1's top and post 2's side wall: not parallel, and apart.
+    const { document, bodyId } = await built();
+    const tops = postTops(document, bodyId, 5 + POST_HEIGHT);
+    const first = tops.find((face) => face.geometry!.center.x < 20)!;
+    const wall = planar(
+      facesOf(document, bodyId),
+      { x: 1, y: 0, z: 0 },
+      (face) => Math.abs(face.geometry!.center.x - 35) < 1e-9
+    );
+    expect(wall).toHaveLength(1);
+    const derived = await edit(
+      document,
+      bodyId,
+      offsetFaces([first, wall[0]!], 2)
+    );
+    expect(derived.warnings).toHaveLength(1);
+    expect(derived.warnings[0]).toContain(
+      'Offset moves a set of faces together only when they all face the same way, and the selected faces face different directions.'
     );
   }, 60_000);
 
