@@ -34933,12 +34933,8 @@ export function App() {
     edgeCount: selectedEdges.length,
     ...(edgeSelectionNaming ? { edgeNoun: edgeSelectionNaming.noun } : {}),
     faceSelected: renderedSelectedTopology?.kind === 'face',
-    ...(renderedSelectedTopology?.kind === 'face' &&
-    representations[renderedSelectedTopology.bodyId]?.topology?.faces.find(
-      (face) => face.hash === renderedSelectedTopology.hash
-    )?.geometry?.surfaceType === 'cylinder'
-      ? { cylindricalFace: true }
-      : {}),
+    // The kind the selection card already read for its verbs.
+    cylindricalFace: calloutFaceSurface === 'cylindrical',
     bodyCount: selectedBodyIds.length,
     regionCount: selectedProfiles.length
   };
