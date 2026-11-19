@@ -33,14 +33,13 @@ const APPLY_EPSILON = 1e-9;
 function movedField(
   current: ParamValue,
   solved: number,
-  resolve: (value: ParamValue) => number
+  resolve: (value: ParamValue) => number,
+  tolerance = APPLY_EPSILON
 ): boolean {
   const resolved = resolve(current);
   // NaN never compares > epsilon, so an unresolvable current value must be
   // classified explicitly or a broken expression would read as "unmoved".
-  return (
-    !Number.isFinite(resolved) || Math.abs(resolved - solved) > APPLY_EPSILON
-  );
+  return !Number.isFinite(resolved) || Math.abs(resolved - solved) > tolerance;
 }
 
 /**
@@ -51,12 +50,13 @@ function movedField(
 function movedAngle(
   current: ParamValue,
   solved: number,
-  resolve: (value: ParamValue) => number
+  resolve: (value: ParamValue) => number,
+  tolerance = APPLY_EPSILON
 ): boolean {
   const resolved = resolve(current);
   if (!Number.isFinite(resolved)) return true;
   const turn = ((((resolved - solved) % 360) + 540) % 360) - 180;
-  return Math.abs(turn) > APPLY_EPSILON;
+  return Math.abs(turn) > tolerance;
 }
 
 export {
@@ -74,7 +74,8 @@ export {
 export function solvedSketchCommands(
   document: ProjectDocument,
   sketchId: SketchId,
-  outcome: SketchSolveOutcome
+  outcome: SketchSolveOutcome,
+  tolerance = APPLY_EPSILON
 ): AnyCommand[] {
   if (!outcome.converged || outcome.rolledBack) {
     return [];
@@ -94,6 +95,10 @@ export function solvedSketchCommands(
       return Number.NaN;
     }
   };
+  const fieldMoved = (current: ParamValue, solved: number) =>
+    movedField(current, solved, resolve, tolerance);
+  const angleMoved = (current: ParamValue, solved: number) =>
+    movedAngle(current, solved, resolve, tolerance);
   const commands: AnyCommand[] = [];
   for (const solved of outcome.objects) {
     if (!sketch.objectIds.includes(solved.objectId)) {
@@ -107,10 +112,10 @@ export function solvedSketchCommands(
     let next: SketchObjectData | null = null;
     if (solved.kind === 'line' && data.objectKind === 'line') {
       if (
-        movedField(data.x1, solved.x1, resolve) ||
-        movedField(data.y1, solved.y1, resolve) ||
-        movedField(data.x2, solved.x2, resolve) ||
-        movedField(data.y2, solved.y2, resolve)
+        fieldMoved(data.x1, solved.x1) ||
+        fieldMoved(data.y1, solved.y1) ||
+        fieldMoved(data.x2, solved.x2) ||
+        fieldMoved(data.y2, solved.y2)
       ) {
         next = {
           ...data,
@@ -121,17 +126,14 @@ export function solvedSketchCommands(
         };
       }
     } else if (solved.kind === 'point' && data.objectKind === 'point') {
-      if (
-        movedField(data.x, solved.x, resolve) ||
-        movedField(data.y, solved.y, resolve)
-      ) {
+      if (fieldMoved(data.x, solved.x) || fieldMoved(data.y, solved.y)) {
         next = { ...data, x: solved.x, y: solved.y };
       }
     } else if (solved.kind === 'circle' && data.objectKind === 'circle') {
       if (
-        movedField(data.centerX, solved.centerX, resolve) ||
-        movedField(data.centerY, solved.centerY, resolve) ||
-        movedField(data.radius, solved.radius, resolve)
+        fieldMoved(data.centerX, solved.centerX) ||
+        fieldMoved(data.centerY, solved.centerY) ||
+        fieldMoved(data.radius, solved.radius)
       ) {
         next = {
           ...data,
@@ -142,11 +144,11 @@ export function solvedSketchCommands(
       }
     } else if (solved.kind === 'arc' && data.objectKind === 'arc') {
       if (
-        movedField(data.centerX, solved.centerX, resolve) ||
-        movedField(data.centerY, solved.centerY, resolve) ||
-        movedField(data.radius, solved.radius, resolve) ||
-        movedAngle(data.startAngleDeg, solved.startAngleDeg, resolve) ||
-        movedAngle(data.endAngleDeg, solved.endAngleDeg, resolve)
+        fieldMoved(data.centerX, solved.centerX) ||
+        fieldMoved(data.centerY, solved.centerY) ||
+        fieldMoved(data.radius, solved.radius) ||
+        angleMoved(data.startAngleDeg, solved.startAngleDeg) ||
+        angleMoved(data.endAngleDeg, solved.endAngleDeg)
       ) {
         next = {
           ...data,
@@ -159,11 +161,11 @@ export function solvedSketchCommands(
       }
     } else if (solved.kind === 'ellipse' && data.objectKind === 'ellipse') {
       if (
-        movedField(data.centerX, solved.centerX, resolve) ||
-        movedField(data.centerY, solved.centerY, resolve) ||
-        movedField(data.radiusX, solved.radiusX, resolve) ||
-        movedField(data.radiusY, solved.radiusY, resolve) ||
-        movedField(data.rotationDeg, solved.rotationDeg, resolve)
+        fieldMoved(data.centerX, solved.centerX) ||
+        fieldMoved(data.centerY, solved.centerY) ||
+        fieldMoved(data.radiusX, solved.radiusX) ||
+        fieldMoved(data.radiusY, solved.radiusY) ||
+        fieldMoved(data.rotationDeg, solved.rotationDeg)
       ) {
         // An elliptical arc keeps its parameter range: the solver held it
         // as its carrier ellipse.
@@ -181,11 +183,7 @@ export function solvedSketchCommands(
       let moved = false;
       const points = data.points.map((point, index) => {
         const at = solved.points[index];
-        if (
-          !at ||
-          (!movedField(point.x, at.x, resolve) &&
-            !movedField(point.y, at.y, resolve))
-        ) {
+        if (!at || (!fieldMoved(point.x, at.x) && !fieldMoved(point.y, at.y))) {
           return point;
         }
         moved = true;

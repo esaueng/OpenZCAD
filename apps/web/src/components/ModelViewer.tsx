@@ -64,6 +64,10 @@ import {
   buildSketchDimensions
 } from './viewer/sketchDimensions';
 import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
+import {
+  buildSketchFilletHud,
+  type SketchFilletHudState
+} from './viewer/sketchFilletHud';
 import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
 import { sketchObjectsInBox } from '../lib/sketch/boxSelect';
 import {
@@ -1562,6 +1566,8 @@ export interface ModelViewerProps {
   faceSetPickBodyId?: string | null;
   /** In-viewport sketch session; null when not sketching. */
   sketchMode: SketchModeState | null;
+  /** Corner targets and the transient draft for an active Sketch Fillet. */
+  sketchFillet?: SketchFilletHudState | null;
   /**
    * Where the text card's outline sits on the plane (the baseline origin a
    * click there would place), written as the pointer moves. The card's Place
@@ -2610,6 +2616,7 @@ export function ModelViewer({
   facePickOnly = false,
   faceSetPickBodyId = null,
   sketchMode,
+  sketchFillet,
   sketchTextAnchorRef,
   onSketchCommit,
   onSketchCommitComposite,
@@ -3209,6 +3216,9 @@ export function ModelViewer({
   const cancelSketchMoveRef = useRef<(() => boolean) | null>(null);
   /** Live sketch rig + local gesture state (imperative, no re-renders). */
   const sketchRigRef = useRef<SketchModeRig | null>(null);
+  const sketchFilletHudRef = useRef<ReturnType<
+    typeof buildSketchFilletHud
+  > | null>(null);
   /** The text outline's origin; null until the pointer reaches the plane. */
   const textAnchorRef = useRef<SketchPoint | null>(null);
   const sketchTextAnchorSinkRef = useRef(sketchTextAnchorRef);
@@ -13797,12 +13807,18 @@ export function ModelViewer({
       // Relation glyphs stand off their geometry in screen space, so they
       // are laid out against this frame's camera; a still frame writes no
       // style and the layout allocates nothing.
+      const filletTargets = sketchFilletHudRef.current?.layout(
+        context.activeCamera,
+        canvasWidth(),
+        canvasHeight()
+      );
       sketchRelationsRef.current?.layout(
         context.activeCamera,
         canvasWidth(),
         canvasHeight(),
         sketchDimensionsRef.current,
-        sketchHandleSpot
+        sketchHandleSpot,
+        filletTargets
       );
       if (cylinderRadiusProxyFrame && import.meta.env.OZ_PERF === '1') {
         mark('cylinder-radius.proxy-frame', {
@@ -17232,6 +17248,34 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [sketchBasis]);
+
+  const sketchFilletActive = Boolean(sketchFillet && sketchBasis);
+  useEffect(() => {
+    const context = contextRef.current;
+    const host = hostRef.current;
+    if (!context || !host || !sketchFilletActive) return;
+    const hud = buildSketchFilletHud(host);
+    sketchFilletHudRef.current = hud;
+    return () => {
+      hud.dispose();
+      sketchFilletHudRef.current = null;
+      context.requestRender();
+    };
+  }, [sketchFilletActive]);
+  useEffect(() => {
+    if (!sketchBasis || !sketchFillet) return;
+    sketchFilletHudRef.current?.update(sketchFillet, sketchBasis);
+    contextRef.current?.requestRender();
+  }, [sketchBasis, sketchFillet]);
+  const filletPlan = sketchFillet?.plan ?? null;
+  const filletFirstLine = sketchFillet?.firstLine;
+  useEffect(() => {
+    const rig = sketchRigRef.current;
+    const context = contextRef.current;
+    if (!rig || !context) return;
+    rig.setFilletPreview(filletPlan, filletFirstLine);
+    context.requestRender();
+  }, [sketchBasis, filletPlan, filletFirstLine]);
 
   // Drag-phase appearance edits patch the live body material directly so
   // slider drags stay at pointer rate; no document write, no kernel rebuild.

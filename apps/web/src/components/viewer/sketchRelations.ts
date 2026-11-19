@@ -12,6 +12,7 @@ import {
   relationChipWidth
 } from '../../lib/sketch/relationGlyphLayout';
 import { VIEWPORT_OBSTACLE_SELECTOR } from './sketchDimensions';
+import { FILLET_CORNER_REACH } from './sketchFilletHud';
 import {
   SKETCH_GRAB_RADIUS_PX,
   SKETCH_ROTATE_RING_BAND_PX,
@@ -297,11 +298,19 @@ export function buildSketchRelationGlyphs(
        */
       dimensions?: SketchLabelBoxes | null,
       /** The selected object's move handles, as drawn this frame. */
-      handle?: SketchHandleSpot | null
+      handle?: SketchHandleSpot | null,
+      /** Fillet buttons are centered on their original sketch junctions. */
+      filletTargets?: readonly { x: number; y: number }[]
     ) {
       if (count === 0) return;
       const labels = dimensions?.labelCount ?? 0;
-      const capacity = (obstacleCount + labels + keepOutCount + 1) * 4;
+      const capacity =
+        (obstacleCount +
+          labels +
+          keepOutCount +
+          1 +
+          (filletTargets?.length ?? 0)) *
+        4;
       if (blockedBoxes.length < capacity) {
         // A rare growth step, when a rebuild brings more labels or points.
         blockedBoxes = new Float64Array(capacity * 2);
@@ -350,6 +359,16 @@ export function buildSketchRelationGlyphs(
         blockedBoxes[at + 2] = handle.x + reach;
         blockedBoxes[at + 3] = handle.y + reach;
         blockedCount += 1;
+      }
+      if (filletTargets) {
+        for (const { x, y } of filletTargets) {
+          const at = blockedCount * 4;
+          blockedBoxes[at] = x - FILLET_CORNER_REACH;
+          blockedBoxes[at + 1] = y - FILLET_CORNER_REACH;
+          blockedBoxes[at + 2] = x + FILLET_CORNER_REACH;
+          blockedBoxes[at + 3] = y + FILLET_CORNER_REACH;
+          blockedCount += 1;
+        }
       }
       layout.setBlocked(blockedBoxes, blockedCount);
       // The screen direction of each normal is the projection's derivative

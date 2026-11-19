@@ -58,6 +58,7 @@ export interface KeypadRequest {
     | 'radius'
     | 'sketch-dimension'
     | 'sketch-edit'
+    | 'sketch-fillet'
     /** U09: an in-place command's handle value. */
     | 'command'
     /** U09: a value of the in-place Extrude (`commandValueId` names it). */
@@ -477,7 +478,8 @@ export function NumericKeypad({
   const [returnTarget] = useState(keypadReturnTarget);
   // A running command's entry (opened by typing, a click or Tab) has no
   // opener to go back to: its bar takes the focus, where Enter is Done.
-  const returnsToCommandBar = request.kind === 'command';
+  const returnsToCommandBar =
+    request.kind === 'command' || request.kind === 'sketch-fillet';
   useEffect(() => {
     const area = rootRef.current?.closest('.viewer-area') ?? null;
     return () =>

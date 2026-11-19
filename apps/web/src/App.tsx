@@ -973,6 +973,8 @@ import type {
   SketchEditPickContext,
   SketchOffsetPick
 } from './lib/sketch/edits';
+import type { SketchEditValidation } from './lib/sketch/editing';
+import { useSketchFilletDraft } from './lib/sketch/useSketchFilletDraft';
 import {
   planFaceOffset,
   withFaceTravelHint
@@ -22270,7 +22272,9 @@ export function App() {
     const open =
       (interaction.mode === 'sketch' &&
         (keypadRef.current?.kind === 'sketch-dimension' ||
-          keypadRef.current?.kind === 'sketch-edit')) ||
+          keypadRef.current?.kind === 'sketch-edit' ||
+          (keypadRef.current?.kind === 'sketch-fillet' &&
+            interaction.session.pendingEdit?.kind === 'fillet'))) ||
       (interaction.mode !== 'idle' &&
         interaction.mode !== 'sketch' &&
         (interaction.phase === 'exact-entry' ||
@@ -23118,7 +23122,8 @@ export function App() {
     sketchId: SketchId,
     commands: AnyCommand[],
     label: string,
-    objectId?: string
+    objectId?: string,
+    validation?: SketchEditValidation
   ) {
     const { checkSketchEdit, sketchEditRaceRefusal } =
       await import('./lib/sketch/editing');
@@ -23126,8 +23131,10 @@ export function App() {
       base,
       sketchId,
       commands,
-      (document) => syncCandidate(document)
+      (document) => syncCandidate(document),
+      validation?.checkCandidate
     );
+    if (validation && !validation.isCurrent()) return false;
     const refusal = sketchEditRaceRefusal(
       base,
       sketchId,
@@ -23848,7 +23855,8 @@ export function App() {
       setSketchEditDraft(null);
       if (
         keypadRef.current?.kind === 'sketch-dimension' ||
-        keypadRef.current?.kind === 'sketch-edit'
+        keypadRef.current?.kind === 'sketch-edit' ||
+        keypadRef.current?.kind === 'sketch-fillet'
       ) {
         setKeypad(null);
       }
@@ -23859,6 +23867,21 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+  const sketchFilletPending =
+    interaction.mode === 'sketch' &&
+    interaction.session.pendingEdit?.kind === 'fillet'
+      ? interaction.session.pendingEdit
+      : null;
+  const filletKeypadOpen = keypad?.kind === 'sketch-fillet';
+  const sketchFillet = useSketchFilletDraft(
+    doc,
+    editingSketchNode,
+    sketchFilletPending !== null,
+    parameterScope.scope,
+    filletKeypadOpen,
+    geometryBusy || sketchSolving,
+    setKeypad
+  );
   const selectedSketchConstraintId =
     interaction.mode === 'sketch'
       ? (interaction.session.selectedConstraintId ?? null)
@@ -23975,6 +23998,40 @@ export function App() {
         ? sketchObjectLabels(sketchReadDocument, editingSketchNode)
         : new Map<string, string>(),
     [editingSketchNode, sketchReadDocument]
+  );
+  const {
+    active: filletArmed,
+    checking: filletChecking,
+    cornerIds: filletCornerIds,
+    corners: filletCorners,
+    firstLine: filletFirstLine,
+    plan: filletPlan,
+    toggle: toggleFilletCorner
+  } = sketchFillet;
+  const filletHud = useMemo(
+    () =>
+      filletArmed
+        ? {
+            corners: filletCorners,
+            selectedIds: filletCornerIds ?? [],
+            firstLine: filletFirstLine,
+            labels: sketchLabels,
+            plan: filletPlan,
+            disabled: filletChecking || filletKeypadOpen,
+            onToggle: toggleFilletCorner
+          }
+        : null,
+    [
+      filletArmed,
+      filletChecking,
+      filletCornerIds,
+      filletCorners,
+      filletFirstLine,
+      filletKeypadOpen,
+      filletPlan,
+      sketchLabels,
+      toggleFilletCorner
+    ]
   );
 
   const sketchOverview = useMemo(() => {
@@ -24691,6 +24748,35 @@ export function App() {
     };
   }
 
+  function closeSketchFillet() {
+    sketchFillet.reset();
+    dispatchInteraction({ type: 'sketch-edit-tool', kind: null });
+  }
+
+  async function applySketchFillet() {
+    const document = managerRef.current?.document;
+    const sketchId = editingSketchNode?.sketchId;
+    if (!document || !sketchId || !requireCurrentSketchGeometry(sketchId))
+      return;
+    const label = await sketchFillet.commit({
+      document,
+      commit: commitSketchEdit,
+      solve: geometry.solveSketch,
+      isCurrent: () => {
+        const live = interactionRef.current;
+        return (
+          live.mode === 'sketch' &&
+          live.session.sketchId === sketchId &&
+          live.session.pendingEdit === sketchFilletPending
+        );
+      }
+    });
+    if (!label) return;
+    closeSketchFillet();
+    setSketchSolveStatus(null);
+    setStatus(`${label} applied.`);
+  }
+
   /**
    * Routes a sketch click while a modify tool is armed. Returns true when the
    * click was consumed, exactly like the constraint picking above: an armed
@@ -24713,6 +24799,10 @@ export function App() {
       !requireCurrentSketchGeometry(session.sketchId as SketchId)
     )
       return true;
+    if (pending.kind === 'fillet') {
+      sketchFillet.pickLine(objectId);
+      return true;
+    }
     if (doc && editingSketchNode) {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
@@ -30431,6 +30521,8 @@ export function App() {
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
       setStatus('Dimension entry canceled.');
+    } else if (open.kind === 'sketch-fillet') {
+      sketchFillet.previewRadius(null);
     } else if (open.kind === 'sketch-edit') {
       setSketchEditDraft(null);
       setStatus('Modify tool canceled.');
@@ -33833,6 +33925,27 @@ export function App() {
         }
         return;
       }
+      if (sketchFilletPending && !event.defaultPrevented) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          if (!event.repeat && !cancelOpenKeypad()) closeSketchFillet();
+          return;
+        }
+        if (
+          target?.matches(
+            '.in-place-command[aria-label="Sketch Fillet command"]'
+          ) &&
+          !meta &&
+          !event.altKey &&
+          !event.repeat &&
+          /^[\d.]$/.test(event.key) &&
+          sketchFillet.cornerIds?.length
+        ) {
+          event.preventDefault();
+          sketchFillet.openRadius(event.key);
+          return;
+        }
+      }
       if (global === 'file-save') {
         event.preventDefault();
         void handleSave();
@@ -36128,8 +36241,11 @@ export function App() {
         solveStatus={sketchSolveStatus}
         solving={sketchSolving}
         onEditTool={(kind, hint) => {
+          if (kind === 'fillet' || sketchFilletPending) sketchFillet.reset();
           dispatchInteraction({ type: 'sketch-edit-tool', kind });
-          if (hint) {
+          if (kind === 'fillet') {
+            setStatus('Pick the corners to round.');
+          } else if (hint) {
             setStatus(hint);
           }
         }}
@@ -37098,6 +37214,7 @@ export function App() {
               });
             }}
             sketchMode={modelingLocked ? null : sketchModeForViewer}
+            sketchFillet={modelingLocked ? null : filletHud}
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
             onSketchCommitComposite={handleSketchCommitComposite}
@@ -37620,6 +37737,20 @@ export function App() {
                     onCancel={cancelOpenKeypad}
                   />
                 ) : null
+              ) : filletKeypadOpen && sketchFillet.active && keypad ? (
+                <NumericKeypad
+                  request={keypad}
+                  units={doc.units}
+                  scope={parameterScope.scope}
+                  anchorRef={keypadAnchorRef}
+                  onUiStateChange={setKeypadUi}
+                  onPreview={sketchFillet.previewRadius}
+                  onEntryError={(error) => {
+                    if (error) sketchFillet.previewRadius(null);
+                  }}
+                  onCommit={sketchFillet.acceptRadius}
+                  onCancel={cancelOpenKeypad}
+                />
               ) : sketchSlotEntry &&
                 interaction.mode === 'sketch' &&
                 interaction.session.tool === 'slot' &&
@@ -38664,7 +38795,40 @@ export function App() {
               ) : null
             }
             commandRow={
-              inPlace.active && inPlaceSpec ? (
+              sketchFillet.active && !modelingLocked ? (
+                <InPlaceCommandBar
+                  title="Sketch Fillet"
+                  ignoreRepeatedEnter
+                  hint={
+                    sketchFillet.checking
+                      ? 'Checking the rounded sketch…'
+                      : sketchFillet.firstLine
+                        ? 'Pick a line that meets the highlighted line.'
+                        : sketchFillet.cornerIds?.length
+                          ? `${countLabel(sketchFillet.cornerIds.length, 'corner', 'corners')} selected · Pick a corner to add or remove it`
+                          : sketchFillet.loading
+                            ? 'Preparing Sketch Fillet…'
+                            : sketchFillet.corners.length
+                              ? 'Pick a corner, or pick two connected lines.'
+                              : 'Fillet needs two straight lines that meet at a corner.'
+                  }
+                  refusal={sketchFillet.checking ? null : sketchFillet.refusal}
+                  canFinish={sketchFillet.canFinish}
+                  locked={sketchFillet.checking}
+                  preciseValue={{
+                    id: 'sketch-fillet-radius',
+                    label: `Fillet radius ${formatNumber(sketchFillet.radius)} ${displayLengthName(doc.units)}`,
+                    text: `R ${formatNumber(sketchFillet.radius)} ${displayLengthName(doc.units)}`
+                  }}
+                  onPreciseValues={
+                    sketchFillet.cornerIds?.length
+                      ? () => sketchFillet.openRadius()
+                      : undefined
+                  }
+                  onDone={() => void applySketchFillet()}
+                  onCancel={closeSketchFillet}
+                />
+              ) : inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar
                   title={
                     inPlace.editing

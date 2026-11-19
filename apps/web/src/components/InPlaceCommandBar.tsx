@@ -120,6 +120,10 @@ export interface InPlaceCommandBarProps {
   onOption?(optionId: string, value: string): void;
   /** Opens exact numeric entry on the current draft before committing. */
   onPreciseValues?(): void;
+  /** A command with one editable measurement can name it on the button. */
+  preciseValue?: { id: string; label: string; text: string };
+  /** Exact entry returns focus here. A held Enter must not also apply it. */
+  ignoreRepeatedEnter?: boolean;
   /**
    * One-off actions beside the choices (a fillet's Select all edges, a
    * chamfer's Swap the two faces), under the same disclosure.
@@ -203,6 +207,8 @@ export function InPlaceCommandBar({
   options = [],
   onOption,
   onPreciseValues,
+  preciseValue,
+  ignoreRepeatedEnter = false,
   actions = [],
   onAction,
   picks: listedPicks = null,
@@ -367,7 +373,8 @@ export function InPlaceCommandBar({
         event.stopPropagation();
         // An Enter that revealed the model can still be held after the
         // button disappears and focus returns here.
-        if (event.repeat && recoveryEnterHeld.current) return;
+        if (event.repeat && (ignoreRepeatedEnter || recoveryEnterHeld.current))
+          return;
         recoveryEnterHeld.current = false;
         if (canFinish && !locked) onDone();
         else if (previewPending && !locked && !refusal) setQueued(true);
@@ -439,10 +446,14 @@ export function InPlaceCommandBar({
         <button
           type="button"
           className="in-place-command-cancel in-place-command-precise"
+          data-testid={
+            preciseValue ? `command-handle-${preciseValue.id}` : undefined
+          }
+          aria-label={preciseValue?.label}
           onClick={onPreciseValues}
           disabled={locked}
         >
-          Precise values…
+          {preciseValue?.text ?? 'Precise values…'}
         </button>
       )}
       {shownRecovery && (

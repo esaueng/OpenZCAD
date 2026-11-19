@@ -12,6 +12,14 @@
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import { resolvedSketchDocument } from '@openzcad/document-core';
 import { retainSketchGeometryCommands } from './releaseGeometry';
+import {
+  addFilletCornerCommands,
+  deleteCornerCoincidenceCommands,
+  lineEnds,
+  movedLine,
+  sameSketchPoint,
+  type ResolveParam
+} from './cornerEditCommands';
 import type {
   Sketch2dPoint,
   SketchChamferGeometry,
@@ -50,7 +58,6 @@ import {
   type EntityId,
   type ParamValue,
   type ProjectDocument,
-  type SketchConstraintId,
   type SketchId,
   type SketchNode,
   type SketchObjectData,
@@ -142,16 +149,7 @@ export function sketchEditToolSpec(
   return spec;
 }
 
-/** Resolves a `ParamValue`, or undefined when its expression does not. */
-export type ResolveParam = (value: ParamValue) => number | undefined;
-
-/**
- * Matching tolerance for "these two entities share this point", in model
- * units. Sketch endpoints that meet were snapped together or solved together,
- * so they agree to far better than this; a micron of slack only keeps a
- * solved-then-rounded joint from reading as a gap.
- */
-const JOINT_TOLERANCE = 1e-6;
+export type { ResolveParam } from './cornerEditCommands';
 
 function sketchObjectData(
   document: ProjectDocument,
@@ -255,37 +253,6 @@ export function refuseEditPick(
   return `${spec.label} needs two lines that meet at a corner.`;
 }
 
-interface LineEnds {
-  start: Sketch2dPoint;
-  end: Sketch2dPoint;
-}
-
-function lineEnds(
-  data: SketchObjectData,
-  resolve: ResolveParam
-): LineEnds | null {
-  if (data.objectKind !== 'line') {
-    return null;
-  }
-  const x1 = resolve(data.x1);
-  const y1 = resolve(data.y1);
-  const x2 = resolve(data.x2);
-  const y2 = resolve(data.y2);
-  if (
-    x1 === undefined ||
-    y1 === undefined ||
-    x2 === undefined ||
-    y2 === undefined
-  ) {
-    return null;
-  }
-  return { start: { x: x1, y: y1 }, end: { x: x2, y: y2 } };
-}
-
-function samePoint(a: Sketch2dPoint, b: Sketch2dPoint): boolean {
-  return Math.hypot(a.x - b.x, a.y - b.y) <= JOINT_TOLERANCE;
-}
-
 /** The corner two picked lines share, in the shape the kernel operations take. */
 export interface SketchCornerResolution {
   corner: Sketch2dPoint;
@@ -325,7 +292,7 @@ export function resolveSketchCorner(
     ['end', 'start'],
     ['end', 'end']
   ] as const;
-  const match = pairs.find(([aEnd, bEnd]) => samePoint(a[aEnd], b[bEnd]));
+  const match = pairs.find(([aEnd, bEnd]) => sameSketchPoint(a[aEnd], b[bEnd]));
   if (!match) {
     return {
       error:
@@ -344,16 +311,6 @@ export function resolveSketchCorner(
   };
 }
 
-function movedLine(
-  data: Extract<SketchObjectData, { objectKind: 'line' }>,
-  point: 'start' | 'end',
-  to: Sketch2dPoint
-): SketchObjectData {
-  return point === 'start'
-    ? { ...data, x1: to.x, y1: to.y }
-    : { ...data, x2: to.x, y2: to.y };
-}
-
 function requireLine(
   document: ProjectDocument,
   sketch: SketchNode,
@@ -364,30 +321,6 @@ function requireLine(
     throw new Error('That object is no longer a line in this sketch.');
   }
   return data;
-}
-
-/**
- * Constraints that tied the two trimmed endpoints straight to each other. The
- * corner they described is gone, so they go with it; the new arc or bevel
- * re-states the joint as two coincidences at its own ends.
- */
-function cornerCoincidenceIds(
-  sketch: SketchNode,
-  a: SketchPointRef,
-  b: SketchPointRef
-): SketchConstraintId[] {
-  const matches = (ref: SketchPointRef, target: SketchPointRef) =>
-    ref.objectId === target.objectId && ref.point === target.point;
-  return (sketch.constraints ?? [])
-    .filter((constraint) => {
-      const data = constraint.data;
-      return (
-        data.constraintKind === 'coincident' &&
-        ((matches(data.a, a) && matches(data.b, b)) ||
-          (matches(data.a, b) && matches(data.b, a)))
-      );
-    })
-    .map((constraint) => constraint.constraintId);
 }
 
 function newEntityId(): EntityId {
@@ -414,7 +347,6 @@ export function sketchFilletCommands(
 ): AnyCommand[] {
   const aData = requireLine(document, sketch, picks.a);
   const bData = requireLine(document, sketch, picks.b);
-  const arcId = newEntityId();
   const aRef: SketchPointRef = {
     objectId: picks.a as EntityId,
     point: resolution.aPoint
@@ -423,16 +355,13 @@ export function sketchFilletCommands(
     objectId: picks.b as EntityId,
     point: resolution.bPoint
   };
-  const arcPointForA = fillet.startsAt === 'a' ? 'start' : 'end';
-  const arcPointForB = fillet.startsAt === 'a' ? 'end' : 'start';
-  const arcRefA: SketchPointRef = { objectId: arcId, point: arcPointForA };
-  const arcRefB: SketchPointRef = { objectId: arcId, point: arcPointForB };
   return [
-    ...cornerCoincidenceIds(sketch, aRef, bRef).map((constraintId) =>
-      commandFactories.deleteSketchConstraint(
-        { sketchId, constraintId },
-        'Release the filleted corner'
-      )
+    ...deleteCornerCoincidenceCommands(
+      sketch,
+      sketchId,
+      aRef,
+      bRef,
+      'Release the filleted corner'
     ),
     commandFactories.updateSketchObject(
       {
@@ -450,72 +379,7 @@ export function sketchFilletCommands(
       },
       'Trim line to fillet'
     ),
-    commandFactories.addSketchObjects(
-      {
-        sketchId,
-        objects: [
-          {
-            objectKind: 'arc',
-            centerX: fillet.center.x,
-            centerY: fillet.center.y,
-            radius: fillet.radius,
-            startAngleDeg: fillet.startAngleDeg,
-            endAngleDeg: fillet.endAngleDeg
-          }
-        ],
-        ids: { objectNodeIds: [arcId] }
-      },
-      'Add fillet arc'
-    ),
-    commandFactories.addSketchConstraint(
-      {
-        sketchId,
-        constraint: { constraintKind: 'coincident', a: aRef, b: arcRefA }
-      },
-      'Join fillet to line'
-    ),
-    commandFactories.addSketchConstraint(
-      {
-        sketchId,
-        constraint: { constraintKind: 'coincident', a: bRef, b: arcRefB }
-      },
-      'Join fillet to line'
-    ),
-    commandFactories.addSketchConstraint(
-      {
-        sketchId,
-        constraint: {
-          constraintKind: 'tangent',
-          a: picks.a as EntityId,
-          b: arcId,
-          at: arcRefA
-        }
-      },
-      'Hold the fillet tangent'
-    ),
-    commandFactories.addSketchConstraint(
-      {
-        sketchId,
-        constraint: {
-          constraintKind: 'tangent',
-          a: picks.b as EntityId,
-          b: arcId,
-          at: arcRefB
-        }
-      },
-      'Hold the fillet tangent'
-    ),
-    commandFactories.addSketchConstraint(
-      {
-        sketchId,
-        constraint: {
-          constraintKind: 'radius',
-          objectId: arcId,
-          value: radius
-        }
-      },
-      'Drive the fillet radius'
-    )
+    ...addFilletCornerCommands(sketchId, aRef, bRef, fillet, radius)
   ];
 }
 
@@ -544,11 +408,12 @@ export function sketchChamferCommands(
     point: resolution.bPoint
   };
   return [
-    ...cornerCoincidenceIds(sketch, aRef, bRef).map((constraintId) =>
-      commandFactories.deleteSketchConstraint(
-        { sketchId, constraintId },
-        'Release the chamfered corner'
-      )
+    ...deleteCornerCoincidenceCommands(
+      sketch,
+      sketchId,
+      aRef,
+      bRef,
+      'Release the chamfered corner'
     ),
     commandFactories.updateSketchObject(
       {

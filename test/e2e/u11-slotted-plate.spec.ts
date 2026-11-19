@@ -25,6 +25,12 @@ import {
 
 const READY = { timeout: 30_000 };
 const PROJECT = 'U11 Slotted Plate';
+const RECTANGLE_CORNERS: [number, number, number][] = [
+  [40, 25, 0],
+  [-40, 25, 0],
+  [-40, -25, 0],
+  [40, -25, 0]
+];
 
 async function exportDocument(page: Page): Promise<ProjectDocument> {
   const file = page.locator('details.file-menu');
@@ -62,6 +68,123 @@ function sketchObject(document: ProjectDocument, id: string): SketchObjectData {
 
 function sketchObjects(document: ProjectDocument) {
   return findSketch(document).objectIds.map((id) => sketchObject(document, id));
+}
+
+function sketchSnapshot(document: ProjectDocument) {
+  const sketch = findSketch(document);
+  return {
+    sketchId: sketch.sketchId,
+    objects: sketch.objectIds.map((id) => ({
+      id,
+      data: sketchObject(document, id)
+    })),
+    constraints: sketch.constraints ?? [],
+    composites: sketch.composites ?? []
+  };
+}
+
+function expectRoundedRectangle(
+  document: ProjectDocument,
+  centers: string[],
+  lengths: number[]
+) {
+  const objects = sketchObjects(document);
+  const arcs = objects.filter((object) => object.objectKind === 'arc');
+  expect(arcs.map((arc) => arc.radius)).toEqual(centers.map(() => 5));
+  expect(arcs.map((arc) => `${arc.centerX},${arc.centerY}`).sort()).toEqual(
+    [...centers].sort()
+  );
+  const edgeLengths = objects
+    .filter((object) => object.objectKind === 'line')
+    .filter((line) => !line.construction)
+    .map((line) =>
+      Math.hypot(
+        Number(line.x2) - Number(line.x1),
+        Number(line.y2) - Number(line.y1)
+      )
+    )
+    .sort((a, b) => a - b);
+  expect(edgeLengths).toHaveLength(lengths.length);
+  for (const [index, length] of lengths.entries()) {
+    expect(edgeLengths[index]).toBeCloseTo(length, 8);
+  }
+}
+
+function sketchFilletBar(page: Page) {
+  return page.getByRole('group', {
+    name: 'Sketch Fillet command',
+    exact: true
+  });
+}
+
+function sketchFilletTool(page: Page) {
+  return page
+    .getByRole('toolbar', { name: 'Sketch tools' })
+    .getByRole('button', { name: /^Fillet(?:$| —)/ });
+}
+
+function sketchFilletCorners(page: Page, pressed: boolean) {
+  return page
+    .getByTestId('sketch-fillet-corner')
+    .and(page.getByRole('button', { pressed }));
+}
+
+async function holdNextSketchSolve(page: Page) {
+  await page.evaluate(() => {
+    const original = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (this: Worker, ...args: unknown[]) {
+      const message = args[0] as { type?: string; requestId?: string };
+      if (message.type !== 'solve-sketch' || !message.requestId) {
+        Reflect.apply(original, this, args);
+        return;
+      }
+      Worker.prototype.postMessage = original;
+      Reflect.set(
+        window,
+        '__releaseSketchFilletSolve',
+        () =>
+          new Promise<void>((resolve) => {
+            const replied = (event: MessageEvent<{ requestId?: string }>) => {
+              if (event.data.requestId !== message.requestId) return;
+              this.removeEventListener('message', replied);
+              resolve();
+            };
+            this.addEventListener('message', replied);
+            Reflect.apply(original, this, args);
+          })
+      );
+    };
+  });
+}
+
+async function drawCenteredRectangle(page: Page, name: string) {
+  await createProject(page, name);
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
+  await expect(rail).toBeVisible();
+  await waitForStillViewport(page);
+  await rail.getByRole('button', { name: 'Rectangle', exact: true }).click();
+  await rail
+    .getByRole('radiogroup', { name: 'Shape type' })
+    .getByRole('radio', { name: 'Center', exact: true })
+    .click();
+  await clickWorldPoint(page, [0, 0, 0]);
+  const canvas = page.locator('.viewer-host canvas');
+  const corner = await projectPoint(canvas, [40, 25, 0]);
+  await page.mouse.move(corner.x, corner.y, { steps: 4 });
+  await page.keyboard.press('8');
+  await page.keyboard.press('0');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('5');
+  await page.keyboard.press('0');
+  await expect(page.locator('.sketch-dim-label')).toContainText(
+    'Height: 50 mm · Width: 80'
+  );
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    /Sketch 01 started|Added rectangle/
+  );
 }
 
 function feature(
@@ -128,82 +251,101 @@ test(
     const status = page.getByRole('contentinfo');
     const rail = page.getByRole('toolbar', { name: 'Sketch tools' });
     const shapeTypes = rail.getByRole('radiogroup', { name: 'Shape type' });
-    const hud = page.locator('.sketch-dim-label');
     const chip = page.getByTestId('command-handle-radius');
     const historyEdit = page.getByRole('group', {
       name: 'Edit Fillet command'
     });
     const filletRow = page.locator('.feature-row-main', { hasText: /^Fillet/ });
 
-    await test.step('Create an 80 × 50 mm centered rectangle on XY', async () => {
-      await createProject(page, PROJECT);
-      await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
-      await page.getByRole('button', { name: 'Top (XY)' }).click();
-      await expect(rail).toBeVisible();
-      await waitForStillViewport(page);
-      await rail
-        .getByRole('button', { name: 'Rectangle', exact: true })
-        .click();
-      await shapeTypes
-        .getByRole('radio', { name: 'Center', exact: true })
-        .click();
-      await clickWorldPoint(page, [0, 0, 0]);
-      const corner = await projectPoint(canvas, [40, 25, 0]);
-      await page.mouse.move(corner.x, corner.y, { steps: 4 });
-      await page.keyboard.press('8');
-      await page.keyboard.press('0');
-      await page.keyboard.press('Tab');
-      await page.keyboard.press('5');
-      await page.keyboard.press('0');
-      await expect(hud).toContainText('Height: 50 mm · Width: 80');
-      await page.keyboard.press('Enter');
-      await expect(status).toContainText(/Sketch 01 started|Added rectangle/);
-      const document = await exportDocument(page);
-      expect(document.units).toBe('mm');
-      expect(findSketch(document).planeRef).toMatchObject({
-        type: 'canonical',
-        plane: 'XY',
-        offset: 0
+    const rectangle =
+      await test.step('Create an 80 × 50 mm centered rectangle on XY', async () => {
+        await drawCenteredRectangle(page, PROJECT);
+        const document = await exportDocument(page);
+        expect(document.units).toBe('mm');
+        expect(findSketch(document).planeRef).toMatchObject({
+          type: 'canonical',
+          plane: 'XY',
+          offset: 0
+        });
+        const lines = sketchObjects(document)
+          .filter((object) => object.objectKind === 'line')
+          .filter((line) => !line.construction);
+        expect(lines).toHaveLength(4);
+        const xs = new Set();
+        const ys = new Set();
+        for (const line of lines) {
+          xs.add(line.x1);
+          xs.add(line.x2);
+          ys.add(line.y1);
+          ys.add(line.y2);
+        }
+        expect(xs).toEqual(new Set([-40, 40]));
+        expect(ys).toEqual(new Set([-25, 25]));
+        const original = sketchSnapshot(document);
+        expect(original.constraints.length).toBeGreaterThan(0);
+        return original;
       });
-      const lines = sketchObjects(document)
-        .filter((object) => object.objectKind === 'line')
-        .filter((line) => !line.construction);
-      expect(lines).toHaveLength(4);
-      const xs = new Set();
-      const ys = new Set();
-      for (const line of lines) {
-        xs.add(line.x1);
-        xs.add(line.x2);
-        ys.add(line.y1);
-        ys.add(line.y2);
-      }
-      expect(xs).toEqual(new Set([-40, 40]));
-      expect(ys).toEqual(new Set([-25, 25]));
-    });
 
-    await test.step('Round the four sketch corners to R5', async () => {
-      for (const [x, y] of [
-        [40, 25],
-        [-40, 25],
-        [-40, -25],
-        [40, -25]
-      ] as const) {
-        await rail.getByRole('button', { name: /^Fillet(?:$| —)/ }).click();
-        await clickWorldPoint(page, [x * 0.65, y, 0]);
-        await expect(status).toContainText('Fillet: pick 2 of 2.');
-        await clickWorldPoint(page, [x, y * 0.65, 0]);
-        const radius = page.getByRole('textbox', { name: 'Fillet radius' });
-        await radius.fill('5');
-        await radius.press('Enter');
-        await expect(status).toContainText('Fillet applied.', READY);
+    await test.step('Round all four sketch corners to R5 in one edit', async () => {
+      await sketchFilletTool(page).click();
+      const bar = sketchFilletBar(page);
+      await expect(bar).toBeVisible(READY);
+      await expect(sketchFilletCorners(page, false)).toHaveCount(4, READY);
+      const picked = sketchFilletCorners(page, true);
+      await waitForStillViewport(page);
+      await clickWorldPoint(page, RECTANGLE_CORNERS[0]!);
+      await expect(picked).toHaveCount(1);
+      await holdNextSketchSolve(page);
+      await bar.getByRole('button', { name: 'Done', exact: true }).click();
+      await expect
+        .poll(() =>
+          page.evaluate(() => Reflect.has(window, '__releaseSketchFilletSolve'))
+        )
+        .toBe(true);
+      await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
+      await expect(bar).toHaveCount(0);
+      await page.evaluate(async () => {
+        const release = Reflect.get(window, '__releaseSketchFilletSolve') as
+          (() => Promise<void>) | undefined;
+        if (!release) throw new Error('No sketch solve was held.');
+        await release();
+      });
+      expect(sketchSnapshot(await exportDocument(page))).toEqual(rectangle);
+
+      await sketchFilletTool(page).click();
+      await expect(sketchFilletCorners(page, false)).toHaveCount(4, READY);
+      for (const [index, corner] of RECTANGLE_CORNERS.entries()) {
+        await clickWorldPoint(page, corner);
+        await expect(picked).toHaveCount(index + 1);
       }
-      const arcs = sketchObjects(await exportDocument(page)).filter(
-        (object) => object.objectKind === 'arc'
+
+      await bar.getByRole('button', { name: /^(?:Fillet )?Radius\b/i }).click();
+      const keypad = page.getByRole('dialog', { name: 'Fillet radius value' });
+      const radius = keypad.getByRole('textbox', { name: 'Fillet radius' });
+      await expect(radius).toBeFocused();
+      await radius.press('ControlOrMeta+a');
+      await radius.press('5');
+      await expect(radius).toHaveValue('5');
+      await radius.press('Enter');
+      await expect(keypad).toBeHidden();
+      await expect(bar).toBeVisible();
+      await expect(picked).toHaveCount(4);
+      expect(sketchSnapshot(await exportDocument(page))).toEqual(rectangle);
+
+      await finishInPlaceCommand(page, 'Sketch Fillet');
+
+      const filleted = await exportDocument(page);
+      expectRoundedRectangle(
+        filleted,
+        ['35,20', '-35,20', '-35,-20', '35,-20'],
+        [40, 40, 70, 70]
       );
-      expect(arcs.map((arc) => arc.radius)).toEqual([5, 5, 5, 5]);
-      expect(
-        new Set(arcs.map((arc) => `${arc.centerX},${arc.centerY}`))
-      ).toEqual(new Set(['35,20', '-35,20', '-35,-20', '35,-20']));
+      await page.getByRole('button', { name: 'Undo', exact: true }).click();
+      expect(sketchSnapshot(await exportDocument(page))).toEqual(rectangle);
+      await page.getByRole('button', { name: 'Redo', exact: true }).click();
+      expect(sketchSnapshot(await exportDocument(page))).toEqual(
+        sketchSnapshot(filleted)
+      );
     });
 
     await test.step('Place the 40 mm center-to-center slot with R3', async () => {
@@ -427,6 +569,7 @@ test(
         });
       const reloaded = await exportDocument(page);
       expect(reloaded.featureOrder).toEqual(created.featureOrder);
+      expect(sketchSnapshot(reloaded)).toEqual(sketchSnapshot(created));
       expect(feature(reloaded, 'fillet')).toMatchObject({
         featureId: identity.featureId,
         data: { ...identity.data, radius: 2 }
@@ -438,3 +581,84 @@ test(
     expect(errors).toEqual([]);
   }
 );
+
+test.describe('Sketch Fillet on touch', () => {
+  test.use({ hasTouch: true });
+
+  test('taps toggle corners and an oversized radius leaves the picks available for retry', async ({
+    page
+  }) => {
+    test.setTimeout(90_000);
+    page.setDefaultTimeout(15_000);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    await page.route('**/api/session', (route) =>
+      route.fulfill({ json: null })
+    );
+    await drawCenteredRectangle(page, 'Sketch Fillet touch');
+    const original = sketchSnapshot(await exportDocument(page));
+    const canvas = page.locator('.viewer-host canvas');
+
+    await sketchFilletTool(page).tap();
+    const bar = sketchFilletBar(page);
+    await expect(bar).toBeVisible(READY);
+    await expect(sketchFilletCorners(page, false)).toHaveCount(4, READY);
+    await waitForStillViewport(page);
+    const picked = sketchFilletCorners(page, true);
+    const done = bar.getByRole('button', { name: 'Done', exact: true });
+    const tapCorner = async (point: [number, number, number]) => {
+      const { x, y } = await projectPoint(canvas, point);
+      await page.touchscreen.tap(x, y);
+    };
+
+    await tapCorner([-40, 25, 0]);
+    await expect(picked).toHaveCount(1);
+    await tapCorner([-40, 25, 0]);
+    await expect(picked).toHaveCount(0);
+    await tapCorner([40, 25, 0]);
+    await expect(picked).toHaveCount(1);
+    await tapCorner([40, -25, 0]);
+    await expect(picked).toHaveCount(2);
+
+    const radiusButton = bar.getByRole('button', {
+      name: /^(?:Fillet )?Radius\b/i
+    });
+    const keypad = page.getByRole('dialog', { name: 'Fillet radius value' });
+    const radiusInput = keypad.getByRole('textbox', { name: 'Fillet radius' });
+    const applyRadius = keypad.getByRole('button', {
+      name: 'Apply fillet radius',
+      exact: true
+    });
+    const enterRadiusByTap = async (radius: string) => {
+      await radiusButton.tap();
+      const prefill = await radiusInput.inputValue();
+      const backspace = keypad.getByRole('button', { name: 'Backspace' });
+      for (let index = 0; index < prefill.length; index++) {
+        await backspace.tap();
+      }
+      for (const digit of radius) {
+        await keypad.getByRole('button', { name: digit, exact: true }).tap();
+      }
+      await expect(radiusInput).toHaveValue(radius);
+      await applyRadius.tap();
+      await expect(keypad).toBeHidden();
+    };
+
+    // Each corner alone can take R26. Together their 52 mm of setbacks
+    // exceed the 50 mm edge they share.
+    await enterRadiusByTap('26');
+    expect(sketchSnapshot(await exportDocument(page))).toEqual(original);
+    await expect(done).toBeDisabled();
+    await expect(picked).toHaveCount(2);
+
+    await enterRadiusByTap('5');
+    await expect(done).toBeEnabled(READY);
+    await done.tap();
+    await expect(bar).toHaveCount(0, READY);
+    expectRoundedRectangle(
+      await exportDocument(page),
+      ['35,20', '35,-20'],
+      [40, 50, 75, 75]
+    );
+  });
+});

@@ -427,6 +427,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         '@openzcad/kernel-adapter/exact': fileURLToPath(
           new URL('../../packages/kernel-adapter/src/exact.ts', import.meta.url)
         ),
+        '@openzcad/kernel-adapter/sketch-2d-ops': fileURLToPath(
+          new URL(
+            '../../packages/kernel-adapter/src/sketch-2d-ops.ts',
+            import.meta.url
+          )
+        ),
         // The mesh import format table is reached only from the lazy mesh
         // import client and its worker. Importing it through the adapter's
         // index barrel would put it in the eager graph — and would make the
@@ -677,6 +683,10 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             // is measured against a per-file budget meant to catch launcher
             // growth, not a regrouping of workspace modules it already
             // preloaded.
+            // The batch fillet planner runs only while the tool is armed.
+            if (id.endsWith('/apps/web/src/lib/sketch/filletBatch.ts')) {
+              return undefined;
+            }
             if (
               id.includes('/apps/web/src/lib/sketch/') ||
               id.includes('/apps/web/src/lib/interaction/')
