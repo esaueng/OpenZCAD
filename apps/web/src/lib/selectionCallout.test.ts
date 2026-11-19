@@ -117,7 +117,7 @@ describe('selectionCalloutVerbs', () => {
     expect(chamfer?.title).not.toBe('Chamfer every edge around this face');
   });
 
-  it('offers a cylindrical face its diameter, an axis and a shell', () => {
+  it('offers a cylindrical face its diameter, then Thread, an axis and a shell', () => {
     const verbs = selectionCalloutVerbs({
       kind: 'face',
       faceCapabilities: selectionCapabilities({
@@ -126,11 +126,24 @@ describe('selectionCalloutVerbs', () => {
       }),
       availability: READY
     });
-    expect(verbs.slice(-2).map((verb) => verb.id)).toEqual([
+    expect(verbs.map((verb) => verb.id)).toEqual([
+      'action:resize-radial-face',
+      'tool:thread',
       'tool:datum-axis',
       'tool:shell'
     ]);
     expect(verbs.map((verb) => verb.id)).not.toContain('tool:hole');
+  });
+
+  it('greys Thread on a cylinder with the reason while it cannot run', () => {
+    const thread = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: null,
+      faceSurface: 'cylindrical',
+      availability: { ...READY, exactGeometryReady: false }
+    }).find((verb) => verb.id === 'tool:thread');
+    expect(thread?.disabled).toBe(true);
+    expect(thread?.title).toContain('Waiting for exact geometry');
   });
 
   it('falls back to the tools when the machine does not hold the face', () => {
@@ -147,7 +160,7 @@ describe('selectionCalloutVerbs', () => {
   });
 
   it('chooses an unarmed face its tools by the kind of face it is', () => {
-    const ids = (faceSurface: 'planar' | 'cylindrical' | 'other') =>
+    const ids = (faceSurface: 'planar' | 'cylindrical' | 'conical' | 'other') =>
       selectionCalloutVerbs({
         kind: 'face',
         faceCapabilities: null,
@@ -162,7 +175,13 @@ describe('selectionCalloutVerbs', () => {
       'tool:thicken',
       'tool:datum-plane'
     ]);
-    expect(ids('cylindrical')).toEqual(['tool:datum-axis', 'tool:shell']);
+    expect(ids('cylindrical')).toEqual([
+      'tool:thread',
+      'tool:datum-axis',
+      'tool:shell'
+    ]);
+    // A cone turns about an axis but takes no thread.
+    expect(ids('conical')).toEqual(['tool:datum-axis', 'tool:shell']);
     expect(ids('other')).toEqual(['tool:shell']);
   });
 
