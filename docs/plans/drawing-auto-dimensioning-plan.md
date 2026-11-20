@@ -170,6 +170,22 @@ Each needs its own schema bump, claimed from open PRs at the time
   `apps/web/src/lib/drawing/assistantPreflight.ts` that refuses a proposal
   whose annotations do not resolve or that leaves a repeated dimension. The
   generator's candidates and repair plug in at that same function.
+- Delivered second (close-out, 2026-11-20): `auto_dimension_drawing`
+  (`sheetId`, `viewIds` or null, `dimensionKinds` or null among `linear`,
+  `diameter`, `radius`, `chamfer`, `angle`). The assistant states only the
+  scope; the Draw workspace runs the Auto-dimension generator on the sheet's
+  own annotations, and `preflightDrawingPatch` keeps the planned dimensions
+  inside the scope. The generator places each dimension in the one view
+  that suits it, so a view scope keeps what is planned there and reports
+  the rest by the view it belongs in rather than moving it. What the scope
+  excludes, what the generator skips and its section advice come back as
+  `leftOut` and read in the preview status ("Left out: 2 radii, by
+  request"); a scope that leaves nothing to add is refused with the same
+  list. The request is proposed alone, never the isometric view, and the
+  dimension check still gates the result. Choosing among individual
+  candidates ("from the bore centre") is not offered: the generator's datum
+  rule (decision 3) decides, and a user who wants another datum asks for
+  that dimension with `add_drawing_annotations`.
 
 ## Slice A decisions (dimension check, 2026-10-31)
 

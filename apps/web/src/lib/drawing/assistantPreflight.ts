@@ -1,11 +1,20 @@
 import {
   CommandManager,
+  commandFactories,
   commandsForCadPatch,
   type AnyCommand
 } from '@openzcad/command-system';
-import type { CadPatchProposal } from '@openzcad/ai-contracts';
+import type {
+  CadAutoDimensionDrawingOperation,
+  CadPatchProposal
+} from '@openzcad/ai-contracts';
 import { findDrawingSheet } from '@openzcad/document-core';
-import type { DrawingSheet, ProjectDocument } from '@openzcad/shared';
+import {
+  DRAWING_VIEW_LABELS,
+  type DrawingAnnotation,
+  type DrawingSheet,
+  type ProjectDocument
+} from '@openzcad/shared';
 import {
   drawingProposalProblems,
   groundDrawingProposal,
@@ -16,6 +25,71 @@ export interface DrawingPatchPreflight {
   commands: AnyCommand[];
   /** The sheet as the proposal would leave it. */
   sheet: DrawingSheet;
+  /**
+   * What an auto-dimension request leaves out, worded for the reviewer:
+   * dimensions its scope excludes and what the generator cannot place.
+   * Empty for a proposal that names its own annotations.
+   */
+  leftOut: string[];
+}
+
+const KIND_NAMES: Record<string, [string, string]> = {
+  linear: ['linear dimension', 'linear dimensions'],
+  diameter: ['diameter', 'diameters'],
+  radius: ['radius', 'radii'],
+  chamfer: ['chamfer dimension', 'chamfer dimensions'],
+  angle: ['angle', 'angles']
+};
+
+const counted = (count: number, kind: string) => {
+  const [one, many] = KIND_NAMES[kind] ?? [kind, `${kind}s`];
+  return `${count} ${count === 1 ? one : many}`;
+};
+
+/**
+ * D06 slice E: the generator's plan for the sheet, cut to the request's
+ * scope. The generator places each dimension in the one view that suits it
+ * best, so a view scope keeps the dimensions planned there and reports the
+ * rest by the view they belong in, never moving them.
+ */
+export function scopedAutoDimensions(
+  operation: CadAutoDimensionDrawingOperation,
+  source: DrawingAssistantSource,
+  viewName: (viewId: string) => string
+): { annotations: DrawingAnnotation[]; leftOut: string[] } {
+  if (!source.autoDimension)
+    throw new Error('Wait for every view to be drawn, then ask again.');
+  const plan = source.autoDimension();
+  const views = operation.viewIds ? new Set(operation.viewIds) : null;
+  const kinds = operation.dimensionKinds
+    ? new Set<string>(operation.dimensionKinds)
+    : null;
+  const annotations: DrawingAnnotation[] = [];
+  const byKind = new Map<string, number>();
+  const byView = new Map<string, number>();
+  for (const annotation of plan.annotations) {
+    if (kinds && !kinds.has(annotation.kind)) {
+      byKind.set(annotation.kind, (byKind.get(annotation.kind) ?? 0) + 1);
+      continue;
+    }
+    if (views && !views.has(annotation.viewId)) {
+      byView.set(annotation.viewId, (byView.get(annotation.viewId) ?? 0) + 1);
+      continue;
+    }
+    annotations.push(annotation);
+  }
+  const leftOut = [
+    ...[...byKind].map(
+      ([kind, count]) => `${counted(count, kind)}, by request`
+    ),
+    ...[...byView].map(
+      ([viewId, count]) =>
+        `${count} ${count === 1 ? 'dimension' : 'dimensions'} that belong in ${viewName(viewId)}`
+    ),
+    ...plan.skipped.map((skip) => skip.message),
+    ...(plan.sectionAdvice ? [plan.sectionAdvice] : [])
+  ];
+  return { annotations, leftOut };
 }
 
 /**
@@ -42,8 +116,42 @@ export function preflightDrawingPatch(
     throw new Error(
       'The sheet is not drawn from the current model. Update it, then ask again.'
     );
-  const grounded = groundDrawingProposal(proposal, source.bodies);
-  const commands = commandsForCadPatch(base, grounded);
+  const auto = proposal.operations.find(
+    (operation): operation is CadAutoDimensionDrawingOperation =>
+      operation.kind === 'auto_dimension_drawing'
+  );
+  let leftOut: string[] = [];
+  let commands: AnyCommand[];
+  if (auto) {
+    if (proposal.operations.length > 1)
+      throw new Error('An auto-dimension request is proposed alone.');
+    const current = findDrawingSheet(base, source.sheetId);
+    const names = new Map(
+      (current?.views ?? []).map((view) => [
+        view.viewId as string,
+        `the ${DRAWING_VIEW_LABELS[view.orientation]} view`
+      ])
+    );
+    const scoped = scopedAutoDimensions(
+      auto,
+      source,
+      (viewId) => names.get(viewId) ?? `view ${viewId}`
+    );
+    leftOut = scoped.leftOut;
+    if (scoped.annotations.length === 0)
+      throw new Error(
+        `Auto-dimension has nothing to add${leftOut.length ? `. Left out: ${leftOut.join('; ')}.` : ': the dimension check finds nothing missing.'}`
+      );
+    commands = scoped.annotations.map((annotation) =>
+      commandFactories.addDrawingAnnotation({
+        sheetId: source.sheetId,
+        annotation
+      })
+    );
+  } else {
+    const grounded = groundDrawingProposal(proposal, source.bodies);
+    commands = commandsForCadPatch(base, grounded);
+  }
   const candidate = new CommandManager(base).runTransaction(
     'Preflight AI drawing edit',
     commands
@@ -57,11 +165,11 @@ export function preflightDrawingPatch(
     bodies: source.bodies,
     units: base.units
   });
-  // Seam for D06 slice C: once the generator lands, a refused set is
-  // repaired from its candidates here before it is refused.
+  // The generator's own plan passes by construction; the check stays as
+  // the gate for it too, so the two can never disagree silently.
   if (problems.length > 0)
     throw new Error(
       `The proposed sheet does not pass the drawing check.\n\n${problems.join('\n')}`
     );
-  return { commands, sheet };
+  return { commands, sheet, leftOut };
 }

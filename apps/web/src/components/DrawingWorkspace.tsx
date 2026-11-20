@@ -4167,7 +4167,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           bodies: drawBodies,
           units: document.units,
           ready: assistantReady
-        }))
+        })),
+      // D06 slice E: the assistant's auto-dimension request runs the same
+      // generator as the button, on the sheet's own annotations.
+      ...(assistantReady
+        ? {
+            autoDimension: () =>
+              planAutoDimensions(sheet, drawnViews, drawBodies, document.units)
+          }
+        : {})
     });
   }, [
     onAssistantSource,

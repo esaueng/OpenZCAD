@@ -18632,7 +18632,8 @@ export function App() {
     return proposal.operations.some(
       (operation) =>
         operation.kind === 'add_drawing_annotations' ||
-        operation.kind === 'remove_drawing_annotations'
+        operation.kind === 'remove_drawing_annotations' ||
+        operation.kind === 'auto_dimension_drawing'
     );
   }
 
@@ -18657,7 +18658,7 @@ export function App() {
           await import('./lib/drawing/assistantPreflight');
         if (epoch !== aiPreviewEpochRef.current)
           return { ok: false, reason: 'A newer preview replaced this one.' };
-        const { sheet } = preflightDrawingPatch(
+        const { sheet, leftOut } = preflightDrawingPatch(
           current,
           proposal,
           drawingModeRef.current ? drawingAssistantRef.current : null
@@ -18666,7 +18667,12 @@ export function App() {
           sheetId: sheet.sheetId,
           annotations: sheet.annotations ?? []
         });
-        setStatus('Previewing the proposed annotations.');
+        // An auto-dimension request says what its scope leaves out.
+        setStatus(
+          leftOut.length > 0
+            ? `Previewing the proposed annotations. Left out: ${leftOut.join('; ')}.`
+            : 'Previewing the proposed annotations.'
+        );
         return { ok: true };
       } catch (error) {
         if (epoch === aiPreviewEpochRef.current) setDrawingPreview(null);

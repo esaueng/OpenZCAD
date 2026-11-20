@@ -6051,6 +6051,7 @@ export function commandsForCadPatch(
       }
       case 'add_drawing_annotations':
       case 'remove_drawing_annotations':
+      case 'auto_dimension_drawing':
         // Compiled above, before any model operation is looked at.
         throw new Error(
           'A proposal changes either the model or a drawing sheet, not both.'

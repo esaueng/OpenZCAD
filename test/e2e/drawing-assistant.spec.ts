@@ -163,3 +163,110 @@ test('the assistant dimensions a Draw sheet from its digest', async ({
     0
   );
 });
+
+test('the assistant asks the generator to dimension the sheet, scoped by kind', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  await stubApi(page, { assistantEnabled: true });
+  await page.route('**/api/assistant/status', (route) =>
+    route.fulfill({
+      json: {
+        configured: true,
+        provider: 'test',
+        model: 'drawing-assistant-test',
+        reasoningEffort: 'high'
+      }
+    })
+  );
+  // First "only the radii" (a box has none), then "dimension it".
+  const asks: (string[] | null)[] = [['radius'], null];
+  await page.route('**/api/assistant/proposals', async (route) => {
+    const { digest } = route.request().postDataJSON() as {
+      digest: CadDocumentDigest;
+    };
+    const dimensionKinds = asks.shift() ?? null;
+    await route.fulfill({
+      contentType: 'text/event-stream',
+      body: `data: ${JSON.stringify({
+        type: 'response.output_text.done',
+        text: JSON.stringify({
+          replyKind: 'patch',
+          questions: null,
+          message: null,
+          readings: null,
+          proposal: {
+            proposalId: dimensionKinds ? 'radii_only' : 'dimension_all',
+            summary: dimensionKinds
+              ? 'Dimension the radii.'
+              : 'Dimension the whole sheet.',
+            assumptions: [],
+            preserveGeometry: false,
+            operations: [
+              {
+                kind: 'auto_dimension_drawing',
+                sheetId: digest.drawing!.sheetId,
+                viewIds: null,
+                dimensionKinds
+              }
+            ]
+          }
+        })
+      })}\n\ndata: ${JSON.stringify({ type: 'response.completed' })}\n\n`
+    });
+  });
+
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Auto-dimensioned by AI');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box', {
+    sizes: { width: '30', depth: '20', height: '10' }
+  });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toBeVisible();
+  await mode(page, 'Draw').click();
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  await drawings.getByRole('button', { name: 'New drawing sheet' }).click();
+  const canvas = drawings.getByRole('application', { name: 'Sheet Sheet 1' });
+  await expect(
+    canvas.locator('[data-view="front"]:not(.is-placeholder)')
+  ).toHaveCount(1, { timeout: 20_000 });
+
+  await openAssistant(page);
+  // A scope that excludes every missing dimension says so instead of
+  // passing silently.
+  await askAssistant(page, 'Dimension only the radii');
+  await expect(
+    page
+      .getByText(
+        /Auto-dimension has nothing to add\. Left out: 3 linear dimensions, by request\./
+      )
+      .first()
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(canvas.getByRole('button', { name: /dimension/ })).toHaveCount(
+    0
+  );
+
+  // The whole sheet: the generator's three spans, previewed, then applied
+  // as one undo step.
+  await askAssistant(page, 'Dimension it');
+  const all = page.locator('.assistant-card', {
+    hasText: 'Dimension the whole sheet.'
+  });
+  await expect(all).toBeVisible({ timeout: 30_000 });
+  for (const value of ['30', '20', '10'])
+    await expect(
+      canvas.getByRole('button', { name: new RegExp(`dimension ${value}$`) })
+    ).toBeVisible();
+  await all.getByRole('button', { name: /Apply/ }).click();
+  await expect(all).toContainText('undo reverses it');
+  await expect(canvas.getByRole('button', { name: /dimension/ })).toHaveCount(
+    3
+  );
+  await canvas.click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect(canvas.getByRole('button', { name: /dimension/ })).toHaveCount(
+    0
+  );
+});
