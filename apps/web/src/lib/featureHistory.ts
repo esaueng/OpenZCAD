@@ -189,7 +189,7 @@ export function featureHistory(document: ProjectDocument) {
         if (data.featureKind === 'pattern' && data.path) {
           sketch(data.path.sketchId);
         }
-        // M02 (schema v113): a mirror pattern's datum plane.
+        // M02 (schema v115): a mirror pattern's datum plane.
         if (
           data.featureKind === 'pattern' &&
           data.mirrorPlane &&

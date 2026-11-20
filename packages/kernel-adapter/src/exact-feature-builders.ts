@@ -4108,7 +4108,7 @@ function pathPatternArm(
 }
 
 /**
- * M02 (schema v113): the mirror arm. Instance 1 is the original reflected in
+ * M02 (schema v115): the mirror arm. Instance 1 is the original reflected in
  * the plane, x ↦ x − 2((x − p)·n)n; it is labelled "1" as a linear pattern's
  * second instance is. A reflection has no kernel pattern entry point, so it
  * is the rigid copy-and-transform build, fused where it overlaps the

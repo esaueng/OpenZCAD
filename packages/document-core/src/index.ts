@@ -824,7 +824,7 @@ export interface PatternInput {
   points?: PatternPoints;
   /** M02 (schema v112): required on a `path` pattern, absent otherwise. */
   path?: PatternPath;
-  /** M02 (schema v113): required on a `mirror` pattern, absent otherwise. */
+  /** M02 (schema v115): required on a `mirror` pattern, absent otherwise. */
   mirrorPlane?: ModelingPlaneReference;
   ids?: BodyFeatureIds;
 }
@@ -3561,7 +3561,7 @@ export function datumPlaneDependents(
     } else if (data.featureKind === 'mirror' || data.featureKind === 'split') {
       uses = usesDatum(data.plane);
     } else if (data.featureKind === 'pattern' && data.mirrorPlane) {
-      // M02 (schema v113): a mirror pattern's plane.
+      // M02 (schema v115): a mirror pattern's plane.
       uses = usesDatum(data.mirrorPlane);
     } else if (data.featureKind === 'sketch') {
       const planeRef = findSketch(document, data.sketchId)?.planeRef;

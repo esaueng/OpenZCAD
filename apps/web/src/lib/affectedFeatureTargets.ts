@@ -332,7 +332,7 @@ export function affectedFeatureTargets(
           (data.featureKind === 'pattern' &&
             data.path !== undefined &&
             affectedSketches.has(data.path.sketchId)) ||
-          // M02 (schema v113): a mirror pattern moves with its datum plane.
+          // M02 (schema v115): a mirror pattern moves with its datum plane.
           (data.featureKind === 'pattern' &&
             data.mirrorPlane !== undefined &&
             isDatumPlaneRef(data.mirrorPlane) &&

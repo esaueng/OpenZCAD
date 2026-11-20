@@ -451,12 +451,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // moved or also turned with the path. An older client has no such
 // arrangement and would build a linear pattern in its place, so it must
 // refuse. Builds on v111.
-// v113 adds M02 mirror patterns (`patternKind: 'mirror'` and
+// v115 adds M02 mirror patterns (`patternKind: 'mirror'` and
 // `mirrorPlane`): the whole body, or the repeated holes, bosses and cuts,
 // copied once as their reflection in a plane. An older client has no such
 // arrangement and would build a linear pattern in its place, so it must
-// refuse. Builds on v112.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 113 as const;
+// refuse. Builds on v112 (v113 and v114 are claimed by #1786 and #1792).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 115 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3186,7 +3186,7 @@ export type FeatureData =
        */
       path?: PatternPath;
       /**
-       * M02 (schema v113), `patternKind: 'mirror'` only, and required
+       * M02 (schema v115), `patternKind: 'mirror'` only, and required
        * there: the plane the one copy is reflected in, a datum plane or a
        * stored origin and normal, as Mirror takes it. `count` (2), `axis`,
        * `spacing` and `angleDeg` are stored but not read.
