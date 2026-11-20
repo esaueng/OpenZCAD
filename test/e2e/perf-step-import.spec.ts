@@ -61,7 +61,9 @@ test('times a STEP file selection through its first modeled frame', async ({
         .getEntriesByName('oz:model-visible')
         .find(
           (e) =>
-            e.startTime >= done && (e as PerformanceMark).detail?.bodies === 1
+            e.startTime >= done &&
+            ((e as PerformanceMark).detail as { bodies?: number } | null)
+              ?.bodies === 1
         );
       if (!visible) return;
       const frame = performance
@@ -72,7 +74,7 @@ test('times a STEP file selection through its first modeled frame', async ({
         frame && {
           discoveryMs: done - discovery,
           firstFrameMs: visible.startTime - start,
-          triangles: frame.detail.triangles
+          triangles: (frame.detail as { triangles: number }).triangles
         }
       );
     },

@@ -242,13 +242,9 @@ describe('Remus STEP import validation', () => {
       expect((await discoverStepLayout(bytes, true)).solidIndices).toEqual([0]);
       for (const call of [strict, relaxed, volume])
         expect(call).not.toHaveBeenCalled();
-      expect(
-        await adapter.inspectStep(bytes, { structure: true })
-      ).toMatchObject({
-        solidIndices: [0],
-        valid: true,
-        volume: expect.any(Number)
-      });
+      const inspection = await adapter.inspectStep(bytes, { structure: true });
+      expect(inspection).toMatchObject({ solidIndices: [0], valid: true });
+      expect(inspection.volume).toBeCloseTo(10 * 20 * 30, 6);
       for (const call of [strict, relaxed, volume])
         expect(call).toHaveBeenCalled();
     } finally {
