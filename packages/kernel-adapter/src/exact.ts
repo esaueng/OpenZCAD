@@ -1621,7 +1621,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * already takes, so tracking it costs no kernel call.
    */
   private historyArenaWear: ReturnType<typeof historyArenaWear> = 'fresh';
-  private readonly primitiveBuildCache = new PrimitiveBuildCache();
+  private readonly primitiveBuildCache = new PrimitiveBuildCache({
+    // Embedded text, or a parsed source this device still holds: exactly
+    // when the import builder would succeed without fetching anything.
+    importRebuildable: (feature) => {
+      const data = feature.data;
+      if (data.featureKind !== 'imported-step') return false;
+      if (data.stepText !== undefined) return true;
+      const ref = data.stepSourceRef;
+      return (
+        !!ref &&
+        this.importedSteps.lookup(
+          importedStepCacheKey(ref.checksumSha256, data)
+        ) !== undefined
+      );
+    }
+  });
 
   /**
    * A persisted session (`exact-session-snapshot.ts`) offered to the build
@@ -2182,6 +2197,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     replayed: number;
     restored: number;
     reusedPrimitives: number;
+    reusedImports: number;
     reusedPreparedFeatures: number;
     reusedAxialFeatures: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
@@ -2405,6 +2421,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let initialLineageIsIdle = false;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
+    let reusedImports = 0;
     let reusedPreparedFeatures = 0;
     let reusedAxialFeatures = 0;
     let cacheResetReason:
@@ -3180,7 +3197,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 if (reused) {
                   if (feature.data.featureKind === 'primitive')
                     reusedPrimitives += 1;
-                  else reusedPreparedFeatures += 1;
+                  else if (feature.data.featureKind === 'imported-step') {
+                    // Self-contained like a primitive: counted with them.
+                    reusedPrimitives += 1;
+                    reusedImports += 1;
+                  } else reusedPreparedFeatures += 1;
                 }
                 return reused;
               },
@@ -3264,6 +3285,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         reusedPreparedFeatures,
       restored: startIndex,
       reusedPrimitives,
+      reusedImports,
       reusedPreparedFeatures,
       reusedAxialFeatures,
       ...(cacheResetReason ? { cacheResetReason } : {}),
@@ -4291,6 +4313,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         replayed,
         restored,
         reusedPrimitives,
+        reusedImports,
         reusedPreparedFeatures,
         reusedAxialFeatures,
         strictVerdicts,
@@ -5238,6 +5261,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               ? 'prefix-restore'
               : 'full-rebuild',
         ...(reusedPrimitives > 0 ? { reusedPrimitives } : {}),
+        ...(reusedImports > 0 ? { reusedImports } : {}),
         ...(reusedPreparedFeatures > 0 ? { reusedPreparedFeatures } : {}),
         ...(reusedAxialFeatures > 0 ? { reusedAxialFeatures } : {}),
         ...(recycleReason ? { recycleReason } : {}),

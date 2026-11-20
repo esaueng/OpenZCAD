@@ -95,11 +95,13 @@ worker yields at feature/body boundaries after an 8 ms work quantum and checks
 cancellation before final publication. Synchronous kernel calls remain
 indivisible. See the [interactive regeneration qualification](interactive-regeneration-performance.md).
 
-The proposed H02 Text-branch cache remains blocked: restoring its old
-post-interval checkpoint cannot preserve a separately edited holder branch.
-See [the design](plans/h02-private-holder-cache-design.md) and
-[current evidence](qa/2026-09-29/h02-cache-safety.md). Measurement hardening
-adds no branch record; the 8 MiB proposed branch cap has zero allocations.
+Restoring an old post-interval checkpoint still cannot preserve a separately
+edited holder branch, so no branch record was added (the proposed 8 MiB
+branch cap has zero allocations). The detached Text cache instead keeps a
+fixed import's solids in the live arena through independent reuse, with no
+restore at all; see
+[the design](plans/h02-private-holder-cache-design.md#detached-text-reuse-in-the-live-arena-2026-11-20)
+and the [earlier evidence](qa/2026-09-29/h02-cache-safety.md).
 
 ## Arena retention in a long session
 
