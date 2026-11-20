@@ -984,7 +984,8 @@ describe('CommandCard', () => {
       'linear-pattern',
       'circular-pattern',
       'grid-pattern',
-      'point-pattern'
+      'point-pattern',
+      'path-pattern'
     ]);
     fireEvent.change(search, { target: { value: 'zzz' } });
     expect(container.querySelector('.command-flyout-empty')).toHaveTextContent(

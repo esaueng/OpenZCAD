@@ -99,7 +99,7 @@ Rules: declare an alias before referencing it; each alias is unique within the p
 
 # 5. Hollowing, openings, and holes
 
-Use \`add_shell\` or \`add_solid_offset\` only when the rollout-capability block appended to these instructions explicitly enables that operation. Otherwise hollow parts are made by subtracting an inner solid from an outer one.
+Use \`add_shell\`, \`add_hole\` or \`add_solid_offset\` only when the rollout-capability block appended to these instructions explicitly enables that operation. Otherwise hollow parts are made by subtracting an inner solid from an outer one.
 
 To hollow a box with wall thickness \`wall\` and floor \`floor_t\`, leaving the top open:
 - cavity size = (width - 2*wall, height - 2*wall, depth - floor_t)
@@ -465,6 +465,7 @@ const ROLLOUT_OPERATION_FLAGS = [
   ['add_multi_profile_extrude', 'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED'],
   ['add_mirror', 'AI_PATCH_MIRROR_ENABLED'],
   ['add_shell', 'AI_PATCH_SHELL_ENABLED'],
+  ['add_hole', 'AI_PATCH_HOLE_ENABLED'],
   ['add_solid_offset', 'AI_PATCH_SOLID_OFFSET_ENABLED'],
   ['add_datum_plane', 'AI_PATCH_DATUM_PLANE_ENABLED'],
   ['add_datum_sketch', 'AI_PATCH_DATUM_PLANE_ENABLED'],
@@ -485,6 +486,7 @@ const ROLLOUT_OPERATION_FLAGS = [
  * parser rejects these, so it is never offered them.
  */
 const NEGOTIATED_OPERATIONS: ReadonlySet<string> = new Set([
+  'add_hole',
   'add_datum_plane',
   'add_datum_sketch',
   'add_datum_mirror',
@@ -562,6 +564,7 @@ When enabled:
 - \`add_multi_profile_extrude\` uses distinct digest-backed sample points from one existing sketch.
 - \`add_mirror\` creates a separate reflected body and keeps its source.
 - \`add_shell\` requires one or more explicitly referenced opening faces.
+- \`add_hole\` drills one simple hole (no counterbore or countersink) into one planar face the user selected or named, copying its exact hash and reference from the digest; the drilled body replaces the target. \`position\` is measured from the face's area centroid in the Hole tool's own face frame, which is NOT the face's \`attachmentFrame\`: with n the outward face normal and r = world Z (world X when |n.z| >= 0.9), u = normalize(r × n) and v = n × u. Send {u: 0, v: 0}, the middle of the face, unless the user gives an offset. A blind hole needs a positive \`depth\`; a through hole sends null. Ask which face when none is selected or named, and never drill a curved face.
 - \`add_solid_offset\` uses a positive outward distance and may still be refused by exact kernel topology limits.
 - \`add_datum_plane\` creates a named reference plane that later operations reuse: an \`offset\` plane a signed distance along a source plane's normal (positive follows the source normal), or a \`midplane\` halfway between two parallel sources. A source is a principal plane (XY/XZ/YZ with an offset) or a datum — a datum-plane featureId from the digest or the \`$localId\` of an earlier \`add_datum_plane\`. Give it a \`localId\` when anything later uses it. Fill only the fields its kind uses and send null for the rest. Drive the offset with a parameter when the user names the distance.
 - \`add_datum_sketch\` sketches on a datum plane, in the plane's own 2D coordinates, exactly like \`add_sketch\`; a later \`add_extrude\` extrudes it along the datum normal. \`add_datum_mirror\` creates a separate reflected body across a datum plane and keeps its source. \`add_datum_split\` cuts a body in two at a datum plane and replaces it: \`localId\` names the half the datum normal points toward, \`secondLocalId\` the other; the plane must cross the body through flat faces. Use these instead of repeating plane numbers when several features share one plane.

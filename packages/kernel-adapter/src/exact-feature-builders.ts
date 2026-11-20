@@ -48,6 +48,11 @@ import { toFaceSweepFeature } from './extrude-options';
 import {
   axisPlaneDatumPoint,
   axisRotationMatrix,
+  chainPathCurves,
+  pathPatternCurves,
+  pathPatternFitProblem,
+  pathStationAt,
+  pathTurnDeg,
   csysAlignMatrix,
   csysDatumAxis,
   offsetDatumPoint,
@@ -449,13 +454,11 @@ function buildDirectEditFeature(
   const deferOutputLineage =
     ctx.deferredDirectEditFeatureId === feature.featureId &&
     [
-        'offset-face',
-        'offset-faces',
-        'resize-blend',
-        'resize-cylindrical-face'
-      ].includes(
-      data.operation.kind
-    ) &&
+      'offset-face',
+      'offset-faces',
+      'resize-blend',
+      'resize-cylindrical-face'
+    ].includes(data.operation.kind) &&
     target.solids.length === 1;
   const repair =
     !deferOutputLineage && !data.operation.faceReference
@@ -2391,7 +2394,9 @@ function buildWrapFeature(
   }
   const basis = result.sketchBases.get(data.sketchId);
   if (!basis) {
-    throw new Error('The wrap sketch plane did not resolve at its history position.');
+    throw new Error(
+      'The wrap sketch plane did not resolve at its history position.'
+    );
   }
   const frame = resolveWrapFrame(
     kernel,
@@ -2417,7 +2422,10 @@ function buildWrapFeature(
     solid = fuseUniformSolidChecked(
       kernel,
       [target.solids[0]!, ...pieces],
-      [`body of "${feature.name}"`, ...pieces.map(() => `wrap "${feature.name}"`)]
+      [
+        `body of "${feature.name}"`,
+        ...pieces.map(() => `wrap "${feature.name}"`)
+      ]
     ).solid;
   } else {
     solid = target.solids[0]!;
@@ -4024,6 +4032,81 @@ function pointsPatternArm(
   };
 }
 
+/**
+ * M02 (schema v112): the arm along a sketch path. Instance `i` stands `i ×
+ * spacing` along the chained lines and arcs from the path's start, where
+ * the original stands, moved there and, with `orientation: 'tangent'`, also
+ * turned in the sketch plane by how far the path has turned. A path has no
+ * kernel pattern entry point, so every copy is the rigid copy-and-transform
+ * build, fused where copies overlap as any pattern's are.
+ */
+function pathPatternArm(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'pattern'>,
+  count: number,
+  spacing: number
+): PatternArm {
+  const path = data.path;
+  if (!path) {
+    throw new Error('A pattern along a path needs its sketch and curves.');
+  }
+  const basis = ctx.result.sketchBases.get(path.sketchId);
+  const sketch = findSketch(ctx.document, path.sketchId);
+  if (!sketch || !basis) {
+    throw new Error(
+      `The sketch this pattern runs along${sketch ? ` (${sketch.name})` : ''} did not resolve.`
+    );
+  }
+  const curves = pathPatternCurves(ctx.document, path, (value, label) =>
+    resolveParamValue(value, ctx.scope, label, ctx.document.units)
+  );
+  if (typeof curves === 'string') throw new Error(curves);
+  const chain = chainPathCurves(curves, path.reversed === true);
+  if (typeof chain === 'string') {
+    throw new Error(`${chain} (${sketch.name})`);
+  }
+  const fit = pathPatternFitProblem(chain, count, spacing);
+  if (fit) throw new Error(fit);
+  const world = (point: { x: number; y: number }) => ({
+    x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+    y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+    z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+  });
+  const stations = Array.from({ length: count }, (_unused, index) => {
+    const station = pathStationAt(chain, spacing * index);
+    if (!station) throw new Error('A copy fell past the end of the path.');
+    return station;
+  });
+  const start = stations[0]!;
+  const from = world(start.point);
+  const normal = normalized(cross(basis.u, basis.v)) ?? basis.normal;
+  const turning = path.orientation === 'tangent';
+  return {
+    total: count,
+    label: (index) => String(index),
+    matrix: (index) => {
+      const to = world(stations[index]!.point);
+      const moved = transformMatrix(
+        { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z },
+        PATTERN_ORIGIN
+      );
+      if (!turning || index === 0) return moved;
+      // Turned about the sketch normal through the start, then moved: the
+      // copy keeps its place relative to the path's direction.
+      return composeAffine(
+        moved,
+        affineMatrix(
+          axisRotationMatrix(
+            { origin: from, direction: normal },
+            pathTurnDeg(start, stations[index]!)
+          )
+        )
+      );
+    },
+    kernelCopies: null
+  };
+}
+
 /** Records a kernel refusal alongside whatever lineage the build published. */
 function withPatternDiagnostic(
   state: RemusLineageState,
@@ -4156,6 +4239,14 @@ function buildPatternFeature(
     );
   } else if (data.patternKind === 'points') {
     arm = pointsPatternArm(ctx, data);
+  } else if (data.patternKind === 'path') {
+    const spacing = resolveParamValue(
+      data.spacing,
+      scope,
+      'spacing',
+      ctx.document.units
+    );
+    arm = pathPatternArm(ctx, data, count, spacing);
   } else {
     const angle = resolveParamValue(
       data.angleDeg,

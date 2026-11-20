@@ -1,0 +1,5 @@
+---
+row: H02
+---
+
+A reopened project's first edit no longer replays independent work its session already held. The persisted kernel session now carries the capturing kernel's independent-reuse tables (primitive and standalone standard-part results, prepared transforms and intersections), whose handles the snapshot keeps; a restore adopts every entry still at its recorded position and digest, so the first edit reuses what the capturing session would have instead of replaying every feature before the session's single checkpoint (the 2026-11-15 baseline's contributor 3: the lettered holder replayed 27 of 31 features after a restore against 12 warm). A stale entry is only that entry's miss, a malformed table refuses the record, and older records restore as before ([persisted sessions](docs/history-cache-retention.md); `test/kernel-session-snapshot.test.ts`). Browser first-edit timing on target hardware remains owner-pending (`node scripts/measure-active1-baselines.mjs --only h02 --check`).

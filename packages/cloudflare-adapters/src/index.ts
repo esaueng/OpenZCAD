@@ -279,6 +279,8 @@ export interface CloudflareEnv {
   AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED?: string;
   AI_PATCH_MIRROR_ENABLED?: string;
   AI_PATCH_SHELL_ENABLED?: string;
+  /** F03: AI-authored simple holes through the manual Hole command. */
+  AI_PATCH_HOLE_ENABLED?: string;
   AI_PATCH_DATUM_PLANE_ENABLED?: string;
   /** Complete datum definitions and axis consumers, negotiated separately. */
   AI_PATCH_DATUM_GEOMETRY_ENABLED?: string;
@@ -377,6 +379,7 @@ export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
   'AI_PATCH_MIRROR_ENABLED',
   'AI_PATCH_SHELL_ENABLED',
+  'AI_PATCH_HOLE_ENABLED',
   'AI_PATCH_SOLID_OFFSET_ENABLED',
   'AI_PATCH_DATUM_PLANE_ENABLED',
   'AI_PATCH_DATUM_GEOMETRY_ENABLED',
