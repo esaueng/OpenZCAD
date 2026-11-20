@@ -459,7 +459,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // view draws each assembly part at its solved pose plus its stored exploded
 // offset. An older client would draw it as modelled, so it must refuse the
 // document. Builds on v113.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 114 as const;
+// v117 adds M01 hole tables on drawing sheets (a `hole-table` drawing
+// annotation): a table of one view's bores, read from the model each time
+// the sheet is drawn. An older client cannot draw it and would refuse the
+// annotation's kind on its next save, so it must refuse. Builds on v116
+// (v115 and v116 are claimed by the M02 mirror and total-length pattern
+// PRs #1796 and #1797).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 117 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

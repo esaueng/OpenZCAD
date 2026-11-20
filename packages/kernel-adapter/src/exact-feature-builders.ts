@@ -174,7 +174,7 @@ import {
   importStepWithOwnBudget,
   stepImportEmptyReason
 } from './kernel-step-import';
-import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { MEASUREMENT_DEFLECTION, edgeWitnessOf } from './exact-witnesses';
 import { isBlendFace } from './exact-brep';
 import { priorBlendFaceTest } from './exact-prior-blend';
 import { importedMeshCacheKey } from './exact-imported-mesh-cache';
@@ -3168,42 +3168,20 @@ function combineBooleanOperands(
   }
 }
 
-function buildEdgeModifierFeature(
+/**
+ * A fillet's or chamfer's resolved size and options, checked as its build
+ * checks them; shared with M02 patterns that repeat it.
+ */
+export function edgeModifierSettings(
   ctx: FeatureBuildContext,
-  feature: FeatureNode,
   data: FeatureDataOf<'fillet' | 'chamfer'>
-): void {
-  const { kernel, document, scope, result } = ctx;
-  if (!feature.bodyId) {
-    throw new Error('Edge modifier has no result body.');
-  }
-  const storedTarget = result.shapes.get(data.targetBodyId);
-  if (!storedTarget) {
-    throw new Error('Edge modifier target is unavailable.');
-  }
-  const target = collapseShape(kernel, storedTarget);
-  const {
-    handles: selected,
-    repairedReferences,
-    carriedHashes
-  } = resolveEdgeModifierEdges(
-    kernel,
-    storedTarget,
-    target,
-    data.edgeHashes,
-    data.edgeReferences,
-    ctx.edgeSelections
-      ? {
-          memory: ctx.edgeSelections,
-          key: edgeSelectionKey(document.projectId, feature.featureId),
-          propose: ctx.proposeCarry === true,
-          // The build's state so far: the frames earlier features resolved.
-          upstream: () =>
-            upstreamSnapshot(document, feature.featureId, ctx.result)
-        }
-      : undefined,
-    ctx.onUnresolvedEdgeHash
-  );
+): {
+  size: number;
+  chamferAngleRadians: number | undefined;
+  variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
+  chamferSecondDistance: number | undefined;
+} {
+  const { document, scope } = ctx;
   const size = resolveParamValue(
     data.featureKind === 'fillet' ? data.radius : data.distance,
     scope,
@@ -3269,6 +3247,53 @@ function buildEdgeModifierFeature(
       throw new Error('Chamfer second distance must be greater than zero.');
     }
   }
+  return { size, chamferAngleRadians, variableRadius, chamferSecondDistance };
+}
+
+function buildEdgeModifierFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'fillet' | 'chamfer'>
+): void {
+  const { kernel, document, result } = ctx;
+  // M02: recorded again below only if this build succeeds (re-check).
+  result.blendEdgeWitnesses?.delete(feature.featureId);
+  if (!feature.bodyId) {
+    throw new Error('Edge modifier has no result body.');
+  }
+  const storedTarget = result.shapes.get(data.targetBodyId);
+  if (!storedTarget) {
+    throw new Error('Edge modifier target is unavailable.');
+  }
+  const target = collapseShape(kernel, storedTarget);
+  const {
+    handles: selected,
+    repairedReferences,
+    carriedHashes
+  } = resolveEdgeModifierEdges(
+    kernel,
+    storedTarget,
+    target,
+    data.edgeHashes,
+    data.edgeReferences,
+    ctx.edgeSelections
+      ? {
+          memory: ctx.edgeSelections,
+          key: edgeSelectionKey(document.projectId, feature.featureId),
+          propose: ctx.proposeCarry === true,
+          // The build's state so far: the frames earlier features resolved.
+          upstream: () =>
+            upstreamSnapshot(document, feature.featureId, ctx.result)
+        }
+      : undefined,
+    ctx.onUnresolvedEdgeHash
+  );
+  const { size, chamferAngleRadians, variableRadius, chamferSecondDistance } =
+    edgeModifierSettings(ctx, data);
+  // M02: where these edges stand now, measured before they are rounded, for
+  // a feature pattern that repeats this one (review: an upstream edit moves
+  // them away from the stored pick).
+  const builtEdges = selected.map((edge) => edgeWitnessOf(kernel, edge));
   let reportedRefusal: string | null = null;
   // The kernel's typed refusal of the requested size, kept beside its text
   // so the thrown refusal carries the kernel's classification. Cleared by a
@@ -3412,6 +3437,7 @@ function buildEdgeModifierFeature(
       'advisory'
     );
   }
+  (result.blendEdgeWitnesses ??= new Map()).set(feature.featureId, builtEdges);
   // Only a feature that actually rebuilt earns a repair: a thrown
   // modifier above skips this, and the legacy selection stays as it
   // was for the user to fix.
@@ -4313,7 +4339,57 @@ function buildPatternFeature(
       },
       (hole) => holeToolSpecFor(ctx, hole),
       // M01 (schema v66): a tapped hole's copies are tapped as it is.
-      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores)
+      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores),
+      // M02: a repeated fillet or chamfer, at each copy's edges, as its own
+      // build applies it; an approximate blend is disclosed as its is.
+      (blend, solid, edges) => {
+        const settings = edgeModifierSettings(ctx, blend);
+        // Two setbacks a copy could swap repeat only when they are equal
+        // (re-check: two equal distances are an even chamfer).
+        if (
+          settings.chamferSecondDistance !== undefined &&
+          Math.abs(settings.chamferSecondDistance - settings.size) >
+            1e-9 * Math.max(1, settings.size)
+        ) {
+          throw new Error(
+            "its faces are set back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly."
+          );
+        }
+        let refusal: string | null = null;
+        let approximate = false;
+        const blended = applyEdgeModifier(
+          kernel,
+          solid,
+          edges,
+          blend.featureKind,
+          settings.size,
+          (message) => {
+            refusal = message;
+          },
+          undefined,
+          settings.chamferAngleRadians,
+          settings.variableRadius,
+          settings.chamferSecondDistance,
+          false,
+          (quality) => {
+            approximate ||= quality.approximate;
+          }
+        );
+        if (blended === null) {
+          throw new Error(
+            refusal ?? `The kernel could not make this ${blend.featureKind}.`
+          );
+        }
+        if (approximate) {
+          raiseFeatureWarning(
+            result,
+            feature,
+            approximateBlendAdvisory(blend.featureKind),
+            'advisory'
+          );
+        }
+        return blended;
+      }
     );
     return;
   }

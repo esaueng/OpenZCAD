@@ -15,6 +15,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
+  discoverStepLayout,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -79,7 +80,7 @@ async function importThroughTheRun(
     file: new File([Uint8Array.from(bytes)], fileName),
     contentType: 'model/step',
     inspectStructure: async () =>
-      adapter.inspectStep(bytes.slice().buffer, { structure: true }),
+      discoverStepLayout(bytes.slice().buffer, true),
     store: {
       ...localStepImportSourceStore,
       ensureLocalProjectStorage: async () => 'ready',

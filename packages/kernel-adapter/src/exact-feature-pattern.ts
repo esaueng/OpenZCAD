@@ -17,6 +17,7 @@ import {
   isFeatureSuppressed,
   patternSourceProblem,
   type BodyId,
+  type EdgeWitnessV1,
   type FaceWitnessV1,
   type FeatureData,
   type FeatureId,
@@ -327,6 +328,15 @@ export function buildFeaturePattern(
     data: FeatureDataOf<'hole'>,
     solid: number,
     bores: readonly { spec: HoleToolSpec; pointId: string | null }[]
+  ) => number,
+  /**
+   * M02: rounds or bevels `edges` of `solid` as a repeated fillet or
+   * chamfer does its own, and returns the result; throws its refusal.
+   */
+  blendEdges?: (
+    data: FeatureDataOf<'fillet' | 'chamfer'>,
+    solid: number,
+    edges: number[]
   ) => number
 ): void {
   const { kernel, document, result } = ctx;
@@ -346,6 +356,44 @@ export function buildFeaturePattern(
     let seed: number[];
     let operation: 'add' | 'cut';
     let bores: { spec: HoleToolSpec; pointId: string | null }[] = [];
+    // M02: a fillet or chamfer is applied again where each copy holds the
+    // edges it rounded, found by its stored edges moved with the copy.
+    if (
+      sourceData.featureKind === 'fillet' ||
+      sourceData.featureKind === 'chamfer'
+    ) {
+      if (!blendEdges) {
+        throw new Error(
+          `${source.name} rounds edges, and this pattern cannot repeat it.`
+        );
+      }
+      // Where its build found its edges, so an upstream edit that moved
+      // them moves the copies too (review). A source that did not build
+      // recorded none, and its copies are not rounded either (re-check).
+      const witnesses = result.blendEdgeWitnesses?.get(source.featureId);
+      if (!witnesses || witnesses.length === 0) {
+        throw new Error(
+          `${source.name} did not build, so a pattern cannot find its edges on a copy; fix ${source.name} first.`
+        );
+      }
+      for (const copy of copies) {
+        const edges = copiedEdges(kernel, solid, witnesses, copy.matrix);
+        if (typeof edges === 'number') {
+          throw new Error(
+            `Copy ${copy.label} of ${source.name} finds no edge where ${source.name}'s edge ${edges + 1} would be; skip it, or repeat the feature it rounds first.`
+          );
+        }
+        try {
+          solid = blendEdges(sourceData, solid, edges);
+        } catch (error) {
+          throw new Error(
+            `Copy ${copy.label} of ${source.name}: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error }
+          );
+        }
+      }
+      continue;
+    }
     if (sourceData.featureKind === 'hole') {
       // A through hole drills clear of the body from its own entry point; a
       // copy needs the same from where it lands, so the one tool all copies
@@ -393,7 +441,7 @@ export function buildFeaturePattern(
       ).solids;
     } else {
       throw new Error(
-        `${source.name} is not a hole, boss or cut, so a feature pattern cannot repeat it.`
+        `${source.name} is not a hole, boss, cut, fillet or chamfer, so a feature pattern cannot repeat it.`
       );
     }
     const repeated = repeat(seed);
@@ -754,4 +802,75 @@ function nameCopiedFaces(
   for (const [handle, reference] of proven.faceReferences) {
     lineage.faceReferences.set(handle, reference);
   }
+}
+
+/**
+ * M02: the edges of `solid` where `references`' edges stand moved by
+ * `matrix`, one each: the same kind of curve and length, with the moved
+ * ends and middle (an open edge, either way round) or the moved centre and
+ * axis (a closed one). The index of the first that finds no one edge, when
+ * one does not. A copy is an exact transform, so it matches within a few
+ * quanta (1e-6 mm each, the linear tolerance), not the slack face naming
+ * allows: an edge a few hundredths of a micron from where a copy's would
+ * stand is another edge (review).
+ */
+/** Quanta a copied blend edge may stand from where the copy puts it. */
+const BLEND_SLACK = 4;
+
+function copiedEdges(
+  kernel: Parameters<typeof topologyCandidatesForSolid>[0],
+  solid: number,
+  witnesses: readonly EdgeWitnessV1[],
+  matrix: Float64Array
+): number[] | number {
+  const candidates = topologyCandidatesForSolid(kernel, solid).filter(
+    (candidate) => candidate.kind === 'edge'
+  );
+  const moved = (point: QuantizedTopologyPoint) =>
+    quantized(applyPoint(matrix, dequantized(point)));
+  const edges: number[] = [];
+  const near = (left: number, right: number) =>
+    closeQuanta(left, right, BLEND_SLACK);
+  const nearPoints = (
+    left: QuantizedTopologyPoint,
+    right: QuantizedTopologyPoint
+  ) => left.every((value, index) => near(value, right[index]!));
+  for (const [index, witness] of witnesses.entries()) {
+    const matches = candidates.filter((candidate) => {
+      const other = candidate.witness as EdgeWitnessV1;
+      if (
+        other.curveType !== witness.curveType ||
+        other.closed !== witness.closed ||
+        !near(other.length, witness.length)
+      )
+        return false;
+      if (!witness.closed && !other.closed) {
+        const [a, b] = witness.endpoints.map(moved) as [
+          QuantizedTopologyPoint,
+          QuantizedTopologyPoint
+        ];
+        const [c, d] = other.endpoints;
+        return (
+          nearPoints(other.midpoint, moved(witness.midpoint)) &&
+          ((nearPoints(a, c) && nearPoints(b, d)) ||
+            (nearPoints(a, d) && nearPoints(b, c)))
+        );
+      }
+      if (witness.closed && other.closed) {
+        if (!nearPoints(other.center, moved(witness.center))) return false;
+        if (!witness.axis || !other.axis) return !witness.axis && !other.axis;
+        const axis = applyDirection(matrix, dequantized(witness.axis, 1000));
+        const theirs = dequantized(other.axis, 1000);
+        const cos =
+          Math.abs(dot(axis, theirs)) /
+          (Math.hypot(axis.x, axis.y, axis.z) *
+            Math.hypot(theirs.x, theirs.y, theirs.z));
+        return Math.abs(cos - 1) <= 1e-9;
+      }
+      return false;
+    });
+    if (matches.length !== 1) return index;
+    edges.push(matches[0]!.handle);
+  }
+  return edges;
 }

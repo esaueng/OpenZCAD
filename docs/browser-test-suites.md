@@ -150,3 +150,16 @@ Use one worker and serial, repeated runs. `OZ_FACE_DRAG_PROFILE` and
 `OZ_FACE_DRAG_TIMELINE` save optional CPU profiles and Chrome timelines outside
 the repo. The JSON includes raw frames/long tasks and separates motion from
 settle/release; interval p99 and >25 ms counts exclude intentional idle frames.
+
+## STEP import through the first modeled frame
+
+Use the Remus fixture `crates/io/tests/data/shapr3d_hammer_holder.step`.
+The probe checks the file digest, imports into an empty project, and requires
+one body, zero warnings and the reference model's 329,644-triangle frame.
+It records discovery-worker time and elapsed time from file selection through
+that frame. Run the same fixture and renderer on both revisions.
+
+```bash
+OZ_PERF=1 OZ_PERF_ANGLE=gl STEP_PERF_FILE=/path/to/shapr3d_hammer_holder.step \
+  pnpm exec playwright test perf-step-import.spec.ts --repeat-each=3 --workers=1
+```

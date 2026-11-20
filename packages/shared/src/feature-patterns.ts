@@ -174,11 +174,17 @@ export function patternPathProblem(data: {
 }
 
 /**
- * Whether a feature is one a feature pattern repeats: a hole, or an extrude
- * that adds to or cuts its target body.
+ * Whether a feature is one a feature pattern repeats: a hole, an extrude
+ * that adds to or cuts its target body, or (M02) a fillet or chamfer, which
+ * each copy takes where it holds the edges the original rounded.
  */
 export function isPatternableFeature(data: FeatureData): boolean {
-  if (data.featureKind === 'hole') return true;
+  if (
+    data.featureKind === 'hole' ||
+    data.featureKind === 'fillet' ||
+    data.featureKind === 'chamfer'
+  )
+    return true;
   return (
     data.featureKind === 'extrude' &&
     (data.operation === 'add' || data.operation === 'cut') &&
@@ -194,6 +200,19 @@ export function patternSourceProblem(
   if (data.featureKind === 'extrude' && data.endCondition === 'to-face') {
     return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance or Through all.`;
   }
+  // A copy's edge may run the other way, or meet its faces the other way
+  // round, so a blend that differs end to end or face to face could land
+  // reversed on it (review): only the even ones repeat.
+  // Two distances are checked once resolved, where equal ones repeat.
+  if (data.featureKind === 'chamfer' && data.angleDeg !== undefined) {
+    return `${name} sets its faces back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly.`;
+  }
+  if (
+    data.featureKind === 'fillet' &&
+    (data.endRadius !== undefined || data.radiusLaw !== undefined)
+  ) {
+    return `${name} changes its radius along the edge, and a copy's edge can run the other way, so a pattern repeats only a constant-radius fillet; fillet the copies' edges directly.`;
+  }
   if (isPatternableFeature(data)) return null;
-  return `${name} is not a hole, boss or cut, so a feature pattern cannot repeat it.`;
+  return `${name} is not a hole, boss, cut, fillet or chamfer, so a feature pattern cannot repeat it.`;
 }

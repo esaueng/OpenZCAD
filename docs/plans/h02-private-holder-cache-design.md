@@ -1,7 +1,8 @@
 # H02 private-holder latency cache design
 
-**Status:** partial implementation: the existing unchanged measurement cache
-is hardened; the proposed text-branch replay record remains blocked. See
+**Status:** implemented without a branch record (2026-11-20, see
+[Detached Text reuse in the live arena](#detached-text-reuse-in-the-live-arena-2026-11-20)).
+The existing unchanged measurement cache is hardened, as recorded in the
 [implementation evidence](../qa/2026-09-29/h02-cache-safety.md).
 
 H02's named trace leaves two costs after the existing exact-history prefix
@@ -251,3 +252,45 @@ Text record, branch-preserving kernel operation or complete dependency/effect
 proof is added. Existing-prefix speedup does not satisfy that proposed branch's
 acceptance. The five acceptance conditions above, all pins and thresholds remain
 unchanged. H02 stays Partial.
+
+## Detached Text reuse in the live arena (2026-11-20)
+
+The blocker above was restoring an old Text branch beside a newly rebuilt
+holder: the checkpoint API restores ancestors only. The adapter's
+independent-reuse path avoids that question altogether. When every feature
+after the edit point is an audited builder that leaves its inputs intact, it
+does not restore a checkpoint. Instead it keeps the live arena and replays
+in order, substituting results that are pure functions of their own digest.
+The `imported-step` builder is now one of those (`selfContained` and
+`preservesPrimitiveInputs` in `exact-primitive-cache.ts`). Its digest names
+the source bytes, reader, solid selection, planar emboss and placement. It
+reads no parameter and no other body, so the fixed lettering of a history
+that imports it after the holder union stays in the arena across holder
+edits. That covers every recipe saved before the import moved ahead of the
+suffix. No checkpoint is restored and no kernel branch operation is needed.
+The parameter-driven `Keep text together` placement still replays.
+
+The acceptance conditions above, as they now hold:
+
+1. A hit publishes what a cache-free build does: warnings, feature warnings,
+   exportable bodies, bounds, volume, faces, edges and mesh size
+   (`test/detached-text-cache.test.ts`, three holder edits).
+2. Zero false hits: changing the emboss selection, the source bytes, the
+   units or the feature order, suppressing the Text feature or restarting the
+   kernel each re-imports it (same test). An unknown feature kind after the
+   edit point keeps the checkpoint path.
+3. The measurement payload keeps its existing proofs: measurements are
+   reused only for unchanged solid handles, and a changed import is
+   re-measured (`test/bounded-history-cache.test.ts`).
+4. Retention adds no cap of its own. The reused solids are the ones the
+   live arena already holds, each entry keeps one import's handles and
+   diagnostics, and the arena-wear compaction
+   ([history cache retention](../history-cache-retention.md#arena-retention-in-a-long-session))
+   bounds the arena.
+5. A restore before the import retires the entry together with its handles
+   (`restoredThrough`). Kernel disposal, compaction and recycling clear the
+   table.
+
+Each reuse is reported as `reusedImports` on the rebuild cache event. The
+private-holder timing comparison (≥ 20% p95) needs the private file and is
+owner-pending: `OZ_PERF=1 OZ_PERF_HOLDER_STEP=… OZ_PERF_HOLDER_PARAMETER=holder_height pnpm exec playwright test perf-holder-reload`.

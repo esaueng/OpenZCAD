@@ -194,6 +194,11 @@ export type GeometryWorkerRequest =
       section?: ExactSectionPlane;
       /** The third 'dxf' source, and the only 'svg' one: the saved sketch. */
       sketchId?: SketchId;
+      /**
+       * L09, the fourth 'dxf' source: the CNC-cut layout of `bodyIds` (every
+       * shown body when empty or `allShownBodies`), with its part gap in mm.
+       */
+      cncLayout?: { gapMm?: number };
       /** 'svg' only: false paints a white background behind the curves. */
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
@@ -1578,6 +1583,29 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.format === 'dxf' && request.cncLayout) {
+        const layout = await exact.exportCncLayoutDxf(
+          document,
+          request.allShownBodies ? [] : request.bodyIds,
+          {
+            ...(request.units ? { units: request.units } : {}),
+            ...(request.cncLayout.gapMm !== undefined
+              ? { gapMm: request.cncLayout.gapMm }
+              : {})
+          }
+        );
+        post({
+          type: 'export',
+          ok: true,
+          requestId: request.requestId,
+          format: 'dxf',
+          text: layout.text,
+          // One warning per part left out, named as the status reads it.
+          warnings: [...layout.warnings]
         });
         post(stateFor('ready', request, { stale: false }));
         return;

@@ -38,7 +38,8 @@ const UNGATED_OPERATION_KINDS = [
   'add_edge_modifier',
   'add_pattern',
   'add_drawing_annotations',
-  'remove_drawing_annotations'
+  'remove_drawing_annotations',
+  'auto_dimension_drawing'
 ];
 
 const input = {

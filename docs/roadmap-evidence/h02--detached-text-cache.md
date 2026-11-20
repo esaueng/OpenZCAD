@@ -1,0 +1,5 @@
+---
+row: H02
+---
+
+Detached Text cache, without a kernel branch operation: an `imported-step` result is now self-contained for independent reuse (its digest names source bytes, reader, selection, emboss and placement; it reads no parameter or body), so a lettered holder saved with its fixed Text import after the parameter-driven union keeps the lettering in the live arena across holder edits instead of re-importing it; nothing is restored from a checkpoint, and the parameter-driven placement still replays. Hits publish exactly what a cache-free build does; emboss, source-bytes, units, order, suppression and kernel-restart changes each re-import (`test/detached-text-cache.test.ts`; `reusedImports` on the cache event); a changed import is re-measured while independent bodies after it are reused (`test/bounded-history-cache.test.ts`). Acceptance conditions in the [design](docs/plans/h02-private-holder-cache-design.md#detached-text-reuse-in-the-live-arena-2026-11-20); the private-holder p95 comparison remains owner-pending.

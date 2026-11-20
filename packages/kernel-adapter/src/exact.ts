@@ -92,6 +92,19 @@ import {
 } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import {
+  cncLayout,
+  cncRefusalText,
+  type CncLayoutExport,
+  type CncLayoutPart,
+  type CncLayoutRefusal
+} from './exact-cnc-layout';
+export type {
+  CncLayoutExport,
+  CncLayoutPlacement,
+  CncLayoutRefusal,
+  CncLayoutRefusalReason
+} from './exact-cnc-layout';
+import {
   exactBodyClash,
   pairwiseBodyClash,
   rowMajorMatrix
@@ -189,7 +202,10 @@ import type {
   PreparedShapeMeasurement
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
-import { diagnoseImportedSolid } from './exact-lineage-builders';
+import {
+  diagnoseImportedSolid,
+  importedSolidBoundary
+} from './exact-lineage-builders';
 import { releasePreparedFaceMove } from './exact-prepared-face-move';
 import {
   hasPreparedGroupEdit,
@@ -226,6 +242,7 @@ import {
   UnionVerdictsWithMeshBudget
 } from './exact-boolean-helpers';
 import {
+  bodyName,
   bodyOpacityFromMetadata,
   decodeText,
   projectRemusLineageDiagnostic
@@ -233,10 +250,8 @@ import {
 import {
   EXACT_IMPORT_BUDGETS,
   importedStepCacheKey,
-  importStepStructureWithOwnBudget,
-  importStepWithOwnBudget,
+  readStepForInspection,
   stepImportEmptyReason,
-  type StepImportReport,
   type StepStructure
 } from './kernel-step-import';
 import {
@@ -363,6 +378,7 @@ import {
   measuredShapeBytes,
   measurementWitness,
   measurementProvenanceKey,
+  sameMeasurementProvenance,
   tailCheckpointIndices,
   withTerminalResultCheckpoint,
   type HistoryArenaRetentionLimits,
@@ -436,6 +452,7 @@ export type {
 } from './gcs-sketch';
 import {
   classifyImportedSolid,
+  importedSolidRejection,
   importedStepDroppedSolidWarning,
   importedStepNoSolidError,
   importedStepRejectedSolidSummary,
@@ -910,6 +927,19 @@ export interface ExactKernelAdapter {
     face: DxfFaceSelector,
     options?: ExportUnitOptions
   ): Promise<string>;
+  /**
+   * L09: the CNC-cut layout of `bodyIds` (every shown body when empty) as
+   * DXF R12 in millimetres (or `options.units`): each solid laid flat on
+   * its largest planar face, its upward planar faces projected exactly,
+   * one `Z<height>` layer per face height, parts arranged in rows and
+   * labelled on `LABELS`. Solids that cannot be laid flat are returned as
+   * refusals; with none left the export refuses by name.
+   */
+  exportCncLayoutDxf(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options?: ExportUnitOptions & { gapMm?: number }
+  ): Promise<CncLayoutExport>;
   /**
    * M16: the flat pattern of a sheet-metal feature — the flat sheet's
    * outline loops and its bend centre lines in the blank's sketch
@@ -1594,7 +1624,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * already takes, so tracking it costs no kernel call.
    */
   private historyArenaWear: ReturnType<typeof historyArenaWear> = 'fresh';
-  private readonly primitiveBuildCache = new PrimitiveBuildCache();
+  private readonly primitiveBuildCache = new PrimitiveBuildCache({
+    // Embedded text, or a parsed source this device still holds: exactly
+    // when the import builder would succeed without fetching anything.
+    importRebuildable: (feature) => {
+      const data = feature.data;
+      if (data.featureKind !== 'imported-step') return false;
+      if (data.stepText !== undefined) return true;
+      const ref = data.stepSourceRef;
+      return (
+        !!ref &&
+        this.importedSteps.lookup(
+          importedStepCacheKey(ref.checksumSha256, data)
+        ) !== undefined
+      );
+    }
+  });
 
   /**
    * A persisted session (`exact-session-snapshot.ts`) offered to the build
@@ -1956,7 +2001,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     allowCoarse: boolean
   ): PreviewDisplay | null {
     const solidKey = shape.solids.join(',');
-    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const provenanceKey = measurementProvenanceKey(shape, imported, 'snapshot');
     const keyed = (entry: {
       strict: boolean;
       solidKey: string;
@@ -1964,7 +2009,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }) =>
       entry.strict === strict &&
       entry.solidKey === solidKey &&
-      entry.provenanceKey === provenanceKey;
+      sameMeasurementProvenance(entry.provenanceKey, provenanceKey);
     const complete = this.measuredShapeCache.get(bodyId);
     const completeKeyed =
       complete !== undefined &&
@@ -2041,7 +2086,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       return;
     }
     const solidKey = shape.solids.join(',');
-    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const provenanceKey = measurementProvenanceKey(shape, imported, 'snapshot');
     const bytes =
       display.vertices.byteLength +
       display.indices.byteLength +
@@ -2155,6 +2200,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     replayed: number;
     restored: number;
     reusedPrimitives: number;
+    reusedImports: number;
     reusedPreparedFeatures: number;
     reusedAxialFeatures: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
@@ -2328,15 +2374,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : undefined
         )
       : [];
-    const idleBases =
-      normalizedDemand?.size === 0
-        ? demandBases
-        : cachingEnabled
-          ? features.map((feature, index) =>
-              historyFeatureDigest(document, feature, index, scope, [])
-            )
-          : [];
-    const idleDigests = salted(idleBases, proposeCarry);
+    // Only eligible booleans read lineage demand. Other features have the
+    // same digest in both modes, even when they consume a boolean's result.
+    const hasBooleanProbe =
+      cachingEnabled && features.some(isBooleanEvolutionProbeEligible);
+    const separateIdleDigests = hasBooleanProbe && normalizedDemand?.size !== 0;
+    const idleBases = separateIdleDigests
+      ? features.map((feature, index) =>
+          isBooleanEvolutionProbeEligible(feature)
+            ? historyFeatureDigest(document, feature, index, scope, [])
+            : demandBases[index]!
+        )
+      : demandBases;
+    const idleDigests = separateIdleDigests
+      ? salted(idleBases, proposeCarry)
+      : digests;
     const plainIdleDigests = proposeCarry
       ? salted(idleBases, false)
       : idleDigests;
@@ -2378,6 +2430,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let initialLineageIsIdle = false;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
+    let reusedImports = 0;
     let reusedPreparedFeatures = 0;
     let reusedAxialFeatures = 0;
     let cacheResetReason:
@@ -3153,7 +3206,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 if (reused) {
                   if (feature.data.featureKind === 'primitive')
                     reusedPrimitives += 1;
-                  else reusedPreparedFeatures += 1;
+                  else if (feature.data.featureKind === 'imported-step') {
+                    // Self-contained like a primitive: counted with them.
+                    reusedPrimitives += 1;
+                    reusedImports += 1;
+                  } else reusedPreparedFeatures += 1;
                 }
                 return reused;
               },
@@ -3170,7 +3227,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         normalizedDemand,
         (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0],
         deferredDirectEditFeatureId,
-        cachingEnabled &&
+        hasBooleanProbe &&
           (this.options.historyCheckpointEstimatedBytes ??
             MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0,
         this.edgeSelections,
@@ -3237,6 +3294,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         reusedPreparedFeatures,
       restored: startIndex,
       reusedPrimitives,
+      reusedImports,
       reusedPreparedFeatures,
       reusedAxialFeatures,
       ...(cacheResetReason ? { cacheResetReason } : {}),
@@ -4264,6 +4322,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         replayed,
         restored,
         reusedPrimitives,
+        reusedImports,
         reusedPreparedFeatures,
         reusedAxialFeatures,
         strictVerdicts,
@@ -4789,7 +4848,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         const cached = this.measuredShapeCache.get(bodyId);
         const provenanceKey = measurementProvenanceKey(
           shape,
-          build.importedStepDiagnostics.get(bodyId)
+          build.importedStepDiagnostics.get(bodyId),
+          'snapshot'
         );
         let measured: Omit<MeasuredShape, 'volume'>;
         let completeMeasurement: () => Promise<MeasuredShape>;
@@ -4800,11 +4860,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (
           cached &&
           cached.analysisKey === analysisKey &&
-          cached.provenanceKey === provenanceKey &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
           cached.recognizedImportedFeatures === recognizeImportedFeatures &&
-          cached.measuredOpening === measureOpening
+          cached.measuredOpening === measureOpening &&
+          sameMeasurementProvenance(cached.provenanceKey, provenanceKey)
         ) {
           // A matching key is only a candidate. A stale handle, changed face/
           // edge/vertex set or validation verdict abandons the entire arena.
@@ -5211,6 +5271,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               ? 'prefix-restore'
               : 'full-rebuild',
         ...(reusedPrimitives > 0 ? { reusedPrimitives } : {}),
+        ...(reusedImports > 0 ? { reusedImports } : {}),
         ...(reusedPreparedFeatures > 0 ? { reusedPreparedFeatures } : {}),
         ...(reusedAxialFeatures > 0 ? { reusedAxialFeatures } : {}),
         ...(recycleReason ? { recycleReason } : {}),
@@ -5696,6 +5757,64 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         millimetresPerUnit(document.units)
       );
       return writeDxf(entities, { units });
+    });
+  }
+
+  async exportCncLayoutDxf(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: ExportUnitOptions & { gapMm?: number } = {}
+  ): Promise<CncLayoutExport> {
+    const units = options.units ?? 'mm';
+    const requested =
+      bodyIds.length > 0 ? bodyIds : await this.documentExportBodyIds(document);
+    return this.withExportBuild(document, (kernel, build) => {
+      const hidden = getParameterHiddenBodyIds(document);
+      const parts: CncLayoutPart[] = [];
+      const refused: CncLayoutRefusal[] = [];
+      for (const bodyId of requested) {
+        if (hidden.has(bodyId) || build.consumed.has(bodyId)) continue;
+        const shape = build.shapes.get(bodyId);
+        if (!shape) continue;
+        const name = bodyName(document, bodyId);
+        if (shape.referenceMesh) {
+          refused.push({ bodyId, name, reason: 'mesh-reference' });
+          continue;
+        }
+        shape.solids.forEach((solid, index) =>
+          parts.push({
+            bodyId,
+            name:
+              shape.solids.length > 1
+                ? `${name} (${index + 1} of ${shape.solids.length})`
+                : name,
+            solid
+          })
+        );
+      }
+      if (parts.length === 0 && refused.length === 0) {
+        throw new Error('Select at least one body to export.');
+      }
+      // The solids are read where the build left them; uniform unit scaling
+      // commutes with projection, so the 2D output is scaled instead.
+      const { layout, refused: unflat } = cncLayout(kernel, parts, {
+        scale: exportLengthScale(document.units, units),
+        modelUnitMm: millimetresPerUnit(document.units),
+        outputUnitMm: millimetresPerUnit(units),
+        ...(options.gapMm !== undefined ? { gapMm: options.gapMm } : {})
+      });
+      refused.push(...unflat);
+      if (!layout) {
+        throw new Error(
+          `Nothing to lay out: ${refused.map(cncRefusalText).join('; ')}.`
+        );
+      }
+      return {
+        text: writeDxf(layout.entities, { units, layers: layout.layers }),
+        placements: layout.placements,
+        refused,
+        warnings: refused.map(cncRefusalText)
+      };
     });
   }
 
@@ -6655,32 +6774,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         typeof data === 'string'
           ? new TextEncoder().encode(data)
           : new Uint8Array(data);
-      let declared: number[] = [];
-      let report: StepImportReport = {
-        solidCount: 0,
-        sheetCount: 0,
-        diagnostics: [],
-        diagnosticCount: 0
-      };
-      let structure: StepStructure | undefined;
-      let structureRefusal: string | undefined;
-      if (options.structure) {
-        try {
-          const imported = importStepStructureWithOwnBudget(kernel, bytes);
-          structure = imported.structure;
-          declared = Array.from(imported.solids);
-          report = imported.report;
-        } catch (error) {
-          structureRefusal =
-            error instanceof Error ? error.message : String(error);
-        }
-      }
+      let imported: ReturnType<typeof readStepForInspection>;
       try {
-        if (structure === undefined) {
-          const imported = importStepWithOwnBudget(kernel, bytes);
-          declared = Array.from(imported.solids);
-          report = imported.report;
-        }
+        imported = readStepForInspection(
+          kernel,
+          bytes,
+          options.structure === true
+        );
       } catch (error) {
         return {
           solid: false,
@@ -6690,6 +6790,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           reason: error instanceof Error ? error.message : String(error)
         };
       }
+      const { report, structure, structureRefusal } = imported;
+      const declared = Array.from(imported.solids);
       const verdicts = declared.map((solid, index) =>
         classifyImportedSolid(diagnoseImportedSolid(kernel, solid, index + 1))
       );
@@ -6894,6 +6996,45 @@ function documentNeedsTranslators(document: ProjectDocument): boolean {
       (feature.data.featureKind === 'imported-mesh' &&
         feature.data.triangleCount <= MAX_MESH_SOLID_CONVERSION_TRIANGLES)
   );
+}
+
+/** Plan the import's body layout. The candidate rebuild diagnoses and
+ * measures every committed body before the import is accepted. */
+export async function discoverStepLayout(
+  data: ArrayBuffer,
+  structure: boolean
+): Promise<{
+  solidIndices: number[];
+  structure?: StepStructure;
+  structureRefusal?: string;
+}> {
+  await loadRemusTranslators();
+  const kernel = new RemusKernel();
+  try {
+    let imported: ReturnType<typeof readStepForInspection>;
+    try {
+      imported = readStepForInspection(kernel, new Uint8Array(data), structure);
+    } catch {
+      // Empty discovery lets the commit validator present the reader's refusal.
+      return { solidIndices: [] };
+    }
+    const solidIndices = Array.from(imported.solids).flatMap((solid, index) =>
+      importedSolidRejection(
+        importedSolidBoundary(kernel, solid, index + 1)
+      ) === undefined
+        ? [index]
+        : []
+    );
+    return {
+      solidIndices,
+      ...(imported.structure ? { structure: imported.structure } : {}),
+      ...(imported.structureRefusal !== undefined
+        ? { structureRefusal: imported.structureRefusal }
+        : {})
+    };
+  } finally {
+    kernel.free();
+  }
 }
 
 export async function createExactKernelAdapter(
