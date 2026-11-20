@@ -5,6 +5,7 @@ import {
   assemblyExplodedMatrices,
   assertDocumentContentSchema,
   createProjectDocument,
+  DRAWING_EXPLODED_VIEW_SCHEMA_VERSION,
   updateDrawingView
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
@@ -261,8 +262,14 @@ describe('exploded drawing views (AS03, schema v112)', () => {
     expect(() => assertDocumentContentSchema(manager.document)).not.toThrow();
     // An older document cannot hold one.
     expect(() =>
-      assertDocumentContentSchema({ ...manager.document, schemaVersion: 111 })
-    ).toThrow(/Exploded drawing views require project schema v112/);
+      assertDocumentContentSchema({
+        ...manager.document,
+        schemaVersion: (DRAWING_EXPLODED_VIEW_SCHEMA_VERSION -
+          1) as typeof PROJECT_DOCUMENT_SCHEMA_VERSION
+      })
+    ).toThrow(
+      `Exploded drawing views require project schema v${DRAWING_EXPLODED_VIEW_SCHEMA_VERSION}`
+    );
     // A view projected later from it draws exploded too.
     const right = addDrawingView(manager.document, {
       sheetId,
