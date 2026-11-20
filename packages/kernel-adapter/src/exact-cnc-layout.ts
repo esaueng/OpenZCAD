@@ -145,7 +145,11 @@ interface PlanarFace {
   readonly normal: Vec3;
   /** A point on the face (its first boundary vertex). */
   readonly point: Vec3;
-  /** Every boundary edge's end points. */
+  /**
+   * Points along every boundary edge: its ends and its curve at each
+   * quarter of its span, so a closed rim (one edge whose ends coincide)
+   * still shows a tilt of the plane it lies in.
+   */
   readonly vertices: Vec3[];
 }
 
@@ -165,6 +169,15 @@ function planarFace(kernel: CncLayoutKernel, face: number): PlanarFace | null {
     for (const edge of kernel.getWireEdges(wire)) {
       const v = kernel.getEdgeVertices(edge);
       vertices.push([v[0]!, v[1]!, v[2]!], [v[3]!, v[4]!, v[5]!]);
+      const span = kernel.getEdgeParamSpan(edge);
+      const t0 = span[0]!;
+      const t1 = span[1]!;
+      if (Number.isFinite(t0) && Number.isFinite(t1)) {
+        for (const fraction of [0.25, 0.5, 0.75]) {
+          const p = kernel.evaluateEdgeCurve(edge, t0 + (t1 - t0) * fraction);
+          vertices.push([p[0]!, p[1]!, p[2]!]);
+        }
+      }
     }
   }
   if (vertices.length === 0) return null;
@@ -389,22 +402,23 @@ function translate(entity: DxfEntity, dx: number, dy: number): DxfEntity {
  */
 export function cncLabel(name: string): string {
   const ellipsis = '…';
-  const room = MAX_LABEL_LENGTH - dxfTextLength(ellipsis);
-  let out = '';
-  let cut = false;
+  let whole = '';
   for (const char of name) {
     const code = char.codePointAt(0)!;
     const printable =
       (code >= 0x20 && code < 0x7f) || (code >= 0xa0 && code <= 0xffff);
-    const next = printable ? char : '?';
-    if (dxfTextLength(out + next) > room) {
-      cut = true;
-      break;
-    }
-    out += next;
+    whole += printable ? char : '?';
   }
-  const label = out.trim() || '?';
-  return cut ? `${label}${ellipsis}` : label;
+  // A name that fits is kept whole; only a longer one gives up room for
+  // the ellipsis.
+  if (dxfTextLength(whole) <= MAX_LABEL_LENGTH) return whole.trim() || '?';
+  const room = MAX_LABEL_LENGTH - dxfTextLength(ellipsis);
+  let out = '';
+  for (const char of whole) {
+    if (dxfTextLength(out + char) > room) break;
+    out += char;
+  }
+  return `${out.trim() || '?'}${ellipsis}`;
 }
 
 /**

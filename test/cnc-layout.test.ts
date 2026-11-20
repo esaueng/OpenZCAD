@@ -12,7 +12,9 @@ import {
 import {
   cncEntityBounds,
   cncHeightLayer,
-  cncLabel
+  cncLabel,
+  cncLayout,
+  type CncLayoutKernel
 } from '../packages/kernel-adapter/src/exact-cnc-layout';
 import { importDxfSketch } from '../apps/web/src/lib/dxfImport';
 import { dxfTextLength } from '@openzcad/io-dxf';
@@ -269,6 +271,38 @@ describe('CNC-cut layout export', () => {
 });
 
 describe('CNC layout helpers', () => {
+  it('refuses a disc whose one closed rim edge is tilted by 0.00005°', () => {
+    // A Ø2000 bed and a Ø2000 top, each bounded by one closed circle whose
+    // ends coincide. The top's normal reads straight up, but its rim rises
+    // 1.75 µm across the disc: only points along the edge show it.
+    const R = 1000;
+    const tilt = 0.000875;
+    const rim = (edge: number, t: number) =>
+      edge === 10
+        ? [R * Math.cos(t), R * Math.sin(t), 0]
+        : [R * Math.cos(t), R * Math.sin(t), 10 + tilt * Math.cos(t)];
+    const kernel = {
+      getSolidFaces: () => [1, 2],
+      getSurfaceType: () => 'plane',
+      getFaceNormal: (face: number) => (face === 1 ? [0, 0, -1] : [0, 0, 1]),
+      faceArea: (face: number) => (face === 1 ? 4e6 : 3e6),
+      getFaceWires: (face: number) => [face],
+      getWireEdges: (wire: number) => [wire * 10],
+      getEdgeVertices: (edge: number) => [...rim(edge, 0), ...rim(edge, 0)],
+      getEdgeParamSpan: () => [0, 2 * Math.PI],
+      evaluateEdgeCurve: (edge: number, t: number) => rim(edge, t)
+    } as unknown as CncLayoutKernel;
+    const { layout, refused } = cncLayout(
+      kernel,
+      [{ bodyId: 'body_disc', name: 'Disc', solid: 1 }],
+      { scale: 1, modelUnitMm: 1, outputUnitMm: 1 }
+    );
+    expect(layout).toBeNull();
+    expect(refused).toEqual([
+      { bodyId: 'body_disc', name: 'Disc', reason: 'no-top-face' }
+    ]);
+  });
+
   it('names heights as R12 layers', () => {
     expect(cncHeightLayer(10)).toBe('Z10');
     expect(cncHeightLayer(3.5)).toBe('Z3_5');
@@ -314,6 +348,8 @@ describe('CNC layout helpers', () => {
     const wide = cncLabel('板'.repeat(37));
     expect(wide).toBe(`${'板'.repeat(16)}…`);
     expect(dxfTextLength(wide)).toBeLessThanOrEqual(120);
+    // A name that fits (17 × 7 = 119) is kept whole.
+    expect(cncLabel('板'.repeat(17))).toBe('板'.repeat(17));
     expect(cncLabel('   ')).toBe('?');
   });
 });
