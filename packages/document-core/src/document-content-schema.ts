@@ -196,6 +196,34 @@ function hasDrawingViewConfiguration(drawings: unknown): boolean {
 }
 
 /**
+ * AS03 exploded drawing views (schema v114): a drawing view's `exploded`.
+ * An older reader would draw the view's bodies where they were modelled.
+ */
+export const DRAWING_EXPLODED_VIEW_SCHEMA_VERSION = 114;
+
+export function assertDrawingExplodedViewSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    DRAWING_EXPLODED_VIEW_SCHEMA_VERSION,
+    'Exploded drawing views'
+  );
+}
+
+/** AS03: any view of a drawing section is drawn exploded. */
+function hasDrawingExplodedView(drawings: unknown): boolean {
+  return (
+    record(drawings) &&
+    Array.isArray(drawings.sheets) &&
+    drawings.sheets.some(
+      (sheet) =>
+        record(sheet) &&
+        Array.isArray(sheet.views) &&
+        sheet.views.some((view) => record(view) && view.exploded !== undefined)
+    )
+  );
+}
+
+/**
  * F06 per-instance configurations (schema v90): an assembly component's
  * `configurationId`. An older reader would show the component as the
  * active row.
@@ -920,6 +948,19 @@ export function assertDocumentContentCommandSchema(
     )
       assertDrawingViewConfigurationSchema(document.schemaVersion);
     if (
+      (command.kind === 'drawing.view.update' &&
+        record(command.payload) &&
+        command.payload.exploded !== undefined) ||
+      (command.kind === 'drawing.view.add' &&
+        record(command.payload) &&
+        record(command.payload.view) &&
+        command.payload.view.exploded !== undefined) ||
+      (command.kind === 'drawing.sheet.add' &&
+        record(command.payload) &&
+        hasDrawingExplodedView({ sheets: [command.payload.sheet] }))
+    )
+      assertDrawingExplodedViewSchema(document.schemaVersion);
+    if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
       hasDrawingDimensionFormat(command.payload)
@@ -1117,6 +1158,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertConfigurationSchema(document.schemaVersion);
   if (hasDrawingViewConfiguration(document.drawings))
     assertDrawingViewConfigurationSchema(document.schemaVersion);
+  if (hasDrawingExplodedView(document.drawings))
+    assertDrawingExplodedViewSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingExplodedView(change.before) ||
+          hasDrawingExplodedView(change.after))
+      )
+        assertDrawingExplodedViewSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (

@@ -455,12 +455,16 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // extrude): the extrusion stops that far short of its face (or, negative,
 // passes it). An older client would build to the face itself, so it must
 // refuse. Builds on v112 (#1785, M02 path patterns).
+// v114 adds AS03 exploded drawing views (`exploded` on a drawing view): the
+// view draws each assembly part at its solved pose plus its stored exploded
+// offset. An older client would draw it as modelled, so it must refuse the
+// document. Builds on v113.
 // v118 adds the M01 outer-boundary hole anchor (`positionAnchor:
 // 'outer-centroid'` on a hole): a typed position is measured from the
 // centroid of the entry face's outer boundary loop alone, so drilling or
 // resizing another hole in that face never moves it. An older client would
 // fall back to the vertex mean and drill the hole elsewhere, so it must
-// refuse. Builds on v113 (v114-v117 are claimed by #1792, #1796, #1797 and
+// refuse. Builds on v114 (#1792; v115-v117 are claimed by #1796, #1797 and
 // #1799).
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 118 as const;
 export type ProjectDocumentSchemaVersion =
