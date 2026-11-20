@@ -38367,6 +38367,13 @@ export function App() {
                           setRegionExtrudeValue(valueId, value, raw, true);
                           return;
                         }
+                        if (keypad.kind === 'offset') {
+                          // The exact worker can build while the viewport prepares
+                          // the local deformation for the same typed value.
+                          handleOffsetPreview(value);
+                          offsetSetterRef.current?.(value);
+                          return;
+                        }
                         offsetSetterRef.current?.(value);
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusPreview(value);

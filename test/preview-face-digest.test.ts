@@ -1,10 +1,12 @@
+import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
   createProjectDocument,
   directEditBody,
-  extrudeSketch
+  extrudeSketch,
+  importStepBody
 } from '@openzcad/document-core';
 import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
@@ -38,7 +40,12 @@ function documentWithExtrusion(): ProjectDocument {
 }
 
 /** The published previews of four drag ticks on the box's top face. */
-async function dragPreviews(document: ProjectDocument, digests: boolean) {
+async function dragPreviews(
+  document: ProjectDocument,
+  digests: boolean,
+  offsets = [1, 2, 2.5, 1],
+  axis: 'x' | 'z' = 'z'
+) {
   const saved = proto.faceContentDigests;
   if (!digests) proto.faceContentDigests = undefined;
   const box = document.bodyOrder[0] as BodyId;
@@ -46,11 +53,11 @@ async function dragPreviews(document: ProjectDocument, digests: boolean) {
   try {
     const base = await adapter.syncDocument(document);
     const top = base.bodyRepresentations[box]!.topology!.faces.find(
-      (face) => (face.geometry?.normal?.z ?? 0) > 0.99
+      (face) => (face.geometry?.normal?.[axis] ?? 0) > 0.99
     )!;
     const source = { ...document, derived: base };
     const previews = [];
-    for (const offset of [1, 2, 2.5, 1]) {
+    for (const offset of offsets) {
       const candidate = directEditBody(source, {
         name: 'Offset',
         targetBodyId: box,
@@ -89,5 +96,32 @@ it.skipIf(!hasDigests)(
     expect(without.digestHits).toBe(0);
     // Every tick after the first finds the box's untouched faces by digest.
     expect(withDigests.digestHits).toBeGreaterThan(0);
+  }
+);
+
+it
+  .skipIf(!hasDigests)
+  .each(['e-analytic-fillet-plate', 'a-export-bored-plate'])(
+  'serves unchanged imported faces on the first exact preview of %s',
+  async (fixture) => {
+    const filename = fixture + '.step';
+    const { document } = importStepBody(
+      createProjectDocument('Imported face preview', toUserId('face_digests')),
+      {
+        name: fixture,
+        artifactId: fixture,
+        sourceName: filename,
+        stepText: readFileSync(
+          new URL('./parity/corpus/' + filename, import.meta.url),
+          'utf8'
+        )
+      }
+    );
+    const warm = await dragPreviews(document, true, [0.5], 'x');
+    const cold = await dragPreviews(document, false, [0.5], 'x');
+    expect(warm.previews[0]?.warnings).toEqual([]);
+    expect(warm.previews).toEqual(cold.previews);
+    expect(warm.digestHits).toBeGreaterThan(0);
+    expect(cold.digestHits).toBe(0);
   }
 );
