@@ -88,6 +88,7 @@
   "hint-lane.spec.ts": 42,
   "history-local-append.spec.ts": 26,
   "hole-callouts.spec.ts": 12,
+  "hole-table.spec.ts": 12,
   "hole-points.spec.ts": 12,
   "hole-standards.spec.ts": 12,
   "import-formats.spec.ts": 2,

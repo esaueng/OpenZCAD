@@ -32,6 +32,7 @@ import {
   Anchor,
   Columns3,
   Diff,
+  Table2,
   TableProperties,
   ImageIcon,
   Sun,
@@ -1151,6 +1152,7 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'circle-centerline',
   'balloon',
   'parts-list',
+  'hole-table',
   'image',
   'datum-feature',
   'feature-control-frame',
@@ -1176,6 +1178,7 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     'circle-centerline': CircleDashed,
     balloon: MessageCircle,
     'parts-list': TableProperties,
+    'hole-table': Table2,
     image: ImageIcon,
     'datum-feature': Anchor,
     'feature-control-frame': Columns3,
@@ -1201,6 +1204,7 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   'circle-centerline': 'B',
   balloon: 'O',
   'parts-list': 'P',
+  'hole-table': 'Y',
   image: 'I',
   'datum-feature': 'Q',
   'feature-control-frame': 'F',
@@ -1280,6 +1284,7 @@ const ANNOTATION_KIND_LABELS: Readonly<
   'intersection-mark': 'Intersection mark',
   centerline: 'Centreline',
   'bom-table': 'Parts list',
+  'hole-table': 'Hole table',
   balloon: 'Balloon',
   image: 'Image',
   'datum-feature': 'Datum feature',
@@ -1298,6 +1303,7 @@ function annotationTitle(annotation: DrawingAnnotation): string {
     ? `${ANNOTATION_TOOL_LABELS[annotation.direction]} dimension`
     : annotation.kind === 'note' ||
         annotation.kind === 'bom-table' ||
+        annotation.kind === 'hole-table' ||
         annotation.kind === 'balloon' ||
         annotation.kind === 'datum-feature' ||
         annotation.kind === 'feature-control-frame' ||
@@ -3148,7 +3154,7 @@ function DrawingToolRail(props: {
     ['radius', 'diameter', 'chamfer'],
     ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
-    ['note', 'balloon', 'parts-list', 'image'],
+    ['note', 'balloon', 'parts-list', 'hole-table', 'image'],
     // The general-tolerance block is placed from Sheet Properties (and W):
     // a phone-width rail has no row to spare.
     ['datum-feature', 'feature-control-frame']
@@ -3180,6 +3186,7 @@ function DrawingToolRail(props: {
               kind === 'note' ||
               kind === 'balloon' ||
               kind === 'parts-list' ||
+              kind === 'hole-table' ||
               kind === 'image' ||
               kind === 'general-tolerance' ||
               isToleranceTool(kind) ||
@@ -5378,7 +5385,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   ? `Datum ${annotation.kind === 'datum-feature' ? annotation.letter : ''} added.`
                   : isGeometryTool(finished.kind) ||
                       finished.kind === 'balloon' ||
-                      finished.kind === 'parts-list'
+                      finished.kind === 'parts-list' ||
+                      finished.kind === 'hole-table'
                     ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
                     : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
@@ -5388,6 +5396,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setTool(
         finished.kind === 'note' ||
           finished.kind === 'parts-list' ||
+          finished.kind === 'hole-table' ||
           finished.kind === 'image' ||
           finished.kind === 'feature-control-frame' ||
           finished.kind === 'general-tolerance'

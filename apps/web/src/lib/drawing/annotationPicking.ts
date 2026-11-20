@@ -547,6 +547,8 @@ export type AnnotationToolKind =
   /** v80: a part's item number, and the assembly's parts list. */
   | 'balloon'
   | 'parts-list'
+  /** M01: a view's bores in a table, each tagged in the view. */
+  | 'hole-table'
   /** v92: one of the project's pictures, placed on the paper. */
   | 'image'
   /** v98 (D07): a datum feature symbol and a feature control frame. */
@@ -587,6 +589,7 @@ export const ANNOTATION_TOOL_LABELS: Readonly<
   'circle-centerline': 'Circular centreline',
   balloon: 'Balloon',
   'parts-list': 'Parts list',
+  'hole-table': 'Hole table',
   image: 'Image',
   'datum-feature': 'Datum feature',
   'feature-control-frame': 'Feature control frame',
@@ -658,6 +661,10 @@ export function annotationToolHint(tool: AnnotationTool): string {
       return 'Balloon: pick an edge of an assembly part for its leader.';
     case 'parts-list':
       return 'Parts list: click where its top-left corner goes.';
+    case 'hole-table':
+      return tool.viewId
+        ? 'Hole table: click where its top-left corner goes.'
+        : 'Hole table: click the view whose holes it lists, one that looks down them.';
     case 'image':
       return 'Image: click where its centre goes.';
     case 'datum-feature':
@@ -765,6 +772,8 @@ export function pickedEnough(tool: AnnotationTool): boolean {
     case 'image':
     case 'general-tolerance':
       return tool.placed !== undefined;
+    case 'hole-table':
+      return tool.viewId !== undefined && tool.placed !== undefined;
     case 'datum-feature':
     case 'feature-control-frame':
       return tool.edges.length === 1 || tool.hostId !== undefined;
@@ -890,6 +899,20 @@ export function applyAnnotationPick(
   } | null = null
 ): PickResult {
   if (pickedEnough(tool)) return { ok: true, tool };
+  // M01: a hole table first takes its view, then its place.
+  if (tool.kind === 'hole-table') {
+    if (tool.viewId)
+      return {
+        ok: true,
+        tool: { ...tool, placed: { x: point[0], y: point[1] } }
+      };
+    return viewAt
+      ? { ok: true, tool: { ...tool, viewId: viewAt.viewId } }
+      : {
+          ok: false,
+          message: 'Click inside a view to list the holes it looks down.'
+        };
+  }
   // A parts list (and, v92, an image) sits on the paper: any click places it.
   if (
     tool.kind === 'parts-list' ||
@@ -1479,6 +1502,8 @@ export function draftAnnotation(
         : null;
     case 'parts-list':
       return { ...base, kind: 'bom-table' };
+    case 'hole-table':
+      return { ...base, kind: 'hole-table', viewId: tool.viewId! };
     case 'general-tolerance':
       // ISO 2768-m, the usual default; Properties chooses another.
       return {
