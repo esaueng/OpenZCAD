@@ -5,7 +5,11 @@ import type {
   GeometryWorkerRequest,
   GeometryWorkerResult
 } from '../../apps/web/src/worker/geometryWorker';
-import type { ProjectDocument } from '@openzcad/shared';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  addPrimitiveFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
 import { test, expect, stubApi, MODEL_ONLY } from './openzcad-fixtures';
 import { largePatternBar } from '../support/large-pattern-bar';
 import { hostSnapshot, perfBrowserArgs } from '../../scripts/perf-host.mjs';
@@ -26,6 +30,14 @@ import { hostSnapshot, perfBrowserArgs } from '../../scripts/perf-host.mjs';
  * frame for that request has been built and accepted. Appends one JSON line
  * to OZ_PERF_OUT (default perf-results/perf-pattern-preview-v2.jsonl).
  */
+const linearCopies = process.env.OZ_PERF_LINEAR_COPIES;
+if (
+  linearCopies !== undefined &&
+  linearCopies !== '13' &&
+  linearCopies !== '25'
+)
+  throw new Error('OZ_PERF_LINEAR_COPIES must be 13 or 25.');
+
 test.skip(!process.env.OZ_PERF, 'Performance probe; set OZ_PERF=1 to run it.');
 test.use({
   launchOptions: { args: perfBrowserArgs() },
@@ -86,7 +98,7 @@ async function armPreviewClock(control: Locator, event: 'click' | 'input') {
         performance.mark('pattern-input');
         const doneButton = () => {
           const card = document.querySelector(
-            '[role="group"][aria-label="Grid pattern command"]'
+            '[role="group"][aria-label="Grid pattern command"], [role="group"][aria-label="Linear pattern command"]'
           );
           return [...(card?.querySelectorAll('button') ?? [])].find((button) =>
             /Done/.test(button.textContent ?? '')
@@ -133,7 +145,7 @@ async function previewTiming(page: Page, timeout: number) {
         );
       if (requests.length !== 1)
         throw new Error(
-          'Expected exactly one checked grid preview for this input.'
+          'Expected exactly one checked pattern preview for this input.'
         );
       const id = (requests[0] as PerformanceMark).detail as string;
       const stages = performance
@@ -171,10 +183,10 @@ test.afterEach(async ({ page }, testInfo) => {
     .catch(() => undefined);
 });
 
-test('large grid pattern preview on the ×50 bar', async ({
-  page,
-  browser
-}, testInfo) => {
+const scenarioName = linearCopies
+  ? `overlapping linear pattern preview with ${linearCopies} cylinders`
+  : 'large grid pattern preview on the ×50 bar';
+test(scenarioName, async ({ page, browser }, testInfo) => {
   test.setTimeout(1_200_000);
   const hostBefore = hostSnapshot();
   await page.addInitScript(() => {
@@ -209,7 +221,16 @@ test('large grid pattern preview on the ×50 bar', async ({
   page.on('pageerror', (error) => runtimeErrors.push(error.message));
 
   await stubApi(page, { panelLayout: MODEL_ONLY });
-  const { document: project } = largePatternBar('Pattern preview perf');
+  const project = linearCopies
+    ? addPrimitiveFeature(
+        createProjectDocument('Spacing preview', toUserId('user_e2e')),
+        {
+          name: 'Stock',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 5, height: 10 }
+        }
+      )
+    : largePatternBar('Pattern preview perf').document;
   const opened = Date.now();
   await openDocument(page, project);
   const canvas = page.locator('.viewer-host canvas');
@@ -226,36 +247,57 @@ test('large grid pattern preview on the ×50 bar', async ({
   if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
     await moreTools.click();
   }
-  const tool = page.getByRole('button', { name: /^Grid pattern/ });
+  const tool = page.getByRole('button', {
+    name: linearCopies ? /^Linear pattern/ : /^Grid pattern/
+  });
   const steps = [];
   await armPreviewClock(tool, 'click');
   await tool.click();
   steps.push({
-    grid: '3x3',
+    grid: linearCopies ? 'initial' : '3x3',
     ...(await previewTiming(page, timeout))
   });
   if ((await moreTools.getAttribute('aria-expanded')) === 'true')
     await moreTools.click();
 
-  for (const [valueId, grid] of [
-    ['count', '10x3'],
-    ['count2', '10x10']
-  ] as const) {
+  const edits = linearCopies
+    ? ([
+        ['spacing', '6', '6'],
+        ['count', '11', '11'],
+        ['count', '12', '12'],
+        ['count', linearCopies, linearCopies],
+        ...['7', '6.25', '6.5', '6.75', '7.25'].map(
+          (spacing) => ['spacing', spacing, spacing] as const
+        )
+      ] as const)
+    : ([
+        ['count', '10', '10x3'],
+        ['count2', '10', '10x10']
+      ] as const);
+  for (const [valueId, value, grid] of edits) {
     await page.getByTestId(`command-handle-${valueId}`).click();
     const input = page.locator('.numeric-keypad input');
     await expect(input).toBeVisible();
     await armPreviewClock(input, 'input');
-    await input.fill('10');
+    await input.fill(value);
     await input.press('Enter');
     steps.push({
       grid,
       ...(await previewTiming(page, timeout))
     });
   }
-  // The last frame accepted is the 10 x 10 request.
-  for (const valueId of ['count', 'count2'])
+  const finalValues = linearCopies
+    ? ([
+        ['count', linearCopies],
+        ['spacing', '7.25']
+      ] as const)
+    : ([
+        ['count', '10'],
+        ['count2', '10']
+      ] as const);
+  for (const [valueId, value] of finalValues)
     await expect(page.getByTestId(`command-handle-${valueId}`)).toContainText(
-      '10'
+      value
     );
 
   const webglRenderer = await page.evaluate(() => {
@@ -268,7 +310,8 @@ test('large grid pattern preview on the ×50 bar', async ({
     return typeof renderer === 'string' ? renderer : null;
   });
   const sample = {
-    probe: 'perf-pattern-preview',
+    probe: linearCopies ? 'overlapping-linear-spacing' : 'perf-pattern-preview',
+    ...(linearCopies ? { copies: Number(linearCopies) } : {}),
     timingVersion: 2,
     recordedAt: new Date().toISOString(),
     repeat: testInfo.repeatEachIndex,
@@ -281,7 +324,10 @@ test('large grid pattern preview on the ×50 bar', async ({
     host: { before: hostBefore, after: hostSnapshot() }
   };
   const out = resolve(
-    process.env.OZ_PERF_OUT ?? 'perf-results/perf-pattern-preview-v2.jsonl'
+    process.env.OZ_PERF_OUT ??
+      (linearCopies
+        ? `perf-results/perf-linear-spacing-${linearCopies}.jsonl`
+        : 'perf-results/perf-pattern-preview-v2.jsonl')
   );
   mkdirSync(dirname(out), { recursive: true });
   appendFileSync(out, `${JSON.stringify(sample)}\n`);

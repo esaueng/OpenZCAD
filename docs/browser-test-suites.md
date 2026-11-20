@@ -78,6 +78,11 @@ card on the ×50 bar) and the Node probe `test/perf/pattern-preview.bench.ts`.
 machine's GPU, and each sample records its WebGL renderer and the host's load
 and memory. See the [baseline record](performance/2026-11-15-active1-baselines.md).
 
+For overlapping linear patterns, set `OZ_PERF_LINEAR_COPIES=13` or
+`OZ_PERF_LINEAR_COPIES=25` when running `perf-pattern-preview`. The probe times
+count and spacing edits from keypad input through the matching exact preview.
+See the [workload and measurements](performance/2026-11-20-parallel-linear-intersections.md).
+
 ## Sharding and timing
 
 Both suites use the existing six shards and required E2E completion gate.

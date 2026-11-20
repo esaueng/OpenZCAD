@@ -1,3 +1,4 @@
+import type { PatternOverlapWorkers } from './pattern-overlap-workers';
 import type { EdgeSelectionMemory } from './exact-edge-selection-transport';
 import type { ImportedMeshStore } from './exact-imported-mesh-cache';
 import { OperationCancellationToken, type RemusKernel } from './remus-runtime';
@@ -181,6 +182,7 @@ export interface PrimitiveReuse {
 }
 
 function* buildDocumentHistorySteps(
+  workers: PatternOverlapWorkers | undefined,
   kernel: RemusKernel,
   document: ProjectDocument,
   importSources: ReadonlyMap<string, Uint8Array> = new Map(),
@@ -234,7 +236,7 @@ function* buildDocumentHistorySteps(
   proposeCarry = false,
   /** See {@link FeatureBuildContext.onUnresolvedEdgeHash}. */
   onUnresolvedEdgeHash?: () => void
-): Generator<void, ExactBuildResult> {
+): Generator<void | Promise<void>, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
   // F05: a feature fed a typed parameter as the wrong quantity (a length as
   // a revolve angle) is refused by name rather than built from the number.
@@ -362,7 +364,12 @@ function* buildDocumentHistorySteps(
           ctx.edgeSelections = edgeSelections;
         }
         if (!primitiveReuse?.restore(index, feature, result)) {
-          buildFeature(ctx, feature);
+          const pending = buildFeature(ctx, feature, workers);
+          if (pending) {
+            yield pending.ready;
+            throwIfBuildCancelled(signal);
+            pending.finish();
+          }
           primitiveReuse?.store(index, feature, result);
         } else {
           completePreparedFeatureLineage(ctx, feature);
@@ -442,11 +449,17 @@ export function withSketchObjectOverrides(
   return { ...document, nodes };
 }
 
+type HistoryInputs =
+  Parameters<typeof buildDocumentHistorySteps> extends [
+    unknown,
+    ...infer Inputs
+  ]
+    ? Inputs
+    : never;
+
 /** Synchronous replay for callers that do not need worker message delivery. */
-export function buildDocumentHistory(
-  ...args: Parameters<typeof buildDocumentHistorySteps>
-): ExactBuildResult {
-  const steps = buildDocumentHistorySteps(...args);
+export function buildDocumentHistory(...args: HistoryInputs): ExactBuildResult {
+  const steps = buildDocumentHistorySteps(undefined, ...args);
   let step = steps.next();
   while (!step.done) step = steps.next();
   return step.value;
@@ -463,9 +476,9 @@ export async function buildDocumentHistoryAsync(
     /** Open synchronous read scopes only while advancing the generator. */
     runStep?: <T>(step: () => T) => T;
   },
-  ...args: Parameters<typeof buildDocumentHistorySteps>
+  ...args: HistoryInputs
 ): Promise<ExactBuildResult> {
-  const steps = buildDocumentHistorySteps(...args);
+  const steps = buildDocumentHistorySteps(undefined, ...args);
   const runStep = controls.runStep ?? ((step) => step());
   try {
     let step = runStep(() => steps.next());
@@ -512,15 +525,17 @@ export async function buildDocumentHistoryCooperatively(
   scheduling: {
     run<T>(work: () => T): T;
     checkpoint(): Promise<void>;
+    patternWorkers?: PatternOverlapWorkers;
   },
-  ...args: Parameters<typeof buildDocumentHistorySteps>
+  ...args: HistoryInputs
 ): Promise<ExactBuildResult> {
-  const steps = buildDocumentHistorySteps(...args);
+  const steps = buildDocumentHistorySteps(scheduling.patternWorkers, ...args);
   try {
     while (true) {
       const step = scheduling.run(() => steps.next());
       if (step.done) return step.value;
-      await scheduling.checkpoint();
+      if (step.value) await step.value;
+      else await scheduling.checkpoint();
     }
   } catch (error) {
     // Close the generator's transaction/cancellation token even if yielding
