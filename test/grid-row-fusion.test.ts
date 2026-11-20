@@ -13,7 +13,7 @@ import { toUserId, type BodyId } from '@openzcad/shared';
 import * as rowFusion from '../packages/kernel-adapter/src/exact-grid-row-fusion';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
-import { barGrid } from './support/large-pattern-bar';
+import { barGrid, largePatternBar } from './support/large-pattern-bar';
 
 describe('a rectangular grid with separated rows', () => {
   it('preserves the full-fuse topology, mesh, STEP and subsequent cut through a nested pattern', async () => {
@@ -106,6 +106,66 @@ describe('a rectangular grid with separated rows', () => {
       route.mockRestore();
     }
   });
+
+  it.each(['box', '50-copy bar'])(
+    'reuses only an identical first row across successive %s grid previews',
+    async (fixture) => {
+      const base =
+        fixture === '50-copy bar'
+          ? largePatternBar().document
+          : addPrimitiveFeature(
+              createProjectDocument('Preview', toUserId('maker')),
+              {
+                name: 'Stock',
+                primitiveKind: 'box',
+                dimensions: { width: 30, height: 18, depth: 5 }
+              }
+            );
+      const source = base.bodyOrder.at(-1)!;
+      const first = patternBody(base, barGrid(source, 4, 2)).document;
+      const changedRows = patternBody(base, barGrid(source, 4, 3)).document;
+      const changedSpacing = patternBody(base, {
+        ...barGrid(source, 4, 3),
+        spacing: 18
+      }).document;
+      const adapter = await createExactKernelAdapter();
+      const fuse = vi.spyOn(RemusKernel.prototype, 'fuseAll');
+      try {
+        await adapter.syncDocument(first);
+        const compare = async (document: typeof base, reused: boolean) => {
+          fuse.mockClear();
+          const frame = await adapter.syncDocument(document);
+          expect(frame.warnings).toEqual([]);
+          // Only the first-row fuse has four operands; final assembly has three.
+          expect(fuse.mock.calls.some(([ids]) => ids.length === 4)).toBe(
+            !reused
+          );
+          const id = document.bodyOrder.at(-1)!;
+          const options = { timestamp: '2026-01-01T00:00:00Z' };
+          const step = await adapter.exportStep(document, [id], options);
+          const fresh = await createExactKernelAdapter();
+          try {
+            const control = await fresh.syncDocument(document);
+            const actual = frame.bodyRepresentations[id]!;
+            const expected = control.bodyRepresentations[id]!;
+            expect(actual.mesh).toEqual(expected.mesh);
+            expect(actual.topology).toEqual(expected.topology);
+            expect(actual.volume).toBe(expected.volume);
+            expect(step).toEqual(
+              await fresh.exportStep(document, [id], options)
+            );
+          } finally {
+            fresh.dispose();
+          }
+        };
+        await compare(changedRows, true);
+        await compare(changedSpacing, false);
+      } finally {
+        fuse.mockRestore();
+        adapter.dispose();
+      }
+    }
+  );
 
   it('keeps a skipped end copy out of the second row', async () => {
     const doc = addPrimitiveFeature(
