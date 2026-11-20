@@ -101,6 +101,39 @@ See [the design](plans/h02-private-holder-cache-design.md) and
 [current evidence](qa/2026-09-29/h02-cache-safety.md). Measurement hardening
 adds no branch record; the 8 MiB proposed branch cap has zero allocations.
 
+## Arena retention in a long session
+
+A checkpoint restore retires every later arena slot as a tombstone that keeps
+its value, and Remus never reuses a slot, so each edit leaves its replay's
+entities behind. Every checkpoint copy, and the copy-on-write after one,
+clones those tombstones too. The replay-work budget above counts features,
+not slots, and a cheap-to-count feature can retire many: on the public
+filleted union (`test/support/filleted-union.ts`), 300 alternating top-face
+offset and fillet-radius edits left 343,000 retired slots (about 1,100 per
+edit), grew WASM linear memory from 32 to 270 MB and the accounted checkpoint
+estimate from 1.2 to 157 MB, past the 128 MiB admission budget so checkpoints
+began to drop, and slowed a one-feature edit from about 47 to 58 ms, without
+the replay budget ever recycling the kernel.
+
+The adapter now reads the arena's live and retired slot counts from the
+checkpoint memory stats its admission already takes (no extra kernel call)
+and classifies the kernel (`historyArenaWear` in `exact-history-cache.ts`):
+
+- **Worn**: at least 65,536 retired slots, and four times as many retired as
+  live ones (so a large model's own entities never count). The worker's idle
+  warm-up (`warmHistory`, the one a restored session uses) replays the history
+  into a fresh kernel, swaps it in and frees the worn one. It is idle work:
+  any new request cancels it at the next feature boundary. It stores nothing,
+  so the worker schedules it for every live project, persisted or not.
+- **Exhausted**: at least 262,144 retired slots (with the same ratio). The
+  next build recycles the kernel first (`recycleReason: 'arena-retention'`),
+  as the replay budget does, so a session that never idles stays bounded.
+
+`test/sustained-session-retention.test.ts` wears the arena out with small
+thresholds and checks both paths publish exactly what a fresh build does.
+Measured results are in the
+[sustained-session record](performance/2026-11-20-sustained-session.md).
+
 ## Persisted sessions across reloads
 
 A new page starts with no history kernel, so a reopened project used to replay
@@ -158,6 +191,9 @@ using Remus whole-kernel snapshots (`kernel.snapshot()` /
   (`MAX_HISTORY_REPLAY_WORK`), since its arena still holds what those replays
   retired, and a restore continues from it. A kernel past half the budget is
   not captured: its reopen replays into a fresh kernel, which is.
+- **Arena wear.** A worn kernel (see
+  [Arena retention](#arena-retention-in-a-long-session)) is not captured
+  either; the compacted kernel that replaces it is.
 - **Warm-up.** A restored kernel holds that single checkpoint, so an edit of
   an earlier feature would replay everything. Once the worker has been idle
   for 2 s, the adapter replays the history in a second kernel with the

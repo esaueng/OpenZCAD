@@ -31,6 +31,11 @@
  *   next feature boundary and it waits for the next idle moment. Every live
  *   result names the document it warms (a draft drops it until its
  *   refinement), so it never replays a superseded revision.
+ * - **Compaction**: the same warm-up runs when the adapter reports a worn
+ *   arena (`historyArenaWear` in the adapter: a long session's retired
+ *   slots), which frees the old kernel. It stores nothing, so the worker
+ *   schedules it for every live project, persisted or not; `forget` still
+ *   drops it with a closed project.
  */
 import type {
   ExactKernelAdapter,
