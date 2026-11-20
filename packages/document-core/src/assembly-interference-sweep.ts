@@ -1,5 +1,6 @@
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
   jointSweepRange,
   motionStudyDrivers,
   motionStudyValues,
@@ -111,14 +112,22 @@ export function assemblySweepPoses(
   return out;
 }
 
-/** The joint values a position shows, for the viewport to pose it. */
+/**
+ * The transient values that pose a position, as the motion's own player
+ * does: a joint sweep overrides only the swept joint (its mates follow it
+ * through the coupling drivers), a study every joint its timeline sets.
+ */
 export function assemblySweepOverrides(
   set: AssemblySet,
   source: AssemblySweepSource,
   at: number
 ): { overrides: Map<string, number[]>; drivers: AssemblyCouplingEnd[] } {
+  const values = sourceValues(set, source, at);
   return {
-    overrides: sourceValues(set, source, at),
+    overrides:
+      source.kind === 'joint'
+        ? new Map([[source.jointId, values.get(source.jointId) ?? []]])
+        : values,
     drivers: sourceDrivers(set, source)
   };
 }
@@ -174,7 +183,11 @@ export function planAssemblySweep(
     const dofUnit = ASSEMBLY_JOINT_DOFS[joint.kind][source.dof];
     if (!dofUnit)
       return { ok: false, reason: `${joint.name} has no motion to sweep.` };
-    const range = jointSweepRange(joint, source.dof);
+    // As Animate sweeps it: a coupled joint only as far as its mates allow.
+    const range = jointSweepRange(
+      { kind: joint.kind, limits: coupledJointLimits(set, joint) },
+      source.dof
+    );
     if (!range)
       return {
         ok: false,
@@ -291,28 +304,39 @@ export function assemblySweepRefinements(
 ): { at: number; pairs: [string, string][] }[] {
   const byPair = new Map<
     string,
-    { a: string; b: string; at: number; verdict: BodyClashVerdict }[]
+    {
+      a: string;
+      b: string;
+      checks: { at: number; verdict: BodyClashVerdict }[];
+    }
   >();
   for (const result of results)
     for (const pair of result.pairs) {
       const key = pairKey(pair.a, pair.b);
-      const list = byPair.get(key) ?? [];
-      list.push({ a: pair.a, b: pair.b, at: result.at, verdict: pair.verdict });
-      byPair.set(key, list);
+      const entry = byPair.get(key) ?? { a: pair.a, b: pair.b, checks: [] };
+      entry.checks.push({ at: result.at, verdict: pair.verdict });
+      byPair.set(key, entry);
     }
   const asks = new Map<number, [string, string][]>();
-  for (const list of byPair.values()) {
-    list.sort((p, q) => p.at - q.at);
-    for (let i = 0; i + 1 < list.length; i += 1) {
-      const p = list[i]!;
-      const q = list[i + 1]!;
-      if (p.verdict.kind === 'unknown' || q.verdict.kind === 'unknown')
-        continue;
+  const ask = (at: number, a: string, b: string) => {
+    const pairs = asks.get(at) ?? [];
+    if (!pairs.some(([x, y]) => x === a && y === b)) pairs.push([a, b]);
+    asks.set(at, pairs);
+  };
+  for (const { a, b, checks } of byPair.values()) {
+    checks.sort((p, q) => p.at - q.at);
+    const decided = checks.filter((check) => check.verdict.kind !== 'unknown');
+    for (let i = 0; i + 1 < decided.length; i += 1) {
+      const p = decided[i]!;
+      const q = decided[i + 1]!;
       if (overlaps(p.verdict) === overlaps(q.verdict)) continue;
-      const mid = (p.at + q.at) / 2;
-      const pairs = asks.get(mid) ?? [];
-      pairs.push([p.a, p.b]);
-      asks.set(mid, pairs);
+      // Every gap between the two, undecided positions included, is
+      // halved: an unknown midpoint never stops the turn being narrowed.
+      const span = checks.filter(
+        (check) => check.at >= p.at && check.at <= q.at
+      );
+      for (let k = 0; k + 1 < span.length; k += 1)
+        ask((span[k]!.at + span[k + 1]!.at) / 2, a, b);
     }
   }
   return [...asks]
@@ -329,7 +353,18 @@ export interface AssemblySweptPair {
    * overlapping; the turn lies within `resolution` beyond each end (or at
    * the motion's own end).
    */
-  overlaps: { from: number; to: number }[];
+  overlaps: {
+    from: number;
+    to: number;
+    /**
+     * How far before `from` and after `to` the turn can lie: the gap to the
+     * nearest position decided not to overlap (0 at the motion's own end).
+     * Wider than the report's resolution only where undecided positions
+     * sit between.
+     */
+    fromWithin: number;
+    toWithin: number;
+  }[];
   /**
    * The position of the largest measured overlap (the first unmeasured one
    * when none is measured), with its verdict and witnesses.
@@ -373,11 +408,15 @@ export function summarizeAssemblySweep(
       list.push({ at: result.at, verdict: pair.verdict });
       byPair.set(key, list);
     }
+  const missing = new Set([...plan.missing, ...workerMissing]);
   const pairs: AssemblySweptPair[] = [];
   for (const [a, b] of plan.pairs) {
+    // A pair with a part that has no geometry was not checked at all: it is
+    // reported through `missing`, never as a pair clear along the motion.
+    if (missing.has(a) || missing.has(b)) continue;
     const list = (byPair.get(pairKey(a, b)) ?? []).sort((p, q) => p.at - q.at);
-    const stretches: { from: number; to: number }[] = [];
-    let open: { from: number; to: number } | null = null;
+    const stretches: AssemblySweptPair['overlaps'] = [];
+    let open: AssemblySweptPair['overlaps'][number] | null = null;
     let worst: AssemblySweptPair['worst'] = null;
     let worstVolume = -1;
     const unknownAt: number[] = [];
@@ -387,7 +426,7 @@ export function summarizeAssemblySweep(
       if (verdict.kind === 'interference') {
         if (open) open.to = at;
         else {
-          open = { from: at, to: at };
+          open = { from: at, to: at, fromWithin: 0, toWithin: 0 };
           stretches.push(open);
         }
         const volume = verdict.volume ?? -0.5;
@@ -410,6 +449,18 @@ export function summarizeAssemblySweep(
       )
         closest = { at, distance: verdict.distance };
     }
+    // How near each turn is known: the gap to the nearest position decided
+    // to be free of overlap on that side (none: the motion's own end).
+    const free = list
+      .filter(({ verdict }) => verdict.kind === 'clear')
+      .map(({ at }) => at);
+    for (const stretch of stretches) {
+      const before = free.filter((at) => at < stretch.from);
+      const after = free.filter((at) => at > stretch.to);
+      stretch.fromWithin =
+        before.length > 0 ? stretch.from - Math.max(...before) : 0;
+      stretch.toWithin = after.length > 0 ? Math.min(...after) - stretch.to : 0;
+    }
     pairs.push({
       a,
       b,
@@ -426,7 +477,7 @@ export function summarizeAssemblySweep(
     resolution: step / 2 ** SWEEP_REFINEMENTS,
     checked: atAll.size,
     pairs,
-    missing: [...new Set([...plan.missing, ...workerMissing])],
+    missing: [...missing],
     still: plan.still
   };
 }

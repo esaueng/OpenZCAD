@@ -12,6 +12,7 @@ import {
 } from '@openzcad/document-core';
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
   jointSweepRange,
   type AssemblyDofUnit,
   type ProjectDocument
@@ -66,7 +67,11 @@ export function AssemblyMotionInterference({
     for (const joint of set?.joints ?? []) {
       const units = ASSEMBLY_JOINT_DOFS[joint.kind];
       units.forEach((unit, dof) => {
-        const range = jointSweepRange(joint, dof);
+        // As Animate sweeps it: a coupled joint as far as its mates allow.
+        const range = jointSweepRange(
+          { kind: joint.kind, limits: coupledJointLimits(set, joint) },
+          dof
+        );
         if (!range) return;
         const source: AssemblySweepSource = {
           kind: 'joint',
@@ -155,9 +160,26 @@ export function AssemblyMotionInterference({
     );
   };
 
+  /**
+   * Poses a position the way the motion's own player shows it: a study at
+   * its playhead with the study open (so a pose made there keys the
+   * timeline, as a scrub does), a joint by its own value alone.
+   */
   const show = (source: AssemblySweepSource, at: number) => {
+    const known =
+      source.kind === 'joint'
+        ? set.joints.some((joint) => joint.id === source.jointId)
+        : set.studies.some((study) => study.id === source.studyId);
+    if (!known) {
+      onStatus('That motion is no longer in the assembly; sweep again.');
+      return;
+    }
     const { overrides, drivers } = assemblySweepOverrides(set, source, at);
     assemblyRuntime.stop();
+    if (source.kind === 'study') {
+      assemblyRuntime.selectStudy(source.studyId);
+      assemblyRuntime.setStudyTime(at);
+    }
     assemblyRuntime.setOverrides(overrides, drivers);
   };
 
@@ -300,7 +322,22 @@ export function AssemblyMotionInterference({
                               )}${pair.unknownAt.length > 6 ? ', …' : ''}; not reported as clear there.`}
                           </p>
                         ) : null}
-                        {worst ? (
+                        {pair.overlaps.some(
+                          (stretch) =>
+                            stretch.fromWithin >
+                              done.report.resolution + 1e-9 ||
+                            stretch.toWithin > done.report.resolution + 1e-9
+                        ) ? (
+                          <p>
+                            {`Positions that could not be checked exactly lie beside this overlap: ${pair.overlaps
+                              .map(
+                                (stretch) =>
+                                  `it may start up to ${format(stretch.fromWithin, done.unit)} before ${format(stretch.from, done.unit)} and end up to ${format(stretch.toWithin, done.unit)} after ${format(stretch.to, done.unit)}`
+                              )
+                              .join('; ')}.`}
+                          </p>
+                        ) : null}
+                        {worst && !stale ? (
                           <button
                             type="button"
                             className="assembly-link-button"
@@ -332,7 +369,7 @@ export function AssemblyMotionInterference({
               .join(' · ')}
           </p>
           <p className="assembly-muted">
-            {`Sampled: ${plural(done.report.checked, 'position')}, every ${format(done.report.step, done.unit)}, with each start and end found to within ${format(done.report.resolution, done.unit)}. An overlap shorter than one step can fall between positions.`}
+            {`Sampled: ${plural(done.report.checked, 'position')}, every ${format(done.report.step, done.unit)}, with each start and end found to within ${format(done.report.resolution, done.unit)} where the positions beside it could be checked exactly. An overlap shorter than one step can fall between positions.`}
           </p>
         </>
       ) : null}

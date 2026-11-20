@@ -254,9 +254,7 @@ describe('Interference through motion (AS04)', () => {
       within(section()).getByRole('combobox', { name: 'Motion to check' })
     ).toHaveDisplayValue('Pivot (0.0° to 360.0°)');
     await act(async () => {
-      fireEvent.click(
-        within(section()).getByRole('button', { name: 'Sweep' })
-      );
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
     });
     // 37 even positions, then four rounds halving each turn.
     expect(sweep).toHaveBeenCalledTimes(5);
@@ -269,7 +267,7 @@ describe('Interference through motion (AS04)', () => {
       name: 'Blade A and Blade B: 85.6° to 184.4°'
     });
     expect(section()).toHaveTextContent(
-      'Sampled: 45 positions, every 10.0°, with each start and end found to within 0.6°. An overlap shorter than one step can fall between positions.'
+      'Sampled: 45 positions, every 10.0°, with each start and end found to within 0.6° where the positions beside it could be checked exactly. An overlap shorter than one step can fall between positions.'
     );
     fireEvent.click(row);
     expect(section()).toHaveTextContent('Largest overlap at 184.4°');

@@ -255,8 +255,8 @@ says "Out of date" once either changes.
 
 Under the static check, "Through motion" runs the same exact query at
 positions along one motion: a joint's Animate sweep (its limits, or a full
-turn for an unlimited angle) or a motion study's timeline, couplings
-followed as in playback. It is read-only and stores nothing.
+turn for an unlimited angle, a coupled joint only as far as its mates
+allow) or a motion study's timeline, couplings followed as in playback. It is read-only and stores nothing.
 
 - **Pairs.** Only pairs whose relative pose changes along the motion are
   checked; pairs that keep their places are counted and left to the static
@@ -266,18 +266,25 @@ followed as in playback. It is read-only and stores nothing.
   in one geometry-worker job on one build: each position poses copies of
   the parts it checks (`assemblyInterferenceSweep` in the adapter). Then,
   four times, each gap across which a pair turns between overlap and no
-  overlap is halved (an unknown position decides nothing), so each start
-  and end is found to within 1/16 of a step.
+  overlap is halved. An unknown position decides nothing, so every gap
+  between the two decided positions around it is halved instead. Each
+  start and end is found to within 1/16 of a step; where undecided
+  positions stay beside a turn, the pair says how far from it the turn
+  can lie.
 - **Sampled, and said so.** A pair reads as overlapping from its first to
   its last overlapping position, with its largest measured overlap, the
   position it is at and its witnesses; an undecided position is listed and
   never read as clear; a pair with no overlap is "clear at every position
-  checked", never plain clear. The result states the positions, the step
+  checked", never plain clear. A pair with a part that has no geometry is
+  left out and the part is listed instead. The result states the positions, the step
   and the resolution, and that an overlap shorter than one step can fall
   between positions.
-- **Show.** A pair's "Show at" poses the assembly at its worst position as
-  a transient scrub (runtime overrides), never saved. A result says "Out of
-  date" once the model, the parts or the motion change.
+- **Show.** A pair's "Show at" poses the assembly at its worst position the
+  way the motion's own player does, never saved by itself: a joint sweep
+  overrides that joint alone (its mates follow through the coupling), and
+  a study opens at that playhead, where a pose made keys the timeline as a
+  scrub does. A result says "Out of date" once the model, the parts or the
+  motion change, and then offers no "Show at".
 
 M09's first slice is display-only and separate from this: with a section cut
 on, bodies whose display caps overlap inside the cut are drawn over in red,

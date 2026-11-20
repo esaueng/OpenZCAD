@@ -9,6 +9,7 @@ import {
   planAssemblySweep,
   runAssemblySweep,
   sortSweptPairs,
+  summarizeAssemblySweep,
   SWEEP_JOINT_STEPS,
   SWEEP_REFINEMENTS,
   type AssemblySweepCheck
@@ -22,6 +23,7 @@ import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type AssemblyFrame,
+  type BodyClashVerdict,
   type BodyId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -104,6 +106,32 @@ async function rig(
 async function synced(document: ProjectDocument) {
   return attachDerivedState(document, await adapter.syncDocument(document));
 }
+
+const clear: BodyClashVerdict = {
+  kind: 'clear',
+  touching: false,
+  distance: null,
+  closest: null,
+  atLeast: null
+};
+const hit: BodyClashVerdict = {
+  kind: 'interference',
+  volume: 1,
+  proof: 'intersect',
+  point: null,
+  bounds: null,
+  complete: true
+};
+const unknown: BodyClashVerdict = {
+  kind: 'unknown',
+  reason: 'x',
+  message: 'x'
+};
+/** One position checking pair a·b. */
+const at = (value: number, verdict: BodyClashVerdict) => ({
+  at: value,
+  pairs: [{ a: 'a', b: 'b', verdict }]
+});
 
 describe('AS04 interference through motion', () => {
   it('plans only the pairs that move against each other, and stores nothing', async () => {
@@ -245,35 +273,100 @@ describe('AS04 interference through motion', () => {
     expect(block.overlaps[0]!.to).toBeLessThan(1.25);
   }, 240_000);
 
-  it('halves only gaps where a verdict turns, and never across an unknown', () => {
-    const clear = {
-      kind: 'clear' as const,
-      touching: false,
-      distance: null,
-      closest: null,
-      atLeast: null
-    };
-    const hit = {
-      kind: 'interference' as const,
-      volume: 1,
-      proof: 'intersect' as const,
-      point: null,
-      bounds: null,
-      complete: true
-    };
-    const unknown = { kind: 'unknown' as const, reason: 'x', message: 'x' };
-    const at = (value: number, verdict: object) => ({
-      at: value,
-      pairs: [{ a: 'a', b: 'b', verdict: verdict as typeof clear }]
-    });
+  it('halves every gap where a verdict turns, narrowing across an unknown position', () => {
     expect(
       assemblySweepRefinements([
         at(0, clear),
         at(1, hit),
         at(2, hit),
         at(3, unknown),
-        at(4, clear)
+        at(4, clear),
+        at(5, clear)
       ])
-    ).toEqual([{ at: 0.5, pairs: [['a', 'b']] }]);
+    ).toEqual([
+      { at: 0.5, pairs: [['a', 'b']] },
+      // 2 overlaps, 4 does not: 3 decided nothing, so both halves narrow.
+      { at: 2.5, pairs: [['a', 'b']] },
+      { at: 3.5, pairs: [['a', 'b']] }
+    ]);
+  });
+
+  it('says how near each turn is known, and leaves out pairs with a part that has no geometry', () => {
+    const plan = {
+      source: { kind: 'joint' as const, jointId: 'j', dof: 0 },
+      unit: 'mm' as const,
+      from: 0,
+      to: 4,
+      positions: [0, 1, 2, 3, 4],
+      components: [],
+      missing: [],
+      pairs: [
+        ['a', 'b'],
+        ['a', 'gone']
+      ] as [string, string][],
+      still: 0
+    };
+    const report = summarizeAssemblySweep(
+      plan,
+      [at(0, clear), at(1, hit), at(2, hit), at(3, unknown), at(4, clear)],
+      ['gone']
+    );
+    expect(report.missing).toEqual(['gone']);
+    expect(report.pairs.map((pair) => `${pair.a}·${pair.b}`)).toEqual(['a·b']);
+    expect(report.pairs[0]!.overlaps).toEqual([
+      { from: 1, to: 2, fromWithin: 1, toWithin: 2 }
+    ]);
+    expect(report.pairs[0]!.unknownAt).toEqual([3]);
+  });
+
+  it('sweeps a coupled joint only as far as its mate allows, as Animate does', async () => {
+    const document = (await rig(null)).document;
+    const set = document.assembly!;
+    const coupled: ProjectDocument = {
+      ...document,
+      assembly: {
+        ...set,
+        components: set.components.map((c) =>
+          c.id === 'c_post' ? { ...c, grounded: false } : c
+        ),
+        joints: [
+          { ...set.joints[0]!, limits: [{ min: 30, max: 32 }] },
+          {
+            id: 'j_turn',
+            name: 'Turn',
+            kind: 'revolute',
+            parent: { componentId: 'c_block', frame: along(0) },
+            child: { componentId: 'c_post', frame: along(0) },
+            values: [0],
+            limits: [null]
+          }
+        ],
+        couplings: [
+          {
+            id: 'cp',
+            name: 'Turn drives slide',
+            driver: { jointId: 'j_turn', dof: 0 },
+            driven: { jointId: 'j_slide', dof: 0 },
+            ratio: 1,
+            offset: 0
+          }
+        ]
+      }
+    };
+    const planned = planAssemblySweep(
+      coupled,
+      { kind: 'joint', jointId: 'j_turn', dof: 0 },
+      () => true
+    );
+    if (!planned.ok) throw new Error(planned.reason);
+    expect([planned.plan.from, planned.plan.to]).toEqual([30, 32]);
+    // Showing a joint position overrides that joint alone.
+    expect([
+      ...assemblySweepOverrides(
+        coupled.assembly!,
+        planned.plan.source,
+        31
+      ).overrides.keys()
+    ]).toEqual(['j_turn']);
   });
 });
