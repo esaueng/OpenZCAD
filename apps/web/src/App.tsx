@@ -224,6 +224,7 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
+import type { AutoDimensionPreview } from './lib/drawing/assistantPreflight';
 import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
   appendRevision,
@@ -18615,10 +18616,7 @@ export function App() {
    * generator plans again on Apply, so Apply refuses unless the document
    * is still the one the preview showed it on.
    */
-  const autoDimensionPreviewRef = useRef<{
-    proposalId: string;
-    document: ProjectDocument;
-  } | null>(null);
+  const autoDimensionPreviewRef = useRef<AutoDimensionPreview | null>(null);
   // Bumped when something opens over the stage that the model should stay
   // clear of: the viewer reframes only if part of the model is covered.
   const [clearStageRequest, setClearStageRequest] = useState(0);
@@ -18667,15 +18665,16 @@ export function App() {
           await import('./lib/drawing/assistantPreflight');
         if (epoch !== aiPreviewEpochRef.current)
           return { ok: false, reason: 'A newer preview replaced this one.' };
-        const { sheet, leftOut } = preflightDrawingPatch(
+        const { sheet, leftOut, commands } = preflightDrawingPatch(
           current,
           proposal,
           drawingModeRef.current ? drawingAssistantRef.current : null
         );
+        // Kept for Apply, which applies exactly this plan.
         autoDimensionPreviewRef.current = proposal.operations.some(
           (operation) => operation.kind === 'auto_dimension_drawing'
         )
-          ? { proposalId: proposal.proposalId, document: current }
+          ? { proposal, document: current, commands }
           : null;
         setDrawingPreview({
           sheetId: sheet.sheetId,
@@ -18759,23 +18758,24 @@ export function App() {
       return false;
     }
     try {
-      const { assertAutoDimensionPreviewed, preflightDrawingPatch } =
+      const { previewedAutoDimensionCommands, preflightDrawingPatch } =
         await import('./lib/drawing/assistantPreflight');
       const live = managerRef.current?.document;
       if (!live || live !== current)
         throw new Error(
           'The document changed while the proposal was checked. Review it again.'
         );
-      assertAutoDimensionPreviewed(
-        proposal,
-        autoDimensionPreviewRef.current,
-        current
-      );
-      const { commands } = preflightDrawingPatch(
-        current,
-        proposal,
-        drawingModeRef.current ? drawingAssistantRef.current : null
-      );
+      const commands =
+        previewedAutoDimensionCommands(
+          proposal,
+          autoDimensionPreviewRef.current,
+          current
+        ) ??
+        preflightDrawingPatch(
+          current,
+          proposal,
+          drawingModeRef.current ? drawingAssistantRef.current : null
+        ).commands;
       const applied = executeTransaction('Apply AI annotations', commands);
       if (applied) setDrawingPreview(null);
       return applied;

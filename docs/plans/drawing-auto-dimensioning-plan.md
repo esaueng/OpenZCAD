@@ -183,8 +183,9 @@ Each needs its own schema bump, claimed from open PRs at the time
   request"); a scope that leaves nothing to add is refused with the same
   list. A Ø span (a bolt circle's pitch) counts as a diameter. The request
   is proposed alone, never the isometric view, and the dimension check
-  still gates the result. Apply plans again, so it is refused unless the
-  document is the one the preview was planned on. Choosing among individual
+  still gates the result. Apply never plans again: it applies the commands
+  the preview planned, and only for that same proposal on the same
+  document. Choosing among individual
   candidates ("from the bore centre") is not offered: the generator's datum
   rule (decision 3) decides, and a user who wants another datum asks for
   that dimension with `add_drawing_annotations`.

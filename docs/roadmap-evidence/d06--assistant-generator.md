@@ -12,13 +12,13 @@ style; the Draw workspace runs Auto-dimension on the sheet's own annotations,
 out (excluded kinds, dimensions that belong in other views, generator skips,
 section advice) for the preview status, refuses a scope that leaves nothing to
 add, and still gates on the dimension check. A Ø span counts as a diameter;
-Apply plans again only on the document the preview was planned on; the request
+Apply applies exactly the previewed plan, and only for that proposal on that document; the request
 is proposed alone and never names the isometric view
 (docs/plans/drawing-auto-dimensioning-plan.md#assistant-integration). The
 plan's corpus gains the bracket with fillets and a slot: zero missing, zero
 repeated, nothing skipped. Evidence: `test/drawing-assistant-operations.test.ts`
 (real kernel: all-views plan applied as one undo step, scope reports, refusals,
-Ø-span scoping, the preview fence), `test/drawing-auto-dimension.test.ts`
+Ø-span scoping, Apply of the previewed plan), `test/drawing-auto-dimension.test.ts`
 (bracket), `apps/web/src/lib/assistant/describe.test.ts`,
 `test/e2e/drawing-assistant.spec.ts` (fake provider: a radii-only scope
 reports the three spans it leaves out; the whole sheet's three spans

@@ -101,31 +101,42 @@ export function scopedAutoDimensions(
   return { annotations, leftOut };
 }
 
+/** What an auto-dimension preview planned, kept for its Apply. */
+export interface AutoDimensionPreview {
+  /** The proposal object itself: provider ids need not be unique. */
+  proposal: CadPatchProposal;
+  document: ProjectDocument;
+  commands: AnyCommand[];
+}
+
 /**
- * An auto-dimension request is planned again when it is applied, so it
- * applies only to the very document its preview was planned on: a view
- * added, a dimension drawn or the model changed since would add dimensions
- * the user never saw.
+ * The commands to apply for an auto-dimension request: exactly the ones
+ * its preview planned. The generator is never run again on Apply — a view
+ * dragged, a dimension drawn or the model changed since would plan
+ * dimensions the user never saw — so Apply refuses unless the very
+ * proposal was previewed on the very document now open. Null for any
+ * other proposal, which compiles the same way every time.
  */
-export function assertAutoDimensionPreviewed(
+export function previewedAutoDimensionCommands(
   proposal: CadPatchProposal,
-  previewed: { proposalId: string; document: ProjectDocument } | null,
+  previewed: AutoDimensionPreview | null,
   current: ProjectDocument
-): void {
+): AnyCommand[] | null {
   if (
     !proposal.operations.some(
       (operation) => operation.kind === 'auto_dimension_drawing'
     )
   )
-    return;
+    return null;
   if (
     !previewed ||
-    previewed.proposalId !== proposal.proposalId ||
+    previewed.proposal !== proposal ||
     previewed.document !== current
   )
     throw new Error(
-      'The drawing changed since these dimensions were previewed. Ask again to dimension it as it is now.'
+      'The drawing changed since these dimensions were previewed. Preview them again, or ask again to dimension the sheet as it is now.'
     );
+  return previewed.commands;
 }
 
 /**

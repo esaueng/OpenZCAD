@@ -32,8 +32,8 @@ import {
   type DrawingAssistantSource
 } from '../apps/web/src/lib/drawing/assistantContext';
 import {
-  assertAutoDimensionPreviewed,
   preflightDrawingPatch,
+  previewedAutoDimensionCommands,
   scopedAutoDimensions
 } from '../apps/web/src/lib/drawing/assistantPreflight';
 import { planAutoDimensions } from '../apps/web/src/lib/drawing/autoDimension';
@@ -537,14 +537,31 @@ describe('assistant drawing operations (D06 slice E)', () => {
       });
     });
 
-    it('applies only to the document its preview was planned on', async () => {
-      const { document, manager } = await drawnPlate();
-      const proposal = parseCadPatchProposal(autoProposal(null, null));
-      const previewed = { proposalId: proposal.proposalId, document };
+    it('applies exactly the previewed plan, only for that proposal on that document', async () => {
+      const { document, manager, source } = await drawnPlate();
+      const digest = digestOf(document, source(document).digest());
+      const proposal = parseCadPatchProposal(autoProposal(null, null), digest);
+      const { commands } = preflightDrawingPatch(
+        document,
+        proposal,
+        source(document)
+      );
+      const previewed = { proposal, document, commands };
+      // The previewed commands themselves, not a fresh plan.
+      expect(
+        previewedAutoDimensionCommands(proposal, previewed, document)
+      ).toBe(commands);
+      // Another proposal, even with the same provider id, is not the one
+      // previewed.
+      const twin = parseCadPatchProposal(
+        autoProposal(null, ['linear']),
+        digest
+      );
+      expect(twin.proposalId).toBe(proposal.proposalId);
       expect(() =>
-        assertAutoDimensionPreviewed(proposal, previewed, document)
-      ).not.toThrow();
-      // A view added (any edit) after the preview: refused, not re-planned.
+        previewedAutoDimensionCommands(twin, previewed, document)
+      ).toThrow(/changed since these dimensions were previewed/);
+      // Any edit after the preview: refused, not re-planned.
       manager.execute(
         commandFactories.renameNode({
           nodeId: document.rootNodeId,
@@ -552,18 +569,15 @@ describe('assistant drawing operations (D06 slice E)', () => {
         })
       );
       expect(() =>
-        assertAutoDimensionPreviewed(proposal, previewed, manager.document)
+        previewedAutoDimensionCommands(proposal, previewed, manager.document)
       ).toThrow(/changed since these dimensions were previewed/);
       expect(() =>
-        assertAutoDimensionPreviewed(proposal, null, document)
+        previewedAutoDimensionCommands(proposal, null, document)
       ).toThrow(/changed since these dimensions were previewed/);
-      expect(() =>
-        assertAutoDimensionPreviewed(
-          proposal,
-          { proposalId: 'another', document },
-          document
-        )
-      ).toThrow(/changed since these dimensions were previewed/);
+      // A proposal naming its own annotations compiles as before.
+      expect(
+        previewedAutoDimensionCommands(proposalOf() as never, null, document)
+      ).toBeNull();
     });
 
     it('waits for the views to be drawn before planning', async () => {
