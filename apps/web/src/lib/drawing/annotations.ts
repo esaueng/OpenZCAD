@@ -2753,6 +2753,7 @@ export function annotationModelReading(
     annotation.kind === 'arc-angle' ||
     annotation.kind === 'three-point-angle' ||
     annotation.kind === 'bom-table' ||
+    annotation.kind === 'hole-table' ||
     annotation.kind === 'balloon' ||
     annotation.kind === 'image' ||
     annotation.kind === 'general-tolerance' ||

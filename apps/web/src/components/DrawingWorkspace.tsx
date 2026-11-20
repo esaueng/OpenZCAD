@@ -1940,6 +1940,11 @@ function AnnotationProperties(props: {
           editable={editable}
           onUpdate={props.onUpdate}
         />
+      ) : selected.kind === 'hole-table' ? (
+        <p className="drawing-hint">
+          Lists the holes its view looks down, read from the model each time the
+          sheet is drawn.
+        </p>
       ) : selected.kind === 'image' ? (
         <>
           <label className="drawing-field">
