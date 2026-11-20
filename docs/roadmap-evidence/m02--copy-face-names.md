@@ -14,5 +14,5 @@ off the plate's end, a boss merging into another) is not congruent and stays
 unnamed, as does a face two copies would both claim, so a name always means
 the copy's own face. The original keeps its names. Evidence:
 `test/pattern-copy-face-names.test.ts` (a boss row and a pocket row: every
-face of copies 1 and 2 named after the original's, each 25 further along;
-a pocket row whose last copy runs off the plate leaves that copy unnamed).
+of the feature's own five faces on copies 1 and 2 named after the original's, each 25 further along;
+a pocket row whose last copy runs half off the plate leaves its floor and cut-short walls unnamed).
