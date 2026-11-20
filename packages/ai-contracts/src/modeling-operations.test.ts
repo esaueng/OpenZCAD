@@ -199,6 +199,23 @@ describe('AI deterministic modeling operation contracts', () => {
     expect(face?.attachmentFrame).toEqual(frame);
   });
 
+  it("offers add_hole's origin, the outer boundary centroid, apart from the snapshot", () => {
+    const document = digestDocument();
+    const geometry =
+      document.derived.bodyRepresentations[toBodyId('body_source')]!.topology!
+        .faces[0]!.geometry!;
+    // A plate top with a bore already in it: the area centroid is pulled off
+    // the middle, the outer boundary's is not (M01, schema v118).
+    geometry.centroid = { x: 49.8, y: 29.9, z: 10 };
+    geometry.outerCentroid = { x: 50, y: 30, z: 10 };
+    const face =
+      createCadDocumentDigest(document).bodies?.[0]?.topology?.faces[0];
+    expect(face?.holeOrigin).toEqual({ x: 50, y: 30, z: 10 });
+    // The snapshot the proposal copies back is unchanged.
+    expect(face?.snapshot?.centroid).toEqual({ x: 49.8, y: 29.9, z: 10 });
+    expect(face?.snapshot).not.toHaveProperty('outerCentroid');
+  });
+
   it('anchors the offered frame on a planar face centroid, and holds a proposal to it', () => {
     const document = digestDocument();
     const geometry =
