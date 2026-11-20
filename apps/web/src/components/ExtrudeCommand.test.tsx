@@ -682,7 +682,7 @@ describe('in-place Extrude bar', () => {
       'draftAngle'
     ]);
     expect(extrudeShownValues({ extent: 'to-face', symmetric: false })).toEqual(
-      ['draftAngle']
+      ['faceOffset', 'draftAngle']
     );
     expect(
       extrudeShownValues({ extent: 'through-all', symmetric: false })
