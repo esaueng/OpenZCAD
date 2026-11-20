@@ -78,6 +78,13 @@ card on the ×50 bar) and the Node probe `test/perf/pattern-preview.bench.ts`.
 machine's GPU, and each sample records its WebGL renderer and the host's load
 and memory. See the [baseline record](performance/2026-11-15-active1-baselines.md).
 
+Measure a History sketch edit upstream of a Boolean cut with
+`OZ_PERF=1 OZ_PERF_ANGLE=gl pnpm exec playwright test upstream-sketch-edit --grep "measures Apply" --repeat-each 3 --workers=1`.
+The probe times the Apply click through committed geometry on a plate with
+30 independent boxes. It checks the cut volume after each of three width edits
+and records whether the worker reused the validated result. Each run attaches
+`sketch-history-performance.json`. Set `OZ_SKETCH_HISTORY_OUT` to append JSONL.
+
 ## Sharding and timing
 
 Both suites use the existing six shards and required E2E completion gate.
