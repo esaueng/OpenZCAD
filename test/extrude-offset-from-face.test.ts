@@ -172,15 +172,24 @@ describe('F01 offset from face', { timeout: 60_000 }, () => {
 
     it('drops a zero offset, and opens a to-face extrude without one byte for byte', async () => {
       const zero = await post(0);
-      expect(listFeaturesInOrder(zero.document).at(-1)!.data).not.toHaveProperty(
-        'toFaceOffset'
-      );
-      const saved = JSON.parse(
-        JSON.stringify((await post('gap')).document)
-      ) as ProjectDocument;
-      expect(JSON.stringify(normalizeDocument(saved))).toBe(
-        JSON.stringify(saved)
-      );
+      expect(
+        listFeaturesInOrder(zero.document).at(-1)!.data
+      ).not.toHaveProperty('toFaceOffset');
+      // A to-face extrude with no offset (the v29 shape) loads unchanged and
+      // gains no offset field; one with an offset keeps it as written.
+      for (const toFaceOffset of [undefined, 'gap']) {
+        const saved = JSON.parse(
+          JSON.stringify((await post(toFaceOffset)).document)
+        ) as ProjectDocument;
+        const loaded = normalizeDocument(saved);
+        expect(JSON.stringify(loaded)).toBe(JSON.stringify(saved));
+        const data = listFeaturesInOrder(loaded).at(-1)!.data;
+        if (toFaceOffset === undefined) {
+          expect(data).not.toHaveProperty('toFaceOffset');
+        } else {
+          expect(data).toMatchObject({ toFaceOffset });
+        }
+      }
     });
 
     it.each([
@@ -473,9 +482,9 @@ describe('F01 offset from face', { timeout: 60_000 }, () => {
           toFaceOffset: -2
         })
       );
-      expect(listFeaturesInOrder(manager.document).at(-1)!.data).toMatchObject(
-        { toFaceOffset: -2 }
-      );
+      expect(listFeaturesInOrder(manager.document).at(-1)!.data).toMatchObject({
+        toFaceOffset: -2
+      });
       let derived = await derive(manager.document);
       expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
         AREA * 27,
@@ -505,9 +514,9 @@ describe('F01 offset from face', { timeout: 60_000 }, () => {
       expect(blind).not.toHaveProperty('toFaceOffset');
       manager.undo();
       manager.undo();
-      expect(listFeaturesInOrder(manager.document).at(-1)!.data).toMatchObject(
-        { toFaceOffset: 5 }
-      );
+      expect(listFeaturesInOrder(manager.document).at(-1)!.data).toMatchObject({
+        toFaceOffset: 5
+      });
       derived = await derive(manager.document);
       expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
         AREA * 20,
@@ -550,7 +559,10 @@ describe('F01 offset from face', { timeout: 60_000 }, () => {
           ctx
         )
       ).toEqual(
-        expect.objectContaining({ endCondition: 'to-face', toFaceOffset: 'gap' })
+        expect.objectContaining({
+          endCondition: 'to-face',
+          toFaceOffset: 'gap'
+        })
       );
       expect(
         extrudeDraftValue(
