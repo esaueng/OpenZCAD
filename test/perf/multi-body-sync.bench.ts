@@ -172,7 +172,9 @@ async function run(
     const packet = sender.encode(next.projectId, derived);
     const total = performance.now() - started - heldMs;
     keep(receiver.apply(structuredClone(packet)));
-    return { readyMs: ready ?? total, totalMs: total, derived };
+    if (ready === undefined)
+      throw new Error('Expected a fresh geometry publication for each edit.');
+    return { readyMs: ready, totalMs: total, derived };
   };
   try {
     const first = await sync(document);
