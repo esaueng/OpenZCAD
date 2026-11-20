@@ -81,7 +81,7 @@ export function labelThreeMfObjects(
   if (!root) {
     throw new Error('Mesh export produced a 3MF model part without <model>.');
   }
-  if (/\sxmlns:m=/.test(root[0])) {
+  if (/\bxmlns:m=/.test(root[0])) {
     throw new Error(
       'The 3MF writer already declared the m: namespace; export refused.'
     );
