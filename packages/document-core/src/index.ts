@@ -88,6 +88,7 @@ export * from './drawings';
 export * from './object-folders';
 export * from './assembly';
 export * from './assembly-bom';
+export * from './assembly-exploded';
 export * from './assembly-interference';
 export * from './assembly-interference-sweep';
 export * from './gear-mesh';

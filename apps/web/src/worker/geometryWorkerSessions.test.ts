@@ -204,6 +204,8 @@ describe('geometry worker persisted sessions', { timeout: 15_000 }, () => {
     async (_case, flag: { persistSession?: boolean }) => {
       store.load.mockResolvedValue(SESSION);
       const { scope, adapter } = await installWorker();
+      // Nothing restored, nothing worn: no warm-up to run.
+      adapter.needsHistoryWarmup.mockReturnValue(false);
       post(scope, { type: 'sync', document, lineageDemand: [], ...flag });
       await vi.waitFor(() =>
         expect(published(scope, document.version)).toBe(true)
@@ -215,6 +217,33 @@ describe('geometry worker persisted sessions', { timeout: 15_000 }, () => {
       );
       expect(adapter.captureHistorySession).not.toHaveBeenCalled();
       expect(adapter.warmHistory).not.toHaveBeenCalled();
+      expect(store.save).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each<[string, { persistSession?: boolean }]>([
+    ['a shared link’s model', {}],
+    ['someone else’s project', { persistSession: false }]
+  ])(
+    'compacts a worn kernel of %s without capturing or storing it',
+    async (_case, flag: { persistSession?: boolean }) => {
+      const { scope, adapter } = await installWorker();
+      // `needsHistoryWarmup` stays true: a long session wore the arena out.
+      post(scope, { type: 'sync', document, lineageDemand: [], ...flag });
+      await vi.waitFor(() =>
+        expect(published(scope, document.version)).toBe(true)
+      );
+      await vi.waitFor(() => expect(adapter.warmHistory).toHaveBeenCalled(), {
+        timeout: KERNEL_SESSION_WARMUP_IDLE_MS + 2_000
+      });
+      await settle();
+      expect(
+        (
+          adapter.warmHistory.mock.calls as unknown as [ProjectDocument][]
+        )[0]![0]
+      ).toBe(document);
+      expect(store.load).not.toHaveBeenCalled();
+      expect(adapter.captureHistorySession).not.toHaveBeenCalled();
       expect(store.save).not.toHaveBeenCalled();
     }
   );
@@ -308,7 +337,7 @@ describe('geometry worker persisted sessions', { timeout: 15_000 }, () => {
     );
   });
 
-  it('a policy turned off drops the scheduled capture and warm-up', async () => {
+  it('a policy turned off drops the scheduled capture', async () => {
     const { scope, adapter } = await installWorker();
     post(scope, {
       type: 'sync',
@@ -319,6 +348,8 @@ describe('geometry worker persisted sessions', { timeout: 15_000 }, () => {
     await vi.waitFor(() =>
       expect(published(scope, document.version)).toBe(true)
     );
+    // A fresh kernel: only the capture was pending.
+    adapter.needsHistoryWarmup.mockReturnValue(false);
     post(scope, {
       type: 'session-policy',
       projectId: document.projectId,

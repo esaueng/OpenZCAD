@@ -37,6 +37,7 @@
   "drawing-detail-views.spec.ts": 12,
   "drawing-dimensions.spec.ts": 10,
   "drawing-dxf-export.spec.ts": 10,
+  "drawing-exploded-view.spec.ts": 25,
   "drawing-distances.spec.ts": 14,
   "drawing-free-sections.spec.ts": 14,
   "drawing-properties.spec.ts": 12,
