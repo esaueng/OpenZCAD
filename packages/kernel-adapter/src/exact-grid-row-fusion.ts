@@ -1,6 +1,20 @@
 import { GEOMETRY_EPSILON } from './exact-math';
 import { RemusKernel } from './remus-runtime';
 
+// One row per live kernel. Count or spacing changes on the second axis
+// often leave the exact first-row operands byte-for-byte unchanged.
+const MAX_ROW_CACHE_BYTES = 4 * 1024 * 1024;
+const cachedRows = new WeakMap<
+  RemusKernel,
+  { operands: Uint8Array; row: Uint8Array }
+>();
+
+function sameOperands(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false;
+  return true;
+}
+
 /**
  * In a complete orthogonal grid of rectangular stock, every row is the same
  * union translated along the second axis. A gap between rows lets fuseAll
@@ -37,10 +51,22 @@ export function fuseSeparatedGridRows(
     // Retiring row handles one by one scans the live arena for references.
     // A private kernel can release the whole intermediate build at once.
     scratch = new RemusKernel();
-    const copies = scratch.deserializeSolids(
-      kernel.serializeSolids(Uint32Array.from(firstRow))
-    );
-    const row = scratch.fuseAll(copies);
+    const operands = kernel.serializeSolids(Uint32Array.from(firstRow));
+    const cached = cachedRows.get(kernel);
+    const reuse = cached && sameOperands(operands, cached.operands);
+    const row = reuse
+      ? scratch.deserializeSolids(cached.row)[0]!
+      : scratch.fuseAll(scratch.deserializeSolids(operands));
+    // Capture before assembly adds more solids to the private kernel.
+    const rowBytes =
+      !reuse && operands.byteLength < MAX_ROW_CACHE_BYTES
+        ? scratch.serializeSolids(Uint32Array.of(row))
+        : undefined;
+    if (
+      rowBytes &&
+      operands.byteLength + rowBytes.byteLength <= MAX_ROW_CACHE_BYTES
+    )
+      cachedRows.set(kernel, { operands, row: rowBytes });
     const placed = [row];
     for (let index = 1; index < rows; index++) {
       placed.push(scratch.copyAndTransformSolid(row, matrix(index)));
