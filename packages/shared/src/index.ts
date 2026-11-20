@@ -455,7 +455,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // extrude): the extrusion stops that far short of its face (or, negative,
 // passes it). An older client would build to the face itself, so it must
 // refuse. Builds on v112 (#1785, M02 path patterns).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 113 as const;
+// v114 adds AS03 exploded drawing views (`exploded` on a drawing view): the
+// view draws each assembly part at its solved pose plus its stored exploded
+// offset. An older client would draw it as modelled, so it must refuse the
+// document. Builds on v113.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 114 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
