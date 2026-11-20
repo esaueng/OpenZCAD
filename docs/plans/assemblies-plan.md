@@ -206,8 +206,12 @@ out along the drag however its joints turned it.
   devices make at once (there is no record in the base to merge into) are
   conflicts the submitter resolves; nothing is chosen silently.
 - **Not in this slice.** Several named exploded views, step-by-step
-  explode playback in motion studies (not asked for here), exploded drawing
-  views and trails.
+  explode playback in motion studies (not asked for here) and trails.
+- **On drawings (schema v114).** A drawing's base view can be drawn
+  exploded: each part at its solved pose with its stored offset, as
+  Assemble shows it, with notes and balloons only; the sheet goes stale
+  when a part is posed or pulled out differently. See
+  [Exploded views](drawing-mvp-design.md#exploded-views-as03-schema-v114).
 
 Command: `assembly.explode.set` (`offsets` per component, null or zero puts
 a part back; `reset` clears every offset first).
@@ -344,8 +348,8 @@ not an exact clash check.
   joints with its own editor, screw couplings on one cylindrical joint) and
   video export (AS08), and the STEP hierarchy round-trip AS04 also names.
   Interference through motion is sampled (above); an exact swept-volume
-  check is not built. The BOM and stored exploded offsets are AS03 (above); exploded
-  drawing views wait on D01/D02.
+  check is not built. The BOM, stored exploded offsets and exploded drawing
+  views are AS03 (above).
 - A coupling's ratio is fixed when the pair is placed: editing a gear's
   tooth count or moving a joint's frame afterwards does not update it. When
   a gear's teeth no longer give the stored ratio, the joint's details (and

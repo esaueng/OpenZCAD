@@ -16,9 +16,13 @@ import {
   type DrawingTitleBlock,
   type DrawingView,
   type DrawingViewId,
+  DRAWING_EXPLODED_VIEW_ANNOTATIONS,
   type ProjectDocument
 } from '@openzcad/shared';
-import { assertDrawingViewConfigurationSchema } from './document-content-schema';
+import {
+  assertDrawingExplodedViewSchema,
+  assertDrawingViewConfigurationSchema
+} from './document-content-schema';
 
 /**
  * D01 drawing commands. Each takes explicit data — the sheet, the view, the
@@ -79,6 +83,17 @@ export interface DrawingViewUpdateInput {
    * active row.
    */
   configurationId?: string | null;
+  /**
+   * AS03 (v114): draw a base view, and the views projected from it, with the
+   * assembly exploded, or as modelled again.
+   */
+  exploded?: boolean;
+  /**
+   * AS03 (v114), only with `exploded`: the sheet's model fence as the
+   * toggled views draw it, so a sheet that was current stays current. The
+   * caller computes it, as for an explicit Update.
+   */
+  source?: DrawingSheet['source'];
 }
 
 export interface DrawingViewDeleteInput {
@@ -342,6 +357,14 @@ export function addDrawingView(
       throw new Error(`Drawing view ${input.view.viewId} already exists.`);
     const view = deepClone(input.view);
     const parent = alignmentBase(sheet, view);
+    // AS03 (v114): a projected view draws the assembly as its base does.
+    if (view.parentViewId !== undefined) {
+      const base = sheet.views.find(
+        (entry) => entry.viewId === view.parentViewId
+      );
+      if (base?.exploded) view.exploded = true;
+      else delete view.exploded;
+    }
     view.centerMm = onPaper(sheet, view.centerMm);
     if (parent)
       view.centerMm = onPaper(
@@ -405,6 +428,13 @@ export function updateDrawingView(
         input.bodyIds.filter((id) => !view.bodyIds.includes(id))
       );
     if (input.hiddenLines !== undefined) view.hiddenLines = input.hiddenLines;
+    if (input.source !== undefined && input.exploded === undefined)
+      throw new Error('A view edit rebinds the sheet only when exploding it.');
+    if (input.exploded !== undefined) {
+      assertDrawingExplodedViewSchema(document.schemaVersion);
+      explodeDrawingView(sheet, view, input.exploded);
+      if (input.source) sheet.source = { ...input.source };
+    }
     if (input.configurationId !== undefined) {
       assertDrawingViewConfigurationSchema(document.schemaVersion);
       if (
@@ -507,6 +537,65 @@ export function updateDrawingView(
     }
     return sheets;
   });
+}
+
+/**
+ * AS03 (v114): draws `view` and the views projected from it exploded, or as
+ * modelled. Refused on a view that is not a base view, one drawing another
+ * configuration row, one that sections, details or auxiliary views are
+ * taken from, and one carrying annotations other than notes and balloons.
+ */
+function explodeDrawingView(
+  sheet: DrawingSheet,
+  view: DrawingView,
+  exploded: boolean
+): void {
+  if (view.parentViewId !== undefined)
+    throw new Error(
+      'A projected view is drawn exploded with its base view; choose it there.'
+    );
+  if (view.section || view.detail || view.auxiliary)
+    throw new Error(
+      'Only a base view and the views projected from it can be drawn exploded.'
+    );
+  const group = sheet.views.filter(
+    (entry) => entry === view || entry.parentViewId === view.viewId
+  );
+  if (exploded) {
+    if (view.configurationId !== undefined)
+      throw new Error(
+        'This view draws another configuration; an exploded view draws the active one.'
+      );
+    const ids = new Set(group.map((entry) => entry.viewId));
+    if (
+      sheet.views.some((entry) => {
+        const source =
+          entry.section?.sourceViewId ??
+          entry.detail?.sourceViewId ??
+          entry.auxiliary?.sourceViewId;
+        return source !== undefined && ids.has(source);
+      })
+    )
+      throw new Error(
+        'Sections, details and auxiliary views are taken from this view; delete them before drawing it exploded.'
+      );
+    if (
+      (sheet.annotations ?? []).some((annotation) => {
+        const viewId = (annotation as { viewId?: DrawingViewId }).viewId;
+        return (
+          viewId !== undefined &&
+          ids.has(viewId) &&
+          !DRAWING_EXPLODED_VIEW_ANNOTATIONS.includes(annotation.kind)
+        );
+      })
+    )
+      throw new Error(
+        'An exploded view carries notes and balloons only; delete this view’s dimensions and marks first.'
+      );
+  }
+  for (const entry of group)
+    if (exploded) entry.exploded = true;
+    else delete entry.exploded;
 }
 
 export function deleteDrawingView(
