@@ -897,14 +897,13 @@ let liveCapturable: {
 } | null = null;
 function noteLiveCapturable(next: typeof liveCapturable): void {
   liveCapturable = next;
-  if (next && persistsLiveSession(next.document.projectId)) {
+  if (!next) return;
+  if (persistsLiveSession(next.document.projectId))
     kernelSessions.schedule(next.exact, next.document, next.contentKey);
-    kernelSessions.scheduleWarmup(
-      next.exact,
-      next.document,
-      next.lineageDemand
-    );
-  }
+  // A warm-up stores nothing: it rebuilds this worker's own history kernel
+  // (a restored session's checkpoints, or an arena worn by a long session)
+  // and frees the old one, so every live project's result may schedule it.
+  kernelSessions.scheduleWarmup(next.exact, next.document, next.lineageDemand);
 }
 
 /**
@@ -2435,11 +2434,8 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
     if (!persistSession || liveSessionPolicy?.projectId !== projectId)
       kernelSessions.forget();
     liveSessionPolicy = { projectId, persist: persistSession };
-    if (
-      persistSession &&
-      liveCapturable &&
-      liveCapturable.document.projectId === projectId
-    )
+    // Capture only when persisting; the warm-up `forget` dropped returns.
+    if (liveCapturable && liveCapturable.document.projectId === projectId)
       noteLiveCapturable(liveCapturable);
     return;
   }

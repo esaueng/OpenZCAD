@@ -451,7 +451,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // moved or also turned with the path. An older client has no such
 // arrangement and would build a linear pattern in its place, so it must
 // refuse. Builds on v111.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 112 as const;
+// v113 adds the F01 offset-from-face extent (`toFaceOffset` on a to-face
+// extrude): the extrusion stops that far short of its face (or, negative,
+// passes it). An older client would build to the face itself, so it must
+// refuse. Builds on v112 (#1785, M02 path patterns).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 113 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2427,6 +2431,15 @@ export type FeatureData =
        * blind restores it.
        */
       toFace?: ExtrudeToFaceTarget;
+      /**
+       * F01 (schema v113): offset from the `toFace` face, with `to-face`
+       * only. Positive stops the extrusion that far short of the face
+       * (toward the sketch plane), negative carries it that far past. Like
+       * the face distance it is applied on every rebuild, never folded into
+       * `distance`; an offset that reaches or crosses the sketch plane
+       * refuses by name. Absent or zero ends on the face itself.
+       */
+      toFaceOffset?: ParamValue;
       /**
        * F01 (schema v29): wall draft in degrees, measured from the sketch
        * normal. Positive tapers the walls inward as the extrusion leaves the

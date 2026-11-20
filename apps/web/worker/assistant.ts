@@ -7,6 +7,7 @@ import {
 } from '@openzcad/ai-contracts';
 import {
   isCloudflareFeatureEnabled,
+  type CloudflareBooleanFlag,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import type {
@@ -14,8 +15,10 @@ import type {
   AssistantReasoningEffort
 } from '@openzcad/shared';
 import {
+  gateAssistantResponse,
   observeAssistantResponse,
   validateAssistantResponse,
+  type AssistantReplyRejection,
   type AssistantResponseFailureClassification
 } from './assistantStreamDiagnostics';
 import {
@@ -457,7 +460,13 @@ export function assistantEndpointIdentity(
   }
 }
 
-const ROLLOUT_OPERATION_FLAGS = [
+/**
+ * The one table of rollout-gated operation kinds. The prompt, the strict
+ * reply schema and the Worker's reply gate (`rolloutReplyRejection`) all read
+ * it, so a kind listed here is withheld from the provider AND refused if the
+ * provider returns it anyway.
+ */
+export const ROLLOUT_OPERATION_FLAGS = [
   ['add_direct_edit', 'AI_PATCH_DIRECT_EDIT_ENABLED'],
   ['add_growing_holder_recipe', 'AI_PATCH_GROWING_HOLDER_ENABLED'],
   ['add_growing_holder_hole_control', 'AI_PATCH_HOLE_CONTROL_ENABLED'],
@@ -531,7 +540,7 @@ export function assistantEnvForClient(
  * the whole branch would withdraw a working capability. The property is
  * pruned instead, from both `properties` and `required`.
  */
-const ROLLOUT_OPERATION_PROPERTY_FLAGS = [
+export const ROLLOUT_OPERATION_PROPERTY_FLAGS = [
   ['add_revolve', 'angleDeg', 'AI_PATCH_PARTIAL_REVOLVE_ENABLED']
 ] as const;
 
@@ -580,6 +589,78 @@ Rollout-controlled operation fields (the operations themselves stay available ei
 Copy every face reference, face snapshot, attachment frame, sketch id, body id, and selected profile point verbatim from the current digest. New topology sources must target existing live digest bodies, never same-proposal body aliases. Datum updates may retain only verbatim historical sources from the target definition when current topology is unavailable. Recognized imported-feature edits remain disabled until their exact diagnostics and command path mature.`;
 }
 
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * The Worker's enforcement of the rollout flags on what the provider actually
+ * returned. Pruning the schema only stops a provider that honors it; one that
+ * ignores the requested format can still answer with a disabled operation (or
+ * a disabled field of an enabled one), and the browser would build a proposal
+ * from it. The browser does not know the deployment's flags, so the Worker is
+ * the boundary: it reads the reply exactly as the browser will
+ * (`parseAssistantReply` takes `proposal.operations` of a `patch` reply) and
+ * refuses the whole reply, by name, when anything in it is switched off.
+ * Replies that are not valid JSON or not patches pass through; the browser
+ * rejects or renders those itself.
+ */
+export function rolloutReplyRejection(
+  env: CloudflareEnv,
+  replyText: string
+): AssistantReplyRejection | undefined {
+  let reply: unknown;
+  try {
+    reply = JSON.parse(replyText) as unknown;
+  } catch {
+    return undefined;
+  }
+  const candidate = plainRecord(reply);
+  if (candidate?.replyKind !== 'patch') return undefined;
+  const operations = plainRecord(candidate.proposal)?.operations;
+  if (!Array.isArray(operations)) return undefined;
+
+  const operationFlags = new Map<string, CloudflareBooleanFlag>(
+    ROLLOUT_OPERATION_FLAGS
+  );
+  const refused = new Map<string, CloudflareBooleanFlag>();
+  for (const raw of operations) {
+    const operation = plainRecord(raw);
+    const kind = operation?.kind;
+    if (typeof kind !== 'string') continue;
+    const flag = operationFlags.get(kind);
+    if (flag !== undefined && !isCloudflareFeatureEnabled(env, flag)) {
+      refused.set(kind, flag);
+    }
+    for (const [
+      gatedKind,
+      property,
+      propertyFlag
+    ] of ROLLOUT_OPERATION_PROPERTY_FLAGS) {
+      if (
+        kind === gatedKind &&
+        operation![property] !== undefined &&
+        operation![property] !== null &&
+        !isCloudflareFeatureEnabled(env, propertyFlag)
+      ) {
+        refused.set(`${kind}.${property}`, propertyFlag);
+      }
+    }
+  }
+  if (refused.size === 0) return undefined;
+  const named = [...refused].map(
+    ([operation, flag]) => `\`${operation}\` (${flag})`
+  );
+  return {
+    code: 'AI_OPERATION_DISABLED',
+    message: `The modeling assistant proposed ${named.join(', ')}, which ${
+      refused.size === 1 ? 'is' : 'are'
+    } turned off for this deployment, so the proposal was discarded. Nothing was changed; try asking again.`
+  };
+}
+
 type MutableJsonSchema = Record<string, unknown>;
 
 function schemaRecord(value: unknown): MutableJsonSchema | undefined {
@@ -589,9 +670,10 @@ function schemaRecord(value: unknown): MutableJsonSchema | undefined {
 }
 
 /**
- * Strict structured output is the enforcement boundary for rollout flags.
- * Prompt instructions help the model choose well, but pruning disabled
- * branches prevents a compliant provider from producing them at all.
+ * Strict structured output keeps a compliant provider from producing a
+ * disabled operation at all; prompt instructions help the model choose well.
+ * Neither binds a provider that ignores the format, so the Worker also gates
+ * the returned reply (`rolloutReplyRejection`).
  */
 export function assistantReplySchemaFor(env: CloudflareEnv): unknown {
   const schema = structuredClone(
@@ -1217,8 +1299,21 @@ function jsonSchemaInstructions(env: CloudflareEnv, retry = false): string {
   return `\n\n# Required JSON reply\nReturn only one JSON object matching this exact JSON Schema. Include every required field, use null only where allowed, and do not add extra keys.\n${JSON.stringify(assistantReplySchemaFor(env))}${retry ? '\nThe previous reply failed validation. Regenerate the complete reply against this schema; check every operation, required field, value type and enum before answering.' : ''}`;
 }
 
+/**
+ * Format validation for providers whose reply the Worker checks before
+ * streaming it. It accepts rollout-disabled operations on purpose: the
+ * stream gate refuses those by name (`rolloutReplyRejection`), where a
+ * pruned schema would only report malformed output.
+ */
 function jsonReplyValidator(env: CloudflareEnv, digest?: CadDocumentDigest) {
-  const schema = assistantReplySchemaFor(env);
+  const everyRolloutEnabled: Record<string, unknown> = { ...env };
+  for (const [, flag] of ROLLOUT_OPERATION_FLAGS) {
+    everyRolloutEnabled[flag] = 'true';
+  }
+  for (const [, , flag] of ROLLOUT_OPERATION_PROPERTY_FLAGS) {
+    everyRolloutEnabled[flag] = 'true';
+  }
+  const schema = assistantReplySchemaFor(everyRolloutEnabled);
   return (text: string): boolean => {
     try {
       const value: unknown = JSON.parse(text);
@@ -1484,7 +1579,14 @@ export async function streamAssistantProposal(
   }
 
   return new Response(
-    observeAssistantResponse(upstream.body, { requestId, provider, model }),
+    observeAssistantResponse(
+      gateAssistantResponse(
+        upstream.body,
+        (replyText) => rolloutReplyRejection(env, replyText),
+        { requestId }
+      ),
+      { requestId, provider, model }
+    ),
     {
       status: 200,
       headers: {
