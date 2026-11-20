@@ -17,10 +17,14 @@ import {
   isFeatureSuppressed,
   patternSourceProblem,
   type BodyId,
+  type FaceWitnessV1,
   type FeatureData,
+  type FeatureId,
   type FeatureNode,
-  type ProjectDocument
+  type ProjectDocument,
+  type QuantizedTopologyPoint
 } from '@openzcad/shared';
+import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { listFeaturesInOrder } from '@openzcad/document-core';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import type { ExactShape } from './exact-types';
@@ -41,7 +45,15 @@ import {
   assignCarrierFace,
   carryAnalyticFaces
 } from './exact-operation-lineage';
-import { cylinderCarrier } from './exact-lineage-builders';
+import {
+  cylinderCarrier,
+  planeCarrier,
+  topologyCandidatesForSolid
+} from './exact-lineage-builders';
+import {
+  createRemusSemanticLineage,
+  type RemusLineageState
+} from './remus-lineage';
 import { buildSweep } from './exact-profile-builders';
 import { raiseFeatureWarning } from './exact-feature-warnings';
 import { bodyName, inheritMeshOrigin } from './exact-shape-utils';
@@ -341,6 +353,8 @@ export function buildFeaturePattern(
   const targetBounds = Array.from<number>(kernel.boundingBox(original));
   const targetVolume = kernel.volume(original, MEASUREMENT_DEFLECTION);
   const holes: RepeatedHole[] = [];
+  // M02: the bosses and cuts repeated, whose copies' faces are named below.
+  const shapedSources: FeatureId[] = [];
   let declined: RemusLineageDiagnostic | null = null;
   let solid = original;
   for (const source of sources) {
@@ -380,6 +394,7 @@ export function buildFeaturePattern(
       operation = 'cut';
     } else if (sourceData.featureKind === 'extrude') {
       operation = sourceData.operation === 'add' ? 'add' : 'cut';
+      shapedSources.push(source.featureId);
       const sweepFeature =
         sourceData.endCondition === 'through-all'
           ? throughAllToolFeature(ctx, source, sourceData, targetBounds, copies)
@@ -558,8 +573,216 @@ export function buildFeaturePattern(
       );
     }
   }
+  // M02: each boss and cut copy's faces, named after the faces of the
+  // feature it copies where they come back congruent to them.
+  for (const source of shapedSources) {
+    nameCopiedFaces(
+      kernel,
+      original,
+      solid,
+      target.lineage,
+      lineage,
+      feature.featureId,
+      source,
+      copies
+    );
+  }
   if (declined) lineage.diagnostics.push(declined);
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/**
+ * Quanta a transformed witness may differ from the copy's own by: the
+ * placement is applied to a quantized witness, so its last place can round
+ * the other way, and a kernel-measured centroid or perimeter carries the
+ * kernel's own rounding.
+ */
+const NAME_SLACK = 64;
+
+function closeQuanta(left: number, right: number, slack = NAME_SLACK): boolean {
+  return Math.abs(left - right) <= slack;
+}
+
+function closePoints(
+  left: QuantizedTopologyPoint,
+  right: QuantizedTopologyPoint
+): boolean {
+  return left.every((value, index) => closeQuanta(value, right[index]!));
+}
+
+function dequantized(point: QuantizedTopologyPoint, scale = 1): Vec3 {
+  return {
+    x: (point[0] * GEOMETRY_LINEAR_TOLERANCE) / scale,
+    y: (point[1] * GEOMETRY_LINEAR_TOLERANCE) / scale,
+    z: (point[2] * GEOMETRY_LINEAR_TOLERANCE) / scale
+  };
+}
+
+function quantized(point: Vec3): QuantizedTopologyPoint {
+  return [
+    Math.round(point.x / GEOMETRY_LINEAR_TOLERANCE),
+    Math.round(point.y / GEOMETRY_LINEAR_TOLERANCE),
+    Math.round(point.z / GEOMETRY_LINEAR_TOLERANCE)
+  ];
+}
+
+/** A face's carrier moved by `matrix`, or null for one without a carrier. */
+/** @internal exported for its regression test. */
+export function placedCarrier(
+  carrier: FaceWitnessV1['analytic'],
+  matrix: Float64Array
+): FaceWitnessV1['analytic'] | null {
+  if (carrier.kind === 'plane') {
+    // Directions are quantized a thousand times finer (`quantizedDirectionOf`).
+    const normal = dequantized(carrier.normal, 1000);
+    const offset = carrier.offset * GEOMETRY_LINEAR_TOLERANCE;
+    const on = {
+      x: normal.x * offset,
+      y: normal.y * offset,
+      z: normal.z * offset
+    };
+    return planeCarrier(applyDirection(matrix, normal), applyPoint(matrix, on));
+  }
+  if (carrier.kind === 'cylinder') {
+    return cylinderCarrier(
+      applyPoint(matrix, dequantized(carrier.axisFoot)),
+      applyDirection(matrix, dequantized(carrier.axis, 1000)),
+      carrier.radius * GEOMETRY_LINEAR_TOLERANCE
+    );
+  }
+  return null;
+}
+
+/** Below this two unit directions are one line (|cos| from 1). */
+const SAME_LINE = 1e-7;
+
+function unitOf(point: QuantizedTopologyPoint): Vec3 {
+  const v = dequantized(point, 1000);
+  const size = Math.hypot(v.x, v.y, v.z) || 1;
+  return { x: v.x / size, y: v.y / size, z: v.z / size };
+}
+
+/**
+ * Whether two carriers are one surface. Directions are compared as lines,
+ * not as quantized canonical vectors: a direction close to an axis can
+ * round to the other canonical sign once it is moved (review), and a
+ * plane's offset turns sign with its normal.
+ */
+/** @internal exported for its regression test. */
+export function closeCarriers(
+  left: FaceWitnessV1['analytic'],
+  right: FaceWitnessV1['analytic']
+): boolean {
+  if (left.kind === 'plane' && right.kind === 'plane') {
+    const cos = dot(unitOf(left.normal), unitOf(right.normal));
+    if (Math.abs(Math.abs(cos) - 1) > SAME_LINE) return false;
+    return closeQuanta(cos < 0 ? -left.offset : left.offset, right.offset);
+  }
+  if (left.kind === 'cylinder' && right.kind === 'cylinder') {
+    const cos = dot(unitOf(left.axis), unitOf(right.axis));
+    return (
+      Math.abs(Math.abs(cos) - 1) <= SAME_LINE &&
+      closePoints(left.axisFoot, right.axisFoot) &&
+      closeQuanta(left.radius, right.radius)
+    );
+  }
+  return false;
+}
+
+/**
+ * M02: names each copy's faces of a repeated boss or cut after the faces of
+ * the feature it copies, `pattern.face.instance.<label>.source.<feature>.<its
+ * name>`. A copy's face takes the name only where exactly one face of the
+ * result is the original's moved by the copy's placement: the same kind of
+ * surface on the moved carrier, with the moved centroid and the same
+ * perimeter. A face the body truncates differently there (a cut running off
+ * an edge, a boss merging into another) is not congruent and stays unnamed,
+ * as a face two copies share would be.
+ */
+function nameCopiedFaces(
+  kernel: Parameters<typeof topologyCandidatesForSolid>[0],
+  original: number,
+  solid: number,
+  before: RemusLineageState | undefined,
+  lineage: RemusLineageState,
+  producer: FeatureId,
+  source: FeatureId,
+  copies: readonly FeaturePatternCopy[]
+): void {
+  if (!before) return;
+  const sourceFaces = topologyCandidatesForSolid(kernel, original).flatMap(
+    (candidate) => {
+      if (candidate.kind !== 'face') return [];
+      const reference = before.faceReferences.get(candidate.handle);
+      if (reference?.producingFeatureId !== source) return [];
+      return [
+        {
+          name: reference.lineageName,
+          witness: candidate.witness as FaceWitnessV1,
+          area: kernel.faceArea(candidate.handle, MEASUREMENT_DEFLECTION)
+        }
+      ];
+    }
+  );
+  if (sourceFaces.length === 0) return;
+  // A face clipped by other cuts can keep its perimeter and centroid (two
+  // opposite corner notches) but never its area (review).
+  const areas = new Map<number, number>();
+  const areaOf = (handle: number) => {
+    if (!areas.has(handle)) {
+      areas.set(handle, kernel.faceArea(handle, MEASUREMENT_DEFLECTION));
+    }
+    return areas.get(handle)!;
+  };
+  const resultFaces = topologyCandidatesForSolid(kernel, solid).filter(
+    (candidate) => candidate.kind === 'face'
+  );
+  const assignments: { handle: number; name: string }[] = [];
+  for (const copy of copies) {
+    for (const { name, witness, area } of sourceFaces) {
+      const carrier = placedCarrier(witness.analytic, copy.matrix);
+      if (!carrier || !witness.centroid) continue;
+      const centroid = quantized(
+        applyPoint(copy.matrix, dequantized(witness.centroid))
+      );
+      const matches = resultFaces.filter((candidate) => {
+        const other = candidate.witness as FaceWitnessV1;
+        return (
+          other.surfaceType === witness.surfaceType &&
+          other.centroid !== null &&
+          closePoints(other.centroid, centroid) &&
+          closeQuanta(other.perimeter, witness.perimeter) &&
+          closeCarriers(other.analytic, carrier) &&
+          Math.abs(areaOf(candidate.handle) - area) <= 1e-6 * Math.max(1, area)
+        );
+      });
+      if (matches.length !== 1) continue;
+      const handle = matches[0]!.handle;
+      if (lineage.faceReferences.has(handle)) continue;
+      assignments.push({
+        handle,
+        name: `pattern.face.instance.${copy.label}.source.${source}.${name}`
+      });
+    }
+  }
+  // A face two copies both claimed is no one copy's.
+  const claims = new Map<number, number>();
+  for (const { handle } of assignments) {
+    claims.set(handle, (claims.get(handle) ?? 0) + 1);
+  }
+  const unique = assignments.filter(({ handle }) => claims.get(handle) === 1);
+  if (unique.length === 0) return;
+  const proven = createRemusSemanticLineage(
+    producer,
+    'boolean',
+    unique.map(({ handle, name }) => ({
+      ...resultFaces.find((candidate) => candidate.handle === handle)!,
+      lineageName: name
+    }))
+  );
+  for (const [handle, reference] of proven.faceReferences) {
+    lineage.faceReferences.set(handle, reference);
+  }
 }

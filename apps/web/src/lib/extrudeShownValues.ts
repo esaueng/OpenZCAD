@@ -3,14 +3,19 @@
  * edit. Kept apart from `ExtrudeCommand`, which loads on demand, so the
  * workspace can ask which values an extent offers without loading the bar.
  */
-export type ExtrudeValueId = 'distance' | 'backDistance' | 'draftAngle';
+export type ExtrudeValueId =
+  | 'distance'
+  | 'backDistance'
+  | 'faceOffset'
+  | 'draftAngle';
 
 /** How far an extrude goes, as the bar's Extent option names it. */
 export type ExtrudeCommandExtent = 'blind' | 'to-face' | 'through-all';
 
 /**
  * The values an extrude in this extent offers to type: Distance only for a
- * blind one, Back distance only one-sided, a draft except through all.
+ * blind one, Back distance only one-sided, the offset from the face only to
+ * a face, a draft except through all.
  */
 export function extrudeShownValues(state: {
   extent: ExtrudeCommandExtent;
@@ -20,6 +25,7 @@ export function extrudeShownValues(state: {
   return [
     ...(blind ? (['distance'] as const) : []),
     ...(blind && !state.symmetric ? (['backDistance'] as const) : []),
+    ...(state.extent === 'to-face' ? (['faceOffset'] as const) : []),
     ...(state.extent !== 'through-all' ? (['draftAngle'] as const) : [])
   ];
 }
