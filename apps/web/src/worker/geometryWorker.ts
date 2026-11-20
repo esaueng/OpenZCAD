@@ -391,6 +391,8 @@ export type GeometryWorkerRequest =
        * reply, and never cancels idle work of the same content.
        */
       type: 'live-content';
+      /** Identifies a checked result the main thread actually committed. */
+      requestId?: string;
       projectId: ProjectId;
       /** `geometryContentKey` of the adopted document. */
       contentKey: string;
@@ -894,11 +896,19 @@ function persistsLiveSession(projectId: ProjectId): boolean {
  * a transient result), whatever the policy: a `session-policy` that turns
  * persistence on schedules it without another rebuild.
  */
-let liveCapturable: {
+interface CapturableSession {
   exact: ExactKernel;
   document: ProjectDocument;
   contentKey: string;
   lineageDemand: readonly BodyId[] | undefined;
+}
+let liveCapturable: CapturableSession | null = null;
+// A plain check may become the committed model. Only its matching adoption
+// can schedule capture, under the live policy. The adapter checks its
+// current history against the document again when idle capture runs.
+let checkedCapturable: {
+  requestId: string;
+  target: CapturableSession;
 } | null = null;
 function noteLiveCapturable(next: typeof liveCapturable): void {
   liveCapturable = next;
@@ -1949,20 +1959,23 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     // (`persistsLiveSession`; it may also allow it later). A draft waits for its
     // refinement, which schedules both; it, and a transient result, drop the
     // warm-up target so an older revision is never replayed in its place.
-    if (request.type === 'sync' && !request.requestId) {
+    if (request.type === 'sync') {
       if (
         !transient &&
         contentKey !== null &&
         exactForSync &&
         !hasDraftDisplay(cachedDerived)
-      )
-        noteLiveCapturable({
+      ) {
+        const target = {
           exact: exactForSync,
           document,
           contentKey,
           lineageDemand: request.lineageDemand
-        });
-      else {
+        };
+        if (!request.requestId) noteLiveCapturable(target);
+        else if (!request.proposeCarry && !request.analysis)
+          checkedCapturable = { requestId: request.requestId, target };
+      } else if (!request.requestId) {
         liveCapturable = null;
         kernelSessions.dropWarmup();
       }
@@ -2164,6 +2177,8 @@ interface PendingDisplayRefinement {
    * kernel away from what is on screen.
    */
   live: boolean;
+  /** A broadcast or the exact checked request that was committed. */
+  captureWhenRefined: boolean;
   /** Not before then: a different checked result awaits its adoption. */
   heldUntilMs: number;
   /** Refinements that failed other than by cancellation; one retry. */
@@ -2219,6 +2234,7 @@ function noteDisplayRefinement(
         projectId,
         contentKey,
         live: !sync.requestId,
+        captureWhenRefined: !sync.requestId,
         heldUntilMs: 0,
         failures: 0
       },
@@ -2246,7 +2262,7 @@ function noteDisplayRefinement(
 
 /** The main thread shows this content now (null: nothing). */
 function noteLiveContent(
-  live: { projectId: ProjectId; contentKey: string } | null
+  live: { projectId: ProjectId; contentKey: string; requestId?: string } | null
 ): void {
   pendingDisplayRefinements = pendingDisplayRefinements.filter((entry) => {
     const current =
@@ -2255,6 +2271,8 @@ function noteLiveContent(
       entry.contentKey === live.contentKey;
     if (current) {
       entry.live = true;
+      entry.captureWhenRefined =
+        !entry.sync.requestId || entry.sync.requestId === live.requestId;
       entry.heldUntilMs = 0;
     }
     return current;
@@ -2396,7 +2414,7 @@ async function refineCommittedDisplay(
       { transfer: derivedMeshTransferables(derived) }
     );
     if (
-      !sync.requestId &&
+      pending.captureWhenRefined &&
       !sync.analysis &&
       !sync.proposeCarry &&
       !transientResults.has(refined)
@@ -2448,6 +2466,15 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
     // result is no longer what is live.
     if (liveCapturable?.contentKey !== event.data.contentKey)
       liveCapturable = null;
+    const checked = checkedCapturable;
+    checkedCapturable = null;
+    if (
+      checked &&
+      checked.requestId === event.data.requestId &&
+      checked.target.document.projectId === event.data.projectId &&
+      checked.target.contentKey === event.data.contentKey
+    )
+      noteLiveCapturable(checked.target);
     armDisplayRefinement();
     return;
   }
@@ -2475,6 +2502,7 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   // Unpack before anything reads the document: every consumer past this point
   // — the rebuild, the cache key, the history digest — expects plain arrays.
   const request = unpackWorkerRequest(event.data);
+  checkedCapturable = null;
   // Idle work yields to anything that asks for the worker.
   workRequestSerial += 1;
   clearTimeout(displayRefinementTimer);

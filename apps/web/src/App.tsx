@@ -5128,8 +5128,8 @@ export function App() {
     // commit stores it in the edit's own revision (`withCarriedSelections`).
     rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
-        ...options,
-        proposeCarry: true
+        proposeCarry: true,
+        ...options
       }),
     track: trackKernelRefusal
   });
@@ -25685,7 +25685,11 @@ export function App() {
       try {
         derived = await parameterChecks.request(() => {
           if (!current()) return Promise.reject(new ParameterCheckStale());
-          return syncParameterCandidate(name, prospective);
+          return syncParameterCandidate(
+            name,
+            prospective,
+            geometry.liveLineageDemand()
+          );
         });
       } catch (error) {
         if (error instanceof ParameterCheckStale) return stale();
