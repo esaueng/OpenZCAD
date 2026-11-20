@@ -173,7 +173,7 @@ import {
   importStepWithOwnBudget,
   stepImportEmptyReason
 } from './kernel-step-import';
-import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { MEASUREMENT_DEFLECTION, edgeWitnessOf } from './exact-witnesses';
 import { isBlendFace } from './exact-brep';
 import { priorBlendFaceTest } from './exact-prior-blend';
 import { importedMeshCacheKey } from './exact-imported-mesh-cache';
@@ -3287,6 +3287,10 @@ function buildEdgeModifierFeature(
   );
   const { size, chamferAngleRadians, variableRadius, chamferSecondDistance } =
     edgeModifierSettings(ctx, data);
+  // M02: where these edges stand now, measured before they are rounded, for
+  // a feature pattern that repeats this one (review: an upstream edit moves
+  // them away from the stored pick).
+  const builtEdges = selected.map((edge) => edgeWitnessOf(kernel, edge));
   let reportedRefusal: string | null = null;
   // The kernel's typed refusal of the requested size, kept beside its text
   // so the thrown refusal carries the kernel's classification. Cleared by a
@@ -3430,6 +3434,7 @@ function buildEdgeModifierFeature(
       'advisory'
     );
   }
+  (result.blendEdgeWitnesses ??= new Map()).set(feature.featureId, builtEdges);
   // Only a feature that actually rebuilt earns a repair: a thrown
   // modifier above skips this, and the legacy selection stays as it
   // was for the user to fix.

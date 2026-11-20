@@ -17,7 +17,6 @@ import {
   isFeatureSuppressed,
   patternSourceProblem,
   type BodyId,
-  type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
   type FaceWitnessV1,
   type FeatureData,
@@ -368,14 +367,19 @@ export function buildFeaturePattern(
           `${source.name} rounds edges, and this pattern cannot repeat it.`
         );
       }
-      const references = sourceData.edgeReferences ?? [];
-      if (references.length === 0) {
+      // Where its build found its edges, so an upstream edit that moved
+      // them moves the copies too (review); the stored pick only when this
+      // build did not record them.
+      const witnesses =
+        result.blendEdgeWitnesses?.get(source.featureId) ??
+        (sourceData.edgeReferences ?? []).map((reference) => reference.witness);
+      if (witnesses.length === 0) {
         throw new Error(
           `${source.name} was made before its edges were named, so a pattern cannot find them on a copy; pick its edges again, then pattern it.`
         );
       }
       for (const copy of copies) {
-        const edges = copiedEdges(kernel, solid, references, copy.matrix);
+        const edges = copiedEdges(kernel, solid, witnesses, copy.matrix);
         if (typeof edges === 'number') {
           throw new Error(
             `Copy ${copy.label} of ${source.name} finds no edge where ${source.name}'s edge ${edges + 1} would be; skip it, or repeat the feature it rounds first.`
@@ -807,12 +811,18 @@ function nameCopiedFaces(
  * `matrix`, one each: the same kind of curve and length, with the moved
  * ends and middle (an open edge, either way round) or the moved centre and
  * axis (a closed one). The index of the first that finds no one edge, when
- * one does not.
+ * one does not. A copy is an exact transform, so it matches within a few
+ * quanta (1e-6 mm each, the linear tolerance), not the slack face naming
+ * allows: an edge a few hundredths of a micron from where a copy's would
+ * stand is another edge (review).
  */
+/** Quanta a copied blend edge may stand from where the copy puts it. */
+const BLEND_SLACK = 4;
+
 function copiedEdges(
   kernel: Parameters<typeof topologyCandidatesForSolid>[0],
   solid: number,
-  references: readonly EdgeTopologyReferenceV5[],
+  witnesses: readonly EdgeWitnessV1[],
   matrix: Float64Array
 ): number[] | number {
   const candidates = topologyCandidatesForSolid(kernel, solid).filter(
@@ -821,14 +831,19 @@ function copiedEdges(
   const moved = (point: QuantizedTopologyPoint) =>
     quantized(applyPoint(matrix, dequantized(point)));
   const edges: number[] = [];
-  for (const [index, reference] of references.entries()) {
-    const witness = reference.witness;
+  const near = (left: number, right: number) =>
+    closeQuanta(left, right, BLEND_SLACK);
+  const nearPoints = (
+    left: QuantizedTopologyPoint,
+    right: QuantizedTopologyPoint
+  ) => left.every((value, index) => near(value, right[index]!));
+  for (const [index, witness] of witnesses.entries()) {
     const matches = candidates.filter((candidate) => {
       const other = candidate.witness as EdgeWitnessV1;
       if (
         other.curveType !== witness.curveType ||
         other.closed !== witness.closed ||
-        !closeQuanta(other.length, witness.length)
+        !near(other.length, witness.length)
       )
         return false;
       if (!witness.closed && !other.closed) {
@@ -838,13 +853,13 @@ function copiedEdges(
         ];
         const [c, d] = other.endpoints;
         return (
-          closePoints(other.midpoint, moved(witness.midpoint)) &&
-          ((closePoints(a, c) && closePoints(b, d)) ||
-            (closePoints(a, d) && closePoints(b, c)))
+          nearPoints(other.midpoint, moved(witness.midpoint)) &&
+          ((nearPoints(a, c) && nearPoints(b, d)) ||
+            (nearPoints(a, d) && nearPoints(b, c)))
         );
       }
       if (witness.closed && other.closed) {
-        if (!closePoints(other.center, moved(witness.center))) return false;
+        if (!nearPoints(other.center, moved(witness.center))) return false;
         if (!witness.axis || !other.axis) return !witness.axis && !other.axis;
         const axis = applyDirection(matrix, dequantized(witness.axis, 1000));
         const theirs = dequantized(other.axis, 1000);

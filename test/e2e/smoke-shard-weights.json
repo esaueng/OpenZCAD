@@ -122,6 +122,7 @@
   "picked-step-feature-delete.spec.ts": 53,
   "path-pattern.spec.ts": 12,
   "point-pattern.spec.ts": 12,
+  "pattern-blends.spec.ts": 12,
   "print-clearance.spec.ts": 20,
   "progressive-loading.spec.ts": 10,
   "rail-keyboard-and-drawer.spec.ts": 8,

@@ -9,6 +9,7 @@ import {
   listFeaturesInOrder,
   patternBody
 } from '@openzcad/document-core';
+import { patternSourceProblem } from '@openzcad/shared';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -17,6 +18,7 @@ import {
   toUserId,
   type BodyId,
   type DerivedState,
+  type FeatureData,
   type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -205,4 +207,118 @@ describe('M02 patterns of fillets and chamfers', () => {
       built.featureWarnings?.map((warning) => warning.message).join('\n')
     ).toMatch(/Copy 1 of Round finds no edge where Round's edge 1 would be/);
   }, 180_000);
+  /** The plate alone, and its upright edge at the low x and y corner. */
+  async function cornerRound(depth = PLATE.z): Promise<ProjectDocument> {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Plate', toUserId('user_m02')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: PLATE.x, height: PLATE.y, depth }
+      }
+    );
+    const bodyId = last(document);
+    const derived = await adapter.syncDocument(document);
+    const body = derived.bodyRepresentations[bodyId]!;
+    const corner = body.topology!.edges.filter((edge) => {
+      const witness = edge.reference?.witness;
+      if (!witness || witness.closed) return false;
+      const [a, b] = witness.endpoints.map((point) =>
+        point.map((value) => value * 1e-6)
+      ) as [number[], number[]];
+      return (
+        Math.abs(a[0]! - body.bbox.min.x) < 1e-5 &&
+        Math.abs(b[0]! - body.bbox.min.x) < 1e-5 &&
+        Math.abs(a[1]! - body.bbox.min.y) < 1e-5 &&
+        Math.abs(b[1]! - body.bbox.min.y) < 1e-5 &&
+        Math.abs(a[2]! - b[2]!) > 1
+      );
+    });
+    expect(corner).toHaveLength(1);
+    return filletEdges(document, {
+      name: 'Round',
+      targetBodyId: bodyId,
+      size: 1,
+      edgeHashes: corner.map((edge) => edge.hash),
+      edgeReferences: corner.map((edge) => edge.reference!)
+    }).document;
+  }
+
+  const cornerRow = (document: ProjectDocument, spacing: number) =>
+    patternBody(document, {
+      name: 'Row',
+      targetBodyId: last(document),
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing,
+      sourceFeatureIds: [lastFeature(document)]
+    }).document;
+
+  it('rounds the far corner a whole plate along, and no edge a hair beside it', async () => {
+    const filleted = await cornerRound();
+    const row = cornerRow(filleted, PLATE.x);
+    const exact = await adapter.syncDocument(row);
+    expect(
+      (exact.featureWarnings ?? []).filter((w) => w.kind !== 'advisory')
+    ).toEqual([]);
+    expect(exact.bodyRepresentations[last(row)]!.volume).toBeCloseTo(
+      PLATE_VOLUME - 2 * (1 - Math.PI / 4) * PLATE.z,
+      5
+    );
+    // 40 nm short of the far corner is not the far corner (review).
+    const near = await adapter.syncDocument(
+      cornerRow(filleted, PLATE.x + 0.00004)
+    );
+    expect(
+      near.featureWarnings?.map((warning) => warning.message).join('\n')
+    ).toMatch(/Copy 1 of Round finds no edge where Round's edge 1 would be/);
+  }, 180_000);
+
+  it('follows the rounded edge when an upstream edit moves it', async () => {
+    // Built 10 deep, then made 12 deep: the stored pick still says 10 mm,
+    // and the copy rounds the corner as it stands now (review).
+    const row = cornerRow(await cornerRound(), PLATE.x);
+    const deeper = structuredClone(row);
+    for (const node of Object.values(deeper.nodes)) {
+      const data = (
+        node as {
+          data?: { featureKind?: string; dimensions?: { depth: number } };
+        }
+      ).data;
+      if (data?.featureKind === 'primitive' && data.dimensions) {
+        data.dimensions.depth = 12;
+      }
+    }
+    const built = await adapter.syncDocument(deeper);
+    expect(
+      (built.featureWarnings ?? []).filter((w) => w.kind !== 'advisory')
+    ).toEqual([]);
+    expect(built.bodyRepresentations[last(row)]!.volume).toBeCloseTo(
+      PLATE.x * PLATE.y * 12 - 2 * (1 - Math.PI / 4) * 12,
+      5
+    );
+  }, 180_000);
+
+  it('refuses blends a reversed copy would land the wrong way round', () => {
+    const chamfer = {
+      featureKind: 'chamfer',
+      targetBodyId: 'body_x',
+      edgeHashes: [1],
+      distance: 1
+    };
+    const fillet = {
+      featureKind: 'fillet',
+      targetBodyId: 'body_x',
+      edgeHashes: [1],
+      radius: 1
+    };
+    const problem = (data: object) =>
+      patternSourceProblem(data as unknown as FeatureData, 'Edge');
+    expect(problem(chamfer)).toBeNull();
+    expect(problem(fillet)).toBeNull();
+    expect(problem({ ...chamfer, distance2: 3 })).toMatch(/unevenly/);
+    expect(problem({ ...chamfer, angleDeg: 30 })).toMatch(/unevenly/);
+    expect(problem({ ...fillet, endRadius: 2 })).toMatch(/along the edge/);
+  });
 });
