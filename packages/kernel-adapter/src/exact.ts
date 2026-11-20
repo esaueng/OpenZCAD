@@ -3475,6 +3475,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ? previewDisplayTessellation(displayTessellation)
         : displayTessellation;
       const faceHandles = Array.from(kernel.getSolidFaces(solid));
+      // The rigid import is already measuring every face for the full model.
+      // Keep those base measurements for its first exact edit preview.
+      const digests = measureOpening
+        ? this.previewFaceGeometry.sourceDigests(kernel, faceHandles)
+        : null;
       const edgeToFaces = edgeToFaceMapOf(kernel, solid);
       // The edit that produced this solid usually measured its witnesses
       // already; inside the sync memo they are shared rather than measured
@@ -3619,6 +3624,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             hash,
             ...(verifiedReference ? { reference: verifiedReference } : {})
           });
+          const digest = digests?.[index];
           const publishedFace: FaceTopology = {
             topologyId: `face:${hash}`,
             hash,
@@ -3629,7 +3635,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               kernel,
               solid,
               handle,
-              (region) => blendRegionMembersByHandle.set(handle, region.faces)
+              (region) => blendRegionMembersByHandle.set(handle, region.faces),
+              digest === undefined
+                ? undefined
+                : (geometry) =>
+                    this.previewFaceGeometry.rememberSource(
+                      digest,
+                      witness,
+                      geometry
+                    )
             )
           };
           faceTopologyByHandle.set(handle, publishedFace);
