@@ -5831,8 +5831,9 @@ export function commandsForCadPatch(
         }
         const targetBodyId = resolveBody(operation.targetBodyId);
         // The manual Hole command, with the payload the Hole tool builds:
-        // a face that reports an area centroid is drilled from it (the
-        // `positionAnchor` marker), any other from its vertex mean.
+        // a face that reports its outer boundary's centroid is drilled from
+        // it (M01, schema v118), one that reports only an area centroid from
+        // that, and any other from its vertex mean.
         const entry = ownEntry(
           projectedDocument.derived.bodyRepresentations,
           targetBodyId
@@ -5852,9 +5853,11 @@ export function commandsForCadPatch(
             ? { depth: operation.depth }
             : {}),
           position: { u: operation.position.u, v: operation.position.v },
-          ...(entry?.geometry?.centroid !== undefined
-            ? { positionAnchor: 'centroid' as const }
-            : {}),
+          ...(entry?.geometry?.outerCentroid !== undefined
+            ? { positionAnchor: 'outer-centroid' as const }
+            : entry?.geometry?.centroid !== undefined
+              ? { positionAnchor: 'centroid' as const }
+              : {}),
           ids
         });
       }

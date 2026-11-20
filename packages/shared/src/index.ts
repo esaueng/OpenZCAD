@@ -3609,8 +3609,11 @@ export interface FaceGeometry {
    * every inner loop (hole) were filled: the anchor a new hole's typed
    * position is measured from (M01, schema v118). Unlike {@link centroid} it
    * does not move when a hole is drilled into, resized on or removed from
-   * the face. Equal to `centroid` on a face with one boundary loop. Present
-   * exactly when `centroid` is, with the same provenance rules.
+   * the face. Equal to `centroid` on a face with one boundary loop. Read
+   * from the kernel's own outer wire, which is walked alone, so it is
+   * present whenever that wire can be walked — even on a face whose inner
+   * loops cannot be, where `centroid` is absent. Exact for a straight-edged
+   * outer boundary, sampled (as `centroid` is) for a curved one.
    */
   outerCentroid?: Vector3;
   /** Outward unit normal; present for exact planar surfaces. */

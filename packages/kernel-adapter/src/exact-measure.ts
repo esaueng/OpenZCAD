@@ -11,7 +11,10 @@ import type { FaceAreaProvenance, FaceGeometry } from '@openzcad/shared';
 import { MEASUREMENT_DEFLECTION, faceWitnessOf } from './exact-witnesses';
 import { faceVertexCentroid, isBlendFace } from './exact-brep';
 import { surfaceTypeOf } from './exact-sync-memo';
-import { planarFaceCentroid } from './exact-face-centroid';
+import {
+  planarFaceCentroid,
+  planarFaceOuterCentroid
+} from './exact-face-centroid';
 import { topologyHashOfWitness } from './topology-lineage';
 import {
   DIRECT_EDIT_TOLERANCE,
@@ -265,8 +268,17 @@ function measureFaceGeometryOnce(
       const measured = planarFaceCentroid(kernel, face, geometry.normal);
       if (measured) {
         geometry.centroid = measured.centroid;
-        geometry.outerCentroid = measured.outerCentroid;
         geometry.centroidProvenance = measured.provenance;
+      }
+      // Measured on its own: an inner loop that cannot be walked blanks the
+      // area centroid but must not cost a hole its anchor (M01, v118).
+      const outerCentroid = planarFaceOuterCentroid(
+        kernel,
+        face,
+        geometry.normal
+      );
+      if (outerCentroid) {
+        geometry.outerCentroid = outerCentroid;
       }
     } catch {
       // NURBS-backed planes have no analytic normal; leave both unset. These
