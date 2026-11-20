@@ -703,6 +703,22 @@ describe.skipIf(!supported)('persisted history sessions', () => {
     expect(events[1]!.reusedPrimitives ?? 0).toBe(0);
     expect(comparable(derived)).toEqual(comparable(await freshReplay(edited)));
 
+    // A lineage table turned into a plain object that encodes like a map
+    // is refused, and no longer shares the table's digest.
+    const objectLineage = structuredClone(session);
+    const entry = objectLineage.reuse!.primitives.find(
+      ([, candidate]) => candidate.shape.lineage
+    )?.[1];
+    expect(entry).toBeDefined();
+    const references = entry!.shape.lineage!.faceReferences;
+    (entry!.shape.lineage as { faceReferences: unknown }).faceReferences = {
+      $map: [...references]
+    };
+    expect(reuseStateDigest(objectLineage.reuse!)).not.toBe(
+      session.reuseDigest
+    );
+    expect(isPersistedHistorySession(objectLineage)).toBe(false);
+
     // Shapes the import could not read are refused with the record.
     const prepared = (patch: Record<string, unknown>) => ({
       ...session,

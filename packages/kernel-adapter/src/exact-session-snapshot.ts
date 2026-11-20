@@ -72,15 +72,38 @@ export interface PersistedHistorySession {
   reuseDigest?: string;
 }
 
-/** Deterministic JSON of a structured-clonable value: maps keep their order. */
+/**
+ * A type-tagged, injective encoding of a structured-clonable value: a map,
+ * a set, an array, a typed array, a plain object and a primitive each get
+ * their own tag, so no value of one type encodes like another (a plain
+ * object shaped like an encoded map included). Maps keep their order.
+ */
 function canonicalJson(value: unknown): string {
-  return JSON.stringify(value, (_key, item: unknown) => {
-    if (item instanceof Map) return { $map: [...item] };
-    if (item instanceof Set) return { $set: [...item] };
+  const encode = (item: unknown): unknown => {
+    if (item instanceof Map)
+      return [
+        'M',
+        [...item].map(([key, entry]) => [encode(key), encode(entry)])
+      ];
+    if (item instanceof Set) return ['S', [...item].map(encode)];
+    if (Array.isArray(item)) return ['A', item.map(encode)];
     if (ArrayBuffer.isView(item))
-      return { $bytes: Array.from(item as unknown as ArrayLike<number>) };
-    return item;
-  });
+      return [
+        'B',
+        item.constructor.name,
+        Array.from(item as unknown as ArrayLike<number>)
+      ];
+    if (item !== null && typeof item === 'object')
+      return [
+        'O',
+        Object.keys(item).map((key) => [
+          key,
+          encode((item as Record<string, unknown>)[key])
+        ])
+      ];
+    return ['P', item === undefined ? null : item, typeof item];
+  };
+  return JSON.stringify(encode(value));
 }
 
 /**
@@ -129,8 +152,27 @@ const isHandleList = (value: unknown) =>
   denseEvery(value, (item) => Number.isSafeInteger(item));
 const isStringList = (value: unknown) =>
   denseEvery(value, (item) => typeof item === 'string');
+/**
+ * A shape as a build stores it: handle list, and (when present) lineage
+ * whose reference tables are maps and whose diagnostics are a list, as the
+ * reuse copy reads them.
+ */
 const isShape = (value: unknown) =>
-  isObject(value) && isHandleList(value.solids);
+  isObject(value) &&
+  isHandleList(value.solids) &&
+  (value.lineage === undefined ||
+    (isObject(value.lineage) &&
+      value.lineage.faceReferences instanceof Map &&
+      value.lineage.edgeReferences instanceof Map &&
+      Array.isArray(value.lineage.diagnostics))) &&
+  (value.nativeVertices === undefined ||
+    (isObject(value.nativeVertices) &&
+      value.nativeVertices.bySolid instanceof Map &&
+      value.nativeVertices.withheldBySolid instanceof Map)) &&
+  (value.referenceMesh === undefined ||
+    (isObject(value.referenceMesh) &&
+      value.referenceMesh.vertices instanceof Float64Array &&
+      value.referenceMesh.indices instanceof Uint32Array));
 
 /**
  * Shape checks on stored reuse tables; any doubt refuses the session. Each
