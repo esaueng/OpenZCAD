@@ -27,6 +27,8 @@ import type { RemusNativeVertexState } from './remus-native-vertices';
 export interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
+  /** Handle of axis-aligned rectangular stock built from a box or an overlapping linear row of boxes. */
+  rectangularStock?: number;
   /** Source facets when a readable mesh cannot be represented as a B-rep. */
   referenceMesh?: { vertices: Float64Array; indices: Uint32Array };
   /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */

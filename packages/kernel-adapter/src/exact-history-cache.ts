@@ -445,6 +445,9 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     shapes.set(bodyId, {
       solids: [...shape.solids],
       ...(shape.referenceMesh ? { referenceMesh: shape.referenceMesh } : {}),
+      ...(shape.rectangularStock !== undefined
+        ? { rectangularStock: shape.rectangularStock }
+        : {}),
       ...(shape.sweepSource ? { sweepSource: shape.sweepSource } : {}),
       ...(shape.nativeVertices
         ? {
