@@ -3409,7 +3409,9 @@ export const commandFactories = {
               ? 'Point'
               : payload.patternKind === 'path'
                 ? 'Path'
-                : 'Circular'
+                : payload.patternKind === 'mirror'
+                  ? 'Mirror'
+                  : 'Circular'
       } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,

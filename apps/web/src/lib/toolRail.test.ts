@@ -192,7 +192,8 @@ describe('the tool drawer', () => {
           'circular-pattern',
           'grid-pattern',
           'point-pattern',
-          'path-pattern'
+          'path-pattern',
+          'mirror-pattern'
         ]
       }
     ]);

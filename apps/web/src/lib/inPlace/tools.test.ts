@@ -1867,6 +1867,65 @@ describe('M02 feature patterns and skipped copies', () => {
     expect(spec.hint(slots, {}, apart)).toMatch(/join end to end/);
   });
 
+  it('Mirror pattern: repeats the picked features reflected in a picked plane', () => {
+    const spec = IN_PLACE_TOOL_SPECS['mirror-pattern'];
+    const bore: FacePick = {
+      ...TOP,
+      point: { x: 5, y: 5, z: 4 },
+      feature: { featureId: 'hole_1' as FeatureId, name: 'Hole' }
+    };
+    const features = { repeat: 'features' };
+    expect(spec.hint({ ...EMPTY }, features, CTX)).toBe(
+      'Click a hole, boss or cut to repeat'
+    );
+    const picked = { ...EMPTY, faces: [bore] };
+    expect(spec.hint(picked, features, CTX)).toBe(
+      'Pick a plane or flat face to mirror in'
+    );
+    expect(spec.ready(picked, features, CTX)).toBe(false);
+    const slots: InPlaceSlots = {
+      ...picked,
+      plane: {
+        kind: 'face',
+        origin: { x: 20, y: 5, z: 2 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    };
+    expect(spec.ready(slots, features, CTX)).toBe(true);
+    // Slid 5 along the face's normal: the plane x = 25, as numbers.
+    expect(spec.request(slots, { offset: 5 }, features, CTX)).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      sourceFeatureIds: ['hole_1'],
+      patternKind: 'mirror',
+      count: 2,
+      axis: 'x',
+      mirrorPlane: {
+        origin: { x: 25, y: 5, z: 2 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    });
+    // A datum plane is stored by reference.
+    expect(
+      spec.request(
+        {
+          ...slots,
+          plane: { kind: 'datum', featureId: 'datum_1' as FeatureId }
+        },
+        {},
+        features,
+        CTX
+      )
+    ).toMatchObject({
+      mirrorPlane: { type: 'datum', datumFeatureId: 'datum_1' }
+    });
+    // The offset arrow stands on the picked feature, along the normal.
+    const arrow = spec
+      .handles(slots, { offset: 0 }, CTX, features)
+      .find((handle) => handle.valueId === 'offset');
+    expect(arrow?.kind).toBe('linear');
+  });
+
   it('toggles a copy in and out of the skip list', () => {
     expect(toggledPatternSkip(undefined, '2')).toBe('2');
     expect(toggledPatternSkip('2', '3')).toBe('2,3');

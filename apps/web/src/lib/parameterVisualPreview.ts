@@ -403,6 +403,7 @@ function previewPreparedParameter(
           // build shows them.
           d.patternKind === 'points' ||
           d.patternKind === 'path' ||
+          d.patternKind === 'mirror' ||
           d.sourceFeatureIds !== undefined ||
           d.skippedInstances !== undefined
         )

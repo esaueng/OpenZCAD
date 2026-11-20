@@ -4107,6 +4107,53 @@ function pathPatternArm(
   };
 }
 
+/**
+ * M02 (schema v113): the mirror arm. Instance 1 is the original reflected in
+ * the plane, x ↦ x − 2((x − p)·n)n; it is labelled "1" as a linear pattern's
+ * second instance is. A reflection has no kernel pattern entry point, so it
+ * is the rigid copy-and-transform build, fused where it overlaps the
+ * original as any pattern's copies are.
+ */
+function mirrorPatternArm(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'pattern'>
+): PatternArm {
+  if (!data.mirrorPlane) {
+    throw new Error('A mirror pattern needs the plane it mirrors in.');
+  }
+  const { planePoint, planeNormal } = resolveOperationPlane(
+    ctx,
+    data.mirrorPlane,
+    'mirror'
+  );
+  const n = planeNormal && normalized(planeNormal);
+  if (!n) {
+    throw new Error('Mirror plane normal must be finite and non-zero.');
+  }
+  const along = 2 * dot(planePoint, n);
+  const reflection = affineMatrix([
+    1 - 2 * n.x * n.x,
+    -2 * n.x * n.y,
+    -2 * n.x * n.z,
+    along * n.x,
+    -2 * n.y * n.x,
+    1 - 2 * n.y * n.y,
+    -2 * n.y * n.z,
+    along * n.y,
+    -2 * n.z * n.x,
+    -2 * n.z * n.y,
+    1 - 2 * n.z * n.z,
+    along * n.z
+  ]);
+  return {
+    total: 2,
+    label: (index) => String(index),
+    matrix: (index) =>
+      index === 0 ? transformMatrix(PATTERN_ORIGIN, PATTERN_ORIGIN) : reflection,
+    kernelCopies: null
+  };
+}
+
 /** Records a kernel refusal alongside whatever lineage the build published. */
 function withPatternDiagnostic(
   state: RemusLineageState,
@@ -4160,10 +4207,13 @@ function buildPatternFeature(
   };
   // A points pattern makes one instance per point; its stored count is not
   // read (see FeatureData).
+  // A mirror pattern makes the original and its reflection.
   const count =
     data.patternKind === 'points'
       ? (data.points?.pointIds.length ?? 0)
-      : wholeCount(data.count, 'count');
+      : data.patternKind === 'mirror'
+        ? 2
+        : wholeCount(data.count, 'count');
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -4239,6 +4289,8 @@ function buildPatternFeature(
     );
   } else if (data.patternKind === 'points') {
     arm = pointsPatternArm(ctx, data);
+  } else if (data.patternKind === 'mirror') {
+    arm = mirrorPatternArm(ctx, data);
   } else if (data.patternKind === 'path') {
     const spacing = resolveParamValue(
       data.spacing,

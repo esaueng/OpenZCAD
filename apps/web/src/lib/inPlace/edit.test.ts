@@ -1397,6 +1397,50 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(update).not.toHaveProperty('clearData');
   });
 
+  it('M02 mirror pattern: its plane reopens typed and writes back unchanged', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'mirror',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      angleDeg: 360,
+      mirrorPlane: {
+        origin: { x: 'half', y: 0, z: 0 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    };
+    const node = feature(data, 'body_m' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('mirror-pattern');
+    expect(armed.seed.options.planeMode).toBe('typed');
+    expect(armed.seed.values).toMatchObject({ planeOY: 0, planeNX: 1 });
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const values = { ...armed.seed.values, planeOX: 'half' };
+    const request = spec.request(
+      { ...armed.seed.slots, axis: null, refs: [], image: null },
+      values,
+      armed.seed.options,
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data
+      },
+      { ...armed.seed.values, planeOX: 50 }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      patternKind: 'mirror',
+      mirrorPlane: data.mirrorPlane
+    });
+    expect(update).not.toHaveProperty('clearData');
+  });
+
   it('loft: a stored apex opens as a point, each coordinate editable', () => {
     const data: FeatureData = {
       featureKind: 'loft',

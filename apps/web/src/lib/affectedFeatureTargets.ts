@@ -331,7 +331,12 @@ export function affectedFeatureTargets(
           // M02: a pattern along a path moves with its sketch's curves.
           (data.featureKind === 'pattern' &&
             data.path !== undefined &&
-            affectedSketches.has(data.path.sketchId));
+            affectedSketches.has(data.path.sketchId)) ||
+          // M02 (schema v113): a mirror pattern moves with its datum plane.
+          (data.featureKind === 'pattern' &&
+            data.mirrorPlane !== undefined &&
+            isDatumPlaneRef(data.mirrorPlane) &&
+            affectedDatums.has(data.mirrorPlane.datumFeatureId));
         break;
       case 'gear':
         affected =

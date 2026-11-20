@@ -33,6 +33,7 @@ import {
   helicalSweepGlyph,
   linearPatternGlyph,
   loftGlyph,
+  mirrorPatternGlyph,
   pathPatternGlyph,
   pointPatternGlyph,
   planeGlyph,
@@ -94,7 +95,8 @@ export type ToolId =
   | 'circular-pattern'
   | 'grid-pattern'
   | 'point-pattern'
-  | 'path-pattern';
+  | 'path-pattern'
+  | 'mirror-pattern';
 
 /**
  * The five groups of the feature tools, in workflow order: make something,
@@ -421,6 +423,13 @@ export const TOOL_META: Record<ToolId, ToolMeta> = {
     icon: pathPatternGlyph,
     group: 'pattern',
     hint: 'Repeat a body or a feature along sketch lines and arcs'
+  },
+  'mirror-pattern': {
+    label: 'Mirror pattern',
+    short: 'Mirror',
+    icon: mirrorPatternGlyph,
+    group: 'pattern',
+    hint: 'Repeat a body or a feature reflected in a plane'
   }
 };
 
@@ -493,7 +502,8 @@ export const TOOL_GROUPS: { id: ToolGroup; label: string; tools: ToolId[] }[] =
         'circular-pattern',
         'grid-pattern',
         'point-pattern',
-        'path-pattern'
+        'path-pattern',
+        'mirror-pattern'
       ]
     }
   ];
@@ -705,7 +715,8 @@ export function toolDisabledReason(
       tool === 'circular-pattern' ||
       tool === 'grid-pattern' ||
       tool === 'point-pattern' ||
-      tool === 'path-pattern') &&
+      tool === 'path-pattern' ||
+      tool === 'mirror-pattern') &&
     avail.liveBodyCount < 1
   ) {
     return 'Needs a body';

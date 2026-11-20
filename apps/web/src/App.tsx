@@ -21470,7 +21470,33 @@ export function App() {
           selection.hash,
           detail?.point
         );
-        return face ? command.pickFace(face) : true;
+        if (face) return command.pickFace(face);
+        // M02 (schema v113): with a feature picked, a flat face no feature
+        // made is a mirror pattern's plane, as Mirror takes one.
+        if (command.spec?.wantsPlane && command.slots.faces.length > 0) {
+          const geometry = (
+            previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+            representations[selection.bodyId]
+          )?.topology?.faces.find(
+            (candidate) =>
+              candidate.topologyId === selection.topologyId ||
+              (selection.hash !== undefined &&
+                candidate.hash === selection.hash)
+          )?.geometry;
+          const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+          if (
+            geometry?.normal &&
+            on &&
+            geometry.surfaceType.toLowerCase() === 'plane'
+          ) {
+            return command.pickPlane({
+              kind: 'face',
+              origin: on,
+              normal: geometry.normal
+            });
+          }
+        }
+        return true;
       }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
@@ -26368,7 +26394,8 @@ export function App() {
             ? { skippedInstances: request.skippedInstances }
             : {}),
           ...(request.points ? { points: request.points } : {}),
-          ...(request.path ? { path: request.path } : {})
+          ...(request.path ? { path: request.path } : {}),
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -37787,7 +37814,10 @@ export function App() {
               !modelingLocked &&
               (tool === 'sketch' ||
                 Boolean(
-                  inPlaceSpec?.wantsPlane && inPlace.slots.bodies.length > 0
+                  inPlaceSpec?.wantsPlane &&
+                  (inPlace.slots.bodies.length > 0 ||
+                    // M02: a mirror pattern's features, picked first.
+                    inPlace.slots.faces.some((face) => face.feature))
                 ) ||
                 // Not while edges are filtered for: a ghost plane in front
                 // of an edge would take the click meant for its end.

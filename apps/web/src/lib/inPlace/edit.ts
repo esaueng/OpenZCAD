@@ -15,6 +15,7 @@ import {
   type FeatureData,
   type FeatureId,
   type FeatureNode,
+  type ModelingPlaneReference,
   type ParamValue,
   type ParametricVector3,
   type SketchId,
@@ -342,6 +343,27 @@ export function inPlaceEditSeed(
     });
   };
 
+  // A Mirror's, a Split's or a mirror pattern's plane (M02, schema v113).
+  const seedPlane = (plane: ModelingPlaneReference) => {
+    if (isDatumPlaneRef(plane)) {
+      // A datum plane gone, or now after the feature, is not restored:
+      // the slot asks for another, as a clicked one would be refused.
+      if (ctx.datumPlaneUsable?.(plane.datumFeatureId) === false) {
+        missing.push('plane');
+      } else {
+        seed.slots.plane = { kind: 'datum', featureId: plane.datumFeatureId };
+      }
+    } else {
+      // A plane stored by its numbers opens typed, each on its own chip,
+      // expressions and all: the way it was given is the way it is edited.
+      seed.options.planeMode = 'typed';
+      for (const axis of ['x', 'y', 'z'] as const) {
+        value(`planeO${axis.toUpperCase()}`, plane.origin[axis]);
+        value(`planeN${axis.toUpperCase()}`, plane.normal[axis]);
+      }
+    }
+    value('offset', 0);
+  };
   switch (data.featureKind) {
     case 'revolve': {
       if (data.profile) {
@@ -753,27 +775,7 @@ export function inPlaceEditSeed(
     case 'mirror':
     case 'split': {
       body(data.targetBodyId);
-      if (isDatumPlaneRef(data.plane)) {
-        // A datum plane gone, or now after the feature, is not restored:
-        // the slot asks for another, as a clicked one would be refused.
-        if (ctx.datumPlaneUsable?.(data.plane.datumFeatureId) === false) {
-          missing.push('plane');
-        } else {
-          seed.slots.plane = {
-            kind: 'datum',
-            featureId: data.plane.datumFeatureId
-          };
-        }
-      } else {
-        // A plane stored by its numbers opens typed, each on its own chip,
-        // expressions and all: the way it was given is the way it is edited.
-        seed.options.planeMode = 'typed';
-        for (const axis of ['x', 'y', 'z'] as const) {
-          value(`planeO${axis.toUpperCase()}`, data.plane.origin[axis]);
-          value(`planeN${axis.toUpperCase()}`, data.plane.normal[axis]);
-        }
-      }
-      value('offset', 0);
+      seedPlane(data.plane);
       if (data.featureKind === 'split') {
         seed.options.keepOriginal = data.keepOriginal ? 'yes' : 'no';
       }
@@ -935,6 +937,10 @@ export function inPlaceEditSeed(
             entityId: pointId
           });
         }
+        break;
+      }
+      if (data.patternKind === 'mirror') {
+        if (data.mirrorPlane) seedPlane(data.mirrorPlane);
         break;
       }
       value('count', data.count);
@@ -1476,7 +1482,8 @@ export function inPlaceFeatureUpdate(
             ? { skippedInstances: request.skippedInstances }
             : {}),
           ...(request.points ? { points: request.points } : {}),
-          ...(request.path ? { path: request.path } : {})
+          ...(request.path ? { path: request.path } : {}),
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {})
         },
         // R01: the world axis is the absent datum axis. M02: a pattern turned
         // back to its body, or with every copy back, stores neither list.

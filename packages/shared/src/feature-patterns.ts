@@ -6,6 +6,7 @@
 import type {
   FeatureData,
   PatternKind,
+  ModelingPlaneReference,
   PatternPath,
   PatternPoints
 } from './index';
@@ -171,6 +172,43 @@ export function patternPathProblem(data: {
     return `"${String(path.orientation)}" is not a path pattern orientation.`;
   }
   return null;
+}
+
+/**
+ * Why a `mirror` pattern's plane cannot be stored, else null: present
+ * exactly on a `mirror` pattern, a datum plane or an origin and normal.
+ * Whether the normal resolves to a non-zero vector is the build's to say.
+ */
+export function patternMirrorProblem(data: {
+  patternKind: PatternKind;
+  mirrorPlane?: ModelingPlaneReference | undefined;
+}): string | null {
+  const plane = data.mirrorPlane as
+    | Partial<Record<'type' | 'datumFeatureId' | 'origin' | 'normal', unknown>>
+    | undefined;
+  if (data.patternKind !== 'mirror') {
+    return plane === undefined
+      ? null
+      : 'Only a mirror pattern names a mirror plane.';
+  }
+  if (!plane || typeof plane !== 'object') {
+    return 'A mirror pattern needs the plane it mirrors in.';
+  }
+  if (plane.type === 'datum') {
+    return typeof plane.datumFeatureId === 'string' && plane.datumFeatureId
+      ? null
+      : 'A mirror pattern names its datum plane.';
+  }
+  const vector = (value: unknown) =>
+    typeof value === 'object' &&
+    value !== null &&
+    ['x', 'y', 'z'].every((axis) => {
+      const part = (value as Record<string, unknown>)[axis];
+      return typeof part === 'number' || typeof part === 'string';
+    });
+  return vector(plane.origin) && vector(plane.normal)
+    ? null
+    : "A mirror pattern's plane is a datum plane or an origin and normal.";
 }
 
 /**
