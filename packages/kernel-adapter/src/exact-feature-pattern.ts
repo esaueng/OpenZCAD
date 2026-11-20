@@ -606,11 +606,12 @@ function placedCarrier(
     // Directions are quantized a thousand times finer (`quantizedDirectionOf`).
     const normal = dequantized(carrier.normal, 1000);
     const offset = carrier.offset * GEOMETRY_LINEAR_TOLERANCE;
-    const on = { x: normal.x * offset, y: normal.y * offset, z: normal.z * offset };
-    return planeCarrier(
-      applyDirection(matrix, normal),
-      applyPoint(matrix, on)
-    );
+    const on = {
+      x: normal.x * offset,
+      y: normal.y * offset,
+      z: normal.z * offset
+    };
+    return planeCarrier(applyDirection(matrix, normal), applyPoint(matrix, on));
   }
   if (carrier.kind === 'cylinder') {
     return cylinderCarrier(
@@ -726,4 +727,3 @@ function nameCopiedFaces(
     lineage.faceReferences.set(handle, reference);
   }
 }
-
