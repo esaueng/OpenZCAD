@@ -3167,42 +3167,20 @@ function combineBooleanOperands(
   }
 }
 
-function buildEdgeModifierFeature(
+/**
+ * A fillet's or chamfer's resolved size and options, checked as its build
+ * checks them; shared with M02 patterns that repeat it.
+ */
+export function edgeModifierSettings(
   ctx: FeatureBuildContext,
-  feature: FeatureNode,
   data: FeatureDataOf<'fillet' | 'chamfer'>
-): void {
-  const { kernel, document, scope, result } = ctx;
-  if (!feature.bodyId) {
-    throw new Error('Edge modifier has no result body.');
-  }
-  const storedTarget = result.shapes.get(data.targetBodyId);
-  if (!storedTarget) {
-    throw new Error('Edge modifier target is unavailable.');
-  }
-  const target = collapseShape(kernel, storedTarget);
-  const {
-    handles: selected,
-    repairedReferences,
-    carriedHashes
-  } = resolveEdgeModifierEdges(
-    kernel,
-    storedTarget,
-    target,
-    data.edgeHashes,
-    data.edgeReferences,
-    ctx.edgeSelections
-      ? {
-          memory: ctx.edgeSelections,
-          key: edgeSelectionKey(document.projectId, feature.featureId),
-          propose: ctx.proposeCarry === true,
-          // The build's state so far: the frames earlier features resolved.
-          upstream: () =>
-            upstreamSnapshot(document, feature.featureId, ctx.result)
-        }
-      : undefined,
-    ctx.onUnresolvedEdgeHash
-  );
+): {
+  size: number;
+  chamferAngleRadians: number | undefined;
+  variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
+  chamferSecondDistance: number | undefined;
+} {
+  const { document, scope } = ctx;
   const size = resolveParamValue(
     data.featureKind === 'fillet' ? data.radius : data.distance,
     scope,
@@ -3268,6 +3246,47 @@ function buildEdgeModifierFeature(
       throw new Error('Chamfer second distance must be greater than zero.');
     }
   }
+  return { size, chamferAngleRadians, variableRadius, chamferSecondDistance };
+}
+
+function buildEdgeModifierFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'fillet' | 'chamfer'>
+): void {
+  const { kernel, document, result } = ctx;
+  if (!feature.bodyId) {
+    throw new Error('Edge modifier has no result body.');
+  }
+  const storedTarget = result.shapes.get(data.targetBodyId);
+  if (!storedTarget) {
+    throw new Error('Edge modifier target is unavailable.');
+  }
+  const target = collapseShape(kernel, storedTarget);
+  const {
+    handles: selected,
+    repairedReferences,
+    carriedHashes
+  } = resolveEdgeModifierEdges(
+    kernel,
+    storedTarget,
+    target,
+    data.edgeHashes,
+    data.edgeReferences,
+    ctx.edgeSelections
+      ? {
+          memory: ctx.edgeSelections,
+          key: edgeSelectionKey(document.projectId, feature.featureId),
+          propose: ctx.proposeCarry === true,
+          // The build's state so far: the frames earlier features resolved.
+          upstream: () =>
+            upstreamSnapshot(document, feature.featureId, ctx.result)
+        }
+      : undefined,
+    ctx.onUnresolvedEdgeHash
+  );
+  const { size, chamferAngleRadians, variableRadius, chamferSecondDistance } =
+    edgeModifierSettings(ctx, data);
   let reportedRefusal: string | null = null;
   // The kernel's typed refusal of the requested size, kept beside its text
   // so the thrown refusal carries the kernel's classification. Cleared by a
@@ -4312,7 +4331,46 @@ function buildPatternFeature(
       },
       (hole) => holeToolSpecFor(ctx, hole),
       // M01 (schema v66): a tapped hole's copies are tapped as it is.
-      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores)
+      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores),
+      // M02: a repeated fillet or chamfer, at each copy's edges, as its own
+      // build applies it; an approximate blend is disclosed as its is.
+      (blend, solid, edges) => {
+        const settings = edgeModifierSettings(ctx, blend);
+        let refusal: string | null = null;
+        let approximate = false;
+        const blended = applyEdgeModifier(
+          kernel,
+          solid,
+          edges,
+          blend.featureKind,
+          settings.size,
+          (message) => {
+            refusal = message;
+          },
+          undefined,
+          settings.chamferAngleRadians,
+          settings.variableRadius,
+          settings.chamferSecondDistance,
+          false,
+          (quality) => {
+            approximate ||= quality.approximate;
+          }
+        );
+        if (blended === null) {
+          throw new Error(
+            refusal ?? `The kernel could not make this ${blend.featureKind}.`
+          );
+        }
+        if (approximate) {
+          raiseFeatureWarning(
+            result,
+            feature,
+            approximateBlendAdvisory(blend.featureKind),
+            'advisory'
+          );
+        }
+        return blended;
+      }
     );
     return;
   }

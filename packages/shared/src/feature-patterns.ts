@@ -174,11 +174,17 @@ export function patternPathProblem(data: {
 }
 
 /**
- * Whether a feature is one a feature pattern repeats: a hole, or an extrude
- * that adds to or cuts its target body.
+ * Whether a feature is one a feature pattern repeats: a hole, an extrude
+ * that adds to or cuts its target body, or (M02) a fillet or chamfer, which
+ * each copy takes where it holds the edges the original rounded.
  */
 export function isPatternableFeature(data: FeatureData): boolean {
-  if (data.featureKind === 'hole') return true;
+  if (
+    data.featureKind === 'hole' ||
+    data.featureKind === 'fillet' ||
+    data.featureKind === 'chamfer'
+  )
+    return true;
   return (
     data.featureKind === 'extrude' &&
     (data.operation === 'add' || data.operation === 'cut') &&
@@ -195,5 +201,5 @@ export function patternSourceProblem(
     return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance or Through all.`;
   }
   if (isPatternableFeature(data)) return null;
-  return `${name} is not a hole, boss or cut, so a feature pattern cannot repeat it.`;
+  return `${name} is not a hole, boss, cut, fillet or chamfer, so a feature pattern cannot repeat it.`;
 }

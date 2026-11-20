@@ -1,0 +1,208 @@
+import { beforeAll, describe, expect, it } from 'vitest';
+import {
+  addPrimitiveFeature,
+  addSketchFeature,
+  chamferEdges,
+  createProjectDocument,
+  extrudeSketch,
+  filletEdges,
+  listFeaturesInOrder,
+  patternBody
+} from '@openzcad/document-core';
+import {
+  createExactKernelAdapter,
+  type ExactKernelAdapter
+} from '@openzcad/kernel-adapter/exact';
+import {
+  toUserId,
+  type BodyId,
+  type DerivedState,
+  type FeatureId,
+  type ProjectDocument
+} from '@openzcad/shared';
+
+/**
+ * M02: a feature pattern repeats fillets and chamfers. Each copy takes the
+ * blend where it holds the edges the original rounded, found by the
+ * original's stored edges moved with the copy. On a 100 × 40 × 10 plate
+ * with a 10 × 10 × 5 boss, so every volume is a closed form.
+ */
+
+const PLATE = { x: 100, y: 40, z: 10 };
+const PLATE_VOLUME = PLATE.x * PLATE.y * PLATE.z;
+const BOSS = 10 * 10 * 5;
+
+const last = (document: ProjectDocument): BodyId => document.bodyOrder.at(-1)!;
+const lastFeature = (document: ProjectDocument): FeatureId =>
+  listFeaturesInOrder(document).at(-1)!.featureId;
+
+describe('M02 patterns of fillets and chamfers', () => {
+  let adapter: ExactKernelAdapter;
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+  });
+
+  /** The plate with a boss at x = 15, and the boss's feature id. */
+  async function bossed(): Promise<{
+    document: ProjectDocument;
+    bossId: FeatureId;
+    top: number;
+  }> {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Plate', toUserId('user_m02')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: PLATE.x, height: PLATE.y, depth: PLATE.z }
+      }
+    );
+    const plateId = last(document);
+    const box = (await adapter.syncDocument(document)).bodyRepresentations[
+      plateId
+    ]!.bbox;
+    const sketched = addSketchFeature(document, {
+      name: 'Boss sketch',
+      planeRef: { type: 'canonical', plane: 'XY', offset: box.max.z },
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 10,
+          height: 10,
+          centerX: box.min.x + 15,
+          centerY: (box.min.y + box.max.y) / 2
+        }
+      ]
+    });
+    const extruded = extrudeSketch(sketched.document, {
+      name: 'Boss',
+      sketchId: sketched.sketchId,
+      distance: 5,
+      operation: 'add',
+      targetBodyId: plateId
+    }).document;
+    return {
+      document: extruded,
+      bossId: lastFeature(extruded),
+      top: box.max.z
+    };
+  }
+
+  /** The boss's straight edges: its four uprights, or its four top edges. */
+  function bossEdges(
+    derived: DerivedState,
+    bodyId: BodyId,
+    top: number,
+    which: 'uprights' | 'top'
+  ) {
+    return derived.bodyRepresentations[bodyId]!.topology!.edges.filter(
+      (edge) => {
+        const witness = edge.reference?.witness;
+        if (!witness || witness.closed) return false;
+        // Witness coordinates count in the 1e-6 quantum.
+        const [a, b] = witness.endpoints.map((point) => point[2] * 1e-6) as [
+          number,
+          number
+        ];
+        return which === 'uprights'
+          ? Math.abs(Math.min(a, b) - top) < 1e-5 &&
+              Math.abs(Math.max(a, b) - (top + 5)) < 1e-5
+          : Math.abs(a - (top + 5)) < 1e-5 && Math.abs(b - (top + 5)) < 1e-5;
+      }
+    );
+  }
+
+  it('rounds every boss copy’s uprights as the original’s', async () => {
+    const { document, bossId, top } = await bossed();
+    const derived = await adapter.syncDocument(document);
+    const uprights = bossEdges(derived, last(document), top, 'uprights');
+    expect(uprights).toHaveLength(4);
+    const filleted = filletEdges(document, {
+      name: 'Round',
+      targetBodyId: last(document),
+      size: 1,
+      edgeHashes: uprights.map((edge) => edge.hash),
+      edgeReferences: uprights.map((edge) => edge.reference!)
+    }).document;
+    const filletId = lastFeature(filleted);
+    const row = patternBody(filleted, {
+      name: 'Row',
+      targetBodyId: last(filleted),
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 25,
+      sourceFeatureIds: [bossId, filletId]
+    }).document;
+    const built = await adapter.syncDocument(row);
+    expect(
+      (built.featureWarnings ?? []).filter((w) => w.kind !== 'advisory')
+    ).toEqual([]);
+    // Each upright gives up (1 − π/4) · 1² along its 5 mm.
+    const rounded = BOSS - 4 * (1 - Math.PI / 4) * 5;
+    expect(built.bodyRepresentations[last(row)]!.volume).toBeCloseTo(
+      PLATE_VOLUME + 3 * rounded,
+      5
+    );
+  }, 180_000);
+
+  it('bevels every boss copy’s top edges as the original’s', async () => {
+    const { document, bossId, top } = await bossed();
+    const derived = await adapter.syncDocument(document);
+    const rim = bossEdges(derived, last(document), top, 'top');
+    expect(rim).toHaveLength(4);
+    const chamfered = chamferEdges(document, {
+      name: 'Bevel',
+      targetBodyId: last(document),
+      size: 1,
+      edgeHashes: rim.map((edge) => edge.hash),
+      edgeReferences: rim.map((edge) => edge.reference!)
+    }).document;
+    const row = patternBody(chamfered, {
+      name: 'Row',
+      targetBodyId: last(chamfered),
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 25,
+      sourceFeatureIds: [bossId, lastFeature(chamfered)]
+    }).document;
+    const built = await adapter.syncDocument(row);
+    expect(
+      (built.featureWarnings ?? []).filter((w) => w.kind !== 'advisory')
+    ).toEqual([]);
+    // The top millimetre becomes a frustum from 10 × 10 to 8 × 8:
+    // (100 + 64 + 80) / 3 in place of 100.
+    const bevelled = BOSS - (100 - 244 / 3);
+    expect(built.bodyRepresentations[last(row)]!.volume).toBeCloseTo(
+      PLATE_VOLUME + 3 * bevelled,
+      5
+    );
+  }, 180_000);
+
+  it('refuses a blend whose copies find no edge to round, by copy', async () => {
+    const { document, top } = await bossed();
+    const derived = await adapter.syncDocument(document);
+    const uprights = bossEdges(derived, last(document), top, 'uprights');
+    const filleted = filletEdges(document, {
+      name: 'Round',
+      targetBodyId: last(document),
+      size: 1,
+      edgeHashes: uprights.map((edge) => edge.hash),
+      edgeReferences: uprights.map((edge) => edge.reference!)
+    }).document;
+    // The fillet alone: no boss copy stands where its copies look.
+    const row = patternBody(filleted, {
+      name: 'Row',
+      targetBodyId: last(filleted),
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing: 25,
+      sourceFeatureIds: [lastFeature(filleted)]
+    }).document;
+    const built = await adapter.syncDocument(row);
+    expect(
+      built.featureWarnings?.map((warning) => warning.message).join('\n')
+    ).toMatch(/Copy 1 of Round finds no edge where Round's edge 1 would be/);
+  }, 180_000);
+});
