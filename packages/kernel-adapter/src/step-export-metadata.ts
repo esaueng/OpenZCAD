@@ -179,11 +179,14 @@ export function formatStepReal(value: number): string {
     throw new Error(`STEP export produced a non-finite number (${value}).`);
   }
   if (value === 0) return '0.';
-  const [mantissa, exponent] = String(value).split('e');
-  const withPoint = mantissa!.includes('.') ? mantissa! : `${mantissa}.`;
-  return exponent === undefined
-    ? withPoint
-    : `${withPoint}E${exponent.replace('+', '')}`;
+  const text = String(value);
+  const exponent = text.indexOf('e');
+  if (exponent < 0) return text.includes('.') ? text : text + '.';
+  const mantissa = text.slice(0, exponent);
+  const power = text.slice(
+    text[exponent + 1] === '+' ? exponent + 2 : exponent + 1
+  );
+  return (mantissa.includes('.') ? mantissa : mantissa + '.') + 'E' + power;
 }
 
 /**
@@ -194,8 +197,9 @@ export function formatStepReal(value: number): string {
  */
 export const STEP_ZERO_RESIDUE = 1e-12;
 
-const STRING_LITERAL = /'(?:[^']|'')*'/g;
-const REAL = /(?<![\w#.$])[+-]?\d+\.\d*(?:[eE][+-]?\d+)?(?![\w.])/g;
+// Match whole STEP strings first so digits inside names are never rewritten.
+const STRING_OR_REAL =
+  /'(?:[^']|'')*'|(?<![\w#.$])[+-]?\d+\.\d*(?:[eE][+-]?\d+)?(?![\w.])/g;
 const ENTITY_LINE = /^#(\d+)\s*=\s*([A-Z][A-Z0-9_]*)\(/;
 const ENTITY_ID = /^#(\d+)\s*=/;
 /** A written entity line: its id and everything after `= `. */
@@ -206,21 +210,15 @@ const SNAPPED_ENTITIES = new Set(['CARTESIAN_POINT', 'DIRECTION']);
 
 /** Rewrites every real outside string literals in one entity line. */
 function normalizeRealsInLine(line: string): string {
+  if (!line.includes('.')) return line;
   const snap = SNAPPED_ENTITIES.has(ENTITY_LINE.exec(line)?.[2] ?? '');
-  const rewrite = (segment: string) =>
-    segment.replace(REAL, (literal) => {
-      const value = Number(literal);
-      return formatStepReal(
-        snap && Math.abs(value) < STEP_ZERO_RESIDUE ? 0 : value
-      );
-    });
-  let out = '';
-  let last = 0;
-  for (const match of line.matchAll(STRING_LITERAL)) {
-    out += rewrite(line.slice(last, match.index)) + match[0];
-    last = match.index + match[0].length;
-  }
-  return out + rewrite(line.slice(last));
+  return line.replace(STRING_OR_REAL, (literal) => {
+    if (literal[0] === "'") return literal;
+    const value = Number(literal);
+    return formatStepReal(
+      snap && Math.abs(value) < STEP_ZERO_RESIDUE ? 0 : value
+    );
+  });
 }
 
 /** Replaces the one line `pattern` matches, or refuses the export. */
