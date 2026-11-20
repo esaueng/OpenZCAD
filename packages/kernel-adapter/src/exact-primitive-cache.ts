@@ -34,6 +34,9 @@ function selfContained(feature: FeatureNode): boolean {
 function copyShape(shape: ExactShape): ExactShape {
   return {
     solids: [...shape.solids],
+    ...(shape.rectangularStock !== undefined
+      ? { rectangularStock: shape.rectangularStock }
+      : {}),
     ...(shape.lineage
       ? {
           lineage: {
