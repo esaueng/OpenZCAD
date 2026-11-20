@@ -363,6 +363,7 @@ import {
   measuredShapeBytes,
   measurementWitness,
   measurementProvenanceKey,
+  sameMeasurementProvenance,
   tailCheckpointIndices,
   withTerminalResultCheckpoint,
   type HistoryArenaRetentionLimits,
@@ -1956,7 +1957,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     allowCoarse: boolean
   ): PreviewDisplay | null {
     const solidKey = shape.solids.join(',');
-    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const provenanceKey = measurementProvenanceKey(shape, imported, 'snapshot');
     const keyed = (entry: {
       strict: boolean;
       solidKey: string;
@@ -1964,7 +1965,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }) =>
       entry.strict === strict &&
       entry.solidKey === solidKey &&
-      entry.provenanceKey === provenanceKey;
+      sameMeasurementProvenance(entry.provenanceKey, provenanceKey);
     const complete = this.measuredShapeCache.get(bodyId);
     const completeKeyed =
       complete !== undefined &&
@@ -2041,7 +2042,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       return;
     }
     const solidKey = shape.solids.join(',');
-    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const provenanceKey = measurementProvenanceKey(shape, imported, 'snapshot');
     const bytes =
       display.vertices.byteLength +
       display.indices.byteLength +
@@ -2328,15 +2329,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : undefined
         )
       : [];
-    const idleBases =
-      normalizedDemand?.size === 0
-        ? demandBases
-        : cachingEnabled
-          ? features.map((feature, index) =>
-              historyFeatureDigest(document, feature, index, scope, [])
-            )
-          : [];
-    const idleDigests = salted(idleBases, proposeCarry);
+    // Only eligible booleans read lineage demand. Other features have the
+    // same digest in both modes, even when they consume a boolean's result.
+    const hasBooleanProbe =
+      cachingEnabled && features.some(isBooleanEvolutionProbeEligible);
+    const separateIdleDigests = hasBooleanProbe && normalizedDemand?.size !== 0;
+    const idleBases = separateIdleDigests
+      ? features.map((feature, index) =>
+          isBooleanEvolutionProbeEligible(feature)
+            ? historyFeatureDigest(document, feature, index, scope, [])
+            : demandBases[index]!
+        )
+      : demandBases;
+    const idleDigests = separateIdleDigests
+      ? salted(idleBases, proposeCarry)
+      : digests;
     const plainIdleDigests = proposeCarry
       ? salted(idleBases, false)
       : idleDigests;
@@ -3170,7 +3177,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         normalizedDemand,
         (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0],
         deferredDirectEditFeatureId,
-        cachingEnabled &&
+        hasBooleanProbe &&
           (this.options.historyCheckpointEstimatedBytes ??
             MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0,
         this.edgeSelections,
@@ -4789,7 +4796,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         const cached = this.measuredShapeCache.get(bodyId);
         const provenanceKey = measurementProvenanceKey(
           shape,
-          build.importedStepDiagnostics.get(bodyId)
+          build.importedStepDiagnostics.get(bodyId),
+          'snapshot'
         );
         let measured: Omit<MeasuredShape, 'volume'>;
         let completeMeasurement: () => Promise<MeasuredShape>;
@@ -4800,11 +4808,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (
           cached &&
           cached.analysisKey === analysisKey &&
-          cached.provenanceKey === provenanceKey &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
           cached.recognizedImportedFeatures === recognizeImportedFeatures &&
-          cached.measuredOpening === measureOpening
+          cached.measuredOpening === measureOpening &&
+          sameMeasurementProvenance(cached.provenanceKey, provenanceKey)
         ) {
           // A matching key is only a candidate. A stale handle, changed face/
           // edge/vertex set or validation verdict abandons the entire arena.

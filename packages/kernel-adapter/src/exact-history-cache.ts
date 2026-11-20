@@ -700,11 +700,12 @@ export function measurementWitness(
 
 export function measurementProvenanceKey(
   shape: ExactShape,
-  importedDiagnostics: ImportedStepDiagnostics | undefined
+  importedDiagnostics: ImportedStepDiagnostics | undefined,
+  encoding: 'canonical' | 'snapshot' = 'canonical'
 ): string {
   const lineage = shape.lineage;
   const native = shape.nativeVertices;
-  return measurementJson({
+  const data = {
     importedDiagnostics,
     nativeVertices: native && {
       qualified: [...native.bySolid]
@@ -725,7 +726,22 @@ export function measurementProvenanceKey(
       edges: [...lineage.edgeReferences].sort(([a], [b]) => a - b),
       diagnostics: lineage.diagnostics
     }
-  });
+  };
+  return encoding === 'snapshot' ? JSON.stringify(data) : measurementJson(data);
+}
+
+/** Live cache entries normally have identical property order. Snapshot every
+ * value on each read (witnesses can mutate) and pay for canonical ordering
+ * only if two JSON spellings could differ solely by object member order. */
+export function sameMeasurementProvenance(
+  left: string,
+  right: string
+): boolean {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      measurementJson(JSON.parse(left)) === measurementJson(JSON.parse(right)))
+  );
 }
 
 /** Same canonical JSON, without a native-to-JS replacer call for every scalar. */
