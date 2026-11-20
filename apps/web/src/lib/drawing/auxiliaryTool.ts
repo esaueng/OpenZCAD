@@ -43,7 +43,7 @@ export function auxiliaryEdgeRefusal(hit: PickableEdge): string | null {
     view.auxiliary
   )
     return 'Pick an edge in a front, top or side view.';
-  // AS03 (v113): parts an exploded view pulls apart are not seen as built.
+  // AS03 (v114): parts an exploded view pulls apart are not seen as built.
   if (view.exploded) return 'Pick an edge in a view that is not exploded.';
   if (hit.edge.curve?.type !== 'LINE') return 'Pick a straight edge.';
   const ends = edgeEndsInPageOrder(view, hit.edge);

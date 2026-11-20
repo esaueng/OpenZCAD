@@ -379,7 +379,7 @@ export interface DrawingView {
    */
   configurationId?: string;
   /**
-   * AS03 (schema v113): this view draws the assembly exploded: each part's
+   * AS03 (schema v114): this view draws the assembly exploded: each part's
    * body at its solved pose with the stored exploded-view offset applied
    * (`T(offset) · pose`, `assembly.explode`), a body in no part where it was
    * modelled. Set on a base view and carried by the views projected from
@@ -391,7 +391,7 @@ export interface DrawingView {
   exploded?: true;
 }
 
-/** Annotation kinds an exploded view (v113) carries: it is presentation. */
+/** Annotation kinds an exploded view (v114) carries: it is presentation. */
 export const DRAWING_EXPLODED_VIEW_ANNOTATIONS: readonly string[] = [
   'note',
   'balloon'
@@ -1144,7 +1144,7 @@ export function drawingSheetError(value: unknown): string | null {
       alignment === null
     )
       return `${where} has a projected view that cannot fold from its base.`;
-    // v113: a projected view draws the assembly as its base does.
+    // v114: a projected view draws the assembly as its base does.
     if ((view.exploded === true) !== (parent.exploded === true))
       return `${where} has a projected view that is not drawn exploded the way its base is.`;
     // Aligned on the shared axis, on the side the projection angle gives
@@ -1166,7 +1166,7 @@ export function drawingSheetError(value: unknown): string | null {
     )
       return `${where} has a projected view out of line with its base or on the wrong side for its projection angle.`;
   }
-  // v113: sections, details and auxiliary views are cut and looked at on
+  // v114: sections, details and auxiliary views are cut and looked at on
   // the modelled bodies, so their source is never an exploded view.
   for (const view of views.values()) {
     const source =
@@ -1310,7 +1310,7 @@ export function drawingSheetError(value: unknown): string | null {
       if (ids.has(id)) return `${where} names annotation ${id} twice.`;
       ids.add(id);
     }
-    // v113: an exploded view carries notes and balloons only.
+    // v114: an exploded view carries notes and balloons only.
     for (const annotation of value.annotations as DrawingAnnotation[]) {
       const viewId = (annotation as { viewId?: string }).viewId;
       if (

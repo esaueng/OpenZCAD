@@ -122,7 +122,7 @@ import {
 type SourceBody = BodyRepresentation | GeometryBodyRepresentation;
 export type AnnotationBodies = Readonly<Record<string, SourceBody | undefined>>;
 
-/** AS03 (v113): the key an exploded view's placed copy of a body is under. */
+/** AS03 (v114): the key an exploded view's placed copy of a body is under. */
 export function explodedBodyKey(viewId: DrawingViewId, bodyId: string): string {
   return `${viewId}#exploded:${bodyId}`;
 }
@@ -197,7 +197,7 @@ export function annotationBody(
   bodyId: string
 ): SourceBody | undefined {
   if (view?.section) return bodies[sectionBodyKey(view.viewId, bodyId)];
-  // AS03 (v113): an exploded view measures its bodies where it draws them.
+  // AS03 (v114): an exploded view measures its bodies where it draws them.
   if (view?.exploded) {
     const placed = bodies[explodedBodyKey(view.viewId, bodyId)];
     if (placed) return placed;

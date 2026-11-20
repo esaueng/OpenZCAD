@@ -47,7 +47,7 @@ import { sectionSourceAt } from '../apps/web/src/lib/drawing/sectionTool';
 import { detailSourceAt } from '../apps/web/src/lib/drawing/detailTool';
 
 /**
- * AS03 exploded drawing views (schema v113): a base view, and the views
+ * AS03 exploded drawing views (schema v114): a base view, and the views
  * projected from it, draw each assembly part at its solved pose with its
  * stored exploded offset applied, carry notes and balloons only, and fence
  * the sheet to where they place the parts.
@@ -157,8 +157,8 @@ const withSheet = (document: ProjectDocument, sheet: DrawingSheet) => ({
   drawings: { sheets: [sheet] }
 });
 
-describe('exploded drawing views (AS03, schema v113)', () => {
-  it('claims v113 and validates where a view may be drawn exploded', () => {
+describe('exploded drawing views (AS03, schema v114)', () => {
+  it('claims v114 and validates where a view may be drawn exploded', () => {
     expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(
       DRAWING_EXPLODED_VIEW_SCHEMA_VERSION
     );

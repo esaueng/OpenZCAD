@@ -65,7 +65,7 @@ function placedPoints(
 }
 
 /**
- * AS03 (v113): one body's projection input placed where an exploded view
+ * AS03 (v114): one body's projection input placed where an exploded view
  * draws it (`assemblyExplodedMatrices`): its mesh and edge polylines moved
  * rigidly; face ranges are unchanged.
  */
@@ -81,7 +81,7 @@ export function placedProjectionInput(
 }
 
 /**
- * AS03 (v113): a body as an exploded view draws it, for the notes and
+ * AS03 (v114): a body as an exploded view draws it, for the notes and
  * balloons placed on that view: its mesh, box and edge polylines moved
  * rigidly. Exact curve and surface records, which hold model coordinates,
  * are left out: an exploded view carries no dimension that would read them.
@@ -203,7 +203,7 @@ export function drawingSourceFingerprint(
 }
 
 /**
- * AS03 (v113): a sheet's model fence with its exploded views' placements
+ * AS03 (v114): a sheet's model fence with its exploded views' placements
  * (`assemblyExplodedMatrices`) appended, or `base` when no view of it is
  * exploded, so every other sheet keeps the fence it was made with.
  */

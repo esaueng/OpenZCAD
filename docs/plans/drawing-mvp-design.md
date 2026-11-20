@@ -579,7 +579,7 @@ notes to D01 sheets:
   place the balloon. Both are offered once the assembly has parts.
 - **Schema.** v80, built on v78 (v79 went unused), with a content gate below it.
 
-## Exploded views (AS03, schema v113)
+## Exploded views (AS03, schema v114)
 
 - **Shape.** `DrawingView.exploded?: true`. A base view drawn exploded
   shows each assembly part's body at its solved pose (the stored joint
@@ -610,7 +610,7 @@ notes to D01 sheets:
   a ready sheet's view rebinds the fence in the same command.
 - **Command.** `drawing.view.update` with `exploded` (on a base view; the
   projected views follow) and, only with it, `source`. One undo step.
-- **Schema.** v113, built on v111 (v112 is claimed by #1785), with a
+- **Schema.** v114, built on v111 (v112 and v113 are claimed by #1785 and #1786), with a
   content gate below it.
 
 ## Title-block layouts (D02, schema v94)

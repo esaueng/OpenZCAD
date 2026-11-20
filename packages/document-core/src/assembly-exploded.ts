@@ -9,7 +9,7 @@ import { assemblyComponentBodies } from './assembly';
 import { isLiveAssemblyBody } from './assembly-bom';
 
 /**
- * AS03 exploded drawing views (schema v113): where an exploded view draws
+ * AS03 exploded drawing views (schema v114): where an exploded view draws
  * each body, as a column-major 4×4 world matrix by body id. A body some
  * component shows is placed at that component's solved pose (the stored
  * joint values) with its stored exploded offset applied after it, the

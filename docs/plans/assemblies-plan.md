@@ -207,11 +207,11 @@ out along the drag however its joints turned it.
   conflicts the submitter resolves; nothing is chosen silently.
 - **Not in this slice.** Several named exploded views, step-by-step
   explode playback in motion studies (not asked for here) and trails.
-- **On drawings (schema v113).** A drawing's base view can be drawn
+- **On drawings (schema v114).** A drawing's base view can be drawn
   exploded: each part at its solved pose with its stored offset, as
   Assemble shows it, with notes and balloons only; the sheet goes stale
   when a part is posed or pulled out differently. See
-  [Exploded views](drawing-mvp-design.md#exploded-views-as03-schema-v113).
+  [Exploded views](drawing-mvp-design.md#exploded-views-as03-schema-v114).
 
 Command: `assembly.explode.set` (`offsets` per component, null or zero puts
 a part back; `reset` clears every offset first).

@@ -5,7 +5,7 @@ import { toUserId, type BodyId } from '@openzcad/shared';
 import { test, expect, stubApi } from './openzcad-fixtures';
 
 /**
- * AS03 exploded drawing views (schema v113): a drawing's front view, set to
+ * AS03 exploded drawing views (schema v114): a drawing's front view, set to
  * Exploded, draws the pin where Assemble pulls it out, takes a balloon but
  * refuses a dimension, exports, and reopens exploded.
  */
