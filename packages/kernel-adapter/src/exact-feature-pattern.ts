@@ -368,14 +368,12 @@ export function buildFeaturePattern(
         );
       }
       // Where its build found its edges, so an upstream edit that moved
-      // them moves the copies too (review); the stored pick only when this
-      // build did not record them.
-      const witnesses =
-        result.blendEdgeWitnesses?.get(source.featureId) ??
-        (sourceData.edgeReferences ?? []).map((reference) => reference.witness);
-      if (witnesses.length === 0) {
+      // them moves the copies too (review). A source that did not build
+      // recorded none, and its copies are not rounded either (re-check).
+      const witnesses = result.blendEdgeWitnesses?.get(source.featureId);
+      if (!witnesses || witnesses.length === 0) {
         throw new Error(
-          `${source.name} was made before its edges were named, so a pattern cannot find them on a copy; pick its edges again, then pattern it.`
+          `${source.name} did not build, so a pattern cannot find its edges on a copy; fix ${source.name} first.`
         );
       }
       for (const copy of copies) {

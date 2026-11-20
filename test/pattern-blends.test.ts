@@ -208,7 +208,10 @@ describe('M02 patterns of fillets and chamfers', () => {
     ).toMatch(/Copy 1 of Round finds no edge where Round's edge 1 would be/);
   }, 180_000);
   /** The plate alone, and its upright edge at the low x and y corner. */
-  async function cornerRound(depth = PLATE.z): Promise<ProjectDocument> {
+  async function cornerRound(
+    depth = PLATE.z,
+    radius = 1
+  ): Promise<ProjectDocument> {
     const document = addPrimitiveFeature(
       createProjectDocument('Plate', toUserId('user_m02')),
       {
@@ -238,7 +241,7 @@ describe('M02 patterns of fillets and chamfers', () => {
     return filletEdges(document, {
       name: 'Round',
       targetBodyId: bodyId,
-      size: 1,
+      size: radius,
       edgeHashes: corner.map((edge) => edge.hash),
       edgeReferences: corner.map((edge) => edge.reference!)
     }).document;
@@ -317,8 +320,57 @@ describe('M02 patterns of fillets and chamfers', () => {
       patternSourceProblem(data as unknown as FeatureData, 'Edge');
     expect(problem(chamfer)).toBeNull();
     expect(problem(fillet)).toBeNull();
-    expect(problem({ ...chamfer, distance2: 3 })).toMatch(/unevenly/);
+    // Two distances are judged once resolved, below.
+    expect(problem({ ...chamfer, distance2: 3 })).toBeNull();
     expect(problem({ ...chamfer, angleDeg: 30 })).toMatch(/unevenly/);
     expect(problem({ ...fillet, endRadius: 2 })).toMatch(/along the edge/);
   });
+
+  it('refuses to repeat a fillet that did not build (re-check)', async () => {
+    // Wider than the plate's 40 mm side: the kernel refuses the original.
+    const filleted = await cornerRound(PLATE.z, 45);
+    const built = await adapter.syncDocument(cornerRow(filleted, PLATE.x));
+    const messages = (built.featureWarnings ?? [])
+      .map((warning) => warning.message)
+      .join('\n');
+    expect(messages).toMatch(/Round did not build, so a pattern cannot find/);
+  }, 180_000);
+
+  it('repeats a chamfer of two equal distances, not of two unequal ones (re-check)', async () => {
+    const { document, bossId, top } = await bossed();
+    const derived = await adapter.syncDocument(document);
+    const rim = bossEdges(derived, last(document), top, 'top');
+    const row = (distance2: number) => {
+      const chamfered = chamferEdges(document, {
+        name: 'Bevel',
+        targetBodyId: last(document),
+        size: 1,
+        distance2,
+        edgeHashes: rim.map((edge) => edge.hash),
+        edgeReferences: rim.map((edge) => edge.reference!)
+      }).document;
+      return patternBody(chamfered, {
+        name: 'Row',
+        targetBodyId: last(chamfered),
+        patternKind: 'linear',
+        count: 3,
+        axis: 'x',
+        spacing: 25,
+        sourceFeatureIds: [bossId, lastFeature(chamfered)]
+      }).document;
+    };
+    const even = row(1);
+    const evenBuilt = await adapter.syncDocument(even);
+    expect(
+      (evenBuilt.featureWarnings ?? []).filter((w) => w.kind !== 'advisory')
+    ).toEqual([]);
+    expect(evenBuilt.bodyRepresentations[last(even)]!.volume).toBeCloseTo(
+      PLATE_VOLUME + 3 * (BOSS - (100 - 244 / 3)),
+      5
+    );
+    const uneven = await adapter.syncDocument(row(2));
+    expect(
+      uneven.featureWarnings?.map((warning) => warning.message).join('\n')
+    ).toMatch(/set back unevenly/);
+  }, 180_000);
 });

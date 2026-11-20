@@ -3255,6 +3255,8 @@ function buildEdgeModifierFeature(
   data: FeatureDataOf<'fillet' | 'chamfer'>
 ): void {
   const { kernel, document, result } = ctx;
+  // M02: recorded again below only if this build succeeds (re-check).
+  result.blendEdgeWitnesses?.delete(feature.featureId);
   if (!feature.bodyId) {
     throw new Error('Edge modifier has no result body.');
   }
@@ -4341,6 +4343,17 @@ function buildPatternFeature(
       // build applies it; an approximate blend is disclosed as its is.
       (blend, solid, edges) => {
         const settings = edgeModifierSettings(ctx, blend);
+        // Two setbacks a copy could swap repeat only when they are equal
+        // (re-check: two equal distances are an even chamfer).
+        if (
+          settings.chamferSecondDistance !== undefined &&
+          Math.abs(settings.chamferSecondDistance - settings.size) >
+            1e-9 * Math.max(1, settings.size)
+        ) {
+          throw new Error(
+            "its faces are set back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly."
+          );
+        }
         let refusal: string | null = null;
         let approximate = false;
         const blended = applyEdgeModifier(

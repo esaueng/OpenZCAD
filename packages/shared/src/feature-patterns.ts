@@ -203,10 +203,8 @@ export function patternSourceProblem(
   // A copy's edge may run the other way, or meet its faces the other way
   // round, so a blend that differs end to end or face to face could land
   // reversed on it (review): only the even ones repeat.
-  if (
-    data.featureKind === 'chamfer' &&
-    (data.distance2 !== undefined || data.angleDeg !== undefined)
-  ) {
+  // Two distances are checked once resolved, where equal ones repeat.
+  if (data.featureKind === 'chamfer' && data.angleDeg !== undefined) {
     return `${name} sets its faces back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly.`;
   }
   if (
