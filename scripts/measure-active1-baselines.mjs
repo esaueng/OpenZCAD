@@ -27,7 +27,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import { createServer } from 'node:net';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ACTIVE1_BUDGETS } from './active1-budgets.mjs';
 import { hostSnapshot, noisyReasons } from './perf-host.mjs';
@@ -50,6 +50,9 @@ const PROBES = [
   // adapter with idle compaction (`test/sustained-session-retention.test.ts`).
   'sustained'
 ];
+
+/** Which flavour the last build this script made was (`--no-build` checks it). */
+const BUILD_STAMP = resolve('perf-results/active1/.last-build.json');
 
 /** Probes that need the `OZ_PERF=1` instrumented build. */
 const INSTRUMENTED_PROBES = ['face-drag', 'orbit'];
@@ -182,17 +185,29 @@ function readJsonl(file) {
 /** Medians across runs for each measurement, with their budgets. */
 export function summarize(dir) {
   const rows = [];
-  const add = (measurement, values, budget, unit = 'ms') => {
-    const value = median(values);
+  const add = (measurement, values, budget, unit = 'ms', atLeast = false) => {
+    const present = values.filter(Number.isFinite);
+    const value = median(present);
+    // A run that recorded nothing for a budgeted row fails it rather than
+    // dropping out of the median.
+    const missing = present.length < values.length;
     rows.push({
       measurement,
       runs: values.length,
       median: value,
-      min: values.length ? Math.min(...values) : null,
-      max: values.length ? Math.max(...values) : null,
+      min: present.length ? Math.min(...present) : null,
+      max: present.length ? Math.max(...present) : null,
       budget,
       unit,
-      withinBudget: budget == null || value == null ? null : value <= budget
+      // A probe this run did not select has no samples: not measured.
+      withinBudget:
+        budget == null || values.length === 0
+          ? null
+          : missing || value == null
+            ? false
+            : atLeast
+              ? value >= budget
+              : value <= budget
     });
   };
   const holder = readJsonl(join(dir, 'h02.jsonl'));
@@ -265,28 +280,26 @@ export function summarize(dir) {
   for (const label of new Set(drags.map((sample) => sample.label))) {
     const samples = drags.filter((sample) => sample.label === label);
     const budget = ACTIVE1_BUDGETS.faceDrag[label] ?? {};
-    // What follows the pointer: the disposable proxy frames when the drag
-    // presents them (the exact preview is then built once the hand rests),
-    // otherwise the streamed exact frames.
-    const proxied = samples.some(
-      (sample) => sample.summary.proxyPresentedFrames > 0
-    );
+    // What followed the pointer in each run: its disposable proxy frames
+    // when it presented them (the exact preview is then built once the hand
+    // rests), otherwise its streamed exact frames. Judged run by run, so a
+    // proxy run cannot hide an exact-only run's lag.
+    const proxied = (sample) => sample.summary.proxyPresentedFrames > 0;
     const lag = (sample) =>
-      proxied
+      proxied(sample)
         ? sample.summary.pointerToProxyFrameMs
         : sample.summary.steadyPointerToPresentedMs;
-    const kind = proxied ? 'proxy' : 'exact';
     add(
-      `Face drag pointer → ${kind} frame p50 (${label})`,
-      samples.map((sample) => lag(sample).p50),
+      `Face drag pointer → frame p50 (${label})`,
+      samples.map((sample) => lag(sample)?.p50 ?? null),
       budget.lagP50Ms
     );
     add(
-      `Face drag pointer → ${kind} frame p95 (${label})`,
-      samples.map((sample) => lag(sample).p95),
+      `Face drag pointer → frame p95 (${label})`,
+      samples.map((sample) => lag(sample)?.p95 ?? null),
       budget.lagP95Ms
     );
-    if (!proxied)
+    if (samples.some((sample) => !proxied(sample)))
       add(
         `Face drag first exact geometry (${label})`,
         samples.map((sample) => sample.summary.firstGeometryMs),
@@ -332,21 +345,25 @@ export function summarize(dir) {
       ACTIVE1_BUDGETS.orbit[key] ??
       ACTIVE1_BUDGETS.orbit[`* x${results[0].throttle}`] ??
       {};
+    // The viewer's own frames (`oz:viewer.frame`), not the page's
+    // requestAnimationFrame callbacks, which keep their cadence while the
+    // viewer skips frames.
     add(
-      `Orbit frame interval p95 (${key})`,
-      results.map((result) => result.orbit.frame.p95),
+      `Orbit viewer frame interval p95 (${key})`,
+      results.map((result) => result.orbit.viewerInterval?.p95 ?? null),
       budget.p95Ms
     );
     add(
-      `Orbit frame interval p99 (${key})`,
-      results.map((result) => result.orbit.frame.p99),
+      `Orbit viewer frame interval p99 (${key})`,
+      results.map((result) => result.orbit.viewerInterval?.p99 ?? null),
       budget.p99Ms
     );
     add(
-      `Orbit dropped refreshes (${key})`,
-      results.map((result) => result.orbit.dropped.pct),
-      budget.droppedPct,
-      '%'
+      `Orbit viewer frames per second (${key})`,
+      results.map((result) => result.orbit.viewerFps ?? null),
+      budget.minViewerFps,
+      'fps',
+      true
     );
   }
   const sustainedRuns = existsSync(dir)
@@ -355,9 +372,11 @@ export function summarize(dir) {
       )
     : [];
   if (sustainedRuns.length) {
-    const runs = sustainedRuns.map((name) =>
-      readJsonl(join(dir, name)).filter((row) => 'edit' in row)
-    );
+    const files = sustainedRuns.map((name) => readJsonl(join(dir, name)));
+    const runs = files.map((lines) => lines.filter((row) => 'edit' in row));
+    // Peaks over every sync, from each run's summary line; the rows are
+    // only sampled every tenth edit and after compactions.
+    const peaks = files.map((lines) => lines.find((row) => 'syncs' in row));
     const third = (rows, part) =>
       rows.slice(
         Math.floor((rows.length * part) / 3),
@@ -372,16 +391,17 @@ export function summarize(dir) {
     const budget = ACTIVE1_BUDGETS.sustained;
     add(
       'Sustained session: peak WASM linear memory',
-      runs.map(
-        (rows) =>
-          Math.max(...rows.map((row) => row.linearMemoryBytes)) / 2 ** 20
+      peaks.map((peak) =>
+        Number.isFinite(peak?.peakLinearMemoryBytes)
+          ? peak.peakLinearMemoryBytes / 2 ** 20
+          : null
       ),
       budget.peakLinearMemoryMiB,
       'MiB'
     );
     add(
       'Sustained session: peak retired arena slots',
-      runs.map((rows) => Math.max(...rows.map((row) => row.retiredSlots))),
+      peaks.map((peak) => peak?.peakRetiredSlots ?? null),
       budget.peakRetiredSlots,
       'slots'
     );
@@ -466,17 +486,31 @@ async function main() {
       cleanup();
       process.exit(130);
     });
+  const instrumented = options.only.some((probe) =>
+    INSTRUMENTED_PROBES.includes(probe)
+  );
   if (browserProbes.length) {
     if (options.build) {
       await waitForQuiet(options.waitMinutes);
       const status = run('pnpm', ['--filter', '@openzcad/web', 'build'], {
         VITE_E2E: '1',
         VITE_E2E_FULL_RENDER: '1',
-        ...(options.only.some((probe) => INSTRUMENTED_PROBES.includes(probe))
-          ? { OZ_PERF: '1' }
-          : {})
+        ...(instrumented ? { OZ_PERF: '1' } : {})
       });
       if (status !== 0) throw new Error('Production-renderer build failed.');
+      mkdirSync(dirname(BUILD_STAMP), { recursive: true });
+      writeFileSync(BUILD_STAMP, `${JSON.stringify({ instrumented })}\n`);
+    } else {
+      // `--no-build` serves whatever the last build left: refuse one of the
+      // other flavour, so an instrumented build never meets the
+      // uninstrumented baselines' budgets, or the reverse.
+      const stamp = existsSync(BUILD_STAMP)
+        ? JSON.parse(readFileSync(BUILD_STAMP, 'utf8'))
+        : null;
+      if (stamp?.instrumented !== instrumented)
+        throw new Error(
+          `--no-build: the last build is ${stamp ? (stamp.instrumented ? 'instrumented (OZ_PERF)' : 'uninstrumented') : 'unknown'}; these probes need ${instrumented ? 'an instrumented' : 'an uninstrumented'} one. Build again.`
+        );
     }
     port = await freePort();
     server = spawn(

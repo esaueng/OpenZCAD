@@ -367,7 +367,16 @@ describe('sustained session retention', () => {
         idle,
         compactions,
         recycles: events.filter((event) => event.recycleReason).length,
-        syncs: events.length
+        syncs: events.length,
+        // Over every sync, not only the sampled rows above.
+        peakRetiredSlots: Math.max(
+          ...events.map(retired).filter(Number.isFinite)
+        ),
+        peakLinearMemoryBytes: Math.max(
+          ...events
+            .map((event) => event.checkpointMemory?.linearMemoryBytes ?? NaN)
+            .filter(Number.isFinite)
+        )
       };
       if (process.env.SUSTAINED_OUT)
         writeFileSync(

@@ -24,7 +24,7 @@ export interface FaceDragBudget {
 export interface OrbitBudget {
   p95Ms?: number;
   p99Ms?: number;
-  droppedPct?: number;
+  minViewerFps?: number;
 }
 
 export const ACTIVE1_BUDGETS: Readonly<{

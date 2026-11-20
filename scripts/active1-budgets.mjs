@@ -80,13 +80,14 @@ export const ACTIVE1_BUDGETS = Object.freeze({
   }),
   /**
    * H02 orbit tails (`orbit` probe), per `<scene> x<cpu slow-down>`, or
-   * `* x<rate>` for every scene: frame interval p95/p99 and the share of
-   * display refreshes that showed no new frame. Every scene measured
-   * 16.7 / 16.7 ms and 0% at both rates on the RX 6600.
+   * `* x<rate>` for every scene: the viewer's own frame interval p95/p99
+   * (`oz:viewer.frame`) and its frames per second, a floor. Every scene
+   * measured 58.5–60 fps with no viewer frame over 16.8 ms at both rates on
+   * the RX 6600.
    */
   orbit: Object.freeze({
-    '* x1': Object.freeze({ p95Ms: 20, p99Ms: 34, droppedPct: 2 }),
-    '* x4': Object.freeze({ p95Ms: 25, p99Ms: 50, droppedPct: 5 })
+    '* x1': Object.freeze({ p95Ms: 20, p99Ms: 25, minViewerFps: 55 }),
+    '* x4': Object.freeze({ p95Ms: 25, p99Ms: 34, minViewerFps: 50 })
   }),
   /**
    * H02 sustained-session retention (`sustained` probe, 300 edits of the

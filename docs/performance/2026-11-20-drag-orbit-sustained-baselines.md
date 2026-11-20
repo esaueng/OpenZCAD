@@ -53,10 +53,12 @@ while dragging) and the exact preview's round trip as separate rows.
 **Targets** (H02: 60 fps, first geometry within 100 ms, p95 under 50 ms):
 
 - **Pointer → frame p95 under 50 ms: met.** All four cases are at 15–16 ms.
-- **First geometry within 100 ms: met** for what the pointer sees. The first
-  proxy frame arrives in about 15 ms. The exact preview is built only at
-  rest, in 64–395 ms, so 100 ms holds for exact geometry on the holder but
-  not on the filleted unions.
+- **First geometry within 100 ms: not established.** The proxy lag above
+  is a median and p95 across all proxy frames, not a measure of the first
+  one. The exact preview's round trip (64–395 ms) is worker time measured
+  after the hand rests, not from the first move to the screen. Neither
+  figure shows that exact geometry reached the screen within 100 ms of the
+  first move, so this target is left unmeasured here.
 - **60 fps: met at the median** in every case. The two filleted unions each
   drop one frame per drag (one 33 ms interval, so their p95 is 33 ms). The
   box and holder hold 16.7 ms at p95.
@@ -67,9 +69,10 @@ while dragging) and the exact preview's round trip as separate rows.
 iPad-sized touch viewport (1366 × 1024, DPR 2), unthrottled and at 4× CPU
 slow-down. It covers seven scenes: rounded and filleted blocks, a 60-tooth
 gear, a torus, a sphere row and a rotational sleeve. Every scene, at both
-rates, measured a frame-interval p95 and p99 of 16.7 ms with no dropped
-display refreshes. The ordinary orbit tails noted as open in H02 do not
-reproduce on this GPU.
+rates, drew 58.5–60 viewer frames per second, and no viewer frame
+interval (`oz:viewer.frame`, the viewer's own frames rather than the page's
+animation callbacks) exceeded 16.8 ms. The ordinary orbit tails noted as
+open in H02 do not reproduce on this GPU.
 
 ## Sustained session
 
@@ -92,15 +95,19 @@ for frame intervals. They are not product targets, which are listed above.
 | Face drag frame interval p95, filleted unions / rest  |               50 / 25 ms |
 | Exact preview at rest, union / history / holder       |       600 / 280 / 120 ms |
 | Release → accepted, union / history / box / holder    | 160 / 250 / 260 / 130 ms |
-| Orbit interval p95 / p99 / dropped, ×1                |          20 / 34 ms, 2 % |
-| Orbit interval p95 / p99 / dropped, ×4                |          25 / 50 ms, 5 % |
+| Orbit viewer interval p95 / p99, viewer fps floor, ×1 |     20 / 25 ms, ≥ 55 fps |
+| Orbit viewer interval p95 / p99, viewer fps floor, ×4 |     25 / 34 ms, ≥ 50 fps |
 | Sustained: peak WASM memory                           |                  128 MiB |
 | Sustained: peak retired arena slots                   |                  131,072 |
 | Sustained: post-GC heap growth, first → last third    |                    4 MiB |
 | Sustained: one-feature edit drift, last ÷ first third |                    1.15× |
 
-`test/active1-summary.test.ts` (root CI) covers the summary rows, the
-proxy-or-exact choice and the budget table. CI does not run the browser
+`test/active1-summary.test.ts` (root CI) covers the summary rows: each drag
+run judged by what followed its pointer, a run that recorded nothing failing
+its row, orbit read from the viewer's own frames, and sustained peaks taken
+over every sync rather than the sampled rows. The script stamps each build's
+flavour (`perf-results/active1/.last-build.json`) and refuses a `--no-build`
+run whose probes need the other flavour. CI does not run the browser
 probes, which depend on the machine; `pnpm typecheck` and `pnpm lint`
 cover their code.
 
