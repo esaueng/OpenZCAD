@@ -73,8 +73,8 @@ const CHECK = process.argv.includes('--check');
 //
 // 2026-11-19: raised by 24 KiB at the maintainer's direction. Main stood at
 // 1,097,106 bytes, 622 under the edge, after the multi-face offset slices
-// already moved their set ordering, reproduction recording and refusal
-// wording into lazy modules to fit. The tripwire stays a tripwire.
+// already moved their face-set ordering and reproduction recording into
+// lazy modules to fit. The tripwire stays a tripwire.
 const DEFAULT_RAW_BUDGET = (1024 + 72) * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
