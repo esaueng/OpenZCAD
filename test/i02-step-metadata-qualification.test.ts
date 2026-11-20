@@ -155,14 +155,25 @@ describe('I02 STEP metadata qualification', { timeout: 30_000 }, () => {
         fileName: 'I02-export.step',
         timestamp: '2026-10-31T12:00:00Z'
       });
-      const later = await adapter.exportStep(document, [pinId!, blockId!], {
+      const laterOptions = {
         fileName: 'I02-export.step',
         timestamp: '2026-11-01T12:00:00Z'
-      });
-      expect(later).toBe(
-        stepText.replace('2026-10-31T12:00:00Z', '2026-11-01T12:00:00Z')
-      );
+      };
+      const bodyIds = [pinId!, blockId!];
+      const later = await adapter.exportStep(document, bodyIds, laterOptions);
       expect(write).toHaveBeenCalledTimes(1);
+      const freshAdapter = await createExactKernelAdapter();
+      try {
+        const fresh = await freshAdapter.exportStep(
+          document,
+          bodyIds,
+          laterOptions
+        );
+        expect(write).toHaveBeenCalledTimes(2);
+        expect(later).toBe(fresh);
+      } finally {
+        freshAdapter.dispose();
+      }
       const metadata = parseStepMetadata('export.step', stepText);
 
       expect(await adapter.inspectStep(stepText)).toMatchObject({
