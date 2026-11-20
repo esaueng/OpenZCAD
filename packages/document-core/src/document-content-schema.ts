@@ -545,10 +545,7 @@ export function hasDrawingHoleTable(value: unknown): boolean {
       continue;
     }
     const entry = next as Record<string, unknown>;
-    if (
-      typeof entry.annotationId === 'string' &&
-      entry.kind === 'hole-table'
-    )
+    if (typeof entry.annotationId === 'string' && entry.kind === 'hole-table')
       return true;
     pending.push(...Object.values(entry));
   }
@@ -1243,7 +1240,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     for (const change of entry.changes)
       if (
         change.field === 'drawings' &&
-        (hasDrawingHoleTable(change.before) || hasDrawingHoleTable(change.after))
+        (hasDrawingHoleTable(change.before) ||
+          hasDrawingHoleTable(change.after))
       )
         assertDrawingHoleTableSchema(document.schemaVersion);
   if (hasDrawingTolerance(document.drawings))
