@@ -100,6 +100,20 @@ export interface PrimitiveReuseState {
 }
 
 export class PrimitiveBuildCache {
+  /**
+   * `importRebuildable`: whether an imported STEP feature could be built
+   * afresh right now without the network (its text is embedded, or its
+   * parsed source is in the import cache). A reused import is only as good
+   * as that: a source this device can no longer read must fail as a fresh
+   * build would, and reusing would also skip refilling the parsed cache a
+   * later selection change relies on. Unset, every import replays.
+   */
+  constructor(
+    private readonly options: {
+      importRebuildable?: (feature: FeatureNode) => boolean;
+    } = {}
+  ) {}
+
   private readonly entries = new Map<FeatureNode['featureId'], Entry>();
   private readonly prepared = new PreparedEditSession();
 
@@ -162,6 +176,11 @@ export class PrimitiveBuildCache {
     if (!selfContained(feature) || isFeatureSuppressed(feature)) {
       return undefined;
     }
+    if (
+      feature.data.featureKind === 'imported-step' &&
+      !this.options.importRebuildable?.(feature)
+    )
+      return undefined;
     const entry = this.entries.get(feature.featureId);
     return entry?.digest === digest ? entry : undefined;
   }

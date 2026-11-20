@@ -1577,7 +1577,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private historyScopeKey: string | null = null;
   private historyProjectId: ProjectDocument['projectId'] | null = null;
   private historyReplayWork = 0;
-  private readonly primitiveBuildCache = new PrimitiveBuildCache();
+  private readonly primitiveBuildCache = new PrimitiveBuildCache({
+    // Embedded text, or a parsed source this device still holds: exactly
+    // when the import builder would succeed without fetching anything.
+    importRebuildable: (feature) => {
+      const data = feature.data;
+      if (data.featureKind !== 'imported-step') return false;
+      if (data.stepText !== undefined) return true;
+      const ref = data.stepSourceRef;
+      return (
+        !!ref &&
+        this.importedSteps.lookup(
+          importedStepCacheKey(ref.checksumSha256, data)
+        ) !== undefined
+      );
+    }
+  });
 
   /**
    * A persisted session (`exact-session-snapshot.ts`) offered to the build

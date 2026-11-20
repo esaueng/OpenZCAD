@@ -13,8 +13,10 @@
  * a hit publishes exactly what a cache-free build does, and every input the
  * import reads, plus suppression, order and a kernel restart, is a miss.
  */
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  addPrimitiveFeature,
   createProjectDocument,
   importStepBody,
   listFeaturesInOrder,
@@ -40,6 +42,7 @@ import {
   type BodyRepresentation,
   type DerivedState,
   type FeatureId,
+  type ImportedSourceReference,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -292,6 +295,95 @@ describe('detached Text cache', () => {
       } finally {
         restarted.dispose();
       }
+    }
+  );
+
+  it(
+    'reuses a referenced import only while this device can rebuild it',
+    {
+      timeout: 300_000
+    },
+    async () => {
+      // A parameter-driven box, then a STEP body imported by reference (its
+      // bytes come from a resolver, as for a stored project).
+      const seed = await createExactKernelAdapter();
+      let stepText: string;
+      try {
+        const box = addPrimitiveFeature(
+          createProjectDocument('Seed', toUserId('test')),
+          {
+            name: 'Seed box',
+            primitiveKind: 'box',
+            dimensions: { width: 10, height: 4, depth: 6 }
+          }
+        );
+        stepText = await seed.exportStep(box, box.bodyOrder);
+      } finally {
+        seed.dispose();
+      }
+      const bytes = new TextEncoder().encode(stepText);
+      const ref: ImportedSourceReference = {
+        marker: 'openzcad-source-ref',
+        version: 1,
+        hashAlgorithm: 'sha256',
+        checksumSha256: createHash('sha256').update(bytes).digest('hex'),
+        logicalBytes: bytes.byteLength
+      };
+      let document = setParameter(
+        createProjectDocument('Referenced', toUserId('test')),
+        { name: 'width', expression: '12' }
+      );
+      document = addPrimitiveFeature(document, {
+        name: 'Driven box',
+        primitiveKind: 'box',
+        dimensions: { width: 'width', height: 4, depth: 6 }
+      });
+      document = importStepBody(document, {
+        name: 'Referenced STEP',
+        artifactId: 'artifact_ref',
+        sourceName: 'referenced.step',
+        stepSourceRef: ref
+      }).document;
+      const run = async (parsedCache: boolean) => {
+        let online = true;
+        const events: RebuildCacheEvent[] = [];
+        const adapter = await createExactKernelAdapter({
+          ...(parsedCache ? {} : { importedStepCacheBytes: 0 }),
+          resolveSourceBytes: async () => {
+            if (!online) throw new Error('offline');
+            return bytes;
+          },
+          onRebuildCacheEvent: (event) => events.push(event)
+        });
+        try {
+          await adapter.syncDocument(document);
+          online = false;
+          const edited = setParameter(document, {
+            name: 'width',
+            expression: '14'
+          });
+          const derived = await adapter.syncDocument(edited);
+          return { derived, event: events.at(-1)! };
+        } finally {
+          adapter.dispose();
+        }
+      };
+      // Parsed source held: a fresh build would succeed offline, so reuse.
+      const held = await run(true);
+      expect(held.event.reusedImports).toBe(1);
+      expect(held.derived.warnings).toEqual([]);
+      // Nothing held and the source unreadable: a fresh build reports the
+      // source missing and omits the body, and so must the edit.
+      const lost = await run(false);
+      expect(lost.event.reusedImports ?? 0).toBe(0);
+      expect(
+        lost.derived.warnings.some((warning) =>
+          warning.includes('not available on this device')
+        )
+      ).toBe(true);
+      expect(
+        lost.derived.bodyRepresentations[document.bodyOrder.at(-1)!]
+      ).toBeUndefined();
     }
   );
 });
