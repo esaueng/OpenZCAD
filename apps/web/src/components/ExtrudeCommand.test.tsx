@@ -362,9 +362,13 @@ describe('in-place Extrude bar', () => {
       choice: { operation: 'automatic' },
       endCondition: 'blind',
       throughAllSide: 'forward',
+      faceOffset: '0',
       draftAngle: '0'
     } as const;
     expect(extrudeChangedInput(base, base)).toBeNull();
+    expect(extrudeChangedInput(base, { ...base, faceOffset: '2' })).toBe(
+      'Offset from face'
+    );
     // A value that also leaves an extent or Symmetric is named for itself.
     expect(
       extrudeChangedInput(base, {

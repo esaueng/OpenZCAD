@@ -53,6 +53,8 @@ export interface ExtrudeCommandState {
   /** NaN while a field's text does not evaluate. */
   distance: number;
   backDistance: number;
+  /** F01 (v112): the offset from the face (To face only). */
+  faceOffset: number;
   draftAngle: number;
   /** Each value as its text holds it (a typed expression as typed). */
   texts: Record<ExtrudeValueId, string>;
@@ -157,6 +159,7 @@ const THROUGH_ALL_SIDES: InPlaceOption['choices'] = [
 const VALUE_LABELS: Record<ExtrudeValueId, string> = {
   distance: 'Distance',
   backDistance: 'Back distance',
+  faceOffset: 'Offset from face',
   draftAngle: 'Draft angle'
 };
 
@@ -171,7 +174,12 @@ export function extrudeChangedInput(
   next: ExtrudeDraft
 ): string | null {
   if (next.toFace !== previous.toFace) return 'Face';
-  for (const valueId of ['distance', 'backDistance', 'draftAngle'] as const) {
+  for (const valueId of [
+    'distance',
+    'backDistance',
+    'faceOffset',
+    'draftAngle'
+  ] as const) {
     if (next[valueId] !== previous[valueId]) return VALUE_LABELS[valueId];
   }
   if (next.choice.operation !== previous.choice.operation) return 'Operation';
@@ -251,10 +259,12 @@ export function ExtrudeCommand({
       symmetric: value.symmetric,
       distance: evaluated(next.distance, 'length'),
       backDistance: evaluated(next.backDistance, 'length'),
+      faceOffset: evaluated(next.faceOffset, 'length'),
       draftAngle: evaluated(next.draftAngle, 'angle'),
       texts: {
         distance: next.distance,
         backDistance: next.backDistance,
+        faceOffset: next.faceOffset,
         draftAngle: next.draftAngle
       }
     };
@@ -361,6 +371,8 @@ export function ExtrudeCommand({
       // A back distance is one-sided: it ends Symmetric, as the card's
       // field (shown only off Symmetric) never stood beside it.
       change({ backDistance: text, symmetric: false });
+    } else if (valueId === 'faceOffset') {
+      change({ faceOffset: text });
     } else {
       change({ draftAngle: text });
     }

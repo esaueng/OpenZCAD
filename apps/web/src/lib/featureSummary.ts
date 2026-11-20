@@ -252,7 +252,19 @@ export function featureValueSummary(
           ? `${extent} · ${angle}° draft`
           : extent;
       if (data.endCondition === 'to-face') {
-        return drafted('To face');
+        // F01 (v112): an offset reads as how far short of (or past) the face.
+        const offset =
+          data.toFaceOffset === undefined
+            ? null
+            : evalParamValue(data.toFaceOffset, scope, {
+                documentUnits: units,
+                dimension: 'length'
+              });
+        return drafted(
+          offset === null || offset === 0
+            ? 'To face'
+            : `To face · ${formatNumber(Math.abs(offset))} ${unit} ${offset > 0 ? 'short' : 'past'}`
+        );
       }
       const distance = lengthValue(data.distance);
       if (distance === null) {

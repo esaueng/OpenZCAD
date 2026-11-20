@@ -778,7 +778,7 @@ function buildExtrudeFeature(
       data.endCondition === 'through-all'
         ? throughAllSweepFeature(ctx, feature, data)
         : data.endCondition === 'to-face'
-          ? toFaceSweepFeature(kernel, document, feature, data, result)
+          ? toFaceSweepFeature(kernel, document, feature, data, result, scope)
           : feature;
     const extrusion = buildSweep(
       kernel,

@@ -29,13 +29,16 @@ import {
   clickWorldPoint,
   editExtrudeFromHistory,
   chooseInPlaceOption,
-  extrudeBar
+  extrudeBar,
+  expectFeatureMeasurement,
+  setBarValues
 } from './openzcad-fixtures';
 
 /**
  * F01 (schema v29): an extrude reaches a face picked in the viewport, with a
  * draft; and a to-face extrude whose face was deleted shows its unresolved
- * state and is repaired by re-picking a face from its History menu.
+ * state and is repaired by re-picking a face from its History menu. F01
+ * (schema v112): an offset from the face stops the extrusion short of it.
  */
 
 /** The 4 × 4 profile at (10, 10) on XY that every extrude here sweeps. */
@@ -392,3 +395,76 @@ test('editing an unchanged to-face extrude ignores later target transforms', asy
   await expect(edit).toHaveCount(0);
   await expectBodyCount(page, 2);
 });
+
+test(
+  'offsets a to-face extrude short of its face, refuses an offset past the sketch plane, and undoes',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(150_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const ceiling = slab(
+      createProjectDocument('Offset from face', toUserId('user_e2e')),
+      'Ceiling',
+      25
+    );
+    const { target } = await faceOf(ceiling.document, ceiling.bodyId, -1);
+    const sketched = addSketchFeature(ceiling.document, {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      objects: [SQUARE]
+    });
+    const document = extrudeSketch(sketched.document, {
+      name: 'Post',
+      sketchId: sketched.sketchId,
+      distance: 1,
+      endCondition: 'to-face',
+      toFace: target
+    }).document;
+    await open(page, document);
+    await expectBodyCount(page, 2);
+    const row = page.locator('.feature-row', { hasText: /Post/ }).last();
+    const rowMain = page.locator('.feature-row-main', { hasText: /^Post$/ });
+    await expect(row).toContainText('To face');
+    // 4 × 4 up to the underside at z = 25.
+    await expectFeatureMeasurement(page, row, '400');
+
+    const edit = await editExtrudeFromHistory(page, rowMain, 'Post');
+    await setBarValues(page, edit, { 'Offset from face': '5' });
+    await expect(
+      edit.getByRole('button', {
+        name: 'Offset from face',
+        exact: true,
+        includeHidden: true
+      })
+    ).toHaveText('5 mm');
+    await edit.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText('Edit Post', {
+      timeout: 60_000
+    });
+    await expect(edit).toHaveCount(0);
+    await expect(row).toContainText('To face · 5 mm short');
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    // Stopped 5 short: 4 × 4 × 20.
+    await expectFeatureMeasurement(page, row, '320');
+
+    // An offset as long as the reach would leave nothing: refused before
+    // Done, and nothing is written.
+    const again = await editExtrudeFromHistory(page, rowMain, 'Post');
+    await setBarValues(page, again, { 'Offset from face': '30' });
+    await expect(again).toContainText('reaches the sketch plane');
+    await expect(again.getByRole('button', { name: 'Done' })).toBeDisabled();
+    await again.getByRole('button', { name: 'Cancel' }).click();
+    await expect(again).toHaveCount(0);
+    await expect(row).toContainText('To face · 5 mm short');
+
+    // Undo restores the extrude that ends on the face.
+    await waitForStillViewport(page);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(row).not.toContainText('short');
+    await expect(row).toContainText('To face');
+    await expectFeatureMeasurement(page, row, '400');
+    expect(errors).toEqual([]);
+  }
+);
