@@ -72,8 +72,11 @@ export function scopedAutoDimensions(
       byKind.set(annotation.kind, (byKind.get(annotation.kind) ?? 0) + 1);
       continue;
     }
-    if (views && !views.has(annotation.viewId)) {
-      byView.set(annotation.viewId, (byView.get(annotation.viewId) ?? 0) + 1);
+    // The generator's dimensions all belong to a view; a paper note would
+    // not, and no view scope excludes it.
+    const viewId = annotation.viewId;
+    if (views && viewId !== undefined && !views.has(viewId)) {
+      byView.set(viewId, (byView.get(viewId) ?? 0) + 1);
       continue;
     }
     annotations.push(annotation);
