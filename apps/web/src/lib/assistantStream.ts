@@ -40,11 +40,15 @@ export type AssistantStreamErrorCode =
   | 'AI_EMPTY_REPLY'
   | 'AI_INVALID_JSON'
   | 'AI_INVALID_REPLY'
+  | 'AI_OPERATION_DISABLED'
   | 'AI_OUTPUT_INCOMPLETE'
   | 'AI_PROVIDER_STREAM_ERROR'
   | 'AI_STREAM_CONNECTION'
   | 'AI_STREAM_PROTOCOL'
   | 'AI_STREAM_TRUNCATED';
+
+/** Mirrors `ASSISTANT_REJECTION_EVENT_TYPE` in the Worker's stream gate. */
+const WORKER_REPLY_REJECTED_EVENT = 'openzcad.reply_rejected';
 
 export const INVALID_STRUCTURED_OUTPUT_MESSAGE =
   'The provider returned invalid structured output.';
@@ -231,6 +235,17 @@ export function readAssistantEvent(
     return { text: currentText, done: false };
   }
   const value = event as Record<string, unknown>;
+  if (value.type === WORKER_REPLY_REJECTED_EVENT) {
+    // Written by the Worker, which replaces any provider event in its
+    // namespace, after it refused the reply (a rollout-disabled operation).
+    throw new AssistantStreamError(
+      'AI_OPERATION_DISABLED',
+      typeof value.message === 'string' && value.message.trim()
+        ? value.message.trim().slice(0, 600)
+        : 'The modeling assistant proposed an operation that is turned off for this deployment.',
+      requestId
+    );
+  }
   const delta = eventTextDelta(value);
   if (delta !== undefined) {
     return { text: currentText + delta, done: false };
@@ -327,6 +342,9 @@ const RETRYABLE_STREAM_CODES: ReadonlySet<AssistantStreamErrorCode> = new Set([
   'AI_EMPTY_REPLY',
   'AI_INVALID_JSON',
   'AI_INVALID_REPLY',
+  // The provider ignored the schema the Worker sent it; another attempt,
+  // routed elsewhere, usually honors it.
+  'AI_OPERATION_DISABLED',
   'AI_PROVIDER_STREAM_ERROR',
   'AI_STREAM_CONNECTION',
   'AI_STREAM_TRUNCATED'
