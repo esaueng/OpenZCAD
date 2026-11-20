@@ -198,6 +198,25 @@ describe('selected-face exact hole proposals', { timeout: 120_000 }, () => {
     expect(removed).toBeCloseTo(Math.PI * 4 * 5, 3);
   });
 
+  it("offsets the hole along the Hole tool's own face frame, not attachmentFrame", async () => {
+    // On a +Z face the Hole tool's u axis is (world X) × n = −Y and its v
+    // axis is n × u = +X; the digest's attachmentFrame puts u on +X instead.
+    const proposal = withHole(proposalFor('Drill a 4 mm hole 5 mm deep'), {
+      position: { u: 5, v: 2 }
+    });
+    const preview = await preflightCadPatch(box, proposal, derive);
+    const [resultId] = preview.candidate.derived.exportableBodyIds;
+    const bore = preview.candidate.derived.bodyRepresentations[
+      resultId!
+    ]!.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    const axis = bore.geometry!.axisStart!;
+    const anchor = top.geometry!.centroid!;
+    expect(axis.x).toBeCloseTo(anchor.x + 2, 6);
+    expect(axis.y).toBeCloseTo(anchor.y - 5, 6);
+  });
+
   it('applies as one transaction that one undo reverts', async () => {
     const preview = await preflightCadPatch(
       box,

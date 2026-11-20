@@ -533,8 +533,10 @@ export type CadPatchOperation =
       /**
        * F03: one simple hole drilled into a planar face of an existing body,
        * built by the manual Hole command (`feature.hole`), which consumes the
-       * body. `position` is measured in the face's own frame from its area
-       * centroid, exactly as the Hole tool's U and V are. `depth` is the
+       * body. `position` is measured from the face's area centroid along
+       * the Hole tool's U and V (`frameFromFace`: u = normalize(r × n),
+       * v = n × u, r = world Z, or world X when |n.z| ≥ 0.9). That is not
+       * the digest's `attachmentFrame`, whose axes differ. `depth` is the
        * blind depth; a through hole carries null.
        */
       kind: 'add_hole';
@@ -3202,7 +3204,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
                 type: 'object',
                 additionalProperties: false,
                 description:
-                  "Hole axis on the face, in the face's attachmentFrame axes measured from its area centroid; {u: 0, v: 0} is the middle of the face.",
+                  "Hole axis offset on the entry face, in the Hole tool's own face frame, NOT attachmentFrame: with n the outward face normal and r = world Z (or world X when |n.z| >= 0.9), the u axis is normalize(r × n) and the v axis is n × u. {u: 0, v: 0} is the face's area centroid, the middle of the face. Use {u: 0, v: 0} unless the user gives an offset.",
                 properties: { u: scalarSchema, v: scalarSchema },
                 required: ['u', 'v']
               }
