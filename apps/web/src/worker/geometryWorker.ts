@@ -60,7 +60,12 @@ import {
   derivedSizeOfSharingBodyGeometry
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
-import { TopologyTransport, type TopologyJson } from '../lib/topologyTransport';
+import {
+  TopologyTransport,
+  type TopologyJson,
+  type TopologyPayload,
+  type TopologyEncoding
+} from '../lib/topologyTransport';
 import { geometryYield } from './geometryYield';
 import { geometryProgress } from './geometryProgress';
 import {
@@ -146,7 +151,7 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       requestId?: string;
       /** Optional reply encoding; older clients keep structured-clone topology. */
-      topologyEncoding?: 'json-v1' | 'json-v2';
+      topologyEncoding?: TopologyEncoding;
       analysis?: EditAnalysisRequest;
       /**
        * Transient lineage demand: body ids whose producing booleans must
@@ -440,7 +445,7 @@ export type GeometrySyncResult =
       transient?: boolean;
       derived: ProjectDocument['derived'];
       /** Topology placeholders are decoded before this result is adopted. */
-      topologyJson?: TopologyJson;
+      topologyJson?: TopologyPayload;
       topologyUndefined?: TopologyJson;
     }
   | {
@@ -1906,7 +1911,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         ...result,
         ...(request.type === 'sync' &&
         (request.topologyEncoding === 'json-v1' ||
-          request.topologyEncoding === 'json-v2')
+          request.topologyEncoding === 'json-v2' ||
+          request.topologyEncoding === 'utf8-v1')
           ? topologyTransport.pack(meshCopy, request.topologyEncoding)
           : { derived: meshCopy })
       };

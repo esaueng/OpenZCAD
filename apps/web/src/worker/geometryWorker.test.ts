@@ -645,8 +645,13 @@ describe('geometry worker rebuild coordination', () => {
       if (message.type !== 'sync' || !message.ok) return;
       expect(options?.transfer).toHaveLength(2);
       const copy = structuredClone(message, options);
-      if (message.requestId === 'cache-hit') {
-        expect(copy.topologyJson).toBeDefined();
+      if (message.requestId !== 'first') {
+        const encoded = copy.topologyJson?.[bodyId];
+        if (message.requestId === 'utf8-v1') {
+          expect(encoded).toBeInstanceOf(Uint8Array);
+        } else {
+          expect(typeof encoded).toBe('string');
+        }
         expect(copy.topologyUndefined).toBeDefined();
         unpackReplyTopologies(
           copy.derived,
@@ -670,17 +675,24 @@ describe('geometry worker rebuild coordination', () => {
         dimensions: { width: 1, height: 1, depth: 1 }
       }
     );
-    for (const requestId of ['first', 'cache-hit']) {
+    for (const requestId of ['first', 'json-v2', 'utf8-v1'] as const) {
       post(scope, {
         type: 'sync',
         document,
         requestId,
-        ...(requestId === 'cache-hit'
-          ? { topologyEncoding: 'json-v2' as const }
-          : {})
+        ...(requestId === 'first' ? {} : { topologyEncoding: requestId })
       });
+      await vi.waitFor(() =>
+        expect(
+          scope.postMessage.mock.calls.some(
+            ([message]) =>
+              message.type === 'sync' && message.requestId === requestId
+          )
+        ).toBe(true)
+      );
     }
-    await vi.waitFor(() => expect(received).toHaveLength(2));
+    expect(received).toHaveLength(3);
+    expect(received[2]).toStrictEqual(received[0]);
     expect(syncDocument).toHaveBeenCalledOnce();
     for (const result of received) {
       expect(result.bodyRepresentations[bodyId]!.mesh).toEqual(mesh);
