@@ -175,9 +175,10 @@ describe('M02 names on boss and cut copies', () => {
 
   it('keeps names off a copy the plate cuts short', async () => {
     const { document, featureId } = await squareFeature('cut');
-    // Copy 4 lands at x = 98, hanging 2 off the plate's end: its walls and
-    // floor are not the original's, so it takes no names; copies 1–3 do.
-    const patterned = row(document, featureId, { count: 5, spacing: 22 });
+    // Copy 4 lands on the plate's end, x = 100, half of it off the plate:
+    // its walls and floor are not the original's, so it takes no names;
+    // copies 1–3 do.
+    const patterned = row(document, featureId, { count: 5, spacing: 22.5 });
     const derived = await adapter.syncDocument(patterned);
     expect(derived.warnings).toEqual([]);
     const labels = new Set(
