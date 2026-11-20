@@ -517,6 +517,20 @@ export interface DrawingBomTable extends DrawingAnnotationBase {
 }
 
 /**
+ * M01: a hole table for one view, its top-left corner at `placementMm`
+ * from the view's centre, so moving the view carries it. Every bore the view sees down its axis is a row,
+ * read from the model each time the sheet is drawn: a tag (a letter per
+ * hole size, a number per bore), its position from the lower-left corner of
+ * the view's bodies, and its size as the hole's callout writes it. The view
+ * carries the tags beside its bores.
+ */
+export interface DrawingHoleTable extends DrawingAnnotationBase {
+  kind: 'hole-table';
+  /** The view whose bores it lists. */
+  viewId: DrawingViewId;
+}
+
+/**
  * v80: a balloon naming the item number of the part an edge belongs to,
  * with a leader to that edge. `componentId` is the assembly component the
  * edge was picked on; its row's item number is read from the BOM table each
@@ -752,6 +766,7 @@ export function isDrawingDimension(
   return (
     annotation.kind !== 'note' &&
     annotation.kind !== 'bom-table' &&
+    annotation.kind !== 'hole-table' &&
     annotation.kind !== 'balloon' &&
     annotation.kind !== 'image' &&
     annotation.kind !== 'datum-feature' &&
@@ -776,6 +791,7 @@ export type DrawingAnnotation =
   | DrawingNote
   | DrawingGeometryAnnotation
   | DrawingBomTable
+  | DrawingHoleTable
   | DrawingBalloon
   | DrawingSheetImage
   | DrawingToleranceAnnotation
@@ -1455,6 +1471,23 @@ export function drawingAnnotationError(
     const error = fitError(value, where);
     if (error) return error;
   }
+  if (value.kind === 'hole-table') {
+    if (
+      [
+        'decimals',
+        'reference',
+        'tolerance',
+        'prefix',
+        'suffix',
+        'provenance',
+        'columns'
+      ].some((key) => value[key] !== undefined)
+    )
+      return `${where} is a hole table, which states no measured value of its own.`;
+    if (value.viewId === undefined)
+      return `${where} is a hole table that lists no view's holes.`;
+    return null;
+  }
   if (value.kind === 'bom-table' || value.kind === 'balloon') {
     if (
       [
@@ -1778,6 +1811,7 @@ export function drawingAnnotationReferences(
     case 'note':
       return annotation.leader ? [annotation.leader] : [];
     case 'bom-table':
+    case 'hole-table':
     case 'image':
     case 'general-tolerance':
       return [];

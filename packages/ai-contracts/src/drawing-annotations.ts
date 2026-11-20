@@ -147,6 +147,7 @@ export interface CadDigestDrawingAnnotation {
     | 'arc-angle'
     | 'three-point-angle'
     | 'bom-table'
+    | 'hole-table'
     | 'balloon'
     | 'image'
     | 'datum-feature'
