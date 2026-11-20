@@ -24,6 +24,7 @@ import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
   unifyCopyChecked,
+  unifyCopyIfStrict,
   unionSwallowedCurvature
 } from './boolean-result-validation';
 import { type KernelUnifyReport, validationReport } from './kernel-validation';
@@ -260,15 +261,21 @@ export function unifyBooleanFaces(kernel: RemusKernel, solid: number): number {
  * it on validation alone sent a perfectly good raw union to the strict pass
  * as "open, non-manifold, or inconsistently oriented".
  *
- * The strict half is the kernel's own verdict from `unifyFacesChecked`; see
- * {@link unifyUnionFacesChecked}, which this returns the solid of.
+ * Use the kernel's strict candidate verdict when available. Older kernels
+ * provide the same decision through {@link unifyUnionFacesChecked}.
  */
 export function unifyUnionFaces(
   kernel: RemusKernel,
   solid: number,
   onAccepted?: (solid: number) => void
 ): number {
-  return unifyUnionFacesChecked(kernel, solid, onAccepted).solid;
+  const candidate = unifyCopyIfStrict(kernel, solid);
+  if (candidate === undefined)
+    return unifyUnionFacesChecked(kernel, solid, onAccepted).solid;
+  if (candidate === solid || !solidMeshIsClosed(kernel, candidate))
+    return solid;
+  onAccepted?.(candidate);
+  return candidate;
 }
 
 /**
