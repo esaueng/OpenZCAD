@@ -527,9 +527,9 @@ export function hasDrawingBom(value: unknown): boolean {
   return false;
 }
 
-/** M01 hole tables on drawing sheets (schema v112). */
+/** M01 hole tables on drawing sheets (schema v115). */
 export function assertDrawingHoleTableSchema(version: unknown): void {
-  assertMinimumProjectSchema(version, 112, 'Hole tables');
+  assertMinimumProjectSchema(version, 115, 'Hole tables');
 }
 
 /** Whether `value` holds an M01 hole table. */

@@ -2,7 +2,7 @@
 row: M01
 ---
 
-Hole tables on drawing sheets (schema v112, up from v111). A `hole-table`
+Hole tables on drawing sheets (schema v115, up from v114). A `hole-table`
 drawing annotation names one view and its place; everything it prints is
 read from the model each time the sheet is drawn. Every bore the view sees
 down its axis is a row: a hole's own bore, a bore at a sketch point, or an
@@ -15,12 +15,12 @@ once per bore (`Ø5 THRU, M6×1 TAP DRILL`). The table is ruled as a parts
 list is, and the view carries each tag up and right of its bore's rim. A
 view that sees no bore down its axis leaves the table broken, with a reason
 that says to place it on a view looking into the holes. Refused: a table
-with no view, one stating a value of its own, and below v112 by the content
+with no view, one stating a value of its own, and below v115 by the content
 gate. UI: a Hole table tool (Y) in Draw's annotation rail. One click takes
 the view, the next places the table's top-left corner, which then moves
 with its view. The table is drawn on screen and in PDF, SVG and DXF exports.
 Evidence: `test/hole-tables.test.ts` (the stored shape and its refusals;
-the v112 gate; the tool's two clicks; on the pinned kernel a 60 × 40 plate
+the v115 gate; the tool's two clicks; on the pinned kernel a 60 × 40 plate
 with a Ø8 hole and an M6 tap drill repeated by a linear pattern, read in the
 top view as A1 40/10 and A2 50/10 `Ø5 THRU, M6×1 TAP DRILL`, B1 15/20
 `Ø8 THRU`, the B1 tag beside its bore; broken in the front view);

@@ -86,7 +86,7 @@ describe('M01 hole tables: the stored annotation', () => {
   });
 
   it('is refused on a document that declares an older schema', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(112);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(115);
     const document = addPrimitiveFeature(
       createProjectDocument('Plate', toUserId('user_m01')),
       {
@@ -108,11 +108,11 @@ describe('M01 hole tables: the stored annotation', () => {
     };
     const old = {
       ...document,
-      schemaVersion: 111,
+      schemaVersion: 114,
       drawings: { sheets: [sheet] }
     } as unknown as ProjectDocument;
     expect(() => assertDocumentContentSchema(old)).toThrow(
-      /Hole tables require project schema v112/
+      /Hole tables require project schema v115/
     );
   });
 
