@@ -8,6 +8,7 @@
 
 import type { BoundaryProvenance } from '@openzcad/shared';
 import type { ViewportCameraState } from './camera/CameraController';
+import type { SnapKind, SnapSource } from './snap/SnapEngine';
 
 export type DisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
 
@@ -128,6 +129,18 @@ export interface ViewerSettings {
 export interface PickDetail {
   point: { x: number; y: number; z: number };
   normal?: { x: number; y: number; z: number };
+  /**
+   * The measure snap `point` was locked onto, when one was. Its `source`
+   * names the edge point the glyph named, so the pick records that point
+   * rather than whatever the bare selection would derive.
+   */
+  snap?: PickSnap;
+}
+
+/** A snap a pick was locked onto: the kind its glyph named, and its source. */
+export interface PickSnap {
+  kind: SnapKind;
+  source?: SnapSource;
 }
 
 /** Pick payload attached to region meshes via userData. */
