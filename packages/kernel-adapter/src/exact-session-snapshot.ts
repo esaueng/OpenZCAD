@@ -64,40 +64,133 @@ export interface PersistedHistorySession {
    * restored kernel had none. Absent in records written before it existed.
    */
   reuse?: PrimitiveReuseState;
+  /**
+   * {@link reuseStateDigest} of `reuse`, checked before any entry is adopted,
+   * as `kernelDigest` is for the kernel bytes: a damaged table is dropped
+   * (the edit replays) rather than trusted. Present exactly when `reuse` is.
+   */
+  reuseDigest?: string;
 }
 
-const isHandleList = (value: unknown) =>
-  Array.isArray(value) && value.every((item) => Number.isSafeInteger(item));
+/** Deterministic JSON of a structured-clonable value: maps keep their order. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) => {
+    if (item instanceof Map) return { $map: [...item] };
+    if (item instanceof Set) return { $set: [...item] };
+    if (ArrayBuffer.isView(item))
+      return { $bytes: Array.from(item as unknown as ArrayLike<number>) };
+    return item;
+  });
+}
 
-/** Shape checks on stored reuse tables; any doubt refuses the session. */
+/**
+ * The digest a session stores beside its reuse tables: two independent
+ * 53-bit string hashes of their canonical JSON. It detects storage damage,
+ * as `kernelDigest` does for the kernel bytes; like those bytes, the tables
+ * live only in this device's own local store.
+ */
+export function reuseStateDigest(state: PrimitiveReuseState): string | null {
+  let text: string;
+  try {
+    text = canonicalJson(state);
+  } catch {
+    return null;
+  }
+  const hash = (seed: number) => {
+    let h1 = 0xdeadbeef ^ seed;
+    let h2 = 0x41c6ce57 ^ seed;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      h1 = Math.imul(h1 ^ code, 2654435761);
+      h2 = Math.imul(h2 ^ code, 1597334677);
+    }
+    h1 =
+      Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+      Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 =
+      Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+      Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  };
+  return `${text.length.toString(36)}-${hash(0)}-${hash(0x9e3779b9)}`;
+}
+
+/** A dense array (no holes) whose every item passes `check`. */
+function denseEvery(value: unknown, check: (item: unknown) => boolean) {
+  if (!Array.isArray(value)) return false;
+  for (let index = 0; index < value.length; index += 1)
+    if (!(index in value) || !check(value[index])) return false;
+  return true;
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object';
+const isHandleList = (value: unknown) =>
+  denseEvery(value, (item) => Number.isSafeInteger(item));
+const isStringList = (value: unknown) =>
+  denseEvery(value, (item) => typeof item === 'string');
+const isShape = (value: unknown) =>
+  isObject(value) && isHandleList(value.solids);
+
+/**
+ * Shape checks on stored reuse tables; any doubt refuses the session. Each
+ * prepared entry may only mark consumed, mesh or partial-revolve the bodies
+ * it names as operands or results, as a recorded build does.
+ */
 function isReuseState(value: unknown): value is PrimitiveReuseState {
-  if (!value || typeof value !== 'object') return false;
-  const state = value as Partial<PrimitiveReuseState>;
-  const keyed = (entries: unknown, check: (entry: object) => boolean) =>
-    Array.isArray(entries) &&
-    entries.every(
+  if (!isObject(value)) return false;
+  const keyed = (
+    entries: unknown,
+    check: (entry: Record<string, unknown>) => boolean
+  ) =>
+    denseEvery(
+      entries,
       (item) =>
         Array.isArray(item) &&
         item.length === 2 &&
         typeof item[0] === 'string' &&
-        !!item[1] &&
-        typeof item[1] === 'object' &&
-        Number.isSafeInteger((item[1] as { index?: unknown }).index) &&
-        typeof (item[1] as { digest?: unknown }).digest === 'string' &&
-        check(item[1] as object)
+        isObject(item[1]) &&
+        Number.isSafeInteger(item[1].index) &&
+        (item[1].index as number) >= 0 &&
+        typeof item[1].digest === 'string' &&
+        check(item[1])
     );
   return (
-    keyed(state.primitives, (entry) =>
-      isHandleList((entry as { shape?: { solids?: unknown } }).shape?.solids)
-    ) &&
-    keyed(state.prepared, (entry) => {
-      const prepared = entry as Record<string, unknown>;
+    keyed(value.primitives, (entry) => isShape(entry.shape)) &&
+    keyed(value.prepared, (entry) => {
+      const { inputs, shapes, consumed, mesh, partialRevolve } = entry;
+      if (
+        !denseEvery(
+          inputs,
+          (input) =>
+            isObject(input) &&
+            typeof input.bodyId === 'string' &&
+            isShape(input.shape) &&
+            typeof input.consumed === 'boolean' &&
+            typeof input.mesh === 'boolean' &&
+            typeof input.partialRevolve === 'boolean'
+        ) ||
+        !(shapes instanceof Map) ||
+        ![...shapes].every(
+          ([bodyId, shape]) => typeof bodyId === 'string' && isShape(shape)
+        ) ||
+        !isStringList(consumed) ||
+        !isStringList(mesh) ||
+        !isStringList(partialRevolve)
+      )
+        return false;
+      const operands = new Set(
+        (inputs as { bodyId: string }[]).map((input) => input.bodyId)
+      );
+      const named = new Set([
+        ...operands,
+        ...(shapes as Map<string, unknown>).keys()
+      ]);
       return (
-        Array.isArray(prepared.inputs) &&
-        prepared.shapes instanceof Map &&
-        Array.isArray(prepared.consumed) &&
-        Array.isArray(prepared.mesh) &&
-        Array.isArray(prepared.partialRevolve)
+        (consumed as string[]).every((id) => operands.has(id)) &&
+        [...(mesh as string[]), ...(partialRevolve as string[])].every((id) =>
+          named.has(id)
+        )
       );
     })
   );
@@ -196,7 +289,9 @@ export function isPersistedHistorySession(
     Array.isArray(build.warnings) &&
     Array.isArray(build.featureWarnings) &&
     Array.isArray(build.referenceRepairs) &&
-    (session.reuse === undefined || isReuseState(session.reuse))
+    (session.reuse === undefined
+      ? session.reuseDigest === undefined
+      : typeof session.reuseDigest === 'string' && isReuseState(session.reuse))
   );
 }
 
