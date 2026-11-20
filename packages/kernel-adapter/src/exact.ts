@@ -2394,6 +2394,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // The restored arena still holds what the captured kernel's replays
         // retired: its budget continues where that kernel's stopped.
         this.historyReplayWork = offered.replayWork;
+        // The capturing kernel's reuse tables name handles the snapshot
+        // kept; an entry no longer at its position and digest is dropped.
+        if (offered.reuse)
+          this.primitiveBuildCache.importState(
+            offered.reuse,
+            features,
+            offered.digests
+          );
         kernel = restored;
         restored = null;
         seeded = offered;
@@ -3915,7 +3923,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           kernelBytes,
           kernelDigest: support.snapshotDigest(kernelBytes),
           projectionSignature: projectionSignature(live.derived),
-          replayWork: this.historyReplayWork
+          replayWork: this.historyReplayWork,
+          reuse: this.primitiveBuildCache.exportState()
         };
       } catch {
         // A refusal (`snapshot:poisoned`, `transient_state`, a limit) only

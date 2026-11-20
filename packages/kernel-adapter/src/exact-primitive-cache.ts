@@ -4,7 +4,10 @@ import {
   type StandardPartBuild
 } from '@openzcad/shared';
 import type { ExactBuildResult, ExactShape } from './exact-types';
-import { PreparedEditSession } from './prepared-edit-session';
+import {
+  PreparedEditSession,
+  type PreparedEditEntries
+} from './prepared-edit-session';
 
 interface Entry {
   index: number;
@@ -69,6 +72,16 @@ function preservesPrimitiveInputs(feature: FeatureNode): boolean {
 }
 
 /** Same-kernel immutable results; every actual topology restore retires its tail. */
+/**
+ * The independent-reuse tables of one kernel state, as a persisted session
+ * carries them (`exact-session-snapshot.ts`). Structured-clonable; every
+ * handle names an entity of the kernel snapshot stored beside it.
+ */
+export interface PrimitiveReuseState {
+  primitives: [FeatureNode['featureId'], Entry][];
+  prepared: PreparedEditEntries;
+}
+
 export class PrimitiveBuildCache {
   private readonly entries = new Map<FeatureNode['featureId'], Entry>();
   private readonly prepared = new PreparedEditSession();
@@ -76,6 +89,41 @@ export class PrimitiveBuildCache {
   clear(): void {
     this.prepared.clear();
     this.entries.clear();
+  }
+
+  /** The tables for a persisted session of the kernel's current state. */
+  exportState(): PrimitiveReuseState {
+    return {
+      primitives: structuredClone([...this.entries]),
+      prepared: this.prepared.exportEntries()
+    };
+  }
+
+  /**
+   * Adopts a persisted session's tables after its kernel snapshot was
+   * restored, so the first edit after a reopen reuses independent results
+   * as the session that captured them did instead of replaying them.
+   * `digests` are the restored history's; an entry whose feature is not at
+   * its recorded position with its recorded digest is dropped.
+   */
+  importState(
+    state: PrimitiveReuseState,
+    features: readonly FeatureNode[],
+    digests: readonly string[]
+  ): void {
+    this.clear();
+    const indexOf = new Map(
+      features.map((feature, index) => [feature.featureId, index])
+    );
+    const current = (
+      featureId: FeatureNode['featureId'],
+      index: number,
+      digest: string
+    ) => indexOf.get(featureId) === index && digests[index] === digest;
+    for (const [featureId, entry] of state.primitives)
+      if (current(featureId, entry.index, entry.digest))
+        this.entries.set(featureId, entry);
+    this.prepared.importEntries(state.prepared, current);
   }
 
   prune(features: readonly FeatureNode[]): void {

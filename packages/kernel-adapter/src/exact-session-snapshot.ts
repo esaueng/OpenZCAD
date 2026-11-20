@@ -21,6 +21,7 @@
 import type { DerivedState } from '@openzcad/shared';
 import type { ExactBuildResult } from './exact-types';
 import type { EdgeSelectionMemoryState } from './exact-edge-selection-transport';
+import type { PrimitiveReuseState } from './exact-primitive-cache';
 import { RemusKernel } from './remus-runtime';
 
 /** Bumped whenever the JS half of a persisted session changes shape. */
@@ -55,6 +56,51 @@ export interface PersistedHistorySession {
    * retired, so a restore carries the count on instead of starting at zero.
    */
   replayWork: number;
+  /**
+   * The captured kernel's independent-reuse tables (primitive results and
+   * prepared transforms/intersections), whose handles the snapshot keeps.
+   * Restored with it, the first edit after a reopen reuses them as the
+   * capturing session would have, instead of replaying them because the
+   * restored kernel had none. Absent in records written before it existed.
+   */
+  reuse?: PrimitiveReuseState;
+}
+
+const isHandleList = (value: unknown) =>
+  Array.isArray(value) && value.every((item) => Number.isSafeInteger(item));
+
+/** Shape checks on stored reuse tables; any doubt refuses the session. */
+function isReuseState(value: unknown): value is PrimitiveReuseState {
+  if (!value || typeof value !== 'object') return false;
+  const state = value as Partial<PrimitiveReuseState>;
+  const keyed = (entries: unknown, check: (entry: object) => boolean) =>
+    Array.isArray(entries) &&
+    entries.every(
+      (item) =>
+        Array.isArray(item) &&
+        item.length === 2 &&
+        typeof item[0] === 'string' &&
+        !!item[1] &&
+        typeof item[1] === 'object' &&
+        Number.isSafeInteger((item[1] as { index?: unknown }).index) &&
+        typeof (item[1] as { digest?: unknown }).digest === 'string' &&
+        check(item[1] as object)
+    );
+  return (
+    keyed(state.primitives, (entry) =>
+      isHandleList((entry as { shape?: { solids?: unknown } }).shape?.solids)
+    ) &&
+    keyed(state.prepared, (entry) => {
+      const prepared = entry as Record<string, unknown>;
+      return (
+        Array.isArray(prepared.inputs) &&
+        prepared.shapes instanceof Map &&
+        Array.isArray(prepared.consumed) &&
+        Array.isArray(prepared.mesh) &&
+        Array.isArray(prepared.partialRevolve)
+      );
+    })
+  );
 }
 
 interface SnapshotKernelStatics {
@@ -149,7 +195,8 @@ export function isPersistedHistorySession(
     build.partialRevolveBodies instanceof Set &&
     Array.isArray(build.warnings) &&
     Array.isArray(build.featureWarnings) &&
-    Array.isArray(build.referenceRepairs)
+    Array.isArray(build.referenceRepairs) &&
+    (session.reuse === undefined || isReuseState(session.reuse))
   );
 }
 

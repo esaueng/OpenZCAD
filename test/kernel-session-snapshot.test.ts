@@ -592,6 +592,82 @@ describe.skipIf(!supported)('persisted history sessions', () => {
     );
   });
 
+  it("reuses the capturing session's independent results on the first edit", async () => {
+    const document = await filletedPart();
+    const session = await capturedSession(document);
+    expect(session.reuse?.primitives.length).toBeGreaterThan(0);
+    // The Post is independent of the pocketed plate: a session that knows
+    // the plate's two primitives need not rebuild them.
+    const post = listFeaturesInOrder(document).find(
+      (feature) => feature.name === 'Post'
+    )!;
+    const edited = updateFeature(document, {
+      featureId: post.featureId,
+      data: { dimensions: { width: 7, height: 6, depth: 12 } }
+    });
+    const features = listFeaturesInOrder(document).length;
+    const firstEdit = async (stored: PersistedHistorySession) => {
+      const { reopened, events } = await reopen(document, stored);
+      expect(events[0]!.sessionRestore).toBe('restored');
+      const derived = await reopened.syncDocument(
+        edited,
+        undefined,
+        undefined,
+        undefined,
+        IDLE
+      );
+      return { derived, event: events[1]! };
+    };
+    // A record written before the tables existed replays everything.
+    const { reuse: _reuse, ...withoutReuse } = session;
+    const before = await firstEdit(withoutReuse);
+    expect(before.event).toMatchObject({ replayed: features, restored: 0 });
+    const after = await firstEdit(session);
+    expect(after.event.kind).toBe('independent-reuse');
+    expect(
+      (after.event.reusedPrimitives ?? 0) +
+        (after.event.reusedPreparedFeatures ?? 0)
+    ).toBeGreaterThanOrEqual(2);
+    expect(after.event.replayed).toBeLessThan(before.event.replayed);
+    const fresh = comparable(await freshReplay(edited));
+    expect(comparable(after.derived)).toEqual(fresh);
+    expect(comparable(before.derived)).toEqual(fresh);
+  });
+
+  it('drops reuse entries that no longer match the restored history', async () => {
+    const document = await filletedPart();
+    const session = await capturedSession(document);
+    // Damaged into another shape: the whole record is refused.
+    expect(
+      isPersistedHistorySession({
+        ...session,
+        reuse: { primitives: [['x', { index: 'a' }]], prepared: [] }
+      })
+    ).toBe(false);
+    // A stale digest is only that entry's miss: the restore still matches
+    // and the edit replays what the entry would have reused.
+    const stale = structuredClone(session);
+    for (const [, entry] of stale.reuse!.primitives) entry.digest += '-stale';
+    for (const [, entry] of stale.reuse!.prepared) entry.digest += '-stale';
+    expect(isPersistedHistorySession(stale)).toBe(true);
+    const { reopened, events } = await reopen(document, stale);
+    expect(events[0]!.sessionRestore).toBe('restored');
+    const plate = listFeaturesInOrder(document)[0]!;
+    const edited = updateFeature(document, {
+      featureId: plate.featureId,
+      data: { dimensions: { width: 41, height: 24, depth: 10 } }
+    });
+    const derived = await reopened.syncDocument(
+      edited,
+      undefined,
+      undefined,
+      undefined,
+      IDLE
+    );
+    expect(events[1]!.reusedPrimitives ?? 0).toBe(0);
+    expect(comparable(derived)).toEqual(comparable(await freshReplay(edited)));
+  });
+
   it('ignores a session for another project', async () => {
     const document = await filletedPart();
     const session = await capturedSession(document);
