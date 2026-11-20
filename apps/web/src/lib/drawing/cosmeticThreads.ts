@@ -88,7 +88,7 @@ export function cosmeticThreads(
       const holeId = holeOfBoreFace(face.reference);
       const callout = holeId ? holes(holeId) : null;
       const thread = callout?.thread;
-      if (!holeId || !thread?.cosmetic) continue;
+      if (!holeId || !callout || !thread?.cosmetic) continue;
       const span = sub(geometry.axisEnd, geometry.axisStart);
       const bore = length(span);
       if (!(bore > 0)) continue;
