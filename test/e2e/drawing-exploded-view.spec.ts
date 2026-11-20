@@ -39,7 +39,8 @@ function pulledOutPin() {
     commandFactories.addPrimitive({
       name: 'Pin',
       primitiveKind: 'box',
-      dimensions: { width: 6, height: 10, depth: 6 }
+      // As deep as the plate, so its top edge is the front view's top.
+      dimensions: { width: 6, height: 10, depth: 20 }
     })
   );
   const [plate, pin] = manager.document.bodyOrder as [BodyId, BodyId];
@@ -113,28 +114,38 @@ test(
       .map(Number) as [number, number];
     await front.click();
     await panel.getByLabel('Exploded').check();
-    // The pin, pulled 60 mm along X, now lies clear of the 40 mm plate it
-    // sat inside: the front view widens by well over 30 mm of model.
+    // Both boxes start at the origin corner, so the 6 mm pin sat inside
+    // the 40 mm plate's span. Pulled 60 mm along X it reaches 66 mm.
+    expect(assembled).toBeCloseTo((40 * num) / den, 1);
     await expect
       .poll(span, { timeout: 30_000 })
-      .toBeGreaterThan(assembled + (30 * num) / den);
+      .toBeCloseTo((66 * num) / den, 1);
     // The toggle kept the sheet current: no Update is asked for.
     await expect(drawings.locator('.drawing-sync.is-outdated')).toHaveCount(0);
 
     // A dimension is refused on it, with the reason; a balloon is not.
     const tools = drawings.getByRole('toolbar', { name: 'Annotation tools' });
-    const box = (await front.boundingBox())!;
-    const pxPerMm = box.width / Number(await front.getAttribute('width'));
-    const top = box.y + 3 * pxPerMm;
+    // Measured after each tool is chosen: choosing one can refit the sheet.
+    const pinTop = async () => {
+      const box = (await front.boundingBox())!;
+      const pxPerMm = box.width / Number(await front.getAttribute('width'));
+      return {
+        x: box.x + box.width - 6 * pxPerMm,
+        y: box.y + 3 * pxPerMm,
+        pxPerMm
+      };
+    };
     await tools.getByRole('button', { name: 'Horizontal' }).click();
-    await page.mouse.click(box.x + box.width - 6 * pxPerMm, top);
+    let at = await pinTop();
+    await page.mouse.click(at.x, at.y);
     await expect(page.getByRole('contentinfo')).toContainText(
       'An exploded view takes notes and balloons only'
     );
     await page.keyboard.press('Escape');
     await tools.getByRole('button', { name: 'Balloon' }).click();
-    await page.mouse.click(box.x + box.width - 6 * pxPerMm, top);
-    await page.mouse.click(box.x + box.width - 6 * pxPerMm, top - 15 * pxPerMm);
+    at = await pinTop();
+    await page.mouse.click(at.x, at.y);
+    await page.mouse.click(at.x, at.y - 15 * at.pxPerMm);
     await expect(
       canvas.getByRole('button', { name: 'Balloon 2' })
     ).toBeVisible();
