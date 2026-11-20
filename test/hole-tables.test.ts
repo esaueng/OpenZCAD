@@ -62,7 +62,7 @@ function view(viewId: DrawingViewId, bodyId: BodyId): DrawingView {
 
 function table(viewId: DrawingViewId): DrawingAnnotation {
   return {
-    annotationId: 'dan_holes' as DrawingAnnotationId,
+    annotationId: 'dann_holes' as DrawingAnnotationId,
     kind: 'hole-table',
     viewId,
     placementMm: { x: -40, y: -40 }
@@ -129,11 +129,11 @@ describe('M01 hole tables: the stored annotation', () => {
     expect(
       draftAnnotation(
         placed.ok ? placed.tool : tool,
-        'dan_new' as DrawingAnnotationId,
+        'dann_new' as DrawingAnnotationId,
         { x: -40, y: -60 }
       )
     ).toEqual({
-      annotationId: 'dan_new',
+      annotationId: 'dann_new',
       kind: 'hole-table',
       viewId: TOP,
       placementMm: { x: -40, y: -60 }
@@ -173,10 +173,11 @@ describe('M01 hole tables: read from the model', () => {
       style: 'simple',
       diameter: 8,
       depthMode: 'through',
+      // From the face's centroid, which an earlier hole has moved; the
+      // face's u runs along −y.
       position: {
-        // The face's u runs along −y.
-        u: (body.bbox.min.y + body.bbox.max.y) / 2 - y,
-        v: x - (body.bbox.min.x + body.bbox.max.x) / 2
+        u: (face.geometry!.centroid ?? face.geometry!.center).y - y,
+        v: x - (face.geometry!.centroid ?? face.geometry!.center).x
       },
       positionAnchor: 'centroid',
       ...extra
