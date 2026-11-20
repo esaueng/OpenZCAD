@@ -168,8 +168,8 @@ export function affectedFeatureTargets(
   // R01 (schema v99): whatever a feature reads by datum-point or
   // coordinate-system reference moves when that datum does.
   const datumRefsAffected = (data: FeatureData) =>
-    [...featureDatumPointRefs(data), ...featureDatumCsysRefs(data)].some(
-      (id) => affectedDatums.has(id)
+    [...featureDatumPointRefs(data), ...featureDatumCsysRefs(data)].some((id) =>
+      affectedDatums.has(id)
     );
   const pointAffected = (point: DatumPointSource) =>
     (point.type === 'edge-vertex' && affectedBodies.has(point.bodyId)) ||
@@ -327,7 +327,11 @@ export function affectedFeatureTargets(
           // does an M01 hole drilled at them.
           ((data.featureKind === 'pattern' || data.featureKind === 'hole') &&
             data.points !== undefined &&
-            affectedSketches.has(data.points.sketchId));
+            affectedSketches.has(data.points.sketchId)) ||
+          // M02: a pattern along a path moves with its sketch's curves.
+          (data.featureKind === 'pattern' &&
+            data.path !== undefined &&
+            affectedSketches.has(data.path.sketchId));
         break;
       case 'gear':
         affected =

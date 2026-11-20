@@ -1012,6 +1012,53 @@ describe('assistant integration', () => {
     expect(schema).not.toContain('"const":"add_datum_sketch"');
     expect(schema).not.toContain('"const":"add_datum_mirror"');
     expect(schema).not.toContain('"const":"add_datum_split"');
+    // F03 holes stay dark until their own flag is set.
+    expect(schema).not.toContain('"const":"add_hole"');
+    expect(enabledLine).not.toContain('`add_hole`');
+  });
+
+  it('offers add_hole only behind its flag and only to a client that parses it', async () => {
+    async function holeRequest(operations?: readonly string[]) {
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response('data: {"type":"response.completed"}\n\n', {
+            headers: { 'content-type': 'text/event-stream' }
+          })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      await streamAssistantProposal(
+        { ...input, ...(operations ? { operations } : {}) },
+        {
+          AI_PROVIDER: 'responses-compatible',
+          AI_API_KEY: 'key',
+          AI_BASE_URL: 'https://models.example.test/v1/responses',
+          AI_PATCH_HOLE_ENABLED: 'true'
+        },
+        'user_test'
+      );
+      const request = JSON.parse(
+        fetchMock.mock.calls[0]![1]?.body as string
+      ) as { instructions: string; text: { format: { schema: unknown } } };
+      return {
+        enabledLine: request.instructions
+          .split('\n')
+          .find((line) => line.includes('enabled for this deployment'))!,
+        schema: JSON.stringify(request.text.format.schema)
+      };
+    }
+    const current = await holeRequest(CAD_PATCH_OPERATION_KINDS);
+    expect(CAD_PATCH_OPERATION_KINDS).toContain('add_hole');
+    expect(current.enabledLine).toContain('`add_hole`');
+    expect(current.schema).toContain('"const":"add_hole"');
+    // A tab loaded before add_hole existed would refuse the reply it parses.
+    for (const stale of [
+      undefined,
+      CAD_PATCH_OPERATION_KINDS.filter((kind) => kind !== 'add_hole')
+    ]) {
+      const request = await holeRequest(stale);
+      expect(request.enabledLine).not.toContain('`add_hole`');
+      expect(request.schema).not.toContain('"const":"add_hole"');
+    }
   });
 
   async function datumRequest(
@@ -2260,6 +2307,7 @@ describe('assistant integration', () => {
     'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
     'AI_PATCH_MIRROR_ENABLED',
     'AI_PATCH_SHELL_ENABLED',
+    'AI_PATCH_HOLE_ENABLED',
     'AI_PATCH_SOLID_OFFSET_ENABLED',
     'AI_PATCH_DATUM_PLANE_ENABLED',
     'AI_PATCH_DATUM_GEOMETRY_ENABLED',

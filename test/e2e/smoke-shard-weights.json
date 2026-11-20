@@ -120,6 +120,7 @@
   "phone-stage.spec.ts": 45,
   "picked-feature-delete.spec.ts": 40,
   "picked-step-feature-delete.spec.ts": 53,
+  "path-pattern.spec.ts": 12,
   "point-pattern.spec.ts": 12,
   "print-clearance.spec.ts": 20,
   "progressive-loading.spec.ts": 10,
@@ -185,5 +186,6 @@
   "encrypted-comments.spec.ts": 20,
   "step-structure.spec.ts": 20,
   "iges-exchange.spec.ts": 20,
-  "history-text-custom-feature.spec.ts": 20
+  "history-text-custom-feature.spec.ts": 20,
+  "selected-face-hole.spec.ts": 15
 }

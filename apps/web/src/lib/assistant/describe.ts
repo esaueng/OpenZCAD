@@ -184,6 +184,8 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `${operation.name} — mirror ${describeBodyRef(operation.targetBodyId)} across the plane through ${vector(operation.plane.origin)}, normal ${vector(operation.plane.normal)}`;
     case 'add_shell':
       return `${operation.name} — shell ${describeBodyRef(operation.targetBodyId)} at ${value(operation.thickness)}, ${plural(operation.openingFaceHashes.length, 'open face')}`;
+    case 'add_hole':
+      return `${operation.name} — drill a ${value(operation.diameter)} ${operation.depthMode === 'through' ? 'through hole' : `hole ${value(operation.depth ?? null)} deep`} into ${describeBodyRef(operation.targetBodyId)} at u ${value(operation.position.u)}, v ${value(operation.position.v)} from the face centre`;
     case 'add_solid_offset':
       return `${operation.name} — offset ${describeBodyRef(operation.targetBodyId)} by ${value(operation.distance)}`;
     case 'add_datum_plane':
@@ -239,6 +241,7 @@ export function operationCreatesBody(operation: CadPatchOperation): boolean {
     operation.kind === 'add_datum_mirror' ||
     operation.kind === 'add_datum_split' ||
     operation.kind === 'add_shell' ||
+    operation.kind === 'add_hole' ||
     operation.kind === 'add_solid_offset'
   );
 }

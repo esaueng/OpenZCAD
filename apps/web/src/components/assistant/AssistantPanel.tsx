@@ -26,7 +26,9 @@ import {
   proposalForEditCandidate,
   createCadDocumentDigest,
   createAllEdgesFilletProposal,
+  createSelectedFaceHoleProposal,
   parseAllEdgesFilletRequest,
+  parseSelectedFaceHoleRequest,
   MAX_ASSISTANT_ATTACHMENTS,
   parseCadPatchProposal,
   type AssistantReply,
@@ -956,10 +958,19 @@ export function AssistantPanel({
             ? createAllEdgesFilletProposal(doc, selection, text)
             : null;
         if (allEdgesFillet?.error) throw new Error(allEdgesFillet.error);
+        // F03: one simple hole in the selected flat face, provider-free,
+        // through the manual Hole command and the same exact preflight.
+        const selectedFaceHole =
+          attachments.length === 0 && !answers && !allEdgesFillet
+            ? createSelectedFaceHoleProposal(doc, selection, text)
+            : null;
+        if (selectedFaceHole?.error) throw new Error(selectedFaceHole.error);
         const verifiedSuggestion =
           attachments.length === 0 ? findDirectSuggestion(text) : undefined;
         const localProposal =
-          allEdgesFillet?.proposal ?? verifiedSuggestion?.proposal;
+          allEdgesFillet?.proposal ??
+          selectedFaceHole?.proposal ??
+          verifiedSuggestion?.proposal;
         if (localProposal) {
           const proposal = parseCadPatchProposal(
             structuredClone(localProposal)
@@ -1090,7 +1101,9 @@ export function AssistantPanel({
       return;
     }
     const verified = Boolean(
-      findDirectSuggestion(text) || parseAllEdgesFilletRequest(text)
+      findDirectSuggestion(text) ||
+      parseAllEdgesFilletRequest(text) ||
+      parseSelectedFaceHoleRequest(text)
     );
     if (thinking || (!configured && !verified)) {
       // Handed back to the prompt line rather than lost. An unconfigured

@@ -446,10 +446,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // engraved into a cylinder or cone): an older client cannot build one, so
 // it must refuse. Builds on v110 (v109 was left unused when L15 landed
 // first).
+// v112 adds M02 patterns along a sketch path (`patternKind: 'path'` and
+// `path`): copies spaced by arc length along joined sketch lines and arcs,
+// moved or also turned with the path. An older client has no such
+// arrangement and would build a linear pattern in its place, so it must
+// refuse. Builds on v111.
 // v113 adds the F01 offset-from-face extent (`toFaceOffset` on a to-face
 // extrude): the extrusion stops that far short of its face (or, negative,
 // passes it). An older client would build to the face itself, so it must
-// refuse. Builds on v112 (claimed by #1785, M02 path patterns).
+// refuse. Builds on v112 (#1785, M02 path patterns).
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 113 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
@@ -564,7 +569,7 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
  * none, the consume-everything Boolean every document before v24 stores.
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
-export type PatternKind = 'linear' | 'circular' | 'grid' | 'points';
+export type PatternKind = 'linear' | 'circular' | 'grid' | 'points' | 'path';
 
 /** M02 (schema v63): the sketch points a `points` pattern repeats at. */
 export interface PatternPoints {
@@ -573,6 +578,31 @@ export interface PatternPoints {
   pointIds: string[];
   /** Where the original stands; it makes no copy and cannot be skipped. */
   referencePointId: string;
+}
+
+/**
+ * M02 (schema v112): the sketch path a `path` pattern repeats along. Its
+ * lines and arcs join end to end in one chain, open or closed; the copies
+ * stand at whole multiples of the pattern's spacing along it, measured from
+ * its start, where the original stands.
+ */
+export interface PatternPath {
+  sketchId: SketchId;
+  /** Line and arc entity ids, each once, in any order. */
+  entityIds: string[];
+  /**
+   * Start at the other end. An open path starts at the free end of the
+   * earliest-listed of its two end curves (a lone line at its first point,
+   * a lone arc at its start angle); a closed one where its first-listed
+   * curve begins.
+   */
+  reversed?: boolean;
+  /**
+   * `'tangent'` also turns each copy, in the sketch plane, by how far the
+   * path has turned from its start; absent keeps every copy square to the
+   * original, only moved.
+   */
+  orientation?: 'tangent';
 }
 
 /**
@@ -3155,6 +3185,13 @@ export type FeatureData =
        * `axis`, `spacing` and `angleDeg` are stored but not read.
        */
       points?: PatternPoints;
+      /**
+       * M02 (schema v112), `patternKind: 'path'` only, and required there:
+       * `count` instances, the original's included, `spacing` apart by arc
+       * length along this sketch path from its start. `axis` and `angleDeg`
+       * are stored but not read.
+       */
+      path?: PatternPath;
     }
   | {
       featureKind: 'direct-edit';

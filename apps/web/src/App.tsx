@@ -269,6 +269,7 @@ import {
   computeSketchProfileAnalysis,
   computeSketchRegions,
   newCanonicalPlaneRef,
+  pathPatternCurves,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -2002,6 +2003,7 @@ import type * as DatumPicks from './lib/inPlace/datumPicks';
 import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
   parseCurveCandidateId,
+  isPathPatternCurve,
   sketchCurveCandidates,
   sketchPointCandidates,
   sketchCurveMiddle,
@@ -12514,7 +12516,9 @@ export function App() {
           feature.data.featureKind === 'sheet-metal',
           (feature.data.featureKind === 'pattern' &&
             feature.data.patternKind === 'points') ||
-            feature.data.featureKind === 'hole'
+            feature.data.featureKind === 'hole',
+          feature.data.featureKind === 'pattern' &&
+            feature.data.patternKind === 'path'
         ),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
@@ -12779,18 +12783,22 @@ export function App() {
     entityId: string,
     bendLine = false,
     /** M02: a pattern on sketch points picks point entities instead. */
-    point = false
+    point = false,
+    /** M02: a pattern along a path takes lines and arcs, construction too. */
+    pathCurve = false
   ): boolean {
     const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
-      (point
-        ? node.data.objectKind === 'point'
-        : bendLine
-          ? node.data.objectKind === 'line'
-          : !node.data.construction &&
-            (node.data.objectKind === 'line' ||
-              node.data.objectKind === 'arc')) &&
+      (pathCurve
+        ? isPathPatternCurve(node.data)
+        : point
+          ? node.data.objectKind === 'point'
+          : bendLine
+            ? node.data.objectKind === 'line'
+            : !node.data.construction &&
+              (node.data.objectKind === 'line' ||
+                node.data.objectKind === 'arc')) &&
       (findSketch(current, sketchId)?.objectIds.includes(
         entityId as EntityId
       ) ??
@@ -26359,7 +26367,8 @@ export function App() {
           ...(request.skippedInstances
             ? { skippedInstances: request.skippedInstances }
             : {}),
-          ...(request.points ? { points: request.points } : {})
+          ...(request.points ? { points: request.points } : {}),
+          ...(request.path ? { path: request.path } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -26622,6 +26631,28 @@ export function App() {
             sketchValueResolver(parameterScope.scope, doc.units)
           )
         : [],
+    // M02: a pattern along a path reads its lines and arcs on their plane.
+    sketchPath: (sketchId, entityIds) => {
+      const view = availableSketchViews.find(
+        (candidate) => candidate.sketchId === sketchId
+      );
+      if (!doc || !view) return null;
+      const resolve = sketchValueResolver(parameterScope.scope, doc.units);
+      try {
+        // The solved sketch, as the build reads it: a line a linked
+        // projection turned is where the copies go.
+        const curves = pathPatternCurves(
+          sketchReadDocument ?? doc,
+          { sketchId, entityIds: [...entityIds] },
+          (value) => resolve(value)
+        );
+        return typeof curves === 'string'
+          ? curves
+          : { curves, basis: view.basis };
+      } catch {
+        return null;
+      }
+    },
     curveMiddle: (sketchId, entityId) =>
       doc
         ? sketchCurveMiddle(
@@ -27934,6 +27965,24 @@ export function App() {
       );
       return bendLineCandidates(doc, views, blank, (value) => resolve(value));
     }
+    // M02: a pattern along a path picks lines and arcs, construction ones
+    // included; an edit offers only sketches made before it.
+    if (inPlaceSpec.id === 'path-pattern') {
+      const views = inPlaceEditing
+        ? availableSketchViews.filter((view) =>
+            featurePrecedes(
+              producingFeatureOf({ sketchId: view.sketchId }),
+              inPlaceEditing.featureId
+            )
+          )
+        : availableSketchViews;
+      return sketchCurveCandidates(
+        doc,
+        views,
+        (value) => resolve(value),
+        isPathPatternCurve
+      );
+    }
     // M02: a pattern on sketch points picks point entities, not curves.
     if (inPlaceSpec.id === 'point-pattern') {
       return sketchPointCandidates(doc, availableSketchViews, (value) =>
@@ -28155,7 +28204,8 @@ export function App() {
             pick.sketchId,
             pick.entityId,
             inPlace.tool === 'bend',
-            inPlace.tool === 'point-pattern' || inPlace.tool === 'hole'
+            inPlace.tool === 'point-pattern' || inPlace.tool === 'hole',
+            inPlace.tool === 'path-pattern'
           ),
         inPlace.tool === 'bend'
       );
