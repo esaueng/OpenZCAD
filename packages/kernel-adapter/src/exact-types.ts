@@ -4,7 +4,12 @@
  * diagnostics. Types only — no runtime code — so any module may import them
  * without creating a cycle.
  */
-import type { DatumAxis, DatumCsys, PlaneBasis, Vec3 } from '@openzcad/geometry';
+import type {
+  DatumAxis,
+  DatumCsys,
+  PlaneBasis,
+  Vec3
+} from '@openzcad/geometry';
 import type {
   BoundingBox,
   BodyId,
@@ -12,6 +17,7 @@ import type {
   BodyTopology,
   EdgeReferenceRepair,
   EdgeHashRepair,
+  EdgeWitnessV1,
   FaceReferenceRepair,
   FeatureId,
   FeatureWarning,
@@ -144,6 +150,13 @@ export interface ExactBuildResult {
    * Build-local only, copied with retained history checkpoints.
    */
   sketchProjectionFailures?: Map<SketchId, string>;
+  /**
+   * M02: the edges each fillet or chamfer rounded, measured on its target as
+   * its build found them (after any upstream edit moved them), keyed by
+   * feature id. A feature pattern repeating it moves these onto each copy.
+   * Build-local only, copied with retained history checkpoints.
+   */
+  blendEdgeWitnesses?: Map<FeatureId, EdgeWitnessV1[]>;
 }
 
 /** Same-kernel measurement handles and the verdicts established for them. */
