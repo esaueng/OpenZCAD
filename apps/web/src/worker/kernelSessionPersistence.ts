@@ -107,6 +107,12 @@ export class KernelSessionPersistence {
   private readonly stored = new Map<string, string>();
   private readonly lastWriteAt = new Map<string, number>();
   private pending: PendingCapture | null = null;
+  /**
+   * The latest capture asked for, kept after it runs: a capture refused
+   * because the kernel was worn is asked again once a warm-up has compacted
+   * that kernel, so the revision is still stored before the project closes.
+   */
+  private lastRequested: PendingCapture | null = null;
   private timer: unknown;
   private capturing = false;
   private warmup: {
@@ -184,6 +190,7 @@ export class KernelSessionPersistence {
    */
   forget(): void {
     this.generation += 1;
+    this.lastRequested = null;
     this.cancel();
     this.dropWarmup();
   }
@@ -201,6 +208,7 @@ export class KernelSessionPersistence {
       return;
     }
     this.pending = { adapter, document, contentKey };
+    this.lastRequested = this.pending;
     this.arm();
   }
 
@@ -277,6 +285,16 @@ export class KernelSessionPersistence {
         (warmed || serial === this.deps.workSerial())
       )
         this.warmup = null;
+      // A capture of this document may have been refused while the kernel
+      // was worn; the compacted kernel holds the same state, so ask again
+      // (a no-op when that content is already stored).
+      const requested = this.lastRequested;
+      if (
+        warmed &&
+        requested?.document === document &&
+        serial === this.deps.workSerial()
+      )
+        this.schedule(requested.adapter, document, requested.contentKey);
     } catch {
       // Idle work: a failure leaves the restored kernel as it was.
       if (this.warmup === warmup) this.warmup = null;

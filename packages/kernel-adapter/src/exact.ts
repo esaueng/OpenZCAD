@@ -1864,6 +1864,23 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
   }
 
+  /**
+   * Re-reads the history kernel's arena wear. Checkpoint admission keeps it
+   * current while features replay; a restore that replays nothing (an undo
+   * of a large terminal feature, an export's own copies, temporary
+   * measurement checkpoints) retires slots without admitting a checkpoint,
+   * so those paths call this instead.
+   */
+  private refreshArenaWear(kernel: RemusKernel | null = this.historyKernel) {
+    if (!kernel || kernel !== this.historyKernel) return;
+    const memory = checkpointMemoryStats(kernel);
+    if (memory)
+      this.historyArenaWear = historyArenaWear(
+        memory,
+        this.options.historyArenaRetention
+      );
+  }
+
   private invalidateHistoryCache(): void {
     this.sparseRestoredHistory = false;
     this.unvalidatedSeed = false;
@@ -3922,6 +3939,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const live = this.liveSessionFor(document);
       const kernel = this.historyKernel;
       const support = kernelSnapshotSupport();
+      // Idle: read the arena as it is now, whatever retired slots since the
+      // last checkpoint admission.
+      this.refreshArenaWear(kernel);
       // A kernel past half its replay budget is not persisted: a restore
       // would carry that arena into every later session and recycle (a full
       // replay) a few edits after reopening. Its reopen replays into a fresh
@@ -5131,6 +5151,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       const sessionRestore = this.sessionRestoreOutcome;
       this.sessionRestoreOutcome = null;
+      // Nothing replayed, so no checkpoint admission re-read the arena,
+      // though the restore (and any temporary measurement checkpoint) may
+      // have retired slots: read it here.
+      if (replayed === 0) this.refreshArenaWear(kernel);
       this.options.onRebuildCacheEvent?.({
         ...(sessionRestore ? { sessionRestore } : {}),
         kind:
@@ -5294,6 +5318,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.primitiveBuildCache.restoredThrough(
             this.historyCheckpoints[last]!.featureIndex
           );
+          // The operation's own copies (unit-scaled export solids) are
+          // retired by this restore, which replays nothing.
+          this.refreshArenaWear(kernel);
         } catch {
           this.invalidateHistoryCache();
         }
@@ -6721,6 +6748,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.primitiveBuildCache.restoredThrough(
             this.historyCheckpoints[last]!.featureIndex
           );
+          // The operation's own copies (unit-scaled export solids) are
+          // retired by this restore, which replays nothing.
+          this.refreshArenaWear(kernel);
         } catch {
           this.invalidateHistoryCache();
         }

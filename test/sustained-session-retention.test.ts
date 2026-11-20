@@ -214,6 +214,48 @@ describe('sustained session retention', () => {
     }
   );
 
+  it(
+    'sees slots retired by restores that replay nothing',
+    {
+      timeout: 180_000
+    },
+    async () => {
+      // Unit-scaled STEP exports of an unchanged model allocate scaled copies
+      // that the export's own checkpoint restore retires, with no feature
+      // replayed: before the fix neither the wear nor the replay budget saw
+      // them, so the arena grew past both thresholds unnoticed.
+      const limits = { compactRetiredSlots: 8_192, recycleRetiredSlots: 1e9 };
+      const { adapter, events, document, bodyId } = await session(limits);
+      const kernel = () =>
+        (adapter as unknown as { historyKernel: unknown }).historyKernel;
+      const before = kernel();
+      let exports = 0;
+      while (
+        !adapter.needsHistoryWarmup!(document.projectId) &&
+        exports < 150
+      ) {
+        await adapter.exportStep(document, [bodyId], { units: 'inch' });
+        exports += 1;
+      }
+      // About 194 retired slots per export against about 4,850 live: worn
+      // once retired slots pass four times the live ones, near export 90.
+      expect(adapter.needsHistoryWarmup!(document.projectId)).toBe(true);
+      expect(exports).toBeGreaterThan(50);
+      expect(kernel()).toBe(before);
+      // The live result the worker would schedule the idle work for: a sync
+      // of the unchanged document, which replays nothing and stays worn.
+      await adapter.syncDocument(document);
+      expect(events.at(-1)?.replayed).toBe(0);
+      expect(adapter.needsHistoryWarmup!(document.projectId)).toBe(true);
+      // Worn, so not persisted; after the idle compaction it is.
+      expect(await adapter.captureHistorySession!(document)).toBeNull();
+      expect(await adapter.warmHistory!(document)).toBe(true);
+      expect(await adapter.captureHistorySession!(document)).not.toBeNull();
+
+      expect(events.length).toBeGreaterThan(0);
+    }
+  );
+
   const longEdits = Number(process.env.SUSTAINED_EDITS ?? 0);
   it.runIf(longEdits > 0)(
     'records a long session at the production thresholds',
