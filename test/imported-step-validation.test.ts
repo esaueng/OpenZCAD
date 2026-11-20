@@ -12,13 +12,17 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type BodyRepresentation } from '@openzcad/shared';
 
-import { RemusKernelAdapter } from '../packages/kernel-adapter/src/exact';
+import {
+  discoverStepLayout,
+  RemusKernelAdapter
+} from '../packages/kernel-adapter/src/exact';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   classifyImportedSolid,
   importedStepDroppedSolidWarning,
@@ -207,6 +211,51 @@ describe('Remus STEP import validation', () => {
       volume: 0
     });
     expect(inspection.reason).toContain('#999999');
+  });
+
+  it.each([
+    'a-export-box',
+    'c-void-single-cavity',
+    'd-multi-solid-and-void',
+    'f-hostile-open-shell',
+    'f-hostile-dangling-reference'
+  ])('plans the same bodies as full inspection for %s', async (id) => {
+    const bytes = new TextEncoder().encode(corpusStep(id)).buffer;
+    for (const structure of [false, true]) {
+      const inspected = await adapter.inspectStep(bytes, { structure });
+      expect(await discoverStepLayout(bytes, structure)).toEqual({
+        solidIndices: inspected.solidIndices,
+        ...(inspected.structure && { structure: inspected.structure }),
+        ...(inspected.structureRefusal !== undefined && {
+          structureRefusal: inspected.structureRefusal
+        })
+      });
+    }
+  });
+
+  it('reserves validation and volume measurement for full inspection', async () => {
+    const bytes = new TextEncoder().encode(corpusStep('a-export-box')).buffer;
+    const strict = vi.spyOn(RemusKernel.prototype, 'validateSolidDetailed');
+    const relaxed = vi.spyOn(RemusKernel.prototype, 'validateSolidRelaxed');
+    const volume = vi.spyOn(RemusKernel.prototype, 'volume');
+    try {
+      expect((await discoverStepLayout(bytes, true)).solidIndices).toEqual([0]);
+      for (const call of [strict, relaxed, volume])
+        expect(call).not.toHaveBeenCalled();
+      expect(
+        await adapter.inspectStep(bytes, { structure: true })
+      ).toMatchObject({
+        solidIndices: [0],
+        valid: true,
+        volume: expect.any(Number)
+      });
+      for (const call of [strict, relaxed, volume])
+        expect(call).toHaveBeenCalled();
+    } finally {
+      strict.mockRestore();
+      relaxed.mockRestore();
+      volume.mockRestore();
+    }
   });
 
   it('imports a closed solid with no validation warning', async () => {

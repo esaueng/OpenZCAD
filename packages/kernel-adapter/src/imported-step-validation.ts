@@ -133,14 +133,15 @@ function plural(count: number, singular: string): string {
   return count === 1 ? singular : `${singular}s`;
 }
 
-/**
- * The single decision point. Closure and manifoldness are structural facts
- * about the shell and decide acceptance; the strict validator's remaining
- * complaints decide whether an accepted body is flagged.
- */
-export function classifyImportedSolid(
-  diagnosis: ImportedSolidDiagnosis
-): ImportedSolidVerdict {
+export type ImportedSolidBoundary = Pick<
+  ImportedSolidDiagnosis,
+  'index' | 'faceCount' | 'edgeCount' | 'openEdgeCount' | 'nonManifoldEdgeCount'
+>;
+
+/** Only the exact boundary decides which declared indices become bodies. */
+export function importedSolidRejection(
+  diagnosis: ImportedSolidBoundary
+): string | undefined {
   const defects: string[] = [];
   if (diagnosis.openEdgeCount > 0) {
     defects.push(
@@ -159,14 +160,24 @@ export function classifyImportedSolid(
     );
   }
   if (defects.length > 0) {
-    return {
-      kind: 'not-a-solid',
-      reason: `solid ${diagnosis.index} (${diagnosis.faceCount} ${plural(
-        diagnosis.faceCount,
-        'face'
-      )}): ${defects.join(', and ')}`
-    };
+    return `solid ${diagnosis.index} (${diagnosis.faceCount} ${plural(
+      diagnosis.faceCount,
+      'face'
+    )}): ${defects.join(', and ')}`;
   }
+}
+
+/**
+ * The single decision point. Closure and manifoldness are structural facts
+ * about the shell and decide acceptance; the strict validator's remaining
+ * complaints decide whether an accepted body is flagged.
+ */
+export function classifyImportedSolid(
+  diagnosis: ImportedSolidDiagnosis
+): ImportedSolidVerdict {
+  const rejection = importedSolidRejection(diagnosis);
+  if (rejection !== undefined)
+    return { kind: 'not-a-solid', reason: rejection };
   const errorCount = applicableErrorCount(diagnosis);
   if (errorCount > 0) {
     // The validator's own descriptions when the strict bar is the one that

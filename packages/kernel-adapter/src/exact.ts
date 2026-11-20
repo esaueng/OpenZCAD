@@ -189,7 +189,10 @@ import type {
   PreparedShapeMeasurement
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
-import { diagnoseImportedSolid } from './exact-lineage-builders';
+import {
+  diagnoseImportedSolid,
+  importedSolidBoundary
+} from './exact-lineage-builders';
 import { releasePreparedFaceMove } from './exact-prepared-face-move';
 import {
   hasPreparedGroupEdit,
@@ -233,10 +236,8 @@ import {
 import {
   EXACT_IMPORT_BUDGETS,
   importedStepCacheKey,
-  importStepStructureWithOwnBudget,
-  importStepWithOwnBudget,
+  readStepForInspection,
   stepImportEmptyReason,
-  type StepImportReport,
   type StepStructure
 } from './kernel-step-import';
 import {
@@ -436,6 +437,7 @@ export type {
 } from './gcs-sketch';
 import {
   classifyImportedSolid,
+  importedSolidRejection,
   importedStepDroppedSolidWarning,
   importedStepNoSolidError,
   importedStepRejectedSolidSummary,
@@ -6655,32 +6657,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         typeof data === 'string'
           ? new TextEncoder().encode(data)
           : new Uint8Array(data);
-      let declared: number[] = [];
-      let report: StepImportReport = {
-        solidCount: 0,
-        sheetCount: 0,
-        diagnostics: [],
-        diagnosticCount: 0
-      };
-      let structure: StepStructure | undefined;
-      let structureRefusal: string | undefined;
-      if (options.structure) {
-        try {
-          const imported = importStepStructureWithOwnBudget(kernel, bytes);
-          structure = imported.structure;
-          declared = Array.from(imported.solids);
-          report = imported.report;
-        } catch (error) {
-          structureRefusal =
-            error instanceof Error ? error.message : String(error);
-        }
-      }
+      let imported: ReturnType<typeof readStepForInspection>;
       try {
-        if (structure === undefined) {
-          const imported = importStepWithOwnBudget(kernel, bytes);
-          declared = Array.from(imported.solids);
-          report = imported.report;
-        }
+        imported = readStepForInspection(
+          kernel,
+          bytes,
+          options.structure === true
+        );
       } catch (error) {
         return {
           solid: false,
@@ -6690,6 +6673,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           reason: error instanceof Error ? error.message : String(error)
         };
       }
+      const { report, structure, structureRefusal } = imported;
+      const declared = Array.from(imported.solids);
       const verdicts = declared.map((solid, index) =>
         classifyImportedSolid(diagnoseImportedSolid(kernel, solid, index + 1))
       );
@@ -6894,6 +6879,45 @@ function documentNeedsTranslators(document: ProjectDocument): boolean {
       (feature.data.featureKind === 'imported-mesh' &&
         feature.data.triangleCount <= MAX_MESH_SOLID_CONVERSION_TRIANGLES)
   );
+}
+
+/** Plan the import's body layout. The candidate rebuild diagnoses and
+ * measures every committed body before the import is accepted. */
+export async function discoverStepLayout(
+  data: ArrayBuffer,
+  structure: boolean
+): Promise<{
+  solidIndices: number[];
+  structure?: StepStructure;
+  structureRefusal?: string;
+}> {
+  await loadRemusTranslators();
+  const kernel = new RemusKernel();
+  try {
+    let imported: ReturnType<typeof readStepForInspection>;
+    try {
+      imported = readStepForInspection(kernel, new Uint8Array(data), structure);
+    } catch {
+      // Empty discovery lets the commit validator present the reader's refusal.
+      return { solidIndices: [] };
+    }
+    const solidIndices = Array.from(imported.solids).flatMap((solid, index) =>
+      importedSolidRejection(
+        importedSolidBoundary(kernel, solid, index + 1)
+      ) === undefined
+        ? [index]
+        : []
+    );
+    return {
+      solidIndices,
+      ...(imported.structure ? { structure: imported.structure } : {}),
+      ...(imported.structureRefusal !== undefined
+        ? { structureRefusal: imported.structureRefusal }
+        : {})
+    };
+  } finally {
+    kernel.free();
+  }
 }
 
 export async function createExactKernelAdapter(
