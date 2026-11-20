@@ -119,7 +119,7 @@ describe('Active 1 summary: face drags and orbits', () => {
     const rows = summarize(dir);
     const row = (measurement: string) =>
       rows.find((entry) => entry.measurement === measurement);
-    expect(row('Face drag pointer → frame p95 (union)')).toMatchObject({
+    expect(row('Face drag pointer → exact frame p95 (union)')).toMatchObject({
       runs: 3,
       median: 80,
       min: 70,
@@ -127,7 +127,9 @@ describe('Active 1 summary: face drags and orbits', () => {
     });
     expect(row('Face drag first exact geometry (union)')?.median).toBe(84);
     // A proxy-only case reports its proxy lag and has no exact first frame.
-    expect(row('Face drag pointer → frame p50 (box cap)')?.median).toBe(8);
+    expect(row('Face drag pointer → proxy frame p50 (box cap)')?.median).toBe(
+      8
+    );
     expect(row('Face drag first exact geometry (box cap)')).toBeUndefined();
     // The median, not the mean, absorbs one slow release.
     expect(row('Face drag release → accepted frame (union)')?.median).toBe(310);
@@ -148,21 +150,41 @@ describe('Active 1 summary: face drags and orbits', () => {
       if (entry.budget == null) expect(entry.withinBudget).toBeNull();
   });
 
-  it('judges each drag run by what followed its pointer', () => {
-    // One run followed by proxy frames, two by slow exact frames: the exact
-    // runs' lag counts rather than dropping out behind the proxy run.
+  it('judges proxy-followed and exact-followed runs apart', () => {
+    // A fast proxy run must not share a median with slow exact-only runs:
+    // a 15 ms and a 40 ms p95 would otherwise pass a 30 ms ceiling at 27.5.
     const dir = tempDir('active1-drag-mixed-');
     writeDrags(dir, [
-      [drag(HOLDER, false, [15, 16], 70)],
-      [drag(HOLDER, true, [60, 80], 70)],
-      [drag(HOLDER, true, [62, 85], 70)]
+      [drag(HOLDER, false, [15, 15], 70)],
+      [drag(HOLDER, true, [35, 40], 70)]
     ]);
-    const p95 = summarize(dir).find(
-      (entry) =>
-        entry.measurement === `Face drag pointer → frame p95 (${HOLDER})`
-    )!;
-    expect(p95.median).toBe(80);
-    expect(p95.withinBudget).toBe(false);
+    const rows = summarize(dir);
+    const find = (measurement: string) =>
+      rows.find((entry) => entry.measurement === measurement)!;
+    expect(
+      find(`Face drag pointer → proxy frame p95 (${HOLDER})`)
+    ).toMatchObject({ runs: 1, median: 15, withinBudget: true });
+    expect(
+      find(`Face drag pointer → exact frame p95 (${HOLDER})`)
+    ).toMatchObject({ runs: 1, median: 40, withinBudget: false });
+  });
+
+  it('takes the exact preview only from runs that asked for one', () => {
+    // A proxy run that committed without a pre-release exact request has no
+    // preview round trip; it must not fail the row the other run passed.
+    const dir = tempDir('active1-drag-preview-');
+    const previewed = drag(HOLDER, false, [15, 16], 70);
+    previewed.summary.requests = 1;
+    previewed.summary.stages.roundTripMs = dist(65, 70);
+    const unasked = drag(HOLDER, false, [15, 16], 70);
+    writeDrags(dir, [[previewed], [unasked]]);
+    expect(
+      summarize(dir).find(
+        (entry) =>
+          entry.measurement ===
+          `Face drag exact preview round trip p50 (${HOLDER})`
+      )
+    ).toMatchObject({ runs: 1, median: 65, withinBudget: true });
   });
 
   it('fails a budgeted row a run did not record', () => {
@@ -176,7 +198,7 @@ describe('Active 1 summary: face drags and orbits', () => {
     ]);
     const p95 = summarize(dir).find(
       (entry) =>
-        entry.measurement === `Face drag pointer → frame p95 (${HOLDER})`
+        entry.measurement === `Face drag pointer → proxy frame p95 (${HOLDER})`
     )!;
     expect(p95.median).toBe(16);
     expect(p95.withinBudget).toBe(false);

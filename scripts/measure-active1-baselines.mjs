@@ -8,6 +8,7 @@
 //     [--only h02,w01-box,w01-history,f06-switch-box,f06-switch-history,
 //             pattern-node,pattern-browser,face-drag,orbit,sustained]
 //     [--out perf-results/active1/<stamp>] [--no-build] [--check]
+//     [--assume-build plain|instrumented]
 //     [--wait-minutes 180] [--heavy-lock ~/.cache/openzcad-heavy.lock]
 //
 // Before every run it waits until the host is quiet (1-minute load average
@@ -24,6 +25,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync
 } from 'node:fs';
 import { createServer } from 'node:net';
@@ -53,6 +55,9 @@ const PROBES = [
 
 /** Which flavour the last build this script made was (`--no-build` checks it). */
 const BUILD_STAMP = resolve('perf-results/active1/.last-build.json');
+const DIST_INDEX = resolve('apps/web/dist/index.html');
+const distMtimeMs = () =>
+  existsSync(DIST_INDEX) ? statSync(DIST_INDEX).mtimeMs : null;
 
 /** Probes that need the `OZ_PERF=1` instrumented build. */
 const INSTRUMENTED_PROBES = ['face-drag', 'orbit'];
@@ -68,6 +73,7 @@ function parseArgs(argv) {
     only: PROBES.filter((probe) => !INSTRUMENTED_PROBES.includes(probe)),
     out: null,
     build: true,
+    assumeBuild: null,
     check: false,
     waitMinutes: 180,
     summarize: null,
@@ -85,7 +91,12 @@ function parseArgs(argv) {
     else if (flag === '--only') options.only = value().split(',');
     else if (flag === '--out') options.out = value();
     else if (flag === '--no-build') options.build = false;
-    else if (flag === '--check') options.check = true;
+    else if (flag === '--assume-build') {
+      const flavour = value();
+      if (flavour !== 'plain' && flavour !== 'instrumented')
+        throw new Error('--assume-build takes plain or instrumented');
+      options.assumeBuild = flavour;
+    } else if (flag === '--check') options.check = true;
     else if (flag === '--heavy-lock') options.heavyLock = value();
     else if (flag === '--wait-minutes') options.waitMinutes = Number(value());
     else if (flag === '--summarize') options.summarize = value();
@@ -282,33 +293,48 @@ export function summarize(dir) {
     const budget = ACTIVE1_BUDGETS.faceDrag[label] ?? {};
     // What followed the pointer in each run: its disposable proxy frames
     // when it presented them (the exact preview is then built once the hand
-    // rests), otherwise its streamed exact frames. Judged run by run, so a
-    // proxy run cannot hide an exact-only run's lag.
+    // rests), otherwise its streamed exact frames. The two kinds get rows of
+    // their own, each over its own runs, so a fast proxy run never shares a
+    // median with a slow exact-only one.
     const proxied = (sample) => sample.summary.proxyPresentedFrames > 0;
-    const lag = (sample) =>
-      proxied(sample)
-        ? sample.summary.pointerToProxyFrameMs
-        : sample.summary.steadyPointerToPresentedMs;
-    add(
-      `Face drag pointer → frame p50 (${label})`,
-      samples.map((sample) => lag(sample)?.p50 ?? null),
-      budget.lagP50Ms
-    );
-    add(
-      `Face drag pointer → frame p95 (${label})`,
-      samples.map((sample) => lag(sample)?.p95 ?? null),
-      budget.lagP95Ms
-    );
+    for (const [kind, runs, read] of [
+      [
+        'proxy',
+        samples.filter(proxied),
+        (sample) => sample.summary.pointerToProxyFrameMs
+      ],
+      [
+        'exact',
+        samples.filter((sample) => !proxied(sample)),
+        (sample) => sample.summary.steadyPointerToPresentedMs
+      ]
+    ]) {
+      if (!runs.length) continue;
+      add(
+        `Face drag pointer → ${kind} frame p50 (${label})`,
+        runs.map((sample) => read(sample)?.p50 ?? null),
+        budget.lagP50Ms
+      );
+      add(
+        `Face drag pointer → ${kind} frame p95 (${label})`,
+        runs.map((sample) => read(sample)?.p95 ?? null),
+        budget.lagP95Ms
+      );
+    }
     if (samples.some((sample) => !proxied(sample)))
       add(
         `Face drag first exact geometry (${label})`,
-        samples.map((sample) => sample.summary.firstGeometryMs),
+        samples
+          .filter((sample) => !proxied(sample))
+          .map((sample) => sample.summary.firstGeometryMs),
         budget.firstGeometryMs
       );
-    if (samples.some((sample) => sample.summary.requests > 0))
+    // Only runs that asked for an exact preview before release have one.
+    const previewed = samples.filter((sample) => sample.summary.requests > 0);
+    if (previewed.length)
       add(
         `Face drag exact preview round trip p50 (${label})`,
-        samples.map((sample) => sample.summary.stages?.roundTripMs?.p50),
+        previewed.map((sample) => sample.summary.stages?.roundTripMs?.p50),
         budget.exactPreviewMs
       );
     add(
@@ -499,17 +525,27 @@ async function main() {
       });
       if (status !== 0) throw new Error('Production-renderer build failed.');
       mkdirSync(dirname(BUILD_STAMP), { recursive: true });
-      writeFileSync(BUILD_STAMP, `${JSON.stringify({ instrumented })}\n`);
+      writeFileSync(
+        BUILD_STAMP,
+        `${JSON.stringify({ instrumented, distMtimeMs: distMtimeMs() })}\n`
+      );
     } else {
-      // `--no-build` serves whatever the last build left: refuse one of the
-      // other flavour, so an instrumented build never meets the
-      // uninstrumented baselines' budgets, or the reverse.
+      // `--no-build` serves whatever is in the web output now. Accept it
+      // only as this script's last build of the right flavour (the stamp
+      // names it, and the output is unchanged since), or as the flavour the
+      // caller vouches for with --assume-build after building it by hand.
       const stamp = existsSync(BUILD_STAMP)
         ? JSON.parse(readFileSync(BUILD_STAMP, 'utf8'))
         : null;
-      if (stamp?.instrumented !== instrumented)
+      const flavour =
+        options.assumeBuild !== null
+          ? options.assumeBuild === 'instrumented'
+          : stamp && stamp.distMtimeMs === distMtimeMs()
+            ? stamp.instrumented
+            : null;
+      if (flavour !== instrumented)
         throw new Error(
-          `--no-build: the last build is ${stamp ? (stamp.instrumented ? 'instrumented (OZ_PERF)' : 'uninstrumented') : 'unknown'}; these probes need ${instrumented ? 'an instrumented' : 'an uninstrumented'} one. Build again.`
+          `--no-build: the web output is ${flavour === null ? 'not a build this script recorded' : flavour ? 'instrumented (OZ_PERF)' : 'uninstrumented'}; these probes need ${instrumented ? 'an instrumented' : 'an uninstrumented'} one. Build again, or pass --assume-build ${instrumented ? 'instrumented' : 'plain'} for a build you made yourself.`
         );
     }
     port = await freePort();

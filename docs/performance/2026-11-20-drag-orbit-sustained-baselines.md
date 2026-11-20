@@ -105,9 +105,12 @@ for frame intervals. They are not product targets, which are listed above.
 `test/active1-summary.test.ts` (root CI) covers the summary rows: each drag
 run judged by what followed its pointer, a run that recorded nothing failing
 its row, orbit read from the viewer's own frames, and sustained peaks taken
-over every sync rather than the sampled rows. The script stamps each build's
-flavour (`perf-results/active1/.last-build.json`) and refuses a `--no-build`
-run whose probes need the other flavour. CI does not run the browser
+over every sync rather than the sampled rows. Proxy-followed and exact-followed drag runs get separate rows, each over
+its own runs, and the exact-preview row reads only the runs that asked for
+one. The script stamps each build it makes with its flavour and the build's
+output time (`perf-results/active1/.last-build.json`). A `--no-build` run
+accepts only that unchanged build of the right flavour, or a hand-made build
+the caller vouches for with `--assume-build plain|instrumented`. CI does not run the browser
 probes, which depend on the machine; `pnpm typecheck` and `pnpm lint`
 cover their code.
 
