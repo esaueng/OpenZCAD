@@ -2,7 +2,7 @@
 row: F01
 ---
 
-Offset-from-face slice: schema v112 adds `toFaceOffset` (a length or
+Offset-from-face slice: schema v113 adds `toFaceOffset` (a length or
 expression) to a to-face extrude. Positive stops the extrusion that far short
 of the face, negative carries it past; absent or zero ends on the face, and a
 v29 to-face extrude loads byte for byte. The offset is applied on every rebuild

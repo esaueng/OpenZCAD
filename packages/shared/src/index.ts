@@ -446,11 +446,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // engraved into a cylinder or cone): an older client cannot build one, so
 // it must refuse. Builds on v110 (v109 was left unused when L15 landed
 // first).
-// v112 adds the F01 offset-from-face extent (`toFaceOffset` on a to-face
+// v113 adds the F01 offset-from-face extent (`toFaceOffset` on a to-face
 // extrude): the extrusion stops that far short of its face (or, negative,
 // passes it). An older client would build to the face itself, so it must
-// refuse. Builds on v111.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 112 as const;
+// refuse. Builds on v112 (claimed by #1785, M02 path patterns).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 113 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2402,7 +2402,7 @@ export type FeatureData =
        */
       toFace?: ExtrudeToFaceTarget;
       /**
-       * F01 (schema v112): offset from the `toFace` face, with `to-face`
+       * F01 (schema v113): offset from the `toFace` face, with `to-face`
        * only. Positive stops the extrusion that far short of the face
        * (toward the sketch plane), negative carries it that far past. Like
        * the face distance it is applied on every rebuild, never folded into

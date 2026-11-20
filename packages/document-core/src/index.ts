@@ -459,7 +459,7 @@ export interface ExtrudeInput {
   /** F01 (v29): required with `to-face`; see the stored feature's `toFace`. */
   toFace?: ExtrudeToFaceTarget;
   /**
-   * F01 (v112): with `to-face` only; positive stops short of the face,
+   * F01 (v113): with `to-face` only; positive stops short of the face,
    * negative passes it. Absent or zero ends on the face.
    */
   toFaceOffset?: ParamValue;
@@ -2754,7 +2754,7 @@ export function validateExtrudeExtent(
 }
 
 /**
- * F01 (v112): a stored offset from the face is a finite literal or a
+ * F01 (v113): a stored offset from the face is a finite literal or a
  * non-empty expression (which resolves, and is checked, in the build).
  */
 function validateToFaceOffsetValue(offset: unknown): void {
@@ -2769,7 +2769,7 @@ function validateToFaceOffsetValue(offset: unknown): void {
 }
 
 /**
- * F01 (v112): where an extrude to a face ends once its offset is applied,
+ * F01 (v113): where an extrude to a face ends once its offset is applied,
  * as a signed distance from the sketch plane along its normal, or null when
  * the offset reaches or crosses the sketch plane (nothing, or the wrong
  * side, would be extruded). `faceDistance` is the signed distance to the

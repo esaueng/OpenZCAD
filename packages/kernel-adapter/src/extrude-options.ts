@@ -112,7 +112,7 @@ export function toFaceDistance(
 }
 
 /**
- * F01 (v112): the offset from the face a to-face extrude carries, resolved;
+ * F01 (v113): the offset from the face a to-face extrude carries, resolved;
  * zero when it has none. An expression resolves here, so it is checked here.
  */
 export function resolveToFaceOffset(

@@ -45,7 +45,7 @@ export interface ExtrudeFormValue {
   /** F01 (v29): present exactly with `to-face`. */
   toFace?: ExtrudeToFaceTarget;
   /**
-   * F01 (v112): with `to-face` only, and absent when it ends on the face
+   * F01 (v113): with `to-face` only, and absent when it ends on the face
    * (a typed 0 is sent as absent). Positive stops short, negative passes.
    */
   toFaceOffset?: ParamValue;
@@ -94,7 +94,7 @@ export interface ExtrudeDraft {
   endCondition: ExtrudeEndCondition;
   throughAllSide: ThroughAllSide;
   toFace?: ExtrudeToFaceTarget;
-  /** F01 (v112): the offset from the face, as typed; read with To face. */
+  /** F01 (v113): the offset from the face, as typed; read with To face. */
   faceOffset: string;
   draftAngle: string;
 }
@@ -221,7 +221,7 @@ export function extrudeToFaceProblem(
 }
 
 /**
- * F01 (v112): an offset from the face that would carry the end onto or past
+ * F01 (v113): an offset from the face that would carry the end onto or past
  * the sketch plane, said before Apply; null when there is none, or while
  * the face's reach or the offset is not known yet (the build decides then).
  */

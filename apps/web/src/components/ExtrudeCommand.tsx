@@ -53,7 +53,7 @@ export interface ExtrudeCommandState {
   /** NaN while a field's text does not evaluate. */
   distance: number;
   backDistance: number;
-  /** F01 (v112): the offset from the face (To face only). */
+  /** F01 (v113): the offset from the face (To face only). */
   faceOffset: number;
   draftAngle: number;
   /** Each value as its text holds it (a typed expression as typed). */

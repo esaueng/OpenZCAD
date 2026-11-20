@@ -42,7 +42,7 @@ import { extrudeShownValues } from '../apps/web/src/lib/extrudeShownValues';
 import { featureValueSummary } from '../apps/web/src/lib/featureSummary';
 
 /**
- * F01 (schema v112): extrude to a face with an offset from it.
+ * F01 (schema v113): extrude to a face with an offset from it.
  *
  * `toFaceOffset` rides on a to-face extrude: positive stops short of the
  * face, negative passes it. It is applied on every rebuild to the distance
@@ -155,7 +155,7 @@ describe('F01 offset from face', { timeout: 60_000 }, () => {
   });
 
   describe('document contract', () => {
-    it('stores the offset beside the face, nothing derived, and pins the current schema (v112)', async () => {
+    it('stores the offset beside the face, nothing derived, and pins the current schema (v113)', async () => {
       const result = await post(5);
       const data = listFeaturesInOrder(result.document).at(-1)!.data;
       expect(data).toMatchObject({
@@ -164,7 +164,7 @@ describe('F01 offset from face', { timeout: 60_000 }, () => {
         endCondition: 'to-face',
         toFaceOffset: 5
       });
-      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(112);
+      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(113);
       expect(result.document.schemaVersion).toBe(
         PROJECT_DOCUMENT_SCHEMA_VERSION
       );

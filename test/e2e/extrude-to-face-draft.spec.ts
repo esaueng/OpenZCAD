@@ -38,7 +38,7 @@ import {
  * F01 (schema v29): an extrude reaches a face picked in the viewport, with a
  * draft; and a to-face extrude whose face was deleted shows its unresolved
  * state and is repaired by re-picking a face from its History menu. F01
- * (schema v112): an offset from the face stops the extrusion short of it.
+ * (schema v113): an offset from the face stops the extrusion short of it.
  */
 
 /** The 4 × 4 profile at (10, 10) on XY that every extrude here sweeps. */

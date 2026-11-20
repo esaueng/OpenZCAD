@@ -252,7 +252,7 @@ export function featureValueSummary(
           ? `${extent} · ${angle}° draft`
           : extent;
       if (data.endCondition === 'to-face') {
-        // F01 (v112): an offset reads as how far short of (or past) the face.
+        // F01 (v113): an offset reads as how far short of (or past) the face.
         const offset =
           data.toFaceOffset === undefined
             ? null
