@@ -579,6 +579,39 @@ notes to D01 sheets:
   place the balloon. Both are offered once the assembly has parts.
 - **Schema.** v80, built on v78 (v79 went unused), with a content gate below it.
 
+## Exploded views (AS03, schema v112)
+
+- **Shape.** `DrawingView.exploded?: true`. A base view drawn exploded
+  shows each assembly part's body at its solved pose (the stored joint
+  values) with its stored exploded-view offset (`assembly.explode`) applied
+  after it, `T(offset) · pose`, exactly where Assemble shows it exploded
+  (`assemblyExplodedMatrices`). A body in no part is drawn where it was
+  modelled. The views projected from that base carry the flag with it; a
+  section, detail or auxiliary view never has it and is never taken from an
+  exploded view, and a view drawing another configuration row is not
+  exploded (it draws the active row).
+- **Drawing.** The projection moves each placed body's canonical drawing
+  tessellation and edge polylines rigidly before hidden-line removal, so
+  parts pulled apart hide one another as they are drawn. Notes and balloons
+  measure the same placed bodies, so a balloon's leader ends on the part
+  where it is drawn and keeps its item number.
+- **Annotations.** Only notes and balloons go on an exploded view: its
+  parts are placed for presentation, so the dimension, mark, centreline and
+  tolerancing tools refuse it with the reason, Auto-dimension leaves it
+  out, and validation refuses any other annotation on it. Exploding a view
+  that already carries one, or that sections, details or auxiliary views
+  are taken from, is refused by name.
+- **Fence.** A sheet with an exploded view is fenced to where those views
+  place their parts as well as to the model: its fingerprint gains
+  `|x:` and a hash of the placements, so posing or pulling a part out in
+  Assemble leaves the sheet stale until an explicit Update, as a model edit
+  does. A sheet with no exploded view keeps its original fingerprint, and a
+  sheet whose last exploded view goes compares on the model alone. Toggling
+  a ready sheet's view rebinds the fence in the same command.
+- **Command.** `drawing.view.update` with `exploded` (on a base view; the
+  projected views follow) and, only with it, `source`. One undo step.
+- **Schema.** v112, built on v111, with a content gate below it.
+
 ## Title-block layouts (D02, schema v94)
 
 - **Shape.** `DrawingSheet.titleBlockLayout`: absent is the compact block

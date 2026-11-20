@@ -17,6 +17,7 @@ import {
   type GeometryBodyRepresentation,
   type UnitSystem
 } from '@openzcad/shared';
+import { explodedPlacementKey } from '@openzcad/document-core';
 import type { ProjectionBodyInput } from './projectView';
 import { projectedExtent, sheetViewArea, type ViewExtent } from './sheetPage';
 
@@ -44,6 +45,77 @@ export function projectionBodyInput(
       .filter((edge) => edge.displayRole !== 'seam' && edge.points.length >= 6)
       .map((edge) => edge.points)
   };
+}
+
+/** Applies a column-major 4×4 rigid matrix to flat xyz triples. */
+function placedPoints(
+  points: ArrayLike<number>,
+  m: readonly number[]
+): Float64Array {
+  const out = new Float64Array(points.length - (points.length % 3));
+  for (let i = 0; i + 2 < points.length; i += 3) {
+    const x = points[i]!;
+    const y = points[i + 1]!;
+    const z = points[i + 2]!;
+    out[i] = m[0]! * x + m[4]! * y + m[8]! * z + m[12]!;
+    out[i + 1] = m[1]! * x + m[5]! * y + m[9]! * z + m[13]!;
+    out[i + 2] = m[2]! * x + m[6]! * y + m[10]! * z + m[14]!;
+  }
+  return out;
+}
+
+/**
+ * AS03 (v112): one body's projection input placed where an exploded view
+ * draws it (`assemblyExplodedMatrices`): its mesh and edge polylines moved
+ * rigidly; face ranges are unchanged.
+ */
+export function placedProjectionInput(
+  input: ProjectionBodyInput,
+  matrix: readonly number[]
+): ProjectionBodyInput {
+  return {
+    ...input,
+    vertices: placedPoints(input.vertices, matrix),
+    edges: input.edges.map((edge) => placedPoints(edge, matrix))
+  };
+}
+
+/**
+ * AS03 (v112): a body as an exploded view draws it, for the notes and
+ * balloons placed on that view: its mesh, box and edge polylines moved
+ * rigidly. Exact curve and surface records, which hold model coordinates,
+ * are left out: an exploded view carries no dimension that would read them.
+ */
+export function placedSourceBody<T extends SourceBody>(
+  body: T,
+  matrix: readonly number[]
+): T {
+  const vertices = Float32Array.from(placedPoints(body.mesh.vertices, matrix));
+  const min = { x: Infinity, y: Infinity, z: Infinity };
+  const max = { x: -Infinity, y: -Infinity, z: -Infinity };
+  for (let i = 0; i + 2 < vertices.length; i += 3) {
+    min.x = Math.min(min.x, vertices[i]!);
+    min.y = Math.min(min.y, vertices[i + 1]!);
+    min.z = Math.min(min.z, vertices[i + 2]!);
+    max.x = Math.max(max.x, vertices[i]!);
+    max.y = Math.max(max.y, vertices[i + 1]!);
+    max.z = Math.max(max.z, vertices[i + 2]!);
+  }
+  const { solidBounds: _bounds, ...rest } = body;
+  return {
+    ...rest,
+    mesh: { ...body.mesh, vertices },
+    bbox: vertices.length >= 3 ? { min, max } : body.bbox,
+    topology: body.topology && {
+      faces: body.topology.faces.map(
+        ({ geometry: _geometry, ...face }) => face
+      ),
+      edges: body.topology.edges.map(({ curve: _curve, ...edge }) => ({
+        ...edge,
+        points: Array.from(placedPoints(edge.points, matrix))
+      }))
+    }
+  } as T;
 }
 
 /** One body behind a section plane, from the geometry worker (D03). */
@@ -128,6 +200,24 @@ export function drawingSourceFingerprint(
     );
   }
   return `v1:${hashString(parts.join(';'))}`;
+}
+
+/**
+ * AS03 (v112): a sheet's model fence with its exploded views' placements
+ * (`assemblyExplodedMatrices`) appended, or `base` when no view of it is
+ * exploded, so every other sheet keeps the fence it was made with.
+ */
+export function explodedSheetFingerprint(
+  base: string,
+  sheet: Pick<DrawingSheet, 'views'>,
+  matrices: ReadonlyMap<BodyId, readonly number[]>
+): string {
+  const ids = sheet.views
+    .filter((view) => view.exploded)
+    .flatMap((view) => view.bodyIds);
+  return ids.length === 0
+    ? base
+    : `${base}|x:${hashString(explodedPlacementKey(matrices, ids))}`;
 }
 
 /** Projected extent of the bodies' display meshes in one orientation. */

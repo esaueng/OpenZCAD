@@ -446,7 +446,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // engraved into a cylinder or cone): an older client cannot build one, so
 // it must refuse. Builds on v110 (v109 was left unused when L15 landed
 // first).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 111 as const;
+// v112 adds AS03 exploded drawing views (`exploded` on a drawing view): the
+// view draws each assembly part at its solved pose plus its stored exploded
+// offset. An older client would draw it as modelled, so it must refuse the
+// document. Builds on v111.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 112 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

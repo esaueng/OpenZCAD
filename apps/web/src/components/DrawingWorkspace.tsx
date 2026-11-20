@@ -53,6 +53,7 @@ import {
 } from '@openzcad/command-system';
 import {
   ASSEMBLY_BOM_COLUMNS,
+  assemblyExplodedMatrices,
   documentForConfiguration,
   updateDrawingView
 } from '@openzcad/document-core';
@@ -224,6 +225,7 @@ import {
   type HoleCalloutLookup,
   type SheetPictureLookup,
   sectionBodyKey,
+  explodedBodyKey,
   type AnnotationBox,
   type AnnotationResolution
 } from '../lib/drawing/annotations';
@@ -267,6 +269,9 @@ import {
   defaultDrawingPaper,
   drawingSourceFingerprint,
   estimateViewExtent,
+  explodedSheetFingerprint,
+  placedProjectionInput,
+  placedSourceBody,
   sectionInputKey,
   sectionPlaneKey,
   sheetBodyIds,
@@ -430,7 +435,9 @@ function sheetStatus(
   sheet: DrawingSheet,
   bodies: DrawingWorkspaceProps['bodies'],
   geometryPending: boolean,
-  fingerprint: string | null
+  fingerprint: string | null,
+  /** AS03 (v112): the fence a model fingerprint gives this sheet. */
+  fence: (base: string) => string = (base) => base
 ): SheetStatus {
   const ids = sheetBodyIds(sheet);
   // While the model rebuilds, `bodies` may not have caught up with the
@@ -445,7 +452,12 @@ function sheetStatus(
       const fingerprint = drawingSourceFingerprint(bodies, [
         ...new Set(ids.map((id) => targets.get(id) ?? id))
       ]);
-      if (fingerprint) return { kind: 'replaced', fingerprint, replacements };
+      if (fingerprint)
+        return {
+          kind: 'replaced',
+          fingerprint: fence(fingerprint),
+          replacements
+        };
     }
   }
   if (missing.length > 0)
@@ -454,7 +466,13 @@ function sheetStatus(
       bodyNames: missing.map((id) => bodies[id]?.name ?? 'a deleted body')
     };
   if (!fingerprint) return { kind: 'pending' };
-  return fingerprint === sheet.source.fingerprint
+  // AS03 (v112): where parts are placed matters only while a view draws
+  // them exploded; a sheet whose last exploded view went is as current as
+  // its model.
+  const stored = sheet.views.some((view) => view.exploded)
+    ? sheet.source.fingerprint
+    : sheet.source.fingerprint.split('|x:')[0];
+  return fingerprint === stored
     ? { kind: 'ready', fingerprint }
     : { kind: 'stale', fingerprint };
 }
@@ -484,7 +502,10 @@ function viewIntentKey(view: DrawingView): string {
     : '';
   // F06: a view on another configuration row (`projectionSheet`).
   const row = view.configurationId ? `|row:${view.configurationId}` : '';
-  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}${aux}${row}`;
+  // AS03 (v112): an exploded view places its parts; the sheet's fence
+  // carries where.
+  const exploded = view.exploded ? '|exploded' : '';
+  return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}${aux}${row}${exploded}`;
 }
 
 function projectionKey(fingerprint: string, view: DrawingView): string {
@@ -540,6 +561,8 @@ interface KeptDrawing {
    * sheet calls its holes out as drawn until it is Updated.
    */
   holes: HoleCalloutLookup;
+  /** AS03 (v112): where its exploded views placed the parts it drew. */
+  explodedMatrices: ReadonlyMap<BodyId, readonly number[]> | null;
 }
 
 function retainedFor(projectId: string) {
@@ -578,7 +601,9 @@ function useViewProjections(
   status: SheetStatus | null,
   document: ProjectDocument,
   requestTessellation: DrawingWorkspaceProps['requestTessellation'],
-  requestSection: DrawingWorkspaceProps['requestSection']
+  requestSection: DrawingWorkspaceProps['requestSection'],
+  /** AS03 (v112): where exploded views draw each assembly body. */
+  explodedMatrices: ReadonlyMap<BodyId, readonly number[]> | null = null
 ): Map<DrawingViewId, ViewState> {
   const client = useRef<DrawingProjectionClient | null>(null);
   /** Aborted on close: abandons tessellations still queued or running. */
@@ -605,8 +630,18 @@ function useViewProjections(
   } | null>(null);
   // Read when a pass starts, not effect inputs: a drawing edit replaces the
   // document without changing the model a ready sheet draws.
-  const latest = useRef({ document, requestTessellation, requestSection });
-  latest.current = { document, requestTessellation, requestSection };
+  const latest = useRef({
+    document,
+    requestTessellation,
+    requestSection,
+    explodedMatrices
+  });
+  latest.current = {
+    document,
+    requestTessellation,
+    requestSection,
+    explodedMatrices
+  };
   /** Failed requests per view, so a worker that keeps failing is not retried forever. */
   const failures = useRef(new Map<string, number>());
   const mounted = useRef(false);
@@ -688,6 +723,14 @@ function useViewProjections(
       }
     >();
     const sectionKeys = new Map<string, DrawingView>();
+    /**
+     * AS03 (v112): an exploded view's placed bodies, by projection input
+     * key: the tessellation they are moved from and where to.
+     */
+    const placedOf = new Map<
+      string,
+      { base: string; matrix: readonly number[] }
+    >();
     const passMarkers = new Map<string, ViewState>();
     for (const view of sheet.views) {
       const key = projectionKey(fingerprint, view);
@@ -717,6 +760,9 @@ function useViewProjections(
           bodyIds.add(key);
           bodyOf.set(key, { row, id });
         }
+        const placements = view.exploded
+          ? latest.current.explodedMatrices
+          : null;
         views.push({
           key,
           orientation: view.orientation,
@@ -725,9 +771,16 @@ function useViewProjections(
           // In the key's order: the lines come out in body order, and a view
           // whose bodies were removed and re-added must export the same bytes
           // whether its projection was cached or made after a reload.
-          bodyIds: [...view.bodyIds]
-            .sort()
-            .map((id) => rowBodyKey(projectionViewCacheKey(view), id))
+          bodyIds: [...view.bodyIds].sort().map((id) => {
+            const base = rowBodyKey(projectionViewCacheKey(view), id);
+            const matrix = placements?.get(id);
+            if (!matrix) return base;
+            // AS03 (v112): a part an exploded view moves is drawn from a
+            // placed copy of the body's tessellation.
+            const placed = `${base}${ROW_SEPARATOR}exploded`;
+            placedOf.set(placed, { base, matrix });
+            return placed;
+          })
         });
       }
       const marker: ViewState = { state: 'projecting' };
@@ -852,6 +905,8 @@ function useViewProjections(
             if (!input) throw new Error(`Body ${id} has no geometry to draw.`);
             inputs[id] = input;
           }
+          for (const [key, { base, matrix }] of placedOf)
+            inputs[key] = placedProjectionInput(inputs[base]!, matrix);
           // Section views project from their cut bodies; a body wholly in
           // front of the plane is simply not in the section. A refused cut
           // is shown on its view at once: retrying cannot change it.
@@ -3824,6 +3879,21 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     bodies: DrawingWorkspaceProps['bodies'];
     byBodySet: Map<string, string | null>;
   }>({ bodies, byBodySet: new Map() });
+  /**
+   * AS03 (v112): where exploded views draw each assembly body, while any
+   * sheet has one; null otherwise, so other sheets never read the assembly.
+   */
+  const explodedMatrices = useMemo(
+    () =>
+      sheets.some((entry) => entry.views.some((view) => view.exploded))
+        ? assemblyExplodedMatrices(
+            document,
+            (id) => !!bodies[id] && !bodies[id].consumed
+          )
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sheets, bodies, document.assembly, document.bodyOrder, document.nodes]
+  );
   const fingerprints = useMemo(() => {
     if (fingerprintCache.current.bodies !== bodies)
       fingerprintCache.current = { bodies, byBodySet: new Map() };
@@ -3847,11 +3917,26 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         const key = [...ids].sort().join(',');
         if (!byBodySet.has(key))
           byBodySet.set(key, drawingSourceFingerprint(bodies, ids));
-        return [entry.sheetId, byBodySet.get(key)!];
+        const base = byBodySet.get(key)!;
+        // AS03 (v112): a sheet with exploded views is also fenced to where
+        // those views place their parts, so posing or pulling a part out in
+        // Assemble leaves the sheet stale until an explicit Update.
+        return [
+          entry.sheetId,
+          base && explodedMatrices
+            ? explodedSheetFingerprint(base, entry, explodedMatrices)
+            : base
+        ];
       })
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sheets, bodies, geometryPending, document.configurations]);
+  }, [
+    sheets,
+    bodies,
+    geometryPending,
+    document.configurations,
+    explodedMatrices
+  ]);
   // F06: each sheet as projection keys read it, every view carrying the
   // configuration row it draws (a derived view, its source's).
   const configurationKey = useMemo(
@@ -3910,10 +3995,14 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             activeRowSheet(sheet, viewConfigurationRows(sheet, document)),
             bodies,
             geometryPending,
-            fingerprints.get(sheet.sheetId) ?? null
+            fingerprints.get(sheet.sheetId) ?? null,
+            (base) =>
+              explodedMatrices
+                ? explodedSheetFingerprint(base, sheet, explodedMatrices)
+                : base
           )
         : null,
-    [document, sheet, bodies, geometryPending, fingerprints]
+    [document, sheet, bodies, geometryPending, fingerprints, explodedMatrices]
   );
   const liveProjections = useViewProjections(
     sheet
@@ -3926,7 +4015,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     status,
     document,
     props.requestTessellation,
-    props.requestSection
+    props.requestSection,
+    explodedMatrices
   );
   const keptDrawings = keptDrawingsFor(document.projectId);
   // M01: a hole's callout data, read from the document by its feature id,
@@ -4031,10 +4121,24 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const sections = drawnViews.filter(
       ({ view, projection }) => view.section && projection.sectionEdges
     );
-    if (sections.length === 0) return modelBodies;
+    const exploded = drawnViews.filter(({ view }) => view.exploded);
+    if (sections.length === 0 && exploded.length === 0) return modelBodies;
     const merged: Record<string, BodyRepresentation | undefined> = {
       ...modelBodies
     };
+    // AS03 (v112): an exploded view's notes and balloons measure its parts
+    // where it draws them, from the model the drawing on screen is of.
+    const placements = keptDrawing?.explodedMatrices ?? explodedMatrices;
+    for (const { view } of exploded)
+      for (const bodyId of view.bodyIds) {
+        const body = modelBodies[bodyId];
+        const matrix = placements?.get(bodyId);
+        if (body && matrix)
+          merged[explodedBodyKey(view.viewId, bodyId)] = placedSourceBody(
+            body,
+            matrix
+          );
+      }
     for (const { view, projection } of sections)
       for (const [bodyId, edges] of Object.entries(projection.sectionEdges!)) {
         const body = modelBodies[bodyId];
@@ -4045,7 +4149,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         };
       }
     return merged;
-  }, [drawnViews, modelBodies]);
+  }, [drawnViews, modelBodies, keptDrawing, explodedMatrices]);
   // Each complete drawing of a ready sheet is kept, by view intent, with the
   // bodies it measured: it outlives this workspace, so a model edit made in
   // Build leaves the sheet as it was drawn until someone Updates it. Views
@@ -4071,7 +4175,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           fingerprint: status.fingerprint,
           bodies,
           projections,
-          holes: liveHoleCallouts
+          holes: liveHoleCallouts,
+          explodedMatrices
         },
         ...previous.filter((entry) => entry.fingerprint !== status.fingerprint)
       ].slice(0, KEPT_DRAWINGS_PER_SHEET)
@@ -4083,7 +4188,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     bodies,
     keptDrawings,
     liveHoleCallouts,
-    keyView
+    keyView,
+    explodedMatrices
   ]);
   // While the model rebuilds the sheet shows its last drawing faded instead
   // of empty outlines; it is only ever seen, never picked from, annotated or
@@ -4402,6 +4508,44 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return false;
     }
     return props.onCommand(command);
+  };
+
+  /**
+   * AS03 (v112): draws a base view and its projected views exploded, or as
+   * modelled. A sheet that was current is rebound to the views as they now
+   * draw, so the toggle does not leave it waiting on an Update.
+   */
+  const toggleExploded = (view: DrawingView, exploded: boolean) => {
+    if (!sheet) return;
+    let source: DrawingSheet['source'] | undefined;
+    if (status?.kind === 'ready')
+      try {
+        const next = updateDrawingView(
+          { ...document, drawings: { sheets: [sheet] } },
+          { sheetId: sheet.sheetId, viewId: view.viewId, exploded }
+        ).drawings!.sheets[0]!;
+        const base = status.fingerprint.split('|x:')[0]!;
+        const matrices = assemblyExplodedMatrices(
+          document,
+          (id) => !!bodies[id] && !bodies[id].consumed
+        );
+        source = {
+          fingerprint: explodedSheetFingerprint(base, next, matrices)
+        };
+      } catch {
+        // Refused: the command below reports why.
+      }
+    run(
+      commandFactories.updateDrawingView(
+        {
+          sheetId: sheet.sheetId,
+          viewId: view.viewId,
+          exploded,
+          ...(source ? { source } : {})
+        },
+        exploded ? 'Draw view exploded' : 'Draw view as modelled'
+      )
+    );
   };
 
   const createSheet = () => {
@@ -7331,6 +7475,38 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               />
               Hidden lines
             </label>
+            {(document.assembly?.components.length ?? 0) > 0 &&
+              !selectedView.section &&
+              !selectedView.detail &&
+              !selectedView.auxiliary &&
+              (selectedView.parentViewId ? (
+                selectedView.exploded && (
+                  <p className="drawing-hint">
+                    Drawn exploded with its base view.
+                  </p>
+                )
+              ) : (
+                <>
+                  <label className="drawing-check">
+                    <input
+                      type="checkbox"
+                      checked={selectedView.exploded === true}
+                      disabled={
+                        !editable || selectedView.configurationId !== undefined
+                      }
+                      onChange={(event) =>
+                        toggleExploded(selectedView, event.target.checked)
+                      }
+                    />
+                    Exploded
+                  </label>
+                  <p className="drawing-hint">
+                    {selectedView.configurationId !== undefined
+                      ? 'An exploded view draws the active configuration.'
+                      : 'Draws each part where Assemble shows it exploded, with its projected views. Notes and balloons only.'}
+                  </p>
+                </>
+              ))}
             {document.configurations &&
               (selectedView.parentViewId ||
               selectedView.section ||

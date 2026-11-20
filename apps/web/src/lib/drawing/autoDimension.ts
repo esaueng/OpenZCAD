@@ -274,7 +274,9 @@ export function planAutoDimensions(
     // Principal views only: an auxiliary view's axes are no model axes.
     (context) =>
       context.view.orientation !== 'iso' &&
-      !drawingViewHasOwnFrame(context.view)
+      !drawingViewHasOwnFrame(context.view) &&
+      // AS03 (v112): an exploded view's parts are placed for presentation.
+      !context.view.exploded
   );
   /** What a view measures of a body: a section's cut edges, else the model's. */
   const edgesOf = (context: ViewContext, bodyId: string) =>

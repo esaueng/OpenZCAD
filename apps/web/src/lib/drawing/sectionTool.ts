@@ -72,7 +72,13 @@ export function sectionSourceAt(
 ): ComposedView | null {
   for (const entry of views) {
     const { view, projection } = entry;
-    if (view.section || view.orientation === 'iso' || !projection.bounds)
+    // AS03 (v112): an exploded view's parts are pulled apart; none is cut.
+    if (
+      view.section ||
+      view.orientation === 'iso' ||
+      view.exploded ||
+      !projection.bounds
+    )
       continue;
     const toPage = viewPageTransform(view, projection.bounds, sheet, units);
     const [x0, y0] = toPage(projection.bounds.minU, projection.bounds.minV);

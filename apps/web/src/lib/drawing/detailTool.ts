@@ -31,7 +31,14 @@ export function detailSourceAt(
     const { view, projection } = entry;
     // A detail's source is a principal view: not a section, another detail
     // or (v81) an auxiliary view, which validation refuses as a source.
-    if (!projection.bounds || view.section || view.detail || view.auxiliary)
+    // AS03 (v112): nor an exploded view, whose parts are pulled apart.
+    if (
+      !projection.bounds ||
+      view.section ||
+      view.detail ||
+      view.auxiliary ||
+      view.exploded
+    )
       continue;
     const box = viewPageBox(view, projection.bounds, sheet, units);
     if (
