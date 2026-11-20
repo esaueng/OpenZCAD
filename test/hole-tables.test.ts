@@ -508,3 +508,166 @@ describe('M01 hole tables: rows and sizes (review)', () => {
     ).toEqual(['A1', 'B1']);
   });
 });
+
+describe('M01 hole tables: what the view shows (re-check)', () => {
+  interface Bore {
+    hole: string;
+    x: number;
+    y?: number;
+    z0: number;
+    z1: number;
+    lineageName?: string;
+  }
+  /** A body of bores down Z, and flat squares of cover over them. */
+  function body(
+    bores: Bore[],
+    covers: { x0: number; x1: number; y0: number; y1: number; z: number }[] = []
+  ) {
+    const vertices: number[] = [];
+    const indices: number[] = [];
+    for (const { x0, x1, y0, y1, z } of covers) {
+      const at = vertices.length / 3;
+      vertices.push(x0, y0, z, x1, y0, z, x1, y1, z, x0, y1, z);
+      indices.push(at, at + 1, at + 2, at, at + 2, at + 3);
+    }
+    const xs = bores.map((bore) => bore.x);
+    return {
+      bbox: {
+        min: { x: Math.min(...xs) - 10, y: 0, z: 0 },
+        max: { x: Math.max(...xs) + 10, y: 40, z: 10 }
+      },
+      mesh: {
+        kind: 'mesh',
+        vertices: new Float32Array(vertices),
+        indices: new Uint32Array(indices)
+      },
+      topology: {
+        faces: bores.map((bore, index) => ({
+          hash: index + 1,
+          reference: {
+            producingFeatureId: bore.hole,
+            lineageName: bore.lineageName ?? 'hole.face.bore'
+          },
+          geometry: {
+            surfaceType: 'Cylinder',
+            radius: 4,
+            axisStart: { x: bore.x, y: bore.y ?? 20, z: bore.z0 },
+            axisEnd: { x: bore.x, y: bore.y ?? 20, z: bore.z1 }
+          }
+        })),
+        edges: []
+      }
+    };
+  }
+  const eight = (extra: Partial<HoleCallout> = {}): HoleCallout => ({
+    count: 1,
+    diameter: 8,
+    depth: null,
+    style: 'simple',
+    ...extra
+  });
+  const resolve = (
+    bodies: Record<string, unknown>,
+    holes: (id: string) => HoleCallout | null,
+    hiddenLines = false
+  ) =>
+    resolveDrawingAnnotation(
+      table(TOP),
+      {
+        ...view(TOP, Object.keys(bodies)[0] as BodyId),
+        bodyIds: Object.keys(bodies) as BodyId[],
+        hiddenLines
+      },
+      bodies as unknown as AnnotationBodies,
+      'mm',
+      holes
+    );
+
+  it('keeps one-size holes of two bodies on one axis as two rows', () => {
+    const resolved = resolve(
+      {
+        body_upper: body([{ hole: 'feat_upper', x: 20, z0: 5, z1: 10 }]),
+        body_lower: body([{ hole: 'feat_lower', x: 20, z0: 0, z1: 5 }])
+      },
+      () => eight(),
+      true
+    );
+    expect(sizes(resolved)).toEqual(['Ø8 THRU', 'Ø8 THRU']);
+  });
+
+  it('hides a bore a thin cover just over it hides, far from the origin', () => {
+    const covered = body(
+      [{ hole: 'feat_far', x: 10_000, z0: 0, z1: 10 }],
+      [{ x0: 9_990, x1: 10_010, y0: 10, y1: 30, z: 10.3 }]
+    );
+    expect(resolve({ body_far: covered }, () => eight())).toMatchObject({
+      ok: false,
+      reason: 'no-holes'
+    });
+  });
+
+  it('lists a bore a strip across its middle leaves showing', () => {
+    const striped = body(
+      [{ hole: 'feat_hole', x: 20, z0: 0, z1: 10 }],
+      [{ x0: 19.5, x1: 20.5, y0: 0, y1: 40, z: 12 }]
+    );
+    expect(sizes(resolve({ body_strip: striped }, () => eight()))).toEqual([
+      'Ø8 THRU'
+    ]);
+  });
+
+  it('names the hole of a feature pattern copy its body was copied with', () => {
+    const copied = body([
+      { hole: 'feat_hole', x: 10, z0: 0, z1: 10 },
+      {
+        hole: 'feat_whole',
+        x: 90,
+        z0: 0,
+        z1: 10,
+        lineageName:
+          'pattern.face.instance.2.pattern.face.instance.2.source.feat_hole.hole.face.bore'
+      }
+    ]);
+    expect(
+      sizes(
+        resolve({ body_copied: copied }, (id) =>
+          id === 'feat_hole' ? eight() : null
+        )
+      )
+    ).toEqual(['Ø8 THRU', 'Ø8 THRU']);
+  });
+
+  it('gives one letter to one standard size however its keys are ordered', () => {
+    const resolved = resolve(
+      {
+        body_std: body([
+          { hole: 'feat_a', x: 10, z0: 0, z1: 10 },
+          { hole: 'feat_b', x: 30, z0: 0, z1: 10 }
+        ])
+      },
+      (id) =>
+        id === 'feat_a'
+          ? eight({
+              standard: {
+                system: 'iso',
+                size: 'M8',
+                kind: 'clearance',
+                fit: 'normal'
+              }
+            })
+          : eight({
+              standard: {
+                fit: 'normal',
+                kind: 'clearance',
+                size: 'M8',
+                system: 'iso'
+              }
+            })
+    );
+    expect(
+      resolved.ok && resolved.resolved.kind === 'hole-table'
+        ? resolved.resolved.rows.map((row) => row[0])
+        : resolved
+    ).toEqual(['A1', 'A2']);
+  });
+});

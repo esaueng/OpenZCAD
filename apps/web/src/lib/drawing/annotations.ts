@@ -3720,9 +3720,40 @@ function holeTagLetters(index: number): string {
 /** Below this two bores' axes stand at one place (a bore split at its seam). */
 const HOLE_TABLE_TOLERANCE = 1e-6;
 
-/** A hole's bore as a whole-body pattern's copy names it: no source hole. */
-const WHOLE_BODY_BORE =
-  /^(?:pattern\.face\.instance\.[A-Za-z0-9_-]+\.)+hole\.face(?:\.at\.[A-Za-z0-9_-]+)?\.bore$/;
+/** Any name a hole's bore takes, its copies' included. */
+const HOLE_BORE_NAME = /(?:^|\.)hole\.face(?:\.at\.[A-Za-z0-9_-]+)?\.bore$/;
+
+/**
+ * The hole a bore's face names, through any whole-body pattern copies of
+ * it: a feature pattern's copy (`….source.<hole>.hole.face….bore`) names its
+ * hole however often its body is copied whole (re-check). A hole's own
+ * bore copied whole names none.
+ */
+function tableHoleOf(reference: {
+  producingFeatureId: FeatureId;
+  lineageName: string;
+}): FeatureId | null {
+  const own = holeOfBoreFace(reference);
+  if (own) return own;
+  const copied =
+    /^(?:pattern\.face\.instance\.[A-Za-z0-9_-]+\.)+?pattern\.face\.instance\.[A-Za-z0-9_-]+\.source\.([A-Za-z0-9_-]+)\.hole\.face(?:\.at\.[A-Za-z0-9_-]+)?\.bore$/.exec(
+      reference.lineageName
+    );
+  return copied ? (copied[1] as FeatureId) : null;
+}
+
+/** JSON with every object's keys sorted, so equal values print alike. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item as Record<string, unknown>).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0
+          )
+        )
+      : item
+  );
+}
 
 /**
  * Whether any of `meshes` lies between `from` and the eye, which looks
@@ -3736,7 +3767,9 @@ function coveredFromEye(
 ): boolean {
   const d = [-direction.x, -direction.y, -direction.z] as const;
   const o = [from.x, from.y, from.z] as const;
-  const near = 1e-4 * Math.max(1, Math.hypot(from.x, from.y, from.z));
+  // Past the float noise of the mesh it starts on, not a share of how far
+  // the model stands from the origin (re-check: a thin cover far out).
+  const near = 1e-6 * Math.max(1, Math.hypot(from.x, from.y, from.z)) + 1e-6;
   for (const { vertices: p, indices } of meshes) {
     for (let t = 0; t + 2 < indices.length; t += 3) {
       const a = indices[t]! * 3;
@@ -3802,6 +3835,9 @@ function holeTable(
     /** The callout itself, which sizes are told apart by. */
     group: string;
     diameter: number;
+    /** Whose bore it is: a bore split at its seam shares both. */
+    bodyId: string;
+    holeId: string;
   }[] = [];
   const meshes = view.bodyIds
     .map((bodyId) => annotationBody(bodies, view, bodyId)?.mesh)
@@ -3826,7 +3862,7 @@ function holeTable(
         !geometry.axisEnd
       )
         continue;
-      const holeId = holeOfBoreFace(face.reference);
+      const holeId = tableHoleOf(face.reference);
       const callout = holeId ? holes(holeId) : null;
       const axis = {
         x: geometry.axisEnd.x - geometry.axisStart.x,
@@ -3860,18 +3896,42 @@ function holeTable(
         dot(geometry.axisStart) <= dot(geometry.axisEnd)
           ? geometry.axisStart
           : geometry.axisEnd;
-      if (!view.hiddenLines && coveredFromEye(meshes, mouth, frame.direction))
+      // Covered only where its whole opening is: the centre and a ring
+      // just inside the rim (re-check: a strip across the middle hides
+      // the centre, not the bore).
+      const radius =
+        callout?.diameter !== undefined
+          ? callout.diameter / 2
+          : (geometry.radius ?? 0);
+      const ring = [mouth];
+      for (let k = 0; k < 12; k += 1) {
+        const t = (2 * Math.PI * k) / 12;
+        const a = 0.9 * radius * Math.cos(t);
+        const b = 0.9 * radius * Math.sin(t);
+        ring.push({
+          x: mouth.x + a * frame.x.x + b * frame.up.x,
+          y: mouth.y + a * frame.x.y + b * frame.up.y,
+          z: mouth.z + a * frame.x.z + b * frame.up.z
+        });
+      }
+      if (
+        !view.hiddenLines &&
+        ring.every((point) => coveredFromEye(meshes, point, frame.direction))
+      )
         continue;
       if (!callout) {
-        // A whole-body pattern's copy names the bore, not its hole.
-        if (WHOLE_BODY_BORE.test(face.reference.lineageName))
+        // A bore its name says is a hole's, whose hole it cannot name (a
+        // whole-body pattern's copy): never left out unsaid.
+        if (HOLE_BORE_NAME.test(face.reference.lineageName))
           return 'hole-unnamed';
         continue;
       }
-      const group = JSON.stringify({ ...callout, count: 1 });
+      const group = canonicalJson({ ...callout, count: 1 });
       if (
         bores.some(
           (bore) =>
+            bore.bodyId === bodyId &&
+            bore.holeId === holeId &&
             bore.group === group &&
             Math.hypot(bore.u - at.u, bore.v - at.v) <=
               HOLE_TABLE_TOLERANCE * Math.max(1, Math.abs(at.u), Math.abs(at.v))
@@ -3893,7 +3953,9 @@ function holeTable(
         // One bore a row: the count belongs to the hole, not to the row.
         size: holeCalloutLabel({ ...callout, count: 1 }, length),
         group,
-        diameter: callout.diameter
+        diameter: callout.diameter,
+        bodyId,
+        holeId: holeId!
       });
     }
   }
