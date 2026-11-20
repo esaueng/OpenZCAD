@@ -13,6 +13,11 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  closeCarriers,
+  placedCarrier
+} from '../packages/kernel-adapter/src/exact-feature-pattern';
+import { planeCarrier } from '../packages/kernel-adapter/src/exact-lineage-builders';
+import {
   toUserId,
   type BodyId,
   type DerivedState,
@@ -196,4 +201,89 @@ describe('M02 names on boss and cut copies', () => {
     ))
       expect(face.name).not.toContain('cap.end');
   }, 120_000);
+
+  it('leaves a copy’s floor unnamed when other cuts clip it (review)', async () => {
+    const { document, featureId, min } = await squareFeature('cut');
+    // Two 1 × 1 through cuts at opposite corners of where copy 1's 4 × 4
+    // floor lands (x = 33–37): perimeter and centroid stay, area does not.
+    const plate = last(document);
+    const box = (await adapter.syncDocument(document)).bodyRepresentations[
+      plate
+    ]!.bbox;
+    const cy = (box.min.y + box.max.y) / 2;
+    const notches = addSketchFeature(document, {
+      name: 'Notches',
+      planeRef: { type: 'canonical', plane: 'XY', offset: box.max.z },
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 1,
+          height: 1,
+          centerX: min + 33.5,
+          centerY: cy - 1.5
+        },
+        {
+          objectKind: 'rectangle',
+          width: 1,
+          height: 1,
+          centerX: min + 36.5,
+          centerY: cy + 1.5
+        }
+      ]
+    });
+    const notched = extrudeSketch(notches.document, {
+      name: 'Notches',
+      sketchId: notches.sketchId,
+      distance: 2,
+      operation: 'cut',
+      targetBodyId: plate,
+      endCondition: 'through-all',
+      throughAllSide: 'backward'
+    }).document;
+    const patterned = row(notched, featureId, { count: 2 });
+    const derived = await adapter.syncDocument(patterned);
+    expect(derived.warnings).toEqual([]);
+    const names = namedFaces(derived, last(patterned))
+      .filter((face) => face.producer === lastFeature(patterned))
+      .map((face) => face.name);
+    expect(names.some((name) => name.includes('cap.end'))).toBe(false);
+  }, 120_000);
+});
+
+describe('M02 copy names: carriers compared as lines (review)', () => {
+  it('matches a wall turned onto an axis whatever way its normal rounds', () => {
+    const angle = (21 * Math.PI) / 180;
+    const wall = planeCarrier(
+      { x: Math.cos(angle), y: Math.sin(angle), z: 0 },
+      { x: 10 * Math.cos(angle), y: 10 * Math.sin(angle), z: 0 }
+    )!;
+    // 69° about +Z puts it on +Y, ten out.
+    const turn = (69 * Math.PI) / 180;
+    const c = Math.cos(turn);
+    const t = Math.sin(turn);
+    const matrix = new Float64Array([
+      c,
+      -t,
+      0,
+      0,
+      t,
+      c,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1
+    ]);
+    const moved = placedCarrier(wall, matrix)!;
+    const actual = planeCarrier({ x: 0, y: 1, z: 0 }, { x: 0, y: 10, z: 0 })!;
+    expect(closeCarriers(moved, actual)).toBe(true);
+    // A parallel plane a millimetre away is still another plane.
+    const beside = planeCarrier({ x: 0, y: 1, z: 0 }, { x: 0, y: 11, z: 0 })!;
+    expect(closeCarriers(moved, beside)).toBe(false);
+  });
 });

@@ -598,7 +598,8 @@ function quantized(point: Vec3): QuantizedTopologyPoint {
 }
 
 /** A face's carrier moved by `matrix`, or null for one without a carrier. */
-function placedCarrier(
+/** @internal exported for its regression test. */
+export function placedCarrier(
   carrier: FaceWitnessV1['analytic'],
   matrix: Float64Array
 ): FaceWitnessV1['analytic'] | null {
@@ -623,19 +624,35 @@ function placedCarrier(
   return null;
 }
 
-function closeCarriers(
+/** Below this two unit directions are one line (|cos| from 1). */
+const SAME_LINE = 1e-7;
+
+function unitOf(point: QuantizedTopologyPoint): Vec3 {
+  const v = dequantized(point, 1000);
+  const size = Math.hypot(v.x, v.y, v.z) || 1;
+  return { x: v.x / size, y: v.y / size, z: v.z / size };
+}
+
+/**
+ * Whether two carriers are one surface. Directions are compared as lines,
+ * not as quantized canonical vectors: a direction close to an axis can
+ * round to the other canonical sign once it is moved (review), and a
+ * plane's offset turns sign with its normal.
+ */
+/** @internal exported for its regression test. */
+export function closeCarriers(
   left: FaceWitnessV1['analytic'],
   right: FaceWitnessV1['analytic']
 ): boolean {
   if (left.kind === 'plane' && right.kind === 'plane') {
-    return (
-      closePoints(left.normal, right.normal) &&
-      closeQuanta(left.offset, right.offset)
-    );
+    const cos = dot(unitOf(left.normal), unitOf(right.normal));
+    if (Math.abs(Math.abs(cos) - 1) > SAME_LINE) return false;
+    return closeQuanta(cos < 0 ? -left.offset : left.offset, right.offset);
   }
   if (left.kind === 'cylinder' && right.kind === 'cylinder') {
+    const cos = dot(unitOf(left.axis), unitOf(right.axis));
     return (
-      closePoints(left.axis, right.axis) &&
+      Math.abs(Math.abs(cos) - 1) <= SAME_LINE &&
       closePoints(left.axisFoot, right.axisFoot) &&
       closeQuanta(left.radius, right.radius)
     );
@@ -672,18 +689,28 @@ function nameCopiedFaces(
       return [
         {
           name: reference.lineageName,
-          witness: candidate.witness as FaceWitnessV1
+          witness: candidate.witness as FaceWitnessV1,
+          area: kernel.faceArea(candidate.handle, MEASUREMENT_DEFLECTION)
         }
       ];
     }
   );
   if (sourceFaces.length === 0) return;
+  // A face clipped by other cuts can keep its perimeter and centroid (two
+  // opposite corner notches) but never its area (review).
+  const areas = new Map<number, number>();
+  const areaOf = (handle: number) => {
+    if (!areas.has(handle)) {
+      areas.set(handle, kernel.faceArea(handle, MEASUREMENT_DEFLECTION));
+    }
+    return areas.get(handle)!;
+  };
   const resultFaces = topologyCandidatesForSolid(kernel, solid).filter(
     (candidate) => candidate.kind === 'face'
   );
   const assignments: { handle: number; name: string }[] = [];
   for (const copy of copies) {
-    for (const { name, witness } of sourceFaces) {
+    for (const { name, witness, area } of sourceFaces) {
       const carrier = placedCarrier(witness.analytic, copy.matrix);
       if (!carrier || !witness.centroid) continue;
       const centroid = quantized(
@@ -696,7 +723,8 @@ function nameCopiedFaces(
           other.centroid !== null &&
           closePoints(other.centroid, centroid) &&
           closeQuanta(other.perimeter, witness.perimeter) &&
-          closeCarriers(other.analytic, carrier)
+          closeCarriers(other.analytic, carrier) &&
+          Math.abs(areaOf(candidate.handle) - area) <= 1e-6 * Math.max(1, area)
         );
       });
       if (matches.length !== 1) continue;
