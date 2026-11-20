@@ -64,7 +64,8 @@ export function AssemblyMotionInterference({
   const sources = useMemo(() => {
     const out: { value: string; label: string; source: AssemblySweepSource }[] =
       [];
-    for (const joint of set?.joints ?? []) {
+    if (!set) return out;
+    for (const joint of set.joints) {
       const units = ASSEMBLY_JOINT_DOFS[joint.kind];
       units.forEach((unit, dof) => {
         // As Animate sweeps it: a coupled joint as far as its mates allow.
@@ -85,7 +86,7 @@ export function AssemblyMotionInterference({
         });
       });
     }
-    for (const study of set?.studies ?? []) {
+    for (const study of set.studies) {
       if (study.tracks.length === 0 || !(study.durationS > 0)) continue;
       const source: AssemblySweepSource = { kind: 'study', studyId: study.id };
       out.push({
