@@ -350,6 +350,16 @@ export interface HoleCallout {
     /** Described, not cut: the bore is still its tap drill. */
     cosmetic: boolean;
   };
+  /**
+   * The plane of the face the hole was drilled into, as the hole last
+   * stored it (its face reference's witness): a point on it and its normal,
+   * whose sign is not meaningful. Which end of a bore is its entry, for a
+   * thread that stops short; absent for a hole stored without a reference.
+   */
+  entryPlane?: {
+    point: { x: number; y: number; z: number };
+    normal: { x: number; y: number; z: number };
+  };
 }
 
 /** A standard size's thread as a drawing names it: `M6×1`, `1/4-20 UNC`. */

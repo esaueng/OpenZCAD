@@ -8,6 +8,7 @@ import {
   drawingFreeSectionLine,
   drawingSectionLine,
   drawingViewAlignment,
+  drawingViewFrame,
   formatDrawingScale,
   projectToView,
   type DrawingSheet,
@@ -16,6 +17,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { ViewProjection } from './projectView';
+import { cosmeticThreadStrokes, type CosmeticThread } from './cosmeticThreads';
 
 /**
  * One sheet laid out on paper: the single page model the on-screen preview,
@@ -439,6 +441,11 @@ export interface SheetPageContext {
    * the project's latest saved revision (see {@link titleBlockAutoDate}).
    */
   date?: string;
+  /**
+   * M01: the cosmetic threads a view draws (see `cosmeticThreads.ts`), read
+   * from the model the view was drawn from. Absent draws none.
+   */
+  cosmeticThreads?: (view: DrawingView) => readonly CosmeticThread[];
 }
 
 /** The ISO date (YYYY-MM-DD) of the project's latest revision, if any. */
@@ -732,6 +739,19 @@ export function composeSheetPage(
         for (const piece of clip ? clipPolylineToCircle(page, clip) : [page])
           strokes.push({ kind, points: piece.flat() });
       }
+    // M01: cosmetic threads, drawn by convention over the view's lines.
+    const threads = context.cosmeticThreads?.(view) ?? [];
+    for (const stroke of cosmeticThreadStrokes(
+      threads,
+      drawingViewFrame(view),
+      toPage
+    )) {
+      const page: [number, number][] = [];
+      for (let i = 0; i + 1 < stroke.points.length; i += 2)
+        page.push([stroke.points[i]!, stroke.points[i + 1]!]);
+      for (const piece of clip ? clipPolylineToCircle(page, clip) : [page])
+        strokes.push({ kind: stroke.kind, points: piece.flat() });
+    }
   }
   const block = titleBlock(sheet, context);
   // Views and annotations can be placed past the paper's edge (a smaller
