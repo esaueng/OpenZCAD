@@ -1905,6 +1905,70 @@ function exactSharedSolidVolume(
   }
 }
 
+// Keep exact overlap measurements for adjacent pairs as the count changes.
+// Indexes only locate a candidate. Both placed solids must match byte for byte.
+const linearOverlaps = new WeakMap<
+  RemusKernel,
+  { operands: Uint8Array; volume: number }[]
+>();
+const MAX_LINEAR_PAIRS = 32;
+const MAX_PAIR_BYTES = 8192;
+
+// A single-source row contains only rigid copies of the same stock. Check
+// one before serializing: small face counts alone do not limit spline data.
+function compactLinearStock(kernel: RemusKernel, solid: number): boolean {
+  const faces = kernel.getSolidFaces(solid);
+  if (
+    faces.length > 8 ||
+    !faces.every((face) => {
+      const type = kernel.getSurfaceType(face);
+      return type === 'plane' || type === 'cylinder';
+    })
+  )
+    return false;
+  const edges = kernel.getSolidEdges(solid);
+  return (
+    edges.length <= 32 &&
+    edges.every((edge) => {
+      const type = kernel.getEdgeCurveType(edge);
+      return type === 'LINE' || type === 'CIRCLE';
+    })
+  );
+}
+
+function linearNeighbourProbe(kernel: RemusKernel) {
+  let eligible: boolean | undefined;
+  return (index: number, left: number, right: number): number => {
+    if (eligible === false || index >= MAX_LINEAR_PAIRS)
+      return exactSharedSolidVolume(kernel, left, right);
+    let operands: Uint8Array | undefined;
+    try {
+      eligible ??= compactLinearStock(kernel, left);
+      if (eligible)
+        operands = kernel.serializeSolids(Uint32Array.of(left, right));
+    } catch {
+      eligible = false;
+      return exactSharedSolidVolume(kernel, left, right);
+    }
+    if (!operands || operands.byteLength > MAX_PAIR_BYTES) {
+      eligible = false;
+      return exactSharedSolidVolume(kernel, left, right);
+    }
+    const entries = linearOverlaps.get(kernel) ?? [];
+    const prior = entries[index];
+    if (
+      prior &&
+      prior.operands.length === operands.length &&
+      prior.operands.every((byte, i) => byte === operands[i])
+    )
+      return prior.volume;
+    const volume = exactSharedSolidVolume(kernel, left, right);
+    entries[index] = { operands, volume };
+    linearOverlaps.set(kernel, entries);
+    return volume;
+  };
+}
+
 /**
  * How much interior volume these solids share, summed over every pair.
  *
@@ -1938,12 +2002,16 @@ export function sharedSolidVolume(
   kernel: RemusKernel,
   solids: number[],
   /** Only callers proving rigid equivalence may reuse an exact intersection. */
-  pairClass?: (left: number, right: number) => string
+  pairClass?: (left: number, right: number) => string,
+  reuseLinearNeighbours = false
 ): number {
   if (solids.length < 2) {
     return 0;
   }
   let total = 0;
+  const measureNeighbour = reuseLinearNeighbours
+    ? linearNeighbourProbe(kernel)
+    : undefined;
   const exactByClass = new Map<string, number>();
   const boxes = solids.map((solid) => kernel.boundingBox(solid));
   for (let left = 0; left < solids.length; left += 1) {
@@ -1975,7 +2043,9 @@ export function sharedSolidVolume(
         const cached = key === undefined ? undefined : exactByClass.get(key);
         shared =
           cached ??
-          exactSharedSolidVolume(kernel, solids[left]!, solids[right]!);
+          (measureNeighbour && right === left + 1
+            ? measureNeighbour(left, solids[left]!, solids[right]!)
+            : exactSharedSolidVolume(kernel, solids[left]!, solids[right]!));
         if (key !== undefined) exactByClass.set(key, shared);
       } catch {
         // A refused intersection is not evidence of disjointness. The boxes

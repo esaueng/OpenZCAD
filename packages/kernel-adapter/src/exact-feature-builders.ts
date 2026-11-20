@@ -4576,7 +4576,8 @@ function buildPatternBody(
           const reversed = `${right % width}:${left % width}:${count - delta}`;
           return direct < reversed ? direct : reversed;
         }
-      : undefined
+      : undefined,
+    data.patternKind === 'linear' && target.solids.length === 1
   );
   if (shared > 0) {
     const summed = solids.reduce(
