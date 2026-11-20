@@ -583,6 +583,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       {
         document: ProjectDocument;
         lineageDemand: readonly BodyId[] | undefined;
+        requestId: string;
         analysis: boolean;
       }
     >()
@@ -1555,6 +1556,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         .finally(() => signal?.removeEventListener('abort', onAbort))
         .then((derived) => {
           syncOrigins.current.set(derived, {
+            requestId: posted.requestId,
             document,
             lineageDemand,
             analysis: analysis !== undefined
@@ -2032,6 +2034,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       // only a draft of this content and drops an older one.
       workerRef.current.postMessage({
         type: 'live-content',
+        requestId: origin.requestId,
         projectId: document.projectId,
         contentKey
       } satisfies GeometryWorkerRequest);

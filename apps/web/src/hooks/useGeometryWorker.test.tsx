@@ -2158,6 +2158,7 @@ describe('adopting a validated edit result as the live result', () => {
     expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 1);
     expect(edit.worker.postMessage).toHaveBeenLastCalledWith({
       type: 'live-content',
+      requestId: expect.any(String) as string,
       projectId: edit.committed.projectId,
       contentKey: geometryContentKey(edit.committed)
     });
