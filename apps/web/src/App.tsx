@@ -21473,7 +21473,13 @@ export function App() {
         if (face) return command.pickFace(face);
         // M02 (schema v113): with a feature picked, a flat face no feature
         // made is a mirror pattern's plane, as Mirror takes one.
-        if (command.spec?.wantsPlane && command.slots.faces.length > 0) {
+        // An edit may keep a repeated feature that shows no face to pick
+        // (review), so a kept source counts as one picked.
+        if (
+          command.spec?.wantsPlane &&
+          (command.slots.faces.length > 0 ||
+            Boolean(command.options.keepSources))
+        ) {
           const geometry = (
             previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
             representations[selection.bodyId]

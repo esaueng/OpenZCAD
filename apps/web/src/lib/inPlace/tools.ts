@@ -6542,10 +6542,14 @@ function mirrorPatternPlane(
   if (fields.datumFeatureId) {
     return { type: 'datum', datumFeatureId: fields.datumFeatureId };
   }
-  // Numbers stay numbers; anything else is an expression, as typed.
+  // A number written as a number stays one; anything else (an expression,
+  // or a number written otherwise, such as "50.0") is kept as typed, so an
+  // untouched edit stores what it reopened with (review).
   const param = (text: string): ParamValue => {
     const number = Number(text);
-    return text.trim() !== '' && Number.isFinite(number) ? number : text;
+    return Number.isFinite(number) && String(number) === text.trim()
+      ? number
+      : text;
   };
   const vector = (v: { x: string; y: string; z: string }) => ({
     x: param(v.x),

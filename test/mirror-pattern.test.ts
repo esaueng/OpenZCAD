@@ -12,6 +12,10 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  copyReflects,
+  mirroredHand
+} from '../packages/kernel-adapter/src/exact-feature-pattern';
+import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
@@ -237,4 +241,20 @@ describe('M02 mirror patterns: exact build', () => {
       derived.featureWarnings?.map((warning) => warning.message).join('\n')
     ).toMatch(/keep at least one copy besides the original/);
   }, 120_000);
+});
+
+describe('M02 mirror patterns: a reflected copy’s thread (review)', () => {
+  it('winds a mirrored tapped hole’s thread the other way', () => {
+    const reflectX = new Float64Array([
+      -1, 0, 0, 100, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
+    ]);
+    const moveX = new Float64Array([
+      1, 0, 0, 25, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1
+    ]);
+    expect(copyReflects(reflectX)).toBe(true);
+    expect(copyReflects(moveX)).toBe(false);
+    expect(mirroredHand(undefined)).toBe('left');
+    expect(mirroredHand('right')).toBe('left');
+    expect(mirroredHand('left')).toBe('right');
+  });
 });

@@ -1407,7 +1407,9 @@ describe('an untouched edit writes the feature back as stored', () => {
       spacing: 10,
       angleDeg: 360,
       mirrorPlane: {
-        origin: { x: 'half', y: 0, z: 0 },
+        // An expression, and a number written otherwise than a number
+        // prints: both come back as written (review).
+        origin: { x: 'half', y: '50.0', z: 0 },
         normal: { x: 1, y: 0, z: 0 }
       }
     };
@@ -1415,9 +1417,9 @@ describe('an untouched edit writes the feature back as stored', () => {
     const armed = inPlaceEditSeed(node, EDIT_CTX)!;
     expect(armed.tool).toBe('mirror-pattern');
     expect(armed.seed.options.planeMode).toBe('typed');
-    expect(armed.seed.values).toMatchObject({ planeOY: 0, planeNX: 1 });
+    expect(armed.seed.values).toMatchObject({ planeNX: 1 });
     const spec = IN_PLACE_TOOL_SPECS[armed.tool];
-    const values = { ...armed.seed.values, planeOX: 'half' };
+    const values = { ...armed.seed.values, planeOX: 'half', planeOY: '50.0' };
     const request = spec.request(
       { ...armed.seed.slots, axis: null, refs: [], image: null },
       values,
@@ -1428,7 +1430,7 @@ describe('an untouched edit writes the feature back as stored', () => {
         datumLabel: () => 'Axis',
         saved: data
       },
-      { ...armed.seed.values, planeOX: 50 }
+      { ...armed.seed.values, planeOX: 50, planeOY: 50 }
     ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
     const update = inPlaceFeatureUpdate(
       { featureId: node.featureId, name: node.name, data },
