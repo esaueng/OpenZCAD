@@ -429,7 +429,11 @@ export function inPlaceEditSeed(
     case 'wrap': {
       for (const reference of data.profiles)
         profile({ sketchId: data.sketchId, profile: reference });
-      const face = ctx.face(data.targetBodyId, data.faceReference.currentHash, data.faceReference);
+      const face = ctx.face(
+        data.targetBodyId,
+        data.faceReference.currentHash,
+        data.faceReference
+      );
       if (face) seed.slots.faces.push(face);
       else missing.push('face');
       value('depth', data.depth);
@@ -934,6 +938,17 @@ export function inPlaceEditSeed(
         break;
       }
       value('count', data.count);
+      if (data.patternKind === 'path') {
+        // M02 (schema v112): the path's curves as picks; its stored start
+        // is the one the tool keeps while they stay the same curves.
+        value('spacing', data.spacing);
+        for (const entityId of data.path?.entityIds ?? []) {
+          seed.slots.path.push({ sketchId: data.path!.sketchId, entityId });
+        }
+        if (data.path?.orientation === 'tangent')
+          seed.options.orient = 'tangent';
+        break;
+      }
       if (data.patternKind === 'linear') {
         value('spacing', data.spacing);
         if (data.direction) {
@@ -1460,7 +1475,8 @@ export function inPlaceFeatureUpdate(
           ...(request.skippedInstances
             ? { skippedInstances: request.skippedInstances }
             : {}),
-          ...(request.points ? { points: request.points } : {})
+          ...(request.points ? { points: request.points } : {}),
+          ...(request.path ? { path: request.path } : {})
         },
         // R01: the world axis is the absent datum axis. M02: a pattern turned
         // back to its body, or with every copy back, stores neither list.
@@ -1523,6 +1539,9 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
     // M02: a pattern on sketch points shows the sketch its points are on,
     // and so does an M01 hole drilled at them.
     case 'pattern':
+      // M02: a pattern along a path shows the sketch its curves are on.
+      if (data.path) return [data.path.sketchId];
+      return data.points ? [data.points.sketchId] : [];
     case 'hole':
       return data.points ? [data.points.sketchId] : [];
     default:

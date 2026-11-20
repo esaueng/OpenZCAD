@@ -185,6 +185,10 @@ export function featureHistory(document: ProjectDocument) {
         ) {
           sketch(data.points.sketchId);
         }
+        // M02: a pattern along a path reads its sketch too.
+        if (data.featureKind === 'pattern' && data.path) {
+          sketch(data.path.sketchId);
+        }
         break;
       case 'gear':
         if (data.targetBodyId !== undefined) body(data.targetBodyId);

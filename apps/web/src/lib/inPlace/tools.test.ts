@@ -1752,6 +1752,121 @@ describe('M02 feature patterns and skipped copies', () => {
     });
   });
 
+  it('Path pattern: copies stand along the picked lines from the end nearer the original', () => {
+    const spec = IN_PLACE_TOOL_SPECS['path-pattern'];
+    const SKETCH = 'sketch_path' as SketchId;
+    const basis = {
+      origin: { x: 0, y: 0, z: 0 },
+      u: { x: 1, y: 0, z: 0 },
+      v: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 0, z: 1 }
+    };
+    // BODY's middle is (10, 5, 2). The path runs from (10, 0), beside it,
+    // 90 along +x, then turns left up 50 along +y.
+    const ctx: InPlaceContext = {
+      ...CTX,
+      sketchPath: (sketchId, entityIds) =>
+        sketchId === SKETCH
+          ? {
+              basis,
+              curves: entityIds.map((id) =>
+                id === 'l_a'
+                  ? {
+                      kind: 'line' as const,
+                      id,
+                      start: { x: 10, y: 0 },
+                      end: { x: 100, y: 0 }
+                    }
+                  : {
+                      kind: 'line' as const,
+                      id,
+                      start: { x: 100, y: 0 },
+                      end: { x: 100, y: 50 }
+                    }
+              )
+            }
+          : null
+    };
+    const pick = (entityId: string) => ({ sketchId: SKETCH, entityId });
+    expect(spec.hint({ ...EMPTY, bodies: [BODY] }, {}, ctx)).toBe(
+      'Click the sketch lines and arcs to repeat along'
+    );
+    const slots = {
+      ...EMPTY,
+      bodies: [BODY],
+      // Picked far end first: the start is the end nearer the original.
+      path: [pick('l_b'), pick('l_a')]
+    };
+    expect(spec.ready(slots, {}, ctx)).toBe(true);
+    const numbers = { count: 3, spacing: 50 };
+    expect(spec.request(slots, numbers, { skip: '1' }, ctx, numbers)).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      patternKind: 'path',
+      count: 3,
+      axis: 'x',
+      spacing: 50,
+      // l_b is listed first, so its free end (100, 50) is the natural start.
+      path: { sketchId: SKETCH, entityIds: ['l_b', 'l_a'], reversed: true },
+      skippedInstances: ['1']
+    });
+    const chips = (options: Record<string, string>) =>
+      spec
+        .handles(slots, numbers, ctx, options)
+        .flatMap((handle) =>
+          handle.kind === 'instance'
+            ? [[handle.params.label, handle.params.anchor]]
+            : []
+        );
+    // 50 along the first line, then 90 along it and 10 up the second.
+    expect(chips({})).toEqual([
+      ['1', { x: 60, y: 5, z: 2 }],
+      ['2', { x: 100, y: 15, z: 2 }]
+    ]);
+    // Following the path, the second copy also turns a quarter left about
+    // the start: the middle, 5 off the path to its left, stays so.
+    const turned = chips({ orient: 'tangent' });
+    expect(turned[1]![0]).toBe('2');
+    const at = turned[1]![1] as { x: number; y: number; z: number };
+    expect(at.x).toBeCloseTo(95, 9);
+    expect(at.y).toBeCloseTo(10, 9);
+    expect(at.z).toBeCloseTo(2, 9);
+    expect(
+      spec.request(
+        slots,
+        numbers,
+        { orient: 'tangent', start: 'far' },
+        ctx,
+        numbers
+      )
+    ).toMatchObject({
+      path: { entityIds: ['l_b', 'l_a'], orientation: 'tangent' }
+    });
+    // Too many copies for the path: the hint says so with its length.
+    const crowded = { count: 4, spacing: 50 };
+    expect(
+      spec.hint(slots, {}, ctx, spec.request(slots, crowded, {}, ctx, crowded))
+    ).toMatch(/4 copies 50 apart need 150 of path, and the path is 140 long/);
+    // Curves that do not join are refused by name.
+    const apart: InPlaceContext = {
+      ...ctx,
+      sketchPath: () => ({
+        basis,
+        curves: [
+          { kind: 'line', id: 'a', start: { x: 0, y: 0 }, end: { x: 9, y: 0 } },
+          {
+            kind: 'line',
+            id: 'b',
+            start: { x: 20, y: 0 },
+            end: { x: 29, y: 0 }
+          }
+        ]
+      })
+    };
+    expect(spec.ready(slots, {}, apart)).toBe(false);
+    expect(spec.hint(slots, {}, apart)).toMatch(/join end to end/);
+  });
+
   it('toggles a copy in and out of the skip list', () => {
     expect(toggledPatternSkip(undefined, '2')).toBe('2');
     expect(toggledPatternSkip('2', '3')).toBe('2,3');

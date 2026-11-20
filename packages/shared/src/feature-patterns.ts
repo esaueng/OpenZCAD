@@ -3,7 +3,12 @@
  * build and the in-place pattern tools, so none of them accepts a copy label
  * or a repeated feature the others would refuse.
  */
-import type { FeatureData, PatternKind, PatternPoints } from './index';
+import type {
+  FeatureData,
+  PatternKind,
+  PatternPath,
+  PatternPoints
+} from './index';
 
 /** Most copies a pattern, the original included, may make. */
 export const MAX_PATTERN_INSTANCES = 100;
@@ -30,7 +35,7 @@ export function patternOriginalLabel(kind: PatternKind): string {
   return kind === 'grid' ? '0-0' : '0';
 }
 
-/** A point entity id as a `points` pattern stores one. */
+/** A sketch entity id as a `points` or `path` pattern stores one. */
 const POINT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 const LINEAR_LABEL = /^(0|[1-9]\d{0,2})$/;
@@ -122,6 +127,48 @@ export function patternPointsProblem(data: {
     if (!ids.includes(label)) {
       return `Skipped point ${label} is not one of the pattern's points.`;
     }
+  }
+  return null;
+}
+
+/**
+ * Why a `path` pattern's path cannot be stored, else null: it is present
+ * exactly on a `path` pattern and names its sketch and at least one curve,
+ * each once. Whether the curves are lines and arcs that join is the
+ * sketch's to say, at the pattern's history position.
+ */
+export function patternPathProblem(data: {
+  patternKind: PatternKind;
+  path?: PatternPath | undefined;
+}): string | null {
+  const path = data.path;
+  if (data.patternKind !== 'path') {
+    return path === undefined
+      ? null
+      : 'Only a pattern along a path names a sketch path.';
+  }
+  if (!path || typeof path !== 'object') {
+    return 'A pattern along a path needs its sketch and curves.';
+  }
+  if (typeof path.sketchId !== 'string' || path.sketchId === '') {
+    return 'A pattern along a path needs its sketch.';
+  }
+  const ids = path.entityIds;
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    !ids.every((id) => POINT_ID.test(String(id)))
+  ) {
+    return 'A pattern along a path lists its curves by id.';
+  }
+  if (new Set(ids).size !== ids.length) {
+    return 'A pattern along a path names each curve once.';
+  }
+  if (path.reversed !== undefined && path.reversed !== true) {
+    return 'A path is reversed or not; store true or leave it out.';
+  }
+  if (path.orientation !== undefined && path.orientation !== 'tangent') {
+    return `"${String(path.orientation)}" is not a path pattern orientation.`;
   }
   return null;
 }

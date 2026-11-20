@@ -112,6 +112,7 @@ import {
   isDocumentHistory,
   isReservedRecordKey,
   ownEntry,
+  patternPathProblem,
   patternPointsProblem,
   holePointsProblem,
   holeStandardDiameter,
@@ -121,6 +122,7 @@ import {
   patternSourceProblem,
   skippedInstancesProblem,
   suppliedIds,
+  type PatternPath,
   type PatternPoints,
   type HolePoints,
   type HoleStandard,
@@ -819,6 +821,8 @@ export interface PatternInput {
   skippedInstances?: string[];
   /** M02 (schema v63): required on a `points` pattern, absent otherwise. */
   points?: PatternPoints;
+  /** M02 (schema v112): required on a `path` pattern, absent otherwise. */
+  path?: PatternPath;
   ids?: BodyFeatureIds;
 }
 
@@ -4632,10 +4636,77 @@ export function patternBody(
               referencePointId: input.points.referencePointId
             }
           }
-        : {})
+        : {}),
+      ...(input.path ? { path: patternPathOnly(input.path) } : {})
     },
     suppliedIds(input.ids)
   );
+}
+
+/** A pattern path as stored: its own fields, the optional ones when set. */
+function patternPathOnly(path: PatternPath): PatternPath {
+  return {
+    sketchId: path.sketchId,
+    entityIds: [...path.entityIds],
+    ...(path.reversed ? { reversed: true } : {}),
+    ...(path.orientation ? { orientation: path.orientation } : {})
+  };
+}
+
+/**
+ * M02 (schema v112): a path pattern's sketch is an earlier one, and each of
+ * its curves is a line or arc of that sketch. Whether they join in one
+ * chain long enough for the copies is the build's to read, at the
+ * pattern's history position.
+ */
+function validatePatternPath(
+  document: ProjectDocument,
+  path: PatternPath,
+  ownFeatureId: FeatureId | null
+): void {
+  const sketch = findSketch(document, path.sketchId);
+  if (!sketch) {
+    throw new Error('The sketch this pattern runs along is no longer there.');
+  }
+  requireEarlierSketch(document, sketch, ownFeatureId, 'run along');
+  for (const entityId of path.entityIds) {
+    const node = ownEntry(document.nodes, entityId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(entityId) ||
+      node?.kind !== 'sketch-object' ||
+      (node.data.objectKind !== 'line' && node.data.objectKind !== 'arc')
+    ) {
+      throw new Error(
+        `A curve this pattern runs along is no longer a line or arc of ${sketch.name}.`
+      );
+    }
+  }
+}
+
+/** A pattern reads only a sketch made before it in History. */
+function requireEarlierSketch(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  ownFeatureId: FeatureId | null,
+  verb: string
+): void {
+  const sketchFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.data.featureKind === 'sketch' &&
+      feature.data.sketchId === sketch.sketchId
+  );
+  const ownIndex =
+    ownFeatureId === null
+      ? document.featureOrder.length
+      : document.featureOrder.indexOf(ownFeatureId);
+  if (
+    !sketchFeature ||
+    document.featureOrder.indexOf(sketchFeature.featureId) >= ownIndex
+  ) {
+    throw new Error(
+      `${sketch.name} comes later in History; a pattern can only ${verb} an earlier sketch.`
+    );
+  }
 }
 
 /**
@@ -4652,23 +4723,7 @@ function validatePatternPoints(
   if (!sketch) {
     throw new Error('The sketch this pattern stands on is no longer there.');
   }
-  const sketchFeature = listFeaturesInOrder(document).find(
-    (feature) =>
-      feature.data.featureKind === 'sketch' &&
-      feature.data.sketchId === points.sketchId
-  );
-  const ownIndex =
-    ownFeatureId === null
-      ? document.featureOrder.length
-      : document.featureOrder.indexOf(ownFeatureId);
-  if (
-    !sketchFeature ||
-    document.featureOrder.indexOf(sketchFeature.featureId) >= ownIndex
-  ) {
-    throw new Error(
-      `${sketch.name} comes later in History; a pattern can only stand on an earlier sketch.`
-    );
-  }
+  requireEarlierSketch(document, sketch, ownFeatureId, 'stand on');
   for (const pointId of points.pointIds) {
     const node = ownEntry(document.nodes, pointId);
     if (
@@ -4756,7 +4811,7 @@ export function validatePatternDefinition(
   document: ProjectDocument,
   data: Pick<
     PatternInput,
-    'patternKind' | 'sourceFeatureIds' | 'skippedInstances' | 'points'
+    'patternKind' | 'sourceFeatureIds' | 'skippedInstances' | 'points' | 'path'
   >,
   ownFeatureId: FeatureId | null
 ): void {
@@ -4768,6 +4823,9 @@ export function validatePatternDefinition(
   const pointsProblem = patternPointsProblem(data);
   if (pointsProblem) throw new Error(pointsProblem);
   if (data.points) validatePatternPoints(document, data.points, ownFeatureId);
+  const pathProblem = patternPathProblem(data);
+  if (pathProblem) throw new Error(pathProblem);
+  if (data.path) validatePatternPath(document, data.path, ownFeatureId);
   const sources = data.sourceFeatureIds;
   if (sources === undefined) return;
   if (!Array.isArray(sources) || sources.length === 0) {
@@ -5748,7 +5806,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'axisRef',
     'sourceFeatureIds',
     'skippedInstances',
-    'points'
+    'points',
+    'path'
   ],
   gear: [
     'gearType',
