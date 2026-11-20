@@ -229,6 +229,7 @@ import {
   type AnnotationBox,
   type AnnotationResolution
 } from '../lib/drawing/annotations';
+import { viewCosmeticThreads } from '../lib/drawing/cosmeticThreads';
 import {
   auditDrawingDimensions,
   type DrawingAudit
@@ -4076,6 +4077,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const modelBodies = keptDrawing?.bodies ?? bodies;
   /** Its holes' callouts, likewise: the kept document's, if kept. */
   const holeCallouts = keptDrawing?.holes ?? liveHoleCallouts;
+  // M01: the cosmetic threads each view draws, from the same model. A
+  // projected or detail view draws its source's configuration row, so the
+  // row is read as its projection reads it (`keyView`).
+  const viewThreads = useCallback(
+    (view: DrawingView) =>
+      viewCosmeticThreads(
+        sheet ? keyView(sheet.sheetId, view) : view,
+        modelBodies,
+        holeCallouts,
+        drawingViewFrame(view).direction
+      ),
+    [sheet, keyView, modelBodies, holeCallouts]
+  );
   const liveBodies = useMemo(
     () =>
       document.bodyOrder.filter((id) => {
@@ -4834,7 +4848,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         projectName: document.name,
         units: document.units,
         sheetNumber,
-        date: autoDate
+        date: autoDate,
+        cosmeticThreads: viewThreads
       },
       composeSheetAnnotations(sheet, drawn, resolutions, document.units)
     );
@@ -5041,7 +5056,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           projectName: document.name,
           units: document.units,
           sheetNumber,
-          date: autoDate
+          date: autoDate,
+          cosmeticThreads: viewThreads
         }),
         boxes: new Map<DrawingAnnotationId, AnnotationBox>(),
         ghost: true
@@ -5060,7 +5076,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           projectName: document.name,
           units: document.units,
           sheetNumber,
-          date: autoDate
+          date: autoDate,
+          cosmeticThreads: viewThreads
         },
         annotations
       ),
@@ -5075,7 +5092,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     document.name,
     document.units,
     sheetNumber,
-    autoDate
+    autoDate,
+    viewThreads
   ]);
   const page: SheetPage | null = composed?.page ?? null;
   // D02 (v92): object URLs for the pictures the page shows, loaded from the
