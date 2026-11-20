@@ -219,6 +219,11 @@ export type AnnotationBreak =
   | 'no-bom'
   /** M01: a hole table's view sees no bore down its axis. */
   | 'no-holes'
+  /**
+   * M01: a hole table's view sees a bore whose hole a whole-body pattern's
+   * copy no longer names, so a row would be missing (review).
+   */
+  | 'hole-unnamed'
   | 'not-in-bom'
   | 'not-on-part'
   | 'no-angle'
@@ -503,6 +508,8 @@ export function annotationBreakMessage(reason: AnnotationBreak): string {
       return 'The project has no assembly parts to list.';
     case 'no-holes':
       return 'This view sees no hole down its axis, so the table has nothing to list. Place it on a view that looks into the holes.';
+    case 'hole-unnamed':
+      return 'This view sees holes copied with a whole body, which do not say which hole they copy, so the table cannot list them. Repeat the holes with a feature pattern instead.';
     case 'not-in-bom':
       return 'The part this balloon named is no longer in the assembly.';
     case 'not-on-part':
@@ -1896,7 +1903,11 @@ export function resolveDrawingAnnotation(
   if (annotation.kind === 'hole-table') {
     if (!view) return failure('not-in-view');
     const table = holeTable(view, bodies, holes, format);
-    return table ? { ok: true, resolved: table } : failure('no-holes');
+    return table === 'hole-unnamed'
+      ? failure('hole-unnamed')
+      : table
+        ? { ok: true, resolved: table }
+        : failure('no-holes');
   }
   if (annotation.kind === 'bom-table') {
     if (!bom || bom.rows.length === 0) return failure('no-bom');
@@ -3698,6 +3709,54 @@ function holeTagLetters(index: number): string {
 /** Below this two bores' axes stand at one place (a bore split at its seam). */
 const HOLE_TABLE_TOLERANCE = 1e-6;
 
+/** A hole's bore as a whole-body pattern's copy names it: no source hole. */
+const WHOLE_BODY_BORE =
+  /^(?:pattern\.face\.instance\.[A-Za-z0-9_-]+\.)+hole\.face(?:\.at\.[A-Za-z0-9_-]+)?\.bore$/;
+
+/**
+ * Whether any of `meshes` lies between `from` and the eye, which looks
+ * along `direction`: a ray from `from` back toward it meets a triangle
+ * (Möller–Trumbore) a little way off, past the face `from` lies on.
+ */
+function coveredFromEye(
+  meshes: readonly { vertices: Float32Array; indices: Uint32Array }[],
+  from: { x: number; y: number; z: number },
+  direction: { x: number; y: number; z: number }
+): boolean {
+  const d = [-direction.x, -direction.y, -direction.z] as const;
+  const o = [from.x, from.y, from.z] as const;
+  const near = 1e-4 * Math.max(1, Math.hypot(from.x, from.y, from.z));
+  for (const { vertices: p, indices } of meshes) {
+    for (let t = 0; t + 2 < indices.length; t += 3) {
+      const a = indices[t]! * 3;
+      const b = indices[t + 1]! * 3;
+      const c = indices[t + 2]! * 3;
+      const e1 = [p[b]! - p[a]!, p[b + 1]! - p[a + 1]!, p[b + 2]! - p[a + 2]!];
+      const e2 = [p[c]! - p[a]!, p[c + 1]! - p[a + 1]!, p[c + 2]! - p[a + 2]!];
+      const h = [
+        d[1] * e2[2]! - d[2] * e2[1]!,
+        d[2] * e2[0]! - d[0] * e2[2]!,
+        d[0] * e2[1]! - d[1] * e2[0]!
+      ];
+      const det = e1[0]! * h[0]! + e1[1]! * h[1]! + e1[2]! * h[2]!;
+      if (Math.abs(det) < 1e-12) continue;
+      const s = [o[0] - p[a]!, o[1] - p[a + 1]!, o[2] - p[a + 2]!];
+      const u = (s[0]! * h[0]! + s[1]! * h[1]! + s[2]! * h[2]!) / det;
+      if (u < 0 || u > 1) continue;
+      const q = [
+        s[1]! * e1[2]! - s[2]! * e1[1]!,
+        s[2]! * e1[0]! - s[0]! * e1[2]!,
+        s[0]! * e1[1]! - s[1]! * e1[0]!
+      ];
+      const v = (d[0] * q[0]! + d[1] * q[1]! + d[2] * q[2]!) / det;
+      if (v < 0 || u + v > 1) continue;
+      const along = (e2[0]! * q[0]! + e2[1]! * q[1]! + e2[2]! * q[2]!) / det;
+      if (along > near) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * M01: the hole table of `view`: every bore it sees down its axis, a row
  * each. Bores are found by their faces' lineage (a hole's own, at sketch
@@ -3706,13 +3765,20 @@ const HOLE_TABLE_TOLERANCE = 1e-6;
  * left corner of its bodies' bounding boxes. Tags take a letter per size,
  * smallest first, and a number per bore within it, left to right then
  * bottom to top. Null when the view sees no bore down its axis.
+ *
+ * Only the bores the view shows (review): one whose opening the bodies
+ * cover is left out unless the view draws hidden lines, and a detail lists
+ * only the bores inside its circle. Bores at one place are one row only
+ * when they are one hole's (a bore split at its seam); a size is the
+ * hole's model callout, not its printed text. A bore a whole-body pattern
+ * copied names no hole, so it breaks the table rather than go missing.
  */
 function holeTable(
   view: DrawingView,
   bodies: AnnotationBodies,
   holes: HoleCalloutLookup | undefined,
   format: DrawingNumberFormat
-): Extract<ResolvedAnnotation, { kind: 'hole-table' }> | null {
+): Extract<ResolvedAnnotation, { kind: 'hole-table' }> | null | 'hole-unnamed' {
   if (!holes) return null;
   const frame = drawingViewFrame(view);
   let minU = Infinity;
@@ -3722,8 +3788,13 @@ function holeTable(
     v: number;
     r: number;
     size: string;
+    /** The callout itself, which sizes are told apart by. */
+    group: string;
     diameter: number;
   }[] = [];
+  const meshes = view.bodyIds
+    .map((bodyId) => annotationBody(bodies, view, bodyId)?.mesh)
+    .filter((mesh): mesh is NonNullable<typeof mesh> => mesh !== undefined);
   for (const bodyId of view.bodyIds) {
     const body = annotationBody(bodies, view, bodyId);
     if (!body) continue;
@@ -3746,7 +3817,6 @@ function holeTable(
         continue;
       const holeId = holeOfBoreFace(face.reference);
       const callout = holeId ? holes(holeId) : null;
-      if (!callout) continue;
       const axis = {
         x: geometry.axisEnd.x - geometry.axisStart.x,
         y: geometry.axisEnd.y - geometry.axisStart.y,
@@ -3762,11 +3832,38 @@ function holeTable(
           : 0;
       if (Math.abs(Math.abs(along) - 1) > HOLE_TABLE_TOLERANCE) continue;
       const at = projectToView(frame, geometry.axisStart);
+      // A detail shows only what lies inside its circle.
+      if (
+        view.detail &&
+        Math.hypot(at.u - view.detail.center.u, at.v - view.detail.center.v) >
+          view.detail.radius
+      )
+        continue;
+      // Its end nearer the eye, which looks along `direction`: covered
+      // there, the view does not show its opening.
+      const dot = (p: { x: number; y: number; z: number }) =>
+        p.x * frame.direction.x +
+        p.y * frame.direction.y +
+        p.z * frame.direction.z;
+      const mouth =
+        dot(geometry.axisStart) <= dot(geometry.axisEnd)
+          ? geometry.axisStart
+          : geometry.axisEnd;
+      if (!view.hiddenLines && coveredFromEye(meshes, mouth, frame.direction))
+        continue;
+      if (!callout) {
+        // A whole-body pattern's copy names the bore, not its hole.
+        if (WHOLE_BODY_BORE.test(face.reference.lineageName))
+          return 'hole-unnamed';
+        continue;
+      }
+      const group = JSON.stringify({ ...callout, count: 1 });
       if (
         bores.some(
           (bore) =>
+            bore.group === group &&
             Math.hypot(bore.u - at.u, bore.v - at.v) <=
-            HOLE_TABLE_TOLERANCE * Math.max(1, Math.abs(at.u), Math.abs(at.v))
+              HOLE_TABLE_TOLERANCE * Math.max(1, Math.abs(at.u), Math.abs(at.v))
         )
       )
         continue;
@@ -3784,15 +3881,16 @@ function holeTable(
         r: callout.diameter / 2,
         // One bore a row: the count belongs to the hole, not to the row.
         size: holeCalloutLabel({ ...callout, count: 1 }, length),
+        group,
         diameter: callout.diameter
       });
     }
   }
   if (bores.length === 0) return null;
-  const sizes = [...new Set(bores.map((bore) => bore.size))].sort(
+  const groups = [...new Set(bores.map((bore) => bore.group))].sort(
     (a, b) =>
-      bores.find((bore) => bore.size === a)!.diameter -
-        bores.find((bore) => bore.size === b)!.diameter || a.localeCompare(b)
+      bores.find((bore) => bore.group === a)!.diameter -
+        bores.find((bore) => bore.group === b)!.diameter || a.localeCompare(b)
   );
   const position = (n: number) =>
     writeNumber(
@@ -3804,18 +3902,18 @@ function holeTable(
     );
   const rows: string[][] = [];
   const tags: { text: string; u: number; v: number; r: number }[] = [];
-  sizes.forEach((size, group) => {
-    const letter = holeTagLetters(group);
+  groups.forEach((group, index) => {
+    const letter = holeTagLetters(index);
     bores
-      .filter((bore) => bore.size === size)
+      .filter((bore) => bore.group === group)
       .sort((a, b) => a.u - b.u || a.v - b.v)
-      .forEach((bore, index) => {
-        const text = `${letter}${index + 1}`;
+      .forEach((bore, at) => {
+        const text = `${letter}${at + 1}`;
         rows.push([
           text,
           position(bore.u - minU),
           position(bore.v - minV),
-          size
+          bore.size
         ]);
         tags.push({ text, u: bore.u, v: bore.v, r: bore.r });
       });

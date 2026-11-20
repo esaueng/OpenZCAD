@@ -5353,7 +5353,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       drawBodies,
       document.units,
       sheetMarkLookup(sheet),
-      bomTable
+      bomTable,
+      holeCallouts
     );
     if (refusal) {
       props.onStatus(refusal);
@@ -5437,7 +5438,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       drawBodies,
       document.units,
       sheetMarkLookup(sheet),
-      bomTable
+      bomTable,
+      holeCallouts
     );
     if (refusal) {
       props.onStatus(refusal);

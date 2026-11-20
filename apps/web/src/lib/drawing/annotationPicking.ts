@@ -31,6 +31,7 @@ import {
   resolveDrawingAnnotation,
   type SheetBom,
   type AnnotationBodies,
+  type HoleCalloutLookup,
   type MarkLookup
 } from './annotations';
 import {
@@ -1648,7 +1649,9 @@ export function draftRefusal(
   /** v73: the sheet's annotations, for points that marks mark. */
   marks?: MarkLookup,
   /** v80: the assembly's BOM, for parts lists and balloons. */
-  bom?: SheetBom
+  bom?: SheetBom,
+  /** M01: the holes' callouts, which a hole table lists (review). */
+  holes?: HoleCalloutLookup
 ): string | null {
   // v92: an image measures nothing; its picture was chosen from the
   // project's own, so there is nothing to refuse.
@@ -1658,7 +1661,7 @@ export function draftRefusal(
     view,
     bodies,
     units,
-    undefined,
+    holes,
     undefined,
     marks,
     bom
