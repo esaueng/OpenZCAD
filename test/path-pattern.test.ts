@@ -254,7 +254,11 @@ describe('M02 patterns along a path: stations', () => {
     } as unknown as FeatureData;
     expect(() =>
       assertFeatureSketchProjectionsValid(
-        { sketchProjectionFailures: new Map([['sketch_path', 'unsatisfied']]) },
+        {
+          sketchProjectionFailures: new Map([
+            ['sketch_path' as SketchId, 'unsatisfied']
+          ])
+        },
         data
       )
     ).toThrow(/linked projections/);
