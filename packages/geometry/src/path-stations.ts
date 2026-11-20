@@ -92,14 +92,9 @@ export function chainPathCurves(
       return 'A curve of the path has no length.';
     }
   }
-  const scale = Math.max(
-    1,
-    ...curves.flatMap((curve) => {
-      const a = curveStart(curve);
-      const b = curveEnd(curve);
-      return [Math.abs(a.x), Math.abs(a.y), Math.abs(b.x), Math.abs(b.y)];
-    })
-  );
+  // Joints are judged by the curves' own size, never by how far they sit
+  // from the sketch's origin: a gap is a gap wherever the path is drawn.
+  const scale = Math.max(1, ...curves.map(curveLength));
   const tolerance = 1e-6 * scale;
   const same = (a: PathPoint2, b: PathPoint2) =>
     Math.hypot(a.x - b.x, a.y - b.y) <= tolerance;
@@ -286,9 +281,11 @@ export function pathPatternCurves(
       const start = (resolve(data.startAngleDeg, 'arc start') * Math.PI) / 180;
       const end = (resolve(data.endAngleDeg, 'arc end') * Math.PI) / 180;
       const turn = Math.PI * 2;
-      let sweep = (((end - start) % turn) + turn) % turn;
-      // Equal angles are a whole circle drawn as an arc.
-      if (sweep <= 1e-12) sweep = turn;
+      const sweep = (((end - start) % turn) + turn) % turn;
+      // An arc whose angles are equal has no sweep, as the sketch says.
+      if (sweep <= 1e-12) {
+        return `An arc this pattern runs along has no sweep in ${sketch.name}.`;
+      }
       curves.push({
         kind: 'arc',
         id,

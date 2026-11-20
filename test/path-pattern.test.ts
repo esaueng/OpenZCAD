@@ -13,6 +13,7 @@ import {
 } from '@openzcad/document-core';
 import {
   chainPathCurves,
+  pathPatternCurves,
   pathPatternFitProblem,
   pathStationAt,
   pathTurnDeg,
@@ -23,11 +24,13 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { assertFeatureSketchProjectionsValid } from '../packages/kernel-adapter/src/exact-sketch-projection-failures';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
   type DerivedState,
+  type FeatureData,
   type FeatureId,
   type ProjectDocument,
   type SketchId,
@@ -227,6 +230,37 @@ describe('M02 patterns along a path: stations', () => {
     ).toMatch(/branches/);
   });
 
+  it('judges a joint by the curves, not by how far from the origin they sit (review)', () => {
+    // A 0.5 gap between 20-long lines is a gap a million units out too.
+    const far = (x: number) => ({
+      kind: 'line' as const,
+      id: String(x),
+      start: { x, y: 0 },
+      end: { x: x + 20, y: 0 }
+    });
+    expect(chainPathCurves([far(1_000_000), far(1_000_020.5)])).toMatch(
+      /join end to end in one chain/
+    );
+    expect(typeof chainPathCurves([far(1_000_000), far(1_000_020)])).toBe(
+      'object'
+    );
+  });
+
+  it('refuses a pattern whose path sketch failed its linked projections (review)', () => {
+    const data = {
+      featureKind: 'pattern',
+      patternKind: 'path',
+      path: { sketchId: 'sketch_path', entityIds: ['a'] }
+    } as unknown as FeatureData;
+    expect(() =>
+      assertFeatureSketchProjectionsValid(
+        { sketchProjectionFailures: new Map([['sketch_path', 'unsatisfied']]) },
+        data
+      )
+    ).toThrow(/linked projections/);
+    expect(() => assertFeatureSketchProjectionsValid({}, data)).not.toThrow();
+  });
+
   it('fits copies on an open path to its end, on a closed one short of it', () => {
     const open = chain([
       { kind: 'line', id: 'a', start: { x: 0, y: 0 }, end: { x: 40, y: 0 } }
@@ -324,6 +358,20 @@ describe('M02 patterns along a path: document contract', () => {
         ...patch(ids, sketchId)
       })
     ).toThrow(message);
+  });
+
+  it('refuses an arc with no sweep, as the sketch does (review)', () => {
+    const { document, sketchId, ids } = pathSketch(
+      box('Block', { x: 10, y: 10, z: 10 }),
+      0,
+      [arc(0, 0, 20, 0, 0)]
+    );
+    const curves = pathPatternCurves(
+      document,
+      { sketchId, entityIds: ids },
+      (value) => Number(value)
+    );
+    expect(curves).toMatch(/has no sweep in Path/);
   });
 
   it('refuses a path pattern on a document that declares schema v111', () => {

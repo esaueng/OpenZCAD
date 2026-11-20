@@ -41,6 +41,12 @@ export function assertFeatureSketchProjectionsValid(
     case 'helical-sweep':
       assertSketchProjectionsValid(result, data.profile.sketchId);
       break;
+    case 'pattern':
+      // M02: a pattern along a path, or on points, reads its sketch.
+      if (data.path) assertSketchProjectionsValid(result, data.path.sketchId);
+      if (data.points)
+        assertSketchProjectionsValid(result, data.points.sketchId);
+      break;
     case 'sheet-metal':
       // The blank's sketch, and each bend line's (it may be another's).
       assertSketchProjectionsValid(result, data.sketchId);

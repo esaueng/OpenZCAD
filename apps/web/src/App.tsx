@@ -26639,8 +26639,10 @@ export function App() {
       if (!doc || !view) return null;
       const resolve = sketchValueResolver(parameterScope.scope, doc.units);
       try {
+        // The solved sketch, as the build reads it: a line a linked
+        // projection turned is where the copies go.
         const curves = pathPatternCurves(
-          doc,
+          sketchReadDocument ?? doc,
           { sketchId, entityIds: [...entityIds] },
           (value) => resolve(value)
         );
