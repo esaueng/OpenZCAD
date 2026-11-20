@@ -533,7 +533,8 @@ export type CadPatchOperation =
       /**
        * F03: one simple hole drilled into a planar face of an existing body,
        * built by the manual Hole command (`feature.hole`), which consumes the
-       * body. `position` is measured from the face's area centroid along
+       * body. `position` is measured from the area centroid of the face's
+       * outer boundary (holes in the face ignored, M01 schema v118) along
        * the Hole tool's U and V (`frameFromFace`: u = normalize(r × n),
        * v = n × u, r = world Z, or world X when |n.z| ≥ 0.9). That is not
        * the digest's `attachmentFrame`, whose axes differ. `depth` is the
@@ -765,6 +766,12 @@ export interface CadDigestBodyTopology {
     surfaceType?: string;
     area?: number;
     center?: Vector3;
+    /**
+     * Where `add_hole`'s position {u: 0, v: 0} stands on a planar face: the
+     * area centroid of its outer boundary (M01, schema v118), which holes
+     * already in the face do not move. Not the snapshot's `centroid`.
+     */
+    holeOrigin?: Vector3;
     normal?: Vector3;
     radius?: number;
     diameter?: number;
@@ -1099,6 +1106,15 @@ function compactFace(
           surfaceType: geometry.surfaceType,
           area: round(geometry.area),
           center: roundVector(geometry.center),
+          // The anchor `add_hole` stores for this face, chosen as the command
+          // chooses it.
+          ...(geometry.surfaceType === 'plane' && geometry.normal
+            ? {
+                holeOrigin: roundVector(
+                  geometry.outerCentroid ?? geometry.centroid ?? geometry.center
+                )
+              }
+            : {}),
           ...(geometry.normal ? { normal: roundVector(geometry.normal) } : {}),
           ...(geometry.radius !== undefined
             ? { radius: round(geometry.radius) }
@@ -3204,7 +3220,7 @@ export const CAD_PATCH_JSON_SCHEMA = {
                 type: 'object',
                 additionalProperties: false,
                 description:
-                  "Hole axis offset on the entry face, in the Hole tool's own face frame, NOT attachmentFrame: with n the outward face normal and r = world Z (or world X when |n.z| >= 0.9), the u axis is normalize(r × n) and the v axis is n × u. {u: 0, v: 0} is the face's area centroid, the middle of the face. Use {u: 0, v: 0} unless the user gives an offset.",
+                  "Hole axis offset on the entry face, in the Hole tool's own face frame, NOT attachmentFrame: with n the outward face normal and r = world Z (or world X when |n.z| >= 0.9), the u axis is normalize(r × n) and the v axis is n × u. {u: 0, v: 0} is the face's digest holeOrigin: the area centroid of its outer boundary, the middle of the face ignoring any holes already in it, NOT snapshot.centroid. Measure offsets from holeOrigin. Use {u: 0, v: 0} unless the user gives an offset.",
                 properties: { u: scalarSchema, v: scalarSchema },
                 required: ['u', 'v']
               }

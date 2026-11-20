@@ -152,17 +152,76 @@ export function holePositionFromPoint(
 }
 
 /**
+ * The point on an entry face a hole's (u, v) is measured from:
+ * `outer-centroid` is the centroid of the face's outer boundary loop alone
+ * (M01, schema v118), `centroid` its full area centroid, and `center` the
+ * vertex mean every hole saved without a marker was drilled against.
+ */
+export type HolePositionAnchor = 'outer-centroid' | 'centroid' | 'center';
+
+/** The measured points of an entry face a hole anchor can stand on. */
+export interface HoleAnchorFace {
+  outerCentroid?: Vector3;
+  centroid?: Vector3;
+  center?: Vector3;
+}
+
+/** The anchor a saved hole's `positionAnchor` marker selects. */
+export function savedHoleAnchor(
+  marker: 'centroid' | 'outer-centroid' | undefined
+): HolePositionAnchor {
+  return marker ?? 'center';
+}
+
+/**
+ * The anchor a NEW hole on `face` is measured from, and stored with: the
+ * outer boundary's centroid, which other holes in the face never move, or
+ * the best the face can report when its boundary could not be walked.
+ */
+export function newHoleAnchor(face: HoleAnchorFace): HolePositionAnchor {
+  return face.outerCentroid
+    ? 'outer-centroid'
+    : face.centroid
+      ? 'centroid'
+      : 'center';
+}
+
+/**
+ * Where `anchor` stands on `face`. A face missing that measurement falls
+ * back to the nearest one it has, so a handle still has somewhere to stand;
+ * the rebuild itself refuses rather than falling back.
+ */
+export function holeAnchorPoint(
+  face: HoleAnchorFace,
+  anchor: HolePositionAnchor
+): Vector3 | undefined {
+  switch (anchor) {
+    case 'outer-centroid':
+      return face.outerCentroid ?? face.centroid ?? face.center;
+    case 'centroid':
+      return face.centroid ?? face.center;
+    case 'center':
+      return face.center ?? face.centroid;
+  }
+}
+
+/**
  * `holePositionFromPoint` for a picked entry face's measured geometry,
  * measured from the anchor the hole is drilled against. Null when the face
  * lacks a normal or that anchor.
  */
 export function holePositionFromPick(
-  face: { normal?: Vector3; centroid?: Vector3; center?: Vector3 },
-  anchor: 'centroid' | 'center',
+  face: HoleAnchorFace & { normal?: Vector3 },
+  anchor: HolePositionAnchor,
   point: Vector3,
   step: number | null
 ): { u: string; v: string } | null {
-  const origin = anchor === 'centroid' ? face.centroid : face.center;
+  const origin =
+    anchor === 'outer-centroid'
+      ? face.outerCentroid
+      : anchor === 'centroid'
+        ? face.centroid
+        : face.center;
   return face.normal && origin
     ? holePositionFromPoint(face.normal, origin, point, step)
     : null;
