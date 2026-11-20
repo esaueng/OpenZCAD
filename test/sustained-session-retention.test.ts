@@ -35,6 +35,7 @@ import {
   type HistoryArenaRetentionLimits
 } from '../packages/kernel-adapter/src/exact-history-cache';
 import type { BodyId, DerivedState, ProjectDocument } from '@openzcad/shared';
+import { deleteFeature, patternBody } from '@openzcad/document-core';
 import { filletedUnion } from './support/filleted-union';
 
 const OFFSETS = [-6.28, -5.5, -4.75, -4, -3.25, -2.5];
@@ -253,6 +254,66 @@ describe('sustained session retention', () => {
       expect(await adapter.captureHistorySession!(document)).not.toBeNull();
 
       expect(events.length).toBeGreaterThan(0);
+    }
+  );
+
+  it(
+    'sees an undo that alone wears the arena out, and refuses to persist it',
+    {
+      timeout: 180_000
+    },
+    async () => {
+      // Undoing a terminal feature restores the checkpoint before it and
+      // replays nothing; that restore alone retires the feature's slots.
+      // Before the fix no checkpoint admission re-read the arena then, so a
+      // worn kernel still reported fresh and could be persisted.
+      //
+      // Retired slots must also outnumber live ones four to one. Unit-scaled
+      // exports (each retires a few hundred slots) build that up with the
+      // threshold out of reach; then the threshold is set just above the
+      // retired count (the limits are read on every call), so the undo is
+      // what crosses it.
+      const limits = { compactRetiredSlots: 1e9, recycleRetiredSlots: 1e9 };
+      const { adapter, events, document, bodyId } = await session(limits);
+      const patterned = patternBody(document, {
+        name: 'Row',
+        targetBodyId: bodyId,
+        patternKind: 'linear',
+        count: 8,
+        axis: 'x',
+        spacing: 80
+      });
+      const { exportableBodyIds: exportable } = await adapter.syncDocument(
+        patterned.document
+      );
+      expect(exportable.length).toBeGreaterThan(0);
+      const stats = () => events.at(-1)!.checkpointMemory!;
+      for (let n = 0; ; n += 1) {
+        await adapter.exportStep(patterned.document, exportable, {
+          units: 'inch'
+        });
+        await adapter.syncDocument(patterned.document);
+        const { allocatedSlots, retiredSlots } = stats();
+        if (retiredSlots >= 4 * (allocatedSlots - retiredSlots) + 4_000) break;
+        if (n > 300) throw new Error('The arena never wore out.');
+      }
+      limits.compactRetiredSlots = stats().retiredSlots + 500;
+      await adapter.syncDocument(patterned.document);
+      expect(adapter.needsHistoryWarmup!(document.projectId)).toBe(false);
+
+      const row = featureNamed(patterned.document, 'Row');
+      const undone = deleteFeature(patterned.document, {
+        featureId: row.featureId
+      });
+      await adapter.syncDocument(undone);
+      expect(events.at(-1)?.replayed).toBe(0);
+      expect(stats().retiredSlots).toBeGreaterThanOrEqual(
+        limits.compactRetiredSlots
+      );
+      expect(adapter.needsHistoryWarmup!(undone.projectId)).toBe(true);
+      expect(await adapter.captureHistorySession!(undone)).toBeNull();
+      expect(await adapter.warmHistory!(undone)).toBe(true);
+      expect(await adapter.captureHistorySession!(undone)).not.toBeNull();
     }
   );
 
