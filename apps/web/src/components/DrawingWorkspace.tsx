@@ -436,8 +436,11 @@ function sheetStatus(
   bodies: DrawingWorkspaceProps['bodies'],
   geometryPending: boolean,
   fingerprint: string | null,
-  /** AS03 (v112): the fence a model fingerprint gives this sheet. */
-  fence: (base: string) => string = (base) => base
+  /**
+   * AS03 (v112): the fence a model fingerprint gives `fenced` (this sheet,
+   * or the sheet as a body replacement will save it).
+   */
+  fence: (base: string, fenced: DrawingSheet) => string = (base) => base
 ): SheetStatus {
   const ids = sheetBodyIds(sheet);
   // While the model rebuilds, `bodies` may not have caught up with the
@@ -455,7 +458,15 @@ function sheetStatus(
       if (fingerprint)
         return {
           kind: 'replaced',
-          fingerprint: fence(fingerprint),
+          // Its exploded placements are read off the successor bodies the
+          // Update saves, so the sheet is current once it is updated.
+          fingerprint: fence(fingerprint, {
+            ...sheet,
+            views: sheet.views.map((view) => ({
+              ...view,
+              bodyIds: view.bodyIds.map((id) => targets.get(id) ?? id)
+            }))
+          }),
           replacements
         };
     }
@@ -3909,7 +3920,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         // still built leaves the fingerprint as it was.
         const rows = viewConfigurationRows(entry, document);
         if (rows.size > 0 && rows.size === entry.views.length)
-          return [entry.sheetId, entry.source.fingerprint];
+          // No view on another row is exploded (v112), so the placements a
+          // removed exploded view left in the fence no longer count.
+          return [entry.sheetId, entry.source.fingerprint.split('|x:')[0]!];
         const activeIds = new Set(sheetBodyIds(activeRowSheet(entry, rows)));
         const ids = sheetBodyIds(entry).filter(
           (id) => activeIds.has(id) || (!!bodies[id] && !bodies[id].consumed)
@@ -3996,9 +4009,9 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             bodies,
             geometryPending,
             fingerprints.get(sheet.sheetId) ?? null,
-            (base) =>
+            (base, fenced) =>
               explodedMatrices
-                ? explodedSheetFingerprint(base, sheet, explodedMatrices)
+                ? explodedSheetFingerprint(base, fenced, explodedMatrices)
                 : base
           )
         : null,
@@ -7475,7 +7488,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
               />
               Hidden lines
             </label>
-            {(document.assembly?.components.length ?? 0) > 0 &&
+            {((document.assembly?.components.length ?? 0) > 0 ||
+              selectedView.exploded) &&
               !selectedView.section &&
               !selectedView.detail &&
               !selectedView.auxiliary &&

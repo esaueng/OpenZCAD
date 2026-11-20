@@ -107,13 +107,14 @@ test(
     const panel = drawings.getByRole('complementary', {
       name: 'Drawing properties'
     });
+    // The sheet's scale, read while no view is selected (the sheet panel).
+    const [num, den] = (await panel.getByLabel('Scale').inputValue())
+      .split(':')
+      .map(Number) as [number, number];
     await front.click();
     await panel.getByLabel('Exploded').check();
     // The pin, pulled 60 mm along X, now lies clear of the 40 mm plate it
     // sat inside: the front view widens by well over 30 mm of model.
-    const [num, den] = (await panel.getByLabel('Scale').inputValue())
-      .split(':')
-      .map(Number) as [number, number];
     await expect
       .poll(span, { timeout: 30_000 })
       .toBeGreaterThan(assembled + (30 * num) / den);
@@ -146,6 +147,7 @@ test(
     await expect(page.locator('.save-state')).toHaveClass(
       /is-(synced|local)\b/
     );
+    const explodedSpan = await span();
     await page.reload();
     const reopened = page
       .getByRole('region', { name: 'Drawings' })
@@ -158,7 +160,7 @@ test(
     );
     await expect
       .poll(async () => Number(await reopenedFront.getAttribute('width')) - 6)
-      .toBeCloseTo(await span(), 3);
+      .toBeCloseTo(explodedSpan, 3);
     await reopenedFront.click();
     await expect(
       page
