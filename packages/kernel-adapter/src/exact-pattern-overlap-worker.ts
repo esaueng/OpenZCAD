@@ -3,13 +3,16 @@ import type {
   PatternOverlapRequest
 } from './pattern-overlap-workers';
 import type { RemusKernel } from 'remus-wasm';
+import { rememberPatternKernelModule } from './pattern-kernel-module';
 import { MEASUREMENT_DEFLECTION } from './measurement-deflection';
 
 // Install the listener before awaiting WASM so the first request is retained.
-const bindings = import('remus-wasm');
-self.onmessage = async ({ data }: MessageEvent<PatternOverlapRequest>) => {
+let bindings: Promise<{ RemusKernel: typeof RemusKernel }> | undefined;
+async function measure(data: PatternOverlapRequest) {
   let kernel: RemusKernel | undefined;
   try {
+    if (data.module && !bindings) rememberPatternKernelModule(data.module);
+    bindings ??= import('remus-wasm');
     const { RemusKernel } = await bindings;
     const volumes: (number | null)[] = [];
     if (data.pairs.length) {
@@ -41,4 +44,13 @@ self.onmessage = async ({ data }: MessageEvent<PatternOverlapRequest>) => {
   } finally {
     kernel?.free();
   }
+}
+
+self.onmessage = ({ data }: MessageEvent<PatternOverlapRequest>) =>
+  measure(data);
+self.onmessageerror = () => {
+  // The first message is always the empty warm-up. If the module could
+  // not be cloned into this realm, warm from the regular package instead.
+  if (!bindings) void measure({ pairs: [] });
+  else self.postMessage({ volumes: null } satisfies PatternOverlapReply);
 };

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as kernelCode from './pattern-kernel-module';
 import {
   PatternOverlapWorkers,
   type PatternOverlapRequest
@@ -45,6 +46,42 @@ describe('pattern overlap workers', () => {
     expect(pool.available).toBe(true);
     return workers;
   }
+  it('sends compiled code only at startup and retries when cloning fails', async () => {
+    const module = new WebAssembly.Module(
+      Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0)
+    );
+    const code = vi
+      .spyOn(kernelCode, 'patternKernelModule')
+      .mockReturnValue(module);
+    const post = TestWorker.prototype.postMessage;
+    const send = vi
+      .spyOn(TestWorker.prototype, 'postMessage')
+      .mockImplementation(function (this: TestWorker, request) {
+        if (request.module && this === TestWorker.instances[0])
+          throw new DOMException('Cannot clone module', 'DataCloneError');
+        post.call(this, request);
+      });
+    try {
+      const workers = await ready();
+      expect(workers[0]!.requests[0]).toEqual({ pairs: [] });
+      expect(
+        workers.slice(1).every((w) => w.requests[0]?.module === module)
+      ).toBe(true);
+      const job = pool.measure(pairs.slice(0, 2));
+      for (const worker of workers) {
+        const work = worker.requests[1]!;
+        expect(work.module).toBeUndefined();
+        worker.reply(work.pairs.map((bytes) => bytes[0]!));
+      }
+      await expect(job).resolves.toEqual(
+        pairs.slice(0, 2).map((bytes) => bytes[0]!)
+      );
+    } finally {
+      send.mockRestore();
+      code.mockRestore();
+    }
+  });
+
   it('posts before returning and reconstructs pair order when replies arrive out of order', async () => {
     const workers = await ready();
     const job = pool.measure(pairs);

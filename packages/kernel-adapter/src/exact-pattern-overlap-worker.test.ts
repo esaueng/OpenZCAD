@@ -42,3 +42,23 @@ it('keeps the other exact intersections when a pair in the same request is refus
     vi.unstubAllGlobals();
   }
 });
+
+it('warms locally after a receiver-side clone failure and refuses an unreadable work request', async () => {
+  const worker = {
+    postMessage: vi.fn(),
+    onmessageerror: undefined as (() => void) | undefined
+  };
+  vi.resetModules();
+  vi.stubGlobal('self', worker);
+  try {
+    await import('./exact-pattern-overlap-worker');
+    worker.onmessageerror!();
+    await vi.waitFor(() =>
+      expect(worker.postMessage).toHaveBeenCalledWith({ volumes: [] })
+    );
+    worker.onmessageerror!();
+    expect(worker.postMessage).toHaveBeenLastCalledWith({ volumes: null });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

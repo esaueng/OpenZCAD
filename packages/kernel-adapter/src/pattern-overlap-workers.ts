@@ -1,7 +1,9 @@
+import { patternKernelModule } from './pattern-kernel-module';
 import type { BuildCancellationSignal } from './exact-cancellation';
 
 export interface PatternOverlapRequest {
   pairs: Uint8Array[];
+  module?: WebAssembly.Module;
 }
 
 export interface PatternOverlapReply {
@@ -17,7 +19,8 @@ const IDLE_TIMEOUT_MS = 15000;
 function request(
   worker: Worker,
   pairs: Uint8Array[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  module?: WebAssembly.Module
 ): Promise<(number | null)[]> {
   return new Promise((resolve, reject) => {
     const clear = () => {
@@ -44,6 +47,14 @@ function request(
     worker.addEventListener('messageerror', failed);
     worker.addEventListener('message', receive);
     try {
+      if (module) {
+        try {
+          worker.postMessage({ pairs, module } satisfies PatternOverlapRequest);
+          return;
+        } catch {
+          // Hosts that cannot clone a module use the ordinary package import.
+        }
+      }
       worker.postMessage({ pairs } satisfies PatternOverlapRequest);
     } catch {
       failed();
@@ -87,7 +98,8 @@ export class PatternOverlapWorkers {
       // An empty request loads the same pinned module as the live kernel.
       void this.run(
         this.workers.map(() => []),
-        STARTUP_TIMEOUT_MS
+        STARTUP_TIMEOUT_MS,
+        patternKernelModule()
       );
     } catch {
       this.stop(true);
@@ -126,7 +138,11 @@ export class PatternOverlapWorkers {
     });
   }
 
-  private async run(chunks: Uint8Array[][], timeout: number) {
+  private async run(
+    chunks: Uint8Array[][],
+    timeout: number,
+    module?: WebAssembly.Module
+  ) {
     clearTimeout(this.idleTimer);
     const controller = new AbortController();
     this.controller = controller;
@@ -140,7 +156,7 @@ export class PatternOverlapWorkers {
     try {
       return await Promise.all(
         this.workers.map((worker, index) =>
-          request(worker, chunks[index]!, controller.signal)
+          request(worker, chunks[index]!, controller.signal, module)
         )
       );
     } catch {

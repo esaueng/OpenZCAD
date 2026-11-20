@@ -411,6 +411,23 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       // The plugin supports several Vite majors, so narrow its cross-version
       // return type to the Vite version used by this workspace.
       plugins: (): PluginOption[] => [
+        {
+          name: 'openzcad-worker-core-wasm-loader',
+          enforce: 'pre',
+          resolveId(source, importer) {
+            if (
+              source === '/__vite-plugin-wasm-helper' &&
+              importer?.endsWith('/remus_wasm_bg.wasm')
+            ) {
+              return fileURLToPath(
+                new URL(
+                  '../../packages/kernel-adapter/src/load-pattern-kernel.ts',
+                  import.meta.url
+                )
+              );
+            }
+          }
+        },
         wasm() as PluginOption,
         remusTranslatorRetry()
       ]
