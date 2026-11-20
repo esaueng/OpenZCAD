@@ -2,7 +2,7 @@
 row: M01
 ---
 
-Hole tables on drawing sheets (schema v115, up from v114). A `hole-table`
+Hole tables on drawing sheets (schema v117, up from v116). A `hole-table`
 drawing annotation names one view and its place; everything it prints is
 read from the model each time the sheet is drawn. Every bore the view sees
 down its axis is a row: a hole's own bore, a bore at a sketch point, or an
@@ -15,15 +15,15 @@ once per bore (`Ø5 THRU, M6×1 TAP DRILL`). The table is ruled as a parts
 list is, and the view carries each tag up and right of its bore's rim. A
 view that sees no bore down its axis leaves the table broken, with a reason
 that says to place it on a view looking into the holes. Refused: a table
-with no view, one stating a value of its own, and below v115 by the content
-gate. UI: a Hole table tool (Y) in Draw's annotation rail. One click takes
+with no view, one stating a value of its own, and below v117 by the content
+gate. UI: Add hole table in Sheet Properties (or Y; the phone-width annotation rail has no row to spare, as for general tolerances). One click takes
 the view, the next places the table's top-left corner, which then moves
 with its view. The table is drawn on screen and in PDF, SVG and DXF exports.
 Evidence: `test/hole-tables.test.ts` (the stored shape and its refusals;
-the v115 gate; the tool's two clicks; on the pinned kernel a 60 × 40 plate
+the v117 gate; the tool's two clicks; on the pinned kernel a 60 × 40 plate
 with a Ø8 hole and an M6 tap drill repeated by a linear pattern, read in the
 top view as A1 40/10 and A2 50/10 `Ø5 THRU, M6×1 TAP DRILL`, B1 15/20
 `Ø8 THRU`, the B1 tag beside its bore; broken in the front view);
-`test/e2e/hole-table.spec.ts`, which drills a hole in place, picks the Hole
-table tool, clicks the top view and then the paper, and finds the A1 row at
+`test/e2e/hole-table.spec.ts`, which drills a hole in place, chooses Add hole
+table in Sheet Properties, clicks the top view and then the paper, and finds the A1 row at
 20/15 with its tag in the view and the stored table on that view.

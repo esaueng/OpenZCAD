@@ -3159,9 +3159,9 @@ function DrawingToolRail(props: {
     ['radius', 'diameter', 'chamfer'],
     ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
-    ['note', 'balloon', 'parts-list', 'hole-table', 'image'],
-    // The general-tolerance block is placed from Sheet Properties (and W):
-    // a phone-width rail has no row to spare.
+    ['note', 'balloon', 'parts-list', 'image'],
+    // The general-tolerance block and (M01) the hole table are placed from
+    // Sheet Properties (and W, Y): a phone-width rail has no row to spare.
     ['datum-feature', 'feature-control-frame']
   ];
   return (
@@ -7693,6 +7693,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 }
               >
                 <Diff size={13} aria-hidden="true" /> Add general tolerances
+              </button>
+            </div>
+            <div className="drawing-panel-section">
+              <h3>Hole table</h3>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!canUseTool('hole-table')}
+                title="Table the holes a view looks down, tagged in the view (Y)"
+                onClick={() => chooseTool(startAnnotationTool('hole-table'))}
+              >
+                <Table2 size={13} aria-hidden="true" /> Add hole table
               </button>
             </div>
             <div className="drawing-panel-section">

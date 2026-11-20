@@ -152,9 +152,10 @@ test(
     const box = (await hit.boundingBox())!;
     const pxPerMm = box.width / Number(await hit.getAttribute('width'));
 
-    // One click takes the top view, the next places the table below it.
+    // From Sheet Properties; one click then takes the top view, the next
+    // places the table below it.
     await drawings
-      .getByRole('button', { name: 'Hole table', exact: true })
+      .getByRole('button', { name: 'Add hole table', exact: true })
       .click();
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.click(box.x, box.y + box.height + 15 * pxPerMm);
