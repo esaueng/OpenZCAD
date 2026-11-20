@@ -285,7 +285,11 @@ test('a Distance pick records the point its snap glyph names', async ({
   expect(Object.keys(named)).toContain(kind);
 
   await page.mouse.click(edge.x, edge.y);
-  await expect(page.getByText(named[kind!]!)).toBeVisible();
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace status' })
+      .getByText(named[kind!]!)
+  ).toBeVisible();
 });
 
 test(
