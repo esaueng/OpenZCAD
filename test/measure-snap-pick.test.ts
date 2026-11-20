@@ -262,6 +262,33 @@ describe('QA15-2E-01: a snapped Distance pick records the snapped point', () => 
     expect(snapTarget(block([left, back]), snap)).toBeNull();
   });
 
+  it('keeps the snapped vertex when a rebuild reverses its edge', () => {
+    // The edge's fingerprint does not depend on its direction, so the same
+    // identity can come back sampled the other way round; "start" must not
+    // then quietly name the far vertex.
+    const body = block();
+    const measured = createDistanceMeasurement(
+      snapTarget(body, snapAt([front], 'endpoint', { x: 0, y: 0, z: 10 }))!,
+      snapTarget(body, snapAt([back], 'endpoint', { x: 0, y: 30, z: 10 }))!,
+      1,
+      'mm'
+    )!;
+    expect(measured.result.value).toBeCloseTo(30, 12);
+    const reversed = line(
+      'edge:front',
+      11,
+      { x: 56, y: 0, z: 10 },
+      { x: 0, y: 0, z: 10 }
+    );
+    const [refreshed] = refreshMeasurements(
+      [measured],
+      [block([reversed, left, back])],
+      2
+    );
+    expect(refreshed!.status).toBe('current');
+    expect(refreshed!.result.value).toBeCloseTo(30, 12);
+  });
+
   it('keeps the snapped vertex through a rebuild', () => {
     const body = block();
     const measured = createDistanceMeasurement(

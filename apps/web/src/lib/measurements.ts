@@ -1417,6 +1417,26 @@ function resolveNotableTarget(
       return null;
     }
     const kind: NotablePointKind = target.semantic;
+    if (kind !== 'edge-midpoint' && target.point) {
+      // An edge's fingerprint does not depend on its direction, so the same
+      // edge can resolve with its samples reversed and "start" would then
+      // name the other vertex. A vertex the hash still finds lies exactly on
+      // one end: keep the end the stored point sits on, and fall back to the
+      // stored role only when it sits on neither (the edge itself moved).
+      const ends = (['vertex-start', 'vertex-end'] as const).map((end) =>
+        notablePointTarget(body, selection, end)
+      );
+      const size = distance(body.bbox.min, body.bbox.max);
+      const stored = target.point;
+      const same = ends.find(
+        (end) =>
+          end?.point &&
+          distance(end.point, stored) <= SNAP_AGREEMENT * Math.max(1, size)
+      );
+      if (same) {
+        return same;
+      }
+    }
     return notablePointTarget(body, selection, kind);
   }
   if (target.kind === 'face' && target.semantic === 'face-center') {

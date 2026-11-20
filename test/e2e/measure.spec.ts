@@ -259,6 +259,8 @@ test('a Distance pick records the point its snap glyph names', async ({
   // QA15-2E-01: the glyph read "Endpoint" while the pick was recorded as the
   // edge's midpoint, so a corner-to-corner distance came out 57.31 for 56.
   // Whatever kind the glyph names, the first pick's label must name the same.
+  // Where the located point lands decides which kind that is; the
+  // deterministic Endpoint regression is `test/measure-snap-pick.test.ts`.
   await createBox(page, 'Measure Snap Pick');
 
   await switchWorkspace(page, 'View');
