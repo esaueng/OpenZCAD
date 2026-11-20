@@ -184,5 +184,6 @@
   "encrypted-comments.spec.ts": 20,
   "step-structure.spec.ts": 20,
   "iges-exchange.spec.ts": 20,
-  "history-text-custom-feature.spec.ts": 20
+  "history-text-custom-feature.spec.ts": 20,
+  "selected-face-hole.spec.ts": 15
 }
