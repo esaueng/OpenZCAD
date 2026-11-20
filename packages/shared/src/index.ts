@@ -455,7 +455,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // extrude): the extrusion stops that far short of its face (or, negative,
 // passes it). An older client would build to the face itself, so it must
 // refuse. Builds on v112 (#1785, M02 path patterns).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 113 as const;
+// v118 adds the M01 outer-boundary hole anchor (`positionAnchor:
+// 'outer-centroid'` on a hole): a typed position is measured from the
+// centroid of the entry face's outer boundary loop alone, so drilling or
+// resizing another hole in that face never moves it. An older client would
+// fall back to the vertex mean and drill the hole elsewhere, so it must
+// refuse. Builds on v113 (v114-v117 are claimed by #1792, #1796, #1797 and
+// #1799).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 118 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2654,8 +2661,16 @@ export type FeatureData =
        * hole deliberately stores no world position — see {@link position} —
        * because upstream features move the body underneath it, and a value
        * that is never read back would be exactly that stale world point.
+       *
+       * M01 (schema v118): `'outer-centroid'` measures from the area centroid
+       * of the face's OUTER boundary loop alone (see
+       * `FaceGeometry.outerCentroid`). The full area centroid moves whenever
+       * another hole is drilled into or resized on the face, so a hole typed
+       * at a 10 mm inset drifted by every hole drilled before it. New holes
+       * take this anchor; `'centroid'` and absent remain what they always
+       * were, so a saved hole never moves.
        */
-      positionAnchor?: 'centroid';
+      positionAnchor?: 'centroid' | 'outer-centroid';
       /**
        * M01 (schema v64): drill one bore, of this same size and depth, at
        * each of these point entities of an earlier sketch whose plane is
@@ -3585,6 +3600,15 @@ export interface FaceGeometry {
    * as "assume approximate" rather than as "exact".
    */
   centroidProvenance?: FaceAreaProvenance;
+  /**
+   * The area centroid of the planar face's OUTER boundary loop alone, as if
+   * every inner loop (hole) were filled: the anchor a new hole's typed
+   * position is measured from (M01, schema v118). Unlike {@link centroid} it
+   * does not move when a hole is drilled into, resized on or removed from
+   * the face. Equal to `centroid` on a face with one boundary loop. Present
+   * exactly when `centroid` is, with the same provenance rules.
+   */
+  outerCentroid?: Vector3;
   /** Outward unit normal; present for exact planar surfaces. */
   normal?: Vector3;
   /**

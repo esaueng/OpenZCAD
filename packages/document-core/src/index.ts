@@ -638,7 +638,7 @@ export interface HoleInput {
   countersinkAngleDeg?: ParamValue;
   position: { u: ParamValue; v: ParamValue };
   /** Anchor `position` is measured from; see the `hole` feature data. */
-  positionAnchor?: 'centroid';
+  positionAnchor?: 'centroid' | 'outer-centroid';
   /** M01 (schema v64): one bore at each of these sketch points. */
   points?: HolePoints;
   /** M01 (schema v65): the standard size whose table gives the diameter. */

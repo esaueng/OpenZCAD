@@ -12967,6 +12967,9 @@ export function App() {
       ...(geometry?.surfaceType ? { surfaceType: geometry.surfaceType } : {}),
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
+      ...(geometry?.outerCentroid
+        ? { outerCentroid: geometry.outerCentroid }
+        : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(cylinder ? { cylinder } : {}),
       ...(geometry?.surfaceType.toLowerCase() === 'cone' &&

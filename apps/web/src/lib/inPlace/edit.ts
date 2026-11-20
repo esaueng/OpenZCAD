@@ -24,7 +24,11 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import { featureHistory, featureResultBodyIds } from '../featureHistory';
-import { holePositionAxes } from '../holePositionAxes';
+import {
+  holeAnchorPoint,
+  holePositionAxes,
+  savedHoleAnchor
+} from '../holePositionAxes';
 import type { RevolveAxisCandidate } from './revolve';
 import { threadEditOptions } from './thread';
 import { standardPartEditSeed } from './standardPart';
@@ -1043,10 +1047,7 @@ export function holeWorldPosition(
   data: Extract<FeatureData, { featureKind: 'hole' }>,
   ctx: Pick<InPlaceEditContext, 'evaluate'>
 ): Vector3 | null {
-  const anchor =
-    data.positionAnchor === 'centroid'
-      ? (face.centroid ?? face.center)
-      : (face.center ?? face.centroid);
+  const anchor = holeAnchorPoint(face, savedHoleAnchor(data.positionAnchor));
   const axes = face.normal ? holePositionAxes(face.normal) : null;
   const u = ctx.evaluate(data.position.u);
   const v = ctx.evaluate(data.position.v);

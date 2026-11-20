@@ -265,6 +265,7 @@ function measureFaceGeometryOnce(
       const measured = planarFaceCentroid(kernel, face, geometry.normal);
       if (measured) {
         geometry.centroid = measured.centroid;
+        geometry.outerCentroid = measured.outerCentroid;
         geometry.centroidProvenance = measured.provenance;
       }
     } catch {

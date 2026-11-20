@@ -34,6 +34,11 @@ const WIRE_JOIN_TOLERANCE_RATIO = 1e-7;
 
 export interface PlanarFaceCentroid {
   readonly centroid: Vec3;
+  /**
+   * The area centroid of the outer boundary loop alone, as if every inner
+   * loop were filled. Equal to {@link centroid} on a face with one loop.
+   */
+  readonly outerCentroid: Vec3;
   /** `exact` only when every boundary edge is a straight line. */
   readonly provenance: FaceAreaProvenance;
 }
@@ -310,15 +315,34 @@ function measurePlanarFaceCentroid(
   if (!Number.isFinite(doubleArea) || doubleArea <= 0) {
     return null;
   }
-  const u = momentU / (3 * doubleArea);
-  const v = momentV / (3 * doubleArea);
-  const centroid = {
+  const toWorld = (u: number, v: number): Vec3 => ({
     x: origin.x + uAxis.x * u + vAxis.x * v,
     y: origin.y + uAxis.y * u + vAxis.y * v,
     z: origin.z + uAxis.z * u + vAxis.z * v
-  };
-  if (!Number.isFinite(centroid.x + centroid.y + centroid.z)) {
+  });
+  const centroid = toWorld(
+    momentU / (3 * doubleArea),
+    momentV / (3 * doubleArea)
+  );
+  // The outer loop on its own: what a typed hole position is measured from
+  // (M01, schema v118), because it stays put while holes come and go. On a
+  // face with one loop this is the same sum as above, so the two agree.
+  const outerSum = wireSums[outer]!;
+  const outerCentroid = toWorld(
+    outerSum.momentU / (3 * outerSum.doubleArea),
+    outerSum.momentV / (3 * outerSum.doubleArea)
+  );
+  if (
+    !Number.isFinite(
+      centroid.x +
+        centroid.y +
+        centroid.z +
+        outerCentroid.x +
+        outerCentroid.y +
+        outerCentroid.z
+    )
+  ) {
     return null;
   }
-  return { centroid, provenance: curved ? 'sampled' : 'exact' };
+  return { centroid, outerCentroid, provenance: curved ? 'sampled' : 'exact' };
 }
