@@ -40,6 +40,7 @@ function sameShape(a: ExactShape, b: ExactShape): boolean {
   if (
     a.solids.length !== b.solids.length ||
     a.solids.some((id, index) => id !== b.solids[index]) ||
+    a.rectangularStock !== b.rectangularStock ||
     a.sweepSource !== b.sweepSource
   )
     return false;

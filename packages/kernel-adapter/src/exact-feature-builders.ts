@@ -72,6 +72,7 @@ import {
   type PlaneBasis,
   type Vec3
 } from '@openzcad/geometry';
+import { fuseSeparatedGridRows } from './exact-grid-row-fusion';
 import { buildFeaturePattern } from './exact-feature-pattern';
 import {
   FULL_REVOLVE_ANGLE_DEG,
@@ -4328,7 +4329,17 @@ function buildPatternFeature(
   const instances = patternInstances(arm, perSource).filter(
     (_instance, index) => !skipped.has(index)
   );
-  buildPatternBody(ctx, feature, data, target, arm, instances, kept, declined);
+  buildPatternBody(
+    ctx,
+    feature,
+    data,
+    target,
+    arm,
+    instances,
+    kept,
+    declined,
+    count2
+  );
 }
 
 /**
@@ -4439,7 +4450,8 @@ function buildPatternBody(
   instances: readonly PatternInstanceBuild[],
   /** Each instance's index in the whole pattern, parallel to `instances`. */
   kept: readonly number[],
-  declined: RemusLineageDiagnostic | null
+  declined: RemusLineageDiagnostic | null,
+  wholeGridRows: number
 ): void {
   const { kernel, scope, result } = ctx;
   if (!feature.bodyId) throw new Error('Pattern has no result body.');
@@ -4501,15 +4513,32 @@ function buildPatternBody(
     // original at index 0. A refused fuse then names the copy the exact
     // engine declined rather than the whole row.
     const solidsPerInstance = Math.max(1, target.solids.length);
-    const fused = fuseUniformSolid(
-      kernel,
-      solids,
-      solids.map((_solid, index) =>
-        index < solidsPerInstance
-          ? 'the original'
-          : `instance ${kept[Math.floor(index / solidsPerInstance)]! + 1}`
-      )
-    );
+    const rectangular =
+      target.solids.length === 1 &&
+      target.rectangularStock === target.solids[0];
+    const complete = kept.length === count;
+    const raw =
+      rectangular && complete && data.patternKind === 'grid' && !data.direction
+        ? fuseSeparatedGridRows(
+            kernel,
+            solids,
+            wholeGridRows,
+            data.axis2 ?? 'y',
+            arm.matrix
+          )
+        : undefined;
+    const fused =
+      raw !== undefined
+        ? unifyUnionFaces(kernel, raw)
+        : fuseUniformSolid(
+            kernel,
+            solids,
+            solids.map((_solid, index) =>
+              index < solidsPerInstance
+                ? 'the original'
+                : `instance ${kept[Math.floor(index / solidsPerInstance)]! + 1}`
+            )
+          );
     const removed = summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);
     // The fuse is NOT guaranteed to merge. On shallow overlaps it
     // returns the operands essentially untouched — measured on three
@@ -4535,7 +4564,8 @@ function buildPatternBody(
     // out, because this defect survived precisely by being silent:
     // the reported volume and the enclosed mesh agreed, both summing
     // the same list.
-    if (removed < (2 * shared) / solids.length - summed * 1e-8) {
+    const minimumRemoved = (2 * shared) / solids.length - summed * 1e-8;
+    if (removed < minimumRemoved) {
       raiseFeatureWarning(
         result,
         feature,
@@ -4543,8 +4573,16 @@ function buildPatternBody(
         'advisory'
       );
     }
+    const rectangularRow =
+      rectangular &&
+      complete &&
+      data.patternKind === 'linear' &&
+      !data.direction &&
+      removed >= minimumRemoved &&
+      kernel.getSolidFaces(fused).length === 6;
     result.shapes.set(feature.bodyId, {
       solids: [fused],
+      ...(rectangularRow ? { rectangularStock: fused } : {}),
       // The fuse rewrites the instance topology and reports no output
       // relation across itself, so the instance names cannot survive it.
       lineage: withPatternDiagnostic(

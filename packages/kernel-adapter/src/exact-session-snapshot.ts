@@ -148,7 +148,7 @@ function denseEvery(value: unknown, check: (item: unknown) => boolean) {
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object';
-const isHandleList = (value: unknown) =>
+const isHandleList = (value: unknown): value is number[] =>
   denseEvery(value, (item) => Number.isSafeInteger(item));
 const isStringList = (value: unknown) =>
   denseEvery(value, (item) => typeof item === 'string');
@@ -160,6 +160,9 @@ const isStringList = (value: unknown) =>
 const isShape = (value: unknown) =>
   isObject(value) &&
   isHandleList(value.solids) &&
+  (value.rectangularStock === undefined ||
+    (value.solids.length === 1 &&
+      value.rectangularStock === value.solids[0])) &&
   (value.lineage === undefined ||
     (isObject(value.lineage) &&
       value.lineage.faceReferences instanceof Map &&
