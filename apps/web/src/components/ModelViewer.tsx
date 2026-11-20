@@ -252,6 +252,7 @@ import {
   type ViewportScale,
   type PickCandidate,
   type PickDetail,
+  type PickSnap,
   type ProfilePickTarget,
   type SelectionFilter,
   type SnapCandidate,
@@ -1589,7 +1590,8 @@ export interface ModelViewerProps {
   onMeasurePreview?:
     | ((
         selection: TopologySelection,
-        point: { x: number; y: number; z: number }
+        point: { x: number; y: number; z: number },
+        snap?: PickSnap
       ) => string | null)
     | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
@@ -7901,11 +7903,11 @@ export function ModelViewer({
       // pointer was actually on.
       const snapped =
         result && onMeasurePreviewRef.current
-          ? (resolveMeasureSnap(event, result)?.candidate.point ?? null)
+          ? (resolveMeasureSnap(event, result)?.candidate ?? null)
           : null;
       const detail: PickDetail | undefined = result
         ? {
-            point: snapped ?? {
+            point: snapped?.point ?? {
               x: result.hit.point.x,
               y: result.hit.point.y,
               z: result.hit.point.z
@@ -7916,7 +7918,17 @@ export function ModelViewer({
                   y: result.faceNormal.y,
                   z: result.faceNormal.z
                 }
-              : undefined
+              : undefined,
+            // The point the glyph named, by identity, so the measure pick
+            // records that point rather than one derived from the selection.
+            ...(snapped
+              ? {
+                  snap: {
+                    kind: snapped.kind,
+                    ...(snapped.source ? { source: snapped.source } : {})
+                  }
+                }
+              : {})
           }
         : undefined;
       // Orbiting should turn about whatever was just clicked, not the model
@@ -8391,7 +8403,15 @@ export function ModelViewer({
           x: wouldPick.hit.point.x,
           y: wouldPick.hit.point.y,
           z: wouldPick.hit.point.z
-        }
+        },
+        snapped
+          ? {
+              kind: snapped.candidate.kind,
+              ...(snapped.candidate.source
+                ? { source: snapped.candidate.source }
+                : {})
+            }
+          : undefined
       );
       if (!label) {
         hud.hide(measurePreviewChip);

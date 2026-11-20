@@ -2,6 +2,7 @@ import type {
   BodyRepresentation,
   BoundingBox,
   EdgeTopology,
+  EdgeTopologyReferenceV5,
   FaceAreaProvenance,
   FaceTopology,
   TopologyReferenceV5,
@@ -767,6 +768,69 @@ export function notablePointTarget(
   }
   return null;
 }
+
+/**
+ * The edge point a measure snap names, as a target, or null when the snap
+ * carries no source or its edge no longer yields that same point.
+ *
+ * The click under a snap glyph used to hand only the snapped POSITION to
+ * {@link measurementTargetFromSelection}, which derives an edge's target from
+ * the edge alone: a straight edge's midpoint, a circle's centre. A pick under
+ * "Endpoint" therefore recorded the edge's midpoint (QA15-2E-01, 57.31 mm
+ * measured for 56). The snap's source names the edge and which of its points
+ * the glyph stood for, so the pick records that notable point — by identity,
+ * so a rebuild re-derives the same vertex rather than carrying a stale
+ * coordinate.
+ *
+ * `point` is where the snap drew its glyph. The derived target must land on
+ * it; one that does not (a curve without an exact derivation, or an identity
+ * that now resolves to another edge) is refused rather than recorded somewhere
+ * the glyph did not mark.
+ */
+export function measurementTargetFromSnap(
+  body: BodyRepresentation,
+  snap: {
+    edgeTopologyId: string;
+    edgeHash: number;
+    edgeReference?: EdgeTopologyReferenceV5;
+    role: 'start' | 'end' | 'midpoint' | 'center';
+  },
+  point: Vector3
+): MeasurementTarget | null {
+  const kind: NotablePointKind =
+    snap.role === 'start'
+      ? 'vertex-start'
+      : snap.role === 'end'
+        ? 'vertex-end'
+        : snap.role === 'midpoint'
+          ? 'edge-midpoint'
+          : 'circle-center';
+  const target = notablePointTarget(
+    body,
+    {
+      bodyId: body.bodyId,
+      kind: 'edge',
+      topologyId: snap.edgeTopologyId,
+      hash: snap.edgeHash,
+      ...(snap.edgeReference ? { reference: snap.edgeReference } : {})
+    },
+    kind
+  );
+  if (!target?.point) {
+    return null;
+  }
+  const size = distance(body.bbox.min, body.bbox.max);
+  return distance(target.point, point) <= SNAP_AGREEMENT * Math.max(1, size)
+    ? target
+    : null;
+}
+
+/**
+ * How far, relative to the body's size, a snap's drawn point and the target
+ * derived from its source may differ. The two read the same exact record
+ * through separate arithmetic, so they agree to rounding, not bit for bit.
+ */
+const SNAP_AGREEMENT = 1e-7;
 
 export function measurementTargetFromSelection(
   body: BodyRepresentation,

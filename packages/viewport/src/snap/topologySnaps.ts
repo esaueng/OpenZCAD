@@ -1,5 +1,5 @@
 import type { EdgeTopology } from '@openzcad/shared';
-import type { SnapCandidate, Vec3 } from './SnapEngine';
+import type { SnapCandidate, SnapSource, Vec3 } from './SnapEngine';
 
 /**
  * Snap candidates read off the exact topology the kernel already publishes.
@@ -301,7 +301,12 @@ export function snapsFromEdges(
   const allowed = (kind: SnapCandidate['kind']) => !wanted || wanted.has(kind);
   const candidates: SnapCandidate[] = [];
   const seen = new Set<string>();
-  const add = (kind: SnapCandidate['kind'], point: Vec3) => {
+  const add = (
+    kind: SnapCandidate['kind'],
+    point: Vec3,
+    edge: EdgeTopology,
+    role: SnapSource['role']
+  ) => {
     if (!allowed(kind)) {
       return;
     }
@@ -311,7 +316,17 @@ export function snapsFromEdges(
       return;
     }
     seen.add(key);
-    candidates.push({ kind, point, label: options.label });
+    candidates.push({
+      kind,
+      point,
+      label: options.label,
+      source: {
+        edgeTopologyId: edge.topologyId,
+        edgeHash: edge.hash,
+        ...(edge.reference ? { edgeReference: edge.reference } : {}),
+        role
+      }
+    });
   };
 
   for (const edge of edges) {
@@ -330,16 +345,16 @@ export function snapsFromEdges(
       // Which edges are closed is still decided from the polyline: the circle
       // record describes the whole circle either way and cannot tell a rim
       // from the fillet arc lying on the same one.
-      add('center', circle ? circle.center : sampledCenter);
+      add('center', circle ? circle.center : sampledCenter, edge, 'center');
       continue;
     }
-    add('endpoint', pointAt(edge.points, 0));
-    add('endpoint', pointAt(edge.points, count - 1));
+    add('endpoint', pointAt(edge.points, 0), edge, 'start');
+    add('endpoint', pointAt(edge.points, count - 1), edge, 'end');
     const middle =
       (circle && exactArcMidpointOf(edge.points, count, circle)) ||
       midpointOf(edge.points, count);
     if (middle) {
-      add('midpoint', middle);
+      add('midpoint', middle, edge, 'midpoint');
     }
   }
   return candidates;
