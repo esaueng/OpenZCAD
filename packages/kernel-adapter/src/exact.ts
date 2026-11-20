@@ -91,11 +91,18 @@ import {
   type StlExportMesh
 } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
-import { pairwiseBodyClash, rowMajorMatrix } from './exact-body-clash';
+import {
+  exactBodyClash,
+  pairwiseBodyClash,
+  rowMajorMatrix
+} from './exact-body-clash';
 import { analyzeBodySurfaces } from './exact-surface-analysis';
 import type {
   AssemblyInterferenceOperand,
   AssemblyInterferenceReport,
+  AssemblySweepComponent,
+  AssemblySweepPosition,
+  AssemblySweepWorkerReport,
   SurfaceAnalysisBody,
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest,
@@ -995,6 +1002,17 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     operands: AssemblyInterferenceOperand[]
   ): Promise<AssemblyInterferenceReport>;
+  /**
+   * AS04 interference through motion: the same clash query at each position
+   * of a sweep, on one build. Each position poses the components it names by
+   * their matrices and checks only its own pairs. A component with no exact
+   * geometry is listed in `missing`, and a pair naming one is left out.
+   */
+  assemblyInterferenceSweep(
+    document: ProjectDocument,
+    components: AssemblySweepComponent[],
+    positions: AssemblySweepPosition[]
+  ): Promise<AssemblySweepWorkerReport>;
   /**
    * M09 analysis overlays: the exact kernel's per-face analysis of each
    * named body (`exact-surface-analysis.ts`), sampled for the viewport to
@@ -6252,6 +6270,84 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             }
           }
         }
+      },
+      []
+    );
+  }
+
+  assemblyInterferenceSweep(
+    document: ProjectDocument,
+    components: AssemblySweepComponent[],
+    positions: AssemblySweepPosition[]
+  ): Promise<AssemblySweepWorkerReport> {
+    // Checked before the build: a malformed pose refuses the whole sweep.
+    const posesAt = positions.map((position) =>
+      Object.fromEntries(
+        Object.entries(position.matrices).map(([id, matrix]) => [
+          id,
+          rowMajorMatrix(matrix)
+        ])
+      )
+    );
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const missing: string[] = [];
+        const solidsOf = new Map<string, readonly number[]>();
+        for (const component of components) {
+          const bodyId = component.bodyId as BodyId;
+          const shape = build.shapes.get(bodyId);
+          if (
+            !shape ||
+            shape.solids.length === 0 ||
+            hidden.has(bodyId) ||
+            build.consumed.has(bodyId)
+          )
+            missing.push(component.componentId);
+          else solidsOf.set(component.componentId, shape.solids);
+        }
+        const results = positions.map((position, index) => {
+          const copies: number[] = [];
+          try {
+            const posed = new Map<string, number[]>();
+            const poseOf = (id: string): number[] | null => {
+              const existing = posed.get(id);
+              if (existing) return existing;
+              const solids = solidsOf.get(id);
+              const matrix = posesAt[index]![id];
+              if (!solids || !matrix) return null;
+              const placed = solids.map((solid) => {
+                const copy = kernel.copyAndTransformSolid(solid, matrix);
+                copies.push(copy);
+                return copy;
+              });
+              posed.set(id, placed);
+              return placed;
+            };
+            const pairs: AssemblyInterferenceReport['pairs'] = [];
+            for (const [a, b] of position.pairs) {
+              const solidsA = poseOf(a);
+              const solidsB = poseOf(b);
+              if (!solidsA || !solidsB) continue;
+              pairs.push({
+                a,
+                b,
+                verdict: exactBodyClash(kernel, solidsA, solidsB)
+              });
+            }
+            return { at: position.at, pairs };
+          } finally {
+            for (const copy of copies) {
+              try {
+                kernel.deleteSolid(copy);
+              } catch {
+                // The checkpoint restore after this job releases it anyway.
+              }
+            }
+          }
+        });
+        return { positions: results, missing };
       },
       []
     );

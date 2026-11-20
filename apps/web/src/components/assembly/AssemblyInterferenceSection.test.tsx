@@ -12,6 +12,7 @@ import {
 } from '../../lib/assembly/assemblyRuntime';
 import { AssemblyPanel } from './AssemblyPanel';
 import type { CheckInterference } from './AssemblyInterferenceSection';
+import type { AssemblySweepCheck } from '@openzcad/document-core';
 
 afterEach(() => {
   act(() => {
@@ -193,5 +194,88 @@ describe('Assembly interference section (AS04)', () => {
     expect(onStatus).toHaveBeenCalledWith(
       'Interference check failed: Geometry worker is unavailable.'
     );
+  });
+});
+
+describe('Interference through motion (AS04)', () => {
+  /** Overlap while the pivot stands strictly between 85° and 185°. */
+  const sweep = vi.fn<AssemblySweepCheck>(
+    async (_document, _parts, positions) => ({
+      positions: positions.map((position) => ({
+        at: position.at,
+        pairs: position.pairs.map(([a, b]) => ({
+          a,
+          b,
+          verdict:
+            position.at > 85 && position.at < 185
+              ? {
+                  kind: 'interference' as const,
+                  volume: position.at,
+                  proof: 'intersect' as const,
+                  point: null,
+                  bounds: null,
+                  complete: true
+                }
+              : {
+                  kind: 'clear' as const,
+                  touching: false,
+                  distance: null,
+                  closest: null,
+                  atLeast: null
+                }
+        }))
+      })),
+      missing: []
+    })
+  );
+
+  function renderSweep() {
+    const fixture = scissorsManager({ joint: true });
+    const recorder = recordingExecute(fixture.manager);
+    const onStatus = vi.fn();
+    render(
+      <AssemblyPanel
+        document={fixture.live()}
+        execute={recorder.execute}
+        onStatus={onStatus}
+        checkInterference={async () => ({ pairs: [], missing: [] })}
+        checkInterferenceSweep={sweep}
+      />
+    );
+    return {
+      onStatus,
+      section: () => screen.getByRole('region', { name: 'Interference' })
+    };
+  }
+
+  it('sweeps a joint, locates where the parts start and stop overlapping, and shows the worst position', async () => {
+    const { section, onStatus } = renderSweep();
+    expect(
+      within(section()).getByRole('combobox', { name: 'Motion to check' })
+    ).toHaveDisplayValue('Pivot (0.0° to 360.0°)');
+    await act(async () => {
+      fireEvent.click(within(section()).getByRole('button', { name: 'Sweep' }));
+    });
+    // 37 even positions, then four rounds halving each turn.
+    expect(sweep).toHaveBeenCalledTimes(5);
+    expect(sweep.mock.calls[0]![2]).toHaveLength(37);
+    expect(sweep.mock.calls[0]![2][0]!.pairs).toEqual([['comp_a', 'comp_b']]);
+    expect(onStatus).toHaveBeenCalledWith(
+      'Interference through motion: 1 pair of parts overlap along Pivot (0.0° to 360.0°).'
+    );
+    const row = within(section()).getByRole('button', {
+      name: 'Blade A and Blade B: 85.6° to 184.4°'
+    });
+    expect(section()).toHaveTextContent(
+      'Sampled: 45 positions, every 10.0°, with each start and end found to within 0.6° where the positions beside it could be checked exactly. An overlap shorter than one step can fall between positions.'
+    );
+    fireEvent.click(row);
+    expect(section()).toHaveTextContent('Largest overlap at 184.4°');
+    act(() => {
+      fireEvent.click(
+        within(section()).getByRole('button', { name: 'Show at 184.4°' })
+      );
+    });
+    expect(getAssemblyRuntime().overrides.get('joint_pin')).toEqual([184.375]);
   });
 });

@@ -90,6 +90,7 @@ export * from './assembly';
 export * from './assembly-bom';
 export * from './assembly-exploded';
 export * from './assembly-interference';
+export * from './assembly-interference-sweep';
 export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
