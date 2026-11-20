@@ -181,8 +181,10 @@ Each needs its own schema bump, claimed from open PRs at the time
   excludes, what the generator skips and its section advice come back as
   `leftOut` and read in the preview status ("Left out: 2 radii, by
   request"); a scope that leaves nothing to add is refused with the same
-  list. The request is proposed alone, never the isometric view, and the
-  dimension check still gates the result. Choosing among individual
+  list. A Ø span (a bolt circle's pitch) counts as a diameter. The request
+  is proposed alone, never the isometric view, and the dimension check
+  still gates the result. Apply plans again, so it is refused unless the
+  document is the one the preview was planned on. Choosing among individual
   candidates ("from the bore centre") is not offered: the generator's datum
   rule (decision 3) decides, and a user who wants another datum asks for
   that dimension with `add_drawing_annotations`.

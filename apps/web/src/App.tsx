@@ -18610,6 +18610,15 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  /**
+   * D06: the document an auto-dimension proposal was previewed on. The
+   * generator plans again on Apply, so Apply refuses unless the document
+   * is still the one the preview showed it on.
+   */
+  const autoDimensionPreviewRef = useRef<{
+    proposalId: string;
+    document: ProjectDocument;
+  } | null>(null);
   // Bumped when something opens over the stage that the model should stay
   // clear of: the viewer reframes only if part of the model is covered.
   const [clearStageRequest, setClearStageRequest] = useState(0);
@@ -18663,6 +18672,11 @@ export function App() {
           proposal,
           drawingModeRef.current ? drawingAssistantRef.current : null
         );
+        autoDimensionPreviewRef.current = proposal.operations.some(
+          (operation) => operation.kind === 'auto_dimension_drawing'
+        )
+          ? { proposalId: proposal.proposalId, document: current }
+          : null;
         setDrawingPreview({
           sheetId: sheet.sheetId,
           annotations: sheet.annotations ?? []
@@ -18745,13 +18759,18 @@ export function App() {
       return false;
     }
     try {
-      const { preflightDrawingPatch } =
+      const { assertAutoDimensionPreviewed, preflightDrawingPatch } =
         await import('./lib/drawing/assistantPreflight');
       const live = managerRef.current?.document;
       if (!live || live !== current)
         throw new Error(
           'The document changed while the proposal was checked. Review it again.'
         );
+      assertAutoDimensionPreviewed(
+        proposal,
+        autoDimensionPreviewRef.current,
+        current
+      );
       const { commands } = preflightDrawingPatch(
         current,
         proposal,

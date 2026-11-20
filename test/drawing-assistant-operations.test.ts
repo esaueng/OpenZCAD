@@ -18,6 +18,7 @@ import {
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
+  type DrawingAnnotation,
   type DrawingSheet,
   type DrawingSheetId,
   type DrawingViewId,
@@ -30,7 +31,11 @@ import {
   drawingAssistantDigest,
   type DrawingAssistantSource
 } from '../apps/web/src/lib/drawing/assistantContext';
-import { preflightDrawingPatch } from '../apps/web/src/lib/drawing/assistantPreflight';
+import {
+  assertAutoDimensionPreviewed,
+  preflightDrawingPatch,
+  scopedAutoDimensions
+} from '../apps/web/src/lib/drawing/assistantPreflight';
 import { planAutoDimensions } from '../apps/web/src/lib/drawing/autoDimension';
 import { auditDrawingDimensions } from '../apps/web/src/lib/drawing/dimensionAudit';
 
@@ -487,6 +492,78 @@ describe('assistant drawing operations (D06 slice E)', () => {
       expect(() =>
         parseCadPatchProposal(autoProposal([], null), digest)
       ).toThrow('auto_dimension_drawing has invalid viewIds.');
+    });
+
+    it('scopes a Ø span (a bolt-circle pitch) as a diameter, not a linear dimension', async () => {
+      const { document, source } = await drawnPlate();
+      const pitch = {
+        annotationId: 'dann_pitch',
+        kind: 'linear',
+        viewId: frontId,
+        diameter: true
+      } as unknown as DrawingAnnotation;
+      const span = {
+        annotationId: 'dann_span',
+        kind: 'linear',
+        viewId: frontId
+      } as unknown as DrawingAnnotation;
+      const fake = {
+        ...source(document),
+        autoDimension: () => ({
+          annotations: [pitch, span],
+          skipped: [],
+          onHiddenLines: 0,
+          sectionAdvice: null
+        })
+      };
+      const scoped = (dimensionKinds: ('linear' | 'diameter')[]) =>
+        scopedAutoDimensions(
+          {
+            kind: 'auto_dimension_drawing',
+            sheetId,
+            viewIds: null,
+            dimensionKinds
+          },
+          fake,
+          (viewId) => viewId
+        );
+      expect(scoped(['diameter'])).toEqual({
+        annotations: [pitch],
+        leftOut: ['1 linear dimension, by request']
+      });
+      expect(scoped(['linear'])).toEqual({
+        annotations: [span],
+        leftOut: ['1 diameter, by request']
+      });
+    });
+
+    it('applies only to the document its preview was planned on', async () => {
+      const { document, manager } = await drawnPlate();
+      const proposal = parseCadPatchProposal(autoProposal(null, null));
+      const previewed = { proposalId: proposal.proposalId, document };
+      expect(() =>
+        assertAutoDimensionPreviewed(proposal, previewed, document)
+      ).not.toThrow();
+      // A view added (any edit) after the preview: refused, not re-planned.
+      manager.execute(
+        commandFactories.renameNode({
+          nodeId: document.rootNodeId,
+          name: 'Plate, edited'
+        })
+      );
+      expect(() =>
+        assertAutoDimensionPreviewed(proposal, previewed, manager.document)
+      ).toThrow(/changed since these dimensions were previewed/);
+      expect(() =>
+        assertAutoDimensionPreviewed(proposal, null, document)
+      ).toThrow(/changed since these dimensions were previewed/);
+      expect(() =>
+        assertAutoDimensionPreviewed(
+          proposal,
+          { proposalId: 'another', document },
+          document
+        )
+      ).toThrow(/changed since these dimensions were previewed/);
     });
 
     it('waits for the views to be drawn before planning', async () => {

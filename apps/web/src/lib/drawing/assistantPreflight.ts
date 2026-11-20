@@ -68,8 +68,14 @@ export function scopedAutoDimensions(
   const byKind = new Map<string, number>();
   const byView = new Map<string, number>();
   for (const annotation of plan.annotations) {
-    if (kinds && !kinds.has(annotation.kind)) {
-      byKind.set(annotation.kind, (byKind.get(annotation.kind) ?? 0) + 1);
+    // A Ø span (a bolt circle's pitch, a turned part's side-view diameter)
+    // is stored as a linear dimension but states a diameter.
+    const kind =
+      annotation.kind === 'linear' && annotation.diameter === true
+        ? 'diameter'
+        : annotation.kind;
+    if (kinds && !kinds.has(kind)) {
+      byKind.set(kind, (byKind.get(kind) ?? 0) + 1);
       continue;
     }
     // The generator's dimensions all belong to a view; a paper note would
@@ -93,6 +99,33 @@ export function scopedAutoDimensions(
     ...(plan.sectionAdvice ? [plan.sectionAdvice] : [])
   ];
   return { annotations, leftOut };
+}
+
+/**
+ * An auto-dimension request is planned again when it is applied, so it
+ * applies only to the very document its preview was planned on: a view
+ * added, a dimension drawn or the model changed since would add dimensions
+ * the user never saw.
+ */
+export function assertAutoDimensionPreviewed(
+  proposal: CadPatchProposal,
+  previewed: { proposalId: string; document: ProjectDocument } | null,
+  current: ProjectDocument
+): void {
+  if (
+    !proposal.operations.some(
+      (operation) => operation.kind === 'auto_dimension_drawing'
+    )
+  )
+    return;
+  if (
+    !previewed ||
+    previewed.proposalId !== proposal.proposalId ||
+    previewed.document !== current
+  )
+    throw new Error(
+      'The drawing changed since these dimensions were previewed. Ask again to dimension it as it is now.'
+    );
 }
 
 /**
