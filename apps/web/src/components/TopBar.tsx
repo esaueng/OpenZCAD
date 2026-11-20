@@ -186,6 +186,11 @@ interface TopBarProps {
   onExportIges?(): void;
   /** Opens the mesh export dialog (3MF / STL with quality control). */
   onOpenMeshExport(): void;
+  /**
+   * L09: writes the CNC cut layout DXF — the export's bodies laid flat,
+   * their upward faces on a layer per height. Absent hides the item.
+   */
+  onExportCncLayout?(): void;
   /** Opens the image export dialog (view PNG / sketch SVG). */
   onOpenImageExport?(): void;
   /**
@@ -347,6 +352,7 @@ export function TopBar({
   onDownloadArtifact,
   onExportStep,
   onExportIges,
+  onExportCncLayout,
   onOpenMeshExport,
   onOpenImageExport,
   onOpenFlatPattern,
@@ -543,6 +549,11 @@ export function TopBar({
   function exportIgesFromMenu() {
     closeFileMenuForDialog();
     onExportIges?.();
+  }
+
+  function exportCncLayoutFromMenu() {
+    closeFileMenuForDialog();
+    onExportCncLayout?.();
   }
 
   function openImageExportFromMenu() {
@@ -1269,17 +1280,35 @@ export function TopBar({
                   </button>
                 )}
               </div>
-              <button
-                type="button"
-                className="topbar-menu-item"
-                disabled={!canExport}
-                title={exportTitle('3MF, STL, OBJ, glTF or PLY')}
-                onClick={openMeshExportFromMenu}
-              >
-                <Download size={13} aria-hidden="true" />
-                <span>Export mesh…</span>
-                <small>3MF · STL · OBJ · glTF · PLY</small>
-              </button>
+              {/* The CNC cut layout shares the mesh row, as IGES shares
+                  STEP's: both are maker hand-offs, and a row of its own
+                  would push the File menu past a 900px window. */}
+              <div className="topbar-menu-item-row">
+                <button
+                  type="button"
+                  className="topbar-menu-item"
+                  disabled={!canExport}
+                  title={exportTitle('3MF, STL, OBJ, glTF or PLY')}
+                  onClick={openMeshExportFromMenu}
+                >
+                  <Download size={13} aria-hidden="true" />
+                  <span>Export mesh…</span>
+                  <small>3MF · STL · OBJ · glTF · PLY</small>
+                </button>
+                {onExportCncLayout && (
+                  <button
+                    type="button"
+                    className="topbar-menu-item topbar-menu-item-compact"
+                    disabled={!canExport}
+                    title="CNC cut layout: the bodies laid flat on their largest flat faces, their upward faces as DXF outlines, one layer per height"
+                    aria-label="Export CNC cut layout (DXF)"
+                    onClick={exportCncLayoutFromMenu}
+                  >
+                    <Download size={13} aria-hidden="true" />
+                    <span>CNC DXF</span>
+                  </button>
+                )}
+              </div>
               {onOpenImageExport && (
                 <button
                   type="button"

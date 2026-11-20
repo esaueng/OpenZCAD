@@ -20457,6 +20457,27 @@ export function App() {
     return target;
   }
 
+  /**
+   * L09: File › CNC cut layout, run from its lazy module: the export
+   * scope's bodies laid flat as one layered DXF.
+   */
+  function handleExportCncLayout() {
+    const target = readyExportTarget(null);
+    if (!target || !doc) return;
+    const stem = exportStemFor(null);
+    const units = exportUnitsFor(doc.units);
+    void import('./lib/cncLayoutDxf').then((lazy) =>
+      lazy.writeCncLayoutDxf({
+        geometry,
+        target,
+        units,
+        stem,
+        save: saveCadTextFile,
+        announce: setStatus
+      })
+    );
+  }
+
   /** I06: File › Export IGES, run from its lazy module. */
   function handleExportIges() {
     const target = readyExportTarget(null);
@@ -35938,6 +35959,21 @@ export function App() {
       }
     },
     {
+      // L09: the CNC cut layout, every export body laid flat in one DXF.
+      id: 'file-export-cnc-layout',
+      label: 'Export CNC cut layout (DXF)',
+      group: 'File',
+      keywords: ['cnc', 'laser', 'router', 'lay flat', 'cut', 'dxf', 'plate'],
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason:
+        currentGeometrySnapshot !== null
+          ? 'Wait for the model to finish updating'
+          : exportBodyIds.length === 0
+            ? emptyExportReason
+            : null,
+      run: () => handleExportCncLayout()
+    },
+    {
       // M16: the sheet-metal flat pattern, its layered DXF and bend table.
       id: 'file-export-flat-pattern',
       label: 'Flat pattern…',
@@ -37199,6 +37235,7 @@ export function App() {
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onExportIges={() => void handleExportIges()}
+          onExportCncLayout={handleExportCncLayout}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal

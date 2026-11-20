@@ -92,6 +92,19 @@ import {
 } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
 import {
+  cncLayout,
+  cncRefusalText,
+  type CncLayoutExport,
+  type CncLayoutPart,
+  type CncLayoutRefusal
+} from './exact-cnc-layout';
+export type {
+  CncLayoutExport,
+  CncLayoutPlacement,
+  CncLayoutRefusal,
+  CncLayoutRefusalReason
+} from './exact-cnc-layout';
+import {
   exactBodyClash,
   pairwiseBodyClash,
   rowMajorMatrix
@@ -226,6 +239,7 @@ import {
   UnionVerdictsWithMeshBudget
 } from './exact-boolean-helpers';
 import {
+  bodyName,
   bodyOpacityFromMetadata,
   decodeText,
   projectRemusLineageDiagnostic
@@ -910,6 +924,19 @@ export interface ExactKernelAdapter {
     face: DxfFaceSelector,
     options?: ExportUnitOptions
   ): Promise<string>;
+  /**
+   * L09: the CNC-cut layout of `bodyIds` (every shown body when empty) as
+   * DXF R12 in millimetres (or `options.units`): each solid laid flat on
+   * its largest planar face, its upward planar faces projected exactly,
+   * one `Z<height>` layer per face height, parts arranged in rows and
+   * labelled on `LABELS`. Solids that cannot be laid flat are returned as
+   * refusals; with none left the export refuses by name.
+   */
+  exportCncLayoutDxf(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options?: ExportUnitOptions & { gapMm?: number }
+  ): Promise<CncLayoutExport>;
   /**
    * M16: the flat pattern of a sheet-metal feature — the flat sheet's
    * outline loops and its bend centre lines in the blank's sketch
@@ -5696,6 +5723,64 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         millimetresPerUnit(document.units)
       );
       return writeDxf(entities, { units });
+    });
+  }
+
+  async exportCncLayoutDxf(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: ExportUnitOptions & { gapMm?: number } = {}
+  ): Promise<CncLayoutExport> {
+    const units = options.units ?? 'mm';
+    const requested =
+      bodyIds.length > 0 ? bodyIds : await this.documentExportBodyIds(document);
+    return this.withExportBuild(document, (kernel, build) => {
+      const hidden = getParameterHiddenBodyIds(document);
+      const parts: CncLayoutPart[] = [];
+      const refused: CncLayoutRefusal[] = [];
+      for (const bodyId of requested) {
+        if (hidden.has(bodyId) || build.consumed.has(bodyId)) continue;
+        const shape = build.shapes.get(bodyId);
+        if (!shape) continue;
+        const name = bodyName(document, bodyId);
+        if (shape.referenceMesh) {
+          refused.push({ bodyId, name, reason: 'mesh-reference' });
+          continue;
+        }
+        shape.solids.forEach((solid, index) =>
+          parts.push({
+            bodyId,
+            name:
+              shape.solids.length > 1
+                ? `${name} (${index + 1} of ${shape.solids.length})`
+                : name,
+            solid
+          })
+        );
+      }
+      if (parts.length === 0 && refused.length === 0) {
+        throw new Error('Select at least one body to export.');
+      }
+      // The solids are read where the build left them; uniform unit scaling
+      // commutes with projection, so the 2D output is scaled instead.
+      const { layout, refused: unflat } = cncLayout(kernel, parts, {
+        scale: exportLengthScale(document.units, units),
+        modelUnitMm: millimetresPerUnit(document.units),
+        outputUnitMm: millimetresPerUnit(units),
+        ...(options.gapMm !== undefined ? { gapMm: options.gapMm } : {})
+      });
+      refused.push(...unflat);
+      if (!layout) {
+        throw new Error(
+          `Nothing to lay out: ${refused.map(cncRefusalText).join('; ')}.`
+        );
+      }
+      return {
+        text: writeDxf(layout.entities, { units, layers: layout.layers }),
+        placements: layout.placements,
+        refused,
+        warnings: refused.map(cncRefusalText)
+      };
     });
   }
 

@@ -16,6 +16,7 @@
   "chamfer-rounded-block.spec.ts": 153,
   "chamfer-rounded-edge.spec.ts": 52,
   "cloud-sync.spec.ts": 39,
+  "cnc-layout.spec.ts": 18,
   "collaboration-lease-recovery.spec.ts": 19,
   "collaboration.spec.ts": 20,
   "command-bar-names.spec.ts": 8,
