@@ -610,7 +610,7 @@ notes to D01 sheets:
   a ready sheet's view rebinds the fence in the same command.
 - **Command.** `drawing.view.update` with `exploded` (on a base view; the
   projected views follow) and, only with it, `source`. One undo step.
-- **Schema.** v114, built on v112 (v113 is claimed by #1786), with a
+- **Schema.** v114, built on v113, with a
   content gate below it.
 
 ## Title-block layouts (D02, schema v94)

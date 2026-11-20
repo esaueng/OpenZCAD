@@ -27192,7 +27192,9 @@ export function App() {
           ? 'Distance'
           : valueId === 'backDistance'
             ? 'Back distance'
-            : 'Draft angle',
+            : valueId === 'faceOffset'
+              ? 'Offset from face'
+              : 'Draft angle',
       initial: text,
       selectInitial: true,
       unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
@@ -27225,6 +27227,7 @@ export function App() {
     if (
       valueId !== 'distance' &&
       valueId !== 'backDistance' &&
+      valueId !== 'faceOffset' &&
       valueId !== 'draftAngle'
     ) {
       return;
@@ -28762,6 +28765,7 @@ export function App() {
       endCondition: regionExtrudeSettings.current?.endCondition,
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       toFace: regionExtrudeSettings.current?.toFace,
+      toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };

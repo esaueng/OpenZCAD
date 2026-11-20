@@ -462,6 +462,11 @@ export interface ExtrudeInput {
   throughAllSide?: ThroughAllSide;
   /** F01 (v29): required with `to-face`; see the stored feature's `toFace`. */
   toFace?: ExtrudeToFaceTarget;
+  /**
+   * F01 (v113): with `to-face` only; positive stops short of the face,
+   * negative passes it. Absent or zero ends on the face.
+   */
+  toFaceOffset?: ParamValue;
   /** F01 (v29): wall draft in degrees; absent or zero is straight walls. */
   draftAngleDeg?: ParamValue;
   ids?: BodyFeatureIds;
@@ -2667,6 +2672,7 @@ export function validateExtrudeExtent(
     endCondition?: unknown;
     throughAllSide?: unknown;
     toFace?: unknown;
+    toFaceOffset?: unknown;
     draftAngleDeg?: unknown;
     operation?: unknown;
     targetBodyId?: unknown;
@@ -2696,6 +2702,9 @@ export function validateExtrudeExtent(
   if (condition !== 'to-face' && data.toFace !== undefined) {
     throw new Error('Only an extrude to a face names a target face.');
   }
+  if (condition !== 'to-face' && data.toFaceOffset !== undefined) {
+    throw new Error('Only an extrude to a face has an offset from the face.');
+  }
   if (condition === 'blind') {
     if (data.throughAllSide !== undefined) {
       throw new Error('A blind extrude has no through-all side.');
@@ -2707,6 +2716,7 @@ export function validateExtrudeExtent(
       throw new Error('An extrude to a face has no through-all side.');
     }
     validateToFaceTarget(data.toFace);
+    validateToFaceOffsetValue(data.toFaceOffset);
     if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
         'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
@@ -2747,6 +2757,51 @@ export function validateExtrudeExtent(
       'A through-all cut has no back distance; choose the side "both" instead.'
     );
   }
+}
+
+/**
+ * F01 (v113): a stored offset from the face is a finite literal or a
+ * non-empty expression (which resolves, and is checked, in the build).
+ */
+function validateToFaceOffsetValue(offset: unknown): void {
+  if (offset === undefined) return;
+  if (typeof offset === 'number') {
+    if (!Number.isFinite(offset)) {
+      throw new Error('Offset from face must be a finite length.');
+    }
+  } else if (typeof offset !== 'string' || !offset.trim()) {
+    throw new Error('Offset from face must be a number or an expression.');
+  }
+}
+
+/**
+ * F01 (v113): where an extrude to a face ends once its offset is applied,
+ * as a signed distance from the sketch plane along its normal, or null when
+ * the offset reaches or crosses the sketch plane (nothing, or the wrong
+ * side, would be extruded). `faceDistance` is the signed distance to the
+ * face ({@link toFaceSignedDistance}); a positive `offset` stops that far
+ * short of it, a negative one carries the end that far past. The exact
+ * build and the extrude card both decide with this.
+ */
+export function toFaceOffsetEnd(
+  faceDistance: number,
+  offset: number
+): number | null {
+  if (!Number.isFinite(faceDistance) || !Number.isFinite(offset)) return null;
+  const end = faceDistance - Math.sign(faceDistance) * offset;
+  return Math.sign(end) === Math.sign(faceDistance) &&
+    Math.abs(end) > 1e-9 * Math.max(1, Math.abs(faceDistance))
+    ? end
+    : null;
+}
+
+/** The refusal {@link toFaceOffsetEnd} stands for, in document words. */
+export function toFaceOffsetReachesSketchMessage(
+  faceDistance: number,
+  offset: number
+): string {
+  const reach = Math.abs(faceDistance);
+  return `Offset from face ${offset} reaches the sketch plane: the face is only ${Math.round(reach * 1e6) / 1e6} away, so the offset must be less than that.`;
 }
 
 export function extrudeSketch(
@@ -2795,7 +2850,11 @@ export function extrudeSketch(
       ...(input.endCondition === 'to-face'
         ? {
             endCondition: 'to-face' as const,
-            toFace: deepClone(input.toFace!)
+            toFace: deepClone(input.toFace!),
+            // A literal zero ends on the face, the absent default.
+            ...(isZeroParam(input.toFaceOffset)
+              ? {}
+              : { toFaceOffset: input.toFaceOffset! })
           }
         : {}),
       // A literal zero is the absent default, so it is never written.
@@ -5652,6 +5711,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'endCondition',
     'throughAllSide',
     'toFace',
+    'toFaceOffset',
     'draftAngleDeg'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
@@ -5879,7 +5939,13 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
 const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   Record<FeatureKind, readonly string[]>
 > = {
-  extrude: ['endCondition', 'throughAllSide', 'toFace', 'draftAngleDeg'],
+  extrude: [
+    'endCondition',
+    'throughAllSide',
+    'toFace',
+    'toFaceOffset',
+    'draftAngleDeg'
+  ],
   // M16: each falls back to its documented default (positive side, a
   // K-factor value, a rectangular relief, no preset, the largest region).
   'sheet-metal': [
