@@ -113,6 +113,20 @@ including browser failure contexts. Daily qualification keeps every full-suite
 case, coverage, its single attempt and seven-day artifact retention. Privacy
 receipts and CodeQL caches have their own retention policies.
 
+## STEP download timing
+
+Use the public Remus fixture `crates/io/tests/data/shapr3d_hammer_holder.step`.
+The probe opens an empty project, imports the SHA-256-pinned part and downloads
+four STEP files. It times each File menu click through dispatch of the download
+and checks the full STEP DATA section against the baseline digest. The first
+export includes any outstanding geometry worker work. Report its timing
+separately from the three repeat exports.
+
+```bash
+OZ_PERF=1 OZ_PERF_ANGLE=gl STEP_PERF_FILE=/path/to/shapr3d_hammer_holder.step \
+  pnpm exec playwright test perf-step-export.spec.ts --repeat-each=3 --workers=1
+```
+
 ## Face-preview main-thread timing
 
 `test/e2e/perf-face-drag-trace.spec.ts` (`OZ_PERF=1`, never a CI timing gate)
