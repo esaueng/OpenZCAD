@@ -3974,16 +3974,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const modelBodies = keptDrawing?.bodies ?? bodies;
   /** Its holes' callouts, likewise: the kept document's, if kept. */
   const holeCallouts = keptDrawing?.holes ?? liveHoleCallouts;
-  // M01: the cosmetic threads each view draws, from the same model.
+  // M01: the cosmetic threads each view draws, from the same model. A
+  // projected or detail view draws its source's configuration row, so the
+  // row is read as its projection reads it (`keyView`).
   const viewThreads = useCallback(
     (view: DrawingView) =>
       viewCosmeticThreads(
-        view,
+        sheet ? keyView(sheet.sheetId, view) : view,
         modelBodies,
         holeCallouts,
         drawingViewFrame(view).direction
       ),
-    [modelBodies, holeCallouts]
+    [sheet, keyView, modelBodies, holeCallouts]
   );
   const liveBodies = useMemo(
     () =>

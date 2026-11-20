@@ -58,6 +58,7 @@ interface ThreadFace {
     planeOffset?: number;
     axisStart?: Vector3;
     axisEnd?: Vector3;
+    apex?: Vector3;
   };
 }
 
@@ -89,14 +90,18 @@ const cross = (a: Vector3, b: Vector3): Vector3 => ({
 const SAME = 1e-6;
 
 /**
- * Whether the bore `face` opens at its axis end `at`: false where its rim
- * there bounds a cone (a drill point) or a disc of the bore's own size (a
- * flat floor), null where no rim is found there.
+ * Whether the bore `face` opens at its axis end `at` (`other` is its other
+ * end): false where its rim there bounds a drill point (a cone whose apex
+ * lies beyond the end, out of the bore) or a disc of the bore's own size (a
+ * flat floor); a countersink's cone, whose apex lies back inside the bore,
+ * opens. Null where no rim is found there, or a cone does not say where its
+ * apex is.
  */
 function opensAt(
   body: ThreadSourceBody,
   face: ThreadFace,
   at: Vector3,
+  otherEnd: Vector3,
   radius: number
 ): boolean | null {
   const scale = Math.max(1, radius);
@@ -115,7 +120,13 @@ function opensAt(
       if (hash === face.hash) continue;
       const other = body.topology?.faces.find((entry) => entry.hash === hash);
       const kind = other?.geometry?.surfaceType.toLowerCase();
-      if (kind === 'cone') return false;
+      if (kind === 'cone') {
+        const apex = other?.geometry?.apex;
+        if (!apex) return null;
+        // Beyond this end, away from the bore: a drill point closes it.
+        if (dot(sub(apex, at), sub(at, otherEnd)) > 0) return false;
+        continue;
+      }
       if (
         kind === 'plane' &&
         other?.geometry?.area !== undefined &&
@@ -175,7 +186,9 @@ export function cosmeticThreads(
       const bore = length(sub(ends[1], ends[0]));
       if (!(bore > 0)) continue;
       const radius = geometry.radius;
-      const open = ends.map((end) => opensAt(body, face, end, radius));
+      const open = ends.map((end, index) =>
+        opensAt(body, face, end, ends[1 - index]!, radius)
+      );
       if (open.some((value) => value === null)) continue;
       const mouths = ends.filter((_end, index) => open[index]);
       let entry: Vector3 | null = null;
@@ -186,10 +199,12 @@ export function cosmeticThreads(
         if (thread.length === null) {
           // Through and threaded all the way: either end will do.
           entry = ends[0];
-        } else {
+        } else if (!face.reference.lineageName.startsWith('pattern.')) {
           // Stopped short in a through bore: from the end on the hole's
-          // entry face as it stands now. A copy whose ends lie on another
-          // face, or on none, cannot say, so it draws nothing.
+          // entry face as it stands now. A pattern's copy draws nothing: a
+          // turned copy can hold its exit, not its entry, on that face
+          // (review), and nothing else in the model says which end it
+          // entered by.
           const plane = entryFacePlane(body, callout.entryFace);
           const on = plane
             ? ends.filter(
@@ -260,6 +275,29 @@ export function occludedFromViewer(
   return false;
 }
 
+/** Points tested for what stands in front of a thread's major diameter. */
+const RING_SAMPLES = 12;
+
+/** The axis point and points round the major diameter at `centre`. */
+function ringPoints(
+  centre: Vector3,
+  frame: DrawingViewFrame,
+  radius: number
+): Vector3[] {
+  const points = [centre];
+  for (let i = 0; i < RING_SAMPLES; i += 1) {
+    const angle = (i / RING_SAMPLES) * 2 * Math.PI;
+    const c = Math.cos(angle) * radius;
+    const s = Math.sin(angle) * radius;
+    points.push({
+      x: centre.x + frame.x.x * c + frame.up.x * s,
+      y: centre.y + frame.x.y * c + frame.up.y * s,
+      z: centre.z + frame.x.z * c + frame.up.z * s
+    });
+  }
+  return points;
+}
+
 /** Below this the bore is square to the view (its sine or cosine). */
 const SQUARE_TOLERANCE = 1e-6;
 /** Segments of the three-quarter circle. */
@@ -289,7 +327,19 @@ export function cosmeticThreadStrokes(
         dot(first, frame.direction) <= dot(second, frame.direction)
           ? first
           : second;
-      const seen = thread.mouths.includes(near) && !occluded(near);
+      // Seen where the nearer end opens, the thread reaches it (a thread
+      // stopped short is not seen from its plain end), and nothing stands
+      // in front of any of the major diameter (review: a washer whose
+      // opening clears the axis can still cover the whole thread).
+      const bore = length(sub(second, first));
+      const reaches =
+        near === thread.entry || thread.length >= bore * (1 - SAME);
+      const seen =
+        thread.mouths.includes(near) &&
+        reaches &&
+        ringPoints(near, frame, thread.majorRadius).every(
+          (point) => !occluded(point)
+        );
       const points: number[] = [];
       for (let i = 0; i <= ARC_SEGMENTS; i += 1) {
         const angle = Math.PI / 2 + (i / ARC_SEGMENTS) * (1.5 * Math.PI);

@@ -191,6 +191,65 @@ describe('M01 cosmetic threads drawn in views', () => {
     expect(thread?.length).toBeCloseTo(4, 12);
   }, 180_000);
 
+  it('keeps a countersunk blind tap’s thread, its cone an entrance, not a floor (re-check)', async () => {
+    const { document, derived, top } = await drilled({
+      style: 'countersink',
+      countersinkDiameter: 10,
+      countersinkAngleDeg: 90,
+      depthMode: 'blind',
+      depth: 8,
+      tapped: { cosmetic: true }
+    });
+    const threads = cosmeticThreads(
+      [derived.bodyRepresentations[last(document)]],
+      holeCalloutLookup(document)
+    );
+    expect(threads).toHaveLength(1);
+    // The bore starts below the countersink and runs down from there.
+    expect(threads[0]!.axis.z).toBeCloseTo(-1, 12);
+    expect(threads[0]!.entry.z).toBeLessThan(top);
+  }, 180_000);
+
+  it('does not see a short thread from a through bore’s plain end (re-check)', async () => {
+    const { document, derived } = await drilled({
+      tapped: { cosmetic: true, length: 4 }
+    });
+    const threads = cosmeticThreads(
+      [derived.bodyRepresentations[last(document)]],
+      holeCalloutLookup(document)
+    );
+    const [below] = cosmeticThreadStrokes(
+      threads,
+      DRAWING_VIEW_FRAMES.bottom,
+      identity
+    );
+    expect(below?.kind).toBe('hidden');
+  }, 180_000);
+
+  it('draws no short thread on a through bore’s pattern copy (re-check)', async () => {
+    const { document } = await drilled({
+      tapped: { cosmetic: true, length: 4 }
+    });
+    const row = patternBody(document, {
+      name: 'Row',
+      targetBodyId: last(document),
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      sourceFeatureIds: [lastFeature(document)]
+    }).document;
+    const derived = await adapter.syncDocument(row);
+    // The hole's own bore still has its thread; the copy cannot say which
+    // end it entered by, so it draws none.
+    expect(
+      cosmeticThreads(
+        [derived.bodyRepresentations[last(row)]],
+        holeCalloutLookup(row)
+      )
+    ).toHaveLength(1);
+  }, 180_000);
+
   it('hides the arc under a body that covers the bore (review)', async () => {
     const { document, derived } = await drilled({
       tapped: { cosmetic: true }
@@ -421,4 +480,40 @@ describe('M01 cosmetic threads drawn in views', () => {
     expect(dashed(true)).toBe(3);
     expect(dashed(false)).toBe(0);
   }, 180_000);
+});
+
+describe('M01 cosmetic threads: what stands in front (re-check)', () => {
+  it('hides an arc whose major diameter is covered though the axis is clear', () => {
+    // The bore's ends as the reader shares them: entry and mouth are the
+    // same end.
+    const top = { x: 0, y: 0, z: 10 };
+    const bottom = { x: 0, y: 0, z: 0 };
+    const thread: CosmeticThread = {
+      holeId: 'feat_hole' as FeatureId,
+      entry: top,
+      axis: { x: 0, y: 0, z: -1 },
+      length: 10,
+      majorRadius: 3,
+      ends: [top, bottom],
+      mouths: [top]
+    };
+    // A washer with a 5.5 opening: nothing over the axis, all of the Ø6
+    // ring covered.
+    const washer = (point: { x: number; y: number }) =>
+      Math.hypot(point.x, point.y) > 2.75;
+    const [covered] = cosmeticThreadStrokes(
+      [thread],
+      DRAWING_VIEW_FRAMES.top,
+      identity,
+      washer
+    );
+    expect(covered?.kind).toBe('hidden');
+    const [open] = cosmeticThreadStrokes(
+      [thread],
+      DRAWING_VIEW_FRAMES.top,
+      identity,
+      () => false
+    );
+    expect(open?.kind).toBe('thin');
+  });
 });
