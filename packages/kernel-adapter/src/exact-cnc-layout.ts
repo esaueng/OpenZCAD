@@ -15,7 +15,7 @@
  * tighter.
  */
 
-import type { DxfEntity, DxfLayer } from '@openzcad/io-dxf';
+import { dxfTextLength, type DxfEntity, type DxfLayer } from '@openzcad/io-dxf';
 
 import {
   dxfPlaneFrame,
@@ -108,16 +108,23 @@ export interface CncLayoutOptions {
 export const CNC_LAYOUT_LABEL_LAYER = 'LABELS';
 const DEFAULT_GAP_MM = 10;
 const LABEL_HEIGHT_MM = 3;
-/** Two unit normals within this of each other are the same direction. */
-const PARALLEL_TOLERANCE = 1e-7;
-/** Relative difference under which two face areas tie. */
-const AREA_TIE = 1e-6;
+/**
+ * Two unit normals whose dot product is within this of 1 are the same
+ * direction (about 0.0001°); a top face must also hold every boundary
+ * vertex within {@link FLAT_TOLERANCE_MM} of one height, which is what
+ * actually rules a slight slope out on a large part.
+ */
+const PARALLEL_TOLERANCE = 1e-12;
+/** How far a top face's vertices may differ in height, in millimetres. */
+const FLAT_TOLERANCE_MM = 1e-4;
+/** Two face areas within this many square millimetres tie. */
+const AREA_TIE_MM2 = 1e-6;
 /** Face-area deflection; planar faces integrate exactly regardless. */
 const AREA_DEFLECTION = 0.01;
-/** Heights are named and grouped to this many decimals of the output unit. */
-const HEIGHT_DECIMALS = 3;
-/** The longest label kept, in characters. */
-const MAX_LABEL_CHARS = 64;
+/** Heights are grouped and named to this physical resolution (1 µm). */
+const HEIGHT_RESOLUTION_MM = 1e-3;
+/** The most a label may take once written as DXF TEXT. */
+const MAX_LABEL_LENGTH = 120;
 
 type Vec3 = readonly [number, number, number];
 type Vec2 = readonly [number, number];
@@ -138,6 +145,8 @@ interface PlanarFace {
   readonly normal: Vec3;
   /** A point on the face (its first boundary vertex). */
   readonly point: Vec3;
+  /** Every boundary edge's end points. */
+  readonly vertices: Vec3[];
 }
 
 function planarFace(kernel: CncLayoutKernel, face: number): PlanarFace | null {
@@ -151,13 +160,15 @@ function planarFace(kernel: CncLayoutKernel, face: number): PlanarFace | null {
   }
   const normal: Vec3 = [raw[0]!, raw[1]!, raw[2]!];
   if (!normal.every(Number.isFinite)) return null;
-  const wires = Array.from(kernel.getFaceWires(face));
-  const firstEdge = wires.length
-    ? Array.from(kernel.getWireEdges(wires[0]!))[0]
-    : undefined;
-  if (firstEdge === undefined) return null;
-  const v = kernel.getEdgeVertices(firstEdge);
-  return { face, normal, point: [v[0]!, v[1]!, v[2]!] };
+  const vertices: Vec3[] = [];
+  for (const wire of kernel.getFaceWires(face)) {
+    for (const edge of kernel.getWireEdges(wire)) {
+      const v = kernel.getEdgeVertices(edge);
+      vertices.push([v[0]!, v[1]!, v[2]!], [v[3]!, v[4]!, v[5]!]);
+    }
+  }
+  if (vertices.length === 0) return null;
+  return { face, normal, point: vertices[0]!, vertices };
 }
 
 /**
@@ -168,8 +179,12 @@ function planarFace(kernel: CncLayoutKernel, face: number): PlanarFace | null {
  */
 function bedFace(
   kernel: CncLayoutKernel,
-  faces: readonly PlanarFace[]
+  faces: readonly PlanarFace[],
+  modelUnitMm: number
 ): PlanarFace | null {
+  // An absolute tie: a relative one lets a large plate's pocketed side,
+  // smaller by a small pocket, tie with its intact side and be chosen.
+  const tieArea = AREA_TIE_MM2 / (modelUnitMm * modelUnitMm);
   let best: { face: PlanarFace; area: number } | null = null;
   for (const face of faces) {
     const area = kernel.faceArea(face.face, AREA_DEFLECTION);
@@ -178,11 +193,10 @@ function bedFace(
       best = { face, area };
       continue;
     }
-    const tie =
-      Math.abs(area - best.area) <= AREA_TIE * Math.max(area, best.area);
+    const tie = Math.abs(area - best.area) <= tieArea;
     if (
       (!tie && area > best.area) ||
-      (tie && face.normal[2] < best.face.normal[2] - PARALLEL_TOLERANCE)
+      (tie && face.normal[2] < best.face.normal[2] - 1e-9)
     ) {
       best = { face, area };
     }
@@ -190,15 +204,31 @@ function bedFace(
   return best?.face ?? null;
 }
 
-const roundHeight = (value: number): number => {
-  const factor = 10 ** HEIGHT_DECIMALS;
-  const rounded = Math.round(value * factor) / factor;
-  return Object.is(rounded, -0) ? 0 : rounded;
-};
+/**
+ * The decimals that state 1 µm in an output unit: 3 in millimetres, 4 in
+ * centimetres, 5 in inches, 6 in metres.
+ */
+export function cncHeightDecimals(outputUnitMm: number): number {
+  return Math.max(
+    0,
+    Math.ceil(Math.log10(outputUnitMm / HEIGHT_RESOLUTION_MM) - 1e-9)
+  );
+}
+
+/** A height in micrometres, as output units at the unit's decimals. */
+function heightInUnits(micrometres: number, outputUnitMm: number): number {
+  const decimals = cncHeightDecimals(outputUnitMm);
+  const value = Number(
+    ((micrometres * HEIGHT_RESOLUTION_MM) / outputUnitMm).toFixed(decimals)
+  );
+  return Object.is(value, -0) ? 0 : value;
+}
 
 /** `Z12`, `Z3_5`: a height as an R12 layer name (no `.` allowed). */
-export function cncHeightLayer(height: number): string {
-  return `Z${roundHeight(height).toString().replace('.', '_')}`;
+export function cncHeightLayer(height: number, outputUnitMm = 1): string {
+  const decimals = cncHeightDecimals(outputUnitMm);
+  const text = Number(height.toFixed(decimals)).toString();
+  return `Z${text.replace('.', '_')}`;
 }
 
 function flattenPart(
@@ -209,7 +239,7 @@ function flattenPart(
   const planar = Array.from(kernel.getSolidFaces(part.solid))
     .map((face) => planarFace(kernel, face))
     .filter((face): face is PlanarFace => face !== null);
-  const bed = bedFace(kernel, planar);
+  const bed = bedFace(kernel, planar, options.modelUnitMm);
   if (!bed) {
     return { bodyId: part.bodyId, name: part.name, reason: 'no-flat-face' };
   }
@@ -222,31 +252,38 @@ function flattenPart(
     options.modelUnitMm
   );
 
-  // Faces facing straight up, grouped by height above the bed.
+  // Faces facing straight up, grouped by height above the bed in whole
+  // micrometres, so every unit keeps the same physical resolution.
+  const flatTolerance = FLAT_TOLERANCE_MM / options.modelUnitMm;
   const byHeight = new Map<number, number[]>();
   for (const face of planar) {
     if (dot(face.normal, up) < 1 - PARALLEL_TOLERANCE) continue;
-    const height = roundHeight(
-      (dot(up, face.point) - bedLevel) * options.scale
+    const levels = face.vertices.map((vertex) => dot(up, vertex) - bedLevel);
+    if (Math.max(...levels) - Math.min(...levels) > flatTolerance) continue;
+    const micrometres = Math.round(
+      (levels[0]! * options.modelUnitMm) / HEIGHT_RESOLUTION_MM
     );
-    if (!(height > 0)) continue;
-    const group = byHeight.get(height) ?? [];
+    if (!(micrometres > 0)) continue;
+    const group = byHeight.get(micrometres) ?? [];
     group.push(face.face);
-    byHeight.set(height, group);
+    byHeight.set(micrometres, group);
   }
   if (byHeight.size === 0) {
     return { bodyId: part.bodyId, name: part.name, reason: 'no-top-face' };
   }
 
-  const heights = [...byHeight.keys()].sort((a, b) => a - b);
+  const levels = [...byHeight.keys()].sort((a, b) => a - b);
+  const heights = levels.map((level) =>
+    heightInUnits(level, options.outputUnitMm)
+  );
   const entities: DxfEntity[] = [];
-  for (const height of heights) {
-    const layer = cncHeightLayer(height);
+  for (const [index, level] of levels.entries()) {
+    const layer = cncHeightLayer(heights[index]!, options.outputUnitMm);
     // An edge two coplanar top faces share is a seam between them, not an
     // outline: cutting it would score a line through the surface.
     const uses = new Map<number, number>();
     const edges: number[] = [];
-    for (const face of byHeight.get(height)!) {
+    for (const face of byHeight.get(level)!) {
       for (const wire of kernel.getFaceWires(face)) {
         for (const edge of kernel.getWireEdges(wire)) {
           if (!uses.has(edge)) edges.push(edge);
@@ -346,23 +383,28 @@ function translate(entity: DxfEntity, dx: number, dy: number): DxfEntity {
 
 /**
  * A body name as one line of TEXT: control and astral characters (which
- * R12 cannot carry) become `?`, and a long name is cut short.
+ * R12 cannot carry) become `?`, and a long name is cut short by its written
+ * length — a non-ASCII character is written as a 7-character escape — so a
+ * label never exceeds what a TEXT value may hold.
  */
 export function cncLabel(name: string): string {
+  const ellipsis = '…';
+  const room = MAX_LABEL_LENGTH - dxfTextLength(ellipsis);
   let out = '';
-  let count = 0;
+  let cut = false;
   for (const char of name) {
-    if (count === MAX_LABEL_CHARS) {
-      out += '…';
-      break;
-    }
     const code = char.codePointAt(0)!;
     const printable =
       (code >= 0x20 && code < 0x7f) || (code >= 0xa0 && code <= 0xffff);
-    out += printable ? char : '?';
-    count += 1;
+    const next = printable ? char : '?';
+    if (dxfTextLength(out + next) > room) {
+      cut = true;
+      break;
+    }
+    out += next;
   }
-  return out.trim() || '?';
+  const label = out.trim() || '?';
+  return cut ? `${label}${ellipsis}` : label;
 }
 
 /**
@@ -444,7 +486,8 @@ export function cncLayout(
       height: labelHeight,
       text: cncLabel(part.name)
     });
-    for (const h of part.heights) heightLayers.add(cncHeightLayer(h));
+    for (const h of part.heights)
+      heightLayers.add(cncHeightLayer(h, options.outputUnitMm));
     placements.push({
       bodyId: part.bodyId,
       name: part.name,

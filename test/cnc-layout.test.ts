@@ -15,6 +15,13 @@ import {
   cncLabel
 } from '../packages/kernel-adapter/src/exact-cnc-layout';
 import { importDxfSketch } from '../apps/web/src/lib/dxfImport';
+import { dxfTextLength } from '@openzcad/io-dxf';
+import { parseCadPatchProposal } from '@openzcad/ai-contracts';
+import {
+  CommandManager,
+  commandsForCadPatch,
+  composeCommands
+} from '@openzcad/command-system';
 import { toUserId } from '@openzcad/shared';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 
@@ -229,8 +236,13 @@ describe('CNC-cut layout export', () => {
       units: 'inch'
     });
     expect(inch.text).toContain('$INSUNITS\r\n70\r\n1\r\n');
-    expect(inch.placements[0]!.faceHeights).toEqual([0.276, 0.394]);
-    expect(layerNames(inch.text)).toEqual(['Z0_276', 'Z0_394', 'LABELS']);
+    // Heights keep 1 µm in every unit: five decimals of an inch.
+    expect(inch.placements[0]!.faceHeights).toEqual([0.27559, 0.3937]);
+    expect(layerNames(inch.text)).toEqual(['Z0_27559', 'Z0_3937', 'LABELS']);
+    const metres = await adapter.exportCncLayoutDxf(document, [plate], {
+      units: 'm'
+    });
+    expect(layerNames(metres.text)).toEqual(['Z0_007', 'Z0_01', 'LABELS']);
     const inchCircles = entities(inch.text)
       .filter((e) => e.type === 'CIRCLE')
       .map((e) => num(e, 40))
@@ -261,6 +273,9 @@ describe('CNC layout helpers', () => {
     expect(cncHeightLayer(10)).toBe('Z10');
     expect(cncHeightLayer(3.5)).toBe('Z3_5');
     expect(cncHeightLayer(0.2756)).toBe('Z0_276');
+    // 1 µm in any unit: a 0.4 mm plate in metres keeps its own layer.
+    expect(cncHeightLayer(0.0004, 1000)).toBe('Z0_0004');
+    expect(cncHeightLayer(0.27559, 25.4)).toBe('Z0_27559');
   });
 
   it('bounds an arc by the axis extremes it sweeps', () => {
@@ -294,7 +309,112 @@ describe('CNC layout helpers', () => {
   it('keeps labels to one line of R12 text', () => {
     expect(cncLabel('Bracket ⌀8')).toBe('Bracket ⌀8');
     expect(cncLabel('Tab\tpart 🙂')).toBe('Tab?part ?');
-    expect(cncLabel('x'.repeat(80))).toBe(`${'x'.repeat(64)}…`);
+    expect(cncLabel('x'.repeat(200))).toBe(`${'x'.repeat(113)}…`);
+    // Cut by written length: each 板 is a 7-character escape in DXF.
+    const wide = cncLabel('板'.repeat(37));
+    expect(wide).toBe(`${'板'.repeat(16)}…`);
+    expect(dxfTextLength(wide)).toBeLessThanOrEqual(120);
     expect(cncLabel('   ')).toBe('?');
+  });
+});
+
+describe('CNC layout review regressions', () => {
+  /** A prism of the XZ profile `points`, extruded `depth` along Y. */
+  async function prism(points: [number, number][], depth: number) {
+    const manager = new CommandManager(
+      createProjectDocument('Prism', toUserId('user_cnc'))
+    );
+    manager.execute(
+      composeCommands(
+        'Build',
+        commandsForCadPatch(
+          manager.document,
+          parseCadPatchProposal({
+            proposalId: 'prism',
+            summary: 'A prism.',
+            assumptions: [],
+            operations: [
+              {
+                kind: 'add_sketch',
+                name: 'Profile',
+                plane: 'XZ',
+                offset: 0,
+                objects: points.map(([x1, y1], index) => {
+                  const [x2, y2] = points[(index + 1) % points.length]!;
+                  return { objectKind: 'line', x1, y1, x2, y2 };
+                }),
+                localId: '$profile'
+              },
+              {
+                kind: 'add_extrude',
+                name: 'Prism',
+                localId: '$prism',
+                sketchId: '$profile',
+                distance: depth,
+                samplePoint: { x: points[0]![0] + 1, y: points[0]![1] + 1 }
+              }
+            ]
+          })
+        )
+      )
+    );
+    const document = manager.document;
+    expect((await adapter.syncDocument(document)).warnings).toEqual([]);
+    return { document, bodyId: document.bodyOrder.at(-1)! };
+  }
+
+  it('refuses a top that slopes by 0.02° rather than cut it at one corner', async () => {
+    // 1000 long, its top rising 0.35 mm from one end to the other.
+    const { document, bodyId } = await prism(
+      [
+        [0, 0],
+        [1000, 0],
+        [1000, 10.35],
+        [0, 10]
+      ],
+      100
+    );
+    await expect(
+      adapter.exportCncLayoutDxf(document, [bodyId])
+    ).rejects.toThrow(/has no flat face looking straight up/);
+  });
+
+  it('rests a big plate on its intact side when a small pocket opens on the other', async () => {
+    let document = addPrimitiveFeature(
+      createProjectDocument('Big plate', toUserId('user_cnc')),
+      {
+        name: 'Plate',
+        primitiveKind: 'box',
+        dimensions: { width: 1000, depth: 1000, height: 10 }
+      }
+    );
+    const blank = document.bodyOrder[0]!;
+    const derived = await adapter.syncDocument(document);
+    // The box's height runs along Y: drill from the −Y face.
+    const face = derived.bodyRepresentations[blank]!.topology!.faces.find(
+      (f) =>
+        f.geometry?.surfaceType === 'plane' &&
+        f.geometry.normal !== undefined &&
+        Math.abs(f.geometry.normal.y + 1) < 1e-9
+    )!;
+    const drilled = holeBody(document, {
+      name: 'Pocket',
+      targetBodyId: blank,
+      faceHash: face.hash,
+      ...(face.reference ? { faceReference: face.reference } : {}),
+      style: 'simple',
+      diameter: 1,
+      depthMode: 'blind',
+      depth: 2,
+      position: { u: 0, v: 0 }
+    });
+    document = drilled.document;
+    expect((await adapter.syncDocument(document)).warnings).toEqual([]);
+    const result = await adapter.exportCncLayoutDxf(document, [drilled.bodyId]);
+    // The pocketed side faces up: its opening is cut on the top layer.
+    const top = entities(result.text).filter((e) => e.layer === 'Z10');
+    expect(
+      top.filter((e) => e.type === 'CIRCLE').map((e) => num(e, 40))
+    ).toEqual([0.5]);
   });
 });
