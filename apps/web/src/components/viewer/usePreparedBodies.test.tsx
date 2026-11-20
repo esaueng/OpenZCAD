@@ -111,6 +111,45 @@ describe('dense body preparation', () => {
       expect(FakeWorker.instances).toHaveLength(0);
     }
   );
+  it.each([true, false])(
+    'restores a prior dense exact mesh during refinement (cloned %s)',
+    (cloned) => {
+      vi.stubGlobal('Worker', FakeWorker);
+      const original = body();
+      original.topology = {
+        faces: [
+          {
+            topologyId: 'face',
+            hash: 17,
+            triangleStart: 0,
+            triangleCount: original.mesh.indices.length / 3
+          }
+        ],
+        edges: [{ topologyId: 'edge', hash: 18, points: [0, 0, 0, 1, 0, 0] }]
+      };
+      const view = renderHook(({ source }) => usePreparedBodies(source), {
+        initialProps: { source: [original] }
+      });
+      const geometry = preparedBodies.get(original)!.geometry;
+      const edited = structuredClone(original);
+      edited.mesh.vertices[0] = edited.mesh.vertices[0]! + 1;
+      releasePreparedBodyGeometry(original);
+      // The edited draft is already displayed while its denser refinement runs.
+      view.rerender({ source: [body('part', 10)] });
+      view.rerender({ source: [edited] });
+      const worker = FakeWorker.instances[0]!;
+      expect(view.result.current.preparing).toBe(true);
+      const restored = cloned ? structuredClone(original) : original;
+      view.rerender({ source: [restored] });
+      expect(view.result.current.preparing).toBe(false);
+      expect(view.result.current.bodies[0]).toBe(restored);
+      expect(preparedBodies.get(restored)?.geometry).toBe(geometry);
+      worker.complete([{ tangentIds: new Set(), silhouettes: null }]);
+      expect(view.result.current.bodies[0]).toBe(restored);
+      expect(worker.postMessage).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it('does not carry preparation when only picking topology changes', () => {
     vi.stubGlobal('Worker', FakeWorker);
     const original = body();
