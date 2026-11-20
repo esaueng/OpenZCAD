@@ -571,12 +571,7 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
 export type PatternKind =
-  | 'linear'
-  | 'circular'
-  | 'grid'
-  | 'points'
-  | 'path'
-  | 'mirror';
+  'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
 
 /** M02 (schema v63): the sketch points a `points` pattern repeats at. */
 export interface PatternPoints {

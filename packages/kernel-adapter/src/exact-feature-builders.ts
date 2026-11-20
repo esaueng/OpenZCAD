@@ -4149,7 +4149,9 @@ function mirrorPatternArm(
     total: 2,
     label: (index) => String(index),
     matrix: (index) =>
-      index === 0 ? transformMatrix(PATTERN_ORIGIN, PATTERN_ORIGIN) : reflection,
+      index === 0
+        ? transformMatrix(PATTERN_ORIGIN, PATTERN_ORIGIN)
+        : reflection,
     kernelCopies: null
   };
 }

@@ -655,7 +655,8 @@ export type InPlaceRequest =
   | {
       tool: 'pattern';
       targetBodyId: BodyId;
-      patternKind: 'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
+      patternKind:
+        'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
       count: ParamValue;
       axis: 'x' | 'y' | 'z';
       spacing?: ParamValue;
