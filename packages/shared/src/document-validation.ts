@@ -261,7 +261,8 @@ const PATTERN_KINDS = valuesOf<PatternKind>({
   linear: true,
   circular: true,
   grid: true,
-  points: true
+  points: true,
+  path: true
 });
 const GEAR_TYPES = valuesOf<GearType>({
   external: true,
@@ -354,9 +355,9 @@ const FEATURE_ENUM_FIELDS = {
       standard: true,
       smooth: true
     }),
-    construction: valuesOf<
-      NonNullable<FeatureDataOf<'sweep'>['construction']>
-    >({ 'in-place': true })
+    construction: valuesOf<NonNullable<FeatureDataOf<'sweep'>['construction']>>(
+      { 'in-place': true }
+    )
   },
   rib: {
     thicknessSide: valuesOf<FeatureDataOf<'rib'>['thicknessSide']>({

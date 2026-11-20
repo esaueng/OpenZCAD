@@ -15,6 +15,8 @@ import {
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
 import { describeInterference } from '../../lib/assembly/interferenceUi';
+import { AssemblyMotionInterference } from './AssemblyMotionInterference';
+import type { AssemblySweepCheck } from '@openzcad/document-core';
 
 export type CheckInterference = (
   document: ProjectDocument,
@@ -65,10 +67,13 @@ function unchecked(summary: InterferenceSummary): string {
 export function AssemblyInterferenceSection({
   document,
   check,
+  checkSweep,
   onStatus
 }: {
   document: ProjectDocument;
   check: CheckInterference;
+  /** AS04 through motion; absent hides it. */
+  checkSweep?: AssemblySweepCheck;
   onStatus(message: string): void;
 }) {
   const [state, setState] = useState<CheckState>({ kind: 'idle' });
@@ -226,6 +231,13 @@ export function AssemblyInterferenceSection({
               .join(' · ')}
           </p>
         </>
+      ) : null}
+      {checkSweep ? (
+        <AssemblyMotionInterference
+          document={document}
+          check={checkSweep}
+          onStatus={onStatus}
+        />
       ) : null}
     </div>
   );
