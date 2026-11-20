@@ -549,6 +549,33 @@ interface BooleanFaceUnifier {
   unifyFacesChecked(solid: number): unknown;
 }
 
+/** Return a strictly healed copy, or the input when no strict merge was kept.
+ * A missing binding or kernel error leaves the checked-report path available. */
+export function unifyCopyIfStrict(
+  kernel: BooleanFaceUnifier & {
+    unifyFacesIfStrict?(solid: number): number;
+    deleteSolid(solid: number): void;
+  },
+  rawSolid: number
+): number | undefined {
+  if (!kernel.unifyFacesIfStrict) return undefined;
+  let candidate: number | undefined;
+  try {
+    candidate = kernel.copyAndTransformSolid(rawSolid, IDENTITY_MATRIX);
+    return kernel.unifyFacesIfStrict(candidate) > 0 ? candidate : rawSolid;
+  } catch {
+    if (candidate !== undefined) {
+      // The checked fallback creates its own copy of the raw solid.
+      try {
+        kernel.deleteSolid(candidate);
+      } catch {
+        // A kernel failure can also invalidate the temporary handle.
+      }
+    }
+    return undefined;
+  }
+}
+
 /** A face-unified copy of a boolean result and the kernel's report on it. */
 export interface UnifiedCopy {
   /** The copy, unified in place: merged when the kernel kept the merge. */
