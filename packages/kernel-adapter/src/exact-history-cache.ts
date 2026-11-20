@@ -759,6 +759,11 @@ export interface RebuildCacheEvent {
   restored: number;
   /** Independent primitive features kept in the current kernel after the prefix. */
   reusedPrimitives?: number;
+  /**
+   * Of those, imported STEP bodies kept in the live arena (the H02 detached
+   * Text cache): a fixed import after the edited suffix is not re-imported.
+   */
+  reusedImports?: number;
   /** Audited immutable transform/carving branches reused in the same arena. */
   reusedPreparedFeatures?: number;
   /** Checked prefix features reused by qualified axial extent transport. */

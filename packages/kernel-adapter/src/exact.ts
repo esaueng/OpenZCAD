@@ -2092,6 +2092,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     replayed: number;
     restored: number;
     reusedPrimitives: number;
+    reusedImports: number;
     reusedPreparedFeatures: number;
     reusedAxialFeatures: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
@@ -2310,6 +2311,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let initialLineageIsIdle = false;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
+    let reusedImports = 0;
     let reusedPreparedFeatures = 0;
     let reusedAxialFeatures = 0;
     let cacheResetReason:
@@ -3057,7 +3059,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 if (reused) {
                   if (feature.data.featureKind === 'primitive')
                     reusedPrimitives += 1;
-                  else reusedPreparedFeatures += 1;
+                  else if (feature.data.featureKind === 'imported-step') {
+                    // Self-contained like a primitive: counted with them.
+                    reusedPrimitives += 1;
+                    reusedImports += 1;
+                  } else reusedPreparedFeatures += 1;
                 }
                 return reused;
               },
@@ -3141,6 +3147,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         reusedPreparedFeatures,
       restored: startIndex,
       reusedPrimitives,
+      reusedImports,
       reusedPreparedFeatures,
       reusedAxialFeatures,
       ...(cacheResetReason ? { cacheResetReason } : {}),
@@ -4156,6 +4163,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         replayed,
         restored,
         reusedPrimitives,
+        reusedImports,
         reusedPreparedFeatures,
         reusedAxialFeatures,
         strictVerdicts,
@@ -5099,6 +5107,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               ? 'prefix-restore'
               : 'full-rebuild',
         ...(reusedPrimitives > 0 ? { reusedPrimitives } : {}),
+        ...(reusedImports > 0 ? { reusedImports } : {}),
         ...(reusedPreparedFeatures > 0 ? { reusedPreparedFeatures } : {}),
         ...(reusedAxialFeatures > 0 ? { reusedAxialFeatures } : {}),
         ...(recycleReason ? { recycleReason } : {}),

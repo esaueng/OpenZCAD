@@ -3,7 +3,11 @@ import {
   type FeatureNode,
   type StandardPartBuild
 } from '@openzcad/shared';
-import type { ExactBuildResult, ExactShape } from './exact-types';
+import type {
+  ExactBuildResult,
+  ExactShape,
+  ImportedStepDiagnostics
+} from './exact-types';
 import { PreparedEditSession } from './prepared-edit-session';
 
 interface Entry {
@@ -12,18 +16,30 @@ interface Entry {
   shape: ExactShape;
   /** A standard part's derived lengths (M17), restored with its shape. */
   standardPart?: StandardPartBuild;
+  /** An imported STEP body's reader verdicts, restored with its shape. */
+  importDiagnostics?: ImportedStepDiagnostics;
 }
 
 /**
  * Builders whose result is a pure function of their own data and digest:
- * a primitive, and (M17) a standard part on a plane, which reads no other
- * body and makes its solids afresh. A part in a hole reads the hole's
- * body, so it is rebuilt.
+ * a primitive, (M17) a standard part on a plane, which reads no other
+ * body and makes its solids afresh, and (H02) an imported STEP body, whose
+ * digest names its source bytes, reader, selection, planar emboss and
+ * placement, and whose import reads no parameter and no other body. A part
+ * in a hole reads the hole's body, so it is rebuilt.
+ *
+ * Reusing an import is the H02 detached Text cache: a history that imports
+ * its fixed lettering after the parameter-driven holder (every recipe saved
+ * before the import was moved ahead of the suffix) keeps the lettering's
+ * solids in the live arena across holder edits instead of re-importing them.
+ * Nothing is restored from a checkpoint, so no kernel branch operation is
+ * involved; any restore before the import retires the entry with its handles.
  */
 function selfContained(feature: FeatureNode): boolean {
   const data = feature.data;
   return (
     data.featureKind === 'primitive' ||
+    data.featureKind === 'imported-step' ||
     (data.featureKind === 'standard-part' && data.hole === undefined)
   );
 }
@@ -53,6 +69,7 @@ function preservesPrimitiveInputs(feature: FeatureNode): boolean {
   if (selfContained(feature)) return true;
   switch (feature.data.featureKind) {
     case 'primitive':
+    case 'imported-step':
     case 'sketch':
     case 'extrude':
     case 'revolve':
@@ -132,6 +149,11 @@ export class PrimitiveBuildCache {
     if (!entry || !feature.bodyId || !allowReuse)
       return this.prepared.restore(feature, digest, result, allowReuse);
     result.shapes.set(feature.bodyId, copyShape(entry.shape));
+    if (entry.importDiagnostics)
+      result.importedStepDiagnostics.set(
+        feature.bodyId,
+        structuredClone(entry.importDiagnostics)
+      );
     if (entry.standardPart) {
       (result.standardParts ??= new Map()).set(feature.featureId, {
         lengthsMm: [...entry.standardPart.lengthsMm]
@@ -149,12 +171,28 @@ export class PrimitiveBuildCache {
     this.prepared.store(index, feature, digest, result);
     if (!selfContained(feature) || !feature.bodyId) return;
     const shape = result.shapes.get(feature.bodyId);
+    // Only a clean exact import: a mesh fallback or a warning keeps replay.
+    if (
+      feature.data.featureKind === 'imported-step' &&
+      (result.meshBodies.has(feature.bodyId) ||
+        result.featureWarnings.some(
+          (warning) => warning.featureId === feature.featureId
+        ) ||
+        !result.importedStepDiagnostics.has(feature.bodyId))
+    )
+      return;
     if (shape) {
       const standardPart = result.standardParts?.get(feature.featureId);
+      const importDiagnostics = result.importedStepDiagnostics.get(
+        feature.bodyId
+      );
       this.entries.set(feature.featureId, {
         index,
         digest,
         shape: copyShape(shape),
+        ...(feature.data.featureKind === 'imported-step' && importDiagnostics
+          ? { importDiagnostics: structuredClone(importDiagnostics) }
+          : {}),
         ...(standardPart
           ? { standardPart: { lengthsMm: [...standardPart.lengthsMm] } }
           : {})
