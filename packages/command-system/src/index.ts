@@ -3273,7 +3273,9 @@ export const commandFactories = {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
       'feature.wrap',
-      payload.mode === 'emboss' ? 'Emboss onto cylinder' : 'Engrave into cylinder',
+      payload.mode === 'emboss'
+        ? 'Emboss onto cylinder'
+        : 'Engrave into cylinder',
       withIds,
       (document) => wrapBody(document, withIds).document,
       (document) => validateWrapInput(document, withIds)
@@ -3405,7 +3407,9 @@ export const commandFactories = {
             ? 'Grid'
             : payload.patternKind === 'points'
               ? 'Point'
-              : 'Circular'
+              : payload.patternKind === 'path'
+                ? 'Path'
+                : 'Circular'
       } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,

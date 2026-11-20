@@ -18,6 +18,17 @@ export {
   isNearlyZero
 } from './tolerance';
 export {
+  chainPathCurves,
+  pathPatternCurves,
+  pathPatternFitProblem,
+  pathStationAt,
+  pathTurnDeg,
+  type PathChain,
+  type PathCurve2,
+  type PathPoint2,
+  type PathStation
+} from './path-stations';
+export {
   resolveBoundaryProfileReference,
   type BoundaryProfileCandidate,
   type BoundaryProfileReference

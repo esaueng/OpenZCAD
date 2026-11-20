@@ -259,6 +259,8 @@ export function assertPatternContentSchema(
     );
   if (data.patternKind === 'points' || data.points !== undefined)
     assertMinimumProjectSchema(version, 63, 'Patterns on sketch points');
+  if (data.patternKind === 'path' || data.path !== undefined)
+    assertMinimumProjectSchema(version, 112, 'Patterns along a sketch path');
 }
 
 /**
@@ -886,7 +888,8 @@ export function assertDocumentContentCommandSchema(
       hasDatumReferenceConstructorKind(command.payload)
     )
       assertDatumReferenceConstructorSchema(document.schemaVersion);
-    if (command.kind === 'feature.wrap') assertWrapSchema(document.schemaVersion);
+    if (command.kind === 'feature.wrap')
+      assertWrapSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')

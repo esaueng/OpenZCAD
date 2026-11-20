@@ -40,7 +40,13 @@ export function parseCurveCandidateId(
 export function sketchCurveCandidates(
   document: ProjectDocument,
   views: readonly { sketchId: string; basis: PlaneBasis }[],
-  resolve: (value: unknown) => number
+  resolve: (value: unknown) => number,
+  /**
+   * Which objects to offer; the drawn, non-construction curves when absent.
+   * M02's path pattern offers lines and arcs, construction ones included.
+   */
+  offers: (data: SketchObjectData) => boolean = (data) =>
+    data.construction !== true && data.objectKind !== 'text'
 ): SketchCurveCandidate[] {
   const candidates: SketchCurveCandidate[] = [];
   for (const view of views) {
@@ -52,7 +58,7 @@ export function sketchCurveCandidates(
       const node = ownEntry(document.nodes, objectId);
       if (node?.kind !== 'sketch-object') continue;
       const data: SketchObjectData = node.data;
-      if (data.construction === true || data.objectKind === 'text') continue;
+      if (data.objectKind === 'text' || !offers(data)) continue;
       let runs: ReturnType<typeof objectPolylines>;
       try {
         runs = objectPolylines(data, resolve);
@@ -211,4 +217,9 @@ export function sketchPointCandidates(
       }
     )
   );
+}
+
+/** M02 (schema v112): a path pattern runs along lines and arcs, drawn or construction. */
+export function isPathPatternCurve(data: SketchObjectData): boolean {
+  return data.objectKind === 'line' || data.objectKind === 'arc';
 }
