@@ -343,6 +343,36 @@ function randomMesh(seed: number, vertexCount: number, triangles: number) {
 }
 
 describe('typed-array smoothing parity', () => {
+  it('preserves first-corner smoothing on repeated indices and mixed edge winding', () => {
+    const mesh: MeshGeometry = {
+      kind: 'mesh',
+      vertices: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 2, 0, 0),
+      indices: Uint32Array.of(
+        0,
+        1,
+        0,
+        2,
+        0,
+        0, // two triangles share the zero-length edge at 0
+        1,
+        2,
+        3,
+        1,
+        2,
+        4, // shared side in the same direction
+        4,
+        2,
+        3 // opposite winding on the shared side with the preceding triangle
+      )
+    };
+    expectIdentical(mesh, {
+      faces: [
+        { topologyId: 'face:one', hash: 1, triangleStart: 0, triangleCount: 5 }
+      ],
+      edges: []
+    });
+  });
+
   it('matches the reference on welded analytic shapes, with and without faces', () => {
     const shapes = [
       new THREE.BoxGeometry(2, 3, 4, 2, 2, 2),
