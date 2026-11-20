@@ -116,6 +116,7 @@
   "perf-pattern-preview.spec.ts": 0,
   "perf-probe.spec.ts": 0,
   "perf-profile.spec.ts": 0,
+  "perf-step-export.spec.ts": 0,
   "phone-stage.spec.ts": 45,
   "primitive-ghost-hole-pick.spec.ts": 5,
   "primitive-position.spec.ts": 6,
