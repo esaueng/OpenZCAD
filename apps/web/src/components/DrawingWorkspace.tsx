@@ -437,7 +437,7 @@ function sheetStatus(
   geometryPending: boolean,
   fingerprint: string | null,
   /**
-   * AS03 (v112): the fence a model fingerprint gives `fenced` (this sheet,
+   * AS03 (v113): the fence a model fingerprint gives `fenced` (this sheet,
    * or the sheet as a body replacement will save it).
    */
   fence: (base: string, fenced: DrawingSheet) => string = (base) => base
@@ -477,7 +477,7 @@ function sheetStatus(
       bodyNames: missing.map((id) => bodies[id]?.name ?? 'a deleted body')
     };
   if (!fingerprint) return { kind: 'pending' };
-  // AS03 (v112): where parts are placed matters only while a view draws
+  // AS03 (v113): where parts are placed matters only while a view draws
   // them exploded; a sheet whose last exploded view went is as current as
   // its model.
   const stored = sheet.views.some((view) => view.exploded)
@@ -513,7 +513,7 @@ function viewIntentKey(view: DrawingView): string {
     : '';
   // F06: a view on another configuration row (`projectionSheet`).
   const row = view.configurationId ? `|row:${view.configurationId}` : '';
-  // AS03 (v112): an exploded view places its parts; the sheet's fence
+  // AS03 (v113): an exploded view places its parts; the sheet's fence
   // carries where.
   const exploded = view.exploded ? '|exploded' : '';
   return `${view.orientation}|${view.hiddenLines}|${[...view.bodyIds].sort().join(',')}${cut}${aux}${row}${exploded}`;
@@ -572,7 +572,7 @@ interface KeptDrawing {
    * sheet calls its holes out as drawn until it is Updated.
    */
   holes: HoleCalloutLookup;
-  /** AS03 (v112): where its exploded views placed the parts it drew. */
+  /** AS03 (v113): where its exploded views placed the parts it drew. */
   explodedMatrices: ReadonlyMap<BodyId, readonly number[]> | null;
 }
 
@@ -613,7 +613,7 @@ function useViewProjections(
   document: ProjectDocument,
   requestTessellation: DrawingWorkspaceProps['requestTessellation'],
   requestSection: DrawingWorkspaceProps['requestSection'],
-  /** AS03 (v112): where exploded views draw each assembly body. */
+  /** AS03 (v113): where exploded views draw each assembly body. */
   explodedMatrices: ReadonlyMap<BodyId, readonly number[]> | null = null
 ): Map<DrawingViewId, ViewState> {
   const client = useRef<DrawingProjectionClient | null>(null);
@@ -735,7 +735,7 @@ function useViewProjections(
     >();
     const sectionKeys = new Map<string, DrawingView>();
     /**
-     * AS03 (v112): an exploded view's placed bodies, by projection input
+     * AS03 (v113): an exploded view's placed bodies, by projection input
      * key: the tessellation they are moved from and where to.
      */
     const placedOf = new Map<
@@ -786,7 +786,7 @@ function useViewProjections(
             const base = rowBodyKey(projectionViewCacheKey(view), id);
             const matrix = placements?.get(id);
             if (!matrix) return base;
-            // AS03 (v112): a part an exploded view moves is drawn from a
+            // AS03 (v113): a part an exploded view moves is drawn from a
             // placed copy of the body's tessellation.
             const placed = `${base}${ROW_SEPARATOR}exploded`;
             placedOf.set(placed, { base, matrix });
@@ -3891,7 +3891,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     byBodySet: Map<string, string | null>;
   }>({ bodies, byBodySet: new Map() });
   /**
-   * AS03 (v112): where exploded views draw each assembly body, while any
+   * AS03 (v113): where exploded views draw each assembly body, while any
    * sheet has one; null otherwise, so other sheets never read the assembly.
    */
   const explodedMatrices = useMemo(
@@ -3920,7 +3920,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         // still built leaves the fingerprint as it was.
         const rows = viewConfigurationRows(entry, document);
         if (rows.size > 0 && rows.size === entry.views.length)
-          // No view on another row is exploded (v112), so the placements a
+          // No view on another row is exploded (v113), so the placements a
           // removed exploded view left in the fence no longer count.
           return [entry.sheetId, entry.source.fingerprint.split('|x:')[0]!];
         const activeIds = new Set(sheetBodyIds(activeRowSheet(entry, rows)));
@@ -3931,7 +3931,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         if (!byBodySet.has(key))
           byBodySet.set(key, drawingSourceFingerprint(bodies, ids));
         const base = byBodySet.get(key)!;
-        // AS03 (v112): a sheet with exploded views is also fenced to where
+        // AS03 (v113): a sheet with exploded views is also fenced to where
         // those views place their parts, so posing or pulling a part out in
         // Assemble leaves the sheet stale until an explicit Update.
         return [
@@ -4139,7 +4139,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const merged: Record<string, BodyRepresentation | undefined> = {
       ...modelBodies
     };
-    // AS03 (v112): an exploded view's notes and balloons measure its parts
+    // AS03 (v113): an exploded view's notes and balloons measure its parts
     // where it draws them, from the model the drawing on screen is of.
     const placements = keptDrawing?.explodedMatrices ?? explodedMatrices;
     for (const { view } of exploded)
@@ -4524,7 +4524,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   };
 
   /**
-   * AS03 (v112): draws a base view and its projected views exploded, or as
+   * AS03 (v113): draws a base view and its projected views exploded, or as
    * modelled. A sheet that was current is rebound to the views as they now
    * draw, so the toggle does not leave it waiting on an Update.
    */

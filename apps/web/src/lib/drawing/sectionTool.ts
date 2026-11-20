@@ -72,7 +72,7 @@ export function sectionSourceAt(
 ): ComposedView | null {
   for (const entry of views) {
     const { view, projection } = entry;
-    // AS03 (v112): an exploded view's parts are pulled apart; none is cut.
+    // AS03 (v113): an exploded view's parts are pulled apart; none is cut.
     if (
       view.section ||
       view.orientation === 'iso' ||

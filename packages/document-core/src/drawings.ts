@@ -84,12 +84,12 @@ export interface DrawingViewUpdateInput {
    */
   configurationId?: string | null;
   /**
-   * AS03 (v112): draw a base view, and the views projected from it, with the
+   * AS03 (v113): draw a base view, and the views projected from it, with the
    * assembly exploded, or as modelled again.
    */
   exploded?: boolean;
   /**
-   * AS03 (v112), only with `exploded`: the sheet's model fence as the
+   * AS03 (v113), only with `exploded`: the sheet's model fence as the
    * toggled views draw it, so a sheet that was current stays current. The
    * caller computes it, as for an explicit Update.
    */
@@ -357,7 +357,7 @@ export function addDrawingView(
       throw new Error(`Drawing view ${input.view.viewId} already exists.`);
     const view = deepClone(input.view);
     const parent = alignmentBase(sheet, view);
-    // AS03 (v112): a projected view draws the assembly as its base does.
+    // AS03 (v113): a projected view draws the assembly as its base does.
     if (view.parentViewId !== undefined) {
       const base = sheet.views.find(
         (entry) => entry.viewId === view.parentViewId
@@ -540,7 +540,7 @@ export function updateDrawingView(
 }
 
 /**
- * AS03 (v112): draws `view` and the views projected from it exploded, or as
+ * AS03 (v113): draws `view` and the views projected from it exploded, or as
  * modelled. Refused on a view that is not a base view, one drawing another
  * configuration row, one that sections, details or auxiliary views are
  * taken from, and one carrying annotations other than notes and balloons.

@@ -196,10 +196,10 @@ function hasDrawingViewConfiguration(drawings: unknown): boolean {
 }
 
 /**
- * AS03 exploded drawing views (schema v112): a drawing view's `exploded`.
+ * AS03 exploded drawing views (schema v113): a drawing view's `exploded`.
  * An older reader would draw the view's bodies where they were modelled.
  */
-export const DRAWING_EXPLODED_VIEW_SCHEMA_VERSION = 112;
+export const DRAWING_EXPLODED_VIEW_SCHEMA_VERSION = 113;
 
 export function assertDrawingExplodedViewSchema(version: unknown): void {
   assertMinimumProjectSchema(

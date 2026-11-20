@@ -31,7 +31,7 @@ export function detailSourceAt(
     const { view, projection } = entry;
     // A detail's source is a principal view: not a section, another detail
     // or (v81) an auxiliary view, which validation refuses as a source.
-    // AS03 (v112): nor an exploded view, whose parts are pulled apart.
+    // AS03 (v113): nor an exploded view, whose parts are pulled apart.
     if (
       !projection.bounds ||
       view.section ||

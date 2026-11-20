@@ -139,7 +139,7 @@ export function pickableFaces(
 ): PickableFace[] {
   const out: PickableFace[] = [];
   for (const { view, projection } of views) {
-    // AS03 (v112): an exploded view offers edges for balloons and notes
+    // AS03 (v113): an exploded view offers edges for balloons and notes
     // only; a face is picked for a dimension or a frame.
     if (!projection.bounds || view.orientation === 'iso' || view.exploded)
       continue;
@@ -868,7 +868,7 @@ function isFaceOnCircle(view: DrawingView, edge: EdgeTopology): boolean {
   );
 }
 
-/** Why a dimension or mark tool does not pick on an exploded view (v112). */
+/** Why a dimension or mark tool does not pick on an exploded view (v113). */
 export const EXPLODED_VIEW_TOOL_REFUSAL =
   'An exploded view takes notes and balloons only: its parts are pulled apart for presentation. Dimension an assembled view.';
 
@@ -907,7 +907,7 @@ export function applyAnnotationPick(
       ok: true,
       tool: { ...tool, placed: { x: point[0], y: point[1] } }
     };
-  // AS03 (v112): an exploded view places parts for presentation, so it
+  // AS03 (v113): an exploded view places parts for presentation, so it
   // takes notes and balloons only; dimensions go on an assembled view.
   if (
     tool.kind !== 'note' &&
