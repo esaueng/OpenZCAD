@@ -1,3 +1,5 @@
+import { PatternOverlapWorkers } from '../packages/kernel-adapter/src/pattern-overlap-workers';
+import { MEASUREMENT_DEFLECTION } from '../packages/kernel-adapter/src/exact-witnesses';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -129,6 +131,99 @@ describe('overlap measurements while editing a linear pattern', () => {
       adapter.dispose();
     }
   });
+
+  it.each([false, true])(
+    'uses independently measured pairs and preserves the complete solid and STEP (skip second copy: %s)',
+    async (skipSecond) => {
+      const stock = addPrimitiveFeature(
+        createProjectDocument('Parallel row', toUserId('maker')),
+        {
+          name: 'Stock',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 5, height: 10 }
+        }
+      );
+      const row = patternBody(stock, {
+        name: 'Row',
+        targetBodyId: stock.bodyOrder[0]!,
+        patternKind: 'linear',
+        axis: 'x',
+        count: 13,
+        spacing: 7,
+        ...(skipSecond ? { skippedInstances: ['1'] } : {})
+      });
+      const adapter = await createExactKernelAdapter();
+      const reference = await createExactKernelAdapter();
+      const buildOptions = { lineageDemand: [], proposeCarry: true };
+      const exportOptions = { timestamp: '2026-01-01T00:00:00Z' };
+      try {
+        const serial = await reference.syncDocument(
+          row.document,
+          undefined,
+          undefined,
+          undefined,
+          buildOptions
+        );
+        const expectedStep = await reference.exportStep(
+          row.document,
+          [row.bodyId],
+          exportOptions
+        );
+        const intersect = RemusKernel.prototype.booleanWithQuality;
+        const calls = vi.spyOn(RemusKernel.prototype, 'booleanWithQuality');
+        vi.spyOn(
+          PatternOverlapWorkers.prototype,
+          'available',
+          'get'
+        ).mockReturnValue(true);
+        const jobs = vi
+          .spyOn(PatternOverlapWorkers.prototype, 'measure')
+          .mockImplementation(async (pairs) => {
+            await Promise.resolve();
+            const scratch = new RemusKernel();
+            try {
+              return pairs.map((bytes) => {
+                const [a, b] = scratch.deserializeSolids(bytes);
+                const common = intersect.call(
+                  scratch,
+                  'intersect',
+                  a!,
+                  b!,
+                  true
+                );
+                return scratch.volume(common.solid, MEASUREMENT_DEFLECTION);
+              });
+            } finally {
+              scratch.free();
+            }
+          });
+        const actual = await adapter.syncDocument(
+          row.document,
+          undefined,
+          undefined,
+          undefined,
+          buildOptions
+        );
+        expect(jobs).toHaveBeenCalledTimes(1);
+        expect(jobs.mock.calls[0]![0]).toHaveLength(skipSecond ? 10 : 11);
+        expect(
+          calls.mock.calls.filter(([op]) => op === 'intersect')
+        ).toHaveLength(skipSecond ? 0 : 1);
+        expect(actual.bodyRepresentations[row.bodyId]).toEqual(
+          serial.bodyRepresentations[row.bodyId]
+        );
+        expect(actual.warnings).toEqual(serial.warnings);
+        expect(actual.featureWarnings).toEqual(serial.featureWarnings);
+        expect(
+          await adapter.exportStep(row.document, [row.bodyId], exportOptions)
+        ).toBe(expectedStep);
+      } finally {
+        vi.restoreAllMocks();
+        adapter.dispose();
+        reference.dispose();
+      }
+    }
+  );
 
   it('retries refused intersections and keeps the conservative overlap when serialization fails', () => {
     const kernel = new RemusKernel();

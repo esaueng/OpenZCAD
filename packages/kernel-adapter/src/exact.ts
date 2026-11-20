@@ -1,3 +1,4 @@
+import { PatternOverlapWorkers } from './pattern-overlap-workers';
 import {
   AxialExtentTracker,
   MIN_AXIAL_HISTORY_FEATURES,
@@ -1551,6 +1552,7 @@ export type {
 } from './kernel-step-import';
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
+  private readonly patternWorkers = new PatternOverlapWorkers();
   readonly kind = 'remus' as const;
   constructor(private readonly options: ExactKernelAdapterOptions = {}) {
     this.importedSteps = new ImportedStepCache(
@@ -3149,6 +3151,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Another project's bodies are a different set: start their held display
     // deflections fresh before the build (the union gate reads them).
     if (this.heldDisplayProjectId !== document.projectId) {
+      this.patternWorkers.dispose();
       this.heldDisplayDeflections.clear();
       this.previewFaceGeometry.clear();
       this.heldDisplayProjectId = document.projectId;
@@ -3167,6 +3170,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     try {
       build = await buildDocumentHistoryCooperatively(
         {
+          patternWorkers: this.patternWorkers,
           run: (work) =>
             withDisplayOnlyBlends(
               activeKernel,
@@ -6868,6 +6872,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
+    this.patternWorkers.dispose();
     this.historyGeneration += 1;
     this.clearCurrentMassSnapshot();
     // An active generator still owns its kernel and cancellation token.

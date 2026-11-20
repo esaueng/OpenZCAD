@@ -1,3 +1,5 @@
+import type { PatternOverlapWorkers } from './pattern-overlap-workers';
+import type { BuildCancellationSignal } from './exact-cancellation';
 /**
  * Boolean and union support: fuse/unify wrappers, shared-volume probes for
  * operation inference, connectivity checks, and the tangent-union offset
@@ -1936,7 +1938,10 @@ function compactLinearStock(kernel: RemusKernel, solid: number): boolean {
   );
 }
 
-function linearNeighbourProbe(kernel: RemusKernel) {
+function linearNeighbourProbe(
+  kernel: RemusKernel,
+  workers?: PatternOverlapWorkers
+) {
   let eligible: boolean | undefined;
   return (index: number, left: number, right: number): number => {
     if (eligible === false || index >= MAX_LINEAR_PAIRS)
@@ -1956,17 +1961,96 @@ function linearNeighbourProbe(kernel: RemusKernel) {
     }
     const entries = linearOverlaps.get(kernel) ?? [];
     const prior = entries[index];
-    if (
-      prior &&
-      prior.operands.length === operands.length &&
-      prior.operands.every((byte, i) => byte === operands[i])
-    )
+    if (prior && sameOperandBytes(prior.operands, operands))
       return prior.volume;
     const volume = exactSharedSolidVolume(kernel, left, right);
+    if (volume > 0) workers?.warm();
     entries[index] = { operands, volume };
     linearOverlaps.set(kernel, entries);
     return volume;
   };
+}
+
+/** Start exact adjacent intersections that can overlap the live fuse. No
+ * worker holds live handles. Install results only on resuming the same build;
+ * the ordinary probe checks both operand bytes again before using them. */
+export function prepareLinearIntersections(
+  kernel: RemusKernel,
+  solids: number[],
+  workers: PatternOverlapWorkers,
+  signal?: BuildCancellationSignal
+): { ready: Promise<void>; install(): void } | undefined {
+  if (
+    !workers.available ||
+    solids.length < 8 ||
+    solids.length > MAX_LINEAR_PAIRS + 1
+  )
+    return;
+  const pairs: { index: number; bytes: Uint8Array }[] = [];
+  const entries = linearOverlaps.get(kernel);
+  try {
+    if (!compactLinearStock(kernel, solids[0]!)) return;
+    if (entries?.[0] && solids.length - 1 - entries.length < 6) {
+      const first = kernel.serializeSolids(
+        Uint32Array.of(solids[0]!, solids[1]!)
+      );
+      if (sameOperandBytes(first, entries[0].operands)) return;
+    }
+    const boxes = solids.map((solid) => kernel.boundingBox(solid));
+    // Pair zero stays on the live kernel and decides whether to start fusing.
+    for (let index = 1; index + 1 < solids.length; ++index) {
+      const left = boxes[index]!,
+        right = boxes[index + 1]!;
+      if (
+        [0, 1, 2].some(
+          (axis) =>
+            Math.min(left[axis + 3]!, right[axis + 3]!) <=
+            Math.max(left[axis]!, right[axis]!)
+        )
+      )
+        continue;
+      const bytes = kernel.serializeSolids(
+        Uint32Array.of(solids[index]!, solids[index + 1]!)
+      );
+      if (bytes.length > MAX_PAIR_BYTES) return;
+      const previous = entries?.[index];
+      if (!previous || !sameOperandBytes(bytes, previous.operands))
+        pairs.push({ index, bytes });
+    }
+  } catch {
+    return;
+  }
+  if (pairs.length < 6) return;
+  const batch = workers.measure(
+    pairs.map((pair) => pair.bytes),
+    signal
+  );
+  if (!batch) return;
+  let volumes: (number | null)[] | undefined;
+  return {
+    ready: batch.then((values) => {
+      volumes = values;
+    }),
+    install() {
+      if (!volumes || signal?.isCancelled()) return;
+      const cache = linearOverlaps.get(kernel) ?? [];
+      for (const [i, pair] of pairs.entries()) {
+        const volume = volumes[i];
+        if (
+          typeof volume === 'number' &&
+          Number.isFinite(volume) &&
+          volume >= 0
+        ) {
+          cache[pair.index] = { operands: pair.bytes, volume };
+        }
+      }
+      linearOverlaps.set(kernel, cache);
+    }
+  };
+}
+
+function sameOperandBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, index) => byte === b[index]);
 }
 
 /**
@@ -2003,14 +2087,15 @@ export function sharedSolidVolume(
   solids: number[],
   /** Only callers proving rigid equivalence may reuse an exact intersection. */
   pairClass?: (left: number, right: number) => string,
-  reuseLinearNeighbours = false
+  reuseLinearNeighbours = false,
+  workers?: PatternOverlapWorkers
 ): number {
   if (solids.length < 2) {
     return 0;
   }
   let total = 0;
   const measureNeighbour = reuseLinearNeighbours
-    ? linearNeighbourProbe(kernel)
+    ? linearNeighbourProbe(kernel, workers)
     : undefined;
   const exactByClass = new Map<string, number>();
   const boxes = solids.map((solid) => kernel.boundingBox(solid));
