@@ -255,7 +255,7 @@ describe('Interference through motion (AS04)', () => {
     ).toHaveDisplayValue('Pivot (0.0° to 360.0°)');
     await act(async () => {
       fireEvent.click(
-        within(section()).getByRole('button', { name: 'Check motion' })
+        within(section()).getByRole('button', { name: 'Sweep' })
       );
     });
     // 37 even positions, then four rounds halving each turn.

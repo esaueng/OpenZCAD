@@ -110,7 +110,7 @@ test(
     ).toHaveText('Slide (0.0 mm to 80.0 mm)');
 
     // As assembled the pin is clear; along the slide it passes through.
-    await interference.getByRole('button', { name: 'Check motion' }).click();
+    await interference.getByRole('button', { name: 'Sweep' }).click();
     const row = interference.getByRole('button', {
       name: /^Block and Pin: 30\.\d mm to 49\.\d mm$/
     });

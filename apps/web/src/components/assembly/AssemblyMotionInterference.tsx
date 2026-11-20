@@ -224,7 +224,7 @@ export function AssemblyMotionInterference({
           onClick={start}
           title="Exact pairwise check at positions along the motion"
         >
-          {state.kind === 'idle' ? 'Check motion' : 'Check motion again'}
+          {state.kind === 'idle' ? 'Sweep' : 'Sweep again'}
         </button>
       </div>
       {stale ? (
