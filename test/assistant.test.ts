@@ -16,6 +16,7 @@ import {
   testAssistantConnection,
   timeoutFor
 } from '../apps/web/worker/assistant';
+import { observeAssistantResponse } from '../apps/web/worker/assistantStreamDiagnostics';
 import { parseAssistantProposalRequest } from '../apps/web/worker/validation';
 import {
   INVALID_STRUCTURED_OUTPUT_MESSAGE,
@@ -1645,7 +1646,9 @@ describe('assistant integration', () => {
     expect(response.status).toBe(200);
     const fallbackStream = await response.text();
     expect(fallbackStream).toContain('response.output_text.done');
-    expect(fallbackStream).toContain('response.done');
+    // The Worker's rollout gate ends every successful stream with its own
+    // canonical completion in place of the provider's terminal event.
+    expect(fallbackStream).toContain('response.completed');
     expect(fallbackStream).toContain('gen_sol_fallback_123');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [strictUrl, strictInit] = fetchMock.mock.calls[0]!;
@@ -1856,16 +1859,32 @@ describe('assistant integration', () => {
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
 
+    // The Worker's rollout gate refuses this unparseable frame before the
+    // observer would see it, so the observer's own bound is tested directly.
+    await new Response(
+      observeAssistantResponse(new Response(oversizedFrame).body!, {
+        requestId: 'req_framing',
+        provider: 'openrouter',
+        model: 'm'
+      })
+    ).text();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      'AI Responses stream failed:',
+      expect.objectContaining({ classification: 'protocol_error' })
+    );
+    consoleError.mockClear();
+
     const response = await streamAssistantProposal(input, {
       AI_PROVIDER: 'openrouter',
       AI_MODEL: 'openai/gpt-6-luna',
       OPENROUTER_API_KEY: 'secret-key'
     });
-    await response.text();
-
+    const forwarded = await response.text();
+    expect(forwarded).not.toContain('xxxx');
     expect(consoleError).toHaveBeenCalledWith(
       'AI Responses stream failed:',
-      expect.objectContaining({ classification: 'protocol_error' })
+      expect.objectContaining({ classification: 'stream_error' })
     );
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
       oversizedFrame.slice(-1_000)

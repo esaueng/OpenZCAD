@@ -226,6 +226,39 @@ describe('warm-up', () => {
     expect(adapter.warmHistory).toHaveBeenCalledTimes(2);
   });
 
+  it('captures again once a warm-up compacts a kernel that was too worn to store', async () => {
+    const { persistence, adapter, deps } = harness();
+    // Worn: the adapter refuses the capture until the arena is compacted.
+    adapter.captureHistorySession.mockResolvedValueOnce(null);
+    persistence.schedule(adapter, document, 'key');
+    persistence.scheduleWarmup(adapter, document, []);
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_IDLE_MS);
+    expect(adapter.captureHistorySession).toHaveBeenCalledTimes(1);
+    expect(deps.save).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(
+      KERNEL_SESSION_WARMUP_IDLE_MS - KERNEL_SESSION_IDLE_MS
+    );
+    expect(adapter.warmHistory).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_IDLE_MS);
+    expect(adapter.captureHistorySession).toHaveBeenCalledTimes(2);
+    expect(deps.save).toHaveBeenCalledWith(
+      expect.objectContaining({ contentKey: 'key' })
+    );
+  });
+
+  it('does not re-capture a closed project after its warm-up', async () => {
+    const { persistence, adapter, deps } = harness();
+    adapter.captureHistorySession.mockResolvedValueOnce(null);
+    persistence.schedule(adapter, document, 'key');
+    persistence.scheduleWarmup(adapter, document, []);
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_IDLE_MS);
+    persistence.forget();
+    persistence.scheduleWarmup(adapter, document, []);
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_WARMUP_IDLE_MS * 3);
+    expect(adapter.captureHistorySession).toHaveBeenCalledTimes(1);
+    expect(deps.save).not.toHaveBeenCalled();
+  });
+
   it('warms only the latest live document, and drops a draft target', async () => {
     const { persistence, adapter, work } = harness();
     const later = { ...document, version: document.version + 1 };

@@ -455,12 +455,16 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // extrude): the extrusion stops that far short of its face (or, negative,
 // passes it). An older client would build to the face itself, so it must
 // refuse. Builds on v112 (#1785, M02 path patterns).
+// v114 adds AS03 exploded drawing views (`exploded` on a drawing view): the
+// view draws each assembly part at its solved pose plus its stored exploded
+// offset. An older client would draw it as modelled, so it must refuse the
+// document. Builds on v113.
 // v117 adds M01 hole tables on drawing sheets (a `hole-table` drawing
 // annotation): a table of one view's bores, read from the model each time
 // the sheet is drawn. An older client cannot draw it and would refuse the
 // annotation's kind on its next save, so it must refuse. Builds on v116
-// (v113 and v114 are claimed by #1786 and #1792, v115 and v116 by the M02
-// mirror and total-length pattern PRs #1796 and #1797).
+// (v115 and v116 are claimed by the M02 mirror and total-length pattern
+// PRs #1796 and #1797).
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 117 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;

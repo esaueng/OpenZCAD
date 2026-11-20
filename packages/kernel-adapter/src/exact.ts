@@ -355,6 +355,7 @@ import {
   MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES,
   MAX_HISTORY_REPLAY_WORK,
   cloneBuildState,
+  historyArenaWear,
   featureAwaitsEnvironment,
   historyCheckpointIndices,
   historyFeatureDigest,
@@ -364,6 +365,7 @@ import {
   measurementProvenanceKey,
   tailCheckpointIndices,
   withTerminalResultCheckpoint,
+  type HistoryArenaRetentionLimits,
   type HistoryCheckpointEntry,
   type MeasuredBodyCacheEntry,
   type PreviewDisplay,
@@ -811,11 +813,15 @@ export interface ExactKernelAdapter {
   captureHistorySession?(
     document: ProjectDocument
   ): Promise<PersistedHistorySession | null>;
-  /** Whether a restored session still awaits {@link warmHistory}. */
+  /**
+   * Whether the history kernel awaits {@link warmHistory}: a restored
+   * session's sparse checkpoint table, or an arena worn by retired slots.
+   */
   needsHistoryWarmup?(projectId: ProjectDocument['projectId']): boolean;
   /**
-   * Idle: rebuilds a restored session's checkpoint table in a second kernel
-   * and swaps it in once complete; cancellation keeps the restored kernel.
+   * Idle: rebuilds a restored session's checkpoint table, or a worn arena,
+   * in a second kernel and swaps it in once complete; cancellation keeps the
+   * current kernel.
    */
   warmHistory?(
     document: ProjectDocument,
@@ -1206,6 +1212,11 @@ export interface ExactKernelAdapterOptions {
   /** Admission budget for accounted checkpoint topology bytes, not total RSS. */
   historyCheckpointEstimatedBytes?: number;
   /**
+   * Overrides the retired-slot thresholds of {@link historyArenaWear}. Tests
+   * wear an arena out in a few edits; nothing in the app sets it.
+   */
+  historyArenaRetention?: HistoryArenaRetentionLimits;
+  /**
    * Overrides {@link MAX_MEASURED_SHAPE_CACHE_BYTES}. Tests pin the byte
    * budget without building a document large enough to exceed the real one;
    * nothing in the app sets it.
@@ -1577,6 +1588,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private historyScopeKey: string | null = null;
   private historyProjectId: ProjectDocument['projectId'] | null = null;
   private historyReplayWork = 0;
+  /**
+   * How worn the history kernel's arena was at its last checkpoint
+   * admission ({@link historyArenaWear}); read from the stats that admission
+   * already takes, so tracking it costs no kernel call.
+   */
+  private historyArenaWear: ReturnType<typeof historyArenaWear> = 'fresh';
   private readonly primitiveBuildCache = new PrimitiveBuildCache();
 
   /**
@@ -1875,6 +1892,23 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
   }
 
+  /**
+   * Re-reads the history kernel's arena wear. Checkpoint admission keeps it
+   * current while features replay; a restore that replays nothing (an undo
+   * of a large terminal feature, an export's own copies, temporary
+   * measurement checkpoints) retires slots without admitting a checkpoint,
+   * so those paths call this instead.
+   */
+  private refreshArenaWear(kernel: RemusKernel | null = this.historyKernel) {
+    if (!kernel || kernel !== this.historyKernel) return;
+    const memory = checkpointMemoryStats(kernel);
+    if (memory)
+      this.historyArenaWear = historyArenaWear(
+        memory,
+        this.options.historyArenaRetention
+      );
+  }
+
   private invalidateHistoryCache(): void {
     this.sparseRestoredHistory = false;
     this.unvalidatedSeed = false;
@@ -1888,6 +1922,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.historyScopeKey = null;
     this.historyProjectId = null;
     this.historyReplayWork = 0;
+    this.historyArenaWear = 'fresh';
     this.primitiveBuildCache.clear();
     this.measuredShapeCache.clear();
     this.measuredShapeCacheBytes = 0;
@@ -2126,7 +2161,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     strictVerdicts: StrictUnionVerdicts;
     /** The replay's kernel reads, for the measurement pass of this sync. */
     readMemo: SyncReadMemo;
-    recycleReason?: 'replay-budget';
+    recycleReason?: RebuildCacheEvent['recycleReason'];
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
     /** A feature this sync rebuilt waited on a font or source; see below. */
     transient: boolean;
@@ -2188,9 +2223,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           hasText
         )
     );
-    const recycled =
-      this.historyKernel !== null &&
-      this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK;
+    const recycled: RebuildCacheEvent['recycleReason'] =
+      this.historyKernel === null
+        ? undefined
+        : this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK
+          ? 'replay-budget'
+          : this.historyArenaWear === 'exhausted'
+            ? 'arena-retention'
+            : undefined;
     if (recycled) this.invalidateHistoryCache();
     // An offset's checked source must survive Apply too. Replacing its sparse
     // checkpoint with the result makes the next preview replay unchanged
@@ -2533,6 +2573,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? idleLineageViewBytes(updated.idle, viewDigests)
             : 0;
           const memory = checkpointMemoryStats(kernel);
+          if (memory)
+            this.historyArenaWear = historyArenaWear(
+              memory,
+              this.options.historyArenaRetention
+            );
           const budget =
             this.options.historyCheckpointEstimatedBytes ??
             MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES;
@@ -2917,6 +2962,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // A checkpoint is cheap to create but makes the next mutation copy the
       // arena. Admit against that projected cost, including retired slots.
       let memory = checkpointMemoryStats(activeKernel);
+      if (memory)
+        this.historyArenaWear = historyArenaWear(
+          memory,
+          this.options.historyArenaRetention
+        );
       let retainedLineageBytes = this.historyLineageMetadataBytes;
       const probeKey = probeKeys[index]!;
       const axialCertificate = axialExtent.snapshot();
@@ -3190,7 +3240,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       reusedPreparedFeatures,
       reusedAxialFeatures,
       ...(cacheResetReason ? { cacheResetReason } : {}),
-      ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
+      ...(recycled ? { recycleReason: recycled } : {}),
       strictVerdicts,
       readMemo,
       transient: transientFrom >= startIndex
@@ -3935,6 +3985,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const live = this.liveSessionFor(document);
       const kernel = this.historyKernel;
       const support = kernelSnapshotSupport();
+      // Idle: read the arena as it is now, whatever retired slots since the
+      // last checkpoint admission.
+      this.refreshArenaWear(kernel);
       // A kernel past half its replay budget is not persisted: a restore
       // would carry that arena into every later session and recycle (a full
       // replay) a few edits after reopening. Its reopen replays into a fresh
@@ -3943,7 +3996,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         !live ||
         !kernel ||
         !support ||
-        this.historyReplayWork * 2 >= MAX_HISTORY_REPLAY_WORK
+        this.historyReplayWork * 2 >= MAX_HISTORY_REPLAY_WORK ||
+        this.historyArenaWear !== 'fresh'
       )
         return null;
       try {
@@ -4007,14 +4061,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   needsHistoryWarmup(projectId: ProjectDocument['projectId']): boolean {
-    return this.sparseRestoredHistory && this.historyProjectId === projectId;
+    return (
+      (this.sparseRestoredHistory || this.historyArenaWear !== 'fresh') &&
+      this.historyProjectId === projectId
+    );
   }
 
   /**
    * Idle work after a persisted session was restored: replays `document` in
    * a second kernel with the ordinary checkpoint schedule, and swaps it in
    * only once complete, so a later edit of any feature restores a nearby
-   * checkpoint instead of replaying the whole history. Cancellation (any new
+   * checkpoint instead of replaying the whole history. The same rebuild
+   * compacts a worn arena ({@link historyArenaWear}): the fresh kernel holds
+   * no retired slots, and the worn one is freed. Cancellation (any new
    * work) keeps the restored kernel and its checkpoint as they were; only
    * the per-body measurements, which a later sync takes again, are dropped.
    * Resolves whether the checkpoint table was rebuilt.
@@ -4041,7 +4100,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         owners: new Map(this.historyCheckpointOwners),
         scopeKey: this.historyScopeKey,
         projectId: this.historyProjectId,
-        replayWork: this.historyReplayWork
+        replayWork: this.historyReplayWork,
+        arenaWear: this.historyArenaWear
       };
       // Detached, so the warm build starts in a fresh kernel and nothing it
       // invalidates on the way frees the restored one.
@@ -4090,6 +4150,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         this.historyScopeKey = restored.scopeKey;
         this.historyProjectId = restored.projectId;
         this.historyReplayWork = restored.replayWork;
+        this.historyArenaWear = restored.arenaWear;
         // Still exactly what the last sync published: a retry may warm it,
         // and a capture may persist it.
         this.liveSession = live;
@@ -5137,6 +5198,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       const sessionRestore = this.sessionRestoreOutcome;
       this.sessionRestoreOutcome = null;
+      // Nothing replayed, so no checkpoint admission re-read the arena,
+      // though the restore (and any temporary measurement checkpoint) may
+      // have retired slots: read it here.
+      if (replayed === 0) this.refreshArenaWear(kernel);
       this.options.onRebuildCacheEvent?.({
         ...(sessionRestore ? { sessionRestore } : {}),
         kind:
@@ -5300,6 +5365,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.primitiveBuildCache.restoredThrough(
             this.historyCheckpoints[last]!.featureIndex
           );
+          // The operation's own copies (unit-scaled export solids) are
+          // retired by this restore, which replays nothing.
+          this.refreshArenaWear(kernel);
         } catch {
           this.invalidateHistoryCache();
         }
@@ -6805,6 +6873,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.primitiveBuildCache.restoredThrough(
             this.historyCheckpoints[last]!.featureIndex
           );
+          // The operation's own copies (unit-scaled export solids) are
+          // retired by this restore, which replays nothing.
+          this.refreshArenaWear(kernel);
         } catch {
           this.invalidateHistoryCache();
         }

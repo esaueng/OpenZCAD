@@ -122,6 +122,11 @@ import {
 type SourceBody = BodyRepresentation | GeometryBodyRepresentation;
 export type AnnotationBodies = Readonly<Record<string, SourceBody | undefined>>;
 
+/** AS03 (v114): the key an exploded view's placed copy of a body is under. */
+export function explodedBodyKey(viewId: DrawingViewId, bodyId: string): string {
+  return `${viewId}#exploded:${bodyId}`;
+}
+
 /**
  * Where a section view's cut bodies sit in an {@link AnnotationBodies} map
  * (D03): beside the model's own bodies, under a key no body id can take, so
@@ -188,10 +193,16 @@ function boreCallout(
 
 export function annotationBody(
   bodies: AnnotationBodies,
-  view: Pick<DrawingView, 'viewId' | 'section'> | undefined,
+  view: Pick<DrawingView, 'viewId' | 'section' | 'exploded'> | undefined,
   bodyId: string
 ): SourceBody | undefined {
-  return bodies[view?.section ? sectionBodyKey(view.viewId, bodyId) : bodyId];
+  if (view?.section) return bodies[sectionBodyKey(view.viewId, bodyId)];
+  // AS03 (v114): an exploded view measures its bodies where it draws them.
+  if (view?.exploded) {
+    const placed = bodies[explodedBodyKey(view.viewId, bodyId)];
+    if (placed) return placed;
+  }
+  return bodies[bodyId];
 }
 
 export type AnnotationBreak =

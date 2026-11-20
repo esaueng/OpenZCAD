@@ -180,12 +180,15 @@ function consumeEvent(state: DiagnosticState, event: unknown): void {
     replaceOutput(state, value.text);
     return;
   }
+  // From here the order mirrors the browser's `readAssistantEvent`: an event
+  // without text of its own falls through to the response snapshot it may
+  // carry, whatever its type, and the last text seen wins.
   if (value.type === 'response.content_part.done') {
     const text = outputTextFromPart(value.part);
     if (text !== undefined) {
       replaceOutput(state, text);
+      return;
     }
-    return;
   }
   if (
     value.type === 'response.output_item.done' &&
@@ -196,9 +199,15 @@ function consumeEvent(state: DiagnosticState, event: unknown): void {
     const text = outputTextFromItem(value.item);
     if (text !== undefined) {
       replaceOutput(state, text);
+      return;
     }
-    return;
   }
+  const response =
+    value.response &&
+    typeof value.response === 'object' &&
+    !Array.isArray(value.response)
+      ? (value.response as Record<string, unknown>)
+      : undefined;
   if (
     value.type === 'response.completed' ||
     value.type === 'response.done' ||
@@ -208,20 +217,14 @@ function consumeEvent(state: DiagnosticState, event: unknown): void {
     value.type === 'error'
   ) {
     state.terminalEvent = value.type;
-    const response =
-      value.response &&
-      typeof value.response === 'object' &&
-      !Array.isArray(value.response)
-        ? (value.response as Record<string, unknown>)
-        : undefined;
-    const responseText = outputTextFromResponse(response);
-    if (responseText !== undefined) {
-      replaceOutput(state, responseText);
-    }
     state.terminalStatus =
       typeof response?.status === 'string'
         ? safeLabel(response.status)
         : undefined;
+  }
+  const responseText = outputTextFromResponse(response);
+  if (responseText !== undefined) {
+    replaceOutput(state, responseText);
   }
 }
 
@@ -454,4 +457,195 @@ export async function validateAssistantResponse(
           ? { upstreamResponseId: state.upstreamResponseId }
           : {})
       };
+}
+
+/**
+ * Event type of a rejection the Worker itself writes into the stream. The
+ * `openzcad.` namespace belongs to the Worker: the gate replaces any provider
+ * event that claims it, so a provider cannot put its own text behind it.
+ */
+export const ASSISTANT_REJECTION_EVENT_TYPE = 'openzcad.reply_rejected';
+export const ASSISTANT_REJECTION_EVENT_PREFIX = 'openzcad.';
+
+export interface AssistantReplyRejection {
+  code: 'AI_OPERATION_DISABLED';
+  message: string;
+}
+
+/**
+ * Generous enough for one event that repeats the whole capped output (a
+ * `response.completed` snapshot), with room for JSON escaping. The
+ * diagnostics observer's smaller framing limit only gives up on logging;
+ * this one decides what the client receives, so it fails closed instead.
+ */
+const MAX_GATE_FRAMING_BUFFER_BYTES = 2 * MAX_CAPTURED_OUTPUT_BYTES + 64 * 1024;
+
+function sseBlock(event: unknown): string {
+  return `data: ${JSON.stringify(event)}\n\n`;
+}
+
+/** Unverifiable output reads as a provider stream failure, never success. */
+const UNVERIFIED_STREAM_EVENT = sseBlock({
+  type: 'error',
+  message: 'The assistant reply could not be verified.'
+});
+
+/**
+ * Holds back the provider's terminal success until the assembled reply has
+ * been checked, then ends the stream with exactly the text it checked.
+ *
+ * The provider stream is otherwise forwarded event by event, so the client
+ * still renders live deltas. The client parses the last full text an event
+ * carries, so the gate replaces the provider's success event with one whose
+ * `output_text` is the checked text and stops there: nothing the provider
+ * sends after it, and no earlier event's differing snapshot, can change what
+ * the client parses. A rejected reply ends with a Worker rejection event the
+ * client shows by name instead of building a proposal.
+ */
+export function gateAssistantResponse(
+  source: ReadableStream<Uint8Array>,
+  check: (replyText: string) => AssistantReplyRejection | undefined,
+  context: Pick<DiagnosticContext, 'requestId'>
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  const decoder = new TextDecoder();
+  const state = createDiagnosticState();
+  let buffer = '';
+  let finished = false;
+
+  const finish = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    final: string
+  ) => {
+    finished = true;
+    controller.enqueue(encoder.encode(final));
+    controller.close();
+    reader.cancel().catch(() => undefined);
+  };
+
+  const terminalSuccess = (event: Record<string, unknown>): boolean => {
+    if (event.type === 'response.completed') return true;
+    if (event.type !== 'response.done') return false;
+    const response = event.response;
+    return (
+      !!response &&
+      typeof response === 'object' &&
+      !Array.isArray(response) &&
+      (response as Record<string, unknown>).status === 'completed'
+    );
+  };
+
+  /** What to forward for one block, or a final block that ends the stream. */
+  const handleBlock = (
+    block: string
+  ): { forward: string } | { final: string } => {
+    // Every forwarded event is re-serialized from what the gate parsed, so
+    // the browser can never read an event the gate did not (a byte-order
+    // mark, a comment line or odd framing the two parsers treat apart).
+    if (block.length > MAX_GATE_FRAMING_BUFFER_BYTES) {
+      return { final: UNVERIFIED_STREAM_EVENT };
+    }
+    const data = dataFromBlock(block);
+    if (!data || data === '[DONE]') return { forward: '' };
+    let event: unknown;
+    try {
+      event = JSON.parse(data) as unknown;
+    } catch {
+      return { final: UNVERIFIED_STREAM_EVENT };
+    }
+    if (!event || typeof event !== 'object' || Array.isArray(event)) {
+      return { forward: sseBlock(event) };
+    }
+    const value = event as Record<string, unknown>;
+    if (
+      typeof value.type === 'string' &&
+      value.type.startsWith(ASSISTANT_REJECTION_EVENT_PREFIX)
+    ) {
+      return { final: UNVERIFIED_STREAM_EVENT };
+    }
+    consumeEvent(state, value);
+    if (!terminalSuccess(value)) return { forward: sseBlock(value) };
+    if (!state.captureComplete) return { final: UNVERIFIED_STREAM_EVENT };
+    const rejection = check(state.output);
+    if (rejection) {
+      console.warn('AI reply rejected by the Worker:', {
+        requestId: context.requestId,
+        upstreamResponseId: state.upstreamResponseId ?? null,
+        code: rejection.code
+      });
+      return {
+        final: sseBlock({
+          type: ASSISTANT_REJECTION_EVENT_TYPE,
+          code: rejection.code,
+          message: rejection.message
+        })
+      };
+    }
+    return {
+      final: sseBlock({
+        type: 'response.completed',
+        response: {
+          ...(state.upstreamResponseId ? { id: state.upstreamResponseId } : {}),
+          status: 'completed',
+          output_text: state.output
+        }
+      })
+    };
+  };
+
+  const drain = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    blocks: string[]
+  ) => {
+    let forward = '';
+    for (const block of blocks) {
+      const result = handleBlock(block);
+      if ('final' in result) {
+        if (forward) controller.enqueue(encoder.encode(forward));
+        finish(controller, result.final);
+        return;
+      }
+      forward += result.forward;
+    }
+    if (forward) controller.enqueue(encoder.encode(forward));
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      while (!finished) {
+        let result: ReadableStreamReadResult<Uint8Array>;
+        try {
+          result = await reader.read();
+        } catch (error) {
+          controller.error(error);
+          return;
+        }
+        if (result.done) {
+          buffer += decoder.decode();
+          if (buffer.trim()) drain(controller, [buffer]);
+          if (!finished) {
+            finished = true;
+            controller.close();
+          }
+          return;
+        }
+        buffer += decoder.decode(result.value, { stream: true });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() ?? '';
+        // UTF-16 length never exceeds the UTF-8 size, so this bound is cheap
+        // and no stricter than the byte limit it stands in for.
+        if (buffer.length > MAX_GATE_FRAMING_BUFFER_BYTES) {
+          finish(controller, UNVERIFIED_STREAM_EVENT);
+          return;
+        }
+        if (blocks.length > 0) {
+          drain(controller, blocks);
+          return;
+        }
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    }
+  });
 }
