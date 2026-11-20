@@ -5,8 +5,7 @@
  * type. This names each object after its body and colours it twice over:
  *
  * - one core `<basematerials>` group whose `<base>` entries are the
- *   distinct display colours, so a reader of the core format alone lists
- *   them; and
+ *   distinct display colours, listing them for any reader; and
  * - one Materials extension `<m:colorgroup>` per distinct colour, holding
  *   that one `<m:color>`, which each object selects with `pid` and
  *   `pindex="0"`.
@@ -17,7 +16,9 @@
  * reads both resources by `pid` and `pindex`, so it resolves the same
  * colours. The extension is declared under the literal prefix `m`, which
  * both importers match by name, and is not required: a reader without it
- * still opens the geometry. PrusaSlicer reads no 3MF colour at all.
+ * still opens the geometry. An object names one property group, so a
+ * reader of the core format alone binds no colour to it: the trade made
+ * for OrcaSlicer. PrusaSlicer reads no 3MF colour at all.
  * Recorded in docs/exchange-loss-contract.md.
  */
 

@@ -117,6 +117,20 @@ export function threeMfObjectLabels(bytes: Uint8Array) {
 }
 
 /**
+ * Each object's colour as a reader of the core format alone resolves it:
+ * only `basematerials` groups. Since objects select the Materials
+ * extension's colour groups (for OrcaSlicer), this reads none.
+ */
+export function threeMfCoreObjectColors(bytes: Uint8Array) {
+  const xml = exportedModel(bytes);
+  const { base } = threeMfColorGroups(xml);
+  return [...xml.matchAll(/<object\b[^>]*>/g)].map(([tag]) => {
+    const { pid, pindex } = objectProperty(tag);
+    return (pid === null ? undefined : base.get(pid)?.[pindex]) ?? null;
+  });
+}
+
+/**
  * The filament each object starts on, as OrcaSlicer's 3MF importer assigns
  * it (`bbs_3mf.cpp`, main 2026-11-20): it reads only `m:colorgroup`, keeps
  * the LAST `m:color` of each group, numbers distinct colours 1, 2… in

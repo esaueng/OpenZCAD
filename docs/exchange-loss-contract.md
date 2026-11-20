@@ -84,12 +84,18 @@ exact face it applies to. Insert project always travels as AP214.
 
 3MF names and colours: each `<object>` carries its body's `name`. Its colour
 is written twice. One core `<basematerials>` group holds a `<base>` per
-distinct display colour, for readers of the core format alone. The Materials
+distinct display colour, listing the model's colours. The Materials
 extension (`xmlns:m`, declared but not required, so any 3MF reader still
 opens the file) holds one `<m:colorgroup>` per distinct colour with that one
 `<m:color>`, and each object selects its colour's group with `pid` and
 `pindex="0"`. One group per colour is what OrcaSlicer needs: it keeps a
-single colour per `m:colorgroup` and matches it by `pid` alone. What the
+single colour per `m:colorgroup` and matches it by `pid` alone. An object names only
+one property group, so a reader of the core format alone finds the colours
+in `basematerials` but no object bound to them: it opens the geometry
+uncoloured. That is the trade for OrcaSlicer; of the slicers below, the two
+that read 3MF colours at all both read the colour groups.
+
+What the
 common slicers do with it, read from their public 3MF importers:
 
 | Slicer (source read)                                         | Parts                                                                                                                          | Colours                                                                                                                                                                                                                                  |

@@ -39,6 +39,7 @@ import {
 import {
   bambuStudioFilaments,
   orcaSlicerFilaments,
+  threeMfCoreObjectColors,
   threeMfObjectLabels
 } from './support/three-mf-export';
 
@@ -315,6 +316,9 @@ describe(
         // filaments, by the rules their importers follow.
         expect(orcaSlicerFilaments(bytes)).toEqual([1, 2]);
         expect(bambuStudioFilaments(bytes)).toEqual([1, 2]);
+        // The trade for that: a core-only reader binds no colour to an
+        // object (docs/exchange-loss-contract.md).
+        expect(threeMfCoreObjectColors(bytes)).toEqual([null, null]);
         // Labelling leaves the geometry, the unit and the placements alone.
         const measure = await reimportSolids('3mf', bytes);
         expect(measure.fileObjects).toBe(2);
