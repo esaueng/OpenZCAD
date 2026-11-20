@@ -1,5 +1,6 @@
 import {
   act,
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -288,6 +289,122 @@ describe('local whole-part fillets', () => {
     expect(
       await screen.findByText(/Unsupported corner blend/)
     ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Apply$/ })).toBeNull();
+    expect(onApply).not.toHaveBeenCalled();
+  });
+});
+
+describe('local selected-face holes (F03)', () => {
+  function holeDocument() {
+    const document = allEdgeDocument();
+    const bodyId = document.bodyOrder[0]!;
+    const body = document.derived.bodyRepresentations[bodyId]!;
+    body.topology!.faces = [
+      {
+        topologyId: 'face:12',
+        hash: 12,
+        reference: {
+          kind: 'face',
+          producingFeatureId: document.featureOrder[0]!,
+          lineageName: 'primitive.box.face.z-max',
+          currentHash: 12,
+          witnessVersion: 1,
+          witness: {
+            surfaceType: 'plane',
+            perimeter: 140,
+            centroid: [20, 15, 20],
+            analytic: { kind: 'plane', normal: [0, 0, 1], offset: 20 },
+            closure: { u: 'open', v: 'open' }
+          }
+        },
+        triangleStart: 0,
+        triangleCount: 2,
+        geometry: {
+          surfaceType: 'plane',
+          area: 1200,
+          center: { x: 20, y: 15, z: 20 },
+          centroid: { x: 20, y: 15, z: 20 },
+          normal: { x: 0, y: 0, z: 1 }
+        }
+      }
+    ];
+    return {
+      document,
+      selection: {
+        bodyIds: [],
+        featureIds: [],
+        topologies: [
+          { bodyId, kind: 'face' as const, topologyId: 'face:12', hash: 12 }
+        ]
+      }
+    };
+  }
+
+  it('previews a typed hole in the selected face without a provider, then applies it', async () => {
+    const { document, selection } = holeDocument();
+    const onPreview = vi
+      .fn<ComponentProps<typeof AssistantPanel>['onPreview']>()
+      .mockResolvedValue({ ok: true });
+    const onApply = vi.fn().mockResolvedValue(true);
+    const { user } = await renderPanel({
+      document,
+      selection,
+      onPreview,
+      onApply,
+      request: { id: 3, text: 'Drill a 5 mm hole 8 mm deep' }
+    });
+    const apply = await screen.findByRole('button', { name: /^Apply$/ });
+    const proposal = onPreview.mock.calls.find(([value]) => value != null)?.[0];
+    expect(proposal?.operations).toEqual([
+      expect.objectContaining({
+        kind: 'add_hole',
+        targetBodyId: document.bodyOrder[0],
+        faceHash: 12,
+        diameter: 5,
+        depthMode: 'blind',
+        depth: 8,
+        position: { u: 0, v: 0 }
+      })
+    ]);
+    await user.click(apply);
+    expect(onApply).toHaveBeenCalledWith(proposal);
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.some(
+          ([url]) =>
+            typeof url === 'string' && url.includes('/api/assistant/proposals')
+        )
+    ).toBe(false);
+  });
+
+  it('says why when no flat face is selected, and keeps a refused preview out of Apply', async () => {
+    const { document, selection } = holeDocument();
+    const onApply = vi.fn();
+    const onPreview = vi
+      .fn()
+      .mockResolvedValue({ ok: false, reason: 'The hole misses the body.' });
+    await renderPanel({
+      document,
+      selection: { ...selection, topologies: [] },
+      onApply,
+      onPreview,
+      request: { id: 4, text: 'Drill a hole' }
+    });
+    expect(
+      (await screen.findAllByText(/Select the one flat face to drill/)).length
+    ).toBeGreaterThan(0);
+    cleanup();
+    await renderPanel({
+      document,
+      selection,
+      onApply,
+      onPreview,
+      request: { id: 5, text: 'Drill a hole' }
+    });
+    expect(
+      (await screen.findAllByText(/The hole misses the body/)).length
+    ).toBeGreaterThan(0);
     expect(screen.queryByRole('button', { name: /^Apply$/ })).toBeNull();
     expect(onApply).not.toHaveBeenCalled();
   });
