@@ -70,7 +70,12 @@ const CHECK = process.argv.includes('--check');
 // and App wiring, and the rib and wrap tools follow with a few KB each. The
 // remaining large entry code is the in-place tool system, which App reads
 // synchronously. The tripwire stays a tripwire.
-const DEFAULT_RAW_BUDGET = (1024 + 48) * 1024;
+//
+// 2026-11-19: raised by 24 KiB at the maintainer's direction. Main stood at
+// 1,097,106 bytes, 622 under the edge, after the multi-face offset slices
+// already moved their set ordering, reproduction recording and refusal
+// wording into lazy modules to fit. The tripwire stays a tripwire.
+const DEFAULT_RAW_BUDGET = (1024 + 72) * 1024;
 const APPROVED_LAZY_ASSETS = [
   {
     pattern: /^assets\/three-.*\.js$/,
