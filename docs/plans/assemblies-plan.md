@@ -251,6 +251,34 @@ contact; clear pairs are counted. Picking a pair picks both parts and shows
 its witness. A result is tied to the model version and poses it checked and
 says "Out of date" once either changes.
 
+### Interference through motion (AS04, no schema change)
+
+Under the static check, "Through motion" runs the same exact query at
+positions along one motion: a joint's Animate sweep (its limits, or a full
+turn for an unlimited angle) or a motion study's timeline, couplings
+followed as in playback. It is read-only and stores nothing.
+
+- **Pairs.** Only pairs whose relative pose changes along the motion are
+  checked; pairs that keep their places are counted and left to the static
+  check. More than 4000 pair checks in one sweep is refused by name.
+- **Positions.** 37 evenly spaced positions along a joint's sweep (36
+  steps), or 8 per second of a study (24 to 120 steps), ends included, all
+  in one geometry-worker job on one build: each position poses copies of
+  the parts it checks (`assemblyInterferenceSweep` in the adapter). Then,
+  four times, each gap across which a pair turns between overlap and no
+  overlap is halved (an unknown position decides nothing), so each start
+  and end is found to within 1/16 of a step.
+- **Sampled, and said so.** A pair reads as overlapping from its first to
+  its last overlapping position, with its largest measured overlap, the
+  position it is at and its witnesses; an undecided position is listed and
+  never read as clear; a pair with no overlap is "clear at every position
+  checked", never plain clear. The result states the positions, the step
+  and the resolution, and that an overlap shorter than one step can fall
+  between positions.
+- **Show.** A pair's "Show at" poses the assembly at its worst position as
+  a transient scrub (runtime overrides), never saved. A result says "Out of
+  date" once the model, the parts or the motion change.
+
 M09's first slice is display-only and separate from this: with a section cut
 on, bodies whose display caps overlap inside the cut are drawn over in red,
 and the toolbox (or, where it is put away, the "Section view on" chip) names
@@ -307,9 +335,9 @@ not an exact clash check.
   after a body is reshaped is a follow-up (today the stored frame is kept).
 - Loops (AS09), couplings beyond gear pairs (a general ratio between any two
   joints with its own editor, screw couplings on one cylindrical joint) and
-  video export (AS08), interference swept through a joint's motion or a
-  motion study (the static pairwise check is AS04, above), and the STEP
-  hierarchy round-trip AS04 also names. The BOM and stored exploded offsets are AS03 (above); exploded
+  video export (AS08), and the STEP hierarchy round-trip AS04 also names.
+  Interference through motion is sampled (above); an exact swept-volume
+  check is not built. The BOM and stored exploded offsets are AS03 (above); exploded
   drawing views wait on D01/D02.
 - A coupling's ratio is fixed when the pair is placed: editing a gear's
   tooth count or moving a joint's frame afterwards does not update it. When
