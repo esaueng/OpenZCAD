@@ -369,6 +369,7 @@ import {
   projectionMatches,
   projectionSignature,
   restoreKernelSnapshot,
+  reuseStateDigest,
   snapshotKernel,
   PERSISTED_HISTORY_SESSION_FORMAT,
   type PersistedHistorySession
@@ -385,6 +386,15 @@ import {
   ownedMeshFaceOffsets
 } from './owned-mesh-output';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
+
+/** A session's reuse tables with their digest, or nothing to store. */
+function reuseTables(
+  cache: PrimitiveBuildCache
+): Pick<PersistedHistorySession, 'reuse' | 'reuseDigest'> {
+  const reuse = cache.exportState();
+  const reuseDigest = reuseStateDigest(reuse);
+  return reuseDigest === null ? {} : { reuse, reuseDigest };
+}
 import {
   booleanEvolutionProbeNeeded,
   isBooleanEvolutionProbeEligible
@@ -2394,6 +2404,24 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // The restored arena still holds what the captured kernel's replays
         // retired: its budget continues where that kernel's stopped.
         this.historyReplayWork = offered.replayWork;
+        // The capturing kernel's reuse tables name handles the snapshot
+        // kept; an entry no longer at its position and digest is dropped.
+        // Damaged tables (a digest mismatch, anything the import cannot
+        // read) are dropped whole: the edit then replays, the restore stands.
+        if (
+          offered.reuse &&
+          offered.reuseDigest === reuseStateDigest(offered.reuse)
+        ) {
+          try {
+            this.primitiveBuildCache.importState(
+              offered.reuse,
+              features,
+              offered.digests
+            );
+          } catch {
+            this.primitiveBuildCache.clear();
+          }
+        }
         kernel = restored;
         restored = null;
         seeded = offered;
@@ -3915,7 +3943,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           kernelBytes,
           kernelDigest: support.snapshotDigest(kernelBytes),
           projectionSignature: projectionSignature(live.derived),
-          replayWork: this.historyReplayWork
+          replayWork: this.historyReplayWork,
+          ...reuseTables(this.primitiveBuildCache)
         };
       } catch {
         // A refusal (`snapshot:poisoned`, `transient_state`, a limit) only
