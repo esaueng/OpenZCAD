@@ -18,6 +18,8 @@ export interface ValidatedFeatureCommitOptions {
     document: ProjectDocument,
     signal: AbortSignal
   ): Promise<ProjectDocument['derived']>;
+  /** Release the cancellable run's prepared worker after commit or abandonment. */
+  releaseCancellable?(signal: AbortSignal): void;
   /**
    * `derived` is the exact rebuild validation already produced for this
    * candidate; committing it alongside the command lets the caller render
@@ -501,6 +503,7 @@ export function useValidatedFeatureCommit(
       }
       return 'rejected';
     } finally {
+      if (input.signal) host.releaseCancellable?.(input.signal);
       lock.release();
       host.onBusy(false);
     }

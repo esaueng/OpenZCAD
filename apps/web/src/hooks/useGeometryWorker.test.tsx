@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createProjectDocument,
   addPrimitiveFeature,
+  importStepBody,
   booleanBodies
 } from '@openzcad/document-core';
-import { toBodyId, toUserId } from '@openzcad/shared';
+import { toArtifactId, toBodyId, toUserId } from '@openzcad/shared';
 import { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
@@ -43,6 +44,129 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it.each([
+    'commit',
+    'archive',
+    'abort',
+    'abandon',
+    'busy',
+    'transient',
+    'crash'
+  ] as const)(
+    'keeps the first STEP validation isolated through %s',
+    async (outcome) => {
+      installWorker();
+      const base = createProjectDocument('Import', toUserId('user'));
+      const manager = { document: base } as CommandManager;
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => manager,
+          onDerived: vi.fn(),
+          onError: vi.fn()
+        })
+      );
+      const original = FakeWorker.instances[0]!;
+      act(() => {
+        result.current.sync(base);
+        original.emit({
+          type: 'sync',
+          ok: true,
+          projectId: base.projectId,
+          version: base.version,
+          derived: base.derived
+        });
+        original.emit({
+          type: 'state',
+          phase: 'ready',
+          projectId: base.projectId,
+          version: base.version,
+          stale: false
+        });
+      });
+      const next = importStepBody(base, {
+        name: 'Part',
+        artifactId: 'local',
+        sourceName: 'part.step',
+        stepText: 'fixture'
+      }).document;
+      const committed = structuredClone(next);
+      if (outcome === 'archive') {
+        for (const node of Object.values(committed.nodes)) {
+          if (
+            node.kind === 'feature' &&
+            node.data.featureKind === 'imported-step'
+          )
+            node.data.artifactId = toArtifactId('archived');
+        }
+      }
+      const promote = outcome === 'commit' || outcome === 'archive';
+      const controller = new AbortController();
+      const validation = result.current.prepareFirstStepImport(
+        next,
+        controller.signal
+      )!;
+      const candidate = FakeWorker.instances[1]!;
+      if (outcome === 'abort') {
+        controller.abort();
+        await expect(validation).rejects.toMatchObject({ name: 'AbortError' });
+      } else {
+        const request = candidate.postMessage.mock.calls[0]![0] as {
+          requestId: string;
+        };
+        candidate.emit({
+          type: 'sync',
+          ok: true,
+          requestId: request.requestId,
+          projectId: next.projectId,
+          version: next.version,
+          transient: outcome === 'transient',
+          derived: next.derived
+        });
+        const derived = await validation;
+        // The diagnosis awaits a microtask even when no deployment check is needed.
+        // A commit in this same turn must not swap in a worker that just crashed.
+        if (outcome === 'crash') candidate.onerror?.(new ErrorEvent('error'));
+        if (outcome !== 'abandon') {
+          // A caller on the existing worker must remain able to finish.
+          const inFlight =
+            outcome === 'busy' ? result.current.syncOnce(base) : undefined;
+          act(() => {
+            manager.document = committed;
+            expect(
+              result.current.adoptValidatedResult(committed, derived)
+            ).toBe(false);
+            result.current.sync(committed, [], { persistSession: true });
+          });
+          const live = promote ? candidate : original;
+          expect(live.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+            type: 'sync',
+            persistSession: true,
+            document: { version: committed.version, nodes: committed.nodes }
+          });
+          if (inFlight) {
+            const tagged = original.postMessage.mock.calls
+              .map((call) => call[0] as { requestId?: string })
+              .find((req) => req.requestId)!;
+            act(() =>
+              original.emit({
+                type: 'sync',
+                ok: true,
+                requestId: tagged.requestId,
+                projectId: base.projectId,
+                version: base.version,
+                derived: base.derived
+              })
+            );
+            await inFlight;
+          }
+        }
+      }
+      result.current.releasePreparedImport(controller.signal);
+      expect(original.terminate).toHaveBeenCalledTimes(promote ? 1 : 0);
+      expect(candidate.terminate).toHaveBeenCalledTimes(promote ? 0 : 1);
+    }
+  );
+
   it('asks each worker to prepare the kernel once, and never when saving data', () => {
     installWorker();
     const { result } = renderHook(() =>

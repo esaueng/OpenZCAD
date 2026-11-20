@@ -6512,7 +6512,9 @@ export function App() {
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
     deriveCancellable: (document, signal) =>
+      geometry.prepareFirstStepImport(document, signal) ??
       rebuildInDisposableWorker(document, signal),
+    releaseCancellable: (signal) => geometry.releasePreparedImport(signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
