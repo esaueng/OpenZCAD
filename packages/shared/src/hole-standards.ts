@@ -16,7 +16,7 @@
  * minor diameter `D − 1.0825 P` and `D − P / 2`; a clearance hole clears the
  * nominal size, each fit wider than the one before), which the tests check.
  */
-import type { HoleStandard, HoleTapped, UnitSystem } from './index';
+import type { FeatureId, HoleStandard, HoleTapped, UnitSystem } from './index';
 import { millimetresPerUnit } from './index';
 
 /** A screw thread standard a hole may be sized by. */
@@ -351,15 +351,12 @@ export interface HoleCallout {
     cosmetic: boolean;
   };
   /**
-   * The plane of the face the hole was drilled into, as the hole last
-   * stored it (its face reference's witness): a point on it and its normal,
-   * whose sign is not meaningful. Which end of a bore is its entry, for a
-   * thread that stops short; absent for a hole stored without a reference.
+   * The face the hole was drilled into, by the name its stored reference
+   * gives it, so a reader can find where that face stands now (which end of
+   * a bore is its entry, for a thread that stops short). Absent for a hole
+   * stored without a reference.
    */
-  entryPlane?: {
-    point: { x: number; y: number; z: number };
-    normal: { x: number; y: number; z: number };
-  };
+  entryFace?: { producingFeatureId: FeatureId; lineageName: string };
 }
 
 /** A standard size's thread as a drawing names it: `M6×1`, `1/4-20 UNC`. */

@@ -10,7 +10,6 @@ import {
   holeStandardThread,
   holeThreadDesignation,
   millimetresPerUnit,
-  type FaceTopologyReferenceV5,
   type FeatureId,
   type HoleCallout,
   type ProjectDocument
@@ -57,7 +56,6 @@ export function holeCallout(
             };
           })()
         : undefined;
-    const entryPlane = storedEntryPlane(data.faceReference);
     return {
       count: data.points?.pointIds.length ?? 1,
       diameter,
@@ -65,34 +63,18 @@ export function holeCallout(
       style: data.style,
       ...(data.standard ? { standard: { ...data.standard } } : {}),
       ...(tapped ? { thread: tapped } : {}),
-      ...(entryPlane ? { entryPlane } : {})
+      ...(data.faceReference
+        ? {
+            entryFace: {
+              producingFeatureId: data.faceReference.producingFeatureId,
+              lineageName: data.faceReference.lineageName
+            }
+          }
+        : {})
     };
   } catch {
     return null;
   }
-}
-
-/** ADR-011: witnesses count in 1e-6 document units, directions 1000× finer. */
-const WITNESS_QUANTUM = 1e-6;
-
-/** The entry face's plane, from its stored witness, else undefined. */
-function storedEntryPlane(
-  reference: FaceTopologyReferenceV5 | undefined
-): HoleCallout['entryPlane'] {
-  const witness = reference?.witness;
-  if (witness?.analytic.kind !== 'plane' || !witness.centroid) return undefined;
-  const [nx, ny, nz] = witness.analytic.normal.map(
-    (value) => (value * WITNESS_QUANTUM) / 1000
-  ) as [number, number, number];
-  const [px, py, pz] = witness.centroid.map(
-    (value) => value * WITNESS_QUANTUM
-  ) as [number, number, number];
-  const size = Math.hypot(nx, ny, nz);
-  if (!(size > 0)) return undefined;
-  return {
-    point: { x: px, y: py, z: pz },
-    normal: { x: nx / size, y: ny / size, z: nz / size }
-  };
 }
 
 /**

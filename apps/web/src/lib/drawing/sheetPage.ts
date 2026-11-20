@@ -17,7 +17,10 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import type { ViewProjection } from './projectView';
-import { cosmeticThreadStrokes, type CosmeticThread } from './cosmeticThreads';
+import {
+  cosmeticThreadStrokes,
+  type ViewCosmeticThreads
+} from './cosmeticThreads';
 
 /**
  * One sheet laid out on paper: the single page model the on-screen preview,
@@ -445,7 +448,7 @@ export interface SheetPageContext {
    * M01: the cosmetic threads a view draws (see `cosmeticThreads.ts`), read
    * from the model the view was drawn from. Absent draws none.
    */
-  cosmeticThreads?: (view: DrawingView) => readonly CosmeticThread[];
+  cosmeticThreads?: (view: DrawingView) => ViewCosmeticThreads;
 }
 
 /** The ISO date (YYYY-MM-DD) of the project's latest revision, if any. */
@@ -740,12 +743,17 @@ export function composeSheetPage(
           strokes.push({ kind, points: piece.flat() });
       }
     // M01: cosmetic threads, drawn by convention over the view's lines.
-    const threads = context.cosmeticThreads?.(view) ?? [];
-    for (const stroke of cosmeticThreadStrokes(
-      threads,
-      drawingViewFrame(view),
-      toPage
-    )) {
+    const threads = context.cosmeticThreads?.(view);
+    for (const stroke of threads
+      ? cosmeticThreadStrokes(
+          threads.threads,
+          drawingViewFrame(view),
+          toPage,
+          threads.occluded
+        )
+      : []) {
+      // A view drawn without hidden lines draws no hidden thread either.
+      if (stroke.kind === 'hidden' && !view.hiddenLines) continue;
       const page: [number, number][] = [];
       for (let i = 0; i + 1 < stroke.points.length; i += 2)
         page.push([stroke.points[i]!, stroke.points[i + 1]!]);

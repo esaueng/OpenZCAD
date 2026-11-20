@@ -5,6 +5,7 @@ import {
   holeBody,
   listFeaturesInOrder,
   patternBody,
+  transformBody,
   type HoleInput
 } from '@openzcad/document-core';
 import {
@@ -153,12 +154,90 @@ describe('M01 cosmetic threads drawn in views', () => {
       Math.atan2(v - middle.y, u - middle.x);
     expect(angle(points[0]!)).toBeCloseTo(Math.PI / 2, 9);
     expect(angle(points.at(-1)!)).toBeCloseTo(0, 9);
+    // A through bore opens below too.
     const [below] = cosmeticThreadStrokes(
       threads,
       DRAWING_VIEW_FRAMES.bottom,
       identity
     );
-    expect(below?.kind).toBe('hidden');
+    expect(below?.kind).toBe('thin');
+    // A blind one does not: seen from below its floor is in the way.
+    const blind = await drilled({
+      depthMode: 'blind',
+      depth: 8,
+      tapped: { cosmetic: true }
+    });
+    const [under] = cosmeticThreadStrokes(
+      cosmeticThreads(
+        [blind.derived.bodyRepresentations[last(blind.document)]],
+        holeCalloutLookup(blind.document)
+      ),
+      DRAWING_VIEW_FRAMES.bottom,
+      identity
+    );
+    expect(under?.kind).toBe('hidden');
+  }, 180_000);
+
+  it('starts a thread stopped short in a through bore on its entry face as it stands (review)', async () => {
+    const { document, derived, top } = await drilled({
+      tapped: { cosmetic: true, length: 4 }
+    });
+    const [thread] = cosmeticThreads(
+      [derived.bodyRepresentations[last(document)]],
+      holeCalloutLookup(document)
+    );
+    expect(thread?.entry.z).toBeCloseTo(top, 9);
+    expect(thread?.axis.z).toBeCloseTo(-1, 12);
+    expect(thread?.length).toBeCloseTo(4, 12);
+  }, 180_000);
+
+  it('hides the arc under a body that covers the bore (review)', async () => {
+    const { document, derived } = await drilled({
+      tapped: { cosmetic: true }
+    });
+    // A 2 mm plate lifted clear over the drilled one.
+    const withCover = addPrimitiveFeature(document, {
+      name: 'Cover',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 40, depth: 2 }
+    });
+    const covered = transformBody(withCover, {
+      name: 'Lift',
+      targetBodyId: last(withCover),
+      translation: { x: 0, y: 0, z: 20 }
+    }).document;
+    const built = await adapter.syncDocument(covered);
+    const plate = last(document);
+    const cover = covered.bodyOrder.at(-1)!;
+    expect(cover).not.toBe(plate);
+    const { threads, occluded } = viewCosmeticThreads(
+      { bodyIds: [plate, cover] },
+      built.bodyRepresentations,
+      holeCalloutLookup(covered),
+      DRAWING_VIEW_FRAMES.top.direction
+    );
+    const [arc] = cosmeticThreadStrokes(
+      threads,
+      DRAWING_VIEW_FRAMES.top,
+      identity,
+      occluded
+    );
+    expect(arc?.kind).toBe('hidden');
+    // Without the cover in the view, the same arc is seen.
+    const alone = viewCosmeticThreads(
+      { bodyIds: [plate] },
+      derived.bodyRepresentations,
+      holeCalloutLookup(document),
+      DRAWING_VIEW_FRAMES.top.direction
+    );
+    expect(
+      cosmeticThreadStrokes(
+        alone.threads,
+        DRAWING_VIEW_FRAMES.top,
+        identity,
+        alone.occluded
+      )[0]?.kind
+    ).toBe('thin');
   }, 180_000);
 
   it('draws hidden major-diameter lines and a limit line across the bore', async () => {
@@ -270,7 +349,13 @@ describe('M01 cosmetic threads drawn in views', () => {
       {
         projectName: 'Plate',
         units: 'mm',
-        cosmeticThreads: (shown) => viewCosmeticThreads(shown, bodies, holes)
+        cosmeticThreads: (shown) =>
+          viewCosmeticThreads(
+            shown,
+            bodies,
+            holes,
+            DRAWING_VIEW_FRAMES[shown.orientation].direction
+          )
       }
     );
     const thin = page.strokes.filter((stroke) => stroke.kind === 'thin');
@@ -281,8 +366,59 @@ describe('M01 cosmetic threads drawn in views', () => {
       )
     );
     expect(arc).toBeDefined();
+    const direction = DRAWING_VIEW_FRAMES.top.direction;
     expect(
-      viewCosmeticThreads({ ...view, section: {} as never }, bodies, holes)
+      viewCosmeticThreads(
+        { ...view, section: {} as never },
+        bodies,
+        holes,
+        direction
+      ).threads
     ).toEqual([]);
+    // A view of another configuration row: this model's bodies are not
+    // what it draws (review).
+    expect(
+      viewCosmeticThreads(
+        { ...view, configurationId: 'cfg_other' },
+        bodies,
+        holes,
+        direction
+      ).threads
+    ).toEqual([]);
+    // Without hidden lines, a front view draws none of its hidden thread
+    // lines (review).
+    const front = {
+      ...view,
+      viewId: 'dvw_front' as DrawingViewId,
+      orientation: 'front' as const,
+      hiddenLines: false
+    };
+    const dashed = (hiddenLines: boolean) =>
+      composeSheetPage(
+        { ...sheet, views: [{ ...front, hiddenLines }] },
+        [
+          {
+            view: { ...front, hiddenLines },
+            projection: {
+              visible: [],
+              hidden: [],
+              bounds: { minU: 0, minV: 0, maxU: 40, maxV: 10 }
+            }
+          }
+        ],
+        {
+          projectName: 'Plate',
+          units: 'mm',
+          cosmeticThreads: (shown) =>
+            viewCosmeticThreads(
+              shown,
+              bodies,
+              holes,
+              DRAWING_VIEW_FRAMES[shown.orientation].direction
+            )
+        }
+      ).strokes.filter((stroke) => stroke.kind === 'hidden').length;
+    expect(dashed(true)).toBe(3);
+    expect(dashed(false)).toBe(0);
   }, 180_000);
 });
