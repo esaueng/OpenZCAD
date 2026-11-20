@@ -6,7 +6,7 @@
 //
 //   node scripts/measure-active1-baselines.mjs [--runs 3] [--angle vulkan]
 //     [--only h02,w01-box,w01-history,f06-switch-box,f06-switch-history,
-//             pattern-node,pattern-browser]
+//             pattern-node,pattern-browser,face-drag,orbit,sustained]
 //     [--out perf-results/active1/<stamp>] [--no-build] [--check]
 //     [--wait-minutes 180] [--heavy-lock ~/.cache/openzcad-heavy.lock]
 //
@@ -40,14 +40,29 @@ const PROBES = [
   'f06-switch-box',
   'f06-switch-history',
   'pattern-node',
-  'pattern-browser'
+  'pattern-browser',
+  // H02 face-drag targets: pointer → presented frame on public native parts.
+  'face-drag',
+  // H02 orbit tails: frame intervals of a one-finger orbit, unthrottled and
+  // at 4× CPU slow-down.
+  'orbit',
+  // H02 whole-worker retention: 300 edits through the worker's exact
+  // adapter with idle compaction (`test/sustained-session-retention.test.ts`).
+  'sustained'
 ];
+
+/** Probes that need the `OZ_PERF=1` instrumented build. */
+const INSTRUMENTED_PROBES = ['face-drag', 'orbit'];
+
+/** The public `perf-face-drag-trace` cases the `face-drag` probe runs. */
+export const FACE_DRAG_CASES =
+  'filleted union width|long native history face drag|rounded box top-face drag|native hammer-holder arm drag';
 
 function parseArgs(argv) {
   const options = {
     runs: 3,
     angle: 'vulkan',
-    only: PROBES,
+    only: PROBES.filter((probe) => !INSTRUMENTED_PROBES.includes(probe)),
     out: null,
     build: true,
     check: false,
@@ -75,6 +90,21 @@ function parseArgs(argv) {
   }
   for (const probe of options.only)
     if (!PROBES.includes(probe)) throw new Error(`Unknown probe ${probe}`);
+  // The drag and orbit probes read frame marks only an `OZ_PERF` build
+  // compiles in; the other browser probes' baselines were taken without it.
+  const instrumented = options.only.filter((probe) =>
+    INSTRUMENTED_PROBES.includes(probe)
+  );
+  const plain = options.only.filter(
+    (probe) =>
+      !INSTRUMENTED_PROBES.includes(probe) &&
+      probe !== 'pattern-node' &&
+      probe !== 'sustained'
+  );
+  if (instrumented.length && plain.length)
+    throw new Error(
+      `Run ${instrumented.join(', ')} separately from ${plain.join(', ')}: they need an OZ_PERF build.`
+    );
   if (!(options.runs >= 1)) throw new Error('--runs must be at least 1');
   return options;
 }
@@ -231,6 +261,150 @@ export function summarize(dir) {
       grid === '10x10' ? ACTIVE1_BUDGETS.patternPreview10x10.nodeMedianMs : null
     );
   }
+  const drags = readJsonl(join(dir, 'face-drag.jsonl'));
+  for (const label of new Set(drags.map((sample) => sample.label))) {
+    const samples = drags.filter((sample) => sample.label === label);
+    const budget = ACTIVE1_BUDGETS.faceDrag[label] ?? {};
+    // What follows the pointer: the disposable proxy frames when the drag
+    // presents them (the exact preview is then built once the hand rests),
+    // otherwise the streamed exact frames.
+    const proxied = samples.some(
+      (sample) => sample.summary.proxyPresentedFrames > 0
+    );
+    const lag = (sample) =>
+      proxied
+        ? sample.summary.pointerToProxyFrameMs
+        : sample.summary.steadyPointerToPresentedMs;
+    const kind = proxied ? 'proxy' : 'exact';
+    add(
+      `Face drag pointer → ${kind} frame p50 (${label})`,
+      samples.map((sample) => lag(sample).p50),
+      budget.lagP50Ms
+    );
+    add(
+      `Face drag pointer → ${kind} frame p95 (${label})`,
+      samples.map((sample) => lag(sample).p95),
+      budget.lagP95Ms
+    );
+    if (!proxied)
+      add(
+        `Face drag first exact geometry (${label})`,
+        samples.map((sample) => sample.summary.firstGeometryMs),
+        budget.firstGeometryMs
+      );
+    if (samples.some((sample) => sample.summary.requests > 0))
+      add(
+        `Face drag exact preview round trip p50 (${label})`,
+        samples.map((sample) => sample.summary.stages?.roundTripMs?.p50),
+        budget.exactPreviewMs
+      );
+    add(
+      `Face drag frame interval p50 while moving (${label})`,
+      samples.map((sample) => sample.rendering?.motion?.intervalMs?.p50),
+      budget.frameIntervalP50Ms
+    );
+    add(
+      `Face drag frame interval p95 while moving (${label})`,
+      samples.map((sample) => sample.rendering?.motion?.intervalMs?.p95),
+      budget.frameIntervalP95Ms
+    );
+    add(
+      `Face drag release → accepted frame (${label})`,
+      samples.map((sample) => sample.summary.releaseToFrameMs),
+      budget.releaseToFrameMs
+    );
+  }
+  const orbitRuns = existsSync(dir)
+    ? readdirSync(dir).filter((name) => name.startsWith('orbit-r'))
+    : [];
+  const orbits = orbitRuns.flatMap((run) =>
+    existsSync(join(dir, run, 'summary.json'))
+      ? JSON.parse(readFileSync(join(dir, run, 'summary.json'), 'utf8'))
+      : []
+  );
+  for (const key of new Set(
+    orbits.map((result) => `${result.scene} x${result.throttle}`)
+  )) {
+    const results = orbits.filter(
+      (result) => `${result.scene} x${result.throttle}` === key
+    );
+    const budget =
+      ACTIVE1_BUDGETS.orbit[key] ??
+      ACTIVE1_BUDGETS.orbit[`* x${results[0].throttle}`] ??
+      {};
+    add(
+      `Orbit frame interval p95 (${key})`,
+      results.map((result) => result.orbit.frame.p95),
+      budget.p95Ms
+    );
+    add(
+      `Orbit frame interval p99 (${key})`,
+      results.map((result) => result.orbit.frame.p99),
+      budget.p99Ms
+    );
+    add(
+      `Orbit dropped refreshes (${key})`,
+      results.map((result) => result.orbit.dropped.pct),
+      budget.droppedPct,
+      '%'
+    );
+  }
+  const sustainedRuns = existsSync(dir)
+    ? readdirSync(dir).filter(
+        (name) => name.startsWith('sustained-r') && name.endsWith('.jsonl')
+      )
+    : [];
+  if (sustainedRuns.length) {
+    const runs = sustainedRuns.map((name) =>
+      readJsonl(join(dir, name)).filter((row) => 'edit' in row)
+    );
+    const third = (rows, part) =>
+      rows.slice(
+        Math.floor((rows.length * part) / 3),
+        Math.floor((rows.length * (part + 1)) / 3)
+      );
+    const oneFeature = (rows) =>
+      median(
+        rows
+          .filter((row) => row.replayed === 1 && row.compactMs == null)
+          .map((row) => row.ms)
+      );
+    const budget = ACTIVE1_BUDGETS.sustained;
+    add(
+      'Sustained session: peak WASM linear memory',
+      runs.map(
+        (rows) =>
+          Math.max(...rows.map((row) => row.linearMemoryBytes)) / 2 ** 20
+      ),
+      budget.peakLinearMemoryMiB,
+      'MiB'
+    );
+    add(
+      'Sustained session: peak retired arena slots',
+      runs.map((rows) => Math.max(...rows.map((row) => row.retiredSlots))),
+      budget.peakRetiredSlots,
+      'slots'
+    );
+    add(
+      'Sustained session: post-GC heap growth, first → last third',
+      runs.map(
+        (rows) =>
+          (median(third(rows, 2).map((row) => row.heapUsed)) -
+            median(third(rows, 0).map((row) => row.heapUsed))) /
+          2 ** 20
+      ),
+      budget.heapGrowthMiB,
+      'MiB'
+    );
+    add(
+      'Sustained session: one-feature edit drift, last ÷ first third',
+      runs.map(
+        (rows) => oneFeature(third(rows, 2)) / oneFeature(third(rows, 0))
+      ),
+      budget.editDriftRatio,
+      '×'
+    );
+  }
   const browser = readJsonl(join(dir, 'pattern-browser.jsonl'));
   for (const grid of new Set(
     browser.flatMap((sample) => sample.steps.map((step) => step.grid))
@@ -281,7 +455,7 @@ async function main() {
   const runsLog = join(dir, 'runs.jsonl');
   const angle = options.angle === 'swiftshader' ? '' : options.angle;
   const browserProbes = options.only.filter(
-    (probe) => probe !== 'pattern-node'
+    (probe) => probe !== 'pattern-node' && probe !== 'sustained'
   );
   let server;
   let port;
@@ -297,7 +471,10 @@ async function main() {
       await waitForQuiet(options.waitMinutes);
       const status = run('pnpm', ['--filter', '@openzcad/web', 'build'], {
         VITE_E2E: '1',
-        VITE_E2E_FULL_RENDER: '1'
+        VITE_E2E_FULL_RENDER: '1',
+        ...(options.only.some((probe) => INSTRUMENTED_PROBES.includes(probe))
+          ? { OZ_PERF: '1' }
+          : {})
       });
       if (status !== 0) throw new Error('Production-renderer build failed.');
     }
@@ -332,10 +509,18 @@ async function main() {
     OZ_PERF_OWN_ROOT: String(process.pid),
     ...(port ? { PLAYWRIGHT_PORT: String(port) } : {})
   };
-  const playwright = (spec, env) =>
+  const playwright = (spec, env, extra = []) =>
     run(
       'pnpm',
-      ['exec', 'playwright', 'test', spec, '--workers=1', '--reporter=line'],
+      [
+        'exec',
+        'playwright',
+        'test',
+        spec,
+        '--workers=1',
+        '--reporter=line',
+        ...extra
+      ],
       {
         ...probeEnv,
         ...env
@@ -391,6 +576,37 @@ async function main() {
     'pattern-browser': () =>
       playwright('perf-pattern-preview', {
         OZ_PERF_OUT: join(dir, 'pattern-browser.jsonl')
+      }),
+    'face-drag': () =>
+      playwright(
+        'perf-face-drag-trace',
+        {
+          OZ_PERF_OUT: join(dir, 'face-drag.jsonl'),
+          ...(angle ? { OZ_FACE_DRAG_ANGLE: angle } : {})
+        },
+        ['-g', FACE_DRAG_CASES]
+      ),
+    sustained: (round) =>
+      run(
+        'pnpm',
+        [
+          'exec',
+          'vitest',
+          'run',
+          'test/sustained-session-retention.test.ts',
+          '-t',
+          'long session'
+        ],
+        {
+          SUSTAINED_EDITS: '300',
+          SUSTAINED_OUT: join(dir, `sustained-r${round}.jsonl`)
+        }
+      ),
+    orbit: (round) =>
+      playwright('perf-frame-timing', {
+        OZ_PERF_DIR: join(dir, `orbit-r${round}`),
+        OZ_PERF_THROTTLE: '1,4',
+        ...(angle ? {} : { OZ_PERF_SOFTWARE_GL: '1' })
       })
   };
   let failures = 0;
