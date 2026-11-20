@@ -3,6 +3,13 @@ import {
   newCanonicalPlaneRef,
   planeIntersectionDatumAxis,
   requireRevolveAxisInPlane,
+  chainPathCurves,
+  pathPatternFitProblem,
+  pathStationAt,
+  pathTurnDeg,
+  type PathChain,
+  type PathCurve2,
+  type PathStation,
   type PlaneBasis
 } from '@openzcad/geometry';
 import {
@@ -27,6 +34,7 @@ import {
   type FeatureId,
   type ParamValue,
   type ParametricVector3,
+  type PatternPath,
   type PatternPoints,
   type HolePoints,
   type HoleTapped,
@@ -124,6 +132,7 @@ export type InPlaceToolId =
   | 'circular-pattern'
   | 'grid-pattern'
   | 'point-pattern'
+  | 'path-pattern'
   | 'fillet'
   | 'chamfer'
   | PrimitiveKind
@@ -162,6 +171,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'circular-pattern',
   'grid-pattern',
   'point-pattern',
+  'path-pattern',
   'fillet',
   'chamfer',
   'box',
@@ -186,7 +196,8 @@ export function isInPlacePatternTool(tool: InPlaceToolId | null): boolean {
     tool === 'linear-pattern' ||
     tool === 'circular-pattern' ||
     tool === 'grid-pattern' ||
-    tool === 'point-pattern'
+    tool === 'point-pattern' ||
+    tool === 'path-pattern'
   );
 }
 
@@ -469,6 +480,14 @@ export interface InPlaceContext {
    * a pattern on sketch points; empty when the sketch has none.
    */
   sketchPoints?(sketchId: SketchId): readonly SketchPointSpot[];
+  /**
+   * M02 (schema v112): a path pattern's lines and arcs on their sketch
+   * plane, or why they cannot be read; null while the sketch is unknown.
+   */
+  sketchPath?(
+    sketchId: SketchId,
+    entityIds: readonly string[]
+  ): { curves: PathCurve2[]; basis: PlaneBasis } | string | null;
   /** M06: a sketch curve's middle in the world and its plane's normal. */
   curveMiddle?(
     sketchId: SketchId,
@@ -632,7 +651,7 @@ export type InPlaceRequest =
   | {
       tool: 'pattern';
       targetBodyId: BodyId;
-      patternKind: 'linear' | 'circular' | 'grid' | 'points';
+      patternKind: 'linear' | 'circular' | 'grid' | 'points' | 'path';
       count: ParamValue;
       axis: 'x' | 'y' | 'z';
       spacing?: ParamValue;
@@ -649,6 +668,8 @@ export type InPlaceRequest =
       skippedInstances?: string[];
       /** M02 (schema v63): the sketch points a points pattern stands on. */
       points?: PatternPoints;
+      /** M02 (schema v112): the sketch path a path pattern runs along. */
+      path?: PatternPath;
     }
   | {
       /** An M14 gear, as the feature stores it. */
@@ -6250,6 +6271,251 @@ export function stepTotal(step: ParamValue, count: ParamValue): ParamValue {
   return `(${String(step)}) * ((${String(count)}) - 1)`;
 }
 
+/**
+ * M02 (schema v112): a pattern along a sketch path. Picks are the body, or
+ * features under Repeat Features, then the path's lines and arcs. The path
+ * starts at the end nearer the original (an edit keeps the stored start);
+ * Options' Start can take the other end, and Orientation turns the copies
+ * with the path. One arrow drags the spacing along the path's first
+ * direction; each copy wears a chip that skips it.
+ */
+interface PathPatternPlan {
+  seed: BodyPick;
+  path: PatternPath;
+  chain: PathChain;
+  basis: PlaneBasis;
+  /** Why the copies do not fit the path, else null. */
+  problem: string | null;
+  copies: PatternCopySpot[];
+  /** The path's first direction, in the world. */
+  heading: Vector3;
+}
+
+const PATH_START_OPTION: OptionSpec = {
+  id: 'start',
+  label: 'Start',
+  choices: [
+    {
+      value: 'near',
+      label: 'Near end',
+      tip: 'Runs from the end of the path nearer the original'
+    },
+    { value: 'far', label: 'Other end', tip: 'Runs from the other end' }
+  ],
+  initial: 'near'
+};
+
+const PATH_ORIENT_OPTION: OptionSpec = {
+  id: 'orient',
+  label: 'Orientation',
+  choices: [
+    {
+      value: 'moved',
+      label: 'Moved',
+      tip: 'Every copy stays square to the original'
+    },
+    {
+      value: 'tangent',
+      label: 'Follow path',
+      tip: 'Each copy turns as the path turns'
+    }
+  ],
+  initial: 'moved'
+};
+
+function samePathCurves(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+function pathPatternPlan(
+  slots: InPlaceSlots,
+  values: Readonly<Record<string, number>>,
+  options: Readonly<Record<string, string>>,
+  ctx: InPlaceContext | undefined
+): PathPatternPlan | string | null {
+  const seed = patternSeed(slots, options, ctx);
+  const sketchId = slots.path[0]?.sketchId;
+  if (!seed || !sketchId) return null;
+  const entityIds = slots.path
+    .filter((pick) => pick.sketchId === sketchId)
+    .map((pick) => pick.entityId);
+  const read = ctx?.sketchPath?.(sketchId, entityIds);
+  if (read === null || read === undefined) return null;
+  if (typeof read === 'string') return read;
+  const forward = chainPathCurves(read.curves, false);
+  if (typeof forward === 'string') return forward;
+  const { basis } = read;
+  const world = (point: { x: number; y: number }): Vector3 => ({
+    x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+    y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+    z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+  });
+  const middle = centre(seed);
+  const reach = (point: Vector3) =>
+    Math.hypot(point.x - middle.x, point.y - middle.y, point.z - middle.z);
+  const saved =
+    ctx?.saved?.featureKind === 'pattern' &&
+    ctx.saved.path?.sketchId === sketchId &&
+    samePathCurves(ctx.saved.path.entityIds, entityIds)
+      ? ctx.saved.path
+      : undefined;
+  // The nearer end, or the start an edit stored; Other end flips it.
+  const near = saved
+    ? saved.reversed === true
+    : reach(world(pathStationAt(forward, forward.length)!.point)) <
+      reach(world(pathStationAt(forward, 0)!.point));
+  const reversed = options.start === 'far' ? !near : near;
+  const chain = reversed ? chainPathCurves(read.curves, true) : forward;
+  if (typeof chain === 'string') return chain;
+  const turning = options.orient === 'tangent';
+  const count = wholeCount(values.count, 3);
+  const spacing = values.spacing ?? 20;
+  const problem = pathPatternFitProblem(chain, count, spacing);
+  const start = pathStationAt(chain, 0)!;
+  const from = world(start.point);
+  const normal = unit({
+    x: basis.u.y * basis.v.z - basis.u.z * basis.v.y,
+    y: basis.u.z * basis.v.x - basis.u.x * basis.v.z,
+    z: basis.u.x * basis.v.y - basis.u.y * basis.v.x
+  });
+  const copyAt = (station: PathStation): Vector3 => {
+    const to = world(station.point);
+    const turned = turning
+      ? turnedAbout(middle, from, normal, pathTurnDeg(start, station))
+      : middle;
+    return offset(
+      turned,
+      { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z },
+      1
+    );
+  };
+  const copies = problem
+    ? []
+    : rowCopies(count, (index) =>
+        copyAt(pathStationAt(chain, spacing * index) ?? start)
+      );
+  const heading = unit({
+    x:
+      basis.u.x * Math.cos(start.tangent) + basis.v.x * Math.sin(start.tangent),
+    y:
+      basis.u.y * Math.cos(start.tangent) + basis.v.y * Math.sin(start.tangent),
+    z: basis.u.z * Math.cos(start.tangent) + basis.v.z * Math.sin(start.tangent)
+  });
+  return {
+    seed,
+    path: {
+      sketchId,
+      entityIds,
+      ...(reversed ? { reversed: true } : {}),
+      ...(turning ? { orientation: 'tangent' as const } : {})
+    },
+    chain,
+    basis,
+    problem,
+    copies,
+    heading
+  };
+}
+
+const pathPattern: InPlaceToolSpec = {
+  id: 'path-pattern',
+  title: 'Path pattern',
+  profileMode: 'none',
+  bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
+  wantsAxis: false,
+  // Its path is the sketch lines and arcs it repeats along.
+  wantsPath: true,
+  values: [
+    // Measured along the path. Fewer copies than fit is fine; more is the
+    // bar's to refuse, with the path's length.
+    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20 },
+    {
+      id: 'count',
+      label: 'Count',
+      unit: 'count',
+      initial: 3,
+      min: 2,
+      max: 100,
+      integer: true
+    }
+  ],
+  options: [REPEAT_OPTION, PATH_ORIENT_OPTION, PATH_START_OPTION],
+  hint(slots, options, ctx, request) {
+    const pick = patternHint(slots, options ?? {});
+    if (pick) return pick;
+    if (slots.path.length === 0) {
+      return 'Click the sketch lines and arcs to repeat along';
+    }
+    // The values reach the hint through the request, as numbers once they
+    // resolve; an expression's fit is the build's to check.
+    const numeric = (value: ParamValue | undefined) =>
+      typeof value === 'number' ? value : undefined;
+    const counted =
+      request?.tool === 'pattern'
+        ? {
+            ...(numeric(request.count) !== undefined
+              ? { count: numeric(request.count)! }
+              : {}),
+            ...(numeric(request.spacing) !== undefined
+              ? { spacing: numeric(request.spacing)! }
+              : {})
+          }
+        : {};
+    const plan = pathPatternPlan(slots, counted, options ?? {}, ctx);
+    if (typeof plan === 'string') return plan;
+    if (plan?.problem) return plan.problem;
+    return 'Drag the spacing · tap a copy to skip it';
+  },
+  ready(slots, options, ctx) {
+    if (patternSource(slots, options, ctx) === null) return false;
+    const plan = pathPatternPlan(slots, {}, options ?? {}, ctx);
+    return plan !== null && typeof plan !== 'string';
+  },
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
+    const plan = pathPatternPlan(slots, numbers ?? {}, options, ctx);
+    if (!source || !plan || typeof plan === 'string') return null;
+    const count = numbers?.count;
+    return {
+      tool: 'pattern',
+      ...source,
+      patternKind: 'path',
+      count: values.count ?? 3,
+      axis: ctx.saved?.featureKind === 'pattern' ? ctx.saved.axis : 'x',
+      spacing: values.spacing ?? 20,
+      path: plan.path,
+      ...skipRequest(
+        options,
+        count === undefined
+          ? null
+          : rowCopies(wholeCount(count, 3), () => ORIGIN)
+      )
+    };
+  },
+  handles(slots, values, ctx, options) {
+    const plan = pathPatternPlan(slots, values, options, ctx);
+    if (!plan || typeof plan === 'string') return [];
+    const { seed } = plan;
+    const origin = centre(seed);
+    return [
+      {
+        valueId: 'spacing',
+        kind: 'linear',
+        key: `${bodyKey(seed)}:path-spacing:${plan.path.entityIds.join(',')}:${plan.path.reversed ? 'r' : 'f'}`,
+        params: { origin, direction: plan.heading }
+      },
+      {
+        valueId: 'count',
+        kind: 'chip',
+        key: `${bodyKey(seed)}:count`,
+        params: { anchor: { x: origin.x, y: origin.y, z: seed.max.z } }
+      },
+      ...instanceHandles(seed, plan.copies, options)
+    ];
+  }
+};
+
 const gridPattern: InPlaceToolSpec = {
   id: 'grid-pattern',
   title: 'Grid pattern',
@@ -6933,6 +7199,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   'circular-pattern': circularPattern,
   'grid-pattern': gridPattern,
   'point-pattern': pointPattern,
+  'path-pattern': pathPattern,
   fillet,
   chamfer,
   box: primitiveSpec('box'),

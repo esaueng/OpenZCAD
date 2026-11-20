@@ -160,6 +160,17 @@ using Remus whole-kernel snapshots (`kernel.snapshot()` /
   (`MAX_HISTORY_REPLAY_WORK`), since its arena still holds what those replays
   retired, and a restore continues from it. A kernel past half the budget is
   not captured: its reopen replays into a fresh kernel, which is.
+- **Reuse tables.** The session also carries the captured kernel's
+  independent-reuse tables (`PrimitiveBuildCache`: primitive and standalone
+  standard-part results, and prepared transforms and intersections), whose
+  handles the snapshot keeps. A restore adopts every entry still at its
+  recorded position with its recorded digest, so the first edit after a
+  reopen reuses what the capturing session would have, instead of replaying
+  every feature before the first checkpoint because the restored kernel
+  started with empty tables (the 2026-11-15 baseline's lettered holder
+  replayed 27 of 31 features where a warm edit replays 12). A stale entry is
+  only that entry's miss; a malformed table refuses the whole record. Older
+  records without it restore as before.
 - **Warm-up.** A restored kernel holds that single checkpoint, so an edit of
   an earlier feature would replay everything. Once the worker has been idle
   for 2 s, the adapter replays the history in a second kernel with the

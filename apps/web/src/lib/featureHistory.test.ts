@@ -183,6 +183,39 @@ it('makes the sketch a pattern stands on a parent of it (M02 review)', () => {
   ).toEqual(['On points']);
 });
 
+it('makes the sketch a pattern runs along a parent of it (M02)', () => {
+  const block = addPrimitiveFeature(
+    createProjectDocument('Path', toUserId('user_path')),
+    {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    }
+  );
+  const path = addSketchFeature(block, {
+    name: 'Path',
+    plane: 'XY',
+    offset: 0,
+    objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 80, y2: 0 }]
+  });
+  const patterned = patternBody(path.document, {
+    name: 'Along path',
+    targetBodyId: block.bodyOrder[0]!,
+    patternKind: 'path',
+    count: 2,
+    spacing: 30,
+    axis: 'x',
+    path: {
+      sketchId: path.sketchId,
+      entityIds: findSketch(path.document, path.sketchId)!.objectIds.map(String)
+    }
+  });
+  const graph = featureHistory(patterned.document);
+  const named = (name: string) =>
+    graph.features.find((feature) => feature.name === name)!.featureId;
+  expect(graph.parents.get(named('Along path'))).toContain(named('Path'));
+});
+
 it('makes the sketch a hole is drilled at a parent of it (M01)', () => {
   const block = addPrimitiveFeature(
     createProjectDocument('Points', toUserId('user_points')),

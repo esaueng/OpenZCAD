@@ -399,8 +399,10 @@ function previewPreparedParameter(
           d.patternKind === 'circular' ||
           d.direction ||
           // M02: copies of features, copies left out and copies on sketch
-          // points are not a row of body copies; the exact build shows them.
+          // points or along a path are not a row of body copies; the exact
+          // build shows them.
           d.patternKind === 'points' ||
+          d.patternKind === 'path' ||
           d.sourceFeatureIds !== undefined ||
           d.skippedInstances !== undefined
         )

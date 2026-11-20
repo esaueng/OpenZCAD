@@ -8,6 +8,9 @@ import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   AssemblyInterferenceOperand,
   AssemblyInterferenceReport,
+  AssemblySweepComponent,
+  AssemblySweepPosition,
+  AssemblySweepWorkerReport,
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest
 } from '@openzcad/shared';
@@ -300,6 +303,17 @@ export type GeometryWorkerRequest =
     }
   | {
       /**
+       * AS04 through motion: the same clash query at each position of a
+       * sweep (the adapter's `assemblyInterferenceSweep`). Read-only.
+       */
+      type: 'assembly-interference-sweep';
+      requestId: string;
+      document: ProjectDocument;
+      components: AssemblySweepComponent[];
+      positions: AssemblySweepPosition[];
+    }
+  | {
+      /**
        * M09 analysis overlays: the exact per-face analysis of the named
        * bodies (the adapter's `surfaceAnalysis`). Read-only.
        */
@@ -535,6 +549,20 @@ export type GeometryAssemblyInterferenceResult =
       error: string;
     };
 
+export type GeometryAssemblySweepResult =
+  | {
+      type: 'assembly-interference-sweep';
+      ok: true;
+      requestId: string;
+      report: AssemblySweepWorkerReport;
+    }
+  | {
+      type: 'assembly-interference-sweep';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
 export type GeometrySurfaceAnalysisResult =
   | {
       type: 'surface-analysis';
@@ -674,6 +702,7 @@ export type GeometryWorkerResult =
   | GeometrySectionResult
   | GeometrySolveSketchResult
   | GeometryAssemblyInterferenceResult
+  | GeometryAssemblySweepResult
   | GeometrySurfaceAnalysisResult
   | GeometrySketch2dOpResult
   | GeometryRecognizeImportedFaceResult
@@ -1337,6 +1366,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
       request.type === 'assembly-interference' ||
+      request.type === 'assembly-interference-sweep' ||
       request.type === 'surface-analysis' ||
       request.type === 'sketch-2d-op' ||
       request.type === 'recognize-imported-face' ||
@@ -1449,6 +1479,21 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         );
         post({
           type: 'assembly-interference',
+          ok: true,
+          requestId: request.requestId,
+          report
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'assembly-interference-sweep') {
+        const report = await exact.assemblyInterferenceSweep(
+          document,
+          request.components,
+          request.positions
+        );
+        post({
+          type: 'assembly-interference-sweep',
           ok: true,
           requestId: request.requestId,
           report
@@ -1981,6 +2026,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'assembly-interference') {
       post({
         type: 'assembly-interference',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'assembly-interference-sweep') {
+      post({
+        type: 'assembly-interference-sweep',
         ok: false,
         requestId: request.requestId,
         error: message

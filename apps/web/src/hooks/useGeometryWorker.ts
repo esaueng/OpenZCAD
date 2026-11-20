@@ -9,6 +9,9 @@ import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   AssemblyInterferenceOperand,
   AssemblyInterferenceReport,
+  AssemblySweepComponent,
+  AssemblySweepPosition,
+  AssemblySweepWorkerReport,
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest
 } from '@openzcad/shared';
@@ -389,6 +392,15 @@ export interface GeometryWorkerApi {
     operands: AssemblyInterferenceOperand[]
   ): Promise<AssemblyInterferenceReport>;
   /**
+   * AS04 through motion: the clash query at each position of a sweep, on
+   * one build of the model.
+   */
+  assemblyInterferenceSweep(
+    document: ProjectDocument,
+    components: AssemblySweepComponent[],
+    positions: AssemblySweepPosition[]
+  ): Promise<AssemblySweepWorkerReport>;
+  /**
    * M09 analysis overlays: the exact per-face analysis of the named bodies,
    * sampled for the viewport (read-only).
    */
@@ -497,6 +509,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const interferenceRequests = useRef(
     new Map<string, PendingRequest<AssemblyInterferenceReport>>()
   );
+  const sweepRequests = useRef(
+    new Map<string, PendingRequest<AssemblySweepWorkerReport>>()
+  );
   const surfaceAnalysisRequests = useRef(
     new Map<string, PendingRequest<SurfaceAnalysisReport>>()
   );
@@ -587,6 +602,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       sheetMetalFoldRequests.current,
       solveSketchRequests.current,
       interferenceRequests.current,
+      sweepRequests.current,
       surfaceAnalysisRequests.current,
       sectionRequests.current,
       sketchPlanarRequests.current,
@@ -1118,6 +1134,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             return;
           }
           interferenceRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'assembly-interference-sweep') {
+          const pending = sweepRequests.current.get(message.requestId);
+          if (!pending) {
+            return;
+          }
+          sweepRequests.current.delete(message.requestId);
           if (message.ok) {
             pending.resolve(message.report);
           } else {
@@ -1740,6 +1769,17 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         type: 'assembly-interference',
         document: documentForWorker(document),
         operands
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    assemblyInterferenceSweep(document, components, positions) {
+      const posted = postRequest(sweepRequests.current, {
+        type: 'assembly-interference-sweep',
+        document: documentForWorker(document),
+        components,
+        positions
       });
       return posted.ok
         ? posted.promise
