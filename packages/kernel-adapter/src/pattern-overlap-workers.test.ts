@@ -68,7 +68,10 @@ describe('pattern overlap workers', () => {
         workers.slice(1).every((w) => w.requests[0]?.module === module)
       ).toBe(true);
       const job = pool.measure(pairs.slice(0, 2));
-      for (const worker of workers) {
+      expect(workers.slice(2).map((worker) => worker.requests.length)).toEqual([
+        1, 1
+      ]);
+      for (const worker of workers.slice(0, 2)) {
         const work = worker.requests[1]!;
         expect(work.module).toBeUndefined();
         worker.reply(work.pairs.map((bytes) => bytes[0]!));
@@ -108,23 +111,31 @@ describe('pattern overlap workers', () => {
     expect(pool.available).toBe(true);
   });
 
-  it('releases a cancelled caller and reuses the workers after their old replies', async () => {
-    const workers = await ready();
-    let cancelled = false;
-    const job = pool.measure(pairs, { isCancelled: () => cancelled });
-    cancelled = true;
-    await vi.advanceTimersByTimeAsync(25);
-    await expect(job).resolves.toBeUndefined();
-    expect(workers.every((w) => w.terminate.mock.calls.length === 0)).toBe(
-      true
-    );
-    expect(pool.available).toBe(false);
-    for (const w of workers)
-      w.reply(w.requests[1]!.pairs.map((bytes) => bytes[0]!));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(pool.available).toBe(true);
-    expect(TestWorker.instances.length).toBe(4);
-  });
+  it.each([1, pairs.length])(
+    'releases a cancelled caller on a %i-pair batch and reuses workers after their replies',
+    async (count) => {
+      const workers = await ready();
+      let cancelled = false;
+      const job = pool.measure(pairs.slice(0, count), {
+        isCancelled: () => cancelled
+      });
+      cancelled = true;
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(job).resolves.toBeUndefined();
+      expect(workers.every((w) => w.terminate.mock.calls.length === 0)).toBe(
+        true
+      );
+      expect(pool.available).toBe(false);
+      expect(workers.slice(count).every((w) => w.requests.length === 1)).toBe(
+        true
+      );
+      for (const w of workers.slice(0, count))
+        w.reply(w.requests[1]!.pairs.map((bytes) => bytes[0]!));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pool.available).toBe(true);
+      expect(TestWorker.instances.length).toBe(4);
+    }
+  );
   it('releases a partial batch on refusal and ignores late replies after a project change', async () => {
     const workers = await ready();
     const job = pool.measure(pairs);
