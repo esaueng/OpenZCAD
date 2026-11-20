@@ -288,6 +288,11 @@ export interface GeometryWorkerApi {
       section?: ExactSectionPlane;
       /** The third 'dxf' source, and the only 'svg' one: the saved sketch. */
       sketchId?: SketchId;
+      /**
+       * L09, the fourth 'dxf' source: the CNC-cut layout of `bodyIds` (or
+       * every shown body), parts laid flat with their gap in millimetres.
+       */
+      cncLayout?: { gapMm?: number };
       /** 'svg' only: false paints a white background behind the curves. */
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
@@ -1637,6 +1642,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           ...(options?.sketchId !== undefined
             ? { sketchId: options.sketchId }
             : {}),
+          ...(options?.cncLayout ? { cncLayout: options.cncLayout } : {}),
           ...(options?.transparent !== undefined
             ? { transparent: options.transparent }
             : {}),
