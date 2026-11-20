@@ -3,7 +3,8 @@ import {
   EXTRUDE_SIDES_CONFLICT_MESSAGE,
   MAX_EXTRUDE_DRAFT_DEG,
   coerceParamValue,
-  extrudeSidesConflict
+  extrudeSidesConflict,
+  toFaceOffsetEnd
 } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -43,6 +44,11 @@ export interface ExtrudeFormValue {
   throughAllSide?: ThroughAllSide;
   /** F01 (v29): present exactly with `to-face`. */
   toFace?: ExtrudeToFaceTarget;
+  /**
+   * F01 (v113): with `to-face` only, and absent when it ends on the face
+   * (a typed 0 is sent as absent). Positive stops short, negative passes.
+   */
+  toFaceOffset?: ParamValue;
   /** F01 (v29): absent for straight walls (a typed 0 is sent as absent). */
   draftAngleDeg?: ParamValue;
 }
@@ -88,6 +94,8 @@ export interface ExtrudeDraft {
   endCondition: ExtrudeEndCondition;
   throughAllSide: ThroughAllSide;
   toFace?: ExtrudeToFaceTarget;
+  /** F01 (v113): the offset from the face, as typed; read with To face. */
+  faceOffset: string;
   draftAngle: string;
 }
 
@@ -103,6 +111,7 @@ export interface ExtrudeDraftInitial {
   endCondition?: ExtrudeEndCondition;
   throughAllSide?: ThroughAllSide;
   toFace?: ExtrudeToFaceTarget;
+  toFaceOffset?: ParamValue;
   draftAngleDeg?: ParamValue;
 }
 
@@ -135,6 +144,7 @@ export function initialExtrudeDraft(
     endCondition: initial.endCondition ?? 'blind',
     throughAllSide: initial.throughAllSide ?? 'forward',
     ...(initial.toFace ? { toFace: initial.toFace } : {}),
+    faceOffset: paramValueText(initial.toFaceOffset ?? 0),
     draftAngle: paramValueText(initial.draftAngleDeg ?? 0)
   };
 }
@@ -208,6 +218,24 @@ export function extrudeToFaceProblem(
       ? 'Checking the target face…'
       : 'This face is not parallel to the sketch plane, or lies on it; pick a face parallel to the sketch.')
   );
+}
+
+/**
+ * F01 (v113): an offset from the face that would carry the end onto or past
+ * the sketch plane, said before Apply; null when there is none, or while
+ * the face's reach or the offset is not known yet (the build decides then).
+ */
+export function extrudeToFaceOffsetProblem(
+  draft: ExtrudeDraft,
+  ctx: ExtrudeDraftContext
+): string | null {
+  if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
+  const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
+  if (offset === null || offset === 0) return null;
+  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
+  if (reach === null) return null;
+  if (toFaceOffsetEnd(reach, offset) !== null) return null;
+  return 'Offset from face reaches the sketch plane; make it smaller than the distance to the face.';
 }
 
 /** The stored face no longer resolves and has not been picked again. */
@@ -291,6 +319,7 @@ export function extrudeFormValue(
   // untouched 0 sends 1.
   const typed = coerceParamValue(draft.distance);
   const draftAngleDeg = coerceParamValue(draft.draftAngle);
+  const toFaceOffset = coerceParamValue(draft.faceOffset);
   return {
     name: draft.name.trim(),
     sketchId: ctx.initial.sketchId,
@@ -313,6 +342,9 @@ export function extrudeFormValue(
     endCondition: throughAll ? 'through-all' : toFace ? 'to-face' : 'blind',
     ...(throughAll ? { throughAllSide: draft.throughAllSide } : {}),
     ...(toFace && draft.toFace ? { toFace: draft.toFace } : {}),
+    ...(toFace && toFaceOffset !== 0 && toFaceOffset !== '0'
+      ? { toFaceOffset }
+      : {}),
     ...(!throughAll && draftAngleDeg !== 0 && draftAngleDeg !== '0'
       ? { draftAngleDeg }
       : {})
@@ -350,6 +382,16 @@ export function extrudeDraftRefusal(
     }
     const problem = extrudeToFaceProblem(draft, ctx);
     if (problem) return problem;
+    const offset = previewExpression(
+      draft.faceOffset,
+      ctx.scope,
+      lengthOf(ctx)
+    );
+    if (!offset.ok || offset.value === undefined) {
+      return `Offset from face: ${offset.text}.`;
+    }
+    const offsetProblem = extrudeToFaceOffsetProblem(draft, ctx);
+    if (offsetProblem) return offsetProblem;
   }
   if (!throughAll) {
     const angle = previewExpression(draft.draftAngle, ctx.scope, angleOf(ctx));

@@ -3,6 +3,8 @@ import {
   MAX_EXTRUDE_DRAFT_DEG,
   TO_FACE_PARALLEL_SINE_LIMIT,
   listFeaturesInOrder,
+  toFaceOffsetEnd,
+  toFaceOffsetReachesSketchMessage,
   toFaceSignedDistance,
   resolveParamValue
 } from '@openzcad/document-core';
@@ -110,20 +112,57 @@ export function toFaceDistance(
 }
 
 /**
+ * F01 (v113): the offset from the face a to-face extrude carries, resolved;
+ * zero when it has none. An expression resolves here, so it is checked here.
+ */
+export function resolveToFaceOffset(
+  data: ExtrudeData,
+  scope: Record<string, number>,
+  document: ProjectDocument
+): number {
+  if (data.toFaceOffset === undefined) return 0;
+  const offset = resolveParamValue(
+    data.toFaceOffset,
+    scope,
+    'offset from face',
+    document.units
+  );
+  if (!Number.isFinite(offset)) {
+    throw new Error('Offset from face must be a finite length.');
+  }
+  return offset;
+}
+
+/**
  * The blind extrude a to-face extrude stands for at this history position:
- * the derived distance replaces the dormant one, and the extent fields are
- * dropped so the sweep, overlap check and boolean treat it as the blind
- * extrude it now is. The stored feature is never rewritten.
+ * the derived distance (to the face, less any offset from it) replaces the
+ * dormant one, and the extent fields are dropped so the sweep, overlap
+ * check and boolean treat it as the blind extrude it now is. The stored
+ * feature is never rewritten.
  */
 export function toFaceSweepFeature(
   kernel: RemusKernel,
   document: ProjectDocument,
   feature: FeatureNode,
   data: ExtrudeData,
-  result: Pick<ExactBuildResult, 'shapes' | 'consumed' | 'sketchBases'>
+  result: Pick<ExactBuildResult, 'shapes' | 'consumed' | 'sketchBases'>,
+  scope: Record<string, number>
 ): FeatureNode {
-  const distance = toFaceDistance(kernel, document, feature, data, result);
-  const { endCondition: _endCondition, toFace: _toFace, ...rest } = data;
+  const faceDistance = toFaceDistance(kernel, document, feature, data, result);
+  const offset = resolveToFaceOffset(data, scope, document);
+  const distance =
+    offset === 0 ? faceDistance : toFaceOffsetEnd(faceDistance, offset);
+  if (distance === null) {
+    // Not an unresolved face: the face resolved, and a re-pick would not
+    // help. The offset (or the face's new position) is what must change.
+    throw new Error(toFaceOffsetReachesSketchMessage(faceDistance, offset));
+  }
+  const {
+    endCondition: _endCondition,
+    toFace: _toFace,
+    toFaceOffset: _toFaceOffset,
+    ...rest
+  } = data;
   return { ...feature, data: { ...rest, distance } };
 }
 
