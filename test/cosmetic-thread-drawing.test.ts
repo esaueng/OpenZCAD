@@ -282,11 +282,7 @@ describe('M01 cosmetic threads drawn in views', () => {
     );
     expect(arc).toBeDefined();
     expect(
-      viewCosmeticThreads(
-        { ...view, section: {} as never },
-        bodies,
-        holes
-      )
+      viewCosmeticThreads({ ...view, section: {} as never }, bodies, holes)
     ).toEqual([]);
   }, 180_000);
 });

@@ -3976,8 +3976,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const holeCallouts = keptDrawing?.holes ?? liveHoleCallouts;
   // M01: the cosmetic threads each view draws, from the same model.
   const viewThreads = useCallback(
-    (view: DrawingView) =>
-      viewCosmeticThreads(view, modelBodies, holeCallouts),
+    (view: DrawingView) => viewCosmeticThreads(view, modelBodies, holeCallouts),
     [modelBodies, holeCallouts]
   );
   const liveBodies = useMemo(
