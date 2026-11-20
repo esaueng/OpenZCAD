@@ -82,18 +82,25 @@ after the header; an AP242 file also carries the model's PMI (D07) as
 semantic datum features, datums and geometric tolerances, each tied to the
 exact face it applies to. Insert project always travels as AP214.
 
-3MF names and colours use only the 3MF core format: each `<object>` carries
-its body's `name`, and one core `<basematerials>` group holds a `<base>` per
-distinct display colour, which each object selects with `pid` and `pindex`.
-No extension is required, so any 3MF reader opens the file. What the common
-slicers do with it, read from their public 3MF importers (2026-11-15):
+3MF names and colours: each `<object>` carries its body's `name`. Its colour
+is written twice. One core `<basematerials>` group holds a `<base>` per
+distinct display colour, for readers of the core format alone. The Materials
+extension (`xmlns:m`, declared but not required, so any 3MF reader still
+opens the file) holds one `<m:colorgroup>` per distinct colour with that one
+`<m:color>`, and each object selects its colour's group with `pid` and
+`pindex="0"`. One group per colour is what OrcaSlicer needs: it keeps a
+single colour per `m:colorgroup` and matches it by `pid` alone. What the
+common slicers do with it, read from their public 3MF importers:
 
-| Slicer (source read)                                         | Parts                                                                                                                          | Colours                                                                                                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Bambu Studio (main 2026-11-10; colour import in 02.09.01.70) | One named object per body. Bodies resting at different heights load, without asking, as one object with a part per body.       | Each distinct colour becomes a filament. A file with colours first opens the colour import dialog, where _Skip_ loads the geometry only. |
-| OrcaSlicer (main 2026-11-14)                                 | One named object per body. Bodies resting at different heights prompt whether to load them as one object with a part per body. | Not read: Orca takes colours only from the Materials extension's `m:colorgroup`, so every body starts on filament 1.                     |
-| PrusaSlicer (main 2026-11-06)                                | One named object per body. With a multi-material printer it may offer to load them as one object with a part per body.         | Not read: it skips `basematerials` as an unknown resource without failing the import.                                                    |
+| Slicer (source read)                                         | Parts                                                                                                                          | Colours                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bambu Studio (main 2026-11-17; colour import in 02.09.01.70) | One named object per body. Bodies resting at different heights load, without asking, as one object with a part per body.       | Each distinct colour becomes a filament: it reads `basematerials` and `m:colorgroup` alike by `pid`/`pindex`. A file with colours first opens the colour import dialog, where _Skip_ loads the geometry only.                            |
+| OrcaSlicer (main 2026-11-20)                                 | One named object per body. Bodies resting at different heights prompt whether to load them as one object with a part per body. | Each distinct colour becomes a filament, from the object's `m:colorgroup` (it reads no `basematerials`).                                                                                                                                 |
+| PrusaSlicer (main 2026-11-06)                                | One named object per body. With a multi-material printer it may offer to load them as one object with a part per body.         | Not read, in any encoding: it parses an object's `pid`/`pindex` but never uses them, its `basematerials` handling is commented out and it has no `m:colorgroup` reader. No 3MF property can colour a body there; it is left to the user. |
 
+The filament each body starts on in Orca and Bambu is checked by
+`orcaSlicerFilaments` and `bambuStudioFilaments` in
+`test/support/three-mf-export.ts`, which follow those importers' rules.
 None of this was confirmed in a running slicer; it is what each importer's
 source does with these elements. OpenZCAD's own 3MF import still merges the
 objects into one body and does not read names or colours back.

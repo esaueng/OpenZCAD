@@ -36,7 +36,11 @@ import {
   type SolidExchangeFormat,
   type SolidMeasure
 } from './support/exchange-harness';
-import { threeMfObjectLabels } from './support/three-mf-export';
+import {
+  bambuStudioFilaments,
+  orcaSlicerFilaments,
+  threeMfObjectLabels
+} from './support/three-mf-export';
 
 /**
  * Every exchange format against its written loss contract (ZC-202): export
@@ -307,6 +311,10 @@ describe(
           ...(angularTolerance === undefined ? {} : { angularTolerance })
         });
         expect(threeMfObjectLabels(bytes)).toEqual(expected);
+        // Both slicers that read 3MF colours put the bodies on two
+        // filaments, by the rules their importers follow.
+        expect(orcaSlicerFilaments(bytes)).toEqual([1, 2]);
+        expect(bambuStudioFilaments(bytes)).toEqual([1, 2]);
         // Labelling leaves the geometry, the unit and the placements alone.
         const measure = await reimportSolids('3mf', bytes);
         expect(measure.fileObjects).toBe(2);

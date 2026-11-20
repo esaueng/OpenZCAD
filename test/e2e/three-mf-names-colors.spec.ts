@@ -19,7 +19,11 @@ import {
   test
 } from './openzcad-fixtures';
 import { reimportSolids } from '../support/exchange-harness';
-import { threeMfObjectLabels } from '../support/three-mf-export';
+import {
+  bambuStudioFilaments,
+  orcaSlicerFilaments,
+  threeMfObjectLabels
+} from '../support/three-mf-export';
 
 async function download(page: Page, click: () => Promise<void>) {
   const pending = page.waitForEvent('download');
@@ -104,6 +108,10 @@ test(
       { name: 'Base & lid', color: DEFAULT_BODY_COLOR.toUpperCase() },
       { name: 'Knob', color: '#D0342C' }
     ]);
+    // OrcaSlicer reads the m:colorgroup, Bambu Studio either group: each
+    // starts the two bodies on their own filaments.
+    expect(orcaSlicerFilaments(bytes)).toEqual([1, 2]);
+    expect(bambuStudioFilaments(bytes)).toEqual([1, 2]);
     // Still one object per body, placed and closed.
     const measure = await reimportSolids('3mf', bytes);
     expect(measure.fileObjects).toBe(2);

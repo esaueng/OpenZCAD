@@ -58,37 +58,119 @@ function xmlAttribute(tag: string, name: string): string | null {
         .replace(/&amp;/g, '&');
 }
 
-/**
- * Each written object's name and colour, in document order, the way a 3MF
- * core reader resolves them: `name` on the object, and the colour from the
- * `displaycolor` of the `<base>` its `pid`/`pindex` select. Independent of
- * the writer, so a round trip compares two separate readings of the format.
- */
-export function threeMfObjectLabels(bytes: Uint8Array) {
-  const xml = exportedModel(bytes);
-  const groups = new Map<string, (string | null)[]>();
+/** Each property group's colours by id: core `basematerials` and `m:colorgroup`. */
+function threeMfColorGroups(xml: string) {
+  const base = new Map<string, (string | null)[]>();
   for (const [, attributes, body] of xml.matchAll(
     /<basematerials\b([^>]*)>([\s\S]*?)<\/basematerials>/g
   )) {
     const id = xmlAttribute(attributes!, 'id');
     if (id === null) throw new Error('A basematerials group has no id');
-    groups.set(
+    base.set(
       id,
       [...body!.matchAll(/<base\b[^>]*>/g)].map(([tag]) =>
         xmlAttribute(tag, 'displaycolor')
       )
     );
   }
+  const color = new Map<string, (string | null)[]>();
+  for (const [, attributes, body] of xml.matchAll(
+    /<m:colorgroup\b([^>]*)>([\s\S]*?)<\/m:colorgroup>/g
+  )) {
+    const id = xmlAttribute(attributes!, 'id');
+    if (id === null) throw new Error('An m:colorgroup has no id');
+    color.set(
+      id,
+      [...body!.matchAll(/<m:color\b[^>]*>/g)].map(([tag]) =>
+        xmlAttribute(tag, 'color')
+      )
+    );
+  }
+  return { base, color };
+}
+
+function objectProperty(tag: string) {
+  return {
+    name: xmlAttribute(tag, 'name'),
+    pid: xmlAttribute(tag, 'pid'),
+    pindex: Number(xmlAttribute(tag, 'pindex') ?? 0)
+  };
+}
+
+/**
+ * Each written object's name and colour, in document order, the way a 3MF
+ * reader with the Materials extension resolves them: `name` on the object,
+ * and the colour its `pid`/`pindex` select in a `basematerials` group or an
+ * `m:colorgroup`. Independent of the writer, so a round trip compares two
+ * separate readings of the format.
+ */
+export function threeMfObjectLabels(bytes: Uint8Array) {
+  const xml = exportedModel(bytes);
+  const { base, color } = threeMfColorGroups(xml);
   return [...xml.matchAll(/<object\b[^>]*>/g)].map(([tag]) => {
-    const pid = xmlAttribute(tag, 'pid');
-    const pindex = Number(xmlAttribute(tag, 'pindex') ?? 0);
-    const group = pid === null ? undefined : groups.get(pid);
+    const { name, pid, pindex } = objectProperty(tag);
+    const group = pid === null ? undefined : (base.get(pid) ?? color.get(pid));
     if (pid !== null && group === undefined)
-      throw new Error(`Object pid ${pid} names no basematerials group`);
-    return {
-      name: xmlAttribute(tag, 'name'),
-      color: group?.[pindex] ?? null
-    };
+      throw new Error(`Object pid ${pid} names no colour group`);
+    return { name, color: group?.[pindex] ?? null };
+  });
+}
+
+/**
+ * The filament each object starts on, as OrcaSlicer's 3MF importer assigns
+ * it (`bbs_3mf.cpp`, main 2026-11-20): it reads only `m:colorgroup`, keeps
+ * the LAST `m:color` of each group, numbers distinct colours 1, 2… in
+ * ascending group id, and looks the object's `pid` up, ignoring `pindex`.
+ * An object it cannot match stays on filament 1 (null here).
+ */
+export function orcaSlicerFilaments(bytes: Uint8Array) {
+  const xml = exportedModel(bytes);
+  const { color } = threeMfColorGroups(xml);
+  const groupColor = new Map(
+    [...color].map(([id, colors]) => [id, colors.at(-1) ?? null])
+  );
+  const filamentOf = new Map<string, number>();
+  const groupFilament = new Map<string, number>();
+  for (const id of [...groupColor.keys()].sort(
+    (a, b) => Number(a) - Number(b)
+  )) {
+    const value = groupColor.get(id)!;
+    if (value === null) continue;
+    if (!filamentOf.has(value)) filamentOf.set(value, filamentOf.size + 1);
+    groupFilament.set(id, filamentOf.get(value)!);
+  }
+  return [...xml.matchAll(/<object\b[^>]*>/g)].map(([tag]) => {
+    const { pid } = objectProperty(tag);
+    return pid === null ? null : (groupFilament.get(pid) ?? null);
+  });
+}
+
+/**
+ * The filament each object starts on, as Bambu Studio's importer assigns it
+ * (`bbs_3mf.cpp`, main 2026-11-17): `basematerials` and `m:colorgroup`
+ * entries alike, numbered by distinct colour in ascending group id then
+ * entry order, looked up by the object's `pid` and `pindex` (an index out
+ * of range reads entry 0).
+ */
+export function bambuStudioFilaments(bytes: Uint8Array) {
+  const xml = exportedModel(bytes);
+  const { base, color } = threeMfColorGroups(xml);
+  const groups = new Map([...base, ...color]);
+  const filamentOf = new Map<string, number>();
+  const entryFilament = new Map<string, number>();
+  for (const id of [...groups.keys()].sort((a, b) => Number(a) - Number(b))) {
+    groups.get(id)!.forEach((value, index) => {
+      if (value === null) return;
+      if (!filamentOf.has(value)) filamentOf.set(value, filamentOf.size + 1);
+      entryFilament.set(`${id}:${index}`, filamentOf.get(value)!);
+    });
+  }
+  return [...xml.matchAll(/<object\b[^>]*>/g)].map(([tag]) => {
+    const { pid, pindex } = objectProperty(tag);
+    if (pid === null || !groups.get(pid)?.length) return null;
+    const entries = groups.get(pid)!;
+    const index = pindex >= 0 && pindex < entries.length ? pindex : 0;
+    return entryFilament.get(`${pid}:${index}`) ?? null;
   });
 }
 

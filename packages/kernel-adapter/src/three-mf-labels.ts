@@ -2,17 +2,28 @@
  * Body names and display colours in a 3MF model part.
  *
  * The paired writer emits one `<object>` per solid with only an id and a
- * type. This names each object after its body and colours it through the 3MF
- * core format's own property resource: one `<basematerials>` group whose
- * `<base>` entries are the distinct display colours, referenced from each
- * object by `pid` and `pindex`. No extension namespace is declared, so every
- * conforming reader can open the file.
+ * type. This names each object after its body and colours it twice over:
  *
- * What the common slicers make of it (read from their 3MF importers, and
- * recorded in docs/exchange-loss-contract.md): every one names the parts
- * after `name`; Bambu Studio also turns each distinct colour into a filament
- * slot; PrusaSlicer and OrcaSlicer skip `basematerials`.
+ * - one core `<basematerials>` group whose `<base>` entries are the
+ *   distinct display colours, so a reader of the core format alone lists
+ *   them; and
+ * - one Materials extension `<m:colorgroup>` per distinct colour, holding
+ *   that one `<m:color>`, which each object selects with `pid` and
+ *   `pindex="0"`.
+ *
+ * One group per colour is what OrcaSlicer needs: its importer keeps a single
+ * colour per `m:colorgroup` (the last one) and matches it to the object's
+ * `pid`, ignoring `pindex`, and it reads no `basematerials`. Bambu Studio
+ * reads both resources by `pid` and `pindex`, so it resolves the same
+ * colours. The extension is declared under the literal prefix `m`, which
+ * both importers match by name, and is not required: a reader without it
+ * still opens the geometry. PrusaSlicer reads no 3MF colour at all.
+ * Recorded in docs/exchange-loss-contract.md.
  */
+
+/** The 3MF Materials and Properties extension namespace. */
+export const THREE_MF_MATERIAL_NAMESPACE =
+  'http://schemas.microsoft.com/3dmanufacturing/material/2015/02';
 
 /** One written object's label, in the order the writer emitted solids. */
 export interface ThreeMfObjectLabel {
@@ -58,11 +69,20 @@ export function labelThreeMfObjects(
     );
   }
   if (
-    /<basematerials\b/.test(model) ||
+    /<(?:[\w-]+:)?(?:basematerials|colorgroup)\b/.test(model) ||
     tags.some((tag) => /\bp(id|index)=/.test(tag))
   ) {
     throw new Error(
       'The 3MF writer already assigned materials; export refused.'
+    );
+  }
+  const root = /<model\b[^>]*>/.exec(model);
+  if (!root) {
+    throw new Error('Mesh export produced a 3MF model part without <model>.');
+  }
+  if (/\sxmlns:m=/.test(root[0])) {
+    throw new Error(
+      'The 3MF writer already declared the m: namespace; export refused.'
     );
   }
   const resources = /<resources\b[^>]*>/.exec(model);
@@ -86,6 +106,8 @@ export function labelThreeMfObjects(
       0,
       ...tags.map((tag) => Number(/\bid="(\d+)"/.exec(tag)?.[1] ?? 0))
     ) + 1;
+  // One colour group per distinct colour, after the base group.
+  const colorGroupId = (index: number) => groupId + 1 + index;
   let next = 0;
   const labelled = model.replace(OBJECT_TAG, (tag) => {
     const index = next++;
@@ -94,13 +116,23 @@ export function labelThreeMfObjects(
     return tag.replace(
       /^<object\b/,
       () =>
-        `<object${name ? ` name="${escapeXmlAttribute(name)}"` : ''} pid="${groupId}" pindex="${pindex[index]}"`
+        `<object${name ? ` name="${escapeXmlAttribute(name)}"` : ''} pid="${colorGroupId(pindex[index]!)}" pindex="0"`
     );
   });
   // The core format requires a resource to be defined before anything that
-  // references it, so the group opens <resources>.
-  const group = `\n  <basematerials id="${groupId}">${colors
+  // references it, so the groups open <resources>.
+  const groups = `\n  <basematerials id="${groupId}">${colors
     .map((color) => `\n   <base name="${color}" displaycolor="${color}"/>`)
-    .join('')}\n  </basematerials>`;
-  return labelled.replace(resources[0], () => `${resources[0]}${group}`);
+    .join('')}\n  </basematerials>${colors
+    .map(
+      (color, index) =>
+        `\n  <m:colorgroup id="${colorGroupId(index)}">\n   <m:color color="${color}"/>\n  </m:colorgroup>`
+    )
+    .join('')}`;
+  return labelled
+    .replace(resources[0], () => `${resources[0]}${groups}`)
+    .replace(
+      root[0],
+      () => `${root[0].slice(0, -1)} xmlns:m="${THREE_MF_MATERIAL_NAMESPACE}">`
+    );
 }
