@@ -351,6 +351,65 @@ export const roundedOperations = () => [
 ];
 
 /**
+ * The plan's corpus bracket: a 60 × 30 plate on XZ, 6 thick, its two top
+ * corners rounded R6, with a 20 long, 8 wide slot through it (centres at
+ * x = 20 and 40, z = 12).
+ */
+export const bracketOperations = () => {
+  const line = (x1: number, y1: number, x2: number, y2: number) => ({
+    objectKind: 'line',
+    x1,
+    y1,
+    x2,
+    y2
+  });
+  const arc = (
+    centerX: number,
+    centerY: number,
+    radius: number,
+    startAngleDeg: number,
+    endAngleDeg: number
+  ) => ({
+    objectKind: 'arc',
+    centerX,
+    centerY,
+    radius,
+    startAngleDeg,
+    endAngleDeg
+  });
+  return [
+    {
+      kind: 'add_sketch',
+      name: 'Bracket',
+      plane: 'XZ',
+      offset: 0,
+      objects: [
+        line(0, 0, 60, 0),
+        line(60, 0, 60, 24),
+        arc(54, 24, 6, 0, 90),
+        line(54, 30, 6, 30),
+        arc(6, 24, 6, 90, 180),
+        line(0, 24, 0, 0),
+        // The slot.
+        line(20, 8, 40, 8),
+        arc(40, 12, 4, -90, 90),
+        line(40, 16, 20, 16),
+        arc(20, 12, 4, 90, 270)
+      ],
+      localId: '$bracket'
+    },
+    {
+      kind: 'add_extrude',
+      name: 'Bracket',
+      localId: '$bracketBody',
+      sketchId: '$bracket',
+      distance: 6,
+      samplePoint: { x: 5, y: 3 }
+    }
+  ];
+};
+
+/**
  * A 30 × 20 block on XZ whose top-right corner is a 45° slope, rounded R5
  * into the right face: the arc is tangent to x = 30 and to the slope, so
  * its centre (25, 10) follows from them and its radius.

@@ -18,9 +18,11 @@ import {
  *
  * The assistant does not decide whether a set is complete or redundant:
  * the app's dimension check does, and a proposal is shown only once every
- * annotation resolves and that check passes. A deterministic generator
- * (D06 slice C) will hand the assistant candidates to choose from; until
- * it lands the assistant picks edges from the digest directly.
+ * annotation resolves and that check passes. To dimension a sheet the
+ * assistant asks the app's deterministic generator (D06 slice C) with
+ * `auto_dimension_drawing`, choosing only scope and style: which views and
+ * which kinds of dimension. The app plans the dimensions, and reports what
+ * the scope leaves out.
  */
 
 export type CadDrawingAnnotationKind =
@@ -76,12 +78,40 @@ export interface CadRemoveDrawingAnnotationsOperation {
   annotationIds: string[];
 }
 
+/** The kinds of dimension the generator places, as a request scopes them. */
+export const AUTO_DIMENSION_KINDS = [
+  'linear',
+  'diameter',
+  'radius',
+  'chamfer',
+  'angle'
+] as const;
+export type CadAutoDimensionKind = (typeof AUTO_DIMENSION_KINDS)[number];
+
+/**
+ * Dimension the sheet with the app's own generator: every dimension the
+ * dimension check finds missing, placed by the app. The assistant states
+ * only the scope ("only the front view", "skip the radii"); what the scope
+ * leaves out is reported with the preview, never dropped silently.
+ */
+export interface CadAutoDimensionDrawingOperation {
+  kind: 'auto_dimension_drawing';
+  sheetId: string;
+  /** Only dimensions in these views; null for every view. */
+  viewIds: string[] | null;
+  /** Only these kinds of dimension; null for every kind. */
+  dimensionKinds: CadAutoDimensionKind[] | null;
+}
+
 export type CadDrawingOperation =
-  CadAddDrawingAnnotationsOperation | CadRemoveDrawingAnnotationsOperation;
+  | CadAddDrawingAnnotationsOperation
+  | CadRemoveDrawingAnnotationsOperation
+  | CadAutoDimensionDrawingOperation;
 
 export const DRAWING_OPERATION_KINDS: ReadonlySet<string> = new Set([
   'add_drawing_annotations',
-  'remove_drawing_annotations'
+  'remove_drawing_annotations',
+  'auto_dimension_drawing'
 ]);
 
 export function isDrawingOperation(operation: {
@@ -303,6 +333,39 @@ export const DRAWING_OPERATION_SCHEMAS = [
       }
     },
     required: ['kind', 'sheetId', 'annotationIds']
+  },
+  {
+    type: 'object',
+    additionalProperties: false,
+    description:
+      "Dimension the Draw sheet in digest.drawing with the app's own generator, which adds every dimension digest.drawing.audit finds missing, placed true size and without repeats. Prefer it to add_drawing_annotations whenever the user asks to dimension the sheet or a part of it. Give the scope only: viewIds (null for every view) and dimensionKinds (null for every kind; e.g. omit 'radius' to skip the radii). Propose it alone, with no other operation.",
+    properties: {
+      kind: { type: 'string', const: 'auto_dimension_drawing' },
+      sheetId: { type: 'string' },
+      viewIds: {
+        anyOf: [
+          {
+            type: 'array',
+            minItems: 1,
+            maxItems: 40,
+            items: { type: 'string' }
+          },
+          { type: 'null' }
+        ]
+      },
+      dimensionKinds: {
+        anyOf: [
+          {
+            type: 'array',
+            minItems: 1,
+            maxItems: AUTO_DIMENSION_KINDS.length,
+            items: { type: 'string', enum: [...AUTO_DIMENSION_KINDS] }
+          },
+          { type: 'null' }
+        ]
+      }
+    },
+    required: ['kind', 'sheetId', 'viewIds', 'dimensionKinds']
   }
 ] as const;
 
@@ -405,6 +468,33 @@ function specError(value: unknown, where: string): string | null {
 export function parseDrawingOperation(operation: Record<string, unknown>) {
   if (!isRef(operation.sheetId))
     throw new Error(`Invalid ${String(operation.kind)} operation.`);
+  if (operation.kind === 'auto_dimension_drawing') {
+    const { viewIds, dimensionKinds } = operation;
+    if (
+      viewIds !== null &&
+      !(
+        Array.isArray(viewIds) &&
+        viewIds.length > 0 &&
+        viewIds.length <= 40 &&
+        viewIds.every(isRef) &&
+        new Set(viewIds).size === viewIds.length
+      )
+    )
+      throw new Error('auto_dimension_drawing has invalid viewIds.');
+    if (
+      dimensionKinds !== null &&
+      !(
+        Array.isArray(dimensionKinds) &&
+        dimensionKinds.length > 0 &&
+        dimensionKinds.every((kind) =>
+          (AUTO_DIMENSION_KINDS as readonly unknown[]).includes(kind)
+        ) &&
+        new Set(dimensionKinds).size === dimensionKinds.length
+      )
+    )
+      throw new Error('auto_dimension_drawing has invalid dimensionKinds.');
+    return;
+  }
   if (operation.kind === 'remove_drawing_annotations') {
     if (
       !Array.isArray(operation.annotationIds) ||
@@ -486,6 +576,17 @@ export function validateDrawingOperation(
     throw new Error(
       'The sheet is not drawn from the current model. Update it before adding dimensions.'
     );
+  if (operation.kind === 'auto_dimension_drawing') {
+    for (const viewId of operation.viewIds ?? []) {
+      const view = drawing.views.find((entry) => entry.viewId === viewId);
+      if (!view) throw new Error(`View ${viewId} is not on the sheet.`);
+      if (view.orientation === 'iso')
+        throw new Error(
+          `View ${viewId} is isometric; dimensions go in views that see them true size.`
+        );
+    }
+    return operation;
+  }
   const views = new Map(drawing.views.map((view) => [view.viewId, view]));
   const edges: Record<string, DrawingEdgeRef> = {};
   operation.annotations.forEach((spec, index) => {
@@ -550,6 +651,17 @@ export function validateDrawingOperation(
 }
 
 export function describeDrawingOperation(operation: CadDrawingOperation) {
+  if (operation.kind === 'auto_dimension_drawing') {
+    const scope = [
+      operation.viewIds
+        ? `in view${operation.viewIds.length === 1 ? '' : 's'} ${operation.viewIds.join(', ')}`
+        : null,
+      operation.dimensionKinds
+        ? `${operation.dimensionKinds.join(', ')} only`
+        : null
+    ].filter(Boolean);
+    return `Auto-dimension the sheet${scope.length ? ` (${scope.join('; ')})` : ''}`;
+  }
   if (operation.kind === 'remove_drawing_annotations') {
     const count = operation.annotationIds.length;
     return `Remove ${count} annotation${count === 1 ? '' : 's'} from the sheet`;
