@@ -580,9 +580,15 @@ async function openStore(
         ctx.groups.account.userId,
         projectId,
         async () => {
-          await links.publishShareSnapshots(ctx, projectId, head);
+          // The wait may have let newer versions land (another member's
+          // save): work from the head as it is now, so a statement renewed
+          // here republishes the newest snapshot, not this version's.
+          const latest = await ctx.store.shareHead(projectId).catch(() => head);
+          const current = latest.version >= head.version ? latest : head;
+          if (!current.shareLinks?.links.length) return;
+          await links.publishShareSnapshots(ctx, projectId, current);
           await links
-            .issueShareAuthorities(ctx, projectId, { head })
+            .issueShareAuthorities(ctx, projectId, { head: current })
             .catch(() => undefined);
         }
       );

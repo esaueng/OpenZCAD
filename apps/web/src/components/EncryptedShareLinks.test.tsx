@@ -546,7 +546,7 @@ describe('EncryptedShareLinks speed', () => {
       screen.queryByRole('group', { name: 'Confirm sharing' })
     ).not.toBeInTheDocument();
     expect(
-      await screen.findByRole('textbox', { name: 'Share link', exact: true })
+      await screen.findByRole('textbox', { name: 'Share link' })
     ).toHaveValue(URL_A);
   });
 
@@ -576,6 +576,31 @@ describe('EncryptedShareLinks speed', () => {
     await waitFor(() => expect(client.create).toHaveBeenCalledOnce());
   });
 
+  it('frees Create link when a passkey confirmation landed but a later step failed', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: true },
+      { links: [], retired: [], needsConfirmation: false, passkey: true }
+    ]);
+    // The confirmation was stored; issuing statements afterwards failed.
+    vi.mocked(client.confirm).mockRejectedValueOnce(
+      new Error('Statements could not be issued.')
+    );
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    await userEvent.click(create);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'could not be issued'
+    );
+    // The refresh finds the confirmation: its form goes, and nothing waits on it.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('group', { name: 'Confirm sharing' })
+      ).not.toBeInTheDocument()
+    );
+    expect(create).toBeEnabled();
+    expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
+  });
+
   it('asks for the recovery key without a passkey prompt when the account has none', async () => {
     const client = fakeClient([
       { links: [], retired: [], needsConfirmation: true, passkey: false }
@@ -600,7 +625,7 @@ describe('EncryptedShareLinks speed', () => {
     vi.mocked(client.list).mockImplementation(() => new Promise(() => {}));
     await userEvent.click(create);
     expect(
-      await screen.findByRole('textbox', { name: 'Share link', exact: true })
+      await screen.findByRole('textbox', { name: 'Share link' })
     ).toHaveValue(URL_A);
     await waitFor(() => expect(create).toBeEnabled());
     // The refresh skips the upkeep pass the action already did.

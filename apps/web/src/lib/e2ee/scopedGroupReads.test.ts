@@ -76,11 +76,11 @@ describe('withScopedGroupReads', () => {
       await api.leaves('p');
       expect(raw.leaves).toHaveBeenCalledTimes(3);
 
-      raw.authority.mockRejectedValueOnce(new Error('503'));
-      await expect(api.authority!('p')).rejects.toThrow('503');
-      await api.authority!('p');
+      raw.group.mockRejectedValueOnce(new Error('503'));
+      await expect(api.group('p')).rejects.toThrow('503');
+      await api.group('p');
       await api.leaves('p');
-      expect(raw.authority).toHaveBeenCalledTimes(2);
+      expect(raw.group).toHaveBeenCalledTimes(2);
       expect(raw.leaves).toHaveBeenCalledTimes(4);
     });
   });
@@ -98,6 +98,16 @@ describe('withScopedGroupReads', () => {
       await api.group('p');
       expect(raw.group).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it('always reads authority fresh: another tab may have pinned a newer one', async () => {
+    const raw = fakeApi();
+    const { api, scope } = withScopedGroupReads(raw);
+    await scope(async () => {
+      await api.authority!('p');
+      await api.authority!('p');
+    });
+    expect(raw.authority).toHaveBeenCalledTimes(2);
   });
 
   it('keeps optional methods absent when the API has none', () => {

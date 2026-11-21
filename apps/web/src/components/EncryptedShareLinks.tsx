@@ -355,13 +355,23 @@ export function EncryptedShareLinks({
   } | null>(null);
   const loadRevision = useRef(0);
 
+  // Whether the last full list reported a problem its upkeep may retry.
+  const upkeepProblem = useRef(false);
   const load = useCallback(
     async (options?: { readonly upkeep?: false }) => {
       const revision = ++loadRevision.current;
-      const next = await (options
-        ? client.list(projectId, options)
-        : client.list(projectId));
+      let next: EncryptedShareLinksState;
+      try {
+        next = await (options
+          ? client.list(projectId, options)
+          : client.list(projectId));
+      } catch (caught) {
+        // A newer load or action owns the error line now.
+        if (revision !== loadRevision.current) return;
+        throw caught;
+      }
       if (revision !== loadRevision.current) return;
+      if (!options) upkeepProblem.current = !!next.problem;
       setState(next);
       if (next.problem) setError(next.problem);
     },
@@ -371,6 +381,16 @@ export function EncryptedShareLinks({
   useEffect(() => {
     void load().catch((caught: unknown) => setError(message(caught)));
   }, [load]);
+
+  // Confirmed (here, or partly before a later step failed): the form and
+  // its Cancel go away, so nothing may stay waiting on them.
+  const needsConfirmation = state?.needsConfirmation;
+  useEffect(() => {
+    if (needsConfirmation !== false) return;
+    setConfirming(false);
+    setCreateAfterConfirm(false);
+    setRecoveryKey('');
+  }, [needsConfirmation]);
 
   useEffect(
     () =>
@@ -412,12 +432,15 @@ export function EncryptedShareLinks({
       setBusy(null);
     }
     // The action's result is already on screen: the list catches up
-    // behind it without the upkeep pass the action just did. After a
-    // failure too, since a revoke can fail after its tombstone was
+    // behind it, without the upkeep pass unless the last one reported a
+    // problem it retries (a revocation the server did not confirm). After
+    // a failure too, since a revoke can fail after its tombstone was
     // written: the link then shows as revocation pending, not active.
-    await load({ upkeep: false }).catch((caught: unknown) => {
-      if (!failed) setError(message(caught));
-    });
+    await (upkeepProblem.current ? load() : load({ upkeep: false })).catch(
+      (caught: unknown) => {
+        if (!failed) setError(message(caught));
+      }
+    );
   };
 
   const createLink = async () => {

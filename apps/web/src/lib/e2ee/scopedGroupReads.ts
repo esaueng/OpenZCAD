@@ -5,17 +5,15 @@ export type ScopeGroupReads = <T>(run: () => Promise<T>) => Promise<T>;
 
 /**
  * The reads that one share-link action repeats: every ownership, role and
- * key check fetches the project's group info, leaves and authority again.
- * Creating one link made 123 such requests for three answers.
+ * key check fetches the project's group info and leaves again. Authority
+ * is not among them: it is checked against a sequence pinned across tabs,
+ * and a held answer older than another tab's pin reads as a rollback.
  */
-const REPEATED_READS = new Set<keyof ProjectGroupsApi>([
-  'group',
-  'leaves',
-  'authority'
-]);
+const REPEATED_READS = new Set<keyof ProjectGroupsApi>(['group', 'leaves']);
 
 /** Other reads: sent as before, and they leave the shared answers alone. */
 const OTHER_READS = new Set<keyof ProjectGroupsApi>([
+  'authority',
   'keys',
   'archives',
   'resets',
@@ -29,7 +27,7 @@ export const SCOPED_READ_MAX_AGE_MS = 5_000;
 
 /**
  * Wraps the page's project-group API so that, while a scope runs, the
- * same group, leaves or authority read is sent once and its answer shared.
+ * same group or leaves read is sent once and its answer shared.
  * Nothing is cached outside a scope. The cache is dropped when:
  *
  * - any write starts or ends (a Commit, an authority save, a key upload:
