@@ -152,10 +152,12 @@ import {
 } from '@openzcad/shared';
 import {
   adoptProjectDocument,
+  assertStorableDocument,
   reidentifyProjectDocument,
   createSavedRevision,
   createProjectDocument,
   duplicateProjectDocument,
+  frozenShareDocumentProblem,
   normalizeDocument,
   sharedProjectSnapshotDocument,
   withoutDerivedProjection
@@ -183,7 +185,10 @@ export type ProjectSharingErrorCode =
   | 'SHARE_LINK_NOT_FOUND'
   | 'SHARE_LINK_LIMIT'
   | 'SHARE_LINK_LABEL_UNAVAILABLE'
-  | 'SHARE_LINK_COMMENTS_UNAVAILABLE';
+  | 'SHARE_LINK_COMMENTS_UNAVAILABLE'
+  | 'SHARE_LINK_HISTORY_UNAVAILABLE'
+  | 'SHARE_LINK_SNAPSHOT_INVALID'
+  | 'SHARE_LINK_SNAPSHOT_TOO_LARGE';
 
 export class ProjectSharingError extends Error {
   constructor(
@@ -207,12 +212,86 @@ export interface CreateProjectInvitationInput {
 export interface CreateProjectShareLinkInput {
   shareLinkId: string;
   mode: ProjectShareLinkMode;
+  /**
+   * The bare token hash for a link to the live project; for a link without
+   * history, one in the frozen domain
+   * ({@link FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX}). The other kind is refused.
+   */
   tokenHash: string;
   createdAt: number;
   /** Already normalized (normalizeShareLinkLabel); absent or null when unnamed. */
   label?: string | null;
   /** L08: a commenter link. */
   comments?: boolean;
+  /**
+   * L08: the link shares the finished model without its history, and this
+   * is that model ({@link frozenShareSnapshot}). Absent for a link to the
+   * live project.
+   */
+  frozenDocument?: ProjectDocument;
+}
+
+/**
+ * L08: a link without history keeps its token hash in a domain of its own.
+ * A link to the live project stores the bare SHA-256 of its token, and that
+ * is all a Worker from before such links looks up (and all the asset and
+ * import-source reads ever look up). A frozen link stores this prefix and a
+ * digest computed over a different input, so no lookup of a bare hash can
+ * resolve one: a rolled-back Worker, or one whose schema probe still says
+ * migration 0062 is missing, answers 404 for its token rather than serving
+ * the live project. Migration 0062's triggers hold a row to its domain.
+ */
+export const FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX = 'frozen-v1:';
+
+/** Whether a stored token hash is in the frozen-link domain. */
+export function isFrozenShareLinkTokenHash(tokenHash: string): boolean {
+  return tokenHash.startsWith(FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX);
+}
+
+/**
+ * Refuses a link whose token hash is in the wrong domain for its kind,
+ * before anything is stored.
+ */
+export function assertShareLinkTokenHashDomain(
+  tokenHash: string,
+  frozen: boolean
+): void {
+  if (isFrozenShareLinkTokenHash(tokenHash) !== frozen)
+    throw new ProjectSharingError(
+      'SHARE_LINK_SNAPSHOT_INVALID',
+      frozen
+        ? 'A link without history needs a token of its own kind.'
+        : 'Only a link without history takes that kind of token.'
+    );
+}
+
+/**
+ * The document a link without history may store and serve for `projectId`:
+ * the share projection of `value`, and only when it holds imported solids
+ * and nothing of the project's history. Checked when stored and again
+ * whenever it is served, so nothing else can leave through such a link.
+ */
+export function frozenShareSnapshot(
+  value: unknown,
+  projectId: string
+): ProjectDocument {
+  let problem: string | null;
+  let document: ProjectDocument | undefined;
+  try {
+    document = sharedProjectSnapshotDocument(assertStorableDocument(value));
+    problem =
+      document.projectId === projectId
+        ? frozenShareDocumentProblem(document)
+        : 'It belongs to another project.';
+  } catch (error) {
+    problem = error instanceof Error ? error.message : 'It cannot be read.';
+  }
+  if (problem !== null || !document)
+    throw new ProjectSharingError(
+      'SHARE_LINK_SNAPSHOT_INVALID',
+      `The model could not be shared without its history. ${problem}`
+    );
+  return document;
 }
 
 /**
@@ -226,6 +305,8 @@ export interface SharedProjectSnapshot {
   mode: ProjectShareLinkMode;
   /** L08: a commenter link. */
   comments?: boolean;
+  /** L08: false when `document` is the frozen model of a link without history. */
+  history?: false;
   document: ProjectDocument;
 }
 
@@ -575,12 +656,28 @@ export interface PersistenceService {
     label: string | null
   ): Promise<ProjectShareLinkSummary>;
   /**
+   * L08: replaces the frozen model of an unrevoked link without history
+   * (the owner's Update). A link to the live project is refused.
+   */
+  updateProjectShareLinkSnapshot(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    document: ProjectDocument,
+    updatedAt: number
+  ): Promise<ProjectShareLinkSummary>;
+  /**
    * Resolves an unrevoked, unexpired share link and loads its project document with the
    * derived projection stripped. Unknown, revoked and expired tokens are equally null
    * so the route can stay an indistinguishable 404.
+   *
+   * `tokenHash` (the bare hash) resolves only a link to the live project.
+   * A link without history resolves only by `frozenTokenHash`, its own
+   * domain; without one, such a link is not found.
    */
   loadSharedProjectByTokenHash(
-    tokenHash: string
+    tokenHash: string,
+    frozenTokenHash?: string
   ): Promise<SharedProjectSnapshot | null>;
   /**
    * Serves one import-source asset to a share-link visitor, only when the
@@ -825,6 +922,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       projectId: string;
       createdByUserId: UserId;
       revokedAt: number | null;
+      frozenAt?: number;
     }
   >();
   private readonly organization = new Map<string, ProjectOrganization>();
@@ -1140,22 +1238,66 @@ export class InMemoryPersistenceService implements PersistenceService {
         'SHARE_LINK_LIMIT',
         'A project supports up to 100 active share links.'
       );
+    const frozenDocument = input.frozenDocument
+      ? frozenShareSnapshot(input.frozenDocument, projectId)
+      : undefined;
+    assertShareLinkTokenHashDomain(
+      input.tokenHash,
+      frozenDocument !== undefined
+    );
+    const { frozenDocument: _received, ...link } = input;
     this.projectShareLinks.set(input.shareLinkId, {
-      ...input,
+      ...link,
+      ...(frozenDocument
+        ? { frozenDocument, frozenAt: input.createdAt, mode: 'view' as const }
+        : {}),
       label: input.label ?? null,
       projectId,
       createdByUserId: ownerUserId,
       revokedAt: null
     });
+    return this.shareLinkSummary(input.shareLinkId);
+  }
+
+  private shareLinkSummary(shareLinkId: string): ProjectShareLinkSummary {
+    const link = this.projectShareLinks.get(shareLinkId)!;
     return {
-      shareLinkId: input.shareLinkId,
-      projectId,
-      mode: input.mode,
-      createdAt: input.createdAt,
-      revokedAt: null,
-      label: input.label ?? null,
-      ...(input.comments ? { comments: true } : {})
+      shareLinkId: link.shareLinkId,
+      projectId: link.projectId,
+      mode: link.mode,
+      createdAt: link.createdAt,
+      revokedAt: link.revokedAt,
+      label: link.label ?? null,
+      ...(link.comments ? { comments: true } : {}),
+      ...(link.frozenAt !== undefined
+        ? { history: false as const, frozenAt: link.frozenAt }
+        : {})
     };
+  }
+
+  async updateProjectShareLinkSnapshot(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    document: ProjectDocument,
+    updatedAt: number
+  ): Promise<ProjectShareLinkSummary> {
+    await this.requireProjectOwner(ownerUserId, projectId);
+    const link = this.projectShareLinks.get(shareLinkId);
+    if (
+      !link ||
+      link.projectId !== projectId ||
+      link.revokedAt !== null ||
+      link.frozenAt === undefined
+    ) {
+      throw new ProjectSharingError(
+        'SHARE_LINK_NOT_FOUND',
+        'Project share link not found.'
+      );
+    }
+    link.frozenDocument = frozenShareSnapshot(document, projectId);
+    link.frozenAt = updatedAt;
+    return this.shareLinkSummary(shareLinkId);
   }
 
   async listProjectShareLinks(
@@ -1166,15 +1308,7 @@ export class InMemoryPersistenceService implements PersistenceService {
     return Array.from(this.projectShareLinks.values())
       .filter((link) => link.projectId === projectId && link.revokedAt === null)
       .sort((left, right) => right.createdAt - left.createdAt)
-      .map((link) => ({
-        shareLinkId: link.shareLinkId,
-        projectId: link.projectId,
-        mode: link.mode,
-        createdAt: link.createdAt,
-        revokedAt: link.revokedAt,
-        label: link.label ?? null,
-        ...(link.comments ? { comments: true } : {})
-      }));
+      .map((link) => this.shareLinkSummary(link.shareLinkId));
   }
 
   async renameProjectShareLink(
@@ -1192,14 +1326,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       );
     }
     link.label = label;
-    return {
-      shareLinkId: link.shareLinkId,
-      projectId: link.projectId,
-      mode: link.mode,
-      createdAt: link.createdAt,
-      revokedAt: null,
-      label
-    };
+    return this.shareLinkSummary(shareLinkId);
   }
 
   async revokeProjectShareLink(
@@ -1218,6 +1345,8 @@ export class InMemoryPersistenceService implements PersistenceService {
     }
     link.revokedAt = revokedAt;
     link.label = null;
+    // The frozen model goes with the link; that it had no history stays.
+    delete link.frozenDocument;
     const revoked = Array.from(this.projectShareLinks.entries())
       .filter(
         ([, entry]) => entry.projectId === projectId && entry.revokedAt !== null
@@ -1227,13 +1356,19 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   async loadSharedProjectByTokenHash(
-    tokenHash: string
+    tokenHash: string,
+    frozenTokenHash?: string
   ): Promise<SharedProjectSnapshot | null> {
     const oldestValidCreation =
       Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS;
     const link = Array.from(this.projectShareLinks.values()).find(
       (candidate) =>
-        candidate.tokenHash === tokenHash &&
+        // Each kind of link by its own hash domain only.
+        (candidate.frozenAt === undefined
+          ? candidate.tokenHash === tokenHash
+          : frozenTokenHash !== undefined &&
+            isFrozenShareLinkTokenHash(frozenTokenHash) &&
+            candidate.tokenHash === frozenTokenHash) &&
         candidate.revokedAt === null &&
         candidate.createdAt > oldestValidCreation
     );
@@ -1247,6 +1382,19 @@ export class InMemoryPersistenceService implements PersistenceService {
     // service has no analog for; the D1 path checks it as well.)
     if (this.organizationOf(link.projectId).status === 'deleted') {
       return null;
+    }
+    if (link.frozenAt !== undefined) {
+      // L08: never the live project. The frozen model is checked again on
+      // the way out, and a link that lost it serves nothing.
+      if (!link.frozenDocument) return null;
+      return {
+        projectId: link.projectId,
+        name: document.name,
+        mode: 'view',
+        ...(link.comments ? { comments: true } : {}),
+        history: false,
+        document: frozenShareSnapshot(link.frozenDocument, link.projectId)
+      };
     }
     if (isUnreadableStoredDocument(normalizedForLoad(document)))
       throw new ProjectObjectStorageError(

@@ -259,6 +259,7 @@ import {
   staleDirectEditFaceRepair,
   withEchoedSavePoints,
   withoutDerivedProjection,
+  isSharedWithoutHistory,
   type ExtrudeInput,
   type StaleDirectEditFaceRepair
 } from '@openzcad/document-core';
@@ -7091,10 +7092,17 @@ export function App() {
   // An encrypted link's verified statement says view or tweak (slice 5-11),
   // and a plaintext link's record does: a view-only link locks Tweak too.
   const shareLinkViewOnly = shareSession?.mode === 'view';
+  // L08: the owner shared the finished model only. The document says so
+  // itself, for a plaintext and an encrypted link alike.
+  const sharedWithoutHistory = Boolean(
+    shareSession && doc && isSharedWithoutHistory(doc)
+  );
   const tweakModeDisabledReason = shareSession
-    ? shareLinkViewOnly
-      ? 'This link is view only — Make a copy to change its parameters'
-      : null
+    ? sharedWithoutHistory
+      ? 'The owner shared this model without its history, so it has no parameters to change'
+      : shareLinkViewOnly
+        ? 'This link is view only — Make a copy to change its parameters'
+        : null
     : buildModeDisabledReason;
   // The stored preference resolves against what the project allows: a
   // read-only share pins the workspace to View whatever this device prefers,
@@ -16322,9 +16330,11 @@ export function App() {
         });
         setStatus(
           `${
-            shared.mode === 'view'
-              ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
-              : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+            isSharedWithoutHistory(opening.document)
+              ? `Opened shared model ${shared.name} · view only. The owner shared it without its history. Make a copy to build on it.`
+              : shared.mode === 'view'
+                ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+                : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
           }${opening.note ? ` ${opening.note}` : ''}`
         );
       } catch (error) {
@@ -37274,6 +37284,7 @@ export function App() {
             shareSession
               ? {
                   mode: shareSession.mode,
+                  ...(sharedWithoutHistory ? { withoutHistory: true } : {}),
                   onMakeCopy: requestShareCopy
                 }
               : null
@@ -39858,6 +39869,7 @@ export function App() {
         <>
           {shareCopyChoice && (
             <SharedLinkCopyDialog
+              withoutHistory={sharedWithoutHistory}
               accountEncrypts={shareCopyChoice.accountEncrypts}
               error={shareCopyChoice.error}
               onRetry={requestShareCopy}
@@ -40142,6 +40154,16 @@ export function App() {
                   // gone, so go back to the projects that remain.
                   setSharingOpen(false);
                   void handleGoHome();
+                }}
+                onFreezeModel={async () => {
+                  // L08: a link without history shares the model as this
+                  // tab shows it now, saved or not.
+                  const current = managerRef.current?.document;
+                  if (!current)
+                    throw new Error('Open the project before sharing it.');
+                  const { freezeModelForSharing } =
+                    await import('./lib/frozenShareModel');
+                  return freezeModelForSharing(current, geometry);
                 }}
                 onClose={() => setSharingOpen(false)}
               />

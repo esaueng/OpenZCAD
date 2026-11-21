@@ -7,6 +7,7 @@ import {
   type EncryptedShareLinksState
 } from './EncryptedShareLinks';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
+import type { ProjectDocument } from '@openzcad/shared';
 
 const URL_A = 'https://app.example/#share=a.b.c';
 
@@ -503,5 +504,105 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     expect(
       screen.getByRole('button', { name: 'Revoke Tweak link' })
     ).toBeEnabled();
+  });
+});
+
+describe('EncryptedShareLinks without history (L08)', () => {
+  const frozenModel = { projectId: 'proj_x' } as unknown as ProjectDocument;
+  const frozenRow: EncryptedShareLinksState = {
+    links: [
+      {
+        shareId: 'shr_f',
+        mode: 'frozen',
+        url: URL_A,
+        status: 'active',
+        expiresAt: Date.UTC(2026, 10, 2)
+      }
+    ],
+    needsConfirmation: false,
+    retired: []
+  };
+
+  it('offers no choice where a model cannot be frozen, and shares history by default', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    expect(
+      screen.queryByRole('checkbox', { name: 'Include history' })
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(client.create).toHaveBeenCalledWith('proj_x', 'view')
+    );
+  });
+
+  it('creates a frozen link with the model frozen in this browser', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false },
+      frozenRow
+    ]);
+    const onFreezeModel = vi.fn(async () => frozenModel);
+    const user = userEvent.setup();
+    render(
+      <EncryptedShareLinks
+        projectId="proj_x"
+        client={client}
+        onFreezeModel={onFreezeModel}
+      />
+    );
+    const history = await screen.findByRole('checkbox', {
+      name: 'Include history'
+    });
+    expect(history).toBeChecked();
+    await user.click(history);
+    const access = screen.getByRole('radiogroup', { name: 'Link access' });
+    expect(within(access).getByRole('radio', { name: 'Tweak' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(client.create).toHaveBeenCalledWith('proj_x', 'frozen', {
+        frozenDocument: frozenModel
+      })
+    );
+    expect(await screen.findAllByText(/No history link/)).not.toHaveLength(0);
+  });
+
+  it('Update freezes the current model into the listed link', async () => {
+    const update = vi.fn(async () => undefined);
+    const client = { ...fakeClient([frozenRow]), update };
+    const onFreezeModel = vi.fn(async () => frozenModel);
+    render(
+      <EncryptedShareLinks
+        projectId="proj_x"
+        client={client}
+        onFreezeModel={onFreezeModel}
+      />
+    );
+    await userEvent.click(
+      await screen.findByRole('button', {
+        name: 'Update No history link to the current model'
+      })
+    );
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('proj_x', 'shr_f', frozenModel)
+    );
+    expect(client.create).not.toHaveBeenCalled();
+  });
+
+  it('says a frozen link with no model needs an update', async () => {
+    const client = fakeClient([
+      {
+        ...frozenRow,
+        links: [{ ...frozenRow.links[0]!, status: 'not-published' }]
+      }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    expect(await screen.findByText('Needs an update')).toBeVisible();
+    // No model can be frozen here, so no Update is offered.
+    expect(
+      screen.queryByRole('button', { name: /to the current model$/ })
+    ).not.toBeInTheDocument();
   });
 });

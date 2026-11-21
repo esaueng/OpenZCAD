@@ -2,6 +2,7 @@ import { listFeaturesInOrder } from './feature-order';
 export { listFeaturesInOrder } from './feature-order';
 export { withoutDerivedProjection } from './document-projection';
 export { sharedProjectSnapshotDocument } from './shared-snapshot';
+export * from './frozen-share';
 import { isShareLinkSheetIds, withShareLinkSheets } from './share-link-sheets';
 export {
   MAX_SHARE_LINK_SHEETS,

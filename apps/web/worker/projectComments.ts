@@ -6,6 +6,7 @@ import {
   type ProjectAccessRole,
   type ProjectComment
 } from '@openzcad/shared';
+import { isShareLinkHistoryReady } from '@openzcad/cloudflare-adapters';
 
 /**
  * L08 review comments on plaintext projects (migration 0058). Every member
@@ -295,20 +296,36 @@ export const MAX_LINK_COMMENTER_NAME = 60;
  * comment on, or null. The same rules as the link's read: not revoked,
  * within its lifetime, the project not trashed and plaintext, the owner's
  * sharing switched on, and the link made with comments.
+ *
+ * `tokenHash` (the bare hash) finds only a link to the live project; a
+ * link without history (migration 0062) is found only by
+ * `frozenTokenHash`, its own domain, and comes back `frozen`: its visitor
+ * reads and answers only the threads started through that link.
  */
 export async function commentLinkProject(
   db: D1Database,
   tokenHash: string,
-  oldestValidCreation: number
-): Promise<{ projectId: string; shareLinkId: string } | null> {
+  oldestValidCreation: number,
+  frozenTokenHash?: string
+): Promise<CommentLink | null> {
+  const historyReady = await isShareLinkHistoryReady(db);
+  const frozenHash =
+    historyReady && frozenTokenHash !== undefined ? frozenTokenHash : null;
+  const byToken = !historyReady
+    ? 'l.token_hash = ?'
+    : frozenHash === null
+      ? '(l.token_hash = ? AND l.history = 1)'
+      : `((l.token_hash = ? AND l.history = 1)
+          OR (l.token_hash = ? AND l.history = 0))`;
   const row = await db
     .prepare(
-      `SELECT l.id AS share_link_id, l.project_id
+      `SELECT l.id AS share_link_id, l.project_id,
+              ${historyReady ? 'l.history' : '1 AS history'}
        FROM project_share_links l
        INNER JOIN projects p ON p.id = l.project_id
        LEFT JOIN user_settings owner_settings
          ON owner_settings.user_id = p.user_id
-       WHERE l.token_hash = ?
+       WHERE ${byToken}
          AND l.revoked_at IS NULL
          AND l.created_at > ?
          AND l.allow_comments = 1
@@ -324,12 +341,39 @@ export async function commentLinkProject(
            1
          ) = 1`
     )
-    .bind(tokenHash, oldestValidCreation)
-    .first<{ share_link_id: string; project_id: string }>();
+    .bind(
+      tokenHash,
+      ...(frozenHash === null ? [] : [frozenHash]),
+      oldestValidCreation
+    )
+    .first<{ share_link_id: string; project_id: string; history: number }>();
   return row
-    ? { projectId: row.project_id, shareLinkId: row.share_link_id }
+    ? {
+        projectId: row.project_id,
+        shareLinkId: row.share_link_id,
+        // Anything but 1 is a link without history.
+        frozen: row.history !== 1
+      }
     : null;
 }
+
+/** The link a visitor comments through. */
+export interface CommentLink {
+  projectId: string;
+  shareLinkId: string;
+  /**
+   * L08: a link without history. It serves a frozen model, not the
+   * project, so it serves none of the project's comments either: a pin
+   * carries a point, a normal, a body id and a document version of the
+   * live model, on bodies and versions the link never shared. Its visitor
+   * sees the threads started through this link (pinned to the frozen model
+   * the visitor was shown) and the replies to them.
+   */
+  frozen: boolean;
+}
+
+/** A thread started through a link: the only kind a frozen link shows. */
+const OWN_THREAD = `parent_id IS NULL AND share_link_id = ?`;
 
 /** A link visitor's comment request: the text, its pin or thread, and a name. */
 export function parseLinkCommentRequest(body: unknown): {
@@ -360,10 +404,23 @@ export function parseLinkCommentRequest(body: unknown): {
 /** A visitor's comment: no account, signed with the name typed, via its link. */
 export async function createLinkComment(
   db: D1Database,
-  link: { projectId: string; shareLinkId: string },
+  link: CommentLink,
   name: string,
   input: CreateProjectCommentRequest
 ): Promise<ProjectComment> {
+  // A frozen link's visitor answers only a thread of that link. Any other
+  // thread does not exist for them, in the words used for an unknown id.
+  if (link.frozen && input.parentId !== undefined) {
+    const own = await db
+      .prepare(
+        `SELECT 1 AS own FROM project_comments
+         WHERE id = ? AND project_id = ? AND ${OWN_THREAD}`
+      )
+      .bind(input.parentId, link.projectId, link.shareLinkId)
+      .first<{ own: number }>();
+    if (!own)
+      throw new ProjectCommentRequestError(404, 'That comment does not exist.');
+  }
   const comment = await createProjectComment(
     db,
     link.projectId,
@@ -377,13 +434,37 @@ export async function createLinkComment(
   return { ...comment, authorUserId: null };
 }
 
-/** What a link visitor sees: every comment, with no member's account id. */
+/**
+ * What a link visitor sees, with no member's account id: every comment of
+ * the project through a link that shares it, and only the link's own
+ * threads (and their replies) through a link without history.
+ */
 export async function listLinkComments(
   db: D1Database,
-  projectId: string
+  link: CommentLink
 ): Promise<ProjectComment[]> {
-  return (await listProjectComments(db, projectId)).map((comment) => ({
-    ...comment,
-    authorUserId: null
-  }));
+  const comments = link.frozen
+    ? (
+        (
+          await db
+            .prepare(
+              `SELECT ${COMMENT_COLUMNS} FROM project_comments
+               WHERE project_id = ?
+                 AND ((${OWN_THREAD})
+                   OR parent_id IN (
+                     SELECT id FROM project_comments
+                     WHERE project_id = ? AND ${OWN_THREAD}))
+               ORDER BY created_at, id`
+            )
+            .bind(
+              link.projectId,
+              link.shareLinkId,
+              link.projectId,
+              link.shareLinkId
+            )
+            .all<CommentRow>()
+        ).results ?? []
+      ).map(toComment)
+    : await listProjectComments(db, link.projectId);
+  return comments.map((comment) => ({ ...comment, authorUserId: null }));
 }
