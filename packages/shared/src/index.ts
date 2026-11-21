@@ -541,7 +541,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // each corner is rounded by a tangent arc of that radius. An older client
 // would mitre or refuse the corner, so it must refuse the document. Builds
 // on v134.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 135 as const;
+// v136 adds M04 sweep profile position (`profilePosition` on an in-place
+// sweep): where on the path the profile stands, sweeping both ways from
+// inside it. An older client would sweep from a path end, so it must refuse
+// the document. Builds on v135.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 136 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -2764,6 +2768,17 @@ export type FeatureData =
        * or a rail.
        */
       cornerRadius?: ParamValue;
+      /**
+       * M04 (v136), `'in-place'` only: where on its path the profile stands
+       * (the kernel's `sweepExactWithOptions` `"position"`), measured from
+       * the profile's area centroid: where the path crosses the profile's
+       * plane (`'intersection'`), its closest point or closest endpoint, or
+       * `'auto'` (the crossing, else the closest endpoint). The profile
+       * never moves; from inside the path the sweep runs both ways. Absent
+       * starts from the path end nearer the profile's plane, as before.
+       */
+      profilePosition?:
+        'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
     }
   | {
       featureKind: 'helical-sweep';

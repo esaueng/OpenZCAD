@@ -444,6 +444,7 @@ export function inPlaceEditSeed(
       seed.options.orientation = data.orientation ?? 'normal';
       seed.options.corner = data.cornerRadius === undefined ? 'mitre' : 'round';
       value('cornerRadius', data.cornerRadius);
+      seed.options.position = data.profilePosition ?? 'end';
       break;
     }
     case 'rib': {
@@ -1280,7 +1281,10 @@ export function inPlaceFeatureUpdate(
             : { orientation: request.orientation }),
           ...(request.cornerRadius === undefined
             ? {}
-            : { cornerRadius: request.cornerRadius })
+            : { cornerRadius: request.cornerRadius }),
+          ...(request.profilePosition === undefined
+            ? {}
+            : { profilePosition: request.profilePosition })
         },
         // An absent construction keeps a sampled sweep sampled. Exact
         // construction is written explicitly and cannot be cleared; an
@@ -1302,6 +1306,10 @@ export function inPlaceFeatureUpdate(
             ...(request.cornerRadius === undefined &&
             stored?.cornerRadius !== undefined
               ? ['cornerRadius']
+              : []),
+            ...(request.profilePosition === undefined &&
+            stored?.profilePosition !== undefined
+              ? ['profilePosition']
               : [])
           ];
           return clear.length ? { clearData: clear } : {};

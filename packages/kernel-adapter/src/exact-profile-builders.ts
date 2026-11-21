@@ -2950,6 +2950,8 @@ export function resolveSweepOptions(
     endScale?: ParamValue;
     orientation?: 'parallel';
     cornerRadius?: ParamValue;
+    profilePosition?:
+      'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
   },
   scope: Record<string, number>,
   units?: ProjectDocument['units']
@@ -2982,6 +2984,14 @@ export function resolveSweepOptions(
     }
     options.corner = 'round';
     options.cornerRadius = radius;
+  }
+  if (data.profilePosition !== undefined) {
+    options.position = {
+      auto: 'auto',
+      intersection: 'intersection',
+      'closest-point': 'closestPoint',
+      'closest-endpoint': 'closestEndpoint'
+    }[data.profilePosition];
   }
   return Object.keys(options).length > 0 ? options : null;
 }

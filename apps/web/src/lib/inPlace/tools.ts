@@ -595,6 +595,9 @@ export type InPlaceRequest =
       orientation?: 'parallel';
       /** M04 (v135): see the sweep `FeatureData`; absent mitres the corners. */
       cornerRadius?: ParamValue;
+      /** M04 (v136): see the sweep `FeatureData`; absent starts from an end. */
+      profilePosition?:
+        'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
     }
   | {
       /** M06 (schema v101): a rib from an open profile, joined to a body. */
@@ -1730,6 +1733,42 @@ const sweep: InPlaceToolSpec = {
       initial: 'mitre'
     },
     {
+      // M04 (v136): where on the path the profile stands; from inside the
+      // path the sweep runs both ways.
+      id: 'position',
+      when: (state) =>
+        !sampledSweep(state) && state.options.orientation !== 'parallel',
+      label: 'Profile at',
+      choices: [
+        {
+          value: 'end',
+          label: 'Path end',
+          tip: 'From the path end nearer the profile'
+        },
+        {
+          value: 'auto',
+          label: 'Auto',
+          tip: 'Where the path crosses the profile, else its nearest end'
+        },
+        {
+          value: 'intersection',
+          label: 'Crossing',
+          tip: 'Where the path crosses the profile’s plane: both ways from there'
+        },
+        {
+          value: 'closest-point',
+          label: 'Closest point',
+          tip: 'The path point nearest the profile: both ways from there'
+        },
+        {
+          value: 'closest-endpoint',
+          label: 'Closest end',
+          tip: 'The path end nearest the profile'
+        }
+      ],
+      initial: 'end'
+    },
+    {
       id: 'mode',
       when: sampledSweep,
       label: 'Mode',
@@ -1829,9 +1868,20 @@ const sweep: InPlaceToolSpec = {
         // before does not apply; a visible choice always goes out.
         ...(options.orientation === 'parallel'
           ? { orientation: 'parallel' as const }
-          : options.corner === 'round'
-            ? { cornerRadius: values.cornerRadius ?? 2 }
-            : {})
+          : {
+              ...(options.corner === 'round'
+                ? { cornerRadius: values.cornerRadius ?? 2 }
+                : {}),
+              ...(options.position && options.position !== 'end'
+                ? {
+                    profilePosition: options.position as
+                      | 'auto'
+                      | 'intersection'
+                      | 'closest-point'
+                      | 'closest-endpoint'
+                  }
+                : {})
+            })
       };
     }
     const rail = slots.guide[0];

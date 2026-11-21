@@ -26279,7 +26279,10 @@ export function App() {
             : { orientation: request.orientation }),
           ...(request.cornerRadius === undefined
             ? {}
-            : { cornerRadius: request.cornerRadius })
+            : { cornerRadius: request.cornerRadius }),
+          ...(request.profilePosition === undefined
+            ? {}
+            : { profilePosition: request.profilePosition })
         });
       case 'rib':
         return commandFactories.ribBody({

@@ -368,6 +368,14 @@ const FEATURE_ENUM_FIELDS = {
     ),
     orientation: valuesOf<NonNullable<FeatureDataOf<'sweep'>['orientation']>>({
       parallel: true
+    }),
+    profilePosition: valuesOf<
+      NonNullable<FeatureDataOf<'sweep'>['profilePosition']>
+    >({
+      auto: true,
+      intersection: true,
+      'closest-point': true,
+      'closest-endpoint': true
     })
   },
   rib: {

@@ -332,6 +332,23 @@ const TRANSLATIONS: readonly Translation[] = [
     sentence: (match) =>
       `The sweep path has a ${Math.round(Number(match[1]) * 10) / 10}° corner next to an arc. A mitre is cut only between straight lines: set Corners to Round, or join the arc tangentially.`
   },
+  // M04 (v136) profile position.
+  {
+    pattern: /has no path intersection to start from/i,
+    sentence:
+      'The sweep path does not cross the profile’s plane. Set the profile position to Closest point or Closest end.'
+  },
+  {
+    pattern: /sweep profile stands on the path's corner/i,
+    sentence:
+      'The profile stands on a mitred corner of the path, which would cut it. Move the profile off the corner, or round the corners.'
+  },
+  {
+    pattern:
+      /a profile position applies to (?:a sweep that turns|an open sweep path)/i,
+    sentence:
+      'A profile position applies to an open path on a sweep that turns with it, with no twist, scale or parallel orientation.'
+  },
   // M04 (v135) round corners.
   {
     pattern: /no round corner of radius ([\d.e+-]+) fits at joint/i,

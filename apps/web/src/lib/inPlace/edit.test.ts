@@ -2202,6 +2202,84 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(radius.when!(state({ orientation: 'parallel' }))).toBe(false);
   });
 
+  it('sweep: the card writes orientation, round corners and profile position on Exact, and an edit reopens and clears them (M04)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const slots = {
+      profiles: [
+        {
+          sketchId: SKETCH,
+          reference: { all: true, sourceEntityIds: ['a'] },
+          regionFingerprint: 7
+        }
+      ],
+      path: [{ sketchId: SKETCH, entityId: 'p1' }],
+      guide: []
+    } as unknown as InPlaceSlots;
+    const ctx = {} as never;
+    expect(
+      spec.request(slots, {}, { build: 'exact', orientation: 'parallel' }, ctx)
+    ).toMatchObject({ orientation: 'parallel' });
+    const rounded = spec.request(
+      slots,
+      { cornerRadius: 3 },
+      { build: 'exact', corner: 'round', position: 'closest-point' },
+      ctx
+    );
+    expect(rounded).toMatchObject({
+      cornerRadius: 3,
+      profilePosition: 'closest-point'
+    });
+    expect(rounded).not.toHaveProperty('orientation');
+    // Parallel takes neither a round corner nor a position.
+    const parallel = spec.request(
+      slots,
+      { cornerRadius: 3 },
+      {
+        build: 'exact',
+        orientation: 'parallel',
+        corner: 'round',
+        position: 'auto'
+      },
+      ctx
+    );
+    expect(parallel).not.toHaveProperty('cornerRadius');
+    expect(parallel).not.toHaveProperty('profilePosition');
+
+    const profile = {
+      sketchId: SKETCH,
+      profile: { all: true as const, sourceEntityIds: ['a'] }
+    };
+    const path = { sketchId: SKETCH, entityIds: ['p1'] as never[] };
+    const saved = feature({
+      featureKind: 'sweep',
+      profile,
+      path,
+      mode: 'standard',
+      construction: 'in-place',
+      cornerRadius: 'r',
+      profilePosition: 'auto'
+    });
+    const opened = inPlaceEditSeed(saved, EDIT_CTX)!;
+    expect(opened.seed.options).toMatchObject({
+      corner: 'round',
+      position: 'auto',
+      orientation: 'normal'
+    });
+    expect(opened.seed.raws.cornerRadius).toBe('r');
+    const cleared = inPlaceFeatureUpdate(saved, {
+      tool: 'sweep',
+      profile,
+      path,
+      mode: 'standard',
+      construction: 'in-place'
+    });
+    expect(cleared?.clearData).toEqual([
+      'guide',
+      'cornerRadius',
+      'profilePosition'
+    ]);
+  });
+
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
     const sweep = (entityIds: string[]): FeatureData => ({
       featureKind: 'sweep',
