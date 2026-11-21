@@ -1056,21 +1056,23 @@ function buildExtrudeFeature(
               : toNext
                 ? toNext.sweep
                 : feature;
-    const swept = buildSweep(
-      kernel,
-      document,
-      sweepFeature,
-      scope,
-      result.sketchBases,
-      (message) => raiseFeatureWarning(result, feature, message, 'advisory')
-    );
-    const extrusion = curved
-      ? trimToCurvedFace(
-          kernel,
-          swept,
-          curved.curved,
-          `Extrude "${feature.name}"`
-        )
+    const sweepOf = (node: FeatureNode) =>
+      buildSweep(kernel, document, node, scope, result.sketchBases, (message) =>
+        raiseFeatureWarning(result, feature, message, 'advisory')
+      );
+    // A curved face's full sweep may be longer than a narrowing draft can
+    // run before it closes; its body-reach sweep is the one fallback.
+    let curvedPlan = curved?.curved;
+    let swept: ExactShape;
+    try {
+      swept = sweepOf(sweepFeature);
+    } catch (error) {
+      if (!curved?.fallback) throw error;
+      swept = sweepOf(curved.fallback.sweep);
+      curvedPlan = curved.fallback.curved;
+    }
+    const extrusion = curvedPlan
+      ? trimToCurvedFace(kernel, swept, curvedPlan, `Extrude "${feature.name}"`)
       : slanted
         ? trimToSlantedFace(
             kernel,

@@ -260,6 +260,74 @@ describe('F01 to a curved face', { timeout: 60_000 }, () => {
         );
       });
 
+      it('builds a narrowing draft that would close beyond the full sweep (re-check)', async () => {
+        // A radius-2 circle drafted atan(2/45): it closes at z = 45, past the
+        // log's reach bound, but meets the log's underside near z = 20.
+        const result = await post(
+          { draftAngleDeg: (Math.atan(2 / 45) * 180) / Math.PI },
+          0,
+          { objectKind: 'circle', centerX: 0, centerY: 0, radius: 2 } as never
+        );
+        const derived = await derive(result.document);
+        expect(derived.warnings).toEqual([]);
+        const body = derived.bodyRepresentations[result.bodyId]!;
+        expect(body.bbox.max.z).toBeLessThan(21);
+        expect(body.bbox.max.z).toBeGreaterThan(20);
+      });
+
+      it('refuses a trimmed curved face lying wholly behind the start, never its extension (re-check)', async () => {
+        // The log's axis at z = 3, trimmed to z ≤ −1: the face that remains
+        // lies below the sketch at z = 0, though its cylinder rises past it.
+        const laid = log(project('Trimmed'), 3);
+        let document = addPrimitiveFeature(laid.document, {
+          name: 'Trim',
+          primitiveKind: 'box',
+          dimensions: { width: 40, height: 60, depth: 40 }
+        });
+        const trim = document.bodyOrder.at(-1)!;
+        document = commandFactories
+          .transformBody({
+            name: 'Raise',
+            targetBodyId: trim,
+            translation: { x: -20, y: -30, z: -1 }
+          })
+          .apply(document);
+        document = commandFactories
+          .booleanBodies({
+            name: 'Trimmed',
+            operation: 'subtract',
+            targetBodyIds: [laid.bodyId, trim]
+          })
+          .apply(document);
+        const bodyId = document.bodyOrder.at(-1)!;
+        const target = await wall(document, bodyId);
+        const sketched = addSketchFeature(document, {
+          name: 'Profile',
+          planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+          objects: [
+            {
+              objectKind: 'rectangle',
+              width: 0.1,
+              height: 2,
+              centerX: 9.85,
+              centerY: 0
+            }
+          ]
+        });
+        const result = extrudeSketch(sketched.document, {
+          name: 'Post',
+          sketchId: sketched.sketchId,
+          distance: 1,
+          endCondition: 'to-face',
+          toSurface: target
+        });
+        const derived = await derive(result.document);
+        expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
+        expect(derived.warnings.join('\n')).toMatch(
+          /lies entirely behind where the extrusion starts/
+        );
+      });
+
       it('validates the curved target body at command entry', async () => {
         const result = await post();
         const command = commandFactories.extrudeSketch({

@@ -14,8 +14,7 @@ import {
 } from './exact-shape-utils';
 import { resolveRevolutionFace } from './face-attachment';
 import { measureFaceGeometry } from './exact-measure';
-import { facesOnPlane, hasFaceOnPlane } from './extrude-to-next';
-import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { facesOnPlane, hasFaceOnPlane, sameStartCaps } from './extrude-to-next';
 import {
   resolveExtrudeStartOffset,
   resolveToFaceOffset
@@ -91,7 +90,12 @@ export function planCurvedToFace(
   sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
   result: Pick<ExactBuildResult, 'shapes' | 'consumed'>,
   scope: Record<string, number>
-): { sweep: FeatureNode; curved: CurvedToFace } {
+): {
+  sweep: FeatureNode;
+  curved: CurvedToFace;
+  /** A shorter plan, when the full sweep cannot be built (a closing draft). */
+  fallback?: { sweep: FeatureNode; curved: CurvedToFace };
+} {
   const target = data.toSurface!;
   if (!document.bodyOrder.includes(target.bodyId)) {
     throw unresolved('the body that carried the face was deleted.');
@@ -217,8 +221,14 @@ export function planCurvedToFace(
       'forward'
     ).forward;
   } catch {
-    // The face's body lies behind the start; the reached cylinder may
-    // still lie ahead, and the bound below covers it.
+    // Handled below: nothing of the face's body lies ahead.
+  }
+  if (!(reach > 0)) {
+    // The cylinder's extension may lie ahead, but the named face does not:
+    // never build to a surface the user did not pick.
+    throw new Error(
+      `${owner}, which carries the curved face, lies entirely behind where the extrusion starts; move the start or pick another face.`
+    );
   }
   // A line from the start plane within the footprint meets the reached
   // cylinder within (ρ + R′ + footprint) / sin φ, φ the angle between the
@@ -231,8 +241,11 @@ export function planCurvedToFace(
   const sine = Math.sqrt(Math.max(0, 1 - dot(axis, n) ** 2));
   const bound = Math.max(reach, (rho + reached + footprint) / sine);
   const length = bound + Math.max(bound * 0.05, 1e-3);
-  return {
-    sweep: { ...feature, data: { ...rest, distance: sign * length } },
+  // The body's own reach, shorter, for a narrowing draft that would close
+  // up before the full bound: tried only when the full sweep is refused.
+  const short = reach + Math.max(reach * 0.05, 1e-3);
+  const plan = (span: number) => ({
+    sweep: { ...feature, data: { ...rest, distance: sign * span } },
     curved: {
       axisPoint,
       axis,
@@ -240,8 +253,12 @@ export function planCurvedToFace(
       inside,
       start,
       direction,
-      length
+      length: span
     }
+  });
+  return {
+    ...plan(length),
+    ...(short < length ? { fallback: plan(short) } : {})
   };
 }
 
@@ -333,27 +350,11 @@ export function trimToCurvedFace(
     // the start plane are this solid's own start face, by exact area and
     // edge count. A profile straddling the cylinder loses some of it.
     const startTolerance = 1e-9 * Math.max(1, plan.length);
-    const caps = (solids: readonly number[]) => {
-      const faces = solids.flatMap((one) =>
+    const capsOf = (solids: readonly number[]) =>
+      solids.flatMap((one) =>
         facesOnPlane(kernel, one, plan.start, plan.direction, startTolerance)
       );
-      return {
-        area: faces.reduce(
-          (sum, face) => sum + kernel.faceArea(face, MEASUREMENT_DEFLECTION),
-          0
-        ),
-        edges: faces.reduce(
-          (sum, face) => sum + kernel.getFaceEdges(face).length,
-          0
-        )
-      };
-    };
-    const own = caps([solid]);
-    const reached = caps(kept);
-    if (
-      reached.edges !== own.edges ||
-      !(Math.abs(reached.area - own.area) <= 1e-9 * Math.max(1e-12, own.area))
-    ) {
+    if (!sameStartCaps(kernel, capsOf(kept), capsOf([solid]))) {
       throw new Error(
         `${label}: part of the profile starts ${plan.inside ? 'outside' : 'inside'} the curved face's cylinder; keep the whole profile to one side.`
       );
