@@ -382,6 +382,12 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     kind: 'remove_drawing_annotations',
     sheetId: 'dsht_1',
     annotationIds: ['dann_1', 'dann_2']
+  },
+  auto_dimension_drawing: {
+    kind: 'auto_dimension_drawing',
+    sheetId: 'dsht_1',
+    viewIds: ['dvw_front'],
+    dimensionKinds: ['linear', 'diameter']
   }
 };
 

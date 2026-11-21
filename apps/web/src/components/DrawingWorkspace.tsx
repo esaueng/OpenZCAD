@@ -32,6 +32,7 @@ import {
   Anchor,
   Columns3,
   Diff,
+  Table2,
   TableProperties,
   ImageIcon,
   Sun,
@@ -229,6 +230,7 @@ import {
   type AnnotationBox,
   type AnnotationResolution
 } from '../lib/drawing/annotations';
+import { viewCosmeticThreads } from '../lib/drawing/cosmeticThreads';
 import {
   auditDrawingDimensions,
   type DrawingAudit
@@ -1217,6 +1219,7 @@ const ANNOTATION_TOOLS: readonly AnnotationToolKind[] = [
   'circle-centerline',
   'balloon',
   'parts-list',
+  'hole-table',
   'image',
   'datum-feature',
   'feature-control-frame',
@@ -1242,6 +1245,7 @@ const ANNOTATION_TOOL_ICONS: Readonly<Record<AnnotationToolKind, LucideIcon>> =
     'circle-centerline': CircleDashed,
     balloon: MessageCircle,
     'parts-list': TableProperties,
+    'hole-table': Table2,
     image: ImageIcon,
     'datum-feature': Anchor,
     'feature-control-frame': Columns3,
@@ -1267,6 +1271,7 @@ const ANNOTATION_TOOL_KEYS: Readonly<Record<AnnotationToolKind, string>> = {
   'circle-centerline': 'B',
   balloon: 'O',
   'parts-list': 'P',
+  'hole-table': 'Y',
   image: 'I',
   'datum-feature': 'Q',
   'feature-control-frame': 'F',
@@ -1346,6 +1351,7 @@ const ANNOTATION_KIND_LABELS: Readonly<
   'intersection-mark': 'Intersection mark',
   centerline: 'Centreline',
   'bom-table': 'Parts list',
+  'hole-table': 'Hole table',
   balloon: 'Balloon',
   image: 'Image',
   'datum-feature': 'Datum feature',
@@ -1364,6 +1370,7 @@ function annotationTitle(annotation: DrawingAnnotation): string {
     ? `${ANNOTATION_TOOL_LABELS[annotation.direction]} dimension`
     : annotation.kind === 'note' ||
         annotation.kind === 'bom-table' ||
+        annotation.kind === 'hole-table' ||
         annotation.kind === 'balloon' ||
         annotation.kind === 'datum-feature' ||
         annotation.kind === 'feature-control-frame' ||
@@ -2000,6 +2007,11 @@ function AnnotationProperties(props: {
           editable={editable}
           onUpdate={props.onUpdate}
         />
+      ) : selected.kind === 'hole-table' ? (
+        <p className="drawing-hint">
+          Lists the holes its view looks down, read from the model each time the
+          sheet is drawn.
+        </p>
       ) : selected.kind === 'image' ? (
         <>
           <label className="drawing-field">
@@ -3215,8 +3227,8 @@ function DrawingToolRail(props: {
     ['angle', 'arc-angle', 'three-point-angle'],
     ['center-mark', 'intersection-mark', 'centerline', 'circle-centerline'],
     ['note', 'balloon', 'parts-list', 'image'],
-    // The general-tolerance block is placed from Sheet Properties (and W):
-    // a phone-width rail has no row to spare.
+    // The general-tolerance block and (M01) the hole table are placed from
+    // Sheet Properties (and W, Y): a phone-width rail has no row to spare.
     ['datum-feature', 'feature-control-frame']
   ];
   return (
@@ -3246,6 +3258,7 @@ function DrawingToolRail(props: {
               kind === 'note' ||
               kind === 'balloon' ||
               kind === 'parts-list' ||
+              kind === 'hole-table' ||
               kind === 'image' ||
               kind === 'general-tolerance' ||
               isToleranceTool(kind) ||
@@ -4076,6 +4089,19 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const modelBodies = keptDrawing?.bodies ?? bodies;
   /** Its holes' callouts, likewise: the kept document's, if kept. */
   const holeCallouts = keptDrawing?.holes ?? liveHoleCallouts;
+  // M01: the cosmetic threads each view draws, from the same model. A
+  // projected or detail view draws its source's configuration row, so the
+  // row is read as its projection reads it (`keyView`).
+  const viewThreads = useCallback(
+    (view: DrawingView) =>
+      viewCosmeticThreads(
+        sheet ? keyView(sheet.sheetId, view) : view,
+        modelBodies,
+        holeCallouts,
+        drawingViewFrame(view).direction
+      ),
+    [sheet, keyView, modelBodies, holeCallouts]
+  );
   const liveBodies = useMemo(
     () =>
       document.bodyOrder.filter((id) => {
@@ -4286,7 +4312,15 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           bodies: drawBodies,
           units: document.units,
           ready: assistantReady
-        }))
+        })),
+      // D06 slice E: the assistant's auto-dimension request runs the same
+      // generator as the button, on the sheet's own annotations.
+      ...(assistantReady
+        ? {
+            autoDimension: () =>
+              planAutoDimensions(sheet, drawnViews, drawBodies, document.units)
+          }
+        : {})
     });
   }, [
     onAssistantSource,
@@ -4834,7 +4868,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         projectName: document.name,
         units: document.units,
         sheetNumber,
-        date: autoDate
+        date: autoDate,
+        cosmeticThreads: viewThreads
       },
       composeSheetAnnotations(sheet, drawn, resolutions, document.units)
     );
@@ -5041,7 +5076,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           projectName: document.name,
           units: document.units,
           sheetNumber,
-          date: autoDate
+          date: autoDate,
+          cosmeticThreads: viewThreads
         }),
         boxes: new Map<DrawingAnnotationId, AnnotationBox>(),
         ghost: true
@@ -5060,7 +5096,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           projectName: document.name,
           units: document.units,
           sheetNumber,
-          date: autoDate
+          date: autoDate,
+          cosmeticThreads: viewThreads
         },
         annotations
       ),
@@ -5075,7 +5112,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     document.name,
     document.units,
     sheetNumber,
-    autoDate
+    autoDate,
+    viewThreads
   ]);
   const page: SheetPage | null = composed?.page ?? null;
   // D02 (v92): object URLs for the pictures the page shows, loaded from the
@@ -5498,7 +5536,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       drawBodies,
       document.units,
       sheetMarkLookup(sheet),
-      bomTable
+      bomTable,
+      holeCallouts
     );
     if (refusal) {
       props.onStatus(refusal);
@@ -5535,7 +5574,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   ? `Datum ${annotation.kind === 'datum-feature' ? annotation.letter : ''} added.`
                   : isGeometryTool(finished.kind) ||
                       finished.kind === 'balloon' ||
-                      finished.kind === 'parts-list'
+                      finished.kind === 'parts-list' ||
+                      finished.kind === 'hole-table'
                     ? `${ANNOTATION_TOOL_LABELS[finished.kind]} added.`
                     : `${ANNOTATION_TOOL_LABELS[finished.kind]} dimension added.`,
         { immediate: true }
@@ -5545,6 +5585,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       setTool(
         finished.kind === 'note' ||
           finished.kind === 'parts-list' ||
+          finished.kind === 'hole-table' ||
           finished.kind === 'image' ||
           finished.kind === 'feature-control-frame' ||
           finished.kind === 'general-tolerance'
@@ -5580,7 +5621,8 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       drawBodies,
       document.units,
       sheetMarkLookup(sheet),
-      bomTable
+      bomTable,
+      holeCallouts
     );
     if (refusal) {
       props.onStatus(refusal);
@@ -7869,6 +7911,18 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                 }
               >
                 <Diff size={13} aria-hidden="true" /> Add general tolerances
+              </button>
+            </div>
+            <div className="drawing-panel-section">
+              <h3>Hole table</h3>
+              <button
+                type="button"
+                className="secondary"
+                disabled={!canUseTool('hole-table')}
+                title="Table the holes a view looks down, tagged in the view (Y)"
+                onClick={() => chooseTool(startAnnotationTool('hole-table'))}
+              >
+                <Table2 size={13} aria-hidden="true" /> Add hole table
               </button>
             </div>
             <div className="drawing-panel-section">

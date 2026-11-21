@@ -87,11 +87,14 @@ import {
   type CadDrawingOperation
 } from './drawing-annotations';
 export {
+  AUTO_DIMENSION_KINDS,
   DRAWING_OPERATION_KINDS,
   MAX_PROPOSED_DRAWING_ANNOTATIONS,
   drawingSpecEdgeRefs,
   isDrawingOperation,
   type CadAddDrawingAnnotationsOperation,
+  type CadAutoDimensionDrawingOperation,
+  type CadAutoDimensionKind,
   type CadDigestDrawing,
   type CadDigestDrawingAnnotation,
   type CadDigestDrawingAudit,
@@ -4738,6 +4741,7 @@ export function parseCadPatchProposal(
         break;
       case 'add_drawing_annotations':
       case 'remove_drawing_annotations':
+      case 'auto_dimension_drawing':
         parseDrawingOperation(operation);
         break;
       case 'rename_feature':
@@ -5622,6 +5626,13 @@ export function parseCadPatchProposal(
     );
   if (new Set(drawingOperations.map((op) => op.sheetId)).size > 1)
     throw new Error('A drawing proposal edits one sheet.');
+  if (
+    drawingOperations.some((op) => op.kind === 'auto_dimension_drawing') &&
+    drawingOperations.length > 1
+  )
+    throw new Error(
+      'An auto_dimension_drawing request is proposed alone: the app plans every dimension it adds.'
+    );
   return digest
     ? validateCadPatchProposalAgainstDigest(proposal, digest)
     : proposal;
@@ -6775,6 +6786,7 @@ export function describeCadPatchOperation(
       return `Create ${operation.patternKind} pattern of ${operation.targetBodyId}`;
     case 'add_drawing_annotations':
     case 'remove_drawing_annotations':
+    case 'auto_dimension_drawing':
       return describeDrawingOperation(operation);
   }
 }

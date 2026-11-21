@@ -36,6 +36,7 @@ import {
 import {
   ExactRebuildCache,
   cloneDerivedSharingBodyGeometry,
+  derivedSizeOfSharingBodyGeometry,
   geometryContentKey
 } from '../../apps/web/src/worker/exactRebuildCache';
 
@@ -140,7 +141,12 @@ async function run(
     maxEntries: 8,
     maxBytes: 32 * 1024 * 1024,
     maxInFlight: 4,
-    ...(share ? { clone: cloneDerivedSharingBodyGeometry } : {})
+    ...(share
+      ? {
+          clone: cloneDerivedSharingBodyGeometry,
+          sizeOf: derivedSizeOfSharingBodyGeometry()
+        }
+      : {})
   });
   const publications: string[] = [];
   let heldMs = 0;
@@ -166,14 +172,16 @@ async function run(
     const packet = sender.encode(next.projectId, derived);
     const total = performance.now() - started - heldMs;
     keep(receiver.apply(structuredClone(packet)));
-    return { readyMs: ready ?? total, totalMs: total, derived };
+    if (ready === undefined)
+      throw new Error('Expected a fresh geometry publication for each edit.');
+    return { readyMs: ready, totalMs: total, derived };
   };
   try {
     const first = await sync(document);
     for (let sample = 0; sample < 4; sample += 1) await sync(edit(sample));
     const timings = [];
     for (let sample = 0; sample < samples; sample += 1)
-      timings.push(await sync(edit(sample)));
+      timings.push(await sync(edit(sample + 4)));
     return { first: first.derived, timings, publications };
   } finally {
     adapter.dispose();

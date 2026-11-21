@@ -489,6 +489,9 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     shapes.set(bodyId, {
       solids: [...shape.solids],
       ...(shape.referenceMesh ? { referenceMesh: shape.referenceMesh } : {}),
+      ...(shape.rectangularStock !== undefined
+        ? { rectangularStock: shape.rectangularStock }
+        : {}),
       ...(shape.sweepSource ? { sweepSource: shape.sweepSource } : {}),
       ...(shape.nativeVertices
         ? {
@@ -559,6 +562,9 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
       : {}),
     ...(result.sketchObjectOverrides
       ? { sketchObjectOverrides: new Map(result.sketchObjectOverrides) }
+      : {}),
+    ...(result.blendEdgeWitnesses
+      ? { blendEdgeWitnesses: new Map(result.blendEdgeWitnesses) }
       : {}),
     ...(result.sketchProjectionFailures
       ? { sketchProjectionFailures: new Map(result.sketchProjectionFailures) }
@@ -700,11 +706,12 @@ export function measurementWitness(
 
 export function measurementProvenanceKey(
   shape: ExactShape,
-  importedDiagnostics: ImportedStepDiagnostics | undefined
+  importedDiagnostics: ImportedStepDiagnostics | undefined,
+  encoding: 'canonical' | 'snapshot' = 'canonical'
 ): string {
   const lineage = shape.lineage;
   const native = shape.nativeVertices;
-  return measurementJson({
+  const data = {
     importedDiagnostics,
     nativeVertices: native && {
       qualified: [...native.bySolid]
@@ -725,7 +732,22 @@ export function measurementProvenanceKey(
       edges: [...lineage.edgeReferences].sort(([a], [b]) => a - b),
       diagnostics: lineage.diagnostics
     }
-  });
+  };
+  return encoding === 'snapshot' ? JSON.stringify(data) : measurementJson(data);
+}
+
+/** Live cache entries normally have identical property order. Snapshot every
+ * value on each read (witnesses can mutate) and pay for canonical ordering
+ * only if two JSON spellings could differ solely by object member order. */
+export function sameMeasurementProvenance(
+  left: string,
+  right: string
+): boolean {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      measurementJson(JSON.parse(left)) === measurementJson(JSON.parse(right)))
+  );
 }
 
 /** Same canonical JSON, without a native-to-JS replacer call for every scalar. */
@@ -807,6 +829,11 @@ export interface RebuildCacheEvent {
   restored: number;
   /** Independent primitive features kept in the current kernel after the prefix. */
   reusedPrimitives?: number;
+  /**
+   * Of those, imported STEP bodies kept in the live arena (the H02 detached
+   * Text cache): a fixed import after the edited suffix is not re-imported.
+   */
+  reusedImports?: number;
   /** Audited immutable transform/carving branches reused in the same arena. */
   reusedPreparedFeatures?: number;
   /** Checked prefix features reused by qualified axial extent transport. */

@@ -224,6 +224,7 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
+import type { AutoDimensionPreview } from './lib/drawing/assistantPreflight';
 import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
   appendRevision,
@@ -5127,8 +5128,8 @@ export function App() {
     // commit stores it in the edit's own revision (`withCarriedSelections`).
     rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
-        ...options,
-        proposeCarry: true
+        proposeCarry: true,
+        ...options
       }),
     track: trackKernelRefusal
   });
@@ -6511,7 +6512,9 @@ export function App() {
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
     deriveCancellable: (document, signal) =>
+      geometry.prepareFirstStepImport(document, signal) ??
       rebuildInDisposableWorker(document, signal),
+    releaseCancellable: (signal) => geometry.releasePreparedImport(signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -13020,10 +13023,12 @@ export function App() {
     }
     const feature = faceProducingFeature(shownDocument, face);
     const problem = !feature
-      ? 'Click a face a hole, boss or cut made.'
+      ? 'Click a face a hole, boss, cut, fillet or chamfer made.'
       : patternSourceProblem(feature.data, feature.name);
     if (!feature || problem) {
-      setStatus(problem ?? 'Click a face a hole, boss or cut made.');
+      setStatus(
+        problem ?? 'Click a face a hole, boss, cut, fillet or chamfer made.'
+      );
       return null;
     }
     const named = { featureId: feature.featureId, name: feature.name };
@@ -18610,6 +18615,12 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  /**
+   * D06: the document an auto-dimension proposal was previewed on. The
+   * generator plans again on Apply, so Apply refuses unless the document
+   * is still the one the preview showed it on.
+   */
+  const autoDimensionPreviewRef = useRef<AutoDimensionPreview | null>(null);
   // Bumped when something opens over the stage that the model should stay
   // clear of: the viewer reframes only if part of the model is covered.
   const [clearStageRequest, setClearStageRequest] = useState(0);
@@ -18632,7 +18643,8 @@ export function App() {
     return proposal.operations.some(
       (operation) =>
         operation.kind === 'add_drawing_annotations' ||
-        operation.kind === 'remove_drawing_annotations'
+        operation.kind === 'remove_drawing_annotations' ||
+        operation.kind === 'auto_dimension_drawing'
     );
   }
 
@@ -18657,16 +18669,27 @@ export function App() {
           await import('./lib/drawing/assistantPreflight');
         if (epoch !== aiPreviewEpochRef.current)
           return { ok: false, reason: 'A newer preview replaced this one.' };
-        const { sheet } = preflightDrawingPatch(
+        const { sheet, leftOut, commands } = preflightDrawingPatch(
           current,
           proposal,
           drawingModeRef.current ? drawingAssistantRef.current : null
         );
+        // Kept for Apply, which applies exactly this plan.
+        autoDimensionPreviewRef.current = proposal.operations.some(
+          (operation) => operation.kind === 'auto_dimension_drawing'
+        )
+          ? { proposal, document: current, commands }
+          : null;
         setDrawingPreview({
           sheetId: sheet.sheetId,
           annotations: sheet.annotations ?? []
         });
-        setStatus('Previewing the proposed annotations.');
+        // An auto-dimension request says what its scope leaves out.
+        setStatus(
+          leftOut.length > 0
+            ? `Previewing the proposed annotations. Left out: ${leftOut.join('; ')}.`
+            : 'Previewing the proposed annotations.'
+        );
         return { ok: true };
       } catch (error) {
         if (epoch === aiPreviewEpochRef.current) setDrawingPreview(null);
@@ -18739,18 +18762,24 @@ export function App() {
       return false;
     }
     try {
-      const { preflightDrawingPatch } =
+      const { previewedAutoDimensionCommands, preflightDrawingPatch } =
         await import('./lib/drawing/assistantPreflight');
       const live = managerRef.current?.document;
       if (!live || live !== current)
         throw new Error(
           'The document changed while the proposal was checked. Review it again.'
         );
-      const { commands } = preflightDrawingPatch(
-        current,
-        proposal,
-        drawingModeRef.current ? drawingAssistantRef.current : null
-      );
+      const commands =
+        previewedAutoDimensionCommands(
+          proposal,
+          autoDimensionPreviewRef.current,
+          current
+        ) ??
+        preflightDrawingPatch(
+          current,
+          proposal,
+          drawingModeRef.current ? drawingAssistantRef.current : null
+        ).commands;
       const applied = executeTransaction('Apply AI annotations', commands);
       if (applied) setDrawingPreview(null);
       return applied;
@@ -20455,6 +20484,27 @@ export function App() {
       return null;
     }
     return target;
+  }
+
+  /**
+   * L09: File › CNC cut layout, run from its lazy module: the export
+   * scope's bodies laid flat as one layered DXF.
+   */
+  function handleExportCncLayout() {
+    const target = readyExportTarget(null);
+    if (!target || !doc) return;
+    const stem = exportStemFor(null);
+    const units = exportUnitsFor(doc.units);
+    void import('./lib/cncLayoutDxf').then((lazy) =>
+      lazy.writeCncLayoutDxf({
+        geometry,
+        target,
+        units,
+        stem,
+        save: saveCadTextFile,
+        announce: setStatus
+      })
+    );
   }
 
   /** I06: File › Export IGES, run from its lazy module. */
@@ -25667,7 +25717,11 @@ export function App() {
       try {
         derived = await parameterChecks.request(() => {
           if (!current()) return Promise.reject(new ParameterCheckStale());
-          return syncParameterCandidate(name, prospective);
+          return syncParameterCandidate(
+            name,
+            prospective,
+            geometry.liveLineageDemand()
+          );
         });
       } catch (error) {
         if (error instanceof ParameterCheckStale) return stale();
@@ -35971,6 +36025,21 @@ export function App() {
       }
     },
     {
+      // L09: the CNC cut layout, every export body laid flat in one DXF.
+      id: 'file-export-cnc-layout',
+      label: 'Export CNC cut layout (DXF)',
+      group: 'File',
+      keywords: ['cnc', 'laser', 'router', 'lay flat', 'cut', 'dxf', 'plate'],
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason:
+        currentGeometrySnapshot !== null
+          ? 'Wait for the model to finish updating'
+          : exportBodyIds.length === 0
+            ? emptyExportReason
+            : null,
+      run: () => handleExportCncLayout()
+    },
+    {
       // M16: the sheet-metal flat pattern, its layered DXF and bend table.
       id: 'file-export-flat-pattern',
       label: 'Flat pattern…',
@@ -37232,6 +37301,7 @@ export function App() {
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onExportIges={() => void handleExportIges()}
+          onExportCncLayout={handleExportCncLayout}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal
@@ -38331,6 +38401,13 @@ export function App() {
                           const valueId = keypad.commandValueId ?? '';
                           moveRegionExtrudeHandle(valueId, value);
                           setRegionExtrudeValue(valueId, value, raw, true);
+                          return;
+                        }
+                        if (keypad.kind === 'offset') {
+                          // The exact worker can build while the viewport prepares
+                          // the local deformation for the same typed value.
+                          handleOffsetPreview(value);
+                          offsetSetterRef.current?.(value);
                           return;
                         }
                         offsetSetterRef.current?.(value);

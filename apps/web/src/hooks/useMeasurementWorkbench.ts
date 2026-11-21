@@ -5,7 +5,7 @@ import type {
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
-import type { PickDetail } from '@openzcad/viewport';
+import type { PickDetail, PickSnap } from '@openzcad/viewport';
 import { downloadText, exportFileStem } from '../lib/model';
 import type {
   Measurement,
@@ -320,9 +320,38 @@ export function useMeasurementWorkbench({
    * pick: a hover is not the place to explain ADR-011, and a silent absence
    * beats a confident wrong number.
    */
+  /**
+   * The target a two-pick measure records for a pick. A Distance pick that a
+   * snap locked onto records the edge point the glyph named; anything else
+   * keeps the selection's own derivation. Angle needs directions, which a
+   * snapped point does not carry, so it never takes this path.
+   */
+  function pickTarget(
+    api: NonNullable<typeof measurementApi>,
+    body: BodyRepresentation,
+    selection: TopologySelection,
+    point: { x: number; y: number; z: number } | undefined,
+    snap: PickSnap | undefined
+  ) {
+    const snapped =
+      measurementMode === 'distance' && snap?.source && point
+        ? api.measurementTargetFromSnap(body, snap.source, point)
+        : null;
+    return (
+      snapped ??
+      api.measurementTargetFromSelection(
+        body,
+        selection,
+        point,
+        measurementMode
+      )
+    );
+  }
+
   function previewMeasurement(
     selection: TopologySelection,
-    point?: { x: number; y: number; z: number }
+    point?: { x: number; y: number; z: number },
+    snap?: PickSnap
   ): string | null {
     if (!doc || !measuring || !measurementApi || geometryPending) {
       return null;
@@ -355,12 +384,7 @@ export function useMeasurementWorkbench({
             .value
         : null;
     }
-    const target = measurementApi.measurementTargetFromSelection(
-      body,
-      selection,
-      point,
-      measurementMode
-    );
+    const target = pickTarget(measurementApi, body, selection, point, snap);
     if (!target?.point) {
       return null;
     }
@@ -477,11 +501,12 @@ export function useMeasurementWorkbench({
       }
       return true;
     }
-    const target = measurementApi.measurementTargetFromSelection(
+    const target = pickTarget(
+      measurementApi,
       body,
       selection,
       point,
-      measurementMode
+      detail?.snap
     );
     if (!target?.point) {
       setStatus(

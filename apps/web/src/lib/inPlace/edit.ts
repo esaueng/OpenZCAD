@@ -343,7 +343,7 @@ export function inPlaceEditSeed(
     });
   };
 
-  // A Mirror's, a Split's or a mirror pattern's plane (M02, schema v115).
+  // A Mirror's, a Split's or a mirror pattern's plane (M02, schema v119).
   const seedPlane = (plane: ModelingPlaneReference) => {
     if (isDatumPlaneRef(plane)) {
       // A datum plane gone, or now after the feature, is not restored:

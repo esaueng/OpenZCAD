@@ -1009,6 +1009,7 @@ export function buildPrimitive(
   }
   return {
     solids: [solid],
+    ...(data.primitiveKind === 'box' ? { rectangularStock: solid } : {}),
     lineage: buildPrimitiveLineage(kernel, solid, feature)
   };
 }

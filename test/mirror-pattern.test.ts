@@ -25,7 +25,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * M02 mirror patterns (schema v115): the whole body, or the repeated holes,
+ * M02 mirror patterns (schema v119): the whole body, or the repeated holes,
  * bosses and cuts, copied once as their reflection in a plane. Every
  * expectation is a closed form on a 100 × 40 × 10 plate or 10 mm blocks.
  */
@@ -111,8 +111,8 @@ function mirrored(
 }
 
 describe('M02 mirror patterns: document contract', () => {
-  it('stores the plane at schema v115', () => {
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(115);
+  it('stores the plane at schema v119', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(119);
     const block = box('Block', { x: 10, y: 10, z: 10 });
     expect(listFeaturesInOrder(mirrored(block, 20)).at(-1)!.data).toMatchObject(
       {
@@ -143,10 +143,10 @@ describe('M02 mirror patterns: document contract', () => {
     expect(() => mirrored(block, 20, patch)).toThrow(message);
   });
 
-  it('refuses a mirror pattern on a document that declares schema v114', () => {
+  it('refuses a mirror pattern on a document that declares schema v118', () => {
     const block = box('Block', { x: 10, y: 10, z: 10 });
-    const old = { ...block, schemaVersion: 114 } as unknown as ProjectDocument;
-    expect(() => mirrored(old, 20)).toThrow(/require project schema v115/);
+    const old = { ...block, schemaVersion: 118 } as unknown as ProjectDocument;
+    expect(() => mirrored(old, 20)).toThrow(/require project schema v119/);
   });
 });
 

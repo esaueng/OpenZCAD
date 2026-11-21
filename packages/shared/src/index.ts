@@ -459,12 +459,19 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // view draws each assembly part at its solved pose plus its stored exploded
 // offset. An older client would draw it as modelled, so it must refuse the
 // document. Builds on v113.
-// v115 adds M02 mirror patterns (`patternKind: 'mirror'` and
+// v117 adds M01 hole tables on drawing sheets (a `hole-table` drawing
+// annotation): a table of one view's bores, read from the model each time
+// the sheet is drawn. An older client cannot draw it and would refuse the
+// annotation's kind on its next save, so it must refuse. Builds on v116
+// (v115 and v116 are claimed by the M02 mirror and total-length pattern
+// PRs #1796 and #1797).
+// v119 adds M02 mirror patterns (`patternKind: 'mirror'` and
 // `mirrorPlane`): the whole body, or the repeated holes, bosses and cuts,
 // copied once as their reflection in a plane. An older client has no such
 // arrangement and would build a linear pattern in its place, so it must
-// refuse. Builds on v114 (#1792, AS03 exploded drawing views).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 115 as const;
+// refuse. Builds on v117 (#1799); v118 is claimed by #1808. It was
+// claimed as v115, left unused, with v116, when #1799 landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 119 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3203,7 +3210,7 @@ export type FeatureData =
        */
       path?: PatternPath;
       /**
-       * M02 (schema v115), `patternKind: 'mirror'` only, and required
+       * M02 (schema v119), `patternKind: 'mirror'` only, and required
        * there: the plane the one copy is reflected in, a datum plane or a
        * stored origin and normal, as Mirror takes it. `count` (2), `axis`,
        * `spacing` and `angleDeg` are stored but not read.

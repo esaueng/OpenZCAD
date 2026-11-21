@@ -8,6 +8,7 @@ import {
   unifyUnionFacesChecked,
   verdictRefusesUnion
 } from '../packages/kernel-adapter/src/exact-boolean-helpers';
+import { unifyFacesReport } from '../packages/kernel-adapter/src/kernel-validation';
 import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import {
   addPrimitiveFeature,
@@ -132,6 +133,11 @@ function circularMeshRing(
 // tripped the 5 s default one at a time on slow CI runners (three different
 // victims across three runs). Give every test here the same generous budget;
 // individual tests may still raise it further.
+function strictMergeFromReport(kernel: RemusKernel, solid: number): number {
+  const report = unifyFacesReport(kernel, solid);
+  return !report.reverted && report.resultErrors === 0 ? report.facesMerged : 0;
+}
+
 describe('exact kernel adapter', { timeout: 30_000 }, () => {
   let adapter: ExactKernelAdapter;
 
@@ -1606,6 +1612,43 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     }
   });
 
+  it('selects a strict merged copy and falls back when the optional kernel call fails', () => {
+    const kernel = new RemusKernel();
+    try {
+      const left = kernel.makeBox(10, 10, 10);
+      const right = kernel.copyAndTransformSolid(
+        left,
+        transformMatrix({ x: 5, y: 5, z: 0 }, { x: 0, y: 0, z: 0 })
+      );
+      const raw = kernel.fuseAll(Uint32Array.of(left, right));
+      const strict = vi.fn((solid: number) =>
+        strictMergeFromReport(kernel, solid)
+      );
+      Object.assign(kernel, { unifyFacesIfStrict: strict });
+      const onAccepted = vi.fn();
+      const fast = unifyUnionFaces(kernel, raw, onAccepted);
+      expect(strict).toHaveBeenCalledTimes(1);
+      expect(fast).not.toBe(raw);
+      expect(onAccepted).toHaveBeenCalledExactlyOnceWith(fast);
+      strict.mockReturnValueOnce(0);
+      expect(unifyUnionFaces(kernel, raw, onAccepted)).toBe(raw);
+      expect(onAccepted).toHaveBeenCalledTimes(1);
+      let failedCopy: number | undefined;
+      strict.mockImplementationOnce((solid: number) => {
+        failedCopy = solid;
+        throw new Error('unavailable');
+      });
+      const drop = vi.spyOn(kernel, 'deleteSolid');
+      const fallback = unifyUnionFaces(kernel, raw);
+      expect(drop).toHaveBeenCalledExactlyOnceWith(failedCopy);
+      expect(kernel.serializeSolids(Uint32Array.of(fallback))).toEqual(
+        kernel.serializeSolids(Uint32Array.of(fast))
+      );
+    } finally {
+      kernel.free();
+    }
+  });
+
   it('keeps the raw union when face unification opens its mesh', () => {
     const kernel = new RemusKernel();
     const left = kernel.makeBox(10, 10, 10);
@@ -1639,9 +1682,18 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
         } as ReturnType<RemusKernel['tessellateSolidGroupedBinary']>;
       });
     try {
-      expect(unifyUnionFaces(kernel, raw)).toBe(raw);
+      const onAccepted = vi.fn();
+      expect(unifyUnionFaces(kernel, raw, onAccepted)).toBe(raw);
+      const strict = vi.fn((solid: number) =>
+        strictMergeFromReport(kernel, solid)
+      );
+      Object.assign(kernel, { unifyFacesIfStrict: strict });
+      expect(unifyUnionFaces(kernel, raw, onAccepted)).toBe(raw);
+      expect(strict).toHaveBeenCalledOnce();
+      expect(onAccepted).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
+      kernel.free();
     }
   });
 

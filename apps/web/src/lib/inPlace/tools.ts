@@ -675,7 +675,7 @@ export type InPlaceRequest =
       points?: PatternPoints;
       /** M02 (schema v112): the sketch path a path pattern runs along. */
       path?: PatternPath;
-      /** M02 (schema v115): the plane a mirror pattern reflects in. */
+      /** M02 (schema v119): the plane a mirror pattern reflects in. */
       mirrorPlane?: ModelingPlaneReference;
     }
   | {
@@ -6524,7 +6524,7 @@ const pathPattern: InPlaceToolSpec = {
 };
 
 /**
- * M02 (schema v115): a mirror pattern. Picks are the body, or features
+ * M02 (schema v119): a mirror pattern. Picks are the body, or features
  * under Repeat Features, then the plane: a principal or datum plane, or a
  * flat face (with features, one no repeated feature made), slid by the
  * same offset arrow as Mirror's, or typed in Options. The one copy is the

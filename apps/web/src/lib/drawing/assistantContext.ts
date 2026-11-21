@@ -1,3 +1,4 @@
+import type { AutoDimensionPlan } from './autoDimension';
 import {
   drawingSpecEdgeRefs,
   isDrawingOperation,
@@ -56,6 +57,12 @@ export interface DrawingAssistantSource {
   units: UnitSystem;
   /** Built on first read: listing every edge is not free. */
   digest: () => CadDigestDrawing;
+  /**
+   * The Auto-dimension generator's plan for the sheet as it stands (its own
+   * annotations, never a preview's), run on the drawn views. Absent until
+   * every view is drawn.
+   */
+  autoDimension?: () => AutoDimensionPlan;
 }
 
 /** Per view: a box's front view lists 12, a turned part a few dozen. */

@@ -7,6 +7,7 @@ import {
 } from '@openzcad/document-core';
 import type { PersistedHistorySession } from '@openzcad/kernel-adapter/exact';
 import { toBodyId, toUserId, type ProjectDocument } from '@openzcad/shared';
+import { geometryContentKey } from './exactRebuildCache';
 import type { GeometryWorkerRequest } from './geometryWorker';
 import {
   KERNEL_SESSION_IDLE_MS,
@@ -245,6 +246,121 @@ describe('geometry worker persisted sessions', { timeout: 15_000 }, () => {
       expect(store.load).not.toHaveBeenCalled();
       expect(adapter.captureHistorySession).not.toHaveBeenCalled();
       expect(store.save).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { policy: true, requestId: 'checked', correctKey: true, saved: true },
+    { policy: false, requestId: 'checked', correctKey: true, saved: false },
+    { policy: true, requestId: 'another', correctKey: true, saved: false },
+    { policy: true, requestId: 'checked', correctKey: false, saved: false }
+  ])(
+    'captures an adopted check under its live policy ($policy, $requestId, $correctKey)',
+    async ({ policy, requestId, correctKey, saved }) => {
+      const { scope, adapter } = await installWorker();
+      adapter.needsHistoryWarmup.mockReturnValue(false);
+      post(scope, {
+        type: 'session-policy',
+        projectId: document.projectId,
+        persistSession: policy
+      });
+      post(scope, {
+        type: 'sync',
+        document,
+        requestId: 'checked',
+        lineageDemand: []
+      });
+      await vi.waitFor(() =>
+        expect(scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'state',
+            phase: 'ready',
+            requestId: 'checked'
+          })
+        )
+      );
+      post(scope, {
+        type: 'live-content',
+        projectId: document.projectId,
+        requestId,
+        contentKey: correctKey ? geometryContentKey(document) : 'other content'
+      });
+      if (saved) {
+        await vi.waitFor(
+          () =>
+            expect(store.save).toHaveBeenCalledWith(
+              expect.objectContaining({
+                contentKey: geometryContentKey(document)
+              })
+            ),
+          { timeout: KERNEL_SESSION_IDLE_MS + 2_000 }
+        );
+        expect(store.save).toHaveBeenCalledOnce();
+      } else {
+        await new Promise((resolve) =>
+          setTimeout(resolve, KERNEL_SESSION_IDLE_MS + 300)
+        );
+        expect(store.save).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each(['checked', 'other'])(
+    'only captures the refined draft of the adopted request (%s)',
+    async (requestId) => {
+      let syncs = 0;
+      const { scope, adapter } = await installWorker(async () =>
+        derived(syncs++ === 0)
+      );
+      adapter.needsHistoryWarmup.mockReturnValue(false);
+      const contentKey = geometryContentKey(document);
+      post(scope, {
+        type: 'session-policy',
+        projectId: document.projectId,
+        persistSession: true
+      });
+      post(scope, {
+        type: 'sync',
+        document,
+        requestId: 'checked',
+        lineageDemand: []
+      });
+      await vi.waitFor(() =>
+        expect(scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'state',
+            phase: 'ready',
+            requestId: 'checked'
+          })
+        )
+      );
+      expect(adapter.captureHistorySession).not.toHaveBeenCalled();
+      post(scope, {
+        type: 'live-content',
+        projectId: document.projectId,
+        contentKey,
+        requestId
+      });
+      await vi.waitFor(() =>
+        expect(scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'display-refined', contentKey }),
+          expect.anything()
+        )
+      );
+      if (requestId === 'checked') {
+        await vi.waitFor(
+          () =>
+            expect(store.save).toHaveBeenCalledWith(
+              expect.objectContaining({ contentKey })
+            ),
+          { timeout: KERNEL_SESSION_IDLE_MS + 2_000 }
+        );
+      } else {
+        await new Promise((resolve) =>
+          setTimeout(resolve, KERNEL_SESSION_IDLE_MS + 300)
+        );
+        expect(store.save).not.toHaveBeenCalled();
+      }
     }
   );
 

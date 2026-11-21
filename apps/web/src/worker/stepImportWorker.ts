@@ -26,26 +26,14 @@ self.onmessage = async (
       ? { file: event.data, structure: false }
       : event.data;
   try {
-    const { createExactKernelAdapter } =
+    const { discoverStepLayout } =
       await import('@openzcad/kernel-adapter/exact');
-    const adapter = await createExactKernelAdapter();
-    try {
-      const inspection = await adapter.inspectStep(
-        await request.file.arrayBuffer(),
-        { structure: request.structure }
-      );
-      const result: StepImportInspectionResult = {
-        ok: true,
-        solidIndices: inspection.solidIndices,
-        ...(inspection.structure ? { structure: inspection.structure } : {}),
-        ...(inspection.structureRefusal !== undefined
-          ? { structureRefusal: inspection.structureRefusal }
-          : {})
-      };
-      self.postMessage(result);
-    } finally {
-      adapter.dispose();
-    }
+    const layout = await discoverStepLayout(
+      await request.file.arrayBuffer(),
+      request.structure
+    );
+    const result: StepImportInspectionResult = { ok: true, ...layout };
+    self.postMessage(result);
   } catch (error) {
     const result: StepImportInspectionResult = {
       ok: false,

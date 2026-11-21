@@ -56,6 +56,7 @@ import type {
   MovePreview,
   MoveSnap,
   PickDetail,
+  PickSnap,
   ProjectionMode,
   SectionOverlapPair,
   SectionPlaneId,
@@ -414,7 +415,8 @@ interface ViewerShellProps {
   onMeasurePreview?:
     | ((
         selection: TopologySelection,
-        point: { x: number; y: number; z: number }
+        point: { x: number; y: number; z: number },
+        snap?: PickSnap
       ) => string | null)
     | null;
   regionHandle: RegionHandleTarget | null;

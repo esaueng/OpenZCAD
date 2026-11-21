@@ -14,6 +14,8 @@
  * they are second.
  */
 
+import type { EdgeTopologyReferenceV5 } from '@openzcad/shared';
+
 export type SnapKind =
   | 'endpoint'
   | 'midpoint'
@@ -28,12 +30,27 @@ export interface Vec3 {
   z: number;
 }
 
+/**
+ * The edge point a topology snap stands for: which edge, and which of its
+ * points. A pick that honours the snap records this point by identity rather
+ * than re-deriving one from the edge, which is how a pick under an
+ * "Endpoint" glyph once landed on the edge's midpoint instead.
+ */
+export interface SnapSource {
+  edgeTopologyId: string;
+  edgeHash: number;
+  edgeReference?: EdgeTopologyReferenceV5;
+  role: 'start' | 'end' | 'midpoint' | 'center';
+}
+
 export interface SnapCandidate {
   kind: SnapKind;
   /** World-space position to snap to. */
   point: Vec3;
   /** What it belongs to, for the readout. */
   label?: string;
+  /** The edge point it was read off, when it came from topology. */
+  source?: SnapSource;
 }
 
 /**

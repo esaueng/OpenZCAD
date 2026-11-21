@@ -303,7 +303,7 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       fields(data, ['spacing', 'spacing2'], rewrite, 'length');
       fields(data, ['angleDeg'], rewrite, 'angle');
       vector(data.direction, rewrite, null);
-      // M02 (schema v115): a mirror pattern's plane, as Mirror's.
+      // M02 (schema v119): a mirror pattern's plane, as Mirror's.
       if (data.mirrorPlane && 'origin' in data.mirrorPlane) {
         vector(data.mirrorPlane.origin, rewrite, 'length');
         vector(data.mirrorPlane.normal, rewrite, null);

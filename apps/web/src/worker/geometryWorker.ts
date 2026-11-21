@@ -60,7 +60,12 @@ import {
   derivedSizeOfSharingBodyGeometry
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
-import { TopologyTransport, type TopologyJson } from '../lib/topologyTransport';
+import {
+  TopologyTransport,
+  type TopologyJson,
+  type TopologyPayload,
+  type TopologyEncoding
+} from '../lib/topologyTransport';
 import { geometryYield } from './geometryYield';
 import { geometryProgress } from './geometryProgress';
 import {
@@ -146,7 +151,7 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       requestId?: string;
       /** Optional reply encoding; older clients keep structured-clone topology. */
-      topologyEncoding?: 'json-v1' | 'json-v2';
+      topologyEncoding?: TopologyEncoding;
       analysis?: EditAnalysisRequest;
       /**
        * Transient lineage demand: body ids whose producing booleans must
@@ -194,6 +199,11 @@ export type GeometryWorkerRequest =
       section?: ExactSectionPlane;
       /** The third 'dxf' source, and the only 'svg' one: the saved sketch. */
       sketchId?: SketchId;
+      /**
+       * L09, the fourth 'dxf' source: the CNC-cut layout of `bodyIds` (every
+       * shown body when empty or `allShownBodies`), with its part gap in mm.
+       */
+      cncLayout?: { gapMm?: number };
       /** 'svg' only: false paints a white background behind the curves. */
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
@@ -386,6 +396,8 @@ export type GeometryWorkerRequest =
        * reply, and never cancels idle work of the same content.
        */
       type: 'live-content';
+      /** Identifies a checked result the main thread actually committed. */
+      requestId?: string;
       projectId: ProjectId;
       /** `geometryContentKey` of the adopted document. */
       contentKey: string;
@@ -435,7 +447,7 @@ export type GeometrySyncResult =
       transient?: boolean;
       derived: ProjectDocument['derived'];
       /** Topology placeholders are decoded before this result is adopted. */
-      topologyJson?: TopologyJson;
+      topologyJson?: TopologyPayload;
       topologyUndefined?: TopologyJson;
     }
   | {
@@ -889,11 +901,19 @@ function persistsLiveSession(projectId: ProjectId): boolean {
  * a transient result), whatever the policy: a `session-policy` that turns
  * persistence on schedules it without another rebuild.
  */
-let liveCapturable: {
+interface CapturableSession {
   exact: ExactKernel;
   document: ProjectDocument;
   contentKey: string;
   lineageDemand: readonly BodyId[] | undefined;
+}
+let liveCapturable: CapturableSession | null = null;
+// A plain check may become the committed model. Only its matching adoption
+// can schedule capture, under the live policy. The adapter checks its
+// current history against the document again when idle capture runs.
+let checkedCapturable: {
+  requestId: string;
+  target: CapturableSession;
 } | null = null;
 function noteLiveCapturable(next: typeof liveCapturable): void {
   liveCapturable = next;
@@ -1582,6 +1602,29 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('ready', request, { stale: false }));
         return;
       }
+      if (request.format === 'dxf' && request.cncLayout) {
+        const layout = await exact.exportCncLayoutDxf(
+          document,
+          request.allShownBodies ? [] : request.bodyIds,
+          {
+            ...(request.units ? { units: request.units } : {}),
+            ...(request.cncLayout.gapMm !== undefined
+              ? { gapMm: request.cncLayout.gapMm }
+              : {})
+          }
+        );
+        post({
+          type: 'export',
+          ok: true,
+          requestId: request.requestId,
+          format: 'dxf',
+          text: layout.text,
+          // One warning per part left out, named as the status reads it.
+          warnings: [...layout.warnings]
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
       if (request.format === 'dxf') {
         if (!request.face && !request.section && !request.sketchId) {
           throw new Error(
@@ -1878,7 +1921,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         ...result,
         ...(request.type === 'sync' &&
         (request.topologyEncoding === 'json-v1' ||
-          request.topologyEncoding === 'json-v2')
+          request.topologyEncoding === 'json-v2' ||
+          request.topologyEncoding === 'utf8-v1')
           ? topologyTransport.pack(meshCopy, request.topologyEncoding)
           : { derived: meshCopy })
       };
@@ -1921,20 +1965,23 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     // (`persistsLiveSession`; it may also allow it later). A draft waits for its
     // refinement, which schedules both; it, and a transient result, drop the
     // warm-up target so an older revision is never replayed in its place.
-    if (request.type === 'sync' && !request.requestId) {
+    if (request.type === 'sync') {
       if (
         !transient &&
         contentKey !== null &&
         exactForSync &&
         !hasDraftDisplay(cachedDerived)
-      )
-        noteLiveCapturable({
+      ) {
+        const target = {
           exact: exactForSync,
           document,
           contentKey,
           lineageDemand: request.lineageDemand
-        });
-      else {
+        };
+        if (!request.requestId) noteLiveCapturable(target);
+        else if (!request.proposeCarry && !request.analysis)
+          checkedCapturable = { requestId: request.requestId, target };
+      } else if (!request.requestId) {
         liveCapturable = null;
         kernelSessions.dropWarmup();
       }
@@ -2136,6 +2183,8 @@ interface PendingDisplayRefinement {
    * kernel away from what is on screen.
    */
   live: boolean;
+  /** A broadcast or the exact checked request that was committed. */
+  captureWhenRefined: boolean;
   /** Not before then: a different checked result awaits its adoption. */
   heldUntilMs: number;
   /** Refinements that failed other than by cancellation; one retry. */
@@ -2191,6 +2240,7 @@ function noteDisplayRefinement(
         projectId,
         contentKey,
         live: !sync.requestId,
+        captureWhenRefined: !sync.requestId,
         heldUntilMs: 0,
         failures: 0
       },
@@ -2218,7 +2268,7 @@ function noteDisplayRefinement(
 
 /** The main thread shows this content now (null: nothing). */
 function noteLiveContent(
-  live: { projectId: ProjectId; contentKey: string } | null
+  live: { projectId: ProjectId; contentKey: string; requestId?: string } | null
 ): void {
   pendingDisplayRefinements = pendingDisplayRefinements.filter((entry) => {
     const current =
@@ -2227,6 +2277,8 @@ function noteLiveContent(
       entry.contentKey === live.contentKey;
     if (current) {
       entry.live = true;
+      entry.captureWhenRefined =
+        !entry.sync.requestId || entry.sync.requestId === live.requestId;
       entry.heldUntilMs = 0;
     }
     return current;
@@ -2368,7 +2420,7 @@ async function refineCommittedDisplay(
       { transfer: derivedMeshTransferables(derived) }
     );
     if (
-      !sync.requestId &&
+      pending.captureWhenRefined &&
       !sync.analysis &&
       !sync.proposeCarry &&
       !transientResults.has(refined)
@@ -2420,6 +2472,15 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
     // result is no longer what is live.
     if (liveCapturable?.contentKey !== event.data.contentKey)
       liveCapturable = null;
+    const checked = checkedCapturable;
+    checkedCapturable = null;
+    if (
+      checked &&
+      checked.requestId === event.data.requestId &&
+      checked.target.document.projectId === event.data.projectId &&
+      checked.target.contentKey === event.data.contentKey
+    )
+      noteLiveCapturable(checked.target);
     armDisplayRefinement();
     return;
   }
@@ -2447,6 +2508,7 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   // Unpack before anything reads the document: every consumer past this point
   // — the rebuild, the cache key, the history digest — expects plain arrays.
   const request = unpackWorkerRequest(event.data);
+  checkedCapturable = null;
   // Idle work yields to anything that asks for the worker.
   workRequestSerial += 1;
   clearTimeout(displayRefinementTimer);

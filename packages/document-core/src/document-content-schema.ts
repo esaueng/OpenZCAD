@@ -290,7 +290,7 @@ export function assertPatternContentSchema(
   if (data.patternKind === 'path' || data.path !== undefined)
     assertMinimumProjectSchema(version, 112, 'Patterns along a sketch path');
   if (data.patternKind === 'mirror' || data.mirrorPlane !== undefined)
-    assertMinimumProjectSchema(version, 115, 'Mirror patterns');
+    assertMinimumProjectSchema(version, 119, 'Mirror patterns');
 }
 
 /**
@@ -551,6 +551,31 @@ export function hasDrawingBom(value: unknown): boolean {
       typeof entry.annotationId === 'string' &&
       (entry.kind === 'bom-table' || entry.kind === 'balloon')
     )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** M01 hole tables on drawing sheets (schema v117). */
+export function assertDrawingHoleTableSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 117, 'Hole tables');
+}
+
+/** Whether `value` holds an M01 hole table. */
+export function hasDrawingHoleTable(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.annotationId === 'string' && entry.kind === 'hole-table')
       return true;
     pending.push(...Object.values(entry));
   }
@@ -1019,6 +1044,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingHoleTable(command.payload)
+    )
+      assertDrawingHoleTableSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingTolerance(command.payload)
     )
       assertDrawingToleranceSchema(document.schemaVersion);
@@ -1256,6 +1287,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
     assertDrawingBomSchema(document.schemaVersion);
+  if (hasDrawingHoleTable(document.drawings))
+    assertDrawingHoleTableSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingHoleTable(change.before) ||
+          hasDrawingHoleTable(change.after))
+      )
+        assertDrawingHoleTableSchema(document.schemaVersion);
   if (hasDrawingTolerance(document.drawings))
     assertDrawingToleranceSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])

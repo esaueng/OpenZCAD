@@ -10,6 +10,7 @@ import {
 import { toUserId, type FeatureWarning } from '@openzcad/shared';
 import {
   inspectDisplayMeshClosure,
+  inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
 } from '../packages/kernel-adapter/src/boolean-result-validation';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
@@ -24,6 +25,40 @@ const CUBE_INDICES = [
 ];
 
 describe('display mesh closure', () => {
+  it.each([
+    { a: 2.8, b: 4.2, probe: 3.5, winding: 2 },
+    { a: 2.9, b: 3.95, probe: 3.3, winding: 0 }
+  ])(
+    'preserves the chosen weld representative at $probe cells',
+    ({ a, b, probe, winding }) => {
+      // A and B are too far apart to weld. The probe can join either one.
+      // The occupied probe cell wins first, then neighbours in x/y/z order.
+      const diagonal = (cell: number) => {
+        const coordinate = cell * 1e-6;
+        return [coordinate, coordinate, coordinate];
+      };
+      const positions = [
+        ...diagonal(a),
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        ...diagonal(b),
+        ...diagonal(probe)
+      ];
+      expect(
+        inspectTriangleMeshClosure(positions, [0, 1, 2, 3, 2, 1, 4, 1, 2])
+      ).toEqual({
+        boundaryEdges: 2,
+        nonManifoldEdges: 1,
+        inconsistentWindingEdges: winding,
+        triangles: 3
+      });
+    }
+  );
+
   it('accepts a closed mesh from shared indices', () => {
     expect(
       isClosedConsistentlyOrientedMesh(
