@@ -1,5 +1,5 @@
 /**
- * S02-D (schema v126): the sketch's own datum as a reference target. The
+ * S02-D (schema v129): the sketch's own datum as a reference target. The
  * origin and the X/Y axes are fixed in the sketch-local frame (the frame a
  * datum-backed sketch takes from its datum plane), so a reference to them
  * measures in that frame and never depends on an object. They carry no

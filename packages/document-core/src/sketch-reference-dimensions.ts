@@ -53,7 +53,7 @@ const COMPOSITE_REFERENCE_SCHEMA_VERSION = 36;
 /** S02-D: composite centres and legacy-shape corner/side/centre targets. */
 const SHAPE_REFERENCE_SCHEMA_VERSION = 125;
 /** S02-D: the sketch origin and X/Y axes. */
-const DATUM_REFERENCE_SCHEMA_VERSION = 126;
+const DATUM_REFERENCE_SCHEMA_VERSION = 129;
 const REFERENCE_DISTANCE_MODE_SCHEMA_VERSION = 35;
 
 function assertReferenceDataSchema(

@@ -501,11 +501,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // cannot read those targets and would refuse or drop the annotation, so it
 // must refuse the document. Builds on v121 (#1842); v122–v124 are claimed
 // by the open F01 PRs #1846, #1847 and #1851.
-// v126 adds S02-D datum reference targets: the sketch origin
+// v129 adds S02-D datum reference targets: the sketch origin
 // (`sketch-origin`) and its X/Y axes (`sketch-axis`), measured in the
 // sketch-local frame. An older client cannot read them, so it must refuse.
-// Builds on v125.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 126 as const;
+// Builds on v126 (#1846); claimed as v126, renumbered when #1846 took it
+// first. v127 and v128 are claimed by the open F01 PRs #1847 and #1851.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 129 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1994,7 +1995,7 @@ export type SketchReferencePointTarget =
   | SketchShapeCornerTarget
   | SketchShapeCenterTarget
   | SketchOriginTarget;
-/** Legacy-shape sides arrive in schema v125 (S02-D); datum axes in v126. */
+/** Legacy-shape sides arrive in schema v125 (S02-D); datum axes in v129. */
 export type SketchReferenceCurveTarget =
   | EntityId
   | SketchCompositeSideTarget

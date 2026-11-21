@@ -240,9 +240,10 @@ describe('S02-D sketch origin and axis reference targets', () => {
       }
     });
     const old = structuredClone(added.document);
-    Object.assign(old, { schemaVersion: 125 });
+    // v128 is the version just before these targets were introduced.
+    Object.assign(old, { schemaVersion: 128 });
     const upgrade =
-      /Sketch origin and axis reference targets require project schema v126 or newer/;
+      /Sketch origin and axis reference targets require project schema v129 or newer/;
     expect(() => normalizeDocument(old)).toThrow(upgrade);
     expect(() => new CommandManager(old)).toThrow(upgrade);
   });
