@@ -52,6 +52,11 @@ export interface EncryptedShareLinksState {
   readonly links: readonly EncryptedShareLinkRow[];
   /** The owner's confirmation (share delegation) needs the identity key. */
   readonly needsConfirmation: boolean;
+  /**
+   * The account has a passkey, so Create link confirms with it straight
+   * away; without one it asks for the recovery key.
+   */
+  readonly passkey?: boolean;
   /** Links turned off because the owner's identity changed. */
   readonly retired: readonly {
     shareId: string;
@@ -70,7 +75,16 @@ export interface EncryptedShareLinkClient {
    * statements that are due, then lists the head's active links and the
    * revoked ones still served.
    */
-  list(projectId: string): Promise<EncryptedShareLinksState>;
+  list(
+    projectId: string,
+    options?: {
+      /**
+       * Skip the upkeep pass (retries, renewals, pending work): a refresh
+       * right after an action that already did that work.
+       */
+      readonly upkeep?: false;
+    }
+  ): Promise<EncryptedShareLinksState>;
   create(
     projectId: string,
     mode: EncryptedShareLinkMode,
@@ -103,83 +117,92 @@ export interface EncryptedShareLinkClient {
 
 /** The page's client: crypto loads with the first encrypted dialog. */
 export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
-  async list(projectId) {
+  async list(projectId, options) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const { ctx } = await encryptedShareLinks();
-    let upkeepError: string | null = null;
-    const upkeep = await links
-      .maintainShareLinks(ctx, projectId)
-      .catch((error: unknown) => {
-        upkeepError = message(error);
-        return null;
-      });
-    const work = await links
-      .shareWorkFor(ctx)
-      .read(ctx.groups.account.userId, projectId)
-      .catch((error: unknown) => {
-        upkeepError ??= message(error);
-        return null;
-      });
-    const view = await links.listShareLinks(
-      ctx,
-      projectId,
-      upkeep?.head ?? undefined
-    );
-    // L08: which links take comments; unknown when that cannot be read.
-    const commenting = await Promise.resolve()
-      .then(() => links.commentingShareLinks(ctx, projectId))
-      .catch(() => null);
-    return {
-      links: view.links.map((link) => ({
-        shareId: link.shareId,
-        mode: link.mode,
-        url: link.url,
-        status: link.status,
-        expiresAt: link.expiresAt,
-        ...(commenting ? { comments: commenting.has(link.shareId) } : {})
-      })),
-      needsConfirmation:
-        view.isOwner && links.delegationNeedsRenewal(view.delegation),
-      retired: work?.retired ?? [],
-      removalNotice: work?.notice ?? null,
-      removalLinks: work?.removalLinks ?? [],
-      problem:
-        upkeepError ??
-        (upkeep?.revocations.failed.length
-          ? `A revoked link may still open for visitors: the server did not confirm it stopped serving it (${upkeep.revocations.failed[0]!.reason}). Revoke it again to retry.`
-          : null) ??
-        snapshotProblem(upkeep)
-    };
+    const page = await encryptedShareLinks();
+    const { ctx } = page;
+    return page.scopeReads(async () => {
+      let upkeepError: string | null = null;
+      const upkeep =
+        options?.upkeep === false
+          ? null
+          : await links
+              .maintainShareLinks(ctx, projectId)
+              .catch((error: unknown) => {
+                upkeepError = message(error);
+                return null;
+              });
+      const work = await links
+        .shareWorkFor(ctx)
+        .read(ctx.groups.account.userId, projectId)
+        .catch((error: unknown) => {
+          upkeepError ??= message(error);
+          return null;
+        });
+      const view = await links.listShareLinks(
+        ctx,
+        projectId,
+        upkeep?.head ?? undefined
+      );
+      // L08: which links take comments; unknown when that cannot be read.
+      const commenting = await Promise.resolve()
+        .then(() => links.commentingShareLinks(ctx, projectId))
+        .catch(() => null);
+      return {
+        links: view.links.map((link) => ({
+          shareId: link.shareId,
+          mode: link.mode,
+          url: link.url,
+          status: link.status,
+          expiresAt: link.expiresAt,
+          ...(commenting ? { comments: commenting.has(link.shareId) } : {})
+        })),
+        needsConfirmation:
+          view.isOwner && links.delegationNeedsRenewal(view.delegation),
+        passkey: page.hasPasskey(),
+        retired: work?.retired ?? [],
+        removalNotice: work?.notice ?? null,
+        removalLinks: work?.removalLinks ?? [],
+        problem:
+          upkeepError ??
+          (upkeep?.revocations.failed.length
+            ? `A revoked link may still open for visitors: the server did not confirm it stopped serving it (${upkeep.revocations.failed[0]!.reason}). Revoke it again to retry.`
+            : null) ??
+          snapshotProblem(upkeep)
+      };
+    });
   },
   async create(projectId, mode, options) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const ctx = (await encryptedShareLinks()).ctx;
-    const created = await links.createShareLink(ctx, projectId, mode);
-    const problem = shareLinkCreationProblem(created);
-    if (problem) throw new Error(problem);
-    if (options?.comments) {
-      await links.allowShareLinkComments(ctx, projectId, {
-        shareId: created.shareId,
-        shareKey: created.fragment.shareKey
-      });
-    }
-    return { url: created.url };
+    const page = await encryptedShareLinks();
+    const { ctx } = page;
+    return page.scopeReads(async () => {
+      const created = await links.createShareLink(ctx, projectId, mode);
+      const problem = shareLinkCreationProblem(created);
+      if (problem) throw new Error(problem);
+      if (options?.comments) {
+        await links.allowShareLinkComments(ctx, projectId, {
+          shareId: created.shareId,
+          shareKey: created.fragment.shareKey
+        });
+      }
+      return { url: created.url };
+    });
   },
   async allowComments(projectId, shareId) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    await links.allowShareLinkCommentsById(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      shareId
+    const page = await encryptedShareLinks();
+    await page.scopeReads(() =>
+      links.allowShareLinkCommentsById(page.ctx, projectId, shareId)
     );
   },
   async revoke(projectId, shareId) {
@@ -187,11 +210,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    await revokeShareLink(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      shareId
-    );
+    const page = await encryptedShareLinks();
+    await page.scopeReads(() => revokeShareLink(page.ctx, projectId, shareId));
   },
   async confirm(projectId, confirmation) {
     const [{ encryptedShareLinks }, { issueShareAuthorities }, crypto] =
@@ -218,18 +238,15 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         secret.fill(0);
       }
     }
-    await issueShareAuthorities(page.ctx, projectId);
+    await page.scopeReads(() => issueShareAuthorities(page.ctx, projectId));
   },
   async reissue(projectId, links) {
     const [{ encryptedShareLinks }, { reissueShareLinks }] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    await reissueShareLinks(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      links
-    );
+    const page = await encryptedShareLinks();
+    await page.scopeReads(() => reissueShareLinks(page.ctx, projectId, links));
   },
   async dismissRemoval(projectId, notice) {
     const [{ encryptedShareLinks }, { acknowledgeShareRemoval }] =
@@ -338,13 +355,18 @@ export function EncryptedShareLinks({
   } | null>(null);
   const loadRevision = useRef(0);
 
-  const load = useCallback(async () => {
-    const revision = ++loadRevision.current;
-    const next = await client.list(projectId);
-    if (revision !== loadRevision.current) return;
-    setState(next);
-    if (next.problem) setError(next.problem);
-  }, [client, projectId]);
+  const load = useCallback(
+    async (options?: { readonly upkeep?: false }) => {
+      const revision = ++loadRevision.current;
+      const next = await (options
+        ? client.list(projectId, options)
+        : client.list(projectId));
+      if (revision !== loadRevision.current) return;
+      setState(next);
+      if (next.problem) setError(next.problem);
+    },
+    [client, projectId]
+  );
 
   useEffect(() => {
     void load().catch((caught: unknown) => setError(message(caught)));
@@ -380,17 +402,22 @@ export function EncryptedShareLinks({
   const run = async (key: string, action: () => Promise<void>) => {
     setBusy(key);
     setError(null);
+    let failed = false;
     try {
       await action();
-      await load();
     } catch (caught) {
+      failed = true;
       setError(message(caught));
-      // A revoke can fail after its tombstone was written: show the link
-      // as revocation pending rather than active.
-      await load().catch(() => undefined);
     } finally {
       setBusy(null);
     }
+    // The action's result is already on screen: the list catches up
+    // behind it without the upkeep pass the action just did. After a
+    // failure too, since a revoke can fail after its tombstone was
+    // written: the link then shows as revocation pending, not active.
+    await load({ upkeep: false }).catch((caught: unknown) => {
+      if (!failed) setError(message(caught));
+    });
   };
 
   const createLink = async () => {
@@ -459,7 +486,7 @@ export function EncryptedShareLinks({
         <Globe className="sharing-access-icon" size={14} aria-hidden="true" />
         <span className="sharing-access-title">
           {state === null
-            ? 'Anyone with a link'
+            ? 'Checking links…'
             : links.length > 0
               ? `Anyone with a link · ${links.length} ${
                   links.every((row) => row.status === 'active')
@@ -472,7 +499,7 @@ export function EncryptedShareLinks({
       <div className="sharing-link-create">
         <ShareLinkModePicker
           value={mode}
-          disabled={disabled || confirming}
+          disabled={busy !== null || confirming}
           describedBy={detailId}
           onChange={setMode}
         />
@@ -480,7 +507,7 @@ export function EncryptedShareLinks({
           <input
             type="checkbox"
             checked={withComments}
-            disabled={disabled || confirming}
+            disabled={busy !== null || confirming}
             aria-describedby={detailId}
             onChange={(event) => setWithComments(event.target.checked)}
           />
@@ -493,12 +520,27 @@ export function EncryptedShareLinks({
           onClick={() => {
             // One action (design review I79): Create link asks for the
             // confirmation sharing needs, then makes the link.
-            if (state?.needsConfirmation) {
-              setCreateAfterConfirm(true);
+            if (!state?.needsConfirmation) {
+              void run('create', createLink);
+              return;
+            }
+            setCreateAfterConfirm(true);
+            if (!state.passkey) {
               setConfirming(true);
               return;
             }
-            void run('create', createLink);
+            // Straight to the passkey prompt, in this click's activation.
+            // Cancelled or refused, the recovery key is the other way.
+            void run('confirm', async () => {
+              try {
+                await client.confirm(projectId, 'passkey');
+              } catch (caught) {
+                setConfirming(true);
+                throw caught;
+              }
+              setCreateAfterConfirm(false);
+              await createLink();
+            });
           }}
         >
           Create link

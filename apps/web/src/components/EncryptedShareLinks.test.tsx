@@ -505,3 +505,105 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     ).toBeEnabled();
   });
 });
+
+describe('EncryptedShareLinks speed', () => {
+  it('says it is checking while links load, with only Create link waiting', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false }
+    ]);
+    let finish: (state: EncryptedShareLinksState) => void = () => undefined;
+    vi.mocked(client.list).mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve))
+    );
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    // Never "Anyone with a link" before the links are known.
+    expect(screen.getByText('Checking links…')).toBeInTheDocument();
+    expect(screen.queryByText(/Anyone with a link/)).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
+    expect(
+      screen.getByRole('checkbox', { name: /^Visitors can comment/ })
+    ).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+    await act(async () =>
+      finish({ links: [], retired: [], needsConfirmation: false })
+    );
+    expect(screen.getByText('Only invited people')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeEnabled();
+  });
+
+  it('goes straight to the passkey from Create link, then makes the link', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: true },
+      { links: [], retired: [], needsConfirmation: false, passkey: true }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    expect(client.confirm).toHaveBeenCalledWith('proj_x', 'passkey');
+    await waitFor(() => expect(client.create).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole('group', { name: 'Confirm sharing' })
+    ).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole('textbox', { name: 'Share link', exact: true })
+    ).toHaveValue(URL_A);
+  });
+
+  it('offers the recovery key when the passkey prompt is cancelled', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: true }
+    ]);
+    vi.mocked(client.confirm).mockRejectedValueOnce(
+      new Error('The passkey prompt was canceled or timed out.')
+    );
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    const group = await screen.findByRole('group', { name: 'Confirm sharing' });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'canceled or timed out'
+    );
+    expect(client.create).not.toHaveBeenCalled();
+    await userEvent.type(within(group).getByLabelText('Recovery key'), 'KEY');
+    await userEvent.click(
+      within(group).getByRole('button', { name: 'Confirm with recovery key' })
+    );
+    expect(client.confirm).toHaveBeenLastCalledWith('proj_x', {
+      recoveryKey: 'KEY'
+    });
+    await waitFor(() => expect(client.create).toHaveBeenCalledOnce());
+  });
+
+  it('asks for the recovery key without a passkey prompt when the account has none', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: false }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    expect(
+      screen.getByRole('group', { name: 'Confirm sharing' })
+    ).toBeInTheDocument();
+    expect(client.confirm).not.toHaveBeenCalled();
+  });
+
+  it('shows the new link and frees the dialog before the list catches up', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    // The refresh after creating never answers in this test.
+    vi.mocked(client.list).mockImplementation(() => new Promise(() => {}));
+    await userEvent.click(create);
+    expect(
+      await screen.findByRole('textbox', { name: 'Share link', exact: true })
+    ).toHaveValue(URL_A);
+    await waitFor(() => expect(create).toBeEnabled());
+    // The refresh skips the upkeep pass the action already did.
+    expect(client.list).toHaveBeenLastCalledWith('proj_x', { upkeep: false });
+  });
+});
