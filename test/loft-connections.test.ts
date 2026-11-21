@@ -257,6 +257,62 @@ describe(
       ).toBeLessThan(1e-9);
     });
 
+    it('refuses a stored guide the picker would not offer, typed as a loft guide', async () => {
+      // Review regression: the picker offers lines, arcs and open splines
+      // that are not construction. A stored guide later turned into
+      // construction, or one naming a circle or a closed spline, must be
+      // refused under the loft's own code, never built and never reported
+      // as a sweep path.
+      const cases: Array<[string, SketchObjectData, 'ruled' | 'smooth']> = [
+        ['construction arc', { ...arcGuide, construction: true }, 'ruled'],
+        [
+          'construction line',
+          {
+            objectKind: 'line',
+            x1: -1,
+            y1: 0,
+            x2: 1,
+            y2: -10,
+            construction: true
+          },
+          'ruled'
+        ],
+        [
+          'circle',
+          { objectKind: 'circle', centerX: 0, centerY: -5, radius: 5 },
+          'smooth'
+        ],
+        [
+          'closed spline',
+          {
+            objectKind: 'spline',
+            closed: true,
+            points: [
+              { x: -1, y: 0 },
+              { x: 3, y: -5 },
+              { x: -1, y: -10 },
+              { x: -5, y: -5 }
+            ]
+          } as SketchObjectData,
+          'smooth'
+        ]
+      ];
+      for (const [name, guide, mode] of cases) {
+        const { document, bodyId } = await built(
+          withGuide(stack(name), guide, { mode })
+        );
+        expect(
+          document.derived.bodyRepresentations[bodyId],
+          name
+        ).toBeUndefined();
+        const [warning] = document.derived.featureWarnings ?? [];
+        expect(warning!.kernelRefusal, name).toMatchObject({
+          family: 'modeling',
+          code: 'loft-guide:not-one-curve'
+        });
+      }
+    });
+
     it('refuses a curved guide between curved sections, typed', async () => {
       const bottom = profileSketch(createProjectDocument('Discs', user), {
         objectKind: 'circle',

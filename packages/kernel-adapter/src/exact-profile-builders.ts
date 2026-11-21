@@ -2275,7 +2275,11 @@ function straightGuideOnRuledLoft(
   if (mode === 'smooth') return false;
   const [entityId] = guide.entityIds;
   const node = entityId ? document.nodes[entityId] : undefined;
-  return node?.kind === 'sketch-object' && node.data.objectKind === 'line';
+  return (
+    node?.kind === 'sketch-object' &&
+    node.data.objectKind === 'line' &&
+    node.data.construction !== true
+  );
 }
 
 /**
@@ -2296,11 +2300,16 @@ function loftGuideCurve(
 } {
   const sketch = findSketch(document, guide.sketchId);
   const [entityId, ...rest] = guide.entityIds;
+  const node = entityId ? document.nodes[entityId] : undefined;
+  // What the picker offers is all a stored guide may name: a line, an arc
+  // or an open spline that is not construction geometry. A guide turned
+  // into construction (or a circle, a closed spline) after it was picked
+  // is refused, not built.
   if (
     !sketch ||
     rest.length > 0 ||
     !entityId ||
-    document.nodes[entityId]?.kind !== 'sketch-object' ||
+    node?.kind !== 'sketch-object' ||
     !sketch.objectIds.includes(entityId)
   ) {
     const message = 'A loft guide is one curve of its guide sketch.';
@@ -2313,14 +2322,42 @@ function loftGuideCurve(
       message
     });
   }
-  const edges = sweepPathEdges(
-    kernel,
-    document,
-    guide,
-    scope,
-    sketchBases,
-    false
-  );
+  if (
+    node.data.construction === true ||
+    !(
+      node.data.objectKind === 'line' ||
+      node.data.objectKind === 'arc' ||
+      (node.data.objectKind === 'spline' && node.data.closed !== true)
+    )
+  ) {
+    const message =
+      'A loft guide is one line, arc or open spline of its guide sketch, not construction geometry.';
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: 'unsupported',
+      kernelCode: 'loft-guide:not-one-curve',
+      kernelMessage: message,
+      reason: message,
+      message
+    });
+  }
+  // The guide's own conversion refuses under the loft's code, so a guide
+  // the sweep-path reader cannot take is never reported as a sweep path.
+  let edges: number[];
+  try {
+    edges = sweepPathEdges(kernel, document, guide, scope, sketchBases, false);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: 'unsupported',
+      kernelCode: 'loft_guide_refused',
+      kernelMessage: message,
+      reason: message,
+      message,
+      cause: error
+    });
+  }
   if (edges.length !== 1) {
     const message = 'A loft guide is one curve of its guide sketch.';
     throw new KernelRefusal({
