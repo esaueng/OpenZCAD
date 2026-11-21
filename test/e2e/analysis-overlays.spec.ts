@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -88,6 +88,20 @@ async function switchAnalysis(page: Page, name: string) {
     .click();
 }
 
+async function expectBesideDisplayButton(page: Page, panel: Locator) {
+  const trigger = page.getByRole('button', { name: /^Display mode \(W\)/ });
+  await expect
+    .poll(async () => {
+      const card = await panel.boundingBox();
+      const button = await trigger.boundingBox();
+      if (!card || !button) return 'unmeasured';
+      const gap = button.x - (card.x + card.width);
+      const level = Math.abs(card.y + 6 - button.y);
+      return gap > 0 && gap < 32 && level < 4 ? 'beside' : { gap, level };
+    })
+    .toBe('beside');
+}
+
 test(
   'draws an exact draft analysis over the bodies, with its legend, provenance and limits (M09)',
   { tag: '@ci-smoke' },
@@ -107,12 +121,12 @@ test(
       '2 faces drafted away, 5 faces below the minimum.',
       { timeout: 60_000 }
     );
+    await expect(panel.getByRole('note')).toBeHidden();
+    await panel.getByText('Details', { exact: true }).click();
     await expect(panel.getByRole('note')).toContainText(
-      'Exact draft from the kernel at sample points'
+      'Exact at sample points'
     );
-    await expect(panel.getByRole('note')).toContainText(
-      '8 of 9 face ranges exact.'
-    );
+    await expect(panel.getByRole('note')).toContainText('8 of 9 faces exact.');
     await expect(panel).toContainText('not a parting-line check');
     await expect
       .poll(async () =>
@@ -128,17 +142,23 @@ test(
     // measures again: the pin's wall now runs from −90° to 90° and its ends
     // are vertical.
     const minimum = panel.getByRole('spinbutton', {
-      name: 'Minimum draft (°)'
+      name: 'Min draft (°)'
     });
     await minimum.fill('5');
     await expect(panel.getByRole('list', { name: 'Legend' })).toContainText(
-      '≥ 5° toward the pull · 2'
+      '≥ 5° · 2'
     );
-    await panel.getByRole('combobox', { name: 'Pull' }).selectOption('+x');
+    await panel.getByRole('radio', { name: '+X' }).click();
     await expect(status).toHaveText(
       /^1 face drafted away, 6 faces below the minimum, 1 face crossing bands\./,
       { timeout: 60_000 }
     );
+
+    // The card stands beside the Display button, in Build's rail and in
+    // Tweak's bar (which sits outside the viewer), not over the model.
+    await expectBesideDisplayButton(page, panel);
+    await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+    await expectBesideDisplayButton(page, panel);
 
     // Off from the panel: the overlay goes with it.
     await panel.getByRole('button', { name: 'Turn off' }).click();

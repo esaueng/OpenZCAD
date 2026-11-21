@@ -133,6 +133,8 @@ export function DisplayModeMenu({
           type="button"
           ref={triggerRef}
           className={buttonClass}
+          // The analysis panel stands beside this button (AnalysisPanel).
+          data-display-mode-trigger=""
           onClick={() => setOpen(!open)}
           aria-label={`${labelWithKey('Display mode', displayKey)} — now: ${displayModeLabel}`}
           aria-expanded={open}
