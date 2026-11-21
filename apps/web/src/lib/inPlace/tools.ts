@@ -1850,6 +1850,14 @@ const sweep: InPlaceToolSpec = {
           // Parallel hides the Corners row, so only a visible choice goes.
           ...(options.corner === 'round' && options.orientation !== 'parallel'
             ? { cornerRadius: values.cornerRadius ?? 2 }
+            : {}),
+          ...(options.position &&
+          options.position !== 'end' &&
+          options.orientation !== 'parallel'
+            ? {
+                profilePosition: options.position as
+                  'auto' | 'intersection' | 'closest-point' | 'closest-endpoint'
+              }
             : {})
         };
       }

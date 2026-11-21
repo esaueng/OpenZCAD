@@ -2200,6 +2200,24 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
     expect(radius.when!(state({}))).toBe(true);
     expect(radius.when!(state({ orientation: 'parallel' }))).toBe(false);
+    // A position chosen beside a rail goes out too, to be refused by name.
+    expect(
+      spec.request(
+        railed as unknown as InPlaceSlots,
+        { twist: 0, endScale: 1 },
+        { build: 'exact', position: 'intersection' },
+        {} as never
+      )
+    ).toMatchObject({ profilePosition: 'intersection' });
+    // Parallel hides the Profile at row too, so its stale choice stays home.
+    expect(
+      spec.request(
+        railed as unknown as InPlaceSlots,
+        { twist: 0, endScale: 1 },
+        { build: 'exact', orientation: 'parallel', position: 'intersection' },
+        {} as never
+      )
+    ).not.toHaveProperty('profilePosition');
   });
 
   it('sweep: the card writes orientation, round corners and profile position on Exact, and an edit reopens and clears them (M04)', () => {
