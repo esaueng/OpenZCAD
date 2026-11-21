@@ -44,7 +44,7 @@ const square: SketchObjectData = {
 function sweepWith(
   start: { document: ProjectDocument; section: SketchSectionReference },
   path: readonly SketchObjectData[],
-  options: Pick<SweepInput, 'orientation'>
+  options: Pick<SweepInput, 'orientation' | 'twistDeg' | 'endScale'>
 ) {
   const [first, ...rest] = path;
   const sketch = addSketchFeature(start.document, {
@@ -193,6 +193,37 @@ describe('exact sweep orientation (M04, v134)', { timeout: 120_000 }, () => {
         )
       )
     ).toContain('keeps moving away from the profile');
+  });
+
+  it('refuses parallel orientation with a twist or end scale before building', () => {
+    const start = profileSketch(createProjectDocument('Turned', user), square);
+    const riser = [
+      { objectKind: 'line' as const, x1: 0, y1: 0, x2: 0, y2: 10 }
+    ];
+    for (const extra of [{ twistDeg: 90 }, { endScale: 2 }]) {
+      expect(() =>
+        sweepWith(start, riser, { orientation: 'parallel', ...extra })
+      ).toThrow('neither turns nor scales');
+    }
+  });
+
+  it('carries the kernel’s path refusals as typed refusals', async () => {
+    const start = profileSketch(createProjectDocument('Typed', user), square);
+    const { document } = await built(
+      sweepWith(
+        start,
+        [
+          { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 10 },
+          { objectKind: 'line', x1: 0, y1: 10, x2: 10, y2: 5 }
+        ],
+        { orientation: 'parallel' }
+      )
+    );
+    const [warning] = document.derived.featureWarnings ?? [];
+    expect(warning!.kernelRefusal).toMatchObject({
+      family: 'modeling',
+      code: 'exact_sweep_refused'
+    });
   });
 
   it('refuses a replayed or stored parallel orientation in a document older than v134', () => {

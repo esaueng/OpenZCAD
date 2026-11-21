@@ -2140,6 +2140,17 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
     expect(plain).not.toHaveProperty('twistDeg');
     expect(plain).not.toHaveProperty('endScale');
+    // Parallel beside a rail also goes out, so it is refused, not dropped.
+    const parallel = spec.request(
+      slots,
+      { twist: 0, endScale: 1 },
+      { build: 'exact', orientation: 'parallel' },
+      {} as never
+    );
+    expect(parallel).toMatchObject({
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] },
+      orientation: 'parallel'
+    });
   });
 
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {

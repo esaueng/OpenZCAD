@@ -1768,7 +1768,11 @@ const sweep: InPlaceToolSpec = {
             entityIds: slots.guide.map((curve) => curve.entityId)
           },
           ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
-          ...(isLiteral(endScale, 1) ? {} : { endScale })
+          ...(isLiteral(endScale, 1) ? {} : { endScale }),
+          // Parallel beside a rail goes out too, to be refused by name.
+          ...(options.orientation === 'parallel'
+            ? { orientation: 'parallel' as const }
+            : {})
         };
       }
       return {

@@ -1,5 +1,6 @@
 import type { RemusKernel } from './remus-runtime';
 import { KernelRefusal } from './kernel-refusal';
+import { operationErrorCategory } from './remus-operation-refusal';
 import {
   EXTRUDE_SIDES_CONFLICT_MESSAGE,
   extrudeSidesConflict,
@@ -2978,6 +2979,31 @@ export function resolveSweepOptions(
  * `sweepExactWithOptions`, which builds it along a straight path with the
  * profile square to it and refuses anything else by name.
  */
+/**
+ * The exact sweep's kernel call, its refusals typed: Remus refuses an exact
+ * sweep it cannot build (a path that turns back, a spline on a turning
+ * sweep) with a prose error, so each is carried as a typed modeling refusal
+ * with the kernel's sentence, never a bare build failure.
+ */
+function typedExactSweep(run: () => number): number {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof KernelRefusal) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    const category = operationErrorCategory(message);
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: category === 'internal' ? 'unsupported' : category,
+      kernelCode: 'exact_sweep_refused',
+      kernelMessage: message,
+      reason: message,
+      message,
+      cause: error
+    });
+  }
+}
+
 function exactSweepSolid(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -3051,10 +3077,12 @@ function exactSweepSolid(
       false
     );
     const endScale = railEndScale(kernel, pathEdges, railEdges, profilePlane);
-    return kernel.sweepExactWithOptions(
-      face,
-      Uint32Array.from(pathEdges),
-      JSON.stringify({ endScale })
+    return typedExactSweep(() =>
+      kernel.sweepExactWithOptions(
+        face,
+        Uint32Array.from(pathEdges),
+        JSON.stringify({ endScale })
+      )
     );
   }
   const edges = sweepPathEdges(
@@ -3066,13 +3094,17 @@ function exactSweepSolid(
     false
   );
   if (options) {
-    return kernel.sweepExactWithOptions(
-      face,
-      Uint32Array.from(edges),
-      JSON.stringify(options)
+    return typedExactSweep(() =>
+      kernel.sweepExactWithOptions(
+        face,
+        Uint32Array.from(edges),
+        JSON.stringify(options)
+      )
     );
   }
-  return kernel.sweepExact(face, Uint32Array.from(edges));
+  return typedExactSweep(() =>
+    kernel.sweepExact(face, Uint32Array.from(edges))
+  );
 }
 
 function sketchBasisOf(

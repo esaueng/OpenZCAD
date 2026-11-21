@@ -3314,6 +3314,11 @@ export function validateSweepOptions(data: {
   }
   const twisted = !isZeroParam(twistDeg);
   const scaled = !isUnitParam(endScale);
+  if ((twisted || scaled) && data.orientation !== undefined) {
+    throw new Error(
+      'A sweep that keeps the profile parallel neither turns nor scales it; clear the twist and end scale, or the orientation.'
+    );
+  }
   if ((twisted || scaled) && data.guide !== undefined) {
     throw new Error(
       'A guide rail sets the sweep’s end scale itself; clear the twist and end scale, or the rail.'
