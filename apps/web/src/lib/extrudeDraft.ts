@@ -452,7 +452,8 @@ export function extrudeFormValue(
       : {
           backDistance: derived ? 0 : coerceParamValue(draft.backDistance)
         }),
-    choice: draft.choice,
+    // More bodies to cut through go only with a through-all cut.
+    choice: throughAll ? draft.choice : extrudeChoiceAlone(draft.choice),
     endCondition: throughAll
       ? 'through-all'
       : toFace
@@ -599,8 +600,37 @@ export function extrudeDraftRefusal(
     if (!ctx.bodies.some((body) => body.bodyId === targetBodyId)) {
       return 'Select a target before applying.';
     }
+    if (throughAll) {
+      const also = extrudeAlsoTargets(draft.choice);
+      if (
+        also.some(
+          (bodyId, index) =>
+            bodyId === targetBodyId ||
+            also.indexOf(bodyId) !== index ||
+            !ctx.bodies.some((body) => body.bodyId === bodyId)
+        )
+      ) {
+        return 'Pick each body the cut goes through once, from the bodies here.';
+      }
+    }
   }
   return null;
+}
+
+/**
+ * F01 multi-target through all: the further bodies a through-all cut goes
+ * through, beyond its target (each becomes its own through-all cut, created
+ * with it as one step).
+ */
+export function extrudeAlsoTargets(choice: ExtrudeChoice): BodyId[] {
+  return choice.operation === 'cut' ? (choice.alsoTargetBodyIds ?? []) : [];
+}
+
+/** The choice without further bodies to cut through. */
+export function extrudeChoiceAlone(choice: ExtrudeChoice): ExtrudeChoice {
+  if (choice.operation !== 'cut' || !choice.alsoTargetBodyIds) return choice;
+  const { alsoTargetBodyIds: _also, ...alone } = choice;
+  return alone;
 }
 
 /**

@@ -28990,10 +28990,17 @@ export function App() {
         );
         if (!isCurrent()) return;
         if (mixed) throw new Error(mixed);
-        const command = resolved.command;
-        const resultBodyId = command.payload.ids?.bodyId;
+        const resultBodyId = resolved.command.payload.ids?.bodyId;
         if (!resultBodyId)
           throw new Error('Extrude could not reserve a result body.');
+        // F01: a through-all cut through several bodies is one through-all
+        // extrude per body, created (and undone) as one step.
+        const command = resolved.extraCommands?.length
+          ? composeCommands(resolved.command.label, [
+              resolved.command,
+              ...resolved.extraCommands
+            ])
+          : resolved.command;
         const committed = await executeValidatedDirectEdit(
           command,
           resultBodyId,
@@ -29007,7 +29014,15 @@ export function App() {
             finishFeatureCreation();
             setRevertPill({ sketchId: target.sketchId as SketchId });
           },
-          undefined,
+          // F01: several cuts are judged each by its own feature and body,
+          // never by a shared label another feature might carry.
+          resolved.extraCommands?.length
+            ? [resolved.command, ...resolved.extraCommands].map((leaf) => ({
+                featureName: leaf.payload.name,
+                featureId: leaf.payload.ids!.featureId,
+                resultBodyId: leaf.payload.ids!.bodyId
+              }))
+            : undefined,
           {
             baseProjectId: base.projectId,
             baseVersion: base.version,

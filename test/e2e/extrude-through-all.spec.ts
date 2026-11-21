@@ -2,7 +2,8 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   createProjectDocument,
-  extrudeSketch
+  extrudeSketch,
+  transformBody
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import {
@@ -289,5 +290,107 @@ test(
     await edit.getByRole('button', { name: 'Cancel' }).click();
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expectFeatureMeasurement(page, tabRow, '16016');
+  }
+);
+
+/**
+ * F01: one through-all cut through two plates. Each body becomes its own
+ * through-all cut, created as one step from the bar and undone as one.
+ */
+test(
+  'cuts through all of two picked bodies in one step, and undoes both',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await stubApi(page);
+    let document = createProjectDocument('Through two', toUserId('user_e2e'));
+    const ids: string[] = [];
+    for (const [name, z] of [
+      ['Lower', 0],
+      ['Upper', 20]
+    ] as const) {
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 40, depth: 10 }
+      });
+      const bodyId = document.bodyOrder.at(-1)!;
+      ids.push(bodyId);
+      document = transformBody(document, {
+        name: `Lift ${name}`,
+        targetBodyId: bodyId,
+        translation: { x: 0, y: 0, z }
+      }).document;
+    }
+    const bodyName = (bodyId: string) =>
+      Object.values(document.nodes).find(
+        (node) => node.kind === 'body' && node.bodyId === bodyId
+      )!.name;
+    document = addSketchFeature(document, {
+      name: 'Slot sketch',
+      plane: 'XY',
+      offset: 40,
+      objects: [
+        {
+          objectKind: 'rectangle',
+          width: 10,
+          height: 10,
+          centerX: 20,
+          centerY: 20
+        }
+      ]
+    }).document;
+    await page.route('**/api/projects', (route) =>
+      route.request().method() === 'POST'
+        ? route.fulfill({
+            status: 201,
+            json: {
+              project: {
+                projectId: document.projectId,
+                name: document.name,
+                revisionCount: 1,
+                updatedAt: new Date().toISOString()
+              },
+              document
+            }
+          })
+        : route.fulfill({ json: { projects: [] } })
+    );
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill(document.name);
+    await page.getByRole('button', { name: 'New project' }).click();
+    await expectBodyCount(page, 2);
+
+    await page.locator('.feature-row-main', { hasText: 'Slot sketch' }).click();
+    await page.keyboard.press('e');
+    const bar = extrudeBar(page);
+    await chooseInPlaceOption(page, 'Extrude', 'Operation', 'Cut');
+    await chooseInPlaceOption(
+      page,
+      'Extrude',
+      'Target body',
+      bodyName(ids[0]!)
+    );
+    await chooseInPlaceOption(page, 'Extrude', 'Extent', 'Through all');
+    await chooseInPlaceOption(page, 'Extrude', 'Direction', 'Reverse');
+    await chooseInPlaceOption(page, 'Extrude', 'Also cut', bodyName(ids[1]!));
+    await bar.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Cut the region through all of 2 bodies.',
+      { timeout: 30_000 }
+    );
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expectBodyCount(page, 2);
+    const cuts = page.locator('.feature-row:not(.is-sketch)', {
+      has: page.locator('.feature-row-main', { hasText: 'Extrude' })
+    });
+    await expect(cuts).toHaveCount(2);
+    // 40 × 40 × 10 less the 10 × 10 hole through each plate.
+    for (const index of [0, 1]) {
+      await expectFeatureMeasurement(page, cuts.nth(index), '15000');
+    }
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect(cuts).toHaveCount(0);
   }
 );
