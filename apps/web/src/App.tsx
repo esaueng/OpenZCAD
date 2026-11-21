@@ -20324,7 +20324,10 @@ export function App() {
       }
       sink.update({ phase: 'writing', fraction: null });
       const saved = await produced.save();
-      if (!saved || signal.aborted) {
+      // A Cancel that lands while the save is still in hand (a share sheet
+      // being staged) comes too late: the file is written, so the run is not
+      // reported as having written nothing.
+      if (!saved) {
         cancelled();
         return;
       }
