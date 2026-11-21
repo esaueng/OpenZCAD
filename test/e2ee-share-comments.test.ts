@@ -147,6 +147,120 @@ const PIN = {
   documentVersion: 1
 };
 
+describe('comment request transport limits', () => {
+  it('retains valid encrypted comments with split UTF-8 and ignored Unicode fields', async () => {
+    const { srv, laptop, projectId, link } = await sharedWithLink();
+    await allowShareLinkComments(laptop.shareLinks, projectId, {
+      shareId: link.shareId,
+      shareKey: link.fragment.shareKey
+    });
+    const access = (await openLink(srv, link.url))!.comments!;
+    const baseFetch = visitorFetch(srv);
+    const api = createE2eeShareLinksApi(async (input, init) => {
+      if (init?.method !== 'POST') return baseFetch(input, init);
+      if (typeof init.body !== 'string')
+        throw new Error('Expected a JSON request body.');
+      const text = JSON.stringify({
+        ...JSON.parse(init.body),
+        padding: '漢'.repeat(40_000)
+      });
+      const bytes = new TextEncoder().encode(text);
+      expect(text.length).toBeLessThan(100_000);
+      expect(bytes.length).toBeGreaterThan(100_000);
+      let offset = 0;
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (offset === bytes.length) controller.close();
+            else {
+              const end = Math.min(bytes.length, offset + 997);
+              controller.enqueue(bytes.slice(offset, end));
+              offset = end;
+            }
+          }
+        },
+        { highWaterMark: 0 }
+      );
+      return baseFetch(input, { ...init, body, duplex: 'half' } as RequestInit);
+    });
+    await postLinkComment(api as never, access, 'Visitor', {
+      anchor: PIN,
+      text: 'Still encrypted'
+    });
+    expect(
+      (await listLinkComments(api as never, access)).map((c) => c.text)
+    ).toEqual(['Still encrypted']);
+  });
+
+  it.each([
+    ['visitor path', undefined],
+    ['visitor path', '1'],
+    ['visitor header', undefined],
+    ['visitor header', '1'],
+    ['owner grant', undefined],
+    ['owner grant', '1']
+  ])(
+    'bounds streamed comment bodies before EOF: %s, length %s',
+    async (route, length) => {
+      const { srv, laptop, projectId, link } = await sharedWithLink();
+      await allowShareLinkComments(laptop.shareLinks, projectId, {
+        shareId: link.shareId,
+        shareKey: link.fragment.shareKey
+      });
+      const grants = rows(srv, 'SELECT * FROM e2ee_share_comment_grants');
+      const state = { chunks: 0, cancelled: false };
+      const body = new ReadableStream<Uint8Array>(
+        {
+          pull(controller) {
+            if (state.chunks === 10) controller.close();
+            else {
+              state.chunks++;
+              controller.enqueue(new Uint8Array(25_001).fill(32));
+            }
+          },
+          cancel() {
+            state.cancelled = true;
+          }
+        },
+        { highWaterMark: 0 }
+      );
+      const grant = route === 'owner grant';
+      const path = grant
+        ? `/api/e2ee/projects/${projectId}/share-links/${link.shareId}/comment-grant`
+        : route === 'visitor header'
+          ? '/api/e2ee/share/comments'
+          : `/api/e2ee/share/${link.fragment.token}/comments`;
+      const response = await worker.fetch(
+        new Request(`https://example.com${path}`, {
+          method: grant ? 'PUT' : 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(grant ? { 'x-openzcad-development-user': owner.userId } : {}),
+            ...(route === 'visitor header'
+              ? { 'x-openzcad-share-token': link.fragment.token }
+              : {}),
+            ...(length ? { 'content-length': length } : {})
+          },
+          body,
+          duplex: 'half'
+        } as RequestInit),
+        srv.env
+      );
+      expect(response.status).toBe(413);
+      expect(await response.json()).toMatchObject({
+        code: 'E2EE_REQUEST_TOO_LARGE'
+      });
+      expect(state.cancelled).toBe(true);
+      expect(state.chunks).toBeLessThan(10);
+      expect(body.locked).toBe(false);
+      expect(rows(srv, 'SELECT * FROM e2ee_share_comments')).toHaveLength(0);
+      expect(rows(srv, 'SELECT * FROM e2ee_share_comment_grants')).toEqual(
+        grants
+      );
+    }
+  );
+});
+
 describe(
   'commenter links on encrypted projects (L08)',
   { timeout: 120_000 },
