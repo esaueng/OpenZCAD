@@ -7,7 +7,10 @@ import type {
   UserId
 } from '@openzcad/shared';
 import { normalizeShareLinkLabel } from '@openzcad/shared';
-import type { PersistenceService } from '@openzcad/persistence';
+import {
+  FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX,
+  type PersistenceService
+} from '@openzcad/persistence';
 import { normalizeEmail } from './auth';
 
 export const PROJECT_INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -57,6 +60,24 @@ export async function hashProjectInvitationToken(
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, '0')
   ).join('');
+}
+
+/**
+ * L08: the token hash of a link without history, in a domain of its own
+ * (`FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX`). The digest is taken over a
+ * labelled input and stored behind a prefix, so it can never equal the
+ * bare hash above: the lookups that serve a live project, in this Worker
+ * and in every earlier one, cannot resolve such a link's token.
+ */
+export async function hashFrozenShareLinkToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    encoder.encode(`openzcad/share-link/frozen/v1:${token}`)
+  );
+  return `${FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX}${Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, '0')
+  ).join('')}`;
 }
 
 function escapeHtml(value: string): string {
@@ -416,7 +437,12 @@ export async function createShareLink(
     {
       shareLinkId: `share_${crypto.randomUUID()}`,
       mode: request.mode,
-      tokenHash: await hashProjectInvitationToken(token),
+      // A link without history is stored where no lookup of a bare token
+      // hash finds it.
+      tokenHash:
+        request.frozenDocument !== undefined
+          ? await hashFrozenShareLinkToken(token)
+          : await hashProjectInvitationToken(token),
       createdAt: now,
       label: request.label,
       ...(request.comments ? { comments: true } : {}),

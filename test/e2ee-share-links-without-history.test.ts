@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  exportPublicKey,
   signProjectEnvelope,
   signShareDelegation,
   toBase64Url
@@ -326,18 +327,25 @@ describe(
           link.shareId
         )[0] as { snapshot_hash: string; signer_device_id: string };
       const first = stored();
-      // As after a new statement or key epoch: every link is sealed again,
-      // here by the editor's device.
+      // As after a new statement or key epoch: every link is sealed again.
+      // An editor's device leaves a link without history alone...
       const editor = page(srv, member);
+      expect(
+        await publishShareSnapshots(editor.shareLinks, projectId, undefined, {
+          republish: [link.shareId]
+        })
+      ).toEqual({ published: [], failed: [] });
+      expect(stored()).toEqual(first);
+      // ...and the owner's seals the stored model again.
       const outcome = await publishShareSnapshots(
-        editor.shareLinks,
+        laptop.shareLinks,
         projectId,
         undefined,
         { republish: [link.shareId] }
       );
       expect(outcome).toEqual({ published: [link.shareId], failed: [] });
       expect(stored().snapshot_hash).not.toBe(first.snapshot_hash);
-      expect(stored().signer_device_id).toBe('other_laptop');
+      expect(stored().signer_device_id).toBe('owner_laptop');
       const opened = await visitor(srv).open(link.url);
       expect(featureNames(opened!.document)).toEqual(['Plate']);
       expect(frozenShareDocumentProblem(opened!.document)).toBeNull();
@@ -489,6 +497,284 @@ describe(
       const opened = await browser.open(reissued!.url);
       expect(featureNames(opened!.document)).toEqual(['Plate']);
       expect(JSON.stringify(opened!.document)).not.toContain(SECRET);
+    });
+  }
+);
+
+/**
+ * Review of #1872, findings 2 and 4: who may replace the snapshot of a
+ * link without history, and what a republication may land over.
+ */
+describe(
+  'replacing the snapshot of an encrypted link without history',
+  { timeout: 120_000 },
+  () => {
+    const stored = (srv: Server, shareId: string) =>
+      rows(
+        srv,
+        `SELECT snapshot_hash, signer_device_id FROM e2ee_share_snapshots
+         WHERE share_id = ?`,
+        shareId
+      )[0] as { snapshot_hash: string; signer_device_id: string };
+
+    /** A snapshot of `document` for the link, sealed and signed by `device`. */
+    async function sealedBy(
+      device: Device,
+      signer: { account: Account; deviceId: string },
+      projectId: string,
+      link: { shareId: string; fragment: { shareKey: Uint8Array } },
+      document: ProjectDocument
+    ) {
+      const head = await device.store.shareHead(projectId);
+      const groups = device.shareLinks.groups;
+      const sealed = await sealSnapshot({
+        projectId,
+        shareId: link.shareId,
+        keyEpoch: head.keyEpoch,
+        projectKey: await projectKeyForEpoch(groups, projectId, head.keyEpoch),
+        authenticator: await epochAuthenticatorForEpoch(
+          groups,
+          projectId,
+          head.keyEpoch
+        ),
+        shareKey: link.fragment.shareKey,
+        head,
+        document,
+        blobs: [],
+        sign: (envelope) =>
+          signProjectEnvelope(
+            signer.account.devices.get(signer.deviceId)!.signing.privateKey,
+            envelope
+          )
+      });
+      return {
+        envelope: sealed.envelope,
+        upload: {
+          signature: toBase64Url(sealed.signature),
+          signerDeviceId: signer.deviceId,
+          wrappedForLinkVisitors: toBase64Url(sealed.forLinkVisitors),
+          wrappedForMembers: toBase64Url(sealed.forMembers)
+        }
+      };
+    }
+
+    it('refuses an editor’s snapshot, of the project or of anything else', async () => {
+      const { srv, laptop, member, projectId, document } = await project();
+      const link = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'frozen',
+        frozenOf(document)
+      );
+      const live = await createShareLink(laptop.shareLinks, projectId, 'view');
+      const first = stored(srv, link.shareId);
+      const editor = page(srv, member);
+      const signer = { account: other, deviceId: 'other_laptop' };
+      const head = await editor.store.shareHead(projectId);
+      // A certified editor seals the live project, properly signed, for the
+      // frozen link: with the wrapped key, its visitors could open it.
+      for (const model of [
+        sharedProjectSnapshotDocument(head.document),
+        frozenOf(document, 'Editor’s plate')
+      ]) {
+        const attempt = await sealedBy(editor, signer, projectId, link, model);
+        await expect(
+          editor.shareLinks.api.putSnapshot(
+            projectId,
+            link.shareId,
+            attempt.upload,
+            attempt.envelope
+          )
+        ).rejects.toMatchObject({
+          status: 403,
+          code: 'E2EE_PROJECT_OWNER_ONLY'
+        });
+      }
+      expect(stored(srv, link.shareId)).toEqual(first);
+      const opened = await visitor(srv).open(link.url);
+      expect(featureNames(opened!.document)).toEqual(['Plate']);
+      expect(JSON.stringify(opened!.document)).not.toContain(SECRET);
+      // The same editor still publishes a link that shares the project.
+      const allowed = await sealedBy(
+        editor,
+        signer,
+        projectId,
+        live,
+        sharedProjectSnapshotDocument(head.document)
+      );
+      await editor.shareLinks.api.putSnapshot(
+        projectId,
+        live.shareId,
+        allowed.upload,
+        allowed.envelope
+      );
+      expect(stored(srv, live.shareId).signer_device_id).toBe('other_laptop');
+    });
+
+    it('is not opened by a visitor when an editor’s snapshot was stored for it', async () => {
+      const { srv, laptop, member, projectId, document } = await project();
+      const link = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'frozen',
+        frozenOf(document)
+      );
+      const editor = page(srv, member);
+      // A server that stored it all the same (an older Worker, or one that
+      // does not check): the editor's snapshot, written under the link. It
+      // is a frozen model in shape, so only its signer tells it apart.
+      const forged = await sealedBy(
+        editor,
+        { account: other, deviceId: 'other_laptop' },
+        projectId,
+        link,
+        frozenOf(document, 'Editor’s plate')
+      );
+      const editorKey = await exportPublicKey(
+        other.signingPairs.get('other_laptop')!.publicKey
+      );
+      srv.db
+        .prepare(
+          `UPDATE e2ee_share_snapshots
+           SET snapshot_hash = ?, envelope_inline = ?, envelope_key = NULL,
+               envelope_bytes = ?, signature = ?,
+               wrapped_for_link_visitors = ?, wrapped_for_members = ?,
+               author_key = ?, signer_user_id = ?, signer_device_id = ?
+           WHERE share_id = ?`
+        )
+        .run(
+          createHash('sha256').update(forged.envelope).digest('hex'),
+          toBase64Url(forged.envelope),
+          forged.envelope.byteLength,
+          forged.upload.signature,
+          forged.upload.wrappedForLinkVisitors,
+          forged.upload.wrappedForMembers,
+          toBase64Url(editorKey),
+          other.userId,
+          'other_laptop',
+          link.shareId
+        );
+      const error = await visitor(srv)
+        .open(link.url)
+        .then(
+          () => null,
+          (caught: unknown) => caught
+        );
+      expect(error).toBeInstanceOf(SharedLinkRefusal);
+      expect((error as SharedLinkRefusal).reason).toBe('not-verified');
+      expect((error as { cause?: { reason?: string } }).cause?.reason).toBe(
+        'author-not-owner'
+      );
+      // The owner's browser does not seal it again as the owner's either.
+      const outcome = await publishShareSnapshots(
+        laptop.shareLinks,
+        projectId,
+        undefined,
+        { republish: [link.shareId] }
+      );
+      expect(outcome.published).toEqual([]);
+      expect(outcome.failed).toMatchObject([{ shareId: link.shareId }]);
+      expect(outcome.failed[0]!.reason).toMatch(/Update the link/);
+      expect(stored(srv, link.shareId).signer_device_id).toBe('other_laptop');
+    });
+
+    it('does not let a republication undo an Update that landed first', async () => {
+      const { srv, laptop, projectId, document } = await project();
+      const link = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'frozen',
+        frozenOf(document)
+      );
+      // One device reads the stored model (A) to seal it again; before its
+      // write arrives, the owner's Update publishes B. Same project version.
+      let updates = 0;
+      const api = laptop.shareLinks.api;
+      const slow = {
+        ...laptop.shareLinks,
+        api: {
+          ...api,
+          putSnapshot: async (
+            ...args: Parameters<typeof api.putSnapshot>
+          ): ReturnType<typeof api.putSnapshot> => {
+            if (updates++ === 0) {
+              // The republication carries the snapshot it read.
+              expect(args[2].replaces).toBe(
+                stored(srv, link.shareId).snapshot_hash
+              );
+              await updateFrozenShareLink(
+                laptop.shareLinks,
+                projectId,
+                link.shareId,
+                frozenOf(document, 'Plate v2')
+              );
+            }
+            return api.putSnapshot(...args);
+          }
+        }
+      };
+      const versions = () =>
+        rows(
+          srv,
+          'SELECT document_version FROM e2ee_share_snapshots WHERE share_id = ?',
+          link.shareId
+        );
+      const before = versions();
+      const outcome = await publishShareSnapshots(slow, projectId, undefined, {
+        republish: [link.shareId]
+      });
+      // Refused, and not reported as a failure: the Update stands.
+      expect(outcome).toEqual({ published: [], failed: [] });
+      expect(versions()).toEqual(before);
+      expect(
+        featureNames((await visitor(srv).open(link.url))!.document)
+      ).toEqual(['Plate v2']);
+    });
+
+    it('lands a write that names the stored snapshot, and no other', async () => {
+      const { srv, laptop, projectId, document } = await project();
+      const link = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'frozen',
+        frozenOf(document)
+      );
+      const signer = { account: owner, deviceId: 'owner_laptop' };
+      const put = async (name: string, replaces: string) => {
+        const next = await sealedBy(
+          laptop,
+          signer,
+          projectId,
+          link,
+          frozenOf(document, name)
+        );
+        return laptop.shareLinks.api.putSnapshot(
+          projectId,
+          link.shareId,
+          { ...next.upload, replaces },
+          next.envelope
+        );
+      };
+      const first = stored(srv, link.shareId).snapshot_hash;
+      await expect(put('Stale', 'f'.repeat(64))).rejects.toMatchObject({
+        status: 409,
+        code: 'E2EE_SHARE_SNAPSHOT_REPLACED'
+      });
+      await expect(put('Malformed', 'not-a-hash')).rejects.toMatchObject({
+        status: 400
+      });
+      expect(stored(srv, link.shareId).snapshot_hash).toBe(first);
+      await put('Current', first);
+      const second = stored(srv, link.shareId).snapshot_hash;
+      expect(second).not.toBe(first);
+      // The hash it replaced is no longer the stored one.
+      await expect(put('Again', first)).rejects.toMatchObject({
+        code: 'E2EE_SHARE_SNAPSHOT_REPLACED'
+      });
+      expect(stored(srv, link.shareId).snapshot_hash).toBe(second);
+      expect(
+        featureNames((await visitor(srv).open(link.url))!.document)
+      ).toEqual(['Current']);
     });
   }
 );

@@ -646,7 +646,7 @@ tombstone is dropped and, unless `authorIsOwner`, the set is unchanged
 (`owner-mismatch`, `delegation-signature`, `delegation-expired`,
 `delegation-not-yet-valid`, `signer-not-delegated`, `authority-signature`,
 `authority-expired`, `authority-not-yet-valid`, `link-mismatch`,
-`author-not-named`, `snapshot-signature`, `snapshot-mismatch`,
+`author-not-named`, `author-not-owner`, `snapshot-signature`, `snapshot-mismatch`,
 `unknown-signer`, `grant-signature`, `tombstone-signature`,
 `grant-mismatch`, `tombstoned`, `tombstone-dropped`, `changed-by-editor`).
 Their `code` is `authentication-failed` for a bad signature or an

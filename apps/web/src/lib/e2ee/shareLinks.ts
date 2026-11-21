@@ -51,11 +51,18 @@
  * - **Links without history** (L08, mode `frozen`). The snapshot of such a
  *   link is never the project: it is the finished model the owner's browser
  *   froze (`frozenShareDocument`: one imported solid per body), given when
- *   the link is created and again on the owner's Update. Every later
- *   republication (a new statement, a new key epoch) reads the link's own
- *   stored snapshot back with the share key, checks that a current author
- *   signed it and that it holds imported solids only, and seals that same
- *   model again. With neither, the link is left unpublished.
+ *   the link is created and again on the owner's Update. Only the owner's
+ *   devices publish it: the server takes such a snapshot from the owner
+ *   alone, and visitors refuse one that a device outside the owner's
+ *   delegation signed, so an editor cannot put the project into it. An
+ *   editor's page leaves these links alone. Every later republication by
+ *   the owner (a new statement, a new key epoch) reads the link's own
+ *   stored snapshot back with the share key, checks that one of the owner's
+ *   current devices signed it and that it holds imported solids only, and
+ *   seals that same model again, replacing exactly the snapshot it read
+ *   (`replaces`): if an Update landed in between, the republication is
+ *   refused and the Update stands. With neither, the link is left
+ *   unpublished.
  *
  * Every head the store accepts has its set verified (`shareLinkSet.ts`).
  */
@@ -100,11 +107,14 @@ import {
 import {
   parseEnvelope,
   publicKeyHash,
+  toHex,
   unwrapKey,
-  verifyProjectEnvelopeSignature
+  verifyProjectEnvelopeSignature,
+  versionHash
 } from '@openzcad/crypto';
 import { decodeProjectEnvelopeJob } from './decodeJobs';
 import {
+  E2eeShareLinkApiError,
   shareSnapshotVersionId,
   type E2eeShareDelegationRecord,
   type E2eeShareLinkRecord,
@@ -169,7 +179,10 @@ export type ShareLinksErrorCode =
   | 'revocation-pending'
   /** L08: not the frozen model a link without history may publish. */
   | 'frozen-model'
-  /** L08: this server does not take comments on encrypted links. */
+  /**
+   * L08: this server does not take comments on encrypted links, or this
+   * device cannot publish a link without history until sharing is confirmed.
+   */
   | 'unavailable';
 
 export class ShareLinksError extends Error {
@@ -957,9 +970,16 @@ export async function publishShareSnapshots(
     }
     return live;
   };
+  // L08: whether this device may publish into links without history, read
+  // once and only when one is due.
+  let ownerDelegation: Promise<ShareDelegationState> | undefined;
   for (const link of links) {
     const record = listed.links.find((l) => l.shareId === link.shareId);
     if (!record) continue;
+    // L08: a link without history is the owner's to publish. An editor's
+    // snapshot of it is refused by the server and by visitors; an editor's
+    // page leaves it as it is, for the owner's next visit.
+    if (link.mode === 'frozen' && role !== 'owner') continue;
     const stored = record.snapshot;
     const given =
       link.mode === 'frozen' ? options.frozen?.get(link.shareId) : undefined;
@@ -986,25 +1006,46 @@ export async function publishShareSnapshots(
         record,
         keyEpoch
       );
+      // L08: visitors accept a frozen link's snapshot only from a device
+      // the owner's delegation names. Publishing from another device over
+      // a link that already serves would take it away from them.
+      if (link.mode === 'frozen' && record.authority) {
+        const delegation = await (ownerDelegation ??= readDelegation(
+          ctx,
+          listed.delegation
+        ));
+        if (
+          !delegation.delegation ||
+          delegation.status === 'expired' ||
+          delegation.status === 'missing' ||
+          !delegation.namesThisDevice
+        )
+          throw new ShareLinksError(
+            'unavailable',
+            'Confirm sharing on this device before publishing this link.'
+          );
+      }
       // L08: a link without history gets its frozen model, given or read
       // back from its own snapshot, and never the project's document.
-      const { document, blobs } =
-        link.mode === 'frozen'
-          ? {
-              document: given
-                ? frozenSnapshotDocument(given, projectId)
-                : await storedFrozenDocument(ctx, projectId, {
-                    shareId: link.shareId,
-                    shareKey,
-                    authors: await shareAuthorKeyHashes(
-                      ctx,
-                      projectId,
-                      keyEpoch
-                    )
-                  }),
-              blobs: []
-            }
-          : liveSnapshot();
+      // Read back, it replaces exactly the snapshot it was read from.
+      let replaces: string | undefined;
+      let frozenModel: ProjectDocument | undefined;
+      if (link.mode === 'frozen') {
+        if (given) {
+          frozenModel = frozenSnapshotDocument(given, projectId);
+        } else {
+          const read = await storedFrozenDocument(ctx, projectId, {
+            shareId: link.shareId,
+            shareKey,
+            authors: ownDeviceKeyHashes(ctx)
+          });
+          frozenModel = read.document;
+          replaces = read.snapshotHash;
+        }
+      }
+      const { document, blobs } = frozenModel
+        ? { document: frozenModel, blobs: [] }
+        : liveSnapshot();
       const sealed = await sealSnapshot({
         projectId,
         shareId: link.shareId,
@@ -1025,12 +1066,21 @@ export async function publishShareSnapshots(
           signature: b64(sealed.signature),
           signerDeviceId: device.deviceId,
           wrappedForLinkVisitors: b64(sealed.forLinkVisitors),
-          wrappedForMembers: b64(sealed.forMembers)
+          wrappedForMembers: b64(sealed.forMembers),
+          ...(replaces !== undefined ? { replaces } : {})
         },
         sealed.envelope
       );
       published.push(link.shareId);
     } catch (error) {
+      // Another device published this link since its snapshot was read
+      // (the owner's Update, or the same republication): theirs stands,
+      // and there is nothing left for this one to do.
+      if (
+        error instanceof E2eeShareLinkApiError &&
+        error.code === 'E2EE_SHARE_SNAPSHOT_REPLACED'
+      )
+        continue;
       failed.push({ shareId: link.shareId, reason: describe(error) });
     }
   }
@@ -1067,12 +1117,21 @@ export function frozenSnapshotDocument(
 }
 
 /**
+ * L08: the signing-key hashes of this account's certified devices. Where
+ * this account owns the project, they are the only keys whose snapshot of a
+ * link without history is the owner's own.
+ */
+const ownDeviceKeyHashes = (ctx: ShareLinksContext): Uint8Array[] =>
+  ctx.groups.account.list.devices.map((device) => device.signingKeyHash);
+
+/**
  * L08: the frozen model a link without history serves now, read back as a
  * visitor reads it (the token and the version key both come from the share
  * key) so it can be sealed again under a new epoch or after a new
- * statement. Accepted only when one of `authors` (the project's current
- * owner and editor devices) signed the envelope and it passes
- * `frozenSnapshotDocument`.
+ * statement. Accepted only when one of `authors` (the owner's current
+ * devices) signed the envelope and it passes `frozenSnapshotDocument`.
+ * `snapshotHash` names the snapshot that was read, for the write that
+ * replaces it.
  */
 async function storedFrozenDocument(
   ctx: ShareLinksContext,
@@ -1082,7 +1141,7 @@ async function storedFrozenDocument(
     readonly shareKey: Uint8Array;
     readonly authors: readonly Uint8Array[];
   }
-): Promise<ProjectDocument> {
+): Promise<{ document: ProjectDocument; snapshotHash: string }> {
   const missing = (reason: string) =>
     new ShareLinksError(
       'frozen-model',
@@ -1133,10 +1192,13 @@ async function storedFrozenDocument(
         keyEpoch: header.keyEpoch
       }
     });
-    return frozenSnapshotDocument(
-      (opened.value as { document: unknown }).document,
-      projectId
-    );
+    return {
+      document: frozenSnapshotDocument(
+        (opened.value as { document: unknown }).document,
+        projectId
+      ),
+      snapshotHash: toHex(await versionHash(served.envelope))
+    };
   } finally {
     versionKey.fill(0);
   }
@@ -2058,11 +2120,8 @@ export async function reissueShareLinks(
     const frozenSources = selected.filter((link) => link.mode === 'frozen');
     if (frozenSources.length) {
       const listed = await ctx.api.list(projectId).catch(() => null);
-      const authors = await shareAuthorKeyHashes(
-        ctx,
-        projectId,
-        head.keyEpoch
-      ).catch(() => []);
+      // The owner's own devices: only their snapshot is the owner's model.
+      const authors = ownDeviceKeyHashes(ctx);
       for (const source of frozenSources) {
         const grant = head.shareLinks?.links.find(
           (link) => link.shareId === source.shareId
@@ -2082,11 +2141,13 @@ export async function reissueShareLinks(
           );
           frozen.set(
             source.shareId,
-            await storedFrozenDocument(ctx, projectId, {
-              shareId: source.shareId,
-              shareKey,
-              authors
-            })
+            (
+              await storedFrozenDocument(ctx, projectId, {
+                shareId: source.shareId,
+                shareKey,
+                authors
+              })
+            ).document
           );
         } catch {
           // Left for Update.

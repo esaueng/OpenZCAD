@@ -202,6 +202,7 @@ import {
   acceptInvitation,
   createInvitation,
   createShareLink,
+  hashFrozenShareLinkToken,
   hashProjectInvitationToken,
   parseCreateInvitation,
   parseProjectMemberRole,
@@ -1217,8 +1218,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         }
       });
     }
-    const shared =
-      await sharedPersistence.loadSharedProjectByTokenHash(tokenHash);
+    // The one read a link without history answers, by its own token-hash
+    // domain; the source and asset reads above look up the bare hash only.
+    const shared = await sharedPersistence.loadSharedProjectByTokenHash(
+      tokenHash,
+      await hashFrozenShareLinkToken(token)
+    );
     if (!shared) {
       return sharedNotFound();
     }
@@ -1277,15 +1282,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const link = await commentLinkProject(
       env.DB!,
       await hashProjectInvitationToken(token),
-      Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
+      Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS,
+      await hashFrozenShareLinkToken(token)
     );
     if (!link) return notFound();
     if (request.method === 'GET')
-      return json(
-        { comments: await listLinkComments(env.DB!, link.projectId) },
-        200,
-        { 'cache-control': 'no-store' }
-      );
+      return json({ comments: await listLinkComments(env.DB!, link) }, 200, {
+        'cache-control': 'no-store'
+      });
     const { name, input } = parseLinkCommentRequest(
       await readJsonBody(request, 8 * 1024)
     );

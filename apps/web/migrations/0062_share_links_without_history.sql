@@ -27,6 +27,27 @@ BEGIN
   SELECT RAISE(ABORT, 'SHARE_LINK_HISTORY_IMMUTABLE');
 END;
 
+-- A link without history keeps its token hash in a domain of its own: the
+-- prefix below, where a link to the live project stores the bare SHA-256
+-- hex of its token. A Worker from before this migration looks up the bare
+-- hash and serves the live project for the row it finds, so it must never
+-- find one of these; with the prefix it cannot, whatever it runs. These
+-- hold every row to its domain, so that does not rest on the code that
+-- writes them.
+CREATE TRIGGER IF NOT EXISTS project_share_link_token_domain_insert
+BEFORE INSERT ON project_share_links
+WHEN (NEW.history = 0) <> (substr(NEW.token_hash, 1, 10) = 'frozen-v1:')
+BEGIN
+  SELECT RAISE(ABORT, 'SHARE_LINK_TOKEN_DOMAIN');
+END;
+
+CREATE TRIGGER IF NOT EXISTS project_share_link_token_domain_update
+BEFORE UPDATE OF token_hash ON project_share_links
+WHEN (NEW.history = 0) <> (substr(NEW.token_hash, 1, 10) = 'frozen-v1:')
+BEGIN
+  SELECT RAISE(ABORT, 'SHARE_LINK_TOKEN_DOMAIN');
+END;
+
 -- The frozen model goes when the link is revoked, whoever revokes it: the
 -- owner, or the cutover that encrypts the project (which must leave no
 -- plaintext of it behind). That it had no history stays on the row.

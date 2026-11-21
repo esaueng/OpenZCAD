@@ -1140,6 +1140,26 @@ async function putSnapshot(
   ) {
     invalid('The body must be a share snapshot of this project');
   }
+  // The snapshot this write replaces, when the author read one first: the
+  // write then lands only over exactly that snapshot (see below).
+  const replaces = metadata.replaces ?? null;
+  if (
+    replaces !== null &&
+    (typeof replaces !== 'string' || !TOKEN_HASH.test(replaces))
+  ) {
+    invalid('replaces must be a snapshot hash');
+  }
+  // L08: the snapshot of a link without history is the owner's alone. An
+  // editor may publish the project they can already read into a link that
+  // shares it; into a `frozen` link the same write would hand its visitors
+  // the document, history included, with a key they can open it with. The
+  // server cannot read the envelope, so it takes such a snapshot only from
+  // the project's owner, signed by one of the owner's certified devices
+  // (`requireCertifiedDevice` below checks the signer against the caller's
+  // own list); visitors check that same binding against the owner's
+  // delegation before they decrypt (`verifySharedSnapshot`).
+  const frozen = (await liveLink(ctx.db, projectId, shareId)).mode === 'frozen';
+  if (frozen) await requireOwnedEncryptedProject(ctx.db, ctx.userId, projectId);
   const device = await requireCertifiedDevice(
     ctx.db,
     ctx.userId,
@@ -1167,7 +1187,6 @@ async function putSnapshot(
   // as for encrypted document writes (#912 review): a removed device's
   // snapshot cannot replace what certified devices published.
   const signerList = deviceListUnchanged(ctx.userId, device);
-  await liveLink(ctx.db, projectId, shareId);
   const current = await currentKeyEpoch(ctx.db, projectId);
   if (header.keyEpoch !== current) stale(current);
   const project = await ctx.db
@@ -1179,20 +1198,34 @@ async function putSnapshot(
   }
   const previous = await ctx.db
     .prepare(
-      `SELECT document_version FROM e2ee_share_snapshots
+      `SELECT document_version, snapshot_hash FROM e2ee_share_snapshots
        WHERE project_id = ? AND share_id = ?`
     )
     .bind(projectId, shareId)
-    .first<{ document_version: number }>();
+    .first<{ document_version: number; snapshot_hash: string }>();
   const snapshotStale: () => never = () =>
     refuse(
       409,
       'E2EE_SHARE_SNAPSHOT_STALE',
       'A snapshot of a newer version is already published for this link.'
     );
+  // Compare-and-swap for a write made from the stored snapshot (a `frozen`
+  // link's republication reseals the model it read back): at the same
+  // document version the upsert below would let it land over a model the
+  // owner's Update published since, and undo the Update.
+  const snapshotReplaced: () => never = () =>
+    refuse(
+      409,
+      'E2EE_SHARE_SNAPSHOT_REPLACED',
+      'Another snapshot was published for this link since this one was prepared.'
+    );
   if (previous && previous.document_version > header.documentVersion) {
     snapshotStale();
   }
+  if (replaces !== null && previous?.snapshot_hash !== replaces) {
+    snapshotReplaced();
+  }
+  const historyReady = await isE2eeShareLinkHistoryReady(ctx.db);
   const hash = toHex(await versionHash(payload));
   let inline: string | null = null;
   let objectKey: string | null = null;
@@ -1242,11 +1275,26 @@ async function putSnapshot(
               signer_user_id, signer_device_id, updated_at)
            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
            WHERE ${ctx.authorization.sql} AND ${WRITER_FENCE}
-             AND EXISTS (SELECT 1 FROM e2ee_share_links
-               WHERE project_id = ? AND share_id = ? AND revoked_at IS NULL)
+             AND EXISTS (SELECT 1 FROM e2ee_share_links fl
+               WHERE fl.project_id = ? AND fl.share_id = ?
+                 AND fl.revoked_at IS NULL${
+                   // A link without history: the project's owner only,
+                   // decided in the statement that stores the snapshot.
+                   historyReady
+                     ? ` AND (fl.history = 1 OR EXISTS (
+                           SELECT 1 FROM projects op
+                           WHERE op.id = fl.project_id AND op.user_id = ?))`
+                     : ''
+                 })
              AND EXISTS (SELECT 1 FROM e2ee_project_groups
                WHERE project_id = ? AND key_epoch_base + epoch = ?)
-             AND ${signerList.sql}
+             AND ${signerList.sql}${
+               replaces === null
+                 ? ''
+                 : ` AND EXISTS (SELECT 1 FROM e2ee_share_snapshots cur
+                       WHERE cur.project_id = ? AND cur.share_id = ?
+                         AND cur.snapshot_hash = ?)`
+             }
            ON CONFLICT (project_id, share_id) DO UPDATE SET
              document_version = excluded.document_version,
              key_epoch = excluded.key_epoch,
@@ -1283,9 +1331,11 @@ async function putSnapshot(
           ...fenceBinds(projectId, ctx.userId),
           projectId,
           shareId,
+          ...(historyReady ? [ctx.userId] : []),
           projectId,
           header.keyEpoch,
-          ...signerList.binds
+          ...signerList.binds,
+          ...(replaces === null ? [] : [projectId, shareId, replaces])
         )
     ]);
   } catch (error) {
@@ -1302,12 +1352,18 @@ async function putSnapshot(
     if (after !== header.keyEpoch) stale(after);
     const now2 = await ctx.db
       .prepare(
-        `SELECT document_version FROM e2ee_share_snapshots
+        `SELECT document_version, snapshot_hash FROM e2ee_share_snapshots
          WHERE project_id = ? AND share_id = ?`
       )
       .bind(projectId, shareId)
-      .first<{ document_version: number }>();
+      .first<{ document_version: number; snapshot_hash: string }>();
     if (now2 && now2.document_version > header.documentVersion) snapshotStale();
+    if (replaces !== null && now2?.snapshot_hash !== replaces) {
+      snapshotReplaced();
+    }
+    if (frozen) {
+      await requireOwnedEncryptedProject(ctx.db, ctx.userId, projectId);
+    }
     sessionRequired();
   }
   const replaced =

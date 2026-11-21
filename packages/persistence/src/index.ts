@@ -212,6 +212,11 @@ export interface CreateProjectInvitationInput {
 export interface CreateProjectShareLinkInput {
   shareLinkId: string;
   mode: ProjectShareLinkMode;
+  /**
+   * The bare token hash for a link to the live project; for a link without
+   * history, one in the frozen domain
+   * ({@link FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX}). The other kind is refused.
+   */
   tokenHash: string;
   createdAt: number;
   /** Already normalized (normalizeShareLinkLabel); absent or null when unnamed. */
@@ -224,6 +229,40 @@ export interface CreateProjectShareLinkInput {
    * live project.
    */
   frozenDocument?: ProjectDocument;
+}
+
+/**
+ * L08: a link without history keeps its token hash in a domain of its own.
+ * A link to the live project stores the bare SHA-256 of its token, and that
+ * is all a Worker from before such links looks up (and all the asset and
+ * import-source reads ever look up). A frozen link stores this prefix and a
+ * digest computed over a different input, so no lookup of a bare hash can
+ * resolve one: a rolled-back Worker, or one whose schema probe still says
+ * migration 0062 is missing, answers 404 for its token rather than serving
+ * the live project. Migration 0062's triggers hold a row to its domain.
+ */
+export const FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX = 'frozen-v1:';
+
+/** Whether a stored token hash is in the frozen-link domain. */
+export function isFrozenShareLinkTokenHash(tokenHash: string): boolean {
+  return tokenHash.startsWith(FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX);
+}
+
+/**
+ * Refuses a link whose token hash is in the wrong domain for its kind,
+ * before anything is stored.
+ */
+export function assertShareLinkTokenHashDomain(
+  tokenHash: string,
+  frozen: boolean
+): void {
+  if (isFrozenShareLinkTokenHash(tokenHash) !== frozen)
+    throw new ProjectSharingError(
+      'SHARE_LINK_SNAPSHOT_INVALID',
+      frozen
+        ? 'A link without history needs a token of its own kind.'
+        : 'Only a link without history takes that kind of token.'
+    );
 }
 
 /**
@@ -631,9 +670,14 @@ export interface PersistenceService {
    * Resolves an unrevoked, unexpired share link and loads its project document with the
    * derived projection stripped. Unknown, revoked and expired tokens are equally null
    * so the route can stay an indistinguishable 404.
+   *
+   * `tokenHash` (the bare hash) resolves only a link to the live project.
+   * A link without history resolves only by `frozenTokenHash`, its own
+   * domain; without one, such a link is not found.
    */
   loadSharedProjectByTokenHash(
-    tokenHash: string
+    tokenHash: string,
+    frozenTokenHash?: string
   ): Promise<SharedProjectSnapshot | null>;
   /**
    * Serves one import-source asset to a share-link visitor, only when the
@@ -1197,6 +1241,10 @@ export class InMemoryPersistenceService implements PersistenceService {
     const frozenDocument = input.frozenDocument
       ? frozenShareSnapshot(input.frozenDocument, projectId)
       : undefined;
+    assertShareLinkTokenHashDomain(
+      input.tokenHash,
+      frozenDocument !== undefined
+    );
     const { frozenDocument: _received, ...link } = input;
     this.projectShareLinks.set(input.shareLinkId, {
       ...link,
@@ -1308,13 +1356,19 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   async loadSharedProjectByTokenHash(
-    tokenHash: string
+    tokenHash: string,
+    frozenTokenHash?: string
   ): Promise<SharedProjectSnapshot | null> {
     const oldestValidCreation =
       Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS;
     const link = Array.from(this.projectShareLinks.values()).find(
       (candidate) =>
-        candidate.tokenHash === tokenHash &&
+        // Each kind of link by its own hash domain only.
+        (candidate.frozenAt === undefined
+          ? candidate.tokenHash === tokenHash
+          : frozenTokenHash !== undefined &&
+            isFrozenShareLinkTokenHash(frozenTokenHash) &&
+            candidate.tokenHash === frozenTokenHash) &&
         candidate.revokedAt === null &&
         candidate.createdAt > oldestValidCreation
     );

@@ -182,6 +182,15 @@ export interface E2eeShareSnapshotUpload {
   wrappedForLinkVisitors: string;
   /** The version key under the project key (`version-key`, 41 bytes). */
   wrappedForMembers: string;
+  /**
+   * The lowercase hex version hash of the stored snapshot this one was
+   * made from. With it the write lands only while that snapshot is still
+   * the stored one (409 `E2EE_SHARE_SNAPSHOT_REPLACED` otherwise); without
+   * it, over whatever is stored. A `frozen` link's republication sends it:
+   * it reseals the model it read back, and must not land over a model the
+   * owner's Update published in between.
+   */
+  replaces?: string;
 }
 
 /** Frame metadata of `GET /api/e2ee/share/:token`; the payload is the envelope. */

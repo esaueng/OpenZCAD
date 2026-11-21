@@ -184,7 +184,10 @@ import {
   PROJECT_OBJECT_STORAGE_PREFIX,
   ProjectObjectStorageError,
   sha256Hex,
+  assertShareLinkTokenHashDomain,
+  EncryptedProjectSharingError,
   frozenShareSnapshot,
+  isFrozenShareLinkTokenHash,
   type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
   type OwnedProjectInstance,
@@ -2450,6 +2453,10 @@ export class D1R2PersistenceService implements PersistenceService {
         'SHARE_LINK_HISTORY_UNAVAILABLE',
         'Sharing without history is not available on this server yet.'
       );
+    // Each kind of link in its own token-hash domain (migration 0062 holds
+    // the row to it as well): a lookup of a bare hash never finds a link
+    // without history, whatever the Worker that runs it knows.
+    assertShareLinkTokenHashDomain(input.tokenHash, frozen);
     const mode = frozen ? 'view' : input.mode;
     const columns: [string, string | number][] = [
       ['id', input.shareLinkId],
@@ -2471,13 +2478,19 @@ export class D1R2PersistenceService implements PersistenceService {
         ],
         ['frozen_at', input.createdAt]
       );
+    // The project is still plaintext in the statement that stores the link.
+    // The check above ran before the model was compressed; a cutover that
+    // encrypted the project since then revoked the links it found, and a
+    // link stored after it would hold plaintext geometry no purge removes.
+    let stored;
     try {
-      await this.env.DB.prepare(
+      stored = await this.env.DB.prepare(
         `INSERT INTO project_share_links
            (${columns.map(([name]) => name).join(', ')})
-         VALUES (${columns.map(() => '?').join(', ')})`
+         SELECT ${columns.map(() => '?').join(', ')}
+         WHERE ${await this.shareableProjectFence()}`
       )
-        .bind(...columns.map(([, value]) => value))
+        .bind(...columns.map(([, value]) => value), projectId)
         .run();
     } catch (error) {
       if (
@@ -2490,6 +2503,13 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
       throw error;
+    }
+    if (!stored.meta?.changes) {
+      // Encrypted (or gone) since the check above: nothing was stored.
+      assertShareableProject(
+        await this.requireProjectOwner(ownerUserId, projectId)
+      );
+      throw new EncryptedProjectSharingError(projectId);
     }
     if (comments)
       await this.env.DB.prepare(
@@ -2525,6 +2545,17 @@ export class D1R2PersistenceService implements PersistenceService {
       ...(comments ? { comments } : {}),
       ...(frozen ? { history: false as const, frozenAt: input.createdAt } : {})
     };
+  }
+
+  /**
+   * A predicate, with one bind (the project id), that holds while the
+   * project is still stored in plaintext. In the statement that writes a
+   * share link, it is what keeps a link (and a frozen model) from landing
+   * after the cutover that encrypts the project revoked its links.
+   */
+  private async shareableProjectFence(): Promise<string> {
+    return `EXISTS (SELECT 1 FROM projects fenced
+              WHERE fenced.id = ?${await this.plaintextOnly('fenced.')})`;
   }
 
   /** The summary columns of `project_share_links` this schema has. */
@@ -2574,11 +2605,17 @@ export class D1R2PersistenceService implements PersistenceService {
     const row = await this.env.DB.prepare(
       `UPDATE project_share_links SET frozen_document = ?, frozen_at = ?
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL AND history = 0
+         AND ${await this.shareableProjectFence()}
        RETURNING ${await this.shareLinkColumns()}`
     )
-      .bind(stored, updatedAt, shareLinkId, projectId)
+      .bind(stored, updatedAt, shareLinkId, projectId, projectId)
       .first<ProjectShareLinkRow>();
     if (!row) {
+      // Encrypted since the check above: its links are revoked, and no
+      // plaintext model is stored beside it.
+      assertShareableProject(
+        await this.requireProjectOwner(ownerUserId, projectId)
+      );
       throw new ProjectSharingError(
         'SHARE_LINK_NOT_FOUND',
         'Project share link not found.'
@@ -2691,10 +2728,14 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   async loadSharedProjectByTokenHash(
-    tokenHash: string
+    tokenHash: string,
+    frozenTokenHash?: string
   ): Promise<SharedProjectSnapshot | null> {
     if (!this.env.DB) {
-      return getInMemoryPersistence().loadSharedProjectByTokenHash(tokenHash);
+      return getInMemoryPersistence().loadSharedProjectByTokenHash(
+        tokenHash,
+        frozenTokenHash
+      );
     }
     // The token hash is the entire authorization: no user access check runs
     // here on purpose, and unknown stays indistinguishable from revoked or expired.
@@ -2717,6 +2758,26 @@ export class D1R2PersistenceService implements PersistenceService {
     // the live project's document columns.
     const historyReady = await isShareLinkHistoryReady(this.env.DB);
     const live = historyReady ? 'l.history = 1' : '1';
+    // Each kind of link resolves by its own token-hash domain only. The
+    // bare hash finds a link to the live project and never one without
+    // history, which stores a hash this lookup cannot equal; so a Worker
+    // that does not know such links (an older one, or this one while its
+    // schema probe still says 0062 is missing) answers 404 for their
+    // tokens. That does not rest on the probe: it is what is stored.
+    // Nor is a frozen-domain hash ever looked up as a bare one.
+    if (isFrozenShareLinkTokenHash(tokenHash)) return null;
+    const frozenHash =
+      historyReady &&
+      frozenTokenHash !== undefined &&
+      isFrozenShareLinkTokenHash(frozenTokenHash)
+        ? frozenTokenHash
+        : null;
+    const byToken = !historyReady
+      ? 'l.token_hash = ?'
+      : frozenHash === null
+        ? '(l.token_hash = ? AND l.history = 1)'
+        : `((l.token_hash = ? AND l.history = 1)
+            OR (l.token_hash = ? AND l.history = 0))`;
     const row = await this.env.DB.prepare(
       `SELECT l.mode, ${comments},
               ${
@@ -2732,7 +2793,7 @@ export class D1R2PersistenceService implements PersistenceService {
        INNER JOIN projects p ON p.id = l.project_id
        LEFT JOIN user_settings owner_settings
          ON owner_settings.user_id = p.user_id
-       WHERE l.token_hash = ?
+       WHERE ${byToken}
          AND l.revoked_at IS NULL
          AND l.created_at > ?
          AND p.status != 'deleted'${await this.plaintextOnly('p.')}
@@ -2748,6 +2809,7 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       .bind(
         tokenHash,
+        ...(frozenHash === null ? [] : [frozenHash]),
         Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
       )
       .first<{
@@ -2813,6 +2875,9 @@ export class D1R2PersistenceService implements PersistenceService {
         assetId
       );
     }
+    // L08: no asset through a link without history, by its hash domain
+    // here and by `history` in the join below.
+    if (isFrozenShareLinkTokenHash(tokenHash)) return null;
     // The join is the authorization: the asset is served only when it belongs
     // to the unrevoked, unexpired link's own project — and, as above, only while the
     // owner still has sharing on and has not trashed the project. Serving a
