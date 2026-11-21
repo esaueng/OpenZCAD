@@ -2756,19 +2756,23 @@ export function ModelViewer({
     drawingBodiesRef.current = result;
     return result;
   }, [suppliedBodies]);
-  const { bodies, preparing, presentation } = usePreparedBodies(renderBodies, {
-    selectedBodyIds: incomingSelectedBodyIds,
-    selectedTopology: incomingSelectedTopology,
-    previewFaceHighlights: incomingPreviewFaceHighlights,
-    focusFaces: incomingFocusFaces,
-    selectionCallout: incomingSelectionCallout,
-    pickLabel: incomingPickLabel,
-    focusGhostBodies: incomingFocusGhostBodies,
-    selectedEdges: incomingSelectedEdges,
-    offsetHandle: incomingOffsetHandle,
-    cylinderRadiusHandle: incomingCylinderRadiusHandle,
-    edgeHandle: incomingEdgeHandle
-  });
+  const { bodies, preparing, presentation } = usePreparedBodies(
+    renderBodies,
+    {
+      selectedBodyIds: incomingSelectedBodyIds,
+      selectedTopology: incomingSelectedTopology,
+      previewFaceHighlights: incomingPreviewFaceHighlights,
+      focusFaces: incomingFocusFaces,
+      selectionCallout: incomingSelectionCallout,
+      pickLabel: incomingPickLabel,
+      focusGhostBodies: incomingFocusGhostBodies,
+      selectedEdges: incomingSelectedEdges,
+      offsetHandle: incomingOffsetHandle,
+      cylinderRadiusHandle: incomingCylinderRadiusHandle,
+      edgeHandle: incomingEdgeHandle
+    },
+    sketchMode !== null
+  );
   // Selection and rigs describe the same projection as the bodies on screen,
   // including intermediate worker replies during rapid previews. Whether the
   // pick wears its chip rides with the chip's content: taken live while the
