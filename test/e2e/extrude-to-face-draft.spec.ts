@@ -7,7 +7,8 @@ import {
   deleteFeature,
   extrudeSketch,
   listFeaturesInOrder,
-  transformBody
+  transformBody,
+  updateFeature
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -192,7 +193,7 @@ for (const action of ['Cancel']) {
     // To face arms the face pick at once.
     await chooseBarOption(edit, 'Extent', 'To face');
     await expect(edit).toContainText(
-      'Click a flat face parallel to the sketch'
+      'Click a flat face facing the sketch'
     );
     await page.getByRole('button', { name: action, exact: true }).click();
     await expect(edit).toHaveCount(0);
@@ -244,7 +245,7 @@ test('creates a drafted extrude up to a face picked in the viewport', async ({
   await chooseInPlaceOption(page, 'Extrude', 'Operation', 'New body');
   // To face arms its face pick at once; Done waits for the face.
   await chooseInPlaceOption(page, 'Extrude', 'Extent', 'To face');
-  await expect(bar).toContainText('Click a flat face parallel to the sketch');
+  await expect(bar).toContainText('Click a flat face facing the sketch');
   await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
   await page.mouse.click(point.x, point.y);
   await expect(bar).toContainText('Up to Ceiling Body · face');
@@ -587,6 +588,76 @@ test(
     await page.keyboard.press('ControlOrMeta+z');
     await expect(row).not.toContainText('back draft');
     await expectFeatureMeasurement(page, row, '153.2');
+    expect(errors).toEqual([]);
+  }
+);
+
+test(
+  'ends a to-face extrude on a slanted face, offsets it square to the face, and undoes',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(150_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const ceiling = slab(
+      createProjectDocument('Slanted face', toUserId('user_e2e')),
+      'Ceiling',
+      25
+    );
+    // The face is named while level, then its lift turns it 10° about X
+    // through the middle of its underside, over the post's middle.
+    const { target } = await faceOf(ceiling.document, ceiling.bodyId, -1);
+    const lift = listFeaturesInOrder(ceiling.document).find(
+      (feature) => feature.name === 'Lift Ceiling'
+    )!;
+    const turned = updateFeature(ceiling.document, {
+      featureId: lift.featureId,
+      data: {
+        transform: {
+          translation: { x: 0, y: 0, z: 25 },
+          rotationDeg: { x: 10, y: 0, z: 0 },
+          pivot: { x: 10, y: 10, z: 0 }
+        }
+      }
+    });
+    const sketched = addSketchFeature(turned, {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      objects: [SQUARE]
+    });
+    const document = extrudeSketch(sketched.document, {
+      name: 'Post',
+      sketchId: sketched.sketchId,
+      distance: 1,
+      endCondition: 'to-face',
+      toFace: target
+    }).document;
+    await open(page, document);
+    await expectBodyCount(page, 2);
+    const row = page.locator('.feature-row', { hasText: /Post/ }).last();
+    const rowMain = page.locator('.feature-row-main', { hasText: /^Post$/ });
+    await expect(row).toContainText('To face');
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    // The slanted top's mean height is 25 over the 4 × 4 profile.
+    await expectFeatureMeasurement(page, row, '400');
+
+    // 3 short, square to the face: 3 / cos 10° lower over the middle.
+    const edit = await editExtrudeFromHistory(page, rowMain, 'Post');
+    await setBarValues(page, edit, { 'Offset from face': '3' });
+    await edit.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText('Edit Post', {
+      timeout: 60_000
+    });
+    await expect(edit).toHaveCount(0);
+    await expect(row).toContainText('To face · 3 mm short');
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expectFeatureMeasurement(page, row, '351.2');
+
+    await waitForStillViewport(page);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(row).not.toContainText('short');
+    await expectFeatureMeasurement(page, row, '400');
     expect(errors).toEqual([]);
   }
 );

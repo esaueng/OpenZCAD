@@ -18,6 +18,8 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { PointPatternMeshWorker } from '../packages/kernel-adapter/src/point-pattern-mesh-worker';
+import { patternCutPrefix } from '../packages/kernel-adapter/src/exact-pattern-cut-prefix';
+import * as cancellation from '../packages/kernel-adapter/src/exact-cancellation';
 import * as cylinderOps from '../packages/kernel-adapter/src/exact-cylinder-ops';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -247,12 +249,15 @@ describe('M02 patterns on sketch points: exact build', () => {
     adapter = await createExactKernelAdapter();
   });
 
-  /** The plate drilled with a Ø6 through hole at (10, 20). */
-  async function drilled(style: 'simple' | 'counterbore' = 'simple'): Promise<{
+  /** A Ø6 through hole at x = 10 on the plate’s middle y coordinate. */
+  async function drilled(
+    style: 'simple' | 'counterbore' = 'simple',
+    stock = PLATE
+  ): Promise<{
     document: ProjectDocument;
     holeId: FeatureId;
   }> {
-    const document = box('Plate', PLATE);
+    const document = box('Plate', stock);
     const derived = await adapter.syncDocument(document);
     const face = topFace(derived, last(document));
     const body = derived.bodyRepresentations[last(document)]!;
@@ -477,6 +482,156 @@ describe('M02 patterns on sketch points: exact build', () => {
       reference.dispose();
     }
   });
+
+  it('restores only identical checked cuts when the last pattern holes are skipped', async () => {
+    const { document: holed, holeId } = await drilled();
+    const { document, sketchId, ids } = pointsSketch(holed, PLATE.z, [
+      [10, 20],
+      [40, 10],
+      [70, 30],
+      [90, 20],
+      [20, 10],
+      [55, 20],
+      [80, 10],
+      [30, 30],
+      [60, 30],
+      [12, 30],
+      [48, 30],
+      [90, 30]
+    ]);
+    let patterned = onPoints(document, sketchId, ids, {
+      targetBodyId: last(holed),
+      sourceFeatureIds: [holeId]
+    });
+    await adapter.syncDocument(patterned);
+    const cuts = vi.spyOn(cancellation, 'exactCutWithCancellation');
+    try {
+      const coincident = updateSketchObject(patterned, {
+        sketchId,
+        objectId: findSketch(document, sketchId)!.objectIds.at(-1)!,
+        data: { objectKind: 'point', x: 40, y: 10 }
+      });
+      const refused = await adapter.syncDocument(coincident);
+      expect(cuts).toHaveBeenCalledTimes(3);
+      expect(
+        refused.featureWarnings?.map((warning) => warning.message).join(' ')
+      ).toContain('removes nothing');
+      const freshRefusal = await createExactKernelAdapter();
+      try {
+        const reference = await freshRefusal.syncDocument(coincident);
+        expect(refused.warnings).toEqual(reference.warnings);
+        expect(refused.featureWarnings).toEqual(reference.featureWarnings);
+      } finally {
+        freshRefusal.dispose();
+      }
+      for (let skipped = 1; skipped <= 3; skipped++) {
+        patterned = updateFeature(patterned, {
+          featureId: lastFeature(patterned),
+          data: {
+            featureKind: 'pattern',
+            skippedInstances: ids.slice(-skipped)
+          }
+        });
+        cuts.mockClear();
+        const warm = await adapter.syncDocument(patterned);
+        expect(cuts).toHaveBeenCalledTimes(3 - skipped);
+        expect(warm.warnings).toEqual([]);
+        const cold = await createExactKernelAdapter();
+        try {
+          const fresh = await cold.syncDocument(patterned);
+          expect(warm.bodyRepresentations[last(patterned)]).toEqual(
+            fresh.bodyRepresentations[last(patterned)]
+          );
+        } finally {
+          cold.dispose();
+        }
+      }
+      const changed = updateSketchObject(patterned, {
+        sketchId,
+        objectId: findSketch(document, sketchId)!.objectIds[1]!,
+        data: { objectKind: 'point', x: 41, y: 10 }
+      });
+      cuts.mockClear();
+      const rebuilt = await adapter.syncDocument(changed);
+      expect(cuts).toHaveBeenCalledTimes(8);
+      expect(rebuilt.warnings).toEqual([]);
+      expect(bores(rebuilt, last(changed))).toContainEqual([41, 10]);
+      const freshMove = await createExactKernelAdapter();
+      try {
+        const reference = await freshMove.syncDocument(changed);
+        expect(rebuilt.bodyRepresentations[last(changed)]).toEqual(
+          reference.bodyRepresentations[last(changed)]
+        );
+      } finally {
+        freshMove.dispose();
+      }
+    } finally {
+      cuts.mockRestore();
+    }
+  }, 120_000);
+
+  it('replays all cuts when the serialized operands and result exceed the shared byte limit', () => {
+    const kernel = new RemusKernel();
+    try {
+      const stock = kernel.makeBox(100, 100, 10);
+      const tool = kernel.makeCylinder(3, 10);
+      const copies = Array.from({ length: 12 }, () => [tool]);
+      const open = () =>
+        patternCutPrefix(kernel, 'large-prefix', stock, 100000, copies);
+      const initial = open()!;
+      const serialize = vi.spyOn(kernel, 'serializeSolids');
+      const restore = vi.spyOn(kernel, 'deserializeSolids');
+      serialize.mockReturnValue(new Uint8Array(200 * 1024));
+      initial.capture(9, stock);
+      initial.commit();
+      expect(serialize).toHaveBeenCalledTimes(2);
+      expect(open()?.count).toBe(0);
+      expect(restore).not.toHaveBeenCalled();
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it('rebuilds only the final three cutters when moving the last of 100 holes', async () => {
+    const { document: holed, holeId } = await drilled('simple', {
+      ...PLATE,
+      y: 100
+    });
+    const locations: [number, number][] = [[10, 50]];
+    for (let y = 5; y < 100; y += 10) {
+      for (let x = 5; x < 100 && locations.length < 100; x += 10)
+        locations.push([x, y]);
+    }
+    const { document, sketchId, ids } = pointsSketch(holed, PLATE.z, locations);
+    const original = onPoints(document, sketchId, ids, {
+      targetBodyId: last(holed),
+      sourceFeatureIds: [holeId]
+    });
+    expect((await adapter.syncDocument(original)).warnings).toEqual([]);
+    const [x, y] = locations.at(-1)!;
+    const moved = updateSketchObject(original, {
+      sketchId,
+      objectId: findSketch(document, sketchId)!.objectIds.at(-1)!,
+      data: { objectKind: 'point', x: x + 0.25, y }
+    });
+    const cuts = vi.spyOn(cancellation, 'exactCutWithCancellation');
+    try {
+      const warm = await adapter.syncDocument(moved);
+      expect(cuts).toHaveBeenCalledTimes(3);
+      expect(warm.warnings).toEqual([]);
+      const cold = await createExactKernelAdapter();
+      try {
+        const reference = await cold.syncDocument(moved);
+        expect(warm.bodyRepresentations[last(moved)]).toEqual(
+          reference.bodyRepresentations[last(moved)]
+        );
+      } finally {
+        cold.dispose();
+      }
+    } finally {
+      cuts.mockRestore();
+    }
+  }, 120_000);
 
   it('checks both counterbore radii on each kept point after a skip', async () => {
     const { document: holed, holeId } = await drilled('counterbore');

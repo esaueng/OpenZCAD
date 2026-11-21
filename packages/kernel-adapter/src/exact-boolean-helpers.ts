@@ -1997,7 +1997,7 @@ export function prepareLinearIntersections(
   const entries = linearOverlaps.get(kernel);
   try {
     if (!compactLinearStock(kernel, solids[0]!)) return;
-    if (entries?.[0] && solids.length - 1 - entries.length < 6) {
+    if (entries?.[0] && solids.length - 1 <= entries.length) {
       const first = kernel.serializeSolids(
         Uint32Array.of(solids[0]!, solids[1]!)
       );
@@ -2027,7 +2027,7 @@ export function prepareLinearIntersections(
   } catch {
     return;
   }
-  if (pairs.length < 6) return;
+  if (pairs.length === 0) return;
   const batch = workers.measure(
     pairs.map((pair) => pair.bytes),
     signal
