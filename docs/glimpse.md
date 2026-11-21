@@ -79,8 +79,13 @@ displays expiry and explains failed changes. A failed/offline request has an unc
 permission. Until withdrawal is confirmed, assume an existing grant may remain
 active until its 30-day expiry.
 
-The hourly existing cron and consent changes publish aggregate snapshots with
-an app-wide monotonic generation. No account/project key leaves this app, and
+The existing hourly cron publishes the census once a day, from its 03:17 UTC
+run (`CENSUS_UTC_HOUR` in `apps/web/worker/glimpseCensus.ts`): Glimpse keeps one
+census row per day, and each publication scans every consenting library while
+holding D1's single writer. A consent change also publishes at once, so a
+grant or withdrawal reaches Glimpse without waiting for the daily run. Both carry
+an app-wide monotonic generation; the Basic adoption counts still publish
+every hour. No account/project key leaves this app, and
 Glimpse discards late/replayed generations. The dashboard shows the latest stock
 inside the selected date range, never the sum of daily stocks. Stored bytes use
 R2 objects/assets/artifacts and fallback D1 document bytes without double counting

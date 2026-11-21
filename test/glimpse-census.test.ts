@@ -568,3 +568,102 @@ it('counts registered accounts and valid web logins independently of consent', a
     db.close();
   }
 });
+
+// The census is day-keyed in Glimpse and scans every consenting library while
+// holding D1's single writer, so the hourly cron publishes it once a day.
+import worker from '../apps/web/worker/index';
+import { CENSUS_UTC_HOUR, isCensusRun } from '../apps/web/worker/glimpseCensus';
+import { sqliteD1 } from './support/sqlite-d1';
+describe('daily census publication from the hourly cron', () => {
+  const at = (hour: number) => Date.UTC(2026, 10, 21, hour, 17);
+  function cronEnv(db: DatabaseSync, statements: string[]) {
+    const bucket = {
+      put: vi.fn(async () => undefined),
+      get: vi.fn(async () => null),
+      head: vi.fn(async () => null),
+      delete: vi.fn(async () => undefined)
+    };
+    const snapshot = vi.fn().mockResolvedValue({ accepted: true });
+    const adoptionSnapshot = vi.fn().mockResolvedValue(undefined);
+    const env = {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development',
+      DB: sqliteD1(db, { onStatement: (sql) => statements.push(sql) }),
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket,
+      GLIMPSE_USAGE_ENABLED: 'true',
+      GLIMPSE_BASIC_ENABLED: 'true',
+      GLIMPSE: { snapshot, adoptionSnapshot }
+    };
+    return { env, snapshot, adoptionSnapshot };
+  }
+
+  it('matches exactly one run of the hourly trigger per UTC day', () => {
+    const hours = Array.from({ length: 24 }, (_, h) => h).filter((h) =>
+      isCensusRun(at(h))
+    );
+    expect(hours).toEqual([CENSUS_UTC_HOUR]);
+  });
+
+  it('runs the census query only on the census hour, and adoption every hour', async () => {
+    const db = activityFixture();
+    const statements: string[] = [];
+    const { env, snapshot, adoptionSnapshot } = cronEnv(db, statements);
+    try {
+      for (let hour = 0; hour < 24; hour++) {
+        statements.length = 0;
+        await worker.scheduled({ scheduledTime: at(hour) }, env as never);
+        const census = statements.includes(ACTIVITY_CENSUS_SQL);
+        expect({ hour, census }).toEqual({
+          hour,
+          census: hour === CENSUS_UTC_HOUR
+        });
+      }
+      expect(snapshot).toHaveBeenCalledOnce();
+      expect(snapshot.mock.calls[0]![0]).toMatchObject({ active7d: 6 });
+      expect(adoptionSnapshot).toHaveBeenCalledTimes(24);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('still publishes on every consent change, at any hour', async () => {
+    const db = activityFixture();
+    const statements: string[] = [];
+    const { env, snapshot } = cronEnv(db, statements);
+    try {
+      expect((await accountConsent(choice(true), env, 'no')).status).toBe(200);
+      expect((await accountConsent(choice(false), env, 'no')).status).toBe(200);
+      expect(snapshot).toHaveBeenCalledTimes(2);
+      expect(
+        statements.filter((sql) => sql === ACTIVITY_CENSUS_SQL)
+      ).toHaveLength(2);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('migration 0064: revisions by author', () => {
+  const plan = (db: DatabaseSync) =>
+    (
+      db.prepare(`EXPLAIN QUERY PLAN ${ACTIVITY_CENSUS_SQL}`).all() as {
+        detail: string;
+      }[]
+    ).map((row) => row.detail);
+  it('makes the activity census find each author’s saves through the index', () => {
+    const db = activityFixture();
+    const before = fixture(false, '0064');
+    try {
+      expect(plan(db).join('\n')).toMatch(
+        /USING (COVERING )?INDEX idx_revisions_author_created/
+      );
+      expect(plan(before).join('\n')).not.toMatch(
+        /idx_revisions_author_created/
+      );
+    } finally {
+      db.close();
+      before.close();
+    }
+  });
+});
