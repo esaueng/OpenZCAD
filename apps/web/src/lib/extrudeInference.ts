@@ -31,13 +31,28 @@ export interface ResolvedExtrude {
   baseVersion: number;
   /** The standalone sweep's outer bound, when this resolution built the tool. */
   toolBounds?: BoundingBox;
+  /**
+   * F01 multi-target through all: one more through-all cut per extra target,
+   * applied after `command` in `document` and committed with it as one step.
+   */
+  extraCommands?: ExtrudeCommand[];
 }
 
 export type ExtrudeChoice =
   | { operation: 'automatic' }
   | { operation: 'new-body' }
   /** Intersect (ZC-060) is explicit only; inference never proposes it. */
-  | { operation: 'add' | 'cut' | 'intersect'; targetBodyId?: BodyId };
+  | {
+      operation: 'add' | 'cut' | 'intersect';
+      targetBodyId?: BodyId;
+      /**
+       * F01 multi-target through all: more bodies a through-all cut goes
+       * through. Each is cut by its own through-all extrude of the same
+       * profile, consuming and replacing that body, all created as one
+       * step. Cut through all only; never inferred.
+       */
+      alsoTargetBodyIds?: BodyId[];
+    };
 
 export interface ResolveExtrudeOptions {
   choice?: ExtrudeChoice;
@@ -132,6 +147,42 @@ function isMeasuredZeroOverlap(
  * Resolve an extrusion once from exact union measurements, then rebuild the
  * stored result operation. Every geometry call remains in the browser worker.
  */
+/**
+ * F01 multi-target through all: the extra through-all cuts an explicit cut
+ * choice names, each the same profile and side as the first, through its own
+ * target, with ids of its own. None unless the extent is through all.
+ */
+function throughAllExtraCommands(
+  options: ResolveExtrudeOptions,
+  reserved: ExtrudeInput
+): ExtrudeCommand[] {
+  const choice = options.choice;
+  if (
+    choice?.operation !== 'cut' ||
+    !choice.alsoTargetBodyIds?.length ||
+    options.input.endCondition !== 'through-all'
+  ) {
+    return [];
+  }
+  const seen = new Set<BodyId>(
+    choice.targetBodyId ? [choice.targetBodyId] : []
+  );
+  const { ids: _ids, ...plain } = reserved;
+  return choice.alsoTargetBodyIds.map((bodyId) => {
+    if (seen.has(bodyId)) {
+      throw new Error('Each body a cut goes through is named once.');
+    }
+    seen.add(bodyId);
+    const target = ownEntry(options.base.derived.bodyRepresentations, bodyId);
+    if (!target || target.consumed) {
+      throw new Error(
+        'A body the cut goes through is no longer available. Pick the bodies again.'
+      );
+    }
+    return commandFactories.extrudeSketch(withOperation(plain, 'cut', bodyId));
+  });
+}
+
 export async function resolveExtrudeOperation(
   options: ResolveExtrudeOptions
 ): Promise<ResolvedExtrude> {
@@ -171,7 +222,12 @@ export async function resolveExtrudeOperation(
       withOperation(reserved, choice.operation, targetBodyId)
     );
     command.validate(options.base);
-    const document = command.apply(options.base);
+    let document = command.apply(options.base);
+    const extraCommands = throughAllExtraCommands(options, reserved);
+    for (const extra of extraCommands) {
+      extra.validate(document);
+      document = extra.apply(document);
+    }
     const derived = await options.derive(document);
     const result = builtResult(derived, reservedResult);
     if (!result) {
@@ -180,10 +236,26 @@ export async function resolveExtrudeOperation(
           'The selected extrusion operation did not produce an exact result body.'
       );
     }
+    for (const extra of extraCommands) {
+      const ids = extra.payload.ids!;
+      if (
+        !builtResult(derived, {
+          bodyId: ids.bodyId,
+          featureId: ids.featureId,
+          name: extra.payload.name
+        })
+      ) {
+        throw new Error(
+          derived.warnings.at(-1) ??
+            'One of the extra through-all cuts did not produce an exact result body.'
+        );
+      }
+    }
     return {
       command,
       document,
       derived,
+      ...(extraCommands.length > 0 ? { extraCommands } : {}),
       ...(choice.operation === 'new-body'
         ? { toolBounds: result.solidBounds }
         : {}),
@@ -375,6 +447,7 @@ export function regionExtrudeOutcome(
   resolved: {
     inference: Pick<OperationInference, 'operation'>;
     command?: { payload: { endCondition?: string } };
+    extraCommands?: readonly unknown[];
   },
   distance: number,
   units = ''
@@ -382,9 +455,12 @@ export function regionExtrudeOutcome(
   // A through-all cut was committed with a dormant distance; naming it would
   // report a depth the build never used.
   if (resolved.command?.payload.endCondition === 'through-all') {
+    const bodies = 1 + (resolved.extraCommands?.length ?? 0);
     return resolved.inference.operation === 'add'
       ? 'Extruded the region through all of the target, added to the body.'
-      : 'Cut the region through all of the target.';
+      : bodies > 1
+        ? `Cut the region through all of ${bodies} bodies.`
+        : 'Cut the region through all of the target.';
   }
   // F01 (v29): nor does a to-face extrude, whose face decides the depth.
   if (resolved.command?.payload.endCondition === 'to-face') {
