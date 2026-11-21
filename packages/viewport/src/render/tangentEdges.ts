@@ -81,7 +81,9 @@ const NEVER_TANGENT = () => false;
  */
 export function tangentFacePairs(
   mesh: Pick<MeshGeometry, 'vertices' | 'indices'>,
-  faces: BodyTopology['faces'],
+  faces: ReadonlyArray<
+    Pick<BodyTopology['faces'][number], 'triangleStart' | 'triangleCount'>
+  >,
   maxAngle: number = TANGENT_EDGE_MAX_ANGLE
 ): (first: number, second: number) => boolean {
   const faceCount = faces.length;
@@ -92,7 +94,7 @@ export function tangentFacePairs(
   }
   const indices = mesh.indices;
   const positions = mesh.vertices;
-  const triangleRange = (face: BodyTopology['faces'][number]) =>
+  const triangleRange = (face: (typeof faces)[number]) =>
     [
       Math.max(0, Math.floor(face.triangleStart)),
       Math.min(

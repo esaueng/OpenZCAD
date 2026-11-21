@@ -1,3 +1,4 @@
+import { startMesh, warmMesh } from './point-pattern-mesh';
 /**
  * M02 feature patterns (schema v62): a pattern that repeats holes and
  * add/cut extrudes on its target body rather than copying the whole body.
@@ -532,6 +533,26 @@ export function buildFeaturePattern(
         `${source.name} is not a hole, boss, cut, fillet, chamfer, wrap or rib, so a feature pattern cannot repeat it.`
       );
     }
+    // The exact mesh of the finished plate can run alongside bore and lineage checks.
+    const stock =
+      sourceData.featureKind === 'hole'
+        ? result.shapes.get(sourceData.targetBodyId)
+        : undefined;
+    const prepareMesh =
+      sources.length === 1 &&
+      data.patternKind === 'points' &&
+      (data.points?.pointIds.length ?? 0) >= 24 &&
+      copies.length >= 20 &&
+      bores.length === 1 &&
+      sourceData.featureKind === 'hole' &&
+      !sourceData.tapped &&
+      sourceData.style === 'simple' &&
+      sourceData.depthMode === 'through' &&
+      data.targetBodyId === source.bodyId &&
+      stock?.rectangularStock !== undefined &&
+      stock.rectangularStock === stock.solids[0] &&
+      stock.solids.length === 1;
+    if (prepareMesh) warmMesh(kernel);
     const repeated = repeat(seed);
     declined ??= repeated.declined;
     const currentBounds = Array.from<number>(kernel.boundingBox(solid));
@@ -581,6 +602,14 @@ export function buildFeaturePattern(
         }
       });
       solid = unifyBooleanFaces(kernel, solid);
+      if (prepareMesh)
+        startMesh(
+          kernel,
+          solid,
+          ctx.heldDisplayDeflection?.(feature.bodyId),
+          ctx.cancellation?.signal
+        );
+
       // M01 (schema v66): the copies of a tapped hole are tapped as it is,
       // each bore checked to be one plain cylinder before it is threaded.
       // A cosmetic thread (schema v67) is described, not cut.

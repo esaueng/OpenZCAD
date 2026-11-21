@@ -16,6 +16,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import * as cylinderOps from '../packages/kernel-adapter/src/exact-cylinder-ops';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -270,6 +271,113 @@ describe('M02 patterns on sketch points: exact build', () => {
     }).document;
     return { document: next, holeId: lastFeature(next) };
   }
+
+  it('draws the exact checked plate with the helper and preserves a later refusal', async () => {
+    const { document: holed, holeId } = await drilled();
+    const coords: [number, number][] = [[10, 20]];
+    for (const y of [10, 20, 30])
+      for (let x = 10; x <= 80; x += 10)
+        if (x !== 10 || y !== 20) coords.push([x, y]);
+    const { document, sketchId, ids } = pointsSketch(holed, PLATE.z, coords);
+    const plate = onPoints(document, sketchId, ids, {
+      targetBodyId: last(holed),
+      sourceFeatureIds: [holeId]
+    });
+    const bad = updateSketchObject(plate, {
+      sketchId,
+      objectId: ids[1] as never,
+      data: { objectKind: 'point', x: 200, y: 10 }
+    });
+    const reference = await createExactKernelAdapter();
+    const candidate = await createExactKernelAdapter();
+    const baseline = await reference.syncDocument(plate);
+    const refused = await reference.syncDocument(bad);
+    expect(refused.warnings.join(' ')).toMatch(/misses/);
+    const stage = vi.fn();
+    let calls = 0;
+    class MeshWorker {
+      onmessage?: (event: { data: unknown }) => void;
+      terminate() {}
+      postMessage(data: {
+        init?: boolean;
+        id: number;
+        bytes: Uint8Array;
+        options: [number, number];
+      }) {
+        if (data.init) return;
+        queueMicrotask(() => {
+          const workerKernel = new RemusKernel();
+          try {
+            const [id] = workerKernel.deserializeSolids(data.bytes);
+            const mesh = workerKernel.tessellateSolidGroupedBinary(
+              id!,
+              ...data.options
+            );
+            try {
+              calls++;
+              this.onmessage?.({
+                data: {
+                  id: data.id,
+                  mesh: {
+                    positions: mesh.takePositions(),
+                    indices: mesh.takeIndices(),
+                    faceOffsets: mesh.takeFaceOffsets()
+                  }
+                }
+              });
+            } finally {
+              mesh.free();
+            }
+          } finally {
+            workerKernel.free();
+          }
+        });
+      }
+    }
+    vi.stubGlobal('Worker', MeshWorker);
+    const underlying = RemusKernel.prototype.tessellateSolidGroupedBinary;
+    let plateMeshes = 0;
+    const tessellate = vi
+      .spyOn(RemusKernel.prototype, 'tessellateSolidGroupedBinary')
+      .mockImplementation(function (this: RemusKernel, id, ...options) {
+        if (this.getSolidFaces(id).length === 30) plateMeshes++;
+        return underlying.call(this, id, ...options);
+      });
+    try {
+      const result = await candidate.syncDocument(
+        plate,
+        undefined,
+        undefined,
+        undefined,
+        { onPatternMesh: stage }
+      );
+      expect(calls).toBe(1);
+      expect(stage).toHaveBeenCalledTimes(1);
+      expect(result.bodyRepresentations).toEqual(baseline.bodyRepresentations);
+      expect(result.warnings).toEqual(baseline.warnings);
+      // Only the auxiliary kernel tessellated the complete, 30-face plate.
+      const body = result.bodyRepresentations[last(plate)]!;
+      expect(body.faceCount).toBe(
+        baseline.bodyRepresentations[last(plate)]!.faceCount
+      );
+      expect(plateMeshes).toBe(1);
+      const failed = await candidate.syncDocument(
+        bad,
+        undefined,
+        undefined,
+        undefined,
+        { onPatternMesh: stage }
+      );
+      expect(failed.warnings).toEqual(refused.warnings);
+      expect(failed.bodyRepresentations).toEqual(refused.bodyRepresentations);
+      expect(stage).toHaveBeenCalledTimes(1);
+    } finally {
+      tessellate.mockRestore();
+      vi.unstubAllGlobals();
+      candidate.dispose();
+      reference.dispose();
+    }
+  });
 
   it('checks both counterbore radii on each kept point after a skip', async () => {
     const { document: holed, holeId } = await drilled('counterbore');

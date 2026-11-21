@@ -1,3 +1,4 @@
+import { takePatternMesh } from './point-pattern-mesh';
 import type { BodyRepresentation } from '@openzcad/shared';
 import { profileDirectEditStage } from './direct-edit-profile';
 import type { RemusKernel } from './remus-runtime';
@@ -78,6 +79,7 @@ export function projectShapeMesh(
     );
     const mesh =
       retained ??
+      takePatternMesh(kernel, solid, tess) ??
       kernel.tessellateSolidGroupedBinary(
         solid,
         tess.linearDeflection,
