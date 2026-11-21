@@ -2949,8 +2949,10 @@ export function resolveSweepOptions(
     twistDeg?: ParamValue;
     endScale?: ParamValue;
     orientation?: 'parallel';
+    cornerRadius?: ParamValue;
   },
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  units?: ProjectDocument['units']
 ): Record<string, number | string> | null {
   const twistDeg =
     data.twistDeg === undefined
@@ -2967,6 +2969,20 @@ export function resolveSweepOptions(
   if (twistDeg !== 0) options.twist = (twistDeg * Math.PI) / 180;
   if (endScale !== 1) options.endScale = endScale;
   if (data.orientation === 'parallel') options.orientation = 'parallel';
+  if (data.cornerRadius !== undefined) {
+    const radius = resolveDimensionedParam(
+      data.cornerRadius,
+      scope,
+      'length',
+      'corner radius',
+      units
+    );
+    if (!(radius > 0)) {
+      throw new Error('A round sweep corner needs a radius greater than zero.');
+    }
+    options.corner = 'round';
+    options.cornerRadius = radius;
+  }
   return Object.keys(options).length > 0 ? options : null;
 }
 
@@ -3150,7 +3166,7 @@ export function buildProfileSweep(
             face,
             feature.data.path,
             guide,
-            resolveSweepOptions(feature.data, scope),
+            resolveSweepOptions(feature.data, scope, document.units),
             sketchBasisOf(feature.data.profile.sketchId, sketchBases),
             scope,
             sketchBases

@@ -537,7 +537,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // sweep): the profile is translated along the path unturned, along splines
 // and through corners. An older client would turn it with the path, so it
 // must refuse the document. Builds on v133.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 134 as const;
+// v135 adds M04 round sweep corners (`cornerRadius` on an in-place sweep):
+// each corner is rounded by a tangent arc of that radius. An older client
+// would mitre or refuse the corner, so it must refuse the document. Builds
+// on v134.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 135 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -2751,6 +2755,15 @@ export type FeatureData =
        * the path, as every sweep before it did.
        */
       orientation?: 'parallel';
+      /**
+       * M04 (v135), `'in-place'` only: each corner of the path (between
+       * straight runs, or beside an arc in the corner's plane) is rounded by
+       * the arc of this radius tangent to both sides, swept exactly. Absent
+       * mitres a corner between straight runs and refuses one next to an
+       * arc, as before. Not with a parallel orientation, a twist, a scale
+       * or a rail.
+       */
+      cornerRadius?: ParamValue;
     }
   | {
       featureKind: 'helical-sweep';

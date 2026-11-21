@@ -330,12 +330,39 @@ const TRANSLATIONS: readonly Translation[] = [
     pattern:
       /sweep path turns a corner of ([\d.]+)° at joint \d+, next to an arc/i,
     sentence: (match) =>
-      `The sweep path has a ${Math.round(Number(match[1]) * 10) / 10}° corner next to an arc. An exact sweep mitres corners only between straight lines: join the arc tangentially.`
+      `The sweep path has a ${Math.round(Number(match[1]) * 10) / 10}° corner next to an arc. A mitre is cut only between straight lines: set Corners to Round, or join the arc tangentially.`
+  },
+  // M04 (v135) round corners.
+  {
+    pattern: /no round corner of radius ([\d.e+-]+) fits at joint/i,
+    sentence: (match) =>
+      `A round corner of radius ${Number(match[1])} does not fit the curves beside it. Use a smaller corner radius.`
+  },
+  {
+    pattern: /too short for its round corners of radius ([\d.e+-]+)/i,
+    sentence: (match) =>
+      `A piece of the sweep path is too short for round corners of radius ${Number(match[1])}. Use a smaller corner radius, or lengthen it.`
+  },
+  {
+    pattern: /out of the plane of the arc beside it/i,
+    sentence:
+      'A round corner next to an arc must lie in the arc’s plane, and this corner turns out of it.'
+  },
+  {
+    pattern:
+      /round corner of radius [\d.e+-]+ at joint \d+ is (?:too small to resolve|larger than the arc)/i,
+    sentence:
+      'That corner radius does not fit here: it is too small to resolve, or larger than the arc beside the corner.'
+  },
+  {
+    pattern: /a round corner applies to a sweep that turns with its path/i,
+    sentence:
+      'Round corners apply to a sweep that turns with its path, with no twist, scale or parallel orientation.'
   },
   {
     pattern: /sweep path turns back on itself/i,
     sentence:
-      'The sweep path turns back on itself; a corner that sharp has no mitre.'
+      'The sweep path turns back on itself: neither a mitre nor a round corner can follow a corner that sharp.'
   },
   {
     pattern: /too short for its mitred corners/i,

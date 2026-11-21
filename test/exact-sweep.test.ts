@@ -223,7 +223,7 @@ describe('exact in-place sweeps (M04)', { timeout: 120_000 }, () => {
     expect(warning).toMatchObject({ featureName: 'Bend' });
     expect(warning!.message).toContain('turns a corner of 90');
     expect(plainRefusal(warning!.message).message).toBe(
-      'The sweep path has a 90° corner next to an arc. An exact sweep mitres corners only between straight lines: join the arc tangentially.'
+      'The sweep path has a 90° corner next to an arc. A mitre is cut only between straight lines: set Corners to Round, or join the arc tangentially.'
     );
   });
 

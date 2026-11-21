@@ -357,6 +357,8 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       // unit-free ratio.
       fields(data, ['twistDeg'], rewrite, 'angle');
       fields(data, ['endScale'], rewrite, 'number');
+      // M04 (v135): a round corner's radius is a length.
+      fields(data, ['cornerRadius'], rewrite, 'length');
       return;
     case 'sketch':
     case 'imported-mesh':

@@ -695,3 +695,59 @@ test('a picked spline path sweeps with the profile kept parallel, exactly (M04, 
     4
   );
 });
+
+test('a picked L path takes a round corner with a typed radius, exactly (M04, v135)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const document = sweepDocument(
+    'Round sweep',
+    { objectKind: 'circle', radius: 1, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [
+          { objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: -20 },
+          { objectKind: 'line', x1: 30, y1: -20, x2: 50, y2: -20 }
+        ]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  await pickCurve(page, canvas, bar, [30, 0, 10], 'Path of 1');
+  await pickCurve(page, canvas, bar, [40, 0, 20], 'Path of 2');
+  await chooseOption(bar, 'Round');
+  await bar.locator('summary[aria-label$=" options"]').click();
+  const radius = bar.getByRole('textbox', { name: /Corner radius/ });
+  await radius.fill('5');
+  await radius.press('Enter');
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data).toMatchObject({ construction: 'in-place', cornerRadius: 5 });
+  const derived = await rebuilt(saved);
+  expect(surfaces(derived, sweep.bodyId!)).toEqual([
+    'cylinder',
+    'cylinder',
+    'plane',
+    'plane',
+    'torus'
+  ]);
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    Math.PI * (30 + 5 * (Math.PI / 2)),
+    6
+  );
+});

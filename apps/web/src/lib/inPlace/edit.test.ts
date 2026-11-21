@@ -2153,6 +2153,55 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('sweep: a round corner goes out beside a rail, to be refused rather than dropped, and Parallel hides it (M04, v135)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const profile = {
+      sketchId: SKETCH,
+      reference: { all: true, sourceEntityIds: ['a'] },
+      regionFingerprint: 7
+    };
+    const path = [{ sketchId: SKETCH, entityId: 'p1' }];
+    const plain = { profiles: [profile], path, guide: [] };
+    const railed = {
+      ...plain,
+      guide: [{ sketchId: SKETCH, entityId: 'rail1' }]
+    };
+    const round = (slots: unknown, orientation?: string) =>
+      spec.request(
+        slots as InPlaceSlots,
+        { twist: 0, endScale: 1, cornerRadius: 3 },
+        {
+          build: 'exact',
+          corner: 'round',
+          ...(orientation ? { orientation } : {})
+        },
+        {} as never
+      );
+    expect(round(plain)).toMatchObject({ cornerRadius: 3 });
+    // Parallel hides the Corners row, so its stale choice is not sent.
+    const parallel = round(plain, 'parallel');
+    expect(parallel).toMatchObject({ orientation: 'parallel' });
+    expect(parallel).not.toHaveProperty('cornerRadius');
+    expect(round(railed)).toMatchObject({
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] },
+      cornerRadius: 3
+    });
+    // Beside a rail, Parallel still hides the Corners row: the stale round
+    // choice is not sent, so validation names the rail, not the corner.
+    const railParallel = round(railed, 'parallel');
+    expect(railParallel).toMatchObject({ orientation: 'parallel' });
+    expect(railParallel).not.toHaveProperty('cornerRadius');
+    // Parallel hides the corner radius field too, so an unused value there
+    // cannot hold Done back.
+    const radius = spec.values.find((value) => value.id === 'cornerRadius')!;
+    const state = (options: Record<string, string>) => ({
+      options: { build: 'exact', corner: 'round', ...options },
+      numbers: {}
+    });
+    expect(radius.when!(state({}))).toBe(true);
+    expect(radius.when!(state({ orientation: 'parallel' }))).toBe(false);
+  });
+
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
     const sweep = (entityIds: string[]): FeatureData => ({
       featureKind: 'sweep',
