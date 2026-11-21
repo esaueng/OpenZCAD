@@ -501,3 +501,131 @@ test('a loft picked with a straight guide line connects the corners it joins (M0
     6
   );
 });
+
+/** A document with a marker box, a profile sketch and the given path sketches. */
+function sweepDocument(
+  name: string,
+  profile: Parameters<typeof addSketchFeature>[1]['object'],
+  paths: {
+    name: string;
+    plane: 'XZ';
+    offset: number;
+    objects: NonNullable<Parameters<typeof addSketchFeature>[1]['objects']>;
+  }[]
+): ProjectDocument {
+  let document = addPrimitiveFeature(
+    createProjectDocument(name, toUserId('user_e2e')),
+    {
+      name: 'Marker',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 2, depth: 2 }
+    }
+  );
+  document = addSketchFeature(document, {
+    name: 'Profile',
+    plane: 'XY',
+    offset: 0,
+    object: profile
+  }).document;
+  for (const path of paths) {
+    document = addSketchFeature(document, {
+      name: path.name,
+      plane: path.plane,
+      offset: path.offset,
+      objects: path.objects
+    }).document;
+  }
+  return document;
+}
+
+/** Click the sketch curve passing through `point`, and expect the bar to say so. */
+async function pickCurve(
+  page: Page,
+  canvas: Locator,
+  bar: Locator,
+  point: [number, number, number],
+  says: string
+) {
+  await page.getByRole('button', { name: 'Fit view (F)', exact: true }).click();
+  await waitForStillViewport(page);
+  const on = await projected(canvas, point);
+  await page.mouse.move(on.x, on.y);
+  await page.mouse.click(on.x, on.y);
+  // The first click after the Options panel closes can go to the panel.
+  if (!((await bar.textContent()) ?? '').includes(says)) {
+    await page.waitForTimeout(500);
+    if (!((await bar.textContent()) ?? '').includes(says)) {
+      await page.mouse.move(on.x + 1, on.y);
+      await page.mouse.move(on.x, on.y);
+      await page.mouse.click(on.x, on.y);
+    }
+  }
+  await expect(bar).toContainText(says);
+}
+
+/** Choose an option in the bar's Options panel. */
+async function chooseOption(bar: Locator, name: string) {
+  const options = bar.locator('summary[aria-label$=" options"]');
+  await options.click();
+  await bar.getByRole('radio', { name, exact: true }).click();
+  await options.click();
+}
+
+async function savedSweep(page: Page) {
+  const saved = await exportedDocument(page);
+  const sweep = listFeaturesInOrder(saved).find(
+    (feature) => feature.data.featureKind === 'sweep'
+  )!;
+  if (sweep.data.featureKind !== 'sweep') throw new Error('Expected a sweep.');
+  return { saved, sweep, data: sweep.data };
+}
+
+test('a picked straight sweep follows a picked straight rail, exactly (M04)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const document = sweepDocument(
+    'Railed sweep',
+    { objectKind: 'rectangle', width: 4, height: 4, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [{ objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: -20 }]
+      },
+      {
+        name: 'Rail',
+        plane: 'XZ',
+        offset: 0,
+        objects: [{ objectKind: 'line', x1: 36, y1: 0, x2: 33, y2: -20 }]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  await pickCurve(page, canvas, bar, [30, 0, 10], 'Path of 1');
+  await chooseOption(bar, 'Rail');
+  await pickCurve(page, canvas, bar, [34.5, 0, 10], 'Rail of 1');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  await expectBodyCount(page, 2);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data.construction).toBe('in-place');
+  expect(data.guide).toBeDefined();
+  const derived = await rebuilt(saved);
+  // The rail from 6 to 3 off the path halves the profile: a frustum.
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    (16 * 20 * (1 + 0.5 + 0.25)) / 3,
+    6
+  );
+});

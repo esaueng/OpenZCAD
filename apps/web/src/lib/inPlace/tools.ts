@@ -1690,7 +1690,7 @@ const sweep: InPlaceToolSpec = {
     },
     {
       id: 'curves',
-      when: sampledSweep,
+      // Exact sweeps follow a straight rail beside a straight path (M04).
       label: 'Picking',
       // A guide rail is the profile's up-vector track: curve clicks add to
       // it instead of the path while this is chosen.
@@ -1699,7 +1699,7 @@ const sweep: InPlaceToolSpec = {
         {
           value: 'guide',
           label: 'Rail',
-          tip: 'The profile turns to face the rail'
+          tip: 'Sampled: the profile turns to face the rail. Exact: a straight rail beside a straight path scales the profile to follow it'
         }
       ],
       initial: 'path'
@@ -1707,7 +1707,7 @@ const sweep: InPlaceToolSpec = {
   ],
   hint(slots, options) {
     if (slots.profiles.length === 0) return 'Pick a profile';
-    if (options?.build === 'sampled' && options.curves === 'guide') {
+    if (options?.curves === 'guide') {
       return slots.guide.length === 0
         ? 'Pick the rail curves'
         : `Rail of ${slots.guide.length}${
@@ -1727,6 +1727,28 @@ const sweep: InPlaceToolSpec = {
       // zero twist and a unit scale are none, and are not written.
       const twist = values.twist;
       const endScale = values.endScale;
+      const exactRail = slots.guide[0];
+      if (exactRail) {
+        // A rail sets the end scale itself (M04). A twist or end scale typed
+        // beside it still goes out, so validation refuses the pair by name
+        // rather than the card dropping the typed values unseen.
+        return {
+          tool: 'sweep',
+          profile: section(pick),
+          path: {
+            sketchId: first.sketchId,
+            entityIds: slots.path.map((curve) => curve.entityId)
+          },
+          mode: 'standard',
+          construction: 'in-place',
+          guide: {
+            sketchId: exactRail.sketchId,
+            entityIds: slots.guide.map((curve) => curve.entityId)
+          },
+          ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
+          ...(isLiteral(endScale, 1) ? {} : { endScale })
+        };
+      }
       return {
         tool: 'sweep',
         profile: section(pick),
