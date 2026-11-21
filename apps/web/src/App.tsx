@@ -937,6 +937,8 @@ import {
   interactionReducer,
   commandSessionFor,
   holdsRefusal,
+  movedOnFromRefusal,
+  refusalSubjectKey,
   refusalDiscardedByHistoryStep,
   isOperationState,
   isStaleSelectionError,
@@ -4699,6 +4701,12 @@ export function App() {
     interaction: InteractionState;
     value: number;
     startedAt: number;
+    /**
+     * The user picked something else while this edit was being checked. A
+     * refusal landing afterwards posts no top bar chip, even if that pick
+     * has since been cleared.
+     */
+    selectionMovedOn?: boolean;
   } | null>(null);
 
   /** Whether the selection is still the one a direct edit was checked for. */
@@ -5584,11 +5592,44 @@ export function App() {
     projectId: ProjectDocument['projectId'];
     version: number;
     message: string;
+    /** The refused operation's selection; picking another retires it. */
+    selectionKey: string | null;
   } | null>(null);
   useEffect(
     () => setLastDirectEditFailure(null),
     [doc?.projectId, doc?.version]
   );
+  // What is picked now, for retiring a refusal the user has moved on from.
+  // A face set and a History pick leave the machine idle, so the workspace's
+  // own selection stands in for them. A body ID alone does not: deselecting
+  // the last edge leaves its body selected.
+  const refusalSubject =
+    interaction.mode !== 'idle'
+      ? refusalSubjectKey(interaction)
+      : boxSelectedFaces
+        ? JSON.stringify(['faces', boxSelectedFaces.map((f) => f.topologyId)])
+        : selectedFeatureNode?.source === 'pinned'
+          ? JSON.stringify(['feature', selectedFeatureNode.id])
+          : null;
+  // Also checked when a refusal lands. An edit still being checked notes a
+  // pick away from it, so its late refusal posts no chip (see
+  // `selectionMovedOn`), even if that pick was cleared before it landed.
+  useEffect(() => {
+    const pending = pendingDirectEditRef.current;
+    if (
+      pending &&
+      movedOnFromRefusal(refusalSubject, refusalSubjectKey(pending.interaction))
+    ) {
+      pending.selectionMovedOn = true;
+    }
+    if (
+      lastDirectEditFailure &&
+      movedOnFromRefusal(refusalSubject, lastDirectEditFailure.selectionKey)
+    ) {
+      setLastDirectEditFailure(null);
+    }
+  }, [refusalSubject, lastDirectEditFailure]);
+
   /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
@@ -6326,12 +6367,14 @@ export function App() {
       if (
         current &&
         pending?.document.projectId === current.projectId &&
-        pending.document.version === current.version
+        pending.document.version === current.version &&
+        !pending.selectionMovedOn
       ) {
         setLastDirectEditFailure({
           projectId: current.projectId,
           version: current.version,
-          message: diagnostic.message
+          message: diagnostic.message,
+          selectionKey: refusalSubjectKey(pending.interaction)
         });
       }
       recordDirectEditOutcome('refused', {
