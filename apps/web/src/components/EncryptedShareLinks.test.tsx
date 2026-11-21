@@ -343,9 +343,12 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     expect(
       screen.queryByRole('button', { name: 'Copy Tweak link' })
     ).not.toBeInTheDocument();
-    await user.click(
-      screen.getByRole('button', { name: 'Copy View only link' })
-    );
+    // The new link is copied from its box, not from its row as well.
+    expect(
+      screen.queryByRole('button', { name: 'Copy View only link' })
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Copy/ })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
     expect(writeText).toHaveBeenCalledWith(URL_A);
 
     // Revoking asks first, with focus on the safe choice (design review I2).

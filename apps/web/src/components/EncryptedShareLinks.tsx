@@ -807,7 +807,9 @@ export function EncryptedShareLinks({
                     Allow comments
                   </button>
                 ) : null}
-                {row.url ? (
+                {/* The link just created is copied from its box above:
+                    one place to copy it from, not two. */}
+                {row.url && row.url !== created ? (
                   <button
                     type="button"
                     className="sharing-row-copy"
