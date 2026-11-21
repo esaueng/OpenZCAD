@@ -110,7 +110,12 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       fields(data.dimensions, Object.keys(data.dimensions), rewrite, 'length');
       return;
     case 'extrude':
-      fields(data, ['distance', 'backDistance'], rewrite, 'length');
+      fields(
+        data,
+        ['distance', 'backDistance', 'toFaceOffset', 'startOffset'],
+        rewrite,
+        'length'
+      );
       fields(data, ['draftAngleDeg'], rewrite, 'angle');
       return;
     case 'revolve':
@@ -298,6 +303,11 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       fields(data, ['spacing', 'spacing2'], rewrite, 'length');
       fields(data, ['angleDeg'], rewrite, 'angle');
       vector(data.direction, rewrite, null);
+      // M02 (schema v119): a mirror pattern's plane, as Mirror's.
+      if (data.mirrorPlane && 'origin' in data.mirrorPlane) {
+        vector(data.mirrorPlane.origin, rewrite, 'length');
+        vector(data.mirrorPlane.normal, rewrite, null);
+      }
       return;
     case 'direct-edit':
       directEdit(data.operation, rewrite);

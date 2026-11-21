@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import type { Locator } from '@playwright/test';
+import { perfBrowserArgs } from '../../scripts/perf-host.mjs';
 import { expect, test, stubApi, expectBodyCount } from './openzcad-fixtures';
 
 /**
@@ -15,6 +16,7 @@ import { expect, test, stubApi, expectBodyCount } from './openzcad-fixtures';
  *
  * OZ_PERF=1 OZ_PERF_FACE_STEP=/path/to/public-holder.step \
  * OZ_PERF_FACE_OUT=/tmp/face-preview.jsonl pnpm exec playwright test 'perf-face-drag.spec.ts$'
+ * Set OZ_PERF_ANGLE=gl for hardware OpenGL. The report records the renderer.
  * Use OZ_PERF_FACE_PROJECT instead of OZ_PERF_FACE_STEP for a project backup.
  *
  * Run the same file and fixture against each build. The frame observation is
@@ -27,6 +29,8 @@ test.skip(
   process.env.OZ_PERF !== '1' || !fixturePath,
   'Set OZ_PERF=1 and OZ_PERF_FACE_STEP or OZ_PERF_FACE_PROJECT.'
 );
+
+test.use({ launchOptions: { args: perfBrowserArgs() } });
 
 type Bounds = { min: number[]; max: number[] };
 type Vec3 = { x: number; y: number; z: number };

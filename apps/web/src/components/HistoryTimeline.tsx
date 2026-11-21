@@ -80,6 +80,8 @@ import {
   draftGlyph,
   extrudeGlyph,
   gridPatternGlyph,
+  mirrorPatternGlyph,
+  pathPatternGlyph,
   pointPatternGlyph,
   helicalSweepGlyph,
   linearPatternGlyph,
@@ -147,7 +149,9 @@ const PATTERN_ICONS: Record<string, ReactNode> = {
   linear: linearPatternGlyph,
   circular: circularPatternGlyph,
   grid: gridPatternGlyph,
-  points: pointPatternGlyph
+  points: pointPatternGlyph,
+  path: pathPatternGlyph,
+  mirror: mirrorPatternGlyph
 };
 const OFFSET_FACE_ICON = <ArrowUpFromDot size={14} aria-hidden="true" />;
 const RESIZE_DIAMETER_ICON = <Diameter size={14} aria-hidden="true" />;

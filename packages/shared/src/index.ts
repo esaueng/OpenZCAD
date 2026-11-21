@@ -446,7 +446,43 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // engraved into a cylinder or cone): an older client cannot build one, so
 // it must refuse. Builds on v110 (v109 was left unused when L15 landed
 // first).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 111 as const;
+// v112 adds M02 patterns along a sketch path (`patternKind: 'path'` and
+// `path`): copies spaced by arc length along joined sketch lines and arcs,
+// moved or also turned with the path. An older client has no such
+// arrangement and would build a linear pattern in its place, so it must
+// refuse. Builds on v111.
+// v113 adds the F01 offset-from-face extent (`toFaceOffset` on a to-face
+// extrude): the extrusion stops that far short of its face (or, negative,
+// passes it). An older client would build to the face itself, so it must
+// refuse. Builds on v112 (#1785, M02 path patterns).
+// v114 adds AS03 exploded drawing views (`exploded` on a drawing view): the
+// view draws each assembly part at its solved pose plus its stored exploded
+// offset. An older client would draw it as modelled, so it must refuse the
+// document. Builds on v113.
+// v117 adds M01 hole tables on drawing sheets (a `hole-table` drawing
+// annotation): a table of one view's bores, read from the model each time
+// the sheet is drawn. An older client cannot draw it and would refuse the
+// annotation's kind on its next save, so it must refuse. Builds on v116
+// (v115 and v116 are claimed by the M02 mirror and total-length pattern
+// PRs #1796 and #1797).
+// v119 adds M02 mirror patterns (`patternKind: 'mirror'` and
+// `mirrorPlane`): the whole body, or the repeated holes, bosses and cuts,
+// copied once as their reflection in a plane. An older client has no such
+// arrangement and would build a linear pattern in its place, so it must
+// refuse. Builds on v117 (#1799); v118 is claimed by #1808. It was
+// claimed as v115, left unused, with v116, when #1799 landed first.
+// v120 adds M02 total-length linear patterns (`spacingMode: 'total'`): the
+// stored spacing is the distance from the original to the last copy, shared
+// out between the copies. Absent keeps the spacing between copies, so every
+// older document builds unchanged. An older client would space the copies
+// a whole total apart, so it must refuse. Builds on v119
+// (#1796); claimed as v116, left unused when #1799 landed first.
+// v121 adds the F01 extrude start offset (`startOffset` on a blind or
+// to-face extrude): the extrusion starts that far from its sketch plane
+// along the sketch normal instead of on it. An older client would start it
+// on the sketch plane, so it must refuse. Builds on v120 (v118 is claimed
+// by #1808).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 121 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -560,7 +596,8 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
  * none, the consume-everything Boolean every document before v24 stores.
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
-export type PatternKind = 'linear' | 'circular' | 'grid' | 'points';
+export type PatternKind =
+  'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
 
 /** M02 (schema v63): the sketch points a `points` pattern repeats at. */
 export interface PatternPoints {
@@ -569,6 +606,31 @@ export interface PatternPoints {
   pointIds: string[];
   /** Where the original stands; it makes no copy and cannot be skipped. */
   referencePointId: string;
+}
+
+/**
+ * M02 (schema v112): the sketch path a `path` pattern repeats along. Its
+ * lines and arcs join end to end in one chain, open or closed; the copies
+ * stand at whole multiples of the pattern's spacing along it, measured from
+ * its start, where the original stands.
+ */
+export interface PatternPath {
+  sketchId: SketchId;
+  /** Line and arc entity ids, each once, in any order. */
+  entityIds: string[];
+  /**
+   * Start at the other end. An open path starts at the free end of the
+   * earliest-listed of its two end curves (a lone line at its first point,
+   * a lone arc at its start angle); a closed one where its first-listed
+   * curve begins.
+   */
+  reversed?: boolean;
+  /**
+   * `'tangent'` also turns each copy, in the sketch plane, by how far the
+   * path has turned from its start; absent keeps every copy square to the
+   * original, only moved.
+   */
+  orientation?: 'tangent';
 }
 
 /**
@@ -2398,6 +2460,27 @@ export type FeatureData =
        */
       toFace?: ExtrudeToFaceTarget;
       /**
+       * F01 (schema v113): offset from the `toFace` face, with `to-face`
+       * only. Positive stops the extrusion that far short of the face
+       * (toward the sketch plane), negative carries it that far past. Like
+       * the face distance it is applied on every rebuild, never folded into
+       * `distance`; an offset that reaches or crosses the sketch plane
+       * refuses by name. Absent or zero ends on the face itself.
+       */
+      toFaceOffset?: ParamValue;
+      /**
+       * F01 (schema v121): where the extrusion starts, as a signed length
+       * along the sketch normal from the sketch plane. The start plane takes
+       * the sketch plane's place for every extent measured from it: a blind
+       * distance, a back distance and a symmetric span run from it, a draft
+       * hinges on it, and a to-face extrude runs from it to the face (an
+       * offset that reaches or passes the face's end refuses by name).
+       * Through all refuses it. Like every extent it is resolved on each
+       * rebuild and never folded into `distance`. Absent or zero starts on
+       * the sketch plane.
+       */
+      startOffset?: ParamValue;
+      /**
        * F01 (schema v29): wall draft in degrees, measured from the sketch
        * normal. Positive tapers the walls inward as the extrusion leaves the
        * sketch plane (the profile is the widest section), negative flares
@@ -3142,6 +3225,27 @@ export type FeatureData =
        * `axis`, `spacing` and `angleDeg` are stored but not read.
        */
       points?: PatternPoints;
+      /**
+       * M02 (schema v112), `patternKind: 'path'` only, and required there:
+       * `count` instances, the original's included, `spacing` apart by arc
+       * length along this sketch path from its start. `axis` and `angleDeg`
+       * are stored but not read.
+       */
+      path?: PatternPath;
+      /**
+       * M02 (schema v119), `patternKind: 'mirror'` only, and required
+       * there: the plane the one copy is reflected in, a datum plane or a
+       * stored origin and normal, as Mirror takes it. `count` (2), `axis`,
+       * `spacing` and `angleDeg` are stored but not read.
+       */
+      mirrorPlane?: ModelingPlaneReference;
+      /**
+       * M02 (schema v116), `patternKind: 'linear'` only: `'total'` reads
+       * `spacing` as the distance from the original to the last copy, so
+       * the copies stand `spacing / (count − 1)` apart and a changed count
+       * keeps the row's length. Absent is the spacing between copies.
+       */
+      spacingMode?: 'total';
     }
   | {
       featureKind: 'direct-edit';

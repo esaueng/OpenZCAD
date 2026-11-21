@@ -360,7 +360,7 @@ export function drillHole(
       'This hole could only be cut by replacing exact surfaces with flat triangles, so it was refused.'
     );
   }
-  const missing = missingHoleBore(kernel, cut, spec);
+  const missing = missingHoleBore(measureCylinderFaces(kernel, cut), spec);
   if (missing !== null) {
     throw new Error(
       `The hole's ${missing * 2} bore did not come back as an analytic cylinder.`
@@ -370,17 +370,15 @@ export function drillHole(
 }
 
 /**
- * The radius of a bore `spec` asks for that `solid` does not hold as an
- * analytic cylinder on the hole's axis, or null when every one is there.
+ * The first required radius missing from the measured cylinders on this
+ * hole's axis, or null when every radius is present.
  */
 export function missingHoleBore(
-  kernel: RemusKernel,
-  solid: number,
+  cylinders: readonly MeasuredCylinderFace[],
   spec: HoleToolSpec
 ): number | null {
-  const bores = coaxialCylinderRadii(
-    kernel,
-    solid,
+  const bores = radiiOnAxis(
+    cylinders,
     spec.surfacePoint,
     spec.axis,
     ANALYTIC_MATCH_EPSILON
@@ -488,14 +486,16 @@ export function holeToolSolids(
 /** Matches the adapter's measurement tessellation for volume proofs. */
 const HOLE_PROOF_DEFLECTION = 0.08;
 
-/** Radii of every analytic cylinder in `solid` sharing the given axis line. */
-export function coaxialCylinderRadii(
+interface MeasuredCylinderFace {
+  axisStart: Vec3;
+  radius: number;
+}
+
+/** Read the faces of one finished solid before checking its hole axes. */
+export function measureCylinderFaces(
   kernel: RemusKernel,
-  solid: number,
-  axisPoint: Vec3,
-  axisDirection: Vec3,
-  tolerance: number
-): number[] {
+  solid: number
+): MeasuredCylinderFace[] {
   return Array.from(kernel.getSolidFaces(solid)).flatMap((handle) => {
     const measured = measureFaceGeometry(kernel, handle);
     if (
@@ -505,10 +505,37 @@ export function coaxialCylinderRadii(
     ) {
       return [];
     }
+    return [{ axisStart: measured.axisStart, radius: measured.radius }];
+  });
+}
+
+function radiiOnAxis(
+  cylinders: readonly MeasuredCylinderFace[],
+  axisPoint: Vec3,
+  axisDirection: Vec3,
+  tolerance: number
+): number[] {
+  return cylinders.flatMap((measured) => {
     const toAxis = subtract(measured.axisStart, axisPoint);
     const along = dot(toAxis, axisDirection);
     return length(subtract(toAxis, scale(axisDirection, along))) <= tolerance
       ? [measured.radius]
       : [];
   });
+}
+
+/** Radii of every analytic cylinder in `solid` sharing the given axis line. */
+export function coaxialCylinderRadii(
+  kernel: RemusKernel,
+  solid: number,
+  axisPoint: Vec3,
+  axisDirection: Vec3,
+  tolerance: number
+): number[] {
+  return radiiOnAxis(
+    measureCylinderFaces(kernel, solid),
+    axisPoint,
+    axisDirection,
+    tolerance
+  );
 }

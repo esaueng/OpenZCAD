@@ -103,6 +103,12 @@ export function drawingCommandInputs(
     const sheetId = operation.sheetId as DrawingSheetId;
     if (!findDrawingSheet(document, sheetId))
       throw new Error(`Drawing sheet ${operation.sheetId} not found.`);
+    if (operation.kind === 'auto_dimension_drawing')
+      // Planned from the drawn views by the app's generator, which this
+      // package cannot see: the app expands it before compiling.
+      throw new Error(
+        'An auto-dimension request is planned by the Draw workspace, not compiled.'
+      );
     return operation.kind === 'remove_drawing_annotations'
       ? operation.annotationIds.map((annotationId) => ({
           kind: 'delete' as const,

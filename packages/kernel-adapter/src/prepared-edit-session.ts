@@ -40,6 +40,7 @@ function sameShape(a: ExactShape, b: ExactShape): boolean {
   if (
     a.solids.length !== b.solids.length ||
     a.solids.some((id, index) => id !== b.solids[index]) ||
+    a.rectangularStock !== b.rectangularStock ||
     a.sweepSource !== b.sweepSource
   )
     return false;
@@ -75,6 +76,9 @@ function sameEntries<T>(a: readonly T[], b: readonly T[]): boolean {
  * mesh-origin flags must also match. No failed result or mutable document is
  * cached. Actual kernel restores retire tail entries through the owner.
  */
+/** {@link PreparedEditSession} entries as a persisted session stores them. */
+export type PreparedEditEntries = [FeatureNode['featureId'], Entry][];
+
 export class PreparedEditSession {
   private readonly entries = new Map<FeatureNode['featureId'], Entry>();
   private pending: {
@@ -87,6 +91,31 @@ export class PreparedEditSession {
   clear(): void {
     this.entries.clear();
     this.pending = null;
+  }
+
+  /** Every entry, for a persisted session of this same kernel state. */
+  exportEntries(): PreparedEditEntries {
+    return structuredClone([...this.entries]);
+  }
+
+  /**
+   * Replaces the entries with a persisted session's, read back into the
+   * kernel that session restored (whose handles they name). Entries for
+   * features no longer at `index` with `digest` are dropped: a later
+   * {@link restore} also compares digests and operand handles.
+   */
+  importEntries(
+    entries: PreparedEditEntries,
+    current: (
+      featureId: FeatureNode['featureId'],
+      index: number,
+      digest: string
+    ) => boolean
+  ): void {
+    this.clear();
+    for (const [featureId, entry] of entries)
+      if (current(featureId, entry.index, entry.digest))
+        this.entries.set(featureId, entry);
   }
 
   prune(features: readonly FeatureNode[]): void {
@@ -202,7 +231,10 @@ export class PreparedEditSession {
         before.standardParts ?? new Map()
       ) ||
       !sameMap(result.datumAxes, before.datumAxes) ||
-      !sameMap(result.datumPoints ?? new Map(), before.datumPoints ?? new Map()) ||
+      !sameMap(
+        result.datumPoints ?? new Map(),
+        before.datumPoints ?? new Map()
+      ) ||
       !sameMap(result.datumCsys ?? new Map(), before.datumCsys ?? new Map()) ||
       !sameMap(
         result.sketchProjections ?? new Map(),

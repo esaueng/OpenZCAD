@@ -378,7 +378,24 @@ export interface DrawingView {
    * detailed from it draws its source's row. Absent: the active row.
    */
   configurationId?: string;
+  /**
+   * AS03 (schema v114): this view draws the assembly exploded: each part's
+   * body at its solved pose with the stored exploded-view offset applied
+   * (`T(offset) · pose`, `assembly.explode`), a body in no part where it was
+   * modelled. Set on a base view and carried by the views projected from
+   * it; never on a section, detail or auxiliary view, nor on a view of
+   * another configuration row. Only notes and balloons go on it: parts are
+   * placed for presentation, so dimensions belong on an assembled view.
+   * Absent: bodies are drawn where they were modelled.
+   */
+  exploded?: true;
 }
+
+/** Annotation kinds an exploded view (v114) carries: it is presentation. */
+export const DRAWING_EXPLODED_VIEW_ANNOTATIONS: readonly string[] = [
+  'note',
+  'balloon'
+];
 
 /**
  * An auxiliary view (D03, schema v81): seen along a direction in its source
@@ -834,6 +851,18 @@ function drawingViewError(view: unknown, where: string): string | null {
     )
       return `${where} draws its source view's configuration and cannot name its own.`;
   }
+  if (view.exploded !== undefined) {
+    if (view.exploded !== true)
+      return `${where} has an invalid exploded setting.`;
+    if (
+      view.section !== undefined ||
+      view.detail !== undefined ||
+      view.auxiliary !== undefined
+    )
+      return `${where} cannot be drawn exploded: only a base view and the views projected from it can.`;
+    if (view.configurationId !== undefined)
+      return `${where} draws another configuration and cannot be drawn exploded.`;
+  }
   if (view.section !== undefined) {
     const section = view.section;
     if (
@@ -1115,6 +1144,9 @@ export function drawingSheetError(value: unknown): string | null {
       alignment === null
     )
       return `${where} has a projected view that cannot fold from its base.`;
+    // v114: a projected view draws the assembly as its base does.
+    if ((view.exploded === true) !== (parent.exploded === true))
+      return `${where} has a projected view that is not drawn exploded the way its base is.`;
     // Aligned on the shared axis, on the side the projection angle gives
     // it: anything else contradicts the projection the title block names.
     const child = view.centerMm as { x: number; y: number };
@@ -1133,6 +1165,16 @@ export function drawingSheetError(value: unknown): string | null {
       side * free < -ALIGNMENT_TOLERANCE_MM
     )
       return `${where} has a projected view out of line with its base or on the wrong side for its projection angle.`;
+  }
+  // v114: sections, details and auxiliary views are cut and looked at on
+  // the modelled bodies, so their source is never an exploded view.
+  for (const view of views.values()) {
+    const source =
+      (view.section as DrawingSectionCut | undefined)?.sourceViewId ??
+      (view.detail as DrawingDetail | undefined)?.sourceViewId ??
+      (view.auxiliary as DrawingAuxiliary | undefined)?.sourceViewId;
+    if (source !== undefined && views.get(source)?.exploded === true)
+      return `${where} has a section, detail or auxiliary view taken from an exploded view.`;
   }
   const labels = new Set<string>();
   for (const view of views.values()) {
@@ -1267,6 +1309,16 @@ export function drawingSheetError(value: unknown): string | null {
       const id = (annotation as DrawingAnnotation).annotationId;
       if (ids.has(id)) return `${where} names annotation ${id} twice.`;
       ids.add(id);
+    }
+    // v114: an exploded view carries notes and balloons only.
+    for (const annotation of value.annotations as DrawingAnnotation[]) {
+      const viewId = (annotation as { viewId?: string }).viewId;
+      if (
+        viewId !== undefined &&
+        views.get(viewId)?.exploded === true &&
+        !DRAWING_EXPLODED_VIEW_ANNOTATIONS.includes(annotation.kind)
+      )
+        return `${where} annotation ${annotation.annotationId} is a ${annotation.kind} on an exploded view, which carries notes and balloons only.`;
     }
     // v73: a mark measured to is a centre or intersection mark of the same
     // view. A missing one is not refused here: deleting a mark leaves what

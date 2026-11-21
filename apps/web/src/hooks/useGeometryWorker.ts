@@ -9,6 +9,9 @@ import type { EditAnalysisRequest } from '@openzcad/shared';
 import type {
   AssemblyInterferenceOperand,
   AssemblyInterferenceReport,
+  AssemblySweepComponent,
+  AssemblySweepPosition,
+  AssemblySweepWorkerReport,
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest
 } from '@openzcad/shared';
@@ -21,7 +24,10 @@ import {
   lineageDemandCacheKey,
   rebindSketchGeometryForContent
 } from '../worker/exactRebuildCache';
-import { attachDerivedState } from '@openzcad/document-core';
+import {
+  attachDerivedState,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
 import { describeWorkerFailure } from '../lib/workerFailure';
 import {
   observeWorker,
@@ -67,6 +73,16 @@ import type {
   GeometryWorkerResult
 } from '../worker/geometryWorker';
 
+import { prepareStepWorker } from '../lib/preparedStepWorker';
+
+function createGeometryWorker(): Worker {
+  return observeWorker(
+    new Worker(new URL('../worker/geometryWorker.ts', import.meta.url), {
+      type: 'module'
+    })
+  );
+}
+
 type DerivedState = ProjectDocument['derived'];
 type ExportSuccess = Extract<GeometryExportResult, { ok: true }>;
 
@@ -100,6 +116,9 @@ const RESPAWN_BUDGET_MS: Record<
   rebuilding: 15 * 60_000
 };
 
+// Small edits already fit the text transport cache. Compact bytes keep
+// hundreds of independent body topologies inside the same 8 MiB budget.
+const UTF8_TOPOLOGY_MIN_BODIES = 256;
 /** How often the watchdog samples worker silence. */
 const WATCHDOG_TICK_MS = 1_000;
 
@@ -209,6 +228,12 @@ export interface GeometryWorkerApi {
    * when the browser asks to save data (a hover is not yet an open).
    */
   prepareKernel?(): void;
+  /** Isolate a first STEP import so an accepted build can warm the empty workspace. */
+  prepareFirstStepImport(
+    document: ProjectDocument,
+    signal: AbortSignal
+  ): Promise<DerivedState> | undefined;
+  releasePreparedImport(signal: AbortSignal): void;
   isReadyFor(document: ProjectDocument | null): boolean;
   /**
    * Posts a rebuild for the live document, at most once per model version
@@ -285,6 +310,11 @@ export interface GeometryWorkerApi {
       section?: ExactSectionPlane;
       /** The third 'dxf' source, and the only 'svg' one: the saved sketch. */
       sketchId?: SketchId;
+      /**
+       * L09, the fourth 'dxf' source: the CNC-cut layout of `bodyIds` (or
+       * every shown body), parts laid flat with their gap in millimetres.
+       */
+      cncLayout?: { gapMm?: number };
       /** 'svg' only: false paints a white background behind the curves. */
       transparent?: boolean;
       /** 'step' only: the name the file is saved under, for its header. */
@@ -388,6 +418,15 @@ export interface GeometryWorkerApi {
     document: ProjectDocument,
     operands: AssemblyInterferenceOperand[]
   ): Promise<AssemblyInterferenceReport>;
+  /**
+   * AS04 through motion: the clash query at each position of a sweep, on
+   * one build of the model.
+   */
+  assemblyInterferenceSweep(
+    document: ProjectDocument,
+    components: AssemblySweepComponent[],
+    positions: AssemblySweepPosition[]
+  ): Promise<AssemblySweepWorkerReport>;
   /**
    * M09 analysis overlays: the exact per-face analysis of the named bodies,
    * sampled for the viewport (read-only).
@@ -497,6 +536,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const interferenceRequests = useRef(
     new Map<string, PendingRequest<AssemblyInterferenceReport>>()
   );
+  const sweepRequests = useRef(
+    new Map<string, PendingRequest<AssemblySweepWorkerReport>>()
+  );
   const surfaceAnalysisRequests = useRef(
     new Map<string, PendingRequest<SurfaceAnalysisReport>>()
   );
@@ -520,6 +562,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const stateSubscribers = useRef(
     new Map<string, (state: GeometryWorkerState) => void>()
   );
+  const preparedImport = useRef<ReturnType<typeof prepareStepWorker> | null>(
+    null
+  );
+  const replaceEmptyWorker = useRef<((worker: Worker) => void) | null>(null);
   const lastSyncedKey = useRef<string | null>(null);
   const broadcastDocument = useRef<ProjectDocument | null>(null);
   const readyDocument = useRef<ProjectDocument | null>(null);
@@ -540,6 +586,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       {
         document: ProjectDocument;
         lineageDemand: readonly BodyId[] | undefined;
+        requestId: string;
         analysis: boolean;
       }
     >()
@@ -587,6 +634,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       sheetMetalFoldRequests.current,
       solveSketchRequests.current,
       interferenceRequests.current,
+      sweepRequests.current,
       surfaceAnalysisRequests.current,
       sectionRequests.current,
       sketchPlanarRequests.current,
@@ -721,20 +769,11 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
     };
 
-    const spawn = () => {
+    const spawn = (prepared?: Worker) => {
       mark('worker.requested');
       let worker: Worker;
       try {
-        worker = timed('worker.create', () =>
-          observeWorker(
-            new Worker(
-              new URL('../worker/geometryWorker.ts', import.meta.url),
-              {
-                type: 'module'
-              }
-            )
-          )
-        );
+        worker = prepared ?? timed('worker.create', createGeometryWorker);
       } catch (error) {
         // A blocked or unsupported worker environment throws synchronously.
         // Swallowing it used to leave workerRef null: every sync silently
@@ -1125,6 +1164,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
           return;
         }
+        if (message.type === 'assembly-interference-sweep') {
+          const pending = sweepRequests.current.get(message.requestId);
+          if (!pending) {
+            return;
+          }
+          sweepRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.report);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
         if (message.type === 'solve-sketch') {
           const pending = solveSketchRequests.current.get(message.requestId);
           if (!pending) {
@@ -1245,6 +1297,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       };
     };
 
+    replaceEmptyWorker.current = (worker) => {
+      const old = workerRef.current;
+      if (old) {
+        old.onmessage = old.onerror = old.onmessageerror = null;
+        old.terminate();
+      }
+      spawn(worker);
+      lastSyncedKey.current = null;
+    };
     spawn();
 
     // The wedged-worker watchdog. A worker that boots, takes work, and then
@@ -1303,6 +1364,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
 
     return () => {
       disposed = true;
+      replaceEmptyWorker.current = null;
+      preparedImport.current?.cancel();
+      preparedImport.current = null;
       window.removeEventListener('online', respawnOnline);
       clearInterval(watchdog);
       const closed = new Error('Geometry worker closed.');
@@ -1468,7 +1532,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       // default. Only an explicit demand opts one into the idle skip.
       const posted = postRequest(syncRequests.current, {
         type: 'sync',
-        topologyEncoding: 'json-v2',
+        topologyEncoding:
+          document.bodyOrder.length >= UTF8_TOPOLOGY_MIN_BODIES
+            ? 'utf8-v1'
+            : 'json-v2',
         document: documentForRebuild(document),
         ...(analysis ? { analysis } : {}),
         ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {}),
@@ -1495,6 +1562,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         .finally(() => signal?.removeEventListener('abort', onAbort))
         .then((derived) => {
           syncOrigins.current.set(derived, {
+            requestId: posted.requestId,
             document,
             lineageDemand,
             analysis: analysis !== undefined
@@ -1608,6 +1676,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           ...(options?.sketchId !== undefined
             ? { sketchId: options.sketchId }
             : {}),
+          ...(options?.cncLayout ? { cncLayout: options.cncLayout } : {}),
           ...(options?.transparent !== undefined
             ? { transparent: options.transparent }
             : {}),
@@ -1745,6 +1814,17 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ? posted.promise
         : Promise.reject(new Error('Geometry worker is unavailable.'));
     },
+    assemblyInterferenceSweep(document, components, positions) {
+      const posted = postRequest(sweepRequests.current, {
+        type: 'assembly-interference-sweep',
+        document: documentForWorker(document),
+        components,
+        positions
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
     surfaceAnalysis(document, bodyIds, analysis) {
       const posted = postRequest(surfaceAnalysisRequests.current, {
         type: 'surface-analysis',
@@ -1850,10 +1930,56 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       setState((current) => ({ ...current, version: document.version }));
       return true;
     },
+    prepareFirstStepImport(document, signal) {
+      const current = hostRef.current.manager()?.document;
+      if (
+        !current ||
+        current.projectId !== document.projectId ||
+        current.featureOrder.length ||
+        current.bodyOrder.length ||
+        !document.featureOrder.length ||
+        !listFeaturesInOrder(document).every(
+          (node) => node.data.featureKind === 'imported-step'
+        )
+      )
+        return undefined;
+      preparedImport.current?.cancel();
+      const prepared = prepareStepWorker(
+        createGeometryWorker(),
+        document,
+        signal
+      );
+      preparedImport.current = prepared;
+      return prepared.promise;
+    },
+    releasePreparedImport(signal) {
+      if (preparedImport.current?.signal !== signal) return;
+      preparedImport.current.cancel();
+      preparedImport.current = null;
+    },
     liveLineageDemand() {
       return lastDemandRef.current ?? [];
     },
     adoptValidatedResult(document, derived) {
+      const previous = readyDocument.current;
+      if (
+        previous?.projectId === document.projectId &&
+        previous.featureOrder.length === 0 &&
+        previous.bodyOrder.length === 0 &&
+        broadcastDocument.current === previous &&
+        hostRef.current.manager()?.document === document &&
+        !armedRef.current &&
+        !pendingRequests().some((requests) => requests.size) &&
+        replaceEmptyWorker.current
+      ) {
+        const prepared = preparedImport.current?.take(document, derived);
+        if (prepared) {
+          replaceEmptyWorker.current(prepared);
+          // The normal commit broadcast still verifies its content key, publishes its
+          // projection and applies the project's ordinary session persistence policy.
+          return false;
+        }
+      }
       const origin = syncOrigins.current.get(derived);
       const completed = readyDocument.current;
       if (
@@ -1914,6 +2040,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       // only a draft of this content and drops an older one.
       workerRef.current.postMessage({
         type: 'live-content',
+        requestId: origin.requestId,
         projectId: document.projectId,
         contentKey
       } satisfies GeometryWorkerRequest);

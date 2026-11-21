@@ -261,7 +261,9 @@ const PATTERN_KINDS = valuesOf<PatternKind>({
   linear: true,
   circular: true,
   grid: true,
-  points: true
+  points: true,
+  path: true,
+  mirror: true
 });
 const GEAR_TYPES = valuesOf<GearType>({
   external: true,
@@ -320,7 +322,13 @@ type FeatureDataOf<K extends FeatureKind> = Extract<
  */
 const FEATURE_ENUM_FIELDS = {
   primitive: { primitiveKind: PRIMITIVE_KINDS },
-  pattern: { patternKind: PATTERN_KINDS, axis: AXIS_IDS, axis2: AXIS_IDS },
+  pattern: {
+    patternKind: PATTERN_KINDS,
+    axis: AXIS_IDS,
+    axis2: AXIS_IDS,
+    // M02 (schema v120).
+    spacingMode: valuesOf<'total'>({ total: true })
+  },
   boolean: {
     operation: valuesOf<BooleanOperation>({
       union: true,
@@ -354,9 +362,9 @@ const FEATURE_ENUM_FIELDS = {
       standard: true,
       smooth: true
     }),
-    construction: valuesOf<
-      NonNullable<FeatureDataOf<'sweep'>['construction']>
-    >({ 'in-place': true })
+    construction: valuesOf<NonNullable<FeatureDataOf<'sweep'>['construction']>>(
+      { 'in-place': true }
+    )
   },
   rib: {
     thicknessSide: valuesOf<FeatureDataOf<'rib'>['thicknessSide']>({

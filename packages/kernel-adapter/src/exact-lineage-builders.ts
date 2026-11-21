@@ -12,7 +12,10 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 import type { ExactShape } from './exact-types';
-import type { ImportedSolidDiagnosis } from './imported-step-validation';
+import type {
+  ImportedSolidBoundary,
+  ImportedSolidDiagnosis
+} from './imported-step-validation';
 import {
   importedSolidValidation,
   validationErrorDescriptions
@@ -77,13 +80,26 @@ export function diagnoseImportedSolid(
   solid: number,
   index: number
 ): ImportedSolidDiagnosis {
-  const edgeToFaces = edgeToFaceMapOf(kernel, solid);
-  // `validateSolidDetailed` reports the same error count as `validateSolid`
-  // — checked against every solid in the parity corpus on this pin — plus the
-  // validator's reasons, so the import taxonomy can name the defect instead
-  // of publishing a bare count.
+  const boundary = importedSolidBoundary(kernel, solid, index);
   const { strict, relaxedErrorCount } = importedSolidValidation(kernel, solid);
   const strictDescriptions = validationErrorDescriptions(strict);
+  return {
+    ...boundary,
+    shellCount: kernel.getSolidShells(solid).length,
+    strictErrorCount: strict.errorCount,
+    relaxedErrorCount,
+    ...(strictDescriptions.length > 0
+      ? { strictIssues: strictDescriptions }
+      : {})
+  };
+}
+
+export function importedSolidBoundary(
+  kernel: RemusKernel,
+  solid: number,
+  index: number
+): ImportedSolidBoundary {
+  const edgeToFaces = edgeToFaceMapOf(kernel, solid);
   let openEdgeCount = 0;
   let nonManifoldEdgeCount = 0;
   let edgeCount = 0;
@@ -101,13 +117,7 @@ export function diagnoseImportedSolid(
     faceCount: kernel.getSolidFaces(solid).length,
     edgeCount,
     openEdgeCount,
-    nonManifoldEdgeCount,
-    shellCount: kernel.getSolidShells(solid).length,
-    strictErrorCount: strict.errorCount,
-    relaxedErrorCount,
-    ...(strictDescriptions.length > 0
-      ? { strictIssues: strictDescriptions }
-      : {})
+    nonManifoldEdgeCount
   };
 }
 

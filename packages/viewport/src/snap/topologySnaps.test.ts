@@ -132,6 +132,21 @@ describe('what a straight edge offers', () => {
     expect(kinds([line]).sort()).toEqual(['endpoint', 'endpoint', 'midpoint']);
   });
 
+  it('names the edge point each candidate stands for', () => {
+    // A measure pick records the point by this identity (QA15-2E-01), so an
+    // "Endpoint" glyph must say WHICH end of WHICH edge.
+    expect(
+      snapsFromEdges([line]).map(({ point, source }) => ({
+        x: point.x,
+        source
+      }))
+    ).toEqual([
+      { x: 0, source: { edgeTopologyId: 'a', edgeHash: 0, role: 'start' } },
+      { x: 10, source: { edgeTopologyId: 'a', edgeHash: 0, role: 'end' } },
+      { x: 5, source: { edgeTopologyId: 'a', edgeHash: 0, role: 'midpoint' } }
+    ]);
+  });
+
   it('puts the midpoint halfway along', () => {
     const middle = snapsFromEdges([line]).find((c) => c.kind === 'midpoint');
     expect(middle?.point).toEqual({ x: 5, y: 0, z: 0 });
@@ -154,7 +169,11 @@ describe('what a straight edge offers', () => {
     // exact, and nothing about the new path may perturb it.
     const straight = edge('line', [[0, 0, 0], [10, 0, 0]]);
     straight.curve = { type: 'LINE' };
-    expect(snapsFromEdges([straight])).toEqual(snapsFromEdges([line]));
+    // Compared by kind and position: each candidate's source names its own
+    // edge, and these are two edges.
+    const placed = (edges: EdgeTopology[]) =>
+      snapsFromEdges(edges).map(({ kind, point }) => ({ kind, point }));
+    expect(placed([straight])).toEqual(placed([line]));
     expect(midpointOf([straight])).toEqual({ x: 5, y: 0, z: 0 });
   });
 });

@@ -48,6 +48,7 @@ import {
   type SketchModeState,
   type SketchViewData,
   type OffsetHandleTarget,
+  type ViewerBodyPickRole,
   type ViewerPmiLabel
 } from './ModelViewer';
 import type {
@@ -56,6 +57,7 @@ import type {
   MovePreview,
   MoveSnap,
   PickDetail,
+  PickSnap,
   ProjectionMode,
   SectionOverlapPair,
   SectionPlaneId,
@@ -172,6 +174,8 @@ interface ViewerShellProps {
   measurementCloudSync?: MeasurementCloudSyncState;
   projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
+  /** U11: each picked body's role in the running command (Base, Tool). */
+  bodyPickRoles?: Readonly<Record<string, ViewerBodyPickRole>> | null;
   selectedTopology: TopologySelection | null;
   previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
@@ -414,7 +418,8 @@ interface ViewerShellProps {
   onMeasurePreview?:
     | ((
         selection: TopologySelection,
-        point: { x: number; y: number; z: number }
+        point: { x: number; y: number; z: number },
+        snap?: PickSnap
       ) => string | null)
     | null;
   regionHandle: RegionHandleTarget | null;
@@ -507,6 +512,7 @@ export function ViewerShell({
   measurementCloudSync,
   projectThumbnailSync,
   selectedBodyIds,
+  bodyPickRoles = null,
   selectedTopology,
   previewFaceHighlights,
   selectedEdges,
@@ -975,6 +981,7 @@ export function ViewerShell({
         measurementAnnotations={placedMeasurements}
         pmiLabels={pmiLabels}
         selectedBodyIds={selectedBodyIds}
+        bodyPickRoles={bodyPickRoles}
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}
         selectionCallout={selectionCallout}

@@ -362,9 +362,14 @@ describe('in-place Extrude bar', () => {
       choice: { operation: 'automatic' },
       endCondition: 'blind',
       throughAllSide: 'forward',
+      faceOffset: '0',
+      startOffset: '0',
       draftAngle: '0'
     } as const;
     expect(extrudeChangedInput(base, base)).toBeNull();
+    expect(extrudeChangedInput(base, { ...base, faceOffset: '2' })).toBe(
+      'Offset from face'
+    );
     // A value that also leaves an extent or Symmetric is named for itself.
     expect(
       extrudeChangedInput(base, {
@@ -671,14 +676,16 @@ describe('in-place Extrude bar', () => {
     expect(extrudeShownValues({ extent: 'blind', symmetric: false })).toEqual([
       'distance',
       'backDistance',
+      'startOffset',
       'draftAngle'
     ]);
     expect(extrudeShownValues({ extent: 'blind', symmetric: true })).toEqual([
       'distance',
+      'startOffset',
       'draftAngle'
     ]);
     expect(extrudeShownValues({ extent: 'to-face', symmetric: false })).toEqual(
-      ['draftAngle']
+      ['faceOffset', 'startOffset', 'draftAngle']
     );
     expect(
       extrudeShownValues({ extent: 'through-all', symmetric: false })

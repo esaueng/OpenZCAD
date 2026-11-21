@@ -252,6 +252,7 @@ import {
   type ViewportScale,
   type PickCandidate,
   type PickDetail,
+  type PickSnap,
   type ProfilePickTarget,
   type SelectionFilter,
   type SnapCandidate,
@@ -869,6 +870,18 @@ export interface FootprintGesture {
 }
 
 /** U09: one value's handle, as the in-place command hands it over. */
+/**
+ * A picked body's role in the running command, with the name and box it
+ * was picked with: a preview that consumes the body (a subtract's tool)
+ * takes it off screen, and its callout still stands where it was.
+ */
+export interface ViewerBodyPickRole {
+  role: string;
+  name: string;
+  min: HandleVec3;
+  max: HandleVec3;
+}
+
 export type CommandHandleView = (
   | {
       kind: 'angle';
@@ -876,7 +889,7 @@ export type CommandHandleView = (
     }
   | {
       kind: 'linear';
-      params: { origin: HandleVec3; direction: HandleVec3 };
+      params: { origin: HandleVec3; direction: HandleVec3; scale?: number };
     }
   | {
       kind: 'coil';
@@ -906,6 +919,12 @@ export type CommandHandleView = (
   drawnValue?: number;
   min?: number;
   max?: number;
+  /**
+   * The step a drag lands on, in place of a length's tenths: 1 for a whole
+   * count (a gear's teeth), so the arrow rests where the value does. Shift
+   * does not lift it.
+   */
+  step?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
   format(value: number): string;
   /** The command names this value in a refusal: its chip says so. */
@@ -1003,12 +1022,35 @@ export interface SketchViewData {
 }
 
 /** An armed region-extrude handle (drag a detected region into a solid). */
+/** The sketch basis moved to an extrusion's start plane (F01, v121). */
+function regionStartBasis<
+  B extends {
+    origin: { x: number; y: number; z: number };
+    normal: { x: number; y: number; z: number };
+  }
+>(basis: B, startOffset: number | undefined): B {
+  if (!startOffset) return basis;
+  return {
+    ...basis,
+    origin: {
+      x: basis.origin.x + basis.normal.x * startOffset,
+      y: basis.origin.y + basis.normal.y * startOffset,
+      z: basis.origin.z + basis.normal.z * startOffset
+    }
+  };
+}
+
 export interface RegionHandleTarget {
   sketchId: string;
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   area: number;
   initialValue?: number;
+  /**
+   * F01 (v121): how far along the sketch normal the extrusion starts; the
+   * arrow and its ghost stand there. Absent is the sketch plane.
+   */
+  startOffset?: number;
   /**
    * The other selected regions of the same sketch. Each draws its own arrow
    * that follows this one's value, and dragging any of them drives them all.
@@ -1165,6 +1207,13 @@ export interface ModelViewerProps {
   pmiLabels?: readonly ViewerPmiLabel[];
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
+  /**
+   * U11: what each picked body is to the running command, by body id (a
+   * boolean's "Base" and "Tool"). Where given, a picked body's callout reads
+   * its role in place of its pick number, from the first pick on, as the
+   * command's Options list names it.
+   */
+  bodyPickRoles?: Readonly<Record<string, ViewerBodyPickRole>> | null;
   selectedTopology: TopologySelection | null;
   /** Exact blend faces created only in the currently published preview. */
   previewFaceHighlights: TopologySelection[];
@@ -1589,7 +1638,8 @@ export interface ModelViewerProps {
   onMeasurePreview?:
     | ((
         selection: TopologySelection,
-        point: { x: number; y: number; z: number }
+        point: { x: number; y: number; z: number },
+        snap?: PickSnap
       ) => string | null)
     | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
@@ -2552,6 +2602,7 @@ export function ModelViewer({
   measurementAnnotations,
   pmiLabels = NO_PMI_LABELS,
   selectedBodyIds: incomingSelectedBodyIds,
+  bodyPickRoles = null,
   selectedTopology: incomingSelectedTopology,
   previewFaceHighlights: incomingPreviewFaceHighlights,
   focusFaces: incomingFocusFaces = NO_FOCUS_FACES,
@@ -7901,11 +7952,11 @@ export function ModelViewer({
       // pointer was actually on.
       const snapped =
         result && onMeasurePreviewRef.current
-          ? (resolveMeasureSnap(event, result)?.candidate.point ?? null)
+          ? (resolveMeasureSnap(event, result)?.candidate ?? null)
           : null;
       const detail: PickDetail | undefined = result
         ? {
-            point: snapped ?? {
+            point: snapped?.point ?? {
               x: result.hit.point.x,
               y: result.hit.point.y,
               z: result.hit.point.z
@@ -7916,7 +7967,17 @@ export function ModelViewer({
                   y: result.faceNormal.y,
                   z: result.faceNormal.z
                 }
-              : undefined
+              : undefined,
+            // The point the glyph named, by identity, so the measure pick
+            // records that point rather than one derived from the selection.
+            ...(snapped
+              ? {
+                  snap: {
+                    kind: snapped.kind,
+                    ...(snapped.source ? { source: snapped.source } : {})
+                  }
+                }
+              : {})
           }
         : undefined;
       // Orbiting should turn about whatever was just clicked, not the model
@@ -8391,7 +8452,15 @@ export function ModelViewer({
           x: wouldPick.hit.point.x,
           y: wouldPick.hit.point.y,
           z: wouldPick.hit.point.z
-        }
+        },
+        snapped
+          ? {
+              kind: snapped.candidate.kind,
+              ...(snapped.candidate.source
+                ? { source: snapped.candidate.source }
+                : {})
+            }
+          : undefined
       );
       if (!label) {
         hud.hide(measurePreviewChip);
@@ -11409,8 +11478,18 @@ export function ModelViewer({
         // Angles in whole degrees and lengths in tenths, unless Shift asks
         // for the free value. A length rig snaps before it clamps, so a drag
         // past an end that is no tenth (a thread's 12.04 face) reaches it.
-        const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-        const free = freeValue(event);
+        const ownStep = commandHandlesRef.current.find(
+          (handle) => handle.valueId === commandDrag.valueId
+        )?.step;
+        const step =
+          ownStep !== undefined && ownStep > 0
+            ? ownStep
+            : draggedRig.kind === ANGLE_RIG_KIND
+              ? 1
+              : 0.1;
+        // A whole count has no free value between its steps: Shift does not
+        // lift its step, or the arrow would rest between teeth.
+        const free = ownStep === undefined && freeValue(event);
         const snapsItself = draggedRig.kind === LINEAR_RIG_KIND;
         const next = draggedRig.valueFromRay?.(
           context.raycaster.ray,
@@ -15263,32 +15342,69 @@ export function ModelViewer({
     // Faces lit together (a History row's, a box sweep's) are the pick even
     // when their bodies are selected, so their chip hangs over the faces.
     const focusCallout = callout?.anchor === 'focus' && !focusBox.isEmpty();
-    if (selectedBodyIds.length > 1 && !focusCallout) {
+    // A command that names its picks' roles names them from the first pick.
+    const roleOf = (bodyId: string): ViewerBodyPickRole | undefined =>
+      bodyPickRoles?.[bodyId];
+    const roled = selectedBodyIds.some((bodyId) => roleOf(bodyId));
+    if ((selectedBodyIds.length > 1 || roled) && !focusCallout) {
       const pickBox = new THREE.Box3();
+      // Labels already placed, by where they stand: a pick whose label would
+      // land on one (a tool the preview consumed inside its base, labelled at
+      // its picked box) joins that label, so both read from any view.
+      const placed: {
+        at: THREE.Vector3;
+        reach: number;
+        element: HTMLElement;
+      }[] = [];
       selectedBodyIds.forEach((bodyId, index) => {
         const target = context.objectsByBodyId.get(bodyId);
         const body = bodies.find((candidate) => candidate.bodyId === bodyId);
-        if (!target || !body) {
-          return;
-        }
-        const box = new THREE.Box3().setFromObject(target);
-        if (box.isEmpty()) {
+        const role = roleOf(bodyId);
+        const shown =
+          target && body ? new THREE.Box3().setFromObject(target) : null;
+        // Off screen under a preview that consumed it, a body with a role
+        // is still named where it was picked.
+        const box =
+          shown && !shown.isEmpty()
+            ? shown
+            : role
+              ? new THREE.Box3(
+                  new THREE.Vector3(role.min.x, role.min.y, role.min.z),
+                  new THREE.Vector3(role.max.x, role.max.y, role.max.z)
+                )
+              : null;
+        const name = body?.name ?? role?.name;
+        if (!box || box.isEmpty() || name === undefined) {
           return;
         }
         pickBox.union(box);
         const top = box.getCenter(new THREE.Vector3());
-        top.z = box.max.z + calloutLift(box, unitsRef.current);
-        const label = makeLabel('selection-callout body-order-callout', '');
+        const lift = calloutLift(box, unitsRef.current);
+        top.z = box.max.z + lift;
         const order = document.createElement('span');
         order.className = 'callout-order';
-        order.textContent = String(index + 1);
-        label.element.append(order, document.createTextNode(body.name));
+        order.textContent = role?.role ?? String(index + 1);
+        if (role) order.dataset.role = role.role;
+        const shared = placed.find(
+          (entry) => entry.at.distanceTo(top) < Math.min(entry.reach, lift)
+        );
+        if (shared) {
+          shared.element.append(
+            document.createTextNode(' · '),
+            order,
+            document.createTextNode(name)
+          );
+          return;
+        }
+        const label = makeLabel('selection-callout body-order-callout', '');
+        label.element.append(order, document.createTextNode(name));
+        placed.push({ at: top.clone(), reach: lift, element: label.element });
         label.position.copy(top);
         label.userData.calloutBodyId = bodyId;
         label.userData.calloutRestingPosition = top.clone();
         context.overlayGroup.add(label);
       });
-      if (callout && !pickBox.isEmpty()) {
+      if (callout && selectedBodyIds.length > 1 && !pickBox.isEmpty()) {
         addSelectionCallout(
           pickBox,
           textLabelSegments(`${selectedBodyIds.length} bodies`),
@@ -15298,7 +15414,7 @@ export function ModelViewer({
       }
     }
     const primaryId =
-      selectedBodyIds.length === 1 && !focusCallout
+      selectedBodyIds.length === 1 && !focusCallout && !roled
         ? selectedBodyIds[0]
         : undefined;
     if (primaryId) {
@@ -15372,6 +15488,7 @@ export function ModelViewer({
     bodies,
     editableBodyIds,
     selectedBodyIds,
+    bodyPickRoles,
     selectedEdges,
     selectedTopology,
     previewFaceHighlights,
@@ -16248,7 +16365,7 @@ export function ModelViewer({
     if (!view || !region) {
       return;
     }
-    const basis = view.basis;
+    const basis = regionStartBasis(view.basis, regionHandle.startOffset);
     const mesh = group.children.find(
       (child) =>
         (child.userData.region as RegionPickData | undefined)
@@ -16346,7 +16463,11 @@ export function ModelViewer({
       if (!region) {
         return [];
       }
-      const rig = buildRegionFollowerRig(view.basis, region, follower);
+      const rig = buildRegionFollowerRig(
+        regionStartBasis(view.basis, regionHandle.startOffset),
+        region,
+        follower
+      );
       rig.setValue(regionHandle.initialValue ?? 0);
       context.scene.add(rig.group);
       context.scene.add(rig.worldGroup);

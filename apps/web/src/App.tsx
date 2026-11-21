@@ -224,6 +224,7 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
+import type { AutoDimensionPreview } from './lib/drawing/assistantPreflight';
 import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
   appendRevision,
@@ -269,6 +270,7 @@ import {
   computeSketchProfileAnalysis,
   computeSketchRegions,
   newCanonicalPlaneRef,
+  pathPatternCurves,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -1964,6 +1966,7 @@ import {
   keypadText,
   profileRegionLoops,
   isInPlacePatternTool,
+  booleanOperandRoles,
   booleanOperationSwitch,
   inPlaceBodyMode,
   inPlaceFaceMode,
@@ -2002,6 +2005,7 @@ import type * as DatumPicks from './lib/inPlace/datumPicks';
 import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
   parseCurveCandidateId,
+  isPathPatternCurve,
   sketchCurveCandidates,
   sketchPointCandidates,
   sketchCurveMiddle,
@@ -5125,8 +5129,8 @@ export function App() {
     // commit stores it in the edit's own revision (`withCarriedSelections`).
     rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
-        ...options,
-        proposeCarry: true
+        proposeCarry: true,
+        ...options
       }),
     track: trackKernelRefusal
   });
@@ -6509,7 +6513,9 @@ export function App() {
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
     deriveCancellable: (document, signal) =>
+      geometry.prepareFirstStepImport(document, signal) ??
       rebuildInDisposableWorker(document, signal),
+    releaseCancellable: (signal) => geometry.releasePreparedImport(signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -12514,7 +12520,9 @@ export function App() {
           feature.data.featureKind === 'sheet-metal',
           (feature.data.featureKind === 'pattern' &&
             feature.data.patternKind === 'points') ||
-            feature.data.featureKind === 'hole'
+            feature.data.featureKind === 'hole',
+          feature.data.featureKind === 'pattern' &&
+            feature.data.patternKind === 'path'
         ),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
@@ -12779,18 +12787,22 @@ export function App() {
     entityId: string,
     bendLine = false,
     /** M02: a pattern on sketch points picks point entities instead. */
-    point = false
+    point = false,
+    /** M02: a pattern along a path takes lines and arcs, construction too. */
+    pathCurve = false
   ): boolean {
     const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
-      (point
-        ? node.data.objectKind === 'point'
-        : bendLine
-          ? node.data.objectKind === 'line'
-          : !node.data.construction &&
-            (node.data.objectKind === 'line' ||
-              node.data.objectKind === 'arc')) &&
+      (pathCurve
+        ? isPathPatternCurve(node.data)
+        : point
+          ? node.data.objectKind === 'point'
+          : bendLine
+            ? node.data.objectKind === 'line'
+            : !node.data.construction &&
+              (node.data.objectKind === 'line' ||
+                node.data.objectKind === 'arc')) &&
       (findSketch(current, sketchId)?.objectIds.includes(
         entityId as EntityId
       ) ??
@@ -13012,10 +13024,13 @@ export function App() {
     }
     const feature = faceProducingFeature(shownDocument, face);
     const problem = !feature
-      ? 'Click a face a hole, boss or cut made.'
+      ? 'Click a face a hole, boss, cut, fillet, chamfer, wrap or rib made.'
       : patternSourceProblem(feature.data, feature.name);
     if (!feature || problem) {
-      setStatus(problem ?? 'Click a face a hole, boss or cut made.');
+      setStatus(
+        problem ??
+          'Click a face a hole, boss, cut, fillet, chamfer, wrap or rib made.'
+      );
       return null;
     }
     const named = { featureId: feature.featureId, name: feature.name };
@@ -18602,6 +18617,12 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  /**
+   * D06: the document an auto-dimension proposal was previewed on. The
+   * generator plans again on Apply, so Apply refuses unless the document
+   * is still the one the preview showed it on.
+   */
+  const autoDimensionPreviewRef = useRef<AutoDimensionPreview | null>(null);
   // Bumped when something opens over the stage that the model should stay
   // clear of: the viewer reframes only if part of the model is covered.
   const [clearStageRequest, setClearStageRequest] = useState(0);
@@ -18624,7 +18645,8 @@ export function App() {
     return proposal.operations.some(
       (operation) =>
         operation.kind === 'add_drawing_annotations' ||
-        operation.kind === 'remove_drawing_annotations'
+        operation.kind === 'remove_drawing_annotations' ||
+        operation.kind === 'auto_dimension_drawing'
     );
   }
 
@@ -18649,16 +18671,27 @@ export function App() {
           await import('./lib/drawing/assistantPreflight');
         if (epoch !== aiPreviewEpochRef.current)
           return { ok: false, reason: 'A newer preview replaced this one.' };
-        const { sheet } = preflightDrawingPatch(
+        const { sheet, leftOut, commands } = preflightDrawingPatch(
           current,
           proposal,
           drawingModeRef.current ? drawingAssistantRef.current : null
         );
+        // Kept for Apply, which applies exactly this plan.
+        autoDimensionPreviewRef.current = proposal.operations.some(
+          (operation) => operation.kind === 'auto_dimension_drawing'
+        )
+          ? { proposal, document: current, commands }
+          : null;
         setDrawingPreview({
           sheetId: sheet.sheetId,
           annotations: sheet.annotations ?? []
         });
-        setStatus('Previewing the proposed annotations.');
+        // An auto-dimension request says what its scope leaves out.
+        setStatus(
+          leftOut.length > 0
+            ? `Previewing the proposed annotations. Left out: ${leftOut.join('; ')}.`
+            : 'Previewing the proposed annotations.'
+        );
         return { ok: true };
       } catch (error) {
         if (epoch === aiPreviewEpochRef.current) setDrawingPreview(null);
@@ -18731,18 +18764,24 @@ export function App() {
       return false;
     }
     try {
-      const { preflightDrawingPatch } =
+      const { previewedAutoDimensionCommands, preflightDrawingPatch } =
         await import('./lib/drawing/assistantPreflight');
       const live = managerRef.current?.document;
       if (!live || live !== current)
         throw new Error(
           'The document changed while the proposal was checked. Review it again.'
         );
-      const { commands } = preflightDrawingPatch(
-        current,
-        proposal,
-        drawingModeRef.current ? drawingAssistantRef.current : null
-      );
+      const commands =
+        previewedAutoDimensionCommands(
+          proposal,
+          autoDimensionPreviewRef.current,
+          current
+        ) ??
+        preflightDrawingPatch(
+          current,
+          proposal,
+          drawingModeRef.current ? drawingAssistantRef.current : null
+        ).commands;
       const applied = executeTransaction('Apply AI annotations', commands);
       if (applied) setDrawingPreview(null);
       return applied;
@@ -20449,6 +20488,27 @@ export function App() {
     return target;
   }
 
+  /**
+   * L09: File › CNC cut layout, run from its lazy module: the export
+   * scope's bodies laid flat as one layered DXF.
+   */
+  function handleExportCncLayout() {
+    const target = readyExportTarget(null);
+    if (!target || !doc) return;
+    const stem = exportStemFor(null);
+    const units = exportUnitsFor(doc.units);
+    void import('./lib/cncLayoutDxf').then((lazy) =>
+      lazy.writeCncLayoutDxf({
+        geometry,
+        target,
+        units,
+        stem,
+        save: saveCadTextFile,
+        announce: setStatus
+      })
+    );
+  }
+
   /** I06: File › Export IGES, run from its lazy module. */
   function handleExportIges() {
     const target = readyExportTarget(null);
@@ -21462,7 +21522,39 @@ export function App() {
           selection.hash,
           detail?.point
         );
-        return face ? command.pickFace(face) : true;
+        if (face) return command.pickFace(face);
+        // M02 (schema v113): with a feature picked, a flat face no feature
+        // made is a mirror pattern's plane, as Mirror takes one.
+        // An edit may keep a repeated feature that shows no face to pick
+        // (review), so a kept source counts as one picked.
+        if (
+          command.spec?.wantsPlane &&
+          (command.slots.faces.length > 0 ||
+            Boolean(command.options.keepSources))
+        ) {
+          const geometry = (
+            previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+            representations[selection.bodyId]
+          )?.topology?.faces.find(
+            (candidate) =>
+              candidate.topologyId === selection.topologyId ||
+              (selection.hash !== undefined &&
+                candidate.hash === selection.hash)
+          )?.geometry;
+          const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+          if (
+            geometry?.normal &&
+            on &&
+            geometry.surfaceType.toLowerCase() === 'plane'
+          ) {
+            return command.pickPlane({
+              kind: 'face',
+              origin: on,
+              normal: geometry.normal
+            });
+          }
+        }
+        return true;
       }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
@@ -25627,7 +25719,11 @@ export function App() {
       try {
         derived = await parameterChecks.request(() => {
           if (!current()) return Promise.reject(new ParameterCheckStale());
-          return syncParameterCandidate(name, prospective);
+          return syncParameterCandidate(
+            name,
+            prospective,
+            geometry.liveLineageDemand()
+          );
         });
       } catch (error) {
         if (error instanceof ParameterCheckStale) return stale();
@@ -26359,7 +26455,10 @@ export function App() {
           ...(request.skippedInstances
             ? { skippedInstances: request.skippedInstances }
             : {}),
-          ...(request.points ? { points: request.points } : {})
+          ...(request.points ? { points: request.points } : {}),
+          ...(request.path ? { path: request.path } : {}),
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {}),
+          ...(request.spacingMode ? { spacingMode: request.spacingMode } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -26622,6 +26721,28 @@ export function App() {
             sketchValueResolver(parameterScope.scope, doc.units)
           )
         : [],
+    // M02: a pattern along a path reads its lines and arcs on their plane.
+    sketchPath: (sketchId, entityIds) => {
+      const view = availableSketchViews.find(
+        (candidate) => candidate.sketchId === sketchId
+      );
+      if (!doc || !view) return null;
+      const resolve = sketchValueResolver(parameterScope.scope, doc.units);
+      try {
+        // The solved sketch, as the build reads it: a line a linked
+        // projection turned is where the copies go.
+        const curves = pathPatternCurves(
+          sketchReadDocument ?? doc,
+          { sketchId, entityIds: [...entityIds] },
+          (value) => resolve(value)
+        );
+        return typeof curves === 'string'
+          ? curves
+          : { curves, basis: view.basis };
+      } catch {
+        return null;
+      }
+    },
     curveMiddle: (sketchId, entityId) =>
       doc
         ? sketchCurveMiddle(
@@ -26820,6 +26941,17 @@ export function App() {
   // Mirrored before paint for the tool availability computed above it.
   const inPlaceBooleanRunning =
     booleanOperationSwitch(inPlace.tool, 'union') !== null;
+  // U11: the viewport names each picked body Base or Tool, as Options does.
+  const inPlaceBodyPickRoles = useMemo(
+    () =>
+      inPlaceBooleanRunning
+        ? booleanOperandRoles(
+            inPlace.slots.bodies,
+            (id) => representations[id]?.name
+          )
+        : null,
+    [inPlaceBooleanRunning, inPlace.slots.bodies, representations]
+  );
   useLayoutEffect(() => {
     setBooleanCommandRunning(inPlaceBooleanRunning);
   }, [inPlaceBooleanRunning]);
@@ -27161,7 +27293,11 @@ export function App() {
           ? 'Distance'
           : valueId === 'backDistance'
             ? 'Back distance'
-            : 'Draft angle',
+            : valueId === 'faceOffset'
+              ? 'Offset from face'
+              : valueId === 'startOffset'
+                ? 'Start offset'
+                : 'Draft angle',
       initial: text,
       selectInitial: true,
       unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
@@ -27194,6 +27330,8 @@ export function App() {
     if (
       valueId !== 'distance' &&
       valueId !== 'backDistance' &&
+      valueId !== 'faceOffset' &&
+      valueId !== 'startOffset' &&
       valueId !== 'draftAngle'
     ) {
       return;
@@ -27690,14 +27828,28 @@ export function App() {
     };
     // An edit has no region arrow: its distance gets one of its own.
     if (edited && !regionExtrudeState) return [];
+    // F01 (v121): the extrusion starts on its start plane, so its back
+    // arrow, draft rig and an edit's distance arrow stand there too.
+    const lift =
+      regionExtrudeState?.extent === 'through-all'
+        ? 0
+        : finite(regionExtrudeState?.startOffset, 0);
+    const lifted = (point: Vector3): Vector3 =>
+      lift === 0
+        ? point
+        : {
+            x: point.x + view.basis.normal.x * lift,
+            y: point.y + view.basis.normal.y * lift,
+            z: point.z + view.basis.normal.z * lift
+          };
     return extrudeHandles(
-      loops.outline,
+      loops.outline.map(lifted),
       view.basis.normal,
       edited
         ? `edit:${extrudeEditFeature!.featureId}`
         : `${pick.sketchId}:${pick.regionFingerprint}`,
       state,
-      loops.holes,
+      loops.holes.map((hole) => hole.map(lifted)),
       edited !== null
     ).map((shape) => {
       const handle = {
@@ -27931,6 +28083,24 @@ export function App() {
       );
       return bendLineCandidates(doc, views, blank, (value) => resolve(value));
     }
+    // M02: a pattern along a path picks lines and arcs, construction ones
+    // included; an edit offers only sketches made before it.
+    if (inPlaceSpec.id === 'path-pattern') {
+      const views = inPlaceEditing
+        ? availableSketchViews.filter((view) =>
+            featurePrecedes(
+              producingFeatureOf({ sketchId: view.sketchId }),
+              inPlaceEditing.featureId
+            )
+          )
+        : availableSketchViews;
+      return sketchCurveCandidates(
+        doc,
+        views,
+        (value) => resolve(value),
+        isPathPatternCurve
+      );
+    }
     // M02: a pattern on sketch points picks point entities, not curves.
     if (inPlaceSpec.id === 'point-pattern') {
       return sketchPointCandidates(doc, availableSketchViews, (value) =>
@@ -28152,7 +28322,8 @@ export function App() {
             pick.sketchId,
             pick.entityId,
             inPlace.tool === 'bend',
-            inPlace.tool === 'point-pattern' || inPlace.tool === 'hole'
+            inPlace.tool === 'point-pattern' || inPlace.tool === 'hole',
+            inPlace.tool === 'path-pattern'
           ),
         inPlace.tool === 'bend'
       );
@@ -28642,6 +28813,15 @@ export function App() {
   }
 
   /** Armed region handle for the viewport. */
+  // F01 (v121): the region's arrow and ghost stand on the start plane.
+  // Through all takes none: a start typed before switching to it is held
+  // for switching back, not shown.
+  const regionStartOffset =
+    regionExtrudeState &&
+    regionExtrudeState.extent !== 'through-all' &&
+    Number.isFinite(regionExtrudeState.startOffset)
+      ? regionExtrudeState.startOffset
+      : 0;
   const regionHandleTarget = useMemo(() => {
     if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return null;
@@ -28652,6 +28832,7 @@ export function App() {
       regionFingerprint: anchor.regionFingerprint,
       samplePoint: anchor.samplePoint,
       area: anchor.area,
+      ...(regionStartOffset !== 0 ? { startOffset: regionStartOffset } : {}),
       initialValue: regionDraftDistance.current ?? interaction.lastValue ?? 0,
       followers: interaction.targets
         .filter((target) => target !== anchor)
@@ -28660,7 +28841,7 @@ export function App() {
           samplePoint: target.samplePoint
         }))
     };
-  }, [interaction]);
+  }, [interaction, regionStartOffset]);
 
   /**
    * The extrude a region gesture describes, before its operation is decided.
@@ -28712,6 +28893,8 @@ export function App() {
       endCondition: regionExtrudeSettings.current?.endCondition,
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       toFace: regionExtrudeSettings.current?.toFace,
+      toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
+      startOffset: regionExtrudeSettings.current?.startOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
@@ -35884,6 +36067,21 @@ export function App() {
       }
     },
     {
+      // L09: the CNC cut layout, every export body laid flat in one DXF.
+      id: 'file-export-cnc-layout',
+      label: 'Export CNC cut layout (DXF)',
+      group: 'File',
+      keywords: ['cnc', 'laser', 'router', 'lay flat', 'cut', 'dxf', 'plate'],
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason:
+        currentGeometrySnapshot !== null
+          ? 'Wait for the model to finish updating'
+          : exportBodyIds.length === 0
+            ? emptyExportReason
+            : null,
+      run: () => handleExportCncLayout()
+    },
+    {
       // M16: the sheet-metal flat pattern, its layered DXF and bend table.
       id: 'file-export-flat-pattern',
       label: 'Flat pattern…',
@@ -37145,6 +37343,7 @@ export function App() {
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onExportIges={() => void handleExportIges()}
+          onExportCncLayout={handleExportCncLayout}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal
@@ -37343,6 +37542,7 @@ export function App() {
             }
             sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
+            bodyPickRoles={inPlaceBodyPickRoles}
             selectedTopology={
               parameterPreview || currentGeometrySnapshot
                 ? null
@@ -37737,7 +37937,10 @@ export function App() {
               !modelingLocked &&
               (tool === 'sketch' ||
                 Boolean(
-                  inPlaceSpec?.wantsPlane && inPlace.slots.bodies.length > 0
+                  inPlaceSpec?.wantsPlane &&
+                  (inPlace.slots.bodies.length > 0 ||
+                    // M02: a mirror pattern's features, picked first.
+                    inPlace.slots.faces.some((face) => face.feature))
                 ) ||
                 // Not while edges are filtered for: a ghost plane in front
                 // of an edge would take the click meant for its end.
@@ -38243,6 +38446,13 @@ export function App() {
                           setRegionExtrudeValue(valueId, value, raw, true);
                           return;
                         }
+                        if (keypad.kind === 'offset') {
+                          // The exact worker can build while the viewport prepares
+                          // the local deformation for the same typed value.
+                          handleOffsetPreview(value);
+                          offsetSetterRef.current?.(value);
+                          return;
+                        }
                         offsetSetterRef.current?.(value);
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusPreview(value);
@@ -38557,6 +38767,7 @@ export function App() {
                 bodyBounds={bodyMeshBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
                 checkInterference={geometry.assemblyInterference}
+                checkInterferenceSweep={geometry.assemblyInterferenceSweep}
               />
             </div>
           </ErrorBoundary>

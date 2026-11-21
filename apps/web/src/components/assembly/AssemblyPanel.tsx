@@ -20,7 +20,8 @@ import { commandFactories } from '@openzcad/command-system';
 import {
   assemblyBomTable,
   assemblyBomToCsv,
-  deriveAssemblyBom
+  deriveAssemblyBom,
+  type AssemblySweepCheck
 } from '@openzcad/document-core';
 import {
   ASSEMBLY_JOINT_DOFS,
@@ -118,6 +119,8 @@ export interface AssemblyPanelProps {
    * Without it the Interference section is not shown.
    */
   checkInterference?: CheckInterference;
+  /** AS04 through motion: the same query at positions along a motion. */
+  checkInterferenceSweep?: AssemblySweepCheck;
 }
 
 type MenuTarget =
@@ -207,7 +210,8 @@ function AssemblyLists({
   bodyBounds,
   reducedMotion,
   saveBomCsv,
-  checkInterference
+  checkInterference,
+  checkInterferenceSweep
 }: AssemblyPanelProps) {
   const model = useAssemblyModel(displayDocument ?? document);
   const selectedComponentId = useAssemblyRuntime((s) => s.selectedComponentId);
@@ -816,6 +820,9 @@ function AssemblyLists({
             <AssemblyInterferenceSection
               document={document}
               check={checkInterference}
+              {...(checkInterferenceSweep
+                ? { checkSweep: checkInterferenceSweep }
+                : {})}
               onStatus={onStatus}
             />
           </Section>

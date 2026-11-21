@@ -879,10 +879,16 @@ describe("bounded history retention", { timeout: 120_000 }, () => {
         data: { stepText: changedSource }
       });
       await equivalent(document, await adapter.syncDocument(document));
+      // The changed import is rebuilt and re-measured; the five boxes after
+      // it are independent and stay in the arena (the import is audited as
+      // self-contained since the H02 detached Text cache), so only their
+      // five measurements are reused.
       expect(events.at(-1)).toMatchObject({
         restored: 0,
-        reusedMeasurements: 0
+        reusedPrimitives: 5,
+        reusedMeasurements: 5
       });
+      expect(events.at(-1)?.reusedImports ?? 0).toBe(0);
       ownership(adapter, 2);
     } finally {
       adapter.dispose();

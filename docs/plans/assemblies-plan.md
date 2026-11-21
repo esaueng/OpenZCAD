@@ -206,8 +206,12 @@ out along the drag however its joints turned it.
   devices make at once (there is no record in the base to merge into) are
   conflicts the submitter resolves; nothing is chosen silently.
 - **Not in this slice.** Several named exploded views, step-by-step
-  explode playback in motion studies (not asked for here), exploded drawing
-  views and trails.
+  explode playback in motion studies (not asked for here) and trails.
+- **On drawings (schema v114).** A drawing's base view can be drawn
+  exploded: each part at its solved pose with its stored offset, as
+  Assemble shows it, with notes and balloons only; the sheet goes stale
+  when a part is posed or pulled out differently. See
+  [Exploded views](drawing-mvp-design.md#exploded-views-as03-schema-v114).
 
 Command: `assembly.explode.set` (`offsets` per component, null or zero puts
 a part back; `reset` clears every offset first).
@@ -251,11 +255,67 @@ contact; clear pairs are counted. Picking a pair picks both parts and shows
 its witness. A result is tied to the model version and poses it checked and
 says "Out of date" once either changes.
 
+### Interference through motion (AS04, no schema change)
+
+Under the static check, "Through motion" runs the same exact query at
+positions along one motion: a joint's Animate sweep (its limits, or a full
+turn for an unlimited angle, a coupled joint only as far as its mates
+allow) or a motion study's timeline, couplings followed as in playback. It is read-only and stores nothing.
+
+- **Pairs.** Only pairs whose relative pose changes along the motion are
+  checked; pairs that keep their places are counted and left to the static
+  check. More than 4000 pair checks in one sweep is refused by name.
+- **Positions.** 37 evenly spaced positions along a joint's sweep (36
+  steps), or 8 per second of a study (24 to 120 steps), ends included, all
+  in one geometry-worker job on one build: each position poses copies of
+  the parts it checks (`assemblyInterferenceSweep` in the adapter). Then,
+  four times, each gap across which a pair turns between overlap and no
+  overlap is halved. An unknown position decides nothing, so every gap
+  between the two decided positions around it is halved instead. Each
+  start and end is found to within 1/16 of a step; where undecided
+  positions stay beside a turn, the pair says how far from it the turn
+  can lie.
+- **Sampled, and said so.** A pair reads as overlapping from its first to
+  its last overlapping position, with its largest measured overlap, the
+  position it is at and its witnesses; an undecided position is listed and
+  never read as clear; a pair with no overlap is "clear at every position
+  checked", never plain clear. A pair with a part that has no geometry is
+  left out and the part is listed instead. The result states the positions, the step
+  and the resolution, and that an overlap shorter than one step can fall
+  between positions.
+- **Show.** A pair's "Show at" poses the assembly at its worst position the
+  way the motion's own player does, never saved by itself: a joint sweep
+  overrides that joint alone (its mates follow through the coupling), and
+  a study opens at that playhead, where a pose made keys the timeline as a
+  scrub does. A result says "Out of date" once the model, the parts or the
+  motion change, and then offers no "Show at".
+
 M09's first slice is display-only and separate from this: with a section cut
 on, bodies whose display caps overlap inside the cut are drawn over in red,
 and the toolbox (or, where it is put away, the "Section view on" chip) names
 them and says the highlight is display evidence from the meshes on screen,
 not an exact clash check.
+
+### STEP hierarchy round-trip (AS04, no schema change)
+
+STEP export writes the assembly as it is assembled. Each body an assembly
+part shows becomes a STEP part whose geometry stays in its own (modelled)
+frame. Its occurrence under the project's product carries the part's
+solved pose: the stored joint values, never an exploded offset, a drag or
+playback. The pose is written as an `ITEM_DEFINED_TRANSFORMATION` from the
+inverse-pose frame in the part to the parent's identity frame, its
+translation in the file's length unit.
+
+- **Structure.** Objects folders still become sub-assemblies (I02). Bodies
+  in no part keep the identity, and a document with neither folders nor
+  parts is still one flat product. The written solids are unchanged, so a
+  reader that ignores product structure reads the modelled geometry, while
+  a structure reader places every part where the assembly put it.
+- **Back in.** I02's structure import reads the file back with each part
+  as its own body where its occurrence places it, named after the part and
+  filed under a folder named after the project. Assemble's first run then
+  makes those bodies parts in one step, at the same places. Joints,
+  couplings and studies are not STEP content and are not written.
 
 ## Interaction
 
@@ -307,10 +367,10 @@ not an exact clash check.
   after a body is reshaped is a follow-up (today the stored frame is kept).
 - Loops (AS09), couplings beyond gear pairs (a general ratio between any two
   joints with its own editor, screw couplings on one cylindrical joint) and
-  video export (AS08), interference swept through a joint's motion or a
-  motion study (the static pairwise check is AS04, above), and the STEP
-  hierarchy round-trip AS04 also names. The BOM and stored exploded offsets are AS03 (above); exploded
-  drawing views wait on D01/D02.
+  video export (AS08). Interference through motion is sampled (above); joints
+  do not travel through STEP (above); an exact swept-volume
+  check is not built. The BOM, stored exploded offsets and exploded drawing
+  views are AS03 (above).
 - A coupling's ratio is fixed when the pair is placed: editing a gear's
   tooth count or moving a joint's frame afterwards does not update it. When
   a gear's teeth no longer give the stored ratio, the joint's details (and

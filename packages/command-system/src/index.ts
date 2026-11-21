@@ -3273,7 +3273,9 @@ export const commandFactories = {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
       'feature.wrap',
-      payload.mode === 'emboss' ? 'Emboss onto cylinder' : 'Engrave into cylinder',
+      payload.mode === 'emboss'
+        ? 'Emboss onto cylinder'
+        : 'Engrave into cylinder',
       withIds,
       (document) => wrapBody(document, withIds).document,
       (document) => validateWrapInput(document, withIds)
@@ -3405,7 +3407,11 @@ export const commandFactories = {
             ? 'Grid'
             : payload.patternKind === 'points'
               ? 'Point'
-              : 'Circular'
+              : payload.patternKind === 'path'
+                ? 'Path'
+                : payload.patternKind === 'mirror'
+                  ? 'Mirror'
+                  : 'Circular'
       } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,
@@ -4487,6 +4493,33 @@ function assertOperationExpressions(
         scope,
         `${operation.name} thickness`,
         operation.thickness,
+        documentUnits
+      );
+      break;
+    case 'add_hole':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} diameter`,
+        operation.diameter,
+        documentUnits
+      );
+      if (operation.depthMode === 'blind' && operation.depth != null)
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} depth`,
+          operation.depth,
+          documentUnits
+        );
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} position u`,
+        operation.position.u,
+        documentUnits
+      );
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} position v`,
+        operation.position.v,
         documentUnits
       );
       break;
@@ -5794,6 +5827,39 @@ export function commandsForCadPatch(
           ids
         });
       }
+      case 'add_hole': {
+        if (isLocalBodyRef(operation.targetBodyId)) {
+          throw new Error('add_hole cannot target same-proposal topology.');
+        }
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        // The manual Hole command, with the payload the Hole tool builds:
+        // a face that reports an area centroid is drilled from it (the
+        // `positionAnchor` marker), any other from its vertex mean.
+        const entry = ownEntry(
+          projectedDocument.derived.bodyRepresentations,
+          targetBodyId
+        )?.topology?.faces.find((face) => face.hash === operation.faceHash);
+        const ids = createBodyFeatureIds();
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], 'hole');
+        return commandFactories.holeBody({
+          name: operation.name,
+          targetBodyId,
+          faceHash: operation.faceHash,
+          faceReference: deepClone(operation.faceReference),
+          style: 'simple',
+          diameter: operation.diameter,
+          depthMode: operation.depthMode,
+          ...(operation.depthMode === 'blind' && operation.depth != null
+            ? { depth: operation.depth }
+            : {}),
+          position: { u: operation.position.u, v: operation.position.v },
+          ...(entry?.geometry?.centroid !== undefined
+            ? { positionAnchor: 'centroid' as const }
+            : {}),
+          ids
+        });
+      }
       case 'add_custom_feature': {
         const ids = createBodyFeatureIds();
         const targetBodyId = resolveBody(operation.targetBodyId);
@@ -5987,6 +6053,7 @@ export function commandsForCadPatch(
       }
       case 'add_drawing_annotations':
       case 'remove_drawing_annotations':
+      case 'auto_dimension_drawing':
         // Compiled above, before any model operation is looked at.
         throw new Error(
           'A proposal changes either the model or a drawing sheet, not both.'

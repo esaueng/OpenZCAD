@@ -150,7 +150,8 @@ describe('drawing annotation operations (D06 slice E)', () => {
     expect(CAD_PATCH_OPERATION_KINDS).toEqual(
       expect.arrayContaining([
         'add_drawing_annotations',
-        'remove_drawing_annotations'
+        'remove_drawing_annotations',
+        'auto_dimension_drawing'
       ])
     );
     const strict = (schema: unknown): void => {

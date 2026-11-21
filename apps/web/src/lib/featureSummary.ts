@@ -247,19 +247,43 @@ export function featureValueSummary(
       // F01 (v29): a draft rides after the extent, in degrees.
       const angle =
         data.draftAngleDeg === undefined ? null : num(data.draftAngleDeg);
+      // F01 (v121): a start offset reads after the extent, before a draft.
+      const start =
+        data.startOffset === undefined
+          ? null
+          : evalParamValue(data.startOffset, scope, {
+              documentUnits: units,
+              dimension: 'length'
+            });
+      const started = (extent: string) =>
+        start === null || start === 0
+          ? extent
+          : `${extent} · starts ${formatNumber(start)} ${unit} off`;
       const drafted = (extent: string) =>
         angle !== null && angle !== '0'
-          ? `${extent} · ${angle}° draft`
-          : extent;
+          ? `${started(extent)} · ${angle}° draft`
+          : started(extent);
       if (data.endCondition === 'to-face') {
-        return drafted('To face');
+        // F01 (v113): an offset reads as how far short of (or past) the face.
+        const offset =
+          data.toFaceOffset === undefined
+            ? null
+            : evalParamValue(data.toFaceOffset, scope, {
+                documentUnits: units,
+                dimension: 'length'
+              });
+        return drafted(
+          offset === null || offset === 0
+            ? 'To face'
+            : `To face · ${formatNumber(Math.abs(offset))} ${unit} ${offset > 0 ? 'short' : 'past'}`
+        );
       }
       const distance = lengthValue(data.distance);
       if (distance === null) {
         return null;
       }
       if (data.symmetric) {
-        return `${distance} ${unit} symmetric`;
+        return started(`${distance} ${unit} symmetric`);
       }
       const back =
         data.backDistance === undefined ? '0' : lengthValue(data.backDistance);
@@ -267,7 +291,7 @@ export function featureValueSummary(
         return null;
       }
       return back !== '0'
-        ? `${distance} + ${back} ${unit}`
+        ? started(`${distance} + ${back} ${unit}`)
         : drafted(`${distance} ${unit}`);
     }
     case 'revolve': {
@@ -515,12 +539,21 @@ export function featureValueSummary(
       // M02: copies left out are counted, so "× 5" never hides a gap.
       const skipped = data.skippedInstances?.length ?? 0;
       const gap = skipped > 0 ? ` · ${skipped} skipped` : '';
+      // M02 (schema v119): the one reflected copy.
+      if (data.patternKind === 'mirror') return `Mirrored${gap}`;
       if (data.patternKind === 'grid') {
         // Absent count2 reads as count (see FeatureData).
         const count2 = data.count2 === undefined ? count : num(data.count2);
         return count2 === null ? null : `${count} × ${count2}${gap}`;
       }
-      return `× ${count}${gap}`;
+      // M02 (schema v120): a row spaced over its total length says so.
+      // A length in the document's units, as the kernel builds it (review:
+      // a suffixed total read as no number at all).
+      const total =
+        data.spacingMode === 'total' ? lengthValue(data.spacing) : null;
+      return total !== null
+        ? `× ${count} over ${total} ${unit}${gap}`
+        : `× ${count}${gap}`;
     }
     default:
       return null;

@@ -16,6 +16,7 @@ import {
   testAssistantConnection,
   timeoutFor
 } from '../apps/web/worker/assistant';
+import { observeAssistantResponse } from '../apps/web/worker/assistantStreamDiagnostics';
 import { parseAssistantProposalRequest } from '../apps/web/worker/validation';
 import {
   INVALID_STRUCTURED_OUTPUT_MESSAGE,
@@ -1012,6 +1013,53 @@ describe('assistant integration', () => {
     expect(schema).not.toContain('"const":"add_datum_sketch"');
     expect(schema).not.toContain('"const":"add_datum_mirror"');
     expect(schema).not.toContain('"const":"add_datum_split"');
+    // F03 holes stay dark until their own flag is set.
+    expect(schema).not.toContain('"const":"add_hole"');
+    expect(enabledLine).not.toContain('`add_hole`');
+  });
+
+  it('offers add_hole only behind its flag and only to a client that parses it', async () => {
+    async function holeRequest(operations?: readonly string[]) {
+      const fetchMock = vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response('data: {"type":"response.completed"}\n\n', {
+            headers: { 'content-type': 'text/event-stream' }
+          })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      await streamAssistantProposal(
+        { ...input, ...(operations ? { operations } : {}) },
+        {
+          AI_PROVIDER: 'responses-compatible',
+          AI_API_KEY: 'key',
+          AI_BASE_URL: 'https://models.example.test/v1/responses',
+          AI_PATCH_HOLE_ENABLED: 'true'
+        },
+        'user_test'
+      );
+      const request = JSON.parse(
+        fetchMock.mock.calls[0]![1]?.body as string
+      ) as { instructions: string; text: { format: { schema: unknown } } };
+      return {
+        enabledLine: request.instructions
+          .split('\n')
+          .find((line) => line.includes('enabled for this deployment'))!,
+        schema: JSON.stringify(request.text.format.schema)
+      };
+    }
+    const current = await holeRequest(CAD_PATCH_OPERATION_KINDS);
+    expect(CAD_PATCH_OPERATION_KINDS).toContain('add_hole');
+    expect(current.enabledLine).toContain('`add_hole`');
+    expect(current.schema).toContain('"const":"add_hole"');
+    // A tab loaded before add_hole existed would refuse the reply it parses.
+    for (const stale of [
+      undefined,
+      CAD_PATCH_OPERATION_KINDS.filter((kind) => kind !== 'add_hole')
+    ]) {
+      const request = await holeRequest(stale);
+      expect(request.enabledLine).not.toContain('`add_hole`');
+      expect(request.schema).not.toContain('"const":"add_hole"');
+    }
   });
 
   async function datumRequest(
@@ -1598,7 +1646,9 @@ describe('assistant integration', () => {
     expect(response.status).toBe(200);
     const fallbackStream = await response.text();
     expect(fallbackStream).toContain('response.output_text.done');
-    expect(fallbackStream).toContain('response.done');
+    // The Worker's rollout gate ends every successful stream with its own
+    // canonical completion in place of the provider's terminal event.
+    expect(fallbackStream).toContain('response.completed');
     expect(fallbackStream).toContain('gen_sol_fallback_123');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [strictUrl, strictInit] = fetchMock.mock.calls[0]!;
@@ -1809,16 +1859,32 @@ describe('assistant integration', () => {
       .spyOn(console, 'error')
       .mockImplementation(() => undefined);
 
+    // The Worker's rollout gate refuses this unparseable frame before the
+    // observer would see it, so the observer's own bound is tested directly.
+    await new Response(
+      observeAssistantResponse(new Response(oversizedFrame).body!, {
+        requestId: 'req_framing',
+        provider: 'openrouter',
+        model: 'm'
+      })
+    ).text();
+
+    expect(consoleError).toHaveBeenCalledWith(
+      'AI Responses stream failed:',
+      expect.objectContaining({ classification: 'protocol_error' })
+    );
+    consoleError.mockClear();
+
     const response = await streamAssistantProposal(input, {
       AI_PROVIDER: 'openrouter',
       AI_MODEL: 'openai/gpt-6-luna',
       OPENROUTER_API_KEY: 'secret-key'
     });
-    await response.text();
-
+    const forwarded = await response.text();
+    expect(forwarded).not.toContain('xxxx');
     expect(consoleError).toHaveBeenCalledWith(
       'AI Responses stream failed:',
-      expect.objectContaining({ classification: 'protocol_error' })
+      expect.objectContaining({ classification: 'stream_error' })
     );
     expect(JSON.stringify(consoleError.mock.calls)).not.toContain(
       oversizedFrame.slice(-1_000)
@@ -2260,6 +2326,7 @@ describe('assistant integration', () => {
     'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED',
     'AI_PATCH_MIRROR_ENABLED',
     'AI_PATCH_SHELL_ENABLED',
+    'AI_PATCH_HOLE_ENABLED',
     'AI_PATCH_SOLID_OFFSET_ENABLED',
     'AI_PATCH_DATUM_PLANE_ENABLED',
     'AI_PATCH_DATUM_GEOMETRY_ENABLED',

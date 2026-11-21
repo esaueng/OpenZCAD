@@ -321,6 +321,18 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     openingFaceReferences: [],
     thickness: 2
   },
+  add_hole: {
+    kind: 'add_hole',
+    name: 'Hole',
+    localId: null,
+    targetBodyId: 'body_1',
+    faceHash: 7,
+    faceReference: measured({ lineageName: 'top cap' }),
+    diameter: 6,
+    depthMode: 'blind',
+    depth: 'hole_depth',
+    position: { u: 0, v: 2 }
+  },
   add_solid_offset: {
     kind: 'add_solid_offset',
     name: 'Offset',
@@ -370,6 +382,12 @@ const SAMPLES: { [Kind in OperationKind]: OperationOf<Kind> } = {
     kind: 'remove_drawing_annotations',
     sheetId: 'dsht_1',
     annotationIds: ['dann_1', 'dann_2']
+  },
+  auto_dimension_drawing: {
+    kind: 'auto_dimension_drawing',
+    sheetId: 'dsht_1',
+    viewIds: ['dvw_front'],
+    dimensionKinds: ['linear', 'diameter']
   }
 };
 
@@ -415,6 +433,18 @@ describe('patch operation descriptions', () => {
     );
     expect(describeOperation(SAMPLES.add_shell)).toBe(
       'Shell — shell body_1 at 2, 1 open face'
+    );
+    expect(describeOperation(SAMPLES.add_hole)).toBe(
+      'Hole — drill a 6 hole hole_depth deep into body_1 at u 0, v 2 from the face centre'
+    );
+    expect(
+      describeOperation({
+        ...SAMPLES.add_hole,
+        depthMode: 'through',
+        depth: null
+      })
+    ).toBe(
+      'Hole — drill a 6 through hole into body_1 at u 0, v 2 from the face centre'
     );
     expect(describeOperation(SAMPLES.add_mirror)).toBe(
       'Mirror — mirror Plate across the plane through 0, 0, 0, normal 1, 0, 0'

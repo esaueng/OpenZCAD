@@ -101,14 +101,70 @@ async function gearData(page: Page) {
     .filter((data) => data.featureKind === 'gear');
 }
 
+/** Where a world point lands on the canvas. */
+async function projected(
+  canvas: Locator,
+  point: [number, number, number]
+): Promise<{ x: number; y: number }> {
+  return canvas.evaluate(
+    (element, points) =>
+      new Promise<{ x: number; y: number }>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-project-points', {
+            detail: {
+              points,
+              resolve: (state: { points: { x: number; y: number }[] }) =>
+                resolve(state.points[0]!)
+            }
+          })
+        );
+      }),
+    [point]
+  );
+}
+
+/** Each command handle's grip on screen, with its value. */
+async function commandHandles(
+  canvas: Locator
+): Promise<Record<string, { x: number; y: number; value: number }>> {
+  return canvas.evaluate((element) =>
+    element.dataset.e2eCommandHandles
+      ? (JSON.parse(element.dataset.e2eCommandHandles) as Record<
+          string,
+          { x: number; y: number; value: number }
+        >)
+      : {}
+  );
+}
+
+/** Presses a handle's grip and drags it through world points. */
+async function dragHandle(
+  page: Page,
+  canvas: Locator,
+  valueId: string,
+  through: [number, number, number][]
+) {
+  await waitForStillViewport(page);
+  const grip = (await commandHandles(canvas))[valueId]!;
+  await page.mouse.move(grip.x, grip.y);
+  await page.mouse.down();
+  for (const point of through) {
+    const at = await projected(canvas, point);
+    await page.mouse.move(at.x, at.y, { steps: 2 });
+  }
+  await page.mouse.up();
+}
+
 test(
-  'Gear in place: a spur gear stands on a picked face',
+  'Gear in place: pick a face, drag teeth on and the face width down, edit it back unchanged',
   {
     tag: '@ci-smoke'
   },
   async ({ page }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(180_000);
     await stubApi(page, { panelLayout: MODEL_ONLY });
+    // A box from the origin: its top face's centre, where the gear stands,
+    // is (20, 15, 20).
     const canvas = await openPart(page, 'In-place gear', 'box', {
       width: 40,
       height: 30,
@@ -120,30 +176,87 @@ test(
     await expect
       .poll(() => pickPlanarFace(page, { x: 0, y: 0, z: 1 }))
       .not.toBeNull();
-    await expect(bar).toContainText('Drag the face width');
-    await enterCommandValue(page, 'teeth', '24');
-    await enterCommandValue(page, 'faceWidth', '6');
+    await expect(bar).toContainText('Drag the teeth arrow to add teeth');
+    const teeth = page.getByTestId('command-handle-teeth');
+    await expect(teeth).toHaveText('20 teeth');
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+      timeout: 60_000
+    });
+
+    // The teeth arrow's head stands on the Ø40 pitch circle of 20 module-2
+    // teeth, out along +X from the gear's centre.
+    await waitForStillViewport(page);
+    const grip = (await commandHandles(canvas)).teeth!;
+    const pitch = await projected(canvas, [40, 15, 20]);
+    expect(Math.hypot(grip.x - pitch.x, grip.y - pitch.y)).toBeLessThan(4);
+
+    // Dragged out to the Ø48 circle: four more teeth at the same module.
+    await dragHandle(page, canvas, 'teeth', [
+      [41, 15, 20],
+      [42, 15, 20],
+      [43, 15, 20],
+      [44, 15, 20]
+    ]);
+    await expect(teeth).toHaveText('24 teeth');
+    // The face width's arrow down from 10 to 6.
+    await dragHandle(page, canvas, 'faceWidth', [
+      [20, 15, 29],
+      [20, 15, 28],
+      [20, 15, 27],
+      [20, 15, 26]
+    ]);
+    await expect
+      .poll(async () => (await commandHandles(canvas)).faceWidth?.value ?? 0)
+      .toBeLessThan(7);
+    const width = (await commandHandles(canvas)).faceWidth!.value;
+    expect(width).toBeGreaterThan(5);
+    // Options reads out what the drag decided.
+    await bar.locator('details.in-place-command-options summary').click();
+    await expect(bar).toContainText('Module 2 mm · Pitch Ø 48 mm');
+    await bar.locator('details.in-place-command-options summary').click();
     await finishInPlaceCommand(page, 'Gear');
     await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
       timeout: 30_000
     });
-    const [gear] = await gearData(page);
+    const [gear, ...others] = await gearData(page);
+    expect(others).toHaveLength(0);
     expect(gear).toMatchObject({
       gearType: 'external',
       sizing: 'module',
       pitch: 2,
       teeth: 24,
-      faceWidth: 6,
       axis: { x: 0, y: 0, z: 1 }
     });
+    expect(Number((gear as { faceWidth: number }).faceWidth)).toBeCloseTo(
+      width,
+      6
+    );
     expect(gear).not.toHaveProperty('targetBodyId');
+
+    // Re-armed from History and finished untouched, it is stored as it was.
+    await revealModelPanel(page, 'History');
+    await page
+      .locator('.feature-row', { hasText: 'Gear' })
+      .locator('.feature-row-main')
+      .click();
+    const edit = page.getByRole('group', { name: 'Edit Gear command' });
+    await expect(edit).toBeVisible();
+    await expect(page.getByTestId('command-handle-teeth')).toHaveText(
+      '24 teeth'
+    );
+    await expect(edit.getByRole('button', { name: /Done/ })).toBeEnabled({
+      timeout: 60_000
+    });
+    await edit.getByRole('button', { name: /Done/ }).click();
+    await expect(edit).toHaveCount(0, { timeout: 60_000 });
+    expect(await gearData(page)).toEqual([gear]);
   }
 );
 
-test('Gear teeth in place: teeth cut along a picked cylinder keep its diameter', async ({
+test('Gear teeth in place: one pick sizes the teeth, the arrow stops them short', async ({
   page
 }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await stubApi(page, { panelLayout: MODEL_ONLY });
   const canvas = await openPart(page, 'In-place gear teeth', 'cylinder', {
     radius: 11,
@@ -152,25 +265,54 @@ test('Gear teeth in place: teeth cut along a picked cylinder keep its diameter',
   await startTool(page, /^Gear teeth/, 'Gear teeth');
   const bar = page.getByRole('group', { name: 'Gear teeth command' });
   await expect(bar).toContainText('Pick a boss or bore');
-  await expect
-    .poll(() =>
-      canvas.evaluate(
-        (element) =>
-          new Promise<unknown>((resolve) => {
-            element.dispatchEvent(
-              new CustomEvent('openzcad:e2e-select-cylinder', {
-                detail: { surface: 'wall', select: true, resolve }
-              })
-            );
-          })
-      )
-    )
-    .not.toBeNull();
+  // The boss's side, near its top: the teeth run down from there.
+  await setSelectionFilter(page, 'Face');
+  await clickWorldPoint(page, [0, -11, 5]);
   await expect(bar).toContainText('Tap the teeth to type');
-  await enterCommandValue(page, 'teeth', '20');
-  await finishInPlaceCommand(page, 'Gear teeth');
+  await expect(page.getByTestId('command-handle-faceWidth')).toHaveText(
+    'Length 6 mm'
+  );
+  // Options reads out what the face decides: its diameter and its length.
+  const options = bar.locator('details.in-place-command-options summary');
+  await options.click();
+  await expect(bar).toContainText(
+    'Sized from the Ø22 mm face · Teeth run the full 6 mm'
+  );
+  await options.click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 120_000
+  });
+  // The arrow, at the bottom, dragged up to 2 above it: 4 of the 6 toothed.
+  await dragHandle(page, canvas, 'faceWidth', [
+    [0, -11, 0.5],
+    [0, -11, 1],
+    [0, -11, 1.5],
+    [0, -11, 2]
+  ]);
+  await expect
+    .poll(async () => (await commandHandles(canvas)).faceWidth?.value ?? 6)
+    .toBeLessThan(4.5);
+  const dragged = (await commandHandles(canvas)).faceWidth!.value;
+  expect(dragged).toBeGreaterThan(3.5);
+  await options.click();
+  await expect(bar).toContainText(/Teeth run [\d.]+ of 6 mm/);
+  await options.click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 120_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0, { timeout: 120_000 });
+  await setSelectionFilter(page, 'Any');
   const [teeth] = await gearData(page);
-  expect(teeth).toMatchObject({ gearType: 'external', teeth: 20 });
+  expect(teeth).toMatchObject({
+    gearType: 'external',
+    teeth: 20,
+    anchor: 'end'
+  });
+  expect(Number((teeth as { faceWidth: number }).faceWidth)).toBeCloseTo(
+    dragged,
+    6
+  );
   expect(teeth).toHaveProperty('targetBodyId');
   // Keep-diameter is the default: no module stored, none needed.
   expect(teeth).not.toHaveProperty('pitch');

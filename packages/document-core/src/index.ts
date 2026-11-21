@@ -88,7 +88,9 @@ export * from './drawings';
 export * from './object-folders';
 export * from './assembly';
 export * from './assembly-bom';
+export * from './assembly-exploded';
 export * from './assembly-interference';
+export * from './assembly-interference-sweep';
 export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
@@ -112,6 +114,9 @@ import {
   isDocumentHistory,
   isReservedRecordKey,
   ownEntry,
+  patternMirrorProblem,
+  patternSpacingModeProblem,
+  patternPathProblem,
   patternPointsProblem,
   holePointsProblem,
   holeStandardDiameter,
@@ -121,6 +126,7 @@ import {
   patternSourceProblem,
   skippedInstancesProblem,
   suppliedIds,
+  type PatternPath,
   type PatternPoints,
   type HolePoints,
   type HoleStandard,
@@ -458,6 +464,16 @@ export interface ExtrudeInput {
   throughAllSide?: ThroughAllSide;
   /** F01 (v29): required with `to-face`; see the stored feature's `toFace`. */
   toFace?: ExtrudeToFaceTarget;
+  /**
+   * F01 (v113): with `to-face` only; positive stops short of the face,
+   * negative passes it. Absent or zero ends on the face.
+   */
+  toFaceOffset?: ParamValue;
+  /**
+   * F01 (v121): where the extrusion starts, along the sketch normal from the
+   * sketch plane; blind or to-face only. Absent or zero starts on the plane.
+   */
+  startOffset?: ParamValue;
   /** F01 (v29): wall draft in degrees; absent or zero is straight walls. */
   draftAngleDeg?: ParamValue;
   ids?: BodyFeatureIds;
@@ -819,6 +835,12 @@ export interface PatternInput {
   skippedInstances?: string[];
   /** M02 (schema v63): required on a `points` pattern, absent otherwise. */
   points?: PatternPoints;
+  /** M02 (schema v112): required on a `path` pattern, absent otherwise. */
+  path?: PatternPath;
+  /** M02 (schema v119): required on a `mirror` pattern, absent otherwise. */
+  mirrorPlane?: ModelingPlaneReference;
+  /** M02 (schema v120): a linear pattern's spacing is its total length. */
+  spacingMode?: 'total';
   ids?: BodyFeatureIds;
 }
 
@@ -2661,6 +2683,8 @@ export function validateExtrudeExtent(
     endCondition?: unknown;
     throughAllSide?: unknown;
     toFace?: unknown;
+    toFaceOffset?: unknown;
+    startOffset?: unknown;
     draftAngleDeg?: unknown;
     operation?: unknown;
     targetBodyId?: unknown;
@@ -2690,6 +2714,15 @@ export function validateExtrudeExtent(
   if (condition !== 'to-face' && data.toFace !== undefined) {
     throw new Error('Only an extrude to a face names a target face.');
   }
+  if (condition !== 'to-face' && data.toFaceOffset !== undefined) {
+    throw new Error('Only an extrude to a face has an offset from the face.');
+  }
+  validateExtrudeLengthValue(data.startOffset, 'Start offset');
+  if (condition === 'through-all' && !resolvedZero(resolve)(data.startOffset)) {
+    throw new Error(
+      'A through-all cut runs through the whole target, so it has no start offset.'
+    );
+  }
   if (condition === 'blind') {
     if (data.throughAllSide !== undefined) {
       throw new Error('A blind extrude has no through-all side.');
@@ -2701,6 +2734,7 @@ export function validateExtrudeExtent(
       throw new Error('An extrude to a face has no through-all side.');
     }
     validateToFaceTarget(data.toFace);
+    validateToFaceOffsetValue(data.toFaceOffset);
     if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
         'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
@@ -2741,6 +2775,131 @@ export function validateExtrudeExtent(
       'A through-all cut has no back distance; choose the side "both" instead.'
     );
   }
+}
+
+/**
+ * F01 (v113): a stored offset from the face is a finite literal or a
+ * non-empty expression (which resolves, and is checked, in the build).
+ */
+function validateToFaceOffsetValue(offset: unknown): void {
+  validateExtrudeLengthValue(offset, 'Offset from face');
+}
+
+/**
+ * A stored optional extrude length (an offset from the face, a start
+ * offset) is a finite literal or a non-empty expression, which resolves,
+ * and is checked, in the build.
+ */
+function validateExtrudeLengthValue(value: unknown, label: string): void {
+  if (value === undefined) return;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new Error(`${label} must be a finite length.`);
+    }
+  } else if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${label} must be a number or an expression.`);
+  }
+}
+
+/**
+ * F01 (v121): the signed length a to-face extrude sweeps from its start
+ * plane, `start` along the normal from the sketch plane, to the face at
+ * `face` (its signed distance from the sketch plane), less `offset` from
+ * the face (positive stops short of it, toward the start; negative passes
+ * it). The extrusion runs whichever way the face lies from the start, so a
+ * face on the sketch plane, or a start beyond the face, is fine. Null when
+ * the start lies on the face, or the offset carries the end onto or past
+ * the start. With no start offset it is exactly {@link toFaceOffsetEnd}.
+ * The exact build and the extrude card both decide with this.
+ */
+export function toFaceExtent(
+  face: number,
+  start: number,
+  offset: number
+): number | null {
+  if (![face, start, offset].every(Number.isFinite)) return null;
+  // Scaled by the planes only, as `toFaceOffsetEnd` scales by the face, so
+  // with no start offset the two rules agree exactly, offset or not.
+  const tolerance = 1e-9 * Math.max(1, Math.abs(face), Math.abs(start));
+  const reach = face - start;
+  if (!(Math.abs(reach) > tolerance)) return null;
+  const direction = Math.sign(reach);
+  const span = reach - direction * offset;
+  return Math.sign(span) === direction && Math.abs(span) > tolerance
+    ? span
+    : null;
+}
+
+/** The refusal {@link toFaceExtent} stands for, in document words. */
+export function toFaceExtentRefusal(
+  face: number,
+  start: number,
+  offset: number
+): string {
+  if (start === 0) return toFaceOffsetReachesSketchMessage(face, offset);
+  const reach = Math.round(Math.abs(face - start) * 1e6) / 1e6;
+  return reach === 0
+    ? `Start offset ${start} reaches the face, so nothing is left to extrude; move the start off the face.`
+    : `Offset from face ${offset} reaches where the extrusion starts: the face is only ${reach} from the start (start offset ${start}), so the offset must be less than that.`;
+}
+
+/**
+ * F01 (v121): the signed distance from the sketch plane to a face parallel
+ * to it, zero when it lies on the sketch plane, or null when it is not
+ * parallel. Unlike {@link toFaceSignedDistance} it keeps a face on the
+ * sketch plane, which a start offset can still reach.
+ */
+export function toFaceParallelHeight(
+  sketch: { origin: ToFacePoint; normal: ToFacePoint },
+  face: { point: ToFacePoint; normal: ToFacePoint }
+): number | null {
+  const alignment =
+    face.normal.x * sketch.normal.x +
+    face.normal.y * sketch.normal.y +
+    face.normal.z * sketch.normal.z;
+  if (
+    !Number.isFinite(alignment) ||
+    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
+      TO_FACE_PARALLEL_SINE_LIMIT
+  ) {
+    return null;
+  }
+  const height =
+    (face.point.x - sketch.origin.x) * sketch.normal.x +
+    (face.point.y - sketch.origin.y) * sketch.normal.y +
+    (face.point.z - sketch.origin.z) * sketch.normal.z;
+  if (!Number.isFinite(height)) return null;
+  return Math.abs(height) > 1e-9 * Math.max(1, Math.abs(height)) ? height : 0;
+}
+
+/**
+ * F01 (v113): where an extrude to a face ends once its offset is applied,
+ * as a signed distance from the sketch plane along its normal, or null when
+ * the offset reaches or crosses the sketch plane (nothing, or the wrong
+ * side, would be extruded). `faceDistance` is the signed distance to the
+ * face ({@link toFaceSignedDistance}); a positive `offset` stops that far
+ * short of it, a negative one carries the end that far past. The exact
+ * build and the extrude card both decide with this.
+ */
+export function toFaceOffsetEnd(
+  faceDistance: number,
+  offset: number
+): number | null {
+  if (!Number.isFinite(faceDistance) || !Number.isFinite(offset)) return null;
+  const end = faceDistance - Math.sign(faceDistance) * offset;
+  return Math.sign(end) === Math.sign(faceDistance) &&
+    Math.abs(end) > 1e-9 * Math.max(1, Math.abs(faceDistance))
+    ? end
+    : null;
+}
+
+/** The refusal {@link toFaceOffsetEnd} stands for, in document words. */
+export function toFaceOffsetReachesSketchMessage(
+  faceDistance: number,
+  offset: number
+): string {
+  const reach = Math.abs(faceDistance);
+  return `Offset from face ${offset} reaches the sketch plane: the face is only ${Math.round(reach * 1e6) / 1e6} away, so the offset must be less than that.`;
 }
 
 export function extrudeSketch(
@@ -2789,9 +2948,17 @@ export function extrudeSketch(
       ...(input.endCondition === 'to-face'
         ? {
             endCondition: 'to-face' as const,
-            toFace: deepClone(input.toFace!)
+            toFace: deepClone(input.toFace!),
+            // A literal zero ends on the face, the absent default.
+            ...(isZeroParam(input.toFaceOffset)
+              ? {}
+              : { toFaceOffset: input.toFaceOffset! })
           }
         : {}),
+      // A literal zero starts on the sketch plane, the absent default.
+      ...(isZeroParam(input.startOffset)
+        ? {}
+        : { startOffset: input.startOffset! }),
       // A literal zero is the absent default, so it is never written.
       ...(isZeroParam(input.draftAngleDeg)
         ? {}
@@ -3553,6 +3720,9 @@ export function datumPlaneDependents(
       uses = datumCsysPlaneSources(data.definition).some(usesDatum);
     } else if (data.featureKind === 'mirror' || data.featureKind === 'split') {
       uses = usesDatum(data.plane);
+    } else if (data.featureKind === 'pattern' && data.mirrorPlane) {
+      // M02 (schema v119): a mirror pattern's plane.
+      uses = usesDatum(data.mirrorPlane);
     } else if (data.featureKind === 'sketch') {
       const planeRef = findSketch(document, data.sketchId)?.planeRef;
       uses =
@@ -4632,10 +4802,81 @@ export function patternBody(
               referencePointId: input.points.referencePointId
             }
           }
-        : {})
+        : {}),
+      ...(input.path ? { path: patternPathOnly(input.path) } : {}),
+      ...(input.mirrorPlane
+        ? { mirrorPlane: deepClone(input.mirrorPlane) }
+        : {}),
+      ...(input.spacingMode ? { spacingMode: input.spacingMode } : {})
     },
     suppliedIds(input.ids)
   );
+}
+
+/** A pattern path as stored: its own fields, the optional ones when set. */
+function patternPathOnly(path: PatternPath): PatternPath {
+  return {
+    sketchId: path.sketchId,
+    entityIds: [...path.entityIds],
+    ...(path.reversed ? { reversed: true } : {}),
+    ...(path.orientation ? { orientation: path.orientation } : {})
+  };
+}
+
+/**
+ * M02 (schema v112): a path pattern's sketch is an earlier one, and each of
+ * its curves is a line or arc of that sketch. Whether they join in one
+ * chain long enough for the copies is the build's to read, at the
+ * pattern's history position.
+ */
+function validatePatternPath(
+  document: ProjectDocument,
+  path: PatternPath,
+  ownFeatureId: FeatureId | null
+): void {
+  const sketch = findSketch(document, path.sketchId);
+  if (!sketch) {
+    throw new Error('The sketch this pattern runs along is no longer there.');
+  }
+  requireEarlierSketch(document, sketch, ownFeatureId, 'run along');
+  for (const entityId of path.entityIds) {
+    const node = ownEntry(document.nodes, entityId);
+    if (
+      !(sketch.objectIds as readonly string[]).includes(entityId) ||
+      node?.kind !== 'sketch-object' ||
+      (node.data.objectKind !== 'line' && node.data.objectKind !== 'arc')
+    ) {
+      throw new Error(
+        `A curve this pattern runs along is no longer a line or arc of ${sketch.name}.`
+      );
+    }
+  }
+}
+
+/** A pattern reads only a sketch made before it in History. */
+function requireEarlierSketch(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  ownFeatureId: FeatureId | null,
+  verb: string
+): void {
+  const sketchFeature = listFeaturesInOrder(document).find(
+    (feature) =>
+      feature.data.featureKind === 'sketch' &&
+      feature.data.sketchId === sketch.sketchId
+  );
+  const ownIndex =
+    ownFeatureId === null
+      ? document.featureOrder.length
+      : document.featureOrder.indexOf(ownFeatureId);
+  if (
+    !sketchFeature ||
+    document.featureOrder.indexOf(sketchFeature.featureId) >= ownIndex
+  ) {
+    throw new Error(
+      `${sketch.name} comes later in History; a pattern can only ${verb} an earlier sketch.`
+    );
+  }
 }
 
 /**
@@ -4652,23 +4893,7 @@ function validatePatternPoints(
   if (!sketch) {
     throw new Error('The sketch this pattern stands on is no longer there.');
   }
-  const sketchFeature = listFeaturesInOrder(document).find(
-    (feature) =>
-      feature.data.featureKind === 'sketch' &&
-      feature.data.sketchId === points.sketchId
-  );
-  const ownIndex =
-    ownFeatureId === null
-      ? document.featureOrder.length
-      : document.featureOrder.indexOf(ownFeatureId);
-  if (
-    !sketchFeature ||
-    document.featureOrder.indexOf(sketchFeature.featureId) >= ownIndex
-  ) {
-    throw new Error(
-      `${sketch.name} comes later in History; a pattern can only stand on an earlier sketch.`
-    );
-  }
+  requireEarlierSketch(document, sketch, ownFeatureId, 'stand on');
   for (const pointId of points.pointIds) {
     const node = ownEntry(document.nodes, pointId);
     if (
@@ -4756,7 +4981,13 @@ export function validatePatternDefinition(
   document: ProjectDocument,
   data: Pick<
     PatternInput,
-    'patternKind' | 'sourceFeatureIds' | 'skippedInstances' | 'points'
+    | 'patternKind'
+    | 'sourceFeatureIds'
+    | 'skippedInstances'
+    | 'points'
+    | 'path'
+    | 'mirrorPlane'
+    | 'spacingMode'
   >,
   ownFeatureId: FeatureId | null
 ): void {
@@ -4768,6 +4999,16 @@ export function validatePatternDefinition(
   const pointsProblem = patternPointsProblem(data);
   if (pointsProblem) throw new Error(pointsProblem);
   if (data.points) validatePatternPoints(document, data.points, ownFeatureId);
+  const pathProblem = patternPathProblem(data);
+  if (pathProblem) throw new Error(pathProblem);
+  if (data.path) validatePatternPath(document, data.path, ownFeatureId);
+  const spacingModeProblem = patternSpacingModeProblem(data);
+  if (spacingModeProblem) throw new Error(spacingModeProblem);
+  const mirrorProblem = patternMirrorProblem(data);
+  if (mirrorProblem) throw new Error(mirrorProblem);
+  if (data.mirrorPlane) {
+    validateModelingPlane(document, data.mirrorPlane, ownFeatureId);
+  }
   const sources = data.sourceFeatureIds;
   if (sources === undefined) return;
   if (!Array.isArray(sources) || sources.length === 0) {
@@ -5592,6 +5833,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'endCondition',
     'throughAllSide',
     'toFace',
+    'toFaceOffset',
+    'startOffset',
     'draftAngleDeg'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
@@ -5748,7 +5991,10 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'axisRef',
     'sourceFeatureIds',
     'skippedInstances',
-    'points'
+    'points',
+    'path',
+    'mirrorPlane',
+    'spacingMode'
   ],
   gear: [
     'gearType',
@@ -5818,7 +6064,14 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
 const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   Record<FeatureKind, readonly string[]>
 > = {
-  extrude: ['endCondition', 'throughAllSide', 'toFace', 'draftAngleDeg'],
+  extrude: [
+    'endCondition',
+    'throughAllSide',
+    'toFace',
+    'toFaceOffset',
+    'startOffset',
+    'draftAngleDeg'
+  ],
   // M16: each falls back to its documented default (positive side, a
   // K-factor value, a rectangular relief, no preset, the largest region).
   'sheet-metal': [
@@ -5838,7 +6091,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // R01: clearing a datum axis returns to the sketch or world axis.
   // U09: clearing a revolve's region returns it to the first-object profile.
   revolve: ['axisRef', 'profile'],
-  pattern: ['axisRef', 'sourceFeatureIds', 'skippedInstances'],
+  pattern: ['axisRef', 'sourceFeatureIds', 'skippedInstances', 'spacingMode'],
   transform: ['axisRotation'],
   // M01: clearing a hole's sketch points (schema v64) drills it at its one
   // stored position again; clearing its standard (schema v65) drills its
@@ -6132,25 +6385,8 @@ export function toFaceSignedDistance(
   sketch: { origin: ToFacePoint; normal: ToFacePoint },
   face: { point: ToFacePoint; normal: ToFacePoint }
 ): number | null {
-  const alignment =
-    face.normal.x * sketch.normal.x +
-    face.normal.y * sketch.normal.y +
-    face.normal.z * sketch.normal.z;
-  if (
-    !Number.isFinite(alignment) ||
-    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
-      TO_FACE_PARALLEL_SINE_LIMIT
-  ) {
-    return null;
-  }
-  const distance =
-    (face.point.x - sketch.origin.x) * sketch.normal.x +
-    (face.point.y - sketch.origin.y) * sketch.normal.y +
-    (face.point.z - sketch.origin.z) * sketch.normal.z;
-  return Number.isFinite(distance) &&
-    Math.abs(distance) > 1e-9 * Math.max(1, Math.abs(distance))
-    ? distance
-    : null;
+  const height = toFaceParallelHeight(sketch, face);
+  return height === 0 ? null : height;
 }
 
 /**

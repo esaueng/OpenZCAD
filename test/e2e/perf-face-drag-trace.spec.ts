@@ -768,7 +768,10 @@ test('traces a long native history face drag', async ({ page }) => {
       await traceDrag(page, canvas, handle, 9)
     );
     expect(summary.releaseToFrameMs).not.toBeNull();
-    expect(summary.proxyPresentedFrames).toBeGreaterThan(0);
+    // Exact streaming or a disposable proxy: either must present frames.
+    expect(
+      summary.proxyPresentedFrames + summary.presentedFrames
+    ).toBeGreaterThan(0);
   } finally {
     adapter.dispose();
   }
@@ -847,15 +850,17 @@ test('traces a rounded box top-face drag', async ({ page }) => {
   });
   await expectBodyCount(page, 1);
   const { canvas, handle } = await armPlanarFace(page, { x: 0, y: 0, z: 1 });
-  // A box cap keeps its primitive-height proxy, so this case measures the
-  // proxy frame rate rather than exact previews.
+  // A box cap used to keep its primitive-height proxy; it now streams exact
+  // previews. Either way the drag must present frames.
   const summary = record(
     'rounded box top face (primitive proxy)',
     { features: 2, faces: 26 },
     await traceDrag(page, canvas, handle, 12)
   );
   expect(summary.pointerEvents).toBeGreaterThan(0);
-  expect(summary.proxyPresentedFrames).toBeGreaterThan(0);
+  expect(
+    summary.proxyPresentedFrames + summary.presentedFrames
+  ).toBeGreaterThan(0);
   expect(summary.releaseToFrameMs).not.toBeNull();
 });
 

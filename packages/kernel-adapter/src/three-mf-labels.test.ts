@@ -19,38 +19,53 @@ const MODEL = [
   '</model>'
 ].join('\n');
 
+const GROUPS = [
+  '',
+  '  <basematerials id="4">',
+  '   <base name="#12ABEF" displaycolor="#12ABEF"/>',
+  '   <base name="#A2A6AE" displaycolor="#A2A6AE"/>',
+  '  </basematerials>',
+  '  <m:colorgroup id="5">',
+  '   <m:color color="#12ABEF"/>',
+  '  </m:colorgroup>',
+  '  <m:colorgroup id="6">',
+  '   <m:color color="#A2A6AE"/>',
+  '  </m:colorgroup>'
+].join('\n');
+
 const objectTags = (model: string) =>
   [...model.matchAll(/<object\b[^>]*>/g)].map(([tag]) => tag);
 
 describe('labelThreeMfObjects', () => {
-  it('names every object and colours it through one core basematerials group', () => {
+  it('names every object and colours it through basematerials and one m:colorgroup per colour', () => {
     const model = labelThreeMfObjects(MODEL, [
       { name: 'Plate', color: '#12abef' },
       { name: 'Upper', color: '#a2a6ae' },
       { name: 'Label', color: '#12ABEF' }
     ]);
+    // Objects select their colour's own group, at its only entry.
     expect(objectTags(model)).toEqual([
-      '<object name="Plate" pid="4" pindex="0" id="1" type="model">',
-      '<object name="Upper" pid="4" pindex="1" id="2" type="model">',
-      '<object name="Label" pid="4" pindex="0" id="3" type="model">'
+      '<object name="Plate" pid="5" pindex="0" id="1" type="model">',
+      '<object name="Upper" pid="6" pindex="0" id="2" type="model">',
+      '<object name="Label" pid="5" pindex="0" id="3" type="model">'
     ]);
-    // One base per distinct colour, whatever its case, and the group is
-    // defined before the objects that reference it.
-    expect(model).toContain(
-      '<resources>\n  <basematerials id="4">\n   <base name="#12ABEF" displaycolor="#12ABEF"/>\n   <base name="#A2A6AE" displaycolor="#A2A6AE"/>\n  </basematerials>'
-    );
-    expect(model.indexOf('<basematerials')).toBeLessThan(
+    // One base and one colour group per distinct colour, whatever its
+    // case, all defined before the objects that reference them.
+    expect(model).toContain(GROUPS);
+    expect(model.indexOf('<m:colorgroup')).toBeLessThan(
       model.indexOf('<object')
     );
-    // No extension namespace: this is the core format alone.
-    expect(model).not.toMatch(/xmlns:|requiredextensions|colorgroup/);
-    // The geometry and build are untouched.
-    expect(model.replace(/ name="[^"]*" pid="4" pindex="\d"/g, '')).toBe(
-      MODEL.replace(
-        '<resources>',
-        '<resources>\n  <basematerials id="4">\n   <base name="#12ABEF" displaycolor="#12ABEF"/>\n   <base name="#A2A6AE" displaycolor="#A2A6AE"/>\n  </basematerials>'
-      )
+    // The extension is declared under `m` and not required.
+    expect(model).toContain(
+      '<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" unit="millimeter" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">'
     );
+    expect(model).not.toMatch(/requiredextensions/);
+    // The geometry and build are untouched.
+    expect(
+      model
+        .replace(/ name="[^"]*" pid="\d+" pindex="0"/g, '')
+        .replace(/ xmlns:m="[^"]*"/, '')
+    ).toBe(MODEL.replace('<resources>', `<resources>${GROUPS}`));
   });
 
   it('escapes names for an XML attribute and writes no name for an unnamed body', () => {
@@ -106,6 +121,18 @@ describe('labelThreeMfObjects', () => {
         labels
       )
     ).toThrow(/already assigned materials/);
+    expect(() =>
+      labelThreeMfObjects(
+        MODEL.replace('<resources>', '<resources><m:colorgroup id="9"/>'),
+        labels
+      )
+    ).toThrow(/already assigned materials/);
+    expect(() =>
+      labelThreeMfObjects(
+        MODEL.replace('unit="millimeter"', 'unit="millimeter" xmlns:m="urn:x"'),
+        labels
+      )
+    ).toThrow(/already declared the m: namespace/);
     expect(() =>
       labelThreeMfObjects(MODEL.replace(/<\/?resources>/g, ''), labels)
     ).toThrow(/without <resources>/);

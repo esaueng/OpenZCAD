@@ -47,7 +47,16 @@ export function extrudeEditInitial(feature: FeatureNode): ExtrudeDraftInitial {
         }
       : {}),
     ...(data.endCondition === 'to-face' && data.toFace
-      ? { endCondition: 'to-face' as const, toFace: data.toFace }
+      ? {
+          endCondition: 'to-face' as const,
+          toFace: data.toFace,
+          ...(data.toFaceOffset !== undefined
+            ? { toFaceOffset: data.toFaceOffset }
+            : {})
+        }
+      : {}),
+    ...(data.startOffset !== undefined
+      ? { startOffset: data.startOffset }
       : {}),
     ...(data.draftAngleDeg !== undefined
       ? { draftAngleDeg: data.draftAngleDeg }
@@ -80,6 +89,8 @@ export function extrudeEditData(
     endCondition: _endCondition,
     throughAllSide: _throughAllSide,
     toFace: _toFace,
+    toFaceOffset: _toFaceOffset,
+    startOffset: _startOffset,
     draftAngleDeg: _draftAngleDeg,
     ...kept
   } = stored;
@@ -118,10 +129,25 @@ export function extrudeEditData(
           throughAllSide: value.throughAllSide ?? 'forward'
         }
       : toFace
-        ? { endCondition: 'to-face' as const, toFace: value.toFace! }
+        ? {
+            endCondition: 'to-face' as const,
+            toFace: value.toFace!,
+            // A stored zero keeps the form it was written in, like draft.
+            ...(value.toFaceOffset !== undefined
+              ? { toFaceOffset: value.toFaceOffset }
+              : storedZero(stored.toFaceOffset)
+                ? { toFaceOffset: stored.toFaceOffset! }
+                : {})
+          }
         : stored.endCondition === 'blind'
           ? { endCondition: 'blind' as const }
           : {}),
+    // A stored zero keeps its form unless the edit went through all.
+    ...(value.startOffset !== undefined
+      ? { startOffset: value.startOffset }
+      : !throughAll && storedZero(stored.startOffset)
+        ? { startOffset: stored.startOffset! }
+        : {}),
     ...(value.draftAngleDeg !== undefined
       ? { draftAngleDeg: value.draftAngleDeg }
       : storedZero(stored.draftAngleDeg)
@@ -158,7 +184,14 @@ export function extrudeEditCommand(
   // the others (a through-all side on a blind extrude). A target goes with
   // New body itself: the update drops it when the operation is written.
   const clearData = (
-    ['endCondition', 'throughAllSide', 'toFace', 'draftAngleDeg'] as const
+    [
+      'endCondition',
+      'throughAllSide',
+      'toFace',
+      'toFaceOffset',
+      'startOffset',
+      'draftAngleDeg'
+    ] as const
   ).filter((key) => key in feature.data && !(key in data));
   return commandFactories.updateFeature(
     {
@@ -232,7 +265,10 @@ export function extrudeEditTargets(
                 ...(feature.data.throughAllSide !== undefined
                   ? ['throughAllSide']
                   : []),
-                ...(feature.data.toFace !== undefined ? ['toFace'] : [])
+                ...(feature.data.toFace !== undefined ? ['toFace'] : []),
+                ...(feature.data.toFaceOffset !== undefined
+                  ? ['toFaceOffset']
+                  : [])
               ]
             }
           : {})

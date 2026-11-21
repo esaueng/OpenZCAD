@@ -253,6 +253,45 @@ test('a hover on an edge snaps to a named point', async ({ page }) => {
   await expect(glyph).toHaveText(/Endpoint|Midpoint|Center/);
 });
 
+test('a Distance pick records the point its snap glyph names', async ({
+  page
+}) => {
+  // QA15-2E-01: the glyph read "Endpoint" while the pick was recorded as the
+  // edge's midpoint, so a corner-to-corner distance came out 57.31 for 56.
+  // Whatever kind the glyph names, the first pick's label must name the same.
+  // Where the located point lands decides which kind that is; the
+  // deterministic Endpoint regression is `test/measure-snap-pick.test.ts`.
+  await createBox(page, 'Measure Snap Pick');
+
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await page
+    .getByLabel('Measurement workbench')
+    .getByRole('button', { name: 'Distance' })
+    .click();
+  await setSelectionFilter(page, 'Edge');
+
+  const edge = await locateEdge(page);
+  await page.mouse.move(edge.x - 60, edge.y - 60);
+  await page.mouse.move(edge.x, edge.y);
+  const glyph = page.locator('.snap-glyph');
+  await expect(glyph).toBeVisible();
+  const kind = (await glyph.textContent())?.trim();
+  const named: Record<string, RegExp> = {
+    Endpoint: / (start|end) selected · pick the second target/,
+    Midpoint: / midpoint selected · pick the second target/,
+    Center: / center selected · pick the second target/
+  };
+  expect(Object.keys(named)).toContain(kind);
+
+  await page.mouse.click(edge.x, edge.y);
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace status' })
+      .getByText(named[kind!]!)
+  ).toBeVisible();
+});
+
 test(
   'a measurement survives a reload',
   { tag: '@ci-smoke' },

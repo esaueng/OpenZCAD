@@ -1,5 +1,7 @@
 import {
   documentNodesWithHistory,
+  patternSpacingModeProblem,
+  type PatternKind,
   type ProjectDocument,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -196,6 +198,34 @@ function hasDrawingViewConfiguration(drawings: unknown): boolean {
 }
 
 /**
+ * AS03 exploded drawing views (schema v114): a drawing view's `exploded`.
+ * An older reader would draw the view's bodies where they were modelled.
+ */
+export const DRAWING_EXPLODED_VIEW_SCHEMA_VERSION = 114;
+
+export function assertDrawingExplodedViewSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    DRAWING_EXPLODED_VIEW_SCHEMA_VERSION,
+    'Exploded drawing views'
+  );
+}
+
+/** AS03: any view of a drawing section is drawn exploded. */
+function hasDrawingExplodedView(drawings: unknown): boolean {
+  return (
+    record(drawings) &&
+    Array.isArray(drawings.sheets) &&
+    drawings.sheets.some(
+      (sheet) =>
+        record(sheet) &&
+        Array.isArray(sheet.views) &&
+        sheet.views.some((view) => record(view) && view.exploded !== undefined)
+    )
+  );
+}
+
+/**
  * F06 per-instance configurations (schema v90): an assembly component's
  * `configurationId`. An older reader would show the component as the
  * active row.
@@ -259,6 +289,20 @@ export function assertPatternContentSchema(
     );
   if (data.patternKind === 'points' || data.points !== undefined)
     assertMinimumProjectSchema(version, 63, 'Patterns on sketch points');
+  if (data.patternKind === 'path' || data.path !== undefined)
+    assertMinimumProjectSchema(version, 112, 'Patterns along a sketch path');
+  if (data.patternKind === 'mirror' || data.mirrorPlane !== undefined)
+    assertMinimumProjectSchema(version, 119, 'Mirror patterns');
+  if (data.spacingMode !== undefined) {
+    assertMinimumProjectSchema(version, 120, 'Total-length patterns');
+    // Stored only on a linear pattern, as creating and editing one keep it
+    // (review): another kind would build without it and read as with it.
+    const problem = patternSpacingModeProblem({
+      patternKind: data.patternKind as PatternKind,
+      spacingMode: data.spacingMode
+    });
+    if (problem) throw new Error(problem);
+  }
 }
 
 /**
@@ -519,6 +563,31 @@ export function hasDrawingBom(value: unknown): boolean {
       typeof entry.annotationId === 'string' &&
       (entry.kind === 'bom-table' || entry.kind === 'balloon')
     )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** M01 hole tables on drawing sheets (schema v117). */
+export function assertDrawingHoleTableSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 117, 'Hole tables');
+}
+
+/** Whether `value` holds an M01 hole table. */
+export function hasDrawingHoleTable(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.annotationId === 'string' && entry.kind === 'hole-table')
       return true;
     pending.push(...Object.values(entry));
   }
@@ -886,7 +955,8 @@ export function assertDocumentContentCommandSchema(
       hasDatumReferenceConstructorKind(command.payload)
     )
       assertDatumReferenceConstructorSchema(document.schemaVersion);
-    if (command.kind === 'feature.wrap') assertWrapSchema(document.schemaVersion);
+    if (command.kind === 'feature.wrap')
+      assertWrapSchema(document.schemaVersion);
     if (command.kind === 'feature.standard-part')
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
@@ -904,6 +974,19 @@ export function assertDocumentContentCommandSchema(
       command.payload.configurationId !== undefined
     )
       assertDrawingViewConfigurationSchema(document.schemaVersion);
+    if (
+      (command.kind === 'drawing.view.update' &&
+        record(command.payload) &&
+        command.payload.exploded !== undefined) ||
+      (command.kind === 'drawing.view.add' &&
+        record(command.payload) &&
+        record(command.payload.view) &&
+        command.payload.view.exploded !== undefined) ||
+      (command.kind === 'drawing.sheet.add' &&
+        record(command.payload) &&
+        hasDrawingExplodedView({ sheets: [command.payload.sheet] }))
+    )
+      assertDrawingExplodedViewSchema(document.schemaVersion);
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
@@ -970,6 +1053,12 @@ export function assertDocumentContentCommandSchema(
       hasDrawingBom(command.payload)
     )
       assertDrawingBomSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
+      hasDrawingHoleTable(command.payload)
+    )
+      assertDrawingHoleTableSchema(document.schemaVersion);
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
@@ -1102,6 +1191,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertConfigurationSchema(document.schemaVersion);
   if (hasDrawingViewConfiguration(document.drawings))
     assertDrawingViewConfigurationSchema(document.schemaVersion);
+  if (hasDrawingExplodedView(document.drawings))
+    assertDrawingExplodedViewSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingExplodedView(change.before) ||
+          hasDrawingExplodedView(change.after))
+      )
+        assertDrawingExplodedViewSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
       if (
@@ -1200,6 +1299,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
     assertDrawingBomSchema(document.schemaVersion);
+  if (hasDrawingHoleTable(document.drawings))
+    assertDrawingHoleTableSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingHoleTable(change.before) ||
+          hasDrawingHoleTable(change.after))
+      )
+        assertDrawingHoleTableSchema(document.schemaVersion);
   if (hasDrawingTolerance(document.drawings))
     assertDrawingToleranceSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])

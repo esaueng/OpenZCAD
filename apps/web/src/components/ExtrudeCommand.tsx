@@ -53,6 +53,10 @@ export interface ExtrudeCommandState {
   /** NaN while a field's text does not evaluate. */
   distance: number;
   backDistance: number;
+  /** F01 (v113): the offset from the face (To face only). */
+  faceOffset: number;
+  /** F01 (v121): the start offset along the sketch normal. */
+  startOffset: number;
   draftAngle: number;
   /** Each value as its text holds it (a typed expression as typed). */
   texts: Record<ExtrudeValueId, string>;
@@ -157,6 +161,8 @@ const THROUGH_ALL_SIDES: InPlaceOption['choices'] = [
 const VALUE_LABELS: Record<ExtrudeValueId, string> = {
   distance: 'Distance',
   backDistance: 'Back distance',
+  faceOffset: 'Offset from face',
+  startOffset: 'Start offset',
   draftAngle: 'Draft angle'
 };
 
@@ -171,7 +177,13 @@ export function extrudeChangedInput(
   next: ExtrudeDraft
 ): string | null {
   if (next.toFace !== previous.toFace) return 'Face';
-  for (const valueId of ['distance', 'backDistance', 'draftAngle'] as const) {
+  for (const valueId of [
+    'distance',
+    'backDistance',
+    'faceOffset',
+    'startOffset',
+    'draftAngle'
+  ] as const) {
     if (next[valueId] !== previous[valueId]) return VALUE_LABELS[valueId];
   }
   if (next.choice.operation !== previous.choice.operation) return 'Operation';
@@ -251,10 +263,14 @@ export function ExtrudeCommand({
       symmetric: value.symmetric,
       distance: evaluated(next.distance, 'length'),
       backDistance: evaluated(next.backDistance, 'length'),
+      faceOffset: evaluated(next.faceOffset, 'length'),
+      startOffset: evaluated(next.startOffset, 'length'),
       draftAngle: evaluated(next.draftAngle, 'angle'),
       texts: {
         distance: next.distance,
         backDistance: next.backDistance,
+        faceOffset: next.faceOffset,
+        startOffset: next.startOffset,
         draftAngle: next.draftAngle
       }
     };
@@ -307,7 +323,11 @@ export function ExtrudeCommand({
     change({
       toFace: target,
       endCondition: 'to-face',
-      ...(reach !== null ? { distance: toFaceReachText(reach) } : {})
+      // A face on the sketch plane has no reach to keep: the typed
+      // distance stays for switching back.
+      ...(reach !== null && reach !== 0
+        ? { distance: toFaceReachText(reach) }
+        : {})
     });
   };
   const faceReach =
@@ -361,6 +381,10 @@ export function ExtrudeCommand({
       // A back distance is one-sided: it ends Symmetric, as the card's
       // field (shown only off Symmetric) never stood beside it.
       change({ backDistance: text, symmetric: false });
+    } else if (valueId === 'faceOffset') {
+      change({ faceOffset: text });
+    } else if (valueId === 'startOffset') {
+      change({ startOffset: text });
     } else {
       change({ draftAngle: text });
     }

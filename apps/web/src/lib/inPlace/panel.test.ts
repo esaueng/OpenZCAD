@@ -223,7 +223,14 @@ describe('in-place Options panel', () => {
     const rows = inPlacePanelSections(
       spec,
       state,
-      new Set(['planeOX', 'planeOY', 'planeOZ', 'planeNX', 'planeNY', 'planeNZ'])
+      new Set([
+        'planeOX',
+        'planeOY',
+        'planeOZ',
+        'planeNX',
+        'planeNY',
+        'planeNZ'
+      ])
     ).flatMap((section) => section.rows);
     expect(rows.filter((row) => row.kind === 'vector')).toEqual([
       {
@@ -367,22 +374,33 @@ describe('gear sizing', () => {
     expect(chips).toEqual(['teeth', 'circularPitch']);
   });
 
-  it('sizes the chips’ circle by the module the sizing gives', () => {
+  it('sizes the teeth arrow and the pitch chip by the module the sizing gives', () => {
     const spec = IN_PLACE_TOOL_SPECS.gear;
-    const reach = (
+    const sized = (
       options: Record<string, string>,
       values: Record<string, number>
     ) => {
-      const chip = spec
-        .handles(ON_XY, values, CTX, options)
-        .find((handle) => handle.kind === 'chip' && handle.valueId === 'teeth');
-      return chip?.kind === 'chip'
-        ? Math.hypot(chip.params.anchor.x, chip.params.anchor.y)
-        : NaN;
+      const handles = spec.handles(ON_XY, values, CTX, options);
+      const teeth = handles.find((handle) => handle.valueId === 'teeth');
+      const pitch = handles.find(
+        (handle) => handle.kind === 'chip' && handle.valueId !== 'teeth'
+      );
+      return {
+        scale: teeth?.kind === 'linear' ? (teeth.params.scale ?? NaN) : NaN,
+        reach:
+          pitch?.kind === 'chip'
+            ? Math.hypot(pitch.params.anchor.x, pitch.params.anchor.y)
+            : NaN
+      };
     };
-    expect(
-      reach({ sizing: 'diametral-pitch' }, { teeth: 20, diametralPitch: 12.7 })
-    ).toBeCloseTo(reach({}, { teeth: 20, module: 2 }));
+    const diametral = sized(
+      { sizing: 'diametral-pitch' },
+      { teeth: 20, diametralPitch: 12.7 }
+    );
+    const module = sized({}, { teeth: 20, module: 2 });
+    expect(module.scale).toBe(1);
+    expect(diametral.scale).toBeCloseTo(module.scale);
+    expect(diametral.reach).toBeCloseTo(module.reach);
   });
 
   it('sums up what the sizing comes to', () => {

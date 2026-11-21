@@ -53,6 +53,11 @@ export {
   createAllEdgesFilletProposal,
   parseAllEdgesFilletRequest
 } from './all-edge-fillets';
+export {
+  createSelectedFaceHoleProposal,
+  parseSelectedFaceHoleRequest,
+  type SelectedFaceHoleRequest
+} from './selected-face-hole';
 import {
   createEditCandidateCatalog,
   type EditCandidateCatalog
@@ -82,11 +87,14 @@ import {
   type CadDrawingOperation
 } from './drawing-annotations';
 export {
+  AUTO_DIMENSION_KINDS,
   DRAWING_OPERATION_KINDS,
   MAX_PROPOSED_DRAWING_ANNOTATIONS,
   drawingSpecEdgeRefs,
   isDrawingOperation,
   type CadAddDrawingAnnotationsOperation,
+  type CadAutoDimensionDrawingOperation,
+  type CadAutoDimensionKind,
   type CadDigestDrawing,
   type CadDigestDrawingAnnotation,
   type CadDigestDrawingAudit,
@@ -523,6 +531,27 @@ export type CadPatchOperation =
       openingFaceHashes: number[];
       openingFaceReferences: FaceTopologyReferenceV5[];
       thickness: ParamValue;
+    }
+  | {
+      /**
+       * F03: one simple hole drilled into a planar face of an existing body,
+       * built by the manual Hole command (`feature.hole`), which consumes the
+       * body. `position` is measured from the face's area centroid along
+       * the Hole tool's U and V (`frameFromFace`: u = normalize(r × n),
+       * v = n × u, r = world Z, or world X when |n.z| ≥ 0.9). That is not
+       * the digest's `attachmentFrame`, whose axes differ. `depth` is the
+       * blind depth; a through hole carries null.
+       */
+      kind: 'add_hole';
+      name: string;
+      localId?: LocalBodyId;
+      targetBodyId: BodyRef;
+      faceHash: number;
+      faceReference: FaceTopologyReferenceV5;
+      diameter: ParamValue;
+      depthMode: 'blind' | 'through';
+      depth?: ParamValue | null;
+      position: { u: ParamValue; v: ParamValue };
     }
   | {
       kind: 'add_solid_offset';
@@ -2618,6 +2647,7 @@ export const AI_CAD_OPERATION_CAPABILITIES = {
   add_multi_profile_extrude: { enabled: true, reason: null },
   add_mirror: { enabled: true, reason: null },
   add_shell: { enabled: true, reason: null },
+  add_hole: { enabled: true, reason: null },
   add_solid_offset: { enabled: true, reason: null },
   add_datum_plane: { enabled: true, reason: null },
   add_datum_plane_v2: { enabled: true, reason: null },
@@ -3152,6 +3182,47 @@ export const CAD_PATCH_JSON_SCHEMA = {
               'openingFaceHashes',
               'openingFaceReferences',
               'thickness'
+            ]
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            description:
+              'Drill one simple hole into one referenced planar face of an existing body. The drilled body replaces the target.',
+            properties: {
+              kind: { type: 'string', const: 'add_hole' },
+              name: { type: 'string' },
+              localId: localIdSchema,
+              targetBodyId: existingBodyRefSchema,
+              faceHash: { type: 'integer', minimum: 1 },
+              faceReference: faceReferenceSchema,
+              diameter: scalarSchema,
+              depthMode: { type: 'string', enum: ['blind', 'through'] },
+              depth: {
+                ...nullableScalarSchema,
+                description:
+                  'Blind depth along the face normal into the body; null for a through hole.'
+              },
+              position: {
+                type: 'object',
+                additionalProperties: false,
+                description:
+                  "Hole axis offset on the entry face, in the Hole tool's own face frame, NOT attachmentFrame: with n the outward face normal and r = world Z (or world X when |n.z| >= 0.9), the u axis is normalize(r × n) and the v axis is n × u. {u: 0, v: 0} is the face's area centroid, the middle of the face. Use {u: 0, v: 0} unless the user gives an offset.",
+                properties: { u: scalarSchema, v: scalarSchema },
+                required: ['u', 'v']
+              }
+            },
+            required: [
+              'kind',
+              'name',
+              'localId',
+              'targetBodyId',
+              'faceHash',
+              'faceReference',
+              'diameter',
+              'depthMode',
+              'depth',
+              'position'
             ]
           },
           {
@@ -4670,6 +4741,7 @@ export function parseCadPatchProposal(
         break;
       case 'add_drawing_annotations':
       case 'remove_drawing_annotations':
+      case 'auto_dimension_drawing':
         parseDrawingOperation(operation);
         break;
       case 'rename_feature':
@@ -5222,6 +5294,41 @@ export function parseCadPatchProposal(
         declareBodyLocalId(operation, declared, declaredBodies);
         break;
       }
+      case 'add_hole': {
+        const position = operation.position as
+          Record<string, unknown> | null | undefined;
+        const blind = operation.depthMode === 'blind';
+        if (
+          typeof operation.name !== 'string' ||
+          typeof operation.targetBodyId !== 'string' ||
+          !Number.isSafeInteger(operation.faceHash) ||
+          Number(operation.faceHash) <= 0 ||
+          !isFaceReference(operation.faceReference) ||
+          operation.faceReference.currentHash !== operation.faceHash ||
+          !isScalar(operation.diameter) ||
+          (operation.depthMode !== 'blind' &&
+            operation.depthMode !== 'through') ||
+          // A blind hole needs its depth; a through hole takes none, so a
+          // stray depth cannot read as a request the command ignores.
+          (blind
+            ? !isScalar(operation.depth)
+            : operation.depth !== null && operation.depth !== undefined) ||
+          !position ||
+          typeof position !== 'object' ||
+          !isScalar(position.u) ||
+          !isScalar(position.v)
+        ) {
+          throw new Error('Invalid add_hole operation.');
+        }
+        requireBodyRef(
+          operation.targetBodyId,
+          declaredBodies,
+          'add_hole targetBodyId'
+        );
+        assertExistingTopologyBody(operation.targetBodyId, 'add_hole');
+        declareBodyLocalId(operation, declared, declaredBodies);
+        break;
+      }
       case 'add_solid_offset':
         if (
           typeof operation.name !== 'string' ||
@@ -5519,6 +5626,13 @@ export function parseCadPatchProposal(
     );
   if (new Set(drawingOperations.map((op) => op.sheetId)).size > 1)
     throw new Error('A drawing proposal edits one sheet.');
+  if (
+    drawingOperations.some((op) => op.kind === 'auto_dimension_drawing') &&
+    drawingOperations.length > 1
+  )
+    throw new Error(
+      'An auto_dimension_drawing request is proposed alone: the app plans every dimension it adds.'
+    );
   return digest
     ? validateCadPatchProposalAgainstDigest(proposal, digest)
     : proposal;
@@ -6545,6 +6659,23 @@ export function validateCadPatchProposalAgainstDigest(
           )
         );
         break;
+      case 'add_hole': {
+        // The Hole tool drills only flat faces; the digest's exact snapshot
+        // is the proof, never the provider's word.
+        const face = exactDigestFace(
+          digest,
+          operation.targetBodyId,
+          operation.faceHash,
+          operation.faceReference,
+          operation.kind
+        );
+        if (face.snapshot?.surfaceType !== 'plane' || !face.snapshot.normal) {
+          throw new Error(
+            'add_hole must drill one current planar digest face; the Hole tool drills only flat faces.'
+          );
+        }
+        break;
+      }
       default:
         break;
     }
@@ -6613,6 +6744,10 @@ export function describeCadPatchOperation(
       return `Mirror body ${operation.targetBodyId} as ${operation.name}`;
     case 'add_shell':
       return `Shell body ${operation.targetBodyId} through ${operation.openingFaceHashes.length} face${operation.openingFaceHashes.length === 1 ? '' : 's'} at ${String(operation.thickness)}`;
+    case 'add_hole':
+      return operation.depthMode === 'through'
+        ? `Drill a ${String(operation.diameter)} through hole in ${operation.targetBodyId}`
+        : `Drill a ${String(operation.diameter)} hole ${String(operation.depth)} deep in ${operation.targetBodyId}`;
     case 'add_solid_offset':
       return `Offset body ${operation.targetBodyId} outward by ${String(operation.distance)}`;
     case 'add_datum_plane':
@@ -6651,6 +6786,7 @@ export function describeCadPatchOperation(
       return `Create ${operation.patternKind} pattern of ${operation.targetBodyId}`;
     case 'add_drawing_annotations':
     case 'remove_drawing_annotations':
+    case 'auto_dimension_drawing':
       return describeDrawingOperation(operation);
   }
 }

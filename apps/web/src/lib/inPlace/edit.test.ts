@@ -1322,6 +1322,180 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(update).not.toHaveProperty('clearData');
   });
 
+  it('M02 path pattern: its curves reopen as picks and write back unchanged', () => {
+    const SKETCH_P = 'sketch_path' as SketchId;
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'path',
+      count: 3,
+      axis: 'x',
+      spacing: 25,
+      angleDeg: 360,
+      path: {
+        sketchId: SKETCH_P,
+        entityIds: ['l_b', 'l_a'],
+        reversed: true,
+        orientation: 'tangent'
+      },
+      skippedInstances: ['2']
+    };
+    const node = feature(data, 'body_p' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('path-pattern');
+    expect(armed.seed.slots.path).toEqual([
+      { sketchId: SKETCH_P, entityId: 'l_b' },
+      { sketchId: SKETCH_P, entityId: 'l_a' }
+    ]);
+    expect(armed.seed.options).toMatchObject({ skip: '2', orient: 'tangent' });
+    expect(armed.seed.values).toMatchObject({ count: 3, spacing: 25 });
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const basis = {
+      origin: { x: 0, y: 0, z: 0 },
+      u: { x: 1, y: 0, z: 0 },
+      v: { x: 0, y: 1, z: 0 },
+      normal: { x: 0, y: 0, z: 1 }
+    };
+    const request = spec.request(
+      { ...armed.seed.slots, axis: null, refs: [], image: null },
+      { count: 3, spacing: 25 },
+      armed.seed.options,
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data,
+        // No body box is published here, so the start the edit stored is
+        // the one the tool keeps.
+        bodyBounds: () => ({
+          min: { x: 0, y: 0, z: 0 },
+          max: { x: 1, y: 1, z: 1 }
+        }),
+        sketchPath: (_sketchId, entityIds) => ({
+          basis,
+          curves: entityIds.map((id) => ({
+            kind: 'line' as const,
+            id,
+            start: id === 'l_a' ? { x: 0, y: 0 } : { x: 100, y: 0 },
+            end: id === 'l_a' ? { x: 100, y: 0 } : { x: 100, y: 100 }
+          }))
+        })
+      },
+      { count: 3, spacing: 25 }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      patternKind: 'path',
+      count: 3,
+      spacing: 25,
+      path: data.path,
+      skippedInstances: ['2']
+    });
+    expect(update).not.toHaveProperty('clearData');
+  });
+
+  it('M02 mirror pattern: its plane reopens typed and writes back unchanged', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'mirror',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      angleDeg: 360,
+      mirrorPlane: {
+        // An expression, and a number written otherwise than a number
+        // prints: both come back as written (review).
+        origin: { x: 'half', y: '50.0', z: 0 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    };
+    const node = feature(data, 'body_m' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('mirror-pattern');
+    expect(armed.seed.options.planeMode).toBe('typed');
+    expect(armed.seed.values).toMatchObject({ planeNX: 1 });
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const values = { ...armed.seed.values, planeOX: 'half', planeOY: '50.0' };
+    const request = spec.request(
+      { ...armed.seed.slots, axis: null, refs: [], image: null },
+      values,
+      armed.seed.options,
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data
+      },
+      { ...armed.seed.values, planeOX: 50, planeOY: 50 }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      patternKind: 'mirror',
+      mirrorPlane: data.mirrorPlane
+    });
+    expect(update).not.toHaveProperty('clearData');
+  });
+
+  it('M02 total-length pattern: reopens as Total and writes back unchanged, or clears', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 4,
+      axis: 'x',
+      spacing: 60,
+      angleDeg: 360,
+      spacingMode: 'total'
+    };
+    const node = feature(data, 'body_t' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('linear-pattern');
+    expect(armed.seed.options.extent).toBe('total');
+    expect(armed.seed.values).toMatchObject({ total: 60, count: 4 });
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const ctx = {
+      sketchViews: [],
+      datumAxes: undefined,
+      datumLabel: () => 'Axis',
+      saved: data
+    };
+    const slots = { ...armed.seed.slots, axis: null, refs: [], image: null };
+    const request = spec.request(
+      slots,
+      armed.seed.values,
+      armed.seed.options,
+      ctx,
+      armed.seed.values
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({ spacing: 60, spacingMode: 'total' });
+    expect(update).not.toHaveProperty('clearData');
+    // Switched to Between copies, the mode is cleared.
+    const between = spec.request(
+      slots,
+      { ...armed.seed.values, spacing: 20 },
+      { ...armed.seed.options, extent: 'spacing' },
+      ctx,
+      { ...armed.seed.values, spacing: 20 }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        between
+      )
+    ).toMatchObject({ data: { spacing: 20 }, clearData: ['spacingMode'] });
+  });
+
   it('loft: a stored apex opens as a point, each coordinate editable', () => {
     const data: FeatureData = {
       featureKind: 'loft',
@@ -2017,6 +2191,14 @@ describe('inPlaceEditSourceSketchIds', () => {
       inPlaceEditSourceSketchIds({
         featureKind: 'hole',
         points: { sketchId: SKETCH, pointIds: ['a'] }
+      } as unknown as FeatureData)
+    ).toEqual([SKETCH]);
+    // M02: a pattern along a path shows its sketch too.
+    expect(
+      inPlaceEditSourceSketchIds({
+        featureKind: 'pattern',
+        patternKind: 'path',
+        path: { sketchId: SKETCH, entityIds: ['a'] }
       } as unknown as FeatureData)
     ).toEqual([SKETCH]);
     // M02: a pattern on sketch points shows its sketch, hidden or not.
