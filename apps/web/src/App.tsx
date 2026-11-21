@@ -13023,12 +13023,12 @@ export function App() {
     }
     const feature = faceProducingFeature(shownDocument, face);
     const problem = !feature
-      ? 'Click a face a hole, boss, cut, fillet, chamfer or wrap made.'
+      ? 'Click a face a hole, boss, cut, fillet, chamfer, wrap or rib made.'
       : patternSourceProblem(feature.data, feature.name);
     if (!feature || problem) {
       setStatus(
         problem ??
-          'Click a face a hole, boss, cut, fillet, chamfer or wrap made.'
+          'Click a face a hole, boss, cut, fillet, chamfer, wrap or rib made.'
       );
       return null;
     }
