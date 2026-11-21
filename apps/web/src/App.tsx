@@ -20258,9 +20258,10 @@ export function App() {
 
   /**
    * One export, reported in the activity pill from the kernel call to the
-   * archive. `produce` builds the file; the save prompt and the archive are
-   * shared. Cancel aborts whichever of the three is running; a save prompt
-   * the user dismisses ends the run quietly, because that is a cancel too.
+   * saved file. `produce` builds the file; the save prompt is shared. Cancel
+   * aborts whichever step is running; a save prompt the user dismisses ends
+   * the run quietly, because that is a cancel too. An export is a download
+   * only: no copy is uploaded to the project's cloud files.
    */
   async function runExportJob(input: {
     fileName: string;
@@ -20272,11 +20273,6 @@ export function App() {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
     }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
-    /**
-     * Keeps a copy in the project's export archive; on by default. A slicer
-     * hand-off (L09) is local only and keeps none.
-     */
-    archive?: boolean;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
   }) {
@@ -20290,13 +20286,7 @@ export function App() {
     sink.start({
       kind: 'export',
       fileName: input.fileName,
-      phases: [
-        'preparing',
-        'loading-kernel',
-        'building',
-        'writing',
-        'archiving'
-      ]
+      phases: ['preparing', 'loading-kernel', 'building', 'writing']
     });
     setStatus(`Exporting ${input.label}…`);
     const cancelled = () => {
@@ -20330,36 +20320,6 @@ export function App() {
         return;
       }
       trackUsage('export_completed');
-      sink.update({ phase: 'archiving', fraction: null });
-      let archived = false;
-      if (input.archive !== false) {
-        try {
-          await archiveArtifact({
-            fileName: input.fileName,
-            contentType: input.contentType,
-            kind: input.kind,
-            body: produced.body,
-            // Cancel is honoured by the two awaits above; without it here the
-            // archive kept uploading the file the user had just stopped
-            // exporting, and finalized it into the File menu.
-            signal,
-            metadata: input.metadata
-          });
-          archived = true;
-        } catch {
-          // The local download has already completed successfully.
-        }
-      }
-      if (signal.aborted) {
-        // The file is on disk; only the copy was stopped.
-        setStatus(`${input.fileName} was saved; its archive was cancelled.`);
-        sink.finish({
-          tone: 'cancelled',
-          message: 'saved, archive cancelled',
-          landed: true
-        });
-        return;
-      }
       const hiddenNote = exportScopeInfo?.hiddenExcluded
         ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
         : '';
@@ -20369,26 +20329,11 @@ export function App() {
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
           : input.completed
             ? input.completed(bodies)
-            : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
+            : `Exported ${bodies} to ${input.fileName}.`;
       setStatus(
         exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
       );
-      // A missing archive is only worth amber where one was on offer: a
-      // signed-out or local-only session was never going to keep a copy,
-      // and flagging every export there would teach people to dismiss it.
-      const archiveExpected =
-        input.archive !== false &&
-        Boolean(session) &&
-        cloudProjectIds.has(doc.projectId);
-      sink.finish(
-        archived || !archiveExpected
-          ? { tone: 'ok', message: bodies, landed: true }
-          : {
-              tone: 'warning',
-              message: `${bodies} · not archived to the cloud`,
-              landed: true
-            }
-      );
+      sink.finish({ tone: 'ok', message: bodies, landed: true });
     } catch (error) {
       if (signal.aborted) {
         cancelled();
@@ -20638,7 +20583,6 @@ export function App() {
         deflectionMm: deflection,
         ...(rowName ? { configuration: rowName } : {})
       },
-      archive: false,
       completed: (bodies) =>
         slicer
           ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
