@@ -12,21 +12,24 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
-  compositeCommands,
-  cornerRectangleShape
+  centerRectangleShape,
+  compositeCommands
 } from '../../apps/web/src/lib/sketch/composites';
 import { expect, revealModelPanel, stubApi, test } from './openzcad-fixtures';
 
 const READY = { timeout: 30_000 };
 const SAVED = /\bis-(?:local|synced)(?:\s|$)/;
 
-/** A held-line rectangle (0,0)–(20,12) beside a legacy 10×6 rectangle at (40,6). */
+/**
+ * A held-line centre rectangle (0,0)–(20,12), whose diagonals cross at its
+ * centre (10,6), beside a legacy 10×6 rectangle at (40,6).
+ */
 function fixture() {
   const manager = new CommandManager(
     createProjectDocument('Shape targets', toUserId('user_s02d'))
   );
   const commit = compositeCommands(
-    cornerRectangleShape({ x: 0, y: 0 }, { x: 20, y: 12 })!,
+    centerRectangleShape({ x: 10, y: 6 }, { x: 20, y: 12 })!,
     {
       kind: 'new-sketch',
       name: 'Mixed outline',
@@ -128,6 +131,31 @@ async function exportDocument(page: Page): Promise<ProjectDocument> {
   ).document;
 }
 
+/** Where sketch-plane points sit on screen (XY plane at z = 0). */
+async function screenPoints(page: Page, points: [number, number][]) {
+  const canvas = page.locator('.viewer-host canvas');
+  const projected = await canvas.evaluate(
+    (element, sketchPoints) =>
+      new Promise<{ x: number; y: number }[]>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-project-points', {
+            detail: {
+              points: sketchPoints.map(([x, y]) => [x, y, 0]),
+              resolve: (state: { points: { x: number; y: number }[] }) =>
+                resolve(state.points)
+            }
+          })
+        );
+      }),
+    points
+  );
+  const box = (await canvas.boundingBox())!;
+  return projected.map((point) => ({
+    x: box.x + point.x,
+    y: box.y + point.y
+  }));
+}
+
 async function choose(panel: Locator, from: string, to: string) {
   await panel
     .getByRole('combobox', { name: 'Reference from', exact: true })
@@ -203,6 +231,52 @@ test(
     ]);
     // Measuring never converts the legacy shape.
     expect(stored.promotions).toBeUndefined();
+
+    // Pick: the label is a read-only instrument, not a value editor.
+    await horizontal.click();
+    await horizontal.press('Enter');
+    await expect(
+      page.getByRole('dialog', { name: 'Distance value' })
+    ).toHaveCount(0);
+    // Drag: a pointer drag moves only the label's placement.
+    const bounds = (await horizontal.boundingBox())!;
+    await page.mouse.move(
+      bounds.x + bounds.width / 2,
+      bounds.y + bounds.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + bounds.width / 2 + 60,
+      bounds.y + bounds.height / 2 - 45,
+      { steps: 8 }
+    );
+    await page.mouse.up();
+    const dragged = findSketch(await exportDocument(page), f.sketch.sketchId)!;
+    const annotationId = stored.referenceDimensions![0]!.annotationId;
+    expect(dragged.dimensionLabelPositions?.[annotationId]).toBeDefined();
+    expect(dragged.referenceDimensions).toEqual(stored.referenceDimensions);
+    expect(dragged.constraints).toEqual(stored.constraints);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect
+      .poll(async () =>
+        Boolean(
+          findSketch(await exportDocument(page), f.sketch.sketchId)!
+            .dimensionLabelPositions?.[annotationId]
+        )
+      )
+      .toBe(false);
+
+    // The shape's centre is a named snap where its diagonals cross.
+    const marker = page.locator('.sketch-snap-marker');
+    const [centre] = await screenPoints(page, [[10, 6]]);
+    await page
+      .getByRole('toolbar', { name: 'Sketch tools' })
+      .getByRole('button', { name: /^Line/ })
+      .click();
+    await page.mouse.move(centre!.x + 25, centre!.y + 25, { steps: 4 });
+    await page.mouse.move(centre!.x, centre!.y, { steps: 4 });
+    await expect(marker).toHaveAttribute('data-label', 'Rectangle 1 · Centre');
+    await page.keyboard.press('Escape');
 
     await page.getByRole('button', { name: 'Undo', exact: true }).click();
     await expect(angle).toHaveCount(0);

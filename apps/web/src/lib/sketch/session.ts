@@ -1126,8 +1126,8 @@ export function collectSketchSnapTargets(
     { composite: SketchComposite; index: number }
   >();
   // A helper's snap that lands on its shape's centre names that centre: a
-  // polygon's circumcircle centre, a centre rectangle's diagonal midpoints,
-  // a slot's centre-line midpoint. No new snap point is added.
+  // polygon's circumcircle centre, a centre rectangle's diagonal midpoints
+  // and crossing, a slot's centre-line midpoint. No snap point is added.
   const helpers = new Map<
     string,
     { composite: SketchComposite; center: SketchPoint }
@@ -1157,10 +1157,25 @@ export function collectSketchSnapTargets(
         helpers.set(id, { composite, center: center.point });
   }
   return targets.map((target) => {
-    const helper = target.sourceId ? helpers.get(target.sourceId) : undefined;
+    // Where a centre rectangle's diagonals cross, the crossing outranks
+    // their midpoints, so a crossing of two of one shape's helpers names
+    // that shape's centre too.
+    const crossing =
+      target.kind === 'intersection' && target.sourceIds
+        ? target.sourceIds.map((id) => helpers.get(id))
+        : undefined;
+    const helper = crossing
+      ? crossing[0] && crossing[0].composite === crossing[1]?.composite
+        ? crossing[0]
+        : undefined
+      : target.sourceId
+        ? helpers.get(target.sourceId)
+        : undefined;
     if (
       helper &&
-      (target.kind === 'center' || target.kind === 'midpoint') &&
+      (target.kind === 'center' ||
+        target.kind === 'midpoint' ||
+        target.kind === 'intersection') &&
       Math.hypot(target.x - helper.center.x, target.y - helper.center.y) <=
         1e-9 * Math.max(1, Math.hypot(helper.center.x, helper.center.y))
     )

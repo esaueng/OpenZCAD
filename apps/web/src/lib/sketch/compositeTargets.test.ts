@@ -275,6 +275,8 @@ describe('S02-D composite centre snaps', () => {
       (target) => target.label === 'Rectangle 1 · Centre'
     );
     expect(centres.length).toBeGreaterThan(0);
+    // The diagonals' crossing, which outranks their midpoints, is named too.
+    expect(centres.map((target) => target.kind)).toContain('intersection');
     for (const centre of centres)
       expect(centre).toMatchObject({
         x: 10,
