@@ -624,6 +624,7 @@ import { useDocumentFonts } from './lib/textFonts';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
 import type * as InteractionDiagnostics from './lib/interactionDiagnostics';
 import { KERNEL_BUILD, supportsBlendGroupEdits } from './lib/kernelBuild';
+import { sampledShoulderMove } from './lib/interaction/sampledShoulderMove';
 import {
   chordFromEvent,
   chordLeavesTypingAlone,
@@ -31273,43 +31274,26 @@ export function App() {
     if (!face || target.hash === undefined) {
       return null;
     }
-    const capBoundary =
-      ownEntry(
-        base.derived.bodyRepresentations,
-        bodyId
-      )?.topology?.edges.filter((e) =>
-        e.adjacentFaceHashes?.includes(face.hash)
-      ) ?? [];
-    const sampledShoulderCap =
-      supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
-      offset < 0 &&
-      (face.geometry?.normal?.z ?? 0) > 0.999 &&
-      capBoundary.length > 0 &&
-      capBoundary.every((e) => e.curve?.type === 'CIRCLE') &&
-      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
-        (f) =>
-          f.geometry?.surfaceType === 'torus' &&
-          f.geometry.featureType === 'blend'
-      ) &&
-      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
-        (f) =>
-          f.geometry?.surfaceType === 'cylinder' &&
-          f.geometry.featureType === 'blend'
-      );
+    const sampledShoulder = sampledShoulderMove(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology,
+      face,
+      offset,
+      KERNEL_BUILD.packageVersion
+    );
     const plan = planFaceOffset({
       document: base,
       bodyId,
       face,
       faceHash: target.hash,
       offset,
-      localOnly: target.localFaceOffset || sampledShoulderCap,
+      localOnly: target.localFaceOffset || sampledShoulder,
       ...(exact === undefined ? {} : { exact })
     });
     if (
       !plan ||
       (target.resizeBodyFeatureId &&
         !target.localFaceOffset &&
-        !sampledShoulderCap &&
+        !sampledShoulder &&
         (plan.kind !== 'primitive-dimension' ||
           plan.primitive.featureId !== target.resizeBodyFeatureId))
     ) {
