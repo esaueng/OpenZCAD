@@ -2836,18 +2836,17 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   expect(text).toContain('SPHERICAL_SURFACE');
   expect(text).not.toContain('B_SPLINE_SURFACE');
   expect(text.trimEnd().endsWith('END-ISO-10303-21;')).toBe(true);
-  // Only the two artifact-archive uploads (import and export) may fail, and
-  // only because the preview host has no /api/uploads. Anything else is a
-  // real console error and this stays an equality assertion so it shows up.
-  // The export's upload starts after the download it archives, so wait for
-  // its 404 rather than counting the instant the file has been read.
+  // Only the import's artifact-archive upload may fail, and only because the
+  // preview host has no /api/uploads. An export is a download only and
+  // uploads nothing. Anything else is a real console error and this stays an
+  // equality assertion so it shows up.
   await expect
     .poll(() => consoleErrors.filter((message) => message.includes('404')))
-    .toHaveLength(2);
+    .toHaveLength(1);
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );
-  expect(consoleErrors).toHaveLength(2);
+  expect(consoleErrors).toHaveLength(1);
 });
 
 test('refuses an unparseable STEP file without leaving a feature behind', async ({
@@ -4388,78 +4387,21 @@ test('an STL import that outlives its project does not land in the next one', as
 });
 
 /**
- * Cancelling an export used to leave its archive uploading.
- *
- * `handleExportMesh` honours the dialog's AbortSignal around the geometry
- * export, then hands the finished file to the archive without it. Archiving
- * is the long phase — the local download has already happened by then, and
- * the dialog's Cancel button stays live throughout — so pressing Cancel
- * stopped nothing, and the file the user had just abandoned was finalized
- * into the File menu's stored files.
+ * A mesh export is a download only: the 3MF is saved locally and no copy is
+ * uploaded to the project's cloud files.
  */
-test('cancelling an export stops its archive upload', async ({ page }) => {
+test('a mesh export is a download only and uploads no copy', async ({
+  page
+}) => {
   test.setTimeout(90_000);
   await stubApi(page);
 
-  const exportUploadSessionId = 'upload_export_e2e';
-  const exportArtifactId = 'artifact_export_e2e';
-  let releaseUpload: (() => void) | undefined;
-  let finalizeCalls = 0;
-
-  // Unlike the suite's default stub, this upload SUCCEEDS — the defect is
-  // only visible when the archive is able to run to completion.
+  const exportUploads: string[] = [];
   await page.route('**/api/uploads', async (route) => {
-    const payload = route.request().postDataJSON() as {
-      kind?: string;
-      projectId?: string;
-      fileName?: string;
-      contentType?: string;
-    };
-    if (payload.kind !== '3mf-export') {
-      return route.fallback();
-    }
-    return route.fulfill({
-      status: 201,
-      json: {
-        session: {
-          uploadSessionId: exportUploadSessionId,
-          artifactId: exportArtifactId,
-          projectId: payload.projectId,
-          objectKey: `${payload.projectId}/uploads/part.3mf`,
-          uploadUrl: `/api/uploads/${exportUploadSessionId}/content`,
-          expiresAt: '2099-01-01T00:00:00.000Z',
-          fileName: payload.fileName,
-          contentType: payload.contentType,
-          kind: payload.kind,
-          metadata: {}
-        }
-      }
-    });
-  });
-
-  const uploadReached = new Promise<void>((resolveReached) => {
-    const held = new Promise<void>((resolveHeld) => {
-      releaseUpload = resolveHeld;
-    });
-    void page.route(
-      `**/api/uploads/${exportUploadSessionId}/content`,
-      async (route) => {
-        resolveReached();
-        await held;
-        return route.fulfill({ status: 204, body: '' });
-      }
-    );
-  });
-
-  await page.route('**/api/artifacts/finalize', (route) => {
-    const payload = route.request().postDataJSON() as {
-      artifactId?: string;
-    };
-    if (payload.artifactId !== exportArtifactId) {
-      return route.fallback();
-    }
-    finalizeCalls += 1;
-    return route.fulfill({ json: { artifactId: exportArtifactId } });
+    const payload = route.request().postDataJSON() as { kind?: string } | null;
+    if (!payload?.kind?.endsWith('-export')) return route.fallback();
+    exportUploads.push(payload.kind);
+    return route.fulfill({ status: 500 });
   });
 
   await page.goto('/');
@@ -4468,10 +4410,7 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await createPrimitiveInPlace(page, 'box');
-  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
-  await expect(page.locator('.panel-body')).toContainText('volume', {
-    ignoreCase: true
-  });
+  await expectBodyCount(page, 1);
 
   const fileMenu = page.locator('details.file-menu');
   await fileMenu.locator('summary').click();
@@ -4479,24 +4418,15 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
   await expect(dialog).toBeVisible();
 
-  // The local file is written before the archive starts, so the download
-  // completing is what tells us the archive is the phase now running.
   const downloadPromise = page.waitForEvent('download');
   await dialog.getByRole('button', { name: /Export 3MF/ }).click();
-  await downloadPromise;
-  await uploadReached;
-
-  // Cancel while the archive is mid-upload. The dialog closed when the
-  // export started; the run is the activity pill's now, and so is Cancel.
-  await page
-    .getByRole('region', { name: 'File export' })
-    .getByRole('button', { name: 'Cancel' })
-    .click();
-  releaseUpload?.();
-
-  // Nothing is finalized, so nothing appears in the File menu's stored files.
-  await page.waitForTimeout(1500);
-  expect(finalizeCalls).toBe(0);
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('Print-Part.3mf');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'to Print-Part.3mf.'
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText('archived');
+  expect(exportUploads).toEqual([]);
 });
 
 test('an archive that outlives its project stays out of the next project’s File menu', async ({
