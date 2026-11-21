@@ -3,8 +3,13 @@ import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { CommandManager, replayCommands } from '@openzcad/command-system';
 import {
+  assemblyComponentBodies,
+  booleanBodies,
+  addAssemblyComponents,
+  addAssemblyJoint,
   addPrimitiveFeature,
   createObjectFolder,
+  setAssemblyExplode,
   assertImportedStepContentSchema,
   createProjectDocument,
   STEP_STRUCTURE_SCHEMA_VERSION,
@@ -22,7 +27,9 @@ import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
   BODY_COLOR_METADATA_KEY,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  solveAssembly,
   toUserId,
+  transformToMatrix4,
   type BodyId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -34,6 +41,7 @@ import {
   type StepImportRunDeps
 } from '../apps/web/src/lib/stepImportRun';
 import { createInFlightImportChecksums } from '../apps/web/src/lib/importArchival';
+import { stepOccurrenceFrames } from './e2e/step-occurrence-frames';
 
 /**
  * I02: STEP import keeps the file's product structure. The fixture was
@@ -403,6 +411,258 @@ it('round-trips Objects folders as STEP assembly structure', async () => {
     } finally {
       sourceAdapter.dispose();
     }
+  } finally {
+    adapter.dispose();
+  }
+}, 120_000);
+
+/**
+ * AS04 STEP hierarchy round-trip: an assembly exports as placed parts. Each
+ * part's geometry stays in its own frame and its occurrence carries the
+ * part's solved pose (never the exploded view), so the structure reader
+ * reads every body back where the assembly put it, named after its part.
+ */
+it('round-trips an assembly’s poses as STEP placements (AS04)', async () => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    let document = createProjectDocument('Hinge', toUserId('user_as04'));
+    for (const [name, dimensions] of [
+      ['Base', { width: 40, height: 10, depth: 20 }],
+      ['Arm', { width: 30, height: 4, depth: 6 }]
+    ] as const)
+      document = addPrimitiveFeature(document, {
+        name,
+        bodyName: name,
+        primitiveKind: 'box',
+        dimensions
+      });
+    const [base, arm] = document.bodyOrder as [BodyId, BodyId];
+    document = addAssemblyComponents(document, {
+      components: [
+        { componentId: 'c_base', name: 'Base', bodyId: base, grounded: true },
+        { componentId: 'c_arm', name: 'Arm', bodyId: arm, grounded: false }
+      ]
+    });
+    // Turned 90° about a vertical pivot at (5, 5, 0) and lifted 10 mm.
+    const pivot = {
+      origin: { x: 5, y: 5, z: 0 },
+      zAxis: { x: 0, y: 0, z: 1 },
+      xAxis: { x: 1, y: 0, z: 0 }
+    };
+    document = addAssemblyJoint(document, {
+      joint: {
+        id: 'j_pivot',
+        name: 'Pivot',
+        kind: 'cylindrical',
+        parent: { componentId: 'c_base', frame: pivot },
+        child: { componentId: 'c_arm', frame: pivot },
+        values: [90, 10],
+        limits: [null, null]
+      }
+    });
+    // Presentation only: never written.
+    document = setAssemblyExplode(document, {
+      offsets: { c_arm: { x: 0, y: 0, z: 500 } }
+    });
+    const derived = await adapter.syncDocument(document);
+    const pose = transformToMatrix4(
+      solveAssembly(document.assembly!).poses.get('c_arm')!
+    );
+    const box = derived.bodyRepresentations[arm]!.bbox;
+    // The arm's modelled box carried by its pose (a quarter turn keeps it
+    // axis-aligned, so its corners' extent is exact).
+    const corners = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => {
+      const p = [
+        i & 1 ? box.max.x : box.min.x,
+        i & 2 ? box.max.y : box.min.y,
+        i & 4 ? box.max.z : box.min.z
+      ];
+      return [0, 1, 2].map(
+        (r) =>
+          pose[r]! * p[0]! +
+          pose[4 + r]! * p[1]! +
+          pose[8 + r]! * p[2]! +
+          pose[12 + r]!
+      );
+    });
+    const posed: number[] = [];
+    for (const axis of [0, 1, 2])
+      posed.push(Math.min(...corners.map((c) => c[axis]!)));
+    for (const axis of [0, 1, 2])
+      posed.push(Math.max(...corners.map((c) => c[axis]!)));
+    expect(posed).not.toEqual([
+      box.min.x,
+      box.min.y,
+      box.min.z,
+      box.max.x,
+      box.max.y,
+      box.max.z
+    ]);
+    const ids = [...derived.exportableBodyIds];
+    for (const units of ['mm', 'inch'] as const) {
+      const exported = await adapter.exportStep({ ...document, derived }, ids, {
+        units
+      });
+      expect(exported).toContain('NEXT_ASSEMBLY_USAGE_OCCURRENCE');
+      const bytes = new TextEncoder().encode(exported);
+      const sourceAdapter = await createExactKernelAdapter({
+        resolveSourceBytes: async () => bytes
+      });
+      try {
+        const { manager } = await importThroughTheRun(
+          sourceAdapter,
+          bytes,
+          `Hinge-${units}.step`,
+          createProjectDocument('Receiver', toUserId('user_as04'))
+        );
+        const received = await sourceAdapter.syncDocument(manager.document);
+        const byName = new Map(
+          bodies(manager.document).map((body) => [body.name, body])
+        );
+        // Named after their parts and filed under the project.
+        expect(byName.get('Arm')?.folder).toBe('Hinge');
+        expect(byName.get('Base')?.folder).toBe('Hinge');
+        const read = (name: string) => {
+          const b =
+            received.bodyRepresentations[byName.get(name)!.bodyId]!.bbox;
+          return [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z];
+        };
+        // The receiver reads in millimetres whatever unit was written.
+        read('Arm').forEach((value, index) =>
+          expect(value).toBeCloseTo(posed[index]!, 4)
+        );
+        const baseBox = derived.bodyRepresentations[base]!.bbox;
+        read('Base').forEach((value, index) =>
+          expect(value).toBeCloseTo(
+            [
+              baseBox.min.x,
+              baseBox.min.y,
+              baseBox.min.z,
+              baseBox.max.x,
+              baseBox.max.y,
+              baseBox.max.z
+            ][index]!,
+            4
+          )
+        );
+      } finally {
+        sourceAdapter.dispose();
+      }
+    }
+  } finally {
+    adapter.dispose();
+  }
+}, 240_000);
+
+/** A box placed as a grounded part 50 mm along X, and a copy of the box. */
+function partAndCopy() {
+  let document = createProjectDocument('Copy', toUserId('user_as04'));
+  document = addPrimitiveFeature(document, {
+    name: 'Box',
+    bodyName: 'Box',
+    primitiveKind: 'box',
+    dimensions: { width: 10, height: 10, depth: 10 }
+  });
+  const box = document.bodyOrder[0] as BodyId;
+  const copied = transformBody(document, {
+    name: 'Copy box',
+    targetBodyId: box,
+    translation: { x: 5, y: 0, z: 0 },
+    rotationDeg: { x: 0, y: 0, z: 0 },
+    copy: true
+  });
+  return { document: copied.document, box, copy: copied.bodyId };
+}
+
+it('places a body by the part Assemble resolves, whichever bodies are exported (AS04)', async () => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    const start = partAndCopy();
+    const { box, copy } = start;
+    let document = start.document;
+    document = addAssemblyComponents(document, {
+      components: [
+        {
+          componentId: 'c_box',
+          name: 'Box',
+          bodyId: box,
+          grounded: true,
+          placement: {
+            translation: { x: 50, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0, w: 1 }
+          }
+        }
+      ]
+    });
+    // Were only the exported bodies counted, the part would follow its
+    // body's lineage to the copy and place it.
+    expect(
+      assemblyComponentBodies(document, (id) => id === copy).get('c_box')
+    ).toBe(copy);
+    const derived = await adapter.syncDocument(document);
+    const onlyCopy = await adapter.exportStep({ ...document, derived }, [copy]);
+    expect(onlyCopy).not.toContain('NEXT_ASSEMBLY_USAGE_OCCURRENCE');
+    const both = await adapter.exportStep({ ...document, derived }, [
+      box,
+      copy
+    ]);
+    // The box's part is placed; the copy, in no part, keeps the identity.
+    expect(
+      stepOccurrenceFrames(both).map(({ origin }) => origin)
+    ).toContainEqual([-50, 0, 0]);
+  } finally {
+    adapter.dispose();
+  }
+}, 120_000);
+
+it('places a body two parts resolve to at the later part’s pose, as Assemble draws it (AS04)', async () => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    const start = partAndCopy();
+    const { box, copy } = start;
+    let document = start.document;
+    const place = (x: number, y: number) => ({
+      translation: { x, y, z: 0 },
+      rotation: { x: 0, y: 0, z: 0, w: 1 }
+    });
+    document = addAssemblyComponents(document, {
+      components: [
+        {
+          componentId: 'c_first',
+          name: 'First',
+          bodyId: box,
+          grounded: true,
+          placement: place(50, 0)
+        },
+        {
+          componentId: 'c_second',
+          name: 'Second',
+          bodyId: copy,
+          grounded: true,
+          placement: place(0, 80)
+        }
+      ]
+    });
+    // Uniting the copy with the box leaves one body both parts follow.
+    const united = booleanBodies(document, {
+      name: 'Unite',
+      operation: 'union',
+      targetBodyIds: [copy, box]
+    });
+    document = united.document;
+    const derived = await adapter.syncDocument(document);
+    const live = (id: BodyId) =>
+      Boolean(derived.bodyRepresentations[id]) &&
+      !derived.bodyRepresentations[id]!.consumed;
+    const shown = assemblyComponentBodies(document, live);
+    expect(shown.get('c_first')).toBe(united.bodyId);
+    expect(shown.get('c_second')).toBe(united.bodyId);
+    const exported = await adapter.exportStep({ ...document, derived }, [
+      united.bodyId
+    ]);
+    expect(stepOccurrenceFrames(exported)).toEqual([
+      { origin: [0, -80, 0], x: [1, 0, 0] }
+    ]);
   } finally {
     adapter.dispose();
   }

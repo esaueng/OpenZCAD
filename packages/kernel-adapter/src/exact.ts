@@ -16,6 +16,7 @@ import {
   type IdleLineageView
 } from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
+import { solveAssembly, transformToMatrix4 } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
 import {
   beginDirectEditProfile,
@@ -75,7 +76,9 @@ export type {
   SketchPlanarResult
 } from './sketch-2d-ops';
 import {
+  assemblyComponentBodies,
   findSketch,
+  isLiveAssemblyBody,
   getParameterScope,
   resolveParamValue,
   getParameterHiddenBodyIds,
@@ -1397,13 +1400,64 @@ function exportSolidLabels(
 }
 
 /**
+ * AS04: where the assembly places each written body that one of its parts
+ * shows: the part's solved pose (the stored joint values; never an exploded
+ * offset), column-major, its translation in the file's length unit.
+ */
+function exportAssemblyPlacements(
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId }[],
+  scale: number,
+  /**
+   * Whether the model shows a body (built, not consumed, not hidden by a
+   * parameter): what a part resolves against, as Assemble resolves it,
+   * whichever bodies this export happens to write.
+   */
+  isLive: (bodyId: BodyId) => boolean
+): Map<BodyId, number[]> {
+  const placements = new Map<BodyId, number[]>();
+  const set = document.assembly;
+  if (!set || set.components.length === 0) return placements;
+  const written = new Set(bodies.map(({ bodyId }) => bodyId));
+  const shown = assemblyComponentBodies(document, isLive);
+  const solution = solveAssembly(set);
+  // Display order, a later part winning a body two parts resolve to: the
+  // pose the Assemble viewport draws that body at.
+  for (const component of set.components) {
+    const bodyId = shown.get(component.id);
+    const pose = solution.poses.get(component.id);
+    if (!bodyId || !pose || !written.has(bodyId)) continue;
+    const matrix = transformToMatrix4(pose);
+    for (const index of [12, 13, 14]) matrix[index] = matrix[index]! * scale;
+    placements.set(bodyId, matrix);
+  }
+  return placements;
+}
+
+/**
  * I02: the Objects folders holding the written bodies, as the STEP product
- * tree; null when no written body sits in a folder.
+ * tree; null when no written body sits in a folder and no assembly part
+ * shows one. AS04: a body an assembly part shows is placed at that part's
+ * solved pose, its geometry staying in its own frame.
  */
 function exportAssembly(
   document: ProjectDocument,
-  bodies: readonly { bodyId: BodyId; solids: number[] }[]
+  bodies: readonly { bodyId: BodyId; solids: number[] }[],
+  scale = 1,
+  build?: ExactBuildResult
 ): StepExportAssembly | null {
+  const hidden = getParameterHiddenBodyIds(document);
+  const placements = exportAssemblyPlacements(
+    document,
+    bodies,
+    scale,
+    build
+      ? (bodyId) =>
+          (build.shapes.get(bodyId)?.solids.length ?? 0) > 0 &&
+          !build.consumed.has(bodyId) &&
+          !hidden.has(bodyId)
+      : (bodyId) => isLiveAssemblyBody(document, bodyId)
+  );
   const all = new Map(
     listObjectFolders(document).map((folder) => [folder.id, folder])
   );
@@ -1423,13 +1477,17 @@ function exportAssembly(
   );
   const placed = bodies.map(({ bodyId, solids }) => {
     const folderId = objectFolderOfBody(document, bodyId);
+    const placement = placements.get(bodyId);
     return {
       name: names.get(bodyId) ?? '',
       solidCount: solids.length,
-      folder: folderId !== null && all.has(folderId) ? add(folderId) : null
+      folder: folderId !== null && all.has(folderId) ? add(folderId) : null,
+      ...(placement ? { placement } : {})
     };
   });
-  return folders.length > 0 ? { folders, bodies: placed } : null;
+  return folders.length > 0 || placements.size > 0
+    ? { folders, bodies: placed }
+    : null;
 }
 
 /**
@@ -1522,7 +1580,12 @@ function writeStepBodies(
     solids: exportSolidLabels(document, bodies),
     ...(options.protocol ? { protocol: options.protocol } : {})
   };
-  const assembly = exportAssembly(document, bodies);
+  const assembly = exportAssembly(
+    document,
+    bodies,
+    exportLengthScale(document.units, options.units ?? 'mm'),
+    build
+  );
   if (assembly) metadata.assembly = assembly;
   if (pmi.length > 0) metadata.pmi = pmi;
   // Never fuse: a boolean union changes the geometry (overlaps merge,
