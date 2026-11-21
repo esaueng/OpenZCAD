@@ -165,7 +165,17 @@ export async function syncProjectMeasurements(
   return { ...remote, source: remote.record ? 'cloud' : 'none' };
 }
 
-/** Starts retryable cloud reconciliation while IndexedDB stays authoritative offline. */
+/** How often an open, visible workspace re-reads the account's measurements. */
+export const MEASUREMENT_POLL_INTERVAL_MS = 60_000;
+
+/**
+ * Starts retryable cloud reconciliation while IndexedDB stays authoritative
+ * offline. A hidden tab does not poll the account: the interval, focus and
+ * online retries skip while `document.visibilityState` is `hidden`, and the
+ * tab checks once when it becomes visible again. A device edit (`push`) is
+ * written straight away whatever the visibility, and until one reaches the
+ * account the retries keep trying it in a hidden tab too.
+ */
 export function watchProjectMeasurements({
   api,
   projectId,
@@ -177,6 +187,9 @@ export function watchProjectMeasurements({
   let syncing = false;
   let pending: StoredMeasurementRecord | undefined;
   let editEpoch = 0;
+  // A device edit the account has not yet accepted (the push failed or is
+  // still in flight). Retries try it even from a hidden tab.
+  let unsynced = false;
   const sync = async (localOverride?: StoredMeasurementRecord) => {
     if (cancelled) return;
     if (syncing) {
@@ -189,6 +202,7 @@ export function watchProjectMeasurements({
       const local = localOverride ?? (await loadLocal());
       const result = await syncProjectMeasurements(api, projectId, local);
       if (cancelled || startedAt !== editEpoch) return;
+      unsynced = false;
       if (result.source === 'cloud' && result.record) {
         await saveLocal(result.record);
         // A device edit can also arrive during the storage transaction. Put
@@ -211,14 +225,22 @@ export function watchProjectMeasurements({
       }
     }
   };
-  const retry = () => void sync();
+  const retry = () => {
+    if (document.visibilityState === 'hidden' && !unsynced) return;
+    void sync();
+  };
+  const onVisibilityChange = () => {
+    if (document.visibilityState === 'visible') retry();
+  };
   void sync();
-  const interval = window.setInterval(retry, 60_000);
+  const interval = window.setInterval(retry, MEASUREMENT_POLL_INTERVAL_MS);
   window.addEventListener('focus', retry);
   window.addEventListener('online', retry);
+  document.addEventListener('visibilitychange', onVisibilityChange);
   return {
     push: (record) => {
       editEpoch += 1;
+      unsynced = true;
       void sync(record);
     },
     stop: () => {
@@ -226,6 +248,7 @@ export function watchProjectMeasurements({
       window.clearInterval(interval);
       window.removeEventListener('focus', retry);
       window.removeEventListener('online', retry);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     }
   };
 }
