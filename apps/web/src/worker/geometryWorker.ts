@@ -1,3 +1,4 @@
+import { BODY_PREPARATION_TRIANGLES } from '../components/viewer/bodyPreparationPolicy';
 import {
   ProjectionSender,
   projectionTransferables,
@@ -644,6 +645,15 @@ export type GeometrySheetMetalFlatPatternResult =
     };
 
 export type GeometryWorkerResult =
+  | {
+      type: 'prepare-pattern-display';
+      projectId: string;
+      version: number;
+      requestId?: string;
+      vertices: Float32Array;
+      indices: Uint32Array;
+      offsets: Uint32Array;
+    }
   | {
       type: 'direct-edit-profile';
       requestId?: string;
@@ -1833,6 +1843,22 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               request.type === 'sync' ? request.analysis : undefined,
               {
                 cancellation,
+                onPatternMesh: ({ positions, indices, faceOffsets }) => {
+                  // Dense replacements already prepare shading off-thread.
+                  if (
+                    indices.length / 3 <= BODY_PREPARATION_TRIANGLES &&
+                    !cancellation.isCancelled()
+                  )
+                    post({
+                      type: 'prepare-pattern-display',
+                      projectId: document.projectId,
+                      version: document.version,
+                      requestId: request.requestId,
+                      vertices: positions,
+                      indices,
+                      offsets: faceOffsets
+                    });
+                },
                 ...(!request.requestId
                   ? {
                       onGeometryReady: (geometry: GeometryReadyState) => {
