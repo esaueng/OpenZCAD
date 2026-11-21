@@ -27,8 +27,7 @@ this machine, and every heavy job ran under the shared lock.
 Two complete rounds of each probe were recorded. The third round was cut off
 at a two-hour limit while waiting for the shared lock. Orbit's second round
 also stopped in its last scene (`rotational-sleeve` at 4× slow-down, which
-has one sample). Run-to-run spread was within 2 ms on every drag and orbit
-row.
+has one sample). Run-to-run spread was within 2 ms on every drag lag, frame-interval and orbit row, and within 53 ms on first exact geometry.
 
 ## Face drag (H02 targets)
 
@@ -53,15 +52,22 @@ while dragging) and the exact preview's round trip as separate rows.
 **Targets** (H02: 60 fps, first geometry within 100 ms, p95 under 50 ms):
 
 - **Pointer → frame p95 under 50 ms: met.** All four cases are at 15–16 ms.
-- **First geometry within 100 ms: not established.** The proxy lag above
-  is a median and p95 across all proxy frames, not a measure of the first
-  one. The exact preview's round trip (64–395 ms) is worker time measured
-  after the hand rests, not from the first move to the screen. Neither
-  figure shows that exact geometry reached the screen within 100 ms of the
-  first move, so this target is left unmeasured here.
-- **60 fps: met at the median** in every case. The two filleted unions each
-  drop one frame per drag (one 33 ms interval, so their p95 is 33 ms). The
-  box and holder hold 16.7 ms at p95.
+- **First geometry within 100 ms: not met.** First exact geometry reached
+  the screen 2,309–2,697 ms after the first move (medians 2,681 / 2,483 /
+  2,311 ms on the filleted union, the filleted-union history and the
+  holder). The drag requests exact geometry only once the hand rests, so
+  this is mostly the drag's own length. The worker's kernel time for that
+  exact preview is 61–404 ms (`stages.kernelMs`; the round trip is within
+  1.5 ms of it): 385–404 ms on the filleted union, 171–185 ms on its
+  history and 61–64 ms on the holder. Proxy frames follow the pointer at
+  15–16 ms (p50 and p95 across the drag; the first proxy frame is not timed
+  separately), but they are disposable display geometry. Meeting the target
+  for exact geometry needs exact previews while the pointer moves, and on
+  the filleted unions an exact build under 100 ms.
+- **60 fps: not met at p95 on the filleted unions.** The median frame
+  interval is 16.7 ms in every case. Each filleted-union drag recorded 19
+  frame intervals, one of them a 33 ms hitch, so its nearest-rank p95 is
+  33 ms. The box and holder recorded no hitch and hold 16.7 ms at p95.
 
 ## Orbit tails
 

@@ -321,12 +321,16 @@ export function summarize(dir) {
         budget.lagP95Ms
       );
     }
-    if (samples.some((sample) => !proxied(sample)))
+    // First exact geometry on screen, from the first pointer move, for
+    // every run that built any (a proxy-led drag builds it only once the
+    // hand rests, so this is far above H02's 100 ms target).
+    const exactRuns = samples.filter(
+      (sample) => sample.summary.presentedFrames > 0
+    );
+    if (exactRuns.length)
       add(
         `Face drag first exact geometry (${label})`,
-        samples
-          .filter((sample) => !proxied(sample))
-          .map((sample) => sample.summary.firstGeometryMs),
+        exactRuns.map((sample) => sample.summary.firstGeometryMs),
         budget.firstGeometryMs
       );
     // Only runs that asked for an exact preview before release have one.
