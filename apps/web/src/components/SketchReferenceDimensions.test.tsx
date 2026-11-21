@@ -409,6 +409,65 @@ describe('composite option budgets', () => {
   );
 });
 
+describe('reference display units', () => {
+  it('shows measured lengths in the chosen unit and stores no converted value', () => {
+    const { sketch, objects } = fixture();
+    const onCommand = vi.fn<(command: AnyCommand) => void>();
+    const onDisplayUnitChange = vi.fn();
+    const props = {
+      sketch,
+      objects,
+      units: 'mm',
+      resolve: (v: number | string) => (typeof v === 'number' ? v : undefined),
+      disabled: false,
+      onCommand,
+      onDisplayUnitChange
+    };
+    const { rerender } = render(<SketchReferenceDimensions {...props} />);
+    const select = screen.getByLabelText('Show lengths in');
+    expect((select as HTMLSelectElement).value).toBe('document');
+    expect(
+      within(select).getByRole('option', { name: 'Document units (mm)' })
+    ).toBeTruthy();
+    fireEvent.change(select, { target: { value: 'inch' } });
+    expect(onDisplayUnitChange).toHaveBeenCalledWith('inch');
+    rerender(<SketchReferenceDimensions {...props} displayUnit="inch" />);
+    for (const [name, point] of [
+      ['Reference from', 'start'],
+      ['Reference to', 'end']
+    ])
+      fireEvent.change(screen.getByLabelText(name!), {
+        target: { value: JSON.stringify({ objectId: objects[0]!.id, point }) }
+      });
+    // The 5 mm diagonal reads in inches; the command carries targets only.
+    expect(screen.getByRole('status').textContent).toBe('Measured: 0.197 in');
+    fireEvent.click(screen.getByRole('button', { name: 'Add reference' }));
+    const payload = onCommand.mock.calls[0]![0].payload as {
+      data: Record<string, unknown>;
+    };
+    expect(Object.keys(payload.data).sort()).toEqual([
+      'a',
+      'b',
+      'dimensionKind'
+    ]);
+  });
+
+  it('hides the selector when nothing can store the choice', () => {
+    const { sketch, objects } = fixture();
+    render(
+      <SketchReferenceDimensions
+        sketch={sketch}
+        objects={objects}
+        units="mm"
+        resolve={(v) => (typeof v === 'number' ? v : undefined)}
+        disabled={false}
+        onCommand={vi.fn()}
+      />
+    );
+    expect(screen.queryByLabelText('Show lengths in')).toBeNull();
+  });
+});
+
 describe('S02-D shape centre and legacy shape targets', () => {
   it('offers a named shape centre beside its corners', () => {
     const { sketch, objects, composite } = compositeFixture();

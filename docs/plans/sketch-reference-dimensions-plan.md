@@ -126,6 +126,24 @@ shared-envelope proposal below records that design stage. The implemented
 primitive references were additive in v16; projected distances now use the
 separately coordinated v35 boundary above.
 
+## Reference display units (S02-F)
+
+Reference lengths have their own display unit, separate from the document's
+units. It is a per-user app setting, not document content:
+`sketching.referenceDisplayUnit` is `document` (the default, which follows
+the document's units) or `mm`, `cm`, `m` or `inch`. The reference palette
+(**Show lengths in**) and Settings → Sketching (**Reference dimension
+units**) both set it. It converts only the rendered figure of reference
+distance and radius labels and palette rows, through
+`convertReferenceLengthForDisplay`. Angles stay in degrees. Driving
+dimensions, the document's units, authored expressions and saved reference
+records are unchanged, so no schema change is needed. An unknown value from a
+newer client falls back to `document` and does not fail the save. A save
+from an older client that omits the field keeps the account's stored unit.
+Evidence: `dimensionAnnotations.test.ts`, `SketchReferenceDimensions.test.tsx`,
+`test/app-settings.test.ts`, `test/api-routes.test.ts` and
+`test/e2e/sketch-reference-display-units.spec.ts`.
+
 ## Decision
 
 Keep three meanings separate:
