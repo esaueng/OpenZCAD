@@ -29,6 +29,7 @@ import {
 import {
   extrudeDraftRefusal,
   extrudeDraftValue,
+  extrudeFormValue,
   initialExtrudeDraft,
   type ExtrudeDraftContext
 } from '../apps/web/src/lib/extrudeDraft';
@@ -301,6 +302,18 @@ describe('F01 per-side draft', { timeout: 60_000 }, () => {
       );
     });
 
+    it('keeps a barely drafted round back side beside a straight front (review)', async () => {
+      const result = extrude({ backDistance: 4, backDraftAngleDeg: 0.001 }, [
+        CIRCLE
+      ]);
+      const derived = await derive(result.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
+        Math.PI * 9 * 10 + circleSide(4, 0.001),
+        5
+      );
+    });
+
     it('builds a round profile as two cone frustums', async () => {
       const result = extrude(
         { backDistance: 4, draftAngleDeg: 2, backDraftAngleDeg: 5 },
@@ -471,6 +484,17 @@ describe('F01 per-side draft', { timeout: 60_000 }, () => {
       expect(
         extrudeDraftValue({ ...held, symmetric: true }, ctx)
       ).toMatchObject({ backDraftAngleDeg: 2 });
+      // A negative back distance is no back side (review).
+      expect(
+        extrudeFormValue({ ...held, backDistance: '-2' }, ctx)
+      ).not.toHaveProperty('backDraftAngleDeg');
+      expect(
+        extrudeShownValues({
+          extent: 'blind',
+          symmetric: false,
+          backDistance: -2
+        })
+      ).not.toContain('backDraftAngle');
       expect(
         extrudeDraftRefusal(
           { ...base, symmetric: true, backDraftAngle: 'nope' },

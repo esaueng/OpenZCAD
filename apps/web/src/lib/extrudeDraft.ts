@@ -320,8 +320,9 @@ export function extrudeHasBackSide(
 ): boolean {
   if (extrudeIsThroughAll(draft) || extrudeIsToFace(draft, ctx)) return false;
   if (draft.symmetric) return true;
+  // A negative back distance is refused, so it is no back side either.
   const back = extrudeDraftNumber(draft.backDistance, 'length', ctx);
-  return back !== null && back !== 0;
+  return back !== null && back > 0;
 }
 
 /**

@@ -2877,12 +2877,19 @@ export function buildSweep(
 }
 
 /**
- * Set on the transient node a coplanar-retry twin builds (see
- * `exact-pierce-tool.ts`): its back distance is pierce travel, so a drafted
- * tool keeps the one-sided taper carried across the start plane rather than
- * being built as a two-sided extrusion with a straight back.
+ * The transient nodes a coplanar-retry twin builds (see
+ * `exact-pierce-tool.ts`): their back distance is pierce travel, so a
+ * drafted tool keeps the one-sided taper carried across the start plane
+ * rather than being built as a two-sided extrusion with a straight back.
+ * Held by identity, in this build only: nothing a document stores can set it.
  */
-export const PIERCE_TRAVEL_METADATA_KEY = 'openzcad.pierceTravel';
+const pierceTravelNodes = new WeakSet<FeatureNode>();
+
+/** Marks `node` as a pierced twin whose back distance is travel. */
+export function markPierceTravel(node: FeatureNode): FeatureNode {
+  pierceTravelNodes.add(node);
+  return node;
+}
 
 /**
  * F01 (v126): a symmetric or two-sided blind extrude with a draft on either
@@ -2905,7 +2912,7 @@ function twoSidedDraftedSweep(
 ): ExactShape | null {
   if (feature.data.featureKind !== 'extrude') return null;
   // A pierced twin's back distance is travel, not a side.
-  if (feature.metadata?.[PIERCE_TRAVEL_METADATA_KEY] === true) return null;
+  if (pierceTravelNodes.has(feature)) return null;
   const data = feature.data;
   const front = resolveExtrudeDraftDeg(data, scope, document, 'front');
   const back = resolveExtrudeDraftDeg(data, scope, document, 'back');
@@ -2961,21 +2968,7 @@ function twoSidedDraftedSweep(
       sketchBases,
       warn
     ).solids;
-    if (angle === 0) {
-      // Straight beside a drafted round half: the same exact loft form.
-      const other = side === sign ? back : front;
-      return other === 0
-        ? solids
-        : solids.map((solid) =>
-            straightRoundWallAsLoft(
-              kernel,
-              solid,
-              basis,
-              scale(basis.normal, side),
-              label
-            )
-          );
-    }
+    if (angle === 0) return solids;
     return draftExtrudedSolids(
       kernel,
       solids,
@@ -2992,10 +2985,12 @@ function twoSidedDraftedSweep(
       `${label} could not pair its two drafted sides: they swept ${aheadSolids.length} and ${behindSolids.length} solids.`
     );
   }
-  const solids = aheadSolids.map((solid, index) => {
+  // The halves meet only on the profile face, so their union holds exactly
+  // the material of both: a fuse that does not is refused, never shipped.
+  const fusePair = (a: number, b: number): number => {
     const fused = fuseUniformSolid(
       kernel,
-      [solid, behindSolids[index]!],
+      [a, b],
       [`${label} front side`, `${label} back side`]
     );
     requireValidSolid(
@@ -3003,7 +2998,42 @@ function twoSidedDraftedSweep(
       fused,
       `${label} with a draft on each side is not a valid closed solid; reduce the angles or the distances.`
     );
+    const expected =
+      kernel.volume(a, MEASUREMENT_DEFLECTION) +
+      kernel.volume(b, MEASUREMENT_DEFLECTION);
+    const got = kernel.volume(fused, MEASUREMENT_DEFLECTION);
+    if (!(Math.abs(got - expected) <= 1e-6 * Math.max(1, expected))) {
+      throw new Error(
+        `${label}: fusing its two drafted sides lost material (${Math.round(got * 1e3) / 1e3} of ${Math.round(expected * 1e3) / 1e3}).`
+      );
+    }
     return fused;
+  };
+  // A straight round side beside a drafted one: if the plain fuse is
+  // refused or loses material, the straight side is rebuilt as the same
+  // exact loft form as the drafted one and the fuse tried once more.
+  const loftStraight = (solid: number, side: 1 | -1) =>
+    straightRoundWallAsLoft(
+      kernel,
+      solid,
+      basis,
+      scale(basis.normal, side),
+      label
+    );
+  const solids = aheadSolids.map((solid, index) => {
+    const behind = behindSolids[index]!;
+    try {
+      return fusePair(solid, behind);
+    } catch (error) {
+      if (front !== 0 && back !== 0) throw error;
+      try {
+        return front === 0
+          ? fusePair(loftStraight(solid, sign), behind)
+          : fusePair(solid, loftStraight(behind, -sign as 1 | -1));
+      } catch {
+        throw error;
+      }
+    }
   });
   return {
     solids,

@@ -32,7 +32,7 @@ export function extrudeShownValues(state: {
     state.symmetric ||
     (state.backDistance !== undefined &&
       Number.isFinite(state.backDistance) &&
-      state.backDistance !== 0);
+      state.backDistance > 0);
   return [
     ...(blind ? (['distance'] as const) : []),
     ...(blind && !state.symmetric ? (['backDistance'] as const) : []),
