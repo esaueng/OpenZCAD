@@ -122,85 +122,82 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const page = await encryptedShareLinks();
-    return page.scopeReads(async (ctx) => {
-      let upkeepError: string | null = null;
-      const upkeep =
-        options?.upkeep === false
-          ? null
-          : await links
-              .maintainShareLinks(ctx, projectId)
-              .catch((error: unknown) => {
-                upkeepError = message(error);
-                return null;
-              });
-      const work = await links
-        .shareWorkFor(ctx)
-        .read(ctx.groups.account.userId, projectId)
-        .catch((error: unknown) => {
-          upkeepError ??= message(error);
-          return null;
-        });
-      const view = await links.listShareLinks(
-        ctx,
-        projectId,
-        upkeep?.head ?? undefined
-      );
-      // L08: which links take comments; unknown when that cannot be read.
-      const commenting = await Promise.resolve()
-        .then(() => links.commentingShareLinks(ctx, projectId))
-        .catch(() => null);
-      return {
-        links: view.links.map((link) => ({
-          shareId: link.shareId,
-          mode: link.mode,
-          url: link.url,
-          status: link.status,
-          expiresAt: link.expiresAt,
-          ...(commenting ? { comments: commenting.has(link.shareId) } : {})
-        })),
-        needsConfirmation:
-          view.isOwner && links.delegationNeedsRenewal(view.delegation),
-        passkey: page.hasPasskey(),
-        retired: work?.retired ?? [],
-        removalNotice: work?.notice ?? null,
-        removalLinks: work?.removalLinks ?? [],
-        problem:
-          upkeepError ??
-          (upkeep?.revocations.failed.length
-            ? `A revoked link may still open for visitors: the server did not confirm it stopped serving it (${upkeep.revocations.failed[0]!.reason}). Revoke it again to retry.`
-            : null) ??
-          snapshotProblem(upkeep)
-      };
-    });
+    const { ctx, hasPasskey } = await encryptedShareLinks();
+    let upkeepError: string | null = null;
+    const upkeep =
+      options?.upkeep === false
+        ? null
+        : await links
+            .maintainShareLinks(ctx, projectId)
+            .catch((error: unknown) => {
+              upkeepError = message(error);
+              return null;
+            });
+    const work = await links
+      .shareWorkFor(ctx)
+      .read(ctx.groups.account.userId, projectId)
+      .catch((error: unknown) => {
+        upkeepError ??= message(error);
+        return null;
+      });
+    const view = await links.listShareLinks(
+      ctx,
+      projectId,
+      upkeep?.head ?? undefined
+    );
+    // L08: which links take comments; unknown when that cannot be read.
+    const commenting = await Promise.resolve()
+      .then(() => links.commentingShareLinks(ctx, projectId))
+      .catch(() => null);
+    return {
+      links: view.links.map((link) => ({
+        shareId: link.shareId,
+        mode: link.mode,
+        url: link.url,
+        status: link.status,
+        expiresAt: link.expiresAt,
+        ...(commenting ? { comments: commenting.has(link.shareId) } : {})
+      })),
+      needsConfirmation:
+        view.isOwner && links.delegationNeedsRenewal(view.delegation),
+      passkey: hasPasskey(),
+      retired: work?.retired ?? [],
+      removalNotice: work?.notice ?? null,
+      removalLinks: work?.removalLinks ?? [],
+      problem:
+        upkeepError ??
+        (upkeep?.revocations.failed.length
+          ? `A revoked link may still open for visitors: the server did not confirm it stopped serving it (${upkeep.revocations.failed[0]!.reason}). Revoke it again to retry.`
+          : null) ??
+        snapshotProblem(upkeep)
+    };
   },
   async create(projectId, mode, options) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const page = await encryptedShareLinks();
-    return page.scopeReads(async (ctx) => {
-      const created = await links.createShareLink(ctx, projectId, mode);
-      const problem = shareLinkCreationProblem(created);
-      if (problem) throw new Error(problem);
-      if (options?.comments) {
-        await links.allowShareLinkComments(ctx, projectId, {
-          shareId: created.shareId,
-          shareKey: created.fragment.shareKey
-        });
-      }
-      return { url: created.url };
-    });
+    const ctx = (await encryptedShareLinks()).ctx;
+    const created = await links.createShareLink(ctx, projectId, mode);
+    const problem = shareLinkCreationProblem(created);
+    if (problem) throw new Error(problem);
+    if (options?.comments) {
+      await links.allowShareLinkComments(ctx, projectId, {
+        shareId: created.shareId,
+        shareKey: created.fragment.shareKey
+      });
+    }
+    return { url: created.url };
   },
   async allowComments(projectId, shareId) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const page = await encryptedShareLinks();
-    await page.scopeReads((ctx) =>
-      links.allowShareLinkCommentsById(ctx, projectId, shareId)
+    await links.allowShareLinkCommentsById(
+      (await encryptedShareLinks()).ctx,
+      projectId,
+      shareId
     );
   },
   async revoke(projectId, shareId) {
@@ -208,8 +205,11 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const page = await encryptedShareLinks();
-    await page.scopeReads((ctx) => revokeShareLink(ctx, projectId, shareId));
+    await revokeShareLink(
+      (await encryptedShareLinks()).ctx,
+      projectId,
+      shareId
+    );
   },
   async confirm(projectId, confirmation) {
     const [{ encryptedShareLinks }, { issueShareAuthorities }, crypto] =
@@ -236,15 +236,18 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         secret.fill(0);
       }
     }
-    await page.scopeReads((ctx) => issueShareAuthorities(ctx, projectId));
+    await issueShareAuthorities(page.ctx, projectId);
   },
   async reissue(projectId, links) {
     const [{ encryptedShareLinks }, { reissueShareLinks }] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const page = await encryptedShareLinks();
-    await page.scopeReads((ctx) => reissueShareLinks(ctx, projectId, links));
+    await reissueShareLinks(
+      (await encryptedShareLinks()).ctx,
+      projectId,
+      links
+    );
   },
   async dismissRemoval(projectId, notice) {
     const [{ encryptedShareLinks }, { acknowledgeShareRemoval }] =
@@ -783,6 +786,18 @@ export function EncryptedShareLinks({
                     void run(`revoke:${row.shareId}`, async () => {
                       await client.revoke(projectId, row.shareId);
                       setCreated(null);
+                      // Revoked: gone from the list at once, so it is not
+                      // copyable while (or if) the refresh lags or fails.
+                      setState((current) =>
+                        current
+                          ? {
+                              ...current,
+                              links: current.links.filter(
+                                (link) => link.shareId !== row.shareId
+                              )
+                            }
+                          : current
+                      );
                     });
                   }}
                 />

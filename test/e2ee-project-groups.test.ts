@@ -37,7 +37,6 @@ import {
   commitProjectGroup,
   createProjectGroup,
   createProjectGroupsApi,
-  ensureProjectRotated,
   joinProjectGroup,
   projectKeyForEpoch,
   recoverProjectGroup,
@@ -51,7 +50,6 @@ import {
 } from '../apps/web/src/lib/e2ee/mls/sessionStore';
 import type { CertifyingDevice } from '../apps/web/src/lib/e2ee/mls/certify';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
-import { withScopedGroupReads } from '../apps/web/src/lib/e2ee/scopedGroupReads';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 
 const OWNER = 'user_owner';
@@ -623,32 +621,6 @@ describe('solo MLS groups', () => {
     expect(await currentKey(rival, owner, 'owner_desktop', projectId)).toBe(
       await currentKey(laptop, owner, 'owner_laptop', projectId)
     );
-  });
-
-  it('notices a Commit sent after the catch-up, even inside a share action', async () => {
-    const srv = newServer();
-    const projectId = seedProject(srv);
-    const laptop = device(srv, owner, 'owner_laptop');
-    const desktop = device(srv, owner, 'owner_desktop');
-    await createProjectGroup(laptop.ctx, projectId);
-    await joinProjectGroup(desktop.ctx, projectId);
-    await catchUpProjectGroup(laptop.ctx, projectId);
-
-    // The share action's reads are shared (scopedGroupReads.ts); the
-    // check after its catch-up must still reach the server.
-    const { api, scope } = withScopedGroupReads(desktop.ctx.api);
-    const action = { ...desktop.ctx, api };
-    await scope(async () => {
-      const caught = await catchUpProjectGroup(action, projectId);
-      expect(await commitProjectGroup(laptop.ctx, projectId)).toEqual({
-        epoch: caught.epoch + 1,
-        keyEpoch: caught.keyEpoch + 1
-      });
-      expect(await ensureProjectRotated(action, projectId, caught)).toEqual({
-        epoch: caught.epoch + 1,
-        keyEpoch: caught.keyEpoch + 1
-      });
-    });
   });
 
   it('refuses a duplicate epoch, and the loser rebases onto the winner', async () => {

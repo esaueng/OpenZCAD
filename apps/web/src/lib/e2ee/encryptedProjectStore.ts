@@ -172,7 +172,6 @@ import {
   type ProjectCutoff,
   type ProjectGroupContext
 } from './projectGroups';
-import { uncached } from './scopedGroupReads';
 import { verifyHeadShareLinks } from './shareLinkSet';
 import { forgetProjectKeys } from './unlockedProjectKeys';
 import { ProjectAuthorityError } from './projectAuthority';
@@ -1511,8 +1510,7 @@ export function createEncryptedProjectStore(
     const material = await groups.sessions.epochMaterial(
       refOf(device, projectId)
     );
-    // Fresh (`scopedGroupReads.ts`): this is what notices the keys moving.
-    const { group } = await uncached(groups.api).group(projectId);
+    const { group } = await groups.api.group(projectId);
     if (group.keyEpochBase + material.epoch !== state.keyEpoch) {
       throw new ApiError(
         409,

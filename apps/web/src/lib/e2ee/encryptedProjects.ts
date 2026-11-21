@@ -75,7 +75,6 @@ import {
   type MemberDevicesRemoved,
   type MembersRemoved
 } from './projectGroups';
-import { withScopedGroupReads } from './scopedGroupReads';
 import {
   createEncryptedMeasurements,
   createEncryptedViewStates,
@@ -152,11 +151,6 @@ export interface PageShareLinks {
   renewDelegation(
     authorization: UnlockAuthorization
   ): Promise<ShareDelegationState>;
-  /**
-   * Runs one share-link action with each repeated group read sent once
-   * (`scopedGroupReads.ts`).
-   */
-  scopeReads<T>(run: (ctx: ShareLinksContext) => Promise<T>): Promise<T>;
   /** Whether this account has a passkey that can confirm sharing. */
   hasPasskey(): boolean;
 }
@@ -427,10 +421,7 @@ async function openStore(
   await storePendingCutoffs(cutoffsApi, localPendingCutoffs(), userId).catch(
     () => 0
   );
-  // One share-link action asks the same group questions many times.
-  const { api: groupsApi, scope: scopeGroupReads } = withScopedGroupReads(
-    createProjectGroupsApi()
-  );
+  const groupsApi = createProjectGroupsApi();
   const contacts = contactsContext(e2ee);
   const groups = {
     api: groupsApi,
@@ -635,7 +626,6 @@ async function openStore(
   const sharingCtx = shareCtx;
   const sharing: PageShareLinks = {
     ctx: sharingCtx,
-    scopeReads: (run) => scopeGroupReads(() => run(sharingCtx)),
     hasPasskey: () =>
       account.list.unlockTargets.some((target) => target.kind === 'passkey'),
     renewDelegation: async (authorization) => {

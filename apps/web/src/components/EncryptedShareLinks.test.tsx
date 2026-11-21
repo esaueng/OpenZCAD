@@ -672,12 +672,28 @@ describe('EncryptedShareLinks speed', () => {
     );
     await user.click(screen.getByRole('button', { name: 'Revoke link' }));
     await waitFor(() => expect(client.list).toHaveBeenCalledTimes(2));
-    // Revoked on the server; the row still says active until the list says.
+    // Revoked on the server: not offered while the list catches up.
     expect(
-      screen.getByRole('button', { name: 'Copy View only link' })
-    ).toBeDisabled();
+      screen.queryByRole('button', { name: 'Copy View only link' })
+    ).not.toBeInTheDocument();
     refreshed({ links: [], retired: [], needsConfirmation: false });
     expect(await screen.findByText('Only invited people')).toBeVisible();
+  });
+
+  it('keeps a revoked link uncopyable when the refresh after revoking fails', async () => {
+    const client = fakeClient([active]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Copy View only link' });
+    vi.mocked(client.list).mockRejectedValue(new Error('List unavailable'));
+    await user.click(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
+    expect(await screen.findByText('List unavailable')).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: 'Copy View only link' })
+    ).not.toBeInTheDocument();
   });
 
   it('drops an earlier action’s refresh error once another action starts', async () => {
