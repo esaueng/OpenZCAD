@@ -177,6 +177,7 @@ import {
   ProjectAuthorityError
 } from './projectAuthority';
 import { projectAuthorityStore } from './projectAuthorityStore';
+import { uncached } from './scopedGroupReads';
 import { getKeySessionRevision } from './keySession';
 
 // --- API -------------------------------------------------------------------
@@ -582,10 +583,12 @@ const isApiError = (error: unknown, code: string) =>
 
 async function fetchGroup(
   ctx: ProjectGroupContext,
-  projectId: string
+  projectId: string,
+  /** Read the server even inside a share action (`scopedGroupReads.ts`). */
+  fresh = false
 ): Promise<E2eeProjectGroupRecord> {
   try {
-    return (await ctx.api.group(projectId)).group;
+    return (await (fresh ? uncached(ctx.api) : ctx.api).group(projectId)).group;
   } catch (error) {
     if (isApiError(error, 'E2EE_GROUP_NOT_FOUND')) {
       throw new ProjectGroupError(
@@ -631,14 +634,19 @@ async function foreignLocalState(
   const status = await ctx.sessions.status(ref);
   if (!status.inGroup || status.pendingRejoin) return null;
   const key = b64(leaf.signatureKey);
-  const { leaves } = await ctx.api.leaves(projectId);
-  const registered = leaves.some(
-    (l) =>
-      l.userId === ref.userId &&
-      l.deviceId === ref.deviceId &&
-      l.leafKey === key
-  );
-  if (registered) return null;
+  const registered = async (api: ProjectGroupsApi) =>
+    (await api.leaves(projectId)).leaves.some(
+      (l) =>
+        l.userId === ref.userId &&
+        l.deviceId === ref.deviceId &&
+        l.leafKey === key
+    );
+  if (await registered(ctx.api)) return null;
+  // Before discarding anything, ask the server itself: a shared answer
+  // (`scopedGroupReads.ts`) may predate a sibling tab registering this
+  // replacement leaf.
+  const fresh = uncached(ctx.api);
+  if (fresh !== ctx.api && (await registered(fresh))) return null;
   return (await serverGroup(ctx, projectId)) ? leaf : null;
 }
 
@@ -2289,7 +2297,8 @@ async function joinByWelcomeOnce(
     if (isApiError(error, 'E2EE_WELCOME_NOT_FOUND')) return null;
     throw error;
   }
-  const group = await fetchGroup(ctx, projectId);
+  // Fresh: the Welcome may be for an epoch newer than an earlier answer.
+  const group = await fetchGroup(ctx, projectId, true);
   const epoch = welcome.epoch + 1;
   if (!Number.isSafeInteger(epoch) || epoch < 1 || epoch > group.epoch) {
     throw new ProjectGroupError(
@@ -2488,7 +2497,8 @@ export async function ensureProjectRotated(
   if (caught) {
     const device = requireDevice(ctx);
     const status = await ctx.sessions.status(refOf(ctx, device, projectId));
-    const group = await fetchGroup(ctx, projectId);
+    // Fresh: this check is what notices a Commit sent since the catch-up.
+    const group = await fetchGroup(ctx, projectId, true);
     if (
       status.epoch === caught.epoch &&
       group.epoch === caught.epoch &&
@@ -4559,8 +4569,9 @@ export async function resetProjectGroup(
   if (!resetGroup) refuse('This build cannot reset encryption groups.');
   const device = requireDevice(ctx);
   const ref = refOf(ctx, device, projectId);
-  const group = await fetchGroup(ctx, projectId);
-  const { leaves } = await ctx.api.leaves(projectId);
+  // Fresh: whether anyone else holds a key decides whether this is allowed.
+  const group = await fetchGroup(ctx, projectId, true);
+  const { leaves } = await uncached(ctx.api).leaves(projectId);
   if (leaves.some((leaf) => leaf.userId !== ctx.account.userId)) {
     refuse('Another account holds a key in this project.');
   }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProjectGroupsApi } from './projectGroups';
 import {
   SCOPED_READ_MAX_AGE_MS,
+  uncached,
   withScopedGroupReads
 } from './scopedGroupReads';
 
@@ -108,6 +109,33 @@ describe('withScopedGroupReads', () => {
       await api.authority!('p');
     });
     expect(raw.authority).toHaveBeenCalledTimes(2);
+  });
+
+  it('reaches the server through uncached() inside a scope', async () => {
+    const raw = fakeApi();
+    const { api, scope } = withScopedGroupReads(raw);
+    expect(uncached(api)).toBe(raw);
+    expect(uncached(raw)).toBe(raw);
+    expect(uncached(withScopedGroupReads(api).api)).toBe(raw);
+    await scope(async () => {
+      await api.group('p');
+      await uncached(api).group('p');
+      await api.group('p');
+    });
+    expect(raw.group).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares answers only within the wrapper that read them', async () => {
+    const raw = fakeApi();
+    const first = withScopedGroupReads(raw);
+    const second = withScopedGroupReads(raw);
+    await first.scope(() =>
+      second.scope(async () => {
+        await first.api.leaves('p');
+        await second.api.leaves('p');
+      })
+    );
+    expect(raw.leaves).toHaveBeenCalledTimes(2);
   });
 
   it('keeps optional methods absent when the API has none', () => {

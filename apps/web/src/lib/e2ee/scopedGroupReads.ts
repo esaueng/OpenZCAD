@@ -1,7 +1,16 @@
 import type { ProjectGroupsApi } from './projectGroups';
 
-/** Runs `run` with repeated group reads answered once (see below). */
-export type ScopeGroupReads = <T>(run: () => Promise<T>) => Promise<T>;
+/** The API a wrapper was made from, for reads that must reach the server. */
+const RAW = Symbol('uncached group reads');
+
+/**
+ * The API without any read sharing. A check that exists to notice a change
+ * since an earlier read (another device's Commit, a sibling tab's reset)
+ * reads through this: a shared answer would be the earlier read itself.
+ */
+export function uncached(api: ProjectGroupsApi): ProjectGroupsApi {
+  return (api as { [RAW]?: ProjectGroupsApi })[RAW] ?? api;
+}
 
 /**
  * The reads that one share-link action repeats: every ownership, role and
@@ -26,9 +35,12 @@ const OTHER_READS = new Set<keyof ProjectGroupsApi>([
 export const SCOPED_READ_MAX_AGE_MS = 5_000;
 
 /**
- * Wraps the page's project-group API so that, while a scope runs, the
- * same group or leaves read is sent once and its answer shared.
- * Nothing is cached outside a scope. The cache is dropped when:
+ * Wraps a project-group API so that, while a scope runs, the same group or
+ * leaves read is sent once and its answer shared. Nothing is cached
+ * outside a scope. Every caller of the wrapped API shares the answers
+ * while one runs (the page's project store and member lists ask most of
+ * the repeated questions), so a check that must see a change since an
+ * earlier read uses `uncached`. The cache is dropped when:
  *
  * - any write starts or ends (a Commit, an authority save, a key upload:
  *   anything that may change what the server answers);
@@ -43,11 +55,11 @@ export const SCOPED_READ_MAX_AGE_MS = 5_000;
 export function withScopedGroupReads(
   api: ProjectGroupsApi,
   now: () => number = Date.now
-): { readonly api: ProjectGroupsApi; readonly scope: ScopeGroupReads } {
+) {
   let depth = 0;
   const answers = new Map<string, { at: number; answer: Promise<unknown> }>();
   const drop = () => answers.clear();
-  const wrapped: Record<string, unknown> = {};
+  const wrapped: Record<string | symbol, unknown> = { [RAW]: uncached(api) };
   for (const name of Object.keys(api) as (keyof ProjectGroupsApi)[]) {
     const method = api[name] as
       ((...args: unknown[]) => Promise<unknown>) | undefined;
@@ -92,7 +104,7 @@ export function withScopedGroupReads(
   }
   return {
     api: wrapped as unknown as ProjectGroupsApi,
-    scope: async (run) => {
+    scope: async <T>(run: () => Promise<T>): Promise<T> => {
       depth++;
       try {
         return await run();

@@ -123,8 +123,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/shareLinks')
     ]);
     const page = await encryptedShareLinks();
-    const { ctx } = page;
-    return page.scopeReads(async () => {
+    return page.scopeReads(async (ctx) => {
       let upkeepError: string | null = null;
       const upkeep =
         options?.upkeep === false
@@ -181,8 +180,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/shareLinks')
     ]);
     const page = await encryptedShareLinks();
-    const { ctx } = page;
-    return page.scopeReads(async () => {
+    return page.scopeReads(async (ctx) => {
       const created = await links.createShareLink(ctx, projectId, mode);
       const problem = shareLinkCreationProblem(created);
       if (problem) throw new Error(problem);
@@ -201,8 +199,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/shareLinks')
     ]);
     const page = await encryptedShareLinks();
-    await page.scopeReads(() =>
-      links.allowShareLinkCommentsById(page.ctx, projectId, shareId)
+    await page.scopeReads((ctx) =>
+      links.allowShareLinkCommentsById(ctx, projectId, shareId)
     );
   },
   async revoke(projectId, shareId) {
@@ -211,7 +209,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/shareLinks')
     ]);
     const page = await encryptedShareLinks();
-    await page.scopeReads(() => revokeShareLink(page.ctx, projectId, shareId));
+    await page.scopeReads((ctx) => revokeShareLink(ctx, projectId, shareId));
   },
   async confirm(projectId, confirmation) {
     const [{ encryptedShareLinks }, { issueShareAuthorities }, crypto] =
@@ -238,7 +236,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         secret.fill(0);
       }
     }
-    await page.scopeReads(() => issueShareAuthorities(page.ctx, projectId));
+    await page.scopeReads((ctx) => issueShareAuthorities(ctx, projectId));
   },
   async reissue(projectId, links) {
     const [{ encryptedShareLinks }, { reissueShareLinks }] = await Promise.all([
@@ -246,7 +244,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/shareLinks')
     ]);
     const page = await encryptedShareLinks();
-    await page.scopeReads(() => reissueShareLinks(page.ctx, projectId, links));
+    await page.scopeReads((ctx) => reissueShareLinks(ctx, projectId, links));
   },
   async dismissRemoval(projectId, notice) {
     const [{ encryptedShareLinks }, { acknowledgeShareRemoval }] =
@@ -355,8 +353,9 @@ export function EncryptedShareLinks({
   } | null>(null);
   const loadRevision = useRef(0);
 
-  // Whether the last full list reported a problem its upkeep may retry.
-  const upkeepProblem = useRef(false);
+  // Whether the last full list reported a problem its upkeep may retry
+  // (or none has finished yet: an action can start before the first one).
+  const upkeepProblem = useRef(true);
   const load = useCallback(
     async (options?: { readonly upkeep?: false }) => {
       const revision = ++loadRevision.current;
@@ -420,8 +419,14 @@ export function EncryptedShareLinks({
   );
 
   const run = async (key: string, action: () => Promise<void>) => {
+    // An earlier action's refresh no longer owns the list or error line.
+    loadRevision.current++;
     setBusy(key);
     setError(null);
+    // A new link or a confirmation shows its result itself, so the
+    // controls come back before the list does. Any other action's result
+    // is the list (a revoked link must not stay copyable meanwhile).
+    const early = key === 'create' || key === 'confirm';
     let failed = false;
     try {
       await action();
@@ -429,18 +434,21 @@ export function EncryptedShareLinks({
       failed = true;
       setError(message(caught));
     } finally {
-      setBusy(null);
+      if (early) setBusy(null);
     }
-    // The action's result is already on screen: the list catches up
-    // behind it, without the upkeep pass unless the last one reported a
-    // problem it retries (a revocation the server did not confirm). After
-    // a failure too, since a revoke can fail after its tombstone was
-    // written: the link then shows as revocation pending, not active.
-    await (upkeepProblem.current ? load() : load({ upkeep: false })).catch(
-      (caught: unknown) => {
-        if (!failed) setError(message(caught));
-      }
-    );
+    // Without the upkeep pass unless the last one reported a problem it
+    // retries (a revocation the server did not confirm). After a failure
+    // too, since a revoke can fail after its tombstone was written: the
+    // link then shows as revocation pending, not active.
+    try {
+      await (upkeepProblem.current ? load() : load({ upkeep: false })).catch(
+        (caught: unknown) => {
+          if (!failed) setError(message(caught));
+        }
+      );
+    } finally {
+      if (!early) setBusy(null);
+    }
   };
 
   const createLink = async () => {

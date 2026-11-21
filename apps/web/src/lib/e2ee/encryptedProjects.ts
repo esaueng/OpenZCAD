@@ -75,7 +75,7 @@ import {
   type MemberDevicesRemoved,
   type MembersRemoved
 } from './projectGroups';
-import { withScopedGroupReads, type ScopeGroupReads } from './scopedGroupReads';
+import { withScopedGroupReads } from './scopedGroupReads';
 import {
   createEncryptedMeasurements,
   createEncryptedViewStates,
@@ -156,7 +156,7 @@ export interface PageShareLinks {
    * Runs one share-link action with each repeated group read sent once
    * (`scopedGroupReads.ts`).
    */
-  scopeReads: ScopeGroupReads;
+  scopeReads<T>(run: (ctx: ShareLinksContext) => Promise<T>): Promise<T>;
   /** Whether this account has a passkey that can confirm sharing. */
   hasPasskey(): boolean;
 }
@@ -635,7 +635,7 @@ async function openStore(
   const sharingCtx = shareCtx;
   const sharing: PageShareLinks = {
     ctx: sharingCtx,
-    scopeReads: scopeGroupReads,
+    scopeReads: (run) => scopeGroupReads(() => run(sharingCtx)),
     hasPasskey: () =>
       account.list.unlockTargets.some((target) => target.kind === 'passkey'),
     renewDelegation: async (authorization) => {

@@ -657,4 +657,53 @@ describe('EncryptedShareLinks speed', () => {
     // The refresh skips the upkeep pass the action already did.
     expect(client.list).toHaveBeenLastCalledWith('proj_x', { upkeep: false });
   });
+
+  it('keeps a revoked link uncopyable until the list shows it revoked', async () => {
+    const client = fakeClient([active]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Copy View only link' });
+    let refreshed: (state: EncryptedShareLinksState) => void = () => undefined;
+    vi.mocked(client.list).mockImplementation(
+      () => new Promise((done) => (refreshed = done))
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
+    await waitFor(() => expect(client.list).toHaveBeenCalledTimes(2));
+    // Revoked on the server; the row still says active until the list says.
+    expect(
+      screen.getByRole('button', { name: 'Copy View only link' })
+    ).toBeDisabled();
+    refreshed({ links: [], retired: [], needsConfirmation: false });
+    expect(await screen.findByText('Only invited people')).toBeVisible();
+  });
+
+  it('drops an earlier action’s refresh error once another action starts', async () => {
+    const client = fakeClient([active]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    let fail: (error: Error) => void = () => undefined;
+    vi.mocked(client.list).mockImplementationOnce(
+      () => new Promise((_, reject) => (fail = reject))
+    );
+    await user.click(create);
+    await waitFor(() => expect(create).toBeEnabled());
+    // The second Create link starts; the first one's refresh fails while
+    // it runs.
+    vi.mocked(client.list).mockResolvedValue(active);
+    let made: (link: { url: string }) => void = () => undefined;
+    vi.mocked(client.create).mockImplementationOnce(
+      () => new Promise((done) => (made = done))
+    );
+    await user.click(create);
+    fail(new Error('First refresh failed'));
+    await new Promise((settle) => setTimeout(settle, 0));
+    made({ url: URL_A });
+    await waitFor(() => expect(client.list).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(create).toBeEnabled());
+    expect(screen.queryByText('First refresh failed')).not.toBeInTheDocument();
+  });
 });
