@@ -470,7 +470,7 @@ test(
 );
 
 test(
-  'starts a to-face extrude off its sketch plane, refuses a start past the face, and undoes',
+  'starts a to-face extrude off its sketch plane, refuses a start on the face, and undoes',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(150_000);
@@ -521,10 +521,10 @@ test(
     await expect(page.getByRole('contentinfo')).toContainText('warnings0');
     await expectFeatureMeasurement(page, row, '320');
 
-    // A start at or past the face leaves nothing: refused before Done.
+    // A start on the face leaves nothing: refused before Done.
     const again = await editExtrudeFromHistory(page, rowMain, 'Post');
-    await setBarValues(page, again, { 'Start offset': '30' });
-    await expect(again).toContainText('Start offset reaches');
+    await setBarValues(page, again, { 'Start offset': '25' });
+    await expect(again).toContainText('Start offset reaches the face');
     await expect(again.getByRole('button', { name: 'Done' })).toBeDisabled();
     await again.getByRole('button', { name: 'Cancel' }).click();
     await expect(again).toHaveCount(0);

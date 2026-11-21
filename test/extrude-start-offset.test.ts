@@ -8,9 +8,11 @@ import {
   extrudeSketch,
   listFeaturesInOrder,
   normalizeDocument,
+  patternBody,
   renameParameter,
   setParameter,
-  toFaceStartSpan,
+  toFaceExtent,
+  toFaceOffsetEnd,
   updateFeature
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
@@ -152,15 +154,32 @@ describe('F01 start offset', { timeout: 60_000 }, () => {
   }
 
   describe('shared span rule', () => {
-    it('measures from the start to the end, refusing a start at or past the end', () => {
-      expect(toFaceStartSpan(25, 5)).toBe(20);
-      expect(toFaceStartSpan(25, -5)).toBe(30);
-      expect(toFaceStartSpan(-13, -3)).toBe(-10);
-      expect(toFaceStartSpan(-13, 2)).toBe(-15);
-      expect(toFaceStartSpan(25, 25)).toBeNull();
-      expect(toFaceStartSpan(25, 30)).toBeNull();
-      expect(toFaceStartSpan(-13, -14)).toBeNull();
-      expect(toFaceStartSpan(25, Number.NaN)).toBeNull();
+    it('measures from the start to the face, whichever side of the start the face lies', () => {
+      expect(toFaceExtent(25, 5, 0)).toBe(20);
+      expect(toFaceExtent(25, -5, 0)).toBe(30);
+      expect(toFaceExtent(-13, -3, 0)).toBe(-10);
+      expect(toFaceExtent(-13, 2, 0)).toBe(-15);
+      // A start beyond the face runs back to it; a face on the sketch plane
+      // is reached from a start off it.
+      expect(toFaceExtent(25, 30, 0)).toBe(-5);
+      expect(toFaceExtent(0, -5, 0)).toBe(5);
+      expect(toFaceExtent(25, 30, 1)).toBe(-4);
+      // A start on the face, or an offset reaching the start, leaves none.
+      expect(toFaceExtent(25, 25, 0)).toBeNull();
+      expect(toFaceExtent(25, 21, 5)).toBeNull();
+      expect(toFaceExtent(25, Number.NaN, 0)).toBeNull();
+      // With no start offset it is exactly the v113 rule.
+      for (const [face, offset] of [
+        [25, 5],
+        [25, -3],
+        [-13, 3],
+        [25, 25],
+        [-13, 14]
+      ] as const) {
+        expect(toFaceExtent(face, 0, offset)).toBe(
+          toFaceOffsetEnd(face, offset)
+        );
+      }
     });
   });
 
@@ -315,21 +334,54 @@ describe('F01 start offset', { timeout: 60_000 }, () => {
       expect(body.bbox.max.z).toBeCloseTo(20, 9);
     });
 
-    it('refuses a start at or past the face end by name, not as an unresolved face', async () => {
-      for (const [start, extra] of [
-        [25, {}],
-        [21, { toFaceOffset: 5 }]
+    it('refuses a start on the face, or an offset reaching the start, by name, not as an unresolved face', async () => {
+      for (const [start, extra, message] of [
+        [25, {}, /Feature "Post": Start offset 25 reaches the face/],
+        [
+          21,
+          { toFaceOffset: 5 },
+          /Feature "Post": Offset from face 5 reaches where the extrusion starts: the face is only 4 from the start/
+        ]
       ] as const) {
         const result = await post(start, extra);
         const derived = await derive(result.document);
         expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
         const warnings = derived.warnings.join('\n');
-        expect(warnings).toMatch(
-          new RegExp(
-            `Feature "Post": Start offset ${start} reaches where the extrusion ends at the face`
-          )
-        );
+        expect(warnings).toMatch(message);
         expect(warnings).not.toMatch(/Target face is unresolved/);
+      }
+    });
+
+    it('runs back to a face below a start beyond it', async () => {
+      const result = await post(30);
+      const derived = await derive(result.document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[result.bodyId]!;
+      // From z = 30 down to the face at 25.
+      expect(body.volume).toBeCloseTo(AREA * 5, 6);
+      expect(body.bbox.min.z).toBeCloseTo(25, 9);
+      expect(body.bbox.max.z).toBeCloseTo(30, 9);
+    });
+
+    it('reaches a face on the sketch plane from a start offset, and refuses it without one', async () => {
+      // A ceiling whose underside lies on the sketch plane at z = 0.
+      for (const [startOffset, height] of [
+        [-5, 5],
+        [0, null]
+      ] as const) {
+        const result = await post(startOffset, {}, 0);
+        const derived = await derive(result.document);
+        if (height === null) {
+          expect(derived.warnings.join('\n')).toMatch(
+            /Target face is unresolved: the face lies on the sketch plane/
+          );
+        } else {
+          expect(derived.warnings).toEqual([]);
+          const body = derived.bodyRepresentations[result.bodyId]!;
+          expect(body.volume).toBeCloseTo(AREA * height, 6);
+          expect(body.bbox.min.z).toBeCloseTo(-5, 9);
+          expect(body.bbox.max.z).toBeCloseTo(0, 9);
+        }
       }
     });
 
@@ -356,6 +408,80 @@ describe('F01 start offset', { timeout: 60_000 }, () => {
         20 * 20 * 10 - AREA * 3,
         6
       );
+    });
+
+    it('grows a boss whose offset start cap lies on the target face, as one sketched there does', async () => {
+      const slab = () =>
+        addPrimitiveFeature(project('Boss'), {
+          name: 'Slab',
+          primitiveKind: 'box',
+          dimensions: { width: 20, height: 20, depth: 10 }
+        });
+      const volumes: number[] = [];
+      for (const [sketchZ, startOffset] of [
+        [10, 0],
+        [8, 2]
+      ] as const) {
+        const document = slab();
+        const slabId = document.bodyOrder.at(-1)!;
+        const sketched = sketch(document, sketchZ);
+        const boss = extrudeSketch(sketched.document, {
+          name: 'Boss',
+          sketchId: sketched.sketchId,
+          distance: 5,
+          startOffset,
+          operation: 'add',
+          targetBodyId: slabId
+        });
+        const derived = await derive(boss.document);
+        expect(derived.warnings).toEqual([]);
+        volumes.push(derived.bodyRepresentations[boss.bodyId]!.volume);
+      }
+      expect(volumes[0]).toBeCloseTo(4000 + AREA * 5, 6);
+      expect(volumes[1]).toBeCloseTo(volumes[0]!, 6);
+    });
+
+    it('does not let a pattern repeat a through-all copy its source refuses', async () => {
+      // Created at a start offset of 0 (accepted), then the parameter moves
+      // it off the sketch plane, which through all refuses.
+      let document = setParameter(project('Pattern'), {
+        name: 'lift',
+        expression: '0'
+      });
+      document = addPrimitiveFeature(document, {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 60, height: 20, depth: 10 }
+      });
+      const blockId = document.bodyOrder.at(-1)!;
+      const sketched = sketch(document, 2);
+      const cut = extrudeSketch(sketched.document, {
+        name: 'Hole',
+        sketchId: sketched.sketchId,
+        distance: 1,
+        startOffset: 'lift',
+        operation: 'cut',
+        targetBodyId: blockId,
+        endCondition: 'through-all',
+        throughAllSide: 'forward'
+      });
+      const holeId = listFeaturesInOrder(cut.document).at(-1)!.featureId;
+      const patterned = patternBody(cut.document, {
+        name: 'Holes',
+        targetBodyId: cut.bodyId,
+        patternKind: 'linear',
+        count: 3,
+        axis: 'x',
+        spacing: 15,
+        sourceFeatureIds: [holeId]
+      }).document;
+      const accepted = await derive(patterned);
+      expect(accepted.warnings).toEqual([]);
+      const moved = setParameter(patterned, { name: 'lift', expression: '3' });
+      const derived = await derive(moved);
+      const warnings = derived.warnings.join('\n');
+      expect(warnings).toMatch(/Feature "Hole": .*has no start offset/);
+      expect(warnings).toMatch(/Feature "Holes": .*has no start offset/);
     });
 
     it('hinges a draft on the start plane, keeping the profile there', async () => {
@@ -504,14 +630,25 @@ describe('F01 start offset', { timeout: 60_000 }, () => {
       ).toMatch(/^Start offset: /);
       expect(
         extrudeDraftRefusal({ ...draft, startOffset: '25' }, context(25), true)
-      ).toMatch(/Start offset reaches where the extrusion ends/);
+      ).toMatch(/Start offset reaches the face/);
       expect(
         extrudeDraftRefusal(
           { ...draft, startOffset: '21', faceOffset: '5' },
           context(25),
           true
         )
-      ).toMatch(/Start offset reaches/);
+      ).toMatch(/Offset from face reaches where the extrusion starts/);
+      // A start beyond the face runs back to it.
+      expect(
+        extrudeDraftRefusal({ ...draft, startOffset: '30' }, context(25), true)
+      ).toBeNull();
+      // A face on the sketch plane needs a start offset to be reached.
+      expect(
+        extrudeDraftRefusal({ ...draft, startOffset: '0' }, context(0), true)
+      ).toMatch(/lies on the sketch plane; give a start offset/);
+      expect(
+        extrudeDraftRefusal({ ...draft, startOffset: '-5' }, context(0), true)
+      ).toBeNull();
       expect(
         extrudeDraftRefusal(
           { ...draft, startOffset: 'lift' },

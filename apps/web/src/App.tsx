@@ -28798,6 +28798,11 @@ export function App() {
   }
 
   /** Armed region handle for the viewport. */
+  // F01 (v121): the region's arrow and ghost stand on the start plane.
+  const regionStartOffset =
+    regionExtrudeState && Number.isFinite(regionExtrudeState.startOffset)
+      ? regionExtrudeState.startOffset
+      : 0;
   const regionHandleTarget = useMemo(() => {
     if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return null;
@@ -28808,6 +28813,7 @@ export function App() {
       regionFingerprint: anchor.regionFingerprint,
       samplePoint: anchor.samplePoint,
       area: anchor.area,
+      ...(regionStartOffset !== 0 ? { startOffset: regionStartOffset } : {}),
       initialValue: regionDraftDistance.current ?? interaction.lastValue ?? 0,
       followers: interaction.targets
         .filter((target) => target !== anchor)
@@ -28816,7 +28822,7 @@ export function App() {
           samplePoint: target.samplePoint
         }))
     };
-  }, [interaction]);
+  }, [interaction, regionStartOffset]);
 
   /**
    * The extrude a region gesture describes, before its operation is decided.

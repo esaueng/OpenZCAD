@@ -1004,12 +1004,35 @@ export interface SketchViewData {
 }
 
 /** An armed region-extrude handle (drag a detected region into a solid). */
+/** The sketch basis moved to an extrusion's start plane (F01, v121). */
+function regionStartBasis<
+  B extends {
+    origin: { x: number; y: number; z: number };
+    normal: { x: number; y: number; z: number };
+  }
+>(basis: B, startOffset: number | undefined): B {
+  if (!startOffset) return basis;
+  return {
+    ...basis,
+    origin: {
+      x: basis.origin.x + basis.normal.x * startOffset,
+      y: basis.origin.y + basis.normal.y * startOffset,
+      z: basis.origin.z + basis.normal.z * startOffset
+    }
+  };
+}
+
 export interface RegionHandleTarget {
   sketchId: string;
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   area: number;
   initialValue?: number;
+  /**
+   * F01 (v121): how far along the sketch normal the extrusion starts; the
+   * arrow and its ghost stand there. Absent is the sketch plane.
+   */
+  startOffset?: number;
   /**
    * The other selected regions of the same sketch. Each draws its own arrow
    * that follows this one's value, and dragging any of them drives them all.
@@ -16268,7 +16291,7 @@ export function ModelViewer({
     if (!view || !region) {
       return;
     }
-    const basis = view.basis;
+    const basis = regionStartBasis(view.basis, regionHandle.startOffset);
     const mesh = group.children.find(
       (child) =>
         (child.userData.region as RegionPickData | undefined)
@@ -16366,7 +16389,11 @@ export function ModelViewer({
       if (!region) {
         return [];
       }
-      const rig = buildRegionFollowerRig(view.basis, region, follower);
+      const rig = buildRegionFollowerRig(
+        regionStartBasis(view.basis, regionHandle.startOffset),
+        region,
+        follower
+      );
       rig.setValue(regionHandle.initialValue ?? 0);
       context.scene.add(rig.group);
       context.scene.add(rig.worldGroup);

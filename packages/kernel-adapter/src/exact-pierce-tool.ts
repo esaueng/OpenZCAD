@@ -36,6 +36,8 @@ import {
 } from '@openzcad/geometry';
 import type { FeatureNode, UnitSystem } from '@openzcad/shared';
 import { buildSweep } from './exact-profile-builders';
+import { resolveExtrudeStartOffset } from './extrude-options';
+import { shiftBasisAlongNormal } from './exact-math';
 import { classifySolidPoint } from './exact-measure';
 import { isBuildCancelled } from './exact-cancellation';
 import { readFacePlaneFrame } from './exact-face-plane-frame';
@@ -646,18 +648,6 @@ function piercedFeatureNode(
 ): FeatureNode | null {
   const data = feature.data;
   if (data.featureKind !== 'extrude' || data.symmetric) return null;
-  // F01 (v121): a start offset moves the start cap off the sketch plane.
-  if (
-    data.startOffset !== undefined &&
-    resolveParamValue(
-      data.startOffset,
-      scope,
-      'start offset',
-      documentUnits
-    ) !== 0
-  ) {
-    return null;
-  }
   if (
     data.backDistance !== undefined &&
     resolveParamValue(
@@ -687,8 +677,13 @@ export function piercedExtrudeTool(
   const { kernel, document, scope, result } = ctx;
   if (feature.data.featureKind !== 'extrude') return null;
   const data: FeatureDataOf<'extrude'> = feature.data;
-  const plane = result.sketchBases.get(data.sketchId);
-  if (!plane) return null;
+  const sketchPlane = result.sketchBases.get(data.sketchId);
+  if (!sketchPlane) return null;
+  // F01 (v121): the start cap lies on the start plane; the twin's travel
+  // runs back across it, as the sweep builder places it.
+  const start = resolveExtrudeStartOffset(data, scope, document);
+  const plane =
+    start === 0 ? sketchPlane : shiftBasisAlongNormal(sketchPlane, start);
   const distance = resolveParamValue(
     data.distance,
     scope,

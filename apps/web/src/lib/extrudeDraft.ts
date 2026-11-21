@@ -4,8 +4,7 @@ import {
   MAX_EXTRUDE_DRAFT_DEG,
   coerceParamValue,
   extrudeSidesConflict,
-  toFaceOffsetEnd,
-  toFaceStartSpan
+  toFaceExtent
 } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -213,7 +212,8 @@ export function extrudeShownExtent(
 
 /**
  * A picked face the build would refuse (not parallel to the sketch, or lying
- * on it), said before Apply rather than after; null when there is none.
+ * on the sketch plane with no start offset to reach it from), said before
+ * Apply rather than after; null when there is none.
  */
 export function extrudeToFaceProblem(
   draft: ExtrudeDraft,
@@ -221,51 +221,73 @@ export function extrudeToFaceProblem(
 ): string | null {
   if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
   const info = ctx.toFacePicking!.describe(draft.toFace);
+  if (info.distance === 0) {
+    const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
+    return start === 0
+      ? 'This face lies on the sketch plane; give a start offset or pick another face.'
+      : null;
+  }
   if (info.distance !== null) return null;
   return (
     info.problem ??
     (info.pending
       ? 'Checking the target face…'
-      : 'This face is not parallel to the sketch plane, or lies on it; pick a face parallel to the sketch.')
+      : 'This face is not parallel to the sketch plane; pick a face parallel to the sketch.')
   );
 }
 
 /**
- * F01 (v113): an offset from the face that would carry the end onto or past
- * the sketch plane, said before Apply; null when there is none, or while
- * the face's reach or the offset is not known yet (the build decides then).
+ * F01 (v113, v121): where a to-face extrusion would sweep from its start to
+ * the face less its offset, by the build's own rule ({@link toFaceExtent});
+ * a refusal when that leaves nothing, else null. Null too while the face's
+ * reach or either value is not known yet (the build decides then).
  */
+function extrudeToFaceExtentRefusal(
+  draft: ExtrudeDraft,
+  ctx: ExtrudeDraftContext
+): { start: boolean; message: string } | null {
+  if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
+  const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
+  const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
+  if (offset === null || start === null) return null;
+  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
+  if (reach === null || (reach === 0 && start === 0)) return null;
+  if (toFaceExtent(reach, start, offset) !== null) return null;
+  if (start === 0) {
+    return {
+      start: false,
+      message:
+        'Offset from face reaches the sketch plane; make it smaller than the distance to the face.'
+    };
+  }
+  return Math.abs(reach - start) <= 1e-9 * Math.max(1, Math.abs(reach))
+    ? {
+        start: true,
+        message: 'Start offset reaches the face; move the start off the face.'
+      }
+    : {
+        start: false,
+        message:
+          'Offset from face reaches where the extrusion starts; make it smaller than the distance from the start to the face.'
+      };
+}
+
+/** F01 (v113): an offset from the face that leaves nothing to extrude. */
 export function extrudeToFaceOffsetProblem(
   draft: ExtrudeDraft,
   ctx: ExtrudeDraftContext
 ): string | null {
-  if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
-  const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
-  if (offset === null || offset === 0) return null;
-  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
-  if (reach === null) return null;
-  if (toFaceOffsetEnd(reach, offset) !== null) return null;
-  return 'Offset from face reaches the sketch plane; make it smaller than the distance to the face.';
+  const refusal = extrudeToFaceExtentRefusal(draft, ctx);
+  return refusal && !refusal.start ? refusal.message : null;
 }
 
-/**
- * F01 (v121): a start offset that reaches or passes where a to-face
- * extrusion ends, said before Apply; null when there is none, or while the
- * face's reach or either offset is not known yet (the build decides then).
- */
+/** F01 (v121): a start offset that lands on the face. */
 export function extrudeStartOffsetProblem(
   draft: ExtrudeDraft,
   ctx: ExtrudeDraftContext
 ): string | null {
-  if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
-  const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
-  const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
-  if (start === null || start === 0 || offset === null) return null;
-  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
-  if (reach === null) return null;
-  const end = offset === 0 ? reach : toFaceOffsetEnd(reach, offset);
-  if (end === null || toFaceStartSpan(end, start) !== null) return null;
-  return 'Start offset reaches where the extrusion ends at the face; move the start back toward the sketch plane.';
+  const refusal = extrudeToFaceExtentRefusal(draft, ctx);
+  return refusal && refusal.start ? refusal.message : null;
 }
 
 /** The stored face no longer resolves and has not been picked again. */

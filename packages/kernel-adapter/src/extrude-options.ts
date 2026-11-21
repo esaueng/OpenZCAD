@@ -1,13 +1,10 @@
 import {
   EXTRUDE_TO_FACE_UNRESOLVED,
   MAX_EXTRUDE_DRAFT_DEG,
-  TO_FACE_PARALLEL_SINE_LIMIT,
   listFeaturesInOrder,
-  toFaceOffsetEnd,
-  toFaceOffsetReachesSketchMessage,
-  toFaceSignedDistance,
-  toFaceStartPassesEndMessage,
-  toFaceStartSpan,
+  toFaceExtent,
+  toFaceExtentRefusal,
+  toFaceParallelHeight,
   resolveParamValue
 } from '@openzcad/document-core';
 import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
@@ -99,17 +96,15 @@ export function toFaceDistance(
     throw unresolved(error instanceof Error ? error.message : String(error));
   }
   // The same test the extrude card applies before it offers Create/Apply.
-  const distance = toFaceSignedDistance(basis, {
+  // A face on the sketch plane resolves as zero: a start offset can still
+  // reach it, and `toFaceSweepFeature` refuses it when there is none.
+  const distance = toFaceParallelHeight(basis, {
     point: frame.origin,
     normal: frame.zAxis
   });
   if (distance !== null) return distance;
-  const alignment = dot(frame.zAxis, basis.normal);
   throw unresolved(
-    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
-      TO_FACE_PARALLEL_SINE_LIMIT
-      ? 'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
-      : 'the face lies on the sketch plane, so there is nothing to extrude.'
+    'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
   );
 }
 
@@ -175,17 +170,19 @@ export function toFaceSweepFeature(
 ): FeatureNode {
   const faceDistance = toFaceDistance(kernel, document, feature, data, result);
   const offset = resolveToFaceOffset(data, scope, document);
-  const distance =
-    offset === 0 ? faceDistance : toFaceOffsetEnd(faceDistance, offset);
-  if (distance === null) {
-    // Not an unresolved face: the face resolved, and a re-pick would not
-    // help. The offset (or the face's new position) is what must change.
-    throw new Error(toFaceOffsetReachesSketchMessage(faceDistance, offset));
-  }
   const start = resolveExtrudeStartOffset(data, scope, document);
-  const span = start === 0 ? distance : toFaceStartSpan(distance, start);
+  if (faceDistance === 0 && start === 0) {
+    throw unresolved(
+      'the face lies on the sketch plane, so there is nothing to extrude.'
+    );
+  }
+  // F01 (v121): measured from the start plane, toward the face whichever
+  // side of the start it lies on.
+  const span = toFaceExtent(faceDistance, start, offset);
   if (span === null) {
-    throw new Error(toFaceStartPassesEndMessage(distance, start));
+    // Not an unresolved face: the face resolved, and a re-pick would not
+    // help. The offset, the start (or the face's position) must change.
+    throw new Error(toFaceExtentRefusal(faceDistance, start, offset));
   }
   const {
     endCondition: _endCondition,

@@ -2802,28 +2802,73 @@ function validateExtrudeLengthValue(value: unknown, label: string): void {
 }
 
 /**
- * F01 (v121): the signed length a to-face extrude sweeps once it starts
- * `start` along the normal from its sketch plane instead of on it, given
- * where it ends (`end`, the face less any offset from it, from
- * {@link toFaceOffsetEnd}); null when the start reaches or passes that end,
- * which would sweep nothing or turn the extrusion back toward the sketch.
+ * F01 (v121): the signed length a to-face extrude sweeps from its start
+ * plane, `start` along the normal from the sketch plane, to the face at
+ * `face` (its signed distance from the sketch plane), less `offset` from
+ * the face (positive stops short of it, toward the start; negative passes
+ * it). The extrusion runs whichever way the face lies from the start, so a
+ * face on the sketch plane, or a start beyond the face, is fine. Null when
+ * the start lies on the face, or the offset carries the end onto or past
+ * the start. With no start offset it is exactly {@link toFaceOffsetEnd}.
  * The exact build and the extrude card both decide with this.
  */
-export function toFaceStartSpan(end: number, start: number): number | null {
-  if (!Number.isFinite(end) || !Number.isFinite(start)) return null;
-  const span = end - start;
-  return Math.sign(span) === Math.sign(end) &&
-    Math.abs(span) > 1e-9 * Math.max(1, Math.abs(end), Math.abs(start))
+export function toFaceExtent(
+  face: number,
+  start: number,
+  offset: number
+): number | null {
+  if (![face, start, offset].every(Number.isFinite)) return null;
+  const tolerance =
+    1e-9 * Math.max(1, Math.abs(face), Math.abs(start), Math.abs(offset));
+  const reach = face - start;
+  if (!(Math.abs(reach) > tolerance)) return null;
+  const direction = Math.sign(reach);
+  const span = reach - direction * offset;
+  return Math.sign(span) === direction && Math.abs(span) > tolerance
     ? span
     : null;
 }
 
-/** The refusal {@link toFaceStartSpan} stands for, in document words. */
-export function toFaceStartPassesEndMessage(
-  end: number,
-  start: number
+/** The refusal {@link toFaceExtent} stands for, in document words. */
+export function toFaceExtentRefusal(
+  face: number,
+  start: number,
+  offset: number
 ): string {
-  return `Start offset ${start} reaches where the extrusion ends at the face (${Math.round(end * 1e6) / 1e6} from the sketch plane), so nothing is left to extrude; move the start back toward the sketch plane.`;
+  if (start === 0) return toFaceOffsetReachesSketchMessage(face, offset);
+  const reach = Math.round(Math.abs(face - start) * 1e6) / 1e6;
+  return reach === 0
+    ? `Start offset ${start} reaches the face, so nothing is left to extrude; move the start off the face.`
+    : `Offset from face ${offset} reaches where the extrusion starts: the face is only ${reach} from the start (start offset ${start}), so the offset must be less than that.`;
+}
+
+/**
+ * F01 (v121): the signed distance from the sketch plane to a face parallel
+ * to it, zero when it lies on the sketch plane, or null when it is not
+ * parallel. Unlike {@link toFaceSignedDistance} it keeps a face on the
+ * sketch plane, which a start offset can still reach.
+ */
+export function toFaceParallelHeight(
+  sketch: { origin: ToFacePoint; normal: ToFacePoint },
+  face: { point: ToFacePoint; normal: ToFacePoint }
+): number | null {
+  const alignment =
+    face.normal.x * sketch.normal.x +
+    face.normal.y * sketch.normal.y +
+    face.normal.z * sketch.normal.z;
+  if (
+    !Number.isFinite(alignment) ||
+    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
+      TO_FACE_PARALLEL_SINE_LIMIT
+  ) {
+    return null;
+  }
+  const height =
+    (face.point.x - sketch.origin.x) * sketch.normal.x +
+    (face.point.y - sketch.origin.y) * sketch.normal.y +
+    (face.point.z - sketch.origin.z) * sketch.normal.z;
+  if (!Number.isFinite(height)) return null;
+  return Math.abs(height) > 1e-9 * Math.max(1, Math.abs(height)) ? height : 0;
 }
 
 /**
@@ -6339,25 +6384,8 @@ export function toFaceSignedDistance(
   sketch: { origin: ToFacePoint; normal: ToFacePoint },
   face: { point: ToFacePoint; normal: ToFacePoint }
 ): number | null {
-  const alignment =
-    face.normal.x * sketch.normal.x +
-    face.normal.y * sketch.normal.y +
-    face.normal.z * sketch.normal.z;
-  if (
-    !Number.isFinite(alignment) ||
-    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
-      TO_FACE_PARALLEL_SINE_LIMIT
-  ) {
-    return null;
-  }
-  const distance =
-    (face.point.x - sketch.origin.x) * sketch.normal.x +
-    (face.point.y - sketch.origin.y) * sketch.normal.y +
-    (face.point.z - sketch.origin.z) * sketch.normal.z;
-  return Number.isFinite(distance) &&
-    Math.abs(distance) > 1e-9 * Math.max(1, Math.abs(distance))
-    ? distance
-    : null;
+  const height = toFaceParallelHeight(sketch, face);
+  return height === 0 ? null : height;
 }
 
 /**
