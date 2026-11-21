@@ -59,25 +59,36 @@ describe('M02 patterns of wraps', { timeout: 180_000 }, () => {
   });
   afterAll(() => adapter.dispose());
 
-  /** The post with a wrap of `objects` on its side, and the wrap's id. */
+  /**
+   * The post (or, `cone`, a frustum from radius 10 at z = 0 to 5 at 20) with
+   * a wrap of `objects` on its side, and the wrap's id.
+   */
   async function wrapped(
     objects: SketchObjectData[],
-    options: Pick<WrapInput, 'mode' | 'depth'>
+    options: Pick<WrapInput, 'mode' | 'depth'>,
+    cone = false
   ): Promise<{ document: ProjectDocument; wrapId: FeatureId }> {
     const start = addPrimitiveFeature(createProjectDocument('Post', user), {
       name: 'Post',
-      primitiveKind: 'cylinder',
-      dimensions: { radius: R, height: 20 }
+      ...(cone
+        ? {
+            primitiveKind: 'cone' as const,
+            dimensions: { bottomRadius: 10, topRadius: 5, height: 20 }
+          }
+        : {
+            primitiveKind: 'cylinder' as const,
+            dimensions: { radius: R, height: 20 }
+          })
     });
     const postId = last(start);
     const first = await adapter.syncDocument(start);
     const side = first.bodyRepresentations[postId]!.topology!.faces.find(
-      (face) => face.geometry?.surfaceType === 'cylinder'
+      (face) => face.geometry?.surfaceType === (cone ? 'cone' : 'cylinder')
     )!;
     const sketch = addSketchFeature(start, {
       name: 'Label',
       plane: 'YZ',
-      offset: R,
+      offset: cone ? 7.5 : R,
       objects
     });
     const node = findSketch(sketch.document, sketch.sketchId)!;
@@ -136,7 +147,9 @@ describe('M02 patterns of wraps', { timeout: 180_000 }, () => {
     // The raised top and its four walls.
     expect(own.length).toBeGreaterThanOrEqual(5);
     for (const face of own) {
-      expect(face.reference!.lineageName).toMatch(/^wrap\.face\.w\d+$/);
+      expect(face.reference!.lineageName).toMatch(
+        /^wrap\.face\.w[0-9a-f]{32}$/
+      );
     }
     // The post's caps keep their names through the wrap.
     // (At z = 0 and 20: the badge's own top and bottom walls face Z too.)
@@ -229,5 +242,49 @@ describe('M02 patterns of wraps', { timeout: 180_000 }, () => {
       (feature) => feature.featureId === wrapId
     )!;
     expect(patternSourceProblem(wrap.data, wrap.name)).toBeNull();
+  });
+
+  it('never gives one name to two different faces across an edit (review)', async () => {
+    // As the review found it: with 32-bit names the badge's bottom here and
+    // its top once the sketch moved shared one.
+    const named = async (centerY: number) => {
+      const { document, wrapId } = await wrapped([{ ...rectangle, centerY }], {
+        mode: 'emboss',
+        depth: 1
+      });
+      const derived = await adapter.syncDocument(document);
+      expect(failures(derived)).toEqual([]);
+      return new Map(
+        derived.bodyRepresentations[last(document)]!.topology!.faces.filter(
+          (face) => face.reference?.producingFeatureId === wrapId
+        ).map((face) => [face.reference!.lineageName, face] as const)
+      );
+    };
+    const before = await named(9.009353);
+    const after = await named(5.025298);
+    expect(before.size).toBeGreaterThan(0);
+    for (const [name, face] of after) {
+      const earlier = before.get(name);
+      if (!earlier) continue;
+      expect(earlier.reference!.witness).toEqual(face.reference!.witness);
+    }
+  });
+
+  it('names the raised face of a badge wrapped on a cone (review)', async () => {
+    const { document, wrapId } = await wrapped(
+      [rectangle],
+      { mode: 'emboss', depth: 1 },
+      true
+    );
+    const derived = await adapter.syncDocument(document);
+    expect(failures(derived)).toEqual([]);
+    const own = derived.bodyRepresentations[
+      last(document)
+    ]!.topology!.faces.filter(
+      (face) => face.reference?.producingFeatureId === wrapId
+    );
+    // The raised cone, read by its exact surface; the spline walls have
+    // no carrier to prove them the wrap's and stay unnamed.
+    expect(own.map((face) => face.geometry?.surfaceType)).toContain('cone');
   });
 });
