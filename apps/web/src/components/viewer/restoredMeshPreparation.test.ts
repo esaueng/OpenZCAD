@@ -52,6 +52,46 @@ describe('restoring prepared display meshes', () => {
     expect(cache.restore(next)?.geometry).toBeDefined();
   });
 
+  it('shares preparation with an identical committed fillet under its new body ID', () => {
+    const cache = new RestoredMeshPreparation();
+    const preview = panel();
+    preview.source = 'fillet';
+    const prepared = prepareBody(preview);
+    cache.remember(preview, prepared);
+    const checked = structuredClone(preview);
+    checked.bodyId = toBodyId('committed blend');
+    const restored = cache.restore(checked);
+    expect(restored?.geometry).toBe(prepared.geometry);
+    expect(restored).toEqual(prepareBody(checked));
+
+    checked.topology!.edges[0]!.topologyId = 'changed pick';
+    expect(cache.restore(checked)).toBeUndefined();
+    checked.topology!.edges[0]!.topologyId = 'join';
+    checked.mesh.vertices[0] = -0;
+    expect(cache.restore(checked)).toBeUndefined();
+  });
+
+  it('keeps the committed fillet available for Undo after another body is prepared', () => {
+    const cache = new RestoredMeshPreparation();
+    const preview = panel();
+    preview.source = 'fillet';
+    const prepared = prepareBody(preview);
+    cache.remember(preview, prepared);
+
+    const checked = structuredClone(preview);
+    checked.bodyId = toBodyId('committed blend');
+    expect(cache.restore(checked)?.geometry).toBe(prepared.geometry);
+    const other = panel();
+    other.bodyId = toBodyId('another solid');
+    other.mesh.vertices[0] = 2;
+    cache.remember(other, prepareBody(other));
+
+    const edit = structuredClone(checked);
+    edit.mesh.vertices[0] = 3;
+    cache.remember(edit, prepareBody(edit));
+    expect(cache.restore(checked)?.geometry).toBe(prepared.geometry);
+  });
+
   it('declines changes in every input used by shading and tangent classification', () => {
     const original = panel();
     const cache = new RestoredMeshPreparation();
