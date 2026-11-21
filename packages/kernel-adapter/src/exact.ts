@@ -1,3 +1,4 @@
+import { clearCheckedHoleCuts } from './exact-point-hole-cuts';
 import { PatternOverlapWorkers } from './pattern-overlap-workers';
 import {
   AxialExtentTracker,
@@ -3154,6 +3155,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.patternWorkers.dispose();
       this.heldDisplayDeflections.clear();
       this.previewFaceGeometry.clear();
+      clearCheckedHoleCuts(activeKernel);
       this.heldDisplayProjectId = document.projectId;
     }
     // Kernel reads the replay shares with the measurement pass of the same
