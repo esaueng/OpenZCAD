@@ -69,12 +69,36 @@ describe('sampled shoulder moves', () => {
   });
 
   it('raises a block top into the rim once the kernel can', () => {
-    expect(sampledShoulderMove(body, blockTop, 4, NEW)).toBe(true);
-    expect(sampledShoulderMove(body, blockTop, 4, OLD)).toBe(false);
+    // The shoulder's spring (z = 28) meets the rim's (z = 33) at +5.
+    expect(sampledShoulderMove(body, blockTop, 5, NEW)).toBe(true);
+    expect(sampledShoulderMove(body, blockTop, 6, NEW)).toBe(true);
+    expect(sampledShoulderMove(body, blockTop, 6, OLD)).toBe(false);
+  });
+
+  it('keeps the Box resize for a rise that stops short of the rim', () => {
+    expect(sampledShoulderMove(body, blockTop, 1, NEW)).toBe(false);
+    expect(sampledShoulderMove(body, blockTop, 4.9, NEW)).toBe(false);
+  });
+
+  it('needs a rim on the shoulder axis', () => {
+    const noRim: BodyTopology = {
+      ...body,
+      faces: body.faces.filter((f) => f !== rim)
+    };
+    expect(sampledShoulderMove(noRim, blockTop, 6, NEW)).toBe(false);
+    const offAxis = face(4, {
+      ...rim.geometry,
+      torusCenter: { x: 30, y: 0, z: 33 }
+    });
+    const otherBoss: BodyTopology = {
+      ...body,
+      faces: body.faces.map((f) => (f === rim ? offAxis : f))
+    };
+    expect(sampledShoulderMove(otherBoss, blockTop, 6, NEW)).toBe(false);
   });
 
   it('keeps the dimension edit for a cap rising away from the block', () => {
-    expect(sampledShoulderMove(body, cap, 4, NEW)).toBe(false);
+    expect(sampledShoulderMove(body, cap, 6, NEW)).toBe(false);
   });
 
   it('keeps the dimension edit for a block top lowered away from the rim', () => {
@@ -86,7 +110,7 @@ describe('sampled shoulder moves', () => {
       ...body,
       edges: [edge(11, 'LINE', [1, 5]), edge(12, 'CIRCLE', [2, 4])]
     };
-    expect(sampledShoulderMove(noShoulder, blockTop, 4, NEW)).toBe(false);
+    expect(sampledShoulderMove(noShoulder, blockTop, 6, NEW)).toBe(false);
     // A convex round on the block top's own edge, as on a cylindrical block.
     const round = face(7, {
       surfaceType: 'torus',
@@ -99,7 +123,7 @@ describe('sampled shoulder moves', () => {
       faces: [...body.faces, round],
       edges: [edge(10, 'CIRCLE', [1, 7]), edge(11, 'LINE', [1, 5])]
     };
-    expect(sampledShoulderMove(convexOnly, blockTop, 4, NEW)).toBe(false);
+    expect(sampledShoulderMove(convexOnly, blockTop, 6, NEW)).toBe(false);
   });
 
   it('needs straight edge rounds beside the torus rounds', () => {
@@ -107,7 +131,7 @@ describe('sampled shoulder moves', () => {
       ...body,
       faces: body.faces.filter((f) => f !== edgeRound)
     };
-    expect(sampledShoulderMove(toriOnly, blockTop, 4, NEW)).toBe(false);
+    expect(sampledShoulderMove(toriOnly, blockTop, 6, NEW)).toBe(false);
     expect(sampledShoulderMove(toriOnly, cap, -4, NEW)).toBe(false);
   });
 
@@ -121,7 +145,7 @@ describe('sampled shoulder moves', () => {
       sampledShoulderMove(
         { ...body, edges: [...body.edges, edge(13, 'CIRCLE', [6, 3])] },
         side,
-        4,
+        6,
         NEW
       )
     ).toBe(false);

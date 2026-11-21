@@ -9,8 +9,9 @@ import { supportsBlendGroupEdits, supportsShoulderRise } from '../kernelBuild';
  *
  * - Lowering a boss cap (bounded only by circles) into the concave shoulder
  *   round at its foot.
- * - Raising the block top around that shoulder into the boss's rim round.
- *   The top meets the shoulder along a circle. The shoulder is concave, so
+ * - Raising the block top around that shoulder far enough to reach the
+ *   boss's rim round. The top meets the shoulder along a circle, and the
+ *   rim is a torus round on the same axis above it. The shoulder is concave, so
  *   its torus centre stands above the top; a boss cap's convex rim has its
  *   centre below the cap, and a rising cap keeps its height edit. This needs
  *   a newer kernel (`supportsShoulderRise`).
@@ -42,23 +43,34 @@ export function sampledShoulderMove(
     );
   if (offset === 0 || !supportsShoulderRise(kernelVersion)) return false;
   const level = face.geometry!.center.z;
-  const shoulders = new Set(
-    topology.faces
-      .filter((f) => {
-        const g = f.geometry;
-        return (
-          g?.surfaceType === 'torus' &&
-          g.featureType === 'blend' &&
-          g.torusCenter !== undefined &&
-          g.minorRadius !== undefined &&
-          g.torusCenter.z > level + g.minorRadius / 2
-        );
-      })
-      .map((f) => f.hash)
-  );
+  const tori = topology.faces.flatMap((f) => {
+    const g = f.geometry;
+    return g?.surfaceType === 'torus' &&
+      g.featureType === 'blend' &&
+      g.torusCenter !== undefined &&
+      g.minorRadius !== undefined &&
+      (g.axis === undefined || Math.abs(g.axis.z) > 0.999)
+      ? [{ hash: f.hash, center: g.torusCenter, minor: g.minorRadius }]
+      : [];
+  });
+  const shoulders = tori.filter((s) => s.center.z > level + s.minor / 2);
+  // The rise reaches the rim once the shoulder's spring on the boss wall
+  // (its centre height) meets the rim's. Below that the Box resize builds.
+  const reachesRim = (s: (typeof tori)[number]) =>
+    tori.some(
+      (r) =>
+        Math.hypot(r.center.x - s.center.x, r.center.y - s.center.y) < 1e-6 &&
+        r.center.z > s.center.z + 1e-6 &&
+        s.center.z + offset >= r.center.z - 1e-6
+    );
   return boundary.some(
     (e) =>
       e.curve?.type === 'CIRCLE' &&
-      e.adjacentFaceHashes!.some((h) => h !== face.hash && shoulders.has(h))
+      shoulders.some(
+        (s) =>
+          s.hash !== face.hash &&
+          e.adjacentFaceHashes!.includes(s.hash) &&
+          reachesRim(s)
+      )
   );
 }
