@@ -165,6 +165,38 @@ describe('S02-D sketch origin and axis reference targets', () => {
     ).toThrow(/Delete the reference dimensions first/);
   });
 
+  it('restores a datum reference on replay without re-measuring saved geometry', () => {
+    // Review: a linked line whose saved coordinates are degenerate resolves
+    // only through the exact build. Live Add measured it there; cold replay
+    // sees only the saved line, so it must restore the identity, not refuse.
+    const f = fixture();
+    const command = commandFactories
+      .addSketchReferenceDimension({
+        sketchId: f.sketchId,
+        data: { dimensionKind: 'angle', a: xAxis, b: f.diagonal },
+        ids: { annotationId: 'sref_datum_replay' as never }
+      })
+      .serialize();
+    const degenerate = structuredClone(f.manager.document);
+    const node = degenerate.nodes[f.diagonal] as {
+      data: Extract<SketchObjectData, { objectKind: 'line' }>;
+    };
+    node.data = { ...node.data, x2: 3 + 5e-10, y2: 4 };
+    const restored = replayCommands(degenerate, [command]);
+    expect(findSketch(restored, f.sketchId)!.referenceDimensions).toEqual([
+      {
+        annotationId: 'sref_datum_replay',
+        data: { dimensionKind: 'angle', a: xAxis, b: f.diagonal }
+      }
+    ]);
+    // The saved line is untouched; the row is unresolved until geometry
+    // resolves, as a restored composite reference is.
+    expect(restored.nodes[f.diagonal]).toEqual(degenerate.nodes[f.diagonal]);
+    expect(measure(restored, f.sketchId)[0]).toMatchObject({
+      status: 'unresolved'
+    });
+  });
+
   it('refuses the same datum twice, malformed descriptors and older carriers', () => {
     const f = fixture();
     const document = f.manager.document;

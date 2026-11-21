@@ -308,7 +308,10 @@ export function restoreSketchReferenceDimensionForReplay(
         isSketchCompositeCornerTarget(target) ||
         isSketchCompositeSideTarget(target) ||
         isSketchCompositeCenterTarget(target) ||
-        isSketchShapeTarget(target)
+        isSketchShapeTarget(target) ||
+        // A datum target is restored by identity too: its other operand may
+        // measure against geometry only the exact build resolves (review).
+        isSketchDatumTarget(target)
     )
   )
     return addSketchReferenceDimension(document, input);
