@@ -2266,6 +2266,89 @@ function loftGuidePoints(
   });
 }
 
+/** M04: a guide that is one straight sketch line on a ruled loft. */
+function straightGuideOnRuledLoft(
+  document: ProjectDocument,
+  guide: SketchPathReference,
+  mode: string
+): boolean {
+  if (mode === 'smooth') return false;
+  const [entityId] = guide.entityIds;
+  const node = entityId ? document.nodes[entityId] : undefined;
+  return node?.kind === 'sketch-object' && node.data.objectKind === 'line';
+}
+
+/**
+ * M04: the loft guide as the kernel's exact NURBS, in world coordinates: one
+ * curve of its guide sketch, a line, an arc or a spline taken whole.
+ */
+function loftGuideCurve(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  guide: SketchPathReference,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+): {
+  degree: number;
+  knots: number[];
+  controlPoints: number[][];
+  weights: number[];
+} {
+  const sketch = findSketch(document, guide.sketchId);
+  const [entityId, ...rest] = guide.entityIds;
+  if (
+    !sketch ||
+    rest.length > 0 ||
+    !entityId ||
+    document.nodes[entityId]?.kind !== 'sketch-object' ||
+    !sketch.objectIds.includes(entityId)
+  ) {
+    const message = 'A loft guide is one curve of its guide sketch.';
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: 'unsupported',
+      kernelCode: 'loft-guide:not-one-curve',
+      kernelMessage: message,
+      reason: message,
+      message
+    });
+  }
+  const edges = sweepPathEdges(
+    kernel,
+    document,
+    guide,
+    scope,
+    sketchBases,
+    false
+  );
+  if (edges.length !== 1) {
+    const message = 'A loft guide is one curve of its guide sketch.';
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: 'unsupported',
+      kernelCode: 'loft-guide:not-one-curve',
+      kernelMessage: message,
+      reason: message,
+      message
+    });
+  }
+  const curve = nurbsCurveOfEdge(kernel, edges[0]!, 'The loft guide');
+  const controlPoints: number[][] = [];
+  for (let i = 0; i < curve.controlPoints.length; i += 3) {
+    controlPoints.push([
+      curve.controlPoints[i]!,
+      curve.controlPoints[i + 1]!,
+      curve.controlPoints[i + 2]!
+    ]);
+  }
+  return {
+    degree: curve.degree,
+    knots: Array.from(curve.knots),
+    controlPoints,
+    weights: Array.from(curve.weights)
+  };
+}
+
 export function buildLoft(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -2295,6 +2378,38 @@ export function buildLoft(
   const handles = Uint32Array.from(faces);
   const endPoint = feature.data.endPoint;
   const { connections, guides } = feature.data;
+  const guide = guides?.[0];
+  if (
+    connections === undefined &&
+    guide !== undefined &&
+    !straightGuideOnRuledLoft(document, guide, feature.data.mode)
+  ) {
+    // M04: a curved guide (or any guide on a smooth loft) is followed
+    // exactly by the kernel's guided loft: every section corner rides a rail
+    // offset from the guide, so the guide lies on the solid. What it cannot
+    // build exactly (curved section edges, unequal corner counts, a guide
+    // that misses a corner, doubles back or crosses a section backwards) it
+    // refuses by name, typed.
+    const options = {
+      ruled: feature.data.mode !== 'smooth',
+      guide: loftGuideCurve(kernel, document, guide, scope, sketchBases)
+    };
+    const solid = validatedLoft(
+      kernel,
+      () =>
+        typedModelingCall('loft_guide_refused', () =>
+          kernel.loftWithOptions(handles, JSON.stringify(options))
+        ),
+      'Loft'
+    );
+    return {
+      solids: [solid],
+      lineage: remusHashOnlyLineage(
+        'sweep',
+        'Loft section topology has no verified output evolution relation.'
+      )
+    };
+  }
   if (connections !== undefined || guides !== undefined) {
     // M04 (v133): the vertices each section's correspondence starts from,
     // named or where the one straight guide meets each section's plane; the

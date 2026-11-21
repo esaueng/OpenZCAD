@@ -28132,7 +28132,7 @@ export function App() {
         : availableSketchViews;
       return sketchPointCandidates(doc, views, (value) => resolve(value));
     }
-    // M04: a loft guide is a straight line, offered only once two sections
+    // M04: a loft guide is a line, an arc or an open spline, offered only once two sections
     // are picked and never from a section's own sketch, so a click on a
     // section's edge still picks the section.
     if (inPlaceSpec.id === 'loft') {
@@ -28154,7 +28154,11 @@ export function App() {
         doc,
         views,
         (value) => resolve(value),
-        (data) => data.construction !== true && data.objectKind === 'line'
+        (data) =>
+          data.construction !== true &&
+          (data.objectKind === 'line' ||
+            data.objectKind === 'arc' ||
+            (data.objectKind === 'spline' && data.closed !== true))
       );
     }
     // Every sketch's curves, the profile's own included: one sketch may hold

@@ -1468,9 +1468,9 @@ const loft: InPlaceToolSpec = {
     if (slots.profiles.length === 0) return 'Pick the first section';
     if (slots.profiles.length === 1) return 'Pick the next section';
     if (slots.path.length > 0) {
-      return `${slots.profiles.length} sections · guided by a line`;
+      return `${slots.profiles.length} sections · guided by a curve`;
     }
-    return `${slots.profiles.length} sections · pick more, or a guide line`;
+    return `${slots.profiles.length} sections · pick more, or a guide curve`;
   },
   // A point apex not yet set starts where the apex off the last section
   // stands.
