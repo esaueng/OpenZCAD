@@ -522,7 +522,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // extrude, beside `toFace`): the extrusion ends on a cylindrical face named
 // by lineage. An older client has no such target and must refuse the
 // document. Builds on v130.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 131 as const;
+// v132 adds M04 exact sweep twist and scale (`twistDeg` and `endScale` on an
+// in-place sweep): the profile turns about and scales along a straight
+// path. An older client would sweep it plain, so it must refuse the
+// document. Builds on v131 (#1851). First claimed as v129, renumbered when
+// #1864, #1847 and #1851 landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 132 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2680,6 +2685,23 @@ export type FeatureData =
        * this field existed took, so those documents replay identically.
        */
       construction?: 'in-place';
+      /**
+       * M04 (v132), `'in-place'` only: the profile's total turn about the
+       * path, in degrees, right-handed about the direction of travel and
+       * linear in the distance travelled (the kernel's
+       * `sweepExactWithOptions`). The path must be straight and the profile
+       * square to it; anything else is refused by name, never sampled.
+       * Absent or zero turns nothing, so a sweep authored before this field
+       * existed replays identically.
+       */
+      twistDeg?: ParamValue;
+      /**
+       * M04 (v132), `'in-place'` only: the profile's scale at the far end of
+       * the path, about the point where the path crosses it, linear in the
+       * distance travelled. Positive; absent or one scales nothing. Held to
+       * the same straight, square path as `twistDeg`.
+       */
+      endScale?: ParamValue;
     }
   | {
       featureKind: 'helical-sweep';

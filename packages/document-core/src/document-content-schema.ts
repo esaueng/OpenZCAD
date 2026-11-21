@@ -1142,6 +1142,32 @@ export function assertDocumentContentCommandSchema(
         83,
         'Simplified threads'
       );
+    // M04 (schema v132): an exact sweep's twist and end scale, created or
+    // patched (a patch need not name its kind; the fields are a sweep's).
+    {
+      const sweep =
+        command.kind === 'feature.sweep'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'sweep')
+            ? command.payload.data
+            : null;
+      if (
+        sweep &&
+        ((sweep.twistDeg !== undefined &&
+          sweep.twistDeg !== 0 &&
+          sweep.twistDeg !== '0') ||
+          (sweep.endScale !== undefined &&
+            sweep.endScale !== 1 &&
+            sweep.endScale !== '1'))
+      )
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          132,
+          'Sweep twist and end scale'
+        );
+    }
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
