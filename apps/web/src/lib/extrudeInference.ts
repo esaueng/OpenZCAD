@@ -1,5 +1,8 @@
 import { commandFactories } from '@openzcad/command-system';
-import type { ExtrudeInput } from '@openzcad/document-core';
+import {
+  numberedFeatureName,
+  type ExtrudeInput
+} from '@openzcad/document-core';
 import {
   classifyExtrudeOperation,
   extrudeBoundsCanShareVolume,
@@ -148,14 +151,11 @@ function isMeasuredZeroOverlap(
  * stored result operation. Every geometry call remains in the browser worker.
  */
 /**
- * F01 multi-target through all: the extra through-all cuts an explicit cut
- * choice names, each the same profile and side as the first, through its own
- * target, with ids of its own. None unless the extent is through all.
+ * F01 multi-target through all: the further bodies an explicit cut choice
+ * names, checked (each once, never the target, each still live). None
+ * unless the extent is through all.
  */
-function throughAllExtraCommands(
-  options: ResolveExtrudeOptions,
-  reserved: ExtrudeInput
-): ExtrudeCommand[] {
+function throughAllExtraTargets(options: ResolveExtrudeOptions): BodyId[] {
   const choice = options.choice;
   if (
     choice?.operation !== 'cut' ||
@@ -167,7 +167,6 @@ function throughAllExtraCommands(
   const seen = new Set<BodyId>(
     choice.targetBodyId ? [choice.targetBodyId] : []
   );
-  const { ids: _ids, ...plain } = reserved;
   return choice.alsoTargetBodyIds.map((bodyId) => {
     if (seen.has(bodyId)) {
       throw new Error('Each body a cut goes through is named once.');
@@ -179,7 +178,7 @@ function throughAllExtraCommands(
         'A body the cut goes through is no longer available. Pick the bodies again.'
       );
     }
-    return commandFactories.extrudeSketch(withOperation(plain, 'cut', bodyId));
+    return bodyId;
   });
 }
 
@@ -223,11 +222,18 @@ export async function resolveExtrudeOperation(
     );
     command.validate(options.base);
     let document = command.apply(options.base);
-    const extraCommands = throughAllExtraCommands(options, reserved);
-    for (const extra of extraCommands) {
+    // One through-all cut per further body, each numbered against the
+    // document as it stands ("Extrude", "Extrude 2"…), with ids of its own.
+    const { ids: _ids, ...plain } = reserved;
+    const extraCommands = throughAllExtraTargets(options).map((bodyId) => {
+      const extra = commandFactories.extrudeSketch({
+        ...withOperation(plain, 'cut', bodyId),
+        name: numberedFeatureName(document, reserved.name)
+      });
       extra.validate(document);
       document = extra.apply(document);
-    }
+      return extra;
+    });
     const derived = await options.derive(document);
     const result = builtResult(derived, reservedResult);
     if (!result) {
@@ -245,8 +251,12 @@ export async function resolveExtrudeOperation(
           name: extra.payload.name
         })
       ) {
+        // The refusal of this very cut, not whatever warning came last.
+        const own = derived.featureWarnings?.find(
+          (warning) => warning.featureId === ids.featureId
+        );
         throw new Error(
-          derived.warnings.at(-1) ??
+          own?.message ??
             'One of the extra through-all cuts did not produce an exact result body.'
         );
       }

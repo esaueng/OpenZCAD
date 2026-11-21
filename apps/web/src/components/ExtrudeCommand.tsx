@@ -8,6 +8,7 @@ import type {
 } from '@openzcad/shared';
 import {
   extrudeAlsoTargets,
+  extrudeChoiceAlone,
   extrudeChoiceWith,
   extrudeDraftNumber,
   extrudeDraftRefusal,
@@ -194,8 +195,14 @@ export function extrudeChangedInput(
     if (next[valueId] !== previous[valueId]) return VALUE_LABELS[valueId];
   }
   if (next.choice.operation !== previous.choice.operation) return 'Operation';
-  if (JSON.stringify(next.choice) !== JSON.stringify(previous.choice)) {
+  if (
+    JSON.stringify(extrudeChoiceAlone(next.choice)) !==
+    JSON.stringify(extrudeChoiceAlone(previous.choice))
+  ) {
     return 'Target body';
+  }
+  if (JSON.stringify(next.choice) !== JSON.stringify(previous.choice)) {
+    return 'Also cut';
   }
   if (next.endCondition !== previous.endCondition) return 'Extent';
   if (next.throughAllSide !== previous.throughAllSide) return 'Direction';

@@ -368,6 +368,17 @@ describe('in-place Extrude bar', () => {
       backDraftAngle: '0'
     } as const;
     expect(extrudeChangedInput(base, base)).toBeNull();
+    // F01 review: a further body to cut through is named as its own input.
+    const cut = {
+      ...base,
+      choice: { operation: 'cut', targetBodyId: plate }
+    } as const;
+    expect(
+      extrudeChangedInput(cut, {
+        ...cut,
+        choice: { ...cut.choice, alsoTargetBodyIds: [plate] }
+      })
+    ).toBe('Also cut');
     expect(extrudeChangedInput(base, { ...base, faceOffset: '2' })).toBe(
       'Offset from face'
     );

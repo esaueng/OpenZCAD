@@ -122,10 +122,16 @@ describe('F01 through all, several bodies', { timeout: 90_000 }, () => {
         ...resolved.extraCommands!
       ])
     );
-    const features = listFeaturesInOrder(manager.document).filter(
-      (feature) => feature.name === 'Through'
+    const features = listFeaturesInOrder(manager.document).filter((feature) =>
+      feature.name.startsWith('Through')
     );
     expect(features).toHaveLength(3);
+    // Review: each cut is its own History row, so each is numbered.
+    expect(features.map((feature) => feature.name)).toEqual([
+      'Through',
+      'Through 2',
+      'Through 3'
+    ]);
     features.forEach((feature, index) => {
       expect(feature.data).toMatchObject({
         operation: 'cut',
@@ -151,8 +157,8 @@ describe('F01 through all, several bodies', { timeout: 90_000 }, () => {
     ).toBe('Cut the region through all of 3 bodies.');
     manager.undo();
     expect(
-      listFeaturesInOrder(manager.document).filter(
-        (feature) => feature.name === 'Through'
+      listFeaturesInOrder(manager.document).filter((feature) =>
+        feature.name.startsWith('Through')
       )
     ).toHaveLength(0);
   });

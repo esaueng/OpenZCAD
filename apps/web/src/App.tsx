@@ -28998,7 +28998,15 @@ export function App() {
             finishFeatureCreation();
             setRevertPill({ sketchId: target.sketchId as SketchId });
           },
-          undefined,
+          // F01: several cuts are judged each by its own feature and body,
+          // never by a shared label another feature might carry.
+          resolved.extraCommands?.length
+            ? [resolved.command, ...resolved.extraCommands].map((leaf) => ({
+                featureName: leaf.payload.name,
+                featureId: leaf.payload.ids!.featureId,
+                resultBodyId: leaf.payload.ids!.bodyId
+              }))
+            : undefined,
           {
             baseProjectId: base.projectId,
             baseVersion: base.version,
