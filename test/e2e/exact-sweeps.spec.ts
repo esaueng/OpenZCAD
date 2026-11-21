@@ -751,3 +751,49 @@ test('a picked L path takes a round corner with a typed radius, exactly (M04, v1
     6
   );
 });
+
+test('a path picked through the profile sweeps both ways from the crossing (M04, v136)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const document = sweepDocument(
+    'Placed sweep',
+    { objectKind: 'circle', radius: 1, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [{ objectKind: 'line', x1: 30, y1: 8, x2: 30, y2: -12 }]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  await pickCurve(page, canvas, bar, [30, 0, 6], 'Path of 1');
+  // Five choices: the row is a list.
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await bar.getByRole('combobox', { name: 'Profile at' }).selectOption({
+    label: 'Crossing'
+  });
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data).toMatchObject({ profilePosition: 'intersection' });
+  const derived = await rebuilt(saved);
+  const body = derived.bodyRepresentations[sweep.bodyId!]!;
+  expect(body.volume).toBeCloseTo(Math.PI * 20, 6);
+  // Both sides of the profile: z from −8 to 12.
+  expect(body.bbox.min.z).toBeCloseTo(-8, 4);
+  expect(body.bbox.max.z).toBeCloseTo(12, 4);
+});

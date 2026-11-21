@@ -553,6 +553,9 @@ export interface SweepInput {
   orientation?: 'parallel';
   /** M04 (v135): see the sweep `FeatureData`; omitted mitres the corners. */
   cornerRadius?: ParamValue;
+  /** M04 (v136): see the sweep `FeatureData`; omitted starts from an end. */
+  profilePosition?:
+    'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
   ids?: BodyFeatureIds;
 }
 
@@ -3276,7 +3279,35 @@ export function validateSweepOptions(data: {
   guide?: unknown;
   orientation?: unknown;
   cornerRadius?: unknown;
+  profilePosition?: unknown;
 }): void {
+  const position = data.profilePosition;
+  if (position !== undefined) {
+    if (
+      !['auto', 'intersection', 'closest-point', 'closest-endpoint'].includes(
+        position as string
+      )
+    ) {
+      throw new Error('Unknown sweep profile position.');
+    }
+    if (data.construction !== 'in-place') {
+      throw new Error(
+        'A sweep profile position needs the exact sweep; build it as Exact.'
+      );
+    }
+    const twisted = !isZeroParam(data.twistDeg);
+    const scaled = !isUnitParam(data.endScale);
+    if (
+      data.orientation !== undefined ||
+      data.guide !== undefined ||
+      twisted ||
+      scaled
+    ) {
+      throw new Error(
+        'A sweep profile position applies to a sweep that turns with its path, with no rail, twist or scale.'
+      );
+    }
+  }
   const radius = data.cornerRadius;
   if (radius !== undefined) {
     if (typeof radius === 'number') {
@@ -3397,7 +3428,10 @@ export function sweepProfile(
         : { orientation: input.orientation }),
       ...(input.cornerRadius === undefined
         ? {}
-        : { cornerRadius: input.cornerRadius })
+        : { cornerRadius: input.cornerRadius }),
+      ...(input.profilePosition === undefined
+        ? {}
+        : { profilePosition: input.profilePosition })
     },
     suppliedIds(input.ids),
     input.bodyName
@@ -6191,7 +6225,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'twistDeg',
     'endScale',
     'orientation',
-    'cornerRadius'
+    'cornerRadius',
+    'profilePosition'
   ],
   'helical-sweep': [
     'profile',
@@ -6442,7 +6477,14 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // M04 (v133): a cleared connection list or guide keeps section starts.
   loft: ['endPoint', 'connections', 'guides'],
   // M04 (v132): a cleared twist or scale is none.
-  sweep: ['guide', 'twistDeg', 'endScale', 'orientation', 'cornerRadius'],
+  sweep: [
+    'guide',
+    'twistDeg',
+    'endScale',
+    'orientation',
+    'cornerRadius',
+    'profilePosition'
+  ],
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.

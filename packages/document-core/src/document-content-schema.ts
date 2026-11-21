@@ -1212,6 +1212,8 @@ function assertSweepContentSchema(
     assertMinimumProjectSchema(version, 134, 'Sweep orientation');
   if (sweep.cornerRadius !== undefined)
     assertMinimumProjectSchema(version, 135, 'Round sweep corners');
+  if (sweep.profilePosition !== undefined)
+    assertMinimumProjectSchema(version, 136, 'Sweep profile position');
 }
 
 export function assertDocumentContentSchema(document: ProjectDocument): void {
