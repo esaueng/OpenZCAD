@@ -96,18 +96,6 @@ export function planSlantedToFace(
     n,
     resolveExtrudeStartOffset(data, scope, document)
   );
-  const height = dot(sub(frame.origin, start), n);
-  if (!(Math.abs(height) > 1e-9 * Math.max(1, Math.abs(height)))) {
-    throw unresolved(
-      'the middle of the slanted face lies on the start plane, so which way to extrude is unclear.'
-    );
-  }
-  const sign = height < 0 ? -1 : 1;
-  const direction = { x: n.x * sign, y: n.y * sign, z: n.z * sign };
-  // Toward the start along the face normal: positive offsets stop short.
-  const towardStart = dot(m, direction) > 0 ? -1 : 1;
-  const offset = resolveToFaceOffset(data, scope, document);
-  const point = along(frame.origin, m, towardStart * offset);
   const {
     endCondition: _endCondition,
     toFace: _toFace,
@@ -115,35 +103,61 @@ export function planSlantedToFace(
     draftAngleDeg: _draftAngleDeg,
     ...rest
   } = data;
+  // The profile's footprint on the start plane: a unit probe's exact box
+  // corners moved back onto it. The face plane is linear, so where it
+  // meets every point of the footprint lies between its values there.
   const probe = buildSweep(
     kernel,
     document,
-    { ...feature, data: { ...rest, distance: sign } },
+    { ...feature, data: { ...rest, distance: 1 } },
     scope,
     sketchBases,
     () => {}
   );
-  const md = dot(m, direction);
-  let reach = 0;
+  const footprint: Vec3[] = [];
   for (const solid of probe.solids) {
     for (const corner of corners(kernel.boundingBox(solid))) {
-      // The corner moved back onto the start plane, then along the
-      // direction until it meets the face plane.
-      const base = along(
-        corner,
-        direction,
-        -dot(sub(corner, start), direction)
-      );
-      reach = Math.max(reach, dot(sub(point, base), m) / md);
+      footprint.push(along(corner, n, -dot(sub(corner, start), n)));
     }
     kernel.deleteSolid(solid);
   }
+  // Signed along the sketch normal: where the face plane is reached from
+  // each footprint corner.
+  const crossing = (point: Vec3, base: Vec3) =>
+    dot(sub(point, base), m) / dot(n, m);
+  const heights = footprint.map((base) => crossing(frame.origin, base));
+  // The way to the face is the side the whole footprint reaches it on;
+  // where the plane crosses the footprint, the face's middle decides and
+  // the split below refuses a plane that crosses the profile itself.
+  let sign: 1 | -1;
+  if (heights.length > 0 && heights.every((h) => h > 0)) sign = 1;
+  else if (heights.length > 0 && heights.every((h) => h < 0)) sign = -1;
+  else {
+    const middle = dot(sub(frame.origin, start), n);
+    if (!(Math.abs(middle) > 1e-9 * Math.max(1, Math.abs(middle)))) {
+      throw unresolved(
+        'the slanted face crosses the start plane under the profile, so which way to extrude is unclear.'
+      );
+    }
+    sign = middle < 0 ? -1 : 1;
+  }
+  const direction = { x: n.x * sign, y: n.y * sign, z: n.z * sign };
+  // Toward the start along the face normal: positive offsets stop short.
+  const towardStart = dot(m, direction) > 0 ? -1 : 1;
+  const offset = resolveToFaceOffset(data, scope, document);
+  const point = along(frame.origin, m, towardStart * offset);
+  const reach = Math.max(
+    0,
+    ...footprint.map((base) => sign * crossing(point, base))
+  );
   if (!(reach > 0)) {
     throw new Error(
       'The slanted face lies behind where the extrusion starts over the whole profile; move the start or pick another face.'
     );
   }
-  const length = reach * 1.02 + 1e-3 * Math.max(1, reach);
+  // A hair past the face plane over the whole footprint: enough for the
+  // split to cut through, and no further for a draft to close up in.
+  const length = reach + 1e-4 * Math.max(1, reach);
   const {
     endCondition: _end,
     toFace: _face,

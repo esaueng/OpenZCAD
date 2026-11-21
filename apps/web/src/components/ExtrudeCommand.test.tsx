@@ -625,6 +625,34 @@ describe('in-place Extrude bar', () => {
     );
   });
 
+  it('keeps the authored distance when the picked face is slanted (review)', async () => {
+    const user = userEvent.setup();
+    const target = { type: 'face' } as unknown as ExtrudeToFaceTarget;
+    const setterRef = createRef<
+      (target: ExtrudeToFaceTarget) => void
+    >() as MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
+    const toFacePicking: ExtrudeToFacePicking = {
+      armed: false,
+      onPick: vi.fn(),
+      cancel: vi.fn(),
+      describe: () => ({ label: 'Roof', distance: 25, slanted: true }),
+      setterRef
+    };
+    const { distanceSetterRef, onSubmit } = setup({ toFacePicking });
+    act(() => distanceSetterRef.current?.(7));
+    await openOptions(user);
+    await user.click(choice('Extent', 'To face'));
+    act(() => setterRef.current?.(target));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endCondition: 'to-face',
+        toFace: target,
+        distance: 7
+      })
+    );
+  });
+
   it('locks the draft a Done is checking: nothing but Cancel changes it', async () => {
     const user = userEvent.setup();
     const distanceSetterRef = createRef<

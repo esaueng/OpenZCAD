@@ -327,8 +327,12 @@ export function ExtrudeCommand({
   const pendingFace = useRef<ExtrudeToFaceTarget | null>(null);
   const updateFace = useRef((_target: ExtrudeToFaceTarget) => {});
   updateFace.current = (target) => {
-    const reach = toFacePicking?.describe(target).distance ?? null;
-    pendingFace.current = reach === null ? target : null;
+    const info = toFacePicking?.describe(target);
+    // Only a parallel face's exact reach stands in for the distance: a
+    // slanted face's middle is no depth, and the authored one is kept.
+    const reach = info && !info.slanted ? info.distance : null;
+    // Retried once the reach is known; a slanted face's is already known.
+    pendingFace.current = (info?.distance ?? null) === null ? target : null;
     change({
       toFace: target,
       endCondition: 'to-face',

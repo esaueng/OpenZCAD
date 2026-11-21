@@ -128,14 +128,15 @@ describe('F01 to a slanted face', { timeout: 60_000 }, () => {
     deg: number,
     patch: Record<string, unknown> = {},
     z = 25,
-    sketchOffset = 0
+    sketchOffset = 0,
+    square: Partial<SketchObjectData> = {}
   ) {
     const lifted = ceiling(project('Slanted'), z, deg);
     const target = await face(lifted.document, lifted.bodyId, -1, deg);
     const sketched = addSketchFeature(lifted.document, {
       name: 'Profile',
       planeRef: { type: 'canonical', plane: 'XY', offset: sketchOffset },
-      objects: [SQUARE]
+      objects: [{ ...SQUARE, ...square } as SketchObjectData]
     });
     const result = extrudeSketch(sketched.document, {
       name: 'Post',
@@ -177,7 +178,12 @@ describe('F01 to a slanted face', { timeout: 60_000 }, () => {
       });
       expect(cos(84)).toBeGreaterThan(TO_FACE_SLANT_COSINE_LIMIT);
       expect(toFaceReach(sketch, leaning(88))).toBeNull();
-      expect(toFaceReach(sketch, leaning(30, 0))).toBeNull();
+      // Review: a slanted face whose middle sits level with the sketch is
+      // still reachable; the build reads the way from the profile.
+      expect(toFaceReach(sketch, leaning(30, 0))).toEqual({
+        height: 0,
+        slanted: true
+      });
     });
   });
 
@@ -287,6 +293,18 @@ describe('F01 to a slanted face', { timeout: 60_000 }, () => {
       expect(volume).toBeLessThan(AREA * 25);
       expect(volume).toBeGreaterThan(
         (lowest / 6) * (area(0) + 4 * area(lowest / 2) + area(lowest))
+      );
+    });
+
+    it('reaches down to a face whose middle is level with the sketch, from a profile wholly above it (review)', async () => {
+      // Turned 30° through (10, 10, 0): the plane is z = tan 30° (y − 10).
+      // A square at y = 0–4 lies wholly above it, so the post runs down.
+      const result = await post(30, {}, 0, 0, { centerY: 2 });
+      const derived = await derive(result.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
+        AREA * tan(30) * 8,
+        6
       );
     });
 

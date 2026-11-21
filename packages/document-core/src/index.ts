@@ -6469,8 +6469,7 @@ export const TO_FACE_SLANT_COSINE_LIMIT = 0.1;
  * F01 (slanted to-face): which way a to-face target lies from the sketch plane and how
  * far, as the signed height of the face's own point along the unit sketch
  * normal, for a parallel or a slanted face; null when the face is steeper
- * than {@link TO_FACE_SLANT_COSINE_LIMIT} or its point lies on the sketch
- * plane (which way it is would be a guess). `slanted` is false exactly when
+ * than {@link TO_FACE_SLANT_COSINE_LIMIT}. `slanted` is false exactly when
  * the face is parallel ({@link toFaceParallelHeight}), in which case
  * `height` is that distance (zero on the sketch plane). For a slanted face the height is only where the face's point
  * is; the build finds where it meets each part of the profile.
@@ -6494,10 +6493,9 @@ export function toFaceReach(
     (face.point.x - sketch.origin.x) * sketch.normal.x +
     (face.point.y - sketch.origin.y) * sketch.normal.y +
     (face.point.z - sketch.origin.z) * sketch.normal.z;
-  return Number.isFinite(height) &&
-    Math.abs(height) > 1e-9 * Math.max(1, Math.abs(height))
-    ? { height, slanted: true }
-    : null;
+  // A slanted face's middle may sit level with the sketch: which way it is
+  // reached is read from the profile in the build, never guessed here.
+  return Number.isFinite(height) ? { height, slanted: true } : null;
 }
 
 /**

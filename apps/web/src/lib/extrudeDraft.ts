@@ -251,6 +251,8 @@ export function extrudeToFaceProblem(
 ): string | null {
   if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
   const info = ctx.toFacePicking!.describe(draft.toFace);
+  // Where a slanted face is reached is the build's to judge.
+  if (info.slanted && info.distance !== null) return null;
   if (info.distance === 0) {
     const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
     return start === 0
