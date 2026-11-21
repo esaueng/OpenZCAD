@@ -262,7 +262,8 @@ const PATTERN_KINDS = valuesOf<PatternKind>({
   circular: true,
   grid: true,
   points: true,
-  path: true
+  path: true,
+  mirror: true
 });
 const GEAR_TYPES = valuesOf<GearType>({
   external: true,

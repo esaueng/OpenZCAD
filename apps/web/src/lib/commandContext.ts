@@ -113,7 +113,8 @@ const CONTEXTS: Record<
       'circular-pattern',
       'grid-pattern',
       'point-pattern',
-      'path-pattern'
+      'path-pattern',
+      'mirror-pattern'
     ]
   },
   bodies: {

@@ -289,6 +289,8 @@ export function assertPatternContentSchema(
     assertMinimumProjectSchema(version, 63, 'Patterns on sketch points');
   if (data.patternKind === 'path' || data.path !== undefined)
     assertMinimumProjectSchema(version, 112, 'Patterns along a sketch path');
+  if (data.patternKind === 'mirror' || data.mirrorPlane !== undefined)
+    assertMinimumProjectSchema(version, 119, 'Mirror patterns');
 }
 
 /**

@@ -32,6 +32,7 @@ import {
   type FeatureData,
   type DatumPlaneDefinition,
   type FeatureId,
+  type ModelingPlaneReference,
   type ParamValue,
   type ParametricVector3,
   type PatternPath,
@@ -133,6 +134,7 @@ export type InPlaceToolId =
   | 'grid-pattern'
   | 'point-pattern'
   | 'path-pattern'
+  | 'mirror-pattern'
   | 'fillet'
   | 'chamfer'
   | PrimitiveKind
@@ -172,6 +174,7 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'grid-pattern',
   'point-pattern',
   'path-pattern',
+  'mirror-pattern',
   'fillet',
   'chamfer',
   'box',
@@ -197,7 +200,8 @@ export function isInPlacePatternTool(tool: InPlaceToolId | null): boolean {
     tool === 'circular-pattern' ||
     tool === 'grid-pattern' ||
     tool === 'point-pattern' ||
-    tool === 'path-pattern'
+    tool === 'path-pattern' ||
+    tool === 'mirror-pattern'
   );
 }
 
@@ -651,7 +655,8 @@ export type InPlaceRequest =
   | {
       tool: 'pattern';
       targetBodyId: BodyId;
-      patternKind: 'linear' | 'circular' | 'grid' | 'points' | 'path';
+      patternKind:
+        'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
       count: ParamValue;
       axis: 'x' | 'y' | 'z';
       spacing?: ParamValue;
@@ -670,6 +675,8 @@ export type InPlaceRequest =
       points?: PatternPoints;
       /** M02 (schema v112): the sketch path a path pattern runs along. */
       path?: PatternPath;
+      /** M02 (schema v119): the plane a mirror pattern reflects in. */
+      mirrorPlane?: ModelingPlaneReference;
     }
   | {
       /** An M14 gear, as the feature stores it. */
@@ -6516,6 +6523,92 @@ const pathPattern: InPlaceToolSpec = {
   }
 };
 
+/**
+ * M02 (schema v119): a mirror pattern. Picks are the body, or features
+ * under Repeat Features, then the plane: a principal or datum plane, or a
+ * flat face (with features, one no repeated feature made), slid by the
+ * same offset arrow as Mirror's, or typed in Options. The one copy is the
+ * reflection; it cannot be skipped, so it wears no chip.
+ */
+function mirrorPatternPlane(
+  slots: InPlaceSlots,
+  values: Record<string, ParamValue>,
+  numbers: Record<string, number>,
+  options: Record<string, string>
+): ModelingPlaneReference | null {
+  const plane = commandPlane(slots, values, numbers, options);
+  if (!plane) return null;
+  const fields = offsetPlaneFields(plane, values.offset);
+  if (fields.datumFeatureId) {
+    return { type: 'datum', datumFeatureId: fields.datumFeatureId };
+  }
+  // A number written as a number stays one; anything else (an expression,
+  // or a number written otherwise, such as "50.0") is kept as typed, so an
+  // untouched edit stores what it reopened with (review).
+  const param = (text: string): ParamValue => {
+    const number = Number(text);
+    return Number.isFinite(number) && String(number) === text.trim()
+      ? number
+      : text;
+  };
+  const vector = (v: { x: string; y: string; z: string }) => ({
+    x: param(v.x),
+    y: param(v.y),
+    z: param(v.z)
+  });
+  return { origin: vector(fields.origin), normal: vector(fields.normal) };
+}
+
+const mirrorPattern: InPlaceToolSpec = {
+  id: 'mirror-pattern',
+  title: 'Mirror pattern',
+  profileMode: 'none',
+  bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
+  wantsPlane: true,
+  wantsAxis: false,
+  wantsPath: false,
+  values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
+  options: [REPEAT_OPTION, PLANE_MODE_OPTION],
+  hint(slots, options) {
+    const pick = patternHint(slots, options ?? {});
+    if (pick) return pick;
+    if (options?.planeMode === 'typed') {
+      return 'Slide the plane, or tap its chips to type';
+    }
+    if (!slots.plane) return 'Pick a plane or flat face to mirror in';
+    return 'Slide the plane, or pick another';
+  },
+  ready: (slots, options, ctx) =>
+    patternSource(slots, options, ctx) !== null &&
+    (slots.plane !== null || options?.planeMode === 'typed'),
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
+    const mirrorPlane = mirrorPatternPlane(
+      slots,
+      values,
+      numbers ?? {},
+      options
+    );
+    if (!source || !mirrorPlane) return null;
+    return {
+      tool: 'pattern',
+      ...source,
+      patternKind: 'mirror',
+      count: 2,
+      axis: ctx.saved?.featureKind === 'pattern' ? ctx.saved.axis : 'x',
+      mirrorPlane
+    };
+  },
+  handles(slots, values, ctx, options) {
+    // The offset arrow and typed chips stand on what is repeated.
+    const seed = patternSeed(slots, options, ctx);
+    return seed
+      ? planeHandles({ ...slots, bodies: [seed] }, values, ctx, options)
+      : [];
+  }
+};
+
 const gridPattern: InPlaceToolSpec = {
   id: 'grid-pattern',
   title: 'Grid pattern',
@@ -7200,6 +7293,7 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   'grid-pattern': gridPattern,
   'point-pattern': pointPattern,
   'path-pattern': pathPattern,
+  'mirror-pattern': mirrorPattern,
   fillet,
   chamfer,
   box: primitiveSpec('box'),

@@ -114,6 +114,7 @@ import {
   isDocumentHistory,
   isReservedRecordKey,
   ownEntry,
+  patternMirrorProblem,
   patternPathProblem,
   patternPointsProblem,
   holePointsProblem,
@@ -830,6 +831,8 @@ export interface PatternInput {
   points?: PatternPoints;
   /** M02 (schema v112): required on a `path` pattern, absent otherwise. */
   path?: PatternPath;
+  /** M02 (schema v119): required on a `mirror` pattern, absent otherwise. */
+  mirrorPlane?: ModelingPlaneReference;
   ids?: BodyFeatureIds;
 }
 
@@ -3618,6 +3621,9 @@ export function datumPlaneDependents(
       uses = datumCsysPlaneSources(data.definition).some(usesDatum);
     } else if (data.featureKind === 'mirror' || data.featureKind === 'split') {
       uses = usesDatum(data.plane);
+    } else if (data.featureKind === 'pattern' && data.mirrorPlane) {
+      // M02 (schema v119): a mirror pattern's plane.
+      uses = usesDatum(data.mirrorPlane);
     } else if (data.featureKind === 'sketch') {
       const planeRef = findSketch(document, data.sketchId)?.planeRef;
       uses =
@@ -4698,7 +4704,10 @@ export function patternBody(
             }
           }
         : {}),
-      ...(input.path ? { path: patternPathOnly(input.path) } : {})
+      ...(input.path ? { path: patternPathOnly(input.path) } : {}),
+      ...(input.mirrorPlane
+        ? { mirrorPlane: deepClone(input.mirrorPlane) }
+        : {})
     },
     suppliedIds(input.ids)
   );
@@ -4872,7 +4881,12 @@ export function validatePatternDefinition(
   document: ProjectDocument,
   data: Pick<
     PatternInput,
-    'patternKind' | 'sourceFeatureIds' | 'skippedInstances' | 'points' | 'path'
+    | 'patternKind'
+    | 'sourceFeatureIds'
+    | 'skippedInstances'
+    | 'points'
+    | 'path'
+    | 'mirrorPlane'
   >,
   ownFeatureId: FeatureId | null
 ): void {
@@ -4887,6 +4901,11 @@ export function validatePatternDefinition(
   const pathProblem = patternPathProblem(data);
   if (pathProblem) throw new Error(pathProblem);
   if (data.path) validatePatternPath(document, data.path, ownFeatureId);
+  const mirrorProblem = patternMirrorProblem(data);
+  if (mirrorProblem) throw new Error(mirrorProblem);
+  if (data.mirrorPlane) {
+    validateModelingPlane(document, data.mirrorPlane, ownFeatureId);
+  }
   const sources = data.sourceFeatureIds;
   if (sources === undefined) return;
   if (!Array.isArray(sources) || sources.length === 0) {
@@ -5869,7 +5888,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'sourceFeatureIds',
     'skippedInstances',
     'points',
-    'path'
+    'path',
+    'mirrorPlane'
   ],
   gear: [
     'gearType',

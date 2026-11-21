@@ -465,7 +465,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // annotation's kind on its next save, so it must refuse. Builds on v116
 // (v115 and v116 are claimed by the M02 mirror and total-length pattern
 // PRs #1796 and #1797).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 117 as const;
+// v119 adds M02 mirror patterns (`patternKind: 'mirror'` and
+// `mirrorPlane`): the whole body, or the repeated holes, bosses and cuts,
+// copied once as their reflection in a plane. An older client has no such
+// arrangement and would build a linear pattern in its place, so it must
+// refuse. Builds on v117 (#1799); v118 is claimed by #1808. It was
+// claimed as v115, left unused, with v116, when #1799 landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 119 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -579,7 +585,8 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
  * none, the consume-everything Boolean every document before v24 stores.
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
-export type PatternKind = 'linear' | 'circular' | 'grid' | 'points' | 'path';
+export type PatternKind =
+  'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
 
 /** M02 (schema v63): the sketch points a `points` pattern repeats at. */
 export interface PatternPoints {
@@ -3202,6 +3209,13 @@ export type FeatureData =
        * are stored but not read.
        */
       path?: PatternPath;
+      /**
+       * M02 (schema v119), `patternKind: 'mirror'` only, and required
+       * there: the plane the one copy is reflected in, a datum plane or a
+       * stored origin and normal, as Mirror takes it. `count` (2), `axis`,
+       * `spacing` and `angleDeg` are stored but not read.
+       */
+      mirrorPlane?: ModelingPlaneReference;
     }
   | {
       featureKind: 'direct-edit';

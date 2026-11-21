@@ -527,6 +527,8 @@ export function featureValueSummary(
       // M02: copies left out are counted, so "× 5" never hides a gap.
       const skipped = data.skippedInstances?.length ?? 0;
       const gap = skipped > 0 ? ` · ${skipped} skipped` : '';
+      // M02 (schema v119): the one reflected copy.
+      if (data.patternKind === 'mirror') return `Mirrored${gap}`;
       if (data.patternKind === 'grid') {
         // Absent count2 reads as count (see FeatureData).
         const count2 = data.count2 === undefined ? count : num(data.count2);

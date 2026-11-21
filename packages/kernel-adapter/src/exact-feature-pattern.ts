@@ -64,6 +64,22 @@ import { throughAllSpan, unionBounds } from './through-all';
 
 type Vec3 = { x: number; y: number; z: number };
 
+/** Whether a copy's placement is a reflection (a negative determinant). */
+export function copyReflects(matrix: Float64Array): boolean {
+  const det =
+    matrix[0]! * (matrix[5]! * matrix[10]! - matrix[6]! * matrix[9]!) -
+    matrix[1]! * (matrix[4]! * matrix[10]! - matrix[6]! * matrix[8]!) +
+    matrix[2]! * (matrix[4]! * matrix[9]! - matrix[5]! * matrix[8]!);
+  return det < 0;
+}
+
+/** The hand a thread's mirror image winds: right becomes left. */
+export function mirroredHand(
+  hand: 'right' | 'left' | undefined
+): 'right' | 'left' {
+  return hand === 'left' ? 'right' : 'left';
+}
+
 /** One copy the pattern keeps, beside the original. */
 export interface FeaturePatternCopy {
   /** Its instance label: `"3"`, or `"1-2"` in a grid. */
@@ -516,7 +532,22 @@ export function buildFeaturePattern(
             );
           }
         }
-        solid = tapHole(sourceData, solid, copied);
+        // M02 (schema v119): a reflected copy's thread winds the other way,
+        // as a mirror image of the original's would (review).
+        const reflected = copies.some((copy) => copyReflects(copy.matrix));
+        solid = tapHole(
+          reflected
+            ? {
+                ...sourceData,
+                tapped: {
+                  ...sourceData.tapped,
+                  hand: mirroredHand(sourceData.tapped.hand)
+                }
+              }
+            : sourceData,
+          solid,
+          copied
+        );
         for (const hole of copied) hole.tapped = true;
       }
     } else {

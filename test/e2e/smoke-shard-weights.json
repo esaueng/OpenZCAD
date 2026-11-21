@@ -124,6 +124,7 @@
   "phone-stage.spec.ts": 45,
   "picked-feature-delete.spec.ts": 40,
   "picked-step-feature-delete.spec.ts": 53,
+  "mirror-pattern.spec.ts": 12,
   "path-pattern.spec.ts": 12,
   "point-pattern.spec.ts": 12,
   "pattern-blends.spec.ts": 12,
