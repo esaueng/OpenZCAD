@@ -336,6 +336,113 @@ describe('F01 up to next', { timeout: 90_000 }, () => {
       }
     );
 
+    describe('review: a cut leaves at one next face, from a full start', () => {
+      /** A 20 mm cube, optionally with a sealed 2 × 2 × 12 cavity at z 4–16. */
+      function cube(cavity: boolean) {
+        let document = addPrimitiveFeature(project('Cube'), {
+          name: 'Cube',
+          primitiveKind: 'box',
+          dimensions: { width: 20, height: 20, depth: 20 }
+        });
+        let bodyId = document.bodyOrder.at(-1)!;
+        if (cavity) {
+          document = addPrimitiveFeature(document, {
+            name: 'Pocket',
+            primitiveKind: 'box',
+            dimensions: { width: 2, height: 2, depth: 12 }
+          });
+          const pocket = document.bodyOrder.at(-1)!;
+          document = commandFactories
+            .transformBody({
+              name: 'Sink',
+              targetBodyId: pocket,
+              translation: { x: 9, y: 9, z: 4 }
+            })
+            .apply(document);
+          document = commandFactories
+            .booleanBodies({
+              name: 'Hollowed',
+              operation: 'subtract',
+              targetBodyIds: [bodyId, pocket]
+            })
+            .apply(document);
+          bodyId = document.bodyOrder.at(-1)!;
+        }
+        return { document, bodyId };
+      }
+
+      it.each([
+        [
+          'a profile over a cavity it only partly covers',
+          true,
+          20,
+          10,
+          /does not leave .* at one next face/
+        ],
+        [
+          'a profile that starts partly off the cube',
+          false,
+          20,
+          19,
+          /starts partly outside/
+        ],
+        [
+          'a profile a hair above the cube',
+          false,
+          20.000004,
+          10,
+          /does not start in/
+        ]
+      ])('refuses %s by name', async (_label, cavity, z, centerX, message) => {
+        const base = cube(cavity);
+        const result = toNext(
+          'cut',
+          z,
+          -1,
+          { profile: square(centerX, 10) },
+          base
+        );
+        const derived = await derive(result.document);
+        expect(derived.warnings.join('\n')).toMatch(message);
+        expect(
+          derived.bodyRepresentations[result.bodyId]?.volume ?? 8000
+        ).toBeCloseTo(cavity ? 8000 - 48 : 8000, 5);
+      });
+
+      it('cuts a tiny pocket through a broad plate (overlap at its own scale)', async () => {
+        let document = addPrimitiveFeature(project('Plate'), {
+          name: 'Plate',
+          primitiveKind: 'box',
+          dimensions: { width: 1000, height: 1000, depth: 10 }
+        });
+        const bodyId = document.bodyOrder.at(-1)!;
+        const sketched = sketch(document, 10, [
+          {
+            objectKind: 'rectangle',
+            width: 0.25,
+            height: 0.25,
+            centerX: 500,
+            centerY: 500
+          }
+        ]);
+        document = sketched.document;
+        const cut = extrudeSketch(document, {
+          name: 'Pin',
+          sketchId: sketched.sketchId,
+          distance: -1,
+          operation: 'cut',
+          targetBodyId: bodyId,
+          endCondition: 'to-next'
+        });
+        const derived = await derive(cut.document);
+        expect(derived.warnings).toEqual([]);
+        expect(derived.bodyRepresentations[cut.bodyId]!.volume).toBeCloseTo(
+          1000 * 1000 * 10 - 0.625,
+          3
+        );
+      });
+    });
+
     it('refuses once its target is deleted', async () => {
       const result = toNext('add', 0, 1);
       const hollowFeature = listFeaturesInOrder(result.document).find(

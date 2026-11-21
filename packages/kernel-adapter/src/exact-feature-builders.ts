@@ -948,7 +948,9 @@ function buildExtrudeFeature(
       extrusion,
       targetBody,
       extrusionBody,
-      throughAll ? overlapRegionTolerance(targetBody, extrusionBody) : undefined
+      throughAll || toNext
+        ? overlapRegionTolerance(targetBody, extrusionBody)
+        : undefined
     );
     // A cut needs shared material: with none there is nothing to remove, and
     // that can be settled before doing any work. That holds for through-all

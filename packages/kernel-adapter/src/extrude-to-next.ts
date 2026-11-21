@@ -6,6 +6,7 @@ import type { RemusKernel } from './remus-runtime';
 import type { ExactShape } from './exact-types';
 import { collapseShape } from './exact-boolean-helpers';
 import { measureFaceGeometry } from './exact-measure';
+import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { remusHashOnlyLineage } from './remus-lineage';
 import { resolveExtrudeStartOffset } from './extrude-options';
 import { throughAllSpan, unionBounds } from './through-all';
@@ -101,14 +102,25 @@ export function toNextSweepFeature(
 }
 
 /** Whether `solid` has a planar face lying on the plane at `point`. */
-function hasFaceOnPlane(
+export function hasFaceOnPlane(
   kernel: RemusKernel,
   solid: number,
   point: Vec3,
   normal: Vec3,
   tolerance: number
 ): boolean {
-  return Array.from(kernel.getSolidFaces(solid)).some((face) => {
+  return facesOnPlane(kernel, solid, point, normal, tolerance).length > 0;
+}
+
+/** The planar faces of `solid` lying on the plane at `point`. */
+function facesOnPlane(
+  kernel: RemusKernel,
+  solid: number,
+  point: Vec3,
+  normal: Vec3,
+  tolerance: number
+): number[] {
+  return Array.from(kernel.getSolidFaces(solid)).filter((face) => {
     if (kernel.getSurfaceType(face).toLowerCase() !== 'plane') return false;
     const n = kernel.getFaceNormal(face);
     const alignment = Math.abs(
@@ -123,6 +135,45 @@ function hasFaceOnPlane(
       (center.z - point.z) * normal.z;
     return Math.abs(height) <= tolerance;
   });
+}
+
+/**
+ * The box behind an air pocket along the extrusion: the pocket's world box,
+ * from just past its far side to the sweep's far end. Null when the pocket
+ * already reaches the far end. For a direction off the axes the world box
+ * is conservative, which can only refuse more, never cut more.
+ */
+function shadowBox(
+  kernel: RemusKernel,
+  box: ArrayLike<number>,
+  reach: ToNextReach,
+  far: Vec3
+): number | null {
+  const d = reach.direction;
+  const lo = { x: box[0]!, y: box[1]!, z: box[2]! };
+  const hi = { x: box[3]!, y: box[4]!, z: box[5]! };
+  const margin = 1e-6 * Math.max(1, reach.length);
+  const min = { ...lo };
+  const max = { ...hi };
+  for (const axis of ['x', 'y', 'z'] as const) {
+    const component = d[axis];
+    if (Math.abs(component) < 1e-12) continue;
+    if (component > 0) {
+      min[axis] = hi[axis] + margin;
+      max[axis] = Math.max(hi[axis], far[axis]) + margin;
+    } else {
+      max[axis] = lo[axis] - margin;
+      min[axis] = Math.min(lo[axis], far[axis]) - margin;
+    }
+  }
+  const size = { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z };
+  if (!(size.x > margin && size.y > margin && size.z > margin)) return null;
+  const solid = kernel.makeBox(size.x, size.y, size.z);
+  kernel.transformSolid(
+    solid,
+    Float64Array.of(1, 0, 0, min.x, 0, 1, 0, min.y, 0, 0, 1, min.z, 0, 0, 0, 1)
+  );
+  return solid;
 }
 
 /**
@@ -187,6 +238,83 @@ export function trimToNext(
     throw new Error(
       `${label} does not meet ${targetName} everywhere: part of the profile has no next face of the body ahead of it. Move the profile over the body, or use a distance.`
     );
+  }
+  // The whole profile starts on one side: the kept regions' faces on the
+  // start plane cover all of the sweep's own start face, exactly.
+  const area = (solids: readonly number[]) =>
+    solids.reduce(
+      (sum, solid) =>
+        sum +
+        facesOnPlane(kernel, solid, reach.start, reach.direction, tolerance)
+          .map((face) => kernel.faceArea(face, MEASUREMENT_DEFLECTION))
+          .reduce((a, b) => a + b, 0),
+      0
+    );
+  const profileArea = area([tool]);
+  if (
+    !(Math.abs(area(kept) - profileArea) <= 1e-6 * Math.max(1e-9, profileArea))
+  ) {
+    throw new Error(
+      operation === 'add'
+        ? `${label} starts partly inside ${targetName}; keep the whole profile outside the body to grow it up to the next face.`
+        : `${label} starts partly outside ${targetName}; keep the whole profile on or inside the body to cut it down to the next face.`
+    );
+  }
+  if (operation === 'cut') {
+    // Each corner of the profile must start in the body or on its face: a
+    // start the slightest gap off the body is no start in it.
+    const touch = 1e-9 * Math.max(1, reach.length);
+    const outside = facesOnPlane(
+      kernel,
+      tool,
+      reach.start,
+      reach.direction,
+      tolerance
+    )
+      .flatMap((face) => Array.from(kernel.getFaceVertices(face)))
+      .some((vertex) => {
+        const p = kernel.getVertexPosition(vertex);
+        return (
+          kernel.classifyPoint(body, p[0]!, p[1]!, p[2]!, touch) === 'outside'
+        );
+      });
+    if (outside) {
+      throw new Error(
+        `${label} does not start in ${targetName}: the profile lies off the body's face; sketch on or inside the body.`
+      );
+    }
+    // A pocket of air inside the sweep with kept material beyond it means
+    // some of the profile left the body there and some did not: there is
+    // no one next face, so the cut is refused rather than run on past it.
+    const air = Array.from(
+      kernel.getCompoundSolids(kernel.booleanRegions('cut', tool, body))
+    ).filter(
+      (region) =>
+        !hasFaceOnPlane(kernel, region, reach.start, reach.direction, tolerance)
+    );
+    for (const pocket of air) {
+      const beyond = shadowBox(kernel, kernel.boundingBox(pocket), reach, far);
+      if (beyond === null) continue;
+      const shared = kept.some((region) => {
+        let common: number;
+        try {
+          common = kernel.intersect(region, beyond);
+        } catch {
+          // Nothing shared: the kernel refuses an empty common.
+          return false;
+        }
+        return (
+          kernel.volume(common, MEASUREMENT_DEFLECTION) >
+          1e-9 * Math.max(1, profileArea * reach.length)
+        );
+      });
+      kernel.deleteSolid(beyond);
+      if (shared) {
+        throw new Error(
+          `${label} does not leave ${targetName} at one next face: under part of the profile the body opens into a cavity, and beside it the cut would run on. Sketch over the cavity alone, or use a distance.`
+        );
+      }
+    }
   }
   return {
     solids: kept,
