@@ -152,6 +152,7 @@
   "sketch-move.spec.ts": 14,
   "sketch-point-slot.spec.ts": 12,
   "sketch-review-fixes.spec.ts": 20,
+  "sketch-shape-reference-targets.spec.ts": 16,
   "sketch-transition-continuity.spec.ts": 26,
   "space-mouse.spec.ts": 4,
   "sphere-cylinder-union.spec.ts": 36,

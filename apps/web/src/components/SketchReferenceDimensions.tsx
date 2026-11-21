@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
+  createSketchCompositeCenterTarget,
   createSketchCompositeCornerTarget,
   createSketchCompositeSideTarget,
   describeSketchReferenceDimension,
   resolveSketchReferenceDimension,
+  sketchShapeTargets,
   toSketchReferenceAnnotationId,
   type EntityId,
   type SketchNode,
@@ -82,14 +84,42 @@ export function SketchReferenceDimensions({
     }));
   });
   points.push(
-    ...selectableComposites.flatMap((composite) =>
-      composite.edgeIds.map((_, index) => ({
+    ...selectableComposites.flatMap((composite) => [
+      ...composite.edgeIds.map((_, index) => ({
         key: JSON.stringify(
           createSketchCompositeCornerTarget(composite, index)
         ),
         label: `${nameOfComposite(composite.compositeId)} · Corner ${index + 1}`
-      }))
-    )
+      })),
+      {
+        key: JSON.stringify(createSketchCompositeCenterTarget(composite)),
+        label: `${nameOfComposite(composite.compositeId)} · Centre`
+      }
+    ])
+  );
+  // A legacy rectangle or polygon is measured where it stands; it is never
+  // converted to reach its corners. Its corners follow the shape's own order.
+  // "(parametric)" keeps an unnamed one ("Rectangle 1") apart from a
+  // held-line shape of the same name.
+  const shapes = namedObjects.flatMap((object) => {
+    const targets = sketchShapeTargets(
+      object.id as EntityId,
+      object.data,
+      resolve
+    );
+    return targets ? [{ object, targets }] : [];
+  });
+  points.push(
+    ...shapes.flatMap(({ object, targets }) => [
+      ...targets.corners.map((target) => ({
+        key: JSON.stringify(target),
+        label: `${object.label} (parametric) · Corner ${target.index + 1}`
+      })),
+      {
+        key: JSON.stringify(targets.center),
+        label: `${object.label} (parametric) · Centre`
+      }
+    ])
   );
   const entities = namedObjects
     .filter((o) =>
@@ -113,6 +143,16 @@ export function SketchReferenceDimensions({
             target
           };
         })
+      )
+    );
+  if (kind === 'angle')
+    entities.push(
+      ...shapes.flatMap(({ object, targets }) =>
+        targets.sides.map((target) => ({
+          key: JSON.stringify(target),
+          label: `${object.label} (parametric) · Side ${target.index + 1}`,
+          target
+        }))
       )
     );
   const options = kind === 'distance' ? points : entities;

@@ -165,7 +165,7 @@ export function createSketchCompositeSideTarget(
 
 /** Every captured member remains a dependency, even if the owner is missing. */
 export function sketchCompositeTargetMemberIds(
-  target: SketchCompositeTarget
+  target: Pick<SketchCompositeTarget, 'topology'>
 ): EntityId[] {
   return [...target.topology.edgeIds, ...target.topology.helperIds];
 }
@@ -254,6 +254,7 @@ function resolveTarget(
       status: 'resolved';
       composite: SketchComposite;
       corners: SketchCompositePoint[];
+      center: SketchCompositePoint;
     }
   | UnresolvedTarget {
   const identity = resolveSketchCompositeTargetIdentity(
@@ -275,7 +276,12 @@ function resolveTarget(
   });
   if (resolved.status === 'broken')
     return targetFailure(target, resolved.reason);
-  return { status: 'resolved', composite, corners: resolved.corners };
+  return {
+    status: 'resolved',
+    composite,
+    corners: resolved.corners,
+    center: resolved.center
+  };
 }
 
 /** Resolve a complete named shape before lowering its corner to a solver point. */
@@ -339,4 +345,84 @@ export function resolveSketchCompositeSideTarget(
   } catch {
     return targetFailure(target, 'its side endpoint does not resolve.');
   }
+}
+
+/**
+ * S02-D (schema v125): a named shape's centre. It names its composite and the
+ * same complete ordered topology witness as a corner or side, with no index:
+ * the centre is the centroid of the shape's corners, which is a rectangle's
+ * or regular polygon's centre and a slot's midpoint between its centres.
+ */
+export interface SketchCompositeCenterTarget {
+  kind: 'composite-center';
+  compositeId: SketchCompositeId;
+  topology: SketchCompositeTargetTopology;
+}
+
+export function isSketchCompositeCenterTarget(
+  value: unknown
+): value is SketchCompositeCenterTarget {
+  if (!isRecord(value) || value.kind !== 'composite-center') return false;
+  if (Object.keys(value).length !== 3) return false;
+  // Reuse the indexed guard's topology rules with corner 0 as a stand-in.
+  return isTarget(
+    {
+      kind: 'composite-corner',
+      compositeId: value.compositeId,
+      index: 0,
+      topology: value.topology
+    },
+    'composite-corner'
+  );
+}
+
+export function createSketchCompositeCenterTarget(
+  composite: SketchComposite
+): SketchCompositeCenterTarget {
+  const { compositeId, topology } = createSketchCompositeCornerTarget(
+    composite,
+    0
+  );
+  return { kind: 'composite-center', compositeId, topology };
+}
+
+/**
+ * A primitive point that names the same physical centre, so the same target
+ * picked twice through two names is refused: a polygon's centre is its
+ * circumcircle's centre. Other shapes' centres have no primitive point.
+ */
+export function sketchCompositeCenterAliases(
+  composite: SketchComposite
+): SketchPointRef[] {
+  const circle = composite.helperIds?.[0];
+  return composite.compositeKind === 'polygon' && circle
+    ? [{ objectId: circle, point: 'center' }]
+    : [];
+}
+
+export type SketchCompositeCenterTargetResolution =
+  { status: 'resolved'; point: SketchCompositePoint } | UnresolvedTarget;
+
+/** Resolve the complete named shape before publishing its centre. */
+export function resolveSketchCompositeCenterTarget(
+  target: SketchCompositeCenterTarget,
+  composites: readonly SketchComposite[],
+  objects: ReadonlyMap<string, SketchObjectData>,
+  resolve: (value: ParamValue) => number | undefined
+): SketchCompositeCenterTargetResolution {
+  const fail = (detail: string): UnresolvedTarget => ({
+    status: 'unresolved',
+    reason: `Composite "${isRecord(target) && typeof target.compositeId === 'string' ? target.compositeId : 'unknown'}" centre: ${detail}`
+  });
+  if (!isSketchCompositeCenterTarget(target))
+    return fail('the saved centre target descriptor is malformed.');
+  const corner = resolveTarget(
+    { ...target, kind: 'composite-corner', index: 0 },
+    composites,
+    objects,
+    resolve
+  );
+  if (corner.status === 'unresolved')
+    return fail(corner.reason.replace(/^Composite "[^"]*" corner 1: /, ''));
+  return { status: 'resolved', point: corner.center };
 }

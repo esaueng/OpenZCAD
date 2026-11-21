@@ -6,6 +6,7 @@ import {
 } from '@openzcad/command-system';
 import { createProjectDocument, findSketch } from '@openzcad/document-core';
 import {
+  createSketchCompositeCenterTarget,
   createSketchCompositeCornerTarget,
   createSketchCompositeSideTarget,
   toSketchReferenceAnnotationId,
@@ -262,4 +263,30 @@ describe('composite dimensions and modify boundaries', () => {
         expect(plan.reason).toMatch(/reference dimension/i);
     }
   );
+});
+
+describe('S02-D composite centre snaps', () => {
+  it('names a centre rectangle diagonal midpoint as the shape centre without adding a snap', () => {
+    const f = fixture(true);
+    const ordinary = collectSketchSnapTargets(f.objects, resolve);
+    const named = collectSketchSnapTargets(f.objects, resolve, [f.composite]);
+    expect(named).toHaveLength(ordinary.length);
+    const centres = named.filter(
+      (target) => target.label === 'Rectangle 1 · Centre'
+    );
+    expect(centres.length).toBeGreaterThan(0);
+    for (const centre of centres)
+      expect(centre).toMatchObject({
+        x: 10,
+        y: 6,
+        compositeTarget: createSketchCompositeCenterTarget(f.composite)
+      });
+    // A corner rectangle has no helper at its centre: nothing is invented.
+    const corner = fixture(false);
+    expect(
+      collectSketchSnapTargets(corner.objects, resolve, [
+        corner.composite
+      ]).some((target) => target.label?.endsWith('· Centre'))
+    ).toBe(false);
+  });
 });
