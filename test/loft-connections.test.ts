@@ -204,6 +204,10 @@ describe(
       expect(plainRefusal(warning!.message).message).toBe(
         'The loft guide or connection does not meet section 1 at a corner. A connection must be a vertex of every section.'
       );
+      expect(warning!.kernelRefusal).toMatchObject({
+        family: 'modeling',
+        code: 'loft_connections_refused'
+      });
     });
 
     it('refuses a curved guide by name', async () => {
@@ -223,6 +227,12 @@ describe(
       expect(warning!.message).toContain(
         'A loft guide must be a straight line'
       );
+      // Typed, so callers branch on it rather than on the sentence.
+      expect(warning!.kernelRefusal).toMatchObject({
+        family: 'modeling',
+        category: 'unsupported',
+        code: 'loft-guide:curved'
+      });
     });
 
     it('refuses replayed connections or a guide into a document older than v133', () => {

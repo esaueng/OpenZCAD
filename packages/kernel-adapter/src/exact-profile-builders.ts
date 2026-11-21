@@ -2209,12 +2209,27 @@ function loftGuidePoints(
     node?.kind !== 'sketch-object' ||
     !sketch.objectIds.includes(entityId)
   ) {
-    throw new Error('A loft guide is one curve of its guide sketch.');
+    const message = 'A loft guide is one curve of its guide sketch.';
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: 'unsupported',
+      kernelCode: 'loft-guide:not-one-curve',
+      kernelMessage: message,
+      reason: message,
+      message: message
+    });
   }
   if (node.data.objectKind !== 'line') {
-    throw new Error(
-      'A loft guide must be a straight line: a curved guide has no exact construction yet. Draw the guide as a line, or clear it.'
-    );
+    const message =
+      'A loft guide must be a straight line: a curved guide has no exact construction yet. Draw the guide as a line, or clear it.';
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: 'unsupported',
+      kernelCode: 'loft-guide:curved',
+      kernelMessage: message,
+      reason: message,
+      message: message
+    });
   }
   const data = node.data;
   const resolve = (value: ParamValue) =>
@@ -2237,9 +2252,15 @@ function loftGuidePoints(
         n.z * (plane.origin.z - a.z)) /
       rise;
     if (!Number.isFinite(t) || t < -1e-9 || t > 1 + 1e-9) {
-      throw new Error(
-        `The loft guide does not reach section ${index + 1}: a guide runs from the first section to the last, through each.`
-      );
+      const message = `The loft guide does not reach section ${index + 1}: a guide runs from the first section to the last, through each.`;
+      throw new KernelRefusal({
+        family: 'modeling',
+        category: 'unsupported',
+        kernelCode: 'loft-guide:short',
+        kernelMessage: message,
+        reason: message,
+        message: message
+      });
     }
     return { x: a.x + along.x * t, y: a.y + along.y * t, z: a.z + along.z * t };
   });
@@ -2297,7 +2318,10 @@ export function buildLoft(
     };
     const solid = validatedLoft(
       kernel,
-      () => kernel.loftWithOptions(handles, JSON.stringify(options)),
+      () =>
+        typedModelingCall('loft_connections_refused', () =>
+          kernel.loftWithOptions(handles, JSON.stringify(options))
+        ),
       'Loft'
     );
     return {
@@ -3019,6 +3043,14 @@ export function resolveSweepOptions(
  * with the kernel's sentence, never a bare build failure.
  */
 function typedExactSweep(run: () => number): number {
+  return typedModelingCall('exact_sweep_refused', run);
+}
+
+/**
+ * A kernel call whose refusals arrive as prose, carried as a typed modeling
+ * refusal with the kernel's sentence under `kernelCode`.
+ */
+function typedModelingCall(kernelCode: string, run: () => number): number {
   try {
     return run();
   } catch (error) {
@@ -3028,7 +3060,7 @@ function typedExactSweep(run: () => number): number {
     throw new KernelRefusal({
       family: 'modeling',
       category: category === 'internal' ? 'unsupported' : category,
-      kernelCode: 'exact_sweep_refused',
+      kernelCode,
       kernelMessage: message,
       reason: message,
       message,
