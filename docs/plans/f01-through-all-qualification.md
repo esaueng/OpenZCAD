@@ -11,7 +11,9 @@ of F01. It does not add an end-condition field or UI.
 > the face, its resolution and its unresolved state (see the F01 row).
 > Schema v130 (2026-11-20) adds `'to-next'` for an add or a cut with one
 > target: the long sweep is split by the target into exact regions and only
-> those standing on the start plane are kept. The
+> those standing on the start plane are kept. A to-face target may lean
+> off parallel (no schema change): a slanted face splits a longer sweep with
+> its plane. The
 > other values listed below stay design
 > intent until their slices land, so a document cannot carry an end
 > condition no build implements. The UI offers Through all whenever Cut is

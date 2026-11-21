@@ -6458,6 +6458,49 @@ export function toFaceSignedDistance(
 }
 
 /**
+ * F01 (slanted to-face): how steeply a to-face target may lean and still be reached:
+ * the cosine between its normal and the sketch normal must be at least this
+ * (the face within about 84° of parallel). A steeper face meets the
+ * extrusion at a grazing angle, along walls far longer than the profile.
+ */
+export const TO_FACE_SLANT_COSINE_LIMIT = 0.1;
+
+/**
+ * F01 (slanted to-face): which way a to-face target lies from the sketch plane and how
+ * far, as the signed height of the face's own point along the unit sketch
+ * normal, for a parallel or a slanted face; null when the face is steeper
+ * than {@link TO_FACE_SLANT_COSINE_LIMIT} or its point lies on the sketch
+ * plane (which way it is would be a guess). `slanted` is false exactly when
+ * the face is parallel ({@link toFaceParallelHeight}), in which case
+ * `height` is that distance (zero on the sketch plane). For a slanted face the height is only where the face's point
+ * is; the build finds where it meets each part of the profile.
+ */
+export function toFaceReach(
+  sketch: { origin: ToFacePoint; normal: ToFacePoint },
+  face: { point: ToFacePoint; normal: ToFacePoint }
+): { height: number; slanted: boolean } | null {
+  // A parallel face on the sketch plane reads as 0: a start offset can
+  // still reach it (the build refuses it without one).
+  const parallel = toFaceParallelHeight(sketch, face);
+  if (parallel !== null) return { height: parallel, slanted: false };
+  const alignment =
+    face.normal.x * sketch.normal.x +
+    face.normal.y * sketch.normal.y +
+    face.normal.z * sketch.normal.z;
+  if (!(Math.abs(alignment) >= TO_FACE_SLANT_COSINE_LIMIT)) return null;
+  const sine = Math.sqrt(Math.max(0, 1 - alignment * alignment));
+  if (sine <= TO_FACE_PARALLEL_SINE_LIMIT) return null;
+  const height =
+    (face.point.x - sketch.origin.x) * sketch.normal.x +
+    (face.point.y - sketch.origin.y) * sketch.normal.y +
+    (face.point.z - sketch.origin.z) * sketch.normal.z;
+  return Number.isFinite(height) &&
+    Math.abs(height) > 1e-9 * Math.max(1, Math.abs(height))
+    ? { height, slanted: true }
+    : null;
+}
+
+/**
  * Whether `feature` is a to-face extrude whose target face no longer
  * resolves, judged from the derived per-feature warnings. Attribution is by
  * feature id, never the display name: two extrudes may share a name. The

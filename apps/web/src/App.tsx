@@ -1084,7 +1084,7 @@ import {
   extrudeToFaceRepair,
   extrudeHistoryDocument,
   extrudeToFaceTargetFromPick,
-  toFaceDistanceEstimate,
+  toFaceReachEstimate,
   toFaceTargetLabel
 } from './lib/extrudeToFace';
 import {
@@ -33505,11 +33505,13 @@ export function App() {
         const history =
           key && reachProjection?.key === key ? reachProjection : null;
         const source = kind === 'edit' ? history?.document : doc;
+        const reach = source
+          ? toFaceReachEstimate(source, sketchId, target)
+          : null;
         return {
           label: doc ? toFaceTargetLabel(doc, target) : 'face',
-          distance: source
-            ? toFaceDistanceEstimate(source, sketchId, target)
-            : null,
+          distance: reach?.height ?? null,
+          ...(reach?.slanted ? { slanted: true } : {}),
           ...(kind === 'edit' && !source
             ? { pending: !history?.error, problem: history?.error }
             : {})
@@ -33529,7 +33531,7 @@ export function App() {
             : { kind: 'create' }
         );
         setStatus(
-          'Click a planar face parallel to the sketch for the extrusion to reach · Esc cancels.'
+          'Click a planar face facing the sketch for the extrusion to reach · Esc cancels.'
         );
       }
     };
@@ -33549,7 +33551,7 @@ export function App() {
       featureName: feature.name
     });
     setStatus(
-      `Re-pick the face "${feature.name}" reaches: click a planar face parallel to its sketch · Esc cancels.`
+      `Re-pick the face "${feature.name}" reaches: click a planar face facing its sketch · Esc cancels.`
     );
   }
 

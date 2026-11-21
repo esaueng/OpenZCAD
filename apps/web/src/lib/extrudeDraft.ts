@@ -71,6 +71,11 @@ export interface ExtrudeFormValue {
 export interface ExtrudeToFaceInfo {
   label: string;
   distance: number | null;
+  /**
+   * The face leans off parallel: `distance` is only where its own point
+   * lies, so the offset and start checks wait for the build.
+   */
+  slanted?: boolean;
   pending?: boolean;
   problem?: string;
 }
@@ -257,7 +262,7 @@ export function extrudeToFaceProblem(
     info.problem ??
     (info.pending
       ? 'Checking the target face…'
-      : 'This face is not parallel to the sketch plane; pick a face parallel to the sketch.')
+      : 'This face is nearly perpendicular to the sketch plane; pick a face that faces the sketch.')
   );
 }
 
@@ -275,8 +280,12 @@ function extrudeToFaceExtentRefusal(
   const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
   const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
   if (offset === null || start === null) return null;
-  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
-  if (reach === null || (reach === 0 && start === 0)) return null;
+  const info = ctx.toFacePicking!.describe(draft.toFace);
+  const reach = info.distance;
+  // A slanted face's distance is only where its own point lies.
+  if (reach === null || info.slanted || (reach === 0 && start === 0)) {
+    return null;
+  }
   if (toFaceExtent(reach, start, offset) !== null) return null;
   if (start === 0) {
     return {

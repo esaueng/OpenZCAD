@@ -452,7 +452,7 @@ export function ExtrudeCommand({
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
   const regions = profileCount > 1 ? ` · ${profileCount} profiles` : '';
   const guidance = toFacePicking?.armed
-    ? 'Click a flat face parallel to the sketch'
+    ? 'Click a flat face facing the sketch'
     : toFace
       ? toFaceInfo
         ? `Up to ${toFaceInfo.label}${regions}`
