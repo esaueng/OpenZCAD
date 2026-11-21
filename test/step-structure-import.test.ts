@@ -3,8 +3,11 @@ import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { CommandManager, replayCommands } from '@openzcad/command-system';
 import {
+  addAssemblyComponents,
+  addAssemblyJoint,
   addPrimitiveFeature,
   createObjectFolder,
+  setAssemblyExplode,
   assertImportedStepContentSchema,
   createProjectDocument,
   STEP_STRUCTURE_SCHEMA_VERSION,
@@ -22,7 +25,9 @@ import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
   BODY_COLOR_METADATA_KEY,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  solveAssembly,
   toUserId,
+  transformToMatrix4,
   type BodyId,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -407,3 +412,141 @@ it('round-trips Objects folders as STEP assembly structure', async () => {
     adapter.dispose();
   }
 }, 120_000);
+
+/**
+ * AS04 STEP hierarchy round-trip: an assembly exports as placed parts. Each
+ * part's geometry stays in its own frame and its occurrence carries the
+ * part's solved pose (never the exploded view), so the structure reader
+ * reads every body back where the assembly put it, named after its part.
+ */
+it('round-trips an assembly’s poses as STEP placements (AS04)', async () => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    let document = createProjectDocument('Hinge', toUserId('user_as04'));
+    for (const [name, dimensions] of [
+      ['Base', { width: 40, height: 10, depth: 20 }],
+      ['Arm', { width: 30, height: 4, depth: 6 }]
+    ] as const)
+      document = addPrimitiveFeature(document, {
+        name,
+        bodyName: name,
+        primitiveKind: 'box',
+        dimensions
+      });
+    const [base, arm] = document.bodyOrder as [BodyId, BodyId];
+    document = addAssemblyComponents(document, {
+      components: [
+        { componentId: 'c_base', name: 'Base', bodyId: base, grounded: true },
+        { componentId: 'c_arm', name: 'Arm', bodyId: arm, grounded: false }
+      ]
+    });
+    // Turned 90° about a vertical pivot at (5, 5, 0) and lifted 10 mm.
+    const pivot = {
+      origin: { x: 5, y: 5, z: 0 },
+      zAxis: { x: 0, y: 0, z: 1 },
+      xAxis: { x: 1, y: 0, z: 0 }
+    };
+    document = addAssemblyJoint(document, {
+      joint: {
+        id: 'j_pivot',
+        name: 'Pivot',
+        kind: 'cylindrical',
+        parent: { componentId: 'c_base', frame: pivot },
+        child: { componentId: 'c_arm', frame: pivot },
+        values: [90, 10],
+        limits: [null, null]
+      }
+    });
+    // Presentation only: never written.
+    document = setAssemblyExplode(document, {
+      offsets: { c_arm: { x: 0, y: 0, z: 500 } }
+    });
+    const derived = await adapter.syncDocument(document);
+    const pose = transformToMatrix4(
+      solveAssembly(document.assembly!).poses.get('c_arm')!
+    );
+    const box = derived.bodyRepresentations[arm]!.bbox;
+    // The arm's modelled box carried by its pose (a quarter turn keeps it
+    // axis-aligned, so its corners' extent is exact).
+    const corners = [0, 1, 2, 3, 4, 5, 6, 7].map((i) => {
+      const p = [
+        i & 1 ? box.max.x : box.min.x,
+        i & 2 ? box.max.y : box.min.y,
+        i & 4 ? box.max.z : box.min.z
+      ];
+      return [0, 1, 2].map(
+        (r) =>
+          pose[r]! * p[0]! +
+          pose[4 + r]! * p[1]! +
+          pose[8 + r]! * p[2]! +
+          pose[12 + r]!
+      );
+    });
+    const posed: number[] = [];
+    for (const axis of [0, 1, 2])
+      posed.push(Math.min(...corners.map((c) => c[axis]!)));
+    for (const axis of [0, 1, 2])
+      posed.push(Math.max(...corners.map((c) => c[axis]!)));
+    expect(posed).not.toEqual([
+      box.min.x,
+      box.min.y,
+      box.min.z,
+      box.max.x,
+      box.max.y,
+      box.max.z
+    ]);
+    const ids = [...derived.exportableBodyIds];
+    for (const units of ['mm', 'inch'] as const) {
+      const exported = await adapter.exportStep({ ...document, derived }, ids, {
+        units
+      });
+      expect(exported).toContain('NEXT_ASSEMBLY_USAGE_OCCURRENCE');
+      const bytes = new TextEncoder().encode(exported);
+      const sourceAdapter = await createExactKernelAdapter({
+        resolveSourceBytes: async () => bytes
+      });
+      try {
+        const { manager } = await importThroughTheRun(
+          sourceAdapter,
+          bytes,
+          `Hinge-${units}.step`,
+          createProjectDocument('Receiver', toUserId('user_as04'))
+        );
+        const received = await sourceAdapter.syncDocument(manager.document);
+        const byName = new Map(
+          bodies(manager.document).map((body) => [body.name, body])
+        );
+        // Named after their parts and filed under the project.
+        expect(byName.get('Arm')?.folder).toBe('Hinge');
+        expect(byName.get('Base')?.folder).toBe('Hinge');
+        const read = (name: string) => {
+          const b =
+            received.bodyRepresentations[byName.get(name)!.bodyId]!.bbox;
+          return [b.min.x, b.min.y, b.min.z, b.max.x, b.max.y, b.max.z];
+        };
+        // The receiver reads in millimetres whatever unit was written.
+        read('Arm').forEach((value, index) =>
+          expect(value).toBeCloseTo(posed[index]!, 4)
+        );
+        const baseBox = derived.bodyRepresentations[base]!.bbox;
+        read('Base').forEach((value, index) =>
+          expect(value).toBeCloseTo(
+            [
+              baseBox.min.x,
+              baseBox.min.y,
+              baseBox.min.z,
+              baseBox.max.x,
+              baseBox.max.y,
+              baseBox.max.z
+            ][index]!,
+            4
+          )
+        );
+      } finally {
+        sourceAdapter.dispose();
+      }
+    }
+  } finally {
+    adapter.dispose();
+  }
+}, 240_000);

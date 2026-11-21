@@ -5,6 +5,7 @@
   "analysis-overlays.spec.ts": 20,
   "analysis-thickness.spec.ts": 20,
   "assembly-interference.spec.ts": 25,
+  "assembly-step-roundtrip.spec.ts": 30,
   "assembly-interference-motion.spec.ts": 25,
   "assembly.spec.ts": 68,
   "boolean-selection.spec.ts": 11,
