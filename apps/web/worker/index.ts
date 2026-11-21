@@ -161,6 +161,8 @@ import {
   assistantProviderIdentity,
   authenticateBrowserSession,
   authenticateRequest,
+  clearRejectedEmailSession,
+  dropRenewedSessionCookie,
   takeRenewedSessionCookie,
   approveDesktopAuthorization,
   AuthFlowError,
@@ -3188,7 +3190,32 @@ async function handleAppRequest(request: Request, env: Env): Promise<Response> {
 
   assertSafeRuntimeConfiguration(env);
   const response = await dispatchApiRequest(request, env);
-  return withApiSecurityHeaders(response, takeRenewedSessionCookie(request));
+  let renewedSessionCookie: string | null = null;
+  if (mayCarryRenewedSessionCookie(response)) {
+    renewedSessionCookie = await takeRenewedSessionCookie(request);
+  } else {
+    dropRenewedSessionCookie(request);
+  }
+  return withApiSecurityHeaders(response, renewedSessionCookie);
+}
+
+/**
+ * A renewed session cookie rides only on a response that authenticated and
+ * left the session cookie alone: never on a WebSocket upgrade, a 401/403, or
+ * a response that sets or clears the cookie itself (sign-in, sign-out,
+ * account erasure, a rejected session).
+ */
+function mayCarryRenewedSessionCookie(response: Response): boolean {
+  if (
+    response.webSocket ||
+    response.status === 401 ||
+    response.status === 403
+  ) {
+    return false;
+  }
+  return !response.headers
+    .getSetCookie()
+    .some((line) => line.startsWith(`${SESSION_COOKIE_NAME}=`));
 }
 
 export default {
@@ -3280,14 +3307,17 @@ function withApiSecurityHeaders(
     headers: response.headers
   });
   // A session the request slid forward re-issues its cookie with the new
-  // lifetime, unless the response already sets or clears that cookie.
-  if (
-    renewedSessionCookie &&
-    !wrapped.headers
-      .getSetCookie()
-      .some((line) => line.startsWith(`${SESSION_COOKIE_NAME}=`))
-  ) {
+  // lifetime. The response then carries the session token, so no shared
+  // cache may store it: anything short of `no-store` becomes `no-store`.
+  if (renewedSessionCookie) {
     wrapped.headers.append('set-cookie', renewedSessionCookie);
+    if (
+      !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(
+        wrapped.headers.get('cache-control') ?? ''
+      )
+    ) {
+      wrapped.headers.set('cache-control', 'no-store');
+    }
   }
   wrapped.headers.set('x-content-type-options', 'nosniff');
   wrapped.headers.set('referrer-policy', 'no-referrer');
@@ -3332,7 +3362,7 @@ async function dispatchApiRequest(
         { error: error.message, code: 'AUTH_REQUIRED' },
         401,
         error.failure === 'invalid'
-          ? { 'set-cookie': await destroyEmailSession(request, env) }
+          ? { 'set-cookie': await clearRejectedEmailSession(request, env) }
           : undefined
       );
     }

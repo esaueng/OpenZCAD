@@ -56,9 +56,13 @@ function storedExpiry(db: DatabaseSync, token = TOKEN): number | undefined {
   return row?.expires_at;
 }
 
-function sessionRequest(path = '/api/session', token = TOKEN): Request {
+function sessionRequest(
+  path = '/api/session',
+  token = TOKEN,
+  headers: Record<string, string> = {}
+): Request {
   return new Request(`https://zcad.app${path}`, {
-    headers: { cookie: `__Host-openzcad_session=${token}` }
+    headers: { cookie: `__Host-openzcad_session=${token}`, ...headers }
   });
 }
 
@@ -223,10 +227,10 @@ describe('sliding browser sessions', () => {
     });
     const request = sessionRequest();
     await authenticateBrowserSession(request, env);
-    const cookie = takeRenewedSessionCookie(request);
+    const cookie = await takeRenewedSessionCookie(request);
     expect(cookie).toMatch(/^__Host-openzcad_session=renewal-session-token;/);
     // Taken once: a second read finds nothing.
-    expect(takeRenewedSessionCookie(request)).toBeNull();
+    expect(await takeRenewedSessionCookie(request)).toBeNull();
     expect(storedExpiry(db)).toBeGreaterThanOrEqual(t + LIFETIME);
 
     const signOut = await worker.fetch(
@@ -268,5 +272,137 @@ describe('sliding browser sessions', () => {
       .get(lease) as { expires_at: number };
     expect(row.expires_at).toBe(t + 100);
     expect(writes).toEqual([]);
+  });
+});
+
+describe('sliding browser session hardening', () => {
+  it('marks a response carrying the renewed session cookie no-store', async () => {
+    const t = now();
+    const { env } = harness({
+      createdAt: t - 20 * DAY,
+      expiresAt: t + 10 * DAY
+    });
+    const renewing = await worker.fetch(sessionRequest(), env);
+    expect(sessionCookies(renewing)).toHaveLength(1);
+    expect(renewing.headers.get('cache-control')).toBe('no-store');
+
+    // A response that carries no cookie keeps the handler's own caching.
+    const plain = await worker.fetch(sessionRequest(), env);
+    expect(sessionCookies(plain)).toEqual([]);
+    expect(plain.headers.get('cache-control')).toBeNull();
+  });
+
+  it('does not re-issue a renewed cookie once its session row is gone', async () => {
+    const t = now();
+    const { db, env } = harness({
+      createdAt: t - 20 * DAY,
+      expiresAt: t + 10 * DAY
+    });
+    const request = sessionRequest();
+    await authenticateBrowserSession(request, env);
+    expect(storedExpiry(db)).toBeGreaterThanOrEqual(t + LIFETIME);
+    // Another tab signs out (or account erasure deletes the row) and signs
+    // in afresh before this response is built.
+    db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').run(
+      tokenHash(TOKEN)
+    );
+    db.prepare(
+      `INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at)
+       VALUES (?, ?, ?, ?)`
+    ).run(tokenHash('fresh-session-token'), USER, t, t + LIFETIME);
+    expect(await takeRenewedSessionCookie(request)).toBeNull();
+  });
+
+  it('does not re-issue a renewed cookie whose row no longer has the renewed expiry', async () => {
+    const t = now();
+    const { db, env } = harness({
+      createdAt: t - 20 * DAY,
+      expiresAt: t + 10 * DAY
+    });
+    const request = sessionRequest();
+    await authenticateBrowserSession(request, env);
+    db.prepare(
+      'UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?'
+    ).run(t + DAY, tokenHash(TOKEN));
+    expect(await takeRenewedSessionCookie(request)).toBeNull();
+  });
+
+  it.each([
+    ['a cross-site fetch', { 'sec-fetch-site': 'cross-site' }],
+    ['a same-site fetch', { 'sec-fetch-site': 'same-site' }],
+    ['a typed navigation', { 'sec-fetch-site': 'none' }],
+    [
+      'a foreign Origin without Sec-Fetch-Site',
+      { origin: 'https://evil.example' }
+    ]
+  ])('does not renew on %s', async (_label, headers) => {
+    const t = now();
+    const { db, env, writes } = harness({
+      createdAt: t - 20 * DAY,
+      expiresAt: t + 10 * DAY
+    });
+    const response = await worker.fetch(
+      sessionRequest('/api/session', TOKEN, headers),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(sessionCookies(response)).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(storedExpiry(db)).toBe(t + 10 * DAY);
+  });
+
+  it.each([
+    ['Sec-Fetch-Site same-origin', { 'sec-fetch-site': 'same-origin' }],
+    ['a matching Origin', { origin: 'https://zcad.app' }]
+  ])('renews on %s', async (_label, headers) => {
+    const t = now();
+    const { db, env } = harness({
+      createdAt: t - 20 * DAY,
+      expiresAt: t + 10 * DAY
+    });
+    const response = await worker.fetch(
+      sessionRequest('/api/session', TOKEN, headers),
+      env
+    );
+    expect(response.status).toBe(200);
+    expect(sessionCookies(response)).toHaveLength(1);
+    expect(storedExpiry(db)).toBeGreaterThanOrEqual(t + LIFETIME);
+  });
+
+  it('keeps a row a concurrent request renewed while rejecting it as expired', async () => {
+    const t = now();
+    const { db, env } = harness({
+      createdAt: t - 31 * DAY,
+      expiresAt: t - 1
+    });
+    const renewedAt = t + LIFETIME;
+    const racing = {
+      ...env,
+      DB: sqliteD1(db, {
+        onStatement(sql) {
+          // Another isolate renews the row between this request's read and
+          // its cleanup.
+          if (/DELETE FROM auth_sessions/.test(sql)) {
+            db.prepare(
+              'UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?'
+            ).run(renewedAt, tokenHash(TOKEN));
+          }
+        }
+      })
+    };
+    const response = await worker.fetch(sessionRequest(), racing);
+    expect(response.status).toBe(401);
+    expect(storedExpiry(db)).toBe(renewedAt);
+  });
+
+  it('still deletes a row that stays expired through the rejection', async () => {
+    const t = now();
+    const { db, env } = harness({
+      createdAt: t - 31 * DAY,
+      expiresAt: t - 1
+    });
+    const response = await worker.fetch(sessionRequest(), env);
+    expect(response.status).toBe(401);
+    expect(storedExpiry(db)).toBeUndefined();
   });
 });
