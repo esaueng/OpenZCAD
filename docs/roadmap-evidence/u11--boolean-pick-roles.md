@@ -8,12 +8,15 @@ by its role: Base from the first click, Tool after. These are the names
 Options lists, where the bodies used to wear pick numbers and one pick wore
 only its name. A Tool that the preview has consumed, such as a subtract's,
 is still named where it was picked, at the box it was picked with, so every
-input stays findable while the result shows. Options' Remove takes a Tool
+input stays findable while the result shows. Picks whose labels would
+stand on the same spot (a core centred in its plate) share one label that
+reads both roles, Base first. Options' Remove takes a Tool
 back out. Picked again in the model, it is named Tool again. A boolean has
 no value to drag, so its picks are the whole interaction. Evidence:
 `booleanSwitch.test.ts` (roles by pick order, with each pick's name and
 box). `test/e2e/boolean-selection.spec.ts` (`@ci-smoke`) clicks two
 overlapping cubes in the model. It checks Base and Tool on the bodies and
 in Options, removes and re-picks the Tool, and checks that the Tool is
-still named once the preview consumed it. It then subtracts to 750 mm³.
+still named once the preview consumed it. It then subtracts to 750 mm³. A second case
+subtracts a centred core and reads Base and Tool on one label.
 `solid-result-options.spec.ts` still passes.

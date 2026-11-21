@@ -12,6 +12,7 @@ import {
   clickWorldPoint,
   expectFeatureMeasurement,
   finishInPlaceCommand,
+  pickObjectsBody,
   pressTool,
   waitForStillViewport
 } from './openzcad-fixtures';
@@ -145,3 +146,47 @@ test(
     );
   }
 );
+
+test('one label reads both roles where a tool stands inside its base', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  page.setDefaultTimeout(15_000);
+  // A 4 mm core centred in a 10 mm plate, both from Z = 0: their labels
+  // would stand on the same spot, before the preview and after it cuts the
+  // core through and consumes it (review).
+  let document = createProjectDocument('Centred core', toUserId('user_e2e'));
+  document = addPrimitiveFeature(document, {
+    name: 'Plate',
+    primitiveKind: 'box',
+    dimensions: { width: 10, height: 10, depth: 10 }
+  });
+  document = addPrimitiveFeature(document, {
+    name: 'Core',
+    primitiveKind: 'box',
+    dimensions: { width: 4, height: 4, depth: 10 }
+  });
+  document = transformBody(document, {
+    name: 'Centre Core',
+    targetBodyId: document.bodyOrder[1]!,
+    translation: { x: 3, y: 3, z: 0 }
+  }).document;
+  await openSeeded(page, document);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+    timeout: 30_000
+  });
+  await pressTool(page, /^Subtract \(X\)/);
+  await pickObjectsBody(page, 'Plate');
+  await pickObjectsBody(page, 'Core');
+  const callouts = page.locator('.body-order-callout');
+  // The preview cuts the hole: only the plate is drawn, and one label names
+  // both picks, Base first.
+  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+    timeout: 30_000
+  });
+  await expect(callouts).toHaveCount(1);
+  await expect(callouts.locator('.callout-order')).toHaveText(['Base', 'Tool']);
+  await expect(callouts).toContainText('Plate');
+  await expect(callouts).toContainText('Core');
+});

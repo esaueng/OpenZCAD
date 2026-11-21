@@ -15309,6 +15309,14 @@ export function ModelViewer({
     const roled = selectedBodyIds.some((bodyId) => roleOf(bodyId));
     if ((selectedBodyIds.length > 1 || roled) && !focusCallout) {
       const pickBox = new THREE.Box3();
+      // Labels already placed, by where they stand: a pick whose label would
+      // land on one (a tool the preview consumed inside its base, labelled at
+      // its picked box) joins that label, so both read from any view.
+      const placed: {
+        at: THREE.Vector3;
+        reach: number;
+        element: HTMLElement;
+      }[] = [];
       selectedBodyIds.forEach((bodyId, index) => {
         const target = context.objectsByBodyId.get(bodyId);
         const body = bodies.find((candidate) => candidate.bodyId === bodyId);
@@ -15332,13 +15340,26 @@ export function ModelViewer({
         }
         pickBox.union(box);
         const top = box.getCenter(new THREE.Vector3());
-        top.z = box.max.z + calloutLift(box, unitsRef.current);
-        const label = makeLabel('selection-callout body-order-callout', '');
+        const lift = calloutLift(box, unitsRef.current);
+        top.z = box.max.z + lift;
         const order = document.createElement('span');
         order.className = 'callout-order';
         order.textContent = role?.role ?? String(index + 1);
         if (role) order.dataset.role = role.role;
+        const shared = placed.find(
+          (entry) => entry.at.distanceTo(top) < Math.min(entry.reach, lift)
+        );
+        if (shared) {
+          shared.element.append(
+            document.createTextNode(' · '),
+            order,
+            document.createTextNode(name)
+          );
+          return;
+        }
+        const label = makeLabel('selection-callout body-order-callout', '');
         label.element.append(order, document.createTextNode(name));
+        placed.push({ at: top.clone(), reach: lift, element: label.element });
         label.position.copy(top);
         label.userData.calloutBodyId = bodyId;
         label.userData.calloutRestingPosition = top.clone();
