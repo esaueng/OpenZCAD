@@ -334,6 +334,7 @@ import {
   type StepExportMetadata,
   type StepExportOptions
 } from './step-export-metadata';
+import { repeatStepExport } from './repeat-step-export';
 import type { StepPmiEntry } from './step-pmi';
 export {
   type StepBodiesExport,
@@ -1592,19 +1593,26 @@ function writeStepBodies(
   // coincident faces weld). Every root of the arena document becomes its
   // own MANIFOLD_SOLID_BREP inside one shape representation, so the
   // bodies stay distinct through a round trip.
-  return finishStepExport(
-    declareStepLengthUnit(
-      decodeText(
-        io.exportStepWithOptions(
-          kernel.serializeSolids(
-            new Uint32Array(bodies.flatMap(({ solids }) => solids))
+  const units = options.units ?? 'mm';
+  const solids = kernel.serializeSolids(
+    new Uint32Array(bodies.flatMap((body) => body.solids))
+  );
+  return repeatStepExport(
+    kernel,
+    document.projectId,
+    units,
+    solids,
+    metadata,
+    () =>
+      finishStepExport(
+        declareStepLengthUnit(
+          decodeText(
+            io.exportStepWithOptions(solids, stepWriterOptions(metadata))
           ),
-          stepWriterOptions(metadata)
-        )
-      ),
-      options.units ?? 'mm'
-    ),
-    metadata
+          units
+        ),
+        metadata
+      )
   );
 }
 

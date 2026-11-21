@@ -1,6 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi
+} from 'vitest';
+import { loadRemusTranslators } from '../packages/kernel-adapter/src/remus-runtime';
 import { parseStepMetadata } from '@openzcad/io-step';
 import {
   addPrimitiveFeature,
@@ -101,6 +110,10 @@ describe('I02 STEP metadata qualification', { timeout: 30_000 }, () => {
       adapter = await createExactKernelAdapter();
     });
 
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
     afterAll(() => {
       adapter.dispose();
     });
@@ -134,10 +147,33 @@ describe('I02 STEP metadata qualification', { timeout: 30_000 }, () => {
       const blockName = bodyNode(blockId!).name;
       const pinName = bodyNode(pinId!).name;
 
+      const write = vi.spyOn(
+        await loadRemusTranslators(),
+        'exportStepWithOptions'
+      );
       const stepText = await adapter.exportStep(document, [pinId!, blockId!], {
         fileName: 'I02-export.step',
         timestamp: '2026-10-31T12:00:00Z'
       });
+      const laterOptions = {
+        fileName: 'I02-export.step',
+        timestamp: '2026-11-01T12:00:00Z'
+      };
+      const bodyIds = [pinId!, blockId!];
+      const later = await adapter.exportStep(document, bodyIds, laterOptions);
+      expect(write).toHaveBeenCalledTimes(1);
+      const freshAdapter = await createExactKernelAdapter();
+      try {
+        const fresh = await freshAdapter.exportStep(
+          document,
+          bodyIds,
+          laterOptions
+        );
+        expect(write).toHaveBeenCalledTimes(2);
+        expect(later).toBe(fresh);
+      } finally {
+        freshAdapter.dispose();
+      }
       const metadata = parseStepMetadata('export.step', stepText);
 
       expect(await adapter.inspectStep(stepText)).toMatchObject({
