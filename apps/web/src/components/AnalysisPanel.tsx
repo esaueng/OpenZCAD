@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent,
   type ReactNode,
   type RefObject
 } from 'react';
@@ -102,14 +103,46 @@ function Segmented<T extends string>({
   options: readonly { id: T; label: string }[];
   onChange(id: T): void;
 }) {
+  const groupRef = useRef<HTMLDivElement | null>(null);
+  const current = Math.max(
+    0,
+    options.findIndex((option) => option.id === value)
+  );
+  // A radio group is one tab stop; the arrows (and Home/End) move and
+  // choose within it.
+  function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const step =
+      event.key === 'ArrowRight' || event.key === 'ArrowDown'
+        ? 1
+        : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+          ? -1
+          : 0;
+    let next = -1;
+    if (step) next = (current + step + options.length) % options.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = options.length - 1;
+    if (next < 0) return;
+    event.preventDefault();
+    onChange(options[next]!.id);
+    groupRef.current
+      ?.querySelectorAll<HTMLButtonElement>('[role="radio"]')
+      [next]?.focus();
+  }
   return (
-    <div className="analysis-segmented" role="radiogroup" aria-label={label}>
-      {options.map((option) => (
+    <div
+      ref={groupRef}
+      className="analysis-segmented"
+      role="radiogroup"
+      aria-label={label}
+      onKeyDown={onKeyDown}
+    >
+      {options.map((option, index) => (
         <button
           key={option.id}
           type="button"
           role="radio"
-          aria-checked={option.id === value}
+          aria-checked={index === current}
+          tabIndex={index === current ? 0 : -1}
           className="analysis-segment"
           onClick={() => onChange(option.id)}
         >
@@ -146,6 +179,7 @@ function NumberField({
       <span className="analysis-number">
         <input
           id={id}
+          aria-label={`${label} (${unit})`}
           type="number"
           min={min}
           max={max}
@@ -253,7 +287,7 @@ function draftView(
         />
         <Chip
           color={DRAFT_COLORS.insufficient}
-          label={`< ${minimum}`}
+          label={request.minimumDegrees > 0 ? `< ${minimum}` : minimum}
           count={summary?.faces.insufficient}
         />
         <Chip
@@ -465,16 +499,32 @@ function useBesideDisplayButton(
     const panel = panelRef.current;
     const stage = panel?.offsetParent;
     if (!panel || !(stage instanceof HTMLElement)) return;
+    // View's and Tweak's bar sits in the app shell beside the viewer, not
+    // inside it: look across the whole workspace.
+    const scope: ParentNode = stage.closest('.workspace') ?? document;
+    let last = '';
+    const apply = (next: CSSProperties | undefined) => {
+      const key = JSON.stringify(next ?? null);
+      if (key === last) return;
+      last = key;
+      setStyle(next);
+    };
+    let observedHost: Element | null = null;
     const place = () => {
       const trigger = Array.from(
-        stage.querySelectorAll<HTMLElement>('[data-display-mode-trigger]')
+        scope.querySelectorAll<HTMLElement>('[data-display-mode-trigger]')
       ).find((element) => element.getClientRects().length > 0);
       if (!trigger) {
-        setStyle(undefined);
+        apply(undefined);
         return;
       }
       const host =
         trigger.closest<HTMLElement>('.viewer-rail, .view-mode-bar') ?? trigger;
+      if (host !== observedHost) {
+        if (observedHost) resize?.unobserve(observedHost);
+        observedHost = host;
+        resize?.observe(host);
+      }
       const s = stage.getBoundingClientRect();
       const h = host.getBoundingClientRect();
       const t = trigger.getBoundingClientRect();
@@ -484,47 +534,73 @@ function useBesideDisplayButton(
         Math.max(low, Math.min(value, Math.max(low, high)));
       const vertical = h.height > h.width;
       // A vertical rail with no room beside it (a phone): the stylesheet's
-      // corner placement.
+      // own placement.
       if (vertical && h.left - s.left < width + GAP + EDGE) {
-        setStyle(undefined);
+        apply(undefined);
         return;
       }
       // A vertical rail: beside it, the panel's top level with the button.
       if (vertical) {
-        setStyle({
+        apply({
           left: 'auto',
-          right: `${s.right - h.left + GAP}px`,
-          top: `${clamp(t.top - s.top - 6, EDGE, s.height - height - EDGE)}px`,
+          right: `${Math.round(s.right - h.left + GAP)}px`,
+          top: `${Math.round(clamp(t.top - s.top - 6, EDGE, s.height - height - EDGE))}px`,
           bottom: 'auto',
           transform: 'none'
         });
         return;
       }
-      // A horizontal bar: above it, centred on the button.
+      // A horizontal bar: above it (or below, without room), centred on
+      // the button.
       const centre = t.left + t.width / 2 - s.left;
       const above = h.top - s.top >= height + GAP + EDGE;
-      setStyle({
-        left: `${clamp(centre - width / 2, EDGE, s.width - width - EDGE)}px`,
+      apply({
+        left: `${Math.round(clamp(centre - width / 2, EDGE, s.width - width - EDGE))}px`,
         right: 'auto',
-        top: above ? 'auto' : `${h.bottom - s.top + GAP}px`,
-        bottom: above ? `${s.bottom - h.top + GAP}px` : 'auto',
+        top: above ? 'auto' : `${Math.round(h.bottom - s.top + GAP)}px`,
+        bottom: above ? `${Math.round(s.bottom - h.top + GAP)}px` : 'auto',
         transform: 'none'
       });
     };
-    place();
-    window.addEventListener('resize', place);
-    if (typeof ResizeObserver === 'undefined') {
-      return () => window.removeEventListener('resize', place);
+    // A dock that opens or widens moves the rail through a custom property
+    // on the workspace, which resizes nothing observed: re-place on those
+    // changes too, once per frame.
+    let frame = 0;
+    const schedule = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        place();
+      });
+    };
+    const resize =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(schedule);
+    resize?.observe(stage);
+    resize?.observe(panel);
+    const mutation =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(schedule);
+    const root = stage.closest('.workspace');
+    for (const target of [root, stage]) {
+      if (target)
+        mutation?.observe(target, {
+          attributes: true,
+          attributeFilter: ['class', 'style']
+        });
     }
-    const observer = new ResizeObserver(place);
-    observer.observe(stage);
-    observer.observe(panel);
-    const host = stage.querySelector('[data-display-mode-trigger]');
-    const rail = host?.closest('.viewer-rail, .view-mode-bar');
-    if (rail) observer.observe(rail);
+    if (root) mutation?.observe(root, { childList: true, subtree: true });
+    root?.addEventListener('transitionend', schedule);
+    window.addEventListener('resize', schedule);
+    place();
     return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', place);
+      if (frame) cancelAnimationFrame(frame);
+      resize?.disconnect();
+      mutation?.disconnect();
+      root?.removeEventListener('transitionend', schedule);
+      window.removeEventListener('resize', schedule);
     };
   }, [panelRef]);
   return style;

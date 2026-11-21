@@ -104,13 +104,34 @@ describe('the analysis panel (M09)', () => {
     expect(within(panel).getByRole('status')).toHaveTextContent('Analysing…');
     const pull = within(panel).getByRole('radiogroup', { name: 'Pull' });
     expect(within(pull).getByRole('radio', { name: '+Z' })).toBeChecked();
+    // One tab stop: only the chosen direction is tabbable.
+    expect(
+      within(pull)
+        .getAllByRole('radio')
+        .map((radio) => radio.tabIndex)
+    ).toEqual([0, -1, -1, -1, -1, -1]);
+    // The arrows move the choice, wrapping at the ends.
+    fireEvent.keyDown(within(pull).getByRole('radio', { name: '+Z' }), {
+      key: 'ArrowRight'
+    });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...request,
+      pull: { x: 0, y: 0, z: -1 }
+    });
+    fireEvent.keyDown(within(pull).getByRole('radio', { name: '+Z' }), {
+      key: 'ArrowLeft'
+    });
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...request,
+      pull: { x: -1, y: 0, z: 0 }
+    });
     fireEvent.click(within(pull).getByRole('radio', { name: '−X' }));
     expect(onChange).toHaveBeenLastCalledWith({
       ...request,
       pull: { x: -1, y: 0, z: 0 }
     });
     const minimum = within(panel).getByRole('spinbutton', {
-      name: 'Min draft'
+      name: 'Min draft (°)'
     });
     fireEvent.change(minimum, { target: { value: '3' } });
     expect(onChange).toHaveBeenLastCalledWith({
@@ -123,6 +144,23 @@ describe('the analysis panel (M09)', () => {
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.click(within(panel).getByRole('button', { name: 'Turn off' }));
     expect(onOff).toHaveBeenCalled();
+  });
+
+  it('names the zero-draft band plainly when the minimum is 0°', () => {
+    render(
+      <AnalysisPanel
+        request={{ ...request, minimumDegrees: 0 }}
+        run={{ kind: 'running' }}
+        nameOf={() => 'Housing'}
+        onChange={vi.fn()}
+        onOff={vi.fn()}
+      />
+    );
+    expect(
+      within(screen.getByRole('list', { name: 'Legend' }))
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual(['≥ 0°', '0°', 'Undercut']);
   });
 
   it('says why it shows nothing: a failure, or a preview on screen', () => {
@@ -347,7 +385,7 @@ describe('the analysis panel for thickness (M09)', () => {
       /^Approximate: .*Resolution 0\.004 mm · 2 of 2 faces exact\.$/
     );
     const minimum = within(panel).getByRole('spinbutton', {
-      name: 'Min wall'
+      name: 'Min wall (mm)'
     });
     fireEvent.change(minimum, { target: { value: '0.8' } });
     expect(onChange).toHaveBeenLastCalledWith({

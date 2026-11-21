@@ -123,7 +123,7 @@ test(
 
     // A 3 mm print minimum: the plate's two broad faces fall below it,
     // recoloured from the same measurement.
-    await panel.getByRole('spinbutton', { name: 'Min wall' }).fill('3');
+    await panel.getByRole('spinbutton', { name: 'Min wall (mm)' }).fill('3');
     await expect(status).toHaveText(
       /^Thinnest wall 2 mm \(exact\) on Plate, face \d+\. 2 faces below the 3 mm minimum\.$/
     );
