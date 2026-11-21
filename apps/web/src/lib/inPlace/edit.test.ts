@@ -2103,7 +2103,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(sampled).not.toHaveProperty('endScale');
   });
 
-  it('sweep: an exact sweep with a rail writes the rail and no twist or scale (M04)', () => {
+  it('sweep: an exact sweep with a rail writes the rail, and a typed twist or scale beside it goes out to be refused (M04)', () => {
     const spec = IN_PLACE_TOOL_SPECS.sweep;
     const slots = {
       profiles: [
@@ -2122,12 +2122,24 @@ describe('an untouched edit writes the feature back as stored', () => {
       { build: 'exact' },
       {} as never
     );
+    // The card never drops what was typed: validation refuses the pair.
     expect(request).toMatchObject({
       construction: 'in-place',
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] },
+      twistDeg: 30,
+      endScale: 2
+    });
+    const plain = spec.request(
+      slots,
+      { twist: 0, endScale: 1 },
+      { build: 'exact' },
+      {} as never
+    );
+    expect(plain).toMatchObject({
       guide: { sketchId: SKETCH, entityIds: ['rail1'] }
     });
-    expect(request).not.toHaveProperty('twistDeg');
-    expect(request).not.toHaveProperty('endScale');
+    expect(plain).not.toHaveProperty('twistDeg');
+    expect(plain).not.toHaveProperty('endScale');
   });
 
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {

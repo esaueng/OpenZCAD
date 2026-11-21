@@ -1729,8 +1729,9 @@ const sweep: InPlaceToolSpec = {
       const endScale = values.endScale;
       const exactRail = slots.guide[0];
       if (exactRail) {
-        // A rail sets the end scale itself (M04): the twist and scale rows
-        // are not written with it.
+        // A rail sets the end scale itself (M04). A twist or end scale typed
+        // beside it still goes out, so validation refuses the pair by name
+        // rather than the card dropping the typed values unseen.
         return {
           tool: 'sweep',
           profile: section(pick),
@@ -1743,7 +1744,9 @@ const sweep: InPlaceToolSpec = {
           guide: {
             sketchId: exactRail.sketchId,
             entityIds: slots.guide.map((curve) => curve.entityId)
-          }
+          },
+          ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
+          ...(isLiteral(endScale, 1) ? {} : { endScale })
         };
       }
       return {
