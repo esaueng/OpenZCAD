@@ -395,6 +395,15 @@ export function inPlaceEditSeed(
         )
       );
       seed.options.shape = data.mode;
+      // M04 (v133): its guide line, as the path slot.
+      const guide = data.guides?.[0];
+      if (guide) {
+        seed.slots.path = guide.entityIds.flatMap((entityId) =>
+          ctx.curve(guide.sketchId, entityId)
+            ? [{ sketchId: guide.sketchId, entityId }]
+            : (missing.push('path'), [])
+        );
+      }
       if (data.endPoint) {
         // Its apex as stored, each coordinate on its own chip.
         seed.options.end = 'point';
@@ -429,6 +438,13 @@ export function inPlaceEditSeed(
       const build = data.construction === 'in-place' ? 'exact' : 'sampled';
       seed.options.saved = build;
       seed.options.build = build;
+      // M04 (v132): the twist and end scale as stored, expressions and all.
+      value('twist', data.twistDeg);
+      value('endScale', data.endScale);
+      seed.options.orientation = data.orientation ?? 'normal';
+      seed.options.corner = data.cornerRadius === undefined ? 'mitre' : 'round';
+      value('cornerRadius', data.cornerRadius);
+      seed.options.position = data.profilePosition ?? 'end';
       break;
     }
     case 'rib': {
@@ -1199,9 +1215,37 @@ export function inPlaceFeatureUpdate(
           featureKind: 'loft',
           sections: request.sections,
           mode: request.mode,
-          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+          ...(request.endPoint ? { endPoint: request.endPoint } : {}),
+          ...(request.guides ? { guides: request.guides as never } : {})
         },
-        ...(request.endPoint ? {} : { clearData: ['endPoint'] })
+        // M04 (v133): the card shows no connections; stored ones are kept
+        // only while the sections are the same, in the same order, and no
+        // guide replaces them. A connection names a vertex of the section at
+        // its index, so a reorder or a swapped section would move it.
+        ...((): { clearData?: string[] } => {
+          const stored = saved.featureKind === 'loft' ? saved : null;
+          const sameSections =
+            stored !== null &&
+            stored.sections.length === request.sections.length &&
+            stored.sections.every(
+              (section, index) =>
+                JSON.stringify(section) ===
+                JSON.stringify(request.sections[index])
+            );
+          const clear = [
+            ...(request.endPoint ? [] : ['endPoint']),
+            ...(request.guides || stored?.guides === undefined
+              ? []
+              : ['guides']),
+            ...(stored?.connections !== undefined &&
+            (request.guides !== undefined ||
+              request.endPoint !== undefined ||
+              !sameSections)
+              ? ['connections']
+              : [])
+          ];
+          return clear.length > 0 ? { clearData: clear } : {};
+        })()
       };
     case 'sweep':
       return {
@@ -1225,11 +1269,51 @@ export function inPlaceFeatureUpdate(
             : {}),
           ...(request.construction
             ? { construction: request.construction }
-            : {})
+            : {}),
+          ...(request.twistDeg === undefined
+            ? {}
+            : { twistDeg: request.twistDeg }),
+          ...(request.endScale === undefined
+            ? {}
+            : { endScale: request.endScale }),
+          ...(request.orientation === undefined
+            ? {}
+            : { orientation: request.orientation }),
+          ...(request.cornerRadius === undefined
+            ? {}
+            : { cornerRadius: request.cornerRadius }),
+          ...(request.profilePosition === undefined
+            ? {}
+            : { profilePosition: request.profilePosition })
         },
         // An absent construction keeps a sampled sweep sampled. Exact
-        // construction is written explicitly and cannot be cleared.
-        ...(request.guide ? {} : { clearData: ['guide'] })
+        // construction is written explicitly and cannot be cleared; an
+        // absent rail, twist or scale clears what was stored (M04, v132).
+        ...((): { clearData?: string[] } => {
+          const stored = saved.featureKind === 'sweep' ? saved : null;
+          const clear = [
+            ...(request.guide ? [] : ['guide']),
+            ...(request.twistDeg === undefined && stored?.twistDeg !== undefined
+              ? ['twistDeg']
+              : []),
+            ...(request.endScale === undefined && stored?.endScale !== undefined
+              ? ['endScale']
+              : []),
+            ...(request.orientation === undefined &&
+            stored?.orientation !== undefined
+              ? ['orientation']
+              : []),
+            ...(request.cornerRadius === undefined &&
+            stored?.cornerRadius !== undefined
+              ? ['cornerRadius']
+              : []),
+            ...(request.profilePosition === undefined &&
+            stored?.profilePosition !== undefined
+              ? ['profilePosition']
+              : [])
+          ];
+          return clear.length ? { clearData: clear } : {};
+        })()
       };
     case 'datum-point':
     case 'datum-csys':

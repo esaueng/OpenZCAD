@@ -140,15 +140,15 @@ jobs:
           retention-days: ${{ job.status == 'success' && 7 || 14 }}
 
   # The root Vitest project (packages and `test/`): the other half of
-  # `pnpm test`, on its own runner so it runs beside the web project, parity
-  # and build instead of ahead of them.
+  # `pnpm test`, partitioned across three duration-balanced runners so it
+  # runs beside the web project, parity and build instead of ahead of them.
   unit:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -171,7 +171,7 @@ jobs:
           OPENZCAD_UNIT_SUITE: ${{ steps.select.outputs.unit }}
           CI_BASE_SHA: ${{ steps.select.outputs.base }}
           CI_UNIT_REPORT: ${{ runner.temp }}/unit-unit.json
-        run: node scripts/run-ci-units.mjs root --shard=${{ matrix.shard }}/2
+        run: node scripts/run-ci-units.mjs root --shard=${{ matrix.shard }}/3
       - name: Upload root unit selection and timings
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -313,6 +313,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: playwright-${{ runner.os }}-
       - run: pnpm exec playwright install chromium
       # Five tagged canaries, not the full cases in these files.
       - name: Run combined-tree save and history canaries

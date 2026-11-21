@@ -46,10 +46,14 @@ export function extrudeEditInitial(feature: FeatureNode): ExtrudeDraftInitial {
             : {})
         }
       : {}),
-    ...(data.endCondition === 'to-face' && data.toFace
+    ...(data.endCondition === 'to-next'
+      ? { endCondition: 'to-next' as const }
+      : {}),
+    ...(data.endCondition === 'to-face' && (data.toFace || data.toSurface)
       ? {
           endCondition: 'to-face' as const,
-          toFace: data.toFace,
+          // F01 (v131): the editor holds a planar or a curved face alike.
+          toFace: data.toSurface ?? data.toFace!,
           ...(data.toFaceOffset !== undefined
             ? { toFaceOffset: data.toFaceOffset }
             : {})
@@ -84,6 +88,7 @@ export function extrudeEditData(
 ): ExtrudeData {
   const throughAll = value.endCondition === 'through-all';
   const toFace = value.endCondition === 'to-face';
+  const toNext = value.endCondition === 'to-next';
   const {
     symmetric: _symmetric,
     backDistance: _backDistance,
@@ -92,6 +97,7 @@ export function extrudeEditData(
     endCondition: _endCondition,
     throughAllSide: _throughAllSide,
     toFace: _toFace,
+    toSurface: _toSurface,
     toFaceOffset: _toFaceOffset,
     startOffset: _startOffset,
     draftAngleDeg: _draftAngleDeg,
@@ -135,7 +141,9 @@ export function extrudeEditData(
       : toFace
         ? {
             endCondition: 'to-face' as const,
-            toFace: value.toFace!,
+            ...(value.toSurface
+              ? { toSurface: value.toSurface }
+              : { toFace: value.toFace! }),
             // A stored zero keeps the form it was written in, like draft.
             ...(value.toFaceOffset !== undefined
               ? { toFaceOffset: value.toFaceOffset }
@@ -143,9 +151,11 @@ export function extrudeEditData(
                 ? { toFaceOffset: stored.toFaceOffset! }
                 : {})
           }
-        : stored.endCondition === 'blind'
-          ? { endCondition: 'blind' as const }
-          : {}),
+        : toNext
+          ? { endCondition: 'to-next' as const }
+          : stored.endCondition === 'blind'
+            ? { endCondition: 'blind' as const }
+            : {}),
     // A stored zero keeps its form unless the edit went through all.
     ...(value.startOffset !== undefined
       ? { startOffset: value.startOffset }
@@ -159,7 +169,10 @@ export function extrudeEditData(
         : {}),
     ...(value.backDraftAngleDeg !== undefined
       ? { backDraftAngleDeg: value.backDraftAngleDeg }
-      : !throughAll && !toFace && storedZero(stored.backDraftAngleDeg)
+      : !throughAll &&
+          !toFace &&
+          !toNext &&
+          storedZero(stored.backDraftAngleDeg)
         ? { backDraftAngleDeg: stored.backDraftAngleDeg! }
         : {})
   };
@@ -185,7 +198,7 @@ export function extrudeEditCommand(
   if (value.choice.operation !== 'new-body' && !value.choice.targetBodyId) {
     throw new Error('Select a target body for this extrusion.');
   }
-  if (value.endCondition === 'to-face' && !value.toFace) {
+  if (value.endCondition === 'to-face' && !value.toFace && !value.toSurface) {
     throw new Error('Pick the face this extrusion reaches.');
   }
   const data = extrudeEditData(feature.data, value);
@@ -197,6 +210,7 @@ export function extrudeEditCommand(
       'endCondition',
       'throughAllSide',
       'toFace',
+      'toSurface',
       'toFaceOffset',
       'startOffset',
       'draftAngleDeg',
@@ -226,7 +240,8 @@ export function extrudePreviewMagnitude(
   resolve: (distance: ExtrudeFormValue['distance']) => number
 ): number {
   return value.endCondition === 'through-all' ||
-    value.endCondition === 'to-face'
+    value.endCondition === 'to-face' ||
+    value.endCondition === 'to-next'
     ? 1
     : Math.abs(resolve(value.distance));
 }
@@ -276,6 +291,7 @@ export function extrudeEditTargets(
                   ? ['throughAllSide']
                   : []),
                 ...(feature.data.toFace !== undefined ? ['toFace'] : []),
+                ...(feature.data.toSurface !== undefined ? ['toSurface'] : []),
                 ...(feature.data.toFaceOffset !== undefined
                   ? ['toFaceOffset']
                   : [])

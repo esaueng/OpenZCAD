@@ -513,15 +513,61 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // Builds on v126 (#1846). It was claimed as v126 and renumbered when F01
 // took that number; v127 and v128 are claimed by the open F01 PRs #1847 and
 // #1851.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 129 as const;
+// v130 adds the F01 up-to-next extent (`endCondition: 'to-next'` on an add or
+// cut extrude with one target): the extrusion runs from its start plane to
+// the next face of the target it meets. An older client has no such extent
+// and must refuse the document. Builds on v129 (#1864); claimed as v123,
+// then v127, renumbered when #1860 and #1864 landed first.
+// v131 adds F01 to-face on a curved face (`toSurface` on a to-face
+// extrude, beside `toFace`): the extrusion ends on a cylindrical face named
+// by lineage. An older client has no such target and must refuse the
+// document. Builds on v130.
+// v132 adds M04 exact sweep twist and scale (`twistDeg` and `endScale` on an
+// in-place sweep): the profile turns about and scales along a straight
+// path. An older client would sweep it plain, so it must refuse the
+// document. Builds on v131 (#1851). First claimed as v129, renumbered when
+// #1864, #1847 and #1851 landed first.
+// v133 adds M04 loft connections and guides (`connections` and `guides` on a
+// loft): the vertex each section's correspondence starts from, given or
+// fixed by one straight guide. An older client would loft from each
+// section's own start, so it must refuse the document. Builds on v132
+// (#1882). First claimed as v136, renumbered to the next unclaimed number
+// when #1882 landed.
+// v134 adds M04 sweep orientation (`orientation: 'parallel'` on an in-place
+// sweep): the profile is translated along the path unturned, along splines
+// and through corners. An older client would turn it with the path, so it
+// must refuse the document. Builds on v133.
+// v135 adds M04 round sweep corners (`cornerRadius` on an in-place sweep):
+// each corner is rounded by a tangent arc of that radius. An older client
+// would mitre or refuse the corner, so it must refuse the document. Builds
+// on v134.
+// v136 adds M04 sweep profile position (`profilePosition` on an in-place
+// sweep): where on the path the profile stands, sweeping both ways from
+// inside it. An older client would sweep from a path end, so it must refuse
+// the document. Builds on v135.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 136 as const;
+/** M04 (v133): a section vertex a loft connection starts from. */
+export type LoftConnectionVertex =
+  | {
+      kind: 'curve-end';
+      /** A line or arc of the section's sketch. */
+      entityId: EntityId;
+      end: 'start' | 'end';
+    }
+  | SketchShapeCornerTarget;
+
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 /** F05: what a typed parameter measures. Absent on a node is unitless. */
 export type ParameterKind = 'length' | 'angle' | 'number';
-/** F01 extrude extents; to-next/offset-from-face are later slices. */
-export type ExtrudeEndCondition = 'blind' | 'through-all' | 'to-face';
+/**
+ * F01 extrude extents. Offset from a face rides on `to-face`
+ * (`toFaceOffset`); `to-next` arrived in v130.
+ */
+export type ExtrudeEndCondition =
+  'blind' | 'through-all' | 'to-face' | 'to-next';
 export type ThroughAllSide = 'forward' | 'backward' | 'both';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
 /** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
@@ -1332,6 +1378,20 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
  * resolver and one re-pick repair serve both.
  */
 export type ExtrudeToFaceTarget = FacePlaneSource;
+
+/**
+ * F01 (schema v131): a curved face an extrude reaches, named by verified
+ * lineage like a wrap's face. Today a cylindrical face: the extrusion ends
+ * on its cylinder, from outside or from inside, re-found at the feature's
+ * history position on every rebuild. `sourceCentroid` is the pick-time
+ * snapshot the editor reads before a build; the build never uses it.
+ */
+export interface ExtrudeToSurfaceTarget {
+  type: 'surface';
+  bodyId: BodyId;
+  faceReference: FaceTopologyReferenceV5;
+  sourceCentroid: Vector3;
+}
 
 /**
  * Schema v99: a principal plane of a coordinate system, as a datum source.
@@ -2488,7 +2548,16 @@ export type FeatureData =
        * stores. `through-all` cuts through the whole target along the sketch
        * normal: the span is recomputed from the target at the feature's
        * history position on every rebuild and never stored, and `distance`
-       * is kept only so switching back to blind restores it.
+       * is kept only so switching back to blind restores it. An add may run
+       * through all too (no schema change: an older client refuses it): it
+       * fills the target's whole span and joins it.
+       * From schema v130 `to-next` runs an add or a cut with one explicit
+       * target from the start plane to the next face of that target, the
+       * way the stored distance's sign points (its size is dormant). It is
+       * derived on every rebuild from the target at the feature's history
+       * position; nothing derived is stored. A profile that does not meet
+       * the target everywhere, an add that starts inside it, or a cut that
+       * starts outside it refuses by name.
        */
       endCondition?: ExtrudeEndCondition;
       /** Required with `through-all`; which side(s) of the sketch plane. */
@@ -2504,6 +2573,14 @@ export type FeatureData =
        * blind restores it.
        */
       toFace?: ExtrudeToFaceTarget;
+      /**
+       * F01 (schema v131): with `to-face`, the curved face it reaches instead
+       * of a planar `toFace` (exactly one of the two). A cylindrical face:
+       * each rebuild re-finds it by lineage and the extrusion stops on its
+       * cylinder; a deleted, ambiguous or non-cylindrical face refuses as
+       * unresolved, as a planar target does.
+       */
+      toSurface?: ExtrudeToSurfaceTarget;
       /**
        * F01 (schema v113): offset from the `toFace` face, with `to-face`
        * only. Positive stops the extrusion that far short of the face
@@ -2607,6 +2684,22 @@ export type FeatureData =
        * order instead. See `HANDOFF.md` for the measurement.
        */
       endPoint?: ParametricVector3;
+      /**
+       * M04 (v133): one vertex per section, in section order, where the
+       * loft's correspondence starts (the kernel's `loftWithOptions`
+       * `connections`): vertex k of every section joins vertex k of the next,
+       * counted from these. A line's or arc's end, or a rectangle's or
+       * polygon's corner, named by identity. Absent keeps each section's own
+       * start, as before. Not with an apex point or a guide.
+       */
+      connections?: LoftConnectionVertex[];
+      /**
+       * M04 (v133): one straight guide curve (a sketch line) through a vertex
+       * of every section, which fixes the correspondence along it: a ruled
+       * loft's edge between those vertices is exactly the guide. Ruled only;
+       * a curved guide, or several, is refused by name.
+       */
+      guides?: SketchPathReference[];
     }
   | {
       featureKind: 'sweep';
@@ -2629,13 +2722,63 @@ export type FeatureData =
        * path's rigid motions (a line moves it along, an arc turns it about
        * the arc's axis) as exact surfaces — planes, cylinders, cones, tori
        * and rational NURBS, never facets (the kernel's `sweepExact`). The
-       * path must be tangent-continuous; a corner, a guide rail or a profile
-       * that would fold is refused by name, never sampled instead. `mode`
+       * path must be tangent-continuous; a corner or a profile that would
+       * fold is refused by name, never sampled instead. A `guide` rail on an
+       * in-place sweep (M04) must be one straight line beside a straight
+       * path, in one plane with it, from the profile's plane to the path's
+       * far end: the profile then scales to follow it, exactly (any other
+       * rail is refused by name). `mode`
        * is kept but builds nothing. Absent means the unchanged sampled
        * `sweepWithOptions`/`sweepAlongEdges` call every sweep authored before
        * this field existed took, so those documents replay identically.
        */
       construction?: 'in-place';
+      /**
+       * M04 (v132), `'in-place'` only: the profile's total turn about the
+       * path, in degrees, right-handed about the direction of travel and
+       * linear in the distance travelled (the kernel's
+       * `sweepExactWithOptions`). The path must be straight and the profile
+       * square to it; anything else is refused by name, never sampled.
+       * Absent or zero turns nothing, so a sweep authored before this field
+       * existed replays identically.
+       */
+      twistDeg?: ParamValue;
+      /**
+       * M04 (v132), `'in-place'` only: the profile's scale at the far end of
+       * the path, about the point where the path crosses it, linear in the
+       * distance travelled. Positive; absent or one scales nothing. Held to
+       * the same straight, square path as `twistDeg`.
+       */
+      endScale?: ParamValue;
+      /**
+       * M04 (v134), `'in-place'` only: `'parallel'` keeps the profile's
+       * orientation, translating it along the path unturned (the kernel's
+       * `sweepExactWithOptions` orientation `"parallel"`): every face is the
+       * exact translational surface of a profile edge along a path edge, so
+       * the path may hold splines and corners. Absent turns the profile with
+       * the path, as every sweep before it did.
+       */
+      orientation?: 'parallel';
+      /**
+       * M04 (v135), `'in-place'` only: each corner of the path (between
+       * straight runs, or beside an arc in the corner's plane) is rounded by
+       * the arc of this radius tangent to both sides, swept exactly. Absent
+       * mitres a corner between straight runs and refuses one next to an
+       * arc, as before. Not with a parallel orientation, a twist, a scale
+       * or a rail.
+       */
+      cornerRadius?: ParamValue;
+      /**
+       * M04 (v136), `'in-place'` only: where on its path the profile stands
+       * (the kernel's `sweepExactWithOptions` `"position"`), measured from
+       * the profile's area centroid: where the path crosses the profile's
+       * plane (`'intersection'`), its closest point or closest endpoint, or
+       * `'auto'` (the crossing, else the closest endpoint). The profile
+       * never moves; from inside the path the sweep runs both ways. Absent
+       * starts from the path end nearer the profile's plane, as before.
+       */
+      profilePosition?:
+        'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
     }
   | {
       featureKind: 'helical-sweep';

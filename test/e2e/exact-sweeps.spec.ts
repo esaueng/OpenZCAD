@@ -339,3 +339,461 @@ test('a faceted helix rebuilds exact from its edit, its height dragged', async (
     3
   );
 });
+
+test('a picked straight sweep takes a typed twist and end scale, exactly (M04, v132)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  let document = addPrimitiveFeature(
+    createProjectDocument('Twisted sweep', toUserId('user_e2e')),
+    {
+      name: 'Marker',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 2, depth: 2 }
+    }
+  );
+  document = addSketchFeature(document, {
+    name: 'Profile',
+    plane: 'XY',
+    offset: 0,
+    object: {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 30,
+      centerY: 0
+    }
+  }).document;
+  document = addSketchFeature(document, {
+    name: 'Path',
+    plane: 'XZ',
+    offset: 0,
+    object: { objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: 20 }
+  }).document;
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  await page.getByRole('button', { name: 'Fit view (F)', exact: true }).click();
+  await waitForStillViewport(page);
+  const on = await projected(canvas, [30, 0, -10]);
+  await page.mouse.move(on.x, on.y);
+  await page.mouse.click(on.x, on.y);
+  await expect(bar).toContainText('Path of 1');
+
+  // Each chip opens the keypad; the values are typed exactly.
+  const keypad = page.locator('.numeric-keypad');
+  for (const [valueId, typed] of [
+    ['twist', '90'],
+    ['endScale', '0.5']
+  ] as const) {
+    const chip = page.getByTestId(`command-handle-${valueId}`);
+    await expect(chip).toBeVisible();
+    await chip.click();
+    await expect(keypad).toBeVisible();
+    await keypad.locator('input').fill(typed);
+    await keypad.locator('input').press('Enter');
+    await expect(keypad).toHaveCount(0);
+  }
+  await expect(page.getByTestId('command-handle-twist')).toHaveText(/90/);
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  await expectBodyCount(page, 2);
+
+  const saved = await exportedDocument(page);
+  const sweep = listFeaturesInOrder(saved).find(
+    (feature) => feature.data.featureKind === 'sweep'
+  )!;
+  if (sweep.data.featureKind !== 'sweep') throw new Error('Expected a sweep.');
+  expect(sweep.data).toMatchObject({
+    construction: 'in-place',
+    twistDeg: 90,
+    endScale: 0.5
+  });
+  const derived = await rebuilt(saved);
+  // Two flat caps and four twisted walls; Cavalieri: A·L·(1 + σ + σ²)/3.
+  expect(
+    surfaces(derived, sweep.bodyId!).filter((type) => type === 'plane')
+  ).toHaveLength(2);
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    (16 * 20 * (1 + 0.5 + 0.25)) / 3,
+    4
+  );
+});
+
+test('a loft picked with a straight guide line connects the corners it joins (M04, v133)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  let document = addPrimitiveFeature(
+    createProjectDocument('Guided loft', toUserId('user_e2e')),
+    {
+      name: 'Marker',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 2, depth: 2 }
+    }
+  );
+  for (const [name, offset] of [
+    ['Bottom', 0],
+    ['Top', 10]
+  ] as const) {
+    document = addSketchFeature(document, {
+      name,
+      plane: 'XY',
+      offset,
+      object: {
+        objectKind: 'rectangle',
+        width: 2,
+        height: 2,
+        centerX: 30,
+        centerY: 0
+      }
+    }).document;
+  }
+  // From the bottom's corner (29, −1, 0) to the top's next corner round,
+  // (31, −1, 10), on the front plane at y = −1 (sketch y runs along −Z).
+  document = addSketchFeature(document, {
+    name: 'Guide',
+    plane: 'XZ',
+    offset: -1,
+    object: { objectKind: 'line', x1: 29, y1: 0, x2: 31, y2: -10 }
+  }).document;
+  const { canvas, bar } = await startTool(page, document, /^Loft\b/);
+  for (const index of [0, 1]) {
+    await canvas.evaluate(
+      (element, detail) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-profile', { detail })
+        ),
+      { index, additive: index > 0 }
+    );
+  }
+  await expect(bar).toContainText('2 sections');
+  await page.getByRole('button', { name: 'Fit view (F)', exact: true }).click();
+  await waitForStillViewport(page);
+  const on = await projected(canvas, [30, -1, 5]);
+  await page.mouse.move(on.x, on.y);
+  await page.mouse.click(on.x, on.y);
+  await expect(bar).toContainText('guided by a line');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const saved = await exportedDocument(page);
+  const loft = listFeaturesInOrder(saved).find(
+    (feature) => feature.data.featureKind === 'loft'
+  )!;
+  if (loft.data.featureKind !== 'loft') throw new Error('Expected a loft.');
+  expect(loft.data.guides).toHaveLength(1);
+  const derived = await rebuilt(saved);
+  // A quarter-turn ruled loft: h/6·(A₀ + 4·A_m + A₁) with a diamond of 2.
+  expect(derived.bodyRepresentations[loft.bodyId!]!.volume).toBeCloseTo(
+    (10 / 6) * (4 + 4 * 2 + 4),
+    6
+  );
+});
+
+/** A document with a marker box, a profile sketch and the given path sketches. */
+function sweepDocument(
+  name: string,
+  profile: Parameters<typeof addSketchFeature>[1]['object'],
+  paths: {
+    name: string;
+    plane: 'XZ';
+    offset: number;
+    objects: NonNullable<Parameters<typeof addSketchFeature>[1]['objects']>;
+  }[]
+): ProjectDocument {
+  let document = addPrimitiveFeature(
+    createProjectDocument(name, toUserId('user_e2e')),
+    {
+      name: 'Marker',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 2, depth: 2 }
+    }
+  );
+  document = addSketchFeature(document, {
+    name: 'Profile',
+    plane: 'XY',
+    offset: 0,
+    object: profile
+  }).document;
+  for (const path of paths) {
+    document = addSketchFeature(document, {
+      name: path.name,
+      plane: path.plane,
+      offset: path.offset,
+      objects: path.objects
+    }).document;
+  }
+  return document;
+}
+
+/** Click the sketch curve passing through `point`, and expect the bar to say so. */
+async function pickCurve(
+  page: Page,
+  canvas: Locator,
+  bar: Locator,
+  point: [number, number, number],
+  says: string
+) {
+  await page.getByRole('button', { name: 'Fit view (F)', exact: true }).click();
+  await waitForStillViewport(page);
+  const on = await projected(canvas, point);
+  await page.mouse.move(on.x, on.y);
+  await page.mouse.click(on.x, on.y);
+  // The first click after the Options panel closes can go to the panel.
+  if (!((await bar.textContent()) ?? '').includes(says)) {
+    await page.waitForTimeout(500);
+    if (!((await bar.textContent()) ?? '').includes(says)) {
+      await page.mouse.move(on.x + 1, on.y);
+      await page.mouse.move(on.x, on.y);
+      await page.mouse.click(on.x, on.y);
+    }
+  }
+  await expect(bar).toContainText(says);
+}
+
+/** Choose an option in the bar's Options panel. */
+async function chooseOption(bar: Locator, name: string) {
+  const options = bar.locator('summary[aria-label$=" options"]');
+  await options.click();
+  await bar.getByRole('radio', { name, exact: true }).click();
+  await options.click();
+}
+
+async function savedSweep(page: Page) {
+  const saved = await exportedDocument(page);
+  const sweep = listFeaturesInOrder(saved).find(
+    (feature) => feature.data.featureKind === 'sweep'
+  )!;
+  if (sweep.data.featureKind !== 'sweep') throw new Error('Expected a sweep.');
+  return { saved, sweep, data: sweep.data };
+}
+
+test('a picked straight sweep follows a picked straight rail, exactly (M04)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const document = sweepDocument(
+    'Railed sweep',
+    { objectKind: 'rectangle', width: 4, height: 4, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [{ objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: -20 }]
+      },
+      {
+        name: 'Rail',
+        plane: 'XZ',
+        offset: 0,
+        objects: [{ objectKind: 'line', x1: 36, y1: 0, x2: 33, y2: -20 }]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  await pickCurve(page, canvas, bar, [30, 0, 10], 'Path of 1');
+  await chooseOption(bar, 'Rail');
+  await pickCurve(page, canvas, bar, [34.5, 0, 10], 'Rail of 1');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  await expectBodyCount(page, 2);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data.construction).toBe('in-place');
+  expect(data.guide).toBeDefined();
+  const derived = await rebuilt(saved);
+  // The rail from 6 to 3 off the path halves the profile: a frustum.
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    (16 * 20 * (1 + 0.5 + 0.25)) / 3,
+    6
+  );
+});
+
+test('a picked spline path sweeps with the profile kept parallel, exactly (M04, v134)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const document = sweepDocument(
+    'Parallel sweep',
+    { objectKind: 'circle', radius: 2, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [
+          {
+            objectKind: 'spline',
+            method: 'control',
+            degree: 3,
+            points: [
+              { x: 30, y: 0 },
+              { x: 33, y: -5 },
+              { x: 28, y: -12 },
+              { x: 34, y: -20 }
+            ]
+          }
+        ]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  // The spline's midpoint, C(1/2) = (P0 + 3·P1 + 3·P2 + P3)/8. Turning
+  // with the path, a spline has no exact sweep: the preview refuses it by
+  // name and points at Parallel.
+  await pickCurve(
+    page,
+    canvas,
+    bar,
+    [30.875, 0, 8.875],
+    'set Orientation to Parallel'
+  );
+  await chooseOption(bar, 'Parallel');
+  await expect(bar).toContainText('Path of 1');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data).toMatchObject({
+    construction: 'in-place',
+    orientation: 'parallel'
+  });
+  const derived = await rebuilt(saved);
+  // The profile's area times the spline's rise along the profile normal.
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    Math.PI * 4 * 20,
+    4
+  );
+});
+
+test('a picked L path takes a round corner with a typed radius, exactly (M04, v135)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const document = sweepDocument(
+    'Round sweep',
+    { objectKind: 'circle', radius: 1, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [
+          { objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: -20 },
+          { objectKind: 'line', x1: 30, y1: -20, x2: 50, y2: -20 }
+        ]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  await pickCurve(page, canvas, bar, [30, 0, 10], 'Path of 1');
+  await pickCurve(page, canvas, bar, [40, 0, 20], 'Path of 2');
+  await chooseOption(bar, 'Round');
+  await bar.locator('summary[aria-label$=" options"]').click();
+  const radius = bar.getByRole('textbox', { name: /Corner radius/ });
+  await radius.fill('5');
+  await radius.press('Enter');
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data).toMatchObject({ construction: 'in-place', cornerRadius: 5 });
+  const derived = await rebuilt(saved);
+  expect(surfaces(derived, sweep.bodyId!)).toEqual([
+    'cylinder',
+    'cylinder',
+    'plane',
+    'plane',
+    'torus'
+  ]);
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    Math.PI * (30 + 5 * (Math.PI / 2)),
+    6
+  );
+});
+
+test('a path picked through the profile sweeps both ways from the crossing (M04, v136)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const document = sweepDocument(
+    'Placed sweep',
+    { objectKind: 'circle', radius: 1, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [{ objectKind: 'line', x1: 30, y1: 8, x2: 30, y2: -12 }]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  await pickCurve(page, canvas, bar, [30, 0, 6], 'Path of 1');
+  // Five choices: the row is a list.
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await bar.getByRole('combobox', { name: 'Profile at' }).selectOption({
+    label: 'Crossing'
+  });
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data).toMatchObject({ profilePosition: 'intersection' });
+  const derived = await rebuilt(saved);
+  const body = derived.bodyRepresentations[sweep.bodyId!]!;
+  expect(body.volume).toBeCloseTo(Math.PI * 20, 6);
+  // Both sides of the profile: z from −8 to 12.
+  expect(body.bbox.min.z).toBeCloseTo(-8, 4);
+  expect(body.bbox.max.z).toBeCloseTo(12, 4);
+});

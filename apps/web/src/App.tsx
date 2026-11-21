@@ -288,7 +288,6 @@ import type {
   BodyTopology,
   BodyRepresentation,
   EntityId,
-  ExtrudeToFaceTarget,
   FeatureId,
   FeatureNode,
   FeatureWarning,
@@ -1068,6 +1067,7 @@ import {
 } from './lib/resolvedExtrudePreview';
 import { isExtrudeChangeClipped } from './lib/extrudeSectionVisibility';
 import type {
+  ExtrudeFaceTarget,
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from './lib/extrudeDraft';
@@ -1084,7 +1084,7 @@ import {
   extrudeToFaceRepair,
   extrudeHistoryDocument,
   extrudeToFaceTargetFromPick,
-  toFaceDistanceEstimate,
+  toFaceReachEstimate,
   toFaceTargetLabel
 } from './lib/extrudeToFace';
 import {
@@ -3543,11 +3543,11 @@ export function App() {
     | null
   >(null);
   const regionToFaceSetter = useRef<
-    ((target: ExtrudeToFaceTarget) => void) | null
+    ((target: ExtrudeFaceTarget) => void) | null
   >(null);
-  const editToFaceSetter = useRef<
-    ((target: ExtrudeToFaceTarget) => void) | null
-  >(null);
+  const editToFaceSetter = useRef<((target: ExtrudeFaceTarget) => void) | null>(
+    null
+  );
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
   /** The open Plane card's draft Offset, drawn ahead of its Apply. */
@@ -5124,7 +5124,8 @@ export function App() {
       }),
     track: trackKernelRefusal
   });
-  const { syncCandidate, syncParameterCandidate } = refusalHarvest;
+  const { syncCandidate, syncParameterCandidate, syncOperationForCommit } =
+    refusalHarvest;
   const reachProjectionBuilderRef = useRef(geometry.syncOnce);
   reachProjectionBuilderRef.current = geometry.syncOnce;
   const reachProjectionRequestRef = useRef<{
@@ -6063,7 +6064,9 @@ export function App() {
   /** The region card's extent takes its depth from the build (F01). */
   const regionExtentIsDerived = () => {
     const extent = regionExtrudeSettings.current?.endCondition;
-    return extent === 'to-face' || extent === 'through-all';
+    return (
+      extent === 'to-face' || extent === 'through-all' || extent === 'to-next'
+    );
   };
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
@@ -6151,7 +6154,8 @@ export function App() {
           !base ||
           current.mode !== 'region' ||
           (regionExtrudeSettings.current?.endCondition === 'to-face' &&
-            !regionExtrudeSettings.current.toFace)
+            !regionExtrudeSettings.current.toFace &&
+            !regionExtrudeSettings.current.toSurface)
         ) {
           setRegionExtrudeChecking(false);
           return null;
@@ -9033,8 +9037,22 @@ export function App() {
     localUserId,
     accountUserId: session?.userId
   });
-  useEffect(() => {
+  function syncWorkspaceGeometry() {
     geometry.sync(doc, lineageDemand, { persistSession });
+  }
+
+  // Submit an opened model before the viewer's passive WebGL setup. Both can
+  // start together. The regular sync below deduplicates a posted rebuild and
+  // still handles a worker that wasn't available during the layout effect.
+  useLayoutEffect(() => {
+    if (doc?.featureOrder.length) {
+      syncWorkspaceGeometry();
+    }
+    // An edit or a policy change stays on the regular sync path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId]);
+  useEffect(() => {
+    syncWorkspaceGeometry();
     // `geometry` is stable across renders; re-sync when the demanded set
     // grows so the probe runs without waiting for the next edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -12792,7 +12810,10 @@ export function App() {
             ? node.data.objectKind === 'line'
             : !node.data.construction &&
               (node.data.objectKind === 'line' ||
-                node.data.objectKind === 'arc')) &&
+                node.data.objectKind === 'arc' ||
+                // M04 (v134): an exact sweep follows a spline exactly when
+                // it keeps the profile parallel.
+                node.data.objectKind === 'spline')) &&
       (findSketch(current, sketchId)?.objectIds.includes(
         entityId as EntityId
       ) ??
@@ -23397,6 +23418,8 @@ export function App() {
     void validatedFeature.runTransaction(commands, {
       label,
       targets,
+      derive: (document) =>
+        syncOperationForCommit(document, geometry.liveLineageDemand()),
       successMessage: commandOutcomeMessage(label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
       cancelled: () => !editSessionIsCurrent(feature, editSession)
@@ -26214,7 +26237,15 @@ export function App() {
           bodyName,
           sections: request.sections,
           mode: request.mode,
-          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+          ...(request.endPoint ? { endPoint: request.endPoint } : {}),
+          ...(request.guides
+            ? {
+                guides: request.guides.map((guide) => ({
+                  sketchId: guide.sketchId,
+                  entityIds: guide.entityIds as EntityId[]
+                }))
+              }
+            : {})
         });
       case 'sweep':
         return commandFactories.sweepProfile({
@@ -26236,7 +26267,22 @@ export function App() {
             : {}),
           ...(request.construction === undefined
             ? {}
-            : { construction: request.construction })
+            : { construction: request.construction }),
+          ...(request.twistDeg === undefined
+            ? {}
+            : { twistDeg: request.twistDeg }),
+          ...(request.endScale === undefined
+            ? {}
+            : { endScale: request.endScale }),
+          ...(request.orientation === undefined
+            ? {}
+            : { orientation: request.orientation }),
+          ...(request.cornerRadius === undefined
+            ? {}
+            : { cornerRadius: request.cornerRadius }),
+          ...(request.profilePosition === undefined
+            ? {}
+            : { profilePosition: request.profilePosition })
         });
       case 'rib':
         return commandFactories.ribBody({
@@ -27987,6 +28033,7 @@ export function App() {
   );
   // M01: where the Hole tool places its hole; sketch points are picked.
   const inPlacePlace = inPlace.options.place;
+  const inPlaceSections = inPlace.slots.profiles;
   const inPlaceCurveCandidates = useMemo(() => {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
@@ -28044,6 +28091,31 @@ export function App() {
         : availableSketchViews;
       return sketchPointCandidates(doc, views, (value) => resolve(value));
     }
+    // M04: a loft guide is a straight line, offered only once two sections
+    // are picked and never from a section's own sketch, so a click on a
+    // section's edge still picks the section.
+    if (inPlaceSpec.id === 'loft') {
+      if (inPlaceSections.length < 2) return null;
+      const sectionSketches = new Set(
+        inPlaceSections.map((pick) => pick.sketchId)
+      );
+      const views = (
+        inPlaceEditing
+          ? availableSketchViews.filter((view) =>
+              featurePrecedes(
+                producingFeatureOf({ sketchId: view.sketchId }),
+                inPlaceEditing.featureId
+              )
+            )
+          : availableSketchViews
+      ).filter((view) => !sectionSketches.has(view.sketchId));
+      return sketchCurveCandidates(
+        doc,
+        views,
+        (value) => resolve(value),
+        (data) => data.construction !== true && data.objectKind === 'line'
+      );
+    }
     // Every sketch's curves, the profile's own included: one sketch may hold
     // both a closed profile and the open spine it sweeps along. An edit
     // offers only sketches made before its feature, as it takes profiles.
@@ -28062,7 +28134,8 @@ export function App() {
     availableSketchViews,
     parameterScope,
     inPlaceEditing,
-    inPlacePlace
+    inPlacePlace,
+    inPlaceSections
   ]);
   const inPlaceCurvePicker = useMemo(
     () =>
@@ -28816,6 +28889,7 @@ export function App() {
       endCondition: regionExtrudeSettings.current?.endCondition,
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       toFace: regionExtrudeSettings.current?.toFace,
+      toSurface: regionExtrudeSettings.current?.toSurface,
       toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
       startOffset: regionExtrudeSettings.current?.startOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
@@ -28972,10 +29046,17 @@ export function App() {
         );
         if (!isCurrent()) return;
         if (mixed) throw new Error(mixed);
-        const command = resolved.command;
-        const resultBodyId = command.payload.ids?.bodyId;
+        const resultBodyId = resolved.command.payload.ids?.bodyId;
         if (!resultBodyId)
           throw new Error('Extrude could not reserve a result body.');
+        // F01: a through-all cut through several bodies is one through-all
+        // extrude per body, created (and undone) as one step.
+        const command = resolved.extraCommands?.length
+          ? composeCommands(resolved.command.label, [
+              resolved.command,
+              ...resolved.extraCommands
+            ])
+          : resolved.command;
         const committed = await executeValidatedDirectEdit(
           command,
           resultBodyId,
@@ -28989,7 +29070,15 @@ export function App() {
             finishFeatureCreation();
             setRevertPill({ sketchId: target.sketchId as SketchId });
           },
-          undefined,
+          // F01: several cuts are judged each by its own feature and body,
+          // never by a shared label another feature might carry.
+          resolved.extraCommands?.length
+            ? [resolved.command, ...resolved.extraCommands].map((leaf) => ({
+                featureName: leaf.payload.name,
+                featureId: leaf.payload.ids!.featureId,
+                resultBodyId: leaf.payload.ids!.bodyId
+              }))
+            : undefined,
           {
             baseProjectId: base.projectId,
             baseVersion: base.version,
@@ -33503,11 +33592,13 @@ export function App() {
         const history =
           key && reachProjection?.key === key ? reachProjection : null;
         const source = kind === 'edit' ? history?.document : doc;
+        const reach = source
+          ? toFaceReachEstimate(source, sketchId, target)
+          : null;
         return {
           label: doc ? toFaceTargetLabel(doc, target) : 'face',
-          distance: source
-            ? toFaceDistanceEstimate(source, sketchId, target)
-            : null,
+          distance: reach?.height ?? null,
+          ...(reach?.slanted ? { slanted: true } : {}),
           ...(kind === 'edit' && !source
             ? { pending: !history?.error, problem: history?.error }
             : {})
@@ -33527,7 +33618,7 @@ export function App() {
             : { kind: 'create' }
         );
         setStatus(
-          'Click a planar face parallel to the sketch for the extrusion to reach · Esc cancels.'
+          'Click a planar or cylindrical face facing the sketch for the extrusion to reach · Esc cancels.'
         );
       }
     };
@@ -33547,7 +33638,7 @@ export function App() {
       featureName: feature.name
     });
     setStatus(
-      `Re-pick the face "${feature.name}" reaches: click a planar face parallel to its sketch · Esc cancels.`
+      `Re-pick the face "${feature.name}" reaches: click a planar or cylindrical face facing its sketch · Esc cancels.`
     );
   }
 

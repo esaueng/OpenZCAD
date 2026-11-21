@@ -12,7 +12,8 @@ export type ExtrudeValueId =
   | 'backDraftAngle';
 
 /** How far an extrude goes, as the bar's Extent option names it. */
-export type ExtrudeCommandExtent = 'blind' | 'to-face' | 'through-all';
+export type ExtrudeCommandExtent =
+  'blind' | 'to-face' | 'through-all' | 'to-next';
 
 /**
  * The values an extrude in this extent offers to type: Distance only for a

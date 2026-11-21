@@ -15,6 +15,7 @@ import {
   resolveThread,
   threadPrintAdvisories
 } from './exact-thread';
+import { drillFeatureBores } from './exact-point-hole-cuts';
 import { requireValidSolid } from './kernel-validation';
 import {
   cutKeptToolMaterialMeshRefusal,
@@ -46,7 +47,18 @@ import {
   validateKeepOriginals
 } from '@openzcad/document-core';
 import { throughAllSpan, unionBounds } from './through-all';
-import { toFaceSweepFeature } from './extrude-options';
+import { resolveToFaceTarget, toFaceSweepFeature } from './extrude-options';
+import {
+  planSlantedToFace,
+  trimToSlantedFace
+} from './extrude-to-face-slanted';
+import { planCurvedToFace, trimToCurvedFace } from './extrude-to-surface';
+import {
+  toNextReach,
+  toNextSweepFeature,
+  trimToNext,
+  type ToNextReach
+} from './extrude-to-next';
 import {
   axisPlaneDatumPoint,
   axisRotationMatrix,
@@ -115,8 +127,8 @@ import {
   type RemusNativeVertexState
 } from './remus-native-vertices';
 import { measureFaceGeometry } from './exact-measure';
+import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
-  drillHole,
   tryExactCoaxialCylinderCut,
   type HoleToolSpec
 } from './exact-cylinder-ops';
@@ -735,12 +747,17 @@ function throughAllSweepFeature(
   const side = data.throughAllSide!;
   let span: { forward: number; backward: number };
   try {
-    span = throughAllSpan(
-      unionBounds(target.solids.map((solid) => kernel.boundingBox(solid))),
-      basis.origin,
-      basis.normal,
-      side
-    );
+    span =
+      data.operation === 'add'
+        ? exactAddSpan(kernel, target.solids, basis, side, targetName)
+        : throughAllSpan(
+            unionBounds(
+              target.solids.map((solid) => kernel.boundingBox(solid))
+            ),
+            basis.origin,
+            basis.normal,
+            side
+          );
   } catch (error) {
     throw new Error(
       `${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')} (target ${targetName}, side ${side}).`,
@@ -764,6 +781,203 @@ function throughAllSweepFeature(
   return { ...feature, data: { ...rest, ...extent } };
 }
 
+/**
+ * F01 (v130): an extrude up to the next face, resolved at this history
+ * position: its one add or cut target (missing, consumed or mesh targets
+ * refuse by name, as for any stored add or cut), and the long blind sweep
+ * whose regions `trimToNext` keeps.
+ */
+function toNextFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'extrude'>
+): {
+  sweep: FeatureNode;
+  target: ExactShape;
+  targetName: string;
+  operation: 'add' | 'cut';
+  reach: ToNextReach;
+} {
+  const { kernel, document, result, scope } = ctx;
+  const operation = data.operation;
+  if (operation !== 'add' && operation !== 'cut') {
+    throw new Error('Up to next is available for an add or a cut only.');
+  }
+  const targetBodyId = data.targetBodyId!;
+  const targetName = bodyName(document, targetBodyId);
+  if (result.consumed.has(targetBodyId)) {
+    throw new Error(`Up-to-next target ${targetName} was already consumed.`);
+  }
+  if (result.meshBodies.has(targetBodyId)) {
+    throw meshBooleanUnsupportedError(targetName);
+  }
+  const target = result.shapes.get(targetBodyId);
+  if (!target) {
+    throw new Error(`Up-to-next target ${targetName} is unavailable.`);
+  }
+  const basis = result.sketchBases.get(data.sketchId);
+  if (!basis) {
+    throw new Error('Up-to-next sketch plane did not resolve.');
+  }
+  const reach = toNextReach(
+    kernel,
+    document,
+    data,
+    basis,
+    target,
+    targetName,
+    scope
+  );
+  const sign =
+    reach.direction.x * basis.normal.x +
+      reach.direction.y * basis.normal.y +
+      reach.direction.z * basis.normal.z <
+    0
+      ? -1
+      : 1;
+  return {
+    sweep: toNextSweepFeature(feature, data, reach, sign),
+    target,
+    targetName,
+    operation,
+    reach
+  };
+}
+
+/**
+ * F01: an add through all must stop exactly where the target does along the
+ * sketch normal, since any overshoot is new material (a cut's conservative
+ * box span only removes the target's own). The extremes are bounded edge by
+ * edge, within the kernel's linear tolerance:
+ * - a straight edge by its ends;
+ * - a full circle exactly, by its centre's height ± r·sin(tilt);
+ * - an arc only when its plane is square to the normal (its whole run at
+ *   one height);
+ * and faces: planar faces reach their extremes on their edges, and a
+ * cylinder does when its axis runs along the normal (r·sin(tilt) within the
+ * tolerance). Any other edge or face (an ellipse, a spline, a leaning
+ * cylinder, a sphere) refuses by name rather than add material past the
+ * target or stop short of it.
+ */
+function exactAddSpan(
+  kernel: RemusKernel,
+  solids: readonly number[],
+  basis: PlaneBasis,
+  side: NonNullable<FeatureDataOf<'extrude'>['throughAllSide']>,
+  targetName: string
+): { forward: number; backward: number } {
+  const n = basis.normal;
+  const along = (p: ArrayLike<number>) =>
+    (p[0]! - basis.origin.x) * n.x +
+    (p[1]! - basis.origin.y) * n.y +
+    (p[2]! - basis.origin.z) * n.z;
+  const refuse = (what: string) =>
+    new Error(
+      `An add through all reaches exactly as far as its target, and ${targetName} has ${what} whose extent along the sketch normal cannot be read exactly; use Up to next or a distance.`
+    );
+  // sin of the angle between a unit vector and the normal.
+  const tilt = (v: { x: number; y: number; z: number }) => {
+    const c = v.x * n.x + v.y * n.y + v.z * n.z;
+    return Math.sqrt(Math.max(0, 1 - c * c));
+  };
+  let high = -Infinity;
+  let low = Infinity;
+  const reach = (t: number) => {
+    high = Math.max(high, t);
+    low = Math.min(low, t);
+  };
+  for (const solid of solids) {
+    for (const face of Array.from(kernel.getSolidFaces(solid))) {
+      const surface = kernel.getSurfaceType(face).toLowerCase();
+      if (surface === 'plane') continue;
+      if (surface === 'cylinder') {
+        const geometry = measureFaceGeometry(kernel, face);
+        if (geometry?.axisStart && geometry.axisEnd && geometry.radius) {
+          const axis = {
+            x: geometry.axisEnd.x - geometry.axisStart.x,
+            y: geometry.axisEnd.y - geometry.axisStart.y,
+            z: geometry.axisEnd.z - geometry.axisStart.z
+          };
+          const size = Math.hypot(axis.x, axis.y, axis.z);
+          if (
+            size > 0 &&
+            geometry.radius *
+              tilt({ x: axis.x / size, y: axis.y / size, z: axis.z / size }) <=
+              GEOMETRY_LINEAR_TOLERANCE
+          ) {
+            continue;
+          }
+        }
+      }
+      throw refuse(`a ${surface} face`);
+    }
+    for (const edge of Array.from(kernel.getSolidEdges(solid))) {
+      const type = kernel.getEdgeCurveType(edge);
+      const span = kernel.getEdgeParamSpan(edge);
+      const at = (t: number) => kernel.evaluateEdgeCurve(edge, t);
+      const t0 = span[0]!;
+      const t1 = span[1]!;
+      if (type === 'LINE') {
+        reach(along(at(t0)));
+        reach(along(at(t1)));
+        continue;
+      }
+      if (type === 'CIRCLE') {
+        // The circle's plane and centre from three exact points on it.
+        const a = at(t0);
+        const b = at(t0 + (t1 - t0) / 3);
+        const c = at(t0 + (2 * (t1 - t0)) / 3);
+        const u = { x: b[0]! - a[0]!, y: b[1]! - a[1]!, z: b[2]! - a[2]! };
+        const v = { x: c[0]! - a[0]!, y: c[1]! - a[1]!, z: c[2]! - a[2]! };
+        const w = {
+          x: u.y * v.z - u.z * v.y,
+          y: u.z * v.x - u.x * v.z,
+          z: u.x * v.y - u.y * v.x
+        };
+        const size = Math.hypot(w.x, w.y, w.z);
+        if (!(size > 0)) throw refuse('a degenerate round edge');
+        const normal = { x: w.x / size, y: w.y / size, z: w.z / size };
+        // Circumradius of the three points.
+        const lu = Math.hypot(u.x, u.y, u.z);
+        const lv = Math.hypot(v.x, v.y, v.z);
+        const uv = Math.hypot(b[0]! - c[0]!, b[1]! - c[1]!, b[2]! - c[2]!);
+        const radius = (lu * lv * uv) / (2 * size);
+        const lean = radius * tilt(normal);
+        const full = Math.abs(Math.abs(t1 - t0) - 2 * Math.PI) <= 1e-9;
+        if (lean <= GEOMETRY_LINEAR_TOLERANCE) {
+          reach(along(a));
+          continue;
+        }
+        if (!full) throw refuse('a leaning arc');
+        // A whole circle's extremes: its centre ± r·sin(tilt).
+        const mid = at(t0 + (t1 - t0) / 2);
+        const centre = [
+          (a[0]! + mid[0]!) / 2,
+          (a[1]! + mid[1]!) / 2,
+          (a[2]! + mid[2]!) / 2
+        ];
+        reach(along(centre) + lean);
+        reach(along(centre) - lean);
+        continue;
+      }
+      throw refuse(`a ${type.toLowerCase()} edge`);
+    }
+  }
+  const forward = Math.max(0, high);
+  const backward = Math.max(0, -low);
+  if (
+    (side === 'forward' && !(forward > 1e-9)) ||
+    (side === 'backward' && !(backward > 1e-9)) ||
+    (side === 'both' && !(forward > 1e-9 || backward > 1e-9))
+  ) {
+    throw new Error('Through-all has no target in the selected direction.');
+  }
+  return {
+    forward: side === 'backward' ? 0 : forward,
+    backward: side === 'forward' ? 0 : backward
+  };
+}
+
 function buildExtrudeFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -781,20 +995,102 @@ function buildExtrudeFeature(
     // the ordinary cut it then is. The stored feature is never rewritten.
     // A to-face extrude likewise sweeps the blind distance its face resolves
     // to here, or refuses as unresolved when the face no longer does.
+    // F01 (v130): an extrude up to the next face sweeps past the whole
+    // target and keeps the regions standing on its start plane (see
+    // `trimToNext`); everything after that treats them as the extrusion.
+    const toNext =
+      data.endCondition === 'to-next'
+        ? toNextFeature(ctx, feature, data)
+        : null;
+    // A face parallel to the sketch keeps the derived blind distance it
+    // always had; a slanted one sweeps past it and is split by its plane.
+    // F01 (v131): a curved face sweeps past it and keeps the near side of
+    // its cylinder.
+    const curved =
+      data.endCondition === 'to-face' && data.toSurface !== undefined
+        ? planCurvedToFace(
+            kernel,
+            document,
+            feature,
+            data,
+            result.sketchBases.get(data.sketchId)!,
+            result.sketchBases,
+            result,
+            scope
+          )
+        : null;
+    const toFace =
+      data.endCondition === 'to-face' && !curved
+        ? resolveToFaceTarget(kernel, document, feature, data, result)
+        : null;
+    const slanted =
+      toFace?.kind === 'slanted'
+        ? planSlantedToFace(
+            kernel,
+            document,
+            feature,
+            data,
+            toFace.frame,
+            result.sketchBases.get(data.sketchId)!,
+            result.sketchBases,
+            scope
+          )
+        : null;
     const sweepFeature =
       data.endCondition === 'through-all'
         ? throughAllSweepFeature(ctx, feature, data)
-        : data.endCondition === 'to-face'
-          ? toFaceSweepFeature(kernel, document, feature, data, result, scope)
-          : feature;
-    const extrusion = buildSweep(
-      kernel,
-      document,
-      sweepFeature,
-      scope,
-      result.sketchBases,
-      (message) => raiseFeatureWarning(result, feature, message, 'advisory')
-    );
+        : curved
+          ? curved.sweep
+          : slanted
+            ? slanted.sweep
+            : data.endCondition === 'to-face'
+              ? toFaceSweepFeature(
+                  kernel,
+                  document,
+                  feature,
+                  data,
+                  result,
+                  scope,
+                  toFace?.kind === 'parallel' ? toFace.distance : undefined
+                )
+              : toNext
+                ? toNext.sweep
+                : feature;
+    const sweepOf = (node: FeatureNode) =>
+      buildSweep(kernel, document, node, scope, result.sketchBases, (message) =>
+        raiseFeatureWarning(result, feature, message, 'advisory')
+      );
+    // A curved face's full sweep may be longer than a narrowing draft can
+    // run before it closes; its body-reach sweep is the one fallback.
+    let curvedPlan = curved?.curved;
+    let swept: ExactShape;
+    try {
+      swept = sweepOf(sweepFeature);
+    } catch (error) {
+      if (!curved?.fallback) throw error;
+      swept = sweepOf(curved.fallback.sweep);
+      curvedPlan = curved.fallback.curved;
+    }
+    const extrusion = curvedPlan
+      ? trimToCurvedFace(kernel, swept, curvedPlan, `Extrude "${feature.name}"`)
+      : slanted
+        ? trimToSlantedFace(
+            kernel,
+            swept,
+            slanted.slanted,
+            `Extrude "${feature.name}"`
+          )
+        : toNext
+          ? trimToNext(
+              kernel,
+              swept,
+              toNext.target,
+              toNext.operation,
+              toNext.reach,
+              `Extrude "${feature.name}"`,
+              toNext.targetName
+            )
+          : swept;
     const operation = data.operation ?? 'new-body';
     if (operation === 'new-body') {
       // Recorded so a later boolean can rebuild this exact tool with pierce
@@ -859,7 +1155,9 @@ function buildExtrudeFeature(
       extrusion,
       targetBody,
       extrusionBody,
-      throughAll ? overlapRegionTolerance(targetBody, extrusionBody) : undefined
+      throughAll || toNext
+        ? overlapRegionTolerance(targetBody, extrusionBody)
+        : undefined
     );
     // A cut needs shared material: with none there is nothing to remove, and
     // that can be settled before doing any work. That holds for through-all
@@ -944,7 +1242,9 @@ function buildExtrudeFeature(
       combined = retryCoplanarRefusal(
         error,
         () =>
-          operation === 'intersect'
+          // A to-next tool is regions of the target, not the swept feature
+          // a pierced twin rebuilds.
+          operation === 'intersect' || toNext || slanted || curved
             ? null
             : piercedExtrudeTool(
                 ctx,
@@ -961,7 +1261,7 @@ function buildExtrudeFeature(
     // typed coplanar refusal; never accept an invalid result or extend a
     // tool through an existing hole or a thin cavity roof.
     if (combined.union && verdictRefusesUnion(combined.union.verdict)) {
-      if (combined.tool === extrusion) {
+      if (combined.tool === extrusion && !toNext && !slanted && !curved) {
         const pierced = piercedExtrudeTool(
           ctx,
           sweepFeature,
@@ -1752,17 +2052,16 @@ function buildHoleFeature(
   const { bores, shape, targetSolid } = holeToolSpecFor(ctx, data);
   // One bore at a time, each proven as a single hole is: a bore that misses
   // the body or cuts nothing refuses by its point, never silently dropped.
-  let drilled = targetSolid;
-  for (const { spec, pointId } of bores) {
-    try {
-      drilled = drillHole(kernel, drilled, spec);
-    } catch (error) {
-      if (pointId === null || !(error instanceof Error)) throw error;
-      throw new Error(`At sketch point ${pointId}: ${error.message}`, {
-        cause: error
-      });
-    }
-  }
+  let drilled = drillFeatureBores(
+    kernel,
+    ctx.document.projectId,
+    targetSolid,
+    bores,
+    data.points !== undefined &&
+      data.style === 'simple' &&
+      !data.tapped &&
+      shape.rectangularStock === targetSolid
+  );
   // M01 (schema v66): each bore tapped with the standard's thread; a
   // cosmetic one (schema v67) is described, not cut.
   if (data.tapped && !data.tapped.cosmetic) {

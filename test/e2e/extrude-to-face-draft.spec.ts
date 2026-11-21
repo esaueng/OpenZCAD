@@ -7,7 +7,8 @@ import {
   deleteFeature,
   extrudeSketch,
   listFeaturesInOrder,
-  transformBody
+  transformBody,
+  updateFeature
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -191,9 +192,7 @@ for (const action of ['Cancel']) {
     );
     // To face arms the face pick at once.
     await chooseBarOption(edit, 'Extent', 'To face');
-    await expect(edit).toContainText(
-      'Click a flat face parallel to the sketch'
-    );
+    await expect(edit).toContainText('Click a face facing the sketch');
     await page.getByRole('button', { name: action, exact: true }).click();
     await expect(edit).toHaveCount(0);
     const bounds = (await canvas.boundingBox())!;
@@ -244,7 +243,7 @@ test('creates a drafted extrude up to a face picked in the viewport', async ({
   await chooseInPlaceOption(page, 'Extrude', 'Operation', 'New body');
   // To face arms its face pick at once; Done waits for the face.
   await chooseInPlaceOption(page, 'Extrude', 'Extent', 'To face');
-  await expect(bar).toContainText('Click a flat face parallel to the sketch');
+  await expect(bar).toContainText('Click a face facing the sketch');
   await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
   await page.mouse.click(point.x, point.y);
   await expect(bar).toContainText('Up to Ceiling Body · face');
@@ -588,5 +587,141 @@ test(
     await expect(row).not.toContainText('back draft');
     await expectFeatureMeasurement(page, row, '153.2');
     expect(errors).toEqual([]);
+  }
+);
+
+test(
+  'ends a to-face extrude on a slanted face, offsets it square to the face, and undoes',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(150_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const ceiling = slab(
+      createProjectDocument('Slanted face', toUserId('user_e2e')),
+      'Ceiling',
+      25
+    );
+    // The face is named while level, then its lift turns it 10° about X
+    // through the middle of its underside, over the post's middle.
+    const { target } = await faceOf(ceiling.document, ceiling.bodyId, -1);
+    const lift = listFeaturesInOrder(ceiling.document).find(
+      (feature) => feature.name === 'Lift Ceiling'
+    )!;
+    const turned = updateFeature(ceiling.document, {
+      featureId: lift.featureId,
+      data: {
+        transform: {
+          translation: { x: 0, y: 0, z: 25 },
+          rotationDeg: { x: 10, y: 0, z: 0 },
+          pivot: { x: 10, y: 10, z: 0 }
+        }
+      }
+    });
+    const sketched = addSketchFeature(turned, {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      objects: [SQUARE]
+    });
+    const document = extrudeSketch(sketched.document, {
+      name: 'Post',
+      sketchId: sketched.sketchId,
+      distance: 1,
+      endCondition: 'to-face',
+      toFace: target
+    }).document;
+    await open(page, document);
+    await expectBodyCount(page, 2);
+    const row = page.locator('.feature-row', { hasText: /Post/ }).last();
+    const rowMain = page.locator('.feature-row-main', { hasText: /^Post$/ });
+    await expect(row).toContainText('To face');
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    // The slanted top's mean height is 25 over the 4 × 4 profile.
+    await expectFeatureMeasurement(page, row, '400');
+
+    // 3 short, square to the face: 3 / cos 10° lower over the middle.
+    const edit = await editExtrudeFromHistory(page, rowMain, 'Post');
+    await setBarValues(page, edit, { 'Offset from face': '3' });
+    await edit.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText('Edit Post', {
+      timeout: 60_000
+    });
+    await expect(edit).toHaveCount(0);
+    await expect(row).toContainText('To face · 3 mm short');
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expectFeatureMeasurement(page, row, '351.2');
+
+    await waitForStillViewport(page);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(row).not.toContainText('short');
+    await expectFeatureMeasurement(page, row, '400');
+    expect(errors).toEqual([]);
+  }
+);
+
+test(
+  'creates an extrude up to a cylindrical face picked in the viewport',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    let document = createProjectDocument(
+      'To a curved face',
+      toUserId('user_e2e')
+    );
+    // A log of radius 10 lying along Y, its axis at x = 0, z = 30.
+    document = addPrimitiveFeature(document, {
+      name: 'Log',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 10, height: 40 }
+    });
+    const logId = document.bodyOrder.at(-1)!;
+    document = transformBody(document, {
+      name: 'Lay',
+      targetBodyId: logId,
+      translation: { x: 0, y: 0, z: 10 },
+      rotationDeg: { x: 90, y: 0, z: 0 },
+      pivot: { x: 0, y: 0, z: 20 }
+    }).document;
+    document = addSketchFeature(document, {
+      name: 'Post sketch',
+      plane: 'XY',
+      offset: 0,
+      objects: [{ ...SQUARE, centerX: 0, centerY: 0 }]
+    }).document;
+    const adapter = await createExactKernelAdapter();
+    const wall = (await adapter.syncDocument(document)).bodyRepresentations[
+      logId
+    ]!.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    const canvas = await open(page, document);
+    const bar = extrudeBar(page);
+    await page.locator('.feature-row-main', { hasText: 'Post sketch' }).click();
+    await page.keyboard.press('e');
+    await expect(bar).toBeVisible();
+    await waitForStillViewport(page);
+    await page.keyboard.press('Escape');
+    await expect(bar).toHaveCount(0);
+    const point = await pointOverFace(page, canvas, wall.topologyId);
+
+    await page.locator('.feature-row-main', { hasText: 'Post sketch' }).click();
+    await page.keyboard.press('e');
+    await chooseInPlaceOption(page, 'Extrude', 'Operation', 'New body');
+    await chooseInPlaceOption(page, 'Extrude', 'Extent', 'To face');
+    await expect(bar).toContainText('Click a face facing the sketch');
+    await page.mouse.click(point.x, point.y);
+    await expect(bar).toContainText('Up to Log Body · face');
+    await bar.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Extruded region up to the face as a new body.',
+      { timeout: 60_000 }
+    );
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expectBodyCount(page, 2);
+    const post = page.locator('.feature-row', { hasText: 'Extrude' }).last();
+    await expect(post).toContainText('To face');
+    // Up to the log's underside, z = 30 − √(100 − x²), over the 4 × 4.
+    await expectFeatureMeasurement(page, post, '321.07');
   }
 );

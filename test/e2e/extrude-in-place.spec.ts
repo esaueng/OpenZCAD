@@ -15,7 +15,9 @@ import {
   waitForStillViewport,
   editExtrudeFromHistory,
   chooseInPlaceOption,
-  extrudeBar
+  extrudeBar,
+  expectBarChoice,
+  pickBarChoice
 } from './openzcad-fixtures';
 
 /**
@@ -458,15 +460,13 @@ test('Extrude in place: the arrow chip sets the distance, and Done keeps an open
   await keypad.getByRole('textbox').fill('12');
   await options.locator('summary').click();
   await radio('Operation', 'Cut').click();
-  await radio('Extent', 'Through all').click();
+  // Cut offers four extents, which may show as a menu.
+  await pickBarChoice(bar, 'Extent', 'Through all');
   await expect(keypad).toHaveCount(0);
   await expect(bar).toContainText('Through all');
-  await expect(radio('Extent', 'Through all')).toHaveAttribute(
-    'aria-checked',
-    'true'
-  );
+  await expectBarChoice(bar, 'Extent', 'Through all');
   // Back to a one-sided blind new body for the rest.
-  await radio('Extent', 'Distance').click();
+  await pickBarChoice(bar, 'Extent', 'Distance');
   await radio('Operation', 'New body').click();
   await radio('Sides', 'One side').click();
 

@@ -107,9 +107,23 @@
         "limit": 30000,
         "period": 60
       }
+    },
+    {
+      "name": "API_WRITE_LIMITER",
+      "namespace_id": "2026111609",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
     }
   ],
-  "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADStableIngest"}],
+  "services": [
+    {
+      "binding": "GLIMPSE",
+      "service": "glimpse",
+      "entrypoint": "OpenZCADStableIngest"
+    }
+  ],
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",
