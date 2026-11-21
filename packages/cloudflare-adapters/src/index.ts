@@ -9650,22 +9650,23 @@ const SOCKET_TICKET_TTL_MS = 30_000;
 const MAX_SNAPSHOT_PAYLOAD_BYTES = 1_600_000;
 const PROJECT_EDIT_LEASE_TTL_MS = 30_000;
 /**
- * How far past its last persisted renewal a stored lease record stays live.
- * Clients renew every 10 s, but the room writes a renewal to storage only
- * when the stored horizon has less than
- * {@link PROJECT_EDIT_LEASE_PERSIST_MARGIN_MS} left, so a held lease costs
- * one storage write per ~60 s instead of one per heartbeat. The in-memory
- * lease, and every `lease-granted` frame, keeps the 30 s TTL.
+ * How long a renewal may go without reaching storage. Clients renew every
+ * 10 s; the room writes a renewal only when its last stored renewal is at
+ * least this old (or the lease set changed), so a held lease costs about one
+ * storage write per 30 s instead of one per heartbeat. The in-memory lease,
+ * and every `lease-granted` frame, keeps the 30 s TTL.
  */
-const PROJECT_EDIT_LEASE_STORED_HORIZON_MS = 120_000;
-const PROJECT_EDIT_LEASE_PERSIST_MARGIN_MS = 60_000;
+const PROJECT_EDIT_LEASE_PERSIST_GAP_MS = 30_000;
 
 /**
- * One persisted lease. `expiresAt` is written as `storedUntil`, so a Worker
- * version that predates the coalesced renewal (rolling deploy, rollback)
- * still reads a live lease and at worst holds it for the stored horizon.
- * `renewedAt` is the holder's last persisted renewal; a restore uses it to
- * expire a holder whose socket is gone 30 s after that renewal.
+ * One persisted lease. `renewedAt` is the last renewal written to storage,
+ * and `expiresAt` is written as `renewedAt + TTL + GAP`: every renewal the
+ * room acknowledged without writing it happened less than GAP after
+ * `renewedAt`, so its acknowledged expiry is never later than the stored
+ * one. A Worker version that predates coalesced renewal (rolling deploy,
+ * rollback) reads only `expiresAt` and so never ends a lease early either.
+ * `storedUntil` is read-and-ignored: an unreleased build of this change
+ * wrote it.
  */
 interface StoredProjectEditLease extends ProjectEditLease {
   renewedAt?: number;
@@ -9892,13 +9893,13 @@ export class ProjectCollaborationRoom extends DurableObject {
   private presence = new Map<string, string>();
   private sockets = new Map<WebSocket, CollaborationSocketConnection>();
   private editLeases: ProjectEditLease[] = [];
-  /** Last renewal (or grant) this room saw for each lease, by leaseId. */
+  /** Last acknowledged renewal (or grant) of each lease, by leaseId. */
   private leaseRenewedAt = new Map<string, number>();
-  /** What storage holds for each lease, by leaseId. */
-  private persistedLeases = new Map<
-    string,
-    { renewedAt: number; storedUntil: number }
-  >();
+  /**
+   * The `renewedAt` storage holds for each lease, by leaseId. A lease
+   * without one (a record from an older writer) persists its next renewal.
+   */
+  private persistedRenewedAt = new Map<string, number>();
   private leaseQueue: Promise<void> = Promise.resolve();
   private socketFrameTimes = new WeakMap<
     WebSocket,
@@ -10006,11 +10007,8 @@ export class ProjectCollaborationRoom extends DurableObject {
       if (storedLease) {
         const { additionalLeases = [], ...first } = storedLease;
         const now = Date.now();
-        const connected = new Set(
-          Array.from(this.sockets.values(), (socket) => socket.clientId)
-        );
         const active = [first, ...additionalLeases]
-          .map((stored) => this.restoreEditLease(stored, connected, now))
+          .map((stored) => this.restoreEditLease(stored))
           .filter(
             (lease) =>
               lease.projectId === this.projectId &&
@@ -10278,14 +10276,12 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
   }
 
-  async webSocketClose(socket: WebSocket): Promise<void> {
+  webSocketClose(socket: WebSocket): void {
     this.removeSocket(socket);
-    await this.leaseQueue;
   }
 
-  async webSocketError(socket: WebSocket): Promise<void> {
+  webSocketError(socket: WebSocket): void {
     this.removeSocket(socket);
-    await this.leaseQueue;
   }
 
   /** Internal-only hard deletion used by the account erasure coordinator. */
@@ -11246,25 +11242,19 @@ export class ProjectCollaborationRoom extends DurableObject {
   }
 
   /**
-   * Rebuilds one in-memory lease from storage after a wake. A record the
-   * coalescing writer produced (`storedUntil === expiresAt`) restores by
-   * the holder's connection:
-   * - Holder's socket open (rebuilt from hibernation attachments): the
-   *   lease stays live for one more TTL from the wake, never past the
-   *   stored horizon, since the holder is renewing and a renewal may be
-   *   what woke the room.
-   * - Holder's socket gone: the lease ends one TTL after its last persisted
-   *   renewal, as an uncoalesced record did.
-   * Accepted trade-off: a tab frozen with its socket still open, in a room
-   * evicted meanwhile, can hold the lease up to the 120 s stored horizon
-   * instead of 30 s. Any other record (an older writer) restores as before.
+   * Rebuilds one in-memory lease from storage after a wake. A record with a
+   * numeric `renewedAt` ends at `max(expiresAt, renewedAt + TTL + GAP)`:
+   * never before the expiry of any renewal the room acknowledged, since an
+   * unwritten one came less than GAP after `renewedAt`, and an older Worker
+   * that renewed and wrote a later `expiresAt` (keeping a stale `renewedAt`)
+   * still wins through the max. A record without one restores `expiresAt`
+   * as written, as before. Restore does not look at which sockets are open.
+   * Accepted trade-off: after the room wakes from eviction, a lease whose
+   * holder has gone can outlive its acknowledged expiry by at most GAP
+   * (30 s); it never ends earlier.
    */
-  private restoreEditLease(
-    stored: StoredProjectEditLease,
-    connected: ReadonlySet<string>,
-    now: number
-  ): ProjectEditLease {
-    const { renewedAt, storedUntil } = stored;
+  private restoreEditLease(stored: StoredProjectEditLease): ProjectEditLease {
+    const { renewedAt } = stored;
     const restored: ProjectEditLease = {
       leaseId: stored.leaseId,
       projectId: stored.projectId,
@@ -11272,45 +11262,55 @@ export class ProjectCollaborationRoom extends DurableObject {
       userId: stored.userId,
       expiresAt: stored.expiresAt
     };
-    if (
-      typeof renewedAt === 'number' &&
-      typeof storedUntil === 'number' &&
-      storedUntil === stored.expiresAt
-    ) {
-      restored.expiresAt = connected.has(stored.clientId)
-        ? Math.max(
-            renewedAt + PROJECT_EDIT_LEASE_TTL_MS,
-            Math.min(storedUntil, now + PROJECT_EDIT_LEASE_TTL_MS)
-          )
-        : Math.min(renewedAt + PROJECT_EDIT_LEASE_TTL_MS, storedUntil);
+    if (typeof renewedAt === 'number' && Number.isFinite(renewedAt)) {
+      restored.expiresAt = Math.max(
+        stored.expiresAt,
+        renewedAt +
+          PROJECT_EDIT_LEASE_TTL_MS +
+          PROJECT_EDIT_LEASE_PERSIST_GAP_MS
+      );
       this.leaseRenewedAt.set(stored.leaseId, renewedAt);
-      this.persistedLeases.set(stored.leaseId, { renewedAt, storedUntil });
+      this.persistedRenewedAt.set(stored.leaseId, renewedAt);
     } else {
-      const legacyRenewedAt = stored.expiresAt - PROJECT_EDIT_LEASE_TTL_MS;
-      this.leaseRenewedAt.set(stored.leaseId, legacyRenewedAt);
-      this.persistedLeases.set(stored.leaseId, {
-        renewedAt: legacyRenewedAt,
-        storedUntil: stored.expiresAt
-      });
+      this.leaseRenewedAt.set(
+        stored.leaseId,
+        stored.expiresAt - PROJECT_EDIT_LEASE_TTL_MS
+      );
+      this.persistedRenewedAt.delete(stored.leaseId);
     }
     return restored;
   }
 
-  private storedEditLease(
-    lease: ProjectEditLease
-  ): Required<StoredProjectEditLease> {
-    const renewedAt =
-      this.leaseRenewedAt.get(lease.leaseId) ??
-      lease.expiresAt - PROJECT_EDIT_LEASE_TTL_MS;
-    const storedUntil = Math.max(
-      renewedAt + PROJECT_EDIT_LEASE_STORED_HORIZON_MS,
-      lease.expiresAt
+  /**
+   * Writes the lease set. `renewal` is an acknowledgement this write carries
+   * (a grant or renewal); like the rest of the lease state, it is recorded
+   * in memory only once the write succeeds, so a rejected write leaves the
+   * room as it was.
+   */
+  private async persistEditLeases(
+    leases: ProjectEditLease[],
+    renewal?: { leaseId: string; renewedAt: number }
+  ): Promise<void> {
+    const renewedAt = new Map(
+      leases.map((lease) => [
+        lease.leaseId,
+        renewal?.leaseId === lease.leaseId
+          ? renewal.renewedAt
+          : (this.leaseRenewedAt.get(lease.leaseId) ??
+            lease.expiresAt - PROJECT_EDIT_LEASE_TTL_MS)
+      ])
     );
-    return { ...lease, expiresAt: storedUntil, renewedAt, storedUntil };
-  }
-
-  private async persistEditLeases(leases: ProjectEditLease[]): Promise<void> {
-    const stored = leases.map((lease) => this.storedEditLease(lease));
+    const stored = leases.map((lease): StoredProjectEditLease => {
+      const at = renewedAt.get(lease.leaseId)!;
+      return {
+        ...lease,
+        renewedAt: at,
+        expiresAt: Math.max(
+          lease.expiresAt,
+          at + PROJECT_EDIT_LEASE_TTL_MS + PROJECT_EDIT_LEASE_PERSIST_GAP_MS
+        )
+      };
+    });
     const [first, ...additionalLeases] = stored;
     if (first) {
       // Keep the original single-lease shape readable during rolling updates.
@@ -11322,47 +11322,8 @@ export class ProjectCollaborationRoom extends DurableObject {
       await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
     }
     this.editLeases = leases;
-    this.persistedLeases = new Map(
-      stored.map(({ leaseId, renewedAt, storedUntil }) => [
-        leaseId,
-        { renewedAt, storedUntil }
-      ])
-    );
-    for (const leaseId of Array.from(this.leaseRenewedAt.keys())) {
-      if (!this.persistedLeases.has(leaseId))
-        this.leaseRenewedAt.delete(leaseId);
-    }
-  }
-
-  /**
-   * A lease holder's last socket closed. The wake grace no longer applies,
-   * so the lease ends one TTL after its last renewal, and storage learns
-   * that renewal if a coalesced heartbeat left it behind, so a later wake
-   * expires the lease when an uncoalesced record would have.
-   */
-  private async settleDepartedLease(clientId: string): Promise<void> {
-    if (this.erasing) return;
-    if (
-      Array.from(this.sockets.values()).some(
-        (socket) => socket.clientId === clientId
-      )
-    )
-      return;
-    let stale = false;
-    const leases = this.editLeases.map((lease) => {
-      if (lease.clientId !== clientId) return lease;
-      const renewedAt = this.leaseRenewedAt.get(lease.leaseId);
-      if (renewedAt === undefined) return lease;
-      const persisted = this.persistedLeases.get(lease.leaseId);
-      if (!persisted || renewedAt > persisted.renewedAt) stale = true;
-      const expiresAt = Math.min(
-        lease.expiresAt,
-        renewedAt + PROJECT_EDIT_LEASE_TTL_MS
-      );
-      return expiresAt === lease.expiresAt ? lease : { ...lease, expiresAt };
-    });
-    if (stale) await this.persistEditLeases(leases);
-    else this.editLeases = leases;
+    this.leaseRenewedAt = renewedAt;
+    this.persistedRenewedAt = new Map(renewedAt);
   }
 
   private async revokeEditLeases(
@@ -11429,14 +11390,13 @@ export class ProjectCollaborationRoom extends DurableObject {
       userId: connection.userId,
       expiresAt: Date.now() + PROJECT_EDIT_LEASE_TTL_MS
     };
-    this.leaseRenewedAt.set(
-      lease.leaseId,
-      lease.expiresAt - PROJECT_EDIT_LEASE_TTL_MS
+    await this.persistEditLeases(
+      [...this.editLeases.filter((candidate) => candidate !== current), lease],
+      {
+        leaseId: lease.leaseId,
+        renewedAt: lease.expiresAt - PROJECT_EDIT_LEASE_TTL_MS
+      }
     );
-    await this.persistEditLeases([
-      ...this.editLeases.filter((candidate) => candidate !== current),
-      lease
-    ]);
     this.send(socket, { type: 'lease-granted', lease });
   }
 
@@ -11473,20 +11433,24 @@ export class ProjectCollaborationRoom extends DurableObject {
       ...current,
       expiresAt: now + PROJECT_EDIT_LEASE_TTL_MS
     };
-    this.leaseRenewedAt.set(lease.leaseId, now);
     const leases = this.editLeases.map((candidate) =>
       candidate === current ? lease : candidate
     );
-    // The lease set is unchanged, so storage needs the renewal only once the
-    // stored horizon runs low (PROJECT_EDIT_LEASE_STORED_HORIZON_MS).
-    const persisted = this.persistedLeases.get(lease.leaseId);
+    // The lease set is unchanged, so storage needs the renewal only once its
+    // stored one is GAP old: until then the stored expiry already covers
+    // this acknowledgement (see StoredProjectEditLease).
+    const persisted = this.persistedRenewedAt.get(lease.leaseId);
     if (
-      !persisted ||
-      persisted.storedUntil - now < PROJECT_EDIT_LEASE_PERSIST_MARGIN_MS
+      persisted === undefined ||
+      now - persisted >= PROJECT_EDIT_LEASE_PERSIST_GAP_MS
     ) {
-      await this.persistEditLeases(leases);
+      await this.persistEditLeases(leases, {
+        leaseId: lease.leaseId,
+        renewedAt: now
+      });
     } else {
       this.editLeases = leases;
+      this.leaseRenewedAt.set(lease.leaseId, now);
     }
     this.send(socket, { type: 'lease-granted', lease });
   }
@@ -12788,15 +12752,6 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     this.sockets.delete(socket);
     this.presence.delete(connection.clientId);
-    if (
-      this.editLeases.some((lease) => lease.clientId === connection.clientId)
-    ) {
-      void this.enqueueLeaseOperation(() =>
-        this.settleDepartedLease(connection.clientId)
-      ).catch(() => {
-        console.error('Collaboration lease settlement failed.');
-      });
-    }
     if (broadcast) {
       void this.broadcastPresence().catch(() => {
         console.error('Collaboration presence broadcast failed.');

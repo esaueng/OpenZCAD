@@ -86,15 +86,10 @@ async function acquire(
   ).lease;
 }
 
-/** The record the room stores for `lease` just after granting it. */
+/** The record the room stores for `lease` when it writes that renewal. */
 function storedLease(lease: ProjectEditLease) {
   const renewedAt = lease.expiresAt - 30_000;
-  return {
-    ...lease,
-    expiresAt: renewedAt + 120_000,
-    renewedAt,
-    storedUntil: renewedAt + 120_000
-  };
+  return { ...lease, expiresAt: renewedAt + 60_000, renewedAt };
 }
 
 function documentFrame(
@@ -621,12 +616,14 @@ describe('project edit lease', () => {
     expect(renewed.expiresAt).toBe(startedAt + 40_000);
 
     owner.close(1006, 'network lost');
-    await room.webSocketClose(owner as unknown as WebSocket);
-    // The coalesced renewal reaches storage when its holder disconnects.
-    expect(values.get('room:edit-lease')).toEqual(storedLease(renewed));
+    // The renewal was coalesced: storage still holds the grant, whose
+    // stored expiry (grant + 60 s) covers the renewal's +40 s.
+    expect(values.get('room:edit-lease')).toEqual(storedLease(lease));
 
+    // The room stays awake, so the lease ends exactly at its acknowledged
+    // expiry (eviction is covered by "coalesced lease renewal writes").
     now.mockReturnValue(startedAt + 30_001);
-    const beforeExpiry = createTestRoom(context, leaseEnv);
+    const beforeExpiry = room;
     const waiting = await openSocket(
       beforeExpiry,
       document.projectId,
@@ -643,15 +640,14 @@ describe('project edit lease', () => {
     });
 
     now.mockReturnValue(startedAt + 40_001);
-    const afterExpiry = createTestRoom(context, leaseEnv);
     const takeover = await openSocket(
-      afterExpiry,
+      beforeExpiry,
       document.projectId,
       'user_heartbeat_editor',
       'editor',
-      'client_takeover'
+      'client_takeover_awake'
     );
-    await acquire(takeover, 'client_takeover');
+    await acquire(takeover, 'client_takeover_awake');
   });
 
   it('rejects forged, other-client, and cross-project lease identities', async () => {
@@ -1066,12 +1062,14 @@ describe('project edit lease', () => {
 
 describe('coalesced lease renewal writes', () => {
   const startedAt = 2_000_000_000_000;
+  const TTL = 30_000;
+  const GAP = 30_000;
 
   function renewFrame(clientId: string, leaseId: string): string {
     return JSON.stringify({ type: 'lease-renew', clientId, leaseId });
   }
 
-  async function heldLease() {
+  async function heldLease(roomEnv: object = leaseEnv) {
     const now = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
     const storage = createRoomContext();
     const put = vi.spyOn(storage.context.storage, 'put');
@@ -1079,7 +1077,7 @@ describe('coalesced lease renewal writes', () => {
       'Coalesced lease',
       toUserId('user_owner')
     );
-    const room = createTestRoom(storage.context, leaseEnv);
+    const room = createTestRoom(storage.context, roomEnv);
     const owner = await openSocket(
       room,
       document.projectId,
@@ -1091,7 +1089,7 @@ describe('coalesced lease renewal writes', () => {
     const leaseWrites = () =>
       put.mock.calls.filter(([key]) => key === 'room:edit-lease').length;
     expect(leaseWrites()).toBe(1);
-    return { ...storage, now, room, owner, lease, document, leaseWrites };
+    return { ...storage, put, now, room, owner, lease, document, leaseWrites };
   }
 
   async function renew(
@@ -1103,158 +1101,248 @@ describe('coalesced lease renewal writes', () => {
     const frame = owner.lastFrame();
     expect(frame).toMatchObject({
       type: 'lease-granted',
-      lease: { leaseId: lease.leaseId, expiresAt: at + 30_000 }
+      lease: { leaseId: lease.leaseId, expiresAt: at + TTL }
     });
     return (
       frame as Extract<CollaborationServerMessage, { type: 'lease-granted' }>
     ).lease;
   }
 
-  async function contender(
+  /** Opens a socket for another account and asks it for the lease. */
+  async function contend(
     room: ProjectCollaborationRoom,
-    projectId: string
-  ): Promise<FakeWebSocket> {
-    const other = await openSocket(
-      room,
-      projectId,
-      'user_other',
-      'editor',
-      'client_other'
-    );
-    await other.receive(
-      JSON.stringify({ type: 'lease-acquire', clientId: 'client_other' })
-    );
-    return other;
+    projectId: string,
+    clientId = 'client_other',
+    userId = 'user_other'
+  ): Promise<CollaborationServerMessage | undefined> {
+    const other = await openSocket(room, projectId, userId, 'editor', clientId);
+    await other.receive(JSON.stringify({ type: 'lease-acquire', clientId }));
+    return other.lastFrame();
   }
 
-  it('writes no renewal while the stored horizon has at least 60 s left', async () => {
+  it('writes a 10 s heartbeat renewal about once every 30 s', async () => {
     const { now, owner, lease, values, leaseWrites } = await heldLease();
-    for (let at = startedAt + 10_000; at <= startedAt + 60_000; at += 10_000) {
+    const writesAt: number[] = [];
+    for (let at = startedAt + 10_000; at <= startedAt + 120_000; at += 10_000) {
       now.mockReturnValue(at);
+      const before = leaseWrites();
       const granted = await renew(owner, lease, at);
       // The client still sees the 30 s TTL on every heartbeat.
-      expect(granted).toEqual({ ...lease, expiresAt: at + 30_000 });
+      expect(granted).toEqual({ ...lease, expiresAt: at + TTL });
+      if (leaseWrites() > before) writesAt.push(at - startedAt);
     }
-    expect(leaseWrites()).toBe(1);
+    expect(writesAt).toEqual([30_000, 60_000, 90_000, 120_000]);
+    expect(values.get('room:edit-lease')).toEqual({
+      ...lease,
+      renewedAt: startedAt + 120_000,
+      expiresAt: startedAt + 120_000 + TTL + GAP
+    });
+  });
+
+  it('keeps a lease to its acknowledged expiry when the close wakes an evicted room (review 1)', async () => {
+    const { now, context, owner, lease, document } = await heldLease();
+    for (let at = startedAt + 10_000; at <= startedAt + 50_000; at += 10_000) {
+      now.mockReturnValue(at);
+      await renew(owner, lease, at);
+    }
+    // Acknowledged expiry: +80 s. The room hibernates, then the holder's
+    // close at +62 s wakes it with no holder socket left.
+    owner.close(1006, 'network lost');
+    now.mockReturnValue(startedAt + 62_000);
+    const woken = createTestRoom(context, leaseEnv);
+    woken.webSocketClose(owner as unknown as WebSocket);
+
+    now.mockReturnValue(startedAt + 63_000);
+    const early = await contend(woken, document.projectId);
+    expect(early).toMatchObject({ type: 'lease-denied', reason: 'held' });
+    now.mockReturnValue(startedAt + 80_000);
+    expect(
+      await contend(woken, document.projectId, 'client_other_2')
+    ).toMatchObject({ type: 'lease-denied', reason: 'held' });
+
+    // At most GAP past the acknowledged expiry, the lease is free.
+    now.mockReturnValue(startedAt + 80_000 + GAP + 1);
+    expect(
+      await contend(woken, document.projectId, 'client_other_3')
+    ).toMatchObject({ type: 'lease-granted' });
+  });
+
+  it('never restores a lease before its last acknowledged expiry, nor more than 30 s after it', async () => {
+    for (let renewals = 0; renewals <= 9; renewals += 1) {
+      const { now, context, owner, lease, document } = await heldLease();
+      let acknowledged = lease.expiresAt;
+      for (let step = 1; step <= renewals; step += 1) {
+        const at = startedAt + step * 10_000;
+        now.mockReturnValue(at);
+        acknowledged = (await renew(owner, lease, at)).expiresAt;
+      }
+      owner.close(1006, 'network lost');
+      now.mockReturnValue(acknowledged - 1);
+      const restored = createTestRoom(context, leaseEnv);
+      const denied = await contend(restored, document.projectId);
+      expect(denied).toMatchObject({ type: 'lease-denied', reason: 'held' });
+      const restoredExpiry = (denied as { expiresAt: number }).expiresAt;
+      expect(restoredExpiry).toBeGreaterThanOrEqual(acknowledged);
+      expect(restoredExpiry).toBeLessThanOrEqual(acknowledged + GAP);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('does not extend a lease for another account reusing its clientId (review 2)', async () => {
+    const { now, context, room, owner, document } = await heldLease();
+    // Acknowledged expiry: +30 s. The holder leaves; a different account
+    // then says hello with the same clientId.
+    now.mockReturnValue(startedAt + 5_000);
+    owner.close(1006, 'network lost');
+    room.webSocketClose(owner as unknown as WebSocket);
+    now.mockReturnValue(startedAt + 50_000);
+    const impostor = await openSocket(
+      room,
+      document.projectId,
+      'user_impostor',
+      'editor',
+      'client_owner'
+    );
+    expect(impostor.closed).toBeNull();
+
+    // The room is evicted and wakes with the impostor's socket attached.
+    now.mockReturnValue(startedAt + TTL + GAP + 1);
+    const woken = createTestRoom(context, leaseEnv);
+    expect(
+      await contend(woken, document.projectId, 'client_third', 'user_third')
+    ).toMatchObject({ type: 'lease-granted' });
+  });
+
+  it('leaves the lease unchanged when a renewal write is rejected (review 3)', async () => {
+    const { now, room, put, owner, lease, document, values } =
+      await heldLease();
+    for (let at = startedAt + 10_000; at <= startedAt + 50_000; at += 10_000) {
+      now.mockReturnValue(at);
+      await renew(owner, lease, at);
+    }
+    const stored = values.get('room:edit-lease');
+
+    // The renewal at +61 s is due a write, and storage rejects it.
+    now.mockReturnValue(startedAt + 61_000);
+    put.mockRejectedValueOnce(new Error('storage unavailable'));
+    await owner.receive(renewFrame(lease.clientId, lease.leaseId));
+    expect(owner.lastFrame()).toMatchObject({ type: 'error' });
+    expect(
+      owner
+        .frames()
+        .some(
+          (frame) =>
+            frame.type === 'lease-granted' &&
+            frame.lease.expiresAt === startedAt + 61_000 + TTL
+        )
+    ).toBe(false);
+    expect(values.get('room:edit-lease')).toBe(stored);
+
+    // A later write for another reason (the owner's second tab takes a
+    // lease) stores the last acknowledged renewal, not the rejected one.
+    now.mockReturnValue(startedAt + 62_000);
+    const secondTab = await openSocket(
+      room,
+      document.projectId,
+      'user_owner',
+      'owner',
+      'client_owner_tab'
+    );
+    await acquire(secondTab, 'client_owner_tab');
     expect(values.get('room:edit-lease')).toMatchObject({
+      leaseId: lease.leaseId,
+      renewedAt: startedAt + 50_000,
+      expiresAt: startedAt + 50_000 + TTL + GAP
+    });
+
+    // In memory the lease still ends at its acknowledged +80 s.
+    now.mockReturnValue(startedAt + 80_001);
+    await owner.receive(renewFrame(lease.clientId, lease.leaseId));
+    expect(owner.lastFrame()).toMatchObject({
+      type: 'lease-lost',
+      reason: 'invalid'
+    });
+  });
+
+  it('keeps the later expiry an older Worker wrote over a stale renewedAt (review 4)', async () => {
+    const { now, context, values, owner, lease, document } = await heldLease();
+    owner.close(1006, 'network lost');
+    // An older Worker renewed at +90 s: it spreads the stored record and
+    // rewrites only `expiresAt`, keeping the stale fields. This build's
+    // earlier record shape carried `storedUntil` too.
+    values.set('room:edit-lease', {
+      ...lease,
       renewedAt: startedAt,
       storedUntil: startedAt + 120_000,
       expiresAt: startedAt + 120_000
     });
-
-    now.mockReturnValue(startedAt + 70_000);
-    await renew(owner, lease, startedAt + 70_000);
-    expect(leaseWrites()).toBe(2);
-    expect(values.get('room:edit-lease')).toEqual({
-      ...lease,
-      expiresAt: startedAt + 190_000,
-      renewedAt: startedAt + 70_000,
-      storedUntil: startedAt + 190_000
-    });
-    now.mockReturnValue(startedAt + 80_000);
-    await renew(owner, lease, startedAt + 80_000);
-    expect(leaseWrites()).toBe(2);
-  });
-
-  it('keeps a connected holder’s lease across eviction until it renews', async () => {
-    const { now, context, owner, lease, document, leaseWrites } =
-      await heldLease();
-    for (let at = startedAt + 10_000; at <= startedAt + 60_000; at += 10_000) {
-      now.mockReturnValue(at);
-      await renew(owner, lease, at);
-    }
-    // Evicted while the holder's socket stays open; the last persisted
-    // renewal is 95 s old, but the holder is connected.
     now.mockReturnValue(startedAt + 95_000);
-    const restored = createTestRoom(context, leaseEnv);
-    await settleRoom(restored);
-    expect(leaseWrites()).toBe(1);
-    const other = await contender(restored, document.projectId);
-    expect(other.lastFrame()).toMatchObject({
+    const woken = createTestRoom(context, leaseEnv);
+    expect(await contend(woken, document.projectId)).toMatchObject({
       type: 'lease-denied',
-      reason: 'held'
-    });
-    await renew(owner, lease, startedAt + 95_000);
-    expect(leaseWrites()).toBe(2);
-    await owner.receive(documentFrame(document, 'client_owner', lease.leaseId));
-    expect(owner.lastFrame()).toMatchObject({ type: 'ack' });
-  });
-
-  it('expires a disconnected holder 30 s after its last persisted renewal', async () => {
-    const { now, context, owner, lease, document } = await heldLease();
-    now.mockReturnValue(startedAt + 20_000);
-    await renew(owner, lease, startedAt + 20_000);
-    // The room is evicted before the close reaches it: the coalesced
-    // renewal at +20 s never reached storage.
-    owner.close(1006, 'network lost');
-
-    now.mockReturnValue(startedAt + 29_999);
-    const before = createTestRoom(context, leaseEnv);
-    const waiting = await contender(before, document.projectId);
-    expect(waiting.lastFrame()).toMatchObject({
-      type: 'lease-denied',
-      reason: 'held'
+      reason: 'held',
+      expiresAt: startedAt + 120_000
     });
 
-    now.mockReturnValue(startedAt + 30_001);
-    const after = createTestRoom(context, leaseEnv);
-    const takeover = await openSocket(
-      after,
-      document.projectId,
-      'user_other',
-      'editor',
-      'client_takeover'
-    );
-    const taken = await acquire(takeover, 'client_takeover');
-    expect(taken.userId).toBe('user_other');
+    // The same with an older Worker's renewal over the current shape.
+    values.set('room:edit-lease', {
+      ...lease,
+      renewedAt: startedAt,
+      expiresAt: startedAt + 125_000
+    });
+    const again = createTestRoom(context, leaseEnv);
+    expect(
+      await contend(again, document.projectId, 'client_other_2')
+    ).toMatchObject({
+      type: 'lease-denied',
+      reason: 'held',
+      expiresAt: startedAt + 125_000
+    });
   });
 
-  it('restores a lease record without the coalescing fields as before', async () => {
-    vi.spyOn(Date, 'now').mockReturnValue(startedAt);
-    const { context, values } = createRoomContext();
-    const document = createProjectDocument(
-      'Older record',
-      toUserId('user_owner')
-    );
-    const seed = createTestRoom(context, leaseEnv);
-    const owner = await openSocket(
-      seed,
-      document.projectId,
-      'user_owner',
-      'owner',
-      'client_owner'
-    );
-    const lease = await acquire(owner, 'client_owner');
-    owner.close(1006, 'network lost');
+  it('restores a lease record without renewedAt as before and writes its next renewal', async () => {
+    const { now, context, values, put, owner, lease, document } =
+      await heldLease();
     // What a Worker without coalescing wrote: the lease alone.
     const older = { ...lease, expiresAt: startedAt + 20_000 };
     values.set('room:edit-lease', older);
 
-    vi.spyOn(Date, 'now').mockReturnValue(startedAt + 19_999);
+    now.mockReturnValue(startedAt + 5_000);
     const restored = createTestRoom(context, leaseEnv);
     await settleRoom(restored);
     expect(values.get('room:edit-lease')).toBe(older);
-    const waiting = await contender(restored, document.projectId);
-    expect(waiting.lastFrame()).toMatchObject({
+    expect(await contend(restored, document.projectId)).toMatchObject({
       type: 'lease-denied',
       reason: 'held',
       expiresAt: startedAt + 20_000
     });
+    // Storage has no renewedAt to cover a coalesced renewal, so it writes.
+    const writes = put.mock.calls.length;
+    await renew(owner, lease, startedAt + 5_000);
+    expect(put.mock.calls.length).toBe(writes + 1);
+    expect(values.get('room:edit-lease')).toEqual({
+      ...lease,
+      renewedAt: startedAt + 5_000,
+      expiresAt: startedAt + 5_000 + TTL + GAP
+    });
 
-    vi.spyOn(Date, 'now').mockReturnValue(startedAt + 20_001);
+    // An untouched older record still expires exactly at its expiresAt.
+    owner.close(1006, 'network lost');
+    values.set('room:edit-lease', older);
+    now.mockReturnValue(startedAt + 19_999);
+    const before = createTestRoom(context, leaseEnv);
+    expect(
+      await contend(before, document.projectId, 'client_other_2')
+    ).toMatchObject({ type: 'lease-denied', reason: 'held' });
+    now.mockReturnValue(startedAt + 20_001);
     const later = createTestRoom(context, leaseEnv);
-    const takeover = await openSocket(
-      later,
-      document.projectId,
-      'user_other',
-      'editor',
-      'client_takeover'
-    );
-    await acquire(takeover, 'client_takeover');
+    expect(
+      await contend(later, document.projectId, 'client_other_3')
+    ).toMatchObject({ type: 'lease-granted' });
   });
 
-  it('restores an encrypted room’s leases by whether each holder is connected', async () => {
-    vi.spyOn(Date, 'now').mockReturnValue(startedAt + 95_000);
+  it('restores an encrypted room’s leases from their stored renewals alone', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(startedAt + 70_000);
     const { context, values } = createRoomContext();
     const projectId = 'project_encrypted_leases';
     values.set('room:meta', {
@@ -1264,32 +1352,29 @@ describe('coalesced lease renewal writes', () => {
       historyVersions: [],
       format: 2
     });
-    const stored = (clientId: string, userId: string) => ({
+    const stored = (clientId: string, userId: string, renewedAt: number) => ({
       leaseId: `lease_${clientId}`,
       projectId,
       clientId,
       userId,
-      renewedAt: startedAt,
-      storedUntil: startedAt + 120_000,
-      expiresAt: startedAt + 120_000
+      renewedAt,
+      expiresAt: renewedAt + TTL + GAP
     });
-    const connected = stored('client_owner', 'user_owner');
-    const departed = stored('client_editor', 'user_editor');
-    const present = stored('client_owner_desktop', 'user_owner');
-    const record = {
-      ...connected,
-      additionalLeases: [departed, present]
-    };
-    values.set('room:edit-lease', record);
-    for (const [clientId, userId] of [
-      ['client_owner', 'user_owner'],
-      ['client_owner_desktop', 'user_owner']
-    ] as const) {
+    const owner = stored('client_owner', 'user_owner', startedAt + 30_000);
+    // Its holder's socket is still open, but its stored renewal is 70 s old.
+    const lapsed = stored('client_owner_desktop', 'user_owner', startedAt);
+    // Its holder has gone, but its stored expiry has not passed.
+    const departed = stored('client_editor', 'user_editor', startedAt + 20_000);
+    values.set('room:edit-lease', {
+      ...owner,
+      additionalLeases: [lapsed, departed]
+    });
+    for (const clientId of ['client_owner', 'client_owner_desktop']) {
       const socket = new FakeWebSocket();
       socket.serializeAttachment({
         schema: 1,
-        userId,
-        displayName: userId,
+        userId: 'user_owner',
+        displayName: 'user_owner',
         role: 'owner',
         clientId,
         format: 2
@@ -1298,11 +1383,9 @@ describe('coalesced lease renewal writes', () => {
     }
     const room = createTestRoom(context, leaseEnv);
     await settleRoom(room);
-    // The departed editor's lease ended 30 s after its last renewal; both
-    // connected owner devices keep theirs, rewritten unchanged.
     expect(values.get('room:edit-lease')).toEqual({
-      ...connected,
-      additionalLeases: [present]
+      ...owner,
+      additionalLeases: [departed]
     });
 
     // A wake that drops nothing leaves the record alone.
