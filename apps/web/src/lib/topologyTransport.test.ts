@@ -525,4 +525,78 @@ describe('explicit reply topology transport', () => {
       unpackReplyTopologies(source, { [id]: '{"faces":[],"edges":[]}' })
     ).toThrow();
   });
+
+  it('preserves aliases across a previous large publication and a re-encoded root', () => {
+    const transport = new TopologyTransport(128 * 1024);
+    const source = projection(tree());
+    const sample = source.bodyRepresentations[id]!;
+    const fresh = () => Array.from({ length: 256 }, () => tree());
+    const bodies = fresh();
+    function pack(roots: ReturnType<typeof fresh>, metadata?: object) {
+      return transport.pack(
+        {
+          ...source,
+          bodyRepresentations: Object.fromEntries(
+            roots.map((topology, n) => {
+              const bodyId = toBodyId('history-' + n);
+              return [
+                bodyId,
+                {
+                  ...sample,
+                  bodyId,
+                  topology,
+                  ...(n === 0 && metadata ? { metadata } : {})
+                }
+              ];
+            })
+          )
+        },
+        'utf8-v1'
+      );
+    }
+    expect(Object.keys(pack(bodies).topologyJson!)).toHaveLength(256);
+    const changed = [tree(), ...bodies.slice(1)].reverse();
+    expect(Object.keys(pack(changed).topologyJson!)).toHaveLength(256);
+    expect(pack(changed, bodies[1]!.edges).topologyJson).toBeUndefined();
+    // The removed root is outside this publication.
+    expect(pack(changed, bodies[0]!.edges).topologyJson).toBeDefined();
+    const [first, second] = changed;
+    expect(
+      pack([first!, first!, ...changed.slice(2)]).topologyJson
+    ).toBeUndefined();
+    expect(
+      pack([{ ...first!, edges: second!.edges }, ...changed.slice(1)])
+        .topologyJson
+    ).toBeUndefined();
+    const edgeList: never[] = [];
+    expect(
+      pack([
+        { ...first!, edges: edgeList },
+        { ...second!, edges: edgeList },
+        ...changed.slice(2)
+      ]).topologyJson
+    ).toBeUndefined();
+    // The first body is reused. A fresh encoding between its two appearances
+    // eventually rolls the cache over, so the last body now has a different
+    // encoding entry for the very same root. It must still fall back.
+    const original = pack(bodies).topologyJson!['history-0'];
+    expect(original).toBeInstanceOf(Uint8Array);
+    let rolled = false;
+    for (let i = 0; i < 128 && !rolled; i++) {
+      const inserted = tree();
+      inserted.extra.text = 'x'.repeat(2048);
+      const duplicate = [
+        bodies[0]!,
+        inserted,
+        ...bodies.slice(2, -1),
+        bodies[0]!
+      ];
+      expect(pack(duplicate).topologyJson).toBeUndefined();
+      const current = transport.pack(projection(bodies[0]), 'utf8-v1')
+        .topologyJson?.[id];
+      expect(current).toBeInstanceOf(Uint8Array);
+      rolled = current !== original;
+    }
+    expect(rolled).toBe(true);
+  });
 });

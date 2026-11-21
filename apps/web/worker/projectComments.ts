@@ -298,7 +298,7 @@ export const MAX_LINK_COMMENTER_NAME = 60;
  * sharing switched on, and the link made with comments.
  *
  * `tokenHash` (the bare hash) finds only a link to the live project; a
- * link without history (migration 0062) is found only by
+ * link without history (migration 0065) is found only by
  * `frozenTokenHash`, its own domain, and comes back `frozen`: its visitor
  * reads and answers only the threads started through that link.
  */

@@ -47,6 +47,9 @@ function plainDataRecord(value: unknown): value is Record<string, unknown> {
  */
 export class TopologyTransport {
   private cache = new WeakMap<object, EncodedTopology | null>();
+  // A successfully packed reply proves its immutable encoding entries share no nodes.
+  // The weak set retains neither the geometry nor the encoded payloads.
+  private disjoint = new WeakSet<EncodedTopology>();
   private binary = false;
   private bytes = 0;
   private entries = 0;
@@ -220,6 +223,8 @@ export class TopologyTransport {
     const encoded: Array<[string, EncodedTopology]> = [];
     const encodedIds = new Set<string>();
     const topologyNodes = new Set<object>();
+    const reused = new Set<EncodedTopology>();
+    const large = binary && entries.length >= 256;
     let publicationBytes = 0;
     for (const [id, body] of entries) {
       const topology = Object.getOwnPropertyDescriptor(body, 'topology');
@@ -231,9 +236,14 @@ export class TopologyTransport {
         return { derived };
       publicationBytes += entry.bytes + id.length * 6;
       if (publicationBytes > this.byteBudget) return { derived };
-      for (const node of entry.nodes) {
-        if (topologyNodes.has(node)) return { derived };
-        topologyNodes.add(node);
+      if (large && this.disjoint.has(entry)) {
+        if (reused.has(entry)) return { derived };
+        reused.add(entry);
+      } else {
+        for (const node of entry.nodes) {
+          if (topologyNodes.has(node)) return { derived };
+          topologyNodes.add(node);
+        }
       }
       encoded.push([id, entry]);
       encodedIds.add(id);
@@ -277,6 +287,17 @@ export class TopologyTransport {
         queue.push(descriptor.value as unknown);
       }
     }
+    if (reused.size) {
+      // The retained trees were mutually disjoint in one complete earlier reply.
+      // They can only collide with the changed trees or the current metadata.
+      for (const node of topologyNodes) seen.add(node);
+      for (const entry of reused) {
+        for (const node of entry.nodes) {
+          if (seen.has(node)) return { derived };
+        }
+      }
+    }
+    if (large) this.disjoint = new WeakSet(encoded.map(([, entry]) => entry));
     const undefinedEntries = encoded.flatMap<[string, string]>(([id, entry]) =>
       entry.undefinedJson ? [[id, entry.undefinedJson]] : []
     );

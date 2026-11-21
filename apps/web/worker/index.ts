@@ -52,6 +52,7 @@ import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import {
   assertApiRateLimitAvailable,
   enforceAccountReadRateLimit,
+  enforceAccountWriteRateLimit,
   enforceApiRateLimit,
   enforcePublicRequestRateLimit,
   enforceRequestLimit,
@@ -1900,7 +1901,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (pathname.startsWith('/api/e2ee/')) {
     try {
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
-        await enforceApiRateLimit(env, `api:${userId}`, 120);
+        await enforceAccountWriteRateLimit(env, userId);
         await assertAccountNotErasing(env.DB, userId);
         // Encrypted writes never refresh the owner's stored limits, which
         // their quota triggers read; bring every account's up to date.
@@ -1934,7 +1935,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
     pathname !== '/api/assistant'
   ) {
-    await enforceApiRateLimit(env, `api:${userId}`, 120);
+    await enforceAccountWriteRateLimit(env, userId);
   }
   if (pathname === '/api/glimpse/account-consent') {
     await assertAccountNotErasing(env.DB, userId);

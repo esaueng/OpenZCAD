@@ -568,3 +568,27 @@ it('counts registered accounts and valid web logins independently of consent', a
     db.close();
   }
 });
+
+describe('migration 0064: revisions by author', () => {
+  const plan = (db: DatabaseSync) =>
+    (
+      db.prepare(`EXPLAIN QUERY PLAN ${ACTIVITY_CENSUS_SQL}`).all() as {
+        detail: string;
+      }[]
+    ).map((row) => row.detail);
+  it('makes the activity census find each author’s saves through the index', () => {
+    const db = activityFixture();
+    const before = fixture(false, '0064');
+    try {
+      expect(plan(db).join('\n')).toMatch(
+        /USING (COVERING )?INDEX idx_revisions_author_created/
+      );
+      expect(plan(before).join('\n')).not.toMatch(
+        /idx_revisions_author_created/
+      );
+    } finally {
+      db.close();
+      before.close();
+    }
+  });
+});

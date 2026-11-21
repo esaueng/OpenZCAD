@@ -576,6 +576,8 @@ export type InPlaceRequest =
       mode: 'ruled' | 'smooth';
       /** Closes the last section to this point (a pointed loft). */
       endPoint?: ParametricVector3;
+      /** M04 (v133): one straight guide line fixing the correspondence. */
+      guides?: { sketchId: SketchId; entityIds: string[] }[];
     }
   | {
       tool: 'sweep';
@@ -585,6 +587,17 @@ export type InPlaceRequest =
       guide?: { sketchId: SketchId; entityIds: string[] };
       /** See the sweep `FeatureData`; absent is the legacy sampled sweep. */
       construction?: 'in-place';
+      /** M04 (v132): see the sweep `FeatureData`; absent turns nothing. */
+      twistDeg?: ParamValue;
+      /** M04 (v132): see the sweep `FeatureData`; absent scales nothing. */
+      endScale?: ParamValue;
+      /** M04 (v134): see the sweep `FeatureData`; absent turns with the path. */
+      orientation?: 'parallel';
+      /** M04 (v135): see the sweep `FeatureData`; absent mitres the corners. */
+      cornerRadius?: ParamValue;
+      /** M04 (v136): see the sweep `FeatureData`; absent starts from an end. */
+      profilePosition?:
+        'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
     }
   | {
       /** M06 (schema v101): a rib from an open profile, joined to a body. */
@@ -1418,7 +1431,9 @@ const loft: InPlaceToolSpec = {
   title: 'Loft',
   profileMode: 'many',
   wantsAxis: false,
-  wantsPath: false,
+  // M04 (v133): a sketch line picked as a guide fixes which vertices the
+  // sections connect at (ruled lofts).
+  wantsPath: true,
   values: [
     // How far the apex stands off the last section, along its normal.
     { id: 'apex', label: 'Apex', unit: 'length', initial: 10 },
@@ -1452,7 +1467,10 @@ const loft: InPlaceToolSpec = {
   hint(slots) {
     if (slots.profiles.length === 0) return 'Pick the first section';
     if (slots.profiles.length === 1) return 'Pick the next section';
-    return `${slots.profiles.length} sections · pick more`;
+    if (slots.path.length > 0) {
+      return `${slots.profiles.length} sections · guided by a line`;
+    }
+    return `${slots.profiles.length} sections · pick more, or a guide line`;
   },
   // A point apex not yet set starts where the apex off the last section
   // stands.
@@ -1480,6 +1498,16 @@ const loft: InPlaceToolSpec = {
       tool: 'loft',
       sections: slots.profiles.map(section),
       mode: options.shape === 'smooth' ? 'smooth' : 'ruled',
+      ...(slots.path[0]
+        ? {
+            guides: [
+              {
+                sketchId: slots.path[0].sketchId,
+                entityIds: slots.path.map((curve) => curve.entityId)
+              }
+            ]
+          }
+        : {}),
       ...(point
         ? { endPoint: point }
         : apex
@@ -1615,15 +1643,131 @@ const SWEEP_BUILD_OPTIONS: OptionSpec[] = [
 const sampledSweep = (state: InPlacePanelState) =>
   state.options.build === 'sampled';
 
+/** A stored value that is exactly this literal (the absent default). */
+const isLiteral = (value: ParamValue | undefined, literal: number) =>
+  value === undefined || value === literal || value === String(literal);
+
 const sweep: InPlaceToolSpec = {
   id: 'sweep',
   title: 'Sweep',
   profileMode: 'one',
   wantsAxis: false,
   wantsPath: true,
-  values: [],
+  // M04 (v132): the exact sweep's twist and end scale, along a straight
+  // path with the profile square to it; the kernel refuses anything else by
+  // name. The sampled sweep has neither.
+  values: [
+    {
+      id: 'twist',
+      label: 'Twist',
+      unit: 'angle',
+      initial: 0,
+      note: 'How far the profile turns about the path by its end',
+      when: (state) => !sampledSweep(state)
+    },
+    {
+      id: 'endScale',
+      label: 'End scale',
+      unit: 'count',
+      initial: 1,
+      min: 0,
+      exclusive: 'min',
+      step: 0.1,
+      suffix: '×',
+      note: 'The profile’s size at the end of the path, against its start',
+      when: (state) => !sampledSweep(state)
+    },
+    {
+      id: 'cornerRadius',
+      label: 'Corner radius',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true,
+      note: 'The radius of the arc that rounds each corner of the path',
+      // No handle of its own: typed in the bar's Options.
+      inOptions: true,
+      when: (state) =>
+        !sampledSweep(state) &&
+        state.options.corner === 'round' &&
+        state.options.orientation !== 'parallel'
+    }
+  ],
   options: [
     ...SWEEP_BUILD_OPTIONS,
+    {
+      // M04 (v134): turn with the path, or keep the profile parallel to
+      // itself (exact along splines and through corners).
+      id: 'orientation',
+      when: (state) => !sampledSweep(state),
+      label: 'Orientation',
+      choices: [
+        {
+          value: 'normal',
+          label: 'Normal to path',
+          tip: 'The profile turns with the path'
+        },
+        {
+          value: 'parallel',
+          label: 'Parallel',
+          tip: 'The profile keeps its orientation: along splines and through corners'
+        }
+      ],
+      initial: 'normal'
+    },
+    {
+      // M04 (v135): mitre a corner between straight runs, or round every
+      // corner (next to an arc too) with a tangent arc.
+      id: 'corner',
+      when: (state) =>
+        !sampledSweep(state) && state.options.orientation !== 'parallel',
+      label: 'Corners',
+      choices: [
+        { value: 'mitre', label: 'Mitre', tip: 'Cut on the bisector plane' },
+        {
+          value: 'round',
+          label: 'Round',
+          tip: 'Rounded by an arc of the corner radius, next to arcs too'
+        }
+      ],
+      initial: 'mitre'
+    },
+    {
+      // M04 (v136): where on the path the profile stands; from inside the
+      // path the sweep runs both ways.
+      id: 'position',
+      when: (state) =>
+        !sampledSweep(state) && state.options.orientation !== 'parallel',
+      label: 'Profile at',
+      choices: [
+        {
+          value: 'end',
+          label: 'Path end',
+          tip: 'From the path end nearer the profile'
+        },
+        {
+          value: 'auto',
+          label: 'Auto',
+          tip: 'Where the path crosses the profile, else its nearest end'
+        },
+        {
+          value: 'intersection',
+          label: 'Crossing',
+          tip: 'Where the path crosses the profile’s plane: both ways from there'
+        },
+        {
+          value: 'closest-point',
+          label: 'Closest point',
+          tip: 'The path point nearest the profile: both ways from there'
+        },
+        {
+          value: 'closest-endpoint',
+          label: 'Closest end',
+          tip: 'The path end nearest the profile'
+        }
+      ],
+      initial: 'end'
+    },
     {
       id: 'mode',
       when: sampledSweep,
@@ -1641,7 +1785,7 @@ const sweep: InPlaceToolSpec = {
     },
     {
       id: 'curves',
-      when: sampledSweep,
+      // Exact sweeps follow a straight rail beside a straight path (M04).
       label: 'Picking',
       // A guide rail is the profile's up-vector track: curve clicks add to
       // it instead of the path while this is chosen.
@@ -1650,7 +1794,7 @@ const sweep: InPlaceToolSpec = {
         {
           value: 'guide',
           label: 'Rail',
-          tip: 'The profile turns to face the rail'
+          tip: 'Sampled: the profile turns to face the rail. Exact: a straight rail beside a straight path scales the profile to follow it'
         }
       ],
       initial: 'path'
@@ -1658,7 +1802,7 @@ const sweep: InPlaceToolSpec = {
   ],
   hint(slots, options) {
     if (slots.profiles.length === 0) return 'Pick a profile';
-    if (options?.build === 'sampled' && options.curves === 'guide') {
+    if (options?.curves === 'guide') {
       return slots.guide.length === 0
         ? 'Pick the rail curves'
         : `Rail of ${slots.guide.length}${
@@ -1669,12 +1813,54 @@ const sweep: InPlaceToolSpec = {
     return `Path of ${slots.path.length} · pick more`;
   },
   ready: (slots) => slots.profiles.length > 0 && slots.path.length > 0,
-  request(slots, _values, options) {
+  request(slots, values, options) {
     const pick = slots.profiles[0];
     const first = slots.path[0];
     if (!pick || !first) return null;
     if (options.build !== 'sampled') {
-      // Exact: no rail and no sampling mode, both of which only sample.
+      // Exact: no rail and no sampling mode, both of which only sample. A
+      // zero twist and a unit scale are none, and are not written.
+      const twist = values.twist;
+      const endScale = values.endScale;
+      const exactRail = slots.guide[0];
+      if (exactRail) {
+        // A rail sets the end scale itself (M04). A twist or end scale typed
+        // beside it still goes out, so validation refuses the pair by name
+        // rather than the card dropping the typed values unseen.
+        return {
+          tool: 'sweep',
+          profile: section(pick),
+          path: {
+            sketchId: first.sketchId,
+            entityIds: slots.path.map((curve) => curve.entityId)
+          },
+          mode: 'standard',
+          construction: 'in-place',
+          guide: {
+            sketchId: exactRail.sketchId,
+            entityIds: slots.guide.map((curve) => curve.entityId)
+          },
+          ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
+          ...(isLiteral(endScale, 1) ? {} : { endScale }),
+          // Parallel or a round corner beside a rail goes out too, to be
+          // refused by name.
+          ...(options.orientation === 'parallel'
+            ? { orientation: 'parallel' as const }
+            : {}),
+          // Parallel hides the Corners row, so only a visible choice goes.
+          ...(options.corner === 'round' && options.orientation !== 'parallel'
+            ? { cornerRadius: values.cornerRadius ?? 2 }
+            : {}),
+          ...(options.position &&
+          options.position !== 'end' &&
+          options.orientation !== 'parallel'
+            ? {
+                profilePosition: options.position as
+                  'auto' | 'intersection' | 'closest-point' | 'closest-endpoint'
+              }
+            : {})
+        };
+      }
       return {
         tool: 'sweep',
         profile: section(pick),
@@ -1683,7 +1869,27 @@ const sweep: InPlaceToolSpec = {
           entityIds: slots.path.map((curve) => curve.entityId)
         },
         mode: 'standard',
-        construction: 'in-place'
+        construction: 'in-place',
+        ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
+        ...(isLiteral(endScale, 1) ? {} : { endScale }),
+        // Parallel hides the Corners row, so a corner choice left from
+        // before does not apply; a visible choice always goes out.
+        ...(options.orientation === 'parallel'
+          ? { orientation: 'parallel' as const }
+          : {
+              ...(options.corner === 'round'
+                ? { cornerRadius: values.cornerRadius ?? 2 }
+                : {}),
+              ...(options.position && options.position !== 'end'
+                ? {
+                    profilePosition: options.position as
+                      | 'auto'
+                      | 'intersection'
+                      | 'closest-point'
+                      | 'closest-endpoint'
+                  }
+                : {})
+            })
       };
     }
     const rail = slots.guide[0];
@@ -1706,7 +1912,21 @@ const sweep: InPlaceToolSpec = {
         : {})
     };
   },
-  handles: () => []
+  handles(slots, _values, ctx, options) {
+    // The exact sweep's twist and end scale sit on chips beside the
+    // profile; the sampled sweep has neither.
+    const pick = slots.profiles[0];
+    if (!pick || options.build === 'sampled') return [];
+    const outline = profileOutline(ctx, pick);
+    const anchor = outline[0];
+    if (!anchor) return [];
+    const key = keyOf(pick.sketchId, pick.regionFingerprint);
+    const beside = outline[Math.floor(outline.length / 2)] ?? anchor;
+    return [
+      { valueId: 'twist', kind: 'chip', key, params: { anchor } },
+      { valueId: 'endScale', kind: 'chip', key, params: { anchor: beside } }
+    ];
+  }
 };
 
 /** Choose between a picked axis and one typed by its origin and direction. */
@@ -5974,9 +6194,8 @@ function instanceHandles(
     return {
       valueId: `instance:${label}`,
       kind: 'instance' as const,
-      // The chip is drawn anew when it is skipped or brought back, or when
-      // its name moves (an earlier point picked again).
-      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}:${off ? 'skipped' : 'kept'}`,
+      // Toggling the copy keeps its button. A new pick-order name replaces it.
+      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}`,
       params: {
         anchor: point,
         label,

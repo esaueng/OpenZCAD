@@ -1304,7 +1304,7 @@ export const isShareLinkCommentsReady = cachedSchemaProbe(
 );
 
 /**
- * Whether migration 0062's `project_share_links.frozen_document` exists.
+ * Whether migration 0065's `project_share_links.frozen_document` exists.
  * Until it does, every link reads as sharing the live project and a link
  * without history is refused rather than created with it.
  */
@@ -1317,7 +1317,7 @@ export const isShareLinkHistoryReady = cachedSchemaProbe(
   0
 );
 
-/** Migration 0063's `e2ee_share_links.history`, for encrypted links. */
+/** Migration 0066's `e2ee_share_links.history`, for encrypted links. */
 export const isE2eeShareLinkHistoryReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_share_links')
    WHERE name = 'history'`,
@@ -2451,7 +2451,7 @@ export class D1R2PersistenceService implements PersistenceService {
         'SHARE_LINK_COMMENTS_UNAVAILABLE',
         'Commenter links are not available on this server yet.'
       );
-    // L08: a link without history needs migration 0062, and is stored with
+    // L08: a link without history needs migration 0065, and is stored with
     // its frozen model in the same insert: it never serves the live project.
     const frozen = input.frozenDocument !== undefined;
     if (frozen && !(await isShareLinkHistoryReady(this.env.DB)))
@@ -2459,7 +2459,7 @@ export class D1R2PersistenceService implements PersistenceService {
         'SHARE_LINK_HISTORY_UNAVAILABLE',
         'Sharing without history is not available on this server yet.'
       );
-    // Each kind of link in its own token-hash domain (migration 0062 holds
+    // Each kind of link in its own token-hash domain (migration 0065 holds
     // the row to it as well): a lookup of a bare hash never finds a link
     // without history, whatever the Worker that runs it knows.
     assertShareLinkTokenHashDomain(input.tokenHash, frozen);
@@ -2768,7 +2768,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // bare hash finds a link to the live project and never one without
     // history, which stores a hash this lookup cannot equal; so a Worker
     // that does not know such links (an older one, or this one while its
-    // schema probe still says 0062 is missing) answers 404 for their
+    // schema probe still says 0065 is missing) answers 404 for their
     // tokens. That does not rest on the probe: it is what is stored.
     // Nor is a frozen-domain hash ever looked up as a bare one.
     if (isFrozenShareLinkTokenHash(tokenHash)) return null;

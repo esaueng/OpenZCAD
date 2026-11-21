@@ -238,8 +238,8 @@ export interface CreateProjectShareLinkInput {
  * import-source reads ever look up). A frozen link stores this prefix and a
  * digest computed over a different input, so no lookup of a bare hash can
  * resolve one: a rolled-back Worker, or one whose schema probe still says
- * migration 0062 is missing, answers 404 for its token rather than serving
- * the live project. Migration 0062's triggers hold a row to its domain.
+ * migration 0065 is missing, answers 404 for its token rather than serving
+ * the live project. Migration 0065's triggers hold a row to its domain.
  */
 export const FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX = 'frozen-v1:';
 

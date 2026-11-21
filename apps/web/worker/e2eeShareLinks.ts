@@ -239,7 +239,7 @@ function modeField(value: unknown): E2eeShareLinkMode {
 
 /**
  * L08: a `frozen` link (the finished model without its history) is stored
- * as mode `view` with `history = 0` (migration 0063; the mode column's
+ * as mode `view` with `history = 0` (migration 0066; the mode column's
  * CHECK is unchanged). The link's mode as clients know it, read back.
  */
 async function modeColumn(db: D1Database, alias = ''): Promise<string> {

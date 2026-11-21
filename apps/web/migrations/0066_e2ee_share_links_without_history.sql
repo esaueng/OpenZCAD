@@ -1,5 +1,5 @@
 -- L08: an end-to-end encrypted share link may serve the finished model
--- without its history (plaintext links: migration 0062).
+-- without its history (plaintext links: migration 0065).
 --
 -- The owner-signed grant carries the third mode, `frozen`. The row in
 -- e2ee_share_links (migration 0040) keeps mode = 'view', so that column's

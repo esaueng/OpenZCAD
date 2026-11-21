@@ -7,7 +7,7 @@
 -- clears the document. Every existing link keeps history = 1 and serves the
 -- live project as before.
 --
--- Encrypted links are migration 0063.
+-- Encrypted links are migration 0066.
 --
 -- Additive: until this is applied the Worker names none of these columns
 -- (it probes for them first), every link reads as sharing its history, and

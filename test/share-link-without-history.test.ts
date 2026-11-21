@@ -307,7 +307,7 @@ describe.each([
   });
 });
 
-describe('a share link without history in D1 (migration 0062)', () => {
+describe('a share link without history in D1 (migration 0065)', () => {
   it('reads every existing link as sharing its history', async () => {
     const { db, document, service } = database();
     db.prepare(
@@ -561,7 +561,7 @@ describe('share links without history (owner routes)', () => {
 
 /**
  * Review of #1872, finding 1: a link without history must not resolve
- * through the read a Worker from before migration 0062 runs, which looks a
+ * through the read a Worker from before migration 0065 runs, which looks a
  * token up by its bare SHA-256 and serves the live project for the row.
  */
 describe('a link without history against the lookups that serve a live project', () => {
@@ -619,7 +619,7 @@ describe('a link without history against the lookups that serve a live project',
     ).toBe(false);
   });
 
-  it('serves nothing for the token while the schema probe says 0062 is missing', async () => {
+  it('serves nothing for the token while the schema probe says 0065 is missing', async () => {
     const { db, document, env } = database();
     await frozenLink(new D1R2PersistenceService(env), document, 'share_f', 'f');
     await new D1R2PersistenceService(env).createProjectShareLink(
@@ -975,8 +975,8 @@ describe('comments through a link without history', () => {
 
 describe('share-link history schema probes', () => {
   it.each([
-    ['plaintext (0062)', isShareLinkHistoryReady],
-    ['encrypted (0063)', isE2eeShareLinkHistoryReady]
+    ['plaintext (0065)', isShareLinkHistoryReady],
+    ['encrypted (0066)', isE2eeShareLinkHistoryReady]
   ])(
     '%s never caches a missing column, so a link frozen by another isolate keeps its guards',
     async (_name, probe) => {

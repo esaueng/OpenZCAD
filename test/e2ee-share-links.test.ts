@@ -2995,7 +2995,7 @@ describe(
   () => {
     /**
      * Every migration but 0040, as a database not yet updated holds them,
-     * and so without 0063, which only adds a column to 0040's link table.
+     * and so without 0066, which only adds a column to 0040's link table.
      */
     function withoutShareLinks(): DatabaseSync {
       const dir = new URL('../apps/web/migrations/', import.meta.url);
@@ -3005,7 +3005,7 @@ describe(
           (name) =>
             name.endsWith('.sql') &&
             !name.startsWith('0040_') &&
-            !name.startsWith('0063_')
+            !name.startsWith('0066_')
         )
         .sort()) {
         db.exec(readFileSync(new URL(file, dir), 'utf8'));

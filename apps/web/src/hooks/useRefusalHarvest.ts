@@ -86,6 +86,25 @@ export function useRefusalHarvest(options: {
     };
   }, [projectId, version]);
 
+  function syncForCommit(
+    owner: string,
+    document: ProjectDocument,
+    lineageDemand?: readonly BodyId[]
+  ) {
+    // Legacy blends can propose a changed edge pick during an edit. Keep
+    // their full validation and ordinary commit replay.
+    const mayCarry = listFeaturesInOrder(document).some(
+      ({ data }) =>
+        (data.featureKind === 'fillet' || data.featureKind === 'chamfer') &&
+        data.edgeReferences === undefined
+    );
+    return mayCarry
+      ? syncFor(owner, document)
+      : syncFor(owner, document, undefined, lineageDemand, {
+          proposeCarry: false
+        });
+  }
+
   async function syncFor(
     owner: string,
     ...args: Parameters<GeometryWorkerApi['syncOnce']>
@@ -180,23 +199,14 @@ export function useRefusalHarvest(options: {
     },
     syncCandidate: ((...args) =>
       syncFor('operation', ...args)) as GeometryWorkerApi['syncOnce'],
+    syncOperationForCommit: (
+      document: ProjectDocument,
+      demand: readonly BodyId[]
+    ) => syncForCommit('operation', document, demand),
     syncParameterCandidate: (
       name: string,
       document: ProjectDocument,
       lineageDemand?: readonly BodyId[]
-    ) => {
-      // Legacy blends can propose a changed edge pick during an edit. Keep
-      // their full validation and ordinary commit replay.
-      const mayCarry = listFeaturesInOrder(document).some(
-        ({ data }) =>
-          (data.featureKind === 'fillet' || data.featureKind === 'chamfer') &&
-          data.edgeReferences === undefined
-      );
-      return mayCarry
-        ? syncFor(`parameter:${name}`, document)
-        : syncFor(`parameter:${name}`, document, undefined, lineageDemand, {
-            proposeCarry: false
-          });
-    }
+    ) => syncForCommit(`parameter:${name}`, document, lineageDemand)
   };
 }

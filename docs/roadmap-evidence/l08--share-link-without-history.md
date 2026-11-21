@@ -15,7 +15,7 @@ owner's list marks it "No history" with an Update action that freezes the
 current model into the same link and URL. Make a copy gives the visitor the
 imported solids as an ordinary project. A visitor is told "The owner shared
 it without its history" in the status line, the Shared chip and the Tweak
-tab's reason. Plaintext links (migration 0062, additive:
+tab's reason. Plaintext links (migration 0065, additive:
 `project_share_links.history`, `frozen_document`, `frozen_at`): the Worker
 stores the frozen document on the link row (gzip, base64, at most 1.9 MB
 stored), serves only it and never reads the project's document for such a
@@ -32,7 +32,7 @@ check one of the owner's devices signed it and that it passes the same
 allowlist, and seal that again; with neither the link stays unpublished
 ("Needs an update"). The visitor's browser refuses a `frozen` link whose snapshot
 holds more than the frozen solids. The server keeps the mode column's
-values and marks the row `history = 0` (migration 0063, additive:
+values and marks the row `history = 0` (migration 0066, additive:
 `e2ee_share_links.history`). A plaintext link without history is
 not offered again as an encrypted link when its project is encrypted.
 Evidence: `packages/document-core/src/frozen-share.test.ts` (the builder,
@@ -49,8 +49,8 @@ smoke case `test/e2e/share-link-without-history.spec.ts` (a visitor opens
 the frozen model, asks for no source, and copies only the solid).
 Review hardening (#1872): a plaintext link without history stores its token
 hash in a domain of its own (`frozen-v1:` and a labelled digest, held by
-triggers in 0062), so the bare-hash lookup of an earlier Worker, or of one
-whose schema probe still says 0062 is missing, cannot resolve it and serve
+triggers in 0065), so the bare-hash lookup of an earlier Worker, or of one
+whose schema probe still says 0065 is missing, cannot resolve it and serve
 the live project; the link insert and Update are fenced on the project
 still being plaintext in the same statement, so neither lands after the
 cutover that encrypts it; and a commenter link without history shows only

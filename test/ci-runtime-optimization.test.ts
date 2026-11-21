@@ -45,7 +45,8 @@ describe('CI runtime optimizations preserve required coverage', () => {
       expect(jobs[gate]).toContain('test "$PLAN_RESULT" = success');
     for (const job of ['e2e-tests', 'e2e-queue'])
       expect(jobs[job]).toContain("needs.plan.result == 'success'");
-    expect(jobs.unit).toContain('shard: [1, 2]');
+    expect(jobs.unit).toContain('shard: [1, 2, 3]');
+    expect(jobs['e2e-queue']).toContain('path: ~/.cache/ms-playwright');
     expect(jobs.validation).toContain('pnpm test:parity-corpus');
     expect(jobs.validation).toContain('run: pnpm build');
   });

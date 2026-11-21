@@ -1142,6 +1142,37 @@ export function assertDocumentContentCommandSchema(
         83,
         'Simplified threads'
       );
+    // M04 (schema v133): a loft's connections and guide, created or patched
+    // (a patch need not name its kind; the fields are a loft's).
+    {
+      const loft =
+        command.kind === 'feature.loft'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'loft')
+            ? command.payload.data
+            : null;
+      if (loft && (loft.connections !== undefined || loft.guides !== undefined))
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          133,
+          'Loft connections and guides'
+        );
+    }
+    // M04: an exact sweep's options, created or patched (a patch need not
+    // name its kind; the fields are a sweep's).
+    {
+      const sweep =
+        command.kind === 'feature.sweep'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'sweep')
+            ? command.payload.data
+            : null;
+      if (sweep) assertSweepContentSchema(sweep, document.schemaVersion);
+    }
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1160,6 +1191,31 @@ export function assertDocumentContentCommandSchema(
 }
 
 /** Call after validating or dropping unreadable history at the entry boundary. */
+/**
+ * M04: the schema each exact-sweep option needs, for a stored sweep node and
+ * for a replayed command alike. A default (no twist, unit scale) needs none.
+ */
+function assertSweepContentSchema(
+  sweep: Record<string, unknown>,
+  version: unknown
+): void {
+  if (
+    (sweep.twistDeg !== undefined &&
+      sweep.twistDeg !== 0 &&
+      sweep.twistDeg !== '0') ||
+    (sweep.endScale !== undefined &&
+      sweep.endScale !== 1 &&
+      sweep.endScale !== '1')
+  )
+    assertMinimumProjectSchema(version, 132, 'Sweep twist and end scale');
+  if (sweep.orientation !== undefined)
+    assertMinimumProjectSchema(version, 134, 'Sweep orientation');
+  if (sweep.cornerRadius !== undefined)
+    assertMinimumProjectSchema(version, 135, 'Round sweep corners');
+  if (sweep.profilePosition !== undefined)
+    assertMinimumProjectSchema(version, 136, 'Sweep profile position');
+}
+
 export function assertDocumentContentSchema(document: ProjectDocument): void {
   if (document.objectFolders !== undefined)
     assertObjectFolderSchema(document.schemaVersion);
@@ -1390,6 +1446,18 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (
+      node.kind === 'feature' &&
+      node.data.featureKind === 'loft' &&
+      (node.data.connections !== undefined || node.data.guides !== undefined)
+    )
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        133,
+        'Loft connections and guides'
+      );
+    if (node.kind === 'feature' && node.data.featureKind === 'sweep')
+      assertSweepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
       assertImportedStepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')

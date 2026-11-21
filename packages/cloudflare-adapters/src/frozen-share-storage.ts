@@ -2,7 +2,7 @@ import type { ProjectDocument } from '@openzcad/shared';
 import { ProjectSharingError } from '@openzcad/persistence';
 
 /**
- * How a link without history keeps its frozen model in D1 (migration 0062,
+ * How a link without history keeps its frozen model in D1 (migration 0065,
  * `project_share_links.frozen_document`): the document's JSON, gzipped,
  * as base64 text. One D1 value holds at most 2,000,000 bytes, so a model
  * that does not fit is refused rather than truncated.

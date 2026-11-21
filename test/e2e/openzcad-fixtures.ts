@@ -1895,11 +1895,70 @@ export async function chooseBarOption(
   if ((await options.getAttribute('open')) === null) {
     await options.locator('summary').click();
   }
-  const button = barChoice(bar, row, choice);
-  await button.click();
-  await expect(button).toHaveAttribute('aria-checked', 'true');
+  await pickBarChoice(bar, row, choice);
   if ((await options.getAttribute('open')) !== null) {
     await options.locator('summary').click();
+  }
+}
+
+/**
+ * Chooses `choice` in one row of a command bar's open Options, whether the
+ * row shows its choices as buttons or, when they would wrap, as a menu.
+ */
+export async function pickBarChoice(
+  bar: Locator,
+  row: string,
+  choice: string
+) {
+  // A row whose buttons would wrap turns into a menu once the panel is
+  // open and measured; let that settle before choosing.
+  await settleFrames(bar.page());
+  const menu = barMenu(bar, row);
+  if ((await menu.count()) > 0) {
+    await menu.selectOption({ label: choice });
+    await expect(menu.locator('option:checked')).toHaveText(choice);
+  } else {
+    const button = barChoice(bar, row, choice);
+    await button.click();
+    await expect(button).toHaveAttribute('aria-checked', 'true');
+  }
+}
+
+async function settleFrames(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      )
+  );
+}
+
+/** A row of a command bar's Options shown as a menu (its choices wrap). */
+function barMenu(bar: Locator, row: string) {
+  return bar.getByRole('combobox', {
+    name: row,
+    exact: true,
+    includeHidden: true
+  });
+}
+
+/**
+ * Expects `choice` to be the one chosen in a row of a command bar's
+ * Options, whether the row shows its choices as buttons or as a menu.
+ */
+export async function expectBarChoice(
+  bar: Locator,
+  row: string,
+  choice: string
+) {
+  const menu = barMenu(bar, row);
+  if ((await menu.count()) > 0) {
+    await expect(menu.locator('option:checked')).toHaveText(choice);
+  } else {
+    await expect(barChoice(bar, row, choice)).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
   }
 }
 

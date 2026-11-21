@@ -283,7 +283,8 @@ const GEAR_SIZINGS = valuesOf<GearSizing>({
 const END_CONDITIONS = valuesOf<ExtrudeEndCondition>({
   blind: true,
   'through-all': true,
-  'to-face': true
+  'to-face': true,
+  'to-next': true
 });
 const THROUGH_ALL_SIDES = valuesOf<ThroughAllSide>({
   forward: true,
@@ -364,7 +365,18 @@ const FEATURE_ENUM_FIELDS = {
     }),
     construction: valuesOf<NonNullable<FeatureDataOf<'sweep'>['construction']>>(
       { 'in-place': true }
-    )
+    ),
+    orientation: valuesOf<NonNullable<FeatureDataOf<'sweep'>['orientation']>>({
+      parallel: true
+    }),
+    profilePosition: valuesOf<
+      NonNullable<FeatureDataOf<'sweep'>['profilePosition']>
+    >({
+      auto: true,
+      intersection: true,
+      'closest-point': true,
+      'closest-endpoint': true
+    })
   },
   rib: {
     thicknessSide: valuesOf<FeatureDataOf<'rib'>['thicknessSide']>({

@@ -66,6 +66,71 @@ const topologyBoundaryOutlines = new WeakMap<
   Float32Array
 >();
 
+type FaceRange = Pick<
+  BodyTopology['faces'][number],
+  'triangleStart' | 'triangleCount'
+>;
+let stagedPlate: {
+  vertices: Float32Array;
+  indices: Uint32Array;
+  faces: FaceRange[];
+  geometry: THREE.BufferGeometry;
+} | null = null;
+let stagedTimer: ReturnType<typeof setTimeout> | undefined;
+function discardStagedPlate() {
+  clearTimeout(stagedTimer);
+  stagedPlate?.geometry.dispose();
+  stagedPlate = null;
+}
+export function preparePatternDisplay({
+  vertices,
+  indices,
+  offsets
+}: {
+  vertices: Float32Array;
+  indices: Uint32Array;
+  offsets: Uint32Array;
+}) {
+  const faces = Array.from(offsets.slice(1), (end, i) => ({
+    triangleStart: offsets[i]! / 3,
+    triangleCount: (end - offsets[i]!) / 3
+  }));
+  discardStagedPlate();
+  const geometry = geometryFromMesh(
+    { kind: 'mesh', vertices, indices },
+    { faces }
+  );
+  stagedPlate = {
+    vertices,
+    indices,
+    faces,
+    geometry
+  };
+  stagedTimer = setTimeout(discardStagedPlate, 1500);
+}
+function takeStagedPlate(mesh: MeshGeometry, topology?: BodyTopology) {
+  const x = stagedPlate;
+  if (
+    !x ||
+    x.indices.length !== mesh.indices.length ||
+    x.vertices.length !== mesh.vertices.length ||
+    x.faces.length !== topology?.faces?.length ||
+    !x.faces.every(
+      (f, i) =>
+        topology.faces[i]!.triangleStart === f.triangleStart &&
+        topology.faces[i]!.triangleCount === f.triangleCount
+    )
+  )
+    return null;
+  if (
+    !sameMeshBuffer(x.indices, mesh.indices) ||
+    !sameMeshBuffer(x.vertices, mesh.vertices)
+  )
+    return null;
+  clearTimeout(stagedTimer);
+  stagedPlate = null;
+  return x.geometry;
+}
 /**
  * Builds angle-weighted smoothing groups from triangle adjacency. Adjacent
  * triangles share a render vertex only when their dihedral angle is below the
@@ -79,7 +144,8 @@ const topologyBoundaryOutlines = new WeakMap<
  */
 function geometryFromMesh(
   mesh: MeshGeometry,
-  topology?: BodyTopology
+  topology?: { faces: FaceRange[] },
+  onTangentPairs?: (pairs: ReturnType<typeof tangentFacePairs>) => void
 ): THREE.BufferGeometry {
   const sourcePositions = mesh.vertices;
   const sourceIndices = mesh.indices;
@@ -258,6 +324,7 @@ function geometryFromMesh(
     topology && topology.faces.length > 1
       ? tangentFacePairs(mesh, topology.faces)
       : null;
+  if (isTangentPair) onTangentPairs?.(isTangentPair);
   for (let slot = 0; slot < edgeCount; slot += 1) {
     // Non-manifold edges stay creased; smoothing across more than two incident
     // faces can blend unrelated shells that merely share indexed vertices.
@@ -399,9 +466,10 @@ function geometryFromMesh(
 
 /** CPU-only preparation, safe to run in a dedicated viewport worker. */
 export function prepareBodyGeometry(
-  body: GeometryBodyRepresentation
+  body: GeometryBodyRepresentation,
+  onTangentPairs?: (pairs: ReturnType<typeof tangentFacePairs>) => void
 ): PreparedBodyGeometry {
-  const geometry = geometryFromMesh(body.mesh, body.topology);
+  const geometry = geometryFromMesh(body.mesh, body.topology, onTangentPairs);
   const layout = exactSmoothingLayouts.get(geometry);
   const result: PreparedBodyGeometry = {
     positions: geometry.getAttribute('position').array as Float32Array,
@@ -830,7 +898,8 @@ export function createObjectForBody(
         .setIndex(new THREE.BufferAttribute(body.mesh.indices, 1))
     : prepared
       ? preparedGeometry(prepared)
-      : geometryFromMesh(body.mesh, body.topology);
+      : (takeStagedPlate(body.mesh, body.topology) ??
+        geometryFromMesh(body.mesh, body.topology));
   // Positions/normals and coplanar depth are mutable per installed object.
   // Keep their copies isolated, but release the immutable staging arrays.
   releasePreparedBodyGeometry(body);

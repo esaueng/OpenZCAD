@@ -273,6 +273,9 @@ export function featureValueSummary(
           ? `${front} · ${backAngle}° back draft`
           : front;
       };
+      if (data.endCondition === 'to-next') {
+        return drafted('Up to next');
+      }
       if (data.endCondition === 'to-face') {
         // F01 (v113): an offset reads as how far short of (or past) the face.
         const offset =

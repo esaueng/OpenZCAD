@@ -44,7 +44,7 @@ import { SHARE_LINK_TOKEN_HEADER } from './share-link-token';
 
 /**
  * `frozen` (L08): view only, and the snapshot is the finished model without
- * its history, never the project (migration 0063 keeps it as mode `view`
+ * its history, never the project (migration 0066 keeps it as mode `view`
  * with `history = 0`).
  */
 export type E2eeShareLinkMode = 'view' | 'tweak' | 'frozen';
