@@ -287,6 +287,42 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('3 × 2 · 2 skipped');
+    // M02 (schema v120): a row spaced over its total length says so.
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'pattern',
+          patternKind: 'linear',
+          count: 4,
+          spacing: 60,
+          spacingMode: 'total'
+        }),
+        {},
+        'mm'
+      )
+    ).toBe('× 4 over 60 mm');
+    // A total typed in inches reads as the length it builds (review).
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'pattern',
+          patternKind: 'linear',
+          count: 4,
+          spacing: '2 in',
+          spacingMode: 'total'
+        }),
+        {},
+        'mm'
+      )
+    ).toBe('× 4 over 50.8 mm');
+    // M02 (schema v115): a mirror pattern's one reflected copy.
+    expect(
+      featureValueSummary(
+        feature({ featureKind: 'pattern', patternKind: 'mirror', count: 2 }),
+        {},
+        'mm'
+      )
+    ).toBe('Mirrored');
   });
 
   it('summarises a worm by its starts and a worm wheel by its worm', () => {

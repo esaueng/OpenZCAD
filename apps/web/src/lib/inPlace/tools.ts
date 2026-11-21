@@ -83,7 +83,14 @@ import {
   type RefKind,
   type RefPick
 } from './datums';
-import { faceSpan, threadSpec, type ThreadRequest } from './thread';
+import {
+  faceSpan,
+  lengthIsExplicit,
+  threadFace,
+  threadReach,
+  threadSpec,
+  type ThreadRequest
+} from './thread';
 import { referenceImage, type ImageSlot } from './image';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
 import { standardPartSpec, type StandardPartRequest } from './standardPart';
@@ -677,6 +684,8 @@ export type InPlaceRequest =
       path?: PatternPath;
       /** M02 (schema v119): the plane a mirror pattern reflects in. */
       mirrorPlane?: ModelingPlaneReference;
+      /** M02 (schema v120): a linear pattern's spacing is its total. */
+      spacingMode?: 'total';
     }
   | {
       /** An M14 gear, as the feature stores it. */
@@ -862,6 +871,11 @@ export type HandleSpec = (
    * up to the face's end), in place of the value's own `max`.
    */
   max?: number;
+  /**
+   * The step a drag lands on (1 for a whole count), in place of tenths;
+   * Shift does not lift it.
+   */
+  step?: number;
 };
 
 export interface InPlaceToolSpec {
@@ -2494,6 +2508,25 @@ function gearIsWorm(state: InPlacePanelState): boolean {
   );
 }
 
+/**
+ * A gear type whose teeth stand round a pitch circle of `module × teeth`
+ * across, so its teeth drag on that circle: spur, helical and ring gears,
+ * a bevel at its heel, and a worm's wheel. A worm counts starts and a rack
+ * runs straight.
+ */
+export function gearTeethOnPitchCircle(
+  options: Readonly<Record<string, string>>
+): boolean {
+  const type = options.gearType ?? 'external';
+  return (
+    type === 'external' ||
+    type === 'internal' ||
+    type === 'bevel' ||
+    type === 'worm-wheel' ||
+    type === 'enveloping-wheel'
+  );
+}
+
 /** The value a gear's chosen sizing reads its pitch from. */
 export function gearPitchValueId(
   options: Readonly<Record<string, string>>
@@ -2588,6 +2621,44 @@ function gearSummary(
     // A helical gear's diameters depend on how the kernel reads its module.
     parts.push(`Pitch Ø ${gearLength(module * teeth, units)}`);
   }
+  return parts.join(' · ');
+}
+
+/**
+ * U11: what Gear teeth's picked face decides, read out in Options as a
+ * thread's is: the diameter it keeps (or the module it is set to), then how
+ * much of the face the teeth run. Before a pick, what the sizing comes to.
+ */
+export function gearTeethSummary(
+  state: InPlacePanelState,
+  units: UnitSystem = 'mm',
+  slots?: Pick<InPlaceSlots, 'faces'>,
+  context?: InPlaceValueContext
+): string | null {
+  const geometry = threadFace(slots?.faces[0]);
+  if (!geometry) return gearSummary(state, units);
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  const parts = [
+    state.options.fit === 'module'
+      ? (gearSummary(state, units) ?? '')
+      : `Sized from the Ø${round(2 * geometry.radius)} ${units} face`
+  ].filter((part) => part !== '');
+  const offset = state.numbers.offset ?? 0;
+  const length =
+    state.numbers.faceWidth ?? Math.max(geometry.length - offset, 0);
+  const held = lengthIsExplicit(
+    geometry,
+    { ...state.numbers, ...(context?.raws ?? {}) },
+    state.numbers,
+    context ?? { touched: ['faceWidth'] },
+    'faceWidth'
+  );
+  const reached = threadReach({ held, offset, length, face: geometry });
+  parts.push(
+    reached.near && reached.far
+      ? `Teeth run the full ${round(geometry.length)} ${units}`
+      : `Teeth run ${round(length)} of ${round(geometry.length)} ${units}`
+  );
   return parts.join(' · ');
 }
 
@@ -3073,15 +3144,17 @@ const gear: InPlaceToolSpec = {
     const teeth = numbers.teeth ?? 20;
     return { rimDiameter: module * (teeth + 10.5) };
   },
-  hint(slots) {
-    // Module and teeth are chips on the placed gear: the summary names them
+  hint(slots, options) {
+    // Module and teeth are on the placed gear: the summary names them
     // before there is a field to change them, so the hint says where it is.
     if (!slots.plane)
       return 'Pick a plane or flat face · then set module and teeth on the gear';
     if (slots.plane.kind === 'datum') {
       return 'Pick a ghost plane or flat face instead';
     }
-    return 'Drag the face width · tap a chip to type';
+    return gearTeethOnPitchCircle(options ?? {})
+      ? 'Drag the teeth arrow to add teeth, or the face width · tap a chip to type'
+      : 'Drag the face width · tap a chip to type';
   },
   ready: (slots) => gearFrame(slots.plane) !== null,
   request(slots, values, options, ctx, numbers) {
@@ -3230,6 +3303,21 @@ const gear: InPlaceToolSpec = {
       y: origin.y + radial.y * by,
       z: origin.z + radial.z * by
     });
+    const module = gearModuleOf(options, values, ctx.units);
+    // U11: the teeth drag on the gear itself. An arrow from the axis whose
+    // head stands on the pitch circle (half a module out per tooth), so
+    // dragging it out adds teeth at the same module and the gear grows, as a
+    // coil's end winds turns at the same spacing. A worm's count is its
+    // starts and a rack has no circle: those stay chips.
+    const teethOnCircle = gearTeethOnPitchCircle(options) && module > 0;
+    // A helical gear's module is its normal module: the kernel stands its
+    // teeth on the transverse pitch circle, module / cos β per tooth across.
+    const helix =
+      gearTwists({ options, numbers: values }) &&
+      (values.helixAngleDeg ?? 0) > 0
+        ? ((values.helixAngleDeg ?? 0) * Math.PI) / 180
+        : 0;
+    const perTooth = module / (2 * Math.cos(helix));
     return [
       {
         valueId: 'faceWidth',
@@ -3237,12 +3325,22 @@ const gear: InPlaceToolSpec = {
         key: `${base}:faceWidth`,
         params: { origin, direction: normal }
       },
-      {
-        valueId: count,
-        kind: 'chip',
-        key: `${base}:${count}`,
-        params: { anchor: at(reach * 1.15) }
-      },
+      teethOnCircle
+        ? {
+            valueId: 'teeth',
+            kind: 'linear',
+            // Rebuilt when the module or helix changes: the arrow's scale
+            // is the pitch radius per tooth.
+            key: keyOf(base, 'teeth', radial.x, radial.y, radial.z, perTooth),
+            params: { origin, direction: radial, scale: perTooth },
+            step: 1
+          }
+        : {
+            valueId: count,
+            kind: 'chip',
+            key: `${base}:${count}`,
+            params: { anchor: at(reach * 1.15) }
+          },
       {
         // The pitch the sizing reads, so the chip edits what is built.
         valueId: pitch,
@@ -3346,7 +3444,7 @@ const gearTeeth: InPlaceToolSpec = {
     },
     ...GEAR_FORM_SECTIONS
   ],
-  summary: gearSummary,
+  summary: gearTeethSummary,
   optionCarries: gearSizingCarries,
   ...gearTeethSpan.behaviour,
   hint(slots, options) {
@@ -5402,6 +5500,41 @@ export function booleanOperationSwitch(
     : null;
 }
 
+/**
+ * A boolean operand's role by its pick order: the first body picked is the
+ * Base (what a subtract cuts from), every later one a Tool.
+ */
+export function booleanOperandRole(index: number): 'Base' | 'Tool' {
+  return index === 0 ? 'Base' : 'Tool';
+}
+
+/**
+ * U11: each picked body's role, by body id, with its name and the box it
+ * was picked with, for the viewport to name the picks as Options lists
+ * them, even where a preview has consumed one.
+ */
+export function booleanOperandRoles(
+  bodies: readonly BodyPick[],
+  name: (bodyId: BodyId) => string | undefined
+): Record<
+  string,
+  { role: 'Base' | 'Tool'; name: string; min: Vector3; max: Vector3 }
+> {
+  const roles: Record<
+    string,
+    { role: 'Base' | 'Tool'; name: string; min: Vector3; max: Vector3 }
+  > = {};
+  bodies.forEach((body, index) => {
+    roles[body.bodyId] = {
+      role: booleanOperandRole(index),
+      name: name(body.bodyId) ?? 'Body',
+      min: body.min,
+      max: body.max
+    };
+  });
+  return roles;
+}
+
 const BOOLEAN_ORIGINAL_CHOICES = [
   { value: 'none', label: 'None' },
   { value: 'target', label: 'Base body' },
@@ -5841,9 +5974,8 @@ function instanceHandles(
     return {
       valueId: `instance:${label}`,
       kind: 'instance' as const,
-      // The chip is drawn anew when it is skipped or brought back, or when
-      // its name moves (an earlier point picked again).
-      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}:${off ? 'skipped' : 'kept'}`,
+      // Toggling the copy keeps its button. A new pick-order name replaces it.
+      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}`,
       params: {
         anchor: point,
         label,
@@ -5864,6 +5996,25 @@ function linearCopies(
   const origin = centre(seed);
   return rowCopies(count, (index) => offset(origin, vector, spacing * index));
 }
+
+/** M02 (schema v120): how a linear pattern's length is given. */
+const LINEAR_EXTENT_OPTION: OptionSpec = {
+  id: 'extent',
+  label: 'Spacing',
+  choices: [
+    {
+      value: 'spacing',
+      label: 'Between copies',
+      tip: 'Each copy stands this far from the last'
+    },
+    {
+      value: 'total',
+      label: 'Total length',
+      tip: 'The copies share this length out, original to last'
+    }
+  ],
+  initial: 'spacing'
+};
 
 const linearPattern: InPlaceToolSpec = {
   id: 'linear-pattern',
@@ -5901,7 +6052,21 @@ const linearPattern: InPlaceToolSpec = {
   values: [
     // Signed: a negative spacing repeats the other way, as the card allowed.
     // Zero is the kernel's to refuse, in the bar.
-    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20 },
+    {
+      id: 'spacing',
+      label: 'Spacing',
+      unit: 'length',
+      initial: 20,
+      when: (state) => state.options.extent !== 'total'
+    },
+    // M02 (schema v120): the row's whole length, original to last copy.
+    {
+      id: 'total',
+      label: 'Total',
+      unit: 'length',
+      initial: 40,
+      when: (state) => state.options.extent === 'total'
+    },
     {
       id: 'count',
       label: 'Count',
@@ -5924,10 +6089,14 @@ const linearPattern: InPlaceToolSpec = {
         ...AXIS_OPTION('x').choices,
         { value: 'custom', label: 'Custom' }
       ]
-    }
+    },
+    LINEAR_EXTENT_OPTION
   ],
   hint: (slots, options) =>
-    patternHint(slots, options) ?? 'Drag the spacing · tap a copy to skip it',
+    patternHint(slots, options) ??
+    (options?.extent === 'total'
+      ? 'Drag the last copy · tap a copy to skip it'
+      : 'Drag the spacing · tap a copy to skip it'),
   ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
   request(slots, values, options, ctx, numbers) {
     const source = patternSource(slots, options, ctx);
@@ -5952,7 +6121,9 @@ const linearPattern: InPlaceToolSpec = {
         direction && ctx.saved?.featureKind === 'pattern'
           ? ctx.saved.axis
           : axisOf(options.axis),
-      spacing: values.spacing ?? 20,
+      ...(options.extent === 'total'
+        ? { spacing: values.total ?? 40, spacingMode: 'total' as const }
+        : { spacing: values.spacing ?? 20 }),
       ...(direction ? { direction } : {}),
       ...skipRequest(
         options,
@@ -5977,11 +6148,17 @@ const linearPattern: InPlaceToolSpec = {
         : AXIS_VECTORS[axisOf(options.axis)]!;
     const origin = centre(body);
     const width = Math.max(body.max.x - body.min.x, 1e-3);
+    // M02 (schema v120): over a total length the arrow is the last copy.
+    const total = options.extent === 'total';
+    const count = wholeCount(values.count, 3);
+    const step = total
+      ? (values.total ?? 40) / Math.max(count - 1, 1)
+      : (values.spacing ?? 20);
     return [
       {
-        valueId: 'spacing',
+        valueId: total ? 'total' : 'spacing',
         kind: 'linear',
-        key: `${bodyKey(body)}:spacing:${custom ? 'custom' : axisOf(options.axis)}`,
+        key: `${bodyKey(body)}:${total ? 'total' : 'spacing'}:${custom ? 'custom' : axisOf(options.axis)}`,
         params: { origin, direction: vector }
       },
       {
@@ -6005,16 +6182,7 @@ const linearPattern: InPlaceToolSpec = {
             }
           }))
         : []),
-      ...instanceHandles(
-        body,
-        linearCopies(
-          body,
-          vector,
-          values.spacing ?? 20,
-          wholeCount(values.count, 3)
-        ),
-        options
-      )
+      ...instanceHandles(body, linearCopies(body, vector, step, count), options)
     ];
   }
 };

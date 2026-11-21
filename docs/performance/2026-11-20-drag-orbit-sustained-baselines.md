@@ -27,8 +27,7 @@ this machine, and every heavy job ran under the shared lock.
 Two complete rounds of each probe were recorded. The third round was cut off
 at a two-hour limit while waiting for the shared lock. Orbit's second round
 also stopped in its last scene (`rotational-sleeve` at 4× slow-down, which
-has one sample). Run-to-run spread was within 2 ms on every drag and orbit
-row.
+has one sample). Run-to-run spread was within 2 ms on every drag lag, frame-interval and orbit row, and within 53 ms on first exact geometry.
 
 ## Face drag (H02 targets)
 
@@ -43,25 +42,46 @@ proxy frames follow the pointer, and the exact preview is built once the
 hand rests. The summary therefore reports the proxy lag (what the user sees
 while dragging) and the exact preview's round trip as separate rows.
 
-| Case (medians of 2 runs)                     | Pointer → frame p50 / p95 | Frame interval p50 / p95 | Exact preview at rest | Release → accepted |
-| -------------------------------------------- | ------------------------: | -----------------------: | --------------------: | -----------------: |
-| Filleted union, width 30 → 22.5 mm (5 feat.) |                15 / 16 ms |             16.7 / 33 ms |                395 ms |              98 ms |
-| Public filleted union history                |                14 / 16 ms |             16.7 / 33 ms |                179 ms |             160 ms |
-| Rounded box top face                         |                15 / 16 ms |           16.7 / 16.7 ms |                     — |             167 ms |
-| Native holder +Z face                        |                15 / 16 ms |           16.7 / 16.7 ms |                 64 ms |              76 ms |
+| Case (medians of 2 runs)                     | Pointer → frame p50 / p95 | Frame interval p50 / p95 (whole motion) | Exact preview at rest | Release → accepted |
+| -------------------------------------------- | ------------------------: | --------------------------------------: | --------------------: | -----------------: |
+| Filleted union, width 30 → 22.5 mm (5 feat.) |                15 / 16 ms |                     16.6 / 17.6–17.8 ms |                395 ms |              98 ms |
+| Public filleted union history                |                14 / 16 ms |                     16.6 / 17.6–18.1 ms |                179 ms |             160 ms |
+| Rounded box top face                         |                15 / 16 ms |                     16.6 / 17.9–18.2 ms |                     — |             167 ms |
+| Native holder +Z face                        |                15 / 16 ms |                     16.6 / 17.2–17.6 ms |                 64 ms |              76 ms |
 
-**Targets** (H02: 60 fps, first geometry within 100 ms, p95 under 50 ms):
+**Targets** (H02: 60 fps, first geometry within 100 ms, p95 under 50 ms).
+By owner decision on 2026-11-21 they apply to what follows the pointer:
+proxy-led dragging meets them. Exact geometry stays a measured, budgeted
+figure, and an exact preview fast enough to stream is
+[ROADMAP K11](../../ROADMAP.md#k11).
 
 - **Pointer → frame p95 under 50 ms: met.** All four cases are at 15–16 ms.
-- **First geometry within 100 ms: not established.** The proxy lag above
-  is a median and p95 across all proxy frames, not a measure of the first
-  one. The exact preview's round trip (64–395 ms) is worker time measured
-  after the hand rests, not from the first move to the screen. Neither
-  figure shows that exact geometry reached the screen within 100 ms of the
-  first move, so this target is left unmeasured here.
-- **60 fps: met at the median** in every case. The two filleted unions each
-  drop one frame per drag (one 33 ms interval, so their p95 is 33 ms). The
-  box and holder hold 16.7 ms at p95.
+- **First geometry within 100 ms: met by the proxy; not met for exact
+  geometry.** Proxy frames follow the first move in about 15 ms (see the
+  caveat below). First exact geometry reached the screen 2,309–2,697 ms after the first move (medians 2,681 / 2,483 /
+  2,311 ms on the filleted union, the filleted-union history and the
+  holder). The drag requests exact geometry only once the hand rests, so
+  this is mostly the drag's own length. The worker's kernel time for that
+  exact preview is 61–404 ms (`stages.kernelMs`; the round trip is within
+  1.5 ms of it): 385–404 ms on the filleted union, 171–185 ms on its
+  history and 61–64 ms on the holder. Proxy frames follow the pointer at
+  15–16 ms (p50 and p95 across the drag; the first proxy frame is not timed
+  separately), but they are disposable display geometry. Meeting the target
+  for exact geometry needs exact previews while the pointer moves, and on
+  the filleted unions an exact build under 100 ms: that is
+  [ROADMAP K11](../../ROADMAP.md#k11), not an H02 blocker.
+- **60 fps: met.** Every case rendered 119–122 frames over the 2 s of
+  pointer motion: frame intervals 16.6 ms p50, 17.2–18.2 ms p95, at most
+  26 ms (read from the drag trace's frame events between the first and last
+  pointer moves). An earlier reading of this record put the filleted unions
+  at a 33 ms p95. That figure came from a subset of 19–24 viewer
+  "continuous" frame marks that included intervals ending before, or
+  straddling, the first pointer move (in three of the four filleted-union
+  runs the 33 ms interval ended before the first move; in the fourth it
+  spanned it). It is not a frame dropped during the motion. Whether a
+  refresh is missed at the very start of a drag is not established by
+  either reading; the probe now measures cadence between the first and
+  last pointer moves.
 
 ## Orbit tails
 
@@ -88,19 +108,19 @@ one-feature edit time stay flat.
 Regression ceilings for this machine, about 1.5–2× the medians, with a floor
 for frame intervals. They are not product targets, which are listed above.
 
-| Measurement                                           |                   Budget |
-| ----------------------------------------------------- | -----------------------: |
-| Face drag pointer → frame p50 / p95, every case       |               25 / 30 ms |
-| Face drag frame interval p50, every case              |                    20 ms |
-| Face drag frame interval p95, filleted unions / rest  |               50 / 25 ms |
-| Exact preview at rest, union / history / holder       |       600 / 280 / 120 ms |
-| Release → accepted, union / history / box / holder    | 160 / 250 / 260 / 130 ms |
-| Orbit viewer interval p95 / p99, viewer fps floor, ×1 |     20 / 25 ms, ≥ 55 fps |
-| Orbit viewer interval p95 / p99, viewer fps floor, ×4 |     25 / 34 ms, ≥ 50 fps |
-| Sustained: peak WASM memory                           |                  128 MiB |
-| Sustained: peak retired arena slots                   |                  131,072 |
-| Sustained: post-GC heap growth, first → last third    |                    4 MiB |
-| Sustained: one-feature edit drift, last ÷ first third |                    1.15× |
+| Measurement                                             |                   Budget |
+| ------------------------------------------------------- | -----------------------: |
+| Face drag pointer → frame p50 / p95, every case         |               25 / 30 ms |
+| Face drag frame interval p50, every case                |                    20 ms |
+| Face drag frame interval p95 (whole motion), every case |                    25 ms |
+| Exact preview at rest, union / history / holder         |       600 / 280 / 120 ms |
+| Release → accepted, union / history / box / holder      | 160 / 250 / 260 / 130 ms |
+| Orbit viewer interval p95 / p99, viewer fps floor, ×1   |     20 / 25 ms, ≥ 55 fps |
+| Orbit viewer interval p95 / p99, viewer fps floor, ×4   |     25 / 34 ms, ≥ 50 fps |
+| Sustained: peak WASM memory                             |                  128 MiB |
+| Sustained: peak retired arena slots                     |                  131,072 |
+| Sustained: post-GC heap growth, first → last third      |                    4 MiB |
+| Sustained: one-feature edit drift, last ÷ first third   |                    1.15× |
 
 `test/active1-summary.test.ts` (root CI) covers the summary rows: each drag
 run judged by what followed its pointer, a run that recorded nothing failing

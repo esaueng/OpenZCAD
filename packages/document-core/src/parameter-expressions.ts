@@ -112,11 +112,11 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
     case 'extrude':
       fields(
         data,
-        ['distance', 'backDistance', 'toFaceOffset'],
+        ['distance', 'backDistance', 'toFaceOffset', 'startOffset'],
         rewrite,
         'length'
       );
-      fields(data, ['draftAngleDeg'], rewrite, 'angle');
+      fields(data, ['draftAngleDeg', 'backDraftAngleDeg'], rewrite, 'angle');
       return;
     case 'revolve':
       fields(data, ['angleDeg'], rewrite, 'angle');

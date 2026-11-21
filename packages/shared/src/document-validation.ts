@@ -283,7 +283,8 @@ const GEAR_SIZINGS = valuesOf<GearSizing>({
 const END_CONDITIONS = valuesOf<ExtrudeEndCondition>({
   blind: true,
   'through-all': true,
-  'to-face': true
+  'to-face': true,
+  'to-next': true
 });
 const THROUGH_ALL_SIDES = valuesOf<ThroughAllSide>({
   forward: true,
@@ -322,7 +323,13 @@ type FeatureDataOf<K extends FeatureKind> = Extract<
  */
 const FEATURE_ENUM_FIELDS = {
   primitive: { primitiveKind: PRIMITIVE_KINDS },
-  pattern: { patternKind: PATTERN_KINDS, axis: AXIS_IDS, axis2: AXIS_IDS },
+  pattern: {
+    patternKind: PATTERN_KINDS,
+    axis: AXIS_IDS,
+    axis2: AXIS_IDS,
+    // M02 (schema v120).
+    spacingMode: valuesOf<'total'>({ total: true })
+  },
   boolean: {
     operation: valuesOf<BooleanOperation>({
       union: true,

@@ -212,15 +212,36 @@ export function patternMirrorProblem(data: {
 }
 
 /**
+ * Why a pattern's spacing mode cannot be stored, else null: `'total'`, on
+ * a linear pattern only.
+ */
+export function patternSpacingModeProblem(data: {
+  patternKind: PatternKind;
+  spacingMode?: unknown;
+}): string | null {
+  if (data.spacingMode === undefined) return null;
+  if (data.spacingMode !== 'total') {
+    return `${JSON.stringify(data.spacingMode)} is not a pattern spacing mode.`;
+  }
+  return data.patternKind === 'linear'
+    ? null
+    : 'Only a linear pattern spaces its copies over a total length.';
+}
+
+/**
  * Whether a feature is one a feature pattern repeats: a hole, an extrude
- * that adds to or cuts its target body, or (M02) a fillet or chamfer, which
- * each copy takes where it holds the edges the original rounded.
+ * that adds to or cuts its target body, (M02) a fillet or chamfer, which
+ * each copy takes where it holds the edges the original rounded, a wrap,
+ * whose material each copy embosses or engraves where it lands, or a rib,
+ * whose material each copy adds where it lands.
  */
 export function isPatternableFeature(data: FeatureData): boolean {
   if (
     data.featureKind === 'hole' ||
     data.featureKind === 'fillet' ||
-    data.featureKind === 'chamfer'
+    data.featureKind === 'chamfer' ||
+    data.featureKind === 'wrap' ||
+    data.featureKind === 'rib'
   )
     return true;
   return (
@@ -238,6 +259,9 @@ export function patternSourceProblem(
   if (data.featureKind === 'extrude' && data.endCondition === 'to-face') {
     return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance or Through all.`;
   }
+  if (data.featureKind === 'extrude' && data.endCondition === 'to-next') {
+    return `${name} extrudes up to the next face, which a pattern cannot repeat yet; give it a distance or Through all.`;
+  }
   // A copy's edge may run the other way, or meet its faces the other way
   // round, so a blend that differs end to end or face to face could land
   // reversed on it (review): only the even ones repeat.
@@ -252,5 +276,5 @@ export function patternSourceProblem(
     return `${name} changes its radius along the edge, and a copy's edge can run the other way, so a pattern repeats only a constant-radius fillet; fillet the copies' edges directly.`;
   }
   if (isPatternableFeature(data)) return null;
-  return `${name} is not a hole, boss, cut, fillet or chamfer, so a feature pattern cannot repeat it.`;
+  return `${name} is not a hole, boss, cut, fillet, chamfer, wrap or rib, so a feature pattern cannot repeat it.`;
 }

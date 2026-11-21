@@ -83,26 +83,15 @@ export function exportIges(input: {
     allShownBodies: boolean;
   };
   fileName: string;
-  /** The open document's version and unit, for the archive record. */
-  version: number;
-  documentUnits: string;
   /** The unit to write. */
   units: ProjectDocument['units'];
   runExportJob(job: MeshExportJob): Promise<void>;
   exportModel: GeometryWorkerApi['exportModel'];
 }): Promise<void> {
   const { target, fileName } = input;
-  const contentType = 'model/iges';
   return input.runExportJob({
     fileName,
     label: 'IGES',
-    kind: 'iges-export',
-    contentType,
-    metadata: {
-      bodyIds: target.bodyIds.join(','),
-      documentVersion: input.version,
-      units: input.documentUnits
-    },
     produce: async (options) => {
       const result = await input.exportModel(
         'iges',
@@ -119,7 +108,6 @@ export function exportIges(input: {
         throw new Error('The IGES export returned no text.');
       }
       return {
-        body: new Blob([result.text], { type: contentType }),
         save: () => saveCadTextFile(fileName, 'igs', result.text),
         warnings: result.warnings.length
       };

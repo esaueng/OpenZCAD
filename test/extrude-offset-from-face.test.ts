@@ -616,9 +616,9 @@ describe('F01 offset from face', { timeout: 60_000 }, () => {
     it('offers the offset value only to a face', () => {
       expect(
         extrudeShownValues({ extent: 'to-face', symmetric: false })
-      ).toEqual(['faceOffset', 'draftAngle']);
+      ).toEqual(['faceOffset', 'startOffset', 'draftAngle']);
       expect(extrudeShownValues({ extent: 'blind', symmetric: false })).toEqual(
-        ['distance', 'backDistance', 'draftAngle']
+        ['distance', 'backDistance', 'startOffset', 'draftAngle']
       );
     });
 

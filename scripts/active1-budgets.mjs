@@ -35,25 +35,29 @@ export const ACTIVE1_BUDGETS = Object.freeze({
    * preview is built once the hand rests. Regression ceilings from two runs
    * on the RX 6600 (Vulkan) in
    * docs/performance/2026-11-20-drag-orbit-sustained-baselines.md: medians
-   * proxy lag 14–15 / 15–16 ms (p50 / p95), frame interval 16.7 ms (p95
-   * 33 ms on the filleted unions, one hitch each), exact preview round trip
-   * 63–404 ms, release → accepted 74–170 ms.
+   * proxy lag 14–15 / 15–16 ms (p50 / p95), frame interval over the whole
+   * pointer motion 16.6 / 17.2–18.2 ms (p50 / p95, 119–122 frames in 2 s), exact preview round trip
+   * 63–404 ms, release → accepted 74–170 ms, and first exact geometry
+   * (from the first move; built only at rest) 2.3–2.7 s, which misses the
+   * H02 100 ms target. That budget is a regression ceiling only.
    */
   faceDrag: Object.freeze({
     'filleted union width 30 to 22.5 mm': Object.freeze({
+      firstGeometryMs: 3_200,
       lagP50Ms: 25,
       lagP95Ms: 30,
       exactPreviewMs: 600,
       frameIntervalP50Ms: 20,
-      frameIntervalP95Ms: 50,
+      frameIntervalP95Ms: 25,
       releaseToFrameMs: 160
     }),
     'public filleted union history': Object.freeze({
+      firstGeometryMs: 3_000,
       lagP50Ms: 25,
       lagP95Ms: 30,
       exactPreviewMs: 280,
       frameIntervalP50Ms: 20,
-      frameIntervalP95Ms: 50,
+      frameIntervalP95Ms: 25,
       releaseToFrameMs: 250
     }),
     'rounded box top face (primitive proxy)': Object.freeze({
@@ -64,6 +68,7 @@ export const ACTIVE1_BUDGETS = Object.freeze({
       releaseToFrameMs: 260
     }),
     'native holder +Z face (plate, cut, two arms)': Object.freeze({
+      firstGeometryMs: 2_800,
       lagP50Ms: 25,
       lagP95Ms: 30,
       exactPreviewMs: 120,
@@ -72,7 +77,14 @@ export const ACTIVE1_BUDGETS = Object.freeze({
       releaseToFrameMs: 130
     })
   }),
-  /** H02's stated drag targets: 60 fps, first geometry ≤ 100 ms, p95 ≤ 50 ms. */
+  /**
+   * H02's drag targets: 60 fps, first geometry ≤ 100 ms, p95 ≤ 50 ms, for
+   * what follows the pointer (proxy frames, or streamed exact frames when a
+   * drag has no proxy). Owner decision 2026-11-21: proxy-led dragging meets
+   * them; first exact geometry stays a measured, budgeted row
+   * (`faceDrag[...].firstGeometryMs`), and an exact preview fast enough to
+   * stream is ROADMAP K11.
+   */
   faceDragTargets: Object.freeze({
     frameIntervalMs: 1000 / 60,
     firstGeometryMs: 100,

@@ -8,7 +8,7 @@ import {
   getParameterScope,
   listFeaturesInOrder,
   resolveParamValue,
-  toFaceSignedDistance
+  toFaceReach
 } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -196,14 +196,27 @@ export function extrudeHistoryDocument(
  * The signed distance from the sketch plane to the target, as the build will
  * derive it, from the current projection: where the viewport arrow sits and
  * the depth Distance falls back to. Null when either plane cannot be placed
- * here, or the face is not parallel to the sketch — the build then refuses
- * by name, and the form says so before Apply.
+ * here, or the face is too steep to reach or lies on the sketch — the build
+ * then refuses by name, and the form says so before Apply.
  */
 export function toFaceDistanceEstimate(
   document: ProjectDocument,
   sketchId: SketchId,
   target: ExtrudeToFaceTarget
 ): number | null {
+  return toFaceReachEstimate(document, sketchId, target)?.height ?? null;
+}
+
+/**
+ * {@link toFaceDistanceEstimate} with whether the face is slanted: then the
+ * height is only where the face's own point lies, and the build finds where
+ * the face meets each part of the profile.
+ */
+export function toFaceReachEstimate(
+  document: ProjectDocument,
+  sketchId: SketchId,
+  target: ExtrudeToFaceTarget
+): { height: number; slanted: boolean } | null {
   const sketch = findSketch(document, sketchId);
   if (!sketch) return null;
   const { scope } = getParameterScope(document);
@@ -226,7 +239,8 @@ export function toFaceDistanceEstimate(
     return null;
   }
   // The exact build's own test, so the card never offers a face it refuses.
-  return toFaceSignedDistance(basis, {
+  // A face on the sketch plane reads as 0: a start offset can reach it.
+  return toFaceReach(basis, {
     point: face.origin,
     normal: face.normal
   });

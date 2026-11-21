@@ -426,7 +426,7 @@ describe('F01 through-all: exact build', () => {
       }
     });
     for (const [patch, message] of [
-      [{ endCondition: 'to-next' }, /Unknown extrude end condition/],
+      [{ endCondition: 'to-vertex' }, /Unknown extrude end condition/],
       [{ endCondition: null }, /Unknown extrude end condition/],
       [{ throughAllSide: ['backward'] }, /needs a side/],
       [

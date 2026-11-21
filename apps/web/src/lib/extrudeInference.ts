@@ -388,6 +388,10 @@ export function regionExtrudeOutcome(
   if (resolved.command?.payload.endCondition === 'to-face') {
     return `Extruded region up to the face${OUTCOME_PHRASES[resolved.inference.operation]}.`;
   }
+  // F01 (v130): nor does an extrude up to the next face of its target.
+  if (resolved.command?.payload.endCondition === 'to-next') {
+    return `Extruded region up to the next face${OUTCOME_PHRASES[resolved.inference.operation]}.`;
+  }
   return `Extruded region by ${distance} ${units}${OUTCOME_PHRASES[resolved.inference.operation]}.`;
 }
 

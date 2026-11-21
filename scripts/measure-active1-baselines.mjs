@@ -193,6 +193,48 @@ function readJsonl(file) {
     .map((line) => JSON.parse(line));
 }
 
+/** Nearest-rank percentile of a list of numbers. */
+const percentile = (values, fraction) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted.length
+    ? sorted[
+        Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)
+      ]
+    : null;
+};
+
+/**
+ * Frame cadence while the pointer moves: the intervals between every frame
+ * the drag trace recorded (each a WebGL render inside the viewer's animation
+ * callback) from the first pointer event to the last. The viewer's
+ * `continuous` frame marks cover only part of a drag and can include
+ * intervals that end before or straddle the first move, so they misstate the
+ * rate during motion. Latency at the start and end of a drag is measured by
+ * the lag and release rows, not here.
+ */
+export function dragFrameCadence(sample) {
+  const trace = Array.isArray(sample.trace) ? sample.trace : null;
+  if (!trace) return null;
+  const kind = (event) => event.stage ?? event.kind;
+  const pointer = trace.filter((event) => kind(event) === 'pointer');
+  if (pointer.length < 2) return null;
+  const start = pointer[0].t;
+  const end = pointer.at(-1).t;
+  const frames = trace
+    .filter(
+      (event) => kind(event) === 'frame' && event.t >= start && event.t <= end
+    )
+    .map((event) => event.t);
+  const intervals = frames.slice(1).map((t, index) => t - frames[index]);
+  if (!intervals.length) return null;
+  return {
+    frames: frames.length,
+    p50: percentile(intervals, 0.5),
+    p95: percentile(intervals, 0.95),
+    max: Math.max(...intervals)
+  };
+}
+
 /** Medians across runs for each measurement, with their budgets. */
 export function summarize(dir) {
   const rows = [];
@@ -321,12 +363,16 @@ export function summarize(dir) {
         budget.lagP95Ms
       );
     }
-    if (samples.some((sample) => !proxied(sample)))
+    // First exact geometry on screen, from the first pointer move, for
+    // every run that built any (a proxy-led drag builds it only once the
+    // hand rests, so this is far above H02's 100 ms target).
+    const exactRuns = samples.filter(
+      (sample) => sample.summary.presentedFrames > 0
+    );
+    if (exactRuns.length)
       add(
         `Face drag first exact geometry (${label})`,
-        samples
-          .filter((sample) => !proxied(sample))
-          .map((sample) => sample.summary.firstGeometryMs),
+        exactRuns.map((sample) => sample.summary.firstGeometryMs),
         budget.firstGeometryMs
       );
     // Only runs that asked for an exact preview before release have one.
@@ -337,14 +383,15 @@ export function summarize(dir) {
         previewed.map((sample) => sample.summary.stages?.roundTripMs?.p50),
         budget.exactPreviewMs
       );
+    const cadence = samples.map(dragFrameCadence);
     add(
       `Face drag frame interval p50 while moving (${label})`,
-      samples.map((sample) => sample.rendering?.motion?.intervalMs?.p50),
+      cadence.map((value) => value?.p50 ?? null),
       budget.frameIntervalP50Ms
     );
     add(
       `Face drag frame interval p95 while moving (${label})`,
-      samples.map((sample) => sample.rendering?.motion?.intervalMs?.p95),
+      cadence.map((value) => value?.p95 ?? null),
       budget.frameIntervalP95Ms
     );
     add(

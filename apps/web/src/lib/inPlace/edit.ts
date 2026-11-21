@@ -956,7 +956,13 @@ export function inPlaceEditSeed(
         break;
       }
       if (data.patternKind === 'linear') {
-        value('spacing', data.spacing);
+        // M02 (schema v120): a total length reopens as Total.
+        if (data.spacingMode === 'total') {
+          seed.options.extent = 'total';
+          value('total', data.spacing);
+        } else {
+          value('spacing', data.spacing);
+        }
         if (data.direction) {
           // Its repeat vector as stored, each part on its own chip.
           seed.options.axis = 'custom';
@@ -1483,7 +1489,8 @@ export function inPlaceFeatureUpdate(
             : {}),
           ...(request.points ? { points: request.points } : {}),
           ...(request.path ? { path: request.path } : {}),
-          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {})
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {}),
+          ...(request.spacingMode ? { spacingMode: request.spacingMode } : {})
         },
         // R01: the world axis is the absent datum axis. M02: a pattern turned
         // back to its body, or with every copy back, stores neither list.
@@ -1497,6 +1504,10 @@ export function inPlaceFeatureUpdate(
               : []),
             ...(saved.skippedInstances && !request.skippedInstances
               ? ['skippedInstances']
+              : []),
+            // M02 (schema v120): back to the spacing between copies.
+            ...(saved.spacingMode && !request.spacingMode
+              ? ['spacingMode']
               : [])
           ];
           return cleared.length > 0 ? { clearData: cleared } : {};

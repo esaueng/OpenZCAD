@@ -95,6 +95,49 @@ function bodyRepresentation(
 }
 
 describe('validated feature commit', () => {
+  it.each([false, true])(
+    'checks a transaction with its selected validator (override: %s)',
+    async (override) => {
+      const base = createProjectDocument(
+        'Transaction check',
+        toUserId('local')
+      );
+      const manager = new CommandManager(base);
+      const derive = vi.fn(
+        async (candidate: ProjectDocument) => candidate.derived
+      );
+      const specific = vi.fn(
+        async (candidate: ProjectDocument) => candidate.derived
+      );
+      const commitTransaction = vi.fn(() => true);
+      const { result } = renderHook(() =>
+        useValidatedFeatureCommit({
+          manager: () => manager,
+          derive,
+          commit: () => true,
+          commitTransaction,
+          onBusy: vi.fn(),
+          onStatus: vi.fn()
+        })
+      );
+      const command = commandFactories.setParameter({
+        name: 'width',
+        expression: '22'
+      });
+      await expect(
+        result.current.runTransaction([command], {
+          label: 'Edit',
+          targets: [],
+          successMessage: 'Applied',
+          ...(override ? { derive: specific } : {})
+        })
+      ).resolves.toBe('committed');
+      expect(derive).toHaveBeenCalledTimes(override ? 0 : 1);
+      expect(specific).toHaveBeenCalledTimes(override ? 1 : 0);
+      expect(commitTransaction).toHaveBeenCalledOnce();
+    }
+  );
+
   it('keeps a tangent-boss failure out of document history and shows its exact diagnostic', async () => {
     const withPlate = addPrimitiveFeature(
       createProjectDocument('Tangent boss', toUserId('user_tangent_boss')),

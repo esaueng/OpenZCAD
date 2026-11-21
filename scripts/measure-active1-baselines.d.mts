@@ -15,3 +15,11 @@ export function summarize(dir: string): Active1SummaryRow[];
 
 /** The public `perf-face-drag-trace` cases the `face-drag` probe runs. */
 export const FACE_DRAG_CASES: string;
+
+/** Frame cadence over a drag's pointer motion, from its trace. */
+export function dragFrameCadence(sample: unknown): {
+  frames: number;
+  p50: number | null;
+  p95: number | null;
+  max: number;
+} | null;
