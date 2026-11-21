@@ -220,7 +220,7 @@ describe('through-hole resizing extends its existing chamfer angle', () => {
   );
 
   it.each(['native', 'STEP'] as const)(
-    'shrinks both broken-out countersinks and split rims from %s without moving retained boundaries',
+    'shrinks both broken-out countersinks and their rims from %s without moving retained boundaries',
     async (sourceKind) => {
       await loadRemusTranslators();
       const kernel = new RemusKernel();
@@ -263,8 +263,10 @@ describe('through-hole resizing extends its existing chamfer angle', () => {
                 Math.abs(e.curve.Circle.center[2] - 18) < 1e-7 &&
                 Math.abs(e.curve.Circle.radius - 2.5) < 1e-7
             );
-            if (sourceKind === 'native') expect(splitRim).toHaveLength(4);
-            else expect(splitRim).toHaveLength(1);
+            // The rim the second mouth breaks out through is one closed
+            // circle from either source. Before Remus 2026.1.154 the native
+            // build left it as four arcs; the STEP path read back one.
+            expect(splitRim).toHaveLength(1);
           }
           const output = resizeThroughHole(
             kernel,

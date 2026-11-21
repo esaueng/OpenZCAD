@@ -64,6 +64,71 @@ function boredBar(): number {
   return kernel.cut(bar, bore);
 }
 
+/**
+ * A regular polygonal prism standing on z = z0: its round walls are flats,
+ * so its caps carry the chords a section kernel without analytic curves
+ * would return for a circle of `radius`.
+ */
+function polygonPrism(
+  radius: number,
+  sides: number,
+  center: readonly [number, number],
+  z0: number,
+  height: number
+): number {
+  const corners: number[] = [];
+  for (let i = 0; i < sides; i += 1) {
+    const angle = (2 * Math.PI * i) / sides;
+    corners.push(
+      center[0] + radius * Math.cos(angle),
+      center[1] + radius * Math.sin(angle),
+      z0
+    );
+  }
+  return kernel.extrude(
+    kernel.makePolygon(Float64Array.from(corners)),
+    0,
+    0,
+    1,
+    height
+  );
+}
+
+/** The upward-facing planar face of a solid that has exactly one. */
+function topCap(solid: number): number {
+  const caps = Array.from(kernel.getSolidFaces(solid)).filter(
+    (face) =>
+      kernel.getSurfaceType(face) === 'plane' &&
+      kernel.getFaceNormal(face)[2]! > 0.5
+  );
+  expect(caps).toHaveLength(1);
+  return caps[0]!;
+}
+
+/**
+ * The pinned kernel sections a cylinder or sphere along its true circle.
+ * The chorded-boundary verdict is still the adapter's to get right for any
+ * section that comes back as chords, so these cases hand it one: `section`
+ * returns `face`, a real face whose curved boundary is a polygon.
+ */
+function withSection<T>(face: number, run: () => T): T {
+  const section = vi
+    .spyOn(kernel, 'section')
+    .mockReturnValue(Uint32Array.of(face));
+  try {
+    return run();
+  } finally {
+    section.mockRestore();
+  }
+}
+
+/** {@link boredBar}'s section at z = 3 with its bore cut into 64 chords. */
+function chordedBoredBarCap(): number {
+  return topCap(
+    kernel.cut(kernel.makeBox(20, 10, 3), polygonPrism(2, 64, [10, 5], -1, 5))
+  );
+}
+
 function expectOk(outcome: ExactSectionOutcome): ExactSectionSuccess {
   if (outcome.status !== 'ok') {
     throw new Error(
@@ -148,20 +213,33 @@ describe('a through hole in the section', () => {
     const outer = loopArea(section.loops[0]!.points, cut);
     const hole = loopArea(section.loops[1]!.points, cut);
     expect(outer).toBeCloseTo(200, 6);
-    // The bore wall is a true cylinder, but the kernel's section cuts its
-    // circle into 64 chords, so the hole is that polygon's area rather than
-    // pi r^2 — within 0.2% of the circle.
+    // The kernel keeps the bore's circle, so the area is the true one; the
+    // loop is that circle sampled for drawing, inscribed in it.
     expect(hole).toBeGreaterThan(Math.PI * 4 * 0.99);
     expect(hole).toBeLessThan(Math.PI * 4);
-    expect(section.area).toBeCloseTo(outer - hole, 6);
+    expect(Math.abs(section.area - (200 - Math.PI * 4))).toBeLessThan(1e-9);
+    expect(section.boundary).toBe('exact');
     // The cut surface is drawn as material only, never over the bore.
     expect(section.positions.length / 3).toBeGreaterThan(4);
+  });
+
+  it('reports a bore kept as its circle as an exact boundary', () => {
+    const section = expectOk(
+      exactSolidSection(kernel, boredBar(), plane([0, 0, 3], [0, 0, 1]))
+    );
+    const trueArea = 200 - Math.PI * 4;
+    expect(Math.abs(section.area - trueArea)).toBeLessThan(trueArea * 1e-12);
+    expect(section.boundary).toBe('exact');
   });
 
   it('reports a chorded bore as an approximate boundary, never an exact one', () => {
     const bar = boredBar();
     const cut = plane([0, 0, 3], [0, 0, 1]);
-    const section = expectOk(exactSolidSection(kernel, bar, cut));
+    const section = expectOk(
+      withSection(chordedBoredBarCap(), () =>
+        exactSolidSection(kernel, bar, cut)
+      )
+    );
     const trueArea = 200 - Math.PI * 4;
     const polygonError = Math.abs(section.area - trueArea);
     // The tessellated witness cannot see this: the polygon is well inside
@@ -231,8 +309,18 @@ describe('a through hole in the section', () => {
     // The verdict never depended on which; it is all that is reported now.
     const ball = kernel.makeSphere(10, 64);
     const cut = plane([0, 0, 9.5], [0, 0, 1]);
-    const section = expectOk(exactSolidSection(kernel, ball, cut));
     const analytic = Math.PI * (10 ** 2 - 9.5 ** 2);
+    // The kernel's own section keeps the circle.
+    const kept = expectOk(exactSolidSection(kernel, ball, cut));
+    expect(Math.abs(kept.area - analytic)).toBeLessThan(analytic * 1e-9);
+    expect(kept.boundary).toBe('exact');
+    // The same cut as 64 chords, their corners on the sphere.
+    const chorded = topCap(
+      polygonPrism(Math.sqrt(10 ** 2 - 9.5 ** 2), 64, [0, 0], 8.5, 1)
+    );
+    const section = expectOk(
+      withSection(chorded, () => exactSolidSection(kernel, ball, cut))
+    );
     expect(Math.abs(section.area - analytic)).toBeGreaterThan(analytic * 1e-4);
     expect(section.boundary).toBe('approximate');
     expect(section).not.toHaveProperty('boundaryDeviation');
@@ -267,7 +355,18 @@ describe('a through hole in the section', () => {
     );
     const sleeve = kernel.cut(kernel.makeCylinder(10, 10), bore);
     const cut = plane([0, 0, 5], [0, 0, 1]);
-    const section = expectOk(exactSolidSection(kernel, sleeve, cut));
+    // The kernel keeps the outer circle, so the scenario needs the chorded
+    // section a kernel without analytic curves would give: the bar's circle
+    // as 64 chords round the same 64-sided bore.
+    const chorded = topCap(
+      kernel.cut(
+        polygonPrism(10, sides, [0, 0], 0, 5),
+        polygonPrism(circumradius, sides, [0, 0], -1, 12)
+      )
+    );
+    const section = expectOk(
+      withSection(chorded, () => exactSolidSection(kernel, sleeve, cut))
+    );
     expect(section.loops.map((loop) => loop.points.length)).toEqual([
       sides,
       sides
@@ -306,16 +405,36 @@ describe('a through hole in the section', () => {
     ].map(([unit, mmPerUnit]) => {
       const scale = mmPerUnit as number;
       const ball = kernel.makeSphere(0.5 / scale, 64);
+      const cut = plane([0, 0, 0], [0, 0, 1]);
+      const kept = expectOk(exactSolidSection(kernel, ball, cut));
+      // The great circle as 2048 chords, their corners on the sphere: each
+      // misses the circle by 0.5 (1 - cos(pi / 2048)) = 5.9e-7 mm.
+      const chorded = topCap(
+        polygonPrism(0.5 / scale, 2048, [0, 0], -0.1 / scale, 0.1 / scale)
+      );
       const section = expectOk(
-        exactSolidSection(kernel, ball, plane([0, 0, 0], [0, 0, 1]))
+        withSection(chorded, () => exactSolidSection(kernel, ball, cut))
       );
       return {
         unit,
+        kept: kept.boundary,
+        keptAreaMm2: kept.area * scale ** 2,
         boundary: section.boundary,
         chords: section.loops[0]!.points.length,
         areaMm2: section.area * scale ** 2
       };
     });
+    // The kernel's own section keeps the circle in every unit.
+    expect(measured.map((result) => result.kept)).toEqual([
+      'exact',
+      'exact',
+      'exact'
+    ]);
+    for (const result of measured) {
+      expect(Math.abs(result.keptAreaMm2 - Math.PI * 0.25)).toBeLessThan(
+        Math.PI * 0.25 * 1e-9
+      );
+    }
     expect(measured.map((result) => result.boundary)).toEqual([
       'approximate',
       'approximate',
@@ -354,10 +473,13 @@ describe('a through hole in the section', () => {
     // The verdict is settled by one stray chord; the other 63 are not paid
     // for. Four outline edges on the solid, then the bore's first chord.
     const bar = boredBar();
+    const chorded = chordedBoredBarCap();
     const distance = vi.spyOn(kernel, 'pointToSolidDistance');
     try {
       const section = expectOk(
-        exactSolidSection(kernel, bar, plane([0, 0, 3], [0, 0, 1]))
+        withSection(chorded, () =>
+          exactSolidSection(kernel, bar, plane([0, 0, 3], [0, 0, 1]))
+        )
       );
       expect(section.boundary).toBe('approximate');
       expect(distance.mock.calls.length).toBeLessThanOrEqual(5);
@@ -449,13 +571,12 @@ describe('planes that break a naive section', () => {
     const cavity = loopArea(section.loops[1]!.points, cut);
     expect(cavity).toBeGreaterThan(Math.PI * 16 * 0.98);
     expect(cavity).toBeLessThan(Math.PI * 16);
-    expect(section.area).toBeCloseTo(400 - cavity, 6);
-    // The sphere's great circle comes back as chords too — finer ones than
-    // a cylinder's, and still not the circle. The cavity is an inner shell:
-    // its faces count when deciding whether the solid has a curve to chord.
-    const chords = section.loops[1]!.points.length;
-    expect(chords).toBeGreaterThan(8);
-    expect(section.boundary).toBe('approximate');
+    // The sphere's great circle comes back as its circle, so the area is the
+    // true one; the loop is that circle sampled for drawing. The cavity is
+    // an inner shell, and its boundary is checked like any other.
+    expect(Math.abs(section.area - (400 - Math.PI * 16))).toBeLessThan(1e-9);
+    expect(section.loops[1]!.points.length).toBeGreaterThan(8);
+    expect(section.boundary).toBe('exact');
   });
 
   it('sections a rotated and translated body in document space', () => {
@@ -578,13 +699,15 @@ describe('section DXF export', () => {
     const unitsAt = pairs.find(([, value]) => value === '$INSUNITS')![0];
     expect(lines[unitsAt + 1]).toBe('70');
     expect(lines[unitsAt + 2]).toBe('4');
-    // Four outline lines plus the 64 chords the kernel cuts the bore's
-    // circle into: the file holds what the section holds, which is why that
-    // section is reported as approximate.
-    expect(section.boundary).toBe('approximate');
-    expect(entities.filter((entity) => entity.kind === 'line')).toHaveLength(
-      68
-    );
+    // Four outline lines and the bore's circle: the file holds what the
+    // section holds, and the section is exact.
+    expect(section.boundary).toBe('exact');
+    expect(entities.filter((entity) => entity.kind === 'line')).toHaveLength(4);
+    const circles = entities.filter((entity) => entity.kind === 'circle');
+    expect(circles).toHaveLength(1);
+    if (circles[0]!.kind === 'circle') {
+      expect(circles[0]!.radius).toBeCloseTo(2, 9);
+    }
     const extent = entities.flatMap((entity) =>
       entity.kind === 'line' ? [entity.start, entity.end] : []
     );
