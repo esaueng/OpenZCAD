@@ -699,7 +699,7 @@ export function AnalysisPanel({
         {running ? (
           <LoaderCircle
             size={12}
-            className="analysis-spinner"
+            className="analysis-spinner spin"
             aria-hidden="true"
           />
         ) : null}

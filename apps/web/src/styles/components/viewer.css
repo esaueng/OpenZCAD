@@ -1911,7 +1911,6 @@
 .analysis-spinner {
   flex: 0 0 auto;
   align-self: center;
-  animation: oz-spin 0.9s linear infinite;
 }
 
 .analysis-about {
