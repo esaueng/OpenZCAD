@@ -6429,6 +6429,13 @@ export interface ProjectShareLinkSummary {
   label: string | null;
   /** L08: visitors may read and write comments (migration 0059). */
   comments?: boolean;
+  /**
+   * L08: false when the link serves the finished model without its history
+   * (migration 0062); absent means the live project, history included.
+   */
+  history?: false;
+  /** Unix seconds the model of a link without history was last frozen. */
+  frozenAt?: number;
 }
 
 /** Longest share-link label, in Unicode code points (SQLite's `length`). */
@@ -6463,6 +6470,22 @@ export interface CreateProjectShareLinkRequest {
   label?: string | null;
   /** L08: a commenter link; visitors may read and write comments. */
   comments?: boolean;
+  /**
+   * L08: false shares the finished model without its history. The link is
+   * then view only and needs `document`, the frozen model the owner's
+   * browser built (`frozenShareDocument`).
+   */
+  history?: boolean;
+  document?: ProjectDocument;
+}
+
+/** L08: replaces the frozen model of a link without history. */
+export interface UpdateProjectShareLinkSnapshotRequest {
+  document: ProjectDocument;
+}
+
+export interface UpdateProjectShareLinkSnapshotResponse {
+  shareLink: ProjectShareLinkSummary;
 }
 
 export interface UpdateProjectShareLinkRequest {
@@ -6488,6 +6511,8 @@ export interface SharedProjectResponse {
     mode: ProjectShareLinkMode;
     /** L08: a commenter link; absent or false is view or tweak only. */
     comments?: boolean;
+    /** L08: false when `document` is the finished model without history. */
+    history?: false;
   };
   document: ProjectDocument;
 }

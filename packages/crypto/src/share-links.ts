@@ -127,10 +127,26 @@ export const MAX_SHARE_LINK_TOMBSTONE_BYTES =
  * What a link visitor may do, as `ProjectShareLinkMode` in
  * `@openzcad/shared`: `view` is read-only, `tweak` opens the
  * parameters-only workspace.
+ *
+ * `frozen` (L08) is read-only too, and its snapshot is not the project: it
+ * is the finished model as the owner froze it, without its history, and
+ * publishers never put the live document in it. It is a mode of its own,
+ * in the owner-signed grant, so that every member's browser learns it with
+ * the link, and a build from before it refuses the link set (an unknown
+ * mode code is `malformed`) rather than republishing the project's history
+ * into such a link on its next save.
  */
-export const SHARE_LINK_MODES = Object.freeze(['view', 'tweak'] as const);
+export const SHARE_LINK_MODES = Object.freeze([
+  'view',
+  'tweak',
+  'frozen'
+] as const);
 export type ShareLinkMode = (typeof SHARE_LINK_MODES)[number];
-const MODE_CODES: Record<ShareLinkMode, number> = { view: 1, tweak: 2 };
+const MODE_CODES: Record<ShareLinkMode, number> = {
+  view: 1,
+  tweak: 2,
+  frozen: 3
+};
 
 // --- Errors ----------------------------------------------------------------
 

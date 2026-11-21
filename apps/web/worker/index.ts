@@ -206,6 +206,7 @@ import {
   parseCreateInvitation,
   parseProjectMemberRole,
   parseRenameShareLink,
+  parseShareLinkSnapshot,
   parseShareLinkToken,
   sendProjectInvitationEmail,
   SharingRequestError
@@ -1237,7 +1238,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           projectId: shared.projectId,
           name: shared.name,
           mode: shared.mode,
-          ...(shared.comments ? { comments: true } : {})
+          ...(shared.comments ? { comments: true } : {}),
+          ...(shared.history === false ? { history: false } : {})
         },
         document: shared.document
       },
@@ -2464,7 +2466,41 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'PATCH' && shareLinkMatch) {
-    const { label } = parseRenameShareLink(await readJsonBody(request));
+    const body = await readJsonBody(request);
+    // L08: the owner's Update of a link without history replaces its frozen
+    // model. It publishes project content, so it passes the same gates as
+    // creating a link.
+    if (
+      typeof body === 'object' &&
+      body !== null &&
+      'document' in body &&
+      !('label' in body)
+    ) {
+      if (!(await isProjectSharingPreferenceEnabled(userId, env)))
+        return json(
+          {
+            error: 'Project sharing is disabled for this account.',
+            code: 'FEATURE_DISABLED'
+          },
+          403
+        );
+      if (isE2eeDefaultOn(env, session.email)) {
+        assertShareableProject(
+          await persistence.requireProjectOwner(userId, shareLinkMatch[1]!)
+        );
+        assertPlaintextSharingAllowed(env, session);
+      }
+      return json({
+        shareLink: await persistence.updateProjectShareLinkSnapshot(
+          userId,
+          shareLinkMatch[1]!,
+          shareLinkMatch[2]!,
+          parseShareLinkSnapshot(body) as ProjectDocument,
+          now
+        )
+      });
+    }
+    const { label } = parseRenameShareLink(body);
     return json({
       shareLink: await persistence.renameProjectShareLink(
         userId,
@@ -3361,7 +3397,11 @@ async function dispatchApiRequest(
           ? 429
           : error.code.endsWith('_NOT_FOUND')
             ? 404
-            : 409;
+            : error.code === 'SHARE_LINK_SNAPSHOT_INVALID'
+              ? 400
+              : error.code === 'SHARE_LINK_SNAPSHOT_TOO_LARGE'
+                ? 413
+                : 409;
       return json({ error: error.message, code: error.code }, status);
     }
     if (error instanceof ProjectAdoptionError) {

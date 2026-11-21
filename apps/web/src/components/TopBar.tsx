@@ -142,7 +142,12 @@ interface TopBarProps {
    * "Shared model · Tweak only" instead of "Local only", "Signed out" and
    * "Offline", none of which describe it, and offers a labelled Make a copy.
    */
-  shareSession?: { mode: 'view' | 'tweak'; onMakeCopy(): void } | null;
+  shareSession?: {
+    mode: 'view' | 'tweak';
+    /** L08: the owner shared the finished model without its history. */
+    withoutHistory?: boolean;
+    onMakeCopy(): void;
+  } | null;
   workspaceMode: WorkspaceMode;
   canRenameProject: boolean;
   /**
@@ -855,16 +860,18 @@ export function TopBar({
           <Tooltip
             label="Shared model"
             description={
-              shareSession.mode === 'view'
-                ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
-                : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'
+              shareSession.withoutHistory
+                ? 'The owner shared this model without its history: you have the finished solid, with no features, sketches or parameters. Make a copy to keep or change it.'
+                : shareSession.mode === 'view'
+                  ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
+                  : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'
             }
             multiline
           >
             <span
               className="topbar-share-state topbar-action"
               role="status"
-              aria-label={`Shared model · ${shareSession.mode === 'view' ? 'View only' : 'Tweak only'}`}
+              aria-label={`Shared model · ${shareSession.mode === 'view' ? 'View only' : 'Tweak only'}${shareSession.withoutHistory ? ' · No history' : ''}`}
               tabIndex={0}
             >
               {/* The glyph stays when a phone's bar drops every chip's

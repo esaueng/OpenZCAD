@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
+import type { ProjectDocument, ProjectShareLinkMode } from '@openzcad/shared';
 import { StableLabel } from './StableLabel';
 import {
+  SHARE_LINK_NO_HISTORY_HINT,
   SHARE_LINK_MODE_HINT,
   ShareLinkModePicker
 } from './ShareLinkModePicker';
@@ -22,7 +24,11 @@ import { shareLinkCreationProblem } from '../lib/projectShareLink';
  * identity change it says the old links were turned off.
  */
 
-export type EncryptedShareLinkMode = 'view' | 'tweak';
+/**
+ * `frozen` (L08): view only, and the link serves the finished model without
+ * its history instead of the project.
+ */
+export type EncryptedShareLinkMode = 'view' | 'tweak' | 'frozen';
 
 export interface EncryptedShareLinkRow {
   readonly shareId: string;
@@ -76,10 +82,23 @@ export interface EncryptedShareLinkClient {
     mode: EncryptedShareLinkMode,
     /**
      * L08 (plan decisions 2 and 3a): sign a comment grant for the new link,
-     * so its visitors can comment.
+     * so its visitors can comment. `frozenDocument` (L08) is the model of
+     * a `frozen` link, which it needs and only it takes.
      */
-    options?: { readonly comments?: boolean }
+    options?: {
+      readonly comments?: boolean;
+      readonly frozenDocument?: ProjectDocument;
+    }
   ): Promise<{ url: string }>;
+  /**
+   * L08: the current model, frozen, replaces what a `frozen` link serves.
+   * Its URL stays.
+   */
+  update?(
+    projectId: string,
+    shareId: string,
+    frozenDocument: ProjectDocument
+  ): Promise<void>;
   revoke(projectId: string, shareId: string): Promise<void>;
   /**
    * L08: lets an existing link's visitors comment, or signs its grant again
@@ -160,7 +179,12 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/shareLinks')
     ]);
     const ctx = (await encryptedShareLinks()).ctx;
-    const created = await links.createShareLink(ctx, projectId, mode);
+    const created = await links.createShareLink(
+      ctx,
+      projectId,
+      mode,
+      options?.frozenDocument
+    );
     const problem = shareLinkCreationProblem(created);
     if (problem) throw new Error(problem);
     if (options?.comments) {
@@ -170,6 +194,18 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       });
     }
     return { url: created.url };
+  },
+  async update(projectId, shareId, frozenDocument) {
+    const [{ encryptedShareLinks }, links] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/shareLinks')
+    ]);
+    await links.updateFrozenShareLink(
+      (await encryptedShareLinks()).ctx,
+      projectId,
+      shareId,
+      frozenDocument
+    );
   },
   async allowComments(projectId, shareId) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
@@ -270,12 +306,17 @@ const STATUS_LABEL: Record<EncryptedShareLinkRow['status'], string> = {
 
 const MODE_LABEL: Record<EncryptedShareLinkMode, string> = {
   view: 'View only',
-  tweak: 'Tweak'
+  tweak: 'Tweak',
+  frozen: 'No history'
 };
 
 function expiryText(row: EncryptedShareLinkRow): string {
   if (row.status !== 'active' || row.expiresAt === null) {
-    return STATUS_LABEL[row.status];
+    // A link without history is published only from its own model: with
+    // none stored, Update is what brings it back.
+    return row.mode === 'frozen' && row.status === 'not-published'
+      ? 'Needs an update'
+      : STATUS_LABEL[row.status];
   }
   return `Active until ${new Date(row.expiresAt).toLocaleDateString(undefined, {
     month: 'short',
@@ -308,17 +349,26 @@ const message = (caught: unknown) =>
 
 export function EncryptedShareLinks({
   projectId,
-  client = pageEncryptedShareLinkClient
+  client = pageEncryptedShareLinkClient,
+  onFreezeModel
 }: {
   projectId: string;
   client?: EncryptedShareLinkClient;
+  /**
+   * L08: the current model frozen for a link without history. Without it
+   * the option to leave history out is not offered.
+   */
+  onFreezeModel?(): Promise<ProjectDocument>;
 }) {
   const [state, setState] = useState<EncryptedShareLinksState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
   // What the next link lets its visitors do; Tweak includes View.
-  const [mode, setMode] = useState<EncryptedShareLinkMode>('view');
+  const [mode, setMode] = useState<ProjectShareLinkMode>('view');
+  // L08: whether the next link shares the project's history.
+  const [includeHistory, setIncludeHistory] = useState(true);
+  const withoutHistory = Boolean(onFreezeModel) && !includeHistory;
   // The mode of the link in the output: the picker may have moved on.
   const [createdMode, setCreatedMode] =
     useState<EncryptedShareLinkMode>('view');
@@ -396,11 +446,20 @@ export function EncryptedShareLinks({
   const createLink = async () => {
     setCreated(null);
     setCopied(null);
-    const linkMode = mode;
+    const linkMode: EncryptedShareLinkMode = withoutHistory ? 'frozen' : mode;
+    // L08: frozen in this browser first, so a model that cannot be frozen
+    // makes no link at all.
+    const frozenDocument =
+      withoutHistory && onFreezeModel ? await onFreezeModel() : undefined;
     setCreated(
-      (withComments
-        ? await client.create(projectId, linkMode, { comments: true })
-        : await client.create(projectId, linkMode)
+      (frozenDocument
+        ? await client.create(projectId, 'frozen', {
+            frozenDocument,
+            ...(withComments ? { comments: true } : {})
+          })
+        : withComments
+          ? await client.create(projectId, linkMode, { comments: true })
+          : await client.create(projectId, linkMode)
       ).url
     );
     setCreatedMode(linkMode);
@@ -472,10 +531,23 @@ export function EncryptedShareLinks({
       <div className="sharing-link-create">
         <ShareLinkModePicker
           value={mode}
+          viewOnly={withoutHistory}
           disabled={disabled || confirming}
           describedBy={detailId}
           onChange={setMode}
         />
+        {onFreezeModel ? (
+          <label className="sharing-link-comments">
+            <input
+              type="checkbox"
+              checked={includeHistory}
+              disabled={disabled || confirming}
+              aria-describedby={detailId}
+              onChange={(event) => setIncludeHistory(event.target.checked)}
+            />
+            Include history
+          </label>
+        ) : null}
         <label className="sharing-link-comments">
           <input
             type="checkbox"
@@ -505,7 +577,9 @@ export function EncryptedShareLinks({
         </button>
       </div>
       <p id={detailId} className="sharing-access-detail">
-        {SHARE_LINK_MODE_HINT[mode]}
+        {withoutHistory
+          ? SHARE_LINK_NO_HISTORY_HINT
+          : SHARE_LINK_MODE_HINT[mode]}
         {withComments ? ' They see only this link’s comments.' : ''} End-to-end
         encrypted: the key is in the link.
       </p>
@@ -736,6 +810,29 @@ export function EncryptedShareLinks({
                     }
                   >
                     Allow comments
+                  </button>
+                ) : null}
+                {row.mode === 'frozen' &&
+                row.status !== 'revocation-pending' &&
+                onFreezeModel &&
+                client.update ? (
+                  <button
+                    type="button"
+                    className="sharing-row-action"
+                    disabled={busy !== null}
+                    title="Share the model as it is now through this link"
+                    aria-label="Update No history link to the current model"
+                    onClick={() =>
+                      void run(`update:${row.shareId}`, async () =>
+                        client.update!(
+                          projectId,
+                          row.shareId,
+                          await onFreezeModel()
+                        )
+                      )
+                    }
+                  >
+                    Update
                   </button>
                 ) : null}
                 {row.url ? (

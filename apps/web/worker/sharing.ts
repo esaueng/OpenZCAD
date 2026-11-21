@@ -1,6 +1,7 @@
 import type {
   CreateProjectInvitationResponse,
   CreateProjectShareLinkResponse,
+  ProjectDocument,
   ProjectMemberRole,
   ProjectShareLinkMode,
   UserId
@@ -319,6 +320,8 @@ export function parseCreateShareLink(value: unknown): {
   mode: ProjectShareLinkMode;
   label: string | null;
   comments: boolean;
+  /** L08: the frozen model of a link without history, as received. */
+  frozenDocument?: unknown;
 } {
   const record = asRecord(value);
   if (record.comments !== undefined && typeof record.comments !== 'boolean')
@@ -327,11 +330,50 @@ export function parseCreateShareLink(value: unknown): {
       'SHARE_LINK_COMMENTS_INVALID',
       'comments must be true or false.'
     );
+  if (record.history !== undefined && typeof record.history !== 'boolean')
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_HISTORY_INVALID',
+      'history must be true or false.'
+    );
+  const mode = parseProjectShareLinkMode(record.mode);
+  const withoutHistory = record.history === false;
+  // A link without history has no parameters to tweak, and serves the
+  // frozen model sent with it instead of the project. A document sent with
+  // any other link is refused rather than ignored, so a client can never
+  // believe it shared a frozen model while the link serves the live one.
+  if (withoutHistory && mode !== 'view')
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_MODE_INVALID',
+      'A link without history is view only.'
+    );
+  if (withoutHistory !== (record.document !== undefined))
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_SNAPSHOT_INVALID',
+      withoutHistory
+        ? 'A link without history needs the model to share.'
+        : 'Only a link without history takes a model.'
+    );
   return {
-    mode: parseProjectShareLinkMode(record.mode),
+    mode,
     label: parseShareLinkLabel(record.label),
-    comments: record.comments === true
+    comments: record.comments === true,
+    ...(withoutHistory ? { frozenDocument: record.document } : {})
   };
+}
+
+/** L08: the body of an owner's Update of a link without history. */
+export function parseShareLinkSnapshot(value: unknown): unknown {
+  const record = asRecord(value);
+  if (record.document === undefined)
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_SNAPSHOT_INVALID',
+      'An update needs the model to share.'
+    );
+  return record.document;
 }
 
 export function parseRenameShareLink(value: unknown): { label: string | null } {
@@ -377,7 +419,12 @@ export async function createShareLink(
       tokenHash: await hashProjectInvitationToken(token),
       createdAt: now,
       label: request.label,
-      ...(request.comments ? { comments: true } : {})
+      ...(request.comments ? { comments: true } : {}),
+      // Persistence stores it only if it is a frozen model of this project
+      // (`frozenShareSnapshot`); anything else refuses the whole link.
+      ...(request.frozenDocument !== undefined
+        ? { frozenDocument: request.frozenDocument as ProjectDocument }
+        : {})
     }
   );
   return { shareLink, token };

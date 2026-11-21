@@ -92,6 +92,7 @@ import {
   e2eeShareSnapshotPrefix,
   isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
+  isE2eeShareLinkHistoryReady,
   isE2eeShareLinkStorageReady,
   isProjectStorageFormatReady
 } from '@openzcad/cloudflare-adapters';
@@ -231,9 +232,20 @@ async function readFrame(
 }
 
 function modeField(value: unknown): E2eeShareLinkMode {
-  if (value !== 'view' && value !== 'tweak')
-    invalid('mode must be view or tweak');
+  if (value !== 'view' && value !== 'tweak' && value !== 'frozen')
+    invalid('mode must be view, tweak or frozen');
   return value;
+}
+
+/**
+ * L08: a `frozen` link (the finished model without its history) is stored
+ * as mode `view` with `history = 0` (migration 0063; the mode column's
+ * CHECK is unchanged). The link's mode as clients know it, read back.
+ */
+async function modeColumn(db: D1Database, alias = ''): Promise<string> {
+  return (await isE2eeShareLinkHistoryReady(db))
+    ? `CASE WHEN ${alias}history = 0 THEN 'frozen' ELSE ${alias}mode END AS mode`
+    : `${alias}mode`;
 }
 
 function signedField(
@@ -294,7 +306,9 @@ interface DelegationRow {
   expires_at: number;
 }
 
-const LINK_COLUMNS = `share_id, mode, share_key_hash, owner_identity_hash,
+const linkColumns = async (
+  db: D1Database
+) => `share_id, ${await modeColumn(db)}, share_key_hash, owner_identity_hash,
   created_at, revoked_at, authority, authority_signature, authority_sequence,
   authority_expires_at`;
 
@@ -328,7 +342,7 @@ async function linkRow(
 ): Promise<LinkRow | null> {
   return db
     .prepare(
-      `SELECT ${LINK_COLUMNS} FROM e2ee_share_links
+      `SELECT ${await linkColumns(db)} FROM e2ee_share_links
        WHERE project_id = ? AND share_id = ?`
     )
     .bind(projectId, shareId)
@@ -356,7 +370,7 @@ async function linkRecords(
   const binds = only === undefined ? [projectId] : [projectId, only];
   const links = await db
     .prepare(
-      `SELECT ${LINK_COLUMNS} FROM e2ee_share_links
+      `SELECT ${await linkColumns(db)} FROM e2ee_share_links
        WHERE project_id = ? AND revoked_at IS NULL${filter}
        ORDER BY created_at, share_id`
     )
@@ -606,6 +620,15 @@ async function createLink(
   }
   const tokenHash = body.tokenHash;
   const mode = modeField(body.mode);
+  // Never registered as an ordinary view link on a server that cannot say
+  // it is a frozen one.
+  const frozen = mode === 'frozen';
+  if (frozen && !(await isE2eeShareLinkHistoryReady(ctx.db)))
+    refuse(
+      503,
+      'E2EE_SHARE_LINKS_UNAVAILABLE',
+      'Sharing without history is not available on this server yet.'
+    );
   const keyHash = bytesField(body.shareKeyHash, 'shareKeyHash', {
     exact: HASH_BYTES
   });
@@ -689,8 +712,10 @@ async function createLink(
       .prepare(
         `INSERT INTO e2ee_share_links
            (project_id, share_id, token_hash, mode, share_key_hash,
-            owner_identity_hash, created_by_user_id, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?
+            owner_identity_hash, created_by_user_id, created_at${
+              frozen ? ', history' : ''
+            })
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?${frozen ? ', 0' : ''}
          WHERE ${ctx.authorization.sql} AND ${PROJECT_FENCE}
            AND EXISTS (SELECT 1 FROM e2ee_project_groups
              WHERE project_id = ? AND key_epoch_base + epoch = ?)
@@ -702,7 +727,7 @@ async function createLink(
         projectId,
         shareId,
         tokenHash,
-        mode,
+        frozen ? 'view' : mode,
         shareKeyHash,
         ownerIdentityHash,
         ctx.userId,
@@ -1661,7 +1686,7 @@ async function servedLink(
     kind === 'blob'
       ? `l.project_id, l.share_id, s.envelope_key,
        s.envelope_bytes, s.snapshot_hash`
-      : `l.project_id, l.share_id, l.mode, l.authority,
+      : `l.project_id, l.share_id, ${await modeColumn(db, 'l.')}, l.authority,
        l.authority_signature, p.user_id AS owner_user_id,
        s.document_version, s.key_epoch,
        s.envelope_key, s.envelope_bytes, s.snapshot_hash,

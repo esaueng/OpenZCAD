@@ -44,7 +44,10 @@ import {
   type E2eeMigrationMemberRecord,
   type E2eeMigrationMembersResponse
 } from '@openzcad/shared';
-import { isE2eeInvitationStorageReady } from '@openzcad/cloudflare-adapters';
+import {
+  isE2eeInvitationStorageReady,
+  isShareLinkHistoryReady
+} from '@openzcad/cloudflare-adapters';
 import {
   KEY_PACKAGE_COUNTS,
   invitationColumns,
@@ -384,10 +387,16 @@ export async function listMigrationMembers(
     });
   }
   const nowSeconds = Math.floor(Date.now() / 1000);
+  // L08: a link without history is not offered again as an encrypted link.
+  // Its replacement would be a `view` link to the live project, history
+  // included; the owner makes a new link without history instead.
+  const withHistory = (await isShareLinkHistoryReady(db))
+    ? ' AND history = 1'
+    : '';
   const { results: links } = await db
     .prepare(
       `SELECT id, mode FROM project_share_links
-       WHERE project_id = ? AND revoked_at IS NULL AND created_at > ?
+       WHERE project_id = ? AND revoked_at IS NULL AND created_at > ?${withHistory}
        ORDER BY created_at, id`
     )
     .bind(projectId, nowSeconds - PROJECT_SHARE_LINK_TTL_SECONDS)

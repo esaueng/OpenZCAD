@@ -48,6 +48,15 @@
  *   server lists names another fingerprint than the owner's current one,
  *   every link is tombstoned and the dialog offers to reissue them.
  *
+ * - **Links without history** (L08, mode `frozen`). The snapshot of such a
+ *   link is never the project: it is the finished model the owner's browser
+ *   froze (`frozenShareDocument`: one imported solid per body), given when
+ *   the link is created and again on the owner's Update. Every later
+ *   republication (a new statement, a new key epoch) reads the link's own
+ *   stored snapshot back with the share key, checks that a current author
+ *   signed it and that it holds imported solids only, and seals that same
+ *   model again. With neither, the link is left unpublished.
+ *
  * Every head the store accepts has its set verified (`shareLinkSet.ts`).
  */
 import {
@@ -83,7 +92,18 @@ import {
   type SignedStatement,
   type VerifiedShareLinkSet
 } from '@openzcad/crypto';
-import { sharedProjectSnapshotDocument } from '@openzcad/document-core';
+import {
+  assertStorableDocument,
+  frozenShareDocumentProblem,
+  sharedProjectSnapshotDocument
+} from '@openzcad/document-core';
+import {
+  parseEnvelope,
+  publicKeyHash,
+  unwrapKey,
+  verifyProjectEnvelopeSignature
+} from '@openzcad/crypto';
+import { decodeProjectEnvelopeJob } from './decodeJobs';
 import {
   shareSnapshotVersionId,
   type E2eeShareDelegationRecord,
@@ -147,6 +167,8 @@ export type ShareLinksErrorCode =
   | 'key-unavailable'
   /** Tombstoned in the project; the server did not confirm forgetting it. */
   | 'revocation-pending'
+  /** L08: not the frozen model a link without history may publish. */
+  | 'frozen-model'
   /** L08: this server does not take comments on encrypted links. */
   | 'unavailable';
 
@@ -889,6 +911,12 @@ export async function publishShareSnapshots(
     readonly republish?: readonly string[];
     /** The server's links as just listed, instead of listing them again. */
     readonly listed?: E2eeShareLinksResponse;
+    /**
+     * L08: the model to publish for links without history, by link id (a
+     * new link's first snapshot, or the owner's Update). Such a link with
+     * no entry here republishes its own stored snapshot.
+     */
+    readonly frozen?: ReadonlyMap<string, ProjectDocument>;
   } = {}
 ): Promise<PublishOutcome> {
   const published: string[] = [];
@@ -913,18 +941,36 @@ export async function publishShareSnapshots(
     projectId,
     keyEpoch
   );
-  const document = sharedProjectSnapshotDocument(current.document);
-  const blobs: ContentBlobReference[] = ctx.blobReferences
-    ? documentBlobReferences(ctx.blobReferences, projectId, document)
-    : [];
+  // The live project, for every link that shares it. Built only when one
+  // does: a project whose links are all without history never projects it.
+  let live:
+    { document: ProjectDocument; blobs: ContentBlobReference[] } | undefined;
+  const liveSnapshot = () => {
+    if (!live) {
+      const document = sharedProjectSnapshotDocument(current.document);
+      live = {
+        document,
+        blobs: ctx.blobReferences
+          ? documentBlobReferences(ctx.blobReferences, projectId, document)
+          : []
+      };
+    }
+    return live;
+  };
   for (const link of links) {
     const record = listed.links.find((l) => l.shareId === link.shareId);
     if (!record) continue;
     const stored = record.snapshot;
+    const given =
+      link.mode === 'frozen' ? options.frozen?.get(link.shareId) : undefined;
     if (
       stored &&
+      !given &&
       (stored.documentVersion > current.version ||
-        (stored.documentVersion === current.version &&
+        // A frozen model does not follow the project's versions: it is
+        // republished only under a new key epoch or a newer statement.
+        ((link.mode === 'frozen' ||
+          stored.documentVersion === current.version) &&
           stored.keyEpoch === keyEpoch &&
           !options.republish?.includes(link.shareId) &&
           !snapshotPredatesAuthority(record)))
@@ -940,6 +986,25 @@ export async function publishShareSnapshots(
         record,
         keyEpoch
       );
+      // L08: a link without history gets its frozen model, given or read
+      // back from its own snapshot, and never the project's document.
+      const { document, blobs } =
+        link.mode === 'frozen'
+          ? {
+              document: given
+                ? frozenSnapshotDocument(given, projectId)
+                : await storedFrozenDocument(ctx, projectId, {
+                    shareId: link.shareId,
+                    shareKey,
+                    authors: await shareAuthorKeyHashes(
+                      ctx,
+                      projectId,
+                      keyEpoch
+                    )
+                  }),
+              blobs: []
+            }
+          : liveSnapshot();
       const sealed = await sealSnapshot({
         projectId,
         shareId: link.shareId,
@@ -970,6 +1035,111 @@ export async function publishShareSnapshots(
     }
   }
   return outcome();
+}
+
+/**
+ * L08: `value` as the snapshot of a link without history: its share
+ * projection, and only when it holds imported solids of this project and
+ * nothing of the project's history. Anything else is refused here, on the
+ * last step before sealing, whoever handed it over.
+ */
+export function frozenSnapshotDocument(
+  value: unknown,
+  projectId: string
+): ProjectDocument {
+  let document: ProjectDocument | undefined;
+  let problem: string | null;
+  try {
+    document = sharedProjectSnapshotDocument(assertStorableDocument(value));
+    problem =
+      document.projectId === projectId
+        ? frozenShareDocumentProblem(document)
+        : 'It belongs to another project.';
+  } catch (error) {
+    problem = describe(error);
+  }
+  if (problem !== null || !document)
+    throw new ShareLinksError(
+      'frozen-model',
+      `The model could not be shared without its history. ${problem}`
+    );
+  return document;
+}
+
+/**
+ * L08: the frozen model a link without history serves now, read back as a
+ * visitor reads it (the token and the version key both come from the share
+ * key) so it can be sealed again under a new epoch or after a new
+ * statement. Accepted only when one of `authors` (the project's current
+ * owner and editor devices) signed the envelope and it passes
+ * `frozenSnapshotDocument`.
+ */
+async function storedFrozenDocument(
+  ctx: ShareLinksContext,
+  projectId: string,
+  link: {
+    readonly shareId: string;
+    readonly shareKey: Uint8Array;
+    readonly authors: readonly Uint8Array[];
+  }
+): Promise<ProjectDocument> {
+  const missing = (reason: string) =>
+    new ShareLinksError(
+      'frozen-model',
+      `${reason} Update the link to share the current model.`
+    );
+  const served = await ctx.api.shared(await shareLinkToken(link.shareKey));
+  if (!served || served.metadata.shareId !== link.shareId)
+    throw missing('This link has no model yet.');
+  const authorKey = fromBase64Url(served.metadata.authorKey);
+  const authorHash = await publicKeyHash(authorKey);
+  if (!link.authors.some((hash) => sameBytes(hash, authorHash)))
+    throw missing('The link\u2019s model was published by a removed device.');
+  if (
+    !(await verifyProjectEnvelopeSignature(
+      authorKey,
+      served.envelope,
+      fromBase64Url(served.metadata.snapshotSignature)
+    ))
+  )
+    throw missing('The link\u2019s model could not be verified.');
+  const { header } = parseEnvelope(served.envelope);
+  if (
+    header.class !== 'project' ||
+    header.kind !== 'share-snapshot' ||
+    header.projectId !== projectId
+  )
+    throw missing('The link\u2019s model could not be verified.');
+  const versionKey = await unwrapKey(
+    link.shareKey,
+    fromBase64Url(served.metadata.wrappedVersionKey),
+    {
+      purpose: 'share-version-key',
+      projectId,
+      keyEpoch: header.keyEpoch,
+      shareId: link.shareId,
+      versionId: shareSnapshotVersionId(header.documentVersion)
+    }
+  );
+  try {
+    const opened = await decodeProjectEnvelopeJob({
+      type: 'project-envelope',
+      kind: 'share-snapshot',
+      versionKey,
+      envelope: served.envelope,
+      expect: {
+        projectId,
+        documentVersion: header.documentVersion,
+        keyEpoch: header.keyEpoch
+      }
+    });
+    return frozenSnapshotDocument(
+      (opened.value as { document: unknown }).document,
+      projectId
+    );
+  } finally {
+    versionKey.fill(0);
+  }
 }
 
 /** One link's share snapshot: a fresh version key, wrapped twice, signed. */
@@ -1062,8 +1232,19 @@ export interface CreatedShareLink {
 export async function createShareLink(
   ctx: ShareLinksContext,
   projectId: string,
-  mode: ShareLinkMode
+  mode: ShareLinkMode,
+  /** L08: the frozen model of a `frozen` link, its first snapshot. */
+  frozenDocument?: ProjectDocument
 ): Promise<CreatedShareLink> {
+  if ((mode === 'frozen') !== (frozenDocument !== undefined))
+    throw new ShareLinksError(
+      'frozen-model',
+      'A link without history needs the model to share, and only it takes one.'
+    );
+  // Refused before anything is written, not after the link exists.
+  const frozen = frozenDocument
+    ? frozenSnapshotDocument(frozenDocument, projectId)
+    : undefined;
   const revision = getKeySessionRevision();
   return withShareWorkLock(ctx.groups.account.userId, projectId, async () => {
     if (getKeySessionRevision() !== revision)
@@ -1074,7 +1255,43 @@ export async function createShareLink(
     const pending = (
       await shareWorkFor(ctx).read(ctx.groups.account.userId, projectId)
     ).pending.find((job) => job.sourceId === null && job.mode === mode);
-    return createStoredShareLink(ctx, projectId, mode, pending);
+    return createStoredShareLink(ctx, projectId, mode, pending, null, frozen);
+  });
+}
+
+/**
+ * L08, the owner's Update: the current model, frozen, replaces the snapshot
+ * of a link without history. The link, its URL and its key stay.
+ */
+export async function updateFrozenShareLink(
+  ctx: ShareLinksContext,
+  projectId: string,
+  shareId: string,
+  frozenDocument: ProjectDocument
+): Promise<void> {
+  const frozen = frozenSnapshotDocument(frozenDocument, projectId);
+  await workLock(ctx, projectId, async () => {
+    const head = await ctx.store.shareHead(projectId);
+    await requireOwner(ctx, projectId, head.keyEpoch);
+    const link = head.shareLinks?.links.find(
+      (entry) => entry.shareId === shareId
+    );
+    if (link?.mode !== 'frozen')
+      throw new ShareLinksError(
+        'link-not-found',
+        'This link shares the project with its history; it has no model to update.'
+      );
+    const outcome = await publishShareSnapshots(ctx, projectId, head, {
+      only: [shareId],
+      republish: [shareId],
+      frozen: new Map([[shareId, frozen]])
+    });
+    if (!outcome.published.includes(shareId))
+      throw new ShareLinksError(
+        'frozen-model',
+        outcome.failed.find((failure) => failure.shareId === shareId)?.reason ??
+          'The link could not be updated. Try again.'
+      );
   });
 }
 
@@ -1085,7 +1302,9 @@ async function createStoredShareLink(
   projectId: string,
   mode: ShareLinkMode,
   saved?: PendingShareCreation,
-  sourceId: string | null = null
+  sourceId: string | null = null,
+  /** L08: a `frozen` link's model; without it the link waits for Update. */
+  frozen?: ProjectDocument
 ): Promise<CreatedShareLink> {
   const revision = getKeySessionRevision();
   const active = () => {
@@ -1290,7 +1509,8 @@ async function createStoredShareLink(
   if (!stated.issued.includes(shareId) && !stated.current.includes(shareId))
     pending.push('authority');
   const shown = await publishShareSnapshots(ctx, projectId, head, {
-    only: [shareId]
+    only: [shareId],
+    ...(frozen ? { frozen: new Map([[shareId, frozen]]) } : {})
   }).catch((error: unknown): PublishOutcome => ({
     published: [],
     failed: [{ shareId, reason: describe(error) }]
@@ -1304,7 +1524,8 @@ async function createStoredShareLink(
     const stored = record?.snapshot;
     if (
       !stored ||
-      stored.documentVersion < head.version ||
+      // A frozen model's version is the one it was sealed at, not the head's.
+      (mode !== 'frozen' && stored.documentVersion < head.version) ||
       stored.keyEpoch < head.keyEpoch ||
       snapshotPredatesAuthority(record)
     )
@@ -1830,6 +2051,48 @@ export async function reissueShareLinks(
     const selected = [...new Set(links.map((link) => link.shareId))].flatMap(
       (id) => (sources.has(id) ? [sources.get(id)!] : [])
     );
+    // L08: a link without history is reissued with the model it served.
+    // Read it back before the old link is forgotten; where that fails, the
+    // new link waits, unpublished, for the owner's Update.
+    const frozen = new Map<string, ProjectDocument>();
+    const frozenSources = selected.filter((link) => link.mode === 'frozen');
+    if (frozenSources.length) {
+      const listed = await ctx.api.list(projectId).catch(() => null);
+      const authors = await shareAuthorKeyHashes(
+        ctx,
+        projectId,
+        head.keyEpoch
+      ).catch(() => []);
+      for (const source of frozenSources) {
+        const grant = head.shareLinks?.links.find(
+          (link) => link.shareId === source.shareId
+        );
+        const record = listed?.links.find(
+          (link) => link.shareId === source.shareId
+        );
+        if (!grant || !record) continue;
+        try {
+          const shareKey = await shareKeyFor(
+            ctx,
+            projectId,
+            source.shareId,
+            grant.shareKeyHash,
+            record,
+            head.keyEpoch
+          );
+          frozen.set(
+            source.shareId,
+            await storedFrozenDocument(ctx, projectId, {
+              shareId: source.shareId,
+              shareKey,
+              authors
+            })
+          );
+        } catch {
+          // Left for Update.
+        }
+      }
+    }
     // Commit the authorized sources/modes before tombstones or remote deletes.
     await rememberRetired(ctx, projectId, selected);
     if (selected.length)
@@ -1850,7 +2113,8 @@ export async function reissueShareLinks(
           projectId,
           link.mode,
           pending,
-          link.shareId
+          link.shareId,
+          frozen.get(link.shareId)
         )
       );
     }

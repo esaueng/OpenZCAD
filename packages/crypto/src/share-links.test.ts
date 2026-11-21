@@ -433,8 +433,11 @@ describe('share-authority statements', () => {
     const mode = new Uint8Array(bytes);
     const modeAt = 3 + 1 + 1 + 'proj_1'.length + 1 + 'share_1'.length + 32;
     expect(mode[modeAt]).toBe(2);
-    mode[modeAt] = 3;
+    // 3 is `frozen` (L08); the next code is unknown.
+    mode[modeAt] = 4;
     throwsCode(() => decodeShareAuthority(mode), 'malformed');
+    mode[modeAt] = 3;
+    expect(decodeShareAuthority(mode).mode).toBe('frozen');
     throwsCode(
       () => decodeShareAuthority(concatBytes(bytes, Uint8Array.of(0))),
       'malformed'
