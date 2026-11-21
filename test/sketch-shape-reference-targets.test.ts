@@ -205,7 +205,9 @@ describe('S02-D legacy shape reference targets', () => {
         objectId: f.poly,
         data: { ...polygon, sides: 5 }
       })
-    ).toThrow(/measure this shape's corners or sides.*The shape was kept/);
+    ).toThrow(
+      /measure this shape's corners, sides or centre.*The shape was kept/
+    );
     // A radius edit keeps the count and is accepted.
     expect(() =>
       updateSketchObject(added.document, {
@@ -347,6 +349,121 @@ describe('S02-D legacy shape reference targets', () => {
       /Shape centre and legacy shape reference targets require project schema v125 or newer/;
     expect(() => normalizeDocument(old)).toThrow(upgrade);
     expect(() => new CommandManager(old)).toThrow(upgrade);
+  });
+});
+
+describe('S02-D review regressions', () => {
+  it('refuses turning a measured rectangle into a four-sided polygon', () => {
+    const f = fixture();
+    const added = addSketchReferenceDimension(f.document, {
+      sketchId: f.sketchId,
+      data: {
+        dimensionKind: 'distance',
+        a: { kind: 'shape-corner', objectId: f.rect, index: 0, count: 4 },
+        b: { objectId: f.ln, point: 'start' }
+      }
+    });
+    expect(() =>
+      updateSketchObject(added.document, {
+        sketchId: f.sketchId,
+        objectId: f.rect,
+        data: {
+          objectKind: 'polygon',
+          sides: 4,
+          radius: 8,
+          centerX: 10,
+          centerY: 6
+        }
+      })
+    ).toThrow(/Delete them before changing its kind or side count/);
+  });
+
+  it('lets a centre-only reference keep its polygon through a count edit', () => {
+    const f = fixture();
+    const added = addSketchReferenceDimension(f.document, {
+      sketchId: f.sketchId,
+      data: {
+        dimensionKind: 'distance',
+        a: { kind: 'shape-center', objectId: f.poly },
+        b: { objectId: f.ln, point: 'start' }
+      }
+    });
+    const edited = updateSketchObject(added.document, {
+      sketchId: f.sketchId,
+      objectId: f.poly,
+      data: { ...polygon, sides: 5 }
+    });
+    // The centre does not move with the count, so the value stands.
+    expect(measure(edited, f.sketchId)[0]).toMatchObject({
+      status: 'current',
+      a: { x: 40, y: 0 }
+    });
+    // A kind change is still refused for a centre.
+    expect(() =>
+      updateSketchObject(added.document, {
+        sketchId: f.sketchId,
+        objectId: f.poly,
+        data: { objectKind: 'circle', radius: 10, centerX: 40, centerY: 0 }
+      })
+    ).toThrow(/changing its kind or side count/);
+  });
+
+  it('does not let a reference already unresolved by a parameter block an unrelated edit', () => {
+    const f = fixture();
+    const added = addSketchReferenceDimension(f.document, {
+      sketchId: f.sketchId,
+      data: {
+        dimensionKind: 'distance',
+        a: { kind: 'shape-corner', objectId: f.poly, index: 5, count: 6 },
+        b: { kind: 'shape-center', objectId: f.poly }
+      }
+    });
+    const five = setParameter(added.document, { name: 'n', expression: '5' });
+    expect(measure(five, f.sketchId)[0]).toMatchObject({
+      status: 'unresolved'
+    });
+    // A radius edit leaves the count at 5: accepted, still unresolved.
+    const radius = updateSketchObject(five, {
+      sketchId: f.sketchId,
+      objectId: f.poly,
+      data: { ...polygon, radius: 12 }
+    });
+    expect(measure(radius, f.sketchId)[0]).toMatchObject({
+      status: 'unresolved'
+    });
+    // Restoring the count resolves the same corner again.
+    const six = setParameter(radius, { name: 'n', expression: '6' });
+    expect(measure(six, f.sketchId)[0]).toMatchObject({
+      status: 'current',
+      value: 12
+    });
+  });
+
+  it('keeps the angle kind diagnostic ahead of an unresolved expression', () => {
+    const outcome = resolveSketchReferenceDimension(
+      new Map<EntityId, SketchObjectData>([
+        [
+          'ent_a' as EntityId,
+          { objectKind: 'line', x1: 'missing', y1: 0, x2: 1, y2: 0 }
+        ],
+        [
+          'ent_b' as EntityId,
+          { objectKind: 'circle', radius: 2, centerX: 0, centerY: 0 }
+        ]
+      ]),
+      {
+        annotationId: toSketchReferenceAnnotationId('sref_order'),
+        data: {
+          dimensionKind: 'angle',
+          a: 'ent_a' as EntityId,
+          b: 'ent_b' as EntityId
+        }
+      },
+      (value) => (typeof value === 'number' ? value : undefined)
+    );
+    expect(outcome.status === 'unresolved' && outcome.reason).toMatch(
+      /applies to two lines, not circle "ent_b"/
+    );
   });
 });
 

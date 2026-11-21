@@ -377,11 +377,14 @@ export function assertNoReferenceDimensionDependents(
 }
 
 /**
- * S02-D: a legacy-shape target names its shape's side count. A direct edit
- * that changes a referenced shape's kind or side count would move every
- * corner index onto a different vertex, so it refuses and names the
- * annotations. (A parameter edit that changes a polygon's count leaves the
- * reference visibly unresolved, never re-indexed.)
+ * S02-D: a legacy-shape target names its shape by kind, and a corner or side
+ * by index within the shape's side count. A direct edit that changes a
+ * measured shape's kind (a rectangle into a four-sided polygon would move
+ * corner 0 from the lower-left corner to the top vertex), or changes the
+ * count a corner or side is indexed in, would silently retarget, so it
+ * refuses and names the annotations. Only the edit's own change is judged:
+ * an annotation already unresolved by a parameter edit does not block an
+ * unrelated edit, and a centre, which no count moves, allows a count edit.
  */
 export function assertShapeReferenceTargetsPreserved(
   document: ProjectDocument,
@@ -389,35 +392,42 @@ export function assertShapeReferenceTargetsPreserved(
   objectId: EntityId,
   data: SketchObjectData
 ): void {
-  const dependents = (sketch.referenceDimensions ?? []).filter(
-    ({ data: reference }) =>
-      reference.dimensionKind !== 'radius' &&
-      [reference.a, reference.b].some(
-        (target) => isSketchShapeTarget(target) && target.objectId === objectId
-      )
+  const targets = (sketch.referenceDimensions ?? []).flatMap((reference) =>
+    reference.data.dimensionKind === 'radius'
+      ? []
+      : [reference.data.a, reference.data.b]
+          .filter(
+            (target) =>
+              isSketchShapeTarget(target) && target.objectId === objectId
+          )
+          .map((target) => ({ reference, target }))
   );
-  if (dependents.length === 0) return;
+  if (targets.length === 0) return;
+  const node = ownEntry(document.nodes, objectId);
+  if (node?.kind !== 'sketch-object') return;
   const scope = getParameterScope(document).scope;
-  const count = sketchShapeSideCount(data, (value) => {
+  const resolve = (value: string | number) => {
     try {
       return resolveParamValue(value, scope, undefined, document.units);
     } catch {
       return undefined;
     }
-  });
-  const changed = dependents.filter(({ data: reference }) =>
-    reference.dimensionKind === 'radius'
-      ? false
-      : [reference.a, reference.b].some(
-          (target) =>
-            isSketchShapeTarget(target) &&
-            target.objectId === objectId &&
-            (typeof count === 'string' ||
-              ('count' in target && target.count !== count))
+  };
+  const kindChanged = node.data.objectKind !== data.objectKind;
+  const countChanged =
+    sketchShapeSideCount(node.data, resolve) !==
+    sketchShapeSideCount(data, resolve);
+  const changed = [
+    ...new Set(
+      targets
+        .filter(
+          ({ target }) => kindChanged || (countChanged && 'count' in target)
         )
-  );
+        .map(({ reference }) => reference)
+    )
+  ];
   if (changed.length)
     throw new Error(
-      `Reference dimensions measure this shape's corners or sides: ${changed.map((r) => `${r.data.dimensionKind} (${r.annotationId})`).join(', ')}. Delete them before changing its kind or side count. The shape was kept.`
+      `Reference dimensions measure this shape's corners, sides or centre: ${changed.map((r) => `${r.data.dimensionKind} (${r.annotationId})`).join(', ')}. Delete them before changing its kind or side count. The shape was kept.`
     );
 }

@@ -101,26 +101,41 @@ export function SketchReferenceDimensions({
   // converted to reach its corners. Its corners follow the shape's own order.
   // "(parametric)" keeps an unnamed one ("Rectangle 1") apart from a
   // held-line shape of the same name.
-  const shapes = namedObjects.flatMap((object) => {
+  // Their options share the snap target budget, as composite options do.
+  let shapes: {
+    object: (typeof namedObjects)[number];
+    targets: NonNullable<ReturnType<typeof sketchShapeTargets>>;
+  }[] = [];
+  let shapeOptionCount = 0;
+  for (const object of namedObjects) {
+    if (
+      object.data.objectKind !== 'rectangle' &&
+      object.data.objectKind !== 'polygon'
+    )
+      continue;
     const targets = sketchShapeTargets(
       object.id as EntityId,
       object.data,
       resolve
     );
-    return targets ? [{ object, targets }] : [];
-  });
-  points.push(
-    ...shapes.flatMap(({ object, targets }) => [
-      ...targets.corners.map((target) => ({
+    if (!targets) continue;
+    shapeOptionCount += targets.corners.length + 1;
+    shapes.push({ object, targets });
+    if (shapeOptionCount > SKETCH_SNAP_LIMITS.targets) break;
+  }
+  const shapeOptionsLimited = shapeOptionCount > SKETCH_SNAP_LIMITS.targets;
+  if (shapeOptionsLimited) shapes = [];
+  for (const { object, targets } of shapes) {
+    for (const target of targets.corners)
+      points.push({
         key: JSON.stringify(target),
         label: `${object.label} (parametric) · Corner ${target.index + 1}`
-      })),
-      {
-        key: JSON.stringify(targets.center),
-        label: `${object.label} (parametric) · Centre`
-      }
-    ])
-  );
+      });
+    points.push({
+      key: JSON.stringify(targets.center),
+      label: `${object.label} (parametric) · Centre`
+    });
+  }
   const entities = namedObjects
     .filter((o) =>
       kind === 'angle'
@@ -146,15 +161,13 @@ export function SketchReferenceDimensions({
       )
     );
   if (kind === 'angle')
-    entities.push(
-      ...shapes.flatMap(({ object, targets }) =>
-        targets.sides.map((target) => ({
+    for (const { object, targets } of shapes)
+      for (const target of targets.sides)
+        entities.push({
           key: JSON.stringify(target),
           label: `${object.label} (parametric) · Side ${target.index + 1}`,
           target
-        }))
-      )
-    );
+        });
   const options = kind === 'distance' ? points : entities;
   const a = options.some((o) => o.key === first) ? first : '';
   const b = options.some((o) => o.key === second) ? second : '';
@@ -201,6 +214,12 @@ export function SketchReferenceDimensions({
         Saved measured values. They do not constrain geometry. Horizontal and
         vertical distances follow the sketch axes.
       </p>
+      {shapeOptionsLimited ? (
+        <p role="status">
+          Parametric shape targets are unavailable because this sketch exceeds
+          the target limit. Other references remain available.
+        </p>
+      ) : null}
       {compositeOptionsLimited ? (
         <p role="status">
           Composite targets are unavailable because this sketch exceeds the

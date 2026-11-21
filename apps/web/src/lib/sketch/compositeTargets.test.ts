@@ -16,7 +16,8 @@ import {
 import {
   centerRectangleShape,
   compositeCommands,
-  cornerRectangleShape
+  cornerRectangleShape,
+  slotShape
 } from './composites';
 import { collectSketchSnapTargets, SKETCH_SNAP_LIMITS } from './session';
 import { sketchDimensionAnnotations } from './dimensionAnnotations';
@@ -290,5 +291,51 @@ describe('S02-D composite centre snaps', () => {
         corner.composite
       ]).some((target) => target.label?.endsWith('· Centre'))
     ).toBe(false);
+  });
+});
+
+describe('S02-D slot centre references', () => {
+  it('measures a slot centre, whose ends are arcs', () => {
+    const commit = compositeCommands(
+      slotShape({ x: 0, y: 0 }, { x: 20, y: 0 }, 4)!,
+      {
+        kind: 'new-sketch',
+        name: 'Slot',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 }
+      }
+    );
+    const manager = new CommandManager(
+      createProjectDocument('Slot centre', toUserId('user_test'))
+    );
+    manager.execute(composeCommands(commit.label, commit.commands));
+    const sketch = findSketch(manager.document, commit.sketchId)!;
+    const slot = sketch.composites![0]!;
+    const centreLine = slot.helperIds![0]!;
+    manager.execute(
+      commandFactories.addSketchReferenceDimension({
+        sketchId: commit.sketchId,
+        data: {
+          dimensionKind: 'distance',
+          a: createSketchCompositeCenterTarget(slot),
+          b: { objectId: centreLine, point: 'start' }
+        }
+      })
+    );
+    const after = findSketch(manager.document, commit.sketchId)!;
+    const objects = after.objectIds.map((id) => {
+      const node = manager.document.nodes[id]!;
+      if (node.kind !== 'sketch-object') throw new Error('Missing member');
+      return { id, data: node.data };
+    });
+    const [label] = sketchDimensionAnnotations(
+      objects,
+      [],
+      (value) => (typeof value === 'number' ? value : undefined),
+      'mm',
+      undefined,
+      after.referenceDimensions,
+      after.composites
+    );
+    expect(label?.label).toBe('(10 mm)');
   });
 });

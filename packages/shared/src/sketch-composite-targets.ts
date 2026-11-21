@@ -10,6 +10,7 @@ import {
   isSketchComposite,
   resolveSketchComposite,
   sketchCompositeHelperKinds,
+  sketchCompositeSideKind,
   sketchCompositeSideRange,
   type SketchCompositePoint
 } from './sketch-composites';
@@ -403,6 +404,51 @@ export function sketchCompositeCenterAliases(
 export type SketchCompositeCenterTargetResolution =
   { status: 'resolved'; point: SketchCompositePoint } | UnresolvedTarget;
 
+/**
+ * Structural qualification of a centre target. Unlike a corner or side,
+ * which only straight sides carry, every composite has a centre, so each
+ * side must be the kind its shape gives it (a slot's ends are arcs).
+ */
+export function resolveSketchCompositeCenterIdentity(
+  target: SketchCompositeCenterTarget,
+  composites: readonly SketchComposite[],
+  objects?: ReadonlyMap<string, SketchObjectData>
+): SketchCompositeTargetIdentityResolution {
+  const fail = (detail: string): UnresolvedTarget => ({
+    status: 'unresolved',
+    reason: `Composite "${isRecord(target) && typeof target.compositeId === 'string' ? target.compositeId : 'unknown'}" centre: ${detail}`
+  });
+  if (!isSketchCompositeCenterTarget(target))
+    return fail('the saved centre target descriptor is malformed.');
+  const identity = resolveSketchCompositeTargetIdentity(
+    { ...target, kind: 'composite-corner', index: 0 },
+    composites
+  );
+  if (identity.status === 'unresolved')
+    return fail(identity.reason.replace(/^Composite "[^"]*" corner 1: /, ''));
+  const { composite } = identity;
+  if (objects) {
+    for (const [index, id] of composite.edgeIds.entries()) {
+      const kind = sketchCompositeSideKind(composite.compositeKind, index);
+      if (objects.get(id)?.objectKind !== kind)
+        return fail(`side "${id}" is missing or is no longer a ${kind}.`);
+    }
+    const helperKinds = sketchCompositeHelperKinds(composite.method);
+    for (const [index, id] of (composite.helperIds ?? []).entries()) {
+      const helper = objects.get(id);
+      if (
+        !helper ||
+        helper.objectKind !== helperKinds[index] ||
+        !helper.construction
+      )
+        return fail(
+          `construction helper "${id}" is missing or has changed kind.`
+        );
+    }
+  }
+  return identity;
+}
+
 /** Resolve the complete named shape before publishing its centre. */
 export function resolveSketchCompositeCenterTarget(
   target: SketchCompositeCenterTarget,
@@ -414,15 +460,26 @@ export function resolveSketchCompositeCenterTarget(
     status: 'unresolved',
     reason: `Composite "${isRecord(target) && typeof target.compositeId === 'string' ? target.compositeId : 'unknown'}" centre: ${detail}`
   });
-  if (!isSketchCompositeCenterTarget(target))
-    return fail('the saved centre target descriptor is malformed.');
-  const corner = resolveTarget(
-    { ...target, kind: 'composite-corner', index: 0 },
+  const identity = resolveSketchCompositeCenterIdentity(
+    target,
     composites,
-    objects,
-    resolve
+    objects
   );
-  if (corner.status === 'unresolved')
-    return fail(corner.reason.replace(/^Composite "[^"]*" corner 1: /, ''));
-  return { status: 'resolved', point: corner.center };
+  if (identity.status === 'unresolved') return identity;
+  const resolved = resolveSketchComposite(
+    identity.composite,
+    objects,
+    (value) => {
+      try {
+        const result = resolve(value);
+        return typeof result === 'number' && Number.isFinite(result)
+          ? result
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+  );
+  if (resolved.status === 'broken') return fail(resolved.reason);
+  return { status: 'resolved', point: resolved.center };
 }

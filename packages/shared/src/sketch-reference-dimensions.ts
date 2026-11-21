@@ -22,6 +22,7 @@ import {
   isSketchCompositeCenterTarget,
   isSketchCompositeCornerTarget,
   isSketchCompositeSideTarget,
+  resolveSketchCompositeCenterIdentity,
   resolveSketchCompositeCenterTarget,
   resolveSketchCompositeCornerTarget,
   resolveSketchCompositeSideTarget,
@@ -446,16 +447,13 @@ function lowerReferenceTargets(
         : { ok: false, reason: identity.reason };
     }
     if (isSketchCompositeCenterTarget(target)) {
-      const identity = resolveSketchCompositeTargetIdentity(
-        { ...target, kind: 'composite-corner', index: 0 },
+      const identity = resolveSketchCompositeCenterIdentity(
+        target,
         composites,
         objects
       );
       if (identity.status === 'unresolved')
-        return {
-          ok: false,
-          reason: identity.reason.replace(' corner 1:', ' centre:')
-        };
+        return { ok: false, reason: identity.reason };
       const operand: PointOperand = {
         kind: 'derived',
         key: `composite-center:${target.compositeId}`,
@@ -1026,6 +1024,18 @@ export function resolveSketchReferenceDimension(
             data.dimensionKind,
             annotationId,
             `target "${String(operand.id)}" is not part of this sketch.`
+          );
+        }
+      }
+      // Kinds are judged before expressions, as they always were.
+      for (const operand of [data.a, data.b]) {
+        const objectData =
+          operand.kind === 'id' ? objectsById.get(operand.id) : undefined;
+        if (objectData && objectData.objectKind !== 'line') {
+          return unresolved(
+            data.dimensionKind,
+            annotationId,
+            `an angle reference applies to two lines, not ${objectData.objectKind} "${String(operand.kind === 'id' ? operand.id : '')}".`
           );
         }
       }
