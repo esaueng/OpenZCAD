@@ -1,5 +1,6 @@
 import { clearPatternCutPrefix } from './exact-pattern-cut-prefix';
 import { PatternOverlapWorkers } from './pattern-overlap-workers';
+import { clearCheckedHoleCuts } from './exact-point-hole-cuts';
 import {
   AxialExtentTracker,
   MIN_AXIAL_HISTORY_FEATURES,
@@ -3226,6 +3227,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.patternWorkers.dispose();
       this.heldDisplayDeflections.clear();
       this.previewFaceGeometry.clear();
+      clearCheckedHoleCuts(activeKernel);
       clearPatternCutPrefix(activeKernel);
       this.heldDisplayProjectId = document.projectId;
     }
