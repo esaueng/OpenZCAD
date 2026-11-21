@@ -83,6 +83,13 @@ For overlapping linear patterns, set `OZ_PERF_LINEAR_COPIES=13` or
 count and spacing edits from keypad input through the matching exact preview.
 See the [workload and measurements](performance/2026-11-20-parallel-linear-intersections.md).
 
+Measure a History sketch edit upstream of a Boolean cut with
+`OZ_PERF=1 OZ_PERF_ANGLE=gl pnpm exec playwright test upstream-sketch-edit --grep "measures Apply" --repeat-each 3 --workers=1`.
+The probe times the Apply click through committed geometry on a plate with
+30 independent boxes. It checks the cut volume after each of three width edits
+and records whether the worker reused the validated result. Each run attaches
+`sketch-history-performance.json`. Set `OZ_SKETCH_HISTORY_OUT` to append JSONL.
+
 ## Sharding and timing
 
 Both suites use the existing six shards and required E2E completion gate.

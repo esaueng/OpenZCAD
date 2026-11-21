@@ -267,6 +267,33 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     });
   });
 
+  it('creates a Tweak link when the owner picks Tweak', async () => {
+    const client = fakeClient([
+      { links: [], needsConfirmation: false, retired: [] }
+    ]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    expect(await screen.findByText('Only invited people')).toBeVisible();
+    const access = screen.getByRole('radiogroup', { name: 'Link access' });
+    // An encrypted link still defaults to View.
+    expect(within(access).getByRole('radio', { name: 'View' })).toBeChecked();
+    await user.click(within(access).getByRole('radio', { name: 'Tweak' }));
+    expect(
+      screen.getByText(
+        'Visitors can also change parameters. Their changes stay with them. End-to-end encrypted: the key is in the link.'
+      )
+    ).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(client.create).toHaveBeenCalledWith('proj_x', 'tweak');
+    // The output names the link it holds, even once the picker moves on.
+    expect(await screen.findByText('Tweak link')).toBeVisible();
+    await user.click(within(access).getByRole('radio', { name: 'View' }));
+    expect(screen.getByText('Tweak link')).toBeVisible();
+    expect(access).toHaveAccessibleDescription(
+      /Visitors can look, measure and export\./
+    );
+  });
+
   it('lets the owner allow comments on a link that does not take them (L08)', async () => {
     const commenting: EncryptedShareLinksState = {
       links: [

@@ -217,6 +217,33 @@ describe('PATCH /api/settings for an encrypted library', () => {
     expect(response.status).toBe(409);
   });
 
+  it('never carries a stored reference display unit into the readable copy', async () => {
+    const d1 = seed(true);
+    // Stored readable, with inches, before the library was encrypted.
+    const before = privateSettings();
+    before.sketching.referenceDisplayUnit = 'inch';
+    db!
+      .prepare(
+        `INSERT INTO user_settings (user_id, settings_json, revision, updated_at)
+       VALUES (?, ?, 1, ?)`
+      )
+      .run(USER, JSON.stringify(before), NOW);
+    // A client from before the setting seals first and omits it.
+    const older = accountServerSettings(privateSettings()) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    delete older.sketching.referenceDisplayUnit;
+    const sealed = await worker.fetch(
+      patch({ expectedRevision: 1, settings: older, sealedSettings: SEALED }),
+      env(d1, projectsOn)
+    );
+    expect(sealed.status).toBe(200);
+    expect(storedRow().sealed_settings).toBe(SEALED);
+    const readable = JSON.parse(storedRow().settings_json) as AppSettings;
+    expect(readable.sketching.referenceDisplayUnit).toBe('document');
+    expect(storedRow().settings_json).not.toContain('sliding clearances');
+  });
+
   it('refuses a malformed sealed record', async () => {
     const d1 = seed(true);
     const response = await worker.fetch(

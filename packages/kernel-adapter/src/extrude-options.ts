@@ -54,6 +54,29 @@ export function toFaceDistance(
   data: ExtrudeData,
   result: Pick<ExactBuildResult, 'shapes' | 'consumed' | 'sketchBases'>
 ): number {
+  const target = resolveToFaceTarget(kernel, document, feature, data, result);
+  if (target.kind === 'parallel') return target.distance;
+  throw unresolved(
+    'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
+  );
+}
+
+/**
+ * The stored target face as it resolves at this history position: parallel
+ * to the sketch (with its signed distance, exactly as {@link toFaceDistance}
+ * always derived it) or, from the slanted to-face slice, leaning off it
+ * (with its plane; the slanted plan decides whether it can be reached).
+ * Every way the face itself fails refuses as unresolved, as before.
+ */
+export function resolveToFaceTarget(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  feature: FeatureNode,
+  data: ExtrudeData,
+  result: Pick<ExactBuildResult, 'shapes' | 'consumed' | 'sketchBases'>
+):
+  | { kind: 'parallel'; distance: number }
+  | { kind: 'slanted'; frame: { origin: Vec3; zAxis: Vec3 } } {
   const target = data.toFace;
   if (!target) {
     throw unresolved('this extrude to a face names no face.');
@@ -102,10 +125,11 @@ export function toFaceDistance(
     point: frame.origin,
     normal: frame.zAxis
   });
-  if (distance !== null) return distance;
-  throw unresolved(
-    'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
-  );
+  if (distance !== null) return { kind: 'parallel', distance };
+  return {
+    kind: 'slanted',
+    frame: { origin: frame.origin, zAxis: frame.zAxis }
+  };
 }
 
 /**
@@ -166,9 +190,12 @@ export function toFaceSweepFeature(
   feature: FeatureNode,
   data: ExtrudeData,
   result: Pick<ExactBuildResult, 'shapes' | 'consumed' | 'sketchBases'>,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  /** The face's distance when the caller has already resolved it. */
+  resolvedDistance?: number
 ): FeatureNode {
-  const faceDistance = toFaceDistance(kernel, document, feature, data, result);
+  const faceDistance =
+    resolvedDistance ?? toFaceDistance(kernel, document, feature, data, result);
   const offset = resolveToFaceOffset(data, scope, document);
   const start = resolveExtrudeStartOffset(data, scope, document);
   if (faceDistance === 0 && start === 0) {
@@ -195,23 +222,27 @@ export function toFaceSweepFeature(
 
 /**
  * The draft angle a feature carries, resolved; zero for straight walls. An
- * expression resolves here, so its range is checked here too.
+ * expression resolves here, so its range is checked here too. `side` picks
+ * the back side's own draft (F01, v126) instead of the front's.
  */
 export function resolveExtrudeDraftDeg(
   data: ExtrudeData,
   scope: Record<string, number>,
-  document: ProjectDocument
+  document: ProjectDocument,
+  side: 'front' | 'back' = 'front'
 ): number {
-  if (data.draftAngleDeg === undefined) return 0;
+  const stored = side === 'back' ? data.backDraftAngleDeg : data.draftAngleDeg;
+  const label = side === 'back' ? 'Back draft angle' : 'Draft angle';
+  if (stored === undefined) return 0;
   const angle = resolveParamValue(
-    data.draftAngleDeg,
+    stored,
     scope,
-    'draft angle',
+    label.toLowerCase(),
     document.units
   );
   if (!Number.isFinite(angle) || Math.abs(angle) >= MAX_EXTRUDE_DRAFT_DEG) {
     throw new Error(
-      `Draft angle must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
+      `${label} must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
     );
   }
   return angle;
@@ -321,6 +352,45 @@ function draftCircularWall(
     Uint32Array.from(faces),
     JSON.stringify({ ruled: true })
   );
+}
+
+/**
+ * F01 (v126): a straight-swept solid whose one wall is round, rebuilt as the
+ * exact ruled loft between its cap circles (a cylinder): the form a drafted
+ * round half takes, so the two halves of a per-side draft fuse face to face
+ * alike. The kernel's fuse of a swept cylinder onto a lofted cone along
+ * their shared circle loses material. Any other solid is returned as it is.
+ */
+export function straightRoundWallAsLoft(
+  kernel: RemusKernel,
+  solid: number,
+  neutral: PlaneBasis,
+  pull: Vec3,
+  label: string
+): number {
+  const faces = classifyFaces(kernel, solid, pull, label);
+  const walls = faces.filter((face) => face.role === 'wall');
+  if (
+    walls.length !== 1 ||
+    walls[0]!.surfaceType === 'plane' ||
+    faces.length !== 3
+  ) {
+    return solid;
+  }
+  const lofted = draftCircularWall(
+    kernel,
+    walls[0]!.handle,
+    neutral,
+    pull,
+    0,
+    label
+  );
+  requireValidSolid(
+    kernel,
+    lofted,
+    `${label} could not be rebuilt as an exact round wall.`
+  );
+  return lofted;
 }
 
 /**

@@ -46,6 +46,9 @@ export function extrudeEditInitial(feature: FeatureNode): ExtrudeDraftInitial {
             : {})
         }
       : {}),
+    ...(data.endCondition === 'to-next'
+      ? { endCondition: 'to-next' as const }
+      : {}),
     ...(data.endCondition === 'to-face' && data.toFace
       ? {
           endCondition: 'to-face' as const,
@@ -60,6 +63,9 @@ export function extrudeEditInitial(feature: FeatureNode): ExtrudeDraftInitial {
       : {}),
     ...(data.draftAngleDeg !== undefined
       ? { draftAngleDeg: data.draftAngleDeg }
+      : {}),
+    ...(data.backDraftAngleDeg !== undefined
+      ? { backDraftAngleDeg: data.backDraftAngleDeg }
       : {})
   };
 }
@@ -81,6 +87,7 @@ export function extrudeEditData(
 ): ExtrudeData {
   const throughAll = value.endCondition === 'through-all';
   const toFace = value.endCondition === 'to-face';
+  const toNext = value.endCondition === 'to-next';
   const {
     symmetric: _symmetric,
     backDistance: _backDistance,
@@ -92,6 +99,7 @@ export function extrudeEditData(
     toFaceOffset: _toFaceOffset,
     startOffset: _startOffset,
     draftAngleDeg: _draftAngleDeg,
+    backDraftAngleDeg: _backDraftAngleDeg,
     ...kept
   } = stored;
   const operation = value.choice.operation as Exclude<
@@ -139,9 +147,11 @@ export function extrudeEditData(
                 ? { toFaceOffset: stored.toFaceOffset! }
                 : {})
           }
-        : stored.endCondition === 'blind'
-          ? { endCondition: 'blind' as const }
-          : {}),
+        : toNext
+          ? { endCondition: 'to-next' as const }
+          : stored.endCondition === 'blind'
+            ? { endCondition: 'blind' as const }
+            : {}),
     // A stored zero keeps its form unless the edit went through all.
     ...(value.startOffset !== undefined
       ? { startOffset: value.startOffset }
@@ -152,6 +162,14 @@ export function extrudeEditData(
       ? { draftAngleDeg: value.draftAngleDeg }
       : storedZero(stored.draftAngleDeg)
         ? { draftAngleDeg: stored.draftAngleDeg! }
+        : {}),
+    ...(value.backDraftAngleDeg !== undefined
+      ? { backDraftAngleDeg: value.backDraftAngleDeg }
+      : !throughAll &&
+          !toFace &&
+          !toNext &&
+          storedZero(stored.backDraftAngleDeg)
+        ? { backDraftAngleDeg: stored.backDraftAngleDeg! }
         : {})
   };
 }
@@ -190,7 +208,8 @@ export function extrudeEditCommand(
       'toFace',
       'toFaceOffset',
       'startOffset',
-      'draftAngleDeg'
+      'draftAngleDeg',
+      'backDraftAngleDeg'
     ] as const
   ).filter((key) => key in feature.data && !(key in data));
   return commandFactories.updateFeature(
@@ -216,7 +235,8 @@ export function extrudePreviewMagnitude(
   resolve: (distance: ExtrudeFormValue['distance']) => number
 ): number {
   return value.endCondition === 'through-all' ||
-    value.endCondition === 'to-face'
+    value.endCondition === 'to-face' ||
+    value.endCondition === 'to-next'
     ? 1
     : Math.abs(resolve(value.distance));
 }

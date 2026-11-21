@@ -190,6 +190,7 @@ import {
   parseUpdateAppSettingsRequest,
   settingsRequestOmitsKeymap,
   settingsRequestOmitsHiddenRelationGlyphs,
+  settingsRequestOmitsReferenceDisplayUnit,
   settingsRequestOmitsRelationGlyphs,
   settingsRequestOmittedViewportFields,
   resolveUserAssistant,
@@ -2125,6 +2126,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         keepStoredKeymap,
         keepStoredRelationGlyphs,
         keepStoredHiddenRelationGlyphs,
+        // A display preference: an older client keeps the stored unit. It
+        // is not worth refusing an encrypted account's older client for, and
+        // an encrypted account's readable copy holds only the server part,
+        // so its stored unit is never carried there (review).
+        keepStoredReferenceDisplayUnit:
+          !libraryEncrypted && settingsRequestOmitsReferenceDisplayUnit(body),
         keepStoredViewportFields,
         libraryEncrypted
       }

@@ -56,6 +56,11 @@ export interface ExtrudeFormValue {
   startOffset?: ParamValue;
   /** F01 (v29): absent for straight walls (a typed 0 is sent as absent). */
   draftAngleDeg?: ParamValue;
+  /**
+   * F01 (v126): the back side's draft; sent only for a blind extrude that
+   * has a back side (symmetric or a back distance), and absent at zero.
+   */
+  backDraftAngleDeg?: ParamValue;
 }
 
 /**
@@ -66,6 +71,11 @@ export interface ExtrudeFormValue {
 export interface ExtrudeToFaceInfo {
   label: string;
   distance: number | null;
+  /**
+   * The face leans off parallel: `distance` is only where its own point
+   * lies, so the offset and start checks wait for the build.
+   */
+  slanted?: boolean;
   pending?: boolean;
   problem?: string;
 }
@@ -104,6 +114,8 @@ export interface ExtrudeDraft {
   /** F01 (v121): the start offset, as typed; read except through all. */
   startOffset: string;
   draftAngle: string;
+  /** F01 (v126): the back side's draft, as typed. */
+  backDraftAngle: string;
 }
 
 /** What an extrude editor opens with. */
@@ -121,6 +133,7 @@ export interface ExtrudeDraftInitial {
   toFaceOffset?: ParamValue;
   startOffset?: ParamValue;
   draftAngleDeg?: ParamValue;
+  backDraftAngleDeg?: ParamValue;
 }
 
 /** What the rules read beyond the draft itself. */
@@ -154,7 +167,8 @@ export function initialExtrudeDraft(
     ...(initial.toFace ? { toFace: initial.toFace } : {}),
     faceOffset: paramValueText(initial.toFaceOffset ?? 0),
     startOffset: paramValueText(initial.startOffset ?? 0),
-    draftAngle: paramValueText(initial.draftAngleDeg ?? 0)
+    draftAngle: paramValueText(initial.draftAngleDeg ?? 0),
+    backDraftAngle: paramValueText(initial.backDraftAngleDeg ?? 0)
   };
 }
 
@@ -185,6 +199,15 @@ export function extrudeOffersThroughAll(draft: ExtrudeDraft): boolean {
   return draft.choice.operation === 'cut';
 }
 
+/** F01 (v130): Up to next stops at an add or cut target's next face. */
+export function extrudeOffersToNext(draft: ExtrudeDraft): boolean {
+  return draft.choice.operation === 'add' || draft.choice.operation === 'cut';
+}
+
+export function extrudeIsToNext(draft: ExtrudeDraft): boolean {
+  return extrudeOffersToNext(draft) && draft.endCondition === 'to-next';
+}
+
 export function extrudeIsThroughAll(draft: ExtrudeDraft): boolean {
   return (
     draft.choice.operation === 'cut' && draft.endCondition === 'through-all'
@@ -204,10 +227,17 @@ export function extrudeShownExtent(
   draft: ExtrudeDraft,
   ctx: ExtrudeDraftContext
 ): ExtrudeEndCondition {
-  if (extrudeIsThroughAll(draft) || extrudeIsToFace(draft, ctx)) {
+  if (
+    extrudeIsThroughAll(draft) ||
+    extrudeIsToFace(draft, ctx) ||
+    extrudeIsToNext(draft)
+  ) {
     return draft.endCondition;
   }
-  return draft.endCondition === 'through-all' ? 'blind' : draft.endCondition;
+  return draft.endCondition === 'through-all' ||
+    draft.endCondition === 'to-next'
+    ? 'blind'
+    : draft.endCondition;
 }
 
 /**
@@ -221,6 +251,8 @@ export function extrudeToFaceProblem(
 ): string | null {
   if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
   const info = ctx.toFacePicking!.describe(draft.toFace);
+  // Where a slanted face is reached is the build's to judge.
+  if (info.slanted && info.distance !== null) return null;
   if (info.distance === 0) {
     const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
     return start === 0
@@ -232,7 +264,7 @@ export function extrudeToFaceProblem(
     info.problem ??
     (info.pending
       ? 'Checking the target face…'
-      : 'This face is not parallel to the sketch plane; pick a face parallel to the sketch.')
+      : 'This face is nearly perpendicular to the sketch plane; pick a face that faces the sketch.')
   );
 }
 
@@ -250,8 +282,12 @@ function extrudeToFaceExtentRefusal(
   const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
   const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
   if (offset === null || start === null) return null;
-  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
-  if (reach === null || (reach === 0 && start === 0)) return null;
+  const info = ctx.toFacePicking!.describe(draft.toFace);
+  const reach = info.distance;
+  // A slanted face's distance is only where its own point lies.
+  if (reach === null || info.slanted || (reach === 0 && start === 0)) {
+    return null;
+  }
   if (toFaceExtent(reach, start, offset) !== null) return null;
   if (start === 0) {
     return {
@@ -302,26 +338,47 @@ export function extrudeToFaceUnresolved(
 }
 
 /**
- * Why the draft angle cannot apply as typed, or null. It tapers a one-sided
- * extrusion only, and an angle at a right angle has no finite taper.
+ * F01 (v126): whether a blind draft has a side behind the sketch plane for
+ * a back draft to taper: symmetric, or a back distance.
+ */
+export function extrudeHasBackSide(
+  draft: ExtrudeDraft,
+  ctx: ExtrudeDraftContext
+): boolean {
+  if (
+    extrudeIsThroughAll(draft) ||
+    extrudeIsToFace(draft, ctx) ||
+    extrudeIsToNext(draft)
+  ) {
+    return false;
+  }
+  if (draft.symmetric) return true;
+  // A negative back distance is refused, so it is no back side either.
+  const back = extrudeDraftNumber(draft.backDistance, 'length', ctx);
+  return back !== null && back > 0;
+}
+
+/**
+ * Why a draft angle cannot apply as typed, or null. An angle at a right
+ * angle has no finite taper; from v126 the front draft applies to every
+ * extent but through all (the caller skips it there), and the back draft
+ * needs a back side to taper.
  */
 export function extrudeDraftAngleError(
   draft: ExtrudeDraft,
   ctx: ExtrudeDraftContext
 ): string | null {
   const angle = extrudeDraftNumber(draft.draftAngle, 'angle', ctx);
-  if (angle === null) return null;
-  if (Math.abs(angle) >= MAX_DRAFT_DEG) {
+  if (angle !== null && Math.abs(angle) >= MAX_DRAFT_DEG) {
     return `Draft must be between -${MAX_DRAFT_DEG}° and ${MAX_DRAFT_DEG}°.`;
   }
-  if (angle === 0) return null;
-  const toFace = extrudeIsToFace(draft, ctx);
-  if (!toFace && draft.symmetric) {
-    return 'Draft tapers a one-sided extrusion; turn off Symmetric to draft it.';
-  }
-  const back = extrudeDraftNumber(draft.backDistance, 'length', ctx);
-  if (!toFace && back !== null && back !== 0) {
-    return 'Draft tapers a one-sided extrusion; clear Back distance to draft it.';
+  // A back draft with no back side is held, hidden and not sent, for when
+  // the side returns: it never blocks an edit it is not part of.
+  if (!extrudeHasBackSide(draft, ctx)) return null;
+  const back = extrudeDraftNumber(draft.backDraftAngle, 'angle', ctx);
+  if (back === null || back === 0) return null;
+  if (Math.abs(back) >= MAX_DRAFT_DEG) {
+    return `Back draft must be between -${MAX_DRAFT_DEG}° and ${MAX_DRAFT_DEG}°.`;
   }
   return null;
 }
@@ -365,12 +422,15 @@ export function extrudeFormValue(
 ): ExtrudeFormValue {
   const throughAll = extrudeIsThroughAll(draft);
   const toFace = extrudeIsToFace(draft, ctx);
-  const derived = throughAll || toFace;
-  // A through-all cut and a to-face extrude derive their span in the build,
-  // so the distance is dormant; a create still needs it non-zero, so an
+  const toNext = extrudeIsToNext(draft);
+  const derived = throughAll || toFace || toNext;
+  // A through-all cut, a to-face and an up-to-next extrude derive their span
+  // in the build, so the distance is dormant (up to next reads only its
+  // sign, for the direction); a create still needs it non-zero, so an
   // untouched 0 sends 1.
   const typed = coerceParamValue(draft.distance);
   const draftAngleDeg = coerceParamValue(draft.draftAngle);
+  const backDraftAngleDeg = coerceParamValue(draft.backDraftAngle);
   const toFaceOffset = coerceParamValue(draft.faceOffset);
   const startOffset = coerceParamValue(draft.startOffset);
   return {
@@ -392,7 +452,13 @@ export function extrudeFormValue(
           backDistance: derived ? 0 : coerceParamValue(draft.backDistance)
         }),
     choice: draft.choice,
-    endCondition: throughAll ? 'through-all' : toFace ? 'to-face' : 'blind',
+    endCondition: throughAll
+      ? 'through-all'
+      : toFace
+        ? 'to-face'
+        : toNext
+          ? 'to-next'
+          : 'blind',
     ...(throughAll ? { throughAllSide: draft.throughAllSide } : {}),
     ...(toFace && draft.toFace ? { toFace: draft.toFace } : {}),
     ...(toFace && toFaceOffset !== 0 && toFaceOffset !== '0'
@@ -403,6 +469,11 @@ export function extrudeFormValue(
       : {}),
     ...(!throughAll && draftAngleDeg !== 0 && draftAngleDeg !== '0'
       ? { draftAngleDeg }
+      : {}),
+    ...(extrudeHasBackSide(draft, ctx) &&
+    backDraftAngleDeg !== 0 &&
+    backDraftAngleDeg !== '0'
+      ? { backDraftAngleDeg }
       : {})
   };
 }
@@ -430,6 +501,7 @@ export function extrudeDraftRefusal(
 ): string | null {
   const throughAll = extrudeIsThroughAll(draft);
   const toFace = extrudeIsToFace(draft, ctx);
+  const toNext = extrudeIsToNext(draft);
   if (!draft.name.trim()) return 'Name the extrude.';
   if (toFace) {
     if (!draft.toFace) return 'Pick the face for the extrusion to reach.';
@@ -469,12 +541,22 @@ export function extrudeDraftRefusal(
     if (!angle.ok || angle.value === undefined) {
       return `Draft angle: ${angle.text}.`;
     }
+    if (extrudeHasBackSide(draft, ctx)) {
+      const back = previewExpression(
+        draft.backDraftAngle,
+        ctx.scope,
+        angleOf(ctx)
+      );
+      if (!back.ok || back.value === undefined) {
+        return `Back draft angle: ${back.text}.`;
+      }
+    }
     const error = extrudeDraftAngleError(draft, ctx);
     if (error) return error;
   }
-  // Through all and to-face ignore the distance; it is kept only for
-  // switching back to blind, so it cannot block Apply.
-  if (!throughAll && !toFace) {
+  // Through all, to-face and up to next ignore the distance's size; it is
+  // kept only for switching back to blind, so it cannot block Apply.
+  if (!throughAll && !toFace && !toNext) {
     const distance = previewExpression(
       draft.distance,
       ctx.scope,

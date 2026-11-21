@@ -271,7 +271,13 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByText('Collaborator 1')).toBeVisible();
     expect(screen.queryByText('Collaborator 2')).not.toBeInTheDocument();
     expect(screen.queryByText('alex')).not.toBeInTheDocument();
-    expect(screen.getAllByText('?')).toHaveLength(2);
+    // Hidden, an avatar is a person glyph with no initial in it.
+    const avatars = document.querySelectorAll('.sharing-avatar');
+    expect(avatars).toHaveLength(2);
+    for (const avatar of avatars) {
+      expect(avatar.textContent).toBe('');
+      expect(avatar.querySelector('svg')).not.toBeNull();
+    }
     // Settings owns the only switch; the dialog just follows it.
     expect(
       screen.queryByRole('button', { name: /personal info/i })
@@ -500,8 +506,13 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
-    await user.click(
-      await screen.findByRole('checkbox', { name: /Visitors can comment/ })
+    const comments = await screen.findByRole('checkbox', {
+      name: /Visitors can comment/
+    });
+    await user.click(comments);
+    // The disclosure is read with the control, not only shown beside it.
+    expect(comments).toHaveAccessibleDescription(
+      /They see every comment and sign theirs with a name\./
     );
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     await waitFor(() =>
@@ -510,6 +521,41 @@ describe('ProjectSharingDialog', () => {
         'tweak',
         null,
         true
+      )
+    );
+  });
+
+  it('mints a view link when the owner picks View', async () => {
+    const base = createProjectDocument('View links', owner);
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onClose={vi.fn()}
+      />
+    );
+    const access = await screen.findByRole('radiogroup', {
+      name: 'Link access'
+    });
+    // A plaintext link still defaults to Tweak.
+    expect(within(access).getByRole('radio', { name: 'Tweak' })).toBeChecked();
+    await user.click(within(access).getByRole('radio', { name: 'View' }));
+    expect(
+      screen.getByText(
+        'Visitors can look, measure and export. Links expire after 30 days.'
+      )
+    ).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'view'
       )
     );
   });
@@ -540,7 +586,7 @@ describe('ProjectSharingDialog', () => {
     expect(screen.getByText('Only invited people')).toBeVisible();
     expect(
       screen.getByText(
-        'Opens in Tweak: parameters and export, no account needed. Links expire 30 days after creation.'
+        'Visitors can also change parameters. Their changes stay with them. Links expire after 30 days.'
       )
     ).toBeVisible();
     expect(
@@ -565,7 +611,9 @@ describe('ProjectSharingDialog', () => {
       )
     );
     expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(screen.getByText('Shown once — copy it now.')).toBeVisible();
+    expect(
+      screen.getByText('Tweak link · shown once — copy it now.')
+    ).toBeVisible();
     expect(screen.getByText('Anyone with a link · 1 active')).toBeVisible();
     const row = screen
       .getByRole('button', { name: /^Rename Tweak link · / })

@@ -259,10 +259,23 @@ export function featureValueSummary(
         start === null || start === 0
           ? extent
           : `${extent} · starts ${formatNumber(start)} ${unit} off`;
-      const drafted = (extent: string) =>
-        angle !== null && angle !== '0'
-          ? `${started(extent)} · ${angle}° draft`
-          : started(extent);
+      // F01 (v126): a symmetric or two-sided extrude's back draft follows.
+      const backAngle =
+        data.backDraftAngleDeg === undefined
+          ? null
+          : num(data.backDraftAngleDeg);
+      const drafted = (extent: string) => {
+        const front =
+          angle !== null && angle !== '0'
+            ? `${started(extent)} · ${angle}° draft`
+            : started(extent);
+        return backAngle !== null && backAngle !== '0'
+          ? `${front} · ${backAngle}° back draft`
+          : front;
+      };
+      if (data.endCondition === 'to-next') {
+        return drafted('Up to next');
+      }
       if (data.endCondition === 'to-face') {
         // F01 (v113): an offset reads as how far short of (or past) the face.
         const offset =
@@ -283,7 +296,7 @@ export function featureValueSummary(
         return null;
       }
       if (data.symmetric) {
-        return started(`${distance} ${unit} symmetric`);
+        return drafted(`${distance} ${unit} symmetric`);
       }
       const back =
         data.backDistance === undefined ? '0' : lengthValue(data.backDistance);
@@ -291,7 +304,7 @@ export function featureValueSummary(
         return null;
       }
       return back !== '0'
-        ? started(`${distance} + ${back} ${unit}`)
+        ? drafted(`${distance} + ${back} ${unit}`)
         : drafted(`${distance} ${unit}`);
     }
     case 'revolve': {

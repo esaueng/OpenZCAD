@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
 import { StableLabel } from './StableLabel';
+import {
+  SHARE_LINK_MODE_HINT,
+  ShareLinkModePicker
+} from './ShareLinkModePicker';
 import { ShareLinkRevokeConfirm } from './ShareLinkRevokeConfirm';
 import type { ShareLinkUpkeep } from '../lib/e2ee/shareLinks';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
@@ -313,6 +317,12 @@ export function EncryptedShareLinks({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
+  // What the next link lets its visitors do; Tweak includes View.
+  const [mode, setMode] = useState<EncryptedShareLinkMode>('view');
+  // The mode of the link in the output: the picker may have moved on.
+  const [createdMode, setCreatedMode] =
+    useState<EncryptedShareLinkMode>('view');
+  const detailId = useId();
   // L08: whether the next link's visitors may comment (plan decision 3a).
   const [withComments, setWithComments] = useState(false);
   // The link whose Revoke is waiting for a yes (design review I2).
@@ -386,12 +396,14 @@ export function EncryptedShareLinks({
   const createLink = async () => {
     setCreated(null);
     setCopied(null);
+    const linkMode = mode;
     setCreated(
       (withComments
-        ? await client.create(projectId, 'view', { comments: true })
-        : await client.create(projectId, 'view')
+        ? await client.create(projectId, linkMode, { comments: true })
+        : await client.create(projectId, linkMode)
       ).url
     );
+    setCreatedMode(linkMode);
   };
   // Inside the confirmation's own run: a refused confirmation creates nothing.
   const finishConfirm = async () => {
@@ -444,26 +456,36 @@ export function EncryptedShareLinks({
     >
       <h3 className="sharing-section-label">General access</h3>
       <div className="sharing-access">
-        <span className="sharing-access-icon" aria-hidden="true">
-          <Globe size={13} />
+        <Globe className="sharing-access-icon" size={14} aria-hidden="true" />
+        <span className="sharing-access-title">
+          {state === null
+            ? 'Anyone with a link'
+            : links.length > 0
+              ? `Anyone with a link · ${links.length} ${
+                  links.every((row) => row.status === 'active')
+                    ? 'active'
+                    : 'listed'
+                }`
+              : 'Only invited people'}
         </span>
-        <span className="sharing-access-text">
-          <span className="sharing-access-title">
-            {state === null
-              ? 'Anyone with a link'
-              : links.length > 0
-                ? `Anyone with a link · ${links.length} ${
-                    links.every((row) => row.status === 'active')
-                      ? 'active'
-                      : 'listed'
-                  }`
-                : 'Only invited people'}
-          </span>
-          <span className="sharing-access-detail">
-            View only. The key is in the link, so OpenZCAD’s servers can’t read
-            the model.
-          </span>
-        </span>
+      </div>
+      <div className="sharing-link-create">
+        <ShareLinkModePicker
+          value={mode}
+          disabled={disabled || confirming}
+          describedBy={detailId}
+          onChange={setMode}
+        />
+        <label className="sharing-link-comments">
+          <input
+            type="checkbox"
+            checked={withComments}
+            disabled={disabled || confirming}
+            aria-describedby={detailId}
+            onChange={(event) => setWithComments(event.target.checked)}
+          />
+          Visitors can comment
+        </label>
         <button
           type="button"
           className={links.length > 0 ? 'secondary' : 'primary'}
@@ -482,16 +504,11 @@ export function EncryptedShareLinks({
           Create link
         </button>
       </div>
-      <label className="sharing-link-comments">
-        <input
-          type="checkbox"
-          checked={withComments}
-          disabled={disabled || confirming}
-          onChange={(event) => setWithComments(event.target.checked)}
-        />
-        Visitors can comment (their comments are encrypted with the link’s key,
-        and they see only this link’s comments)
-      </label>
+      <p id={detailId} className="sharing-access-detail">
+        {SHARE_LINK_MODE_HINT[mode]}
+        {withComments ? ' They see only this link’s comments.' : ''} End-to-end
+        encrypted: the key is in the link.
+      </p>
 
       {error ? (
         <p className="sharing-share-hint" role="alert">
@@ -605,6 +622,7 @@ export function EncryptedShareLinks({
               {copied === 'created' ? 'Copied' : 'Copy'}
             </StableLabel>
           </button>
+          <p className="sharing-share-mode">{MODE_LABEL[createdMode]} link</p>
         </div>
       ) : null}
 

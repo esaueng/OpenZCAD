@@ -46,7 +46,17 @@ import {
   validateKeepOriginals
 } from '@openzcad/document-core';
 import { throughAllSpan, unionBounds } from './through-all';
-import { toFaceSweepFeature } from './extrude-options';
+import { resolveToFaceTarget, toFaceSweepFeature } from './extrude-options';
+import {
+  planSlantedToFace,
+  trimToSlantedFace
+} from './extrude-to-face-slanted';
+import {
+  toNextReach,
+  toNextSweepFeature,
+  trimToNext,
+  type ToNextReach
+} from './extrude-to-next';
 import {
   axisPlaneDatumPoint,
   axisRotationMatrix,
@@ -764,6 +774,69 @@ function throughAllSweepFeature(
   return { ...feature, data: { ...rest, ...extent } };
 }
 
+/**
+ * F01 (v130): an extrude up to the next face, resolved at this history
+ * position: its one add or cut target (missing, consumed or mesh targets
+ * refuse by name, as for any stored add or cut), and the long blind sweep
+ * whose regions `trimToNext` keeps.
+ */
+function toNextFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'extrude'>
+): {
+  sweep: FeatureNode;
+  target: ExactShape;
+  targetName: string;
+  operation: 'add' | 'cut';
+  reach: ToNextReach;
+} {
+  const { kernel, document, result, scope } = ctx;
+  const operation = data.operation;
+  if (operation !== 'add' && operation !== 'cut') {
+    throw new Error('Up to next is available for an add or a cut only.');
+  }
+  const targetBodyId = data.targetBodyId!;
+  const targetName = bodyName(document, targetBodyId);
+  if (result.consumed.has(targetBodyId)) {
+    throw new Error(`Up-to-next target ${targetName} was already consumed.`);
+  }
+  if (result.meshBodies.has(targetBodyId)) {
+    throw meshBooleanUnsupportedError(targetName);
+  }
+  const target = result.shapes.get(targetBodyId);
+  if (!target) {
+    throw new Error(`Up-to-next target ${targetName} is unavailable.`);
+  }
+  const basis = result.sketchBases.get(data.sketchId);
+  if (!basis) {
+    throw new Error('Up-to-next sketch plane did not resolve.');
+  }
+  const reach = toNextReach(
+    kernel,
+    document,
+    data,
+    basis,
+    target,
+    targetName,
+    scope
+  );
+  const sign =
+    reach.direction.x * basis.normal.x +
+      reach.direction.y * basis.normal.y +
+      reach.direction.z * basis.normal.z <
+    0
+      ? -1
+      : 1;
+  return {
+    sweep: toNextSweepFeature(feature, data, reach, sign),
+    target,
+    targetName,
+    operation,
+    reach
+  };
+}
+
 function buildExtrudeFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -781,13 +854,51 @@ function buildExtrudeFeature(
     // the ordinary cut it then is. The stored feature is never rewritten.
     // A to-face extrude likewise sweeps the blind distance its face resolves
     // to here, or refuses as unresolved when the face no longer does.
+    // F01 (v130): an extrude up to the next face sweeps past the whole
+    // target and keeps the regions standing on its start plane (see
+    // `trimToNext`); everything after that treats them as the extrusion.
+    const toNext =
+      data.endCondition === 'to-next'
+        ? toNextFeature(ctx, feature, data)
+        : null;
+    // A face parallel to the sketch keeps the derived blind distance it
+    // always had; a slanted one sweeps past it and is split by its plane.
+    const toFace =
+      data.endCondition === 'to-face'
+        ? resolveToFaceTarget(kernel, document, feature, data, result)
+        : null;
+    const slanted =
+      toFace?.kind === 'slanted'
+        ? planSlantedToFace(
+            kernel,
+            document,
+            feature,
+            data,
+            toFace.frame,
+            result.sketchBases.get(data.sketchId)!,
+            result.sketchBases,
+            scope
+          )
+        : null;
     const sweepFeature =
       data.endCondition === 'through-all'
         ? throughAllSweepFeature(ctx, feature, data)
-        : data.endCondition === 'to-face'
-          ? toFaceSweepFeature(kernel, document, feature, data, result, scope)
-          : feature;
-    const extrusion = buildSweep(
+        : slanted
+          ? slanted.sweep
+          : data.endCondition === 'to-face'
+            ? toFaceSweepFeature(
+                kernel,
+                document,
+                feature,
+                data,
+                result,
+                scope,
+                toFace?.kind === 'parallel' ? toFace.distance : undefined
+              )
+            : toNext
+              ? toNext.sweep
+              : feature;
+    const swept = buildSweep(
       kernel,
       document,
       sweepFeature,
@@ -795,6 +906,24 @@ function buildExtrudeFeature(
       result.sketchBases,
       (message) => raiseFeatureWarning(result, feature, message, 'advisory')
     );
+    const extrusion = slanted
+      ? trimToSlantedFace(
+          kernel,
+          swept,
+          slanted.slanted,
+          `Extrude "${feature.name}"`
+        )
+      : toNext
+        ? trimToNext(
+            kernel,
+            swept,
+            toNext.target,
+            toNext.operation,
+            toNext.reach,
+            `Extrude "${feature.name}"`,
+            toNext.targetName
+          )
+        : swept;
     const operation = data.operation ?? 'new-body';
     if (operation === 'new-body') {
       // Recorded so a later boolean can rebuild this exact tool with pierce
@@ -859,7 +988,9 @@ function buildExtrudeFeature(
       extrusion,
       targetBody,
       extrusionBody,
-      throughAll ? overlapRegionTolerance(targetBody, extrusionBody) : undefined
+      throughAll || toNext
+        ? overlapRegionTolerance(targetBody, extrusionBody)
+        : undefined
     );
     // A cut needs shared material: with none there is nothing to remove, and
     // that can be settled before doing any work. That holds for through-all
@@ -944,7 +1075,9 @@ function buildExtrudeFeature(
       combined = retryCoplanarRefusal(
         error,
         () =>
-          operation === 'intersect'
+          // A to-next tool is regions of the target, not the swept feature
+          // a pierced twin rebuilds.
+          operation === 'intersect' || toNext || slanted
             ? null
             : piercedExtrudeTool(
                 ctx,
@@ -961,7 +1094,7 @@ function buildExtrudeFeature(
     // typed coplanar refusal; never accept an invalid result or extend a
     // tool through an existing hole or a thin cavity roof.
     if (combined.union && verdictRefusesUnion(combined.union.verdict)) {
-      if (combined.tool === extrusion) {
+      if (combined.tool === extrusion && !toNext && !slanted) {
         const pierced = piercedExtrudeTool(
           ctx,
           sweepFeature,

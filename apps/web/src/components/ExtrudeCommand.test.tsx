@@ -364,7 +364,8 @@ describe('in-place Extrude bar', () => {
       throughAllSide: 'forward',
       faceOffset: '0',
       startOffset: '0',
-      draftAngle: '0'
+      draftAngle: '0',
+      backDraftAngle: '0'
     } as const;
     expect(extrudeChangedInput(base, base)).toBeNull();
     expect(extrudeChangedInput(base, { ...base, faceOffset: '2' })).toBe(
@@ -549,19 +550,30 @@ describe('in-place Extrude bar', () => {
     );
   });
 
-  it('refuses a draft beside Symmetric by name and holds Done', async () => {
+  it('drafts each side of a symmetric extrude, holding a back draft until there is a back side', async () => {
     const user = userEvent.setup();
-    const { distanceSetterRef, commandRef } = setup();
+    const { distanceSetterRef, commandRef, onSubmit } = setup();
     act(() => distanceSetterRef.current?.(10));
+    act(() => commandRef.current?.setValue('backDraftAngle', '3'));
+    // One-sided: held, not offered, and it blocks nothing.
+    expect(
+      screen.queryByRole('button', { name: 'Back draft angle' })
+    ).toBeNull();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeEnabled();
     await openOptions(user);
     await user.click(choice('Sides', 'Symmetric'));
     act(() => commandRef.current?.setValue('draftAngle', '4'));
     expect(
-      screen.getByText(
-        'Draft tapers a one-sided extrusion; turn off Symmetric to draft it.'
-      )
-    ).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+      screen.getByRole('button', { name: 'Back draft angle' })
+    ).toHaveTextContent('3°');
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symmetric: true,
+        draftAngleDeg: 4,
+        backDraftAngleDeg: 3
+      })
+    );
   });
 
   it('offers Through all on Cut only, with its direction, and no draft', async () => {
@@ -609,6 +621,34 @@ describe('in-place Extrude bar', () => {
         endCondition: 'to-face',
         toFace: target,
         distance: 6
+      })
+    );
+  });
+
+  it('keeps the authored distance when the picked face is slanted (review)', async () => {
+    const user = userEvent.setup();
+    const target = { type: 'face' } as unknown as ExtrudeToFaceTarget;
+    const setterRef = createRef<
+      (target: ExtrudeToFaceTarget) => void
+    >() as MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
+    const toFacePicking: ExtrudeToFacePicking = {
+      armed: false,
+      onPick: vi.fn(),
+      cancel: vi.fn(),
+      describe: () => ({ label: 'Roof', distance: 25, slanted: true }),
+      setterRef
+    };
+    const { distanceSetterRef, onSubmit } = setup({ toFacePicking });
+    act(() => distanceSetterRef.current?.(7));
+    await openOptions(user);
+    await user.click(choice('Extent', 'To face'));
+    act(() => setterRef.current?.(target));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endCondition: 'to-face',
+        toFace: target,
+        distance: 7
       })
     );
   });
@@ -682,7 +722,8 @@ describe('in-place Extrude bar', () => {
     expect(extrudeShownValues({ extent: 'blind', symmetric: true })).toEqual([
       'distance',
       'startOffset',
-      'draftAngle'
+      'draftAngle',
+      'backDraftAngle'
     ]);
     expect(extrudeShownValues({ extent: 'to-face', symmetric: false })).toEqual(
       ['faceOffset', 'startOffset', 'draftAngle']

@@ -45,6 +45,7 @@ export {
 } from './storable-document';
 import {
   assertNoReferenceDimensionDependents,
+  assertShapeReferenceTargetsPreserved,
   assertReferenceCommandSchema,
   assertSketchReferenceDimensions
 } from './sketch-reference-dimensions';
@@ -476,6 +477,11 @@ export interface ExtrudeInput {
   startOffset?: ParamValue;
   /** F01 (v29): wall draft in degrees; absent or zero is straight walls. */
   draftAngleDeg?: ParamValue;
+  /**
+   * F01 (v126): the draft of the side behind the start plane, on a
+   * symmetric or two-sided blind extrude; absent or zero is straight walls.
+   */
+  backDraftAngleDeg?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -1262,6 +1268,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // an absent mode remains the saved absolute distance without rewriting it.
   // Schema v36 composite reference targets are explicit snapshots. Never
   // derive them from a legacy object or promote an older carrier silently.
+  // Schema v125 shape-centre and legacy-shape targets are authored too: opening
+  // older content never synthesizes one from a rectangle or polygon object.
   // Schema v37 boundary provenance and conversion ownership are authored.
   // Opening older content never converts it or invents source witnesses.
   // Schema v56 -> v57 thread runouts and pipe threads are optional fields on
@@ -2021,6 +2029,12 @@ export function updateSketchObject(
     input.objectId,
     input.data
   );
+  assertShapeReferenceTargetsPreserved(
+    document,
+    sketch,
+    input.objectId,
+    input.data
+  );
   objectNode.objectKind = input.data.objectKind;
   objectNode.data = input.data;
   objectNode.name = `${input.data.objectKind} profile`;
@@ -2602,14 +2616,32 @@ function validateToFaceTarget(target: unknown): void {
   }
 }
 
+/** A stored draft literal is finite and inside a right angle. */
+function validateDraftValue(angle: unknown, label: string): void {
+  if (angle === undefined) return;
+  if (typeof angle === 'number') {
+    if (!Number.isFinite(angle) || Math.abs(angle) >= MAX_EXTRUDE_DRAFT_DEG) {
+      throw new Error(
+        `${label} must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
+      );
+    }
+  } else if (typeof angle !== 'string' || !angle.trim()) {
+    throw new Error(`${label} must be a number or an expression.`);
+  }
+}
+
 /**
- * F01 (v29) draft: finite and inside a right angle when it is a literal (an
- * expression is checked where it resolves, in the build). It tapers a
- * one-sided extrusion only.
+ * F01 draft: finite and inside a right angle when it is a literal (an
+ * expression is checked where it resolves, in the build). `draftAngleDeg`
+ * (v29) tapers the side the distance runs to; from v126 a symmetric or
+ * two-sided blind extrusion takes it too, and `backDraftAngleDeg` tapers
+ * its other side. Through all takes neither, and a back draft needs a back
+ * side to taper.
  */
 function validateExtrudeDraft(
   data: {
     draftAngleDeg?: unknown;
+    backDraftAngleDeg?: unknown;
     endCondition?: unknown;
     symmetric?: unknown;
     backDistance?: unknown;
@@ -2617,26 +2649,32 @@ function validateExtrudeDraft(
   resolve?: ParamZeroResolver
 ): void {
   const zero = resolvedZero(resolve);
-  const angle = data.draftAngleDeg;
-  if (angle === undefined) return;
-  if (typeof angle === 'number') {
-    if (!Number.isFinite(angle) || Math.abs(angle) >= MAX_EXTRUDE_DRAFT_DEG) {
-      throw new Error(
-        `Draft angle must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
-      );
-    }
-  } else if (typeof angle !== 'string' || !angle.trim()) {
-    throw new Error('Draft angle must be a number or an expression.');
-  }
-  if (zero(angle)) return;
+  validateDraftValue(data.draftAngleDeg, 'Draft angle');
+  validateDraftValue(data.backDraftAngleDeg, 'Back draft angle');
+  const front = !zero(data.draftAngleDeg);
+  const back = !zero(data.backDraftAngleDeg);
+  if (!front && !back) return;
   if (data.endCondition === 'through-all') {
     throw new Error(
       'A through-all cut has no draft yet; use a distance or a face.'
     );
   }
-  if (data.symmetric === true || !zero(data.backDistance)) {
+  // A back side is symmetric, or a back distance that is positive (or an
+  // expression not resolvable here, which the build checks): a negative
+  // one is refused at rebuild, so it is no back side to draft.
+  const backValue =
+    typeof data.backDistance === 'number'
+      ? data.backDistance
+      : ((data.backDistance !== undefined &&
+          resolve?.(data.backDistance as ParamValue)) ??
+        undefined);
+  const backSide =
+    data.symmetric === true ||
+    (!zero(data.backDistance) &&
+      (typeof backValue !== 'number' || backValue > 0));
+  if (back && !backSide) {
     throw new Error(
-      'Draft applies to a one-sided extrusion; a symmetric or two-sided extrusion has no draft yet.'
+      'Back draft tapers the side behind the sketch plane; make the extrusion symmetric or give it a back distance first.'
     );
   }
 }
@@ -2686,6 +2724,7 @@ export function validateExtrudeExtent(
     toFaceOffset?: unknown;
     startOffset?: unknown;
     draftAngleDeg?: unknown;
+    backDraftAngleDeg?: unknown;
     operation?: unknown;
     targetBodyId?: unknown;
     symmetric?: unknown;
@@ -2738,6 +2777,27 @@ export function validateExtrudeExtent(
     if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
         'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
+      );
+    }
+    return;
+  }
+  if (condition === 'to-next') {
+    if (data.throughAllSide !== undefined) {
+      throw new Error(
+        'An extrude up to the next face has no through-all side.'
+      );
+    }
+    if (data.operation !== 'add' && data.operation !== 'cut') {
+      throw new Error('Up to next is available for an add or a cut only.');
+    }
+    if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
+      throw new Error(
+        'An extrude up to the next face needs one explicit target body.'
+      );
+    }
+    if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
+      throw new Error(
+        'An extrude up to the next face runs one way, from its start to the next face; it is not symmetric or two-sided.'
       );
     }
     return;
@@ -2945,6 +3005,9 @@ export function extrudeSketch(
             throughAllSide: input.throughAllSide!
           }
         : {}),
+      ...(input.endCondition === 'to-next'
+        ? { endCondition: 'to-next' as const }
+        : {}),
       ...(input.endCondition === 'to-face'
         ? {
             endCondition: 'to-face' as const,
@@ -2962,7 +3025,10 @@ export function extrudeSketch(
       // A literal zero is the absent default, so it is never written.
       ...(isZeroParam(input.draftAngleDeg)
         ? {}
-        : { draftAngleDeg: input.draftAngleDeg! })
+        : { draftAngleDeg: input.draftAngleDeg! }),
+      ...(isZeroParam(input.backDraftAngleDeg)
+        ? {}
+        : { backDraftAngleDeg: input.backDraftAngleDeg! })
     }
   };
 
@@ -5835,7 +5901,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'toFace',
     'toFaceOffset',
     'startOffset',
-    'draftAngleDeg'
+    'draftAngleDeg',
+    'backDraftAngleDeg'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
   loft: ['sections', 'mode', 'endPoint'],
@@ -6070,7 +6137,8 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'toFace',
     'toFaceOffset',
     'startOffset',
-    'draftAngleDeg'
+    'draftAngleDeg',
+    'backDraftAngleDeg'
   ],
   // M16: each falls back to its documented default (positive side, a
   // K-factor value, a rectangular relief, no preset, the largest region).
@@ -6387,6 +6455,47 @@ export function toFaceSignedDistance(
 ): number | null {
   const height = toFaceParallelHeight(sketch, face);
   return height === 0 ? null : height;
+}
+
+/**
+ * F01 (slanted to-face): how steeply a to-face target may lean and still be reached:
+ * the cosine between its normal and the sketch normal must be at least this
+ * (the face within about 84° of parallel). A steeper face meets the
+ * extrusion at a grazing angle, along walls far longer than the profile.
+ */
+export const TO_FACE_SLANT_COSINE_LIMIT = 0.1;
+
+/**
+ * F01 (slanted to-face): which way a to-face target lies from the sketch plane and how
+ * far, as the signed height of the face's own point along the unit sketch
+ * normal, for a parallel or a slanted face; null when the face is steeper
+ * than {@link TO_FACE_SLANT_COSINE_LIMIT}. `slanted` is false exactly when
+ * the face is parallel ({@link toFaceParallelHeight}), in which case
+ * `height` is that distance (zero on the sketch plane). For a slanted face the height is only where the face's point
+ * is; the build finds where it meets each part of the profile.
+ */
+export function toFaceReach(
+  sketch: { origin: ToFacePoint; normal: ToFacePoint },
+  face: { point: ToFacePoint; normal: ToFacePoint }
+): { height: number; slanted: boolean } | null {
+  // A parallel face on the sketch plane reads as 0: a start offset can
+  // still reach it (the build refuses it without one).
+  const parallel = toFaceParallelHeight(sketch, face);
+  if (parallel !== null) return { height: parallel, slanted: false };
+  const alignment =
+    face.normal.x * sketch.normal.x +
+    face.normal.y * sketch.normal.y +
+    face.normal.z * sketch.normal.z;
+  if (!(Math.abs(alignment) >= TO_FACE_SLANT_COSINE_LIMIT)) return null;
+  const sine = Math.sqrt(Math.max(0, 1 - alignment * alignment));
+  if (sine <= TO_FACE_PARALLEL_SINE_LIMIT) return null;
+  const height =
+    (face.point.x - sketch.origin.x) * sketch.normal.x +
+    (face.point.y - sketch.origin.y) * sketch.normal.y +
+    (face.point.z - sketch.origin.z) * sketch.normal.z;
+  // A slanted face's middle may sit level with the sketch: which way it is
+  // reached is read from the profile in the build, never guessed here.
+  return Number.isFinite(height) ? { height, slanted: true } : null;
 }
 
 /**

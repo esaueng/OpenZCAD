@@ -116,7 +116,7 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
         rewrite,
         'length'
       );
-      fields(data, ['draftAngleDeg'], rewrite, 'angle');
+      fields(data, ['draftAngleDeg', 'backDraftAngleDeg'], rewrite, 'angle');
       return;
     case 'revolve':
       fields(data, ['angleDeg'], rewrite, 'angle');

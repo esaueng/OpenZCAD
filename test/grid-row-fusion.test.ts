@@ -15,7 +15,9 @@ import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import { barGrid, largePatternBar } from './support/large-pattern-bar';
 
-describe('a rectangular grid with separated rows', () => {
+// Each case rebuilds exact geometry, cold control kernels and STEP exports;
+// the 50-copy bar takes ~3 s idle and over 5 s on a loaded CI runner.
+describe('a rectangular grid with separated rows', { timeout: 60_000 }, () => {
   it('preserves the full-fuse topology, mesh, STEP and subsequent cut through a nested pattern', async () => {
     let doc = addPrimitiveFeature(
       createProjectDocument('Stock', toUserId('maker')),

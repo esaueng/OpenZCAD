@@ -11,6 +11,7 @@ import {
   XRAY_OPACITY_BOUNDS,
   UNITLESS_IMPORT_UNITS,
   normalizeKeymapOverrides,
+  SKETCH_REFERENCE_DISPLAY_UNITS,
   type AppSettings,
   type PanelWidthLimits,
   type UnitSystem,
@@ -294,6 +295,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       ),
       // Absent from settings written before S08: on, as the labels were.
       snapHints: boolean(sketching.snapHints, defaults.sketching.snapHints),
+      // Absent from settings written before S02-F: the document's units.
+      referenceDisplayUnit: member(
+        sketching.referenceDisplayUnit,
+        SKETCH_REFERENCE_DISPLAY_UNITS,
+        defaults.sketching.referenceDisplayUnit
+      ),
       linearSnap: boundedNumber(
         sketching.linearSnap,
         defaults.sketching.linearSnap,
