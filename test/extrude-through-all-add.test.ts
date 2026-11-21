@@ -244,9 +244,61 @@ describe('F01 add through all', { timeout: 60_000 }, () => {
       const result = add(document, bodyId, 'both', 5, 10, 0);
       const derived = await adapter.syncDocument(result.document);
       expect(derived.warnings.join('\n')).toMatch(
-        /An add through all reaches exactly as far as its target, and .* has a curved face/
+        /An add through all reaches exactly as far as its target, and .* has a cylinder face/
       );
     });
+
+    it.each([
+      ['an oblique cap (an elliptical rim)', 'cap', /ellipse edge/],
+      ['a cylinder leaning 0.01°', 'lean', /cylinder face/]
+    ])(
+      'refuses a target with %s instead of misjudging its reach (re-check)',
+      async (_label, kind, message) => {
+        let { document, bodyId } = cylinder(false);
+        if (kind === 'lean') {
+          document = commandFactories
+            .transformBody({
+              name: 'Lean',
+              targetBodyId: bodyId,
+              translation: { x: 0, y: 0, z: 0 },
+              rotationDeg: { x: 0.01, y: 0, z: 0 },
+              pivot: { x: 0, y: 0, z: 0 }
+            })
+            .apply(document);
+        } else {
+          document = addPrimitiveFeature(document, {
+            name: 'Wedge',
+            primitiveKind: 'box',
+            dimensions: { width: 40, height: 40, depth: 40 }
+          });
+          const wedge = document.bodyOrder.at(-1)!;
+          document = commandFactories
+            .transformBody({
+              name: 'Tilt',
+              targetBodyId: wedge,
+              translation: { x: -20, y: -20, z: 8 },
+              rotationDeg: { x: 20, y: 0, z: 0 },
+              pivot: { x: 20, y: 20, z: 0 }
+            })
+            .apply(document);
+          document = commandFactories
+            .booleanBodies({
+              name: 'Bevel',
+              operation: 'subtract',
+              targetBodyIds: [bodyId, wedge]
+            })
+            .apply(document);
+          bodyId = document.bodyOrder.at(-1)!;
+        }
+        const result = add(document, bodyId, 'both', 5, 10, 0);
+        const derived = await adapter.syncDocument(result.document);
+        expect(derived.warnings.join('\n')).toMatch(
+          new RegExp(
+            `An add through all reaches exactly as far as its target, and .* has a ${message.source}`
+          )
+        );
+      }
+    );
 
     it('is not repeated by a feature pattern yet', () => {
       expect(

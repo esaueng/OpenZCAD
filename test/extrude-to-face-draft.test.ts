@@ -257,7 +257,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
           endCondition: 'through-all',
           throughAllSide: 'forward'
         },
-        /through-all cut has no draft/
+        /through-all extrude has no draft/
       ]
     ])('refuses %o at entry', async (patch, message) => {
       const lifted = ceiling(project('Refusals'), 25);
@@ -1095,7 +1095,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       const refused = await derive(tapered);
       expectPassedThrough(refused, cut.bodyId, block.bodyId);
       expect(refused.warnings.join('\n')).toMatch(
-        /through-all cut has no draft/
+        /through-all extrude has no draft/
       );
     });
 

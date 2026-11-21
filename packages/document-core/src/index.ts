@@ -2656,7 +2656,7 @@ function validateExtrudeDraft(
   if (!front && !back) return;
   if (data.endCondition === 'through-all') {
     throw new Error(
-      'A through-all cut has no draft yet; use a distance or a face.'
+      'A through-all extrude has no draft yet; use a distance or a face.'
     );
   }
   // A back side is symmetric, or a back distance that is positive (or an
@@ -2759,7 +2759,7 @@ export function validateExtrudeExtent(
   validateExtrudeLengthValue(data.startOffset, 'Start offset');
   if (condition === 'through-all' && !resolvedZero(resolve)(data.startOffset)) {
     throw new Error(
-      'A through-all cut runs through the whole target, so it has no start offset.'
+      'A through-all extrude runs through the whole target, so it has no start offset.'
     );
   }
   if (condition === 'blind') {
@@ -2826,7 +2826,7 @@ export function validateExtrudeExtent(
   }
   if (data.symmetric === true) {
     throw new Error(
-      'A through-all cut is not symmetric; choose the side "both" instead.'
+      'A through-all extrude is not symmetric; choose the side "both" instead.'
     );
   }
   if (
@@ -2835,7 +2835,7 @@ export function validateExtrudeExtent(
     data.backDistance !== '0'
   ) {
     throw new Error(
-      'A through-all cut has no back distance; choose the side "both" instead.'
+      'A through-all extrude has no back distance; choose the side "both" instead.'
     );
   }
 }

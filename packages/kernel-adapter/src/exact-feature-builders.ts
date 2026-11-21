@@ -125,6 +125,7 @@ import {
   type RemusNativeVertexState
 } from './remus-native-vertices';
 import { measureFaceGeometry } from './exact-measure';
+import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
   drillHole,
   tryExactCoaxialCylinderCut,
@@ -845,11 +846,17 @@ function toNextFeature(
 /**
  * F01: an add through all must stop exactly where the target does along the
  * sketch normal, since any overshoot is new material (a cut's conservative
- * box span only removes the target's own). The target's extremes along the
- * normal are read from its vertices, which is exact when every face is
- * planar or a cylinder whose axis runs along the normal (its extremes lie on
- * its planar boundary circles). Any other target refuses by name rather than
- * add material past it.
+ * box span only removes the target's own). The extremes are bounded edge by
+ * edge, within the kernel's linear tolerance:
+ * - a straight edge by its ends;
+ * - a full circle exactly, by its centre's height ± r·sin(tilt);
+ * - an arc only when its plane is square to the normal (its whole run at
+ *   one height);
+ * and faces: planar faces reach their extremes on their edges, and a
+ * cylinder does when its axis runs along the normal (r·sin(tilt) within the
+ * tolerance). Any other edge or face (an ellipse, a spline, a leaning
+ * cylinder, a sphere) refuses by name rather than add material past the
+ * target or stop short of it.
  */
 function exactAddSpan(
   kernel: RemusKernel,
@@ -859,15 +866,32 @@ function exactAddSpan(
   targetName: string
 ): { forward: number; backward: number } {
   const n = basis.normal;
+  const along = (p: ArrayLike<number>) =>
+    (p[0]! - basis.origin.x) * n.x +
+    (p[1]! - basis.origin.y) * n.y +
+    (p[2]! - basis.origin.z) * n.z;
+  const refuse = (what: string) =>
+    new Error(
+      `An add through all reaches exactly as far as its target, and ${targetName} has ${what} whose extent along the sketch normal cannot be read exactly; use Up to next or a distance.`
+    );
+  // sin of the angle between a unit vector and the normal.
+  const tilt = (v: { x: number; y: number; z: number }) => {
+    const c = v.x * n.x + v.y * n.y + v.z * n.z;
+    return Math.sqrt(Math.max(0, 1 - c * c));
+  };
   let high = -Infinity;
   let low = Infinity;
+  const reach = (t: number) => {
+    high = Math.max(high, t);
+    low = Math.min(low, t);
+  };
   for (const solid of solids) {
     for (const face of Array.from(kernel.getSolidFaces(solid))) {
       const surface = kernel.getSurfaceType(face).toLowerCase();
       if (surface === 'plane') continue;
       if (surface === 'cylinder') {
         const geometry = measureFaceGeometry(kernel, face);
-        if (geometry?.axisStart && geometry.axisEnd) {
+        if (geometry?.axisStart && geometry.axisEnd && geometry.radius) {
           const axis = {
             x: geometry.axisEnd.x - geometry.axisStart.x,
             y: geometry.axisEnd.y - geometry.axisStart.y,
@@ -876,25 +900,66 @@ function exactAddSpan(
           const size = Math.hypot(axis.x, axis.y, axis.z);
           if (
             size > 0 &&
-            Math.abs(axis.x * n.x + axis.y * n.y + axis.z * n.z) / size >=
-              1 - 1e-9
+            geometry.radius *
+              tilt({ x: axis.x / size, y: axis.y / size, z: axis.z / size }) <=
+              GEOMETRY_LINEAR_TOLERANCE
           ) {
             continue;
           }
         }
       }
-      throw new Error(
-        `An add through all reaches exactly as far as its target, and ${targetName} has a curved face whose extent along the sketch normal cannot be read exactly; use Up to next or a distance.`
-      );
+      throw refuse(`a ${surface} face`);
     }
-    for (const vertex of Array.from(kernel.getSolidVertices(solid))) {
-      const p = kernel.getVertexPosition(vertex);
-      const t =
-        (p[0]! - basis.origin.x) * n.x +
-        (p[1]! - basis.origin.y) * n.y +
-        (p[2]! - basis.origin.z) * n.z;
-      high = Math.max(high, t);
-      low = Math.min(low, t);
+    for (const edge of Array.from(kernel.getSolidEdges(solid))) {
+      const type = kernel.getEdgeCurveType(edge);
+      const span = kernel.getEdgeParamSpan(edge);
+      const at = (t: number) => kernel.evaluateEdgeCurve(edge, t);
+      const t0 = span[0]!;
+      const t1 = span[1]!;
+      if (type === 'LINE') {
+        reach(along(at(t0)));
+        reach(along(at(t1)));
+        continue;
+      }
+      if (type === 'CIRCLE') {
+        // The circle's plane and centre from three exact points on it.
+        const a = at(t0);
+        const b = at(t0 + (t1 - t0) / 3);
+        const c = at(t0 + (2 * (t1 - t0)) / 3);
+        const u = { x: b[0]! - a[0]!, y: b[1]! - a[1]!, z: b[2]! - a[2]! };
+        const v = { x: c[0]! - a[0]!, y: c[1]! - a[1]!, z: c[2]! - a[2]! };
+        const w = {
+          x: u.y * v.z - u.z * v.y,
+          y: u.z * v.x - u.x * v.z,
+          z: u.x * v.y - u.y * v.x
+        };
+        const size = Math.hypot(w.x, w.y, w.z);
+        if (!(size > 0)) throw refuse('a degenerate round edge');
+        const normal = { x: w.x / size, y: w.y / size, z: w.z / size };
+        // Circumradius of the three points.
+        const lu = Math.hypot(u.x, u.y, u.z);
+        const lv = Math.hypot(v.x, v.y, v.z);
+        const uv = Math.hypot(b[0]! - c[0]!, b[1]! - c[1]!, b[2]! - c[2]!);
+        const radius = (lu * lv * uv) / (2 * size);
+        const lean = radius * tilt(normal);
+        const full = Math.abs(Math.abs(t1 - t0) - 2 * Math.PI) <= 1e-9;
+        if (lean <= GEOMETRY_LINEAR_TOLERANCE) {
+          reach(along(a));
+          continue;
+        }
+        if (!full) throw refuse('a leaning arc');
+        // A whole circle's extremes: its centre ± r·sin(tilt).
+        const mid = at(t0 + (t1 - t0) / 2);
+        const centre = [
+          (a[0]! + mid[0]!) / 2,
+          (a[1]! + mid[1]!) / 2,
+          (a[2]! + mid[2]!) / 2
+        ];
+        reach(along(centre) + lean);
+        reach(along(centre) - lean);
+        continue;
+      }
+      throw refuse(`a ${type.toLowerCase()} edge`);
     }
   }
   const forward = Math.max(0, high);
