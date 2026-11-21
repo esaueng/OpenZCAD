@@ -1070,10 +1070,11 @@ function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
  */
 function validateToFaceBody(
   document: ProjectDocument,
-  input: Pick<ExtrudeInput, 'toFace'>,
+  input: Pick<ExtrudeInput, 'toFace' | 'toSurface'>,
   ownBodyId: BodyId | undefined
 ): void {
-  const bodyId = input.toFace?.bodyId;
+  // F01 (v131): a curved target names its body the same way.
+  const bodyId = input.toFace?.bodyId ?? input.toSurface?.bodyId;
   if (bodyId === undefined) return;
   if (bodyId === ownBodyId) {
     throw new Error(

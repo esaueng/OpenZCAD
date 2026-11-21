@@ -288,7 +288,6 @@ import type {
   BodyTopology,
   BodyRepresentation,
   EntityId,
-  ExtrudeToFaceTarget,
   FeatureId,
   FeatureNode,
   FeatureWarning,
@@ -1068,6 +1067,7 @@ import {
 } from './lib/resolvedExtrudePreview';
 import { isExtrudeChangeClipped } from './lib/extrudeSectionVisibility';
 import type {
+  ExtrudeFaceTarget,
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from './lib/extrudeDraft';
@@ -1084,7 +1084,7 @@ import {
   extrudeToFaceRepair,
   extrudeHistoryDocument,
   extrudeToFaceTargetFromPick,
-  toFaceDistanceEstimate,
+  toFaceReachEstimate,
   toFaceTargetLabel
 } from './lib/extrudeToFace';
 import {
@@ -3543,11 +3543,11 @@ export function App() {
     | null
   >(null);
   const regionToFaceSetter = useRef<
-    ((target: ExtrudeToFaceTarget) => void) | null
+    ((target: ExtrudeFaceTarget) => void) | null
   >(null);
-  const editToFaceSetter = useRef<
-    ((target: ExtrudeToFaceTarget) => void) | null
-  >(null);
+  const editToFaceSetter = useRef<((target: ExtrudeFaceTarget) => void) | null>(
+    null
+  );
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
   /** The open Plane card's draft Offset, drawn ahead of its Apply. */
@@ -6153,7 +6153,8 @@ export function App() {
           !base ||
           current.mode !== 'region' ||
           (regionExtrudeSettings.current?.endCondition === 'to-face' &&
-            !regionExtrudeSettings.current.toFace)
+            !regionExtrudeSettings.current.toFace &&
+            !regionExtrudeSettings.current.toSurface)
         ) {
           setRegionExtrudeChecking(false);
           return null;
@@ -28818,6 +28819,7 @@ export function App() {
       endCondition: regionExtrudeSettings.current?.endCondition,
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       toFace: regionExtrudeSettings.current?.toFace,
+      toSurface: regionExtrudeSettings.current?.toSurface,
       toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
       startOffset: regionExtrudeSettings.current?.startOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
@@ -28974,10 +28976,17 @@ export function App() {
         );
         if (!isCurrent()) return;
         if (mixed) throw new Error(mixed);
-        const command = resolved.command;
-        const resultBodyId = command.payload.ids?.bodyId;
+        const resultBodyId = resolved.command.payload.ids?.bodyId;
         if (!resultBodyId)
           throw new Error('Extrude could not reserve a result body.');
+        // F01: a through-all cut through several bodies is one through-all
+        // extrude per body, created (and undone) as one step.
+        const command = resolved.extraCommands?.length
+          ? composeCommands(resolved.command.label, [
+              resolved.command,
+              ...resolved.extraCommands
+            ])
+          : resolved.command;
         const committed = await executeValidatedDirectEdit(
           command,
           resultBodyId,
@@ -28991,7 +29000,15 @@ export function App() {
             finishFeatureCreation();
             setRevertPill({ sketchId: target.sketchId as SketchId });
           },
-          undefined,
+          // F01: several cuts are judged each by its own feature and body,
+          // never by a shared label another feature might carry.
+          resolved.extraCommands?.length
+            ? [resolved.command, ...resolved.extraCommands].map((leaf) => ({
+                featureName: leaf.payload.name,
+                featureId: leaf.payload.ids!.featureId,
+                resultBodyId: leaf.payload.ids!.bodyId
+              }))
+            : undefined,
           {
             baseProjectId: base.projectId,
             baseVersion: base.version,
@@ -33505,11 +33522,13 @@ export function App() {
         const history =
           key && reachProjection?.key === key ? reachProjection : null;
         const source = kind === 'edit' ? history?.document : doc;
+        const reach = source
+          ? toFaceReachEstimate(source, sketchId, target)
+          : null;
         return {
           label: doc ? toFaceTargetLabel(doc, target) : 'face',
-          distance: source
-            ? toFaceDistanceEstimate(source, sketchId, target)
-            : null,
+          distance: reach?.height ?? null,
+          ...(reach?.slanted ? { slanted: true } : {}),
           ...(kind === 'edit' && !source
             ? { pending: !history?.error, problem: history?.error }
             : {})
@@ -33529,7 +33548,7 @@ export function App() {
             : { kind: 'create' }
         );
         setStatus(
-          'Click a planar face parallel to the sketch for the extrusion to reach · Esc cancels.'
+          'Click a planar or cylindrical face facing the sketch for the extrusion to reach · Esc cancels.'
         );
       }
     };
@@ -33549,7 +33568,7 @@ export function App() {
       featureName: feature.name
     });
     setStatus(
-      `Re-pick the face "${feature.name}" reaches: click a planar face parallel to its sketch · Esc cancels.`
+      `Re-pick the face "${feature.name}" reaches: click a planar or cylindrical face facing its sketch · Esc cancels.`
     );
   }
 

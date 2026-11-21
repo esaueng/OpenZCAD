@@ -161,7 +161,7 @@ export function sameStartCaps(
 }
 
 /** The planar faces of `solid` lying on the plane at `point`. */
-function facesOnPlane(
+export function facesOnPlane(
   kernel: RemusKernel,
   solid: number,
   point: Vec3,

@@ -225,7 +225,7 @@ describe('F01 start offset', { timeout: 60_000 }, () => {
           throughAllSide: 'forward',
           startOffset: 2
         },
-        /through-all cut .* has no start offset/
+        /through-all extrude .* has no start offset/
       ],
       [{ startOffset: Infinity }, /Start offset must be a finite length/],
       [{ startOffset: ' ' }, /Start offset must be a number or an expression/]

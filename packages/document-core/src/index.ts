@@ -207,6 +207,7 @@ import {
   type ExtrudeOperation,
   type ThroughAllSide,
   type ExtrudeToFaceTarget,
+  type ExtrudeToSurfaceTarget,
   type FeatureWarning,
   type FeatureId,
   type FeatureKind,
@@ -465,6 +466,8 @@ export interface ExtrudeInput {
   throughAllSide?: ThroughAllSide;
   /** F01 (v29): required with `to-face`; see the stored feature's `toFace`. */
   toFace?: ExtrudeToFaceTarget;
+  /** F01 (v131): with `to-face`, a curved face instead of `toFace`. */
+  toSurface?: ExtrudeToSurfaceTarget;
   /**
    * F01 (v113): with `to-face` only; positive stops short of the face,
    * negative passes it. Absent or zero ends on the face.
@@ -2616,6 +2619,32 @@ function validateToFaceTarget(target: unknown): void {
   }
 }
 
+/**
+ * F01 (v131): a curved to-face target names its body and a lineage face
+ * reference; the build re-finds the face and checks its kind there.
+ */
+function validateToSurfaceTarget(target: unknown): void {
+  const face = target as Partial<ExtrudeToSurfaceTarget> | undefined;
+  const finite = (value: unknown) =>
+    !!value &&
+    typeof value === 'object' &&
+    ['x', 'y', 'z'].every((axis) =>
+      Number.isFinite((value as Record<string, unknown>)[axis])
+    );
+  if (
+    !face ||
+    face.type !== 'surface' ||
+    typeof face.bodyId !== 'string' ||
+    !face.bodyId ||
+    face.faceReference?.kind !== 'face' ||
+    !finite(face.sourceCentroid)
+  ) {
+    throw new Error(
+      'An extrude to a curved face needs a face with a qualified lineage reference; pick an exact cylindrical face.'
+    );
+  }
+}
+
 /** A stored draft literal is finite and inside a right angle. */
 function validateDraftValue(angle: unknown, label: string): void {
   if (angle === undefined) return;
@@ -2656,7 +2685,7 @@ function validateExtrudeDraft(
   if (!front && !back) return;
   if (data.endCondition === 'through-all') {
     throw new Error(
-      'A through-all cut has no draft yet; use a distance or a face.'
+      'A through-all extrude has no draft yet; use a distance or a face.'
     );
   }
   // A back side is symmetric, or a back distance that is positive (or an
@@ -2721,6 +2750,7 @@ export function validateExtrudeExtent(
     endCondition?: unknown;
     throughAllSide?: unknown;
     toFace?: unknown;
+    toSurface?: unknown;
     toFaceOffset?: unknown;
     startOffset?: unknown;
     draftAngleDeg?: unknown;
@@ -2750,7 +2780,10 @@ export function validateExtrudeExtent(
   // Only an absent field is blind: a stored `null` is malformed, not legacy.
   const condition =
     data.endCondition === undefined ? 'blind' : data.endCondition;
-  if (condition !== 'to-face' && data.toFace !== undefined) {
+  if (
+    condition !== 'to-face' &&
+    (data.toFace !== undefined || data.toSurface !== undefined)
+  ) {
     throw new Error('Only an extrude to a face names a target face.');
   }
   if (condition !== 'to-face' && data.toFaceOffset !== undefined) {
@@ -2759,7 +2792,7 @@ export function validateExtrudeExtent(
   validateExtrudeLengthValue(data.startOffset, 'Start offset');
   if (condition === 'through-all' && !resolvedZero(resolve)(data.startOffset)) {
     throw new Error(
-      'A through-all cut runs through the whole target, so it has no start offset.'
+      'A through-all extrude runs through the whole target, so it has no start offset.'
     );
   }
   if (condition === 'blind') {
@@ -2772,7 +2805,17 @@ export function validateExtrudeExtent(
     if (data.throughAllSide !== undefined) {
       throw new Error('An extrude to a face has no through-all side.');
     }
-    validateToFaceTarget(data.toFace);
+    if (data.toSurface !== undefined) {
+      // F01 (v131): a curved face instead of a planar one, never both.
+      if (data.toFace !== undefined) {
+        throw new Error(
+          'An extrude to a face names one face: a planar face or a curved one, not both.'
+        );
+      }
+      validateToSurfaceTarget(data.toSurface);
+    } else {
+      validateToFaceTarget(data.toFace);
+    }
     validateToFaceOffsetValue(data.toFaceOffset);
     if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
@@ -2807,23 +2850,26 @@ export function validateExtrudeExtent(
       `Unknown extrude end condition ${JSON.stringify(condition)}.`
     );
   }
-  if (data.operation !== 'cut') {
-    throw new Error('Through all is available for a cut extrusion only.');
+  // F01: an add through all fills the target's whole span along the
+  // sketch normal and joins it; new-body and intersect have no target to
+  // span (or would only keep what is already there).
+  if (data.operation !== 'cut' && data.operation !== 'add') {
+    throw new Error('Through all is available for a cut or an add only.');
   }
   if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
-    throw new Error('A through-all cut needs one explicit target body.');
+    throw new Error('A through-all extrude needs one explicit target body.');
   }
   if (
     typeof data.throughAllSide !== 'string' ||
     !['forward', 'backward', 'both'].includes(data.throughAllSide)
   ) {
     throw new Error(
-      'A through-all cut needs a side: forward, backward or both.'
+      'A through-all extrude needs a side: forward, backward or both.'
     );
   }
   if (data.symmetric === true) {
     throw new Error(
-      'A through-all cut is not symmetric; choose the side "both" instead.'
+      'A through-all extrude is not symmetric; choose the side "both" instead.'
     );
   }
   if (
@@ -2832,7 +2878,7 @@ export function validateExtrudeExtent(
     data.backDistance !== '0'
   ) {
     throw new Error(
-      'A through-all cut has no back distance; choose the side "both" instead.'
+      'A through-all extrude has no back distance; choose the side "both" instead.'
     );
   }
 }
@@ -3011,7 +3057,9 @@ export function extrudeSketch(
       ...(input.endCondition === 'to-face'
         ? {
             endCondition: 'to-face' as const,
-            toFace: deepClone(input.toFace!),
+            ...(input.toSurface
+              ? { toSurface: deepClone(input.toSurface) }
+              : { toFace: deepClone(input.toFace!) }),
             // A literal zero ends on the face, the absent default.
             ...(isZeroParam(input.toFaceOffset)
               ? {}
@@ -5899,6 +5947,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'endCondition',
     'throughAllSide',
     'toFace',
+    'toSurface',
     'toFaceOffset',
     'startOffset',
     'draftAngleDeg',
@@ -6135,6 +6184,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'endCondition',
     'throughAllSide',
     'toFace',
+    'toSurface',
     'toFaceOffset',
     'startOffset',
     'draftAngleDeg',
@@ -6455,6 +6505,47 @@ export function toFaceSignedDistance(
 ): number | null {
   const height = toFaceParallelHeight(sketch, face);
   return height === 0 ? null : height;
+}
+
+/**
+ * F01 (slanted to-face): how steeply a to-face target may lean and still be reached:
+ * the cosine between its normal and the sketch normal must be at least this
+ * (the face within about 84° of parallel). A steeper face meets the
+ * extrusion at a grazing angle, along walls far longer than the profile.
+ */
+export const TO_FACE_SLANT_COSINE_LIMIT = 0.1;
+
+/**
+ * F01 (slanted to-face): which way a to-face target lies from the sketch plane and how
+ * far, as the signed height of the face's own point along the unit sketch
+ * normal, for a parallel or a slanted face; null when the face is steeper
+ * than {@link TO_FACE_SLANT_COSINE_LIMIT}. `slanted` is false exactly when
+ * the face is parallel ({@link toFaceParallelHeight}), in which case
+ * `height` is that distance (zero on the sketch plane). For a slanted face the height is only where the face's point
+ * is; the build finds where it meets each part of the profile.
+ */
+export function toFaceReach(
+  sketch: { origin: ToFacePoint; normal: ToFacePoint },
+  face: { point: ToFacePoint; normal: ToFacePoint }
+): { height: number; slanted: boolean } | null {
+  // A parallel face on the sketch plane reads as 0: a start offset can
+  // still reach it (the build refuses it without one).
+  const parallel = toFaceParallelHeight(sketch, face);
+  if (parallel !== null) return { height: parallel, slanted: false };
+  const alignment =
+    face.normal.x * sketch.normal.x +
+    face.normal.y * sketch.normal.y +
+    face.normal.z * sketch.normal.z;
+  if (!(Math.abs(alignment) >= TO_FACE_SLANT_COSINE_LIMIT)) return null;
+  const sine = Math.sqrt(Math.max(0, 1 - alignment * alignment));
+  if (sine <= TO_FACE_PARALLEL_SINE_LIMIT) return null;
+  const height =
+    (face.point.x - sketch.origin.x) * sketch.normal.x +
+    (face.point.y - sketch.origin.y) * sketch.normal.y +
+    (face.point.z - sketch.origin.z) * sketch.normal.z;
+  // A slanted face's middle may sit level with the sketch: which way it is
+  // reached is read from the profile in the build, never guessed here.
+  return Number.isFinite(height) ? { height, slanted: true } : null;
 }
 
 /**
