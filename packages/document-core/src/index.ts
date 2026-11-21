@@ -2656,7 +2656,7 @@ function validateExtrudeDraft(
   if (!front && !back) return;
   if (data.endCondition === 'through-all') {
     throw new Error(
-      'A through-all cut has no draft yet; use a distance or a face.'
+      'A through-all extrude has no draft yet; use a distance or a face.'
     );
   }
   // A back side is symmetric, or a back distance that is positive (or an
@@ -2759,7 +2759,7 @@ export function validateExtrudeExtent(
   validateExtrudeLengthValue(data.startOffset, 'Start offset');
   if (condition === 'through-all' && !resolvedZero(resolve)(data.startOffset)) {
     throw new Error(
-      'A through-all cut runs through the whole target, so it has no start offset.'
+      'A through-all extrude runs through the whole target, so it has no start offset.'
     );
   }
   if (condition === 'blind') {
@@ -2807,23 +2807,26 @@ export function validateExtrudeExtent(
       `Unknown extrude end condition ${JSON.stringify(condition)}.`
     );
   }
-  if (data.operation !== 'cut') {
-    throw new Error('Through all is available for a cut extrusion only.');
+  // F01: an add through all fills the target's whole span along the
+  // sketch normal and joins it; new-body and intersect have no target to
+  // span (or would only keep what is already there).
+  if (data.operation !== 'cut' && data.operation !== 'add') {
+    throw new Error('Through all is available for a cut or an add only.');
   }
   if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
-    throw new Error('A through-all cut needs one explicit target body.');
+    throw new Error('A through-all extrude needs one explicit target body.');
   }
   if (
     typeof data.throughAllSide !== 'string' ||
     !['forward', 'backward', 'both'].includes(data.throughAllSide)
   ) {
     throw new Error(
-      'A through-all cut needs a side: forward, backward or both.'
+      'A through-all extrude needs a side: forward, backward or both.'
     );
   }
   if (data.symmetric === true) {
     throw new Error(
-      'A through-all cut is not symmetric; choose the side "both" instead.'
+      'A through-all extrude is not symmetric; choose the side "both" instead.'
     );
   }
   if (
@@ -2832,7 +2835,7 @@ export function validateExtrudeExtent(
     data.backDistance !== '0'
   ) {
     throw new Error(
-      'A through-all cut has no back distance; choose the side "both" instead.'
+      'A through-all extrude has no back distance; choose the side "both" instead.'
     );
   }
 }

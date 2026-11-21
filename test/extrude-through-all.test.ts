@@ -95,7 +95,7 @@ describe('F01 through-all: document contract', () => {
   });
 
   it.each([
-    [{ operation: 'add' }, /cut extrusion only/],
+    [{ operation: 'intersect' }, /cut or an add only/],
     [{ operation: 'cut', targetBodyId: undefined }, /one explicit target/],
     [{ operation: 'cut', throughAllSide: undefined }, /needs a side/],
     [{ operation: 'cut', symmetric: true }, /not symmetric/],

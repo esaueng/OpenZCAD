@@ -562,7 +562,7 @@ export function ExtrudeCommand({
               {
                 value: 'through-all',
                 label: 'Through all',
-                tip: 'Cuts through the whole target'
+                tip: 'Runs through the whole target'
               }
             ]
           : [])

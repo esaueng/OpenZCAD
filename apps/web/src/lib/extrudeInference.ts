@@ -382,7 +382,9 @@ export function regionExtrudeOutcome(
   // A through-all cut was committed with a dormant distance; naming it would
   // report a depth the build never used.
   if (resolved.command?.payload.endCondition === 'through-all') {
-    return 'Cut the region through all of the target.';
+    return resolved.inference.operation === 'add'
+      ? 'Extruded the region through all of the target, added to the body.'
+      : 'Cut the region through all of the target.';
   }
   // F01 (v29): nor does a to-face extrude, whose face decides the depth.
   if (resolved.command?.payload.endCondition === 'to-face') {

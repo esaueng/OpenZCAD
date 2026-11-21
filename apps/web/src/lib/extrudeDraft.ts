@@ -194,9 +194,12 @@ export function extrudeDraftNumber(
   return preview.ok && preview.value !== undefined ? preview.value : null;
 }
 
-/** Through all needs one explicit cut target, so only Cut offers it. */
+/**
+ * Through all needs one explicit target to span, so only Cut and Add offer
+ * it (an add through all fills the target's whole span and joins it).
+ */
 export function extrudeOffersThroughAll(draft: ExtrudeDraft): boolean {
-  return draft.choice.operation === 'cut';
+  return draft.choice.operation === 'cut' || draft.choice.operation === 'add';
 }
 
 /** F01 (v130): Up to next stops at an add or cut target's next face. */
@@ -209,9 +212,7 @@ export function extrudeIsToNext(draft: ExtrudeDraft): boolean {
 }
 
 export function extrudeIsThroughAll(draft: ExtrudeDraft): boolean {
-  return (
-    draft.choice.operation === 'cut' && draft.endCondition === 'through-all'
-  );
+  return extrudeOffersThroughAll(draft) && draft.endCondition === 'through-all';
 }
 
 /** F01 (v29): to-face replaces the distance with a picked face. */
