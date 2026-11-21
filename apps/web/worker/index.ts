@@ -3358,12 +3358,14 @@ async function dispatchApiRequest(
       return json({ error: error.message, code: error.code }, error.status);
     }
     if (error instanceof AuthenticationError) {
+      const clearing =
+        error.failure === 'invalid'
+          ? await clearRejectedEmailSession(request, env)
+          : null;
       return json(
         { error: error.message, code: 'AUTH_REQUIRED' },
         401,
-        error.failure === 'invalid'
-          ? { 'set-cookie': await clearRejectedEmailSession(request, env) }
-          : undefined
+        clearing ? { 'set-cookie': clearing } : undefined
       );
     }
     if (error instanceof AccountDeletionError) {

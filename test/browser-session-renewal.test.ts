@@ -5,6 +5,7 @@ import worker from '../apps/web/worker/index';
 import {
   authenticateBrowserSession,
   createSessionCookie,
+  dropRenewedSessionCookie,
   takeRenewedSessionCookie
 } from '../apps/web/worker/auth';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
@@ -300,7 +301,6 @@ describe('sliding browser session hardening', () => {
     });
     const request = sessionRequest();
     await authenticateBrowserSession(request, env);
-    expect(storedExpiry(db)).toBeGreaterThanOrEqual(t + LIFETIME);
     // Another tab signs out (or account erasure deletes the row) and signs
     // in afresh before this response is built.
     db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').run(
@@ -311,9 +311,11 @@ describe('sliding browser session hardening', () => {
        VALUES (?, ?, ?, ?)`
     ).run(tokenHash('fresh-session-token'), USER, t, t + LIFETIME);
     expect(await takeRenewedSessionCookie(request)).toBeNull();
+    expect(storedExpiry(db)).toBeUndefined();
+    expect(storedExpiry(db, 'fresh-session-token')).toBe(t + LIFETIME);
   });
 
-  it('does not re-issue a renewed cookie whose row no longer has the renewed expiry', async () => {
+  it('does not re-issue a cookie for a session another request already renewed', async () => {
     const t = now();
     const { db, env } = harness({
       createdAt: t - 20 * DAY,
@@ -323,8 +325,24 @@ describe('sliding browser session hardening', () => {
     await authenticateBrowserSession(request, env);
     db.prepare(
       'UPDATE auth_sessions SET expires_at = ? WHERE token_hash = ?'
-    ).run(t + DAY, tokenHash(TOKEN));
+    ).run(t + LIFETIME, tokenHash(TOKEN));
     expect(await takeRenewedSessionCookie(request)).toBeNull();
+    expect(storedExpiry(db)).toBe(t + LIFETIME);
+  });
+
+  it('does not advance the stored expiry when the response cannot carry the cookie (re-check 3)', async () => {
+    const t = now();
+    const { db, env } = harness({
+      createdAt: t - 20 * DAY,
+      expiresAt: t + 10 * DAY
+    });
+    const request = sessionRequest();
+    await authenticateBrowserSession(request, env);
+    // A 403 (say, sharing disabled) drops the pending renewal.
+    dropRenewedSessionCookie(request);
+    expect(storedExpiry(db)).toBe(t + 10 * DAY);
+    expect(await takeRenewedSessionCookie(request)).toBeNull();
+    expect(storedExpiry(db)).toBe(t + 10 * DAY);
   });
 
   it.each([
@@ -393,6 +411,9 @@ describe('sliding browser session hardening', () => {
     const response = await worker.fetch(sessionRequest(), racing);
     expect(response.status).toBe(401);
     expect(storedExpiry(db)).toBe(renewedAt);
+    // The late 401 must not clear the cookie the renewal just re-issued
+    // (re-check 2).
+    expect(sessionCookies(response)).toEqual([]);
   });
 
   it('still deletes a row that stays expired through the rejection', async () => {
@@ -404,5 +425,8 @@ describe('sliding browser session hardening', () => {
     const response = await worker.fetch(sessionRequest(), env);
     expect(response.status).toBe(401);
     expect(storedExpiry(db)).toBeUndefined();
+    expect(sessionCookies(response)).toEqual([
+      expect.stringMatching(/Max-Age=0/)
+    ]);
   });
 });
