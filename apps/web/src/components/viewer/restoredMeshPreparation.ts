@@ -10,6 +10,7 @@ import { facetedSource } from '../../../../../packages/viewport/src/render/edgeO
 
 interface Entry {
   bodyId: GeometryBodyRepresentation['bodyId'];
+  source: GeometryBodyRepresentation['source'];
   vertices: Float32Array;
   indices: Uint32Array;
   faces: Float64Array;
@@ -76,28 +77,36 @@ export class RestoredMeshPreparation {
       faceInputs[i * 3 + 1] = face.triangleCount;
       faceInputs[i * 3 + 2] = face.hash;
     });
-    // Keep the preceding revision of this body in preference to an unrelated
-    // mesh. A restored revision becomes the baseline for the next edit.
-    const last =
-      this.entries.find((entry) => entry.bodyId === body.bodyId) ??
+    this.retain({
+      bodyId: body.bodyId,
+      source: body.source,
+      vertices,
+      indices,
+      faces: faceInputs,
+      edges: edges.map((edge) => ({
+        id: edge.topologyId,
+        neighbours: edge.adjacentFaceHashes?.slice() ?? []
+      })),
+      faceted: facetedSource(body.source),
+      tangentIds: prepared.tangentIds,
+      geometry,
+      silhouettes
+    });
+  }
+
+  private retain(entry: Entry) {
+    // Prefer this body's preceding revision so Undo can find it after another
+    // body was prepared. A cross-ID hit also claims a slot for its checked body.
+    const prior =
+      this.entries.find((saved) => saved.bodyId === entry.bodyId) ??
       this.entries[0];
-    this.entries = [
-      {
-        bodyId: body.bodyId,
-        vertices,
-        indices,
-        faces: faceInputs,
-        edges: edges.map((edge) => ({
-          id: edge.topologyId,
-          neighbours: edge.adjacentFaceHashes?.slice() ?? []
-        })),
-        faceted: facetedSource(body.source),
-        tangentIds: prepared.tangentIds,
-        geometry,
-        silhouettes
-      }
-    ];
-    if (last && last.geometry !== geometry) this.entries.push(last);
+    this.entries = [entry];
+    if (
+      prior &&
+      (prior.bodyId !== entry.bodyId || prior.geometry !== entry.geometry)
+    ) {
+      this.entries.push(prior);
+    }
   }
 
   restore(body: GeometryBodyRepresentation): PreparedBody | undefined {
@@ -105,7 +114,10 @@ export class RestoredMeshPreparation {
     if (!topology?.faces.length || !topology.edges.length) return;
     const entry = this.entries.find(
       (saved) =>
-        saved.bodyId === body.bodyId &&
+        // A new blend's preview and checked commit allocate independent body IDs.
+        // Rendering depends on the mesh and topology inputs compared below.
+        (saved.bodyId === body.bodyId ||
+          (body.source === 'fillet' && saved.source === 'fillet')) &&
         saved.faces.length === topology.faces.length * 3 &&
         saved.edges.length === topology.edges.length &&
         saved.faceted === facetedSource(body.source) &&
@@ -131,7 +143,11 @@ export class RestoredMeshPreparation {
         sameMeshBuffer(saved.indices, body.mesh.indices)
     );
     if (!entry) return;
-    if (this.entries[1] === entry) this.entries.reverse();
+    if (entry.bodyId !== body.bodyId) {
+      this.retain({ ...entry, bodyId: body.bodyId });
+    } else if (this.entries[1] === entry) {
+      this.entries.reverse();
+    }
     // Keep a separate wrapper: installation releases its geometry field.
     // Picking receives the restored projection and all of its current data.
     return {

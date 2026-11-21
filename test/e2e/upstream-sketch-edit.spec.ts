@@ -1,7 +1,17 @@
+import { appendFileSync } from 'node:fs';
+import { hostSnapshot, perfBrowserArgs } from '../../scripts/perf-host.mjs';
 import { CommandManager } from '@openzcad/command-system';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import type { ProjectDocument } from '@openzcad/shared';
+import {
+  addPrimitiveFeature,
+  addSketchFeature,
+  booleanBodies,
+  createProjectDocument,
+  extrudeSketch
+} from '@openzcad/document-core';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
+import type { GeometryWorkerRequest } from '../../apps/web/src/worker/geometryWorker';
 import {
   loftedHollowDuct,
   upperDuctSectionEdit
@@ -12,6 +22,9 @@ import {
   stubApi,
   bodyCardFromHistory
 } from './openzcad-fixtures';
+
+if (process.env.OZ_PERF_ANGLE)
+  test.use({ launchOptions: { args: perfBrowserArgs() } });
 
 /**
  * Production QA CAD-002 (2026-10-11): narrowing a shelled loft's upper section
@@ -61,6 +74,183 @@ async function openFileMenu(page: Page) {
     await menu.locator('summary').click();
   return menu;
 }
+
+function plateWithHole(independentBoxes: number): ProjectDocument {
+  const rectangle = (
+    document: ProjectDocument,
+    name: string,
+    width: number,
+    height: number
+  ) =>
+    addSketchFeature(document, {
+      name,
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: [
+        { objectKind: 'rectangle', width, height, centerX: 0, centerY: 0 }
+      ]
+    });
+  const base = createProjectDocument('Plate with a hole', toUserId('local'));
+  const profile = rectangle(base, 'Plate profile', 20, 10);
+  let model = profile.document;
+  for (let i = 0; i < independentBoxes; i++) {
+    model = addPrimitiveFeature(model, {
+      name: `Independent ${i}`,
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 4, depth: 3 }
+    });
+  }
+  const plate = extrudeSketch(model, {
+    name: 'Plate',
+    sketchId: profile.sketchId,
+    distance: 4
+  });
+  const hole = rectangle(plate.document, 'Hole profile', 2, 2);
+  const tool = extrudeSketch(hole.document, {
+    name: 'Tool',
+    sketchId: hole.sketchId,
+    distance: 4
+  });
+  return booleanBodies(tool.document, {
+    name: 'Pocketed plate',
+    operation: 'subtract',
+    targetBodyIds: [plate.bodyId, tool.bodyId]
+  }).document;
+}
+
+async function openPlate(page: Page, independentBoxes: number) {
+  await page.addInitScript(() => {
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message: unknown, options?) {
+      const request = message as GeometryWorkerRequest | null;
+      if (request?.type === 'sync') {
+        performance.mark('sketch-history:sync', {
+          detail: {
+            projectId: request.document.projectId,
+            version: request.document.version,
+            checked: !!request.requestId
+          }
+        });
+      }
+      post.call(this, message, options as StructuredSerializeOptions);
+    };
+  });
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await createProject(page, 'History edit');
+  await importProject(page, plateWithHole(independentBoxes));
+  await expect(await bodyReadout(page)).toContainText('784 mm³');
+}
+
+async function changePlateWidth(page: Page, width: number) {
+  await page.keyboard.press('Escape');
+  await page.locator('.feature-row-main', { hasText: 'Plate profile' }).click();
+  const inspector = page.getByRole('region', { name: 'Feature inspector' });
+  await inspector.getByLabel('Width', { exact: true }).fill(String(width));
+  const apply = inspector.getByRole('button', { name: 'Apply', exact: true });
+  await apply.evaluate((button) => {
+    performance.clearMeasures('oz:edit.analysis-ready');
+    performance.clearMarks('sketch-history:apply');
+    performance.clearMarks('sketch-history:sync');
+    button.addEventListener(
+      'click',
+      () => performance.mark('sketch-history:apply'),
+      { once: true, capture: true }
+    );
+  });
+  await apply.click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          performance.getEntriesByName('oz:edit.analysis-ready', 'measure')
+            .length
+      )
+    )
+    .toBeGreaterThan(0);
+  const volume = width * 10 * 4 - 2 * 2 * 4;
+  await expect(await bodyReadout(page)).toContainText(`${volume} mm³`);
+  const result = await page.evaluate(() => {
+    const start = performance.getEntriesByName(
+      'sketch-history:apply',
+      'mark'
+    )[0]!.startTime;
+    const requests = performance
+      .getEntriesByName('sketch-history:sync', 'mark')
+      .filter((entry) => entry.startTime >= start)
+      .map((entry) => ({
+        at: entry.startTime,
+        ...((entry as PerformanceMark).detail as {
+          projectId: string;
+          version: number;
+          checked: boolean;
+        })
+      }));
+    const check = requests.find((request) => request.checked);
+    if (!check) throw new Error('Missing sketch validation request');
+    const completions = performance
+      .getEntriesByName('oz:edit.analysis-ready', 'measure')
+      .map((entry) => ({
+        end: entry.startTime + entry.duration,
+        ...((entry as PerformanceMeasure).detail as {
+          projectId: string;
+          version: number;
+          adopted?: number;
+        })
+      }))
+      .filter(
+        (entry) =>
+          entry.end >= check.at &&
+          entry.projectId === check.projectId &&
+          entry.version >= check.version
+      )
+      .sort((a, b) => a.end - b.end);
+    const last = completions.at(-1);
+    if (!last)
+      throw new Error('Missing committed geometry for the sketch edit');
+    const syncs = requests.filter(
+      (request) =>
+        request.projectId === check.projectId &&
+        request.version >= check.version &&
+        request.at <= last.end
+    ).length;
+    return { exactMs: last.end - start, adopted: last.adopted === 1, syncs };
+  });
+  return { width, volume, ...result };
+}
+
+test(
+  'adopts the checked History sketch edit for the downstream cut',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openPlate(page, 0);
+    expect(await changePlateWidth(page, 22)).toMatchObject({
+      adopted: true,
+      syncs: 1
+    });
+  }
+);
+
+test.describe('History sketch performance', () => {
+  test('measures Apply through committed Boolean geometry', async ({
+    page
+  }, testInfo) => {
+    test.skip(!process.env.OZ_PERF, 'Opt-in geometry benchmark');
+    const load = hostSnapshot();
+    await openPlate(page, 30);
+    const samples = [];
+    for (const width of [22, 23, 24])
+      samples.push(await changePlateWidth(page, width));
+    const report = { load, angle: process.env.OZ_PERF_ANGLE ?? null, samples };
+    const json = JSON.stringify(report);
+    await testInfo.attach('sketch-history-performance.json', {
+      contentType: 'application/json',
+      body: json
+    });
+    if (process.env.OZ_SKETCH_HISTORY_OUT)
+      appendFileSync(process.env.OZ_SKETCH_HISTORY_OUT, json + '\n');
+  });
+});
 
 test('refuses an upstream section edit that strands a dependent shell, and keeps the hollow duct', async ({
   page
