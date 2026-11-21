@@ -104,7 +104,9 @@ export interface StepExportAssembly {
 /** A STEP real: always a decimal point, never `-0`, exponent as `E`. */
 function stepReal(value: number): string {
   // A quarter turn's cosine is 6e-17, not 0: below 1e-12 is written as 0.
-  const rounded = Math.abs(value) < 1e-12 ? 0 : Number(value.toPrecision(15));
+  const near = Math.abs(value) < 1e-12 ? 0 : Number(value.toPrecision(15));
+  // Rounding the largest finite values up would overflow to Infinity.
+  const rounded = Number.isFinite(near) ? near : value;
   const text = String(Object.is(rounded, -0) ? 0 : rounded).toUpperCase();
   if (text.includes('.')) return text;
   const at = text.indexOf('E');

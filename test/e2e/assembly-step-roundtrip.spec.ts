@@ -13,6 +13,7 @@ import {
   stubApi,
   test
 } from './openzcad-fixtures';
+import { stepOccurrenceFrames } from './step-occurrence-frames';
 
 /**
  * AS04 STEP hierarchy round-trip in a real browser: File › STEP writes an
@@ -97,12 +98,15 @@ test(
       chunks.push(chunk as Buffer);
     const step = Buffer.concat(chunks);
     const text = step.toString('utf8');
-    // Two parts under the project, the arm's occurrence carrying its pose:
-    // a quarter turn about Z puts its local z frame on the world z axis
-    // and its x axis along −y once inverted.
+    // Two parts under the project. The base sits as modelled; the arm's
+    // occurrence carries its pose, a quarter turn about Z through (5, 5, 0),
+    // written as the inverse frame in the part: origin (0, 10, 0), x along −y.
     expect(text).toContain("NEXT_ASSEMBLY_USAGE_OCCURRENCE('1', 'Base'");
     expect(text).toContain("NEXT_ASSEMBLY_USAGE_OCCURRENCE('2', 'Arm'");
-    expect(text).toMatch(/DIRECTION\('', \(0\., -1\., 0\.\)\)/);
+    expect(stepOccurrenceFrames(text)).toEqual([
+      { origin: [0, 0, 0], x: [1, 0, 0] },
+      { origin: [0, 10, 0], x: [0, -1, 0] }
+    ]);
 
     // A fresh project, in a browser with no saved state, reads both parts
     // back from that file.

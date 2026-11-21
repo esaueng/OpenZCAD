@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { CommandManager, replayCommands } from '@openzcad/command-system';
 import {
+  assemblyComponentBodies,
+  booleanBodies,
   addAssemblyComponents,
   addAssemblyJoint,
   addPrimitiveFeature,
@@ -39,6 +41,7 @@ import {
   type StepImportRunDeps
 } from '../apps/web/src/lib/stepImportRun';
 import { createInFlightImportChecksums } from '../apps/web/src/lib/importArchival';
+import { stepOccurrenceFrames } from './e2e/step-occurrence-frames';
 
 /**
  * I02: STEP import keeps the file's product structure. The fixture was
@@ -550,3 +553,117 @@ it('round-trips an assembly’s poses as STEP placements (AS04)', async () => {
     adapter.dispose();
   }
 }, 240_000);
+
+/** A box placed as a grounded part 50 mm along X, and a copy of the box. */
+function partAndCopy() {
+  let document = createProjectDocument('Copy', toUserId('user_as04'));
+  document = addPrimitiveFeature(document, {
+    name: 'Box',
+    bodyName: 'Box',
+    primitiveKind: 'box',
+    dimensions: { width: 10, height: 10, depth: 10 }
+  });
+  const box = document.bodyOrder[0] as BodyId;
+  const copied = transformBody(document, {
+    name: 'Copy box',
+    targetBodyId: box,
+    translation: { x: 5, y: 0, z: 0 },
+    rotationDeg: { x: 0, y: 0, z: 0 },
+    copy: true
+  });
+  return { document: copied.document, box, copy: copied.bodyId };
+}
+
+it('places a body by the part Assemble resolves, whichever bodies are exported (AS04)', async () => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    const start = partAndCopy();
+    const { box, copy } = start;
+    let document = start.document;
+    document = addAssemblyComponents(document, {
+      components: [
+        {
+          componentId: 'c_box',
+          name: 'Box',
+          bodyId: box,
+          grounded: true,
+          placement: {
+            translation: { x: 50, y: 0, z: 0 },
+            rotation: { x: 0, y: 0, z: 0, w: 1 }
+          }
+        }
+      ]
+    });
+    // Were only the exported bodies counted, the part would follow its
+    // body's lineage to the copy and place it.
+    expect(
+      assemblyComponentBodies(document, (id) => id === copy).get('c_box')
+    ).toBe(copy);
+    const derived = await adapter.syncDocument(document);
+    const onlyCopy = await adapter.exportStep({ ...document, derived }, [copy]);
+    expect(onlyCopy).not.toContain('NEXT_ASSEMBLY_USAGE_OCCURRENCE');
+    const both = await adapter.exportStep({ ...document, derived }, [
+      box,
+      copy
+    ]);
+    // The box's part is placed; the copy, in no part, keeps the identity.
+    expect(
+      stepOccurrenceFrames(both).map(({ origin }) => origin)
+    ).toContainEqual([-50, 0, 0]);
+  } finally {
+    adapter.dispose();
+  }
+}, 120_000);
+
+it('places a body two parts resolve to at the later part’s pose, as Assemble draws it (AS04)', async () => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    const start = partAndCopy();
+    const { box, copy } = start;
+    let document = start.document;
+    const place = (x: number, y: number) => ({
+      translation: { x, y, z: 0 },
+      rotation: { x: 0, y: 0, z: 0, w: 1 }
+    });
+    document = addAssemblyComponents(document, {
+      components: [
+        {
+          componentId: 'c_first',
+          name: 'First',
+          bodyId: box,
+          grounded: true,
+          placement: place(50, 0)
+        },
+        {
+          componentId: 'c_second',
+          name: 'Second',
+          bodyId: copy,
+          grounded: true,
+          placement: place(0, 80)
+        }
+      ]
+    });
+    // Uniting the copy with the box leaves one body both parts follow.
+    const united = booleanBodies(document, {
+      name: 'Unite',
+      operation: 'union',
+      targetBodyIds: [copy, box]
+    });
+    document = united.document;
+    const derived = await adapter.syncDocument(document);
+    const live = (id: BodyId) =>
+      Boolean(derived.bodyRepresentations[id]) &&
+      !derived.bodyRepresentations[id]!.consumed;
+    const shown = assemblyComponentBodies(document, live);
+    expect(shown.get('c_first')).toBe(united.bodyId);
+    expect(shown.get('c_second')).toBe(united.bodyId);
+    const exported = await adapter.exportStep({ ...document, derived }, [
+      united.bodyId
+    ]);
+    expect(stepOccurrenceFrames(exported)).toEqual([
+      { origin: [0, -80, 0], x: [1, 0, 0] }
+    ]);
+  } finally {
+    adapter.dispose();
+  }
+}, 120_000);

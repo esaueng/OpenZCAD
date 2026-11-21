@@ -78,6 +78,7 @@ export type {
 import {
   assemblyComponentBodies,
   findSketch,
+  isLiveAssemblyBody,
   getParameterScope,
   resolveParamValue,
   getParameterHiddenBodyIds,
@@ -1406,18 +1407,26 @@ function exportSolidLabels(
 function exportAssemblyPlacements(
   document: ProjectDocument,
   bodies: readonly { bodyId: BodyId }[],
-  scale: number
+  scale: number,
+  /**
+   * Whether the model shows a body (built, not consumed, not hidden by a
+   * parameter): what a part resolves against, as Assemble resolves it,
+   * whichever bodies this export happens to write.
+   */
+  isLive: (bodyId: BodyId) => boolean
 ): Map<BodyId, number[]> {
   const placements = new Map<BodyId, number[]>();
   const set = document.assembly;
   if (!set || set.components.length === 0) return placements;
   const written = new Set(bodies.map(({ bodyId }) => bodyId));
-  const shown = assemblyComponentBodies(document, (id) => written.has(id));
+  const shown = assemblyComponentBodies(document, isLive);
   const solution = solveAssembly(set);
+  // Display order, a later part winning a body two parts resolve to: the
+  // pose the Assemble viewport draws that body at.
   for (const component of set.components) {
     const bodyId = shown.get(component.id);
     const pose = solution.poses.get(component.id);
-    if (!bodyId || !pose || placements.has(bodyId)) continue;
+    if (!bodyId || !pose || !written.has(bodyId)) continue;
     const matrix = transformToMatrix4(pose);
     for (const index of [12, 13, 14]) matrix[index] = matrix[index]! * scale;
     placements.set(bodyId, matrix);
@@ -1434,9 +1443,21 @@ function exportAssemblyPlacements(
 function exportAssembly(
   document: ProjectDocument,
   bodies: readonly { bodyId: BodyId; solids: number[] }[],
-  scale = 1
+  scale = 1,
+  build?: ExactBuildResult
 ): StepExportAssembly | null {
-  const placements = exportAssemblyPlacements(document, bodies, scale);
+  const hidden = getParameterHiddenBodyIds(document);
+  const placements = exportAssemblyPlacements(
+    document,
+    bodies,
+    scale,
+    build
+      ? (bodyId) =>
+          (build.shapes.get(bodyId)?.solids.length ?? 0) > 0 &&
+          !build.consumed.has(bodyId) &&
+          !hidden.has(bodyId)
+      : (bodyId) => isLiveAssemblyBody(document, bodyId)
+  );
   const all = new Map(
     listObjectFolders(document).map((folder) => [folder.id, folder])
   );
@@ -1562,7 +1583,8 @@ function writeStepBodies(
   const assembly = exportAssembly(
     document,
     bodies,
-    exportLengthScale(document.units, options.units ?? 'mm')
+    exportLengthScale(document.units, options.units ?? 'mm'),
+    build
   );
   if (assembly) metadata.assembly = assembly;
   if (pmi.length > 0) metadata.pmi = pmi;
