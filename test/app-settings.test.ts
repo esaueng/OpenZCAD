@@ -246,6 +246,41 @@ describe('application settings', () => {
     ).toEqual(['coincident']);
   });
 
+  it('keeps a reference display unit, falling back to the document units', () => {
+    expect(defaultAppSettings().sketching.referenceDisplayUnit).toBe(
+      'document'
+    );
+    expect(
+      normalizeAppSettings({ sketching: { referenceDisplayUnit: 'inch' } })
+        .sketching.referenceDisplayUnit
+    ).toBe('inch');
+    for (const unknown of ['ft', 3, null, 'Document'])
+      expect(
+        normalizeAppSettings({ sketching: { referenceDisplayUnit: unknown } })
+          .sketching.referenceDisplayUnit
+      ).toBe('document');
+    const older = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    delete older.sketching.referenceDisplayUnit;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: older },
+        'development'
+      ).settings.sketching.referenceDisplayUnit
+    ).toBe('document');
+    const newer = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      sketching: Record<string, unknown>;
+    };
+    newer.sketching.referenceDisplayUnit = 'furlong';
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 0, settings: newer },
+        'development'
+      ).settings.sketching.referenceDisplayUnit
+    ).toBe('document');
+  });
+
   it('preserves Anthropic through account validation and local persistence', () => {
     const settings = deepClone(DEFAULT_APP_SETTINGS);
     settings.assistant.provider = 'anthropic';
