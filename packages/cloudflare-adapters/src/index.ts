@@ -9880,6 +9880,13 @@ export class ProjectCollaborationRoom extends DurableObject {
   private sourceArchives: CopiedImportArchive[] = [];
   private sourceCopyPublicationStarted = false;
   private historyVersions: number[] = [];
+  /**
+   * Versions whose `room:history:<v>` key storage is known to hold: found by
+   * {@link ensureDocumentHistory} or written by {@link persistRoomState}. A
+   * committed version is stored together with `room:latest`, so the previous
+   * latest needs no rewrite when it is in here.
+   */
+  private persistedHistoryVersions = new Set<number>();
   private historyLoaded = false;
   private historyLoad: Promise<void> | null = null;
   private projectId: string | null = null;
@@ -10003,11 +10010,13 @@ export class ProjectCollaborationRoom extends DurableObject {
         )
       );
       for (const document of history) {
-        if (document)
+        if (document) {
           this.documentHistory.set(
             document.version,
             reconcileCopiedImportSources(document, this.sourceArchives)
           );
+          this.persistedHistoryVersions.add(document.version);
+        }
       }
       this.historyLoaded = true;
     })().finally(() => {
@@ -10304,6 +10313,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.editLeases = [];
     this.latestDocument = null;
     this.documentHistory.clear();
+    this.persistedHistoryVersions.clear();
     this.sourceArchives = [];
     this.sourceCopyPublicationStarted = false;
     this.historyVersions = [];
@@ -11569,12 +11579,22 @@ export class ProjectCollaborationRoom extends DurableObject {
         .first<{ allowed: number }>();
       if (allowed?.allowed !== 1) return false;
     }
+    // Load the stored index first so the previous latest is only rewritten
+    // when its history key is actually missing.
+    if (this.historyVersions.length && !this.historyLoaded) {
+      await this.ensureDocumentHistory();
+    }
     const dirty = new Set<number>(dirtyHistoryVersions);
     const previousLatest = this.latestDocument;
     const previousHistory = new Map(this.documentHistory);
     if (previousLatest && previousLatest.version !== document.version) {
       this.documentHistory.set(previousLatest.version, previousLatest);
-      dirty.add(previousLatest.version);
+      // Its commit stored this version under its history key in the same
+      // batch as `room:latest`; rewriting the unchanged value costs a row and
+      // a full-document write per commit. Write it only when that key is not
+      // known to exist (legacy state, a missing key, an unpersisted latest).
+      if (!this.persistedHistoryVersions.has(previousLatest.version))
+        dirty.add(previousLatest.version);
     }
     this.latestDocument = document;
     this.documentHistory.set(document.version, document);
@@ -12416,6 +12436,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       ]);
       this.latestDocument = null;
       this.documentHistory.clear();
+      this.persistedHistoryVersions.clear();
       this.historyVersions = [];
       this.historyLoaded = false;
       this.sourceArchives = [];
@@ -12464,6 +12485,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     // connection starts the room afresh.
     this.latestDocument = null;
     this.documentHistory.clear();
+    this.persistedHistoryVersions.clear();
     this.historyVersions = [];
     this.historyLoaded = false;
     this.roomFormat = null;
@@ -12523,6 +12545,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       ...(this.roomFormat === 2 ? { format: 2 as const } : {})
     } satisfies RoomMeta;
     await this.roomContext.storage.put(entries);
+    for (const version of dirtyHistoryVersions) {
+      if (this.documentHistory.has(version))
+        this.persistedHistoryVersions.add(version);
+    }
+    for (const version of evicted)
+      this.persistedHistoryVersions.delete(version);
     // Deleting after the index no longer references these keys keeps a failed
     // delete a storage leak rather than a dangling history version.
     if (evicted.length > 0) {
