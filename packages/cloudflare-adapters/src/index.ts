@@ -1311,14 +1311,20 @@ export const isShareLinkCommentsReady = cachedSchemaProbe(
 export const isShareLinkHistoryReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('project_share_links')
    WHERE name = 'frozen_document'`,
-  (row) => row?.ready === 1
+  (row) => row?.ready === 1,
+  // Never cache "missing": a stale answer would read another isolate's
+  // frozen link as an ordinary one and drop its owner-only guards.
+  0
 );
 
 /** Migration 0063's `e2ee_share_links.history`, for encrypted links. */
 export const isE2eeShareLinkHistoryReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_share_links')
    WHERE name = 'history'`,
-  (row) => row?.ready === 1
+  (row) => row?.ready === 1,
+  // Never cache "missing": a stale answer would read another isolate's
+  // frozen link as an ordinary one and drop its owner-only guards.
+  0
 );
 
 export const isShareLinkLabelReady = cachedSchemaProbe(

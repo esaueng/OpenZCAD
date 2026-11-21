@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import worker from '../apps/web/worker/index';
-import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
+import {
+  D1R2PersistenceService,
+  isE2eeShareLinkHistoryReady,
+  isShareLinkHistoryReady
+} from '@openzcad/cloudflare-adapters';
 import {
   createProjectDocument,
   frozenShareDocument,
@@ -967,4 +971,24 @@ describe('comments through a link without history', () => {
     // A link that shares the project still replies to it.
     expect((await reply('l', secret.commentId)).status).toBe(201);
   });
+});
+
+describe('share-link history schema probes', () => {
+  it.each([
+    ['plaintext (0062)', isShareLinkHistoryReady],
+    ['encrypted (0063)', isE2eeShareLinkHistoryReady]
+  ])(
+    '%s never caches a missing column, so a link frozen by another isolate keeps its guards',
+    async (_name, probe) => {
+      let installed = 0;
+      const db = {
+        prepare: () => ({
+          bind: () => ({ first: async () => ({ ready: installed }) })
+        })
+      } as unknown as Parameters<typeof probe>[0];
+      await expect(probe(db)).resolves.toBe(false);
+      installed = 1;
+      await expect(probe(db)).resolves.toBe(true);
+    }
+  );
 });
