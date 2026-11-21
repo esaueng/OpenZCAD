@@ -73,6 +73,18 @@ interface Endpoint {
   linked: boolean;
 }
 
+// A narrow x band can still contain a whole sketch's endpoints, including
+// ones far apart in y. Bound candidate work as well as stored neighbors.
+const MAX_ENDPOINT_PAIR_CHECKS = 1_000_000;
+
+class SketchFilletCatalogLimitError extends Error {
+  constructor() {
+    super(
+      'This sketch has too many nearby endpoints to check safely. Split it into smaller sketches before using Sketch Fillet.'
+    );
+  }
+}
+
 function sourceLines(
   document: ProjectDocument,
   sketch: SketchNode,
@@ -152,20 +164,24 @@ function catalogCorners(lines: ReadonlyMap<EntityId, SourceLine>): Map<
     );
   }
   endpoints.sort((a, b) => a.position.x - b.position.x);
-  const neighbors = new Map<Endpoint, Endpoint[]>(
-    endpoints.map((endpoint) => [endpoint, []])
-  );
+  // Only a unique neighbor can form a corner. Keep that one, or null once
+  // the endpoint is branched; retaining the entire branch is unnecessary.
+  const neighbors = new Map<Endpoint, Endpoint | null>();
+  let pairChecks = 0;
   for (const [index, a] of endpoints.entries()) {
     for (let next = index + 1; next < endpoints.length; next += 1) {
       const b = endpoints[next]!;
       if (b.position.x - a.position.x > JOINT_TOLERANCE) break;
+      if (++pairChecks > MAX_ENDPOINT_PAIR_CHECKS) {
+        throw new SketchFilletCatalogLimitError();
+      }
       if (
         a.ref.objectId === b.ref.objectId ||
         !sameSketchPoint(a.position, b.position)
       )
         continue;
-      neighbors.get(a)!.push(b);
-      neighbors.get(b)!.push(a);
+      neighbors.set(a, neighbors.has(a) ? null : b);
+      neighbors.set(b, neighbors.has(b) ? null : a);
     }
   }
 
@@ -173,10 +189,9 @@ function catalogCorners(lines: ReadonlyMap<EntityId, SourceLine>): Map<
     string,
     { corner: SketchFilletCorner; geometry: SketchCorner }
   >();
-  for (const [a, adjacent] of neighbors) {
-    if (a.linked || adjacent.length !== 1) continue;
-    const b = adjacent[0]!;
-    if (b.linked || neighbors.get(b)!.length !== 1) continue;
+  for (const a of endpoints) {
+    const b = neighbors.get(a);
+    if (a.linked || !b || b.linked || neighbors.get(b) !== a) continue;
     if (endpointKey(a.ref) >= endpointKey(b.ref)) continue;
     const point = jointPoint(a, b);
     if (!point) continue;
@@ -192,7 +207,11 @@ function catalogCorners(lines: ReadonlyMap<EntityId, SourceLine>): Map<
   return corners;
 }
 
-/** Finds the selectable, unbranched line-to-line corners of the resolved sketch. */
+/**
+ * Finds the selectable, unbranched line-to-line corners of the resolved
+ * sketch. Refuses excessive candidate work rather than returning a partial
+ * catalog that could reinterpret a branched endpoint as a corner.
+ */
 export function listSketchFilletCorners(
   document: ProjectDocument,
   sketch: SketchNode,
@@ -259,7 +278,18 @@ export function planSketchFilletBatch(
     };
   }
   const base = sourceLines(document, sketch, resolve);
-  const catalog = catalogCorners(base);
+  let catalog: ReturnType<typeof catalogCorners>;
+  try {
+    catalog = catalogCorners(base);
+  } catch (error) {
+    if (!(error instanceof SketchFilletCatalogLimitError)) throw error;
+    return {
+      status: 'refuse',
+      reason: error.message,
+      lineIds: [],
+      cornerIds
+    };
+  }
   const lines = new Map<EntityId, SketchFilletBatchLine>();
   const arcs: SketchFilletBatchArc[] = [];
   for (const id of cornerIds) {
