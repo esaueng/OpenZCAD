@@ -7,6 +7,8 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import {
+  extrudeAlsoTargets,
+  extrudeChoiceAlone,
   extrudeChoiceWith,
   extrudeDraftNumber,
   extrudeDraftRefusal,
@@ -193,8 +195,14 @@ export function extrudeChangedInput(
     if (next[valueId] !== previous[valueId]) return VALUE_LABELS[valueId];
   }
   if (next.choice.operation !== previous.choice.operation) return 'Operation';
-  if (JSON.stringify(next.choice) !== JSON.stringify(previous.choice)) {
+  if (
+    JSON.stringify(extrudeChoiceAlone(next.choice)) !==
+    JSON.stringify(extrudeChoiceAlone(previous.choice))
+  ) {
     return 'Target body';
+  }
+  if (JSON.stringify(next.choice) !== JSON.stringify(previous.choice)) {
+    return 'Also cut';
   }
   if (next.endCondition !== previous.endCondition) return 'Extent';
   if (next.throughAllSide !== previous.throughAllSide) return 'Direction';
@@ -576,6 +584,30 @@ export function ExtrudeCommand({
       value: draft.throughAllSide,
       choices: THROUGH_ALL_SIDES
     });
+    // F01: a new through-all cut can go through more bodies than its
+    // target, each picked in a row of its own, with a fresh row after the
+    // last until no body is left. An edit changes one feature only.
+    if (!editing && draft.choice.operation === 'cut') {
+      const main = draft.choice.targetBodyId;
+      const also = extrudeAlsoTargets(draft.choice);
+      for (let index = 0; index <= also.length; index += 1) {
+        const taken = new Set([
+          main,
+          ...also.filter((_, other) => other !== index)
+        ]);
+        const free = bodies.filter((body) => !taken.has(body.bodyId));
+        if (index === also.length && free.length === 0) break;
+        options.push({
+          id: `also:${index}`,
+          label: index === 0 ? 'Also cut' : `Also cut ${index + 1}`,
+          value: also[index] ?? '',
+          choices: [
+            { value: '', label: 'Nothing more' },
+            ...free.map((body) => ({ value: body.bodyId, label: body.name }))
+          ]
+        });
+      }
+    }
   }
   if (blind) {
     options.push({
@@ -594,6 +626,17 @@ export function ExtrudeCommand({
   }
 
   function setOption(optionId: string, value: string) {
+    if (optionId.startsWith('also:') && draft.choice.operation === 'cut') {
+      const index = Number(optionId.slice('also:'.length));
+      const also = [...extrudeAlsoTargets(draft.choice)];
+      if (value) also[index] = value as BodyId;
+      else also.splice(index, 1);
+      const { alsoTargetBodyIds: _also, ...alone } = draft.choice;
+      change({
+        choice: also.length > 0 ? { ...alone, alsoTargetBodyIds: also } : alone
+      });
+      return;
+    }
     switch (optionId) {
       case 'operation':
         change({
@@ -604,14 +647,21 @@ export function ExtrudeCommand({
           )
         });
         return;
-      case 'target':
+      case 'target': {
+        // Further bodies a through-all cut goes through stay, less the one
+        // that just became its target.
+        const also = extrudeAlsoTargets(draft.choice).filter(
+          (bodyId) => bodyId !== value
+        );
         change({
           choice: {
             operation: draft.choice.operation as 'add' | 'cut' | 'intersect',
-            ...(value ? { targetBodyId: value as BodyId } : {})
+            ...(value ? { targetBodyId: value as BodyId } : {}),
+            ...(also.length > 0 ? { alsoTargetBodyIds: also } : {})
           }
         });
         return;
+      }
       case 'extent':
         change({
           endCondition: value as ExtrudeDraft['endCondition']
