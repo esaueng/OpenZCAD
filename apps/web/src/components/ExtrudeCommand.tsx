@@ -14,8 +14,10 @@ import {
   extrudeFormValue,
   extrudeIsThroughAll,
   extrudeIsToFace,
+  extrudeIsToNext,
   extrudeNeedsTarget,
   extrudeOffersThroughAll,
+  extrudeOffersToNext,
   extrudeShownExtent,
   initialExtrudeDraft,
   reversedDistance,
@@ -257,7 +259,8 @@ export function ExtrudeCommand({
   };
   const throughAll = extrudeIsThroughAll(draft);
   const toFace = extrudeIsToFace(draft, ctx);
-  const blind = !throughAll && !toFace;
+  const toNext = extrudeIsToNext(draft);
+  const blind = !throughAll && !toFace && !toNext;
 
   function stateOf(next: ExtrudeDraft): ExtrudeCommandState {
     const value = extrudeFormValue(next, ctx);
@@ -456,7 +459,9 @@ export function ExtrudeCommand({
         : 'Pick the face to reach'
       : throughAll
         ? `Through all${regions}`
-        : `Drag the arrows, or tap a value${regions}`;
+        : toNext
+          ? `Up to the next face${evaluated(draft.distance, 'length') < 0 ? ', reversed' : ''}${regions}`
+          : `Drag the arrows, or tap a value${regions}`;
   const checking =
     previewPending &&
     !toFacePicking?.armed &&
@@ -519,7 +524,11 @@ export function ExtrudeCommand({
       }))
     });
   }
-  if (extrudeOffersThroughAll(draft) || toFacePicking) {
+  if (
+    extrudeOffersThroughAll(draft) ||
+    extrudeOffersToNext(draft) ||
+    toFacePicking
+  ) {
     options.push({
       id: 'extent',
       label: 'Extent',
@@ -532,6 +541,15 @@ export function ExtrudeCommand({
                 value: 'to-face',
                 label: 'To face',
                 tip: 'Follows the face if it moves'
+              }
+            ]
+          : []),
+        ...(extrudeOffersToNext(draft)
+          ? [
+              {
+                value: 'to-next',
+                label: 'Up to next',
+                tip: "Stops at the target's next face"
               }
             ]
           : []),
@@ -610,7 +628,13 @@ export function ExtrudeCommand({
   }
 
   const values = extrudeShownValues({
-    extent: throughAll ? 'through-all' : toFace ? 'to-face' : 'blind',
+    extent: throughAll
+      ? 'through-all'
+      : toFace
+        ? 'to-face'
+        : toNext
+          ? 'to-next'
+          : 'blind',
     symmetric: draft.symmetric,
     backDistance: evaluated(draft.backDistance, 'length')
   }).map((valueId) => {
@@ -631,7 +655,7 @@ export function ExtrudeCommand({
   });
 
   const actions = [
-    ...(blind ? [{ id: 'reverse', label: 'Reverse direction' }] : []),
+    ...(blind || toNext ? [{ id: 'reverse', label: 'Reverse direction' }] : []),
     ...(toFace && toFacePicking
       ? [
           {
@@ -665,7 +689,14 @@ export function ExtrudeCommand({
       actions={actions}
       onAction={(actionId) => {
         if (actionId === 'reverse') {
-          change({ distance: reversedDistance(draft.distance) });
+          // Up to next reads only the distance's sign: a dormant zero
+          // reverses to -1, not to -0 (which still points forward).
+          change({
+            distance:
+              toNext && evaluated(draft.distance, 'length') === 0
+                ? '-1'
+                : reversedDistance(draft.distance)
+          });
         } else if (actionId === 'pick-face') {
           toFacePicking?.onPick();
         }

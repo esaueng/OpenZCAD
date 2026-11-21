@@ -6063,7 +6063,9 @@ export function App() {
   /** The region card's extent takes its depth from the build (F01). */
   const regionExtentIsDerived = () => {
     const extent = regionExtrudeSettings.current?.endCondition;
-    return extent === 'to-face' || extent === 'through-all';
+    return (
+      extent === 'to-face' || extent === 'through-all' || extent === 'to-next'
+    );
   };
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
