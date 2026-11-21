@@ -2814,14 +2814,14 @@ export function validateExtrudeExtent(
     throw new Error('Through all is available for a cut or an add only.');
   }
   if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
-    throw new Error('A through-all cut needs one explicit target body.');
+    throw new Error('A through-all extrude needs one explicit target body.');
   }
   if (
     typeof data.throughAllSide !== 'string' ||
     !['forward', 'backward', 'both'].includes(data.throughAllSide)
   ) {
     throw new Error(
-      'A through-all cut needs a side: forward, backward or both.'
+      'A through-all extrude needs a side: forward, backward or both.'
     );
   }
   if (data.symmetric === true) {

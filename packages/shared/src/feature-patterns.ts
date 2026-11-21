@@ -256,6 +256,13 @@ export function patternSourceProblem(
   data: FeatureData,
   name: string
 ): string | null {
+  if (
+    data.featureKind === 'extrude' &&
+    data.endCondition === 'through-all' &&
+    data.operation === 'add'
+  ) {
+    return `${name} adds through all of its target, which a pattern cannot repeat yet (each copy needs its own exact reach); give it a distance.`;
+  }
   if (data.featureKind === 'extrude' && data.endCondition === 'to-face') {
     return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance or Through all.`;
   }

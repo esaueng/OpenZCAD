@@ -8,11 +8,13 @@ import {
   normalizeDocument,
   setParameter
 } from '@openzcad/document-core';
+import { commandFactories } from '@openzcad/command-system';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  patternSourceProblem,
   toUserId,
   type BodyId,
   type ProjectDocument,
@@ -61,13 +63,14 @@ function add(
   plateId: BodyId,
   side: ThroughAllSide,
   planeZ = 5,
-  centerX = 40
+  centerX = 40,
+  centerY = 20
 ) {
   const sketched = addSketchFeature(document, {
     name: 'Tab sketch',
     planeRef: { type: 'canonical', plane: 'XY', offset: planeZ },
     objects: [
-      { objectKind: 'rectangle', width: 4, height: 4, centerX, centerY: 20 }
+      { objectKind: 'rectangle', width: 4, height: 4, centerX, centerY }
     ]
   });
   return extrudeSketch(sketched.document, {
@@ -193,6 +196,90 @@ describe('F01 add through all', { timeout: 60_000 }, () => {
     expect(derived.warnings.join('\n')).toMatch(
       /Through-all has no target in the selected direction \(target Plate.*side forward\)/
     );
+  });
+
+  describe('review: an add reaches exactly as far as its target', () => {
+    function cylinder(lying: boolean) {
+      let document = addPrimitiveFeature(
+        createProjectDocument('Round', toUserId('user_through_all_add')),
+        {
+          name: 'Drum',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 10, height: 10 }
+        }
+      );
+      const bodyId = document.bodyOrder.at(-1)!;
+      if (lying) {
+        document = commandFactories
+          .transformBody({
+            name: 'Lay',
+            targetBodyId: bodyId,
+            translation: { x: 0, y: 0, z: 0 },
+            rotationDeg: { x: 90, y: 0, z: 0 },
+            pivot: { x: 0, y: 0, z: 5 }
+          })
+          .apply(document);
+      }
+      return { document, bodyId };
+    }
+
+    it('adds a tab exactly through a cylinder whose axis runs along the normal', async () => {
+      const { document, bodyId } = cylinder(false);
+      const result = add(document, bodyId, 'both', 5, 10, 0);
+      const derived = await adapter.syncDocument(result.document);
+      expect(derived.warnings).toEqual([]);
+      // ∫₋₂² (√(100 − y²) − 8) dy of the square lies inside the drum.
+      const inside = 2 * Math.sqrt(96) + 100 * Math.asin(0.2) - 32;
+      const body = derived.bodyRepresentations[result.bodyId]!;
+      expect(body.volume).toBeCloseTo(
+        Math.PI * 100 * 10 + (16 - inside) * 10,
+        4
+      );
+      expect(body.bbox.max.z).toBeCloseTo(10, 9);
+      expect(body.bbox.min.z).toBeCloseTo(0, 9);
+    });
+
+    it('refuses a target whose curved face it cannot measure exactly along the normal', async () => {
+      const { document, bodyId } = cylinder(true);
+      const result = add(document, bodyId, 'both', 5, 10, 0);
+      const derived = await adapter.syncDocument(result.document);
+      expect(derived.warnings.join('\n')).toMatch(
+        /An add through all reaches exactly as far as its target, and .* has a curved face/
+      );
+    });
+
+    it('is not repeated by a feature pattern yet', () => {
+      expect(
+        patternSourceProblem(
+          {
+            featureKind: 'extrude',
+            sketchId: 'sketch_a' as never,
+            distance: 1,
+            operation: 'add',
+            targetBodyId: 'body_a' as BodyId,
+            endCondition: 'through-all',
+            throughAllSide: 'both'
+          },
+          'Tab'
+        )
+      ).toMatch(
+        /adds through all of its target, which a pattern cannot repeat yet/
+      );
+      expect(
+        patternSourceProblem(
+          {
+            featureKind: 'extrude',
+            sketchId: 'sketch_a' as never,
+            distance: 1,
+            operation: 'cut',
+            targetBodyId: 'body_a' as BodyId,
+            endCondition: 'through-all',
+            throughAllSide: 'both'
+          },
+          'Hole'
+        )
+      ).toBeNull();
+    });
   });
 
   describe('editor', () => {

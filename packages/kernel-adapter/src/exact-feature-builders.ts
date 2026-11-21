@@ -745,12 +745,17 @@ function throughAllSweepFeature(
   const side = data.throughAllSide!;
   let span: { forward: number; backward: number };
   try {
-    span = throughAllSpan(
-      unionBounds(target.solids.map((solid) => kernel.boundingBox(solid))),
-      basis.origin,
-      basis.normal,
-      side
-    );
+    span =
+      data.operation === 'add'
+        ? exactAddSpan(kernel, target.solids, basis, side, targetName)
+        : throughAllSpan(
+            unionBounds(
+              target.solids.map((solid) => kernel.boundingBox(solid))
+            ),
+            basis.origin,
+            basis.normal,
+            side
+          );
   } catch (error) {
     throw new Error(
       `${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')} (target ${targetName}, side ${side}).`,
@@ -834,6 +839,76 @@ function toNextFeature(
     targetName,
     operation,
     reach
+  };
+}
+
+/**
+ * F01: an add through all must stop exactly where the target does along the
+ * sketch normal, since any overshoot is new material (a cut's conservative
+ * box span only removes the target's own). The target's extremes along the
+ * normal are read from its vertices, which is exact when every face is
+ * planar or a cylinder whose axis runs along the normal (its extremes lie on
+ * its planar boundary circles). Any other target refuses by name rather than
+ * add material past it.
+ */
+function exactAddSpan(
+  kernel: RemusKernel,
+  solids: readonly number[],
+  basis: PlaneBasis,
+  side: NonNullable<FeatureDataOf<'extrude'>['throughAllSide']>,
+  targetName: string
+): { forward: number; backward: number } {
+  const n = basis.normal;
+  let high = -Infinity;
+  let low = Infinity;
+  for (const solid of solids) {
+    for (const face of Array.from(kernel.getSolidFaces(solid))) {
+      const surface = kernel.getSurfaceType(face).toLowerCase();
+      if (surface === 'plane') continue;
+      if (surface === 'cylinder') {
+        const geometry = measureFaceGeometry(kernel, face);
+        if (geometry?.axisStart && geometry.axisEnd) {
+          const axis = {
+            x: geometry.axisEnd.x - geometry.axisStart.x,
+            y: geometry.axisEnd.y - geometry.axisStart.y,
+            z: geometry.axisEnd.z - geometry.axisStart.z
+          };
+          const size = Math.hypot(axis.x, axis.y, axis.z);
+          if (
+            size > 0 &&
+            Math.abs(axis.x * n.x + axis.y * n.y + axis.z * n.z) / size >=
+              1 - 1e-9
+          ) {
+            continue;
+          }
+        }
+      }
+      throw new Error(
+        `An add through all reaches exactly as far as its target, and ${targetName} has a curved face whose extent along the sketch normal cannot be read exactly; use Up to next or a distance.`
+      );
+    }
+    for (const vertex of Array.from(kernel.getSolidVertices(solid))) {
+      const p = kernel.getVertexPosition(vertex);
+      const t =
+        (p[0]! - basis.origin.x) * n.x +
+        (p[1]! - basis.origin.y) * n.y +
+        (p[2]! - basis.origin.z) * n.z;
+      high = Math.max(high, t);
+      low = Math.min(low, t);
+    }
+  }
+  const forward = Math.max(0, high);
+  const backward = Math.max(0, -low);
+  if (
+    (side === 'forward' && !(forward > 1e-9)) ||
+    (side === 'backward' && !(backward > 1e-9)) ||
+    (side === 'both' && !(forward > 1e-9 || backward > 1e-9))
+  ) {
+    throw new Error('Through-all has no target in the selected direction.');
+  }
+  return {
+    forward: side === 'backward' ? 0 : forward,
+    backward: side === 'forward' ? 0 : backward
   };
 }
 
