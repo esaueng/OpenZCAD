@@ -522,14 +522,19 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // extrude, beside `toFace`): the extrusion ends on a cylindrical face named
 // by lineage. An older client has no such target and must refuse the
 // document. Builds on v130.
-// v136 adds M04 loft connections and guides (`connections` and `guides` on a
+// v132 adds M04 exact sweep twist and scale (`twistDeg` and `endScale` on an
+// in-place sweep): the profile turns about and scales along a straight
+// path. An older client would sweep it plain, so it must refuse the
+// document. Builds on v131 (#1851). First claimed as v129, renumbered when
+// #1864, #1847 and #1851 landed first.
+// v133 adds M04 loft connections and guides (`connections` and `guides` on a
 // loft): the vertex each section's correspondence starts from, given or
 // fixed by one straight guide. An older client would loft from each
-// section's own start, so it must refuse the document. Builds on v131
-// (#1851); v132 is claimed by #1882 and v133–v135 by the M04 sweep slices
-// that follow it.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 136 as const;
-/** M04 (v136): a section vertex a loft connection starts from. */
+// section's own start, so it must refuse the document. Builds on v132
+// (#1882). First claimed as v136, renumbered to the next unclaimed number
+// when #1882 landed.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 133 as const;
+/** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
       kind: 'curve-end';
@@ -2668,7 +2673,7 @@ export type FeatureData =
        */
       endPoint?: ParametricVector3;
       /**
-       * M04 (v136): one vertex per section, in section order, where the
+       * M04 (v133): one vertex per section, in section order, where the
        * loft's correspondence starts (the kernel's `loftWithOptions`
        * `connections`): vertex k of every section joins vertex k of the next,
        * counted from these. A line's or arc's end, or a rectangle's or
@@ -2677,7 +2682,7 @@ export type FeatureData =
        */
       connections?: LoftConnectionVertex[];
       /**
-       * M04 (v136): one straight guide curve (a sketch line) through a vertex
+       * M04 (v133): one straight guide curve (a sketch line) through a vertex
        * of every section, which fixes the correspondence along it: a ruled
        * loft's edge between those vertices is exactly the guide. Ruled only;
        * a curved guide, or several, is refused by name.
@@ -2712,6 +2717,23 @@ export type FeatureData =
        * this field existed took, so those documents replay identically.
        */
       construction?: 'in-place';
+      /**
+       * M04 (v132), `'in-place'` only: the profile's total turn about the
+       * path, in degrees, right-handed about the direction of travel and
+       * linear in the distance travelled (the kernel's
+       * `sweepExactWithOptions`). The path must be straight and the profile
+       * square to it; anything else is refused by name, never sampled.
+       * Absent or zero turns nothing, so a sweep authored before this field
+       * existed replays identically.
+       */
+      twistDeg?: ParamValue;
+      /**
+       * M04 (v132), `'in-place'` only: the profile's scale at the far end of
+       * the path, about the point where the path crosses it, linear in the
+       * distance travelled. Positive; absent or one scales nothing. Held to
+       * the same straight, square path as `twistDeg`.
+       */
+      endScale?: ParamValue;
     }
   | {
       featureKind: 'helical-sweep';

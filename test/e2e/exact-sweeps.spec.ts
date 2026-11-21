@@ -340,7 +340,95 @@ test('a faceted helix rebuilds exact from its edit, its height dragged', async (
   );
 });
 
-test('a loft picked with a straight guide line connects the corners it joins (M04, v136)', async ({
+test('a picked straight sweep takes a typed twist and end scale, exactly (M04, v132)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  let document = addPrimitiveFeature(
+    createProjectDocument('Twisted sweep', toUserId('user_e2e')),
+    {
+      name: 'Marker',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 2, depth: 2 }
+    }
+  );
+  document = addSketchFeature(document, {
+    name: 'Profile',
+    plane: 'XY',
+    offset: 0,
+    object: {
+      objectKind: 'rectangle',
+      width: 4,
+      height: 4,
+      centerX: 30,
+      centerY: 0
+    }
+  }).document;
+  document = addSketchFeature(document, {
+    name: 'Path',
+    plane: 'XZ',
+    offset: 0,
+    object: { objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: 20 }
+  }).document;
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  await page.getByRole('button', { name: 'Fit view (F)', exact: true }).click();
+  await waitForStillViewport(page);
+  const on = await projected(canvas, [30, 0, -10]);
+  await page.mouse.move(on.x, on.y);
+  await page.mouse.click(on.x, on.y);
+  await expect(bar).toContainText('Path of 1');
+
+  // Each chip opens the keypad; the values are typed exactly.
+  const keypad = page.locator('.numeric-keypad');
+  for (const [valueId, typed] of [
+    ['twist', '90'],
+    ['endScale', '0.5']
+  ] as const) {
+    const chip = page.getByTestId(`command-handle-${valueId}`);
+    await expect(chip).toBeVisible();
+    await chip.click();
+    await expect(keypad).toBeVisible();
+    await keypad.locator('input').fill(typed);
+    await keypad.locator('input').press('Enter');
+    await expect(keypad).toHaveCount(0);
+  }
+  await expect(page.getByTestId('command-handle-twist')).toHaveText(/90/);
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  await expectBodyCount(page, 2);
+
+  const saved = await exportedDocument(page);
+  const sweep = listFeaturesInOrder(saved).find(
+    (feature) => feature.data.featureKind === 'sweep'
+  )!;
+  if (sweep.data.featureKind !== 'sweep') throw new Error('Expected a sweep.');
+  expect(sweep.data).toMatchObject({
+    construction: 'in-place',
+    twistDeg: 90,
+    endScale: 0.5
+  });
+  const derived = await rebuilt(saved);
+  // Two flat caps and four twisted walls; Cavalieri: A·L·(1 + σ + σ²)/3.
+  expect(
+    surfaces(derived, sweep.bodyId!).filter((type) => type === 'plane')
+  ).toHaveLength(2);
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    (16 * 20 * (1 + 0.5 + 0.25)) / 3,
+    4
+  );
+});
+
+test('a loft picked with a straight guide line connects the corners it joins (M04, v133)', async ({
   page
 }) => {
   test.setTimeout(150_000);

@@ -522,9 +522,9 @@ export interface LoftInput {
   mode: 'ruled' | 'smooth';
   /** Apex point closing the loft after its last section; omitted by default. */
   endPoint?: ParametricVector3;
-  /** M04 (v136): see the loft `FeatureData`; omitted keeps section starts. */
+  /** M04 (v133): see the loft `FeatureData`; omitted keeps section starts. */
   connections?: LoftConnectionVertex[];
-  /** M04 (v136): see the loft `FeatureData`; at most one straight guide. */
+  /** M04 (v133): see the loft `FeatureData`; at most one straight guide. */
   guides?: SketchPathReference[];
   ids?: BodyFeatureIds;
 }
@@ -545,6 +545,10 @@ export interface SweepInput {
   guide?: SketchPathReference;
   /** See the sweep `FeatureData`; omitted is the legacy sampled sweep. */
   construction?: 'in-place';
+  /** M04 (v132): see the sweep `FeatureData`; omitted or zero turns nothing. */
+  twistDeg?: ParamValue;
+  /** M04 (v132): see the sweep `FeatureData`; omitted or one scales nothing. */
+  endScale?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -3159,7 +3163,7 @@ export function revolveSketch(
 }
 
 /**
- * M04 (v136): a loft's connections name one vertex per section, and its
+ * M04 (v133): a loft's connections name one vertex per section, and its
  * guides are at most one, on a ruled loft; neither goes with an apex point,
  * and the two are not given together (a guide fixes the connections).
  */
@@ -3250,11 +3254,60 @@ export function loftSections(
   );
 }
 
+/** A stored literal 1, or absent: the identity scale. */
+function isUnitParam(value: unknown): boolean {
+  return value === undefined || value === 1 || value === '1';
+}
+
+/**
+ * M04 (v132): a sweep's twist and end scale are literals that are finite
+ * (and positive, for the scale) or non-empty expressions, which the build
+ * resolves and checks. Either needs the exact in-place construction: the
+ * sampled sweep has no twist or scale of its own.
+ */
+export function validateSweepOptions(data: {
+  construction?: unknown;
+  twistDeg?: unknown;
+  endScale?: unknown;
+}): void {
+  const { twistDeg, endScale } = data;
+  if (twistDeg !== undefined) {
+    if (typeof twistDeg === 'number') {
+      if (!Number.isFinite(twistDeg)) {
+        throw new Error('Sweep twist must be a finite angle.');
+      }
+    } else if (typeof twistDeg !== 'string' || !twistDeg.trim()) {
+      throw new Error('Sweep twist must be a number or an expression.');
+    }
+  }
+  if (endScale !== undefined) {
+    if (typeof endScale === 'number') {
+      if (!Number.isFinite(endScale) || endScale <= 0) {
+        throw new Error('Sweep end scale must be greater than zero.');
+      }
+      // The kernel builds end scales from 1/1000 to 1000.
+      if (endScale < 0.001 || endScale > 1000) {
+        throw new Error('Sweep end scale must be between 0.001 and 1000.');
+      }
+    } else if (typeof endScale !== 'string' || !endScale.trim()) {
+      throw new Error('Sweep end scale must be a number or an expression.');
+    }
+  }
+  const twisted = !isZeroParam(twistDeg);
+  const scaled = !isUnitParam(endScale);
+  if ((twisted || scaled) && data.construction !== 'in-place') {
+    throw new Error(
+      'Twist and scale along the path need the exact sweep; build it as Exact.'
+    );
+  }
+}
+
 export function sweepProfile(
   document: ProjectDocument,
   input: SweepInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   assertFeatureProfileProvenance(input, document);
+  validateSweepOptions(input);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3271,7 +3324,11 @@ export function sweepProfile(
       // authored before the exact in-place construction existed was built as.
       ...(input.construction === undefined
         ? {}
-        : { construction: input.construction })
+        : { construction: input.construction }),
+      // M04 (v132): a literal zero twist or unit scale is the absent
+      // default, so it is never written.
+      ...(isZeroParam(input.twistDeg) ? {} : { twistDeg: input.twistDeg! }),
+      ...(isUnitParam(input.endScale) ? {} : { endScale: input.endScale! })
     },
     suppliedIds(input.ids),
     input.bodyName
@@ -5987,6 +6044,34 @@ export function resolveParamValue(
   }
 }
 
+/**
+ * {@link resolveParamValue} held to a field's dimension: an expression
+ * whose quantity the field cannot hold (`90 deg` for a unit-free ratio, a
+ * length for an angle) is refused with a labelled message instead of being
+ * read as its bare number.
+ */
+export function resolveDimensionedParam(
+  value: ParamValue,
+  scope: Record<string, number>,
+  dimension: 'length' | 'angle' | 'number',
+  label: string,
+  documentUnits?: UnitSystem
+): number {
+  if (typeof value === 'string') {
+    try {
+      requireFieldDimension(
+        parseExpressionQuantity(value, scope, documentUnits),
+        dimension
+      );
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : 'evaluation failed.';
+      throw new Error(`${label}: ${reason}`, { cause: error });
+    }
+  }
+  return resolveParamValue(value, scope, label, documentUnits);
+}
+
 /** Normalizes raw form input: plain numerics become numbers, otherwise the expression string is kept. */
 export function coerceParamValue(raw: string): ParamValue {
   const trimmed = raw.trim();
@@ -6028,7 +6113,15 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
   loft: ['sections', 'mode', 'endPoint', 'connections', 'guides'],
-  sweep: ['profile', 'path', 'mode', 'guide', 'construction'],
+  sweep: [
+    'profile',
+    'path',
+    'mode',
+    'guide',
+    'construction',
+    'twistDeg',
+    'endScale'
+  ],
   'helical-sweep': [
     'profile',
     'axisOrigin',
@@ -6275,9 +6368,10 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   ],
   boolean: ['keepOriginals'],
   split: ['keepOriginal'],
-  // M04 (v136): a cleared connection list or guide keeps section starts.
+  // M04 (v133): a cleared connection list or guide keeps section starts.
   loft: ['endPoint', 'connections', 'guides'],
-  sweep: ['guide'],
+  // M04 (v132): a cleared twist or scale is none.
+  sweep: ['guide', 'twistDeg', 'endScale'],
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.
@@ -6465,6 +6559,13 @@ export function updateFeature(
     validateExtrudeExtent(feature.data, extrudeParamResolver(next));
   } else if (feature.data.featureKind === 'loft') {
     validateLoftOptions(feature.data);
+  } else if (feature.data.featureKind === 'sweep') {
+    // M04 (v132): a literal zero twist or unit scale is the absent default,
+    // as on creation, so a patch never writes one.
+    const sweep = feature.data as unknown as Record<string, unknown>;
+    if (isZeroParam(sweep.twistDeg)) delete sweep.twistDeg;
+    if (isUnitParam(sweep.endScale)) delete sweep.endScale;
+    validateSweepOptions(feature.data);
   } else if (
     feature.data.featureKind === 'boolean' ||
     feature.data.featureKind === 'split'

@@ -26264,7 +26264,13 @@ export function App() {
             : {}),
           ...(request.construction === undefined
             ? {}
-            : { construction: request.construction })
+            : { construction: request.construction }),
+          ...(request.twistDeg === undefined
+            ? {}
+            : { twistDeg: request.twistDeg }),
+          ...(request.endScale === undefined
+            ? {}
+            : { endScale: request.endScale })
         });
       case 'rib':
         return commandFactories.ribBody({

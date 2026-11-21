@@ -4,6 +4,7 @@ import {
   extrudeSidesConflict,
   findSketch,
   listFeaturesInOrder,
+  resolveDimensionedParam,
   resolveParamValue
 } from '@openzcad/document-core';
 import {
@@ -2116,7 +2117,7 @@ function apexVolumeSlack(unapexed: number, apexed: number): number {
  * lying wholly in the closing plane build a pyramid off the last section and
  * keep every earlier one as a zero-thickness web with no material in it.
  */
-/** M04 (v136): a loft connection's vertex, in world coordinates. */
+/** M04 (v133): a loft connection's vertex, in world coordinates. */
 function loftConnectionPoint(
   document: ProjectDocument,
   section: SketchSectionReference,
@@ -2177,7 +2178,7 @@ function loftConnectionPoint(
 }
 
 /**
- * M04 (v136): where one straight loft guide meets each section's plane. A
+ * M04 (v133): where one straight loft guide meets each section's plane. A
  * ruled loft's edge between those points is exactly the guide; the kernel
  * refuses a point that is not a vertex of its section.
  */
@@ -2267,7 +2268,7 @@ export function buildLoft(
   const endPoint = feature.data.endPoint;
   const { connections, guides } = feature.data;
   if (connections !== undefined || guides !== undefined) {
-    // M04 (v136): the vertices each section's correspondence starts from,
+    // M04 (v133): the vertices each section's correspondence starts from,
     // named or where the one straight guide meets each section's plane; the
     // kernel refuses a point that is not a vertex of its section.
     const points =
@@ -2740,11 +2741,36 @@ function guidedSweepSolid(
 }
 
 /**
+ * M04 (v132): a sweep's twist (radians) and end scale, resolved; `null`
+ * when it has neither, so the plain `sweepExact` call is unchanged.
+ */
+export function resolveSweepOptions(
+  data: { twistDeg?: ParamValue; endScale?: ParamValue },
+  scope: Record<string, number>
+): { twist: number; endScale: number } | null {
+  const twistDeg =
+    data.twistDeg === undefined
+      ? 0
+      : resolveDimensionedParam(data.twistDeg, scope, 'angle', 'twist');
+  const endScale =
+    data.endScale === undefined
+      ? 1
+      : resolveDimensionedParam(data.endScale, scope, 'number', 'end scale');
+  if (!(endScale > 0)) {
+    throw new Error('Sweep end scale must be greater than zero.');
+  }
+  if (twistDeg === 0 && endScale === 1) return null;
+  return { twist: (twistDeg * Math.PI) / 180, endScale };
+}
+
+/**
  * M04: the exact in-place sweep. The profile stays where it is and the
  * kernel carries it along the path's lines and whole arcs as exact surfaces
  * (`sweepExact`); a corner, a fold or a self-crossing is refused by name and
  * never sampled instead. A guide rail has no exact construction, so it is
- * refused rather than rebuilt as facets.
+ * refused rather than rebuilt as facets. A twist or end scale (v132) goes to
+ * `sweepExactWithOptions`, which builds it along a straight path with the
+ * profile square to it and refuses anything else by name.
  */
 function exactSweepSolid(
   kernel: RemusKernel,
@@ -2752,6 +2778,7 @@ function exactSweepSolid(
   face: number,
   path: SketchPathReference,
   guided: boolean,
+  options: { twist: number; endScale: number } | null,
   scope: Record<string, number>,
   sketchBases: ReadonlyMap<SketchId, PlaneBasis>
 ): number {
@@ -2768,6 +2795,13 @@ function exactSweepSolid(
     sketchBases,
     false
   );
+  if (options) {
+    return kernel.sweepExactWithOptions(
+      face,
+      Uint32Array.from(edges),
+      JSON.stringify(options)
+    );
+  }
   return kernel.sweepExact(face, Uint32Array.from(edges));
 }
 
@@ -2811,6 +2845,7 @@ export function buildProfileSweep(
             face,
             feature.data.path,
             guided,
+            resolveSweepOptions(feature.data, scope),
             scope,
             sketchBases
           ),
@@ -2822,6 +2857,13 @@ export function buildProfileSweep(
         'Profile sweep topology has no verified output evolution relation.'
       )
     };
+  }
+  if (resolveSweepOptions(feature.data, scope)) {
+    // Validation keeps these to exact sweeps; a document edited by hand is
+    // refused rather than swept plain.
+    throw new Error(
+      'Twist and scale along the path need the exact sweep; build it as Exact.'
+    );
   }
   const solid = guided
     ? guidedSweepSolid(

@@ -2,7 +2,7 @@
 row: M04
 ---
 
-Loft guide curves and connections, on the exact route (schema v136).
+Loft guide curves and connections, on the exact route (schema v133).
 
 **Connections.** A loft stores `connections`: one vertex per section, a line's or arc's end or a rectangle's or polygon's corner, named by identity. Each section's correspondence then starts there, through the kernel's `loftWithOptions` `connections` (Remus #1918). The kernel re-enters each section's outer loop at that vertex. Nothing moves. Straight-edged sections take the exact polygon loft, and curved ones the curve-preserving loft, or the loft is refused: a connection never sends a loft to the chording fallback.
 

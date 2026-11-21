@@ -576,7 +576,7 @@ export type InPlaceRequest =
       mode: 'ruled' | 'smooth';
       /** Closes the last section to this point (a pointed loft). */
       endPoint?: ParametricVector3;
-      /** M04 (v136): one straight guide line fixing the correspondence. */
+      /** M04 (v133): one straight guide line fixing the correspondence. */
       guides?: { sketchId: SketchId; entityIds: string[] }[];
     }
   | {
@@ -587,6 +587,10 @@ export type InPlaceRequest =
       guide?: { sketchId: SketchId; entityIds: string[] };
       /** See the sweep `FeatureData`; absent is the legacy sampled sweep. */
       construction?: 'in-place';
+      /** M04 (v132): see the sweep `FeatureData`; absent turns nothing. */
+      twistDeg?: ParamValue;
+      /** M04 (v132): see the sweep `FeatureData`; absent scales nothing. */
+      endScale?: ParamValue;
     }
   | {
       /** M06 (schema v101): a rib from an open profile, joined to a body. */
@@ -1420,7 +1424,7 @@ const loft: InPlaceToolSpec = {
   title: 'Loft',
   profileMode: 'many',
   wantsAxis: false,
-  // M04 (v136): a sketch line picked as a guide fixes which vertices the
+  // M04 (v133): a sketch line picked as a guide fixes which vertices the
   // sections connect at (ruled lofts).
   wantsPath: true,
   values: [
@@ -1632,13 +1636,41 @@ const SWEEP_BUILD_OPTIONS: OptionSpec[] = [
 const sampledSweep = (state: InPlacePanelState) =>
   state.options.build === 'sampled';
 
+/** A stored value that is exactly this literal (the absent default). */
+const isLiteral = (value: ParamValue | undefined, literal: number) =>
+  value === undefined || value === literal || value === String(literal);
+
 const sweep: InPlaceToolSpec = {
   id: 'sweep',
   title: 'Sweep',
   profileMode: 'one',
   wantsAxis: false,
   wantsPath: true,
-  values: [],
+  // M04 (v132): the exact sweep's twist and end scale, along a straight
+  // path with the profile square to it; the kernel refuses anything else by
+  // name. The sampled sweep has neither.
+  values: [
+    {
+      id: 'twist',
+      label: 'Twist',
+      unit: 'angle',
+      initial: 0,
+      note: 'How far the profile turns about the path by its end',
+      when: (state) => !sampledSweep(state)
+    },
+    {
+      id: 'endScale',
+      label: 'End scale',
+      unit: 'count',
+      initial: 1,
+      min: 0,
+      exclusive: 'min',
+      step: 0.1,
+      suffix: '×',
+      note: 'The profile’s size at the end of the path, against its start',
+      when: (state) => !sampledSweep(state)
+    }
+  ],
   options: [
     ...SWEEP_BUILD_OPTIONS,
     {
@@ -1686,12 +1718,15 @@ const sweep: InPlaceToolSpec = {
     return `Path of ${slots.path.length} · pick more`;
   },
   ready: (slots) => slots.profiles.length > 0 && slots.path.length > 0,
-  request(slots, _values, options) {
+  request(slots, values, options) {
     const pick = slots.profiles[0];
     const first = slots.path[0];
     if (!pick || !first) return null;
     if (options.build !== 'sampled') {
-      // Exact: no rail and no sampling mode, both of which only sample.
+      // Exact: no rail and no sampling mode, both of which only sample. A
+      // zero twist and a unit scale are none, and are not written.
+      const twist = values.twist;
+      const endScale = values.endScale;
       return {
         tool: 'sweep',
         profile: section(pick),
@@ -1700,7 +1735,9 @@ const sweep: InPlaceToolSpec = {
           entityIds: slots.path.map((curve) => curve.entityId)
         },
         mode: 'standard',
-        construction: 'in-place'
+        construction: 'in-place',
+        ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
+        ...(isLiteral(endScale, 1) ? {} : { endScale })
       };
     }
     const rail = slots.guide[0];
@@ -1723,7 +1760,21 @@ const sweep: InPlaceToolSpec = {
         : {})
     };
   },
-  handles: () => []
+  handles(slots, _values, ctx, options) {
+    // The exact sweep's twist and end scale sit on chips beside the
+    // profile; the sampled sweep has neither.
+    const pick = slots.profiles[0];
+    if (!pick || options.build === 'sampled') return [];
+    const outline = profileOutline(ctx, pick);
+    const anchor = outline[0];
+    if (!anchor) return [];
+    const key = keyOf(pick.sketchId, pick.regionFingerprint);
+    const beside = outline[Math.floor(outline.length / 2)] ?? anchor;
+    return [
+      { valueId: 'twist', kind: 'chip', key, params: { anchor } },
+      { valueId: 'endScale', kind: 'chip', key, params: { anchor: beside } }
+    ];
+  }
 };
 
 /** Choose between a picked axis and one typed by its origin and direction. */

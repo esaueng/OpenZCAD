@@ -1954,7 +1954,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(exact?.data).toHaveProperty('construction', 'in-place');
   });
 
-  it('loft: a picked guide line goes out as the loft guide, and an edit clears a removed one (M04, v136)', () => {
+  it('loft: a picked guide line goes out as the loft guide, and an edit clears a removed one (M04, v133)', () => {
     const spec = IN_PLACE_TOOL_SPECS.loft;
     const pick = (fingerprint: number) => ({
       sketchId: SKETCH,
@@ -1996,7 +1996,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(cleared?.clearData).toEqual(['endPoint', 'guides']);
   });
 
-  it('loft: stored connections stay with unchanged sections and clear when the sections are reordered (M04, v136)', () => {
+  it('loft: stored connections stay with unchanged sections and clear when the sections are reordered (M04, v133)', () => {
     const sections = [
       {
         sketchId: SKETCH,
@@ -2028,6 +2028,79 @@ describe('an untouched edit writes the feature back as stored', () => {
       mode: 'ruled'
     });
     expect(reordered?.clearData).toEqual(['endPoint', 'connections']);
+  });
+
+  it('sweep: an exact edit reopens its twist and end scale, and clears them when set back to none (M04, v132)', () => {
+    const profile = {
+      sketchId: SKETCH,
+      profile: { all: true as const, sourceEntityIds: ['a'] }
+    };
+    const path = { sketchId: SKETCH, entityIds: ['p1'] as never[] };
+    const twisted = feature({
+      featureKind: 'sweep',
+      profile,
+      path,
+      mode: 'standard',
+      construction: 'in-place',
+      twistDeg: 'tw',
+      endScale: 0.5
+    });
+    const opened = inPlaceEditSeed(twisted, EDIT_CTX)!;
+    expect(opened.seed.raws.twist).toBe('tw');
+    expect(opened.seed.values.endScale).toBe(0.5);
+    expect(opened.seed.touched).toEqual(
+      expect.arrayContaining(['twist', 'endScale'])
+    );
+    const request = {
+      tool: 'sweep',
+      profile,
+      path,
+      mode: 'standard',
+      construction: 'in-place'
+    } as const;
+    const kept = inPlaceFeatureUpdate(twisted, {
+      ...request,
+      twistDeg: 'tw',
+      endScale: 0.5
+    });
+    expect(kept?.data).toMatchObject({ twistDeg: 'tw', endScale: 0.5 });
+    expect(kept?.clearData).toEqual(['guide']);
+    const cleared = inPlaceFeatureUpdate(twisted, request);
+    expect(cleared?.clearData).toEqual(['guide', 'twistDeg', 'endScale']);
+  });
+
+  it('sweep: the card writes a twist and end scale only when they are not none, on Exact only', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const slots = {
+      profiles: [
+        {
+          sketchId: SKETCH,
+          reference: { all: true, sourceEntityIds: ['a'] },
+          regionFingerprint: 7
+        }
+      ],
+      path: [{ sketchId: SKETCH, entityId: 'p1' }],
+      guide: []
+    } as unknown as InPlaceSlots;
+    const ctx = {} as never;
+    const exact = { build: 'exact' };
+    expect(
+      spec.request(slots, { twist: 0, endScale: 1 }, exact, ctx)
+    ).not.toHaveProperty('twistDeg');
+    expect(
+      spec.request(slots, { twist: 0, endScale: 1 }, exact, ctx)
+    ).not.toHaveProperty('endScale');
+    expect(
+      spec.request(slots, { twist: 'tw', endScale: 2 }, exact, ctx)
+    ).toMatchObject({ twistDeg: 'tw', endScale: 2, construction: 'in-place' });
+    const sampled = spec.request(
+      slots,
+      { twist: 30, endScale: 2 },
+      { build: 'sampled', mode: 'standard' },
+      ctx
+    );
+    expect(sampled).not.toHaveProperty('twistDeg');
+    expect(sampled).not.toHaveProperty('endScale');
   });
 
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {

@@ -29,7 +29,7 @@ import { plainRefusal } from '../apps/web/src/lib/refusalLanguage';
 import { profileSketch } from './fixtures/swept-elbow';
 
 /**
- * M04 (schema v136): loft connections and guides. A ruled loft between
+ * M04 (schema v133): loft connections and guides. A ruled loft between
  * parallel sections moves every vertex linearly, so its section area is
  * quadratic in height and the prismatoid formula `h/6·(A₀ + 4·A_m + A₁)` is
  * exact. Connecting each bottom corner to the next top corner round turns a
@@ -117,7 +117,7 @@ const rel = (measured: number, exact: number) =>
 const TWISTED = (10 / 6) * (4 + 4 * 2 + 4);
 
 describe(
-  'loft connections and guides (M04, v136)',
+  'loft connections and guides (M04, v133)',
   { timeout: 120_000 },
   () => {
     let adapter: ExactKernelAdapter;
@@ -140,7 +140,7 @@ describe(
     }
 
     it('writes the schema it introduces', () => {
-      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(136);
+      expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(133);
     });
 
     it('connecting matching corners is the plain loft', async () => {
@@ -225,17 +225,17 @@ describe(
       );
     });
 
-    it('refuses replayed connections or a guide into a document older than v136', () => {
+    it('refuses replayed connections or a guide into a document older than v133', () => {
       for (const payload of [{ connections: [] }, { guides: [] }]) {
         expect(() =>
           assertDocumentContentCommandSchema({
-            schemaVersion: 135,
+            schemaVersion: 132,
             commandLog: [{ kind: 'feature.loft', payload }],
             editHistory: undefined
           } as unknown as Parameters<
             typeof assertDocumentContentCommandSchema
           >[0])
-        ).toThrow(/136/);
+        ).toThrow(/133/);
       }
     });
 
@@ -308,7 +308,7 @@ describe(
       expect(() => assertFeatureSketchProjectionsValid({}, data)).not.toThrow();
     });
 
-    it('refuses a stored loft with connections or a guide in a document older than v136', () => {
+    it('refuses a stored loft with connections or a guide in a document older than v133', () => {
       const lofted = withGuide(stack('Stored'), {
         objectKind: 'line',
         x1: -1,
@@ -320,10 +320,10 @@ describe(
       expect(() =>
         assertDocumentContentSchema({
           ...lofted.document,
-          schemaVersion: 135,
+          schemaVersion: 132,
           commandLog: []
         } as unknown as ProjectDocument)
-      ).toThrow(/136/);
+      ).toThrow(/133/);
     });
 
     it('refuses a guide on a smooth loft and connections with an apex before building', () => {

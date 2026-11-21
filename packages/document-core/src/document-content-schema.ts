@@ -1142,7 +1142,7 @@ export function assertDocumentContentCommandSchema(
         83,
         'Simplified threads'
       );
-    // M04 (schema v136): a loft's connections and guide, created or patched
+    // M04 (schema v133): a loft's connections and guide, created or patched
     // (a patch need not name its kind; the fields are a loft's).
     {
       const loft =
@@ -1156,8 +1156,34 @@ export function assertDocumentContentCommandSchema(
       if (loft && (loft.connections !== undefined || loft.guides !== undefined))
         assertMinimumProjectSchema(
           document.schemaVersion,
-          136,
+          133,
           'Loft connections and guides'
+        );
+    }
+    // M04 (schema v132): an exact sweep's twist and end scale, created or
+    // patched (a patch need not name its kind; the fields are a sweep's).
+    {
+      const sweep =
+        command.kind === 'feature.sweep'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'sweep')
+            ? command.payload.data
+            : null;
+      if (
+        sweep &&
+        ((sweep.twistDeg !== undefined &&
+          sweep.twistDeg !== 0 &&
+          sweep.twistDeg !== '0') ||
+          (sweep.endScale !== undefined &&
+            sweep.endScale !== 1 &&
+            sweep.endScale !== '1'))
+      )
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          132,
+          'Sweep twist and end scale'
         );
     }
     switch (command.kind) {
@@ -1415,7 +1441,7 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     )
       assertMinimumProjectSchema(
         document.schemaVersion,
-        136,
+        133,
         'Loft connections and guides'
       );
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
