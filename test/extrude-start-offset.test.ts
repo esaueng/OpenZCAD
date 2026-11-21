@@ -205,18 +205,17 @@ describe('F01 start offset', { timeout: 60_000 }, () => {
       [{ startOffset: Infinity }, /Start offset must be a finite length/],
       [{ startOffset: ' ' }, /Start offset must be a number or an expression/]
     ])('refuses %o at entry', (patch, message) => {
-      let document = addPrimitiveFeature(project('Refusals'), {
+      const block = addPrimitiveFeature(project('Refusals'), {
         name: 'Block',
         primitiveKind: 'box',
         dimensions: { width: 20, height: 20, depth: 10 }
       });
-      const blockId = document.bodyOrder.at(-1)!;
-      document = sketch(document).document;
-      const sketchId = listFeaturesInOrder(document).at(-1)!.data;
+      const blockId = block.bodyOrder.at(-1)!;
+      const sketched = sketch(block);
       expect(() =>
-        extrudeSketch(document, {
+        extrudeSketch(sketched.document, {
           name: 'Bad',
-          sketchId: (sketchId as { sketchId: never }).sketchId,
+          sketchId: sketched.sketchId,
           distance: 2,
           ...Object.fromEntries(
             Object.entries(patch).map(([key, value]) => [
