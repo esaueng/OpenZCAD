@@ -9,6 +9,7 @@ import {
   isSketchCompositeSideTarget,
   isSketchReferenceDimension,
   isSketchShapeTarget,
+  isSketchDatumTarget,
   sketchShapeSideCount,
   isSketchReferenceDimensionData,
   resolveSketchReferenceDimension,
@@ -51,6 +52,8 @@ export interface SketchReferenceLabelPositionInput extends SketchReferenceDimens
 const COMPOSITE_REFERENCE_SCHEMA_VERSION = 36;
 /** S02-D: composite centres and legacy-shape corner/side/centre targets. */
 const SHAPE_REFERENCE_SCHEMA_VERSION = 125;
+/** S02-D: the sketch origin and X/Y axes. */
+const DATUM_REFERENCE_SCHEMA_VERSION = 126;
 const REFERENCE_DISTANCE_MODE_SCHEMA_VERSION = 35;
 
 function assertReferenceDataSchema(
@@ -81,6 +84,15 @@ function assertReferenceDataSchema(
       schemaVersion,
       SHAPE_REFERENCE_SCHEMA_VERSION,
       'Shape centre and legacy shape reference targets'
+    );
+  if (
+    data.dimensionKind !== 'radius' &&
+    [data.a, data.b].some((target) => isSketchDatumTarget(target))
+  )
+    assertMinimumProjectSchema(
+      schemaVersion,
+      DATUM_REFERENCE_SCHEMA_VERSION,
+      'Sketch origin and axis reference targets'
     );
   if (data.dimensionKind === 'distance' && data.distanceMode !== undefined)
     assertMinimumProjectSchema(

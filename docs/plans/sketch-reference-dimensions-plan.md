@@ -6,10 +6,11 @@ rectangle/polygon corners and sides through the shared measured-target unions;
 driving constraints keep primitive identities. Its schema v32 topology,
 qualification and deletion contract is authoritative in the
 [composite target identity plan](sketch-composite-identity-plan.md#composite-target-identity-s04-b).
-S02-D composite consumers (shape centres and legacy parametric shapes) are
-implemented at schema v125, below. Datum consumers and a separate
-display-unit selector remain open. The original proposal below retains
-design history.
+S02-D composite consumers (shape centres and legacy parametric shapes, schema
+v125) and datum consumers (the sketch origin and axes, schema v126) are
+implemented, below. The separate display-unit selector is S02-F. With them
+the S02 scope is delivered. Driving-distance modes remain outside S02. The
+original proposal below retains design history.
 
 ## Shape centres and legacy shapes (S02-D)
 
@@ -55,6 +56,30 @@ the GCS input are unchanged, as for every reference.
 Evidence: `test/sketch-shape-reference-targets.test.ts`,
 `SketchReferenceDimensions.test.tsx`, `compositeTargets.test.ts` and
 `test/e2e/sketch-shape-reference-targets.spec.ts`.
+
+## Sketch origin and axes (S02-D)
+
+Schema v126 adds the sketch's own datum as reference targets:
+`{ kind: 'sketch-origin' }` is a point target, and
+`{ kind: 'sketch-axis', axis: 'x' | 'y' }` is a line target. They have no
+coordinates and no object, so they never block a deletion and never go
+stale. They measure in the sketch-local frame: (0, 0) and the +X/+Y
+directions. For a datum-backed sketch, that is the frame R01 resolves from
+its datum plane. A plane offset or a datum move changes where the
+annotation stands in the world and never changes its measured value. If the
+datum itself fails, the R01 rule applies: the world annotation is
+unavailable, and the local target stays valid.
+
+Distances from the origin work in every mode. Angles take an axis beside a
+line, an S04-B side or a legacy side, or the other axis. The origin twice, or
+one axis twice, is refused as the same target. An axis is never a point
+target, and the origin is never a line target. Pre-v126 carriers refuse both
+forms. The palette lists "Sketch origin", "Sketch X axis" and "Sketch Y
+axis" first. Evidence: `test/sketch-datum-reference-targets.test.ts`
+(distance 5 and vertical 2 from the origin, 45° and 90° to the axes, the same
+values at plane offsets 0 and 25, undo/redo, replay, reopen, refusals),
+`SketchReferenceDimensions.test.tsx` and
+`test/e2e/sketch-datum-reference-targets.spec.ts`.
 
 ## Projected reference distances (S02-E)
 

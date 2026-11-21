@@ -9,6 +9,7 @@ export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './sketch-composite-targets';
 export * from './sketch-shape-targets';
+export * from './sketch-datum-targets';
 export * from './sketch-boundary-provenance';
 export * from './sketch-promotions';
 export * from './mass-density';
@@ -37,6 +38,10 @@ import type {
   SketchCompositeCornerTarget,
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
+import type {
+  SketchAxisTarget,
+  SketchOriginTarget
+} from './sketch-datum-targets';
 import type {
   SketchShapeCenterTarget,
   SketchShapeCornerTarget,
@@ -496,7 +501,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // cannot read those targets and would refuse or drop the annotation, so it
 // must refuse the document. Builds on v121 (#1842); v122–v124 are claimed
 // by the open F01 PRs #1846, #1847 and #1851.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 125 as const;
+// v126 adds S02-D datum reference targets: the sketch origin
+// (`sketch-origin`) and its X/Y axes (`sketch-axis`), measured in the
+// sketch-local frame. An older client cannot read them, so it must refuse.
+// Builds on v125.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 126 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1983,10 +1992,14 @@ export type SketchReferencePointTarget =
   | SketchCompositeCornerTarget
   | SketchCompositeCenterTarget
   | SketchShapeCornerTarget
-  | SketchShapeCenterTarget;
-/** Legacy-shape sides arrive in schema v125 (S02-D). */
+  | SketchShapeCenterTarget
+  | SketchOriginTarget;
+/** Legacy-shape sides arrive in schema v125 (S02-D); datum axes in v126. */
 export type SketchReferenceCurveTarget =
-  EntityId | SketchCompositeSideTarget | SketchShapeSideTarget;
+  | EntityId
+  | SketchCompositeSideTarget
+  | SketchShapeSideTarget
+  | SketchAxisTarget;
 
 export type SketchReferenceDimensionData =
   | {

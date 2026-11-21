@@ -39,6 +39,11 @@ import {
   resolveSketchShapePointTarget,
   resolveSketchShapeSideTarget
 } from './sketch-shape-targets';
+import {
+  isSketchAxisTarget,
+  isSketchOriginTarget,
+  sketchAxisSegment
+} from './sketch-datum-targets';
 
 /** Every saved point-target form, including v125 shape centres and legacy shapes. */
 export function isSketchReferencePointTarget(
@@ -49,7 +54,8 @@ export function isSketchReferencePointTarget(
     isSketchCompositeCornerTarget(value) ||
     isSketchCompositeCenterTarget(value) ||
     isSketchShapeCornerTarget(value) ||
-    isSketchShapeCenterTarget(value)
+    isSketchShapeCenterTarget(value) ||
+    isSketchOriginTarget(value)
   );
 }
 
@@ -60,7 +66,8 @@ export function isSketchReferenceCurveTarget(
   return (
     typeof value === 'string' ||
     isSketchCompositeSideTarget(value) ||
-    isSketchShapeSideTarget(value)
+    isSketchShapeSideTarget(value) ||
+    isSketchAxisTarget(value)
   );
 }
 
@@ -296,17 +303,21 @@ export function sketchReferenceDimensionObjectIds(
   data: SketchReferenceDimensionData
 ): EntityId[] {
   const pointIds = (target: SketchReferencePointTarget): EntityId[] =>
-    isSketchPointRef(target) ||
-    isSketchShapeCornerTarget(target) ||
-    isSketchShapeCenterTarget(target)
-      ? [target.objectId]
-      : sketchCompositeTargetMemberIds(target);
+    isSketchOriginTarget(target)
+      ? []
+      : isSketchPointRef(target) ||
+          isSketchShapeCornerTarget(target) ||
+          isSketchShapeCenterTarget(target)
+        ? [target.objectId]
+        : sketchCompositeTargetMemberIds(target);
   const curveIds = (target: SketchReferenceCurveTarget): EntityId[] =>
     typeof target === 'string'
       ? [target]
-      : isSketchShapeSideTarget(target)
-        ? [target.objectId]
-        : sketchCompositeTargetMemberIds(target);
+      : isSketchAxisTarget(target)
+        ? []
+        : isSketchShapeSideTarget(target)
+          ? [target.objectId]
+          : sketchCompositeTargetMemberIds(target);
   return [
     ...new Set(
       data.dimensionKind === 'distance'
@@ -496,6 +507,17 @@ function lowerReferenceTargets(
         ? { ok: true, operand: { ...operand, point: result.point } }
         : { ok: false, reason: result.reason };
     }
+    if (isSketchOriginTarget(target))
+      return {
+        ok: true,
+        operand: {
+          kind: 'derived',
+          key: 'sketch-origin',
+          label: 'sketch origin',
+          aliases: [],
+          point: { x: 0, y: 0 }
+        }
+      };
     return { ok: false, reason: 'the point target descriptor is malformed.' };
   };
   type CurveResult =
@@ -548,6 +570,16 @@ function lowerReferenceTargets(
           }
         : { ok: false, reason: result.reason };
     }
+    if (isSketchAxisTarget(target))
+      return {
+        ok: true,
+        operand: {
+          kind: 'derived',
+          key: `sketch-axis:${target.axis}`,
+          label: `sketch ${target.axis.toUpperCase()} axis`,
+          ...sketchAxisSegment(target.axis)
+        }
+      };
     return { ok: false, reason: 'the side target descriptor is malformed.' };
   };
   if (data.dimensionKind === 'distance') {
@@ -1169,21 +1201,25 @@ export function describeSketchReferenceDimension(
     String(id)
 ): string {
   const pointName = (target: SketchReferencePointTarget) =>
-    isSketchPointRef(target)
-      ? `${nameOf(target.objectId)}.${target.point}`
-      : isSketchShapeCornerTarget(target)
-        ? `${nameOf(target.objectId)} (parametric) · Corner ${target.index + 1}`
-        : isSketchShapeCenterTarget(target)
-          ? `${nameOf(target.objectId)} (parametric) · Centre`
-          : isSketchCompositeCenterTarget(target)
-            ? `${nameOfComposite(target.compositeId)} · Centre`
-            : `${nameOfComposite(target.compositeId)} · Corner ${target.index + 1}`;
+    isSketchOriginTarget(target)
+      ? 'Sketch origin'
+      : isSketchPointRef(target)
+        ? `${nameOf(target.objectId)}.${target.point}`
+        : isSketchShapeCornerTarget(target)
+          ? `${nameOf(target.objectId)} (parametric) · Corner ${target.index + 1}`
+          : isSketchShapeCenterTarget(target)
+            ? `${nameOf(target.objectId)} (parametric) · Centre`
+            : isSketchCompositeCenterTarget(target)
+              ? `${nameOfComposite(target.compositeId)} · Centre`
+              : `${nameOfComposite(target.compositeId)} · Corner ${target.index + 1}`;
   const curveName = (target: SketchReferenceCurveTarget) =>
     typeof target === 'string'
       ? nameOf(target)
-      : isSketchShapeSideTarget(target)
-        ? `${nameOf(target.objectId)} (parametric) · Side ${target.index + 1}`
-        : `${nameOfComposite(target.compositeId)} · Side ${target.index + 1}`;
+      : isSketchAxisTarget(target)
+        ? `Sketch ${target.axis.toUpperCase()} axis`
+        : isSketchShapeSideTarget(target)
+          ? `${nameOf(target.objectId)} (parametric) · Side ${target.index + 1}`
+          : `${nameOfComposite(target.compositeId)} · Side ${target.index + 1}`;
   switch (data.dimensionKind) {
     case 'distance':
       return `Reference ${data.distanceMode && data.distanceMode !== 'absolute' ? `${data.distanceMode} ` : ''}distance · ${pointName(data.a)} ↔ ${pointName(data.b)}`;

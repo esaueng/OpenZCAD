@@ -534,18 +534,21 @@ function referenceMeasuresPoint(
   return (sketch.referenceDimensions ?? []).some(({ data }) => {
     if (data.dimensionKind === 'distance')
       return [data.a, data.b].some((point) =>
-        'topology' in point
-          ? sketchCompositeTargetMemberIds(point).includes(ref.objectId)
-          : 'point' in point
-            ? point.objectId === ref.objectId && point.point === ref.point
-            : // A legacy shape's corner or centre moves with the whole shape.
-              point.objectId === ref.objectId
+        !('objectId' in point) && !('topology' in point)
+          ? false // The sketch origin moves with no trim.
+          : 'topology' in point
+            ? sketchCompositeTargetMemberIds(point).includes(ref.objectId)
+            : 'point' in point
+              ? point.objectId === ref.objectId && point.point === ref.point
+              : // A legacy shape's corner or centre moves with the whole shape.
+                point.objectId === ref.objectId
       );
     return (
       data.dimensionKind === 'angle' &&
       [data.a, data.b].some(
         (side) =>
           typeof side !== 'string' &&
+          side.kind !== 'sketch-axis' &&
           ('topology' in side
             ? sketchCompositeTargetMemberIds(side).includes(ref.objectId)
             : side.objectId === ref.objectId)
