@@ -190,12 +190,18 @@ export function watchProjectMeasurements({
   // A device edit the account has not yet accepted (the push failed or is
   // still in flight). Retries try it even from a hidden tab.
   let unsynced = false;
+  // A read asked for while another was in flight. The running one may carry
+  // a snapshot older than the request (e.g. the visible-again check), so it
+  // runs once more afterwards.
+  let rerun = false;
   const sync = async (localOverride?: StoredMeasurementRecord) => {
     if (cancelled) return;
     if (syncing) {
-      pending = localOverride ?? pending;
+      if (localOverride) pending = localOverride;
+      else rerun = true;
       return;
     }
+    rerun = false;
     syncing = true;
     const startedAt = editEpoch;
     try {
@@ -216,12 +222,19 @@ export function watchProjectMeasurements({
       if (!cancelled && startedAt === editEpoch) onResult(result);
     } catch {
       // The device copy is usable; focus, online, and the poll retry cloud.
+      // It may hold an edit the account never took (one restored from
+      // IndexedDB after a reload, say), so retry from a hidden tab too until
+      // a reconciliation succeeds.
+      unsynced = true;
     } finally {
       syncing = false;
       if (pending) {
         const next = pending;
         pending = undefined;
+        rerun = false;
         void sync(next);
+      } else if (rerun) {
+        void sync();
       }
     }
   };

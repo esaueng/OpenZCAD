@@ -468,4 +468,59 @@ describe('measurement polling and page visibility', () => {
     expect(load).toHaveBeenCalledTimes(reads);
     watcher.stop();
   });
+  it('keeps retrying a restored device edit from a hidden tab when its first write fails', async () => {
+    // A device edit that survived a reload is never pushed; the first
+    // reconciliation finds it and its write fails.
+    const restored = record(
+      '2026-08-07T12:00:00.000Z',
+      'Restored offline edit'
+    );
+    const harness = api({
+      revision: 1,
+      record: record('2026-08-07T10:00:00.000Z', 'Account')
+    });
+    harness.save.mockRejectedValueOnce(new Error('Offline'));
+    const device = { current: restored };
+    const watcher = watchProjectMeasurements({
+      api: harness.api,
+      projectId: restored.projectId,
+      loadLocal: async () => device.current,
+      saveLocal: async (value) => {
+        device.current = value;
+      },
+      onResult: () => undefined
+    });
+    await vi.waitFor(() => expect(harness.save).toHaveBeenCalledTimes(1));
+    await settle();
+    setVisibility('hidden');
+    vi.advanceTimersByTime(MEASUREMENT_POLL_INTERVAL_MS);
+    await vi.waitFor(() => expect(harness.save).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(harness.snapshot().record).toEqual(restored));
+    watcher.stop();
+  });
+
+  it('reads again after an in-flight read when the tab becomes visible', async () => {
+    const { watcher, load } = await started();
+    setVisibility('hidden');
+    let release: () => void = () => undefined;
+    const original = load.getMockImplementation();
+    load.mockImplementationOnce(
+      (...args) =>
+        new Promise((resolve, reject) => {
+          release = () => {
+            void Promise.resolve(original!(...args)).then(resolve, reject);
+          };
+        })
+    );
+    // A focus while hidden is skipped, so start the slow read from the
+    // visible-again path, then ask again while it is still running.
+    setVisibility('visible');
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    window.dispatchEvent(new Event('focus'));
+    await settle();
+    expect(load).toHaveBeenCalledTimes(2);
+    release();
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+    watcher.stop();
+  });
 });
