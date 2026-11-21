@@ -1036,6 +1036,7 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
@@ -1566,6 +1567,8 @@ const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
 /** Longest an account conflict waits for the project's room to connect. */
 /** Where the measurement workbench is a sheet across the stage's foot. */
 const MEASUREMENT_SHEET_MEDIA = '(max-width: 620px)';
+/** Where View's parts list stands over the middle of the model. */
+const PHONE_PARTS_LIST_MEDIA = `(max-width: ${PANEL_LANE_REST_MAX_WIDTH}px)`;
 const ROOM_SETTLE_TIMEOUT_MS = 5000;
 
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
@@ -18626,8 +18629,15 @@ export function App() {
     []
   );
   // On a phone the parts list beside View's rail opens over the middle of
-  // the model: once, as it opens, the model slides into the stage it leaves.
-  const phonePartsShown = phonePartsOpen === true;
+  // the model: once, as it comes up (opened, or shown again on a return to
+  // View), the model slides into the stage it leaves. Judged at the width
+  // the window has now, not the one the project opened at: a wider stage
+  // never moves the camera.
+  const phoneStage = useMediaQuery(PHONE_PARTS_LIST_MEDIA);
+  const phonePartsShown =
+    phoneStage &&
+    viewMode &&
+    (phonePartsOpen ?? panelState.viewModeRailOpen) === true;
   useEffect(() => {
     if (phonePartsShown) requestClearStage();
   }, [phonePartsShown, requestClearStage]);

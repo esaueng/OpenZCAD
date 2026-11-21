@@ -756,6 +756,24 @@ for (const viewport of [
       await expect(parameters).toBeVisible({ timeout: 30_000 });
       if (viewport.name === 'phone') {
         start = await restingCamera(page);
+        // The one move a phone makes: the model above the sheet, not under.
+        const model = await page.locator('.viewer-host canvas').evaluate(
+          (element) =>
+            new Promise<{ bottom: number } | null>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-bodies-in-view', {
+                  detail: {
+                    resolve: (state: { screen: { bottom: number } | null }) =>
+                      resolve(state.screen)
+                  }
+                })
+              );
+            })
+        );
+        const sheet = await page.locator('.tweak-flyouts').boundingBox();
+        expect(model, 'the model is drawn').not.toBeNull();
+        expect(sheet, 'the sheet is up').not.toBeNull();
+        expect(model!.bottom).toBeLessThanOrEqual(sheet!.y + 1);
       } else {
         expectSameCamera(await restingCamera(page), start);
       }
