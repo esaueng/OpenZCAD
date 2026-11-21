@@ -2818,8 +2818,9 @@ export function toFaceExtent(
   offset: number
 ): number | null {
   if (![face, start, offset].every(Number.isFinite)) return null;
-  const tolerance =
-    1e-9 * Math.max(1, Math.abs(face), Math.abs(start), Math.abs(offset));
+  // Scaled by the planes only, as `toFaceOffsetEnd` scales by the face, so
+  // with no start offset the two rules agree exactly, offset or not.
+  const tolerance = 1e-9 * Math.max(1, Math.abs(face), Math.abs(start));
   const reach = face - start;
   if (!(Math.abs(reach) > tolerance)) return null;
   const direction = Math.sign(reach);

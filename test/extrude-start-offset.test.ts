@@ -180,6 +180,12 @@ describe('F01 start offset', { timeout: 60_000 }, () => {
           toFaceOffsetEnd(face, offset)
         );
       }
+      // Review: a huge offset past a face near the sketch plane is the same
+      // span under both rules (the tolerance scales by the planes only).
+      expect(toFaceExtent(0.0001, 0, -100001)).toBe(
+        toFaceOffsetEnd(0.0001, -100001)
+      );
+      expect(toFaceExtent(0.0001, 0, -100001)).not.toBeNull();
     });
   });
 
@@ -649,6 +655,19 @@ describe('F01 start offset', { timeout: 60_000 }, () => {
       expect(
         extrudeDraftRefusal({ ...draft, startOffset: '-5' }, context(0), true)
       ).toBeNull();
+      // A stored face on the sketch plane, refused as unresolved with no
+      // start, is reached by typing a start: no re-pick needed.
+      const stored = {
+        ...context(0),
+        initial: { ...context(0).initial, toFace: target },
+        toFacePicking: { ...context(0).toFacePicking!, unresolved: true }
+      };
+      expect(
+        extrudeDraftRefusal({ ...draft, startOffset: '-5' }, stored, true)
+      ).toBeNull();
+      expect(
+        extrudeDraftRefusal({ ...draft, startOffset: '0' }, stored, true)
+      ).toMatch(/no longer exists here/);
       expect(
         extrudeDraftRefusal(
           { ...draft, startOffset: 'lift' },

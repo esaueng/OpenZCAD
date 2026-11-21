@@ -433,7 +433,12 @@ export function extrudeDraftRefusal(
   if (!draft.name.trim()) return 'Name the extrude.';
   if (toFace) {
     if (!draft.toFace) return 'Pick the face for the extrusion to reach.';
-    if (extrudeToFaceUnresolved(draft, ctx)) {
+    // A face stored on the sketch plane with no start offset is refused as
+    // unresolved; a start offset typed now reaches it without a re-pick.
+    const reachable =
+      ctx.toFacePicking!.describe(draft.toFace).distance === 0 &&
+      (extrudeDraftNumber(draft.startOffset, 'length', ctx) ?? 0) !== 0;
+    if (extrudeToFaceUnresolved(draft, ctx) && !reachable) {
       return 'The target face no longer exists here; pick a face again.';
     }
     const problem = extrudeToFaceProblem(draft, ctx);

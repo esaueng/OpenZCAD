@@ -323,7 +323,11 @@ export function ExtrudeCommand({
     change({
       toFace: target,
       endCondition: 'to-face',
-      ...(reach !== null ? { distance: toFaceReachText(reach) } : {})
+      // A face on the sketch plane has no reach to keep: the typed
+      // distance stays for switching back.
+      ...(reach !== null && reach !== 0
+        ? { distance: toFaceReachText(reach) }
+        : {})
     });
   };
   const faceReach =

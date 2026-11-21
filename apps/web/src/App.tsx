@@ -27818,7 +27818,10 @@ export function App() {
     if (edited && !regionExtrudeState) return [];
     // F01 (v121): the extrusion starts on its start plane, so its back
     // arrow, draft rig and an edit's distance arrow stand there too.
-    const lift = finite(regionExtrudeState?.startOffset, 0);
+    const lift =
+      regionExtrudeState?.extent === 'through-all'
+        ? 0
+        : finite(regionExtrudeState?.startOffset, 0);
     const lifted = (point: Vector3): Vector3 =>
       lift === 0
         ? point
@@ -28799,8 +28802,12 @@ export function App() {
 
   /** Armed region handle for the viewport. */
   // F01 (v121): the region's arrow and ghost stand on the start plane.
+  // Through all takes none: a start typed before switching to it is held
+  // for switching back, not shown.
   const regionStartOffset =
-    regionExtrudeState && Number.isFinite(regionExtrudeState.startOffset)
+    regionExtrudeState &&
+    regionExtrudeState.extent !== 'through-all' &&
+    Number.isFinite(regionExtrudeState.startOffset)
       ? regionExtrudeState.startOffset
       : 0;
   const regionHandleTarget = useMemo(() => {
