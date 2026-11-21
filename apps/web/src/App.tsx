@@ -26455,7 +26455,8 @@ export function App() {
             : {}),
           ...(request.points ? { points: request.points } : {}),
           ...(request.path ? { path: request.path } : {}),
-          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {})
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {}),
+          ...(request.spacingMode ? { spacingMode: request.spacingMode } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in

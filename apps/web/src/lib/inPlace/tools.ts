@@ -677,6 +677,8 @@ export type InPlaceRequest =
       path?: PatternPath;
       /** M02 (schema v119): the plane a mirror pattern reflects in. */
       mirrorPlane?: ModelingPlaneReference;
+      /** M02 (schema v120): a linear pattern's spacing is its total. */
+      spacingMode?: 'total';
     }
   | {
       /** An M14 gear, as the feature stores it. */
@@ -5865,6 +5867,25 @@ function linearCopies(
   return rowCopies(count, (index) => offset(origin, vector, spacing * index));
 }
 
+/** M02 (schema v120): how a linear pattern's length is given. */
+const LINEAR_EXTENT_OPTION: OptionSpec = {
+  id: 'extent',
+  label: 'Spacing',
+  choices: [
+    {
+      value: 'spacing',
+      label: 'Between copies',
+      tip: 'Each copy stands this far from the last'
+    },
+    {
+      value: 'total',
+      label: 'Total length',
+      tip: 'The copies share this length out, original to last'
+    }
+  ],
+  initial: 'spacing'
+};
+
 const linearPattern: InPlaceToolSpec = {
   id: 'linear-pattern',
   title: 'Linear pattern',
@@ -5901,7 +5922,21 @@ const linearPattern: InPlaceToolSpec = {
   values: [
     // Signed: a negative spacing repeats the other way, as the card allowed.
     // Zero is the kernel's to refuse, in the bar.
-    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20 },
+    {
+      id: 'spacing',
+      label: 'Spacing',
+      unit: 'length',
+      initial: 20,
+      when: (state) => state.options.extent !== 'total'
+    },
+    // M02 (schema v120): the row's whole length, original to last copy.
+    {
+      id: 'total',
+      label: 'Total',
+      unit: 'length',
+      initial: 40,
+      when: (state) => state.options.extent === 'total'
+    },
     {
       id: 'count',
       label: 'Count',
@@ -5924,10 +5959,14 @@ const linearPattern: InPlaceToolSpec = {
         ...AXIS_OPTION('x').choices,
         { value: 'custom', label: 'Custom' }
       ]
-    }
+    },
+    LINEAR_EXTENT_OPTION
   ],
   hint: (slots, options) =>
-    patternHint(slots, options) ?? 'Drag the spacing · tap a copy to skip it',
+    patternHint(slots, options) ??
+    (options?.extent === 'total'
+      ? 'Drag the last copy · tap a copy to skip it'
+      : 'Drag the spacing · tap a copy to skip it'),
   ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
   request(slots, values, options, ctx, numbers) {
     const source = patternSource(slots, options, ctx);
@@ -5952,7 +5991,9 @@ const linearPattern: InPlaceToolSpec = {
         direction && ctx.saved?.featureKind === 'pattern'
           ? ctx.saved.axis
           : axisOf(options.axis),
-      spacing: values.spacing ?? 20,
+      ...(options.extent === 'total'
+        ? { spacing: values.total ?? 40, spacingMode: 'total' as const }
+        : { spacing: values.spacing ?? 20 }),
       ...(direction ? { direction } : {}),
       ...skipRequest(
         options,
@@ -5977,11 +6018,17 @@ const linearPattern: InPlaceToolSpec = {
         : AXIS_VECTORS[axisOf(options.axis)]!;
     const origin = centre(body);
     const width = Math.max(body.max.x - body.min.x, 1e-3);
+    // M02 (schema v120): over a total length the arrow is the last copy.
+    const total = options.extent === 'total';
+    const count = wholeCount(values.count, 3);
+    const step = total
+      ? (values.total ?? 40) / Math.max(count - 1, 1)
+      : (values.spacing ?? 20);
     return [
       {
-        valueId: 'spacing',
+        valueId: total ? 'total' : 'spacing',
         kind: 'linear',
-        key: `${bodyKey(body)}:spacing:${custom ? 'custom' : axisOf(options.axis)}`,
+        key: `${bodyKey(body)}:${total ? 'total' : 'spacing'}:${custom ? 'custom' : axisOf(options.axis)}`,
         params: { origin, direction: vector }
       },
       {
@@ -6005,16 +6052,7 @@ const linearPattern: InPlaceToolSpec = {
             }
           }))
         : []),
-      ...instanceHandles(
-        body,
-        linearCopies(
-          body,
-          vector,
-          values.spacing ?? 20,
-          wholeCount(values.count, 3)
-        ),
-        options
-      )
+      ...instanceHandles(body, linearCopies(body, vector, step, count), options)
     ];
   }
 };

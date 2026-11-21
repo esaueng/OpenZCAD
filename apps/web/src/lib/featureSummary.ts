@@ -534,7 +534,14 @@ export function featureValueSummary(
         const count2 = data.count2 === undefined ? count : num(data.count2);
         return count2 === null ? null : `${count} × ${count2}${gap}`;
       }
-      return `× ${count}${gap}`;
+      // M02 (schema v120): a row spaced over its total length says so.
+      // A length in the document's units, as the kernel builds it (review:
+      // a suffixed total read as no number at all).
+      const total =
+        data.spacingMode === 'total' ? lengthValue(data.spacing) : null;
+      return total !== null
+        ? `× ${count} over ${total} ${unit}${gap}`
+        : `× ${count}${gap}`;
     }
     default:
       return null;

@@ -4285,7 +4285,13 @@ function buildPatternFeature(
     if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern spacing cannot be zero.');
     }
-    arm = linearPatternArm(kernel, direction, spacing, count);
+    // M02 (schema v120): a total length is shared out between the copies.
+    arm = linearPatternArm(
+      kernel,
+      direction,
+      data.spacingMode === 'total' ? spacing / (count - 1) : spacing,
+      count
+    );
   } else if (data.patternKind === 'grid') {
     const spacing = resolveParamValue(
       data.spacing,

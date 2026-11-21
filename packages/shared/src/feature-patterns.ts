@@ -212,6 +212,23 @@ export function patternMirrorProblem(data: {
 }
 
 /**
+ * Why a pattern's spacing mode cannot be stored, else null: `'total'`, on
+ * a linear pattern only.
+ */
+export function patternSpacingModeProblem(data: {
+  patternKind: PatternKind;
+  spacingMode?: unknown;
+}): string | null {
+  if (data.spacingMode === undefined) return null;
+  if (data.spacingMode !== 'total') {
+    return `${JSON.stringify(data.spacingMode)} is not a pattern spacing mode.`;
+  }
+  return data.patternKind === 'linear'
+    ? null
+    : 'Only a linear pattern spaces its copies over a total length.';
+}
+
+/**
  * Whether a feature is one a feature pattern repeats: a hole, an extrude
  * that adds to or cuts its target body, or (M02) a fillet or chamfer, which
  * each copy takes where it holds the edges the original rounded.
