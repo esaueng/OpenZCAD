@@ -287,4 +287,42 @@ describe('M02 patterns of wraps', { timeout: 180_000 }, () => {
     // no carrier to prove them the wrap's and stay unnamed.
     expect(own.map((face) => face.geometry?.surfaceType)).toContain('cone');
   });
+
+  it('renames a raised face whose trim an edit reflects (re-check)', async () => {
+    // As the re-check found it: a triangle reflected across z = 10 keeps
+    // its raised face's perimeter, vertex centroid and cylinder.
+    const triangle = (points: [number, number][]): SketchObjectData[] =>
+      points.map(([x1, y1], index) => {
+        const [x2, y2] = points[(index + 1) % points.length]!;
+        return { objectKind: 'line', x1, y1, x2, y2 };
+      });
+    const raised = async (points: [number, number][]) => {
+      const { document, wrapId } = await wrapped(triangle(points), {
+        mode: 'emboss',
+        depth: 1
+      });
+      const derived = await adapter.syncDocument(document);
+      expect(failures(derived)).toEqual([]);
+      const face = derived.bodyRepresentations[
+        last(document)
+      ]!.topology!.faces.find(
+        (candidate) =>
+          candidate.reference?.producingFeatureId === wrapId &&
+          candidate.geometry?.surfaceType === 'cylinder'
+      );
+      expect(face?.reference?.lineageName).toMatch(/^wrap\.face\.w/);
+      return face!.reference!.lineageName;
+    };
+    const first = await raised([
+      [-2, 8],
+      [0, 9],
+      [2, 13]
+    ]);
+    const reflected = await raised([
+      [-2, 12],
+      [0, 11],
+      [2, 7]
+    ]);
+    expect(reflected).not.toBe(first);
+  });
 });

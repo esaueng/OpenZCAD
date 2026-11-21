@@ -504,10 +504,13 @@ function faceSignatureOfWitness(witness: FaceWitnessV1): string {
  * name the faces they add after themselves. The 32-bit fingerprint can name
  * two different faces alike across rebuilds (review: an emboss's bottom and,
  * once its sketch moved, its top), and a lineage name is trusted over the
- * witness, so a name must not collide where the geometry differs.
+ * witness, so a name must not collide where the geometry differs. `corners`
+ * adds what the witness leaves out (re-check: a trim reflected across its
+ * middle keeps its perimeter, vertex centroid and carrier): the caller's
+ * exact account of where the face's vertices stand.
  */
-export function faceWitnessName(witness: FaceWitnessV1): string {
-  const text = faceSignatureOfWitness(witness);
+export function faceWitnessName(witness: FaceWitnessV1, corners = ''): string {
+  const text = `${faceSignatureOfWitness(witness)}|${corners}`;
   // cyrb128: four 32-bit lanes; not cryptographic, and need not be.
   let h1 = 1779033703;
   let h2 = 3144134277;

@@ -9,8 +9,10 @@ bosses, cuts, fillets and chamfers. Each wrap now names its faces: the
 body's names are carried through where the wrap only trims a face
 (`carryAnalyticFaces`), and each face the wrap adds, on a surface the body
 had no face on, is named after its own exact witness by a
-128-bit name (`wrap.face.w<name>`, `nameAddedFaces`; the 32-bit
-fingerprint could name two faces alike across an edit). A cone is read by
+128-bit name of its witness and the exact places of its vertices
+(`wrap.face.w<name>`, `nameAddedFaces`; the 32-bit fingerprint could name
+two faces alike across an edit, and the witness alone a trim reflected
+across its middle). A cone is read by
 its exact surface. A face whose witness another
 shares, or whose surface cannot be read, stays unnamed, and an edit that
 reshapes a face renames it, so a reference never moves to another face.
@@ -30,7 +32,7 @@ badge embossed 1 deep repeated four times round the post at
 faces named by copy; a Ø4 disc engraved 1 deep repeated three times; a wrap
 that did not build refused by its pattern; across an edit that moves the
 badge, no name shared by two different faces; a badge on a frustum naming
-its raised cone); `test/e2e/pattern-wraps.spec.ts`
+its raised cone; a triangle's raised face renamed when an edit reflects it); `test/e2e/pattern-wraps.spec.ts`
 (`@ci-smoke`), which picks the badge under Repeat Features, clicks the Z
 axis line above the post, sets Fixed step, drags the step rig, sets four
 copies 90° apart, and checks the stored pattern.

@@ -790,8 +790,24 @@ export function nameAddedFaces(
       .map((c) => witnessOf(c).surfaceType)
   );
   const after = faces(solid);
+  // Where each vertex stands, to a micron, in a fixed order: two trims of
+  // one surface with the same perimeter and centre still differ here.
+  const cornersOf = (face: number) =>
+    Array.from(kernel.getFaceVertices(face), (vertex) =>
+      Array.from(kernel.getVertexPosition(vertex), (value) =>
+        Math.round(value * 1e6)
+      ).join(',')
+    )
+      .sort()
+      .join(';');
+  const names = new Map(
+    after.map((candidate) => [
+      candidate.handle,
+      faceWitnessName(witnessOf(candidate), cornersOf(candidate.handle))
+    ])
+  );
   const nameOf = (candidate: (typeof after)[number]) =>
-    faceWitnessName(witnessOf(candidate));
+    names.get(candidate.handle)!;
   const counts = new Map<string, number>();
   for (const candidate of after) {
     counts.set(nameOf(candidate), (counts.get(nameOf(candidate)) ?? 0) + 1);
