@@ -18,12 +18,15 @@ export function shareLinkCopyName(
   existingNames: Iterable<string>
 ): string {
   const names = [...existingNames];
-  const name = sharedName.trim().slice(0, MAX_PROJECT_NAME_LENGTH).trim();
+  const wanted = sharedName.trim().toLowerCase();
   const taken = names.some(
-    (existing) => existing.trim().toLowerCase() === name.toLowerCase()
+    (existing) => existing.trim().toLowerCase() === wanted
   );
-  if (!name || taken) return duplicateProjectName(sharedName, names);
-  return name;
+  // Kept exactly as stored, never cut: slicing could split a surrogate pair.
+  if (!wanted || taken || sharedName.length > MAX_PROJECT_NAME_LENGTH) {
+    return duplicateProjectName(sharedName, names);
+  }
+  return sharedName;
 }
 
 /**
