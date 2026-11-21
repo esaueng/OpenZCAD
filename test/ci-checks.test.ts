@@ -259,9 +259,9 @@ describe('required validation gate', () => {
     // `pnpm test` is the root project followed by the web project; the jobs
     // split them, so each half has to appear or a whole project goes untested.
     expect(jobs.unit).toContain(
-      'run: node scripts/run-ci-units.mjs root --shard=${{ matrix.shard }}/2\n'
+      'run: node scripts/run-ci-units.mjs root --shard=${{ matrix.shard }}/3\n'
     );
-    expect(jobs.unit).toContain('shard: [1, 2]\n');
+    expect(jobs.unit).toContain('shard: [1, 2, 3]\n');
     expect(jobs.validation).toContain(
       'run: node scripts/run-ci-units.mjs web\n'
     );

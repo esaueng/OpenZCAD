@@ -1,6 +1,7 @@
 export type UnitSuite = 'smoke' | 'full';
 export type UnitProject = 'root' | 'web';
 export const ROOT_FULL_INCLUDE: string[];
+export function listRootUnitFiles(rootDir?: string): string[];
 export function resolveUnitSuite(
   env?: Record<string, string | undefined>
 ): UnitSuite;

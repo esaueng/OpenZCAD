@@ -1,16 +1,37 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   additiveUnitManifest,
   browserSpecsFromChanges,
+  changedPaths,
   selectCI
 } from '../scripts/ci-selection.mjs';
 import {
+  DEFAULT_UNIT_WEIGHT_SECONDS,
+  discoverRelatedFiles,
+  mergeUnitWeights,
+  parseUnitShard,
+  partitionUnitFiles,
+  readUnitWeights,
   relatedFiles,
   runUnits,
-  selectedFiles
+  selectedFiles,
+  UNIT_ROOT_WEIGHTS_PATH,
+  weightsFromVitestReports
 } from '../scripts/run-ci-units.mjs';
-import { unitTestInclude } from '../scripts/unit-suites.mjs';
-import { resolve } from 'node:path';
+import {
+  listRootUnitFiles,
+  unitTestInclude
+} from '../scripts/unit-suites.mjs';
 
 describe('critical and affected CI selection', () => {
   it('narrows only semantic additions that preserve both critical manifests', () => {
@@ -176,4 +197,216 @@ describe('critical and affected CI selection', () => {
       'lacks a file'
     );
   });
+
+  it('keeps smoke selection when only docs markdown files are deleted', () => {
+    expect(
+      selectCI(['ROADMAP.md', 'docs/roadmap-evidence/f01--old.md'], {
+        deleted: true,
+        deletedPaths: ['docs/roadmap-evidence/f01--old.md']
+      })
+    ).toEqual({ unit: 'smoke', e2e: 'smoke' });
+    expect(
+      selectCI(['docs/roadmap-evidence/f01--old.md', 'apps/web/src/old.ts'], {
+        deleted: true,
+        deletedPaths: [
+          'docs/roadmap-evidence/f01--old.md',
+          'apps/web/src/old.ts'
+        ]
+      })
+    ).toEqual({ unit: 'full', e2e: 'smoke' });
+    expect(
+      selectCI(['docs/notes.md', 'test/e2e/deleted.spec.ts'], {
+        deleted: true,
+        deletedPaths: ['test/e2e/deleted.spec.ts']
+      })
+    ).toEqual({ unit: 'full', e2e: 'full' });
+  });
+
+  it('balances root unit shards deterministically and assigns every file once', () => {
+    expect(parseUnitShard('2/3')).toEqual({ shard: 2, total: 3 });
+    expect(() => parseUnitShard('0/3')).toThrow();
+    expect(() => parseUnitShard('4/3')).toThrow();
+
+    const weights = readUnitWeights();
+    const smoke = unitTestInclude('root', { CI: 'true' })!;
+    const allRoot = listRootUnitFiles();
+    expect(allRoot.length).toBeGreaterThan(smoke.length);
+    for (const file of smoke) expect(allRoot).toContain(file);
+
+    for (const files of [smoke, allRoot]) {
+      const shards = partitionUnitFiles(files, weights, 3);
+      expect(shards.every((shard) => shard.files.length > 0)).toBe(true);
+      expect(shards.flatMap((shard) => shard.files).sort()).toEqual(
+        [...files].sort()
+      );
+    }
+
+    const toy = partitionUnitFiles(
+      ['a.test.ts', 'b.test.ts', 'c.test.ts', 'd.test.ts'],
+      { 'a.test.ts': 10, 'b.test.ts': 6, 'c.test.ts': 5 },
+      2
+    );
+    // d uses DEFAULT_UNIT_WEIGHT_SECONDS (2): 10 vs 6+5+2 -> 10+2=12 vs 6+5=11
+    expect(toy).toEqual([
+      { files: ['a.test.ts', 'd.test.ts'], seconds: 10 + DEFAULT_UNIT_WEIGHT_SECONDS },
+      { files: ['b.test.ts', 'c.test.ts'], seconds: 11 }
+    ]);
+
+    expect(
+      weightsFromVitestReports([
+        {
+          testResults: [
+            {
+              name: '/home/runner/work/OpenZCAD/OpenZCAD/test/auth.test.ts',
+              startTime: 1000,
+              endTime: 3550
+            }
+          ]
+        }
+      ])
+    ).toEqual({ 'test/auth.test.ts': 2.6 });
+
+    expect(
+      mergeUnitWeights(
+        { 'test/kept.test.ts': 5, 'test/gone.test.ts': 9 },
+        { 'test/kept.test.ts': 7, 'test/new.test.ts': 1.2 },
+        ['test/kept.test.ts', 'test/new.test.ts']
+      )
+    ).toEqual({ 'test/kept.test.ts': 7, 'test/new.test.ts': 1.2 });
+
+    expect(readFileSync(UNIT_ROOT_WEIGHTS_PATH, 'utf8')).toBe(
+      `${JSON.stringify(weights, null, 2)}\n`
+    );
+  });
+
+  it('passes balanced shard files via OPENZCAD_UNIT_FILES without Vitest --shard', () => {
+    const calls: {
+      args: string[];
+      files?: string[];
+      suite?: string;
+    }[] = [];
+    const status = runUnits(
+      ['root', '--shard=2/3'],
+      { OPENZCAD_UNIT_SUITE: 'full' },
+      (_file, args, options) => {
+        const parsed = options.env.OPENZCAD_UNIT_FILES
+          ? (JSON.parse(options.env.OPENZCAD_UNIT_FILES) as { root: string[] })
+              .root
+          : undefined;
+        calls.push({
+          args,
+          files: parsed,
+          suite: options.env.OPENZCAD_UNIT_SUITE
+        });
+        return { status: 0 };
+      }
+    );
+    expect(status).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.args).toContain('vitest.config.ts');
+    expect(calls[0]!.args.join(' ')).not.toContain('--shard');
+    expect(calls[0]!.suite).toBe('full');
+    expect(calls[0]!.files?.length).toBeGreaterThan(0);
+  });
+
+  it('discovers related tests on shallow disconnected history without falling back to full', async () => {
+    // Regression: CI clones HEAD at depth=1 and fetches base at depth=1, so
+    // `git diff base...HEAD` fails with "no merge base". changedPaths uses a
+    // two-dot diff and runUnits passes those paths to --list-related instead.
+    const dir = mkdtempSync(join(tmpdir(), 'ci-shallow-discovery-'));
+    const remote = join(dir, 'remote.git');
+    const work = join(dir, 'work');
+    const shallow = join(dir, 'shallow');
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=example-user',
+          '-c',
+          'user.email=example-user@example.invalid',
+          '-c',
+          'commit.gpgsign=false',
+          '-c',
+          `core.hooksPath=${join(dir, 'no-hooks')}`,
+          ...args
+        ],
+        { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      ).trim();
+    try {
+      mkdirSync(remote, { recursive: true });
+      mkdirSync(work, { recursive: true });
+      git(remote, 'init', '--bare', '--quiet');
+      git(work, 'init', '--quiet');
+      git(work, 'remote', 'add', 'origin', remote);
+      writeFileSync(join(work, 'a.txt'), 'v1\n');
+      git(work, 'add', '.');
+      git(work, 'commit', '--quiet', '-m', 'base');
+      const base = git(work, 'rev-parse', 'HEAD');
+      git(work, 'push', '--quiet', 'origin', 'HEAD:refs/heads/main');
+
+      writeFileSync(join(work, 'a.txt'), 'v2\n');
+      git(work, 'add', '.');
+      git(work, 'commit', '--quiet', '-m', 'middle');
+      writeFileSync(join(work, 'b.txt'), 'v3\n');
+      git(work, 'add', '.');
+      git(work, 'commit', '--quiet', '-m', 'head');
+      git(work, 'push', '--quiet', 'origin', 'HEAD:refs/heads/feature');
+
+      git(
+        dir,
+        'clone',
+        '--quiet',
+        '--depth=1',
+        '--branch',
+        'feature',
+        `file://${remote}`,
+        shallow
+      );
+      git(
+        shallow,
+        'fetch',
+        '--quiet',
+        '--no-tags',
+        '--depth=1',
+        'origin',
+        base
+      );
+      // Confirm no merge base exists, matching GitHub Actions shallow checkout.
+      expect(() => git(shallow, 'merge-base', base, 'HEAD')).toThrow();
+      expect(changedPaths(base, shallow)).toEqual(['a.txt', 'b.txt']);
+
+      // Explicit-path Vitest discovery resolves changed tests without Git.
+      const discovered = await discoverRelatedFiles(process.cwd(), [
+        resolve('test/account-deletion.test.ts')
+      ]);
+      expect(relatedFiles('root', discovered, process.cwd())).toEqual([
+        'test/account-deletion.test.ts'
+      ]);
+
+      // Zero-change base (HEAD) stays on smoke without invoking discovery.
+      const head = execFileSync('git', ['rev-parse', 'HEAD'], {
+        encoding: 'utf8'
+      }).trim();
+      const observedCalls: string[][] = [];
+      const status = runUnits(
+        ['root', '--shard=1/3'],
+        {
+          OPENZCAD_UNIT_SUITE: 'smoke',
+          CI_BASE_SHA: head
+        },
+        (_file, args, options) => {
+          observedCalls.push(args);
+          expect(options.env.OPENZCAD_UNIT_SUITE).toBe('smoke');
+          expect(options.env.OPENZCAD_UNIT_FILES).toBeDefined();
+          return { status: 0 };
+        }
+      );
+      expect(status).toBe(0);
+      expect(observedCalls).toHaveLength(1);
+      expect(observedCalls[0]).toContain('vitest.config.ts');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

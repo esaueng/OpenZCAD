@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import process from 'node:process';
 
@@ -10,6 +11,30 @@ const repository = new URL('../', import.meta.url);
 const manifest = JSON.parse(
   readFileSync(new URL('../test/unit-ci-files.json', import.meta.url), 'utf8')
 );
+
+/** Enumerate every root Vitest file matching ROOT_FULL_INCLUDE, sorted. */
+export function listRootUnitFiles(rootDir = fileURLToPath(repository)) {
+  const files = [];
+  const visit = (dir) => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) visit(full);
+      else if (entry.isFile() && entry.name.endsWith('.test.ts')) {
+        files.push(relative(rootDir, full).split(sep).join('/'));
+      }
+    }
+  };
+  visit(join(rootDir, 'test'));
+  const packagesDir = join(rootDir, 'packages');
+  if (existsSync(packagesDir)) {
+    for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) visit(join(packagesDir, entry.name, 'src'));
+    }
+  }
+  return files.sort((a, b) => a.localeCompare(b));
+}
 
 /** Local runs and kernel qualification retain full coverage by default. */
 export function resolveUnitSuite(env = process.env) {
@@ -55,11 +80,11 @@ export function validateUnitFiles(project, files) {
 export function unitTestInclude(project, env = process.env) {
   if (project !== 'root' && project !== 'web')
     throw new Error(`Unknown unit project "${project}".`);
-  if (resolveUnitSuite(env) === 'full')
-    return project === 'root' ? [...ROOT_FULL_INCLUDE] : undefined;
   if (env.OPENZCAD_UNIT_FILES) {
     const selection = JSON.parse(env.OPENZCAD_UNIT_FILES);
     return validateUnitFiles(project, selection[project]);
   }
+  if (resolveUnitSuite(env) === 'full')
+    return project === 'root' ? [...ROOT_FULL_INCLUDE] : undefined;
   return validateUnitFiles(project, manifest[project]);
 }

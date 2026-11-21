@@ -90,7 +90,7 @@ pnpm build
 
 A required `plan` job runs the kernel-pin declaration; beside it `quality`
 (lint, in two partitions), `typecheck`, `unit` (the root Vitest project in
-two partitions) and `validation` (the web Vitest project, the parity corpus,
+three duration-balanced partitions) and `validation` (the web Vitest project, the parity corpus,
 the build) run in parallel, each selecting its own tests. Together `unit` and `validation` are `pnpm test`.
 Root and web Vitest run the critical manifest plus the files a change affects;
 unknown inputs, dependency or configuration changes and kernel (Remus)

@@ -14,6 +14,7 @@ export function selectCI(
     event?: string;
     labels?: string[];
     deleted?: boolean;
+    deletedPaths?: string[];
     manifestAdditions?: boolean;
   }
 ): { unit: 'full' | 'smoke'; e2e: 'full' | 'smoke' };

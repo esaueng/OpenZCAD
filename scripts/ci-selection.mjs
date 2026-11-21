@@ -83,6 +83,7 @@ export function selectCI(
     event = 'pull_request',
     labels = [],
     deleted = false,
+    deletedPaths,
     manifestAdditions = false
   } = {}
 ) {
@@ -90,6 +91,15 @@ export function selectCI(
     /^(?:\.github\/|scripts\/|test\/support\/|test\/setup|test\/unit-global|test\/unit-ci-files|test\/e2e\/fixtures\/|test\/parity\/|packages\/(?:crypto|mls)\/|packages\/kernel-adapter\/package\.json$|(?:pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|vitest.*|playwright.*|tsconfig.*|eslint.*|turbo\.json)$)|(?:^|\/)package\.json$/;
   const known =
     /^(?:apps\/web\/(?:src|worker)\/|packages\/[^/]+\/src\/|test\/|docs\/|public\/)|\.(?:md|css|svg|png|jpg|webp)$/;
+  const docMarkdown = /^docs\/.*\.md$/;
+  const deletedList = Array.isArray(deletedPaths)
+    ? deletedPaths
+    : deleted
+      ? paths
+      : [];
+  // Folding roadmap evidence deletes docs/**/*.md files; keep non-doc deletions
+  // fail-closed while avoiding full-suite runs for documentation cleanup.
+  const hasNonDocDeletion = deletedList.some((p) => !docMarkdown.test(p));
   const explicitFull =
     event === 'schedule' ||
     event === 'workflow_dispatch' ||
@@ -97,7 +107,7 @@ export function selectCI(
   const unitFull =
     explicitFull ||
     labels.includes('kernel-bump') ||
-    deleted ||
+    hasNonDocDeletion ||
     !paths.length ||
     paths.some((p) => {
       if (p === 'test/unit-ci-files.json' && manifestAdditions) return false;
@@ -110,8 +120,7 @@ export function selectCI(
   // browser regression still requires the full remaining matrix.
   const browserFull =
     explicitFull ||
-    (deleted &&
-      paths.some((p) => p.startsWith('test/e2e/') && p.endsWith('.spec.ts')));
+    deletedList.some((p) => p.startsWith('test/e2e/') && p.endsWith('.spec.ts'));
   return {
     unit: unitFull ? 'full' : 'smoke',
     e2e: browserFull ? 'full' : 'smoke'
@@ -167,12 +176,14 @@ if (
       // A missing baseline must never authorize a narrower selection.
     }
   }
+  const deletedPaths = paths.filter((p) => !existsSync(p));
   const plan = unavailable
     ? { unit: 'full', e2e: 'full' }
     : selectCI(paths, {
         event: process.env.GITHUB_EVENT_NAME,
         labels: event.pull_request?.labels?.map((l) => l.name) ?? [],
-        deleted: paths.some((p) => !existsSync(p)),
+        deleted: deletedPaths.length > 0,
+        deletedPaths,
         manifestAdditions
       });
   const output = `base=${base ?? ''}\nunit=${plan.unit}\ne2e=${plan.e2e}\n`;
