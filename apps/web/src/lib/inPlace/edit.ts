@@ -395,6 +395,15 @@ export function inPlaceEditSeed(
         )
       );
       seed.options.shape = data.mode;
+      // M04 (v133): its guide line, as the path slot.
+      const guide = data.guides?.[0];
+      if (guide) {
+        seed.slots.path = guide.entityIds.flatMap((entityId) =>
+          ctx.curve(guide.sketchId, entityId)
+            ? [{ sketchId: guide.sketchId, entityId }]
+            : (missing.push('path'), [])
+        );
+      }
       if (data.endPoint) {
         // Its apex as stored, each coordinate on its own chip.
         seed.options.end = 'point';
@@ -1202,9 +1211,37 @@ export function inPlaceFeatureUpdate(
           featureKind: 'loft',
           sections: request.sections,
           mode: request.mode,
-          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+          ...(request.endPoint ? { endPoint: request.endPoint } : {}),
+          ...(request.guides ? { guides: request.guides as never } : {})
         },
-        ...(request.endPoint ? {} : { clearData: ['endPoint'] })
+        // M04 (v133): the card shows no connections; stored ones are kept
+        // only while the sections are the same, in the same order, and no
+        // guide replaces them. A connection names a vertex of the section at
+        // its index, so a reorder or a swapped section would move it.
+        ...((): { clearData?: string[] } => {
+          const stored = saved.featureKind === 'loft' ? saved : null;
+          const sameSections =
+            stored !== null &&
+            stored.sections.length === request.sections.length &&
+            stored.sections.every(
+              (section, index) =>
+                JSON.stringify(section) ===
+                JSON.stringify(request.sections[index])
+            );
+          const clear = [
+            ...(request.endPoint ? [] : ['endPoint']),
+            ...(request.guides || stored?.guides === undefined
+              ? []
+              : ['guides']),
+            ...(stored?.connections !== undefined &&
+            (request.guides !== undefined ||
+              request.endPoint !== undefined ||
+              !sameSections)
+              ? ['connections']
+              : [])
+          ];
+          return clear.length > 0 ? { clearData: clear } : {};
+        })()
       };
     case 'sweep':
       return {

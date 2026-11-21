@@ -26234,7 +26234,15 @@ export function App() {
           bodyName,
           sections: request.sections,
           mode: request.mode,
-          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+          ...(request.endPoint ? { endPoint: request.endPoint } : {}),
+          ...(request.guides
+            ? {
+                guides: request.guides.map((guide) => ({
+                  sketchId: guide.sketchId,
+                  entityIds: guide.entityIds as EntityId[]
+                }))
+              }
+            : {})
         });
       case 'sweep':
         return commandFactories.sweepProfile({
@@ -28013,6 +28021,7 @@ export function App() {
   );
   // M01: where the Hole tool places its hole; sketch points are picked.
   const inPlacePlace = inPlace.options.place;
+  const inPlaceSections = inPlace.slots.profiles;
   const inPlaceCurveCandidates = useMemo(() => {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
@@ -28070,6 +28079,31 @@ export function App() {
         : availableSketchViews;
       return sketchPointCandidates(doc, views, (value) => resolve(value));
     }
+    // M04: a loft guide is a straight line, offered only once two sections
+    // are picked and never from a section's own sketch, so a click on a
+    // section's edge still picks the section.
+    if (inPlaceSpec.id === 'loft') {
+      if (inPlaceSections.length < 2) return null;
+      const sectionSketches = new Set(
+        inPlaceSections.map((pick) => pick.sketchId)
+      );
+      const views = (
+        inPlaceEditing
+          ? availableSketchViews.filter((view) =>
+              featurePrecedes(
+                producingFeatureOf({ sketchId: view.sketchId }),
+                inPlaceEditing.featureId
+              )
+            )
+          : availableSketchViews
+      ).filter((view) => !sectionSketches.has(view.sketchId));
+      return sketchCurveCandidates(
+        doc,
+        views,
+        (value) => resolve(value),
+        (data) => data.construction !== true && data.objectKind === 'line'
+      );
+    }
     // Every sketch's curves, the profile's own included: one sketch may hold
     // both a closed profile and the open spine it sweeps along. An edit
     // offers only sketches made before its feature, as it takes profiles.
@@ -28088,7 +28122,8 @@ export function App() {
     availableSketchViews,
     parameterScope,
     inPlaceEditing,
-    inPlacePlace
+    inPlacePlace,
+    inPlaceSections
   ]);
   const inPlaceCurvePicker = useMemo(
     () =>

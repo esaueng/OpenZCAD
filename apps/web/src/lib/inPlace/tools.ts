@@ -576,6 +576,8 @@ export type InPlaceRequest =
       mode: 'ruled' | 'smooth';
       /** Closes the last section to this point (a pointed loft). */
       endPoint?: ParametricVector3;
+      /** M04 (v133): one straight guide line fixing the correspondence. */
+      guides?: { sketchId: SketchId; entityIds: string[] }[];
     }
   | {
       tool: 'sweep';
@@ -1422,7 +1424,9 @@ const loft: InPlaceToolSpec = {
   title: 'Loft',
   profileMode: 'many',
   wantsAxis: false,
-  wantsPath: false,
+  // M04 (v133): a sketch line picked as a guide fixes which vertices the
+  // sections connect at (ruled lofts).
+  wantsPath: true,
   values: [
     // How far the apex stands off the last section, along its normal.
     { id: 'apex', label: 'Apex', unit: 'length', initial: 10 },
@@ -1456,7 +1460,10 @@ const loft: InPlaceToolSpec = {
   hint(slots) {
     if (slots.profiles.length === 0) return 'Pick the first section';
     if (slots.profiles.length === 1) return 'Pick the next section';
-    return `${slots.profiles.length} sections · pick more`;
+    if (slots.path.length > 0) {
+      return `${slots.profiles.length} sections · guided by a line`;
+    }
+    return `${slots.profiles.length} sections · pick more, or a guide line`;
   },
   // A point apex not yet set starts where the apex off the last section
   // stands.
@@ -1484,6 +1491,16 @@ const loft: InPlaceToolSpec = {
       tool: 'loft',
       sections: slots.profiles.map(section),
       mode: options.shape === 'smooth' ? 'smooth' : 'ruled',
+      ...(slots.path[0]
+        ? {
+            guides: [
+              {
+                sketchId: slots.path[0].sketchId,
+                entityIds: slots.path.map((curve) => curve.entityId)
+              }
+            ]
+          }
+        : {}),
       ...(point
         ? { endPoint: point }
         : apex

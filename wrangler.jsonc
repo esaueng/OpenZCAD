@@ -42,21 +42,63 @@
     "crons": ["17 * * * *"]
   },
   "ratelimits": [
-    {"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026101501", "simple":{"limit":120,"period":60}},
+    {
+      "name": "GLIMPSE_USAGE_LIMITER",
+      "namespace_id": "2026101501",
+      "simple": { "limit": 120, "period": 60 }
+    },
     // Per-location request limits checked before any D1 work
     // (REQUEST_LIMITS in apps/web/worker/apiRateLimit.ts, with beta's
     // account-read override below). Missing bindings fall back to D1.
-    {"name":"AUTH_REQUEST_LIMITER", "namespace_id":"2026111301", "simple":{"limit":30,"period":60}},
-    {"name":"DESKTOP_EXCHANGE_LIMITER", "namespace_id":"2026111302", "simple":{"limit":60,"period":60}},
-    {"name":"ANONYMOUS_ASSISTANT_LIMITER", "namespace_id":"2026111303", "simple":{"limit":20,"period":60}},
-    {"name":"SHARE_LINK_LIMITER", "namespace_id":"2026111304", "simple":{"limit":300,"period":60}},
-    {"name":"ACCOUNT_READ_LIMITER", "namespace_id":"2026111305", "simple":{"limit":3000,"period":60}},
-    {"name":"DESKTOP_START_LIMITER", "namespace_id":"2026111306", "simple":{"limit":10,"period":60}},
-    {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111307", "simple":{"limit":30000,"period":60}},
-    {"name":"API_WRITE_LIMITER", "namespace_id":"2026111308", "simple":{"limit":120,"period":60}}
+    {
+      "name": "AUTH_REQUEST_LIMITER",
+      "namespace_id": "2026111301",
+      "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "DESKTOP_EXCHANGE_LIMITER",
+      "namespace_id": "2026111302",
+      "simple": { "limit": 60, "period": 60 }
+    },
+    {
+      "name": "ANONYMOUS_ASSISTANT_LIMITER",
+      "namespace_id": "2026111303",
+      "simple": { "limit": 20, "period": 60 }
+    },
+    {
+      "name": "SHARE_LINK_LIMITER",
+      "namespace_id": "2026111304",
+      "simple": { "limit": 300, "period": 60 }
+    },
+    {
+      "name": "ACCOUNT_READ_LIMITER",
+      "namespace_id": "2026111305",
+      "simple": { "limit": 3000, "period": 60 }
+    },
+    {
+      "name": "DESKTOP_START_LIMITER",
+      "namespace_id": "2026111306",
+      "simple": { "limit": 10, "period": 60 }
+    },
+    {
+      "name": "SHARE_READ_CEILING_LIMITER",
+      "namespace_id": "2026111307",
+      "simple": { "limit": 30000, "period": 60 }
+    },
+    {
+      "name": "API_WRITE_LIMITER",
+      "namespace_id": "2026111308",
+      "simple": { "limit": 120, "period": 60 }
+    }
   ],
   // Production collection enabled; optional analytics still require browser consent.
-  "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADIngest"}],
+  "services": [
+    {
+      "binding": "GLIMPSE",
+      "service": "glimpse",
+      "entrypoint": "OpenZCADIngest"
+    }
+  ],
   // See docs/glimpse.md for consent controls and rollback.
   "assets": {
     "directory": "./apps/web/dist",
@@ -262,15 +304,51 @@
     // Previews use the standard limits in separate namespaces so Preview
     // traffic never spends production's budget.
     "ratelimits": [
-      {"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026111501", "simple":{"limit":120,"period":60}},
-      {"name":"AUTH_REQUEST_LIMITER", "namespace_id":"2026111502", "simple":{"limit":30,"period":60}},
-      {"name":"DESKTOP_EXCHANGE_LIMITER", "namespace_id":"2026111503", "simple":{"limit":60,"period":60}},
-      {"name":"ANONYMOUS_ASSISTANT_LIMITER", "namespace_id":"2026111504", "simple":{"limit":20,"period":60}},
-      {"name":"SHARE_LINK_LIMITER", "namespace_id":"2026111505", "simple":{"limit":300,"period":60}},
-      {"name":"ACCOUNT_READ_LIMITER", "namespace_id":"2026111506", "simple":{"limit":1200,"period":60}},
-      {"name":"DESKTOP_START_LIMITER", "namespace_id":"2026111507", "simple":{"limit":10,"period":60}},
-      {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111508", "simple":{"limit":30000,"period":60}},
-      {"name":"API_WRITE_LIMITER", "namespace_id":"2026111509", "simple":{"limit":120,"period":60}}
+      {
+        "name": "GLIMPSE_USAGE_LIMITER",
+        "namespace_id": "2026111501",
+        "simple": { "limit": 120, "period": 60 }
+      },
+      {
+        "name": "AUTH_REQUEST_LIMITER",
+        "namespace_id": "2026111502",
+        "simple": { "limit": 30, "period": 60 }
+      },
+      {
+        "name": "DESKTOP_EXCHANGE_LIMITER",
+        "namespace_id": "2026111503",
+        "simple": { "limit": 60, "period": 60 }
+      },
+      {
+        "name": "ANONYMOUS_ASSISTANT_LIMITER",
+        "namespace_id": "2026111504",
+        "simple": { "limit": 20, "period": 60 }
+      },
+      {
+        "name": "SHARE_LINK_LIMITER",
+        "namespace_id": "2026111505",
+        "simple": { "limit": 300, "period": 60 }
+      },
+      {
+        "name": "ACCOUNT_READ_LIMITER",
+        "namespace_id": "2026111506",
+        "simple": { "limit": 1200, "period": 60 }
+      },
+      {
+        "name": "DESKTOP_START_LIMITER",
+        "namespace_id": "2026111507",
+        "simple": { "limit": 10, "period": 60 }
+      },
+      {
+        "name": "SHARE_READ_CEILING_LIMITER",
+        "namespace_id": "2026111508",
+        "simple": { "limit": 30000, "period": 60 }
+      },
+      {
+        "name": "API_WRITE_LIMITER",
+        "namespace_id": "2026111509",
+        "simple": { "limit": 120, "period": 60 }
+      }
     ]
   }
 }
