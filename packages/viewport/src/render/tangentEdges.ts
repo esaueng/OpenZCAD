@@ -50,11 +50,11 @@ export const FACETED_JOINT_MAX_ANGLE = THREE.MathUtils.degToRad(25);
 export function tangentEdgeIds(
   mesh: Pick<MeshGeometry, 'vertices' | 'indices'>,
   topology: Pick<BodyTopology, 'faces' | 'edges'>,
-  maxAngle: number = TANGENT_EDGE_MAX_ANGLE
+  maxAngle: number = TANGENT_EDGE_MAX_ANGLE,
+  isTangentPair = tangentFacePairs(mesh, topology.faces, maxAngle)
 ): Set<string> {
   const tangent = new Set<string>();
   const faces = topology.faces;
-  const isTangentPair = tangentFacePairs(mesh, faces, maxAngle);
   // A hash two faces share names neither of them.
   const faceByHash = new Map<number, number>();
   faces.forEach((face, index) => {

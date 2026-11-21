@@ -31,10 +31,19 @@ function sameBodySet(a: Bodies, b: Bodies) {
   return a.length === b.length && b.every((body) => ids.has(body.bodyId));
 }
 
+function createPreparationWorker(): Worker {
+  return observeWorker(
+    new Worker(new URL('./bodyPreparationWorker.ts', import.meta.url), {
+      type: 'module'
+    })
+  );
+}
+
 /** Dense replacements prepare off-thread; displayed geometry and its props travel together. */
 export function usePreparedBodies<T = undefined>(
   source: Bodies,
-  presentation?: T
+  presentation?: T,
+  editingSketch = false
 ) {
   const [ready, setReady] = useState<Snapshot<T | undefined>>({
     id: 0,
@@ -45,6 +54,7 @@ export function usePreparedBodies<T = undefined>(
   const latestSource = useRef(source);
   const displayed = useRef({ source, presentation });
   const workerRef = useRef<Worker | null>(null);
+  const warmWorker = useRef<Worker | null>(null);
   const active = useRef<Request<T | undefined> | null>(null);
   const serial = useRef(0);
   const [unavailable, setUnavailable] = useState(false);
@@ -95,6 +105,29 @@ export function usePreparedBodies<T = undefined>(
       (body) => denseBodyNeedsPreparation(body) && !preparedBodies.has(body)
     );
 
+  // Start the display worker while the user is editing the sketch. Its first
+  // replacement mesh can then use the worker as soon as the kernel replies.
+  const warmForSketch =
+    editingSketch && !unavailable && source.some(denseBodyNeedsPreparation);
+  useEffect(() => {
+    if (!warmForSketch || workerRef.current) return;
+    let worker: Worker;
+    try {
+      worker = createPreparationWorker();
+    } catch {
+      return;
+    }
+    warmWorker.current = worker;
+    const discard = () => {
+      if (warmWorker.current !== worker) return;
+      warmWorker.current = null;
+      worker.terminate();
+    };
+    worker.onerror = discard;
+    worker.onmessageerror = discard;
+    return discard;
+  }, [warmForSketch]);
+
   useEffect(
     () => () => {
       if (active.current) clearTimeout(active.current.timeout);
@@ -132,11 +165,8 @@ export function usePreparedBodies<T = undefined>(
     let worker = workerRef.current;
     if (!worker) {
       try {
-        worker = observeWorker(
-          new Worker(new URL('./bodyPreparationWorker.ts', import.meta.url), {
-            type: 'module'
-          })
-        );
+        worker = warmWorker.current ?? createPreparationWorker();
+        warmWorker.current = null;
         worker.onerror = () => fail('error');
         worker.onmessageerror = () => fail('messageerror');
         worker.onmessage = (

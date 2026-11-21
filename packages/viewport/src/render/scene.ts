@@ -79,7 +79,8 @@ const topologyBoundaryOutlines = new WeakMap<
  */
 function geometryFromMesh(
   mesh: MeshGeometry,
-  topology?: BodyTopology
+  topology?: BodyTopology,
+  onTangentPairs?: (pairs: ReturnType<typeof tangentFacePairs>) => void
 ): THREE.BufferGeometry {
   const sourcePositions = mesh.vertices;
   const sourceIndices = mesh.indices;
@@ -258,6 +259,7 @@ function geometryFromMesh(
     topology && topology.faces.length > 1
       ? tangentFacePairs(mesh, topology.faces)
       : null;
+  if (isTangentPair) onTangentPairs?.(isTangentPair);
   for (let slot = 0; slot < edgeCount; slot += 1) {
     // Non-manifold edges stay creased; smoothing across more than two incident
     // faces can blend unrelated shells that merely share indexed vertices.
@@ -399,9 +401,10 @@ function geometryFromMesh(
 
 /** CPU-only preparation, safe to run in a dedicated viewport worker. */
 export function prepareBodyGeometry(
-  body: GeometryBodyRepresentation
+  body: GeometryBodyRepresentation,
+  onTangentPairs?: (pairs: ReturnType<typeof tangentFacePairs>) => void
 ): PreparedBodyGeometry {
-  const geometry = geometryFromMesh(body.mesh, body.topology);
+  const geometry = geometryFromMesh(body.mesh, body.topology, onTangentPairs);
   const layout = exactSmoothingLayouts.get(geometry);
   const result: PreparedBodyGeometry = {
     positions: geometry.getAttribute('position').array as Float32Array,
