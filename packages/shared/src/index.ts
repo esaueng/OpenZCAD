@@ -533,7 +533,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // section's own start, so it must refuse the document. Builds on v132
 // (#1882). First claimed as v136, renumbered to the next unclaimed number
 // when #1882 landed.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 133 as const;
+// v134 adds M04 sweep orientation (`orientation: 'parallel'` on an in-place
+// sweep): the profile is translated along the path unturned, along splines
+// and through corners. An older client would turn it with the path, so it
+// must refuse the document. Builds on v133.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 134 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -2738,6 +2742,15 @@ export type FeatureData =
        * the same straight, square path as `twistDeg`.
        */
       endScale?: ParamValue;
+      /**
+       * M04 (v134), `'in-place'` only: `'parallel'` keeps the profile's
+       * orientation, translating it along the path unturned (the kernel's
+       * `sweepExactWithOptions` orientation `"parallel"`): every face is the
+       * exact translational surface of a profile edge along a path edge, so
+       * the path may hold splines and corners. Absent turns the profile with
+       * the path, as every sweep before it did.
+       */
+      orientation?: 'parallel';
     }
   | {
       featureKind: 'helical-sweep';

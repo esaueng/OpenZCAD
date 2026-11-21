@@ -441,6 +441,7 @@ export function inPlaceEditSeed(
       // M04 (v132): the twist and end scale as stored, expressions and all.
       value('twist', data.twistDeg);
       value('endScale', data.endScale);
+      seed.options.orientation = data.orientation ?? 'normal';
       break;
     }
     case 'rib': {
@@ -1271,7 +1272,10 @@ export function inPlaceFeatureUpdate(
             : { twistDeg: request.twistDeg }),
           ...(request.endScale === undefined
             ? {}
-            : { endScale: request.endScale })
+            : { endScale: request.endScale }),
+          ...(request.orientation === undefined
+            ? {}
+            : { orientation: request.orientation })
         },
         // An absent construction keeps a sampled sweep sampled. Exact
         // construction is written explicitly and cannot be cleared; an
@@ -1285,6 +1289,10 @@ export function inPlaceFeatureUpdate(
               : []),
             ...(request.endScale === undefined && stored?.endScale !== undefined
               ? ['endScale']
+              : []),
+            ...(request.orientation === undefined &&
+            stored?.orientation !== undefined
+              ? ['orientation']
               : [])
           ];
           return clear.length ? { clearData: clear } : {};

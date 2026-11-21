@@ -549,6 +549,8 @@ export interface SweepInput {
   twistDeg?: ParamValue;
   /** M04 (v132): see the sweep `FeatureData`; omitted or one scales nothing. */
   endScale?: ParamValue;
+  /** M04 (v134): see the sweep `FeatureData`; omitted turns with the path. */
+  orientation?: 'parallel';
   ids?: BodyFeatureIds;
 }
 
@@ -3270,7 +3272,23 @@ export function validateSweepOptions(data: {
   twistDeg?: unknown;
   endScale?: unknown;
   guide?: unknown;
+  orientation?: unknown;
 }): void {
+  if (data.orientation !== undefined) {
+    if (data.orientation !== 'parallel') {
+      throw new Error('Sweep orientation must be parallel or absent.');
+    }
+    if (data.construction !== 'in-place') {
+      throw new Error(
+        'Keeping the profile parallel needs the exact sweep; build it as Exact.'
+      );
+    }
+    if (data.guide !== undefined) {
+      throw new Error(
+        'A sweep that keeps the profile parallel takes no guide rail; clear the rail or the orientation.'
+      );
+    }
+  }
   const { twistDeg, endScale } = data;
   if (twistDeg !== undefined) {
     if (typeof twistDeg === 'number') {
@@ -3334,7 +3352,10 @@ export function sweepProfile(
       // M04 (v132): a literal zero twist or unit scale is the absent
       // default, so it is never written.
       ...(isZeroParam(input.twistDeg) ? {} : { twistDeg: input.twistDeg! }),
-      ...(isUnitParam(input.endScale) ? {} : { endScale: input.endScale! })
+      ...(isUnitParam(input.endScale) ? {} : { endScale: input.endScale! }),
+      ...(input.orientation === undefined
+        ? {}
+        : { orientation: input.orientation })
     },
     suppliedIds(input.ids),
     input.bodyName
@@ -6126,7 +6147,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'guide',
     'construction',
     'twistDeg',
-    'endScale'
+    'endScale',
+    'orientation'
   ],
   'helical-sweep': [
     'profile',
@@ -6377,7 +6399,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // M04 (v133): a cleared connection list or guide keeps section starts.
   loft: ['endPoint', 'connections', 'guides'],
   // M04 (v132): a cleared twist or scale is none.
-  sweep: ['guide', 'twistDeg', 'endScale'],
+  sweep: ['guide', 'twistDeg', 'endScale', 'orientation'],
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.

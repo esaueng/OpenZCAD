@@ -629,3 +629,69 @@ test('a picked straight sweep follows a picked straight rail, exactly (M04)', as
     6
   );
 });
+
+test('a picked spline path sweeps with the profile kept parallel, exactly (M04, v134)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  const document = sweepDocument(
+    'Parallel sweep',
+    { objectKind: 'circle', radius: 2, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [
+          {
+            objectKind: 'spline',
+            method: 'control',
+            degree: 3,
+            points: [
+              { x: 30, y: 0 },
+              { x: 33, y: -5 },
+              { x: 28, y: -12 },
+              { x: 34, y: -20 }
+            ]
+          }
+        ]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  // The spline's midpoint, C(1/2) = (P0 + 3·P1 + 3·P2 + P3)/8. Turning
+  // with the path, a spline has no exact sweep: the preview refuses it by
+  // name and points at Parallel.
+  await pickCurve(
+    page,
+    canvas,
+    bar,
+    [30.875, 0, 8.875],
+    'set Orientation to Parallel'
+  );
+  await chooseOption(bar, 'Parallel');
+  await expect(bar).toContainText('Path of 1');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data).toMatchObject({
+    construction: 'in-place',
+    orientation: 'parallel'
+  });
+  const derived = await rebuilt(saved);
+  // The profile's area times the spline's rise along the profile normal.
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    Math.PI * 4 * 20,
+    4
+  );
+});

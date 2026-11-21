@@ -12810,7 +12810,10 @@ export function App() {
             ? node.data.objectKind === 'line'
             : !node.data.construction &&
               (node.data.objectKind === 'line' ||
-                node.data.objectKind === 'arc')) &&
+                node.data.objectKind === 'arc' ||
+                // M04 (v134): an exact sweep follows a spline exactly when
+                // it keeps the profile parallel.
+                node.data.objectKind === 'spline')) &&
       (findSketch(current, sketchId)?.objectIds.includes(
         entityId as EntityId
       ) ??
@@ -26270,7 +26273,10 @@ export function App() {
             : { twistDeg: request.twistDeg }),
           ...(request.endScale === undefined
             ? {}
-            : { endScale: request.endScale })
+            : { endScale: request.endScale }),
+          ...(request.orientation === undefined
+            ? {}
+            : { orientation: request.orientation })
         });
       case 'rib':
         return commandFactories.ribBody({

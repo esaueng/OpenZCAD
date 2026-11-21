@@ -591,6 +591,8 @@ export type InPlaceRequest =
       twistDeg?: ParamValue;
       /** M04 (v132): see the sweep `FeatureData`; absent scales nothing. */
       endScale?: ParamValue;
+      /** M04 (v134): see the sweep `FeatureData`; absent turns with the path. */
+      orientation?: 'parallel';
     }
   | {
       /** M06 (schema v101): a rib from an open profile, joined to a body. */
@@ -1674,6 +1676,26 @@ const sweep: InPlaceToolSpec = {
   options: [
     ...SWEEP_BUILD_OPTIONS,
     {
+      // M04 (v134): turn with the path, or keep the profile parallel to
+      // itself (exact along splines and through corners).
+      id: 'orientation',
+      when: (state) => !sampledSweep(state),
+      label: 'Orientation',
+      choices: [
+        {
+          value: 'normal',
+          label: 'Normal to path',
+          tip: 'The profile turns with the path'
+        },
+        {
+          value: 'parallel',
+          label: 'Parallel',
+          tip: 'The profile keeps its orientation: along splines and through corners'
+        }
+      ],
+      initial: 'normal'
+    },
+    {
       id: 'mode',
       when: sampledSweep,
       label: 'Mode',
@@ -1759,7 +1781,10 @@ const sweep: InPlaceToolSpec = {
         mode: 'standard',
         construction: 'in-place',
         ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
-        ...(isLiteral(endScale, 1) ? {} : { endScale })
+        ...(isLiteral(endScale, 1) ? {} : { endScale }),
+        ...(options.orientation === 'parallel'
+          ? { orientation: 'parallel' as const }
+          : {})
       };
     }
     const rail = slots.guide[0];
