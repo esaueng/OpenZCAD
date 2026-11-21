@@ -185,6 +185,25 @@ export function SketchReferenceDimensions({
           label: `${object.label} (parametric) · Side ${target.index + 1}`,
           target
         });
+  // The sketch's own datum: fixed in its local frame, never an object.
+  points.unshift({
+    key: JSON.stringify({ kind: 'sketch-origin' }),
+    label: 'Sketch origin'
+  });
+  if (kind === 'angle')
+    entities.unshift(
+      ...(['x', 'y'] as const).map((axis) => {
+        const target: SketchReferenceCurveTarget = {
+          kind: 'sketch-axis',
+          axis
+        };
+        return {
+          key: JSON.stringify(target),
+          label: `Sketch ${axis.toUpperCase()} axis`,
+          target
+        };
+      })
+    );
   const options = kind === 'distance' ? points : entities;
   const a = options.some((o) => o.key === first) ? first : '';
   const b = options.some((o) => o.key === second) ? second : '';

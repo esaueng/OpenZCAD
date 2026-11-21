@@ -577,3 +577,52 @@ describe('S02-D shape centre and legacy shape targets', () => {
     ).toHaveLength(2);
   });
 });
+
+describe('S02-D sketch origin and axis targets', () => {
+  it('measures from the sketch origin and against an axis', () => {
+    const { sketch, objects } = fixture();
+    const onCommand = vi.fn<(command: AnyCommand) => void>();
+    render(
+      <SketchReferenceDimensions
+        sketch={sketch}
+        objects={objects}
+        units="mm"
+        resolve={(value) => (typeof value === 'number' ? value : undefined)}
+        disabled={false}
+        onCommand={onCommand}
+      />
+    );
+    const origin = { kind: 'sketch-origin' };
+    fireEvent.change(screen.getByLabelText('Reference from'), {
+      target: { value: JSON.stringify(origin) }
+    });
+    fireEvent.change(screen.getByLabelText('Reference to'), {
+      target: {
+        value: JSON.stringify({ objectId: objects[2]!.id, point: 'center' })
+      }
+    });
+    expect(screen.getByRole('status').textContent).toBe(
+      `Measured: ${Math.round(Math.hypot(10, 10) * 1000) / 1000} mm`
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add reference' }));
+    expect(onCommand.mock.calls[0]![0].payload).toMatchObject({
+      data: { dimensionKind: 'distance', a: origin }
+    });
+
+    fireEvent.change(screen.getByLabelText('Reference type'), {
+      target: { value: 'angle' }
+    });
+    const axis = { kind: 'sketch-axis', axis: 'y' };
+    fireEvent.change(screen.getByLabelText('Reference from'), {
+      target: { value: JSON.stringify(axis) }
+    });
+    fireEvent.change(screen.getByLabelText('Reference to'), {
+      target: { value: objects[1]!.id }
+    });
+    // "Upright" runs along the Y axis.
+    expect(screen.getByRole('status').textContent).toBe('Measured: 0°');
+    expect(
+      screen.getAllByRole('option', { name: 'Sketch X axis' })
+    ).toHaveLength(2);
+  });
+});

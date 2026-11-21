@@ -9,6 +9,7 @@ export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './sketch-composite-targets';
 export * from './sketch-shape-targets';
+export * from './sketch-datum-targets';
 export * from './sketch-boundary-provenance';
 export * from './sketch-promotions';
 export * from './mass-density';
@@ -37,6 +38,10 @@ import type {
   SketchCompositeCornerTarget,
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
+import type {
+  SketchAxisTarget,
+  SketchOriginTarget
+} from './sketch-datum-targets';
 import type {
   SketchShapeCenterTarget,
   SketchShapeCornerTarget,
@@ -502,7 +507,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // draft on such an extrude and has no back draft, so it must refuse the
 // document. Builds on v125 (#1860); claimed as v122, renumbered when #1860
 // landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 126 as const;
+// v129 adds S02-D datum reference targets: the sketch origin
+// (`sketch-origin`) and its X/Y axes (`sketch-axis`), measured in the
+// sketch-local frame. An older client cannot read them, so it must refuse.
+// Builds on v126 (#1846). It was claimed as v126 and renumbered when F01
+// took that number; v127 and v128 are claimed by the open F01 PRs #1847 and
+// #1851.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 129 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1989,10 +2000,14 @@ export type SketchReferencePointTarget =
   | SketchCompositeCornerTarget
   | SketchCompositeCenterTarget
   | SketchShapeCornerTarget
-  | SketchShapeCenterTarget;
-/** Legacy-shape sides arrive in schema v125 (S02-D). */
+  | SketchShapeCenterTarget
+  | SketchOriginTarget;
+/** Legacy-shape sides arrive in schema v125 (S02-D); datum axes in v129. */
 export type SketchReferenceCurveTarget =
-  EntityId | SketchCompositeSideTarget | SketchShapeSideTarget;
+  | EntityId
+  | SketchCompositeSideTarget
+  | SketchShapeSideTarget
+  | SketchAxisTarget;
 
 export type SketchReferenceDimensionData =
   | {
