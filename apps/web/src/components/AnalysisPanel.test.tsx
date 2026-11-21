@@ -74,23 +74,21 @@ describe('the analysis panel (M09)', () => {
   it('summarises the exact answer with its legend, provenance and limits', () => {
     const { panel } = renderPanel({ kind: 'done', report: boxReport() });
     expect(within(panel).getByRole('status')).toHaveTextContent(
-      '1 face drafted away, 3 faces below the minimum, 1 face crossing bands. Crosses bands: the face changes band and needs splitting at a parting line.'
+      '1 face drafted away, 3 faces below the minimum, 1 face crossing bands.'
     );
     const legend = within(panel).getByRole('list', { name: 'Legend' });
     expect(
       within(legend)
         .getAllByRole('listitem')
         .map((item) => item.textContent)
-    ).toEqual([
-      '≥ 1° toward the pull · 1',
-      'Within ±1° · 3',
-      '≥ 1° away (undercut) · 1',
-      'Not evaluated'
-    ]);
+    ).toEqual(['≥ 1° · 1', '< 1° · 3', 'Undercut · 1', 'Not evaluated']);
     expect(within(panel).getByRole('note')).toHaveTextContent(
-      /^Exact draft from the kernel .* 5 of 6 face ranges exact\.$/
+      /^Crosses bands: needs a split at a parting line\.Exact at sample points.*5 of 6 faces exact\.$/
     );
     expect(panel).toHaveTextContent(/not a parting-line check/);
+    expect(panel).toHaveTextContent(/needs a split at a parting line/);
+    // The provenance and limits wait behind one disclosure.
+    expect(panel.querySelector('details')).not.toHaveAttribute('open');
     expect(
       within(within(panel).getByRole('list', { name: 'Not analysed' }))
         .getAllByRole('listitem')
@@ -103,18 +101,16 @@ describe('the analysis panel (M09)', () => {
 
   it('edits the pull and the minimum, and turns off', () => {
     const { panel, onChange, onOff } = renderPanel({ kind: 'running' });
-    expect(within(panel).getByRole('status')).toHaveTextContent(
-      'Analysing with the exact kernel…'
-    );
-    fireEvent.change(within(panel).getByRole('combobox', { name: 'Pull' }), {
-      target: { value: '-x' }
-    });
+    expect(within(panel).getByRole('status')).toHaveTextContent('Analysing…');
+    const pull = within(panel).getByRole('radiogroup', { name: 'Pull' });
+    expect(within(pull).getByRole('radio', { name: '+Z' })).toBeChecked();
+    fireEvent.click(within(pull).getByRole('radio', { name: '−X' }));
     expect(onChange).toHaveBeenLastCalledWith({
       ...request,
       pull: { x: -1, y: 0, z: 0 }
     });
     const minimum = within(panel).getByRole('spinbutton', {
-      name: 'Minimum draft (°)'
+      name: 'Min draft'
     });
     fireEvent.change(minimum, { target: { value: '3' } });
     expect(onChange).toHaveBeenLastCalledWith({
@@ -131,15 +127,13 @@ describe('the analysis panel (M09)', () => {
 
   it('says why it shows nothing: a failure, or a preview on screen', () => {
     renderPanel({ kind: 'failed', message: 'Kernel busy' });
-    expect(screen.getByRole('status')).toHaveTextContent(
-      'The analysis failed: Kernel busy'
-    );
+    expect(screen.getByRole('status')).toHaveTextContent('Failed: Kernel busy');
   });
 
   it('pauses while a preview stands in for the build', () => {
     renderPanel({ kind: 'done', report: boxReport() }, true);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'Paused while a preview is on screen; the colours return with the built model.'
+      'Paused during preview.'
     );
   });
 });
@@ -197,23 +191,17 @@ describe('the analysis panel for curvature and zebra (M09)', () => {
     expect(within(panel).getByRole('status')).toHaveTextContent(
       'Tightest radius 6 mm (exact) on Plate, face 1. Mean curvature -0.0833 1/mm to 0 1/mm.'
     );
+    const legend = within(panel).getByRole('list', { name: 'Legend' });
     expect(
-      within(within(panel).getByRole('list', { name: 'Legend' }))
-        .getAllByRole('listitem')
-        .map((item) => item.textContent)
-    ).toEqual([
-      'Concave · -0.0833 1/mm',
-      'Flat · 0',
-      'Convex · 0.0833 1/mm',
-      'Not evaluated'
-    ]);
+      ['Concave', 'Flat', 'Convex'].map(
+        (name) => within(legend).getByTitle(name).textContent
+      )
+    ).toEqual(['Concave -0.0833 1/mm', 'Flat 0', 'Convex 0.0833 1/mm']);
     expect(within(panel).getByRole('note')).toHaveTextContent(
-      /2 of 2 face ranges exact\.$/
+      /2 of 2 faces exact\.$/
     );
     expect(panel).toHaveTextContent(/one tight face mutes the rest/);
-    fireEvent.change(within(panel).getByRole('combobox', { name: 'Measure' }), {
-      target: { value: 'gaussian' }
-    });
+    fireEvent.click(within(panel).getByRole('radio', { name: 'Gaussian' }));
     expect(onChange).toHaveBeenLastCalledWith({
       kind: 'curvature',
       measure: 'gaussian'
@@ -233,15 +221,20 @@ describe('the analysis panel for curvature and zebra (M09)', () => {
     );
     const panel = screen.getByRole('region', { name: 'Zebra analysis' });
     expect(within(panel).getByRole('note')).toHaveTextContent(
-      /^Stripes reflected from the kernel’s exact outward normals/
+      /^Exact normals at sample points/
     );
     expect(panel).toHaveTextContent(/read by eye/);
-    const stripes = within(panel).getByRole('spinbutton', { name: 'Stripes' });
+    // The stripes themselves are the key: no legend to read.
+    expect(within(panel).queryByRole('list', { name: 'Legend' })).toBeNull();
+    const stripes = within(panel).getByRole('slider', { name: 'Stripes' });
+    // One status only: the stripe count is not a second live region.
+    expect(within(panel).getAllByRole('status')).toHaveLength(1);
     fireEvent.change(stripes, { target: { value: '20' } });
     expect(onChange).toHaveBeenLastCalledWith({ kind: 'zebra', stripes: 20 });
     onChange.mockClear();
+    // The slider cannot go below the fewest stripes: it holds at two.
     fireEvent.change(stripes, { target: { value: '1' } });
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenLastCalledWith({ kind: 'zebra', stripes: 2 });
   });
 });
 
@@ -285,15 +278,13 @@ describe('the Gaussian curvature legend (M09)', () => {
     );
     const legend = screen.getByRole('list', { name: 'Legend' });
     expect(
-      within(legend)
-        .getAllByRole('listitem')
-        .map((item) => item.textContent)
-    ).toEqual([
-      'Negative (saddle) · -0.04 1/mm²',
-      'Zero (flat or developable) · 0',
-      'Positive (dome or bowl) · 0.04 1/mm²',
-      'Not evaluated'
-    ]);
+      [
+        'Negative (saddle)',
+        'Zero (flat or developable)',
+        'Positive (dome or bowl)'
+      ].map((name) => within(legend).getByTitle(name).textContent)
+    ).toEqual(['Saddle -0.04 1/mm²', 'Flat 0', 'Dome 0.04 1/mm²']);
+    expect(legend).not.toHaveTextContent(/Concave|Convex/);
   });
 });
 
@@ -351,17 +342,12 @@ describe('the analysis panel for thickness (M09)', () => {
       within(within(panel).getByRole('list', { name: 'Legend' }))
         .getAllByRole('listitem')
         .map((item) => item.textContent)
-    ).toEqual([
-      'Under 3 mm · 1',
-      '3 mm to 6 mm · 0',
-      '6 mm or more · 1',
-      'Not measured'
-    ]);
+    ).toEqual(['< 3 mm · 1', '< 6 mm · 0', '≥ 6 mm · 1']);
     expect(within(panel).getByRole('note')).toHaveTextContent(
-      /^Approximate: .* Resolution 0\.004 mm\. 2 of 2 face ranges exact\.$/
+      /^Approximate: .*Resolution 0\.004 mm · 2 of 2 faces exact\.$/
     );
     const minimum = within(panel).getByRole('spinbutton', {
-      name: 'Minimum wall (mm)'
+      name: 'Min wall'
     });
     fireEvent.change(minimum, { target: { value: '0.8' } });
     expect(onChange).toHaveBeenLastCalledWith({

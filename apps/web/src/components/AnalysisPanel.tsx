@@ -1,8 +1,26 @@
-import { useId, type ReactNode } from 'react';
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject
+} from 'react';
+import {
+  Info,
+  Layers2,
+  LoaderCircle,
+  Rows3,
+  Spline,
+  Triangle,
+  X
+} from 'lucide-react';
 import type {
   CurvatureAnalysisRequest,
   CurvatureMeasure,
   DraftAnalysisRequest,
+  SurfaceAnalysisKind,
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest,
   ThicknessAnalysisRequest,
@@ -21,8 +39,7 @@ import {
   CURVATURE_MEASURE_LABELS,
   DRAFT_COLORS,
   DRAFT_VERDICT_LABELS,
-  analysisLimits,
-  analysisProvenance,
+  analysisNotes,
   curvatureScale,
   curvatureUnit,
   describeCurvatureSummary,
@@ -39,6 +56,13 @@ import {
   summarizeThickness
 } from '../lib/analysis/surfaceAnalysisUi';
 
+const KIND_ICONS: Record<SurfaceAnalysisKind, typeof Triangle> = {
+  draft: Triangle,
+  curvature: Spline,
+  zebra: Rows3,
+  thickness: Layers2
+};
+
 const PULL_LABELS: Record<DraftPullId, string> = {
   '+z': '+Z',
   '-z': '−Z',
@@ -46,6 +70,16 @@ const PULL_LABELS: Record<DraftPullId, string> = {
   '-y': '−Y',
   '+x': '+X',
   '-x': '−X'
+};
+
+/** One word under each end of the curvature ramp; the full name is its title. */
+const CURVATURE_SHORT_LABELS: Record<
+  CurvatureMeasure,
+  { negative: string; zero: string; positive: string }
+> = {
+  gaussian: { negative: 'Saddle', zero: 'Flat', positive: 'Dome' },
+  mean: { negative: 'Concave', zero: 'Flat', positive: 'Convex' },
+  maximum: { negative: 'Concave', zero: 'Flat', positive: 'Tightest' }
 };
 
 function pullIdOf(request: DraftAnalysisRequest): DraftPullId {
@@ -56,21 +90,111 @@ function pullIdOf(request: DraftAnalysisRequest): DraftPullId {
   return '+z';
 }
 
-function Swatch({ color }: { color: string }) {
+/** A row of mutually exclusive choices, read as one radio group. */
+function Segmented<T extends string>({
+  label,
+  value,
+  options,
+  onChange
+}: {
+  label: string;
+  value: T;
+  options: readonly { id: T; label: string }[];
+  onChange(id: T): void;
+}) {
   return (
-    <span
-      className="analysis-swatch"
-      style={{ background: color }}
-      aria-hidden="true"
-    />
+    <div className="analysis-segmented" role="radiogroup" aria-label={label}>
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          role="radio"
+          aria-checked={option.id === value}
+          className="analysis-segment"
+          onClick={() => onChange(option.id)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A labelled number with its unit inside the field. */
+function NumberField({
+  id,
+  label,
+  unit,
+  value,
+  min,
+  max,
+  step,
+  accept
+}: {
+  id: string;
+  label: string;
+  unit: string;
+  value: number;
+  min: number;
+  max?: number;
+  step: number | 'any';
+  accept(value: number): void;
+}) {
+  return (
+    <div className="analysis-field">
+      <label htmlFor={id}>{label}</label>
+      <span className="analysis-number">
+        <input
+          id={id}
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(event) => accept(Number(event.target.value))}
+        />
+        <span className="analysis-unit" aria-hidden="true">
+          {unit}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/** One legend entry: its colour, a short name and, once measured, a count. */
+function Chip({
+  color,
+  label,
+  count
+}: {
+  color: string;
+  label: string;
+  count?: number | null;
+}) {
+  return (
+    <li className="analysis-chip">
+      <span
+        className="analysis-swatch"
+        style={{ background: color }}
+        aria-hidden="true"
+      />
+      <span>{label}</span>
+      {count !== undefined && count !== null ? (
+        <span className="analysis-chip-count"> · {count}</span>
+      ) : null}
+    </li>
   );
 }
 
 interface KindView {
+  /** The settings, kept to a row or two of compact controls. */
   fields: ReactNode;
+  /** The colour key, or null when the overlay explains itself. */
   legend: ReactNode;
   /** The one-line result, once there is a report. */
   summary: string;
+  /** A further word on the result, kept under the disclosure. */
+  detail?: string;
   /** Appended to the provenance note, once there is a report. */
   exactness: string;
 }
@@ -81,7 +205,7 @@ function draftView(
   request: DraftAnalysisRequest,
   report: SurfaceAnalysisReport | null,
   onChange: OnChange,
-  ids: { first: string; second: string }
+  id: string
 ): KindView {
   const summary = report
     ? summarizeDraft(report, request.minimumDegrees)
@@ -90,73 +214,62 @@ function draftView(
   return {
     fields: (
       <>
-        <label className="analysis-panel-field" htmlFor={ids.first}>
-          Pull
-          <select
-            id={ids.first}
+        <div className="analysis-field">
+          <span className="analysis-field-label" aria-hidden="true">
+            Pull
+          </span>
+          <Segmented
+            label="Pull"
             value={pullIdOf(request)}
-            onChange={(event) =>
-              onChange({
-                ...request,
-                pull: DRAFT_PULL_DIRECTIONS[event.target.value as DraftPullId]
-              })
+            options={(Object.keys(DRAFT_PULL_DIRECTIONS) as DraftPullId[]).map(
+              (pull) => ({ id: pull, label: PULL_LABELS[pull] })
+            )}
+            onChange={(pull) =>
+              onChange({ ...request, pull: DRAFT_PULL_DIRECTIONS[pull] })
             }
-          >
-            {Object.keys(DRAFT_PULL_DIRECTIONS).map((id) => (
-              <option key={id} value={id}>
-                {PULL_LABELS[id as DraftPullId]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="analysis-panel-field" htmlFor={ids.second}>
-          Minimum draft (°)
-          <input
-            id={ids.second}
-            type="number"
-            min={0}
-            max={89}
-            step={0.5}
-            value={request.minimumDegrees}
-            onChange={(event) => {
-              const value = Number(event.target.value);
-              if (!Number.isFinite(value) || value < 0 || value >= 90) return;
-              onChange({ ...request, minimumDegrees: value });
-            }}
           />
-        </label>
+        </div>
+        <NumberField
+          id={id}
+          label="Min draft"
+          unit="°"
+          value={request.minimumDegrees}
+          min={0}
+          max={89}
+          step={0.5}
+          accept={(value) => {
+            if (!Number.isFinite(value) || value < 0 || value >= 90) return;
+            onChange({ ...request, minimumDegrees: value });
+          }}
+        />
       </>
     ),
     legend: (
       <>
-        <li>
-          <Swatch color={DRAFT_COLORS.positive} />≥ {minimum} toward the pull
-          {summary ? ` · ${summary.faces.positive}` : ''}
-        </li>
-        <li>
-          <Swatch color={DRAFT_COLORS.insufficient} />
-          Within ±{minimum}
-          {summary ? ` · ${summary.faces.insufficient}` : ''}
-        </li>
-        <li>
-          <Swatch color={DRAFT_COLORS.negative} />≥ {minimum} away (undercut)
-          {summary ? ` · ${summary.faces.negative}` : ''}
-        </li>
-        <li>
-          <Swatch color={DRAFT_COLORS.unevaluated} />
-          Not evaluated
-        </li>
+        <Chip
+          color={DRAFT_COLORS.positive}
+          label={`≥ ${minimum}`}
+          count={summary?.faces.positive}
+        />
+        <Chip
+          color={DRAFT_COLORS.insufficient}
+          label={`< ${minimum}`}
+          count={summary?.faces.insufficient}
+        />
+        <Chip
+          color={DRAFT_COLORS.negative}
+          label="Undercut"
+          count={summary?.faces.negative}
+        />
       </>
     ),
-    summary: summary
-      ? `${describeDraftSummary(summary)}${
-          summary.faces.mixed > 0
-            ? ` ${DRAFT_VERDICT_LABELS.mixed}: the face changes band and needs splitting at a parting line.`
-            : ''
-        }`
-      : '',
+    summary: summary ? describeDraftSummary(summary) : '',
+    detail:
+      summary && summary.faces.mixed > 0
+        ? `${DRAFT_VERDICT_LABELS.mixed}: needs a split at a parting line.`
+        : undefined,
     exactness: summary
-      ? ` ${summary.exactFaces} of ${summary.totalFaces} face ranges exact.`
+      ? `${summary.exactFaces} of ${summary.totalFaces} faces exact.`
       : ''
   };
 }
@@ -165,7 +278,6 @@ function curvatureView(
   request: CurvatureAnalysisRequest,
   report: SurfaceAnalysisReport | null,
   onChange: OnChange,
-  ids: { first: string },
   lengthUnit: string,
   nameOf: (bodyId: string) => string
 ): KindView {
@@ -175,51 +287,53 @@ function curvatureView(
   const signed = request.measure !== 'maximum';
   const end = (value: number) => `${formatCurvature(value)} ${unit}`;
   const labels = CURVATURE_LEGEND_LABELS[request.measure];
+  const ramp = signed
+    ? `linear-gradient(90deg, ${CURVATURE_COLORS.concave}, ${CURVATURE_COLORS.flat}, ${CURVATURE_COLORS.convex})`
+    : `linear-gradient(90deg, ${CURVATURE_COLORS.flat}, ${CURVATURE_COLORS.tight}, ${CURVATURE_COLORS.convex})`;
+  const short = CURVATURE_SHORT_LABELS[request.measure];
+  const ends = [
+    ...(signed
+      ? [{ short: short.negative, full: labels.negative, value: end(-scale) }]
+      : []),
+    { short: short.zero, full: labels.zero, value: '0' },
+    { short: short.positive, full: labels.positive, value: end(scale) }
+  ];
   return {
     fields: (
-      <label className="analysis-panel-field" htmlFor={ids.first}>
-        Measure
-        <select
-          id={ids.first}
-          value={request.measure}
-          onChange={(event) =>
-            onChange({
-              ...request,
-              measure: event.target.value as CurvatureMeasure
-            })
-          }
-        >
-          {Object.entries(CURVATURE_MEASURE_LABELS).map(([id, label]) => (
-            <option key={id} value={id}>
-              {label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <Segmented
+        label="Measure"
+        value={request.measure}
+        options={(
+          Object.entries(CURVATURE_MEASURE_LABELS) as [
+            CurvatureMeasure,
+            string
+          ][]
+        ).map(([id, label]) => ({ id, label }))}
+        onChange={(measure) => onChange({ ...request, measure })}
+      />
     ),
     legend: (
-      <>
-        {signed ? (
-          <li>
-            <Swatch color={CURVATURE_COLORS.concave} />
-            {labels.negative}
-            {report ? ` · ${end(-scale)}` : ''}
-          </li>
-        ) : null}
-        <li>
-          <Swatch color={CURVATURE_COLORS.flat} />
-          {labels.zero} · 0
-        </li>
-        <li>
-          <Swatch color={CURVATURE_COLORS.convex} />
-          {labels.positive}
-          {report ? ` · ${end(scale)}` : ''}
-        </li>
-        <li>
-          <Swatch color={CURVATURE_COLORS.unevaluated} />
-          Not evaluated
-        </li>
-      </>
+      <li className="analysis-ramp">
+        <span
+          className="analysis-ramp-bar"
+          style={{ background: ramp }}
+          aria-hidden="true"
+        />
+        <span className="analysis-ramp-ends">
+          {ends.map((item) => (
+            <span
+              key={item.short}
+              className="analysis-ramp-end"
+              title={item.full}
+            >
+              <span className="analysis-ramp-name">{item.short}</span>
+              {report ? (
+                <span className="analysis-ramp-value"> {item.value}</span>
+              ) : null}
+            </span>
+          ))}
+        </span>
+      </li>
     ),
     summary: summary
       ? `${describeCurvatureSummary(summary, lengthUnit, nameOf)}${
@@ -229,7 +343,7 @@ function curvatureView(
         }`
       : '',
     exactness: summary
-      ? ` ${summary.exactFaces} of ${summary.totalFaces} face ranges exact.`
+      ? `${summary.exactFaces} of ${summary.totalFaces} faces exact.`
       : ''
   };
 }
@@ -238,15 +352,16 @@ function zebraView(
   request: ZebraAnalysisRequest,
   report: SurfaceAnalysisReport | null,
   onChange: OnChange,
-  ids: { first: string }
+  id: string
 ): KindView {
   return {
     fields: (
-      <label className="analysis-panel-field" htmlFor={ids.first}>
-        Stripes
+      <div className="analysis-field analysis-field-wide">
+        <label htmlFor={id}>Stripes</label>
         <input
-          id={ids.first}
-          type="number"
+          id={id}
+          className="analysis-slider"
+          type="range"
           min={ZEBRA_STRIPE_LIMITS.min}
           max={ZEBRA_STRIPE_LIMITS.max}
           step={1}
@@ -262,23 +377,13 @@ function zebraView(
             onChange({ ...request, stripes: value });
           }}
         />
-      </label>
+        {/* The slider states its own value; this is its echo on screen. */}
+        <span className="analysis-slider-value" aria-hidden="true">
+          {request.stripes}
+        </span>
+      </div>
     ),
-    legend: (
-      <>
-        <li>
-          <span
-            className="analysis-swatch analysis-swatch-zebra"
-            aria-hidden="true"
-          />
-          Reflected stripes; they move as the view turns
-        </li>
-        <li>
-          <Swatch color={CURVATURE_COLORS.unevaluated} />
-          Not evaluated
-        </li>
-      </>
-    ),
+    legend: null,
     summary: report ? describeZebraSummary(report) : '',
     exactness: ''
   };
@@ -288,7 +393,7 @@ function thicknessView(
   request: ThicknessAnalysisRequest,
   report: SurfaceAnalysisReport | null,
   onChange: OnChange,
-  ids: { first: string },
+  id: string,
   lengthUnit: string,
   nameOf: (bodyId: string) => string
 ): KindView {
@@ -297,43 +402,36 @@ function thicknessView(
   const twice = formatLength(request.minimum * 2, lengthUnit);
   return {
     fields: (
-      <label className="analysis-panel-field" htmlFor={ids.first}>
-        Minimum wall ({lengthUnit})
-        <input
-          id={ids.first}
-          type="number"
-          min={0}
-          step="any"
-          value={request.minimum}
-          onChange={(event) => {
-            const value = Number(event.target.value);
-            if (!Number.isFinite(value) || value <= 0) return;
-            onChange({ ...request, minimum: value });
-          }}
-        />
-      </label>
+      <NumberField
+        id={id}
+        label="Min wall"
+        unit={lengthUnit}
+        value={request.minimum}
+        min={0}
+        step="any"
+        accept={(value) => {
+          if (!Number.isFinite(value) || value <= 0) return;
+          onChange({ ...request, minimum: value });
+        }}
+      />
     ),
     legend: (
       <>
-        <li>
-          <Swatch color={THICKNESS_COLORS.thin} />
-          Under {minimum}
-          {summary ? ` · ${summary.faces.thin}` : ''}
-        </li>
-        <li>
-          <Swatch color={THICKNESS_COLORS.marginal} />
-          {minimum} to {twice}
-          {summary ? ` · ${summary.faces.marginal}` : ''}
-        </li>
-        <li>
-          <Swatch color={THICKNESS_COLORS.ample} />
-          {twice} or more
-          {summary ? ` · ${summary.faces.ample}` : ''}
-        </li>
-        <li>
-          <Swatch color={THICKNESS_COLORS.unevaluated} />
-          Not measured
-        </li>
+        <Chip
+          color={THICKNESS_COLORS.thin}
+          label={`< ${minimum}`}
+          count={summary?.faces.thin}
+        />
+        <Chip
+          color={THICKNESS_COLORS.marginal}
+          label={`< ${twice}`}
+          count={summary?.faces.marginal}
+        />
+        <Chip
+          color={THICKNESS_COLORS.ample}
+          label={`≥ ${twice}`}
+          count={summary?.faces.ample}
+        />
       </>
     ),
     summary: summary
@@ -342,17 +440,101 @@ function thicknessView(
     exactness: summary
       ? `${
           summary.resolution !== null
-            ? ` Resolution ${formatLength(summary.resolution, lengthUnit)}.`
+            ? `Resolution ${formatLength(summary.resolution, lengthUnit)} · `
             : ''
-        } ${summary.exactFaces} of ${summary.totalFaces} face ranges exact.`
+        }${summary.exactFaces} of ${summary.totalFaces} faces exact.`
       : ''
   };
 }
 
+const EDGE = 8;
+const GAP = 8;
+
 /**
- * M09: the analysis that is on, its settings, its legend, and what its
- * colours do and do not prove. Shown over the viewport while an analysis
- * from the Display menu is on; Turn off ends it.
+ * Stands the panel beside the Display button that switched it on: left of
+ * a rail on the right edge, or above a bar along the foot. The button moves
+ * with the layout (Build's rail, View's bar, a docked inspector), so the
+ * panel follows it rather than a fixed corner. Without a button on screen
+ * the stylesheet's own placement stands.
+ */
+function useBesideDisplayButton(
+  panelRef: RefObject<HTMLElement | null>
+): CSSProperties | undefined {
+  const [style, setStyle] = useState<CSSProperties | undefined>(undefined);
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const stage = panel?.offsetParent;
+    if (!panel || !(stage instanceof HTMLElement)) return;
+    const place = () => {
+      const trigger = Array.from(
+        stage.querySelectorAll<HTMLElement>('[data-display-mode-trigger]')
+      ).find((element) => element.getClientRects().length > 0);
+      if (!trigger) {
+        setStyle(undefined);
+        return;
+      }
+      const host =
+        trigger.closest<HTMLElement>('.viewer-rail, .view-mode-bar') ?? trigger;
+      const s = stage.getBoundingClientRect();
+      const h = host.getBoundingClientRect();
+      const t = trigger.getBoundingClientRect();
+      const width = panel.offsetWidth;
+      const height = panel.offsetHeight;
+      const clamp = (value: number, low: number, high: number) =>
+        Math.max(low, Math.min(value, Math.max(low, high)));
+      const vertical = h.height > h.width;
+      // A vertical rail with no room beside it (a phone): the stylesheet's
+      // corner placement.
+      if (vertical && h.left - s.left < width + GAP + EDGE) {
+        setStyle(undefined);
+        return;
+      }
+      // A vertical rail: beside it, the panel's top level with the button.
+      if (vertical) {
+        setStyle({
+          left: 'auto',
+          right: `${s.right - h.left + GAP}px`,
+          top: `${clamp(t.top - s.top - 6, EDGE, s.height - height - EDGE)}px`,
+          bottom: 'auto',
+          transform: 'none'
+        });
+        return;
+      }
+      // A horizontal bar: above it, centred on the button.
+      const centre = t.left + t.width / 2 - s.left;
+      const above = h.top - s.top >= height + GAP + EDGE;
+      setStyle({
+        left: `${clamp(centre - width / 2, EDGE, s.width - width - EDGE)}px`,
+        right: 'auto',
+        top: above ? 'auto' : `${h.bottom - s.top + GAP}px`,
+        bottom: above ? `${s.bottom - h.top + GAP}px` : 'auto',
+        transform: 'none'
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    if (typeof ResizeObserver === 'undefined') {
+      return () => window.removeEventListener('resize', place);
+    }
+    const observer = new ResizeObserver(place);
+    observer.observe(stage);
+    observer.observe(panel);
+    const host = stage.querySelector('[data-display-mode-trigger]');
+    const rail = host?.closest('.viewer-rail, .view-mode-bar');
+    if (rail) observer.observe(rail);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', place);
+    };
+  }, [panelRef]);
+  return style;
+}
+
+/**
+ * M09: the analysis that is on, its few settings, a compact colour key and
+ * the one-line result. What the colours do and do not prove sits one click
+ * away under the info disclosure. Stands beside the Display button that
+ * switched it on; the close button ends it.
  */
 export function AnalysisPanel({
   request,
@@ -373,31 +555,18 @@ export function AnalysisPanel({
   onChange: OnChange;
   onOff(): void;
 }) {
-  const first = useId();
-  const second = useId();
+  const id = useId();
+  const panelRef = useRef<HTMLElement | null>(null);
+  const placement = useBesideDisplayButton(panelRef);
   const report = run.kind === 'done' ? run.report : null;
   const view =
     request.kind === 'draft'
-      ? draftView(request, report, onChange, { first, second })
+      ? draftView(request, report, onChange, id)
       : request.kind === 'curvature'
-        ? curvatureView(
-            request,
-            report,
-            onChange,
-            { first },
-            lengthUnit,
-            nameOf
-          )
+        ? curvatureView(request, report, onChange, lengthUnit, nameOf)
         : request.kind === 'zebra'
-          ? zebraView(request, report, onChange, { first })
-          : thicknessView(
-              request,
-              report,
-              onChange,
-              { first },
-              lengthUnit,
-              nameOf
-            );
+          ? zebraView(request, report, onChange, id)
+          : thicknessView(request, report, onChange, id, lengthUnit, nameOf);
   const unsupported = report
     ? [
         ...report.missing.map(
@@ -406,45 +575,88 @@ export function AnalysisPanel({
         ...describeUnsupported(report.unsupported, nameOf)
       ]
     : [];
+  const Icon = KIND_ICONS[request.kind];
+  const running = !previewing && run.kind === 'running';
   return (
     <section
+      ref={panelRef}
       className="analysis-panel"
       role="region"
       aria-label={`${ANALYSIS_LABELS[request.kind]} analysis`}
+      style={placement}
     >
       <div className="analysis-panel-head">
+        <Icon size={14} className="analysis-panel-icon" aria-hidden="true" />
         <h2 className="analysis-panel-title">
-          {ANALYSIS_LABELS[request.kind]} analysis
+          {ANALYSIS_LABELS[request.kind]}
         </h2>
-        <button type="button" className="analysis-panel-off" onClick={onOff}>
-          Turn off
+        <button
+          type="button"
+          className="analysis-panel-off"
+          aria-label="Turn off"
+          title="Turn off"
+          onClick={onOff}
+        >
+          <X size={14} aria-hidden="true" />
         </button>
       </div>
       <div className="analysis-panel-fields">{view.fields}</div>
-      <ul className="analysis-legend" aria-label="Legend">
-        {view.legend}
-      </ul>
-      <p className="analysis-panel-status" role="status">
-        {previewing
-          ? 'Paused while a preview is on screen; the colours return with the built model.'
-          : run.kind === 'running'
-            ? 'Analysing with the exact kernel…'
-            : run.kind === 'failed'
-              ? `The analysis failed: ${run.message}`
-              : view.summary}
-      </p>
-      <p className="analysis-panel-note" role="note">
-        {analysisProvenance(request.kind)}
-        {view.exactness}
-      </p>
-      <p className="analysis-panel-note">{analysisLimits(request.kind)}</p>
-      {unsupported.length > 0 ? (
-        <ul className="analysis-unsupported" aria-label="Not analysed">
-          {unsupported.map((line, index) => (
-            <li key={index}>{line}</li>
-          ))}
+      {view.legend || unsupported.length > 0 ? (
+        <ul className="analysis-legend" aria-label="Legend">
+          {view.legend}
+          {unsupported.length > 0 ? (
+            <Chip
+              color={CURVATURE_COLORS.unevaluated}
+              label={
+                request.kind === 'thickness' ? 'Not measured' : 'Not evaluated'
+              }
+            />
+          ) : null}
         </ul>
       ) : null}
+      <p
+        className={`analysis-panel-status${
+          run.kind === 'failed' && !previewing ? ' is-failed' : ''
+        }`}
+        role="status"
+      >
+        {running ? (
+          <LoaderCircle
+            size={12}
+            className="analysis-spinner"
+            aria-hidden="true"
+          />
+        ) : null}
+        {previewing
+          ? 'Paused during preview.'
+          : running
+            ? 'Analysing…'
+            : run.kind === 'failed'
+              ? `Failed: ${run.message}`
+              : view.summary}
+      </p>
+      {/* Closed by default and again for each analysis: the card shows
+          the result, the notes wait behind one click. */}
+      <details className="analysis-about" key={request.kind}>
+        <summary>
+          <Info size={12} aria-hidden="true" />
+          Details
+        </summary>
+        <ul className="analysis-notes" role="note">
+          {view.detail ? <li>{view.detail}</li> : null}
+          {analysisNotes(request.kind).map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+          {view.exactness ? <li>{view.exactness}</li> : null}
+        </ul>
+        {unsupported.length > 0 ? (
+          <ul className="analysis-unsupported" aria-label="Not analysed">
+            {unsupported.map((line, index) => (
+              <li key={index}>{line}</li>
+            ))}
+          </ul>
+        ) : null}
+      </details>
     </section>
   );
 }
