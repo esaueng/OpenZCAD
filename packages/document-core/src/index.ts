@@ -207,6 +207,7 @@ import {
   type ExtrudeOperation,
   type ThroughAllSide,
   type ExtrudeToFaceTarget,
+  type ExtrudeToSurfaceTarget,
   type FeatureWarning,
   type FeatureId,
   type FeatureKind,
@@ -242,6 +243,7 @@ import {
   type SketchPlaneRef,
   type SketchProfileReference,
   type SketchSectionReference,
+  type LoftConnectionVertex,
   type SketchPathReference,
   type UnitSystem,
   type UserId,
@@ -465,6 +467,8 @@ export interface ExtrudeInput {
   throughAllSide?: ThroughAllSide;
   /** F01 (v29): required with `to-face`; see the stored feature's `toFace`. */
   toFace?: ExtrudeToFaceTarget;
+  /** F01 (v131): with `to-face`, a curved face instead of `toFace`. */
+  toSurface?: ExtrudeToSurfaceTarget;
   /**
    * F01 (v113): with `to-face` only; positive stops short of the face,
    * negative passes it. Absent or zero ends on the face.
@@ -518,6 +522,10 @@ export interface LoftInput {
   mode: 'ruled' | 'smooth';
   /** Apex point closing the loft after its last section; omitted by default. */
   endPoint?: ParametricVector3;
+  /** M04 (v133): see the loft `FeatureData`; omitted keeps section starts. */
+  connections?: LoftConnectionVertex[];
+  /** M04 (v133): see the loft `FeatureData`; at most one straight guide. */
+  guides?: SketchPathReference[];
   ids?: BodyFeatureIds;
 }
 
@@ -537,6 +545,17 @@ export interface SweepInput {
   guide?: SketchPathReference;
   /** See the sweep `FeatureData`; omitted is the legacy sampled sweep. */
   construction?: 'in-place';
+  /** M04 (v132): see the sweep `FeatureData`; omitted or zero turns nothing. */
+  twistDeg?: ParamValue;
+  /** M04 (v132): see the sweep `FeatureData`; omitted or one scales nothing. */
+  endScale?: ParamValue;
+  /** M04 (v134): see the sweep `FeatureData`; omitted turns with the path. */
+  orientation?: 'parallel';
+  /** M04 (v135): see the sweep `FeatureData`; omitted mitres the corners. */
+  cornerRadius?: ParamValue;
+  /** M04 (v136): see the sweep `FeatureData`; omitted starts from an end. */
+  profilePosition?:
+    'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
   ids?: BodyFeatureIds;
 }
 
@@ -2616,6 +2635,32 @@ function validateToFaceTarget(target: unknown): void {
   }
 }
 
+/**
+ * F01 (v131): a curved to-face target names its body and a lineage face
+ * reference; the build re-finds the face and checks its kind there.
+ */
+function validateToSurfaceTarget(target: unknown): void {
+  const face = target as Partial<ExtrudeToSurfaceTarget> | undefined;
+  const finite = (value: unknown) =>
+    !!value &&
+    typeof value === 'object' &&
+    ['x', 'y', 'z'].every((axis) =>
+      Number.isFinite((value as Record<string, unknown>)[axis])
+    );
+  if (
+    !face ||
+    face.type !== 'surface' ||
+    typeof face.bodyId !== 'string' ||
+    !face.bodyId ||
+    face.faceReference?.kind !== 'face' ||
+    !finite(face.sourceCentroid)
+  ) {
+    throw new Error(
+      'An extrude to a curved face needs a face with a qualified lineage reference; pick an exact cylindrical face.'
+    );
+  }
+}
+
 /** A stored draft literal is finite and inside a right angle. */
 function validateDraftValue(angle: unknown, label: string): void {
   if (angle === undefined) return;
@@ -2656,7 +2701,7 @@ function validateExtrudeDraft(
   if (!front && !back) return;
   if (data.endCondition === 'through-all') {
     throw new Error(
-      'A through-all cut has no draft yet; use a distance or a face.'
+      'A through-all extrude has no draft yet; use a distance or a face.'
     );
   }
   // A back side is symmetric, or a back distance that is positive (or an
@@ -2721,6 +2766,7 @@ export function validateExtrudeExtent(
     endCondition?: unknown;
     throughAllSide?: unknown;
     toFace?: unknown;
+    toSurface?: unknown;
     toFaceOffset?: unknown;
     startOffset?: unknown;
     draftAngleDeg?: unknown;
@@ -2750,7 +2796,10 @@ export function validateExtrudeExtent(
   // Only an absent field is blind: a stored `null` is malformed, not legacy.
   const condition =
     data.endCondition === undefined ? 'blind' : data.endCondition;
-  if (condition !== 'to-face' && data.toFace !== undefined) {
+  if (
+    condition !== 'to-face' &&
+    (data.toFace !== undefined || data.toSurface !== undefined)
+  ) {
     throw new Error('Only an extrude to a face names a target face.');
   }
   if (condition !== 'to-face' && data.toFaceOffset !== undefined) {
@@ -2759,7 +2808,7 @@ export function validateExtrudeExtent(
   validateExtrudeLengthValue(data.startOffset, 'Start offset');
   if (condition === 'through-all' && !resolvedZero(resolve)(data.startOffset)) {
     throw new Error(
-      'A through-all cut runs through the whole target, so it has no start offset.'
+      'A through-all extrude runs through the whole target, so it has no start offset.'
     );
   }
   if (condition === 'blind') {
@@ -2772,11 +2821,42 @@ export function validateExtrudeExtent(
     if (data.throughAllSide !== undefined) {
       throw new Error('An extrude to a face has no through-all side.');
     }
-    validateToFaceTarget(data.toFace);
+    if (data.toSurface !== undefined) {
+      // F01 (v131): a curved face instead of a planar one, never both.
+      if (data.toFace !== undefined) {
+        throw new Error(
+          'An extrude to a face names one face: a planar face or a curved one, not both.'
+        );
+      }
+      validateToSurfaceTarget(data.toSurface);
+    } else {
+      validateToFaceTarget(data.toFace);
+    }
     validateToFaceOffsetValue(data.toFaceOffset);
     if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
         'An extrude to a face runs one way, from the sketch plane to the face; it is not symmetric or two-sided.'
+      );
+    }
+    return;
+  }
+  if (condition === 'to-next') {
+    if (data.throughAllSide !== undefined) {
+      throw new Error(
+        'An extrude up to the next face has no through-all side.'
+      );
+    }
+    if (data.operation !== 'add' && data.operation !== 'cut') {
+      throw new Error('Up to next is available for an add or a cut only.');
+    }
+    if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
+      throw new Error(
+        'An extrude up to the next face needs one explicit target body.'
+      );
+    }
+    if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
+      throw new Error(
+        'An extrude up to the next face runs one way, from its start to the next face; it is not symmetric or two-sided.'
       );
     }
     return;
@@ -2786,23 +2866,26 @@ export function validateExtrudeExtent(
       `Unknown extrude end condition ${JSON.stringify(condition)}.`
     );
   }
-  if (data.operation !== 'cut') {
-    throw new Error('Through all is available for a cut extrusion only.');
+  // F01: an add through all fills the target's whole span along the
+  // sketch normal and joins it; new-body and intersect have no target to
+  // span (or would only keep what is already there).
+  if (data.operation !== 'cut' && data.operation !== 'add') {
+    throw new Error('Through all is available for a cut or an add only.');
   }
   if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
-    throw new Error('A through-all cut needs one explicit target body.');
+    throw new Error('A through-all extrude needs one explicit target body.');
   }
   if (
     typeof data.throughAllSide !== 'string' ||
     !['forward', 'backward', 'both'].includes(data.throughAllSide)
   ) {
     throw new Error(
-      'A through-all cut needs a side: forward, backward or both.'
+      'A through-all extrude needs a side: forward, backward or both.'
     );
   }
   if (data.symmetric === true) {
     throw new Error(
-      'A through-all cut is not symmetric; choose the side "both" instead.'
+      'A through-all extrude is not symmetric; choose the side "both" instead.'
     );
   }
   if (
@@ -2811,7 +2894,7 @@ export function validateExtrudeExtent(
     data.backDistance !== '0'
   ) {
     throw new Error(
-      'A through-all cut has no back distance; choose the side "both" instead.'
+      'A through-all extrude has no back distance; choose the side "both" instead.'
     );
   }
 }
@@ -2984,10 +3067,15 @@ export function extrudeSketch(
             throughAllSide: input.throughAllSide!
           }
         : {}),
+      ...(input.endCondition === 'to-next'
+        ? { endCondition: 'to-next' as const }
+        : {}),
       ...(input.endCondition === 'to-face'
         ? {
             endCondition: 'to-face' as const,
-            toFace: deepClone(input.toFace!),
+            ...(input.toSurface
+              ? { toSurface: deepClone(input.toSurface) }
+              : { toFace: deepClone(input.toFace!) }),
             // A literal zero ends on the face, the absent default.
             ...(isZeroParam(input.toFaceOffset)
               ? {}
@@ -3081,11 +3169,75 @@ export function revolveSketch(
   return { document: next, bodyId };
 }
 
+/**
+ * M04 (v133): a loft's connections name one vertex per section, and its
+ * guides are at most one, on a ruled loft; neither goes with an apex point,
+ * and the two are not given together (a guide fixes the connections).
+ */
+export function validateLoftOptions(data: {
+  sections?: readonly unknown[];
+  mode?: unknown;
+  endPoint?: unknown;
+  connections?: unknown;
+  guides?: unknown;
+}): void {
+  const { connections, guides } = data;
+  if (connections === undefined && guides === undefined) return;
+  if (data.endPoint !== undefined) {
+    throw new Error(
+      'A loft with an apex point takes no connections or guides; clear one of them.'
+    );
+  }
+  if (connections !== undefined && guides !== undefined) {
+    throw new Error(
+      'A loft guide fixes its connections; give the guide or the connections, not both.'
+    );
+  }
+  if (connections !== undefined) {
+    if (
+      !Array.isArray(connections) ||
+      connections.length !== (data.sections?.length ?? -1)
+    ) {
+      throw new Error('Loft connections name one vertex for every section.');
+    }
+    for (const vertex of connections as unknown[]) {
+      const v = vertex as Record<string, unknown> | null;
+      const curveEnd =
+        v?.kind === 'curve-end' &&
+        typeof v.entityId === 'string' &&
+        (v.end === 'start' || v.end === 'end');
+      const corner =
+        v?.kind === 'shape-corner' &&
+        typeof v.objectId === 'string' &&
+        Number.isInteger(v.index) &&
+        Number.isInteger(v.count);
+      if (!curveEnd && !corner) {
+        throw new Error(
+          'A loft connection names a curve end or a shape corner.'
+        );
+      }
+    }
+  }
+  if (guides !== undefined) {
+    if (!Array.isArray(guides) || guides.length !== 1) {
+      throw new Error(
+        'A loft takes one guide curve: one straight guide fixes its connections.'
+      );
+    }
+    if (data.mode !== 'ruled') {
+      throw new Error(
+        'A loft guide is built on a ruled loft only: a smooth loft through a guide has no exact construction yet. Switch the loft to Ruled, or clear the guide.'
+      );
+    }
+  }
+}
+
 export function loftSections(
   document: ProjectDocument,
   input: LoftInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   assertFeatureProfileProvenance(input, document);
+  validateLoftOptions(input);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3098,11 +3250,150 @@ export function loftSections(
       // loft stays byte-identical to one authored before apex points existed.
       ...(input.endPoint === undefined
         ? {}
-        : { endPoint: deepClone(input.endPoint) })
+        : { endPoint: deepClone(input.endPoint) }),
+      ...(input.connections === undefined
+        ? {}
+        : { connections: deepClone(input.connections) }),
+      ...(input.guides === undefined ? {} : { guides: deepClone(input.guides) })
     },
     suppliedIds(input.ids),
     input.bodyName
   );
+}
+
+/** A stored literal 1, or absent: the identity scale. */
+function isUnitParam(value: unknown): boolean {
+  return value === undefined || value === 1 || value === '1';
+}
+
+/**
+ * M04 (v132): a sweep's twist and end scale are literals that are finite
+ * (and positive, for the scale) or non-empty expressions, which the build
+ * resolves and checks. Either needs the exact in-place construction: the
+ * sampled sweep has no twist or scale of its own.
+ */
+export function validateSweepOptions(data: {
+  construction?: unknown;
+  twistDeg?: unknown;
+  endScale?: unknown;
+  guide?: unknown;
+  orientation?: unknown;
+  cornerRadius?: unknown;
+  profilePosition?: unknown;
+}): void {
+  const position = data.profilePosition;
+  if (position !== undefined) {
+    if (
+      !['auto', 'intersection', 'closest-point', 'closest-endpoint'].includes(
+        position as string
+      )
+    ) {
+      throw new Error('Unknown sweep profile position.');
+    }
+    if (data.construction !== 'in-place') {
+      throw new Error(
+        'A sweep profile position needs the exact sweep; build it as Exact.'
+      );
+    }
+    const twisted = !isZeroParam(data.twistDeg);
+    const scaled = !isUnitParam(data.endScale);
+    if (
+      data.orientation !== undefined ||
+      data.guide !== undefined ||
+      twisted ||
+      scaled
+    ) {
+      throw new Error(
+        'A sweep profile position applies to a sweep that turns with its path, with no rail, twist or scale.'
+      );
+    }
+  }
+  const radius = data.cornerRadius;
+  if (radius !== undefined) {
+    if (typeof radius === 'number') {
+      if (!Number.isFinite(radius) || radius <= 0) {
+        throw new Error(
+          'A round sweep corner needs a radius greater than zero.'
+        );
+      }
+    } else if (typeof radius !== 'string' || !radius.trim()) {
+      throw new Error(
+        'A sweep corner radius must be a number or an expression.'
+      );
+    }
+    if (data.construction !== 'in-place') {
+      throw new Error(
+        'Round sweep corners need the exact sweep; build it as Exact.'
+      );
+    }
+    const twisted = !isZeroParam(data.twistDeg);
+    const scaled = !isUnitParam(data.endScale);
+    if (
+      data.orientation !== undefined ||
+      data.guide !== undefined ||
+      twisted ||
+      scaled
+    ) {
+      throw new Error(
+        'Round sweep corners apply to a sweep that turns with its path, with no rail, twist or scale.'
+      );
+    }
+  }
+  if (data.orientation !== undefined) {
+    if (data.orientation !== 'parallel') {
+      throw new Error('Sweep orientation must be parallel or absent.');
+    }
+    if (data.construction !== 'in-place') {
+      throw new Error(
+        'Keeping the profile parallel needs the exact sweep; build it as Exact.'
+      );
+    }
+    if (data.guide !== undefined) {
+      throw new Error(
+        'A sweep that keeps the profile parallel takes no guide rail; clear the rail or the orientation.'
+      );
+    }
+  }
+  const { twistDeg, endScale } = data;
+  if (twistDeg !== undefined) {
+    if (typeof twistDeg === 'number') {
+      if (!Number.isFinite(twistDeg)) {
+        throw new Error('Sweep twist must be a finite angle.');
+      }
+    } else if (typeof twistDeg !== 'string' || !twistDeg.trim()) {
+      throw new Error('Sweep twist must be a number or an expression.');
+    }
+  }
+  if (endScale !== undefined) {
+    if (typeof endScale === 'number') {
+      if (!Number.isFinite(endScale) || endScale <= 0) {
+        throw new Error('Sweep end scale must be greater than zero.');
+      }
+      // The kernel builds end scales from 1/1000 to 1000.
+      if (endScale < 0.001 || endScale > 1000) {
+        throw new Error('Sweep end scale must be between 0.001 and 1000.');
+      }
+    } else if (typeof endScale !== 'string' || !endScale.trim()) {
+      throw new Error('Sweep end scale must be a number or an expression.');
+    }
+  }
+  const twisted = !isZeroParam(twistDeg);
+  const scaled = !isUnitParam(endScale);
+  if ((twisted || scaled) && data.orientation !== undefined) {
+    throw new Error(
+      'A sweep that keeps the profile parallel neither turns nor scales it; clear the twist and end scale, or the orientation.'
+    );
+  }
+  if ((twisted || scaled) && data.guide !== undefined) {
+    throw new Error(
+      'A guide rail sets the sweep’s end scale itself; clear the twist and end scale, or the rail.'
+    );
+  }
+  if ((twisted || scaled) && data.construction !== 'in-place') {
+    throw new Error(
+      'Twist and scale along the path need the exact sweep; build it as Exact.'
+    );
+  }
 }
 
 export function sweepProfile(
@@ -3110,6 +3401,7 @@ export function sweepProfile(
   input: SweepInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   assertFeatureProfileProvenance(input, document);
+  validateSweepOptions(input);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3126,7 +3418,20 @@ export function sweepProfile(
       // authored before the exact in-place construction existed was built as.
       ...(input.construction === undefined
         ? {}
-        : { construction: input.construction })
+        : { construction: input.construction }),
+      // M04 (v132): a literal zero twist or unit scale is the absent
+      // default, so it is never written.
+      ...(isZeroParam(input.twistDeg) ? {} : { twistDeg: input.twistDeg! }),
+      ...(isUnitParam(input.endScale) ? {} : { endScale: input.endScale! }),
+      ...(input.orientation === undefined
+        ? {}
+        : { orientation: input.orientation }),
+      ...(input.cornerRadius === undefined
+        ? {}
+        : { cornerRadius: input.cornerRadius }),
+      ...(input.profilePosition === undefined
+        ? {}
+        : { profilePosition: input.profilePosition })
     },
     suppliedIds(input.ids),
     input.bodyName
@@ -5842,6 +6147,34 @@ export function resolveParamValue(
   }
 }
 
+/**
+ * {@link resolveParamValue} held to a field's dimension: an expression
+ * whose quantity the field cannot hold (`90 deg` for a unit-free ratio, a
+ * length for an angle) is refused with a labelled message instead of being
+ * read as its bare number.
+ */
+export function resolveDimensionedParam(
+  value: ParamValue,
+  scope: Record<string, number>,
+  dimension: 'length' | 'angle' | 'number',
+  label: string,
+  documentUnits?: UnitSystem
+): number {
+  if (typeof value === 'string') {
+    try {
+      requireFieldDimension(
+        parseExpressionQuantity(value, scope, documentUnits),
+        dimension
+      );
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : 'evaluation failed.';
+      throw new Error(`${label}: ${reason}`, { cause: error });
+    }
+  }
+  return resolveParamValue(value, scope, label, documentUnits);
+}
+
 /** Normalizes raw form input: plain numerics become numbers, otherwise the expression string is kept. */
 export function coerceParamValue(raw: string): ParamValue {
   const trimmed = raw.trim();
@@ -5875,14 +6208,26 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'endCondition',
     'throughAllSide',
     'toFace',
+    'toSurface',
     'toFaceOffset',
     'startOffset',
     'draftAngleDeg',
     'backDraftAngleDeg'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
-  loft: ['sections', 'mode', 'endPoint'],
-  sweep: ['profile', 'path', 'mode', 'guide', 'construction'],
+  loft: ['sections', 'mode', 'endPoint', 'connections', 'guides'],
+  sweep: [
+    'profile',
+    'path',
+    'mode',
+    'guide',
+    'construction',
+    'twistDeg',
+    'endScale',
+    'orientation',
+    'cornerRadius',
+    'profilePosition'
+  ],
   'helical-sweep': [
     'profile',
     'axisOrigin',
@@ -6111,6 +6456,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'endCondition',
     'throughAllSide',
     'toFace',
+    'toSurface',
     'toFaceOffset',
     'startOffset',
     'draftAngleDeg',
@@ -6128,8 +6474,17 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   ],
   boolean: ['keepOriginals'],
   split: ['keepOriginal'],
-  loft: ['endPoint'],
-  sweep: ['guide'],
+  // M04 (v133): a cleared connection list or guide keeps section starts.
+  loft: ['endPoint', 'connections', 'guides'],
+  // M04 (v132): a cleared twist or scale is none.
+  sweep: [
+    'guide',
+    'twistDeg',
+    'endScale',
+    'orientation',
+    'cornerRadius',
+    'profilePosition'
+  ],
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.
@@ -6315,6 +6670,15 @@ export function updateFeature(
   }
   if (feature.data.featureKind === 'extrude') {
     validateExtrudeExtent(feature.data, extrudeParamResolver(next));
+  } else if (feature.data.featureKind === 'loft') {
+    validateLoftOptions(feature.data);
+  } else if (feature.data.featureKind === 'sweep') {
+    // M04 (v132): a literal zero twist or unit scale is the absent default,
+    // as on creation, so a patch never writes one.
+    const sweep = feature.data as unknown as Record<string, unknown>;
+    if (isZeroParam(sweep.twistDeg)) delete sweep.twistDeg;
+    if (isUnitParam(sweep.endScale)) delete sweep.endScale;
+    validateSweepOptions(feature.data);
   } else if (
     feature.data.featureKind === 'boolean' ||
     feature.data.featureKind === 'split'
@@ -6431,6 +6795,47 @@ export function toFaceSignedDistance(
 ): number | null {
   const height = toFaceParallelHeight(sketch, face);
   return height === 0 ? null : height;
+}
+
+/**
+ * F01 (slanted to-face): how steeply a to-face target may lean and still be reached:
+ * the cosine between its normal and the sketch normal must be at least this
+ * (the face within about 84° of parallel). A steeper face meets the
+ * extrusion at a grazing angle, along walls far longer than the profile.
+ */
+export const TO_FACE_SLANT_COSINE_LIMIT = 0.1;
+
+/**
+ * F01 (slanted to-face): which way a to-face target lies from the sketch plane and how
+ * far, as the signed height of the face's own point along the unit sketch
+ * normal, for a parallel or a slanted face; null when the face is steeper
+ * than {@link TO_FACE_SLANT_COSINE_LIMIT}. `slanted` is false exactly when
+ * the face is parallel ({@link toFaceParallelHeight}), in which case
+ * `height` is that distance (zero on the sketch plane). For a slanted face the height is only where the face's point
+ * is; the build finds where it meets each part of the profile.
+ */
+export function toFaceReach(
+  sketch: { origin: ToFacePoint; normal: ToFacePoint },
+  face: { point: ToFacePoint; normal: ToFacePoint }
+): { height: number; slanted: boolean } | null {
+  // A parallel face on the sketch plane reads as 0: a start offset can
+  // still reach it (the build refuses it without one).
+  const parallel = toFaceParallelHeight(sketch, face);
+  if (parallel !== null) return { height: parallel, slanted: false };
+  const alignment =
+    face.normal.x * sketch.normal.x +
+    face.normal.y * sketch.normal.y +
+    face.normal.z * sketch.normal.z;
+  if (!(Math.abs(alignment) >= TO_FACE_SLANT_COSINE_LIMIT)) return null;
+  const sine = Math.sqrt(Math.max(0, 1 - alignment * alignment));
+  if (sine <= TO_FACE_PARALLEL_SINE_LIMIT) return null;
+  const height =
+    (face.point.x - sketch.origin.x) * sketch.normal.x +
+    (face.point.y - sketch.origin.y) * sketch.normal.y +
+    (face.point.z - sketch.origin.z) * sketch.normal.z;
+  // A slanted face's middle may sit level with the sketch: which way it is
+  // reached is read from the profile in the build, never guessed here.
+  return Number.isFinite(height) ? { height, slanted: true } : null;
 }
 
 /**

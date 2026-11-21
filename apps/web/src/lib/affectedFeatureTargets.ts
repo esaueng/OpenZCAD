@@ -262,7 +262,10 @@ export function affectedFeatureTargets(
           (data.targetBodyId !== undefined &&
             affectedBodies.has(data.targetBodyId)) ||
           // F01 (v29): a to-face extent reads its face's body here.
-          (data.toFace !== undefined && planeAffected(data.toFace));
+          (data.toFace !== undefined && planeAffected(data.toFace)) ||
+          // F01 (v131): so does a curved face.
+          (data.toSurface !== undefined &&
+            affectedBodies.has(data.toSurface.bodyId));
         break;
       case 'revolve':
         affected =

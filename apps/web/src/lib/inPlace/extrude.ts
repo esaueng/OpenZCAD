@@ -11,7 +11,7 @@ import type { HandleSpec } from './tools';
 
 /** What the handles read of the extrude as it stands. */
 export interface ExtrudeHandleState {
-  extent: 'blind' | 'to-face' | 'through-all';
+  extent: 'blind' | 'to-face' | 'through-all' | 'to-next';
   symmetric: boolean;
   /** Signed: which side of the sketch the extrusion leaves by. */
   distance: number;

@@ -8,7 +8,16 @@ of F01. It does not add an end-condition field or UI.
 > with a lineage-named `toFace` target and an extrude `draftAngleDeg`, and
 > schema v113 (2026-11-20) delivers offset-from-face as a `toFaceOffset`
 > length on a to-face extrude rather than a separate end condition: it shares
-> the face, its resolution and its unresolved state (see the F01 row). The
+> the face, its resolution and its unresolved state (see the F01 row).
+> Schema v130 (2026-11-20) adds `'to-next'` for an add or a cut with one
+> target: the long sweep is split by the target into exact regions and only
+> those standing on the start plane are kept. A to-face target may lean
+> off parallel (no schema change): a slanted face splits a longer sweep with
+> its plane. An add may run through all, and a cut may go through several
+> bodies: one through-all cut per body, created as one step, so each body's
+> result and consumption follow the single-target contract below. Schema
+> v131 adds `toSurface`, a cylindrical face named by lineage that a to-face
+> extrude reaches from outside or inside. The
 > other values listed below stay design
 > intent until their slices land, so a document cannot carry an end
 > condition no build implements. The UI offers Through all whenever Cut is

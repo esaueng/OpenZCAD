@@ -67,6 +67,32 @@ function dxfLines(text: string): DxfLine[] {
   return result;
 }
 
+interface DxfCircle {
+  center: [number, number];
+  radius: number;
+}
+
+function dxfCircles(text: string): DxfCircle[] {
+  const values = text.split(/\r?\n/).filter((line) => line.length > 0);
+  const result: DxfCircle[] = [];
+  for (let index = 0; index + 1 < values.length; index += 2) {
+    if (Number(values[index]) !== 0 || values[index + 1] !== 'CIRCLE') continue;
+    const fields = new Map<number, number>();
+    for (let next = index + 2; next + 1 < values.length; next += 2) {
+      const code = Number(values[next]);
+      if (code === 0) break;
+      if ([10, 20, 40].includes(code))
+        fields.set(code, Number(values[next + 1]));
+    }
+    const [x, y, radius] = [fields.get(10), fields.get(20), fields.get(40)];
+    if (x === undefined || y === undefined || radius === undefined) {
+      throw new Error('DXF CIRCLE is missing its centre or radius.');
+    }
+    result.push({ center: [x, y], radius });
+  }
+  return result;
+}
+
 function samePoint(a: readonly [number, number], b: readonly [number, number]) {
   return Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6;
 }
@@ -431,21 +457,20 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await expect(subtract.getByTitle('Feature failed to build')).toHaveCount(0);
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 
-  // UX-013: the bore's circle is 64 chords in this section, so the rail may
-  // not call it exact. It says why, and quotes no tolerance: none of the
-  // figures tried for one could be certified.
-  await openExactSection(page, 'Approximate');
+  // The pinned kernel sections the bore along its true circle (Remus
+  // 2026.1.154, #1794), so the rail calls the cut exact and quotes its area
+  // bare. A kernel that handed back chords would read `Approximate` here
+  // (UX-013); test/exact-section.test.ts holds that verdict.
+  await openExactSection(page, 'Exact');
   const exactState = await sectionState(page);
   expect(exactState.sectionCaps).toEqual([]);
   expect(exactState.exactSections[0]!.triangles).toBeGreaterThanOrEqual(2);
   const sectionDetail = await page
     .locator('.rail-section-state-detail')
     .textContent();
-  expect(sectionDetail).toMatch(
-    /^About [0-9.]+ mm² of material\. Curved edges are cut as straight segments\.$/
-  );
+  expect(sectionDetail).toMatch(/^[0-9.]+ mm² of material$/);
   const measuredArea = Number(sectionDetail?.match(/([0-9.]+) mm²/)?.[1]);
-  expect(measuredArea).toBeCloseTo(1200 - Math.PI * 36, 0);
+  expect(measuredArea).toBeCloseTo(1200 - Math.PI * 36, 2);
   const exportButton = page.getByRole('button', {
     name: 'Export the section as DXF'
   });
@@ -458,20 +483,16 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await exportButton.click();
   const download = await downloadPromise;
   const dxf = await readDownload(download);
+  // The plate's outline is four LINEs; the bore is one CIRCLE, written as
+  // the curve it is rather than as segments.
   const chains = closedLineChains(dxfLines(dxf));
-  expect(chains).toHaveLength(2);
-  const areas = chains.map(polygonArea).sort((a, b) => a - b);
-  expect(areas[1]).toBeCloseTo(40 * 30, 6);
-  // The circular edge is span-true LINE tessellation, so its polygon area is
-  // just below pi*r². A radius/bounds check proves the inner loop exists even
-  // if its segment count changes.
-  expect(Math.abs(areas[0]! - Math.PI * 6 ** 2)).toBeLessThan(0.5);
-  const hole = chains.find((chain) => polygonArea(chain) === areas[0])!;
-  const holeBounds = pointBounds(hole);
-  expect(holeBounds.min[0]).toBeCloseTo(14, 6);
-  expect(holeBounds.max[0]).toBeCloseTo(26, 6);
-  expect(holeBounds.min[1]).toBeCloseTo(9, 6);
-  expect(holeBounds.max[1]).toBeCloseTo(21, 6);
+  expect(chains).toHaveLength(1);
+  expect(polygonArea(chains[0]!)).toBeCloseTo(40 * 30, 6);
+  const circles = dxfCircles(dxf);
+  expect(circles).toHaveLength(1);
+  expect(circles[0]!.center[0]).toBeCloseTo(20, 6);
+  expect(circles[0]!.center[1]).toBeCloseTo(15, 6);
+  expect(circles[0]!.radius).toBeCloseTo(6, 6);
   expect(dxf.trimEnd().endsWith('0\r\nEOF')).toBe(true);
 
   // A section computed from the committed document must come down while the
@@ -512,6 +533,6 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   // With the cut already off, that press can only hide the panel.
   if ((await sectionPanel.count()) > 0) await sectionButton.click();
   await expect(sectionPanel).toHaveCount(0);
-  await openExactSection(page, 'Approximate');
+  await openExactSection(page, 'Exact');
   await expect(exportButton).toBeEnabled();
 });

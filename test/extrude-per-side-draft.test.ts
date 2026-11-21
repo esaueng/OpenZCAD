@@ -198,7 +198,7 @@ describe('F01 per-side draft', { timeout: 60_000 }, () => {
           [SQUARE],
           block
         )
-      ).toThrow(/through-all cut has no draft/);
+      ).toThrow(/through-all extrude has no draft/);
     });
 
     it('refuses clearing the back side while a back draft stays behind', () => {

@@ -14,6 +14,7 @@ import {
   toSketchId,
   toUserId,
   type ExtrudeToFaceTarget,
+  type ExtrudeToSurfaceTarget,
   type ParamValue
 } from '@openzcad/shared';
 import {
@@ -24,6 +25,7 @@ import {
   type ExtrudeCommandState
 } from './ExtrudeCommand';
 import type {
+  ExtrudeFaceTarget,
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from '../lib/extrudeDraft';
@@ -368,6 +370,17 @@ describe('in-place Extrude bar', () => {
       backDraftAngle: '0'
     } as const;
     expect(extrudeChangedInput(base, base)).toBeNull();
+    // F01 review: a further body to cut through is named as its own input.
+    const cut = {
+      ...base,
+      choice: { operation: 'cut', targetBodyId: plate }
+    } as const;
+    expect(
+      extrudeChangedInput(cut, {
+        ...cut,
+        choice: { ...cut.choice, alsoTargetBodyIds: [plate] }
+      })
+    ).toBe('Also cut');
     expect(extrudeChangedInput(base, { ...base, faceOffset: '2' })).toBe(
       'Offset from face'
     );
@@ -601,7 +614,9 @@ describe('in-place Extrude bar', () => {
     const onPick = vi.fn();
     const setterRef = createRef<
       (target: ExtrudeToFaceTarget) => void
-    >() as MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
+    >() as unknown as MutableRefObject<
+      ((target: ExtrudeFaceTarget) => void) | null
+    >;
     const toFacePicking: ExtrudeToFacePicking = {
       armed: false,
       onPick,
@@ -622,6 +637,64 @@ describe('in-place Extrude bar', () => {
         toFace: target,
         distance: 6
       })
+    );
+  });
+
+  it('keeps the authored distance when the picked face is slanted (review)', async () => {
+    const user = userEvent.setup();
+    const target = { type: 'face' } as unknown as ExtrudeToFaceTarget;
+    const setterRef = createRef<
+      (target: ExtrudeFaceTarget) => void
+    >() as unknown as MutableRefObject<
+      ((target: ExtrudeFaceTarget) => void) | null
+    >;
+    const toFacePicking: ExtrudeToFacePicking = {
+      armed: false,
+      onPick: vi.fn(),
+      cancel: vi.fn(),
+      describe: () => ({ label: 'Roof', distance: 25, slanted: true }),
+      setterRef
+    };
+    const { distanceSetterRef, onSubmit } = setup({ toFacePicking });
+    act(() => distanceSetterRef.current?.(7));
+    await openOptions(user);
+    await user.click(choice('Extent', 'To face'));
+    act(() => setterRef.current?.(target));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endCondition: 'to-face',
+        toFace: target,
+        distance: 7
+      })
+    );
+  });
+
+  it('offers Reverse up to a curved face, whose way the sign decides (review)', async () => {
+    const user = userEvent.setup();
+    const target = {
+      type: 'surface'
+    } as unknown as ExtrudeToSurfaceTarget;
+    const setterRef = createRef<
+      (target: ExtrudeFaceTarget) => void
+    >() as unknown as MutableRefObject<
+      ((target: ExtrudeFaceTarget) => void) | null
+    >;
+    const toFacePicking: ExtrudeToFacePicking = {
+      armed: false,
+      onPick: vi.fn(),
+      cancel: vi.fn(),
+      describe: () => ({ label: 'Log', distance: 0, slanted: true }),
+      setterRef
+    };
+    const { onSubmit } = setup({ toFacePicking });
+    await openOptions(user);
+    await user.click(choice('Extent', 'To face'));
+    act(() => setterRef.current?.(target));
+    await user.click(screen.getByRole('button', { name: 'Reverse direction' }));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ toSurface: target, distance: -1 })
     );
   });
 

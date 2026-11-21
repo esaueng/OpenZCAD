@@ -256,8 +256,18 @@ export function patternSourceProblem(
   data: FeatureData,
   name: string
 ): string | null {
+  if (
+    data.featureKind === 'extrude' &&
+    data.endCondition === 'through-all' &&
+    data.operation === 'add'
+  ) {
+    return `${name} adds through all of its target, which a pattern cannot repeat yet (each copy needs its own exact reach); give it a distance.`;
+  }
   if (data.featureKind === 'extrude' && data.endCondition === 'to-face') {
-    return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance or Through all.`;
+    return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance, or Through all for a cut.`;
+  }
+  if (data.featureKind === 'extrude' && data.endCondition === 'to-next') {
+    return `${name} extrudes up to the next face, which a pattern cannot repeat yet; give it a distance, or Through all for a cut.`;
   }
   // A copy's edge may run the other way, or meet its faces the other way
   // round, so a blend that differs end to end or face to face could land

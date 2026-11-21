@@ -107,7 +107,7 @@ def load_sql(data: bytes):
 
 
 # Migrations above 0050 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57, 58, 59, 60, 61})
+REVIEWED_AFTER_0050 = frozenset({53, 54, 55, 56, 57, 58, 59, 60, 61, 64})
 
 
 def required_objects(db):
@@ -144,6 +144,8 @@ def required_objects(db):
     # 0061 adds e2ee_share_comment_grants (signed public statements) and
     # e2ee_share_comments (encrypted visitor comment envelopes stored inline
     # as text): no stored objects or keys.
+    # 0064 adds only an index on revisions(author_user_id, created_at): no
+    # stored objects or keys.
     # 0051-0052 are intentionally unused.
     if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
            for name in migrations):
