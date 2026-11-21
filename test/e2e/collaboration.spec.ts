@@ -1097,6 +1097,8 @@ test('keeps the share session chip a visible glyph on a phone', async ({
 // The owner now picks View or Tweak for a plaintext link too; a View link's
 // visitor stays in View, as an encrypted View link's does.
 test('pins a plaintext view link to View', async ({ page }) => {
+  // On a phone the switch has a row of its own, which goes with it.
+  await page.setViewportSize({ width: 390, height: 844 });
   await stubAnonymousApi(page);
   const document = createProjectDocument('View source', toUserId('owner'));
   await page.route('**/api/share', (route) =>
@@ -1122,6 +1124,15 @@ test('pins a plaintext view link to View', async ({ page }) => {
     page.getByRole('group', { name: 'Workspace mode' })
   ).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Tweak' })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page
+        .locator('.app-shell')
+        .evaluate((shell) =>
+          getComputedStyle(shell).getPropertyValue('--phone-mode-h').trim()
+        )
+    )
+    .toBe('0px');
 });
 
 test('makes a durable share copy without storing the owner snapshot', async ({

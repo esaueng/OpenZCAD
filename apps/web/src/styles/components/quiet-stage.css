@@ -1796,8 +1796,10 @@
     display: inline;
   }
 
-  /* No mode switch (a View-only shared link): no second row either. */
-  .app-shell:has(> .topbar:not(:has(> .mode-switch))) {
+  /* No mode switch (a View-only shared link): no second row either.
+     `:has()` cannot nest, so the shell asks for a top bar and for no
+     switch in it as two separate conditions. */
+  .app-shell:has(> .topbar):not(:has(> .topbar > .mode-switch)) {
     --phone-mode-h: 0px;
   }
 

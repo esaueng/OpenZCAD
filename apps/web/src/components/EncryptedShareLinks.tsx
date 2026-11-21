@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
 import { StableLabel } from './StableLabel';
 import {
@@ -319,6 +319,10 @@ export function EncryptedShareLinks({
   const [created, setCreated] = useState<string | null>(null);
   // What the next link lets its visitors do; Tweak includes View.
   const [mode, setMode] = useState<EncryptedShareLinkMode>('view');
+  // The mode of the link in the output: the picker may have moved on.
+  const [createdMode, setCreatedMode] =
+    useState<EncryptedShareLinkMode>('view');
+  const detailId = useId();
   // L08: whether the next link's visitors may comment (plan decision 3a).
   const [withComments, setWithComments] = useState(false);
   // The link whose Revoke is waiting for a yes (design review I2).
@@ -392,12 +396,14 @@ export function EncryptedShareLinks({
   const createLink = async () => {
     setCreated(null);
     setCopied(null);
+    const linkMode = mode;
     setCreated(
       (withComments
-        ? await client.create(projectId, mode, { comments: true })
-        : await client.create(projectId, mode)
+        ? await client.create(projectId, linkMode, { comments: true })
+        : await client.create(projectId, linkMode)
       ).url
     );
+    setCreatedMode(linkMode);
   };
   // Inside the confirmation's own run: a refused confirmation creates nothing.
   const finishConfirm = async () => {
@@ -467,6 +473,7 @@ export function EncryptedShareLinks({
         <ShareLinkModePicker
           value={mode}
           disabled={disabled || confirming}
+          describedBy={detailId}
           onChange={setMode}
         />
         <label className="sharing-link-comments">
@@ -474,6 +481,7 @@ export function EncryptedShareLinks({
             type="checkbox"
             checked={withComments}
             disabled={disabled || confirming}
+            aria-describedby={detailId}
             onChange={(event) => setWithComments(event.target.checked)}
           />
           Visitors can comment
@@ -496,7 +504,7 @@ export function EncryptedShareLinks({
           Create link
         </button>
       </div>
-      <p className="sharing-access-detail">
+      <p id={detailId} className="sharing-access-detail">
         {SHARE_LINK_MODE_HINT[mode]}
         {withComments ? ' They see only this link’s comments.' : ''} End-to-end
         encrypted: the key is in the link.
@@ -614,6 +622,7 @@ export function EncryptedShareLinks({
               {copied === 'created' ? 'Copied' : 'Copy'}
             </StableLabel>
           </button>
+          <p className="sharing-share-mode">{MODE_LABEL[createdMode]} link</p>
         </div>
       ) : null}
 

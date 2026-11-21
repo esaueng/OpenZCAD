@@ -285,6 +285,13 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     ).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     expect(client.create).toHaveBeenCalledWith('proj_x', 'tweak');
+    // The output names the link it holds, even once the picker moves on.
+    expect(await screen.findByText('Tweak link')).toBeVisible();
+    await user.click(within(access).getByRole('radio', { name: 'View' }));
+    expect(screen.getByText('Tweak link')).toBeVisible();
+    expect(access).toHaveAccessibleDescription(
+      /Visitors can look, measure and export\./
+    );
   });
 
   it('lets the owner allow comments on a link that does not take them (L08)', async () => {

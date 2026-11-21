@@ -2184,6 +2184,16 @@
   outline-offset: 1px;
 }
 
+/* Contrast themes flatten the fill and text colour that mark the choice,
+   and the radios themselves are hidden: the system highlight marks it. */
+@media (forced-colors: active) {
+  .sharing-link-mode-option:has(input:checked) {
+    forced-color-adjust: none;
+    color: HighlightText;
+    background: Highlight;
+  }
+}
+
 .sharing-link-mode-option:has(input:disabled) {
   cursor: default;
   opacity: var(--opacity-disabled);
@@ -2233,6 +2243,14 @@
   flex: 1;
   min-width: 0;
   height: 28px;
+  font-size: var(--fs-xs);
+}
+
+/* Which access the link above grants: the picker may have moved on. */
+.sharing-share-mode {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--color-text-muted);
   font-size: var(--fs-xs);
 }
 

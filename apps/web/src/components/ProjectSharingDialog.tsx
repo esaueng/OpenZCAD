@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -469,6 +470,7 @@ export function ProjectSharingDialog({
   const [createdShareLink, setCreatedShareLink] = useState<{
     url: string;
     shareLinkId: string;
+    mode: ProjectShareLinkMode;
   } | null>(null);
   const [stateCodeOpen, setStateCodeOpen] = useState(false);
   const [confirmingRemoval, setConfirmingRemoval] = useState<UserId | null>(
@@ -1453,7 +1455,8 @@ export function ProjectSharingDialog({
                       );
                   setCreatedShareLink({
                     url: buildShareLinkUrl(created.token),
-                    shareLinkId: created.shareLink.shareLinkId
+                    shareLinkId: created.shareLink.shareLinkId,
+                    mode
                   });
                   await refresh();
                 })
@@ -1606,7 +1609,11 @@ export function ProjectSharingDialog({
 
 interface PlaintextShareLinksProps {
   shareLinks: readonly ProjectShareLinkSummary[];
-  created: { url: string; shareLinkId: string } | null;
+  created: {
+    url: string;
+    shareLinkId: string;
+    mode: ProjectShareLinkMode;
+  } | null;
   copied: boolean;
   disabled: boolean;
   localImportSourceNames: readonly string[];
@@ -1651,6 +1658,7 @@ function PlaintextShareLinks({
   const [editingId, setEditingId] = useState<string | null>(null);
   // What the next link lets its visitors do; Tweak includes View.
   const [mode, setMode] = useState<ProjectShareLinkMode>('tweak');
+  const detailId = useId();
   // L08: whether the next link lets its visitors comment.
   const [withComments, setWithComments] = useState(false);
   // The link whose Revoke is waiting for a yes (design review I2).
@@ -1705,11 +1713,16 @@ function PlaintextShareLinks({
         </span>
       </div>
       <div className="sharing-link-create">
-        <ShareLinkModePicker value={mode} onChange={setMode} />
+        <ShareLinkModePicker
+          value={mode}
+          describedBy={detailId}
+          onChange={setMode}
+        />
         <label className="sharing-link-comments">
           <input
             type="checkbox"
             checked={withComments}
+            aria-describedby={detailId}
             onChange={(event) => setWithComments(event.target.checked)}
           />
           Visitors can comment
@@ -1723,7 +1736,7 @@ function PlaintextShareLinks({
           Create link
         </button>
       </div>
-      <p className="sharing-access-detail">
+      <p id={detailId} className="sharing-access-detail">
         {SHARE_LINK_MODE_HINT[mode]}
         {withComments
           ? ' They see every comment and sign theirs with a name.'
@@ -1798,7 +1811,9 @@ function PlaintextShareLinks({
               {copied ? 'Copied' : 'Copy'}
             </StableLabel>
           </button>
-          <p className="sharing-share-once">Shown once — copy it now.</p>
+          <p className="sharing-share-once">
+            {LINK_MODE_LABELS[created.mode]} link · shown once — copy it now.
+          </p>
         </div>
       )}
       {shareLinks.length > 0 && (

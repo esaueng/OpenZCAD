@@ -19,10 +19,13 @@ export const SHARE_LINK_MODE_HINT: Record<ProjectShareLinkMode, string> = {
 export function ShareLinkModePicker({
   value,
   disabled = false,
+  describedBy,
   onChange
 }: {
   value: ProjectShareLinkMode;
   disabled?: boolean;
+  /** The line saying what the chosen access allows. */
+  describedBy?: string;
   onChange(mode: ProjectShareLinkMode): void;
 }) {
   const name = useId();
@@ -31,6 +34,7 @@ export function ShareLinkModePicker({
       className="sharing-link-mode"
       role="radiogroup"
       aria-label="Link access"
+      aria-describedby={describedBy}
     >
       {OPTIONS.map((option) => (
         <label key={option.mode} className="sharing-link-mode-option">

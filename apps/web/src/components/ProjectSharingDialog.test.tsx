@@ -506,8 +506,13 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
-    await user.click(
-      await screen.findByRole('checkbox', { name: /Visitors can comment/ })
+    const comments = await screen.findByRole('checkbox', {
+      name: /Visitors can comment/
+    });
+    await user.click(comments);
+    // The disclosure is read with the control, not only shown beside it.
+    expect(comments).toHaveAccessibleDescription(
+      /They see every comment and sign theirs with a name\./
     );
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     await waitFor(() =>
@@ -606,7 +611,9 @@ describe('ProjectSharingDialog', () => {
       )
     );
     expect(screen.getByRole('button', { name: 'Copied' })).toBeVisible();
-    expect(screen.getByText('Shown once — copy it now.')).toBeVisible();
+    expect(
+      screen.getByText('Tweak link · shown once — copy it now.')
+    ).toBeVisible();
     expect(screen.getByText('Anyone with a link · 1 active')).toBeVisible();
     const row = screen
       .getByRole('button', { name: /^Rename Tweak link · / })
