@@ -18,5 +18,7 @@ Evidence:
 
 - `test/exact-sweep-guide-rail.test.ts`: a square scaled to half by a rail from 3 to 1.5 off the path, six planes at the Cavalieri volume; a disc and a rail drawn the other way round, one cone; the four refusals; entry validation.
 - `apps/web/src/lib/inPlace/edit.test.ts`: the rail request.
+- `test/e2e/exact-sweeps.spec.ts`: a square picked, then a path and a rail clicked on the canvas, builds the scaled sweep.
+- `test/exact-sweep-twist-scale.test.ts`: a stored twist in a document older than v132 is refused (the guard previously covered replayed commands only).
 
 Remaining: a rail that turns about the path (a helix) has no exact construction yet.
