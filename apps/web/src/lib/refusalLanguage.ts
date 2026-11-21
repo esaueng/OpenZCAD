@@ -344,7 +344,26 @@ const TRANSLATIONS: readonly Translation[] = [
   },
   {
     pattern: /exact sweep paths are lines and circular arcs/i,
-    sentence: 'An exact sweep path can only be made of lines and arcs.'
+    sentence:
+      'A sweep that turns with its path follows only lines and arcs exactly. To sweep along a spline, set Orientation to Parallel, which keeps the profile parallel to itself.'
+  },
+  // M04 (v134) parallel orientation: the path must run steadily away from
+  // the profile's plane, or the swept body could meet itself.
+  {
+    pattern:
+      /cannot be shown to run steadily through the profile's plane|turns back through the profile's plane: a sweep that keeps/i,
+    sentence:
+      'A sweep that keeps the profile parallel needs a path that keeps moving away from the profile: this one turns back or runs along the profile’s plane. Change the path, or set Orientation to Normal to path.'
+  },
+  {
+    pattern: /closed sweep path cannot keep the profile's orientation/i,
+    sentence:
+      'A sweep that keeps the profile parallel cannot follow a closed path: the profile would come back through itself.'
+  },
+  {
+    pattern: /spline that does not end on its control points/i,
+    sentence:
+      'This spline in the sweep path cannot be swept exactly; redraw it, or split it into pieces.'
   },
   {
     pattern:

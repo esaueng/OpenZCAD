@@ -1,5 +1,6 @@
 import type { RemusKernel } from './remus-runtime';
 import { KernelRefusal } from './kernel-refusal';
+import { operationErrorCategory } from './remus-operation-refusal';
 import {
   EXTRUDE_SIDES_CONFLICT_MESSAGE,
   extrudeSidesConflict,
@@ -20,6 +21,7 @@ import {
   mergeAdjacentProfiles,
   normalToEdgeDatumPlane,
   requireRevolveAxisInPlane,
+  resolveSplineGeometry,
   surfaceDatumAxis,
   type DatumAxis,
   type DatumCsys,
@@ -94,7 +96,11 @@ import {
   resolveRegionProfiles,
   resolveRegionProfilesInSketch
 } from './region-profile';
-import { ellipseRegionEdges, splineRegionEdges } from './profile-curve-edges';
+import {
+  ellipseRegionEdges,
+  splinePathEdge,
+  splineRegionEdges
+} from './profile-curve-edges';
 import {
   basisMatchesLiftedFrame,
   bezierFallbackWarning,
@@ -2452,8 +2458,24 @@ export function sweepPathEdges(
         kernel.makeLineEdge(start.x, start.y, start.z, end.x, end.y, end.z)
       ];
     }
+    if (data.objectKind === 'spline' && !splitArcs) {
+      // M04: an exact sweep takes a spline whole, as its exact NURBS; only a
+      // sweep that keeps the profile's orientation can follow it exactly,
+      // and the kernel refuses it by name otherwise.
+      const spline = resolveSplineGeometry(data, (value) =>
+        resolveParamValue(value, scope, 'path spline', document.units)
+      );
+      if (spline.closed) {
+        throw new Error(
+          'A sweep path cannot be a closed spline: a sweep runs from one end of its path to the other.'
+        );
+      }
+      return [splinePathEdge(kernel, basis, spline)];
+    }
     if (data.objectKind !== 'arc') {
-      throw new Error('Sweep paths currently support line and arc entities.');
+      throw new Error(
+        'Sweep paths support line and arc entities, and splines on an exact sweep.'
+      );
     }
     const center2 = {
       x: resolveParamValue(
@@ -2923,9 +2945,13 @@ export function railEndScale(
  * when it has neither, so the plain `sweepExact` call is unchanged.
  */
 export function resolveSweepOptions(
-  data: { twistDeg?: ParamValue; endScale?: ParamValue },
+  data: {
+    twistDeg?: ParamValue;
+    endScale?: ParamValue;
+    orientation?: 'parallel';
+  },
   scope: Record<string, number>
-): { twist: number; endScale: number } | null {
+): Record<string, number | string> | null {
   const twistDeg =
     data.twistDeg === undefined
       ? 0
@@ -2937,8 +2963,11 @@ export function resolveSweepOptions(
   if (!(endScale > 0)) {
     throw new Error('Sweep end scale must be greater than zero.');
   }
-  if (twistDeg === 0 && endScale === 1) return null;
-  return { twist: (twistDeg * Math.PI) / 180, endScale };
+  const options: Record<string, number | string> = {};
+  if (twistDeg !== 0) options.twist = (twistDeg * Math.PI) / 180;
+  if (endScale !== 1) options.endScale = endScale;
+  if (data.orientation === 'parallel') options.orientation = 'parallel';
+  return Object.keys(options).length > 0 ? options : null;
 }
 
 /**
@@ -2950,13 +2979,38 @@ export function resolveSweepOptions(
  * `sweepExactWithOptions`, which builds it along a straight path with the
  * profile square to it and refuses anything else by name.
  */
+/**
+ * The exact sweep's kernel call, its refusals typed: Remus refuses an exact
+ * sweep it cannot build (a path that turns back, a spline on a turning
+ * sweep) with a prose error, so each is carried as a typed modeling refusal
+ * with the kernel's sentence, never a bare build failure.
+ */
+function typedExactSweep(run: () => number): number {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof KernelRefusal) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    const category = operationErrorCategory(message);
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: category === 'internal' ? 'unsupported' : category,
+      kernelCode: 'exact_sweep_refused',
+      kernelMessage: message,
+      reason: message,
+      message,
+      cause: error
+    });
+  }
+}
+
 function exactSweepSolid(
   kernel: RemusKernel,
   document: ProjectDocument,
   face: number,
   path: SketchPathReference,
   guide: SketchPathReference | undefined,
-  options: { twist: number; endScale: number } | null,
+  options: Record<string, number | string> | null,
   profilePlane: PlaneBasis,
   scope: Record<string, number>,
   sketchBases: ReadonlyMap<SketchId, PlaneBasis>
@@ -3023,10 +3077,12 @@ function exactSweepSolid(
       false
     );
     const endScale = railEndScale(kernel, pathEdges, railEdges, profilePlane);
-    return kernel.sweepExactWithOptions(
-      face,
-      Uint32Array.from(pathEdges),
-      JSON.stringify({ endScale })
+    return typedExactSweep(() =>
+      kernel.sweepExactWithOptions(
+        face,
+        Uint32Array.from(pathEdges),
+        JSON.stringify({ endScale })
+      )
     );
   }
   const edges = sweepPathEdges(
@@ -3038,13 +3094,17 @@ function exactSweepSolid(
     false
   );
   if (options) {
-    return kernel.sweepExactWithOptions(
-      face,
-      Uint32Array.from(edges),
-      JSON.stringify(options)
+    return typedExactSweep(() =>
+      kernel.sweepExactWithOptions(
+        face,
+        Uint32Array.from(edges),
+        JSON.stringify(options)
+      )
     );
   }
-  return kernel.sweepExact(face, Uint32Array.from(edges));
+  return typedExactSweep(() =>
+    kernel.sweepExact(face, Uint32Array.from(edges))
+  );
 }
 
 function sketchBasisOf(
@@ -3076,13 +3136,6 @@ export function buildProfileSweep(
     sketchBases,
     warn,
     'Sweep profile'
-  );
-  const edges = sweepPathEdges(
-    kernel,
-    document,
-    feature.data.path,
-    scope,
-    sketchBases
   );
   const guide = feature.data.guide;
   const guided = guide !== undefined;
@@ -3118,6 +3171,14 @@ export function buildProfileSweep(
       'Twist and scale along the path need the exact sweep; build it as Exact.'
     );
   }
+  // The sampled sweep's path, arcs split into quarter turns as always.
+  const edges = sweepPathEdges(
+    kernel,
+    document,
+    feature.data.path,
+    scope,
+    sketchBases
+  );
   const solid = guided
     ? guidedSweepSolid(
         kernel,

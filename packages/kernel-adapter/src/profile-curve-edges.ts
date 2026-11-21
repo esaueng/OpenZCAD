@@ -308,3 +308,28 @@ function splinePieceEdges(
   }
   return edges;
 }
+
+/**
+ * M04: one open spline of a sweep path as a single exact NURBS edge on the
+ * sketch plane (unit weights, the spline's own knots and controls).
+ */
+export function splinePathEdge(
+  kernel: RemusKernel,
+  basis: PlaneBasis,
+  spline: {
+    degree: number;
+    knots: number[];
+    controls: { x: number; y: number }[];
+  }
+): number {
+  const params = splineNurbsParams(spline as SplineRegionCurve);
+  return lift(
+    kernel,
+    basis,
+    NURBS_CURVE_TYPE,
+    params,
+    1,
+    spline.knots[0]!,
+    spline.knots[spline.knots.length - 1]!
+  );
+}

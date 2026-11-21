@@ -365,7 +365,10 @@ const FEATURE_ENUM_FIELDS = {
     }),
     construction: valuesOf<NonNullable<FeatureDataOf<'sweep'>['construction']>>(
       { 'in-place': true }
-    )
+    ),
+    orientation: valuesOf<NonNullable<FeatureDataOf<'sweep'>['orientation']>>({
+      parallel: true
+    })
   },
   rib: {
     thicknessSide: valuesOf<FeatureDataOf<'rib'>['thicknessSide']>({
