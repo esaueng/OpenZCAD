@@ -1142,6 +1142,24 @@ export function assertDocumentContentCommandSchema(
         83,
         'Simplified threads'
       );
+    // M04 (schema v133): a loft's connections and guide, created or patched
+    // (a patch need not name its kind; the fields are a loft's).
+    {
+      const loft =
+        command.kind === 'feature.loft'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'loft')
+            ? command.payload.data
+            : null;
+      if (loft && (loft.connections !== undefined || loft.guides !== undefined))
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          133,
+          'Loft connections and guides'
+        );
+    }
     // M04: an exact sweep's options, created or patched (a patch need not
     // name its kind; the fields are a sweep's).
     {
@@ -1422,6 +1440,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (
+      node.kind === 'feature' &&
+      node.data.featureKind === 'loft' &&
+      (node.data.connections !== undefined || node.data.guides !== undefined)
+    )
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        133,
+        'Loft connections and guides'
+      );
     if (node.kind === 'feature' && node.data.featureKind === 'sweep')
       assertSweepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')

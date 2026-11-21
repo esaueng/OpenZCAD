@@ -1954,6 +1954,82 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(exact?.data).toHaveProperty('construction', 'in-place');
   });
 
+  it('loft: a picked guide line goes out as the loft guide, and an edit clears a removed one (M04, v133)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.loft;
+    const pick = (fingerprint: number) => ({
+      sketchId: SKETCH,
+      reference: { all: true, sourceEntityIds: [`s${fingerprint}`] },
+      regionFingerprint: fingerprint
+    });
+    const slots = {
+      profiles: [pick(1), pick(2)],
+      path: [{ sketchId: SKETCH, entityId: 'g1' }],
+      guide: []
+    } as unknown as InPlaceSlots;
+    const request = spec.request(slots, {}, { shape: 'ruled' }, {} as never);
+    expect(request).toMatchObject({
+      tool: 'loft',
+      mode: 'ruled',
+      guides: [{ sketchId: SKETCH, entityIds: ['g1'] }]
+    });
+    const sections = [
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s1'] }
+      },
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s2'] }
+      }
+    ];
+    const saved = feature({
+      featureKind: 'loft',
+      sections,
+      mode: 'ruled',
+      guides: [{ sketchId: SKETCH, entityIds: ['g1'] as never[] }]
+    });
+    const cleared = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections,
+      mode: 'ruled'
+    });
+    expect(cleared?.clearData).toEqual(['endPoint', 'guides']);
+  });
+
+  it('loft: stored connections stay with unchanged sections and clear when the sections are reordered (M04, v133)', () => {
+    const sections = [
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s1'] }
+      },
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s2'] }
+      }
+    ];
+    const saved = feature({
+      featureKind: 'loft',
+      sections,
+      mode: 'ruled',
+      connections: [
+        { kind: 'line-end', entityId: 's1', end: 'start' },
+        { kind: 'line-end', entityId: 's2', end: 'start' }
+      ] as never
+    });
+    const kept = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections,
+      mode: 'ruled'
+    });
+    expect(kept?.clearData).toEqual(['endPoint']);
+    const reordered = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections: [sections[1]!, sections[0]!],
+      mode: 'ruled'
+    });
+    expect(reordered?.clearData).toEqual(['endPoint', 'connections']);
+  });
+
   it('sweep: an exact edit reopens its twist and end scale, and clears them when set back to none (M04, v132)', () => {
     const profile = {
       sketchId: SKETCH,

@@ -527,7 +527,23 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // path. An older client would sweep it plain, so it must refuse the
 // document. Builds on v131 (#1851). First claimed as v129, renumbered when
 // #1864, #1847 and #1851 landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 132 as const;
+// v133 adds M04 loft connections and guides (`connections` and `guides` on a
+// loft): the vertex each section's correspondence starts from, given or
+// fixed by one straight guide. An older client would loft from each
+// section's own start, so it must refuse the document. Builds on v132
+// (#1882). First claimed as v136, renumbered to the next unclaimed number
+// when #1882 landed.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 133 as const;
+/** M04 (v133): a section vertex a loft connection starts from. */
+export type LoftConnectionVertex =
+  | {
+      kind: 'curve-end';
+      /** A line or arc of the section's sketch. */
+      entityId: EntityId;
+      end: 'start' | 'end';
+    }
+  | SketchShapeCornerTarget;
+
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2656,6 +2672,22 @@ export type FeatureData =
        * order instead. See `HANDOFF.md` for the measurement.
        */
       endPoint?: ParametricVector3;
+      /**
+       * M04 (v133): one vertex per section, in section order, where the
+       * loft's correspondence starts (the kernel's `loftWithOptions`
+       * `connections`): vertex k of every section joins vertex k of the next,
+       * counted from these. A line's or arc's end, or a rectangle's or
+       * polygon's corner, named by identity. Absent keeps each section's own
+       * start, as before. Not with an apex point or a guide.
+       */
+      connections?: LoftConnectionVertex[];
+      /**
+       * M04 (v133): one straight guide curve (a sketch line) through a vertex
+       * of every section, which fixes the correspondence along it: a ruled
+       * loft's edge between those vertices is exactly the guide. Ruled only;
+       * a curved guide, or several, is refused by name.
+       */
+      guides?: SketchPathReference[];
     }
   | {
       featureKind: 'sweep';

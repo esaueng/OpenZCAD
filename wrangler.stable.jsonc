@@ -117,7 +117,13 @@
       }
     }
   ],
-  "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADStableIngest"}],
+  "services": [
+    {
+      "binding": "GLIMPSE",
+      "service": "glimpse",
+      "entrypoint": "OpenZCADStableIngest"
+    }
+  ],
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",

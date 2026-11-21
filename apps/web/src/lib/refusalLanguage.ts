@@ -372,6 +372,16 @@ const TRANSLATIONS: readonly Translation[] = [
     sentence:
       'The closed sweep path does not bring the profile back to where it started.'
   },
+  // M04 (v133) loft connections and guides.
+  {
+    pattern: /loft connection point .* is not a vertex of section (\d+)/i,
+    sentence: (match) =>
+      `The loft guide or connection does not meet section ${Number(match[1]) + 1} at a corner. A connection must be a vertex of every section.`
+  },
+  {
+    pattern: /loft connections cannot be combined with an apex point/i,
+    sentence: 'A loft with an apex point takes no connections or guide.'
+  },
   // M04 (v132) exact sweep twist and scale (`sweepExactWithOptions`): built
   // along a straight path with the profile square to it, refused by name
   // otherwise and never sampled.
