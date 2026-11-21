@@ -209,74 +209,77 @@ test('a signed-out blank project opens locally without account creation', async 
   expect(createdInAccount).toBe(false);
 });
 
-test('opening a saved model starts one rebuild before viewport setup @ci-smoke', async ({
-  page
-}) => {
-  const model = addPrimitiveFeature(
-    createProjectDocument('Saved box', toUserId('user_e2e')),
-    {
-      name: 'Stock',
-      primitiveKind: 'box',
-      dimensions: { width: 20, height: 10, depth: 5 }
-    }
-  );
-  await stubApi(page);
-  await page.route('**/api/projects', (route) =>
-    route.fulfill({
-      json: {
-        projects: [
-          {
-            projectId: model.projectId,
-            name: model.name,
-            revisionCount: 1,
-            updatedAt: new Date().toISOString()
-          }
-        ]
+test(
+  'opening a saved model starts one rebuild before viewport setup',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    const model = addPrimitiveFeature(
+      createProjectDocument('Saved box', toUserId('user_e2e')),
+      {
+        name: 'Stock',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 10, depth: 5 }
       }
-    })
-  );
-  await page.route('**/api/projects/' + model.projectId, (route) =>
-    route.fulfill({ json: model })
-  );
-  await page.route('**/api/projects/' + model.projectId + '/version', (route) =>
-    route.fulfill({ json: { documentVersion: model.version } })
-  );
-  await page.addInitScript((projectId) => {
-    const post = Worker.prototype.postMessage;
-    Worker.prototype.postMessage = function (message: unknown, options?) {
-      const request = message as GeometryWorkerRequest | null;
-      if (
-        request?.type === 'sync' &&
-        !request.requestId &&
-        request.document.projectId === projectId
-      )
-        performance.mark('test:opening-sync', {
-          detail: request.persistSession
-        });
-      post.call(this, message, options as StructuredSerializeOptions);
-    };
-  }, model.projectId);
+    );
+    await stubApi(page);
+    await page.route('**/api/projects', (route) =>
+      route.fulfill({
+        json: {
+          projects: [
+            {
+              projectId: model.projectId,
+              name: model.name,
+              revisionCount: 1,
+              updatedAt: new Date().toISOString()
+            }
+          ]
+        }
+      })
+    );
+    await page.route('**/api/projects/' + model.projectId, (route) =>
+      route.fulfill({ json: model })
+    );
+    await page.route(
+      '**/api/projects/' + model.projectId + '/version',
+      (route) => route.fulfill({ json: { documentVersion: model.version } })
+    );
+    await page.addInitScript((projectId) => {
+      const post = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message: unknown, options?) {
+        const request = message as GeometryWorkerRequest | null;
+        if (
+          request?.type === 'sync' &&
+          !request.requestId &&
+          request.document.projectId === projectId
+        )
+          performance.mark('test:opening-sync', {
+            detail: request.persistSession
+          });
+        post.call(this, message, options as StructuredSerializeOptions);
+      };
+    }, model.projectId);
 
-  await page.goto('/');
-  await page
-    .getByRole('button', { name: /^Saved box/ })
-    .and(page.locator('.start-tile-open'))
-    .click();
-  await expectBodyCount(page, 1);
-  await page.waitForFunction(
-    () => performance.getEntriesByName('oz:model-visible').length > 0
-  );
-  const result = await page.evaluate(() => {
-    const posts = performance.getEntriesByName(
-      'test:opening-sync'
-    ) as PerformanceMark[];
-    const [init] = performance.getEntriesByName('oz:viewer.init:begin');
-    return {
-      policies: posts.map((mark) => mark.detail === true),
-      beforeSetup: Boolean(
-        init && posts[0] && posts[0].startTime <= init.startTime
-      )
-    };
-  });
-  expect(result).toEqual({ policies: [true], beforeSetup: true });
-});
+    await page.goto('/');
+    await page
+      .getByRole('button', { name: /^Saved box/ })
+      .and(page.locator('.start-tile-open'))
+      .click();
+    await expectBodyCount(page, 1);
+    await page.waitForFunction(
+      () => performance.getEntriesByName('oz:model-visible').length > 0
+    );
+    const result = await page.evaluate(() => {
+      const posts = performance.getEntriesByName(
+        'test:opening-sync'
+      ) as PerformanceMark[];
+      const [init] = performance.getEntriesByName('oz:viewer.init:begin');
+      return {
+        policies: posts.map((mark) => mark.detail === true),
+        beforeSetup: Boolean(
+          init && posts[0] && posts[0].startTime <= init.startTime
+        )
+      };
+    });
+    expect(result).toEqual({ policies: [true], beforeSetup: true });
+  }
+);
