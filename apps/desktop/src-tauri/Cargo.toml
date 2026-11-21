@@ -18,6 +18,9 @@ webdriver = ["dep:tauri-plugin-wdio-webdriver"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[target.'cfg(target_os = "macos")'.build-dependencies]
+cc = "1"
+
 [dependencies]
 base64 = "0.23.1"
 getrandom = "0.4.3"
