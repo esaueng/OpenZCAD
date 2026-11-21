@@ -3182,8 +3182,8 @@ export function loftSections(
 }
 
 /** A stored literal 1, or absent: the identity scale. */
-function isUnitParam(value: ParamValue | undefined): boolean {
-  return value === undefined || value === 1;
+function isUnitParam(value: unknown): boolean {
+  return value === undefined || value === 1 || value === '1';
 }
 
 /**
@@ -3220,8 +3220,8 @@ export function validateSweepOptions(data: {
       throw new Error('Sweep end scale must be a number or an expression.');
     }
   }
-  const twisted = twistDeg !== undefined && twistDeg !== 0;
-  const scaled = endScale !== undefined && endScale !== 1;
+  const twisted = !isZeroParam(twistDeg);
+  const scaled = !isUnitParam(endScale);
   if ((twisted || scaled) && data.construction !== 'in-place') {
     throw new Error(
       'Twist and scale along the path need the exact sweep; build it as Exact.'
@@ -5971,6 +5971,34 @@ export function resolveParamValue(
   }
 }
 
+/**
+ * {@link resolveParamValue} held to a field's dimension: an expression
+ * whose quantity the field cannot hold (`90 deg` for a unit-free ratio, a
+ * length for an angle) is refused with a labelled message instead of being
+ * read as its bare number.
+ */
+export function resolveDimensionedParam(
+  value: ParamValue,
+  scope: Record<string, number>,
+  dimension: 'length' | 'angle' | 'number',
+  label: string,
+  documentUnits?: UnitSystem
+): number {
+  if (typeof value === 'string') {
+    try {
+      requireFieldDimension(
+        parseExpressionQuantity(value, scope, documentUnits),
+        dimension
+      );
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : 'evaluation failed.';
+      throw new Error(`${label}: ${reason}`, { cause: error });
+    }
+  }
+  return resolveParamValue(value, scope, label, documentUnits);
+}
+
 /** Normalizes raw form input: plain numerics become numbers, otherwise the expression string is kept. */
 export function coerceParamValue(raw: string): ParamValue {
   const trimmed = raw.trim();
@@ -6456,6 +6484,11 @@ export function updateFeature(
   if (feature.data.featureKind === 'extrude') {
     validateExtrudeExtent(feature.data, extrudeParamResolver(next));
   } else if (feature.data.featureKind === 'sweep') {
+    // M04 (v132): a literal zero twist or unit scale is the absent default,
+    // as on creation, so a patch never writes one.
+    const sweep = feature.data as unknown as Record<string, unknown>;
+    if (isZeroParam(sweep.twistDeg)) delete sweep.twistDeg;
+    if (isUnitParam(sweep.endScale)) delete sweep.endScale;
     validateSweepOptions(feature.data);
   } else if (
     feature.data.featureKind === 'boolean' ||

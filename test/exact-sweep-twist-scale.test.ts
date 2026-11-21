@@ -4,7 +4,10 @@ import {
   addSketchObjects,
   createProjectDocument,
   findSketch,
+  assertDocumentContentCommandSchema,
   importStepBody,
+  renameParameter,
+  setParameter,
   sweepProfile,
   updateFeature,
   type SweepInput
@@ -216,6 +219,61 @@ describe(
       expect(
         rel(document.derived.bodyRepresentations[bodyId]!.volume, 16 * LENGTH)
       ).toBeLessThan(1e-9);
+    });
+
+    it('rewrites a twist expression when its parameter is renamed', () => {
+      const start = profileSketch(
+        setParameter(createProjectDocument('Rename', user), {
+          name: 'turn',
+          expression: '90'
+        }),
+        square
+      );
+      const swept = sweepWith(start, [riser], { twistDeg: 'turn' });
+      const renamed = renameParameter(swept.document, {
+        name: 'turn',
+        newName: 'sweepTurn'
+      });
+      expect(sweepFeature(renamed).data).toMatchObject({
+        twistDeg: 'sweepTurn'
+      });
+    });
+
+    it('refuses an end scale with a unit instead of reading its bare number', async () => {
+      const start = profileSketch(createProjectDocument('Units', user), square);
+      const { document, bodyId } = await built(
+        sweepWith(start, [riser], { endScale: '90 deg' })
+      );
+      expect(document.derived.bodyRepresentations[bodyId]).toBeUndefined();
+      const [warning] = document.derived.featureWarnings ?? [];
+      expect(warning!.message).toContain('end scale');
+      expect(warning!.message).toContain('without units');
+    });
+
+    it('a patch with a zero twist and a unit scale writes neither', () => {
+      const start = profileSketch(createProjectDocument('Patch', user), square);
+      const swept = sweepWith(start, [riser], { construction: undefined });
+      const patched = updateFeature(swept.document, {
+        featureId: sweepFeature(swept.document).featureId,
+        data: { twistDeg: 0, endScale: '1' } as never
+      });
+      expect(sweepFeature(patched).data).not.toHaveProperty('twistDeg');
+      expect(sweepFeature(patched).data).not.toHaveProperty('endScale');
+    });
+
+    it('refuses a replayed twist into a document older than v132', () => {
+      expect(() =>
+        assertDocumentContentCommandSchema({
+          schemaVersion: 131 as never,
+          commandLog: [
+            {
+              kind: 'feature.sweep',
+              payload: { construction: 'in-place', twistDeg: 90 }
+            }
+          ] as never,
+          editHistory: undefined as never
+        })
+      ).toThrow(/132/);
     });
 
     it('never writes a zero twist or a unit scale', () => {

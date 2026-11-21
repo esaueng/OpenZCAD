@@ -4,6 +4,7 @@ import {
   extrudeSidesConflict,
   findSketch,
   listFeaturesInOrder,
+  resolveDimensionedParam,
   resolveParamValue
 } from '@openzcad/document-core';
 import {
@@ -2592,11 +2593,11 @@ export function resolveSweepOptions(
   const twistDeg =
     data.twistDeg === undefined
       ? 0
-      : resolveParamValue(data.twistDeg, scope, 'twist');
+      : resolveDimensionedParam(data.twistDeg, scope, 'angle', 'twist');
   const endScale =
     data.endScale === undefined
       ? 1
-      : resolveParamValue(data.endScale, scope, 'end scale');
+      : resolveDimensionedParam(data.endScale, scope, 'number', 'end scale');
   if (!(endScale > 0)) {
     throw new Error('Sweep end scale must be greater than zero.');
   }
