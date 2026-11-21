@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addSketchFeature,
+  addSketchObjects,
   assertDocumentContentCommandSchema,
   assertDocumentContentSchema,
   createProjectDocument,
@@ -31,17 +32,33 @@ import { profileSketch, roundProfile } from './fixtures/swept-elbow';
  */
 const user = toUserId('user_exact_sweep_position');
 
+const isPathList = (
+  path: SketchObjectData | readonly SketchObjectData[]
+): path is readonly SketchObjectData[] => Array.isArray(path);
+
 function sweepWith(
   start: { document: ProjectDocument; section: SketchSectionReference },
-  path: SketchObjectData,
+  path: SketchObjectData | readonly SketchObjectData[],
   options: Pick<SweepInput, 'profilePosition' | 'orientation'>
 ) {
-  const sketch = addSketchFeature(start.document, {
+  const objects: readonly SketchObjectData[] = isPathList(path) ? path : [path];
+  const [first, ...rest] = objects;
+  const added = addSketchFeature(start.document, {
     name: 'Path',
     plane: 'XZ',
     offset: 0,
-    object: path
+    object: first!
   });
+  const sketch =
+    rest.length === 0
+      ? added
+      : {
+          ...added,
+          document: addSketchObjects(added.document, {
+            sketchId: added.sketchId,
+            objects: rest
+          }).document
+        };
   return sweepProfile(sketch.document, {
     name: 'Placed',
     profile: start.section,
@@ -180,6 +197,55 @@ describe(
           'where the profile stands is ambiguous'
         );
       }
+    });
+
+    it('refuses the same path with its end a hair off the plane, within the kernel tolerance', async () => {
+      const start = profileSketch(createProjectDocument('Near miss', user), {
+        objectKind: 'circle',
+        radius: 1,
+        centerX: -10,
+        centerY: 0
+      });
+      const { document, bodyId } = await built(
+        sweepWith(
+          start,
+          {
+            objectKind: 'arc',
+            centerX: 0,
+            centerY: 0,
+            radius: 10,
+            startAngleDeg: 150,
+            endAngleDeg: 359.9999971352
+          },
+          { profilePosition: 'intersection' }
+        )
+      );
+      expect(document.derived.bodyRepresentations[bodyId]).toBeUndefined();
+      const [warning] = document.derived.featureWarnings ?? [];
+      expect(warning!.kernelRefusal).toMatchObject({
+        code: 'sweep-position:ambiguous-crossing'
+      });
+    });
+
+    it('sweeps a through-path split at the profile plane, its joint not taken for an end', async () => {
+      const start = profileSketch(
+        createProjectDocument('Split', user),
+        roundProfile(1)
+      );
+      const { document, bodyId } = await built(
+        sweepWith(
+          start,
+          [
+            { objectKind: 'line', x1: 0, y1: -8, x2: 0, y2: 0 },
+            { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 12 }
+          ],
+          { profilePosition: 'intersection' }
+        )
+      );
+      expect(document.derived.warnings).toEqual([]);
+      const body = document.derived.bodyRepresentations[bodyId]!;
+      expect(body.bbox.min.z).toBeCloseTo(-12, 6);
+      expect(body.bbox.max.z).toBeCloseTo(8, 6);
     });
 
     it('names the guide rail when a position meets one', () => {

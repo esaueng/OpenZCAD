@@ -3042,51 +3042,95 @@ const AMBIGUOUS_CROSSING =
 
 /**
  * M04 (v136): Crossing and Auto anchor where the path meets the profile's
- * plane. The pinned kernel takes a path end lying on the plane before it
- * looks for a crossing inside an arc, so a path that both ends on the plane
- * and crosses it elsewhere could be anchored on the wrong side. Such a path
- * is refused, typed: conservatively, whenever an end lies on the plane and
- * any control point of the path lies strictly on each side of it (rational
- * curves with positive weights stay within their control hull).
+ * plane. The pinned kernel takes a path end lying on the plane (within its
+ * own 1e-6 tolerance) before it looks for a crossing inside an arc, so a
+ * path that ends on the plane and meets it anywhere else could be anchored
+ * at that end, on the wrong side of the profile. Such a path is refused,
+ * typed, before the kernel sees it.
+ *
+ * Only the chain's two free ends count as ends; joints between pieces do
+ * not. Each piece is judged on its own control hull (a rational curve with
+ * positive weights stays inside it): a piece away from the end may meet the
+ * plane when its hull reaches it, and the piece holding the end may meet it
+ * again only when its other control points reach the plane or straddle it.
+ * The test is conservative: it never lets an ambiguous path through, and a
+ * path that ends on the plane and meets it once only near that end passes.
  */
 function assertUnambiguousCrossing(
   kernel: RemusKernel,
   edges: readonly number[],
   plane: PlaneBasis
 ): void {
-  const distances: number[] = [];
-  const ends: number[] = [];
-  let scale = 1;
-  for (const edge of edges) {
+  type Piece = { points: Point[]; d: number[] };
+  const pieces: Piece[] = edges.map((edge) => {
     const curve = nurbsCurveOfEdge(kernel, edge, 'The sweep path');
-    const points = curve.controlPoints;
-    const count = points.length / 3;
-    for (let i = 0; i < count; i += 1) {
-      const p = {
-        x: points[3 * i]!,
-        y: points[3 * i + 1]!,
-        z: points[3 * i + 2]!
-      };
-      const d = dot3(minus(p, plane.origin), plane.normal);
-      scale = Math.max(scale, Math.abs(p.x), Math.abs(p.y), Math.abs(p.z));
-      distances.push(d);
-      if (i === 0 || i === count - 1) ends.push(d);
+    const raw = curve.controlPoints;
+    const points: Point[] = [];
+    for (let i = 0; i < raw.length / 3; i += 1) {
+      points.push({ x: raw[3 * i]!, y: raw[3 * i + 1]!, z: raw[3 * i + 2]! });
     }
-  }
-  const tolerance = 1e-9 * scale;
-  const endOnPlane = ends.some((d) => Math.abs(d) <= tolerance);
-  const above = distances.some((d) => d > tolerance);
-  const below = distances.some((d) => d < -tolerance);
-  if (endOnPlane && above && below) {
-    throw new KernelRefusal({
-      family: 'modeling',
-      category: 'unsupported',
-      kernelCode: 'sweep-position:ambiguous-crossing',
-      kernelMessage: AMBIGUOUS_CROSSING,
-      reason: AMBIGUOUS_CROSSING,
-      message: AMBIGUOUS_CROSSING
+    return {
+      points,
+      d: points.map((p) => dot3(minus(p, plane.origin), plane.normal))
+    };
+  });
+  const magnitude = Math.max(
+    1,
+    ...pieces.flatMap((piece) =>
+      piece.points.map((p) =>
+        Math.max(Math.abs(p.x), Math.abs(p.y), Math.abs(p.z))
+      )
+    )
+  );
+  // The kernel's own linear tolerance, plus the rounding of coordinates.
+  const onPlane = 1e-6 + 16 * Number.EPSILON * magnitude;
+  const joinTolerance = 1e-6 + 16 * Number.EPSILON * magnitude;
+  const same = (a: Point, b: Point) => norm3(minus(a, b)) <= joinTolerance;
+  // Free ends: a piece end no other piece shares.
+  const ends: { piece: number; index: number }[] = [];
+  pieces.forEach((piece, at) => {
+    for (const index of [0, piece.points.length - 1]) {
+      const p = piece.points[index]!;
+      const shared = pieces.some(
+        (other, k) =>
+          k !== at &&
+          (same(other.points[0]!, p) ||
+            same(other.points[other.points.length - 1]!, p))
+      );
+      if (!shared) ends.push({ piece: at, index });
+    }
+  });
+  const endsOnPlane = ends.filter(
+    (end) => Math.abs(pieces[end.piece]!.d[end.index]!) <= onPlane
+  );
+  if (endsOnPlane.length === 0) return;
+  const meetsElsewhere =
+    endsOnPlane.length > 1 ||
+    pieces.some((piece, at) => {
+      const end = endsOnPlane.find((e) => e.piece === at);
+      const others = piece.d.filter((_, index) => index !== end?.index);
+      if (end === undefined) {
+        // A piece away from the end meets the plane if its hull reaches it.
+        return (
+          Math.min(...others) <= onPlane && Math.max(...others) >= -onPlane
+        );
+      }
+      // The piece holding the end meets it again only if another control
+      // point reaches the plane or the hull straddles it.
+      return (
+        others.some((d) => Math.abs(d) <= onPlane) ||
+        (others.some((d) => d > onPlane) && others.some((d) => d < -onPlane))
+      );
     });
-  }
+  if (!meetsElsewhere) return;
+  throw new KernelRefusal({
+    family: 'modeling',
+    category: 'unsupported',
+    kernelCode: 'sweep-position:ambiguous-crossing',
+    kernelMessage: AMBIGUOUS_CROSSING,
+    reason: AMBIGUOUS_CROSSING,
+    message: AMBIGUOUS_CROSSING
+  });
 }
 
 function exactSweepSolid(
