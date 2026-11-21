@@ -168,11 +168,11 @@ describe('sectionOutline', () => {
     expect(report.refusals).toEqual([]);
     expect(report.regions).toHaveLength(1);
     const region = report.regions[0]!;
-    expect(region.area).toBeGreaterThan(180);
-    expect(region.area).toBeLessThan(200);
-    // The verdict on the boundary crosses out of the build with the region:
-    // the bore is chords here, and the report says so.
-    expect(region.boundary).toBe('approximate');
+    // The kernel keeps the bore's circle, so the area is the true one and
+    // the verdict that crosses out of the build with the region is exact.
+    // (A chorded boundary's verdict is covered in exact-section.test.ts.)
+    expect(Math.abs(region.area - (200 - Math.PI * 4))).toBeLessThan(1e-9);
+    expect(region.boundary).toBe('exact');
     // A verdict only: no figure for how far off the polygon is.
     expect(region).not.toHaveProperty('boundaryDeviation');
     expect(region).not.toHaveProperty('areaUncertainty');

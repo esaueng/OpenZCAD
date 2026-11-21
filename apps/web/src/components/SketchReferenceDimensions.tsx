@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
+  createSketchCompositeCenterTarget,
   createSketchCompositeCornerTarget,
   createSketchCompositeSideTarget,
   describeSketchReferenceDimension,
   resolveSketchReferenceDimension,
+  sketchShapeTargets,
   toSketchReferenceAnnotationId,
   type EntityId,
   type SketchNode,
@@ -13,9 +15,11 @@ import {
   type SketchReferencePointTarget,
   type SketchReferenceCurveTarget,
   type SketchReferenceDistanceMode,
-  type SketchReferenceDimensionData
+  type SketchReferenceDimensionData,
+  type SketchReferenceDisplayUnit
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import { referenceLengthText } from '../lib/sketch/dimensionAnnotations';
 import { sketchCompositeTargetNames } from '../lib/sketch/compositeTargetNames';
 import { SKETCH_SNAP_LIMITS } from '../lib/sketch/session';
 
@@ -26,7 +30,20 @@ interface Props {
   resolve(value: number | string): number | undefined;
   disabled: boolean;
   onCommand(command: AnyCommand): void;
+  /** S02: display only; the document keeps its units. */
+  displayUnit?: SketchReferenceDisplayUnit;
+  onDisplayUnitChange?(unit: SketchReferenceDisplayUnit): void;
 }
+
+const UNIT_NAMES: Record<
+  Exclude<SketchReferenceDisplayUnit, 'document'>,
+  string
+> = {
+  mm: 'Millimetres (mm)',
+  cm: 'Centimetres (cm)',
+  m: 'Metres (m)',
+  inch: 'Inches (in)'
+};
 
 /** Saved measurements are a separate instrument, never a numeric edit form. */
 export function SketchReferenceDimensions({
@@ -35,7 +52,9 @@ export function SketchReferenceDimensions({
   units,
   resolve,
   disabled,
-  onCommand
+  onCommand,
+  displayUnit = 'document',
+  onDisplayUnitChange
 }: Props) {
   const [kind, setKind] =
     useState<SketchReferenceDimensionData['dimensionKind']>('distance');
@@ -82,15 +101,58 @@ export function SketchReferenceDimensions({
     }));
   });
   points.push(
-    ...selectableComposites.flatMap((composite) =>
-      composite.edgeIds.map((_, index) => ({
+    ...selectableComposites.flatMap((composite) => [
+      ...composite.edgeIds.map((_, index) => ({
         key: JSON.stringify(
           createSketchCompositeCornerTarget(composite, index)
         ),
         label: `${nameOfComposite(composite.compositeId)} · Corner ${index + 1}`
-      }))
-    )
+      })),
+      {
+        key: JSON.stringify(createSketchCompositeCenterTarget(composite)),
+        label: `${nameOfComposite(composite.compositeId)} · Centre`
+      }
+    ])
   );
+  // A legacy rectangle or polygon is measured where it stands; it is never
+  // converted to reach its corners. Its corners follow the shape's own order.
+  // "(parametric)" keeps an unnamed one ("Rectangle 1") apart from a
+  // held-line shape of the same name.
+  // Their options share the snap target budget, as composite options do.
+  let shapes: {
+    object: (typeof namedObjects)[number];
+    targets: NonNullable<ReturnType<typeof sketchShapeTargets>>;
+  }[] = [];
+  let shapeOptionCount = 0;
+  for (const object of namedObjects) {
+    if (
+      object.data.objectKind !== 'rectangle' &&
+      object.data.objectKind !== 'polygon'
+    )
+      continue;
+    const targets = sketchShapeTargets(
+      object.id as EntityId,
+      object.data,
+      resolve
+    );
+    if (!targets) continue;
+    shapeOptionCount += targets.corners.length + 1;
+    shapes.push({ object, targets });
+    if (shapeOptionCount > SKETCH_SNAP_LIMITS.targets) break;
+  }
+  const shapeOptionsLimited = shapeOptionCount > SKETCH_SNAP_LIMITS.targets;
+  if (shapeOptionsLimited) shapes = [];
+  for (const { object, targets } of shapes) {
+    for (const target of targets.corners)
+      points.push({
+        key: JSON.stringify(target),
+        label: `${object.label} (parametric) · Corner ${target.index + 1}`
+      });
+    points.push({
+      key: JSON.stringify(targets.center),
+      label: `${object.label} (parametric) · Centre`
+    });
+  }
   const entities = namedObjects
     .filter((o) =>
       kind === 'angle'
@@ -114,6 +176,33 @@ export function SketchReferenceDimensions({
           };
         })
       )
+    );
+  if (kind === 'angle')
+    for (const { object, targets } of shapes)
+      for (const target of targets.sides)
+        entities.push({
+          key: JSON.stringify(target),
+          label: `${object.label} (parametric) · Side ${target.index + 1}`,
+          target
+        });
+  // The sketch's own datum: fixed in its local frame, never an object.
+  points.unshift({
+    key: JSON.stringify({ kind: 'sketch-origin' }),
+    label: 'Sketch origin'
+  });
+  if (kind === 'angle')
+    entities.unshift(
+      ...(['x', 'y'] as const).map((axis) => {
+        const target: SketchReferenceCurveTarget = {
+          kind: 'sketch-axis',
+          axis
+        };
+        return {
+          key: JSON.stringify(target),
+          label: `Sketch ${axis.toUpperCase()} axis`,
+          target
+        };
+      })
     );
   const options = kind === 'distance' ? points : entities;
   const a = options.some((o) => o.key === first) ? first : '';
@@ -151,7 +240,7 @@ export function SketchReferenceDimensions({
       ? 'Unresolved'
       : outcome.dimensionKind === 'angle'
         ? `${formatNumber(outcome.valueDeg)}°`
-        : `${formatNumber(outcome.value)} ${units === 'inch' ? 'in' : units}`;
+        : referenceLengthText(outcome.value, units, displayUnit);
   const nameOf = (id: EntityId) =>
     namedObjects.find((o) => o.id === id)?.label ?? String(id);
   return (
@@ -161,6 +250,36 @@ export function SketchReferenceDimensions({
         Saved measured values. They do not constrain geometry. Horizontal and
         vertical distances follow the sketch axes.
       </p>
+      {onDisplayUnitChange ? (
+        <label>
+          Show lengths in
+          <select
+            value={displayUnit}
+            onChange={(event) =>
+              onDisplayUnitChange(
+                event.currentTarget.value as SketchReferenceDisplayUnit
+              )
+            }
+          >
+            <option value="document">
+              Document units ({units === 'inch' ? 'in' : units})
+            </option>
+            {(Object.keys(UNIT_NAMES) as (keyof typeof UNIT_NAMES)[]).map(
+              (unit) => (
+                <option key={unit} value={unit}>
+                  {UNIT_NAMES[unit]}
+                </option>
+              )
+            )}
+          </select>
+        </label>
+      ) : null}
+      {shapeOptionsLimited ? (
+        <p role="status">
+          Parametric shape targets are unavailable because this sketch exceeds
+          the target limit. Other references remain available.
+        </p>
+      ) : null}
       {compositeOptionsLimited ? (
         <p role="status">
           Composite targets are unavailable because this sketch exceeds the

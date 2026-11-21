@@ -14,8 +14,10 @@ import {
   extrudeFormValue,
   extrudeIsThroughAll,
   extrudeIsToFace,
+  extrudeIsToNext,
   extrudeNeedsTarget,
   extrudeOffersThroughAll,
+  extrudeOffersToNext,
   extrudeShownExtent,
   initialExtrudeDraft,
   reversedDistance,
@@ -55,7 +57,11 @@ export interface ExtrudeCommandState {
   backDistance: number;
   /** F01 (v113): the offset from the face (To face only). */
   faceOffset: number;
+  /** F01 (v121): the start offset along the sketch normal. */
+  startOffset: number;
   draftAngle: number;
+  /** F01 (v126): the back side's draft (two-sided blind only). */
+  backDraftAngle: number;
   /** Each value as its text holds it (a typed expression as typed). */
   texts: Record<ExtrudeValueId, string>;
 }
@@ -160,7 +166,9 @@ const VALUE_LABELS: Record<ExtrudeValueId, string> = {
   distance: 'Distance',
   backDistance: 'Back distance',
   faceOffset: 'Offset from face',
-  draftAngle: 'Draft angle'
+  startOffset: 'Start offset',
+  draftAngle: 'Draft angle',
+  backDraftAngle: 'Back draft angle'
 };
 
 /**
@@ -178,7 +186,9 @@ export function extrudeChangedInput(
     'distance',
     'backDistance',
     'faceOffset',
-    'draftAngle'
+    'startOffset',
+    'draftAngle',
+    'backDraftAngle'
   ] as const) {
     if (next[valueId] !== previous[valueId]) return VALUE_LABELS[valueId];
   }
@@ -249,7 +259,8 @@ export function ExtrudeCommand({
   };
   const throughAll = extrudeIsThroughAll(draft);
   const toFace = extrudeIsToFace(draft, ctx);
-  const blind = !throughAll && !toFace;
+  const toNext = extrudeIsToNext(draft);
+  const blind = !throughAll && !toFace && !toNext;
 
   function stateOf(next: ExtrudeDraft): ExtrudeCommandState {
     const value = extrudeFormValue(next, ctx);
@@ -260,12 +271,16 @@ export function ExtrudeCommand({
       distance: evaluated(next.distance, 'length'),
       backDistance: evaluated(next.backDistance, 'length'),
       faceOffset: evaluated(next.faceOffset, 'length'),
+      startOffset: evaluated(next.startOffset, 'length'),
       draftAngle: evaluated(next.draftAngle, 'angle'),
+      backDraftAngle: evaluated(next.backDraftAngle, 'angle'),
       texts: {
         distance: next.distance,
         backDistance: next.backDistance,
         faceOffset: next.faceOffset,
-        draftAngle: next.draftAngle
+        startOffset: next.startOffset,
+        draftAngle: next.draftAngle,
+        backDraftAngle: next.backDraftAngle
       }
     };
   }
@@ -317,7 +332,11 @@ export function ExtrudeCommand({
     change({
       toFace: target,
       endCondition: 'to-face',
-      ...(reach !== null ? { distance: toFaceReachText(reach) } : {})
+      // A face on the sketch plane has no reach to keep: the typed
+      // distance stays for switching back.
+      ...(reach !== null && reach !== 0
+        ? { distance: toFaceReachText(reach) }
+        : {})
     });
   };
   const faceReach =
@@ -373,6 +392,10 @@ export function ExtrudeCommand({
       change({ backDistance: text, symmetric: false });
     } else if (valueId === 'faceOffset') {
       change({ faceOffset: text });
+    } else if (valueId === 'startOffset') {
+      change({ startOffset: text });
+    } else if (valueId === 'backDraftAngle') {
+      change({ backDraftAngle: text });
     } else {
       change({ draftAngle: text });
     }
@@ -436,7 +459,9 @@ export function ExtrudeCommand({
         : 'Pick the face to reach'
       : throughAll
         ? `Through all${regions}`
-        : `Drag the arrows, or tap a value${regions}`;
+        : toNext
+          ? `Up to the next face${evaluated(draft.distance, 'length') < 0 ? ', reversed' : ''}${regions}`
+          : `Drag the arrows, or tap a value${regions}`;
   const checking =
     previewPending &&
     !toFacePicking?.armed &&
@@ -499,7 +524,11 @@ export function ExtrudeCommand({
       }))
     });
   }
-  if (extrudeOffersThroughAll(draft) || toFacePicking) {
+  if (
+    extrudeOffersThroughAll(draft) ||
+    extrudeOffersToNext(draft) ||
+    toFacePicking
+  ) {
     options.push({
       id: 'extent',
       label: 'Extent',
@@ -512,6 +541,15 @@ export function ExtrudeCommand({
                 value: 'to-face',
                 label: 'To face',
                 tip: 'Follows the face if it moves'
+              }
+            ]
+          : []),
+        ...(extrudeOffersToNext(draft)
+          ? [
+              {
+                value: 'to-next',
+                label: 'Up to next',
+                tip: "Stops at the target's next face"
               }
             ]
           : []),
@@ -590,12 +628,22 @@ export function ExtrudeCommand({
   }
 
   const values = extrudeShownValues({
-    extent: throughAll ? 'through-all' : toFace ? 'to-face' : 'blind',
-    symmetric: draft.symmetric
+    extent: throughAll
+      ? 'through-all'
+      : toFace
+        ? 'to-face'
+        : toNext
+          ? 'to-next'
+          : 'blind',
+    symmetric: draft.symmetric,
+    backDistance: evaluated(draft.backDistance, 'length')
   }).map((valueId) => {
     const text = draft[valueId];
     const plain = Number(text.trim());
-    const unit = valueId === 'draftAngle' ? '°' : ` ${units}`;
+    const unit =
+      valueId === 'draftAngle' || valueId === 'backDraftAngle'
+        ? '°'
+        : ` ${units}`;
     const formatted = formatNumber(plain);
     return {
       id: valueId,
@@ -607,7 +655,7 @@ export function ExtrudeCommand({
   });
 
   const actions = [
-    ...(blind ? [{ id: 'reverse', label: 'Reverse direction' }] : []),
+    ...(blind || toNext ? [{ id: 'reverse', label: 'Reverse direction' }] : []),
     ...(toFace && toFacePicking
       ? [
           {
@@ -641,7 +689,14 @@ export function ExtrudeCommand({
       actions={actions}
       onAction={(actionId) => {
         if (actionId === 'reverse') {
-          change({ distance: reversedDistance(draft.distance) });
+          // Up to next reads only the distance's sign: a dormant zero
+          // reverses to -1, not to -0 (which still points forward).
+          change({
+            distance:
+              toNext && evaluated(draft.distance, 'length') === 0
+                ? '-1'
+                : reversedDistance(draft.distance)
+          });
         } else if (actionId === 'pick-face') {
           toFacePicking?.onPick();
         }

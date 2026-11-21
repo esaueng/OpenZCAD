@@ -625,11 +625,10 @@ test('opens and switches public links in an already-open Settings tab', async ({
   }, tokens[0]);
   await expect(page.locator('.breadcrumb')).toContainText(first.name);
   await expect(page.getByRole('dialog', { name: 'Settings' })).toHaveCount(0);
-  await expect(
-    page
-      .getByRole('group', { name: 'Workspace mode' })
-      .getByRole('button', { name: 'Build' })
-  ).toBeDisabled();
+  // A shared link shows only the modes it opens: Build is not offered.
+  const modes = page.getByRole('group', { name: 'Workspace mode' });
+  await expect(modes.getByRole('button', { name: 'Tweak' })).toBeEnabled();
+  await expect(modes.getByRole('button', { name: 'Build' })).toHaveCount(0);
   await page.evaluate((token) => {
     window.location.hash = `share=${token}`;
   }, tokens[1]);
@@ -1093,6 +1092,47 @@ test('keeps the share session chip a visible glyph on a phone', async ({
   await expect(
     page.locator('.topbar').getByRole('button', { name: 'Make a copy', exact: true })
   ).toBeVisible();
+});
+
+// The owner now picks View or Tweak for a plaintext link too; a View link's
+// visitor stays in View, as an encrypted View link's does.
+test('pins a plaintext view link to View', async ({ page }) => {
+  // On a phone the switch has a row of its own, which goes with it.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubAnonymousApi(page);
+  const document = createProjectDocument('View source', toUserId('owner'));
+  await page.route('**/api/share', (route) =>
+    route.fulfill({
+      json: {
+        document,
+        project: {
+          projectId: document.projectId,
+          name: document.name,
+          mode: 'view'
+        }
+      }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  await expect(
+    page
+      .locator('.topbar')
+      .getByRole('status', { name: 'Shared model · View only' })
+  ).toBeVisible();
+  // View is the only mode left, so there is no switch to show.
+  await expect(
+    page.getByRole('group', { name: 'Workspace mode' })
+  ).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Tweak' })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page
+        .locator('.app-shell')
+        .evaluate((shell) =>
+          getComputedStyle(shell).getPropertyValue('--phone-mode-h').trim()
+        )
+    )
+    .toBe('0px');
 });
 
 test('makes a durable share copy without storing the owner snapshot', async ({

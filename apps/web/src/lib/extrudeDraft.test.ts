@@ -34,25 +34,28 @@ describe('extrude draft rules', () => {
     );
   });
 
-  it('refuses a draft beside Symmetric or a back distance, by name', () => {
+  it('drafts beside Symmetric or a back distance, and refuses a back draft without one', () => {
     expect(
       extrudeDraftRefusal(
         draft({ distance: '10', draftAngle: '3', symmetric: true }),
         ctx,
         true
       )
-    ).toBe(
-      'Draft tapers a one-sided extrusion; turn off Symmetric to draft it.'
-    );
+    ).toBeNull();
     expect(
       extrudeDraftRefusal(
         draft({ distance: '10', draftAngle: '3', backDistance: '2' }),
         ctx,
         true
       )
-    ).toBe(
-      'Draft tapers a one-sided extrusion; clear Back distance to draft it.'
-    );
+    ).toBeNull();
+    expect(
+      extrudeDraftRefusal(
+        draft({ distance: '10', backDraftAngle: '3' }),
+        ctx,
+        true
+      )
+    ).toBeNull();
     expect(
       extrudeDraftRefusal(
         draft({ distance: '10', draftAngle: '89' }),

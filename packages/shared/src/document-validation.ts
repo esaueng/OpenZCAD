@@ -283,7 +283,8 @@ const GEAR_SIZINGS = valuesOf<GearSizing>({
 const END_CONDITIONS = valuesOf<ExtrudeEndCondition>({
   blind: true,
   'through-all': true,
-  'to-face': true
+  'to-face': true,
+  'to-next': true
 });
 const THROUGH_ALL_SIDES = valuesOf<ThroughAllSide>({
   forward: true,

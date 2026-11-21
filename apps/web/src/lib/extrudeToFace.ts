@@ -8,7 +8,7 @@ import {
   getParameterScope,
   listFeaturesInOrder,
   resolveParamValue,
-  toFaceSignedDistance
+  toFaceParallelHeight
 } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -226,7 +226,8 @@ export function toFaceDistanceEstimate(
     return null;
   }
   // The exact build's own test, so the card never offers a face it refuses.
-  return toFaceSignedDistance(basis, {
+  // A face on the sketch plane reads as 0: a start offset can reach it.
+  return toFaceParallelHeight(basis, {
     point: face.origin,
     normal: face.normal
   });
