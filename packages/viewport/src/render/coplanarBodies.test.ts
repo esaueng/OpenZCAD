@@ -119,6 +119,49 @@ describe('coplanar opaque body depth', () => {
     geometry.dispose();
   });
 
+  it('rechecks offsets when parallel faces share a normal lookup', () => {
+    function shelves(id: string, heights: number[]): BodyRepresentation {
+      const body = box(id);
+      body.mesh = {
+        kind: 'mesh',
+        vertices: Float32Array.from(
+          heights.flatMap((z) => [0, 0, z, 2, 0, z, 0, 2, z])
+        ),
+        indices: Uint32Array.from({ length: heights.length * 3 }, (_, i) => i)
+      };
+      delete body.topology;
+      body.bbox = {
+        min: { x: 0, y: 0, z: Math.min(...heights) },
+        max: { x: 2, y: 2, z: Math.max(...heights) }
+      };
+      return body;
+    }
+    const first = shelves('a', [0, 2]);
+    for (const [height, expected] of [
+      [1, 0],
+      [2, 1],
+      [1, 0],
+      [0, 1]
+    ] as const) {
+      expect(
+        coplanarBodyDepthSlots([first, shelves('b', [height])]).get('b')
+      ).toBe(expected);
+    }
+  });
+
+  it('rebuilds cached plane buckets when a retained mesh gets new face ranges', () => {
+    const a = box('a');
+    const b = box('b');
+    const original = a.topology!;
+    b.topology = { ...b.topology!, faces: [b.topology!.faces[0]!] };
+    const slot = () => coplanarBodyDepthSlots([a, b]).get('b');
+    expect(slot()).toBe(1);
+    a.topology = { ...original, faces: [original.faces[1]!] };
+    expect(slot()).toBe(0);
+    a.topology = original;
+    expect(slot()).toBe(1);
+  });
+
   it('does not treat curved face ranges as one planar face', () => {
     const a = box('a');
     const b = box('b');
