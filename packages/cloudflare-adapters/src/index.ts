@@ -11419,6 +11419,11 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
       return;
     }
+    // The membership read above can outlast the socket. A renewal the holder
+    // can no longer receive is not acknowledged, so it must not extend the
+    // lease either: storing it would let a departed holder's lease outlive
+    // its last acknowledged expiry by more than the GAP bound after eviction.
+    if (socket.readyState !== WebSocket.OPEN) return;
     const current = this.activeLease(
       connection.userId,
       connection.clientId,

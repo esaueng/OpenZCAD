@@ -1264,6 +1264,29 @@ describe('coalesced lease renewal writes', () => {
     });
   });
 
+  it('does not store a renewal whose socket closed before it was granted (re-check 1)', async () => {
+    const { now, context, owner, lease, document, leaseWrites } =
+      await heldLease();
+    for (let at = startedAt + 10_000; at <= startedAt + 20_000; at += 10_000) {
+      now.mockReturnValue(at);
+      await renew(owner, lease, at);
+    }
+    // Acknowledged expiry: +50 s. The +30 s renewal is due a write, but the
+    // socket closes while the room is still checking membership.
+    now.mockReturnValue(startedAt + 30_000);
+    const writes = leaseWrites();
+    owner.close(1006, 'network lost');
+    await owner.receive(renewFrame(lease.clientId, lease.leaseId));
+    expect(leaseWrites()).toBe(writes);
+
+    // After eviction the lease ends no later than GAP past +50 s.
+    now.mockReturnValue(startedAt + 50_000 + GAP + 1);
+    const woken = createTestRoom(context, leaseEnv);
+    expect(await contend(woken, document.projectId)).toMatchObject({
+      type: 'lease-granted'
+    });
+  });
+
   it('keeps the later expiry an older Worker wrote over a stale renewedAt (review 4)', async () => {
     const { now, context, values, owner, lease, document } = await heldLease();
     owner.close(1006, 'network lost');
