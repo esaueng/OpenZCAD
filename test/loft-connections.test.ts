@@ -293,6 +293,26 @@ describe(
       expect(warning!.message).toContain(
         'A loft guide is one curve of its guide sketch'
       );
+      expect(warning!.kernelRefusal).toMatchObject({
+        category: 'unsupported',
+        code: 'loft-guide:not-one-curve'
+      });
+    });
+
+    it('refuses a guide that stops before the last section, typed', async () => {
+      const start = stack('Short guide');
+      // From the bottom corner (−1, −1, 0) up to z = 5 only: the top section
+      // at z = 10 is never reached.
+      const { document, bodyId } = await built(
+        withGuide(start, { objectKind: 'line', x1: -1, y1: 0, x2: 0, y2: -5 })
+      );
+      expect(document.derived.bodyRepresentations[bodyId]).toBeUndefined();
+      const [warning] = document.derived.featureWarnings ?? [];
+      expect(warning!.message).toContain('does not reach section 2');
+      expect(warning!.kernelRefusal).toMatchObject({
+        category: 'unsupported',
+        code: 'loft-guide:short'
+      });
     });
 
     it('refuses a loft whose guide sketch failed to solve, before building', () => {
