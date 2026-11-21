@@ -498,6 +498,10 @@ export function EncryptedShareLinks({
     setTransientRemoval((current) => (current === transient ? null : current));
   };
   const disabled = busy !== null || state === null;
+  // The form shows only while sharing needs confirming, so only then may
+  // it hold the other controls: a refresh that finds the confirmation
+  // (in any order with the action that made it) frees them.
+  const awaitingConfirmation = confirming && !!state?.needsConfirmation;
 
   return (
     <section
@@ -522,7 +526,7 @@ export function EncryptedShareLinks({
       <div className="sharing-link-create">
         <ShareLinkModePicker
           value={mode}
-          disabled={busy !== null || confirming}
+          disabled={busy !== null || awaitingConfirmation}
           describedBy={detailId}
           onChange={setMode}
         />
@@ -530,7 +534,7 @@ export function EncryptedShareLinks({
           <input
             type="checkbox"
             checked={withComments}
-            disabled={busy !== null || confirming}
+            disabled={busy !== null || awaitingConfirmation}
             aria-describedby={detailId}
             onChange={(event) => setWithComments(event.target.checked)}
           />
@@ -539,7 +543,7 @@ export function EncryptedShareLinks({
         <button
           type="button"
           className={links.length > 0 ? 'secondary' : 'primary'}
-          disabled={disabled || confirming}
+          disabled={disabled || awaitingConfirmation}
           onClick={() => {
             // One action (design review I79): Create link asks for the
             // confirmation sharing needs, then makes the link.

@@ -583,10 +583,14 @@ async function openStore(
           // The wait may have let newer versions land (another member's
           // save): work from the head as it is now, so a statement renewed
           // here republishes the newest snapshot, not this version's.
-          const latest = await ctx.store.shareHead(projectId).catch(() => head);
-          const current = latest.version >= head.version ? latest : head;
+          // Without the current head, publish this version only: renewing
+          // from it could leave a newer snapshot older than the statement.
+          const latest = await ctx.store.shareHead(projectId).catch(() => null);
+          const current =
+            latest && latest.version >= head.version ? latest : head;
           if (!current.shareLinks?.links.length) return;
           await links.publishShareSnapshots(ctx, projectId, current);
+          if (!latest) return;
           await links
             .issueShareAuthorities(ctx, projectId, { head: current })
             .catch(() => undefined);

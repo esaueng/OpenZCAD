@@ -601,6 +601,29 @@ describe('EncryptedShareLinks speed', () => {
     expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
   });
 
+  it('frees Create link when another refresh saw the confirmation before the action failed', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: true },
+      { links: [], retired: [], needsConfirmation: false, passkey: true }
+    ]);
+    let fail: (error: Error) => void = () => undefined;
+    vi.mocked(client.confirm).mockImplementationOnce(
+      () => new Promise((_, reject) => (fail = reject))
+    );
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    await userEvent.click(create);
+    // A removal refresh lands first and finds the stored confirmation...
+    await act(async () => client.fireRemoval());
+    // ...then the action's later step fails.
+    await act(async () => fail(new Error('Statements could not be issued.')));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'could not be issued'
+    );
+    await waitFor(() => expect(create).toBeEnabled());
+    expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
+  });
+
   it('asks for the recovery key without a passkey prompt when the account has none', async () => {
     const client = fakeClient([
       { links: [], retired: [], needsConfirmation: true, passkey: false }
