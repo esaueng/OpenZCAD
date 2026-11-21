@@ -710,7 +710,7 @@ export function ExtrudeCommand({
 
   const actions = [
     // A curved face is reached either way from inside it: the distance's
-    // sign, which Reverse sets, decides (F01, v124).
+    // sign, which Reverse sets, decides (F01, v131).
     ...(blind || toNext || (toFace && draft.toFace?.type === 'surface')
       ? [{ id: 'reverse', label: 'Reverse direction' }]
       : []),

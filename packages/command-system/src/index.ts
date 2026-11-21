@@ -1073,7 +1073,7 @@ function validateToFaceBody(
   input: Pick<ExtrudeInput, 'toFace' | 'toSurface'>,
   ownBodyId: BodyId | undefined
 ): void {
-  // F01 (v124): a curved target names its body the same way.
+  // F01 (v131): a curved target names its body the same way.
   const bodyId = input.toFace?.bodyId ?? input.toSurface?.bodyId;
   if (bodyId === undefined) return;
   if (bodyId === ownBodyId) {
