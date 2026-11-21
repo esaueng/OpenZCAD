@@ -46,7 +46,11 @@ import {
   validateKeepOriginals
 } from '@openzcad/document-core';
 import { throughAllSpan, unionBounds } from './through-all';
-import { toFaceSweepFeature } from './extrude-options';
+import { resolveToFaceTarget, toFaceSweepFeature } from './extrude-options';
+import {
+  planSlantedToFace,
+  trimToSlantedFace
+} from './extrude-to-face-slanted';
 import {
   toNextReach,
   toNextSweepFeature,
@@ -857,14 +861,43 @@ function buildExtrudeFeature(
       data.endCondition === 'to-next'
         ? toNextFeature(ctx, feature, data)
         : null;
+    // A face parallel to the sketch keeps the derived blind distance it
+    // always had; a slanted one sweeps past it and is split by its plane.
+    const toFace =
+      data.endCondition === 'to-face'
+        ? resolveToFaceTarget(kernel, document, feature, data, result)
+        : null;
+    const slanted =
+      toFace?.kind === 'slanted'
+        ? planSlantedToFace(
+            kernel,
+            document,
+            feature,
+            data,
+            toFace.frame,
+            result.sketchBases.get(data.sketchId)!,
+            result.sketchBases,
+            scope
+          )
+        : null;
     const sweepFeature =
       data.endCondition === 'through-all'
         ? throughAllSweepFeature(ctx, feature, data)
-        : data.endCondition === 'to-face'
-          ? toFaceSweepFeature(kernel, document, feature, data, result, scope)
-          : toNext
-            ? toNext.sweep
-            : feature;
+        : slanted
+          ? slanted.sweep
+          : data.endCondition === 'to-face'
+            ? toFaceSweepFeature(
+                kernel,
+                document,
+                feature,
+                data,
+                result,
+                scope,
+                toFace?.kind === 'parallel' ? toFace.distance : undefined
+              )
+            : toNext
+              ? toNext.sweep
+              : feature;
     const swept = buildSweep(
       kernel,
       document,
@@ -873,17 +906,24 @@ function buildExtrudeFeature(
       result.sketchBases,
       (message) => raiseFeatureWarning(result, feature, message, 'advisory')
     );
-    const extrusion = toNext
-      ? trimToNext(
+    const extrusion = slanted
+      ? trimToSlantedFace(
           kernel,
           swept,
-          toNext.target,
-          toNext.operation,
-          toNext.reach,
-          `Extrude "${feature.name}"`,
-          toNext.targetName
+          slanted.slanted,
+          `Extrude "${feature.name}"`
         )
-      : swept;
+      : toNext
+        ? trimToNext(
+            kernel,
+            swept,
+            toNext.target,
+            toNext.operation,
+            toNext.reach,
+            `Extrude "${feature.name}"`,
+            toNext.targetName
+          )
+        : swept;
     const operation = data.operation ?? 'new-body';
     if (operation === 'new-body') {
       // Recorded so a later boolean can rebuild this exact tool with pierce
@@ -1037,7 +1077,7 @@ function buildExtrudeFeature(
         () =>
           // A to-next tool is regions of the target, not the swept feature
           // a pierced twin rebuilds.
-          operation === 'intersect' || toNext
+          operation === 'intersect' || toNext || slanted
             ? null
             : piercedExtrudeTool(
                 ctx,
@@ -1054,7 +1094,7 @@ function buildExtrudeFeature(
     // typed coplanar refusal; never accept an invalid result or extend a
     // tool through an existing hole or a thin cavity roof.
     if (combined.union && verdictRefusesUnion(combined.union.verdict)) {
-      if (combined.tool === extrusion && !toNext) {
+      if (combined.tool === extrusion && !toNext && !slanted) {
         const pierced = piercedExtrudeTool(
           ctx,
           sweepFeature,
