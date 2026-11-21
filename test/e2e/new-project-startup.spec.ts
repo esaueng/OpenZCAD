@@ -272,7 +272,7 @@ test('opening a saved model starts one rebuild before viewport setup @ci-smoke',
     ) as PerformanceMark[];
     const [init] = performance.getEntriesByName('oz:viewer.init:begin');
     return {
-      policies: posts.map((mark) => mark.detail),
+      policies: posts.map((mark) => mark.detail === true),
       beforeSetup: Boolean(
         init && posts[0] && posts[0].startTime <= init.startTime
       )
