@@ -230,14 +230,16 @@ export function patternSpacingModeProblem(data: {
 
 /**
  * Whether a feature is one a feature pattern repeats: a hole, an extrude
- * that adds to or cuts its target body, or (M02) a fillet or chamfer, which
- * each copy takes where it holds the edges the original rounded.
+ * that adds to or cuts its target body, (M02) a fillet or chamfer, which
+ * each copy takes where it holds the edges the original rounded, or a wrap,
+ * whose material each copy embosses or engraves where it lands.
  */
 export function isPatternableFeature(data: FeatureData): boolean {
   if (
     data.featureKind === 'hole' ||
     data.featureKind === 'fillet' ||
-    data.featureKind === 'chamfer'
+    data.featureKind === 'chamfer' ||
+    data.featureKind === 'wrap'
   )
     return true;
   return (
@@ -269,5 +271,5 @@ export function patternSourceProblem(
     return `${name} changes its radius along the edge, and a copy's edge can run the other way, so a pattern repeats only a constant-radius fillet; fillet the copies' edges directly.`;
   }
   if (isPatternableFeature(data)) return null;
-  return `${name} is not a hole, boss, cut, fillet or chamfer, so a feature pattern cannot repeat it.`;
+  return `${name} is not a hole, boss, cut, fillet, chamfer or wrap, so a feature pattern cannot repeat it.`;
 }

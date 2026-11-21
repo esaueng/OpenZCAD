@@ -130,6 +130,7 @@
   "pattern-total-length.spec.ts": 12,
   "point-pattern.spec.ts": 12,
   "pattern-blends.spec.ts": 12,
+  "pattern-wraps.spec.ts": 12,
   "print-clearance.spec.ts": 20,
   "progressive-loading.spec.ts": 10,
   "rail-keyboard-and-drawer.spec.ts": 8,
