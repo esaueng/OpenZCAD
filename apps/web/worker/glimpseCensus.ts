@@ -130,21 +130,6 @@ function withoutActivity(value: Census): Census {
   for (const field of ACTIVITY_FIELDS) delete copy[field];
   return copy;
 }
-/**
- * The UTC hour whose hourly cron run publishes the census. Glimpse keeps one
- * census row per day (`CensusRow.day`), so the other 23 runs would only
- * repeat the whole-library scan below, which holds D1's single writer while
- * it runs. A consent change still publishes at once (see accountConsent).
- */
-export const CENSUS_UTC_HOUR = 3;
-/**
- * Whether the cron run scheduled at `scheduledTime` (ms since the epoch, the
- * trigger's `scheduledTime`) is the day's census run. Deciding from the
- * trigger time needs no write: exactly one run of `17 * * * *` matches a day.
- */
-export function isCensusRun(scheduledTime: number): boolean {
-  return new Date(scheduledTime).getUTCHours() === CENSUS_UTC_HOUR;
-}
 export async function publishCensus(env: CensusEnv): Promise<boolean> {
   if (
     !env.DB ||
@@ -180,8 +165,7 @@ export async function publishCensus(env: CensusEnv): Promise<boolean> {
     } catch (error) {
       // A Glimpse deployment older than the activity fields rejects the whole
       // snapshot as invalid. Retry exactly once without them, so the agreed
-      // totals keep flowing; any other failure waits for the next day's run
-      // or the next consent change.
+      // totals keep flowing; any other failure waits for the next hour.
       if (
         !ACTIVITY_FIELDS.some((field) => field in value) ||
         !/invalid census/i.test(String(error))

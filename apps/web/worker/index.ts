@@ -1,5 +1,5 @@
 import { releaseDevelopmentE2eeWrite } from './e2eeWriteAuthorization';
-import { accountConsent, isCensusRun, publishCensus } from './glimpseCensus';
+import { accountConsent, publishCensus } from './glimpseCensus';
 import { publishAdoption } from './glimpseAdoption';
 import {
   countApi,
@@ -3190,7 +3190,7 @@ async function handleAppRequest(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async scheduled(controller: unknown, env: Env): Promise<void> {
+  async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
     // Objects failed writes left pending (migration 0055), however their
@@ -3233,20 +3233,7 @@ export default {
             isE2eeDefaultOn(env, email)
         : undefined
     );
-    // The census is day-keyed and scans every consenting library: once a
-    // day. Adoption counts only users and sign-in sessions: every run.
-    const scheduledTime = (controller as { scheduledTime?: unknown } | null)
-      ?.scheduledTime;
-    await Promise.all([
-      isCensusRun(
-        typeof scheduledTime === 'number' && Number.isFinite(scheduledTime)
-          ? scheduledTime
-          : Date.now()
-      )
-        ? publishCensus(env)
-        : undefined,
-      publishAdoption(env)
-    ]);
+    await Promise.all([publishCensus(env), publishAdoption(env)]);
   },
   async fetch(
     request: Request,
