@@ -2912,6 +2912,8 @@ export function App() {
   );
   const [shareSession, setShareSession] = useState<{
     token: string;
+    /** What the link lets its visitor do, plaintext or encrypted. */
+    mode: 'view' | 'tweak';
     encryptedMode?: 'view' | 'tweak';
     /** L08: a plaintext commenter link; its visitor may comment. */
     comments?: boolean;
@@ -7095,9 +7097,9 @@ export function App() {
   // A parameter change is still a document edit, so a read-only seat locks
   // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
   // the whole point of the visit.
-  // An encrypted link's verified statement says view or tweak (slice 5-11):
-  // a view-only link locks Tweak too. A plaintext link's visitor chooses.
-  const shareLinkViewOnly = shareSession?.encryptedMode === 'view';
+  // An encrypted link's verified statement says view or tweak (slice 5-11),
+  // and a plaintext link's record does: a view-only link locks Tweak too.
+  const shareLinkViewOnly = shareSession?.mode === 'view';
   const tweakModeDisabledReason = shareSession
     ? shareLinkViewOnly
       ? 'This link is view only — Make a copy to change its parameters'
@@ -16222,6 +16224,7 @@ export function App() {
         let shared: {
           name: string;
           document: ProjectDocument;
+          mode: 'view' | 'tweak';
           encryptedMode?: 'view' | 'tweak';
           comments?: boolean;
           encryptedComments?: LinkCommentsAccess | null;
@@ -16239,6 +16242,7 @@ export function App() {
           shared = opened && {
             name: opened.name,
             document: opened.document,
+            mode: opened.mode,
             encryptedMode: opened.mode,
             encryptedComments: opened.comments
           };
@@ -16253,6 +16257,9 @@ export function App() {
           shared = plaintext && {
             name: plaintext.project.name,
             document: plaintext.document,
+            // A plaintext link's mode is the owner's choice too; links from
+            // before it was offered are all Tweak.
+            mode: plaintext.project.mode === 'view' ? 'view' : 'tweak',
             ...(plaintext.project.comments ? { comments: true } : {})
           };
         }
@@ -16292,12 +16299,14 @@ export function App() {
         const opened = shared.encryptedMode
           ? {
               token: pendingShareToken,
+              mode: shared.mode,
               encryptedMode: shared.encryptedMode,
               comments: !!shared.encryptedComments,
               encryptedComments: shared.encryptedComments
             }
           : {
               token: pendingShareToken,
+              mode: shared.mode,
               ...(shared.comments ? { comments: true } : {})
             };
         setShareSession(opened);
@@ -16308,7 +16317,7 @@ export function App() {
         });
         setStatus(
           `${
-            shared.encryptedMode === 'view'
+            shared.mode === 'view'
               ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
               : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
           }${opening.note ? ` ${opening.note}` : ''}`
@@ -37281,8 +37290,7 @@ export function App() {
           shareSession={
             shareSession
               ? {
-                  // A plaintext link always opens in Tweak.
-                  mode: shareSession.encryptedMode ?? 'tweak',
+                  mode: shareSession.mode,
                   onMakeCopy: requestShareCopy
                 }
               : null

@@ -1630,6 +1630,14 @@
   backdrop-filter: none;
 }
 
+/* A phone has no width to spare for lining up with the chip: the popover
+   takes the screen's width less the usual gutters, as other sheets do. */
+@media (max-width: 620px) {
+  .sharing-backdrop {
+    padding-right: var(--sp-3);
+  }
+}
+
 .sharing-popover {
   width: min(400px, 100%);
   max-height: calc(100dvh - var(--topbar-h) - var(--sp-5));
@@ -1672,22 +1680,30 @@
   font-size: var(--fs-sm);
 }
 
+/* A quiet readout that opens the state code: the lock carries the colour,
+   the word stays muted, and a surface appears only on hover. */
 .sharing-encrypted-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-height: 22px;
-  padding: 0 8px;
-  border: 1px solid color-mix(in srgb, var(--color-success) 40%, transparent);
-  border-radius: 999px;
+  min-height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.sharing-encrypted-chip > svg {
   color: var(--color-success);
-  font-size: var(--fs-mini);
 }
 
 .sharing-encrypted-chip:hover,
 .sharing-encrypted-chip[aria-expanded='true'] {
-  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 
 .sharing-body {
@@ -1696,6 +1712,9 @@
 
 .sharing-section {
   display: grid;
+  /* A row never sizes the column: the invite field's intrinsic width
+     pushed Invite past the popover's edge on a phone. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
   padding: var(--sp-3);
 }
@@ -1713,14 +1732,18 @@
   text-transform: uppercase;
 }
 
-/* L08: the next link's commenter option, under General access. */
+/* L08: the next link's commenter option, beside its access. */
 .sharing-link-comments {
   display: flex;
-  align-items: flex-start;
-  gap: var(--sp-2);
+  align-items: center;
+  gap: 6px;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
-  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.sharing-link-comments input {
+  margin: 0;
 }
 
 /* L08: the drawing sheets share links show. */
@@ -1860,8 +1883,8 @@
 }
 
 .sharing-invite .primary,
-.sharing-access .primary,
-.sharing-access .secondary,
+.sharing-link-create .primary,
+.sharing-link-create .secondary,
 .sharing-rename .primary,
 .sharing-rename .secondary,
 .sharing-confirm-actions .secondary,
@@ -2085,45 +2108,85 @@
   gap: 6px;
 }
 
-/* General access: one summary line, then the links under it. */
+/* General access: who can open it, then the next link's access, comments
+   and Create link on one row, then one line on what that link allows. Flat
+   on the section: the old tinted card and badge icon read as a box in a
+   box. */
 .sharing-access {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: var(--sp-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-2);
+  gap: var(--sp-2);
 }
 
 .sharing-access-icon {
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  display: inline-grid;
-  place-items: center;
-  border: 1px solid var(--color-accent-border);
-  border-radius: 50%;
-  background: var(--color-accent-dim);
-  color: var(--color-accent-hi);
-}
-
-.sharing-access-text {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 1px;
+  color: var(--color-text-muted);
 }
 
 .sharing-access-title {
+  min-width: 0;
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
 }
 
+.sharing-link-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.sharing-link-create > button {
+  margin-left: auto;
+}
+
 .sharing-access-detail {
+  margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
   line-height: 1.4;
+}
+
+/* View | Tweak: two radios as one segmented control, drawn as the top
+   bar's mode switch is. */
+.sharing-link-mode {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.sharing-link-mode-option {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+
+.sharing-link-mode-option:hover {
+  color: var(--color-text);
+}
+
+.sharing-link-mode-option:has(input:checked) {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+}
+
+.sharing-link-mode-option:has(input:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.sharing-link-mode-option:has(input:disabled) {
+  cursor: default;
+  opacity: var(--opacity-disabled);
 }
 
 /* A just-created link: optional name, the URL shown once, and Copy. */

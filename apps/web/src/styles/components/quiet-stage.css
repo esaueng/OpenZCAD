@@ -188,8 +188,11 @@
   }
 }
 
-/* 28px actions + 2 × 3px padding + 2 × 1px border = the island height. */
+/* 28px actions + 2 × 3px padding + 2 × 1px border = the island height.
+   Pinned to the last column: a shared link with View alone has no mode
+   switch, and auto-placement would pull the actions into its slot. */
 .topbar > .topbar-actions-island {
+  grid-column: -2;
   justify-self: end;
   align-self: center;
   box-sizing: border-box;
@@ -1791,6 +1794,16 @@
 
   .topbar .mode-switch-label {
     display: inline;
+  }
+
+  /* No mode switch (a View-only shared link): no second row either. */
+  .app-shell:has(> .topbar:not(:has(> .mode-switch))) {
+    --phone-mode-h: 0px;
+  }
+
+  .app-shell > .topbar:not(:has(> .mode-switch)) {
+    height: var(--topbar-island-h);
+    grid-template-rows: var(--topbar-island-h);
   }
 }
 
