@@ -2345,6 +2345,8 @@ function buildRibFeature(
   data: FeatureDataOf<'rib'>
 ): void {
   const { kernel, result } = ctx;
+  // M02: recorded again below only if this build succeeds.
+  result.builtRibs?.delete(feature.featureId);
   if (!feature.bodyId) throw new Error('Rib has no result body.');
   const target = result.shapes.get(data.targetBodyId);
   if (!target || target.solids.length !== 1) {
@@ -2370,14 +2372,26 @@ function buildRibFeature(
     [target.solids[0]!, rib],
     [`body of "${feature.name}"`, `rib "${feature.name}"`]
   );
+  // M02: the body's names carried where its faces are only trimmed, and the
+  // rib's own faces named after themselves, so a click on one names the rib
+  // and a feature pattern can name its copies.
+  const lineage = carryAnalyticFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage
+  );
+  nameAddedFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    lineage,
+    feature.featureId,
+    'rib.face'
+  );
+  (result.builtRibs ??= new Set()).add(feature.featureId);
   result.consumed.add(data.targetBodyId);
-  result.shapes.set(feature.bodyId, {
-    solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'rib',
-      'Rib topology has no verified output evolution relation.'
-    )
-  });
+  result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 

@@ -32,6 +32,7 @@ import type { ExactShape } from './exact-types';
 import { AdapterRefusal } from './adapter-refusal';
 import {
   collapseShape,
+  faceComponentsOf,
   fuseUniformSolidChecked,
   unifyBooleanFaces,
   verdictRefusesUnion
@@ -57,6 +58,7 @@ import {
 } from './remus-lineage';
 import { buildSweep } from './exact-profile-builders';
 import { buildWrapSolids } from './exact-wrap';
+import { buildRibSolid } from './exact-rib';
 import { raiseFeatureWarning } from './exact-feature-warnings';
 import { bodyName, inheritMeshOrigin } from './exact-shape-utils';
 import { requireValidSolid } from './kernel-validation';
@@ -478,9 +480,36 @@ export function buildFeaturePattern(
         (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
         source.name
       );
+    } else if (sourceData.featureKind === 'rib') {
+      // M02: the rib's material made again against the body it was made on,
+      // as its build makes it, and repeated as a boss.
+      operation = 'add';
+      shapedSources.push(source.featureId);
+      const before = result.shapes.get(sourceData.targetBodyId);
+      const basis = result.sketchBases.get(sourceData.profile.sketchId);
+      if (
+        !result.builtRibs?.has(source.featureId) ||
+        before?.solids.length !== 1 ||
+        !basis
+      ) {
+        throw new Error(
+          `${source.name} did not build, so a pattern cannot repeat it; fix ${source.name} first.`
+        );
+      }
+      seed = [
+        buildRibSolid(
+          kernel,
+          document,
+          sourceData,
+          before.solids[0]!,
+          basis,
+          ctx.scope,
+          (message) => raiseFeatureWarning(result, feature, message, 'advisory')
+        )
+      ];
     } else {
       throw new Error(
-        `${source.name} is not a hole, boss, cut, fillet, chamfer or wrap, so a feature pattern cannot repeat it.`
+        `${source.name} is not a hole, boss, cut, fillet, chamfer, wrap or rib, so a feature pattern cannot repeat it.`
       );
     }
     const repeated = repeat(seed);
@@ -574,12 +603,13 @@ export function buildFeaturePattern(
         for (const hole of copied) hole.tapped = true;
       }
     } else {
-      // A wrap's copies are fused one at a time, as its own build fuses its
-      // pieces: the kernel declines several wrapped copies in one pass,
-      // though each fuses exactly on its own.
+      // A wrap's or a rib's copies are fused one at a time, as a wrap's own
+      // build fuses its pieces: the kernel declines several wrapped copies
+      // in one pass, though each fuses exactly on its own.
       const batches =
-        sourceData.featureKind === 'wrap'
+        sourceData.featureKind === 'wrap' || sourceData.featureKind === 'rib'
           ? copies.map((copy, index) => ({
+              copy: copy.label,
               tools: repeated.solids[index] ?? [],
               labels: (repeated.solids[index] ?? []).map(
                 () => `${source.name} copy ${copy.label}`
@@ -587,6 +617,7 @@ export function buildFeaturePattern(
             }))
           : [
               {
+                copy: null as string | null,
                 tools: repeated.solids.flat(),
                 labels: copies.flatMap((copy, index) =>
                   (repeated.solids[index] ?? []).map(
@@ -595,8 +626,13 @@ export function buildFeaturePattern(
                 )
               }
             ];
-      for (const { tools, labels } of batches) {
+      for (const { copy, tools, labels } of batches) {
         if (tools.length === 0) continue;
+        // A copy fused on its own must join the body: one that lands clear
+        // of it near enough for its box to touch would fuse as a separate
+        // piece (review), which the union's own checks accept.
+        const piecesBefore =
+          copy === null ? null : faceComponentsOf(kernel, solid)?.length;
         const union = fuseUniformSolidChecked(
           kernel,
           [solid, ...tools],
@@ -608,6 +644,18 @@ export function buildFeaturePattern(
             'Union produced an open, non-manifold, or inconsistently ' +
               'oriented result. Adjust the overlap or placement and try again.'
           );
+        }
+        if (copy !== null) {
+          const piecesAfter = faceComponentsOf(kernel, union.solid)?.length;
+          if (
+            piecesBefore === undefined ||
+            piecesAfter === undefined ||
+            piecesAfter > piecesBefore!
+          ) {
+            throw new Error(
+              `Copy ${copy} of ${source.name} does not join ${targetName}; skip it or change the pattern.`
+            );
+          }
         }
         solid = union.solid;
       }

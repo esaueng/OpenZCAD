@@ -165,6 +165,12 @@ export interface ExactBuildResult {
    * checkpoints.
    */
   wrapFrames?: Map<FeatureId, WrapFrame>;
+  /**
+   * M02: the ribs that built, whose material a feature pattern repeating
+   * one makes again against the body the rib was made on. Build-local only,
+   * copied with retained history checkpoints.
+   */
+  builtRibs?: Set<FeatureId>;
 }
 
 /** Same-kernel measurement handles and the verdicts established for them. */
