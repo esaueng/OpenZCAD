@@ -137,6 +137,31 @@ test(
     expect(findSketch(after, f.sketchId)).toEqual(before);
     expect(after.units).toBe('mm');
 
+    // Pick and drag in inches: the label stays read-only, and a pointer drag
+    // moves only its placement.
+    await inches.click();
+    await inches.press('Enter');
+    await expect(
+      page.getByRole('dialog', { name: 'Distance value' })
+    ).toHaveCount(0);
+    const bounds = (await inches.boundingBox())!;
+    await page.mouse.move(
+      bounds.x + bounds.width / 2,
+      bounds.y + bounds.height / 2
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + bounds.width / 2 + 50,
+      bounds.y + bounds.height / 2 - 40,
+      { steps: 8 }
+    );
+    await page.mouse.up();
+    await expect(inches).toBeVisible();
+    const dragged = findSketch(await exportDocument(page), f.sketchId)!;
+    const annotationId = before.referenceDimensions![0]!.annotationId;
+    expect(dragged.dimensionLabelPositions?.[annotationId]).toBeDefined();
+    expect(dragged.referenceDimensions).toEqual(before.referenceDimensions);
+
     // The choice is a preference: it survives a reload.
     await page
       .getByRole('button', { name: 'Finish Sketch', exact: true })
