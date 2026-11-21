@@ -2781,6 +2781,27 @@ export function validateExtrudeExtent(
     }
     return;
   }
+  if (condition === 'to-next') {
+    if (data.throughAllSide !== undefined) {
+      throw new Error(
+        'An extrude up to the next face has no through-all side.'
+      );
+    }
+    if (data.operation !== 'add' && data.operation !== 'cut') {
+      throw new Error('Up to next is available for an add or a cut only.');
+    }
+    if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
+      throw new Error(
+        'An extrude up to the next face needs one explicit target body.'
+      );
+    }
+    if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
+      throw new Error(
+        'An extrude up to the next face runs one way, from its start to the next face; it is not symmetric or two-sided.'
+      );
+    }
+    return;
+  }
   if (condition !== 'through-all') {
     throw new Error(
       `Unknown extrude end condition ${JSON.stringify(condition)}.`
@@ -2983,6 +3004,9 @@ export function extrudeSketch(
             endCondition: 'through-all' as const,
             throughAllSide: input.throughAllSide!
           }
+        : {}),
+      ...(input.endCondition === 'to-next'
+        ? { endCondition: 'to-next' as const }
         : {}),
       ...(input.endCondition === 'to-face'
         ? {

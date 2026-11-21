@@ -194,6 +194,15 @@ export function extrudeOffersThroughAll(draft: ExtrudeDraft): boolean {
   return draft.choice.operation === 'cut';
 }
 
+/** F01 (v130): Up to next stops at an add or cut target's next face. */
+export function extrudeOffersToNext(draft: ExtrudeDraft): boolean {
+  return draft.choice.operation === 'add' || draft.choice.operation === 'cut';
+}
+
+export function extrudeIsToNext(draft: ExtrudeDraft): boolean {
+  return extrudeOffersToNext(draft) && draft.endCondition === 'to-next';
+}
+
 export function extrudeIsThroughAll(draft: ExtrudeDraft): boolean {
   return (
     draft.choice.operation === 'cut' && draft.endCondition === 'through-all'
@@ -213,10 +222,17 @@ export function extrudeShownExtent(
   draft: ExtrudeDraft,
   ctx: ExtrudeDraftContext
 ): ExtrudeEndCondition {
-  if (extrudeIsThroughAll(draft) || extrudeIsToFace(draft, ctx)) {
+  if (
+    extrudeIsThroughAll(draft) ||
+    extrudeIsToFace(draft, ctx) ||
+    extrudeIsToNext(draft)
+  ) {
     return draft.endCondition;
   }
-  return draft.endCondition === 'through-all' ? 'blind' : draft.endCondition;
+  return draft.endCondition === 'through-all' ||
+    draft.endCondition === 'to-next'
+    ? 'blind'
+    : draft.endCondition;
 }
 
 /**
@@ -318,7 +334,13 @@ export function extrudeHasBackSide(
   draft: ExtrudeDraft,
   ctx: ExtrudeDraftContext
 ): boolean {
-  if (extrudeIsThroughAll(draft) || extrudeIsToFace(draft, ctx)) return false;
+  if (
+    extrudeIsThroughAll(draft) ||
+    extrudeIsToFace(draft, ctx) ||
+    extrudeIsToNext(draft)
+  ) {
+    return false;
+  }
   if (draft.symmetric) return true;
   // A negative back distance is refused, so it is no back side either.
   const back = extrudeDraftNumber(draft.backDistance, 'length', ctx);
@@ -389,9 +411,11 @@ export function extrudeFormValue(
 ): ExtrudeFormValue {
   const throughAll = extrudeIsThroughAll(draft);
   const toFace = extrudeIsToFace(draft, ctx);
-  const derived = throughAll || toFace;
-  // A through-all cut and a to-face extrude derive their span in the build,
-  // so the distance is dormant; a create still needs it non-zero, so an
+  const toNext = extrudeIsToNext(draft);
+  const derived = throughAll || toFace || toNext;
+  // A through-all cut, a to-face and an up-to-next extrude derive their span
+  // in the build, so the distance is dormant (up to next reads only its
+  // sign, for the direction); a create still needs it non-zero, so an
   // untouched 0 sends 1.
   const typed = coerceParamValue(draft.distance);
   const draftAngleDeg = coerceParamValue(draft.draftAngle);
@@ -417,7 +441,13 @@ export function extrudeFormValue(
           backDistance: derived ? 0 : coerceParamValue(draft.backDistance)
         }),
     choice: draft.choice,
-    endCondition: throughAll ? 'through-all' : toFace ? 'to-face' : 'blind',
+    endCondition: throughAll
+      ? 'through-all'
+      : toFace
+        ? 'to-face'
+        : toNext
+          ? 'to-next'
+          : 'blind',
     ...(throughAll ? { throughAllSide: draft.throughAllSide } : {}),
     ...(toFace && draft.toFace ? { toFace: draft.toFace } : {}),
     ...(toFace && toFaceOffset !== 0 && toFaceOffset !== '0'
@@ -460,6 +490,7 @@ export function extrudeDraftRefusal(
 ): string | null {
   const throughAll = extrudeIsThroughAll(draft);
   const toFace = extrudeIsToFace(draft, ctx);
+  const toNext = extrudeIsToNext(draft);
   if (!draft.name.trim()) return 'Name the extrude.';
   if (toFace) {
     if (!draft.toFace) return 'Pick the face for the extrusion to reach.';
@@ -512,9 +543,9 @@ export function extrudeDraftRefusal(
     const error = extrudeDraftAngleError(draft, ctx);
     if (error) return error;
   }
-  // Through all and to-face ignore the distance; it is kept only for
-  // switching back to blind, so it cannot block Apply.
-  if (!throughAll && !toFace) {
+  // Through all, to-face and up to next ignore the distance's size; it is
+  // kept only for switching back to blind, so it cannot block Apply.
+  if (!throughAll && !toFace && !toNext) {
     const distance = previewExpression(
       draft.distance,
       ctx.scope,

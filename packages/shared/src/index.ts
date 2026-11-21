@@ -513,15 +513,24 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // Builds on v126 (#1846). It was claimed as v126 and renumbered when F01
 // took that number; v127 and v128 are claimed by the open F01 PRs #1847 and
 // #1851.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 129 as const;
+// v130 adds the F01 up-to-next extent (`endCondition: 'to-next'` on an add or
+// cut extrude with one target): the extrusion runs from its start plane to
+// the next face of the target it meets. An older client has no such extent
+// and must refuse the document. Builds on v129 (#1864); claimed as v123,
+// then v127, renumbered when #1860 and #1864 landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 130 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 /** F05: what a typed parameter measures. Absent on a node is unitless. */
 export type ParameterKind = 'length' | 'angle' | 'number';
-/** F01 extrude extents; to-next/offset-from-face are later slices. */
-export type ExtrudeEndCondition = 'blind' | 'through-all' | 'to-face';
+/**
+ * F01 extrude extents. Offset from a face rides on `to-face`
+ * (`toFaceOffset`); `to-next` arrived in v130.
+ */
+export type ExtrudeEndCondition =
+  'blind' | 'through-all' | 'to-face' | 'to-next';
 export type ThroughAllSide = 'forward' | 'backward' | 'both';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
 /** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
@@ -2489,6 +2498,13 @@ export type FeatureData =
        * normal: the span is recomputed from the target at the feature's
        * history position on every rebuild and never stored, and `distance`
        * is kept only so switching back to blind restores it.
+       * From schema v130 `to-next` runs an add or a cut with one explicit
+       * target from the start plane to the next face of that target, the
+       * way the stored distance's sign points (its size is dormant). It is
+       * derived on every rebuild from the target at the feature's history
+       * position; nothing derived is stored. A profile that does not meet
+       * the target everywhere, an add that starts inside it, or a cut that
+       * starts outside it refuses by name.
        */
       endCondition?: ExtrudeEndCondition;
       /** Required with `through-all`; which side(s) of the sketch plane. */

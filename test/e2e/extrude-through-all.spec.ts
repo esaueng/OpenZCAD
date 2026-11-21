@@ -12,6 +12,7 @@ import {
   expectBodyCount,
   barChoice,
   chooseBarOption,
+  expectBarChoice,
   editExtrudeFromHistory,
   chooseInPlaceOption,
   extrudeBar,
@@ -112,10 +113,7 @@ test('switches a blind cut to through all and back through undo', async ({
   // on what was stored rather than the dormant distance.
   await expectFeatureMeasurement(page, pocketRow, '15000');
   edit = await editExtrudeFromHistory(page, pocket);
-  await expect(barChoice(edit, 'Extent', 'Through all')).toHaveAttribute(
-    'aria-checked',
-    'true'
-  );
+  await expectBarChoice(edit, 'Extent', 'Through all');
   await expect(
     barChoice(edit, 'Direction', 'Reverse')
   ).toHaveAttribute('aria-checked', 'true');
@@ -123,10 +121,7 @@ test('switches a blind cut to through all and back through undo', async ({
   await edit.getByRole('button', { name: 'Cancel' }).click();
   await page.getByRole('button', { name: 'Undo', exact: true }).click();
   edit = await editExtrudeFromHistory(page, pocket);
-  await expect(barChoice(edit, 'Extent', 'Distance')).toHaveAttribute(
-    'aria-checked',
-    'true'
-  );
+  await expectBarChoice(edit, 'Extent', 'Distance');
   await edit.getByRole('button', { name: 'Cancel' }).click();
   await expectFeatureMeasurement(page, pocketRow, '15700');
 });
@@ -210,8 +205,5 @@ test('creates a cut through all straight from a sketch', { tag: '@ci-smoke' }, a
     '15000'
   );
   const edit = await editExtrudeFromHistory(page, cut);
-  await expect(barChoice(edit, 'Extent', 'Through all')).toHaveAttribute(
-    'aria-checked',
-    'true'
-  );
+  await expectBarChoice(edit, 'Extent', 'Through all');
 });

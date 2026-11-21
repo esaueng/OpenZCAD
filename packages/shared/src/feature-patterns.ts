@@ -259,6 +259,9 @@ export function patternSourceProblem(
   if (data.featureKind === 'extrude' && data.endCondition === 'to-face') {
     return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance or Through all.`;
   }
+  if (data.featureKind === 'extrude' && data.endCondition === 'to-next') {
+    return `${name} extrudes up to the next face, which a pattern cannot repeat yet; give it a distance or Through all.`;
+  }
   // A copy's edge may run the other way, or meet its faces the other way
   // round, so a blend that differs end to end or face to face could land
   // reversed on it (review): only the even ones repeat.
