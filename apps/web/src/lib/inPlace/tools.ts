@@ -1821,14 +1821,13 @@ const sweep: InPlaceToolSpec = {
         construction: 'in-place',
         ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
         ...(isLiteral(endScale, 1) ? {} : { endScale }),
-        // Each option goes out as chosen; a pair the exact sweep cannot
-        // build together is refused by name, never dropped unseen.
+        // Parallel hides the Corners row, so a corner choice left from
+        // before does not apply; a visible choice always goes out.
         ...(options.orientation === 'parallel'
           ? { orientation: 'parallel' as const }
-          : {}),
-        ...(options.corner === 'round'
-          ? { cornerRadius: values.cornerRadius ?? 2 }
-          : {})
+          : options.corner === 'round'
+            ? { cornerRadius: values.cornerRadius ?? 2 }
+            : {})
       };
     }
     const rail = slots.guide[0];

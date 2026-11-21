@@ -2153,7 +2153,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
-  it('sweep: a round corner goes out beside Parallel or a rail, to be refused rather than dropped (M04, v135)', () => {
+  it('sweep: a round corner goes out beside a rail, to be refused rather than dropped, and Parallel hides it (M04, v135)', () => {
     const spec = IN_PLACE_TOOL_SPECS.sweep;
     const profile = {
       sketchId: SKETCH,
@@ -2178,10 +2178,10 @@ describe('an untouched edit writes the feature back as stored', () => {
         {} as never
       );
     expect(round(plain)).toMatchObject({ cornerRadius: 3 });
-    expect(round(plain, 'parallel')).toMatchObject({
-      orientation: 'parallel',
-      cornerRadius: 3
-    });
+    // Parallel hides the Corners row, so its stale choice is not sent.
+    const parallel = round(plain, 'parallel');
+    expect(parallel).toMatchObject({ orientation: 'parallel' });
+    expect(parallel).not.toHaveProperty('cornerRadius');
     expect(round(railed)).toMatchObject({
       guide: { sketchId: SKETCH, entityIds: ['rail1'] },
       cornerRadius: 3
