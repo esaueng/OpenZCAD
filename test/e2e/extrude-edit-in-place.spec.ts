@@ -285,13 +285,13 @@ for (const command of ['an edit', 'a new extrude'] as const) {
     }
     await chooseBarOption(bar, 'Extent', 'To face');
     await expect(bar).toContainText(
-      'Click a flat face facing the sketch'
+      'Click a face facing the sketch'
     );
     // One press disarms the pick; the command and its extent stay.
     await page.keyboard.press('Escape');
     await expect(bar).toBeVisible();
     await expect(bar).not.toContainText(
-      'Click a flat face facing the sketch'
+      'Click a face facing the sketch'
     );
     await expect(barChoice(bar, 'Extent', 'To face')).toHaveAttribute(
       'aria-checked',

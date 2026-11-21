@@ -24,6 +24,7 @@ import {
   type ExtrudeCommandState
 } from './ExtrudeCommand';
 import type {
+  ExtrudeFaceTarget,
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from '../lib/extrudeDraft';
@@ -612,7 +613,9 @@ describe('in-place Extrude bar', () => {
     const onPick = vi.fn();
     const setterRef = createRef<
       (target: ExtrudeToFaceTarget) => void
-    >() as MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
+    >() as unknown as MutableRefObject<
+      ((target: ExtrudeFaceTarget) => void) | null
+    >;
     const toFacePicking: ExtrudeToFacePicking = {
       armed: false,
       onPick,
@@ -640,8 +643,10 @@ describe('in-place Extrude bar', () => {
     const user = userEvent.setup();
     const target = { type: 'face' } as unknown as ExtrudeToFaceTarget;
     const setterRef = createRef<
-      (target: ExtrudeToFaceTarget) => void
-    >() as MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
+      (target: ExtrudeFaceTarget) => void
+    >() as unknown as MutableRefObject<
+      ((target: ExtrudeFaceTarget) => void) | null
+    >;
     const toFacePicking: ExtrudeToFacePicking = {
       armed: false,
       onPick: vi.fn(),

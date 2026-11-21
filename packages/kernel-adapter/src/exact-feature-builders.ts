@@ -51,6 +51,7 @@ import {
   planSlantedToFace,
   trimToSlantedFace
 } from './extrude-to-face-slanted';
+import { planCurvedToFace, trimToCurvedFace } from './extrude-to-surface';
 import {
   toNextReach,
   toNextSweepFeature,
@@ -1003,8 +1004,23 @@ function buildExtrudeFeature(
         : null;
     // A face parallel to the sketch keeps the derived blind distance it
     // always had; a slanted one sweeps past it and is split by its plane.
+    // F01 (v131): a curved face sweeps past it and keeps the near side of
+    // its cylinder.
+    const curved =
+      data.endCondition === 'to-face' && data.toSurface !== undefined
+        ? planCurvedToFace(
+            kernel,
+            document,
+            feature,
+            data,
+            result.sketchBases.get(data.sketchId)!,
+            result.sketchBases,
+            result,
+            scope
+          )
+        : null;
     const toFace =
-      data.endCondition === 'to-face'
+      data.endCondition === 'to-face' && !curved
         ? resolveToFaceTarget(kernel, document, feature, data, result)
         : null;
     const slanted =
@@ -1023,21 +1039,23 @@ function buildExtrudeFeature(
     const sweepFeature =
       data.endCondition === 'through-all'
         ? throughAllSweepFeature(ctx, feature, data)
-        : slanted
-          ? slanted.sweep
-          : data.endCondition === 'to-face'
-            ? toFaceSweepFeature(
-                kernel,
-                document,
-                feature,
-                data,
-                result,
-                scope,
-                toFace?.kind === 'parallel' ? toFace.distance : undefined
-              )
-            : toNext
-              ? toNext.sweep
-              : feature;
+        : curved
+          ? curved.sweep
+          : slanted
+            ? slanted.sweep
+            : data.endCondition === 'to-face'
+              ? toFaceSweepFeature(
+                  kernel,
+                  document,
+                  feature,
+                  data,
+                  result,
+                  scope,
+                  toFace?.kind === 'parallel' ? toFace.distance : undefined
+                )
+              : toNext
+                ? toNext.sweep
+                : feature;
     const swept = buildSweep(
       kernel,
       document,
@@ -1046,24 +1064,31 @@ function buildExtrudeFeature(
       result.sketchBases,
       (message) => raiseFeatureWarning(result, feature, message, 'advisory')
     );
-    const extrusion = slanted
-      ? trimToSlantedFace(
+    const extrusion = curved
+      ? trimToCurvedFace(
           kernel,
           swept,
-          slanted.slanted,
+          curved.curved,
           `Extrude "${feature.name}"`
         )
-      : toNext
-        ? trimToNext(
+      : slanted
+        ? trimToSlantedFace(
             kernel,
             swept,
-            toNext.target,
-            toNext.operation,
-            toNext.reach,
-            `Extrude "${feature.name}"`,
-            toNext.targetName
+            slanted.slanted,
+            `Extrude "${feature.name}"`
           )
-        : swept;
+        : toNext
+          ? trimToNext(
+              kernel,
+              swept,
+              toNext.target,
+              toNext.operation,
+              toNext.reach,
+              `Extrude "${feature.name}"`,
+              toNext.targetName
+            )
+          : swept;
     const operation = data.operation ?? 'new-body';
     if (operation === 'new-body') {
       // Recorded so a later boolean can rebuild this exact tool with pierce
@@ -1217,7 +1242,7 @@ function buildExtrudeFeature(
         () =>
           // A to-next tool is regions of the target, not the swept feature
           // a pierced twin rebuilds.
-          operation === 'intersect' || toNext || slanted
+          operation === 'intersect' || toNext || slanted || curved
             ? null
             : piercedExtrudeTool(
                 ctx,
@@ -1234,7 +1259,7 @@ function buildExtrudeFeature(
     // typed coplanar refusal; never accept an invalid result or extend a
     // tool through an existing hole or a thin cavity roof.
     if (combined.union && verdictRefusesUnion(combined.union.verdict)) {
-      if (combined.tool === extrusion && !toNext && !slanted) {
+      if (combined.tool === extrusion && !toNext && !slanted && !curved) {
         const pierced = piercedExtrudeTool(
           ctx,
           sweepFeature,

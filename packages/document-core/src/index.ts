@@ -207,6 +207,7 @@ import {
   type ExtrudeOperation,
   type ThroughAllSide,
   type ExtrudeToFaceTarget,
+  type ExtrudeToSurfaceTarget,
   type FeatureWarning,
   type FeatureId,
   type FeatureKind,
@@ -465,6 +466,8 @@ export interface ExtrudeInput {
   throughAllSide?: ThroughAllSide;
   /** F01 (v29): required with `to-face`; see the stored feature's `toFace`. */
   toFace?: ExtrudeToFaceTarget;
+  /** F01 (v131): with `to-face`, a curved face instead of `toFace`. */
+  toSurface?: ExtrudeToSurfaceTarget;
   /**
    * F01 (v113): with `to-face` only; positive stops short of the face,
    * negative passes it. Absent or zero ends on the face.
@@ -2616,6 +2619,32 @@ function validateToFaceTarget(target: unknown): void {
   }
 }
 
+/**
+ * F01 (v131): a curved to-face target names its body and a lineage face
+ * reference; the build re-finds the face and checks its kind there.
+ */
+function validateToSurfaceTarget(target: unknown): void {
+  const face = target as Partial<ExtrudeToSurfaceTarget> | undefined;
+  const finite = (value: unknown) =>
+    !!value &&
+    typeof value === 'object' &&
+    ['x', 'y', 'z'].every((axis) =>
+      Number.isFinite((value as Record<string, unknown>)[axis])
+    );
+  if (
+    !face ||
+    face.type !== 'surface' ||
+    typeof face.bodyId !== 'string' ||
+    !face.bodyId ||
+    face.faceReference?.kind !== 'face' ||
+    !finite(face.sourceCentroid)
+  ) {
+    throw new Error(
+      'An extrude to a curved face needs a face with a qualified lineage reference; pick an exact cylindrical face.'
+    );
+  }
+}
+
 /** A stored draft literal is finite and inside a right angle. */
 function validateDraftValue(angle: unknown, label: string): void {
   if (angle === undefined) return;
@@ -2721,6 +2750,7 @@ export function validateExtrudeExtent(
     endCondition?: unknown;
     throughAllSide?: unknown;
     toFace?: unknown;
+    toSurface?: unknown;
     toFaceOffset?: unknown;
     startOffset?: unknown;
     draftAngleDeg?: unknown;
@@ -2750,7 +2780,10 @@ export function validateExtrudeExtent(
   // Only an absent field is blind: a stored `null` is malformed, not legacy.
   const condition =
     data.endCondition === undefined ? 'blind' : data.endCondition;
-  if (condition !== 'to-face' && data.toFace !== undefined) {
+  if (
+    condition !== 'to-face' &&
+    (data.toFace !== undefined || data.toSurface !== undefined)
+  ) {
     throw new Error('Only an extrude to a face names a target face.');
   }
   if (condition !== 'to-face' && data.toFaceOffset !== undefined) {
@@ -2772,7 +2805,17 @@ export function validateExtrudeExtent(
     if (data.throughAllSide !== undefined) {
       throw new Error('An extrude to a face has no through-all side.');
     }
-    validateToFaceTarget(data.toFace);
+    if (data.toSurface !== undefined) {
+      // F01 (v131): a curved face instead of a planar one, never both.
+      if (data.toFace !== undefined) {
+        throw new Error(
+          'An extrude to a face names one face: a planar face or a curved one, not both.'
+        );
+      }
+      validateToSurfaceTarget(data.toSurface);
+    } else {
+      validateToFaceTarget(data.toFace);
+    }
     validateToFaceOffsetValue(data.toFaceOffset);
     if (data.symmetric === true || !resolvedZero(resolve)(data.backDistance)) {
       throw new Error(
@@ -3014,7 +3057,9 @@ export function extrudeSketch(
       ...(input.endCondition === 'to-face'
         ? {
             endCondition: 'to-face' as const,
-            toFace: deepClone(input.toFace!),
+            ...(input.toSurface
+              ? { toSurface: deepClone(input.toSurface) }
+              : { toFace: deepClone(input.toFace!) }),
             // A literal zero ends on the face, the absent default.
             ...(isZeroParam(input.toFaceOffset)
               ? {}
@@ -5902,6 +5947,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'endCondition',
     'throughAllSide',
     'toFace',
+    'toSurface',
     'toFaceOffset',
     'startOffset',
     'draftAngleDeg',
@@ -6138,6 +6184,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'endCondition',
     'throughAllSide',
     'toFace',
+    'toSurface',
     'toFaceOffset',
     'startOffset',
     'draftAngleDeg',

@@ -700,7 +700,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         backDistance: 0,
         choice: { operation: 'cut', targetBodyId: block.bodyId },
         endCondition: 'to-face',
-        toFace: target
+        toFace: target as ExtrudeToFaceTarget
       }).apply(pocket.document);
       const derived = await derive(through);
       expect(derived.warnings).toEqual([]);
@@ -833,7 +833,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       // The repaired target validates and rebuilds at the extrude's position.
       const repaired = commandFactories.updateFeature({
         featureId: feature.featureId,
-        data: { toFace: target }
+        data: { toFace: target as ExtrudeToFaceTarget }
       });
       repaired.validate(built);
       const derived = await derive(repaired.apply(built));

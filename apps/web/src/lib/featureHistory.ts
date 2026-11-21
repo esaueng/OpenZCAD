@@ -132,6 +132,8 @@ export function featureHistory(document: ProjectDocument) {
         body(data.targetBodyId);
         // F01: a to-face extent reads its face's body.
         if (data.toFace) planeSource(data.toFace);
+        // F01 (v131): so does a curved one.
+        if (data.toSurface) body(data.toSurface.bodyId);
         break;
       case 'revolve':
         sketch(data.sketchId);

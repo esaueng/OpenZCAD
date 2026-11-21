@@ -288,7 +288,6 @@ import type {
   BodyTopology,
   BodyRepresentation,
   EntityId,
-  ExtrudeToFaceTarget,
   FeatureId,
   FeatureNode,
   FeatureWarning,
@@ -1068,6 +1067,7 @@ import {
 } from './lib/resolvedExtrudePreview';
 import { isExtrudeChangeClipped } from './lib/extrudeSectionVisibility';
 import type {
+  ExtrudeFaceTarget,
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from './lib/extrudeDraft';
@@ -3543,11 +3543,11 @@ export function App() {
     | null
   >(null);
   const regionToFaceSetter = useRef<
-    ((target: ExtrudeToFaceTarget) => void) | null
+    ((target: ExtrudeFaceTarget) => void) | null
   >(null);
-  const editToFaceSetter = useRef<
-    ((target: ExtrudeToFaceTarget) => void) | null
-  >(null);
+  const editToFaceSetter = useRef<((target: ExtrudeFaceTarget) => void) | null>(
+    null
+  );
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
   /** The open Plane card's draft Offset, drawn ahead of its Apply. */
@@ -6153,7 +6153,8 @@ export function App() {
           !base ||
           current.mode !== 'region' ||
           (regionExtrudeSettings.current?.endCondition === 'to-face' &&
-            !regionExtrudeSettings.current.toFace)
+            !regionExtrudeSettings.current.toFace &&
+            !regionExtrudeSettings.current.toSurface)
         ) {
           setRegionExtrudeChecking(false);
           return null;
@@ -28818,6 +28819,7 @@ export function App() {
       endCondition: regionExtrudeSettings.current?.endCondition,
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       toFace: regionExtrudeSettings.current?.toFace,
+      toSurface: regionExtrudeSettings.current?.toSurface,
       toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
       startOffset: regionExtrudeSettings.current?.startOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
@@ -33546,7 +33548,7 @@ export function App() {
             : { kind: 'create' }
         );
         setStatus(
-          'Click a planar face facing the sketch for the extrusion to reach · Esc cancels.'
+          'Click a planar or cylindrical face facing the sketch for the extrusion to reach · Esc cancels.'
         );
       }
     };
@@ -33566,7 +33568,7 @@ export function App() {
       featureName: feature.name
     });
     setStatus(
-      `Re-pick the face "${feature.name}" reaches: click a planar face facing its sketch · Esc cancels.`
+      `Re-pick the face "${feature.name}" reaches: click a planar or cylindrical face facing its sketch · Esc cancels.`
     );
   }
 

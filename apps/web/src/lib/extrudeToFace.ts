@@ -13,6 +13,7 @@ import {
 import type {
   BodyId,
   ExtrudeToFaceTarget,
+  ExtrudeToSurfaceTarget,
   FaceTopology,
   FeatureId,
   FeatureNode,
@@ -41,7 +42,7 @@ export function extrudeToFaceTargetFromPick(
    * extrusion itself creates is refused.
    */
   editing?: FeatureNode
-): ExtrudeToFaceTarget {
+): ExtrudeToFaceTarget | ExtrudeToSurfaceTarget {
   if (selection.kind !== 'face') {
     throw new Error('Click a planar face for the extrusion to reach.');
   }
@@ -150,14 +151,31 @@ function targetForFace(
   document: ProjectDocument,
   bodyId: BodyId,
   face: FaceTopology | undefined
-): ExtrudeToFaceTarget {
+): ExtrudeToFaceTarget | ExtrudeToSurfaceTarget {
+  // F01 (v131): a cylindrical face is a curved target, named by lineage as
+  // a wrap names its face; the build re-finds it and reads its cylinder.
+  if (face?.geometry?.surfaceType === 'cylinder') {
+    if (!face.reference) {
+      throw new Error(
+        'This face has no identity a rebuild can find again, so an extrusion cannot follow it. Pick a face of an extruded, primitive or moved body.'
+      );
+    }
+    return {
+      type: 'surface',
+      bodyId,
+      faceReference: face.reference,
+      sourceCentroid: face.geometry.centroid ?? face.geometry.center
+    };
+  }
   const attachment = faceSketchAttachment({
     bodyId,
     pickedHash: face?.hash,
     face
   });
   if (!attachment.ok) {
-    throw new Error('Pick an exact planar face for the extrusion to reach.');
+    throw new Error(
+      'Pick an exact planar or cylindrical face for the extrusion to reach.'
+    );
   }
   const ref = attachment.planeRef;
   if (ref.type !== 'face' || !ref.faceReference || !ref.sourceCentroid) {
@@ -215,13 +233,33 @@ export function toFaceDistanceEstimate(
 export function toFaceReachEstimate(
   document: ProjectDocument,
   sketchId: SketchId,
-  target: ExtrudeToFaceTarget
+  target: ExtrudeToFaceTarget | ExtrudeToSurfaceTarget
 ): { height: number; slanted: boolean } | null {
   const sketch = findSketch(document, sketchId);
   if (!sketch) return null;
   const { scope } = getParameterScope(document);
   const resolve = (value: ParamValue) =>
     resolveParamValue(value, scope, 'sketch offset', document.units);
+  if (target.type === 'surface') {
+    // F01 (v131): a curved face reads as where its pick-time middle lies,
+    // like a slanted face: the build finds where it meets the profile.
+    try {
+      const basis = resolvedSketchPlaneBasis(
+        document,
+        sketch.planeRef,
+        resolve,
+        sketch.name
+      );
+      const c = target.sourceCentroid;
+      const height =
+        (c.x - basis.origin.x) * basis.normal.x +
+        (c.y - basis.origin.y) * basis.normal.y +
+        (c.z - basis.origin.z) * basis.normal.z;
+      return Number.isFinite(height) ? { height, slanted: true } : null;
+    } catch {
+      return null;
+    }
+  }
   // Both planes are re-resolved against the current projection, as the
   // build re-resolves them: an upstream edit can move the sketch and the
   // face together, so the face's pick-time snapshot is not where it is now.
@@ -249,7 +287,7 @@ export function toFaceReachEstimate(
 /** "Ceiling · face", for the extrude card and the history row. */
 export function toFaceTargetLabel(
   document: ProjectDocument,
-  target: ExtrudeToFaceTarget
+  target: ExtrudeToFaceTarget | ExtrudeToSurfaceTarget
 ): string {
   const body = ownEntry(
     document.derived.bodyRepresentations,
@@ -276,13 +314,21 @@ export function extrudeToFaceRepair(
   ) {
     throw new Error('Only an extrude to a face can have its face re-picked.');
   }
-  const toFace = extrudeToFaceTargetFromPick(document, selection, feature);
+  const target = extrudeToFaceTargetFromPick(document, selection, feature);
   const label = `Re-pick face for ${feature.name}`;
+  // F01 (v131): a planar face replaces a curved one, and the other way
+  // round: the field the new face is not is cleared.
+  const surface = target.type === 'surface';
+  const stale = surface ? 'toFace' : 'toSurface';
   return {
     feature,
     label,
     command: commandFactories.updateFeature(
-      { featureId, data: { toFace } },
+      {
+        featureId,
+        data: surface ? { toSurface: target } : { toFace: target },
+        ...(stale in feature.data ? { clearData: [stale] } : {})
+      },
       label
     )
   };
