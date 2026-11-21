@@ -525,13 +525,16 @@ test(
       page.getByRole('status', { name: 'Saved', exact: true })
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
 
-    // Every encrypted blob upload other than a thumbnail, from here on.
+    // Every upload other than a thumbnail, from here on: encrypted blobs,
+    // and plaintext upload sessions, which the stub refuses before anything
+    // reaches the database, so only the request itself shows one.
     const blobUploads: string[] = [];
     page.on('request', (request) => {
+      if (request.method() !== 'POST') return;
       const path = new URL(request.url()).pathname;
-      if (request.method() === 'POST' && path.endsWith('/blobs/uploads')) {
+      if (path.endsWith('/blobs/uploads') || path === '/api/uploads') {
         const { kind } = request.postDataJSON() as { kind: string };
-        if (kind !== 'thumbnail') blobUploads.push(kind);
+        if (kind !== 'thumbnail') blobUploads.push(`${path} ${kind}`);
       }
     });
 

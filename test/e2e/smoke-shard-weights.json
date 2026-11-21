@@ -62,6 +62,7 @@
   "encrypted-room.spec.ts": 15,
   "encrypted-share-links.spec.ts": 21,
   "encrypted-link-comments.spec.ts": 25,
+  "encrypted-content-blobs.spec.ts": 15,
   "encryption-device-approval.spec.ts": 7,
   "encryption-passkeys.spec.ts": 4,
   "encryption-pins.spec.ts": 3,
