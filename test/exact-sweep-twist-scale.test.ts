@@ -255,7 +255,7 @@ describe(
       const swept = sweepWith(start, [riser], { construction: undefined });
       const patched = updateFeature(swept.document, {
         featureId: sweepFeature(swept.document).featureId,
-        data: { twistDeg: 0, endScale: '1' } as never
+        data: { twistDeg: 0, endScale: '1' }
       });
       expect(sweepFeature(patched).data).not.toHaveProperty('twistDeg');
       expect(sweepFeature(patched).data).not.toHaveProperty('endScale');
@@ -271,7 +271,7 @@ describe(
               payload: { construction: 'in-place', twistDeg: 90 }
             }
           ] as never,
-          editHistory: undefined as never
+          editHistory: undefined
         })
       ).toThrow(/132/);
     });
