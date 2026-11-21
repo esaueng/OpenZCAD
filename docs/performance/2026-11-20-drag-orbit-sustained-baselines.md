@@ -68,9 +68,14 @@ while dragging) and the exact preview's round trip as separate rows.
   pointer motion: frame intervals 16.6 ms p50, 17.2–18.2 ms p95, at most
   26 ms (read from the drag trace's frame events between the first and last
   pointer moves). An earlier reading of this record put the filleted unions
-  at a 33 ms p95. That figure came from the viewer's 19–24 "continuous"
-  frame marks, the first of which spans the idle-to-drag transition, not
-  from a frame dropped during the drag; the probe now reads the trace.
+  at a 33 ms p95. That figure came from a subset of 19–24 viewer
+  "continuous" frame marks that included intervals ending before, or
+  straddling, the first pointer move (in three of the four filleted-union
+  runs the 33 ms interval ended before the first move; in the fourth it
+  spanned it). It is not a frame dropped during the motion. Whether a
+  refresh is missed at the very start of a drag is not established by
+  either reading; the probe now measures cadence between the first and
+  last pointer moves.
 
 ## Orbit tails
 

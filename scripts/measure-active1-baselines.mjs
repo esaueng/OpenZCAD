@@ -205,9 +205,12 @@ const percentile = (values, fraction) => {
 
 /**
  * Frame cadence while the pointer moves: the intervals between every frame
- * the drag trace recorded from the first pointer event to the last. The
- * viewer's `continuous` frame marks cover only part of a drag, and the first
- * of them spans the idle-to-drag transition, so they misstate the rate.
+ * the drag trace recorded (each a WebGL render inside the viewer's animation
+ * callback) from the first pointer event to the last. The viewer's
+ * `continuous` frame marks cover only part of a drag and can include
+ * intervals that end before or straddle the first move, so they misstate the
+ * rate during motion. Latency at the start and end of a drag is measured by
+ * the lag and release rows, not here.
  */
 export function dragFrameCadence(sample) {
   const trace = Array.isArray(sample.trace) ? sample.trace : null;
