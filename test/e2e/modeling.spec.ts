@@ -2903,92 +2903,26 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
-test('archives a browser-generated STEP export and lists the stored file', async ({
+test('a STEP export is a download only and uploads no copy', async ({
   page
 }) => {
   test.setTimeout(90_000);
   await stubApi(page);
 
-  let projectId = '';
-  let uploadedStep = '';
-  let finalized = false;
-  const artifactId = 'artifact_e6_browser_export';
-  const uploadSessionId = 'upload_e6_browser_export';
-  const artifact = () => ({
-    artifactId,
-    projectId,
-    kind: 'step-export' as const,
-    name: 'Archived-Part.step',
-    objectKey: `${projectId}/uploads/archived-part.step`,
-    contentType: 'model/step',
-    bytes: uploadedStep.length,
-    createdAt: '2026-08-03T12:00:00.000Z',
-    metadata: { documentVersion: 1, units: 'mm' }
+  // Any upload or artifact write during the export is a cloud copy the
+  // user did not ask for.
+  const uploads: string[] = [];
+  await page.route('**/api/uploads**', async (route) => {
+    uploads.push(route.request().url());
+    await route.fulfill({ status: 500 });
   });
-
-  await page.route('**/api/projects/*/artifacts', (route) =>
-    route.fulfill({ json: { artifacts: finalized ? [artifact()] : [] } })
-  );
-  await page.route(`**/api/artifacts/${artifactId}`, (route) =>
-    route.fulfill({ json: { artifact: finalized ? artifact() : null } })
-  );
   await page.route('**/api/artifacts/finalize', async (route) => {
-    const payload = route.request().postDataJSON() as {
-      uploadSessionId?: string;
-    };
-    if (payload.uploadSessionId !== uploadSessionId) return route.fallback();
-    expect(route.request().postDataJSON()).toEqual({
-      projectId,
-      uploadSessionId,
-      artifactId
-    });
-    finalized = true;
-    await route.fulfill({ json: { artifactId } });
-  });
-  await page.route(
-    `**/api/uploads/${uploadSessionId}/content`,
-    async (route) => {
-      expect(route.request().method()).toBe('PUT');
-      expect(route.request().headers()['content-type']).toContain('model/step');
-      uploadedStep = route.request().postData() ?? '';
-      await route.fulfill({ status: 204 });
-    }
-  );
-  await page.route('**/api/uploads', async (route) => {
-    const payload = route.request().postDataJSON() as {
-      projectId: string;
-      fileName: string;
-      contentType: string;
-      kind: string;
-    };
-    if (payload.kind !== 'step-export') return route.fallback();
-    projectId = payload.projectId;
-    expect(payload).toMatchObject({
-      fileName: 'Archived-Part.step',
-      contentType: 'model/step',
-      kind: 'step-export'
-    });
-    await route.fulfill({
-      status: 201,
-      json: {
-        session: {
-          uploadSessionId,
-          artifactId,
-          projectId,
-          objectKey: `${projectId}/uploads/archived-part.step`,
-          uploadUrl: `/api/uploads/${uploadSessionId}/content`,
-          expiresAt: '2026-08-04T12:00:00.000Z',
-          fileName: payload.fileName,
-          contentType: payload.contentType,
-          kind: payload.kind,
-          metadata: {}
-        }
-      }
-    });
+    uploads.push(route.request().url());
+    await route.fulfill({ status: 500 });
   });
 
   await page.goto('/');
-  await page.getByLabel('Project name').fill('Archived Part');
+  await page.getByLabel('Project name').fill('Local Part');
   await page.getByRole('button', { name: 'New project' }).click();
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
@@ -2998,16 +2932,12 @@ test('archives a browser-generated STEP export and lists the stored file', async
   const downloadPromise = page.waitForEvent('download');
   await fileMenu.getByRole('button', { name: /STEP/ }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('Archived-Part.step');
-  await expect(page.getByRole('contentinfo')).toContainText('and archived it');
-  expect(uploadedStep.startsWith('ISO-10303-21;')).toBe(true);
-  expect(uploadedStep).toContain('MANIFOLD_SOLID_BREP');
-
-  await expect(fileMenu.locator('summary')).toContainText('File 1');
-  await fileMenu.locator('summary').click();
-  await expect(
-    fileMenu.getByRole('link', { name: /Archived-Part\.step/ })
-  ).toHaveAttribute('href', `/api/artifacts/${artifactId}/download`);
+  expect(download.suggestedFilename()).toBe('Local-Part.step');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'to Local-Part.step.'
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText('archived');
+  expect(uploads).toEqual([]);
 });
 
 test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke' }, async ({
