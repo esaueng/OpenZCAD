@@ -4700,6 +4700,12 @@ export function App() {
     interaction: InteractionState;
     value: number;
     startedAt: number;
+    /**
+     * The user picked something else while this edit was being checked. A
+     * refusal landing afterwards posts no top bar chip, even if that pick
+     * has since been cleared.
+     */
+    selectionMovedOn?: boolean;
   } | null>(null);
 
   /** Whether the selection is still the one a direct edit was checked for. */
@@ -5593,8 +5599,9 @@ export function App() {
     [doc?.projectId, doc?.version]
   );
   // What is picked now, for retiring a refusal the user has moved on from.
-  // A face set, a History pick and a body pick leave the machine idle, so
-  // the workspace's own selection stands in for them.
+  // A face set and a History pick leave the machine idle, so the workspace's
+  // own selection stands in for them. A body ID alone does not: deselecting
+  // the last edge leaves its body selected.
   const refusalSubject =
     interaction.mode !== 'idle'
       ? refusalSubjectKey(interaction)
@@ -5602,12 +5609,18 @@ export function App() {
         ? JSON.stringify(['faces', boxSelectedFaces.map((f) => f.topologyId)])
         : selectedFeatureNode?.source === 'pinned'
           ? JSON.stringify(['feature', selectedFeatureNode.id])
-          : selectedBodyIds.length > 0
-            ? JSON.stringify(['bodies', selectedBodyIds])
-            : null;
-  // Also checked when a refusal lands: a late reply for an edit the user has
-  // already left must not post its chip beside the new pick.
+          : null;
+  // Also checked when a refusal lands. An edit still being checked notes a
+  // pick away from it, so its late refusal posts no chip (see
+  // `selectionMovedOn`), even if that pick was cleared before it landed.
   useEffect(() => {
+    const pending = pendingDirectEditRef.current;
+    if (
+      pending &&
+      movedOnFromRefusal(refusalSubject, refusalSubjectKey(pending.interaction))
+    ) {
+      pending.selectionMovedOn = true;
+    }
     if (
       lastDirectEditFailure &&
       movedOnFromRefusal(refusalSubject, lastDirectEditFailure.selectionKey)
@@ -6353,7 +6366,8 @@ export function App() {
       if (
         current &&
         pending?.document.projectId === current.projectId &&
-        pending.document.version === current.version
+        pending.document.version === current.version &&
+        !pending.selectionMovedOn
       ) {
         setLastDirectEditFailure({
           projectId: current.projectId,

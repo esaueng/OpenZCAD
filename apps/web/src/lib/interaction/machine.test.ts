@@ -2129,7 +2129,7 @@ describe('a preview refused under a held handle', () => {
     expect(
       movedOn(interactionReducer(IDLE, { type: 'enter-sketch', plane }))
     ).toBe(true);
-    // A pick the machine does not hold (a face set, a History row, a body)
+    // A pick the machine does not hold (a face set, a History row)
     // is keyed by the workspace and moves on too.
     expect(movedOnFromRefusal('["faces",["face:3","face:7"]]', key)).toBe(true);
   });
