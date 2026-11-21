@@ -518,7 +518,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // the next face of the target it meets. An older client has no such extent
 // and must refuse the document. Builds on v129 (#1864); claimed as v123,
 // then v127, renumbered when #1860 and #1864 landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 130 as const;
+// v131 adds F01 to-face on a curved face (`toSurface` on a to-face
+// extrude, beside `toFace`): the extrusion ends on a cylindrical face named
+// by lineage. An older client has no such target and must refuse the
+// document. Builds on v130.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 131 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1341,6 +1345,20 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
  * resolver and one re-pick repair serve both.
  */
 export type ExtrudeToFaceTarget = FacePlaneSource;
+
+/**
+ * F01 (schema v131): a curved face an extrude reaches, named by verified
+ * lineage like a wrap's face. Today a cylindrical face: the extrusion ends
+ * on its cylinder, from outside or from inside, re-found at the feature's
+ * history position on every rebuild. `sourceCentroid` is the pick-time
+ * snapshot the editor reads before a build; the build never uses it.
+ */
+export interface ExtrudeToSurfaceTarget {
+  type: 'surface';
+  bodyId: BodyId;
+  faceReference: FaceTopologyReferenceV5;
+  sourceCentroid: Vector3;
+}
 
 /**
  * Schema v99: a principal plane of a coordinate system, as a datum source.
@@ -2522,6 +2540,14 @@ export type FeatureData =
        * blind restores it.
        */
       toFace?: ExtrudeToFaceTarget;
+      /**
+       * F01 (schema v131): with `to-face`, the curved face it reaches instead
+       * of a planar `toFace` (exactly one of the two). A cylindrical face:
+       * each rebuild re-finds it by lineage and the extrusion stops on its
+       * cylinder; a deleted, ambiguous or non-cylindrical face refuses as
+       * unresolved, as a planar target does.
+       */
+      toSurface?: ExtrudeToSurfaceTarget;
       /**
        * F01 (schema v113): offset from the `toFace` face, with `to-face`
        * only. Positive stops the extrusion that far short of the face

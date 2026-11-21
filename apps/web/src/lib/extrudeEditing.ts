@@ -49,10 +49,11 @@ export function extrudeEditInitial(feature: FeatureNode): ExtrudeDraftInitial {
     ...(data.endCondition === 'to-next'
       ? { endCondition: 'to-next' as const }
       : {}),
-    ...(data.endCondition === 'to-face' && data.toFace
+    ...(data.endCondition === 'to-face' && (data.toFace || data.toSurface)
       ? {
           endCondition: 'to-face' as const,
-          toFace: data.toFace,
+          // F01 (v131): the editor holds a planar or a curved face alike.
+          toFace: data.toSurface ?? data.toFace!,
           ...(data.toFaceOffset !== undefined
             ? { toFaceOffset: data.toFaceOffset }
             : {})
@@ -96,6 +97,7 @@ export function extrudeEditData(
     endCondition: _endCondition,
     throughAllSide: _throughAllSide,
     toFace: _toFace,
+    toSurface: _toSurface,
     toFaceOffset: _toFaceOffset,
     startOffset: _startOffset,
     draftAngleDeg: _draftAngleDeg,
@@ -139,7 +141,9 @@ export function extrudeEditData(
       : toFace
         ? {
             endCondition: 'to-face' as const,
-            toFace: value.toFace!,
+            ...(value.toSurface
+              ? { toSurface: value.toSurface }
+              : { toFace: value.toFace! }),
             // A stored zero keeps the form it was written in, like draft.
             ...(value.toFaceOffset !== undefined
               ? { toFaceOffset: value.toFaceOffset }
@@ -194,7 +198,7 @@ export function extrudeEditCommand(
   if (value.choice.operation !== 'new-body' && !value.choice.targetBodyId) {
     throw new Error('Select a target body for this extrusion.');
   }
-  if (value.endCondition === 'to-face' && !value.toFace) {
+  if (value.endCondition === 'to-face' && !value.toFace && !value.toSurface) {
     throw new Error('Pick the face this extrusion reaches.');
   }
   const data = extrudeEditData(feature.data, value);
@@ -206,6 +210,7 @@ export function extrudeEditCommand(
       'endCondition',
       'throughAllSide',
       'toFace',
+      'toSurface',
       'toFaceOffset',
       'startOffset',
       'draftAngleDeg',
@@ -286,6 +291,7 @@ export function extrudeEditTargets(
                   ? ['throughAllSide']
                   : []),
                 ...(feature.data.toFace !== undefined ? ['toFace'] : []),
+                ...(feature.data.toSurface !== undefined ? ['toSurface'] : []),
                 ...(feature.data.toFaceOffset !== undefined
                   ? ['toFaceOffset']
                   : [])

@@ -10,6 +10,7 @@ import type {
   BodyId,
   ExtrudeEndCondition,
   ExtrudeToFaceTarget,
+  ExtrudeToSurfaceTarget,
   ParamValue,
   SketchId,
   ThroughAllSide,
@@ -42,8 +43,10 @@ export interface ExtrudeFormValue {
    */
   endCondition?: ExtrudeEndCondition;
   throughAllSide?: ThroughAllSide;
-  /** F01 (v29): present exactly with `to-face`. */
+  /** F01 (v29): with `to-face`, a planar face (or `toSurface`). */
   toFace?: ExtrudeToFaceTarget;
+  /** F01 (v131): with `to-face`, a curved face instead of `toFace`. */
+  toSurface?: ExtrudeToSurfaceTarget;
   /**
    * F01 (v113): with `to-face` only, and absent when it ends on the face
    * (a typed 0 is sent as absent). Positive stops short, negative passes.
@@ -92,12 +95,18 @@ export interface ExtrudeToFacePicking {
    */
   cancel(): void;
   /** How a target reads and where it sits, from the current projection. */
-  describe(target: ExtrudeToFaceTarget): ExtrudeToFaceInfo;
+  describe(target: ExtrudeFaceTarget): ExtrudeToFaceInfo;
   /** The stored face no longer resolves (edit only). */
   unresolved?: boolean;
   /** Receives the face the viewport pick produced. */
-  setterRef: MutableRefObject<((target: ExtrudeToFaceTarget) => void) | null>;
+  setterRef: MutableRefObject<((target: ExtrudeFaceTarget) => void) | null>;
 }
+
+/**
+ * The face a to-face extrude reaches, as the editor holds it: a planar face
+ * (stored as `toFace`) or, from v131, a curved one (stored as `toSurface`).
+ */
+export type ExtrudeFaceTarget = ExtrudeToFaceTarget | ExtrudeToSurfaceTarget;
 
 /** The settings as typed: every number is its field's text. */
 export interface ExtrudeDraft {
@@ -108,7 +117,7 @@ export interface ExtrudeDraft {
   choice: ExtrudeChoice;
   endCondition: ExtrudeEndCondition;
   throughAllSide: ThroughAllSide;
-  toFace?: ExtrudeToFaceTarget;
+  toFace?: ExtrudeFaceTarget;
   /** F01 (v113): the offset from the face, as typed; read with To face. */
   faceOffset: string;
   /** F01 (v121): the start offset, as typed; read except through all. */
@@ -129,7 +138,7 @@ export interface ExtrudeDraftInitial {
   targetBodyId?: BodyId;
   endCondition?: ExtrudeEndCondition;
   throughAllSide?: ThroughAllSide;
-  toFace?: ExtrudeToFaceTarget;
+  toFace?: ExtrudeFaceTarget;
   toFaceOffset?: ParamValue;
   startOffset?: ParamValue;
   draftAngleDeg?: ParamValue;
@@ -462,7 +471,11 @@ export function extrudeFormValue(
           ? 'to-next'
           : 'blind',
     ...(throughAll ? { throughAllSide: draft.throughAllSide } : {}),
-    ...(toFace && draft.toFace ? { toFace: draft.toFace } : {}),
+    ...(toFace && draft.toFace
+      ? draft.toFace.type === 'surface'
+        ? { toSurface: draft.toFace }
+        : { toFace: draft.toFace }
+      : {}),
     ...(toFace && toFaceOffset !== 0 && toFaceOffset !== '0'
       ? { toFaceOffset }
       : {}),

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import type {
   BodyId,
-  ExtrudeToFaceTarget,
   ParamValue,
   ThroughAllSide,
   UnitSystem
@@ -27,6 +26,7 @@ import {
   type ExtrudeDraft,
   type ExtrudeDraftContext,
   type ExtrudeDraftInitial,
+  type ExtrudeFaceTarget,
   type ExtrudeFormValue,
   type ExtrudeToFacePicking
 } from '../lib/extrudeDraft';
@@ -332,8 +332,8 @@ export function ExtrudeCommand({
   }, [editing]);
   // A picked face becomes the target, and the depth it gives becomes the
   // dormant distance, so switching back to Distance keeps the same reach.
-  const pendingFace = useRef<ExtrudeToFaceTarget | null>(null);
-  const updateFace = useRef((_target: ExtrudeToFaceTarget) => {});
+  const pendingFace = useRef<ExtrudeFaceTarget | null>(null);
+  const updateFace = useRef((_target: ExtrudeFaceTarget) => {});
   updateFace.current = (target) => {
     const info = toFacePicking?.describe(target);
     // Only a parallel face's exact reach stands in for the distance: a
@@ -464,7 +464,7 @@ export function ExtrudeCommand({
     toFace && draft.toFace ? toFacePicking!.describe(draft.toFace) : null;
   const regions = profileCount > 1 ? ` · ${profileCount} profiles` : '';
   const guidance = toFacePicking?.armed
-    ? 'Click a flat face facing the sketch'
+    ? 'Click a face facing the sketch'
     : toFace
       ? toFaceInfo
         ? `Up to ${toFaceInfo.label}${regions}`
@@ -709,7 +709,11 @@ export function ExtrudeCommand({
   });
 
   const actions = [
-    ...(blind || toNext ? [{ id: 'reverse', label: 'Reverse direction' }] : []),
+    // A curved face is reached either way from inside it: the distance's
+    // sign, which Reverse sets, decides (F01, v131).
+    ...(blind || toNext || (toFace && draft.toFace?.type === 'surface')
+      ? [{ id: 'reverse', label: 'Reverse direction' }]
+      : []),
     ...(toFace && toFacePicking
       ? [
           {
@@ -747,7 +751,7 @@ export function ExtrudeCommand({
           // reverses to -1, not to -0 (which still points forward).
           change({
             distance:
-              toNext && evaluated(draft.distance, 'length') === 0
+              (toNext || toFace) && evaluated(draft.distance, 'length') === 0
                 ? '-1'
                 : reversedDistance(draft.distance)
           });
