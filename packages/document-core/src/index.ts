@@ -45,6 +45,7 @@ export {
 } from './storable-document';
 import {
   assertNoReferenceDimensionDependents,
+  assertShapeReferenceTargetsPreserved,
   assertReferenceCommandSchema,
   assertSketchReferenceDimensions
 } from './sketch-reference-dimensions';
@@ -1262,6 +1263,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // an absent mode remains the saved absolute distance without rewriting it.
   // Schema v36 composite reference targets are explicit snapshots. Never
   // derive them from a legacy object or promote an older carrier silently.
+  // Schema v125 shape-centre and legacy-shape targets are authored too: opening
+  // older content never synthesizes one from a rectangle or polygon object.
   // Schema v37 boundary provenance and conversion ownership are authored.
   // Opening older content never converts it or invents source witnesses.
   // Schema v56 -> v57 thread runouts and pipe threads are optional fields on
@@ -2016,6 +2019,12 @@ export function updateSketchObject(
     input.objectId
   );
   assertSketchPromotionMemberUpdate(
+    document,
+    sketch,
+    input.objectId,
+    input.data
+  );
+  assertShapeReferenceTargetsPreserved(
     document,
     sketch,
     input.objectId,

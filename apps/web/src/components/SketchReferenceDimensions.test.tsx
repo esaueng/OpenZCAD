@@ -12,6 +12,7 @@ import {
   findSketch
 } from '@openzcad/document-core';
 import {
+  createSketchCompositeCenterTarget,
   createSketchCompositeCornerTarget,
   createSketchCompositeSideTarget,
   toUserId,
@@ -406,4 +407,114 @@ describe('composite option budgets', () => {
       expect(screen.getAllByRole('option', { name: 'Line 1' })).toHaveLength(2);
     }
   );
+});
+
+describe('S02-D shape centre and legacy shape targets', () => {
+  it('offers a named shape centre beside its corners', () => {
+    const { sketch, objects, composite } = compositeFixture();
+    const onCommand = vi.fn<(command: AnyCommand) => void>();
+    render(
+      <SketchReferenceDimensions
+        sketch={sketch}
+        objects={objects}
+        units="mm"
+        resolve={(value) => (typeof value === 'number' ? value : undefined)}
+        disabled={false}
+        onCommand={onCommand}
+      />
+    );
+    const centre = createSketchCompositeCenterTarget(composite);
+    const corner = createSketchCompositeCornerTarget(composite, 0);
+    fireEvent.change(screen.getByLabelText('Reference from'), {
+      target: { value: JSON.stringify(centre) }
+    });
+    fireEvent.change(screen.getByLabelText('Reference to'), {
+      target: { value: JSON.stringify(corner) }
+    });
+    expect(
+      screen.getAllByRole('option', { name: 'Rectangle 1 · Centre' })
+    ).toHaveLength(2);
+    expect(screen.getByRole('status').textContent).toBe(
+      `Measured: ${Math.hypot(10, 6).toFixed(3).replace(/0+$/, '')} mm`
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add reference' }));
+    expect(onCommand.mock.calls[0]![0].payload).toMatchObject({
+      data: { dimensionKind: 'distance', a: centre, b: corner }
+    });
+  });
+
+  it('measures an unconverted legacy rectangle by corner, centre and side', () => {
+    const added = addSketchFeature(
+      createProjectDocument('Legacy', toUserId('user_test')),
+      {
+        name: 'Sketch',
+        plane: 'XY',
+        objects: [
+          {
+            objectKind: 'rectangle',
+            width: 20,
+            height: 12,
+            centerX: 10,
+            centerY: 6
+          },
+          { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 5 }
+        ]
+      }
+    );
+    const sketch = findSketch(added.document, added.sketchId)!;
+    const objects = sketch.objectIds.map((id, i) => ({
+      id,
+      label: ['Plate', 'Upright'][i]!,
+      data:
+        added.document.nodes[id]!.kind === 'sketch-object'
+          ? added.document.nodes[id]!.data
+          : { objectKind: 'line' as const, x1: 0, y1: 0, x2: 1, y2: 0 }
+    }));
+    const rect = objects[0]!.id;
+    const onCommand = vi.fn<(command: AnyCommand) => void>();
+    render(
+      <SketchReferenceDimensions
+        sketch={sketch}
+        objects={objects}
+        units="mm"
+        resolve={(value) => (typeof value === 'number' ? value : undefined)}
+        disabled={false}
+        onCommand={onCommand}
+      />
+    );
+    const corner = { kind: 'shape-corner', objectId: rect, index: 2, count: 4 };
+    const centre = { kind: 'shape-center', objectId: rect };
+    fireEvent.change(screen.getByLabelText('Distance type'), {
+      target: { value: 'vertical' }
+    });
+    fireEvent.change(screen.getByLabelText('Reference from'), {
+      target: { value: JSON.stringify(centre) }
+    });
+    fireEvent.change(screen.getByLabelText('Reference to'), {
+      target: { value: JSON.stringify(corner) }
+    });
+    expect(
+      screen.getAllByRole('option', { name: 'Plate (parametric) · Corner 3' })
+    ).toHaveLength(2);
+    expect(screen.getByRole('status').textContent).toBe('Measured: 6 mm');
+    fireEvent.click(screen.getByRole('button', { name: 'Add reference' }));
+    expect(onCommand.mock.calls[0]![0].payload).toMatchObject({
+      data: { dimensionKind: 'distance', a: centre, b: corner }
+    });
+
+    fireEvent.change(screen.getByLabelText('Reference type'), {
+      target: { value: 'angle' }
+    });
+    const side = { kind: 'shape-side', objectId: rect, index: 0, count: 4 };
+    fireEvent.change(screen.getByLabelText('Reference from'), {
+      target: { value: JSON.stringify(side) }
+    });
+    fireEvent.change(screen.getByLabelText('Reference to'), {
+      target: { value: objects[1]!.id }
+    });
+    expect(screen.getByRole('status').textContent).toBe('Measured: 90°');
+    expect(
+      screen.getAllByRole('option', { name: 'Plate (parametric) · Side 1' })
+    ).toHaveLength(2);
+  });
 });

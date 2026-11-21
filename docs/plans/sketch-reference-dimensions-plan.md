@@ -6,8 +6,55 @@ rectangle/polygon corners and sides through the shared measured-target unions;
 driving constraints keep primitive identities. Its schema v32 topology,
 qualification and deletion contract is authoritative in the
 [composite target identity plan](sketch-composite-identity-plan.md#composite-target-identity-s04-b).
-Legacy parametric-composite and datum consumers, plus a separate display-unit
-selector, remain open. The original proposal below retains design history.
+S02-D composite consumers (shape centres and legacy parametric shapes) are
+implemented at schema v125, below. Datum consumers and a separate
+display-unit selector remain open. The original proposal below retains
+design history.
+
+## Shape centres and legacy shapes (S02-D)
+
+Schema v125 adds four reference targets. Each is target identity only, with
+no coordinates or values:
+
+* `composite-center` names a held-line shape's centre with the same
+  composite ID and complete ordered topology witness as an S04-B corner or
+  side, without an index. It measures the centroid of the shape's corners:
+  a rectangle's or regular polygon's centre, or a slot's midpoint between
+  its centres. The whole shape must resolve first, so changed topology,
+  missing helpers and broken loops stay unresolved by name. A polygon's
+  centre is the same physical point as its circumcircle's centre, so picking
+  both is refused as the same target twice.
+* `shape-corner`, `shape-side` and `shape-center` name an unconverted legacy
+  rectangle or regular polygon by object ID, with a zero-based index and the
+  side count when the target was made. Corners follow the order that the
+  region builder and S04-C boundary tokens already use: a rectangle starts at
+  its lower-left corner, a polygon at its top vertex, both
+  counter-clockwise. Side `i` runs from corner `i` to corner `i + 1`.
+  Measuring never converts the shape or writes to it.
+
+Distances take every point form, mixed with primitive points and S04-B
+corners, in all three distance modes. Angles take legacy sides beside lines
+and composite sides. The palette names these targets "Rectangle 1 · Centre"
+and "Rectangle (parametric) · Corner 3", so an unnamed legacy shape is never
+confused with a held-line shape of the same name. A helper snap that already
+lands on a shape's centre (a polygon's circumcircle centre, a centre
+rectangle's diagonal midpoints, a slot's centre-line midpoint) now carries
+that centre's name and target; no snap point is added.
+
+Refusal and repair follow S04. Deleting a measured legacy shape or a member
+of a measured composite refuses until the annotation is removed, and so does
+explicit conversion of a measured legacy shape. A direct edit that changes a
+measured shape's kind or side count refuses atomically and names the
+annotations. A parameter edit that changes a polygon's count cannot be
+refused at that edit, so the reference is unresolved ("the polygon now has 5
+sides, not 6"), stays visible and removable, and is never re-indexed. Replay
+restores these targets structurally, as with S04-B targets. Pre-v125 current,
+readable-history and replay carriers refuse them. Exact-history digests and
+the GCS input are unchanged, as for every reference.
+
+Evidence: `test/sketch-shape-reference-targets.test.ts`,
+`SketchReferenceDimensions.test.tsx`, `compositeTargets.test.ts` and
+`test/e2e/sketch-shape-reference-targets.spec.ts`.
 
 ## Projected reference distances (S02-E)
 

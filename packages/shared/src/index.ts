@@ -8,6 +8,7 @@ export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './sketch-composite-targets';
+export * from './sketch-shape-targets';
 export * from './sketch-boundary-provenance';
 export * from './sketch-promotions';
 export * from './mass-density';
@@ -32,9 +33,15 @@ import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type {
+  SketchCompositeCenterTarget,
   SketchCompositeCornerTarget,
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
+import type {
+  SketchShapeCenterTarget,
+  SketchShapeCornerTarget,
+  SketchShapeSideTarget
+} from './sketch-shape-targets';
 import type { BoundaryProvenance } from './sketch-boundary-provenance';
 import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
@@ -482,7 +489,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // along the sketch normal instead of on it. An older client would start it
 // on the sketch plane, so it must refuse. Builds on v120 (v118 is claimed
 // by #1808).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 121 as const;
+// v125 adds S02-D reference targets: a named shape's centre
+// (`composite-center`) and a legacy parametric rectangle's or regular
+// polygon's corner, side or centre (`shape-corner`, `shape-side`,
+// `shape-center`), measured without converting the shape. An older client
+// cannot read those targets and would refuse or drop the annotation, so it
+// must refuse the document. Builds on v121 (#1842); v122–v124 are claimed
+// by the open F01 PRs #1846, #1847 and #1851.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 125 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -1960,9 +1974,19 @@ export type SketchReferenceDistanceMode =
   'absolute' | 'horizontal' | 'vertical';
 
 /** Measured targets; driving constraints retain primitive point identities. */
+/**
+ * Composite centres and legacy-shape corners/centres arrive in schema v125
+ * (S02-D); a primitive point and a held-line corner keep their earlier forms.
+ */
 export type SketchReferencePointTarget =
-  SketchPointRef | SketchCompositeCornerTarget;
-export type SketchReferenceCurveTarget = EntityId | SketchCompositeSideTarget;
+  | SketchPointRef
+  | SketchCompositeCornerTarget
+  | SketchCompositeCenterTarget
+  | SketchShapeCornerTarget
+  | SketchShapeCenterTarget;
+/** Legacy-shape sides arrive in schema v125 (S02-D). */
+export type SketchReferenceCurveTarget =
+  EntityId | SketchCompositeSideTarget | SketchShapeSideTarget;
 
 export type SketchReferenceDimensionData =
   | {
