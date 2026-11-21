@@ -35,7 +35,7 @@ import {
   type Vec3
 } from '@openzcad/geometry';
 import type { FeatureNode, UnitSystem } from '@openzcad/shared';
-import { buildSweep } from './exact-profile-builders';
+import { markPierceTravel, buildSweep } from './exact-profile-builders';
 import { resolveExtrudeStartOffset } from './extrude-options';
 import { shiftBasisAlongNormal } from './exact-math';
 import { classifySolidPoint } from './exact-measure';
@@ -659,7 +659,12 @@ function piercedFeatureNode(
   ) {
     return null;
   }
-  return { ...feature, data: { ...data, backDistance: travel } };
+  // Marked so a drafted tool keeps its one-sided taper carried across the
+  // start plane, as it always has: the travel is not a back side to draft.
+  return markPierceTravel({
+    ...feature,
+    data: { ...data, backDistance: travel }
+  });
 }
 
 /**

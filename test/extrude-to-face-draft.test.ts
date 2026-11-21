@@ -246,8 +246,9 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       ],
       [{ draftAngleDeg: 90 }, /between -89 and 89/],
       [{ draftAngleDeg: Number.NaN }, /between -89 and 89/],
-      [{ draftAngleDeg: 4, symmetric: true }, /one-sided extrusion/],
-      [{ draftAngleDeg: 4, backDistance: 3 }, /one-sided extrusion/],
+      // F01 (v126): a symmetric or two-sided extrusion takes a draft now;
+      // only a back draft with no back side is refused.
+      [{ backDraftAngleDeg: 4 }, /Back draft tapers the side behind/],
       [
         {
           draftAngleDeg: 4,
@@ -1043,15 +1044,19 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
           parametric.bodyId
         ]!.volume
       ).toBeCloseTo(2400, 6);
-      // ...and refused by name once the parameter leaves 0.
+      // ...and, once the parameter leaves 0, tapers the side the distance
+      // runs to (F01, v126) while the back half stays straight.
       const tapered = setParameter(parametric.document, {
         name: 'taper',
         expression: '3'
       });
-      const refused = await derive(tapered);
-      expect(refused.bodyRepresentations[parametric.bodyId]).toBeUndefined();
-      expect(refused.warnings.join('\n')).toMatch(
-        /Feature "Taper": Draft applies to a one-sided extrusion/
+      const drafted = await derive(tapered);
+      expect(drafted.warnings).toEqual([]);
+      expect(
+        drafted.bodyRepresentations[parametric.bodyId]!.volume
+      ).toBeCloseTo(
+        draftedBox(20, 12, 5, Math.tan((3 * Math.PI) / 180)) + 20 * 12 * 5,
+        6
       );
     });
 
