@@ -406,6 +406,17 @@ const TRANSLATIONS: readonly Translation[] = [
       'Twist and end scale can carry a full circle only when it is centred on the path. Centre it on the path, or draw it as two arcs.'
   },
   {
+    pattern: /end scale must be between ([\d.e+-]+) and ([\d.e+-]+)/i,
+    sentence: (match) =>
+      `The end scale must be between ${Number(match[1])} and ${Number(match[2])}.`
+  },
+  {
+    pattern:
+      /can (?:twist|scale|twist and scale) the profile only when each closed curve in it is a circle/i,
+    sentence:
+      'Twist and end scale can carry a closed curve in the profile only when it is a circle. Split the curve into pieces, or use a circle.'
+  },
+  {
     pattern: /(?:scaled|twisted) extrusion cannot sweep a trimmed spline edge/i,
     sentence:
       'Twist and end scale cannot carry a trimmed spline in the profile yet.'

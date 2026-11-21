@@ -240,6 +240,9 @@ describe(
       expect(() => sweepWith(start, [riser], { endScale: -2 })).toThrow(
         'greater than zero'
       );
+      expect(() => sweepWith(start, [riser], { endScale: 1e-20 })).toThrow(
+        'between 0.001 and 1000'
+      );
     });
 
     it('refuses a twist along a path with an arc by name, building nothing', async () => {

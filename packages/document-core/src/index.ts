@@ -3212,6 +3212,10 @@ export function validateSweepOptions(data: {
       if (!Number.isFinite(endScale) || endScale <= 0) {
         throw new Error('Sweep end scale must be greater than zero.');
       }
+      // The kernel builds end scales from 1/1000 to 1000.
+      if (endScale < 0.001 || endScale > 1000) {
+        throw new Error('Sweep end scale must be between 0.001 and 1000.');
+      }
     } else if (typeof endScale !== 'string' || !endScale.trim()) {
       throw new Error('Sweep end scale must be a number or an expression.');
     }
