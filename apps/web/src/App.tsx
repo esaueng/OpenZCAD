@@ -936,6 +936,7 @@ import {
   interactionReducer,
   commandSessionFor,
   holdsRefusal,
+  movedOnFromRefusal,
   refusalDiscardedByHistoryStep,
   isOperationState,
   isStaleSelectionError,
@@ -5583,11 +5584,20 @@ export function App() {
     projectId: ProjectDocument['projectId'];
     version: number;
     message: string;
+    /** The refused operation's selection; picking another retires it. */
+    selectionKey: string | null;
   } | null>(null);
   useEffect(
     () => setLastDirectEditFailure(null),
     [doc?.projectId, doc?.version]
   );
+  useEffect(() => {
+    setLastDirectEditFailure((failure) =>
+      failure && movedOnFromRefusal(interaction, failure.selectionKey)
+        ? null
+        : failure
+    );
+  }, [interaction]);
   /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
@@ -6330,7 +6340,8 @@ export function App() {
         setLastDirectEditFailure({
           projectId: current.projectId,
           version: current.version,
-          message: diagnostic.message
+          message: diagnostic.message,
+          selectionKey: operationSelectionKey(pending.interaction)
         });
       }
       recordDirectEditOutcome('refused', {

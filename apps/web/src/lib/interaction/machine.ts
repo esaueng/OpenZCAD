@@ -1757,6 +1757,21 @@ export function holdsRefusal(state: InteractionState): boolean {
 }
 
 /**
+ * Whether `state` has moved on from a refused edit made on `refusedKey` (the
+ * refused operation's `operationSelectionKey`). Selecting another face, edges
+ * or region, or opening a sketch, has: the top bar's "Edit not applied" chip
+ * described the earlier pick and was stale beside the new one. A plain
+ * deselection has not; the chip stays as its link to the refusal's Activity
+ * log entry (#1596). Neither has the refused operation itself.
+ */
+export function movedOnFromRefusal(
+  state: InteractionState,
+  refusedKey: string | null
+): boolean {
+  return state.mode !== 'idle' && operationSelectionKey(state) !== refusedKey;
+}
+
+/**
  * The failed edit an Undo or Redo discards instead of stepping history: the
  * title of an operation that holds a refusal, or null. The failed edit was
  * never committed, so the top history entry is older, unrelated work; a user

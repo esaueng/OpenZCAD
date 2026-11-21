@@ -15,6 +15,7 @@ import {
   radialFaceOperationName,
   escapeTarget,
   holdsRefusal,
+  movedOnFromRefusal,
   refusalDiscardedByHistoryStep,
   interactionReducer,
   isOperationState,
@@ -2071,6 +2072,40 @@ describe('a preview refused under a held handle', () => {
       value: -9
     });
     expect(state).toMatchObject({ phase: 'failed', lastValue: -9 });
+  });
+  // Recording review: "Edit not applied" stayed in the top bar through
+  // selecting other faces after a refused offset, naming no edit.
+  it('retires a refusal once another selection takes over', () => {
+    const failed = interactionReducer(draggingOffset(), {
+      type: 'validation-failed',
+      diagnostic: refusal,
+      value: -9
+    });
+    expect(holdsRefusal(failed)).toBe(true);
+    const key = operationSelectionKey(failed);
+    expect(movedOnFromRefusal(failed, key)).toBe(false);
+    // A plain deselection keeps the chip as the link to the log (#1596).
+    expect(movedOnFromRefusal(IDLE, key)).toBe(false);
+    // Picking the refused face again is the same edit.
+    expect(
+      movedOnFromRefusal(
+        interactionReducer(IDLE, { type: 'select-face', target: face() }),
+        key
+      )
+    ).toBe(false);
+    const otherFace = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ topologyId: 'face:7', hash: 7 })
+    });
+    expect(movedOnFromRefusal(otherFace, key)).toBe(true);
+    const edges = interactionReducer(IDLE, {
+      type: 'select-edge',
+      selection: edge(1),
+      additive: false
+    });
+    expect(movedOnFromRefusal(edges, key)).toBe(true);
+    const sketch = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    expect(movedOnFromRefusal(sketch, key)).toBe(true);
   });
 });
 
