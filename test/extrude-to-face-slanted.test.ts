@@ -322,21 +322,23 @@ describe('F01 to a slanted face', { timeout: 60_000 }, () => {
       expect(volume).toBeLessThan((4 + 2 * top * t) ** 2 * top);
     });
 
-    it('chooses the way for a round profile beside a level face middle, then the kernel refuses its elliptical section by name (re-check)', async () => {
+    it('builds a round profile beside a level face middle up to the slanted face (re-check)', async () => {
       // Turned −30° through (10, 10, 0): the plane rises over y < 10, and a
       // circle there sits wholly under it. The way is no longer refused as
-      // unclear; the exact split of a round wall by a slanted plane (an
-      // ellipse) is not in the kernel yet, and says so.
+      // unclear, and the kernel cuts the round wall along its elliptical
+      // section: a cylinder cut by a plane holds its area times the plane's
+      // height over the circle's centre, here tan 30° · (10 − 3).
       const result = await post(-30, {}, 0, 0, {
         objectKind: 'circle',
         centerX: 10,
         centerY: 3,
         radius: 1.5
       } as never);
-      const warnings = (await derive(result.document)).warnings.join('\n');
-      expect(warnings).not.toMatch(/unresolved|unclear/);
-      expect(warnings).toMatch(
-        /Feature "Post": Extrude "Post" could not be cut at the slanted face: .*ellipse/
+      const derived = await derive(result.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
+        Math.PI * 1.5 ** 2 * tan(30) * 7,
+        3
       );
     });
 
