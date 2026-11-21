@@ -537,3 +537,56 @@ test(
     expect(errors).toEqual([]);
   }
 );
+
+test(
+  'drafts each side of a symmetric extrude from the bar, and undoes',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(150_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const sketched = addSketchFeature(
+      createProjectDocument('Per-side draft', toUserId('user_e2e')),
+      { name: 'Profile', plane: 'XY', offset: 0, objects: [SQUARE] }
+    );
+    const document = extrudeSketch(sketched.document, {
+      name: 'Boss',
+      sketchId: sketched.sketchId,
+      distance: 10,
+      symmetric: true
+    }).document;
+    await open(page, document);
+    await expectBodyCount(page, 1);
+    const row = page.locator('.feature-row', { hasText: /Boss/ }).last();
+    const rowMain = page.locator('.feature-row-main', { hasText: /^Boss$/ });
+    await expectFeatureMeasurement(page, row, '160');
+
+    // F01 (v126): a 2° draft on the front half only: one 4 × 4 frustum of
+    // height 5 (73.22) beside a straight 4 × 4 × 5 half (80).
+    const edit = await editExtrudeFromHistory(page, rowMain, 'Boss');
+    await setBarValues(page, edit, { 'Draft angle': '2' });
+    await edit.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText('Edit Boss', {
+      timeout: 60_000
+    });
+    await expect(edit).toHaveCount(0);
+    await expect(row).toContainText('10 mm symmetric · 2° draft');
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expectFeatureMeasurement(page, row, '153.2');
+
+    // The back half takes its own 2° draft: two frustums (146.44).
+    const again = await editExtrudeFromHistory(page, rowMain, 'Boss');
+    await setBarValues(page, again, { 'Back draft angle': '2' });
+    await again.getByRole('button', { name: 'Done' }).click();
+    await expect(again).toHaveCount(0);
+    await expect(row).toContainText('2° draft · 2° back draft');
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expectFeatureMeasurement(page, row, '146.4');
+
+    await waitForStillViewport(page);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(row).not.toContainText('back draft');
+    await expectFeatureMeasurement(page, row, '153.2');
+    expect(errors).toEqual([]);
+  }
+);

@@ -60,6 +60,9 @@ export function extrudeEditInitial(feature: FeatureNode): ExtrudeDraftInitial {
       : {}),
     ...(data.draftAngleDeg !== undefined
       ? { draftAngleDeg: data.draftAngleDeg }
+      : {}),
+    ...(data.backDraftAngleDeg !== undefined
+      ? { backDraftAngleDeg: data.backDraftAngleDeg }
       : {})
   };
 }
@@ -92,6 +95,7 @@ export function extrudeEditData(
     toFaceOffset: _toFaceOffset,
     startOffset: _startOffset,
     draftAngleDeg: _draftAngleDeg,
+    backDraftAngleDeg: _backDraftAngleDeg,
     ...kept
   } = stored;
   const operation = value.choice.operation as Exclude<
@@ -152,6 +156,11 @@ export function extrudeEditData(
       ? { draftAngleDeg: value.draftAngleDeg }
       : storedZero(stored.draftAngleDeg)
         ? { draftAngleDeg: stored.draftAngleDeg! }
+        : {}),
+    ...(value.backDraftAngleDeg !== undefined
+      ? { backDraftAngleDeg: value.backDraftAngleDeg }
+      : !throughAll && !toFace && storedZero(stored.backDraftAngleDeg)
+        ? { backDraftAngleDeg: stored.backDraftAngleDeg! }
         : {})
   };
 }
@@ -190,7 +199,8 @@ export function extrudeEditCommand(
       'toFace',
       'toFaceOffset',
       'startOffset',
-      'draftAngleDeg'
+      'draftAngleDeg',
+      'backDraftAngleDeg'
     ] as const
   ).filter((key) => key in feature.data && !(key in data));
   return commandFactories.updateFeature(

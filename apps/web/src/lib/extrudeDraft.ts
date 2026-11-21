@@ -56,6 +56,11 @@ export interface ExtrudeFormValue {
   startOffset?: ParamValue;
   /** F01 (v29): absent for straight walls (a typed 0 is sent as absent). */
   draftAngleDeg?: ParamValue;
+  /**
+   * F01 (v126): the back side's draft; sent only for a blind extrude that
+   * has a back side (symmetric or a back distance), and absent at zero.
+   */
+  backDraftAngleDeg?: ParamValue;
 }
 
 /**
@@ -104,6 +109,8 @@ export interface ExtrudeDraft {
   /** F01 (v121): the start offset, as typed; read except through all. */
   startOffset: string;
   draftAngle: string;
+  /** F01 (v126): the back side's draft, as typed. */
+  backDraftAngle: string;
 }
 
 /** What an extrude editor opens with. */
@@ -121,6 +128,7 @@ export interface ExtrudeDraftInitial {
   toFaceOffset?: ParamValue;
   startOffset?: ParamValue;
   draftAngleDeg?: ParamValue;
+  backDraftAngleDeg?: ParamValue;
 }
 
 /** What the rules read beyond the draft itself. */
@@ -154,7 +162,8 @@ export function initialExtrudeDraft(
     ...(initial.toFace ? { toFace: initial.toFace } : {}),
     faceOffset: paramValueText(initial.toFaceOffset ?? 0),
     startOffset: paramValueText(initial.startOffset ?? 0),
-    draftAngle: paramValueText(initial.draftAngleDeg ?? 0)
+    draftAngle: paramValueText(initial.draftAngleDeg ?? 0),
+    backDraftAngle: paramValueText(initial.backDraftAngleDeg ?? 0)
   };
 }
 
@@ -302,26 +311,41 @@ export function extrudeToFaceUnresolved(
 }
 
 /**
- * Why the draft angle cannot apply as typed, or null. It tapers a one-sided
- * extrusion only, and an angle at a right angle has no finite taper.
+ * F01 (v126): whether a blind draft has a side behind the sketch plane for
+ * a back draft to taper: symmetric, or a back distance.
+ */
+export function extrudeHasBackSide(
+  draft: ExtrudeDraft,
+  ctx: ExtrudeDraftContext
+): boolean {
+  if (extrudeIsThroughAll(draft) || extrudeIsToFace(draft, ctx)) return false;
+  if (draft.symmetric) return true;
+  // A negative back distance is refused, so it is no back side either.
+  const back = extrudeDraftNumber(draft.backDistance, 'length', ctx);
+  return back !== null && back > 0;
+}
+
+/**
+ * Why a draft angle cannot apply as typed, or null. An angle at a right
+ * angle has no finite taper; from v126 the front draft applies to every
+ * extent but through all (the caller skips it there), and the back draft
+ * needs a back side to taper.
  */
 export function extrudeDraftAngleError(
   draft: ExtrudeDraft,
   ctx: ExtrudeDraftContext
 ): string | null {
   const angle = extrudeDraftNumber(draft.draftAngle, 'angle', ctx);
-  if (angle === null) return null;
-  if (Math.abs(angle) >= MAX_DRAFT_DEG) {
+  if (angle !== null && Math.abs(angle) >= MAX_DRAFT_DEG) {
     return `Draft must be between -${MAX_DRAFT_DEG}° and ${MAX_DRAFT_DEG}°.`;
   }
-  if (angle === 0) return null;
-  const toFace = extrudeIsToFace(draft, ctx);
-  if (!toFace && draft.symmetric) {
-    return 'Draft tapers a one-sided extrusion; turn off Symmetric to draft it.';
-  }
-  const back = extrudeDraftNumber(draft.backDistance, 'length', ctx);
-  if (!toFace && back !== null && back !== 0) {
-    return 'Draft tapers a one-sided extrusion; clear Back distance to draft it.';
+  // A back draft with no back side is held, hidden and not sent, for when
+  // the side returns: it never blocks an edit it is not part of.
+  if (!extrudeHasBackSide(draft, ctx)) return null;
+  const back = extrudeDraftNumber(draft.backDraftAngle, 'angle', ctx);
+  if (back === null || back === 0) return null;
+  if (Math.abs(back) >= MAX_DRAFT_DEG) {
+    return `Back draft must be between -${MAX_DRAFT_DEG}° and ${MAX_DRAFT_DEG}°.`;
   }
   return null;
 }
@@ -371,6 +395,7 @@ export function extrudeFormValue(
   // untouched 0 sends 1.
   const typed = coerceParamValue(draft.distance);
   const draftAngleDeg = coerceParamValue(draft.draftAngle);
+  const backDraftAngleDeg = coerceParamValue(draft.backDraftAngle);
   const toFaceOffset = coerceParamValue(draft.faceOffset);
   const startOffset = coerceParamValue(draft.startOffset);
   return {
@@ -403,6 +428,11 @@ export function extrudeFormValue(
       : {}),
     ...(!throughAll && draftAngleDeg !== 0 && draftAngleDeg !== '0'
       ? { draftAngleDeg }
+      : {}),
+    ...(extrudeHasBackSide(draft, ctx) &&
+    backDraftAngleDeg !== 0 &&
+    backDraftAngleDeg !== '0'
+      ? { backDraftAngleDeg }
       : {})
   };
 }
@@ -468,6 +498,16 @@ export function extrudeDraftRefusal(
     const angle = previewExpression(draft.draftAngle, ctx.scope, angleOf(ctx));
     if (!angle.ok || angle.value === undefined) {
       return `Draft angle: ${angle.text}.`;
+    }
+    if (extrudeHasBackSide(draft, ctx)) {
+      const back = previewExpression(
+        draft.backDraftAngle,
+        ctx.scope,
+        angleOf(ctx)
+      );
+      if (!back.ok || back.value === undefined) {
+        return `Back draft angle: ${back.text}.`;
+      }
     }
     const error = extrudeDraftAngleError(draft, ctx);
     if (error) return error;

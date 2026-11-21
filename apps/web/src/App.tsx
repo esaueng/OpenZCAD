@@ -776,9 +776,7 @@ function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
 /** Per-format file identity for exports from the Export mesh dialog. */
 const STL_EXPORT_FILE_INFO = {
   extension: 'stl',
-  contentType: 'model/stl',
   label: 'STL',
-  kind: 'stl-export' as const,
   binaryFormat: 'stl' as const
 };
 /**
@@ -808,40 +806,30 @@ const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
     extension: string;
-    contentType: string;
     label: string;
-    kind: ArtifactKind;
     binaryFormat: CadBinaryExportFormat;
   }
 > = {
   '3mf': {
     extension: '3mf',
-    contentType: 'model/3mf',
     label: '3MF',
-    kind: '3mf-export',
     binaryFormat: '3mf'
   },
   'stl-binary': STL_EXPORT_FILE_INFO,
   stl: STL_EXPORT_FILE_INFO,
   obj: {
     extension: 'obj',
-    contentType: 'model/obj',
     label: 'OBJ',
-    kind: 'obj-export',
     binaryFormat: 'obj'
   },
   glb: {
     extension: 'glb',
-    contentType: 'model/gltf-binary',
     label: 'glTF',
-    kind: 'gltf-export',
     binaryFormat: 'glb'
   },
   ply: {
     extension: 'ply',
-    contentType: 'application/octet-stream',
     label: 'PLY',
-    kind: 'ply-export',
     binaryFormat: 'ply'
   }
 };
@@ -20275,13 +20263,10 @@ export function App() {
   async function runExportJob(input: {
     fileName: string;
     label: string;
-    kind: ArtifactKind;
-    contentType: string;
-    metadata: Record<string, string | number>;
     produce(options: {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
-    }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
+    }): Promise<{ save(): Promise<boolean>; warnings: number }>;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
   }) {
@@ -20324,7 +20309,10 @@ export function App() {
       }
       sink.update({ phase: 'writing', fraction: null });
       const saved = await produced.save();
-      if (!saved || signal.aborted) {
+      // A Cancel that lands while the save is still in hand (a share sheet
+      // being staged) comes too late: the file is written, so the run is not
+      // reported as having written nothing.
+      if (!saved) {
         cancelled();
         return;
       }
@@ -20467,14 +20455,12 @@ export function App() {
   function handleExportIges() {
     const target = readyExportTarget(null);
     if (!target || !doc) return;
-    const { version, units } = doc;
     const fileName = `${exportStemFor(null)}.igs`;
+    const { units } = doc;
     void import('./lib/igesImport').then((lazy) =>
       lazy.exportIges({
         target,
         fileName,
-        version,
-        documentUnits: units,
         units: exportUnitsFor(units),
         runExportJob,
         exportModel: geometry.exportModel
@@ -20489,18 +20475,9 @@ export function App() {
     }
     const { document: exported, bodyIds, allShownBodies, rowName } = target;
     const fileName = `${exportStemFor(rowName)}.step`;
-    const contentType = 'model/step';
     await runExportJob({
       fileName,
       label: rowName ? `STEP of ${rowName}` : 'STEP',
-      kind: 'step-export',
-      contentType,
-      metadata: {
-        bodyIds: bodyIds.join(','),
-        documentVersion: doc.version,
-        units: doc.units,
-        ...(rowName ? { configuration: rowName } : {})
-      },
       ...(rowName
         ? {
             completed: () => `Exported configuration ${rowName} to ${fileName}.`
@@ -20518,7 +20495,6 @@ export function App() {
           throw new Error('The STEP export returned no text.');
         }
         return {
-          body: new Blob([result.text], { type: contentType }),
           save: () => saveCadTextFile(fileName, 'step', result.text),
           warnings: result.warnings.length
         };
@@ -20540,7 +20516,7 @@ export function App() {
     if (!target || !doc) {
       return;
     }
-    const { version, units } = doc;
+    const { units } = doc;
     void import('./lib/meshExportPackage').then((lazy) =>
       lazy.exportMesh({
         format,
@@ -20548,8 +20524,6 @@ export function App() {
         options: tolerances,
         target,
         info: MESH_EXPORT_FILE_INFO[format],
-        version,
-        documentUnits: units,
         units: exportUnitsFor(units),
         stemOf: exportStemFor,
         setStatus,
@@ -20582,16 +20556,6 @@ export function App() {
     void runExportJob({
       fileName,
       label: slicer ? `3MF for ${slicer.label}` : '3MF for your slicer',
-      kind: info.kind,
-      contentType: info.contentType,
-      metadata: {
-        bodyIds: bodyIds.join(','),
-        documentVersion: doc.version,
-        units: doc.units,
-        format: '3mf',
-        deflectionMm: deflection,
-        ...(rowName ? { configuration: rowName } : {})
-      },
       completed: (bodies) =>
         slicer
           ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
@@ -20608,7 +20572,6 @@ export function App() {
           throw new Error('The 3MF export returned no file.');
         }
         return {
-          body: new Blob([result.data], { type: info.contentType }),
           save: () =>
             slicer
               ? openInDesktopSlicer(slicer.id, fileName, result.data)
@@ -27251,10 +27214,15 @@ export function App() {
               ? 'Offset from face'
               : valueId === 'startOffset'
                 ? 'Start offset'
-                : 'Draft angle',
+                : valueId === 'backDraftAngle'
+                  ? 'Back draft angle'
+                  : 'Draft angle',
       initial: text,
       selectInitial: true,
-      unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
+      unitKind:
+        valueId === 'draftAngle' || valueId === 'backDraftAngle'
+          ? 'angle'
+          : 'length',
       baseline: value,
       baselineRaw: text,
       ...(at ? { fixedClientAnchor: at } : {})
@@ -27286,7 +27254,8 @@ export function App() {
       valueId !== 'backDistance' &&
       valueId !== 'faceOffset' &&
       valueId !== 'startOffset' &&
-      valueId !== 'draftAngle'
+      valueId !== 'draftAngle' &&
+      valueId !== 'backDraftAngle'
     ) {
       return;
     }
@@ -28850,6 +28819,7 @@ export function App() {
       toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
       startOffset: regionExtrudeSettings.current?.startOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
+      backDraftAngleDeg: regionExtrudeSettings.current?.backDraftAngleDeg,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
