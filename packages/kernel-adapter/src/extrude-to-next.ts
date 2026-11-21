@@ -113,6 +113,53 @@ export function hasFaceOnPlane(
   return facesOnPlane(kernel, solid, point, normal, tolerance).length > 0;
 }
 
+/**
+ * Whether the start caps `kept` are the sweep's own `profile` caps: the same
+ * edge count, the same exact area, and the same vertex bounds within the
+ * kernel's linear tolerance (a strip far thinner than the area allowance
+ * still moves a corner).
+ */
+export function sameStartCaps(
+  kernel: RemusKernel,
+  kept: readonly number[],
+  profile: readonly number[]
+): boolean {
+  const measure = (faces: readonly number[]) => {
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (const face of faces) {
+      for (const vertex of Array.from(kernel.getFaceVertices(face))) {
+        const p = kernel.getVertexPosition(vertex);
+        for (let axis = 0; axis < 3; axis += 1) {
+          lo[axis] = Math.min(lo[axis]!, p[axis]!);
+          hi[axis] = Math.max(hi[axis]!, p[axis]!);
+        }
+      }
+    }
+    return {
+      area: faces.reduce(
+        (sum, face) => sum + kernel.faceArea(face, MEASUREMENT_DEFLECTION),
+        0
+      ),
+      edges: faces.reduce(
+        (sum, face) => sum + kernel.getFaceEdges(face).length,
+        0
+      ),
+      bounds: [...lo, ...hi]
+    };
+  };
+  const a = measure(kept);
+  const b = measure(profile);
+  return (
+    a.edges === b.edges &&
+    Math.abs(a.area - b.area) <= 1e-9 * Math.max(1e-12, b.area) &&
+    a.bounds.every(
+      (value, index) =>
+        Math.abs(value - b.bounds[index]!) <= GEOMETRY_LINEAR_TOLERANCE
+    )
+  );
+}
+
 /** The planar faces of `solid` lying on the plane at `point`. */
 function facesOnPlane(
   kernel: RemusKernel,
@@ -219,25 +266,7 @@ export function trimToNext(
     solids.flatMap((solid) =>
       facesOnPlane(kernel, solid, reach.start, reach.direction, startTolerance)
     );
-  const measure = (faces: readonly number[]) => ({
-    area: faces.reduce(
-      (sum, face) => sum + kernel.faceArea(face, MEASUREMENT_DEFLECTION),
-      0
-    ),
-    edges: faces.reduce(
-      (sum, face) => sum + kernel.getFaceEdges(face).length,
-      0
-    )
-  });
-  const profile = measure(capsOf([tool]));
-  const start = measure(capsOf(kept));
-  if (
-    start.edges !== profile.edges ||
-    !(
-      Math.abs(start.area - profile.area) <=
-      1e-9 * Math.max(1e-12, profile.area)
-    )
-  ) {
+  if (!sameStartCaps(kernel, capsOf(kept), capsOf([tool]))) {
     throw new Error(
       operation === 'add'
         ? `${label} starts partly inside ${targetName}; keep the whole profile outside the body to grow it up to the next face.`
