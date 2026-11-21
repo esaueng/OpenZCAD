@@ -5072,10 +5072,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             );
           {
             const ready = pendingMesh(kernel, shape.solids);
-            if (ready) {
-              await ready;
-              throwIfBuildCancelled(cancellation);
-            }
+            if (ready) await raceBuildCancellation(() => ready, cancellation);
+            throwIfBuildCancelled(cancellation);
           }
           const prepared = inMeasurementScope(() =>
             this.prepareShapeMeasurement(

@@ -291,41 +291,46 @@ describe('M02 patterns on sketch points: exact build', () => {
     const { plate } = await pointPlate();
     const candidate = await createExactKernelAdapter();
     let cancelled = false;
-    let answer: (() => void) | undefined;
-    class DelayedWorker {
-      onmessage?: (event: { data: unknown }) => void;
-      terminate() {}
-      postMessage(data: { init?: boolean; id: number }) {
-        if (!data.init)
-          answer = () =>
-            this.onmessage?.({ data: { id: data.id, mesh: null } });
-      }
+    let waiting!: () => void;
+    const started = new Promise<void>((resolve) => {
+      waiting = resolve;
+    });
+    const terminate = vi.fn();
+    class SilentWorker {
+      terminate = terminate;
+      postMessage() {}
     }
     const original = PointPatternMeshWorker.prototype.wait;
     const wait = vi
       .spyOn(PointPatternMeshWorker.prototype, 'wait')
       .mockImplementation(function (this: PointPatternMeshWorker, solids) {
         const ready = original.call(this, solids);
-        if (ready) {
-          cancelled = true;
-          answer!();
-        }
+        if (ready) waiting();
         return ready;
       });
-    vi.stubGlobal('Worker', DelayedWorker);
+    vi.stubGlobal('Worker', SilentWorker);
     const stage = vi.fn();
     const measure = vi.spyOn(
       RemusKernel.prototype,
       'tessellateSolidGroupedBinary'
     );
     try {
-      await expect(
-        candidate.syncDocument(plate, undefined, undefined, undefined, {
+      const pending = candidate.syncDocument(
+        plate,
+        undefined,
+        undefined,
+        undefined,
+        {
           onPatternMesh: stage,
           cancellation: { isCancelled: () => cancelled }
-        })
-      ).rejects.toThrow(/rebuild was cancelled/i);
-      expect(cancelled).toBe(true);
+        }
+      );
+      await started;
+      cancelled = true;
+      await expect(pending).rejects.toThrow(/rebuild was cancelled/i);
+      // Superseding an edit releases the build before the silent helper's
+      // response timeout. The next edit can still use the same helper.
+      expect(terminate).not.toHaveBeenCalled();
       expect(stage).not.toHaveBeenCalled();
       expect(
         measure.mock.invocationCallOrder.every(
