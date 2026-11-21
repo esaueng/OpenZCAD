@@ -207,6 +207,35 @@ describe('exact sweep orientation (M04, v134)', { timeout: 120_000 }, () => {
     }
   });
 
+  it('refuses a closed spline path as a typed refusal', async () => {
+    const start = profileSketch(createProjectDocument('Loop', user), square);
+    const { document } = await built(
+      sweepWith(
+        start,
+        [
+          {
+            objectKind: 'spline',
+            method: 'control',
+            degree: 3,
+            closed: true,
+            points: [
+              { x: 0, y: 5 },
+              { x: 5, y: 10 },
+              { x: 0, y: 15 },
+              { x: -5, y: 10 }
+            ]
+          }
+        ],
+        { orientation: 'parallel' }
+      )
+    );
+    const [warning] = document.derived.featureWarnings ?? [];
+    expect(warning!.kernelRefusal).toMatchObject({
+      category: 'unsupported',
+      code: 'sweep-path:closed-spline'
+    });
+  });
+
   it('carries the kernel’s path refusals as typed refusals', async () => {
     const start = profileSketch(createProjectDocument('Typed', user), square);
     const { document } = await built(

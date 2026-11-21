@@ -143,6 +143,60 @@ describe(
       );
     });
 
+    it('refuses a path that ends on the profile plane and crosses it elsewhere, typed, rather than anchoring at the end', async () => {
+      // A radius-1 disc at x = -10. The arc runs from below the plane,
+      // crosses it at (-10, 0, 0) under the disc, rises over the top and
+      // ends on the plane at (10, 0, 0): the crossing under the disc is
+      // where the profile stands, and anchoring at the far end would sweep
+      // it the wrong way.
+      const start = profileSketch(createProjectDocument('Ambiguous', user), {
+        objectKind: 'circle',
+        radius: 1,
+        centerX: -10,
+        centerY: 0
+      });
+      for (const profilePosition of ['auto', 'intersection'] as const) {
+        const { document, bodyId } = await built(
+          sweepWith(
+            start,
+            {
+              objectKind: 'arc',
+              centerX: 0,
+              centerY: 0,
+              radius: 10,
+              startAngleDeg: 150,
+              endAngleDeg: 360
+            },
+            { profilePosition }
+          )
+        );
+        expect(document.derived.bodyRepresentations[bodyId]).toBeUndefined();
+        const [warning] = document.derived.featureWarnings ?? [];
+        expect(warning!.kernelRefusal).toMatchObject({
+          category: 'unsupported',
+          code: 'sweep-position:ambiguous-crossing'
+        });
+        expect(plainRefusal(warning!.message).message).toContain(
+          'where the profile stands is ambiguous'
+        );
+      }
+    });
+
+    it('names the guide rail when a position meets one', () => {
+      // The validation sentence names the rail itself; the kernel's own
+      // refusal is translated to a sentence that names it too.
+      expect(
+        plainRefusal(
+          'A sweep profile position applies to a sweep that turns with its path, with no rail, twist or scale.'
+        ).message
+      ).toContain('rail');
+      expect(
+        plainRefusal(
+          'exact sweep: a profile position applies to a sweep that turns with its path'
+        ).message
+      ).toContain('guide rail');
+    });
+
     it('refuses a replayed or stored profile position in a document older than v136', () => {
       expect(() =>
         assertDocumentContentCommandSchema({

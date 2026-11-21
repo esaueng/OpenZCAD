@@ -347,7 +347,7 @@ const TRANSLATIONS: readonly Translation[] = [
     pattern:
       /a profile position applies to (?:a sweep that turns|an open sweep path)/i,
     sentence:
-      'A profile position applies to an open path on a sweep that turns with it, with no twist, scale or parallel orientation.'
+      'A profile position applies to an open path on a sweep that turns with it, with no twist, scale, guide rail or parallel orientation.'
   },
   // M04 (v135) round corners.
   {
@@ -374,7 +374,7 @@ const TRANSLATIONS: readonly Translation[] = [
   {
     pattern: /a round corner applies to a sweep that turns with its path/i,
     sentence:
-      'Round corners apply to a sweep that turns with its path, with no twist, scale or parallel orientation.'
+      'Round corners apply to a sweep that turns with its path, with no twist, scale, guide rail or parallel orientation.'
   },
   {
     pattern: /sweep path turns back on itself/i,

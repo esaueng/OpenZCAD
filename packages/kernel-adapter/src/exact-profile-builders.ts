@@ -2466,9 +2466,16 @@ export function sweepPathEdges(
         resolveParamValue(value, scope, 'path spline', document.units)
       );
       if (spline.closed) {
-        throw new Error(
-          'A sweep path cannot be a closed spline: a sweep runs from one end of its path to the other.'
-        );
+        const message =
+          'A sweep path cannot be a closed spline: a sweep runs from one end of its path to the other.';
+        throw new KernelRefusal({
+          family: 'modeling',
+          category: 'unsupported',
+          kernelCode: 'sweep-path:closed-spline',
+          kernelMessage: message,
+          reason: message,
+          message
+        });
       }
       return [splinePathEdge(kernel, basis, spline)];
     }
@@ -3030,6 +3037,58 @@ function typedExactSweep(run: () => number): number {
   }
 }
 
+const AMBIGUOUS_CROSSING =
+  'The sweep path both ends on the profile\u2019s plane and crosses it elsewhere, so where the profile stands is ambiguous. Set the profile position to Closest point or Closest end, or shorten the path so it meets the profile\u2019s plane once.';
+
+/**
+ * M04 (v136): Crossing and Auto anchor where the path meets the profile's
+ * plane. The pinned kernel takes a path end lying on the plane before it
+ * looks for a crossing inside an arc, so a path that both ends on the plane
+ * and crosses it elsewhere could be anchored on the wrong side. Such a path
+ * is refused, typed: conservatively, whenever an end lies on the plane and
+ * any control point of the path lies strictly on each side of it (rational
+ * curves with positive weights stay within their control hull).
+ */
+function assertUnambiguousCrossing(
+  kernel: RemusKernel,
+  edges: readonly number[],
+  plane: PlaneBasis
+): void {
+  const distances: number[] = [];
+  const ends: number[] = [];
+  let scale = 1;
+  for (const edge of edges) {
+    const curve = nurbsCurveOfEdge(kernel, edge, 'The sweep path');
+    const points = curve.controlPoints;
+    const count = points.length / 3;
+    for (let i = 0; i < count; i += 1) {
+      const p = {
+        x: points[3 * i]!,
+        y: points[3 * i + 1]!,
+        z: points[3 * i + 2]!
+      };
+      const d = dot3(minus(p, plane.origin), plane.normal);
+      scale = Math.max(scale, Math.abs(p.x), Math.abs(p.y), Math.abs(p.z));
+      distances.push(d);
+      if (i === 0 || i === count - 1) ends.push(d);
+    }
+  }
+  const tolerance = 1e-9 * scale;
+  const endOnPlane = ends.some((d) => Math.abs(d) <= tolerance);
+  const above = distances.some((d) => d > tolerance);
+  const below = distances.some((d) => d < -tolerance);
+  if (endOnPlane && above && below) {
+    throw new KernelRefusal({
+      family: 'modeling',
+      category: 'unsupported',
+      kernelCode: 'sweep-position:ambiguous-crossing',
+      kernelMessage: AMBIGUOUS_CROSSING,
+      reason: AMBIGUOUS_CROSSING,
+      message: AMBIGUOUS_CROSSING
+    });
+  }
+}
+
 function exactSweepSolid(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -3120,6 +3179,9 @@ function exactSweepSolid(
     false
   );
   if (options) {
+    if (options.position === 'auto' || options.position === 'intersection') {
+      assertUnambiguousCrossing(kernel, edges, profilePlane);
+    }
     return typedExactSweep(() =>
       kernel.sweepExactWithOptions(
         face,
