@@ -1,0 +1,5 @@
+---
+row: H02
+---
+
+Face-drag, orbit and sustained-session probes join `scripts/measure-active1-baselines.mjs` (`face-drag`, `orbit`, `sustained`), with budgets in `scripts/active1-budgets.mjs` and summary coverage in `test/active1-summary.test.ts`; drag and orbit run on an `OZ_PERF` instrumented build of their own ([record](docs/performance/2026-11-20-drag-orbit-sustained-baselines.md)). On the RX 6600 (Vulkan), two runs: the pointer is followed at 14–15 ms p50 / 15–16 ms p95 (target p95 < 50 ms met), frames at 16.7 ms median (60 fps met at the median; each filleted union drops one frame, p95 33 ms), the exact preview at rest in 64–395 ms (exact first geometry within 100 ms is not established by these rows) and release → accepted in 76–167 ms; every orbit scene draws 58.5–60 viewer frames per second with no viewer frame over 16.8 ms at ×1 and ×4 CPU, so the ordinary orbit tails do not reproduce here. The complex-fillet 2× target's code (OpenZCAD #1155, Remus #1492) is on `main`; its private-part requalification, integrated-GPU and quiet-host timing are listed owner-pending with commands in the record.
