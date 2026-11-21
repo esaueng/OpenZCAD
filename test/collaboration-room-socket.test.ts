@@ -219,7 +219,7 @@ describe('collaboration room socket handling', () => {
       document: edited
     });
 
-    restored.webSocketClose(viewer as unknown as WebSocket);
+    await restored.webSocketClose(viewer as unknown as WebSocket);
     expect((await restored.snapshot()).members).not.toContainEqual([
       'viewer-client',
       'idle'
