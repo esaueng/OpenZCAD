@@ -56,6 +56,7 @@ import {
   type RemusLineageState
 } from './remus-lineage';
 import { buildSweep } from './exact-profile-builders';
+import { buildWrapSolids } from './exact-wrap';
 import { raiseFeatureWarning } from './exact-feature-warnings';
 import { bodyName, inheritMeshOrigin } from './exact-shape-utils';
 import { requireValidSolid } from './kernel-validation';
@@ -439,9 +440,31 @@ export function buildFeaturePattern(
         result.sketchBases,
         (message) => raiseFeatureWarning(result, feature, message, 'advisory')
       ).solids;
+    } else if (sourceData.featureKind === 'wrap') {
+      // M02: the wrap's material made again from the cylinder or cone its
+      // build resolved, and repeated as a boss (emboss) or a cut (engrave).
+      operation = sourceData.mode === 'emboss' ? 'add' : 'cut';
+      shapedSources.push(source.featureId);
+      const frame = result.wrapFrames?.get(source.featureId);
+      const basis = result.sketchBases.get(sourceData.sketchId);
+      if (!frame || !basis) {
+        throw new Error(
+          `${source.name} did not build, so a pattern cannot repeat it; fix ${source.name} first.`
+        );
+      }
+      seed = buildWrapSolids(
+        kernel,
+        document,
+        sourceData,
+        frame,
+        basis,
+        ctx.scope,
+        (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
+        source.name
+      );
     } else {
       throw new Error(
-        `${source.name} is not a hole, boss, cut, fillet or chamfer, so a feature pattern cannot repeat it.`
+        `${source.name} is not a hole, boss, cut, fillet, chamfer or wrap, so a feature pattern cannot repeat it.`
       );
     }
     const repeated = repeat(seed);
@@ -520,27 +543,43 @@ export function buildFeaturePattern(
         for (const hole of copied) hole.tapped = true;
       }
     } else {
-      const tools = repeated.solids.flat();
-      const union = fuseUniformSolidChecked(
-        kernel,
-        [solid, ...tools],
-        [
-          targetName,
-          ...copies.flatMap((copy, index) =>
-            (repeated.solids[index] ?? []).map(
-              () => `${source.name} copy ${copy.label}`
-            )
-          )
-        ]
-      );
-      if (verdictRefusesUnion(union.verdict)) {
-        throw new AdapterRefusal(
-          'union_not_solid',
-          'Union produced an open, non-manifold, or inconsistently ' +
-            'oriented result. Adjust the overlap or placement and try again.'
+      // A wrap's copies are fused one at a time, as its own build fuses its
+      // pieces: the kernel declines several wrapped copies in one pass,
+      // though each fuses exactly on its own.
+      const batches =
+        sourceData.featureKind === 'wrap'
+          ? copies.map((copy, index) => ({
+              tools: repeated.solids[index] ?? [],
+              labels: (repeated.solids[index] ?? []).map(
+                () => `${source.name} copy ${copy.label}`
+              )
+            }))
+          : [
+              {
+                tools: repeated.solids.flat(),
+                labels: copies.flatMap((copy, index) =>
+                  (repeated.solids[index] ?? []).map(
+                    () => `${source.name} copy ${copy.label}`
+                  )
+                )
+              }
+            ];
+      for (const { tools, labels } of batches) {
+        if (tools.length === 0) continue;
+        const union = fuseUniformSolidChecked(
+          kernel,
+          [solid, ...tools],
+          [targetName, ...labels]
         );
+        if (verdictRefusesUnion(union.verdict)) {
+          throw new AdapterRefusal(
+            'union_not_solid',
+            'Union produced an open, non-manifold, or inconsistently ' +
+              'oriented result. Adjust the overlap or placement and try again.'
+          );
+        }
+        solid = union.solid;
       }
-      solid = union.solid;
     }
   }
   requireValidSolid(

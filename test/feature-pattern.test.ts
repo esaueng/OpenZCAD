@@ -185,7 +185,7 @@ describe('M02 feature patterns: document contract', () => {
     expect(() => grid(['1-0'])).not.toThrow();
   });
 
-  it('refuses a feature that is not a hole, boss, cut, fillet or chamfer', () => {
+  it('refuses a feature that is not a hole, boss, cut, fillet, chamfer or wrap', () => {
     const document = plate();
     const box = listFeaturesInOrder(document)[0]!.featureId;
     expect(() =>
@@ -196,7 +196,7 @@ describe('M02 feature patterns: document contract', () => {
         spacing: 20,
         sourceFeatureIds: [box]
       })
-    ).toThrow(/not a hole, boss, cut, fillet or chamfer/);
+    ).toThrow(/not a hole, boss, cut, fillet, chamfer or wrap/);
   });
 
   it('refuses either field on a document that declares schema v61', () => {

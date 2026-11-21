@@ -27,6 +27,7 @@ import {
 import {
   carryAnalyticFaces,
   draftLineage,
+  nameAddedFaces,
   SHELL_DRAFT_LINEAGE_FACE_LIMIT,
   shellLineage,
   holeLineage,
@@ -2390,6 +2391,8 @@ function buildWrapFeature(
   data: FeatureDataOf<'wrap'>
 ): void {
   const { kernel, result } = ctx;
+  // M02: recorded again below only if this build succeeds.
+  result.wrapFrames?.delete(feature.featureId);
   if (!feature.bodyId) throw new Error('Wrap has no result body.');
   const target = result.shapes.get(data.targetBodyId);
   if (!target || target.solids.length !== 1) {
@@ -2438,14 +2441,26 @@ function buildWrapFeature(
       solid = validateGeneratedSolid(kernel, cut, `Engrave "${feature.name}"`);
     }
   }
+  // M02: the body's names carried where its faces are only trimmed, and the
+  // wrap's own faces named after themselves, so a click on one names the
+  // wrap and a feature pattern can name its copies.
+  const lineage = carryAnalyticFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage
+  );
+  nameAddedFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    lineage,
+    feature.featureId,
+    'wrap.face'
+  );
+  (result.wrapFrames ??= new Map()).set(feature.featureId, frame);
   result.consumed.add(data.targetBodyId);
-  result.shapes.set(feature.bodyId, {
-    solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'wrap',
-      'Wrap topology has no verified output evolution relation.'
-    )
-  });
+  result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 

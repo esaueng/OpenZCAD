@@ -740,3 +740,50 @@ export function draftLineage(
     ])
   );
 }
+
+/**
+ * M02: names the faces a feature added to a body, after their exact
+ * witness: `<prefix>.w<hash>`. Only a face `state` left unnamed whose
+ * surface the body before had no face on is the feature's own (a face of
+ * the body the feature trimmed keeps its carrier and stays unnamed). A face
+ * whose surface cannot be read, or whose witness another face of the result
+ * shares, stays unnamed too, and an edit that reshapes a face renames it, so
+ * a reference to one never moves to another.
+ */
+export function nameAddedFaces(
+  kernel: RemusKernel,
+  before: number,
+  solid: number,
+  state: RemusLineageState,
+  producer: FeatureId,
+  prefix: string
+): void {
+  const faces = (handle: number) =>
+    topologyCandidatesForSolid(kernel, handle).filter(
+      (candidate) => candidate.kind === 'face'
+    );
+  const earlier = faces(before).map(
+    (candidate) => (candidate.witness as FaceWitnessV1).analytic
+  );
+  const after = faces(solid);
+  const hashOf = (candidate: (typeof after)[number]) =>
+    topologyHashOfWitness('face', candidate.witness as FaceWitnessV1);
+  const counts = new Map<number, number>();
+  for (const candidate of after) {
+    counts.set(hashOf(candidate), (counts.get(hashOf(candidate)) ?? 0) + 1);
+  }
+  const assignments: RemusSemanticAssignment[] = [];
+  for (const candidate of after) {
+    if (state.faceReferences.has(candidate.handle)) continue;
+    const carrier = (candidate.witness as FaceWitnessV1).analytic;
+    if (carrier.kind === 'none') continue;
+    if (earlier.some((other) => sameAnalyticCarrier(other, carrier))) continue;
+    const hash = hashOf(candidate);
+    if (counts.get(hash) !== 1) continue;
+    assignments.push({ ...candidate, lineageName: `${prefix}.w${hash}` });
+  }
+  if (assignments.length === 0) return;
+  const proven = createRemusSemanticLineage(producer, 'boolean', assignments);
+  for (const [handle, reference] of proven.faceReferences)
+    state.faceReferences.set(handle, reference);
+}
