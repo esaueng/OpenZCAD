@@ -10,7 +10,7 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
-import { checkAppVersion } from '../../scripts/app-version.mjs';
+import { buildAppVersion } from '../../scripts/app-version.mjs';
 import { localRemusPackages } from './build/localRemus';
 import {
   remusArtifactGate,
@@ -290,8 +290,27 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     ...(remusArtifacts && !localRemus ? { artifacts: remusArtifacts } : {})
   };
   const commit = sourceCommit();
-  // Fails the build when a manifest disagrees with package.json.
-  const appVersion = checkAppVersion(repoRoot);
+  // Fails when a manifest disagrees with package.json. A build counts the
+  // user-facing merges since the base version, deepening a shallow CI or
+  // Workers Builds clone; CI and release builds fail rather than report the
+  // bare base. Dev and preview servers never fetch.
+  const isCiBuild =
+    command === 'build' &&
+    Boolean(
+      process.env.CI ||
+      process.env.WORKERS_CI ||
+      process.env.WORKERS_CI_COMMIT_SHA
+    );
+  const appBuildVersion = buildAppVersion(repoRoot, {
+    fetch: command === 'build',
+    required: isCiBuild
+  });
+  if (!appBuildVersion.exact) {
+    console.warn(
+      `OpenZCAD: reporting base app version ${appBuildVersion.base} (${appBuildVersion.reason}).`
+    );
+  }
+  const appVersion = appBuildVersion.version;
   const isDesktop = mode === 'desktop';
   const isIPad = mode === 'ipad';
   const isBundled = isDesktop || isIPad;

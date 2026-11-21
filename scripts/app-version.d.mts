@@ -21,3 +21,21 @@ export function readAppVersions(
 ): { path: string; version: string }[];
 export function checkAppVersion(repoRoot: string): string;
 export function setAppVersion(repoRoot: string, version: string): string[];
+export function isUserFacingSubject(subject: string): boolean;
+
+export interface AppBuildVersion {
+  /** What the build reports: base + one patch per user-facing merge. */
+  version: string;
+  /** The version in package.json. */
+  base: string;
+  /** User-facing first-parent merges since the commit that set the base. */
+  merges: number;
+  /** False when the history was unavailable and `version` is the bare base. */
+  exact: boolean;
+  reason?: string;
+}
+
+export function buildAppVersion(
+  repoRoot: string,
+  options?: { fetch?: boolean; required?: boolean }
+): AppBuildVersion;
