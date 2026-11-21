@@ -26,7 +26,11 @@ import {
   type QuantizedTopologyPoint
 } from '@openzcad/shared';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  extrudeParamResolver,
+  listFeaturesInOrder,
+  validateExtrudeExtent
+} from '@openzcad/document-core';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import type { ExactShape } from './exact-types';
 import { AdapterRefusal } from './adapter-refusal';
@@ -464,6 +468,13 @@ export function buildFeaturePattern(
       seed = bores.flatMap(({ spec }) => holeToolSolids(kernel, spec));
       operation = 'cut';
     } else if (sourceData.featureKind === 'extrude') {
+      // The source's own stored extent, checked as its rebuild checks it: a
+      // copy never builds an extent the source refuses (a start offset a
+      // parameter moved off zero beside through all, say).
+      validateExtrudeExtent(
+        sourceData,
+        extrudeParamResolver(document, ctx.scope)
+      );
       operation = sourceData.operation === 'add' ? 'add' : 'cut';
       shapedSources.push(source.featureId);
       const sweepFeature =

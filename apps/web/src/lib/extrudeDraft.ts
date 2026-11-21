@@ -4,7 +4,7 @@ import {
   MAX_EXTRUDE_DRAFT_DEG,
   coerceParamValue,
   extrudeSidesConflict,
-  toFaceOffsetEnd
+  toFaceExtent
 } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -49,6 +49,11 @@ export interface ExtrudeFormValue {
    * (a typed 0 is sent as absent). Positive stops short, negative passes.
    */
   toFaceOffset?: ParamValue;
+  /**
+   * F01 (v121): where the extrusion starts along the sketch normal; absent
+   * through all and when it starts on the sketch plane (a typed 0).
+   */
+  startOffset?: ParamValue;
   /** F01 (v29): absent for straight walls (a typed 0 is sent as absent). */
   draftAngleDeg?: ParamValue;
 }
@@ -96,6 +101,8 @@ export interface ExtrudeDraft {
   toFace?: ExtrudeToFaceTarget;
   /** F01 (v113): the offset from the face, as typed; read with To face. */
   faceOffset: string;
+  /** F01 (v121): the start offset, as typed; read except through all. */
+  startOffset: string;
   draftAngle: string;
 }
 
@@ -112,6 +119,7 @@ export interface ExtrudeDraftInitial {
   throughAllSide?: ThroughAllSide;
   toFace?: ExtrudeToFaceTarget;
   toFaceOffset?: ParamValue;
+  startOffset?: ParamValue;
   draftAngleDeg?: ParamValue;
 }
 
@@ -145,6 +153,7 @@ export function initialExtrudeDraft(
     throughAllSide: initial.throughAllSide ?? 'forward',
     ...(initial.toFace ? { toFace: initial.toFace } : {}),
     faceOffset: paramValueText(initial.toFaceOffset ?? 0),
+    startOffset: paramValueText(initial.startOffset ?? 0),
     draftAngle: paramValueText(initial.draftAngleDeg ?? 0)
   };
 }
@@ -203,7 +212,8 @@ export function extrudeShownExtent(
 
 /**
  * A picked face the build would refuse (not parallel to the sketch, or lying
- * on it), said before Apply rather than after; null when there is none.
+ * on the sketch plane with no start offset to reach it from), said before
+ * Apply rather than after; null when there is none.
  */
 export function extrudeToFaceProblem(
   draft: ExtrudeDraft,
@@ -211,31 +221,73 @@ export function extrudeToFaceProblem(
 ): string | null {
   if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
   const info = ctx.toFacePicking!.describe(draft.toFace);
+  if (info.distance === 0) {
+    const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
+    return start === 0
+      ? 'This face lies on the sketch plane; give a start offset or pick another face.'
+      : null;
+  }
   if (info.distance !== null) return null;
   return (
     info.problem ??
     (info.pending
       ? 'Checking the target face…'
-      : 'This face is not parallel to the sketch plane, or lies on it; pick a face parallel to the sketch.')
+      : 'This face is not parallel to the sketch plane; pick a face parallel to the sketch.')
   );
 }
 
 /**
- * F01 (v113): an offset from the face that would carry the end onto or past
- * the sketch plane, said before Apply; null when there is none, or while
- * the face's reach or the offset is not known yet (the build decides then).
+ * F01 (v113, v121): where a to-face extrusion would sweep from its start to
+ * the face less its offset, by the build's own rule ({@link toFaceExtent});
+ * a refusal when that leaves nothing, else null. Null too while the face's
+ * reach or either value is not known yet (the build decides then).
  */
+function extrudeToFaceExtentRefusal(
+  draft: ExtrudeDraft,
+  ctx: ExtrudeDraftContext
+): { start: boolean; message: string } | null {
+  if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
+  const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
+  const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
+  if (offset === null || start === null) return null;
+  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
+  if (reach === null || (reach === 0 && start === 0)) return null;
+  if (toFaceExtent(reach, start, offset) !== null) return null;
+  if (start === 0) {
+    return {
+      start: false,
+      message:
+        'Offset from face reaches the sketch plane; make it smaller than the distance to the face.'
+    };
+  }
+  return Math.abs(reach - start) <= 1e-9 * Math.max(1, Math.abs(reach))
+    ? {
+        start: true,
+        message: 'Start offset reaches the face; move the start off the face.'
+      }
+    : {
+        start: false,
+        message:
+          'Offset from face reaches where the extrusion starts; make it smaller than the distance from the start to the face.'
+      };
+}
+
+/** F01 (v113): an offset from the face that leaves nothing to extrude. */
 export function extrudeToFaceOffsetProblem(
   draft: ExtrudeDraft,
   ctx: ExtrudeDraftContext
 ): string | null {
-  if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
-  const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
-  if (offset === null || offset === 0) return null;
-  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
-  if (reach === null) return null;
-  if (toFaceOffsetEnd(reach, offset) !== null) return null;
-  return 'Offset from face reaches the sketch plane; make it smaller than the distance to the face.';
+  const refusal = extrudeToFaceExtentRefusal(draft, ctx);
+  return refusal && !refusal.start ? refusal.message : null;
+}
+
+/** F01 (v121): a start offset that lands on the face. */
+export function extrudeStartOffsetProblem(
+  draft: ExtrudeDraft,
+  ctx: ExtrudeDraftContext
+): string | null {
+  const refusal = extrudeToFaceExtentRefusal(draft, ctx);
+  return refusal && refusal.start ? refusal.message : null;
 }
 
 /** The stored face no longer resolves and has not been picked again. */
@@ -320,6 +372,7 @@ export function extrudeFormValue(
   const typed = coerceParamValue(draft.distance);
   const draftAngleDeg = coerceParamValue(draft.draftAngle);
   const toFaceOffset = coerceParamValue(draft.faceOffset);
+  const startOffset = coerceParamValue(draft.startOffset);
   return {
     name: draft.name.trim(),
     sketchId: ctx.initial.sketchId,
@@ -344,6 +397,9 @@ export function extrudeFormValue(
     ...(toFace && draft.toFace ? { toFace: draft.toFace } : {}),
     ...(toFace && toFaceOffset !== 0 && toFaceOffset !== '0'
       ? { toFaceOffset }
+      : {}),
+    ...(!throughAll && startOffset !== 0 && startOffset !== '0'
+      ? { startOffset }
       : {}),
     ...(!throughAll && draftAngleDeg !== 0 && draftAngleDeg !== '0'
       ? { draftAngleDeg }
@@ -377,7 +433,12 @@ export function extrudeDraftRefusal(
   if (!draft.name.trim()) return 'Name the extrude.';
   if (toFace) {
     if (!draft.toFace) return 'Pick the face for the extrusion to reach.';
-    if (extrudeToFaceUnresolved(draft, ctx)) {
+    // A face stored on the sketch plane with no start offset is refused as
+    // unresolved; a start offset typed now reaches it without a re-pick.
+    const reachable =
+      ctx.toFacePicking!.describe(draft.toFace).distance === 0 &&
+      (extrudeDraftNumber(draft.startOffset, 'length', ctx) ?? 0) !== 0;
+    if (extrudeToFaceUnresolved(draft, ctx) && !reachable) {
       return 'The target face no longer exists here; pick a face again.';
     }
     const problem = extrudeToFaceProblem(draft, ctx);
@@ -394,6 +455,16 @@ export function extrudeDraftRefusal(
     if (offsetProblem) return offsetProblem;
   }
   if (!throughAll) {
+    const start = previewExpression(
+      draft.startOffset,
+      ctx.scope,
+      lengthOf(ctx)
+    );
+    if (!start.ok || start.value === undefined) {
+      return `Start offset: ${start.text}.`;
+    }
+    const startProblem = extrudeStartOffsetProblem(draft, ctx);
+    if (startProblem) return startProblem;
     const angle = previewExpression(draft.draftAngle, ctx.scope, angleOf(ctx));
     if (!angle.ok || angle.value === undefined) {
       return `Draft angle: ${angle.text}.`;

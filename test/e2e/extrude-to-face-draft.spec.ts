@@ -468,3 +468,72 @@ test(
     expect(errors).toEqual([]);
   }
 );
+
+test(
+  'starts a to-face extrude off its sketch plane, refuses a start on the face, and undoes',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(150_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const ceiling = slab(
+      createProjectDocument('Start offset', toUserId('user_e2e')),
+      'Ceiling',
+      25
+    );
+    const { target } = await faceOf(ceiling.document, ceiling.bodyId, -1);
+    const sketched = addSketchFeature(ceiling.document, {
+      name: 'Profile',
+      plane: 'XY',
+      offset: 0,
+      objects: [SQUARE]
+    });
+    const document = extrudeSketch(sketched.document, {
+      name: 'Post',
+      sketchId: sketched.sketchId,
+      distance: 1,
+      endCondition: 'to-face',
+      toFace: target
+    }).document;
+    await open(page, document);
+    await expectBodyCount(page, 2);
+    const row = page.locator('.feature-row', { hasText: /Post/ }).last();
+    const rowMain = page.locator('.feature-row-main', { hasText: /^Post$/ });
+    await expectFeatureMeasurement(page, row, '400');
+
+    // F01 (v121): starting 5 above the sketch plane, the post still ends on
+    // the face: 4 × 4 × 20.
+    const edit = await editExtrudeFromHistory(page, rowMain, 'Post');
+    await setBarValues(page, edit, { 'Start offset': '5' });
+    await expect(
+      edit.getByRole('button', {
+        name: 'Start offset',
+        exact: true,
+        includeHidden: true
+      })
+    ).toHaveText('5 mm');
+    await edit.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText('Edit Post', {
+      timeout: 60_000
+    });
+    await expect(edit).toHaveCount(0);
+    await expect(row).toContainText('To face · starts 5 mm off');
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expectFeatureMeasurement(page, row, '320');
+
+    // A start on the face leaves nothing: refused before Done.
+    const again = await editExtrudeFromHistory(page, rowMain, 'Post');
+    await setBarValues(page, again, { 'Start offset': '25' });
+    await expect(again).toContainText('Start offset reaches the face');
+    await expect(again.getByRole('button', { name: 'Done' })).toBeDisabled();
+    await again.getByRole('button', { name: 'Cancel' }).click();
+    await expect(again).toHaveCount(0);
+    await expect(row).toContainText('starts 5 mm off');
+
+    await waitForStillViewport(page);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(row).not.toContainText('starts');
+    await expectFeatureMeasurement(page, row, '400');
+    expect(errors).toEqual([]);
+  }
+);

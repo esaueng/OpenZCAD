@@ -118,7 +118,8 @@ import {
 import {
   DRAFTED_EXTRUDE_HASH_ONLY_REASON,
   draftExtrudedSolids,
-  resolveExtrudeDraftDeg
+  resolveExtrudeDraftDeg,
+  resolveExtrudeStartOffset
 } from './extrude-options';
 
 const CURVE_SEGMENTS = 32;
@@ -2804,11 +2805,25 @@ export function buildSweep(
   document: ProjectDocument,
   feature: FeatureNode,
   scope: Record<string, number>,
-  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  storedBases: ReadonlyMap<SketchId, PlaneBasis>,
   warn: (message: string) => void,
   /** R01: the resolved datum axis a revolve with an `axisRef` turns about. */
   revolveAxis?: DatumAxis
 ): ExactShape {
+  // F01 (v121): an extrude with a start offset is built on its start plane,
+  // the sketch plane moved along its normal, so the span, the profile face,
+  // every lineage carrier and the draft's neutral plane all start there.
+  let sketchBases = storedBases;
+  if (feature.data.featureKind === 'extrude') {
+    const start = resolveExtrudeStartOffset(feature.data, scope, document);
+    const basis = storedBases.get(feature.data.sketchId);
+    if (start !== 0 && basis) {
+      sketchBases = new Map(storedBases).set(
+        feature.data.sketchId,
+        shiftBasisAlongNormal(basis, start)
+      );
+    }
+  }
   const shape = buildStraightSweep(
     kernel,
     document,

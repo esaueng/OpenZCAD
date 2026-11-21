@@ -55,6 +55,9 @@ export function extrudeEditInitial(feature: FeatureNode): ExtrudeDraftInitial {
             : {})
         }
       : {}),
+    ...(data.startOffset !== undefined
+      ? { startOffset: data.startOffset }
+      : {}),
     ...(data.draftAngleDeg !== undefined
       ? { draftAngleDeg: data.draftAngleDeg }
       : {})
@@ -87,6 +90,7 @@ export function extrudeEditData(
     throughAllSide: _throughAllSide,
     toFace: _toFace,
     toFaceOffset: _toFaceOffset,
+    startOffset: _startOffset,
     draftAngleDeg: _draftAngleDeg,
     ...kept
   } = stored;
@@ -138,6 +142,12 @@ export function extrudeEditData(
         : stored.endCondition === 'blind'
           ? { endCondition: 'blind' as const }
           : {}),
+    // A stored zero keeps its form unless the edit went through all.
+    ...(value.startOffset !== undefined
+      ? { startOffset: value.startOffset }
+      : !throughAll && storedZero(stored.startOffset)
+        ? { startOffset: stored.startOffset! }
+        : {}),
     ...(value.draftAngleDeg !== undefined
       ? { draftAngleDeg: value.draftAngleDeg }
       : storedZero(stored.draftAngleDeg)
@@ -179,6 +189,7 @@ export function extrudeEditCommand(
       'throughAllSide',
       'toFace',
       'toFaceOffset',
+      'startOffset',
       'draftAngleDeg'
     ] as const
   ).filter((key) => key in feature.data && !(key in data));
