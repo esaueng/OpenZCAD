@@ -1966,6 +1966,7 @@ import {
   keypadText,
   profileRegionLoops,
   isInPlacePatternTool,
+  booleanOperandRoles,
   booleanOperationSwitch,
   inPlaceBodyMode,
   inPlaceFaceMode,
@@ -26940,6 +26941,17 @@ export function App() {
   // Mirrored before paint for the tool availability computed above it.
   const inPlaceBooleanRunning =
     booleanOperationSwitch(inPlace.tool, 'union') !== null;
+  // U11: the viewport names each picked body Base or Tool, as Options does.
+  const inPlaceBodyPickRoles = useMemo(
+    () =>
+      inPlaceBooleanRunning
+        ? booleanOperandRoles(
+            inPlace.slots.bodies,
+            (id) => representations[id]?.name
+          )
+        : null,
+    [inPlaceBooleanRunning, inPlace.slots.bodies, representations]
+  );
   useLayoutEffect(() => {
     setBooleanCommandRunning(inPlaceBooleanRunning);
   }, [inPlaceBooleanRunning]);
@@ -37502,6 +37514,7 @@ export function App() {
             }
             sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
+            bodyPickRoles={inPlaceBodyPickRoles}
             selectedTopology={
               parameterPreview || currentGeometrySnapshot
                 ? null

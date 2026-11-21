@@ -870,6 +870,18 @@ export interface FootprintGesture {
 }
 
 /** U09: one value's handle, as the in-place command hands it over. */
+/**
+ * A picked body's role in the running command, with the name and box it
+ * was picked with: a preview that consumes the body (a subtract's tool)
+ * takes it off screen, and its callout still stands where it was.
+ */
+export interface ViewerBodyPickRole {
+  role: string;
+  name: string;
+  min: HandleVec3;
+  max: HandleVec3;
+}
+
 export type CommandHandleView = (
   | {
       kind: 'angle';
@@ -1166,6 +1178,13 @@ export interface ModelViewerProps {
   pmiLabels?: readonly ViewerPmiLabel[];
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
+  /**
+   * U11: what each picked body is to the running command, by body id (a
+   * boolean's "Base" and "Tool"). Where given, a picked body's callout reads
+   * its role in place of its pick number, from the first pick on, as the
+   * command's Options list names it.
+   */
+  bodyPickRoles?: Readonly<Record<string, ViewerBodyPickRole>> | null;
   selectedTopology: TopologySelection | null;
   /** Exact blend faces created only in the currently published preview. */
   previewFaceHighlights: TopologySelection[];
@@ -2554,6 +2573,7 @@ export function ModelViewer({
   measurementAnnotations,
   pmiLabels = NO_PMI_LABELS,
   selectedBodyIds: incomingSelectedBodyIds,
+  bodyPickRoles = null,
   selectedTopology: incomingSelectedTopology,
   previewFaceHighlights: incomingPreviewFaceHighlights,
   focusFaces: incomingFocusFaces = NO_FOCUS_FACES,
@@ -15283,16 +15303,31 @@ export function ModelViewer({
     // Faces lit together (a History row's, a box sweep's) are the pick even
     // when their bodies are selected, so their chip hangs over the faces.
     const focusCallout = callout?.anchor === 'focus' && !focusBox.isEmpty();
-    if (selectedBodyIds.length > 1 && !focusCallout) {
+    // A command that names its picks' roles names them from the first pick.
+    const roleOf = (bodyId: string): ViewerBodyPickRole | undefined =>
+      bodyPickRoles?.[bodyId];
+    const roled = selectedBodyIds.some((bodyId) => roleOf(bodyId));
+    if ((selectedBodyIds.length > 1 || roled) && !focusCallout) {
       const pickBox = new THREE.Box3();
       selectedBodyIds.forEach((bodyId, index) => {
         const target = context.objectsByBodyId.get(bodyId);
         const body = bodies.find((candidate) => candidate.bodyId === bodyId);
-        if (!target || !body) {
-          return;
-        }
-        const box = new THREE.Box3().setFromObject(target);
-        if (box.isEmpty()) {
+        const role = roleOf(bodyId);
+        const shown =
+          target && body ? new THREE.Box3().setFromObject(target) : null;
+        // Off screen under a preview that consumed it, a body with a role
+        // is still named where it was picked.
+        const box =
+          shown && !shown.isEmpty()
+            ? shown
+            : role
+              ? new THREE.Box3(
+                  new THREE.Vector3(role.min.x, role.min.y, role.min.z),
+                  new THREE.Vector3(role.max.x, role.max.y, role.max.z)
+                )
+              : null;
+        const name = body?.name ?? role?.name;
+        if (!box || box.isEmpty() || name === undefined) {
           return;
         }
         pickBox.union(box);
@@ -15301,14 +15336,15 @@ export function ModelViewer({
         const label = makeLabel('selection-callout body-order-callout', '');
         const order = document.createElement('span');
         order.className = 'callout-order';
-        order.textContent = String(index + 1);
-        label.element.append(order, document.createTextNode(body.name));
+        order.textContent = role?.role ?? String(index + 1);
+        if (role) order.dataset.role = role.role;
+        label.element.append(order, document.createTextNode(name));
         label.position.copy(top);
         label.userData.calloutBodyId = bodyId;
         label.userData.calloutRestingPosition = top.clone();
         context.overlayGroup.add(label);
       });
-      if (callout && !pickBox.isEmpty()) {
+      if (callout && selectedBodyIds.length > 1 && !pickBox.isEmpty()) {
         addSelectionCallout(
           pickBox,
           textLabelSegments(`${selectedBodyIds.length} bodies`),
@@ -15318,7 +15354,7 @@ export function ModelViewer({
       }
     }
     const primaryId =
-      selectedBodyIds.length === 1 && !focusCallout
+      selectedBodyIds.length === 1 && !focusCallout && !roled
         ? selectedBodyIds[0]
         : undefined;
     if (primaryId) {
@@ -15392,6 +15428,7 @@ export function ModelViewer({
     bodies,
     editableBodyIds,
     selectedBodyIds,
+    bodyPickRoles,
     selectedEdges,
     selectedTopology,
     previewFaceHighlights,

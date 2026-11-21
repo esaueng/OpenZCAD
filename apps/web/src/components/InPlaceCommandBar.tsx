@@ -14,7 +14,7 @@ import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
 import { plainRefusal } from '../lib/refusalLanguage';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
-import type { BodyPick } from '../lib/inPlace/tools';
+import { booleanOperandRole, type BodyPick } from '../lib/inPlace/tools';
 import { spokenValueName } from '../lib/inPlace/chipNames';
 import {
   blendRefusalText,
@@ -238,7 +238,7 @@ export function InPlaceCommandBar({
         minimum: 0,
         items: booleanOperands.bodies.map((body, index) => ({
           id: body.bodyId,
-          name: `${index === 0 ? 'Base' : 'Tool'} · ${booleanOperands.name(body.bodyId) ?? 'Body'}`
+          name: `${booleanOperandRole(index)} · ${booleanOperands.name(body.bodyId) ?? 'Body'}`
         }))
       }
     : listedPicks;

@@ -5404,6 +5404,41 @@ export function booleanOperationSwitch(
     : null;
 }
 
+/**
+ * A boolean operand's role by its pick order: the first body picked is the
+ * Base (what a subtract cuts from), every later one a Tool.
+ */
+export function booleanOperandRole(index: number): 'Base' | 'Tool' {
+  return index === 0 ? 'Base' : 'Tool';
+}
+
+/**
+ * U11: each picked body's role, by body id, with its name and the box it
+ * was picked with, for the viewport to name the picks as Options lists
+ * them, even where a preview has consumed one.
+ */
+export function booleanOperandRoles(
+  bodies: readonly BodyPick[],
+  name: (bodyId: BodyId) => string | undefined
+): Record<
+  string,
+  { role: 'Base' | 'Tool'; name: string; min: Vector3; max: Vector3 }
+> {
+  const roles: Record<
+    string,
+    { role: 'Base' | 'Tool'; name: string; min: Vector3; max: Vector3 }
+  > = {};
+  bodies.forEach((body, index) => {
+    roles[body.bodyId] = {
+      role: booleanOperandRole(index),
+      name: name(body.bodyId) ?? 'Body',
+      min: body.min,
+      max: body.max
+    };
+  });
+  return roles;
+}
+
 const BOOLEAN_ORIGINAL_CHOICES = [
   { value: 'none', label: 'None' },
   { value: 'target', label: 'Base body' },
