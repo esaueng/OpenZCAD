@@ -1757,18 +1757,44 @@ export function holdsRefusal(state: InteractionState): boolean {
 }
 
 /**
- * Whether `state` has moved on from a refused edit made on `refusedKey` (the
- * refused operation's `operationSelectionKey`). Selecting another face, edges
- * or region, or opening a sketch, has: the top bar's "Edit not applied" chip
- * described the earlier pick and was stale beside the new one. A plain
- * deselection has not; the chip stays as its link to the refusal's Activity
- * log entry (#1596). Neither has the refused operation itself.
+ * What a refused edit was made on, for the top bar's "Edit not applied" chip:
+ * the face (or face set), edges or regions, whatever command and offset mode
+ * held them, since a re-pick of the same face rebuilds its target in the
+ * default mode. Null when the machine holds nothing; a sketch is a subject of
+ * its own.
+ */
+export function refusalSubjectKey(state: InteractionState): string | null {
+  switch (state.mode) {
+    case 'idle':
+      return null;
+    case 'sketch':
+      return JSON.stringify(['sketch']);
+    case 'face':
+      return JSON.stringify([
+        state.mode,
+        state.target.bodyId,
+        state.target.topologyId,
+        offsetFaceSetKey(state.target)
+      ]);
+    default:
+      return operationSelectionKey(state);
+  }
+}
+
+/**
+ * Whether the selection has moved on from a refused edit made on
+ * `refusedKey`: `current` is the subject now picked (`refusalSubjectKey`, or
+ * the workspace's own key for a pick the machine does not hold), null when
+ * nothing is. Picking something else has; the chip described the earlier
+ * pick and was stale beside the new one. A plain deselection has not; the
+ * chip stays as its link to the refusal's Activity log entry (#1596).
+ * Neither has re-picking the refused subject.
  */
 export function movedOnFromRefusal(
-  state: InteractionState,
+  current: string | null,
   refusedKey: string | null
 ): boolean {
-  return state.mode !== 'idle' && operationSelectionKey(state) !== refusedKey;
+  return current !== null && current !== refusedKey;
 }
 
 /**

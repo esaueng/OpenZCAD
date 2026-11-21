@@ -937,6 +937,7 @@ import {
   commandSessionFor,
   holdsRefusal,
   movedOnFromRefusal,
+  refusalSubjectKey,
   refusalDiscardedByHistoryStep,
   isOperationState,
   isStaleSelectionError,
@@ -5591,13 +5592,30 @@ export function App() {
     () => setLastDirectEditFailure(null),
     [doc?.projectId, doc?.version]
   );
+  // What is picked now, for retiring a refusal the user has moved on from.
+  // A face set, a History pick and a body pick leave the machine idle, so
+  // the workspace's own selection stands in for them.
+  const refusalSubject =
+    interaction.mode !== 'idle'
+      ? refusalSubjectKey(interaction)
+      : boxSelectedFaces
+        ? JSON.stringify(['faces', boxSelectedFaces.map((f) => f.topologyId)])
+        : selectedFeatureNode?.source === 'pinned'
+          ? JSON.stringify(['feature', selectedFeatureNode.id])
+          : selectedBodyIds.length > 0
+            ? JSON.stringify(['bodies', selectedBodyIds])
+            : null;
+  // Also checked when a refusal lands: a late reply for an edit the user has
+  // already left must not post its chip beside the new pick.
   useEffect(() => {
-    setLastDirectEditFailure((failure) =>
-      failure && movedOnFromRefusal(interaction, failure.selectionKey)
-        ? null
-        : failure
-    );
-  }, [interaction]);
+    if (
+      lastDirectEditFailure &&
+      movedOnFromRefusal(refusalSubject, lastDirectEditFailure.selectionKey)
+    ) {
+      setLastDirectEditFailure(null);
+    }
+  }, [refusalSubject, lastDirectEditFailure]);
+
   /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
@@ -6341,7 +6359,7 @@ export function App() {
           projectId: current.projectId,
           version: current.version,
           message: diagnostic.message,
-          selectionKey: operationSelectionKey(pending.interaction)
+          selectionKey: refusalSubjectKey(pending.interaction)
         });
       }
       recordDirectEditOutcome('refused', {

@@ -16,6 +16,7 @@ import {
   escapeTarget,
   holdsRefusal,
   movedOnFromRefusal,
+  refusalSubjectKey,
   refusalDiscardedByHistoryStep,
   interactionReducer,
   isOperationState,
@@ -2082,30 +2083,55 @@ describe('a preview refused under a held handle', () => {
       value: -9
     });
     expect(holdsRefusal(failed)).toBe(true);
-    const key = operationSelectionKey(failed);
-    expect(movedOnFromRefusal(failed, key)).toBe(false);
+    const key = refusalSubjectKey(failed);
+    const movedOn = (state: InteractionState) =>
+      movedOnFromRefusal(refusalSubjectKey(state), key);
+    expect(movedOn(failed)).toBe(false);
     // A plain deselection keeps the chip as the link to the log (#1596).
-    expect(movedOnFromRefusal(IDLE, key)).toBe(false);
-    // Picking the refused face again is the same edit.
+    expect(movedOn(IDLE)).toBe(false);
+    // Picking the refused face again is the same edit, even when the
+    // refusal was made in local offset mode and the re-pick comes back in
+    // the default one.
     expect(
-      movedOnFromRefusal(
-        interactionReducer(IDLE, { type: 'select-face', target: face() }),
-        key
-      )
+      movedOn(interactionReducer(IDLE, { type: 'select-face', target: face() }))
     ).toBe(false);
-    const otherFace = interactionReducer(IDLE, {
+    const local = interactionReducer(IDLE, {
       type: 'select-face',
-      target: face({ topologyId: 'face:7', hash: 7 })
+      target: face({ localFaceOffset: true })
     });
-    expect(movedOnFromRefusal(otherFace, key)).toBe(true);
-    const edges = interactionReducer(IDLE, {
-      type: 'select-edge',
-      selection: edge(1),
-      additive: false
+    const repick = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
     });
-    expect(movedOnFromRefusal(edges, key)).toBe(true);
-    const sketch = interactionReducer(IDLE, { type: 'enter-sketch', plane });
-    expect(movedOnFromRefusal(sketch, key)).toBe(true);
+    expect(operationSelectionKey(local)).not.toBe(
+      operationSelectionKey(repick)
+    );
+    expect(
+      movedOnFromRefusal(refusalSubjectKey(repick), refusalSubjectKey(local))
+    ).toBe(false);
+    expect(
+      movedOn(
+        interactionReducer(IDLE, {
+          type: 'select-face',
+          target: face({ topologyId: 'face:7', hash: 7 })
+        })
+      )
+    ).toBe(true);
+    expect(
+      movedOn(
+        interactionReducer(IDLE, {
+          type: 'select-edge',
+          selection: edge(1),
+          additive: false
+        })
+      )
+    ).toBe(true);
+    expect(
+      movedOn(interactionReducer(IDLE, { type: 'enter-sketch', plane }))
+    ).toBe(true);
+    // A pick the machine does not hold (a face set, a History row, a body)
+    // is keyed by the workspace and moves on too.
+    expect(movedOnFromRefusal('["faces",["face:3","face:7"]]', key)).toBe(true);
   });
 });
 
