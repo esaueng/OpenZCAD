@@ -577,6 +577,20 @@ describe('planes that break a naive section', () => {
     expect(Math.abs(section.area - (400 - Math.PI * 16))).toBeLessThan(1e-9);
     expect(section.loops[1]!.points.length).toBeGreaterThan(8);
     expect(section.boundary).toBe('exact');
+    // The same cut with the cavity's circle as chords. Only the inner shell
+    // is curved, so an adapter that looked for curvature on the outer shell
+    // alone would skip the boundary check and call this exact.
+    const chorded = topCap(
+      kernel.cut(
+        kernel.makeBox(20, 20, 10),
+        polygonPrism(4, 256, [10, 10], -1, 12)
+      )
+    );
+    const chordedSection = expectOk(
+      withSection(chorded, () => exactSolidSection(kernel, hollow, cut))
+    );
+    expect(chordedSection.loops[1]!.points).toHaveLength(256);
+    expect(chordedSection.boundary).toBe('approximate');
   });
 
   it('sections a rotated and translated body in document space', () => {
@@ -708,6 +722,20 @@ describe('section DXF export', () => {
     if (circles[0]!.kind === 'circle') {
       expect(circles[0]!.radius).toBeCloseTo(2, 9);
     }
+    // A section whose bore came back as 64 chords writes every chord: four
+    // outline lines and the 64 of the inner wire, which is why that section
+    // is reported as approximate.
+    const chorded = expectOk(
+      withSection(chordedBoredBarCap(), () =>
+        exactSolidSection(kernel, bar, cut)
+      )
+    );
+    expect(chorded.boundary).toBe('approximate');
+    expect(
+      sectionDxfEntities(kernel, chorded.faces, cut, 1).filter(
+        (entity) => entity.kind === 'line'
+      )
+    ).toHaveLength(68);
     const extent = entities.flatMap((entity) =>
       entity.kind === 'line' ? [entity.start, entity.end] : []
     );

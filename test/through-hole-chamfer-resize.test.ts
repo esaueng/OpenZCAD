@@ -219,13 +219,26 @@ describe('through-hole resizing extends its existing chamfer angle', () => {
     }
   );
 
-  it.each(['native', 'STEP'] as const)(
+  it.each(['native', 'STEP', 'saved 2026.1.151'] as const)(
     'shrinks both broken-out countersinks and their rims from %s without moving retained boundaries',
     async (sourceKind) => {
       await loadRemusTranslators();
       const kernel = new RemusKernel();
       try {
         let solid = syntheticHolderSolid(kernel);
+        if (sourceKind === 'saved 2026.1.151') {
+          // The holder as Remus 2026.1.151 built and serialized it, with the
+          // x=56 rim split into four arcs: documents saved on that pin still
+          // carry it, and the resize has to keep handling it.
+          solid = kernel.deserializeSolids(
+            readFileSync(
+              new URL(
+                './fixtures/hammer-holder/synthetic-holder-remus-2026.1.151.json',
+                import.meta.url
+              )
+            )
+          )[0]!;
+        }
         if (sourceKind === 'STEP') {
           solid = kernel.deserializeSolids(
             remusTranslators().importStep(
@@ -264,9 +277,12 @@ describe('through-hole resizing extends its existing chamfer angle', () => {
                 Math.abs(e.curve.Circle.radius - 2.5) < 1e-7
             );
             // The rim the second mouth breaks out through is one closed
-            // circle from either source. Before Remus 2026.1.154 the native
-            // build left it as four arcs; the STEP path read back one.
-            expect(splitRim).toHaveLength(1);
+            // circle as the current kernel builds or reads it back. Before
+            // Remus 2026.1.154 the native build left it as four arcs, which
+            // the saved source keeps.
+            expect(splitRim).toHaveLength(
+              sourceKind === 'saved 2026.1.151' ? 4 : 1
+            );
           }
           const output = resizeThroughHole(
             kernel,
