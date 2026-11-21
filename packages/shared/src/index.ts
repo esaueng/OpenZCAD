@@ -2497,7 +2497,9 @@ export type FeatureData =
        * stores. `through-all` cuts through the whole target along the sketch
        * normal: the span is recomputed from the target at the feature's
        * history position on every rebuild and never stored, and `distance`
-       * is kept only so switching back to blind restores it.
+       * is kept only so switching back to blind restores it. An add may run
+       * through all too (no schema change: an older client refuses it): it
+       * fills the target's whole span and joins it.
        * From schema v130 `to-next` runs an add or a cut with one explicit
        * target from the start plane to the next face of that target, the
        * way the stored distance's sign points (its size is dormant). It is

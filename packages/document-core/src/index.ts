@@ -2807,8 +2807,11 @@ export function validateExtrudeExtent(
       `Unknown extrude end condition ${JSON.stringify(condition)}.`
     );
   }
-  if (data.operation !== 'cut') {
-    throw new Error('Through all is available for a cut extrusion only.');
+  // F01: an add through all fills the target's whole span along the
+  // sketch normal and joins it; new-body and intersect have no target to
+  // span (or would only keep what is already there).
+  if (data.operation !== 'cut' && data.operation !== 'add') {
+    throw new Error('Through all is available for a cut or an add only.');
   }
   if (typeof data.targetBodyId !== 'string' || !data.targetBodyId) {
     throw new Error('A through-all cut needs one explicit target body.');
