@@ -1,13 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState
 } from 'react';
 import type { CSSProperties, RefObject } from 'react';
-import { Globe, Lock, X } from 'lucide-react';
+import { Globe, Lock, UserRound, X } from 'lucide-react';
 import type {
   CollaborationMember,
   ProjectAccessRole,
@@ -43,6 +44,10 @@ import {
   type EncryptedShareLinkClient
 } from './EncryptedShareLinks';
 import { ShareLinkDrawings } from './ShareLinkDrawings';
+import {
+  SHARE_LINK_MODE_HINT,
+  ShareLinkModePicker
+} from './ShareLinkModePicker';
 import type {
   InvitableContact,
   OwnerInvitation
@@ -312,6 +317,11 @@ const ROLE_ARTICLES: Record<'editor' | 'viewer', string> = {
   viewer: 'a viewer'
 };
 
+/** An avatar with personal info hidden: a person, not a question mark. */
+function HiddenPerson() {
+  return <UserRound size={13} aria-hidden="true" />;
+}
+
 const LINK_MODE_LABELS: Record<ProjectShareLinkMode, string> = {
   tweak: 'Tweak',
   view: 'View'
@@ -460,6 +470,7 @@ export function ProjectSharingDialog({
   const [createdShareLink, setCreatedShareLink] = useState<{
     url: string;
     shareLinkId: string;
+    mode: ProjectShareLinkMode;
   } | null>(null);
   const [stateCodeOpen, setStateCodeOpen] = useState(false);
   const [confirmingRemoval, setConfirmingRemoval] = useState<UserId | null>(
@@ -1103,7 +1114,11 @@ export function ProjectSharingDialog({
                         data-presence={person.presence ?? undefined}
                         aria-hidden="true"
                       >
-                        {personalInfoVisible ? person.initial : '?'}
+                        {personalInfoVisible ? (
+                          person.initial
+                        ) : (
+                          <HiddenPerson />
+                        )}
                       </span>
                       <span className="sharing-member-id">
                         {name}
@@ -1187,7 +1202,11 @@ export function ProjectSharingDialog({
                       className="sharing-avatar sharing-avatar-pending"
                       aria-hidden="true"
                     >
-                      {personalInfoVisible ? initialOf(invitation.email) : '?'}
+                      {personalInfoVisible ? (
+                        initialOf(invitation.email)
+                      ) : (
+                        <HiddenPerson />
+                      )}
                     </span>
                     <span className="sharing-row-text">
                       <span className="sharing-member-id">
@@ -1338,9 +1357,11 @@ export function ProjectSharingDialog({
                               className="sharing-avatar sharing-avatar-pending"
                               aria-hidden="true"
                             >
-                              {personalInfoVisible && invitation.email
-                                ? initialOf(invitation.email)
-                                : '?'}
+                              {personalInfoVisible && invitation.email ? (
+                                initialOf(invitation.email)
+                              ) : (
+                                <HiddenPerson />
+                              )}
                             </span>
                             <span className="sharing-row-text">
                               <span className="sharing-member-id">{label}</span>
@@ -1415,7 +1436,7 @@ export function ProjectSharingDialog({
               urlRef={shareLinkUrlRef}
               configurations={configurations}
               onCopy={(url) => void copyShareLink(url)}
-              onCreate={(comments) =>
+              onCreate={(mode, comments) =>
                 void mutate('share-link:create', async () => {
                   await onBeforeCreateShareLink?.();
                   setCreatedShareLink(null);
@@ -1424,17 +1445,18 @@ export function ProjectSharingDialog({
                   const created = comments
                     ? await shareLinkClient.createProjectShareLink(
                         projectId,
-                        'tweak',
+                        mode,
                         null,
                         true
                       )
                     : await shareLinkClient.createProjectShareLink(
                         projectId,
-                        'tweak'
+                        mode
                       );
                   setCreatedShareLink({
                     url: buildShareLinkUrl(created.token),
-                    shareLinkId: created.shareLink.shareLinkId
+                    shareLinkId: created.shareLink.shareLinkId,
+                    mode
                   });
                   await refresh();
                 })
@@ -1587,15 +1609,22 @@ export function ProjectSharingDialog({
 
 interface PlaintextShareLinksProps {
   shareLinks: readonly ProjectShareLinkSummary[];
-  created: { url: string; shareLinkId: string } | null;
+  created: {
+    url: string;
+    shareLinkId: string;
+    mode: ProjectShareLinkMode;
+  } | null;
   copied: boolean;
   disabled: boolean;
   localImportSourceNames: readonly string[];
   urlRef: RefObject<HTMLInputElement | null>;
   configurations: readonly { id: string; name: string }[];
   onCopy(url: string): void;
-  /** `comments`: L08 commenter link, whose visitors may comment. */
-  onCreate(comments: boolean): void;
+  /**
+   * `mode`: what visitors may do (Tweak includes View). `comments`: L08
+   * commenter link, whose visitors may comment.
+   */
+  onCreate(mode: ProjectShareLinkMode, comments: boolean): void;
   onRename(shareLink: ProjectShareLinkSummary, draft: string): Promise<void>;
   onRevoke(shareLink: ProjectShareLinkSummary): void;
 }
@@ -1627,6 +1656,9 @@ function PlaintextShareLinks({
     ? withShareConfiguration(created.url, opensOnRow || null)
     : '';
   const [editingId, setEditingId] = useState<string | null>(null);
+  // What the next link lets its visitors do; Tweak includes View.
+  const [mode, setMode] = useState<ProjectShareLinkMode>('tweak');
+  const detailId = useId();
   // L08: whether the next link lets its visitors comment.
   const [withComments, setWithComments] = useState(false);
   // The link whose Revoke is waiting for a yes (design review I2).
@@ -1673,38 +1705,44 @@ function PlaintextShareLinks({
     >
       <h3 className="sharing-section-label">General access</h3>
       <div className="sharing-access">
-        <span className="sharing-access-icon" aria-hidden="true">
-          <Globe size={13} />
+        <Globe className="sharing-access-icon" size={14} aria-hidden="true" />
+        <span className="sharing-access-title">
+          {shareLinks.length > 0
+            ? `Anyone with a link · ${shareLinks.length} active`
+            : 'Only invited people'}
         </span>
-        <span className="sharing-access-text">
-          <span className="sharing-access-title">
-            {shareLinks.length > 0
-              ? `Anyone with a link · ${shareLinks.length} active`
-              : 'Only invited people'}
-          </span>
-          <span className="sharing-access-detail">
-            Opens in Tweak: parameters and export, no account needed. Links
-            expire 30 days after creation.
-          </span>
-        </span>
+      </div>
+      <div className="sharing-link-create">
+        <ShareLinkModePicker
+          value={mode}
+          describedBy={detailId}
+          onChange={setMode}
+        />
+        <label className="sharing-link-comments">
+          <input
+            type="checkbox"
+            checked={withComments}
+            aria-describedby={detailId}
+            onChange={(event) => setWithComments(event.target.checked)}
+          />
+          Visitors can comment
+        </label>
         <button
           type="button"
           className={shareLinks.length > 0 ? 'secondary' : 'primary'}
           disabled={disabled || localImportSourceNames.length > 0}
-          onClick={() => onCreate(withComments)}
+          onClick={() => onCreate(mode, withComments)}
         >
           Create link
         </button>
       </div>
-      <label className="sharing-link-comments">
-        <input
-          type="checkbox"
-          checked={withComments}
-          onChange={(event) => setWithComments(event.target.checked)}
-        />
-        Visitors can comment (they see every comment and sign theirs with a
-        name)
-      </label>
+      <p id={detailId} className="sharing-access-detail">
+        {SHARE_LINK_MODE_HINT[mode]}
+        {withComments
+          ? ' They see every comment and sign theirs with a name.'
+          : ''}{' '}
+        Links expire after 30 days.
+      </p>
       {localImportSourceNames.length > 0 && (
         <p className="sharing-hint" role="alert">
           Save the source files for {localImportSourceNames.join(', ')} to your
@@ -1773,7 +1811,9 @@ function PlaintextShareLinks({
               {copied ? 'Copied' : 'Copy'}
             </StableLabel>
           </button>
-          <p className="sharing-share-once">Shown once — copy it now.</p>
+          <p className="sharing-share-once">
+            {LINK_MODE_LABELS[created.mode]} link · shown once — copy it now.
+          </p>
         </div>
       )}
       {shareLinks.length > 0 && (
