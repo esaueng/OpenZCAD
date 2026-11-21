@@ -1,11 +1,10 @@
 import {
   EXTRUDE_TO_FACE_UNRESOLVED,
   MAX_EXTRUDE_DRAFT_DEG,
-  TO_FACE_PARALLEL_SINE_LIMIT,
   listFeaturesInOrder,
-  toFaceOffsetEnd,
-  toFaceOffsetReachesSketchMessage,
-  toFaceSignedDistance,
+  toFaceExtent,
+  toFaceExtentRefusal,
+  toFaceParallelHeight,
   resolveParamValue
 } from '@openzcad/document-core';
 import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
@@ -97,17 +96,15 @@ export function toFaceDistance(
     throw unresolved(error instanceof Error ? error.message : String(error));
   }
   // The same test the extrude card applies before it offers Create/Apply.
-  const distance = toFaceSignedDistance(basis, {
+  // A face on the sketch plane resolves as zero: a start offset can still
+  // reach it, and `toFaceSweepFeature` refuses it when there is none.
+  const distance = toFaceParallelHeight(basis, {
     point: frame.origin,
     normal: frame.zAxis
   });
   if (distance !== null) return distance;
-  const alignment = dot(frame.zAxis, basis.normal);
   throw unresolved(
-    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
-      TO_FACE_PARALLEL_SINE_LIMIT
-      ? 'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
-      : 'the face lies on the sketch plane, so there is nothing to extrude.'
+    'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
   );
 }
 
@@ -134,11 +131,34 @@ export function resolveToFaceOffset(
 }
 
 /**
+ * F01 (v121): where the extrusion starts, resolved, as a signed length along
+ * the sketch normal from the sketch plane; zero when it starts on the plane.
+ */
+export function resolveExtrudeStartOffset(
+  data: Pick<ExtrudeData, 'startOffset'>,
+  scope: Record<string, number>,
+  document: Pick<ProjectDocument, 'units'>
+): number {
+  if (data.startOffset === undefined) return 0;
+  const offset = resolveParamValue(
+    data.startOffset,
+    scope,
+    'start offset',
+    document.units
+  );
+  if (!Number.isFinite(offset)) {
+    throw new Error('Start offset must be a finite length.');
+  }
+  return offset;
+}
+
+/**
  * The blind extrude a to-face extrude stands for at this history position:
- * the derived distance (to the face, less any offset from it) replaces the
- * dormant one, and the extent fields are dropped so the sweep, overlap
- * check and boolean treat it as the blind extrude it now is. The stored
- * feature is never rewritten.
+ * the derived distance (to the face, less any offset from it, measured from
+ * where the extrusion starts) replaces the dormant one, and the extent
+ * fields are dropped so the sweep, overlap check and boolean treat it as the
+ * blind extrude it now is. A start offset stays, so the sweep starts where
+ * it says. The stored feature is never rewritten.
  */
 export function toFaceSweepFeature(
   kernel: RemusKernel,
@@ -150,12 +170,19 @@ export function toFaceSweepFeature(
 ): FeatureNode {
   const faceDistance = toFaceDistance(kernel, document, feature, data, result);
   const offset = resolveToFaceOffset(data, scope, document);
-  const distance =
-    offset === 0 ? faceDistance : toFaceOffsetEnd(faceDistance, offset);
-  if (distance === null) {
+  const start = resolveExtrudeStartOffset(data, scope, document);
+  if (faceDistance === 0 && start === 0) {
+    throw unresolved(
+      'the face lies on the sketch plane, so there is nothing to extrude.'
+    );
+  }
+  // F01 (v121): measured from the start plane, toward the face whichever
+  // side of the start it lies on.
+  const span = toFaceExtent(faceDistance, start, offset);
+  if (span === null) {
     // Not an unresolved face: the face resolved, and a re-pick would not
-    // help. The offset (or the face's new position) is what must change.
-    throw new Error(toFaceOffsetReachesSketchMessage(faceDistance, offset));
+    // help. The offset, the start (or the face's position) must change.
+    throw new Error(toFaceExtentRefusal(faceDistance, start, offset));
   }
   const {
     endCondition: _endCondition,
@@ -163,7 +190,7 @@ export function toFaceSweepFeature(
     toFaceOffset: _toFaceOffset,
     ...rest
   } = data;
-  return { ...feature, data: { ...rest, distance } };
+  return { ...feature, data: { ...rest, distance: span } };
 }
 
 /**

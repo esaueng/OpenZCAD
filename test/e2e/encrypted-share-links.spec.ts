@@ -90,10 +90,10 @@ test(
         .getByRole('status')
         .filter({ hasText: `Opened shared model ${PROJECT_NAME} · view only` })
     ).toBeVisible();
-    // A view-only link pins the visitor to View.
+    // A view-only link pins the visitor to View: with nothing else to
+    // switch to, the mode switch is not drawn at all.
     const modes = page.getByRole('group', { name: 'Workspace mode' });
-    await expect(modes.getByRole('button', { name: 'Tweak' })).toBeDisabled();
-    await expect(modes.getByRole('button', { name: 'Build' })).toBeDisabled();
+    await expect(modes).toHaveCount(0);
     // The visitor reached only the anonymous encrypted routes: the snapshot
     // and the one content blob it names. Never a plaintext share route.
     const e2ee = visitor.requests.filter((path) =>

@@ -2,7 +2,7 @@
 row: S02
 ---
 
-S02-D composite consumers (schema v125, building on v120; v121–v124 are
+S02-D composite consumers (schema v125, building on v121; v122–v124 are
 claimed by the open F01 PRs). Reference distances and angles now measure a
 held-line shape's centre (`composite-center`, with the S04-B topology
 witness) and an unconverted legacy rectangle's or regular polygon's corners,

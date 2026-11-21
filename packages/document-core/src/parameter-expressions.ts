@@ -112,7 +112,7 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
     case 'extrude':
       fields(
         data,
-        ['distance', 'backDistance', 'toFaceOffset'],
+        ['distance', 'backDistance', 'toFaceOffset', 'startOffset'],
         rewrite,
         'length'
       );
