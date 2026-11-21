@@ -1210,6 +1210,8 @@ function assertSweepContentSchema(
     assertMinimumProjectSchema(version, 132, 'Sweep twist and end scale');
   if (sweep.orientation !== undefined)
     assertMinimumProjectSchema(version, 134, 'Sweep orientation');
+  if (sweep.cornerRadius !== undefined)
+    assertMinimumProjectSchema(version, 135, 'Round sweep corners');
 }
 
 export function assertDocumentContentSchema(document: ProjectDocument): void {

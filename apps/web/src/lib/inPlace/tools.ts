@@ -593,6 +593,8 @@ export type InPlaceRequest =
       endScale?: ParamValue;
       /** M04 (v134): see the sweep `FeatureData`; absent turns with the path. */
       orientation?: 'parallel';
+      /** M04 (v135): see the sweep `FeatureData`; absent mitres the corners. */
+      cornerRadius?: ParamValue;
     }
   | {
       /** M06 (schema v101): a rib from an open profile, joined to a body. */
@@ -1671,6 +1673,18 @@ const sweep: InPlaceToolSpec = {
       suffix: '×',
       note: 'The profile’s size at the end of the path, against its start',
       when: (state) => !sampledSweep(state)
+    },
+    {
+      id: 'cornerRadius',
+      label: 'Corner radius',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true,
+      note: 'The radius of the arc that rounds each corner of the path',
+      // No handle of its own: typed in the bar's Options.
+      inOptions: true,
+      when: (state) => !sampledSweep(state) && state.options.corner === 'round'
     }
   ],
   options: [
@@ -1694,6 +1708,23 @@ const sweep: InPlaceToolSpec = {
         }
       ],
       initial: 'normal'
+    },
+    {
+      // M04 (v135): mitre a corner between straight runs, or round every
+      // corner (next to an arc too) with a tangent arc.
+      id: 'corner',
+      when: (state) =>
+        !sampledSweep(state) && state.options.orientation !== 'parallel',
+      label: 'Corners',
+      choices: [
+        { value: 'mitre', label: 'Mitre', tip: 'Cut on the bisector plane' },
+        {
+          value: 'round',
+          label: 'Round',
+          tip: 'Rounded by an arc of the corner radius, next to arcs too'
+        }
+      ],
+      initial: 'mitre'
     },
     {
       id: 'mode',
@@ -1788,7 +1819,9 @@ const sweep: InPlaceToolSpec = {
         ...(isLiteral(endScale, 1) ? {} : { endScale }),
         ...(options.orientation === 'parallel'
           ? { orientation: 'parallel' as const }
-          : {})
+          : options.corner === 'round'
+            ? { cornerRadius: values.cornerRadius ?? 2 }
+            : {})
       };
     }
     const rail = slots.guide[0];

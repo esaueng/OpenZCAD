@@ -26276,7 +26276,10 @@ export function App() {
             : { endScale: request.endScale }),
           ...(request.orientation === undefined
             ? {}
-            : { orientation: request.orientation })
+            : { orientation: request.orientation }),
+          ...(request.cornerRadius === undefined
+            ? {}
+            : { cornerRadius: request.cornerRadius })
         });
       case 'rib':
         return commandFactories.ribBody({
