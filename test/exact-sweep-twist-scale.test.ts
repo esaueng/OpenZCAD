@@ -5,6 +5,7 @@ import {
   createProjectDocument,
   findSketch,
   assertDocumentContentCommandSchema,
+  assertDocumentContentSchema,
   importStepBody,
   renameParameter,
   setParameter,
@@ -272,6 +273,22 @@ describe(
             }
           ] as never,
           editHistory: undefined
+        })
+      ).toThrow(/132/);
+    });
+
+    it('refuses a stored twist in a document older than v132', () => {
+      const start = profileSketch(
+        createProjectDocument('Stored', user),
+        square
+      );
+      const swept = sweepWith(start, [riser], { twistDeg: 90 });
+      expect(() => assertDocumentContentSchema(swept.document)).not.toThrow();
+      expect(() =>
+        assertDocumentContentSchema({
+          ...swept.document,
+          schemaVersion: 131 as never,
+          commandLog: []
         })
       ).toThrow(/132/);
     });

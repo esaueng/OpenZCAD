@@ -1142,8 +1142,8 @@ export function assertDocumentContentCommandSchema(
         83,
         'Simplified threads'
       );
-    // M04 (schema v132): an exact sweep's twist and end scale, created or
-    // patched (a patch need not name its kind; the fields are a sweep's).
+    // M04: an exact sweep's options, created or patched (a patch need not
+    // name its kind; the fields are a sweep's).
     {
       const sweep =
         command.kind === 'feature.sweep'
@@ -1153,20 +1153,7 @@ export function assertDocumentContentCommandSchema(
                 command.payload.data.featureKind === 'sweep')
             ? command.payload.data
             : null;
-      if (
-        sweep &&
-        ((sweep.twistDeg !== undefined &&
-          sweep.twistDeg !== 0 &&
-          sweep.twistDeg !== '0') ||
-          (sweep.endScale !== undefined &&
-            sweep.endScale !== 1 &&
-            sweep.endScale !== '1'))
-      )
-        assertMinimumProjectSchema(
-          document.schemaVersion,
-          132,
-          'Sweep twist and end scale'
-        );
+      if (sweep) assertSweepContentSchema(sweep, document.schemaVersion);
     }
     switch (command.kind) {
       case 'sketch.add':
@@ -1186,6 +1173,25 @@ export function assertDocumentContentCommandSchema(
 }
 
 /** Call after validating or dropping unreadable history at the entry boundary. */
+/**
+ * M04: the schema each exact-sweep option needs, for a stored sweep node and
+ * for a replayed command alike. A default (no twist, unit scale) needs none.
+ */
+function assertSweepContentSchema(
+  sweep: Record<string, unknown>,
+  version: unknown
+): void {
+  if (
+    (sweep.twistDeg !== undefined &&
+      sweep.twistDeg !== 0 &&
+      sweep.twistDeg !== '0') ||
+    (sweep.endScale !== undefined &&
+      sweep.endScale !== 1 &&
+      sweep.endScale !== '1')
+  )
+    assertMinimumProjectSchema(version, 132, 'Sweep twist and end scale');
+}
+
 export function assertDocumentContentSchema(document: ProjectDocument): void {
   if (document.objectFolders !== undefined)
     assertObjectFolderSchema(document.schemaVersion);
@@ -1416,6 +1422,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'sweep')
+      assertSweepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
       assertImportedStepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')
