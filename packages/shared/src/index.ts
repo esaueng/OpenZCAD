@@ -504,8 +504,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v129 adds S02-D datum reference targets: the sketch origin
 // (`sketch-origin`) and its X/Y axes (`sketch-axis`), measured in the
 // sketch-local frame. An older client cannot read them, so it must refuse.
-// Builds on v126 (#1846); claimed as v126, renumbered when #1846 took it
-// first. v127 and v128 are claimed by the open F01 PRs #1847 and #1851.
+// Builds on v125 (#1860). It was claimed as v126 and renumbered when F01
+// took that number; v126–v128 are claimed by the open F01 PRs #1846, #1847
+// and #1851.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 129 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
