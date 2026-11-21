@@ -1037,7 +1037,6 @@ import {
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
-import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from './lib/displayMode';
@@ -1565,6 +1564,8 @@ const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
   }))
 );
 /** Longest an account conflict waits for the project's room to connect. */
+/** Where the measurement workbench is a sheet across the stage's foot. */
+const MEASUREMENT_SHEET_MEDIA = '(max-width: 620px)';
 const ROOM_SETTLE_TIMEOUT_MS = 5000;
 
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
@@ -4551,11 +4552,6 @@ export function App() {
       if (action) spaceMouseActionRef.current(action);
     });
   }, []);
-  const [presentedGeometry, setPresentedGeometry] = useState<{
-    projectId: string;
-    generation: number;
-    visible: boolean;
-  } | null>(null);
   /**
    * What the section view is currently showing. The clipped preview owns the
    * drag; the kernel's exact section is asked for once the plane rests, and
@@ -7240,7 +7236,6 @@ export function App() {
     canBuild: canNavigateToBuild,
     onSwitch: () => handleWorkspaceMode('build'),
     onLaunch: launchTool,
-    onPrepare: () => prepareResponsiveFrame.prepare(),
     onExpired: () =>
       setStatus(
         'Unable to open Build. Switch to Build and choose the tool again.'
@@ -18620,22 +18615,34 @@ export function App() {
    * is still the one the preview showed it on.
    */
   const autoDimensionPreviewRef = useRef<AutoDimensionPreview | null>(null);
-  // Bumped when something opens over the stage that the model should stay
-  // clear of: the viewer reframes only if part of the model is covered.
+  // Bumped when an AI preview is shown, or a phone's sheet comes up over
+  // the stage: the viewer reframes only if part of the model is covered.
+  // Otherwise panels, menus, workbenches and mode changes never move the
+  // camera; the model stays where it was, and closing one never moves it
+  // back.
   const [clearStageRequest, setClearStageRequest] = useState(0);
-  const sectionControlsShown =
-    viewerSettings.sectionView !== undefined &&
-    panelState.sectionPanelOpen !== false;
+  const requestClearStage = useCallback(
+    () => setClearStageRequest((request) => request + 1),
+    []
+  );
+  // On a phone the parts list beside View's rail opens over the middle of
+  // the model: once, as it opens, the model slides into the stage it leaves.
+  const phonePartsShown = phonePartsOpen === true;
   useEffect(() => {
-    if (sectionControlsShown) setClearStageRequest((request) => request + 1);
-  }, [sectionControlsShown]);
-  // The measurement workbench floats over View's and Tweak's stage (a
-  // phone's sheet across its foot, I47): what it measures stays in view.
-  // Build's workbench is a command card and never moves the camera.
+    if (phonePartsShown) requestClearStage();
+  }, [phonePartsShown, requestClearStage]);
+  // View's and Tweak's measurement workbench docks across a narrow stage's
+  // foot (I47): once, as it opens, what it measures slides above it. Wider,
+  // it floats beside the model and the camera stays. Build's workbench is a
+  // command card and never moves the camera.
   const measuringOverStage = measuring && modelingLocked;
   useEffect(() => {
-    if (measuringOverStage) setClearStageRequest((request) => request + 1);
-  }, [measuringOverStage]);
+    if (
+      measuringOverStage &&
+      window.matchMedia(MEASUREMENT_SHEET_MEDIA).matches
+    )
+      requestClearStage();
+  }, [measuringOverStage, requestClearStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {
@@ -26872,26 +26879,6 @@ export function App() {
   useLayoutEffect(() => {
     setBooleanCommandRunning(inPlaceBooleanRunning);
   }, [inPlaceBooleanRunning]);
-  const prepareResponsiveFrame = useResponsiveFraming({
-    projectId: doc?.projectId ?? null,
-    mode: resolvedWorkspaceMode,
-    layout: panelLayout,
-    // A parts list asked for on a phone changes the clear stage. Resting it
-    // on the way in does not: that first frame is the viewer's to make.
-    panels: `${panelState.tweakPanelOpen}:${panelState.viewModeRailOpen}${
-      phonePartsOpen ? ':asked' : ''
-    }`,
-    enabled:
-      displayedGeometryComplete &&
-      presentedGeometry?.projectId === doc?.projectId &&
-      presentedGeometry?.generation === resumeViewGeneration &&
-      presentedGeometry?.visible === true &&
-      !tool &&
-      !inPlace.active &&
-      interaction.mode === 'idle' &&
-      !parameterDraftActive,
-    onFit: () => setFitSignal((value) => value + 1)
-  });
   // Every open edit: an in-place command's, and the in-place Extrude's.
   cancelInPlaceRef.current = () => {
     inPlaceRef.current.cancel(true);
@@ -37352,11 +37339,7 @@ export function App() {
       sidebar={
         viewMode || drawingMode || assembleMode ? null : tweakMode ? (
           <TweakPanel
-            onLayoutChange={(reason) =>
-              reason === 'mount'
-                ? prepareResponsiveFrame.mounted()
-                : prepareResponsiveFrame.request()
-            }
+            onPhoneSheetShown={requestClearStage}
             units={doc?.units}
             modelError={parameterModelError}
             parameters={exposedParameters}
@@ -37648,20 +37631,8 @@ export function App() {
             initialView={initialView}
             onViewChange={handleViewportChange}
             onViewSettled={handleViewportSettled}
-            onGeometryPresented={(ms, visible) => {
+            onGeometryPresented={(ms) => {
               previewPresentationMs.current = ms;
-              if (doc)
-                setPresentedGeometry((current) =>
-                  current?.projectId === doc.projectId &&
-                  current.generation === resumeViewGeneration &&
-                  current.visible === visible
-                    ? current
-                    : {
-                        projectId: doc.projectId,
-                        generation: resumeViewGeneration,
-                        visible
-                      }
-                );
             }}
             onBodiesDrawnElsewhere={setBodiesDrawnElsewhere}
             onWheelDeviceLearned={handleWheelDeviceLearned}

@@ -9,6 +9,7 @@ import {
   bareCanvasDrags,
   locateEdge,
   pickPlanarFace,
+  stubAnonymousApi,
   waitForStillViewport
 } from './openzcad-fixtures';
 
@@ -706,3 +707,74 @@ test('the cylinder radius handle stays on screen while its release validates', a
   ).toBe(0);
   await page.evaluate(() => window.__holdFinal!.release());
 });
+
+/** The camera once the viewport has stopped drawing. */
+async function restingCamera(page: Page): Promise<CameraState> {
+  await waitForStillViewport(page);
+  return camera(page.locator('.viewer-host canvas'));
+}
+
+function expectSameCamera(actual: CameraState, expected: CameraState) {
+  for (const key of ['position', 'target'] as const) {
+    expected[key].forEach((value, axis) =>
+      expect(actual[key][axis], `${key}[${axis}]`).toBeCloseTo(value, 6)
+    );
+  }
+}
+
+// Opening or closing a panel, a menu or a workbench, or changing mode, used
+// to Fit the model again into whatever stage the panels left clear: the
+// model jumped sideways each time Parts or Parameters opened, and back when
+// they closed. The view is the user's: only Fit and other explicit framing
+// move it. A phone's sheet covers the model's half of the stage, so there
+// the model slides above it once, as it first comes up; from then on the
+// view stays, the sheet closing included.
+for (const viewport of [
+  { name: 'desktop', width: 1440, height: 900 },
+  { name: 'phone', width: 390, height: 844 }
+]) {
+  test(
+    `opening panels and changing mode leave the camera where it was (${viewport.name})`,
+    viewport.name === 'desktop' ? { tag: '@ci-smoke' } : {},
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize(viewport);
+      await stubAnonymousApi(page);
+      await page.goto('/');
+      await page
+        .getByRole('button', { name: /Open demo: Mounting Bracket/ })
+        .click();
+      const tweak = page.getByRole('button', { name: 'Tweak', exact: true });
+      await expect(tweak).toBeVisible({ timeout: 90_000 });
+      await expectBodyCount(page, 1);
+      let start = await restingCamera(page);
+
+      await tweak.click();
+      const parameters = page
+        .getByRole('toolbar', { name: 'Tweak tools' })
+        .getByRole('button', { name: 'Parameters', exact: true });
+      await expect(parameters).toBeVisible({ timeout: 30_000 });
+      if (viewport.name === 'phone') {
+        start = await restingCamera(page);
+      } else {
+        expectSameCamera(await restingCamera(page), start);
+      }
+
+      // Each toggle of the Parameters table and the parts list, both ways.
+      for (let step = 0; step < 2; step += 1) {
+        await parameters.click();
+        expectSameCamera(await restingCamera(page), start);
+        await page
+          .getByRole('button', { name: /^(Show|Hide) the parts list$/ })
+          .first()
+          .click();
+        expectSameCamera(await restingCamera(page), start);
+      }
+
+      await page.getByRole('button', { name: 'View', exact: true }).click();
+      expectSameCamera(await restingCamera(page), start);
+      await page.getByRole('button', { name: 'Build', exact: true }).click();
+      expectSameCamera(await restingCamera(page), start);
+    }
+  );
+}
