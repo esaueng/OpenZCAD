@@ -3196,6 +3196,7 @@ export function validateSweepOptions(data: {
   construction?: unknown;
   twistDeg?: unknown;
   endScale?: unknown;
+  guide?: unknown;
 }): void {
   const { twistDeg, endScale } = data;
   if (twistDeg !== undefined) {
@@ -3222,6 +3223,11 @@ export function validateSweepOptions(data: {
   }
   const twisted = !isZeroParam(twistDeg);
   const scaled = !isUnitParam(endScale);
+  if ((twisted || scaled) && data.guide !== undefined) {
+    throw new Error(
+      'A guide rail sets the sweep’s end scale itself; clear the twist and end scale, or the rail.'
+    );
+  }
   if ((twisted || scaled) && data.construction !== 'in-place') {
     throw new Error(
       'Twist and scale along the path need the exact sweep; build it as Exact.'

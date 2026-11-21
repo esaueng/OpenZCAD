@@ -2027,6 +2027,33 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(sampled).not.toHaveProperty('endScale');
   });
 
+  it('sweep: an exact sweep with a rail writes the rail and no twist or scale (M04)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const slots = {
+      profiles: [
+        {
+          sketchId: SKETCH,
+          reference: { all: true, sourceEntityIds: ['a'] },
+          regionFingerprint: 7
+        }
+      ],
+      path: [{ sketchId: SKETCH, entityId: 'p1' }],
+      guide: [{ sketchId: SKETCH, entityId: 'rail1' }]
+    } as unknown as InPlaceSlots;
+    const request = spec.request(
+      slots,
+      { twist: 30, endScale: 2 },
+      { build: 'exact' },
+      {} as never
+    );
+    expect(request).toMatchObject({
+      construction: 'in-place',
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] }
+    });
+    expect(request).not.toHaveProperty('twistDeg');
+    expect(request).not.toHaveProperty('endScale');
+  });
+
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
     const sweep = (entityIds: string[]): FeatureData => ({
       featureKind: 'sweep',

@@ -2678,8 +2678,12 @@ export type FeatureData =
        * path's rigid motions (a line moves it along, an arc turns it about
        * the arc's axis) as exact surfaces — planes, cylinders, cones, tori
        * and rational NURBS, never facets (the kernel's `sweepExact`). The
-       * path must be tangent-continuous; a corner, a guide rail or a profile
-       * that would fold is refused by name, never sampled instead. `mode`
+       * path must be tangent-continuous; a corner or a profile that would
+       * fold is refused by name, never sampled instead. A `guide` rail on an
+       * in-place sweep (M04) must be one straight line beside a straight
+       * path, in one plane with it, from the profile's plane to the path's
+       * far end: the profile then scales to follow it, exactly (any other
+       * rail is refused by name). `mode`
        * is kept but builds nothing. Absent means the unchanged sampled
        * `sweepWithOptions`/`sweepAlongEdges` call every sweep authored before
        * this field existed took, so those documents replay identically.

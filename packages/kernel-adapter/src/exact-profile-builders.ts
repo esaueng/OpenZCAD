@@ -2582,6 +2582,139 @@ function guidedSweepSolid(
   return guided;
 }
 
+type Point = { x: number; y: number; z: number };
+const minus = (a: Point, b: Point): Point => ({
+  x: a.x - b.x,
+  y: a.y - b.y,
+  z: a.z - b.z
+});
+const dot3 = (a: Point, b: Point) => a.x * b.x + a.y * b.y + a.z * b.z;
+const cross3 = (a: Point, b: Point): Point => ({
+  x: a.y * b.z - a.z * b.y,
+  y: a.z * b.x - a.x * b.z,
+  z: a.x * b.y - a.y * b.x
+});
+const norm3 = (a: Point) => Math.hypot(a.x, a.y, a.z);
+
+/** The two ends of a straight edge, or `null` for any other curve. */
+function straightEnds(
+  kernel: RemusKernel,
+  edge: number,
+  label: string
+): [Point, Point] | null {
+  const curve = nurbsCurveOfEdge(kernel, edge, label);
+  const points = curve.controlPoints;
+  const count = points.length / 3;
+  const at = (i: number): Point => ({
+    x: points[3 * i]!,
+    y: points[3 * i + 1]!,
+    z: points[3 * i + 2]!
+  });
+  const [first, last] = [at(0), at(count - 1)];
+  const along = minus(last, first);
+  const length = norm3(along);
+  if (!(length > 0)) return null;
+  // Straight when every control point lies on the chord.
+  for (let i = 0; i < count; i += 1) {
+    const off = cross3(minus(at(i), first), along);
+    if (norm3(off) / length > 1e-9 * Math.max(1, length)) return null;
+  }
+  return [first, last];
+}
+
+/**
+ * M04: the end scale a straight guide rail asks of an exact sweep along a
+ * straight path. The rail lies in one plane with the path and runs from the
+ * profile's plane to the far end of the path, on one side of it; its
+ * distance from the path then changes linearly, which is exactly a sweep
+ * scaling the profile about the path by the ratio of its far distance to its
+ * near one, every point at the rail's distance staying on the rail. Any
+ * other rail has no exact construction and is refused by name.
+ */
+export function railEndScale(
+  kernel: RemusKernel,
+  pathEdges: readonly number[],
+  railEdges: readonly number[],
+  profilePlane: PlaneBasis
+): number {
+  const pathEnds = pathEdges.map((edge) =>
+    straightEnds(kernel, edge, 'The sweep path')
+  );
+  const railEnds = railEdges.map((edge) =>
+    straightEnds(kernel, edge, 'The sweep guide rail')
+  );
+  if (pathEnds.some((ends) => ends === null)) {
+    throw new Error(
+      'An exact sweep follows a guide rail only along a straight path: a rail on a curved path has no exact surface. Sweep along a straight line, or clear the guide rail.'
+    );
+  }
+  if (railEnds.length !== 1 || railEnds[0] === null) {
+    throw new Error(
+      'An exact sweep follows a guide rail only when the rail is one straight line: a curved rail has no exact surface. Draw the rail as a straight line, or clear the guide rail.'
+    );
+  }
+  // The path's line, from all its pieces' ends.
+  const points = pathEnds.flatMap((ends) => ends!);
+  const plane = (p: Point) =>
+    dot3(minus(p, profilePlane.origin), profilePlane.normal);
+  const near = points.reduce((a, b) =>
+    Math.abs(plane(a)) <= Math.abs(plane(b)) ? a : b
+  );
+  const far = points.reduce((a, b) =>
+    Math.abs(plane(a)) >= Math.abs(plane(b)) ? a : b
+  );
+  const axis = minus(far, near);
+  const length = norm3(axis);
+  const unit = { x: axis.x / length, y: axis.y / length, z: axis.z / length };
+  const scale = Math.max(1, length, norm3(near), norm3(far));
+  const tolerance = 1e-7 * scale;
+  const offAxis = (p: Point) => {
+    const d = minus(p, near);
+    const along = dot3(d, unit);
+    return {
+      along,
+      across: minus(d, {
+        x: unit.x * along,
+        y: unit.y * along,
+        z: unit.z * along
+      })
+    };
+  };
+  for (const p of points) {
+    if (norm3(offAxis(p).across) > tolerance) {
+      throw new Error(
+        'An exact sweep follows a guide rail only along a straight path: this path turns. Sweep along a straight line, or clear the guide rail.'
+      );
+    }
+  }
+  const [r0, r1] = railEnds[0]!;
+  // The rail's end at the profile and its end at the path's far end.
+  const [start, end] =
+    Math.abs(offAxis(r0).along) <= Math.abs(offAxis(r1).along)
+      ? [offAxis(r0), offAxis(r1)]
+      : [offAxis(r1), offAxis(r0)];
+  if (
+    Math.abs(start.along) > tolerance ||
+    Math.abs(end.along - length) > tolerance
+  ) {
+    throw new Error(
+      'A sweep guide rail must run the length of the path, from the profile’s plane to the path’s far end. Redraw the rail end to end with the path, or clear it.'
+    );
+  }
+  const [d0, d1] = [norm3(start.across), norm3(end.across)];
+  const sameSide =
+    d0 > tolerance &&
+    d1 > tolerance &&
+    norm3(cross3(start.across, end.across)) <= 1e-7 * d0 * d1 &&
+    dot3(start.across, end.across) > 0;
+  if (!sameSide) {
+    throw new Error(
+      'An exact sweep follows a guide rail only when the rail lies beside the path in one plane with it, never crossing it: a rail that turns about the path has no exact surface. Draw the rail in a plane through the path, or clear the guide rail.'
+    );
+  }
+  return d1 / d0;
+}
+
 /**
  * M04 (v132): a sweep's twist (radians) and end scale, resolved; `null`
  * when it has neither, so the plain `sweepExact` call is unchanged.
@@ -2619,14 +2752,39 @@ function exactSweepSolid(
   document: ProjectDocument,
   face: number,
   path: SketchPathReference,
-  guided: boolean,
+  guide: SketchPathReference | undefined,
   options: { twist: number; endScale: number } | null,
+  profilePlane: PlaneBasis,
   scope: Record<string, number>,
   sketchBases: ReadonlyMap<SketchId, PlaneBasis>
 ): number {
-  if (guided) {
-    throw new Error(
-      'A guide rail has no exact sweep construction: the rail turns the profile in a way no exact surface follows, so the sweep would be built from facets. Clear the guide rail.'
+  if (guide) {
+    if (options) {
+      throw new Error(
+        'A guide rail sets the sweep’s end scale itself: clear the twist and end scale, or clear the guide rail.'
+      );
+    }
+    const pathEdges = sweepPathEdges(
+      kernel,
+      document,
+      path,
+      scope,
+      sketchBases,
+      false
+    );
+    const railEdges = sweepPathEdges(
+      kernel,
+      document,
+      guide,
+      scope,
+      sketchBases,
+      false
+    );
+    const endScale = railEndScale(kernel, pathEdges, railEdges, profilePlane);
+    return kernel.sweepExactWithOptions(
+      face,
+      Uint32Array.from(pathEdges),
+      JSON.stringify({ endScale })
     );
   }
   const edges = sweepPathEdges(
@@ -2645,6 +2803,16 @@ function exactSweepSolid(
     );
   }
   return kernel.sweepExact(face, Uint32Array.from(edges));
+}
+
+function sketchBasisOf(
+  sketchId: SketchId,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+): PlaneBasis {
+  const basis = sketchBases.get(sketchId);
+  if (!basis)
+    throw new Error('The sweep profile’s sketch plane is unavailable.');
+  return basis;
 }
 
 export function buildProfileSweep(
@@ -2686,8 +2854,9 @@ export function buildProfileSweep(
             document,
             face,
             feature.data.path,
-            guided,
+            guide,
             resolveSweepOptions(feature.data, scope),
+            sketchBasisOf(feature.data.profile.sketchId, sketchBases),
             scope,
             sketchBases
           ),

@@ -242,7 +242,7 @@ describe('exact in-place sweeps (M04)', { timeout: 120_000 }, () => {
     );
   });
 
-  it('refuses a guide rail on an exact sweep rather than faceting it', async () => {
+  it('refuses a guide rail along a curved path rather than faceting it', async () => {
     const start = profileSketch(
       createProjectDocument('Railed', user),
       roundProfile(2)
@@ -256,7 +256,7 @@ describe('exact in-place sweeps (M04)', { timeout: 120_000 }, () => {
     feature.data.guide = feature.data.path;
     const { document } = await built(swept);
     expect(document.derived.warnings.join('\n')).toContain(
-      'A guide rail has no exact sweep construction'
+      'An exact sweep follows a guide rail only along a straight path'
     );
   });
 });
