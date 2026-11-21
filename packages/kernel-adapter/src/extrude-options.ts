@@ -328,6 +328,45 @@ function draftCircularWall(
 }
 
 /**
+ * F01 (v126): a straight-swept solid whose one wall is round, rebuilt as the
+ * exact ruled loft between its cap circles (a cylinder): the form a drafted
+ * round half takes, so the two halves of a per-side draft fuse face to face
+ * alike. The kernel's fuse of a swept cylinder onto a lofted cone along
+ * their shared circle loses material. Any other solid is returned as it is.
+ */
+export function straightRoundWallAsLoft(
+  kernel: RemusKernel,
+  solid: number,
+  neutral: PlaneBasis,
+  pull: Vec3,
+  label: string
+): number {
+  const faces = classifyFaces(kernel, solid, pull, label);
+  const walls = faces.filter((face) => face.role === 'wall');
+  if (
+    walls.length !== 1 ||
+    walls[0]!.surfaceType === 'plane' ||
+    faces.length !== 3
+  ) {
+    return solid;
+  }
+  const lofted = draftCircularWall(
+    kernel,
+    walls[0]!.handle,
+    neutral,
+    pull,
+    0,
+    label
+  );
+  requireValidSolid(
+    kernel,
+    lofted,
+    `${label} could not be rebuilt as an exact round wall.`
+  );
+  return lofted;
+}
+
+/**
  * F01 (v29): taper each straight-swept solid's walls by `angleDeg` about the
  * neutral (sketch) plane, along `pull` (the unit direction the extrusion
  * leaves the sketch in). Positive narrows the section away from the plane.

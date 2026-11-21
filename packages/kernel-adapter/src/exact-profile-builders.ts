@@ -121,7 +121,8 @@ import {
   DRAFTED_EXTRUDE_HASH_ONLY_REASON,
   draftExtrudedSolids,
   resolveExtrudeDraftDeg,
-  resolveExtrudeStartOffset
+  resolveExtrudeStartOffset,
+  straightRoundWallAsLoft
 } from './extrude-options';
 
 const CURVE_SEGMENTS = 32;
@@ -2876,6 +2877,14 @@ export function buildSweep(
 }
 
 /**
+ * Set on the transient node a coplanar-retry twin builds (see
+ * `exact-pierce-tool.ts`): its back distance is pierce travel, so a drafted
+ * tool keeps the one-sided taper carried across the start plane rather than
+ * being built as a two-sided extrusion with a straight back.
+ */
+export const PIERCE_TRAVEL_METADATA_KEY = 'openzcad.pierceTravel';
+
+/**
  * F01 (v126): a symmetric or two-sided blind extrude with a draft on either
  * side, or null when it is not one (the one-sided path builds it). Each side
  * is swept one-sided from the start plane on its own, tapered by its own
@@ -2895,6 +2904,8 @@ function twoSidedDraftedSweep(
   warn: (message: string) => void
 ): ExactShape | null {
   if (feature.data.featureKind !== 'extrude') return null;
+  // A pierced twin's back distance is travel, not a side.
+  if (feature.metadata?.[PIERCE_TRAVEL_METADATA_KEY] === true) return null;
   const data = feature.data;
   const front = resolveExtrudeDraftDeg(data, scope, document, 'front');
   const back = resolveExtrudeDraftDeg(data, scope, document, 'back');
@@ -2950,16 +2961,29 @@ function twoSidedDraftedSweep(
       sketchBases,
       warn
     ).solids;
-    return angle === 0
-      ? solids
-      : draftExtrudedSolids(
-          kernel,
-          solids,
-          basis,
-          scale(basis.normal, side),
-          angle,
-          `${label} (${side === sign ? 'front' : 'back'} side)`
-        );
+    if (angle === 0) {
+      // Straight beside a drafted round half: the same exact loft form.
+      const other = side === sign ? back : front;
+      return other === 0
+        ? solids
+        : solids.map((solid) =>
+            straightRoundWallAsLoft(
+              kernel,
+              solid,
+              basis,
+              scale(basis.normal, side),
+              label
+            )
+          );
+    }
+    return draftExtrudedSolids(
+      kernel,
+      solids,
+      basis,
+      scale(basis.normal, side),
+      angle,
+      `${label} (${side === sign ? 'front' : 'back'} side)`
+    );
   };
   const aheadSolids = half(ahead, front, sign);
   const behindSolids = half(-sign * behind, back, -sign as 1 | -1);

@@ -2659,7 +2659,20 @@ function validateExtrudeDraft(
       'A through-all cut has no draft yet; use a distance or a face.'
     );
   }
-  if (back && data.symmetric !== true && zero(data.backDistance)) {
+  // A back side is symmetric, or a back distance that is positive (or an
+  // expression not resolvable here, which the build checks): a negative
+  // one is refused at rebuild, so it is no back side to draft.
+  const backValue =
+    typeof data.backDistance === 'number'
+      ? data.backDistance
+      : ((data.backDistance !== undefined &&
+          resolve?.(data.backDistance as ParamValue)) ??
+        undefined);
+  const backSide =
+    data.symmetric === true ||
+    (!zero(data.backDistance) &&
+      (typeof backValue !== 'number' || backValue > 0));
+  if (back && !backSide) {
     throw new Error(
       'Back draft tapers the side behind the sketch plane; make the extrusion symmetric or give it a back distance first.'
     );

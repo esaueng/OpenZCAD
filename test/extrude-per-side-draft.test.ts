@@ -158,6 +158,11 @@ describe('F01 per-side draft', { timeout: 60_000 }, () => {
 
     it.each([
       [{ backDraftAngleDeg: 2 }, /Back draft tapers the side behind/],
+      // Review: a negative back distance is no back side.
+      [
+        { backDistance: -2, backDraftAngleDeg: 3 },
+        /Back draft tapers the side behind/
+      ],
       [
         { backDistance: 0, backDraftAngleDeg: 2 },
         /Back draft tapers the side behind/
@@ -284,6 +289,16 @@ describe('F01 per-side draft', { timeout: 60_000 }, () => {
       expect(body.volume).toBeCloseTo(volume, 5);
       expect(body.bbox.min.z).toBeCloseTo(minZ, 9);
       expect(body.bbox.max.z).toBeCloseTo(maxZ, 9);
+    });
+
+    it('builds a round profile drafted on one side and straight on the other', async () => {
+      const result = extrude({ backDistance: 4, draftAngleDeg: 2 }, [CIRCLE]);
+      const derived = await derive(result.document);
+      expect(derived.warnings).toEqual([]);
+      expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
+        circleSide(10, 2) + Math.PI * 9 * 4,
+        4
+      );
     });
 
     it('builds a round profile as two cone frustums', async () => {
@@ -445,10 +460,17 @@ describe('F01 per-side draft', { timeout: 60_000 }, () => {
       ).not.toHaveProperty('backDraftAngleDeg');
     });
 
-    it('refuses a back draft without a back side, or one that does not evaluate', () => {
+    it('holds a back draft without a back side, and refuses one that does not evaluate', () => {
+      // Review: a hidden back draft never blocks the edit; it is held, not
+      // sent, until a back side returns.
+      const held = { ...base, backDraftAngle: '2' };
+      expect(extrudeDraftRefusal(held, ctx, true)).toBeNull();
+      expect(extrudeDraftValue(held, ctx)).not.toHaveProperty(
+        'backDraftAngleDeg'
+      );
       expect(
-        extrudeDraftRefusal({ ...base, backDraftAngle: '2' }, ctx, true)
-      ).toMatch(/Back draft tapers the side behind the sketch plane/);
+        extrudeDraftValue({ ...held, symmetric: true }, ctx)
+      ).toMatchObject({ backDraftAngleDeg: 2 });
       expect(
         extrudeDraftRefusal(
           { ...base, symmetric: true, backDraftAngle: 'nope' },

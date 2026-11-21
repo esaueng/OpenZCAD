@@ -55,9 +55,7 @@ describe('extrude draft rules', () => {
         ctx,
         true
       )
-    ).toBe(
-      'Back draft tapers the side behind the sketch plane; turn on Symmetric or give a back distance first.'
-    );
+    ).toBeNull();
     expect(
       extrudeDraftRefusal(
         draft({ distance: '10', draftAngle: '89' }),

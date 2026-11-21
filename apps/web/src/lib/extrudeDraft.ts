@@ -338,13 +338,13 @@ export function extrudeDraftAngleError(
   if (angle !== null && Math.abs(angle) >= MAX_DRAFT_DEG) {
     return `Draft must be between -${MAX_DRAFT_DEG}° and ${MAX_DRAFT_DEG}°.`;
   }
+  // A back draft with no back side is held, hidden and not sent, for when
+  // the side returns: it never blocks an edit it is not part of.
+  if (!extrudeHasBackSide(draft, ctx)) return null;
   const back = extrudeDraftNumber(draft.backDraftAngle, 'angle', ctx);
   if (back === null || back === 0) return null;
   if (Math.abs(back) >= MAX_DRAFT_DEG) {
     return `Back draft must be between -${MAX_DRAFT_DEG}° and ${MAX_DRAFT_DEG}°.`;
-  }
-  if (!extrudeHasBackSide(draft, ctx)) {
-    return 'Back draft tapers the side behind the sketch plane; turn on Symmetric or give a back distance first.';
   }
   return null;
 }
@@ -428,7 +428,9 @@ export function extrudeFormValue(
     ...(!throughAll && draftAngleDeg !== 0 && draftAngleDeg !== '0'
       ? { draftAngleDeg }
       : {}),
-    ...(!derived && backDraftAngleDeg !== 0 && backDraftAngleDeg !== '0'
+    ...(extrudeHasBackSide(draft, ctx) &&
+    backDraftAngleDeg !== 0 &&
+    backDraftAngleDeg !== '0'
       ? { backDraftAngleDeg }
       : {})
   };
@@ -496,7 +498,7 @@ export function extrudeDraftRefusal(
     if (!angle.ok || angle.value === undefined) {
       return `Draft angle: ${angle.text}.`;
     }
-    if (!toFace) {
+    if (extrudeHasBackSide(draft, ctx)) {
       const back = previewExpression(
         draft.backDraftAngle,
         ctx.scope,

@@ -550,17 +550,16 @@ describe('in-place Extrude bar', () => {
     );
   });
 
-  it('drafts each side of a symmetric extrude, and refuses a back draft off it', async () => {
+  it('drafts each side of a symmetric extrude, holding a back draft until there is a back side', async () => {
     const user = userEvent.setup();
     const { distanceSetterRef, commandRef, onSubmit } = setup();
     act(() => distanceSetterRef.current?.(10));
     act(() => commandRef.current?.setValue('backDraftAngle', '3'));
+    // One-sided: held, not offered, and it blocks nothing.
     expect(
-      screen.getByText(
-        'Back draft tapers the side behind the sketch plane; turn on Symmetric or give a back distance first.'
-      )
-    ).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+      screen.queryByRole('button', { name: 'Back draft angle' })
+    ).toBeNull();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeEnabled();
     await openOptions(user);
     await user.click(choice('Sides', 'Symmetric'));
     act(() => commandRef.current?.setValue('draftAngle', '4'));
