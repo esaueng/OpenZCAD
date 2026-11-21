@@ -1142,6 +1142,24 @@ export function assertDocumentContentCommandSchema(
         83,
         'Simplified threads'
       );
+    // M04 (schema v136): a loft's connections and guide, created or patched
+    // (a patch need not name its kind; the fields are a loft's).
+    {
+      const loft =
+        command.kind === 'feature.loft'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'loft')
+            ? command.payload.data
+            : null;
+      if (loft && (loft.connections !== undefined || loft.guides !== undefined))
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          136,
+          'Loft connections and guides'
+        );
+    }
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':

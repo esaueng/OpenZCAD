@@ -1954,6 +1954,48 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(exact?.data).toHaveProperty('construction', 'in-place');
   });
 
+  it('loft: a picked guide line goes out as the loft guide, and an edit clears a removed one (M04, v136)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.loft;
+    const pick = (fingerprint: number) => ({
+      sketchId: SKETCH,
+      reference: { all: true, sourceEntityIds: [`s${fingerprint}`] },
+      regionFingerprint: fingerprint
+    });
+    const slots = {
+      profiles: [pick(1), pick(2)],
+      path: [{ sketchId: SKETCH, entityId: 'g1' }],
+      guide: []
+    } as unknown as InPlaceSlots;
+    const request = spec.request(slots, {}, { shape: 'ruled' }, {} as never);
+    expect(request).toMatchObject({
+      tool: 'loft',
+      mode: 'ruled',
+      guides: [{ sketchId: SKETCH, entityIds: ['g1'] }]
+    });
+    const sections = [
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s1'] }
+      },
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s2'] }
+      }
+    ];
+    const saved = feature({
+      featureKind: 'loft',
+      sections,
+      mode: 'ruled',
+      guides: [{ sketchId: SKETCH, entityIds: ['g1'] as never[] }]
+    });
+    const cleared = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections,
+      mode: 'ruled'
+    });
+    expect(cleared?.clearData).toEqual(['endPoint', 'guides']);
+  });
+
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
     const sweep = (entityIds: string[]): FeatureData => ({
       featureKind: 'sweep',

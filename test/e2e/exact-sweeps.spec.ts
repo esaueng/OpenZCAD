@@ -339,3 +339,77 @@ test('a faceted helix rebuilds exact from its edit, its height dragged', async (
     3
   );
 });
+
+test('a loft picked with a straight guide line connects the corners it joins (M04, v136)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  let document = addPrimitiveFeature(
+    createProjectDocument('Guided loft', toUserId('user_e2e')),
+    {
+      name: 'Marker',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 2, depth: 2 }
+    }
+  );
+  for (const [name, offset] of [
+    ['Bottom', 0],
+    ['Top', 10]
+  ] as const) {
+    document = addSketchFeature(document, {
+      name,
+      plane: 'XY',
+      offset,
+      object: {
+        objectKind: 'rectangle',
+        width: 2,
+        height: 2,
+        centerX: 30,
+        centerY: 0
+      }
+    }).document;
+  }
+  // From the bottom's corner (29, −1, 0) to the top's next corner round,
+  // (31, −1, 10), on the front plane at y = −1 (sketch y runs along −Z).
+  document = addSketchFeature(document, {
+    name: 'Guide',
+    plane: 'XZ',
+    offset: -1,
+    object: { objectKind: 'line', x1: 29, y1: 0, x2: 31, y2: -10 }
+  }).document;
+  const { canvas, bar } = await startTool(page, document, /^Loft\b/);
+  for (const index of [0, 1]) {
+    await canvas.evaluate(
+      (element, detail) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-profile', { detail })
+        ),
+      { index, additive: index > 0 }
+    );
+  }
+  await expect(bar).toContainText('2 sections');
+  await page.getByRole('button', { name: 'Fit view (F)', exact: true }).click();
+  await waitForStillViewport(page);
+  const on = await projected(canvas, [30, -1, 5]);
+  await page.mouse.move(on.x, on.y);
+  await page.mouse.click(on.x, on.y);
+  await expect(bar).toContainText('guided by a line');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const saved = await exportedDocument(page);
+  const loft = listFeaturesInOrder(saved).find(
+    (feature) => feature.data.featureKind === 'loft'
+  )!;
+  if (loft.data.featureKind !== 'loft') throw new Error('Expected a loft.');
+  expect(loft.data.guides).toHaveLength(1);
+  const derived = await rebuilt(saved);
+  // A quarter-turn ruled loft: h/6·(A₀ + 4·A_m + A₁) with a diamond of 2.
+  expect(derived.bodyRepresentations[loft.bodyId!]!.volume).toBeCloseTo(
+    (10 / 6) * (4 + 4 * 2 + 4),
+    6
+  );
+});

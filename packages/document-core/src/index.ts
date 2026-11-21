@@ -243,6 +243,7 @@ import {
   type SketchPlaneRef,
   type SketchProfileReference,
   type SketchSectionReference,
+  type LoftConnectionVertex,
   type SketchPathReference,
   type UnitSystem,
   type UserId,
@@ -521,6 +522,10 @@ export interface LoftInput {
   mode: 'ruled' | 'smooth';
   /** Apex point closing the loft after its last section; omitted by default. */
   endPoint?: ParametricVector3;
+  /** M04 (v136): see the loft `FeatureData`; omitted keeps section starts. */
+  connections?: LoftConnectionVertex[];
+  /** M04 (v136): see the loft `FeatureData`; at most one straight guide. */
+  guides?: SketchPathReference[];
   ids?: BodyFeatureIds;
 }
 
@@ -3153,11 +3158,75 @@ export function revolveSketch(
   return { document: next, bodyId };
 }
 
+/**
+ * M04 (v136): a loft's connections name one vertex per section, and its
+ * guides are at most one, on a ruled loft; neither goes with an apex point,
+ * and the two are not given together (a guide fixes the connections).
+ */
+export function validateLoftOptions(data: {
+  sections?: readonly unknown[];
+  mode?: unknown;
+  endPoint?: unknown;
+  connections?: unknown;
+  guides?: unknown;
+}): void {
+  const { connections, guides } = data;
+  if (connections === undefined && guides === undefined) return;
+  if (data.endPoint !== undefined) {
+    throw new Error(
+      'A loft with an apex point takes no connections or guides; clear one of them.'
+    );
+  }
+  if (connections !== undefined && guides !== undefined) {
+    throw new Error(
+      'A loft guide fixes its connections; give the guide or the connections, not both.'
+    );
+  }
+  if (connections !== undefined) {
+    if (
+      !Array.isArray(connections) ||
+      connections.length !== (data.sections?.length ?? -1)
+    ) {
+      throw new Error('Loft connections name one vertex for every section.');
+    }
+    for (const vertex of connections as unknown[]) {
+      const v = vertex as Record<string, unknown> | null;
+      const curveEnd =
+        v?.kind === 'curve-end' &&
+        typeof v.entityId === 'string' &&
+        (v.end === 'start' || v.end === 'end');
+      const corner =
+        v?.kind === 'shape-corner' &&
+        typeof v.objectId === 'string' &&
+        Number.isInteger(v.index) &&
+        Number.isInteger(v.count);
+      if (!curveEnd && !corner) {
+        throw new Error(
+          'A loft connection names a curve end or a shape corner.'
+        );
+      }
+    }
+  }
+  if (guides !== undefined) {
+    if (!Array.isArray(guides) || guides.length !== 1) {
+      throw new Error(
+        'A loft takes one guide curve: one straight guide fixes its connections.'
+      );
+    }
+    if (data.mode !== 'ruled') {
+      throw new Error(
+        'A loft guide is built on a ruled loft only: a smooth loft through a guide has no exact construction yet. Switch the loft to Ruled, or clear the guide.'
+      );
+    }
+  }
+}
+
 export function loftSections(
   document: ProjectDocument,
   input: LoftInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   assertFeatureProfileProvenance(input, document);
+  validateLoftOptions(input);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3170,7 +3239,11 @@ export function loftSections(
       // loft stays byte-identical to one authored before apex points existed.
       ...(input.endPoint === undefined
         ? {}
-        : { endPoint: deepClone(input.endPoint) })
+        : { endPoint: deepClone(input.endPoint) }),
+      ...(input.connections === undefined
+        ? {}
+        : { connections: deepClone(input.connections) }),
+      ...(input.guides === undefined ? {} : { guides: deepClone(input.guides) })
     },
     suppliedIds(input.ids),
     input.bodyName
@@ -5954,7 +6027,7 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'backDraftAngleDeg'
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
-  loft: ['sections', 'mode', 'endPoint'],
+  loft: ['sections', 'mode', 'endPoint', 'connections', 'guides'],
   sweep: ['profile', 'path', 'mode', 'guide', 'construction'],
   'helical-sweep': [
     'profile',
@@ -6202,7 +6275,8 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   ],
   boolean: ['keepOriginals'],
   split: ['keepOriginal'],
-  loft: ['endPoint'],
+  // M04 (v136): a cleared connection list or guide keeps section starts.
+  loft: ['endPoint', 'connections', 'guides'],
   sweep: ['guide'],
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2'],
@@ -6389,6 +6463,8 @@ export function updateFeature(
   }
   if (feature.data.featureKind === 'extrude') {
     validateExtrudeExtent(feature.data, extrudeParamResolver(next));
+  } else if (feature.data.featureKind === 'loft') {
+    validateLoftOptions(feature.data);
   } else if (
     feature.data.featureKind === 'boolean' ||
     feature.data.featureKind === 'split'

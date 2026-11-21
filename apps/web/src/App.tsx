@@ -5124,7 +5124,8 @@ export function App() {
       }),
     track: trackKernelRefusal
   });
-  const { syncCandidate, syncParameterCandidate, syncOperationForCommit } = refusalHarvest;
+  const { syncCandidate, syncParameterCandidate, syncOperationForCommit } =
+    refusalHarvest;
   const reachProjectionBuilderRef = useRef(geometry.syncOnce);
   reachProjectionBuilderRef.current = geometry.syncOnce;
   const reachProjectionRequestRef = useRef<{
@@ -26233,7 +26234,15 @@ export function App() {
           bodyName,
           sections: request.sections,
           mode: request.mode,
-          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+          ...(request.endPoint ? { endPoint: request.endPoint } : {}),
+          ...(request.guides
+            ? {
+                guides: request.guides.map((guide) => ({
+                  sketchId: guide.sketchId,
+                  entityIds: guide.entityIds as EntityId[]
+                }))
+              }
+            : {})
         });
       case 'sweep':
         return commandFactories.sweepProfile({

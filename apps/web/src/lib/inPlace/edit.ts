@@ -395,6 +395,15 @@ export function inPlaceEditSeed(
         )
       );
       seed.options.shape = data.mode;
+      // M04 (v136): its guide line, as the path slot.
+      const guide = data.guides?.[0];
+      if (guide) {
+        seed.slots.path = guide.entityIds.flatMap((entityId) =>
+          ctx.curve(guide.sketchId, entityId)
+            ? [{ sketchId: guide.sketchId, entityId }]
+            : (missing.push('path'), [])
+        );
+      }
       if (data.endPoint) {
         // Its apex as stored, each coordinate on its own chip.
         seed.options.end = 'point';
@@ -1199,9 +1208,27 @@ export function inPlaceFeatureUpdate(
           featureKind: 'loft',
           sections: request.sections,
           mode: request.mode,
-          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+          ...(request.endPoint ? { endPoint: request.endPoint } : {}),
+          ...(request.guides ? { guides: request.guides as never } : {})
         },
-        ...(request.endPoint ? {} : { clearData: ['endPoint'] })
+        // M04 (v136): the card shows no connections; stored ones are kept
+        // while every section still has one and no guide replaces them.
+        ...((): { clearData?: string[] } => {
+          const stored = saved.featureKind === 'loft' ? saved : null;
+          const clear = [
+            ...(request.endPoint ? [] : ['endPoint']),
+            ...(request.guides || stored?.guides === undefined
+              ? []
+              : ['guides']),
+            ...(stored?.connections !== undefined &&
+            (request.guides !== undefined ||
+              request.endPoint !== undefined ||
+              stored.connections.length !== request.sections.length)
+              ? ['connections']
+              : [])
+          ];
+          return clear.length > 0 ? { clearData: clear } : {};
+        })()
       };
     case 'sweep':
       return {

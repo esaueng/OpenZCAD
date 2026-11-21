@@ -33,6 +33,8 @@ import {
   MAX_HELICAL_SWEEP_TURNS,
   parseSketchBoundaryToken,
   resolveSketchPromotionBoundaryTokens,
+  resolveSketchShapePointTarget,
+  type LoftConnectionVertex,
   type FaceWitnessV1,
   type FeatureNode,
   type ProjectDocument,
@@ -2114,6 +2116,122 @@ function apexVolumeSlack(unapexed: number, apexed: number): number {
  * lying wholly in the closing plane build a pyramid off the last section and
  * keep every earlier one as a zero-thickness web with no material in it.
  */
+/** M04 (v136): a loft connection's vertex, in world coordinates. */
+function loftConnectionPoint(
+  document: ProjectDocument,
+  section: SketchSectionReference,
+  vertex: LoftConnectionVertex,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  index: number
+): Vec3 {
+  const label = `Loft section ${index + 1}`;
+  const basis = sectionPlane(document, section, sketchBases, label);
+  const sketch = findSketch(document, section.sketchId)!;
+  const resolve = (value: ParamValue) =>
+    resolveParamValue(value, scope, 'loft connection', document.units);
+  if (vertex.kind === 'shape-corner') {
+    const objects = new Map<string, SketchObjectData>();
+    for (const id of sketch.objectIds) {
+      const node = document.nodes[id];
+      if (node?.kind === 'sketch-object') objects.set(id, node.data);
+    }
+    const resolved = resolveSketchShapePointTarget(vertex, objects, resolve);
+    if (resolved.status !== 'resolved') {
+      throw new Error(`${label} connection: ${resolved.reason}`);
+    }
+    return planePoint3(basis, resolved.point);
+  }
+  const node = document.nodes[vertex.entityId];
+  if (
+    node?.kind !== 'sketch-object' ||
+    !sketch.objectIds.includes(vertex.entityId)
+  ) {
+    throw new Error(
+      `${label} connection names a curve that is not in the section's sketch.`
+    );
+  }
+  const data = node.data;
+  if (data.objectKind === 'line') {
+    return planePoint3(
+      basis,
+      vertex.end === 'start'
+        ? { x: resolve(data.x1), y: resolve(data.y1) }
+        : { x: resolve(data.x2), y: resolve(data.y2) }
+    );
+  }
+  if (data.objectKind === 'arc') {
+    const angle =
+      (resolve(vertex.end === 'start' ? data.startAngleDeg : data.endAngleDeg) *
+        Math.PI) /
+      180;
+    const radius = resolve(data.radius);
+    return planePoint3(basis, {
+      x: resolve(data.centerX) + radius * Math.cos(angle),
+      y: resolve(data.centerY) + radius * Math.sin(angle)
+    });
+  }
+  throw new Error(
+    `${label} connection names a ${data.objectKind}; a connection is the end of a line or arc, or a corner of a rectangle or polygon.`
+  );
+}
+
+/**
+ * M04 (v136): where one straight loft guide meets each section's plane. A
+ * ruled loft's edge between those points is exactly the guide; the kernel
+ * refuses a point that is not a vertex of its section.
+ */
+function loftGuidePoints(
+  document: ProjectDocument,
+  sections: readonly SketchSectionReference[],
+  guide: SketchPathReference,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>
+): Vec3[] {
+  const sketch = findSketch(document, guide.sketchId);
+  const basis = sketch ? sketchBases.get(sketch.sketchId) : undefined;
+  if (!sketch || !basis) {
+    throw new Error('The loft guide sketch no longer resolves.');
+  }
+  const [entityId, ...rest] = guide.entityIds;
+  const node = entityId ? document.nodes[entityId] : undefined;
+  if (rest.length > 0 || node?.kind !== 'sketch-object') {
+    throw new Error('A loft guide is one sketch curve.');
+  }
+  if (node.data.objectKind !== 'line') {
+    throw new Error(
+      'A loft guide must be a straight line: a curved guide has no exact construction yet. Draw the guide as a line, or clear it.'
+    );
+  }
+  const data = node.data;
+  const resolve = (value: ParamValue) =>
+    resolveParamValue(value, scope, 'loft guide', document.units);
+  const a = planePoint3(basis, { x: resolve(data.x1), y: resolve(data.y1) });
+  const b = planePoint3(basis, { x: resolve(data.x2), y: resolve(data.y2) });
+  const along = { x: b.x - a.x, y: b.y - a.y, z: b.z - a.z };
+  return sections.map((section, index) => {
+    const plane = sectionPlane(
+      document,
+      section,
+      sketchBases,
+      `Loft section ${index + 1}`
+    );
+    const n = plane.normal;
+    const rise = n.x * along.x + n.y * along.y + n.z * along.z;
+    const t =
+      (n.x * (plane.origin.x - a.x) +
+        n.y * (plane.origin.y - a.y) +
+        n.z * (plane.origin.z - a.z)) /
+      rise;
+    if (!Number.isFinite(t) || t < -1e-9 || t > 1 + 1e-9) {
+      throw new Error(
+        `The loft guide does not reach section ${index + 1}: a guide runs from the first section to the last, through each.`
+      );
+    }
+    return { x: a.x + along.x * t, y: a.y + along.y * t, z: a.z + along.z * t };
+  });
+}
+
 export function buildLoft(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -2142,6 +2260,41 @@ export function buildLoft(
   );
   const handles = Uint32Array.from(faces);
   const endPoint = feature.data.endPoint;
+  const { connections, guides } = feature.data;
+  if (connections !== undefined || guides !== undefined) {
+    // M04 (v136): the vertices each section's correspondence starts from,
+    // named or where the one straight guide meets each section's plane; the
+    // kernel refuses a point that is not a vertex of its section.
+    const points =
+      connections !== undefined
+        ? connections.map((vertex, index) =>
+            loftConnectionPoint(
+              document,
+              sections[index]!,
+              vertex,
+              scope,
+              sketchBases,
+              index
+            )
+          )
+        : loftGuidePoints(document, sections, guides![0]!, scope, sketchBases);
+    const options = {
+      ruled: feature.data.mode !== 'smooth',
+      connections: points.map((point) => [point.x, point.y, point.z])
+    };
+    const solid = validatedLoft(
+      kernel,
+      () => kernel.loftWithOptions(handles, JSON.stringify(options)),
+      'Loft'
+    );
+    return {
+      solids: [solid],
+      lineage: remusHashOnlyLineage(
+        'sweep',
+        'Loft section topology has no verified output evolution relation.'
+      )
+    };
+  }
   if (endPoint === undefined) {
     const mode = feature.data.mode;
     const solid = validatedLoft(
