@@ -6,6 +6,7 @@ import {
 } from '@openzcad/command-system';
 import { createProjectDocument, findSketch } from '@openzcad/document-core';
 import {
+  createSketchCompositeCenterTarget,
   createSketchCompositeCornerTarget,
   createSketchCompositeSideTarget,
   toSketchReferenceAnnotationId,
@@ -15,7 +16,8 @@ import {
 import {
   centerRectangleShape,
   compositeCommands,
-  cornerRectangleShape
+  cornerRectangleShape,
+  slotShape
 } from './composites';
 import { collectSketchSnapTargets, SKETCH_SNAP_LIMITS } from './session';
 import { sketchDimensionAnnotations } from './dimensionAnnotations';
@@ -262,4 +264,78 @@ describe('composite dimensions and modify boundaries', () => {
         expect(plan.reason).toMatch(/reference dimension/i);
     }
   );
+});
+
+describe('S02-D composite centre snaps', () => {
+  it('names a centre rectangle diagonal midpoint as the shape centre without adding a snap', () => {
+    const f = fixture(true);
+    const ordinary = collectSketchSnapTargets(f.objects, resolve);
+    const named = collectSketchSnapTargets(f.objects, resolve, [f.composite]);
+    expect(named).toHaveLength(ordinary.length);
+    const centres = named.filter(
+      (target) => target.label === 'Rectangle 1 · Centre'
+    );
+    expect(centres.length).toBeGreaterThan(0);
+    // The diagonals' crossing, which outranks their midpoints, is named too.
+    expect(centres.map((target) => target.kind)).toContain('intersection');
+    for (const centre of centres)
+      expect(centre).toMatchObject({
+        x: 10,
+        y: 6,
+        compositeTarget: createSketchCompositeCenterTarget(f.composite)
+      });
+    // A corner rectangle has no helper at its centre: nothing is invented.
+    const corner = fixture(false);
+    expect(
+      collectSketchSnapTargets(corner.objects, resolve, [
+        corner.composite
+      ]).some((target) => target.label?.endsWith('· Centre'))
+    ).toBe(false);
+  });
+});
+
+describe('S02-D slot centre references', () => {
+  it('measures a slot centre, whose ends are arcs', () => {
+    const commit = compositeCommands(
+      slotShape({ x: 0, y: 0 }, { x: 20, y: 0 }, 4)!,
+      {
+        kind: 'new-sketch',
+        name: 'Slot',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 }
+      }
+    );
+    const manager = new CommandManager(
+      createProjectDocument('Slot centre', toUserId('user_test'))
+    );
+    manager.execute(composeCommands(commit.label, commit.commands));
+    const sketch = findSketch(manager.document, commit.sketchId)!;
+    const slot = sketch.composites![0]!;
+    const centreLine = slot.helperIds![0]!;
+    manager.execute(
+      commandFactories.addSketchReferenceDimension({
+        sketchId: commit.sketchId,
+        data: {
+          dimensionKind: 'distance',
+          a: createSketchCompositeCenterTarget(slot),
+          b: { objectId: centreLine, point: 'start' }
+        }
+      })
+    );
+    const after = findSketch(manager.document, commit.sketchId)!;
+    const objects = after.objectIds.map((id) => {
+      const node = manager.document.nodes[id]!;
+      if (node.kind !== 'sketch-object') throw new Error('Missing member');
+      return { id, data: node.data };
+    });
+    const [label] = sketchDimensionAnnotations(
+      objects,
+      [],
+      (value) => (typeof value === 'number' ? value : undefined),
+      'mm',
+      undefined,
+      after.referenceDimensions,
+      after.composites
+    );
+    expect(label?.label).toBe('(10 mm)');
+  });
 });

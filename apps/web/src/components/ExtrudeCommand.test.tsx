@@ -363,6 +363,7 @@ describe('in-place Extrude bar', () => {
       endCondition: 'blind',
       throughAllSide: 'forward',
       faceOffset: '0',
+      startOffset: '0',
       draftAngle: '0'
     } as const;
     expect(extrudeChangedInput(base, base)).toBeNull();
@@ -675,14 +676,16 @@ describe('in-place Extrude bar', () => {
     expect(extrudeShownValues({ extent: 'blind', symmetric: false })).toEqual([
       'distance',
       'backDistance',
+      'startOffset',
       'draftAngle'
     ]);
     expect(extrudeShownValues({ extent: 'blind', symmetric: true })).toEqual([
       'distance',
+      'startOffset',
       'draftAngle'
     ]);
     expect(extrudeShownValues({ extent: 'to-face', symmetric: false })).toEqual(
-      ['faceOffset', 'draftAngle']
+      ['faceOffset', 'startOffset', 'draftAngle']
     );
     expect(
       extrudeShownValues({ extent: 'through-all', symmetric: false })
