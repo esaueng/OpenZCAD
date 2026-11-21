@@ -619,3 +619,12 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     }
   });
 });
+
+describe('exact sweep path refusals (M04)', () => {
+  it('names neither corner mode as the fix when the path turns back on itself', () => {
+    const { message } = plainRefusal(
+      'exact sweep path turns back on itself at joint 1'
+    );
+    expect(message).toContain('neither a mitre nor a round corner');
+  });
+});

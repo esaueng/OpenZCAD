@@ -1684,7 +1684,10 @@ const sweep: InPlaceToolSpec = {
       note: 'The radius of the arc that rounds each corner of the path',
       // No handle of its own: typed in the bar's Options.
       inOptions: true,
-      when: (state) => !sampledSweep(state) && state.options.corner === 'round'
+      when: (state) =>
+        !sampledSweep(state) &&
+        state.options.corner === 'round' &&
+        state.options.orientation !== 'parallel'
     }
   ],
   options: [
@@ -1805,7 +1808,8 @@ const sweep: InPlaceToolSpec = {
           ...(options.orientation === 'parallel'
             ? { orientation: 'parallel' as const }
             : {}),
-          ...(options.corner === 'round'
+          // Parallel hides the Corners row, so only a visible choice goes.
+          ...(options.corner === 'round' && options.orientation !== 'parallel'
             ? { cornerRadius: values.cornerRadius ?? 2 }
             : {})
         };

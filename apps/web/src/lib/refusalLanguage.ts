@@ -362,7 +362,7 @@ const TRANSLATIONS: readonly Translation[] = [
   {
     pattern: /sweep path turns back on itself/i,
     sentence:
-      'The sweep path turns back on itself; a corner that sharp has no mitre.'
+      'The sweep path turns back on itself: neither a mitre nor a round corner can follow a corner that sharp.'
   },
   {
     pattern: /too short for its mitred corners/i,

@@ -2186,6 +2186,20 @@ describe('an untouched edit writes the feature back as stored', () => {
       guide: { sketchId: SKETCH, entityIds: ['rail1'] },
       cornerRadius: 3
     });
+    // Beside a rail, Parallel still hides the Corners row: the stale round
+    // choice is not sent, so validation names the rail, not the corner.
+    const railParallel = round(railed, 'parallel');
+    expect(railParallel).toMatchObject({ orientation: 'parallel' });
+    expect(railParallel).not.toHaveProperty('cornerRadius');
+    // Parallel hides the corner radius field too, so an unused value there
+    // cannot hold Done back.
+    const radius = spec.values.find((value) => value.id === 'cornerRadius')!;
+    const state = (options: Record<string, string>) => ({
+      options: { build: 'exact', corner: 'round', ...options },
+      numbers: {}
+    });
+    expect(radius.when!(state({}))).toBe(true);
+    expect(radius.when!(state({ orientation: 'parallel' }))).toBe(false);
   });
 
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
