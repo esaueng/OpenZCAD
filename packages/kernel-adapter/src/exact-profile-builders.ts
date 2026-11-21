@@ -2195,8 +2195,13 @@ function loftGuidePoints(
   }
   const [entityId, ...rest] = guide.entityIds;
   const node = entityId ? document.nodes[entityId] : undefined;
-  if (rest.length > 0 || node?.kind !== 'sketch-object') {
-    throw new Error('A loft guide is one sketch curve.');
+  if (
+    rest.length > 0 ||
+    !entityId ||
+    node?.kind !== 'sketch-object' ||
+    !sketch.objectIds.includes(entityId)
+  ) {
+    throw new Error('A loft guide is one curve of its guide sketch.');
   }
   if (node.data.objectKind !== 'line') {
     throw new Error(

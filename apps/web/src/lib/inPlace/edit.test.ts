@@ -1996,6 +1996,40 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(cleared?.clearData).toEqual(['endPoint', 'guides']);
   });
 
+  it('loft: stored connections stay with unchanged sections and clear when the sections are reordered (M04, v136)', () => {
+    const sections = [
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s1'] }
+      },
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s2'] }
+      }
+    ];
+    const saved = feature({
+      featureKind: 'loft',
+      sections,
+      mode: 'ruled',
+      connections: [
+        { kind: 'line-end', entityId: 's1', end: 'start' },
+        { kind: 'line-end', entityId: 's2', end: 'start' }
+      ] as never
+    });
+    const kept = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections,
+      mode: 'ruled'
+    });
+    expect(kept?.clearData).toEqual(['endPoint']);
+    const reordered = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections: [sections[1]!, sections[0]!],
+      mode: 'ruled'
+    });
+    expect(reordered?.clearData).toEqual(['endPoint', 'connections']);
+  });
+
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
     const sweep = (entityIds: string[]): FeatureData => ({
       featureKind: 'sweep',

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addSketchFeature,
   assertDocumentContentCommandSchema,
+  assertDocumentContentSchema,
   createProjectDocument,
   findSketch,
   loftSections,
@@ -13,11 +14,14 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { assertFeatureSketchProjectionsValid } from '../packages/kernel-adapter/src/exact-sketch-projection-failures';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type BodyId,
+  type FeatureData,
   type ProjectDocument,
+  type SketchId,
   type SketchObjectData,
   type SketchSectionReference
 } from '@openzcad/shared';
@@ -233,6 +237,93 @@ describe(
           >[0])
         ).toThrow(/136/);
       }
+    });
+
+    it('refuses a guide curve that is not in its guide sketch', async () => {
+      const start = stack('Wrong sketch');
+      const lofted = withGuide(start, {
+        objectKind: 'line',
+        x1: -1,
+        y1: 0,
+        x2: 1,
+        y2: -10
+      });
+      // Point the guide's sketch at the line, but its entity at a section's
+      // rectangle: a stale or hand-edited reference.
+      const [featureId, node] = Object.entries(lofted.document.nodes).find(
+        ([, entry]) =>
+          entry.kind === 'feature' && entry.data.featureKind === 'loft'
+      )!;
+      if (node.kind !== 'feature' || node.data.featureKind !== 'loft')
+        throw new Error('Expected the loft.');
+      const sectionObject = findSketch(
+        lofted.document,
+        start.sections[0]!.sketchId
+      )!.objectIds[0]!;
+      const guide = node.data.guides![0]!;
+      const document: ProjectDocument = {
+        ...lofted.document,
+        nodes: {
+          ...lofted.document.nodes,
+          [featureId]: {
+            ...node,
+            data: {
+              ...node.data,
+              guides: [{ ...guide, entityIds: [sectionObject] }]
+            }
+          }
+        }
+      };
+      const { document: rebuilt, bodyId } = await built({
+        document,
+        bodyId: lofted.bodyId
+      });
+      expect(rebuilt.derived.bodyRepresentations[bodyId]).toBeUndefined();
+      const [warning] = rebuilt.derived.featureWarnings ?? [];
+      expect(warning!.message).toContain(
+        'A loft guide is one curve of its guide sketch'
+      );
+    });
+
+    it('refuses a loft whose guide sketch failed to solve, before building', () => {
+      const data = {
+        featureKind: 'loft',
+        sections: [
+          { sketchId: 'sketch_a', profile: { all: true } },
+          { sketchId: 'sketch_b', profile: { all: true } }
+        ],
+        mode: 'ruled',
+        guides: [{ sketchId: 'sketch_guide', entityIds: ['g'] }]
+      } as unknown as FeatureData;
+      expect(() =>
+        assertFeatureSketchProjectionsValid(
+          {
+            sketchProjectionFailures: new Map([
+              ['sketch_guide' as SketchId, 'unsatisfied']
+            ])
+          },
+          data
+        )
+      ).toThrow(/linked projections/);
+      expect(() => assertFeatureSketchProjectionsValid({}, data)).not.toThrow();
+    });
+
+    it('refuses a stored loft with connections or a guide in a document older than v136', () => {
+      const lofted = withGuide(stack('Stored'), {
+        objectKind: 'line',
+        x1: -1,
+        y1: 0,
+        x2: 1,
+        y2: -10
+      });
+      expect(() => assertDocumentContentSchema(lofted.document)).not.toThrow();
+      expect(() =>
+        assertDocumentContentSchema({
+          ...lofted.document,
+          schemaVersion: 135,
+          commandLog: []
+        } as unknown as ProjectDocument)
+      ).toThrow(/136/);
     });
 
     it('refuses a guide on a smooth loft and connections with an apex before building', () => {

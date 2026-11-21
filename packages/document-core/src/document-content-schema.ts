@@ -1408,6 +1408,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (
+      node.kind === 'feature' &&
+      node.data.featureKind === 'loft' &&
+      (node.data.connections !== undefined || node.data.guides !== undefined)
+    )
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        136,
+        'Loft connections and guides'
+      );
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
       assertImportedStepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')

@@ -1212,9 +1212,19 @@ export function inPlaceFeatureUpdate(
           ...(request.guides ? { guides: request.guides as never } : {})
         },
         // M04 (v136): the card shows no connections; stored ones are kept
-        // while every section still has one and no guide replaces them.
+        // only while the sections are the same, in the same order, and no
+        // guide replaces them. A connection names a vertex of the section at
+        // its index, so a reorder or a swapped section would move it.
         ...((): { clearData?: string[] } => {
           const stored = saved.featureKind === 'loft' ? saved : null;
+          const sameSections =
+            stored !== null &&
+            stored.sections.length === request.sections.length &&
+            stored.sections.every(
+              (section, index) =>
+                JSON.stringify(section) ===
+                JSON.stringify(request.sections[index])
+            );
           const clear = [
             ...(request.endPoint ? [] : ['endPoint']),
             ...(request.guides || stored?.guides === undefined
@@ -1223,7 +1233,7 @@ export function inPlaceFeatureUpdate(
             ...(stored?.connections !== undefined &&
             (request.guides !== undefined ||
               request.endPoint !== undefined ||
-              stored.connections.length !== request.sections.length)
+              !sameSections)
               ? ['connections']
               : [])
           ];
