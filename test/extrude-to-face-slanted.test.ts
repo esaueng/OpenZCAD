@@ -308,6 +308,38 @@ describe('F01 to a slanted face', { timeout: 60_000 }, () => {
       );
     });
 
+    it('reaches a slanted face with a flaring draft whose walls meet it past the profile (re-check)', async () => {
+      // A face turned 30°: the outward 1.2° draft's walls meet it later than
+      // the profile's own corners do. Bounded between the straight post and
+      // the post flared to its highest corner.
+      const result = await post(30, { draftAngleDeg: -1.2 });
+      const derived = await derive(result.document);
+      expect(derived.warnings).toEqual([]);
+      const volume = derived.bodyRepresentations[result.bodyId]!.volume;
+      expect(volume).toBeGreaterThan(AREA * 25);
+      const t = tan(1.2);
+      const top = 25 + 2 * tan(30) * 1.1;
+      expect(volume).toBeLessThan((4 + 2 * top * t) ** 2 * top);
+    });
+
+    it('chooses the way for a round profile beside a level face middle, then the kernel refuses its elliptical section by name (re-check)', async () => {
+      // Turned −30° through (10, 10, 0): the plane rises over y < 10, and a
+      // circle there sits wholly under it. The way is no longer refused as
+      // unclear; the exact split of a round wall by a slanted plane (an
+      // ellipse) is not in the kernel yet, and says so.
+      const result = await post(-30, {}, 0, 0, {
+        objectKind: 'circle',
+        centerX: 10,
+        centerY: 3,
+        radius: 1.5
+      } as never);
+      const warnings = (await derive(result.document)).warnings.join('\n');
+      expect(warnings).not.toMatch(/unresolved|unclear/);
+      expect(warnings).toMatch(
+        /Feature "Post": Extrude "Post" could not be cut at the slanted face: .*ellipse/
+      );
+    });
+
     it('refuses a face that crosses the profile where it starts, by name', async () => {
       // Turned 80° through (10, 10, 1): the plane passes z = 0 inside the
       // square.

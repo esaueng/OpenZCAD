@@ -25,5 +25,7 @@ bounds, a plane crossing the profile, a turned face followed, and a face
 turned 87° unresolved; editor rules),
 `test/extrude-to-face-draft.test.ts` (an 88° turn is unresolved) and the
 `@ci-smoke` case in `test/e2e/extrude-to-face-draft.spec.ts` (400 on a face
-turned 10°, 351.26 with 3 mm short, undo to 400). Remaining: multi-target
+turned 10°, 351.26 with 3 mm short, undo to 400). A round wall cut by a slanted plane has an elliptical section, which the
+kernel's exact split does not build yet: that refuses by name. Remaining:
+a round profile up to a slanted face (kernel), multi-target
 and add through-all, and to-face on a curved face.

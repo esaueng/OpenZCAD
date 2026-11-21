@@ -10,6 +10,7 @@ import type { ExactShape } from './exact-types';
 import { buildSweep } from './exact-profile-builders';
 import { hasFaceOnPlane } from './extrude-to-next';
 import {
+  resolveExtrudeDraftDeg,
   resolveExtrudeStartOffset,
   resolveToFaceOffset
 } from './extrude-options';
@@ -133,7 +134,10 @@ export function planSlantedToFace(
   if (heights.length > 0 && heights.every((h) => h > 0)) sign = 1;
   else if (heights.length > 0 && heights.every((h) => h < 0)) sign = -1;
   else {
-    const middle = dot(sub(frame.origin, start), n);
+    // Mixed: the plane's height over the middle of the footprint decides
+    // (the mean of its box corners); the split refuses a plane that truly
+    // crosses the profile.
+    const middle = heights.reduce((a, b) => a + b, 0) / heights.length;
     if (!(Math.abs(middle) > 1e-9 * Math.max(1, Math.abs(middle)))) {
       throw unresolved(
         'the slanted face crosses the start plane under the profile, so which way to extrude is unclear.'
@@ -155,9 +159,22 @@ export function planSlantedToFace(
       'The slanted face lies behind where the extrusion starts over the whole profile; move the start or pick another face.'
     );
   }
-  // A hair past the face plane over the whole footprint: enough for the
-  // split to cut through, and no further for a draft to close up in.
-  const length = reach + 1e-4 * Math.max(1, reach);
+  // A flaring draft widens the section by tan|draft| per unit of height, and
+  // across the footprint the face plane rises at most `slope` per unit, so
+  // its walls meet the plane by reach / (1 − slope · tan|draft|): the sweep
+  // reaches that, a hair past, and no further for a narrowing draft to close
+  // up in. A flare that outruns the face never meets it.
+  const draft = resolveExtrudeDraftDeg(data, scope, document);
+  const slope =
+    Math.sqrt(Math.max(0, 1 - dot(m, n) ** 2)) / Math.abs(dot(m, n));
+  const flare = draft < 0 ? Math.tan((-draft * Math.PI) / 180) : 0;
+  if (!(slope * flare < 1 - 1e-9)) {
+    throw new Error(
+      `The draft flares out faster than the slanted face rises, so its walls never meet it; reduce the draft or pick another face.`
+    );
+  }
+  const walls = reach / (1 - slope * flare);
+  const length = walls + 1e-4 * Math.max(1, walls);
   const {
     endCondition: _end,
     toFace: _face,
