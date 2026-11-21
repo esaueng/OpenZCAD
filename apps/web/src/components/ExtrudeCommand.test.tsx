@@ -364,7 +364,8 @@ describe('in-place Extrude bar', () => {
       throughAllSide: 'forward',
       faceOffset: '0',
       startOffset: '0',
-      draftAngle: '0'
+      draftAngle: '0',
+      backDraftAngle: '0'
     } as const;
     expect(extrudeChangedInput(base, base)).toBeNull();
     expect(extrudeChangedInput(base, { ...base, faceOffset: '2' })).toBe(
@@ -549,19 +550,31 @@ describe('in-place Extrude bar', () => {
     );
   });
 
-  it('refuses a draft beside Symmetric by name and holds Done', async () => {
+  it('drafts each side of a symmetric extrude, and refuses a back draft off it', async () => {
     const user = userEvent.setup();
-    const { distanceSetterRef, commandRef } = setup();
+    const { distanceSetterRef, commandRef, onSubmit } = setup();
     act(() => distanceSetterRef.current?.(10));
+    act(() => commandRef.current?.setValue('backDraftAngle', '3'));
+    expect(
+      screen.getByText(
+        'Back draft tapers the side behind the sketch plane; turn on Symmetric or give a back distance first.'
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
     await openOptions(user);
     await user.click(choice('Sides', 'Symmetric'));
     act(() => commandRef.current?.setValue('draftAngle', '4'));
     expect(
-      screen.getByText(
-        'Draft tapers a one-sided extrusion; turn off Symmetric to draft it.'
-      )
-    ).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Done' })).toBeDisabled();
+      screen.getByRole('button', { name: 'Back draft angle' })
+    ).toHaveTextContent('3°');
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        symmetric: true,
+        draftAngleDeg: 4,
+        backDraftAngleDeg: 3
+      })
+    );
   });
 
   it('offers Through all on Cut only, with its direction, and no draft', async () => {
@@ -682,7 +695,8 @@ describe('in-place Extrude bar', () => {
     expect(extrudeShownValues({ extent: 'blind', symmetric: true })).toEqual([
       'distance',
       'startOffset',
-      'draftAngle'
+      'draftAngle',
+      'backDraftAngle'
     ]);
     expect(extrudeShownValues({ extent: 'to-face', symmetric: false })).toEqual(
       ['faceOffset', 'startOffset', 'draftAngle']

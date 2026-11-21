@@ -71,6 +71,8 @@ import {
   validateGeneratedSolid
 } from './exact-shape-utils';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { fuseUniformSolid } from './exact-boolean-helpers';
+import { requireValidSolid } from './kernel-validation';
 import {
   GEOMETRY_EPSILON,
   cross,
@@ -2824,6 +2826,17 @@ export function buildSweep(
       );
     }
   }
+  if (feature.data.featureKind === 'extrude') {
+    const twoSided = twoSidedDraftedSweep(
+      kernel,
+      document,
+      feature,
+      scope,
+      sketchBases,
+      warn
+    );
+    if (twoSided) return twoSided;
+  }
   const shape = buildStraightSweep(
     kernel,
     document,
@@ -2858,6 +2871,118 @@ export function buildSweep(
       angle,
       `Extrude "${feature.name}"`
     ),
+    lineage: remusHashOnlyLineage('sweep', DRAFTED_EXTRUDE_HASH_ONLY_REASON)
+  };
+}
+
+/**
+ * F01 (v126): a symmetric or two-sided blind extrude with a draft on either
+ * side, or null when it is not one (the one-sided path builds it). Each side
+ * is swept one-sided from the start plane on its own, tapered by its own
+ * angle (`draftAngleDeg` the side the distance runs to, `backDraftAngleDeg`
+ * the other) with the start plane as the neutral plane, and the two halves,
+ * which share the profile face there exactly, are fused into one solid per
+ * profile cell. A side whose angle is zero keeps straight walls. Any half
+ * the draft refuses, or a pair the exact fuse refuses, refuses the feature
+ * by name; nothing is approximated.
+ */
+function twoSidedDraftedSweep(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  feature: FeatureNode,
+  scope: Record<string, number>,
+  sketchBases: ReadonlyMap<SketchId, PlaneBasis>,
+  warn: (message: string) => void
+): ExactShape | null {
+  if (feature.data.featureKind !== 'extrude') return null;
+  const data = feature.data;
+  const front = resolveExtrudeDraftDeg(data, scope, document, 'front');
+  const back = resolveExtrudeDraftDeg(data, scope, document, 'back');
+  if (front === 0 && back === 0) return null;
+  const distance = resolveParamValue(
+    data.distance,
+    scope,
+    'distance',
+    document.units
+  );
+  const backDistance =
+    data.backDistance === undefined
+      ? 0
+      : resolveParamValue(
+          data.backDistance,
+          scope,
+          'back distance',
+          document.units
+        );
+  if (!data.symmetric && !(backDistance > 0)) {
+    // One-sided: the ordinary draft path, which a back draft cannot reach
+    // (the document refuses one without a back side; so does this).
+    if (back !== 0) {
+      throw new Error(
+        `Extrude "${feature.name}" has a back draft but no back side to taper.`
+      );
+    }
+    return null;
+  }
+  if (data.symmetric && backDistance !== 0) {
+    throw new Error(EXTRUDE_SIDES_CONFLICT_MESSAGE);
+  }
+  const sign = distance < 0 ? -1 : 1;
+  const ahead = data.symmetric ? distance / 2 : distance;
+  const behind = data.symmetric ? Math.abs(distance) / 2 : backDistance;
+  const basis = sketchBases.get(data.sketchId);
+  if (!basis) throw new Error('Extrude sketch plane did not resolve.');
+  const label = `Extrude "${feature.name}"`;
+  const half = (span: number, angle: number, side: 1 | -1): number[] => {
+    const {
+      symmetric: _symmetric,
+      backDistance: _backDistance,
+      draftAngleDeg: _draftAngleDeg,
+      backDraftAngleDeg: _backDraftAngleDeg,
+      startOffset: _startOffset,
+      ...rest
+    } = data;
+    const solids = buildStraightSweep(
+      kernel,
+      document,
+      { ...feature, data: { ...rest, distance: span } },
+      scope,
+      sketchBases,
+      warn
+    ).solids;
+    return angle === 0
+      ? solids
+      : draftExtrudedSolids(
+          kernel,
+          solids,
+          basis,
+          scale(basis.normal, side),
+          angle,
+          `${label} (${side === sign ? 'front' : 'back'} side)`
+        );
+  };
+  const aheadSolids = half(ahead, front, sign);
+  const behindSolids = half(-sign * behind, back, -sign as 1 | -1);
+  if (aheadSolids.length !== behindSolids.length) {
+    throw new Error(
+      `${label} could not pair its two drafted sides: they swept ${aheadSolids.length} and ${behindSolids.length} solids.`
+    );
+  }
+  const solids = aheadSolids.map((solid, index) => {
+    const fused = fuseUniformSolid(
+      kernel,
+      [solid, behindSolids[index]!],
+      [`${label} front side`, `${label} back side`]
+    );
+    requireValidSolid(
+      kernel,
+      fused,
+      `${label} with a draft on each side is not a valid closed solid; reduce the angles or the distances.`
+    );
+    return fused;
+  });
+  return {
+    solids,
     lineage: remusHashOnlyLineage('sweep', DRAFTED_EXTRUDE_HASH_ONLY_REASON)
   };
 }

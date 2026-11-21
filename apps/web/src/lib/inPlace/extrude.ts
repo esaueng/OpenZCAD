@@ -63,13 +63,12 @@ export function extrudeTakesBackDistance(state: ExtrudeHandleState): boolean {
 }
 
 /**
- * Whether a draft applies: it tapers a one-sided extrusion only, so not a
- * through-all cut, and a blind one only off Symmetric with no back distance.
+ * Whether a draft applies: every extent but a through-all cut. On a
+ * symmetric or two-sided extrusion the rig drafts the side the distance
+ * runs to; the other side's draft is typed (F01, v126).
  */
 export function extrudeTakesDraft(state: ExtrudeHandleState): boolean {
-  if (state.extent === 'through-all') return false;
-  if (state.extent === 'to-face') return true;
-  return !state.symmetric && !(state.backDistance > 0);
+  return state.extent !== 'through-all';
 }
 
 /**

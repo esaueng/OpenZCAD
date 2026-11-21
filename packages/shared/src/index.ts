@@ -496,7 +496,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // cannot read those targets and would refuse or drop the annotation, so it
 // must refuse the document. Builds on v121 (#1842); v122–v124 are claimed
 // by the open F01 PRs #1846, #1847 and #1851.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 125 as const;
+// v126 adds F01 per-side draft (`draftAngleDeg` on a symmetric or two-sided
+// blind extrude, and `backDraftAngleDeg` for its other side): each side
+// tapers by its own angle from the start plane. An older client refuses a
+// draft on such an extrude and has no back draft, so it must refuse the
+// document. Builds on v125 (#1860); claimed as v122, renumbered when #1860
+// landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 126 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2509,11 +2515,19 @@ export type FeatureData =
        * normal. Positive tapers the walls inward as the extrusion leaves the
        * sketch plane (the profile is the widest section), negative flares
        * them outward. The sketch plane is the neutral plane, so the profile
-       * itself never changes. Absent or zero means straight walls. A one-sided
-       * blind or to-face extrusion only: symmetric, two-sided and through-all
-       * extents refuse it until per-side draft lands.
+       * itself never changes. Absent or zero means straight walls. From
+       * schema v126 a symmetric or two-sided blind extrusion takes it for the
+       * side its distance runs to; through all refuses it.
        */
       draftAngleDeg?: ParamValue;
+      /**
+       * F01 (schema v126): the draft of the side behind the start plane (the
+       * back distance, or a symmetric extrusion's other half), in degrees
+       * from the sketch normal. Positive narrows that side as it leaves the
+       * start plane, as `draftAngleDeg` does its side. A one-sided extrusion
+       * has no back side and refuses it. Absent or zero means straight walls.
+       */
+      backDraftAngleDeg?: ParamValue;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the

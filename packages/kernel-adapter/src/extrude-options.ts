@@ -195,23 +195,27 @@ export function toFaceSweepFeature(
 
 /**
  * The draft angle a feature carries, resolved; zero for straight walls. An
- * expression resolves here, so its range is checked here too.
+ * expression resolves here, so its range is checked here too. `side` picks
+ * the back side's own draft (F01, v126) instead of the front's.
  */
 export function resolveExtrudeDraftDeg(
   data: ExtrudeData,
   scope: Record<string, number>,
-  document: ProjectDocument
+  document: ProjectDocument,
+  side: 'front' | 'back' = 'front'
 ): number {
-  if (data.draftAngleDeg === undefined) return 0;
+  const stored = side === 'back' ? data.backDraftAngleDeg : data.draftAngleDeg;
+  const label = side === 'back' ? 'Back draft angle' : 'Draft angle';
+  if (stored === undefined) return 0;
   const angle = resolveParamValue(
-    data.draftAngleDeg,
+    stored,
     scope,
-    'draft angle',
+    label.toLowerCase(),
     document.units
   );
   if (!Number.isFinite(angle) || Math.abs(angle) >= MAX_EXTRUDE_DRAFT_DEG) {
     throw new Error(
-      `Draft angle must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
+      `${label} must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
     );
   }
   return angle;
