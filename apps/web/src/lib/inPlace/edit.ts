@@ -429,6 +429,9 @@ export function inPlaceEditSeed(
       const build = data.construction === 'in-place' ? 'exact' : 'sampled';
       seed.options.saved = build;
       seed.options.build = build;
+      // M04 (v132): the twist and end scale as stored, expressions and all.
+      value('twist', data.twistDeg);
+      value('endScale', data.endScale);
       break;
     }
     case 'rib': {
@@ -1225,11 +1228,30 @@ export function inPlaceFeatureUpdate(
             : {}),
           ...(request.construction
             ? { construction: request.construction }
-            : {})
+            : {}),
+          ...(request.twistDeg === undefined
+            ? {}
+            : { twistDeg: request.twistDeg }),
+          ...(request.endScale === undefined
+            ? {}
+            : { endScale: request.endScale })
         },
         // An absent construction keeps a sampled sweep sampled. Exact
-        // construction is written explicitly and cannot be cleared.
-        ...(request.guide ? {} : { clearData: ['guide'] })
+        // construction is written explicitly and cannot be cleared; an
+        // absent rail, twist or scale clears what was stored (M04, v132).
+        ...((): { clearData?: string[] } => {
+          const stored = saved.featureKind === 'sweep' ? saved : null;
+          const clear = [
+            ...(request.guide ? [] : ['guide']),
+            ...(request.twistDeg === undefined && stored?.twistDeg !== undefined
+              ? ['twistDeg']
+              : []),
+            ...(request.endScale === undefined && stored?.endScale !== undefined
+              ? ['endScale']
+              : [])
+          ];
+          return clear.length ? { clearData: clear } : {};
+        })()
       };
     case 'datum-point':
     case 'datum-csys':

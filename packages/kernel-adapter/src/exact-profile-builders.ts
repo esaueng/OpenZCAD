@@ -2582,11 +2582,36 @@ function guidedSweepSolid(
 }
 
 /**
+ * M04 (v132): a sweep's twist (radians) and end scale, resolved; `null`
+ * when it has neither, so the plain `sweepExact` call is unchanged.
+ */
+export function resolveSweepOptions(
+  data: { twistDeg?: ParamValue; endScale?: ParamValue },
+  scope: Record<string, number>
+): { twist: number; endScale: number } | null {
+  const twistDeg =
+    data.twistDeg === undefined
+      ? 0
+      : resolveParamValue(data.twistDeg, scope, 'twist');
+  const endScale =
+    data.endScale === undefined
+      ? 1
+      : resolveParamValue(data.endScale, scope, 'end scale');
+  if (!(endScale > 0)) {
+    throw new Error('Sweep end scale must be greater than zero.');
+  }
+  if (twistDeg === 0 && endScale === 1) return null;
+  return { twist: (twistDeg * Math.PI) / 180, endScale };
+}
+
+/**
  * M04: the exact in-place sweep. The profile stays where it is and the
  * kernel carries it along the path's lines and whole arcs as exact surfaces
  * (`sweepExact`); a corner, a fold or a self-crossing is refused by name and
  * never sampled instead. A guide rail has no exact construction, so it is
- * refused rather than rebuilt as facets.
+ * refused rather than rebuilt as facets. A twist or end scale (v132) goes to
+ * `sweepExactWithOptions`, which builds it along a straight path with the
+ * profile square to it and refuses anything else by name.
  */
 function exactSweepSolid(
   kernel: RemusKernel,
@@ -2594,6 +2619,7 @@ function exactSweepSolid(
   face: number,
   path: SketchPathReference,
   guided: boolean,
+  options: { twist: number; endScale: number } | null,
   scope: Record<string, number>,
   sketchBases: ReadonlyMap<SketchId, PlaneBasis>
 ): number {
@@ -2610,6 +2636,13 @@ function exactSweepSolid(
     sketchBases,
     false
   );
+  if (options) {
+    return kernel.sweepExactWithOptions(
+      face,
+      Uint32Array.from(edges),
+      JSON.stringify(options)
+    );
+  }
   return kernel.sweepExact(face, Uint32Array.from(edges));
 }
 
@@ -2653,6 +2686,7 @@ export function buildProfileSweep(
             face,
             feature.data.path,
             guided,
+            resolveSweepOptions(feature.data, scope),
             scope,
             sketchBases
           ),
@@ -2664,6 +2698,13 @@ export function buildProfileSweep(
         'Profile sweep topology has no verified output evolution relation.'
       )
     };
+  }
+  if (resolveSweepOptions(feature.data, scope)) {
+    // Validation keeps these to exact sweeps; a document edited by hand is
+    // refused rather than swept plain.
+    throw new Error(
+      'Twist and scale along the path need the exact sweep; build it as Exact.'
+    );
   }
   const solid = guided
     ? guidedSweepSolid(

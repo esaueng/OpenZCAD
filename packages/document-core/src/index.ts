@@ -540,6 +540,10 @@ export interface SweepInput {
   guide?: SketchPathReference;
   /** See the sweep `FeatureData`; omitted is the legacy sampled sweep. */
   construction?: 'in-place';
+  /** M04 (v132): see the sweep `FeatureData`; omitted or zero turns nothing. */
+  twistDeg?: ParamValue;
+  /** M04 (v132): see the sweep `FeatureData`; omitted or one scales nothing. */
+  endScale?: ParamValue;
   ids?: BodyFeatureIds;
 }
 
@@ -3177,11 +3181,56 @@ export function loftSections(
   );
 }
 
+/** A stored literal 1, or absent: the identity scale. */
+function isUnitParam(value: ParamValue | undefined): boolean {
+  return value === undefined || value === 1;
+}
+
+/**
+ * M04 (v132): a sweep's twist and end scale are literals that are finite
+ * (and positive, for the scale) or non-empty expressions, which the build
+ * resolves and checks. Either needs the exact in-place construction: the
+ * sampled sweep has no twist or scale of its own.
+ */
+export function validateSweepOptions(data: {
+  construction?: unknown;
+  twistDeg?: unknown;
+  endScale?: unknown;
+}): void {
+  const { twistDeg, endScale } = data;
+  if (twistDeg !== undefined) {
+    if (typeof twistDeg === 'number') {
+      if (!Number.isFinite(twistDeg)) {
+        throw new Error('Sweep twist must be a finite angle.');
+      }
+    } else if (typeof twistDeg !== 'string' || !twistDeg.trim()) {
+      throw new Error('Sweep twist must be a number or an expression.');
+    }
+  }
+  if (endScale !== undefined) {
+    if (typeof endScale === 'number') {
+      if (!Number.isFinite(endScale) || endScale <= 0) {
+        throw new Error('Sweep end scale must be greater than zero.');
+      }
+    } else if (typeof endScale !== 'string' || !endScale.trim()) {
+      throw new Error('Sweep end scale must be a number or an expression.');
+    }
+  }
+  const twisted = twistDeg !== undefined && twistDeg !== 0;
+  const scaled = endScale !== undefined && endScale !== 1;
+  if ((twisted || scaled) && data.construction !== 'in-place') {
+    throw new Error(
+      'Twist and scale along the path need the exact sweep; build it as Exact.'
+    );
+  }
+}
+
 export function sweepProfile(
   document: ProjectDocument,
   input: SweepInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   assertFeatureProfileProvenance(input, document);
+  validateSweepOptions(input);
   return addBodyResultFeature(
     document,
     input.name,
@@ -3198,7 +3247,11 @@ export function sweepProfile(
       // authored before the exact in-place construction existed was built as.
       ...(input.construction === undefined
         ? {}
-        : { construction: input.construction })
+        : { construction: input.construction }),
+      // M04 (v132): a literal zero twist or unit scale is the absent
+      // default, so it is never written.
+      ...(isZeroParam(input.twistDeg) ? {} : { twistDeg: input.twistDeg! }),
+      ...(isUnitParam(input.endScale) ? {} : { endScale: input.endScale! })
     },
     suppliedIds(input.ids),
     input.bodyName
@@ -5955,7 +6008,15 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
   ],
   revolve: ['sketchId', 'axis', 'angleDeg', 'axisRef', 'profile'],
   loft: ['sections', 'mode', 'endPoint'],
-  sweep: ['profile', 'path', 'mode', 'guide', 'construction'],
+  sweep: [
+    'profile',
+    'path',
+    'mode',
+    'guide',
+    'construction',
+    'twistDeg',
+    'endScale'
+  ],
   'helical-sweep': [
     'profile',
     'axisOrigin',
@@ -6203,7 +6264,8 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   boolean: ['keepOriginals'],
   split: ['keepOriginal'],
   loft: ['endPoint'],
-  sweep: ['guide'],
+  // M04 (v132): a cleared twist or scale is none.
+  sweep: ['guide', 'twistDeg', 'endScale'],
   fillet: ['endRadius', 'radiusLaw'],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.
@@ -6389,6 +6451,8 @@ export function updateFeature(
   }
   if (feature.data.featureKind === 'extrude') {
     validateExtrudeExtent(feature.data, extrudeParamResolver(next));
+  } else if (feature.data.featureKind === 'sweep') {
+    validateSweepOptions(feature.data);
   } else if (
     feature.data.featureKind === 'boolean' ||
     feature.data.featureKind === 'split'
