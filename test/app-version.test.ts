@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   APP_VERSION_FILES,
+  assertNewAppBase,
   buildAppVersion,
   checkAppVersion,
   isAppVersion,
@@ -253,6 +254,29 @@ describe('app build version', () => {
       merges: 5,
       exact: true
     });
+  });
+
+  it('only takes a new base that opens a later release or year', () => {
+    // A committed patch base races the merges queued beside it.
+    expect(() =>
+      assertNewAppBase('2026.1.0', '2026.1.103', '2026.1.104')
+    ).toThrow('--bump release');
+    expect(() =>
+      assertNewAppBase('2026.1.0', '2026.1.103', '2026.1.50')
+    ).toThrow('builds already report 2026.1.103');
+    expect(() =>
+      assertNewAppBase('2026.2.0', '2026.2.3', '2026.1.9')
+    ).toThrow();
+    // Re-setting the current base repairs a drifted manifest.
+    expect(() =>
+      assertNewAppBase('2026.1.0', '2026.1.103', '2026.1.0')
+    ).not.toThrow();
+    expect(() =>
+      assertNewAppBase('2026.1.0', '2026.1.103', '2026.2.0')
+    ).not.toThrow();
+    expect(() =>
+      assertNewAppBase('2026.1.0', '2026.1.103', '2027.1.0')
+    ).not.toThrow();
   });
 
   it('reports the base outside a git checkout unless the build requires history', () => {

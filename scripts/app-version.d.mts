@@ -39,3 +39,8 @@ export function buildAppVersion(
   repoRoot: string,
   options?: { fetch?: boolean; required?: boolean }
 ): AppBuildVersion;
+export function assertNewAppBase(
+  currentBase: string,
+  reported: string,
+  next: string
+): void;

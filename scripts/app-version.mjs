@@ -12,8 +12,7 @@
  *   node scripts/app-version.mjs                 # print the base version
  *   node scripts/app-version.mjs --build         # print the version a build reports
  *   node scripts/app-version.mjs --check         # every manifest agrees
- *   node scripts/app-version.mjs --bump patch    # 2026.1.0 -> 2026.1.1
- *   node scripts/app-version.mjs --bump release  # 2026.1.4 -> 2026.2.0
+ *   node scripts/app-version.mjs --bump release  # 2026.1.104 -> 2026.2.0
  *   node scripts/app-version.mjs --set 2027.1.0  # open a new year's line
  */
 import { execFileSync } from 'node:child_process';
@@ -201,15 +200,18 @@ function deepen(git, depth) {
  * clone is deepened when `fetch` allows it.
  *
  * Without the history it needs, it throws when `required` and otherwise
- * returns the base with `exact: false`, so a dev server or a source tarball
- * still runs while CI and release builds fail instead of shipping the base
- * as if nothing had merged.
+ * returns the base with `exact: false`, so a dev server still runs while
+ * every build fails instead of shipping the base as if nothing had merged.
  */
-export function buildAppVersion(
+export function buildAppVersion(repoRoot, options = {}) {
+  return countAppVersion(repoRoot, checkAppVersion(repoRoot), options);
+}
+
+function countAppVersion(
   repoRoot,
+  base,
   { fetch = false, required = false } = {}
 ) {
-  const base = checkAppVersion(repoRoot);
   const inexact = (reason) => {
     if (required) {
       throw new Error(
@@ -253,9 +255,24 @@ export function buildAppVersion(
   };
 }
 
-function compareAppVersions(left, right) {
-  const [a, b] = [parseAppVersion(left), parseAppVersion(right)];
-  return a.year - b.year || a.release - b.release || a.patch - b.patch;
+/**
+ * Refuses a new base that a build could report below what users already
+ * see. Patch numbers are counted, so a new base must open a later release
+ * or year: a committed patch base races the merges queued beside it
+ * (base 2026.1.104 lands after two fixes already reported 2026.1.105).
+ * Re-setting the current base, to repair a drifted manifest, is allowed.
+ */
+export function assertNewAppBase(currentBase, reported, next) {
+  const [from, to] = [parseAppVersion(reported), parseAppVersion(next)];
+  if (next === currentBase) return;
+  if (
+    to.year > from.year ||
+    (to.year === from.year && to.release > from.release)
+  )
+    return;
+  throw new Error(
+    `Refusing to set the app version base to ${next}: builds already report ${reported}, and patch numbers are counted from merges. Open a new release with --bump release or a new year with --set YYYY.1.0.`
+  );
 }
 
 /** Writes `version` into every manifest and returns the files it changed. */
@@ -297,29 +314,31 @@ function main(args) {
     );
     return;
   }
-  if ((flag === '--bump' || flag === '--set') && value !== undefined) {
+  if (
+    ((flag === '--bump' && value === 'release') || flag === '--set') &&
+    value !== undefined
+  ) {
+    // Only the root manifest: --set is also how a drifted copy is repaired.
     const current = readAppVersions(repoRoot)[0].version;
-    // Builds already report base + merges, so a new base continues from
-    // what users see rather than from the stale base.
+    // Moving off the pre-scheme 0.1.0 has nothing to compare against.
     const reported = isAppVersion(current)
-      ? buildAppVersion(repoRoot, { fetch: true, required: true }).version
+      ? countAppVersion(repoRoot, current, { fetch: true, required: true })
+          .version
       : current;
     const next =
       flag === '--bump' ? nextAppVersion(reported, value) : value.trim();
-    // Moving off the pre-scheme 0.1.0 has nothing to compare against.
-    if (isAppVersion(current) && compareAppVersions(reported, next) > 0) {
-      throw new Error(
-        `Refusing to move the app version back from ${reported} to ${next}.`
-      );
-    }
+    if (isAppVersion(current)) assertNewAppBase(current, reported, next);
     const changed = setAppVersion(repoRoot, next);
+    const files = changed.length ? `: ${changed.join(', ')}` : ' (no change)';
     console.log(
-      `App version ${reported} -> ${next}${changed.length ? `: ${changed.join(', ')}` : ' (no change)'}`
+      next === current
+        ? `App version base ${current} rewritten${files}`
+        : `App version ${reported} -> ${next}${files}`
     );
     return;
   }
   throw new Error(
-    'Usage: node scripts/app-version.mjs [--check | --build | --bump patch|release | --set YYYY.RELEASE.PATCH]'
+    'Usage: node scripts/app-version.mjs [--check | --build | --bump release | --set YYYY.RELEASE.PATCH]'
   );
 }
 

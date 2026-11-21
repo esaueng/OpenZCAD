@@ -46,7 +46,8 @@ With base `2026.1.0` and 103 such merges since it was set, beta reports
 with no version PR and no extra CI; stable reports the number of the commit
 it was promoted to. Builds of the same commit always agree, so the beta and
 stable Workers and the desktop bundle's in-app label match. The desktop
-bundle's own version (`tauri.conf.json`, `Cargo.toml`) keeps the base.
+bundle's own version (`tauri.conf.json`, `Cargo.toml`) keeps the base until
+the next release.
 
 Commits that do not count still deploy, so builds can share a number; the
 source commit identifies the exact build, which is why every place the
@@ -62,10 +63,10 @@ Workers Builds clone shallowly, so a `vite build` deepens the clone (from
 reaches the base, and unshallows as a last resort. A dev or preview server
 never fetches.
 
-A build with `CI`, `WORKERS_CI` or `WORKERS_CI_COMMIT_SHA` set fails when
-the history is still unavailable, instead of reporting the bare base as if
-nothing had merged. Other builds, such as one from a source tarball without
-`.git`, warn and report the base.
+Every `vite build` (CI, Workers Builds, a local `deploy:beta`, the desktop
+bundle) fails when the history is still unavailable, instead of reporting
+the bare base as if nothing had merged. Only dev and preview servers fall
+back to the base, with a warning.
 
 Print what a build of the current checkout will report:
 
@@ -100,15 +101,18 @@ base, in a standalone PR so parallel PRs never race for the same number:
 ```bash
 pnpm version:app                  # print the base version
 pnpm version:app --build          # print the version builds report
-pnpm version:app --bump release   # 2026.1.103 -> 2026.2.0
+pnpm version:app --bump release   # 2026.1.104 -> 2026.2.0
 pnpm version:app --set 2027.1.0   # open a new year's line
 pnpm version:app --check          # verify every copy agrees
 ```
 
-`--bump` and `--set` start from the reported version, not the stale base, and
-refuse to move backwards; `--bump patch` (2026.1.103 -> 2026.1.104) also
-resyncs the desktop bundle's version without a new release. The script
-rewrites only the version text in each file. Title the PR
+There is no `--bump patch`: patches are counted, and a committed patch base
+would race the merges queued beside it (a `2026.1.104` base landing after
+two fixes already reported `2026.1.105` moves the number back). `--bump`
+and `--set` start from the reported version, not the stale base, and refuse
+any new base that keeps the same `YYYY.RELEASE`. `--set` to the current
+base is allowed, to repair a manifest that drifted. The script rewrites only
+the version text in each file. Title the PR
 `chore(release): OpenZCAD <version>`: `chore` keeps the bump itself out of
 the count, and the count restarts from its merge. Once it merges, beta
 reports the new version; stable reports it after the next promotion

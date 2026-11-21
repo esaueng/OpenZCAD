@@ -292,18 +292,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
   const commit = sourceCommit();
   // Fails when a manifest disagrees with package.json. A build counts the
   // user-facing merges since the base version, deepening a shallow CI or
-  // Workers Builds clone; CI and release builds fail rather than report the
-  // bare base. Dev and preview servers never fetch.
-  const isCiBuild =
-    command === 'build' &&
-    Boolean(
-      process.env.CI ||
-      process.env.WORKERS_CI ||
-      process.env.WORKERS_CI_COMMIT_SHA
-    );
+  // Workers Builds clone, and fails rather than report the bare base: a
+  // deploy must never ship a number below what users already saw. Dev and
+  // preview servers never fetch and fall back to the base.
   const appBuildVersion = buildAppVersion(repoRoot, {
     fetch: command === 'build',
-    required: isCiBuild
+    required: command === 'build'
   });
   if (!appBuildVersion.exact) {
     console.warn(

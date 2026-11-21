@@ -163,9 +163,9 @@ in `.github/workflows/macos-desktop.yml`.
   manifests. Builds add one patch per `feat`/`fix`/`perf`/`revert` merge
   since the base was set, so PR titles' types decide the version and nobody
   bumps it per merge. Change the base only with
-  `pnpm version:app --bump patch|release`, in a standalone PR; every Vite
-  build fails when a copy disagrees, and a CI or Workers build fails without
-  the git history back to the base. See [App versioning](docs/versioning.md).
+  `pnpm version:app --bump release` (or `--set` for a new year), in a
+  standalone PR; every Vite build fails when a copy disagrees or without the
+  git history back to the base. See [App versioning](docs/versioning.md).
 - Parity files intentionally use `test/parity/**/*.spec.ts`. Renaming one to
   `*.test.ts` silently moves it into the root pool instead of the serial parity
   job configured by `test/parity/vitest.corpus.config.ts`.
