@@ -33,12 +33,14 @@ describe('a point pattern mesh helper', () => {
     const ready = helper.wait([17]);
     worker.onmessage!({ data: { id: 1, mesh } });
     await ready;
-    expect(stage).toHaveBeenCalledWith(mesh);
+    expect(stage).not.toHaveBeenCalled();
     expect(helper.take(99, quality)).toBeUndefined();
     expect(
       helper.take(17, { ...quality, linearDeflection: 0.04 })
     ).toBeUndefined();
+    expect(stage).not.toHaveBeenCalled();
     expect(helper.take(17, quality)).toBe(mesh);
+    expect(stage).toHaveBeenCalledExactlyOnceWith(mesh);
     expect(helper.take(17, quality)).toBeUndefined();
     vi.advanceTimersByTime(15_000);
     expect(worker.terminate).toHaveBeenCalledOnce();

@@ -17,6 +17,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { PointPatternMeshWorker } from '../packages/kernel-adapter/src/point-pattern-mesh-worker';
 import * as cylinderOps from '../packages/kernel-adapter/src/exact-cylinder-ops';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -272,7 +273,7 @@ describe('M02 patterns on sketch points: exact build', () => {
     return { document: next, holeId: lastFeature(next) };
   }
 
-  it('draws the exact checked plate with the helper and preserves a later refusal', async () => {
+  async function pointPlate() {
     const { document: holed, holeId } = await drilled();
     const coords: [number, number][] = [[10, 20]];
     for (const y of [10, 20, 30])
@@ -283,6 +284,64 @@ describe('M02 patterns on sketch points: exact build', () => {
       targetBodyId: last(holed),
       sourceFeatureIds: [holeId]
     });
+    return { plate, sketchId, ids };
+  }
+
+  it('stops a superseded build while waiting for the exact pattern mesh', async () => {
+    const { plate } = await pointPlate();
+    const candidate = await createExactKernelAdapter();
+    let cancelled = false;
+    let answer: (() => void) | undefined;
+    class DelayedWorker {
+      onmessage?: (event: { data: unknown }) => void;
+      terminate() {}
+      postMessage(data: { init?: boolean; id: number }) {
+        if (!data.init)
+          answer = () =>
+            this.onmessage?.({ data: { id: data.id, mesh: null } });
+      }
+    }
+    const original = PointPatternMeshWorker.prototype.wait;
+    const wait = vi
+      .spyOn(PointPatternMeshWorker.prototype, 'wait')
+      .mockImplementation(function (this: PointPatternMeshWorker, solids) {
+        const ready = original.call(this, solids);
+        if (ready) {
+          cancelled = true;
+          answer!();
+        }
+        return ready;
+      });
+    vi.stubGlobal('Worker', DelayedWorker);
+    const stage = vi.fn();
+    const measure = vi.spyOn(
+      RemusKernel.prototype,
+      'tessellateSolidGroupedBinary'
+    );
+    try {
+      await expect(
+        candidate.syncDocument(plate, undefined, undefined, undefined, {
+          onPatternMesh: stage,
+          cancellation: { isCancelled: () => cancelled }
+        })
+      ).rejects.toThrow(/rebuild was cancelled/i);
+      expect(cancelled).toBe(true);
+      expect(stage).not.toHaveBeenCalled();
+      expect(
+        measure.mock.invocationCallOrder.every(
+          (order) => order < wait.mock.invocationCallOrder.at(-1)!
+        )
+      ).toBe(true);
+    } finally {
+      measure.mockRestore();
+      wait.mockRestore();
+      vi.unstubAllGlobals();
+      candidate.dispose();
+    }
+  });
+
+  it('draws the exact checked plate with the helper and preserves a later refusal', async () => {
+    const { plate, sketchId, ids } = await pointPlate();
     const bad = updateSketchObject(plate, {
       sketchId,
       objectId: ids[1] as never,
@@ -371,6 +430,41 @@ describe('M02 patterns on sketch points: exact build', () => {
       expect(failed.warnings).toEqual(refused.warnings);
       expect(failed.bodyRepresentations).toEqual(refused.bodyRepresentations);
       expect(stage).toHaveBeenCalledTimes(1);
+
+      // A downstream hole consumes the pattern. Its intermediate mesh must
+      // never occupy the helper or reach the viewport.
+      const face = topFace(baseline, last(plate));
+      const finished = holeBody(plate, {
+        name: 'Finish plate',
+        targetBodyId: last(plate),
+        faceHash: face.hash,
+        ...(face.reference ? { faceReference: face.reference } : {}),
+        style: 'simple',
+        diameter: 4,
+        depthMode: 'through',
+        position: { u: 0, v: 44 },
+        positionAnchor: 'centroid'
+      }).document;
+      const nested = await createExactKernelAdapter();
+      try {
+        const expected = await reference.syncDocument(finished);
+        expect(expected.warnings).toEqual([]);
+        const actual = await nested.syncDocument(
+          finished,
+          undefined,
+          undefined,
+          undefined,
+          { onPatternMesh: stage }
+        );
+        expect(actual.bodyRepresentations).toEqual(
+          expected.bodyRepresentations
+        );
+        expect(actual.warnings).toEqual(expected.warnings);
+        expect(calls).toBe(1);
+        expect(stage).toHaveBeenCalledTimes(1);
+      } finally {
+        nested.dispose();
+      }
     } finally {
       tessellate.mockRestore();
       vi.unstubAllGlobals();

@@ -4721,13 +4721,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           }
           let projection: ReturnType<typeof projectShapeMesh>;
           try {
-            {
-              const ready = pendingMesh(kernel, shape.solids);
-              if (ready) {
-                await ready;
-                throwIfBuildCancelled(cancellation);
-              }
-            }
             projection = withSyncReadMemo(readMemo, () =>
               profileDirectEditStage('projection', () =>
                 projectShapeMesh(

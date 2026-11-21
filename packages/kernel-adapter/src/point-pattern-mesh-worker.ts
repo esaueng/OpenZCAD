@@ -66,11 +66,6 @@ export class PointPatternMeshWorker {
             MAX_PATTERN_MESH_BYTES
         ) {
           job.mesh = mesh;
-          try {
-            this.stage(mesh);
-          } catch {
-            /* Measurement can still use the exact mesh. */
-          }
         } else {
           this.reset();
         }
@@ -176,6 +171,12 @@ export class PointPatternMeshWorker {
       return;
     const mesh = job.mesh;
     this.reset();
+    // Only prepare shading once measurement accepts this solid and quality.
+    try {
+      this.stage(mesh);
+    } catch {
+      /* Measurement can still use the exact mesh. */
+    }
     return mesh;
   }
 }

@@ -27,7 +27,10 @@ import {
   type QuantizedTopologyPoint
 } from '@openzcad/shared';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  getParameterHiddenBodyIds,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import type { ExactShape } from './exact-types';
 import { AdapterRefusal } from './adapter-refusal';
@@ -551,7 +554,9 @@ export function buildFeaturePattern(
       data.targetBodyId === source.bodyId &&
       stock?.rectangularStock !== undefined &&
       stock.rectangularStock === stock.solids[0] &&
-      stock.solids.length === 1;
+      stock.solids.length === 1 &&
+      document.featureOrder.at(-1) === feature.featureId &&
+      !getParameterHiddenBodyIds(document).has(feature.bodyId);
     if (prepareMesh) warmMesh(kernel);
     const repeated = repeat(seed);
     declined ??= repeated.declined;
