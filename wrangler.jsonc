@@ -52,7 +52,8 @@
     {"name":"SHARE_LINK_LIMITER", "namespace_id":"2026111304", "simple":{"limit":300,"period":60}},
     {"name":"ACCOUNT_READ_LIMITER", "namespace_id":"2026111305", "simple":{"limit":3000,"period":60}},
     {"name":"DESKTOP_START_LIMITER", "namespace_id":"2026111306", "simple":{"limit":10,"period":60}},
-    {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111307", "simple":{"limit":30000,"period":60}}
+    {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111307", "simple":{"limit":30000,"period":60}},
+    {"name":"API_WRITE_LIMITER", "namespace_id":"2026111308", "simple":{"limit":120,"period":60}}
   ],
   // Production collection enabled; optional analytics still require browser consent.
   "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADIngest"}],
@@ -268,7 +269,8 @@
       {"name":"SHARE_LINK_LIMITER", "namespace_id":"2026111505", "simple":{"limit":300,"period":60}},
       {"name":"ACCOUNT_READ_LIMITER", "namespace_id":"2026111506", "simple":{"limit":1200,"period":60}},
       {"name":"DESKTOP_START_LIMITER", "namespace_id":"2026111507", "simple":{"limit":10,"period":60}},
-      {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111508", "simple":{"limit":30000,"period":60}}
+      {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111508", "simple":{"limit":30000,"period":60}},
+      {"name":"API_WRITE_LIMITER", "namespace_id":"2026111509", "simple":{"limit":120,"period":60}}
     ]
   }
 }

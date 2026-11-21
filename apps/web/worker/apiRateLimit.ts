@@ -159,7 +159,13 @@ export const REQUEST_LIMITS = {
    * `api:` budget; reads get one generous enough for loading a large
    * project's assets or encrypted blobs several times a minute.
    */
-  ACCOUNT_READ_LIMITER: 1_200
+  ACCOUNT_READ_LIMITER: 1_200,
+  /**
+   * Signed-in writes (plaintext and encrypted), per account: the `api:`
+   * budget. Counted in the binding so an autosave writes no limiter row to
+   * D1; a deployment without the binding counts it in D1 as before.
+   */
+  API_WRITE_LIMITER: 120
 } as const;
 
 export type RequestLimiter = keyof typeof REQUEST_LIMITS;
@@ -238,6 +244,17 @@ export async function enforceAccountReadRateLimit(
     `api-read:${userId}`,
     Number.isSafeInteger(limit) && limit > 0 ? limit : undefined
   );
+}
+
+/**
+ * Counts one signed-in write (any method but GET, HEAD and OPTIONS) against
+ * the account's `api:` write budget.
+ */
+export async function enforceAccountWriteRateLimit(
+  env: CloudflareEnv & RequestLimiterEnv,
+  userId: string
+): Promise<void> {
+  await enforceRequestLimit(env, 'API_WRITE_LIMITER', `api:${userId}`);
 }
 
 /**
