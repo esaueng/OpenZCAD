@@ -11,11 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import {
-  listRootUnitFiles,
-  unitTestInclude,
-  validateUnitFiles
-} from './unit-suites.mjs';
+import { unitTestInclude, validateUnitFiles } from './unit-suites.mjs';
 import { changedPaths } from './ci-selection.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -122,7 +118,13 @@ export function partitionUnitFiles(files, weights, total) {
   for (const file of ordered) {
     let lightest = shards[0];
     for (const shard of shards) {
-      if (shard.seconds < lightest.seconds) lightest = shard;
+      // Zero-second files tie; fewer files wins so no shard is left empty.
+      if (
+        shard.seconds < lightest.seconds ||
+        (shard.seconds === lightest.seconds &&
+          shard.files.length < lightest.files.length)
+      )
+        lightest = shard;
     }
     lightest.files.push(file);
     lightest.seconds += seconds(file);
@@ -200,6 +202,26 @@ export async function discoverRelatedFiles(cwd, changedAbsolutePaths) {
   }
 }
 
+/**
+ * Every test file of a project's full suite, exactly as Vitest's own include
+ * glob resolves it (symlinks, cycles and excludes included), as absolute paths.
+ */
+export async function listProjectFiles(cwd, config = 'vitest.full.config.ts') {
+  const { createVitest } = await import('vitest/node');
+  const vitest = await createVitest('test', {
+    config,
+    root: cwd,
+    watch: false,
+    passWithNoTests: true
+  });
+  try {
+    const specs = await vitest.globTestSpecifications();
+    return [...new Set(specs.map((spec) => spec.moduleId))];
+  } finally {
+    await vitest.close();
+  }
+}
+
 export function runUnits(args, env = process.env, execute = spawnSync) {
   const project = args[0];
   if (!['root', 'web'].includes(project))
@@ -268,40 +290,76 @@ export function runUnits(args, env = process.env, execute = spawnSync) {
     let configFile =
       suite === 'full' ? 'vitest.full.config.ts' : 'vitest.config.ts';
 
-    if (shard && project === 'root') {
-      const candidateFiles =
-        suite === 'smoke' && files ? files : listRootUnitFiles(root);
-      const weights = readUnitWeights();
-      const partitions = partitionUnitFiles(
-        candidateFiles,
-        weights,
-        shard.total
+    if (shard && project === 'root' && discoveryFailed) {
+      // Sibling shards discover independently, so one that falls back cannot
+      // know which smoke files its siblings dropped. It runs the complete
+      // project rather than any partition of it.
+      runFiles = undefined;
+      vitestArgs = rest;
+      console.error(
+        `[ci-units] root suite=full shard=${shard.shard}/${shard.total} discovery failed: complete project`
       );
-      // Sibling shards discover independently. One that falls back to the
-      // full suite cannot know which smoke files its siblings dropped, so it
-      // runs every root file rather than only its full-suite partition.
-      const assigned = discoveryFailed
-        ? {
-            files: candidateFiles,
-            seconds: partitions.reduce((sum, part) => sum + part.seconds, 0)
-          }
-        : partitions[shard.shard - 1];
-      if (!assigned.files.length) {
-        throw new Error(
-          `Unit shard ${shard.shard}/${shard.total} would run no test files.`
+    } else if (shard && project === 'root') {
+      let candidateFiles = suite === 'smoke' ? files : undefined;
+      if (!candidateFiles) {
+        try {
+          const inventory = resolve(temporary, 'inventory.json');
+          const listed = execute(
+            process.execPath,
+            [selfPath, '--list-all', project, inventory],
+            {
+              cwd,
+              env: {
+                ...env,
+                OPENZCAD_UNIT_SUITE: 'full',
+                OPENZCAD_UNIT_FILES: undefined
+              },
+              stdio: 'inherit'
+            }
+          );
+          if (listed.error || listed.status !== 0)
+            throw new Error('Vitest inventory failed.');
+          candidateFiles = relatedFiles(
+            project,
+            JSON.parse(readFileSync(inventory, 'utf8')),
+            cwd
+          );
+          if (!candidateFiles.length)
+            throw new Error('Vitest inventory is empty.');
+        } catch (error) {
+          console.error(
+            `Full-suite inventory unavailable; running the complete project: ${error.message}`
+          );
+          candidateFiles = undefined;
+        }
+      }
+      if (!candidateFiles) {
+        runFiles = undefined;
+        vitestArgs = rest;
+      } else {
+        const partitions = partitionUnitFiles(
+          candidateFiles,
+          readUnitWeights(),
+          shard.total
+        );
+        const assigned = partitions[shard.shard - 1];
+        if (!assigned.files.length) {
+          throw new Error(
+            `Unit shard ${shard.shard}/${shard.total} would run no test files.`
+          );
+        }
+        runFiles = assigned.files;
+        configFile = 'vitest.config.ts';
+        vitestArgs = rest;
+        shardMeta = {
+          shard: `${shard.shard}/${shard.total}`,
+          totalFiles: candidateFiles.length,
+          estimatedSeconds: Math.round(assigned.seconds)
+        };
+        console.error(
+          `[ci-units] root suite=${suite} shard=${shardMeta.shard} files=${runFiles.length}/${candidateFiles.length} est=${shardMeta.estimatedSeconds}s`
         );
       }
-      runFiles = assigned.files;
-      configFile = 'vitest.config.ts';
-      vitestArgs = rest;
-      shardMeta = {
-        shard: `${shard.shard}/${shard.total}`,
-        totalFiles: candidateFiles.length,
-        estimatedSeconds: Math.round(assigned.seconds)
-      };
-      console.error(
-        `[ci-units] root suite=${suite} shard=${shardMeta.shard} files=${runFiles.length}/${candidateFiles.length} est=${shardMeta.estimatedSeconds}s`
-      );
     } else {
       console.error(
         `[ci-units] ${project} suite=${suite} files=${runFiles ? runFiles.length : 'complete project'}`
@@ -365,6 +423,15 @@ if (
     const changedAbsolutePaths = JSON.parse(readFileSync(changedFile, 'utf8'));
     const discovered = await discoverRelatedFiles(cwd, changedAbsolutePaths);
     writeFileSync(outputFile, JSON.stringify(discovered));
+  } else if (command === '--list-all') {
+    const [project, outputFile] = rest;
+    if (!['root', 'web'].includes(project) || !outputFile) {
+      throw new Error(
+        'Usage: run-ci-units.mjs --list-all <root|web> <output.json>'
+      );
+    }
+    const cwd = project === 'root' ? root : resolve(root, 'apps/web');
+    writeFileSync(outputFile, JSON.stringify(await listProjectFiles(cwd)));
   } else if (command === '--update-weights') {
     if (!rest.length) {
       throw new Error(
@@ -372,7 +439,7 @@ if (
       );
     }
     const reports = rest.map((file) => JSON.parse(readFileSync(file, 'utf8')));
-    const allRoot = listRootUnitFiles(root);
+    const allRoot = relatedFiles('root', await listProjectFiles(root), root);
     const weightsPath = resolve(root, UNIT_ROOT_WEIGHTS_PATH);
     const next = mergeUnitWeights(
       readUnitWeights(weightsPath),

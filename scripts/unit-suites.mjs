@@ -1,5 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 import process from 'node:process';
 
@@ -11,35 +10,6 @@ const repository = new URL('../', import.meta.url);
 const manifest = JSON.parse(
   readFileSync(new URL('../test/unit-ci-files.json', import.meta.url), 'utf8')
 );
-
-/** Enumerate every root Vitest file matching ROOT_FULL_INCLUDE, sorted. */
-export function listRootUnitFiles(rootDir = fileURLToPath(repository)) {
-  const files = [];
-  const visit = (dir) => {
-    if (!existsSync(dir)) return;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === 'node_modules' || entry.name === 'dist') continue;
-      const full = join(dir, entry.name);
-      // Vitest's include glob follows symlinks; so must the shard inventory.
-      const kind = entry.isSymbolicLink()
-        ? statSync(full, { throwIfNoEntry: false })
-        : entry;
-      if (!kind) continue;
-      if (kind.isDirectory()) visit(full);
-      else if (kind.isFile() && entry.name.endsWith('.test.ts')) {
-        files.push(relative(rootDir, full).split(sep).join('/'));
-      }
-    }
-  };
-  visit(join(rootDir, 'test'));
-  const packagesDir = join(rootDir, 'packages');
-  if (existsSync(packagesDir)) {
-    for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) visit(join(packagesDir, entry.name, 'src'));
-    }
-  }
-  return files.sort((a, b) => a.localeCompare(b));
-}
 
 /** Local runs and kernel qualification retain full coverage by default. */
 export function resolveUnitSuite(env = process.env) {

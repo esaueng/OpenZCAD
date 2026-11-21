@@ -35,6 +35,10 @@ export function discoverRelatedFiles(
   cwd: string,
   changedAbsolutePaths: string[]
 ): Promise<string[]>;
+export function listProjectFiles(
+  cwd: string,
+  config?: string
+): Promise<string[]>;
 export function runUnits(
   args: string[],
   env: Record<string, string | undefined>,
