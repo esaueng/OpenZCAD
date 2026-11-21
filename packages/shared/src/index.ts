@@ -507,10 +507,17 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // draft on such an extrude and has no back draft, so it must refuse the
 // document. Builds on v125 (#1860); claimed as v122, renumbered when #1860
 // landed first.
+// v129 adds S02-D datum reference targets: the sketch origin
+// (`sketch-origin`) and its X/Y axes (`sketch-axis`), measured in the
+// sketch-local frame. An older client cannot read them, so it must refuse.
+// Builds on v126 (#1846). It was claimed as v126 and renumbered when F01
+// took that number; v127 and v128 are claimed by the open F01 PRs #1847 and
+// #1851.
 // v130 adds the F01 up-to-next extent (`endCondition: 'to-next'` on an add or
 // cut extrude with one target): the extrusion runs from its start plane to
 // the next face of the target it meets. An older client has no such extent
-// and must refuse the document. Builds on v126.
+// and must refuse the document. Builds on v129 (#1864); claimed as v123,
+// then v127, renumbered when #1860 and #1864 landed first.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 130 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
