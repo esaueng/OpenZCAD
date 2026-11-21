@@ -466,27 +466,16 @@ describe('box side ancestry', () => {
       operation: 'union',
       targetBodyIds: [cylinder.bodyOrder[1]!, box.bodyOrder[0]!]
     });
-    const unionFeatureId = listFeaturesInOrder(joined.document).at(-1)!
-      .featureId;
-    const junction: EdgeTopologyReferenceV5 = {
-      kind: 'edge',
-      producingFeatureId: unionFeatureId,
-      lineageName:
-        'boolean.edge.between.operand.0.primitive.cylinder.face.wall|operand.1.primitive.box.face.z-max',
-      currentHash: 101,
-      witnessVersion: 1,
-      witness: {} as EdgeWitnessV1
-    };
     const rounded = filletEdges(joined.document, {
       name: 'Round junction',
       targetBodyId: joined.bodyId,
       edgeHashes: [101],
-      edgeReferences: [junction],
       size: 5
     });
     const reference: FaceTopologyReferenceV5 = {
       kind: 'face',
-      producingFeatureId: unionFeatureId,
+      producingFeatureId: listFeaturesInOrder(joined.document).at(-1)!
+        .featureId,
       lineageName: 'boolean.face.operand.1.primitive.box.face.x-max',
       currentHash: 123,
       witnessVersion: 1,
@@ -494,27 +483,6 @@ describe('box side ancestry', () => {
     };
     return { box, joined, rounded, reference };
   }
-
-  it('keeps a side under a hash-only blend on the local move', () => {
-    // A blend holding its edge by hash alone cannot find it again once the
-    // operand is resized, so the side moves locally across the union, as a
-    // cylinder cap under the same blend does.
-    const { joined, reference } = joinedBox();
-    const hashOnly = filletEdges(joined.document, {
-      name: 'Round junction',
-      targetBodyId: joined.bodyId,
-      edgeHashes: [101],
-      size: 5
-    });
-    expect(
-      primitiveBoxFaceAncestor(
-        hashOnly.document,
-        hashOnly.bodyId,
-        reference,
-        123
-      )
-    ).toBeNull();
-  });
 
   it('follows the unique union operand role through the fillet', () => {
     const { box, rounded, reference } = joinedBox();

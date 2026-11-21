@@ -45,17 +45,32 @@ export function resolveKernelBuild(env: KernelBuildEnv): KernelBuild {
 
 export const KERNEL_BUILD: KernelBuild = resolveKernelBuild(import.meta.env);
 
+/** Whether a paired release identity is at least 2026.1.`release`. Unknown and
+ * prerelease identities answer false.
+ */
+function atLeast2026Series1(version: string, release: number): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:\+[^\s]+)?$/.exec(version);
+  if (!match) return false;
+  const [year, series, patch] = match.slice(1).map(Number);
+  return (
+    year! > 2026 ||
+    (year === 2026 && (series! > 1 || (series === 1 && patch! >= release)))
+  );
+}
+
 /** Blend-group edits and exact mixed tangent chamfers shipped together in 125.
  * Unknown/prerelease identities keep the previous selection behavior.
  */
 export function supportsBlendGroupEdits(version: string): boolean {
-  const match = /^(\d+)\.(\d+)\.(\d+)(?:\+[^\s]+)?$/.exec(version);
-  if (!match) return false;
-  const [year, series, release] = match.slice(1).map(Number);
-  return (
-    year! > 2026 ||
-    (year === 2026 && (series! > 1 || (series === 1 && release! >= 125)))
-  );
+  return atLeast2026Series1(version, 125);
+}
+
+/** From 156 a block top rises into a boss's rim round through the sampled
+ * shoulder join, as a boss cap already descends into its shoulder. Before it
+ * the swept-region check refuses that rise past the rim's reach.
+ */
+export function supportsShoulderRise(version: string): boolean {
+  return atLeast2026Series1(version, 156);
 }
 
 /**

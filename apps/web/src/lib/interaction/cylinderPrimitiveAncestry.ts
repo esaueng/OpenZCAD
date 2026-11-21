@@ -768,15 +768,12 @@ export function primitiveBoxFaceAncestor(
       : undefined
   );
   if (!chain?.publishers.has(faceReference.producingFeatureId)) return null;
-  // Across either boolean a blend holding an edge by hash alone cannot find
-  // its pick again on the resized operand: the side then moves as a local
-  // offset, as a cylinder cap under the same blend does. The subtract
-  // crossing also needs the side clear of every tool.
+  // The union crossing predates the hash-only guard and keeps its contract;
+  // the subtract crossing takes the full WS4 one.
   if (
-    chain.crossed &&
+    chain.crossed?.operation === 'subtract' &&
     (chainHasHashOnlyEdgePick(document, chain) ||
-      (chain.crossed.operation === 'subtract' &&
-        !sideClearOfTools(document, selectedBodyId, faceHash)))
+      !sideClearOfTools(document, selectedBodyId, faceHash))
   )
     return null;
   return {
