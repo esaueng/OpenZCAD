@@ -187,6 +187,31 @@ describe('Active 1 summary: face drags and orbits', () => {
     ).toMatchObject({ runs: 1, median: 65, withinBudget: true });
   });
 
+  it('reports first exact geometry for proxy-led runs that built it', () => {
+    // A proxy-led drag builds exact geometry only once the hand rests: its
+    // first exact frame is still reported, against its regression ceiling.
+    const dir = tempDir('active1-drag-first-');
+    const run = (first: number) => {
+      const sample = drag(HOLDER, false, [15, 16], 70);
+      sample.summary.presentedFrames = 1;
+      sample.summary.firstGeometryMs = first;
+      return [sample];
+    };
+    writeDrags(dir, [run(2_300), run(2_320)]);
+    expect(
+      summarize(dir).find(
+        (entry) =>
+          entry.measurement === `Face drag first exact geometry (${HOLDER})`
+      )
+    ).toMatchObject({
+      runs: 2,
+      median: 2_310,
+      budget: ACTIVE1_BUDGETS.faceDrag[HOLDER]!.firstGeometryMs,
+      withinBudget: true
+    });
+    expect(ACTIVE1_BUDGETS.faceDragTargets.firstGeometryMs).toBe(100);
+  });
+
   it('fails a budgeted row a run did not record', () => {
     const dir = tempDir('active1-drag-missing-');
     const empty = drag(HOLDER, false, [15, 16], 70);

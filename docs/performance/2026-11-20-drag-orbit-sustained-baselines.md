@@ -53,15 +53,19 @@ while dragging) and the exact preview's round trip as separate rows.
 **Targets** (H02: 60 fps, first geometry within 100 ms, p95 under 50 ms):
 
 - **Pointer → frame p95 under 50 ms: met.** All four cases are at 15–16 ms.
-- **First geometry within 100 ms: not established.** The proxy lag above
-  is a median and p95 across all proxy frames, not a measure of the first
-  one. The exact preview's round trip (64–395 ms) is worker time measured
-  after the hand rests, not from the first move to the screen. Neither
-  figure shows that exact geometry reached the screen within 100 ms of the
-  first move, so this target is left unmeasured here.
-- **60 fps: met at the median** in every case. The two filleted unions each
-  drop one frame per drag (one 33 ms interval, so their p95 is 33 ms). The
-  box and holder hold 16.7 ms at p95.
+- **First geometry within 100 ms: not met.** The first proxy frame
+  follows the first move in about 15 ms, but that is disposable display
+  geometry. The first exact geometry reached the screen 2,309–2,697 ms after
+  the first move (medians 2,681 / 2,483 / 2,311 ms on the filleted union,
+  the filleted-union history and the holder). The drag requests exact
+  geometry only once the hand rests, so this figure is mostly the drag's own
+  length; even the worker's exact build alone takes 64–395 ms. Meeting the
+  target for exact geometry needs exact previews while the pointer moves,
+  and on the filleted unions an exact build under 100 ms (now 179–395 ms).
+- **60 fps: not met at p95 on the filleted unions.** The median frame
+  interval is 16.7 ms in every case, but each filleted-union drag drops one
+  frame (one 33 ms interval, so their p95 is 33 ms). The box and holder hold
+  16.7 ms at p95.
 
 ## Orbit tails
 
