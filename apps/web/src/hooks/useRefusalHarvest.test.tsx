@@ -216,29 +216,35 @@ describe('edit refusal ownership', () => {
     });
   });
 
-  it('keeps full validation for a parameter edit upstream of a hash-only fillet', async () => {
-    const base = scene().document;
-    const { document } = filletEdges(base, {
-      name: 'Edge finish',
-      targetBodyId: base.bodyOrder[0]!,
-      edgeHashes: [42],
-      size: 1
-    });
-    const rebuild = vi.fn(async () => document.derived);
-    const { result } = renderHook(() =>
-      useRefusalHarvest({
-        document,
-        currentDocument: () => document,
-        warnings: [],
-        rebuild,
-        track: vi.fn()
-      })
-    );
-    await act(async () => {
-      await result.current.syncParameterCandidate('height', document, []);
-    });
-    expect(rebuild).toHaveBeenCalledWith(document);
-  });
+  it.each(['parameter', 'history'])(
+    'keeps full validation for a %s edit upstream of a hash-only fillet',
+    async (edit) => {
+      const base = scene().document;
+      const { document } = filletEdges(base, {
+        name: 'Edge finish',
+        targetBodyId: base.bodyOrder[0]!,
+        edgeHashes: [42],
+        size: 1
+      });
+      const rebuild = vi.fn(async () => document.derived);
+      const { result } = renderHook(() =>
+        useRefusalHarvest({
+          document,
+          currentDocument: () => document,
+          warnings: [],
+          rebuild,
+          track: vi.fn()
+        })
+      );
+      await act(async () => {
+        if (edit === 'history')
+          await result.current.syncOperationForCommit(document, []);
+        else
+          await result.current.syncParameterCandidate('height', document, []);
+      });
+      expect(rebuild).toHaveBeenCalledWith(document);
+    }
+  );
 
   it('keeps the latest-started attempt and invalidates old save callbacks', async () => {
     const { document, warning, derived } = scene();
