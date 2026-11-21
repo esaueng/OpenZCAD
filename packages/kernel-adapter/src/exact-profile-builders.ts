@@ -2790,6 +2790,18 @@ function straightEnds(
  * near one, every point at the rail's distance staying on the rail. Any
  * other rail has no exact construction and is refused by name.
  */
+const RAIL_ON_CURVED_PATH =
+  'An exact sweep follows a guide rail only along a straight path: a rail on a curved path has no exact surface. Sweep along a straight line, or clear the guide rail.';
+const RAIL_NOT_ONE_LINE =
+  'An exact sweep follows a guide rail only when the rail is one straight line: a curved rail has no exact surface. Draw the rail as a straight line, or clear the guide rail.';
+
+/**
+ * The linear tolerance a rail is held to, in model units: absolute, so a
+ * longer path or a model further from the origin never loosens it. The
+ * second term is only the rounding of the coordinates themselves.
+ */
+const RAIL_TOLERANCE = 1e-7;
+
 export function railEndScale(
   kernel: RemusKernel,
   pathEdges: readonly number[],
@@ -2815,16 +2827,10 @@ export function railEndScale(
     straightEnds(kernel, edge, 'The sweep guide rail')
   );
   if (pathEnds.some((ends) => ends === null)) {
-    refuse(
-      'curved-path',
-      'An exact sweep follows a guide rail only along a straight path: a rail on a curved path has no exact surface. Sweep along a straight line, or clear the guide rail.'
-    );
+    refuse('curved-path', RAIL_ON_CURVED_PATH);
   }
   if (railEnds.length !== 1 || railEnds[0] === null) {
-    refuse(
-      'curved-rail',
-      'An exact sweep follows a guide rail only when the rail is one straight line: a curved rail has no exact surface. Draw the rail as a straight line, or clear the guide rail.'
-    );
+    refuse('curved-rail', RAIL_NOT_ONE_LINE);
   }
   // The path's line, from all its pieces' ends.
   const points = pathEnds.flatMap((ends) => ends!);
@@ -2840,9 +2846,8 @@ export function railEndScale(
   const length = norm3(axis);
   const unit = { x: axis.x / length, y: axis.y / length, z: axis.z / length };
   const [r0, r1] = railEnds[0]!;
-  // Relative to the path's length, so moving the model never changes the
-  // verdict; the small second term only absorbs the rounding of coordinates
-  // far from the origin.
+  // Absolute, so neither the path's length nor the model's distance from
+  // the origin changes a verdict beyond the rounding of the coordinates.
   const magnitude = Math.max(
     norm3(near),
     norm3(far),
@@ -2850,7 +2855,7 @@ export function railEndScale(
     norm3(r1),
     norm3(profilePlane.origin)
   );
-  const tolerance = 1e-7 * Math.max(1, length) + 1e-12 * magnitude;
+  const tolerance = RAIL_TOLERANCE + 16 * Number.EPSILON * magnitude;
   const offAxis = (p: Point) => {
     const d = minus(p, near);
     const along = dot3(d, unit);
@@ -2970,6 +2975,45 @@ function exactSweepSolid(
       sketchBases,
       false
     );
+    // Only one straight sketch line can be a rail; anything else (a circle,
+    // a spline, several curves) is refused as typed before its edges are
+    // built, so no plain error reaches the history.
+    const lineOnly = (ids: readonly string[]) =>
+      ids.every((id) => {
+        const node = document.nodes[id];
+        return (
+          node?.kind === 'sketch-object' && node.data.objectKind === 'line'
+        );
+      });
+    // The path is refused first: a rail on a curved path has no exact
+    // surface whatever the rail is.
+    if (!lineOnly(path.entityIds)) {
+      throw new KernelRefusal({
+        family: 'modeling',
+        category: 'unsupported',
+        kernelCode: 'sweep-rail:curved-path',
+        kernelMessage: RAIL_ON_CURVED_PATH,
+        reason: RAIL_ON_CURVED_PATH,
+        message: RAIL_ON_CURVED_PATH
+      });
+    }
+    const railObjects = guide.entityIds.map((id) => document.nodes[id]);
+    if (
+      railObjects.length !== 1 ||
+      railObjects.some(
+        (node) =>
+          node?.kind !== 'sketch-object' || node.data.objectKind !== 'line'
+      )
+    ) {
+      throw new KernelRefusal({
+        family: 'modeling',
+        category: 'unsupported',
+        kernelCode: 'sweep-rail:curved-rail',
+        kernelMessage: RAIL_NOT_ONE_LINE,
+        reason: RAIL_NOT_ONE_LINE,
+        message: RAIL_NOT_ONE_LINE
+      });
+    }
     const railEdges = sweepPathEdges(
       kernel,
       document,

@@ -155,6 +155,27 @@ describe('exact sweep guide rails (M04)', { timeout: 120_000 }, () => {
     ).toContain('the rail is one straight line');
   });
 
+  it('refuses a circle rail as a typed unsupported refusal', async () => {
+    const start = profileSketch(createProjectDocument('Circle', user), square);
+    const { document, bodyId } = await built(
+      railed(start, {
+        objectKind: 'circle',
+        centerX: 8,
+        centerY: 10,
+        radius: 2
+      })
+    );
+    expect(document.derived.bodyRepresentations[bodyId]).toBeUndefined();
+    const [warning] = document.derived.featureWarnings ?? [];
+    expect(warning!.kernelRefusal).toMatchObject({
+      category: 'unsupported',
+      code: 'sweep-rail:curved-rail'
+    });
+    expect(plainRefusal(warning!.message).message).toContain(
+      'the rail is one straight line'
+    );
+  });
+
   it('refuses a rail that does not run the length of the path', async () => {
     const start = profileSketch(createProjectDocument('Short', user), square);
     expect(

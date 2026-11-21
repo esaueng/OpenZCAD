@@ -154,6 +154,46 @@ describe('exact sweep rail checks (M04)', () => {
     ).toBe('sweep-rail:skew-rail');
   });
 
+  it('refuses a rail skewed a thousandth of a unit along a long path', () => {
+    expect(
+      refusalCode(() =>
+        scaleOf(
+          [
+            [0, 0, 0],
+            [0, 0, 10_000]
+          ],
+          [
+            [0.11, 0, 0],
+            [0.11, 0.0009, 10_000]
+          ]
+        )
+      )
+    ).toBe('sweep-rail:skew-rail');
+  });
+
+  it('refuses a rail eight millionths short at the origin and far from it alike', () => {
+    for (const offset of [
+      [0, 0, 0],
+      [10_000_000, 0, 0]
+    ] as P[]) {
+      expect(
+        refusalCode(() =>
+          scaleOf(
+            [
+              [0, 0, 0],
+              [0, 0, 20]
+            ],
+            [
+              [2, 0, 0],
+              [4, 0, 19.999992]
+            ],
+            offset
+          )
+        )
+      ).toBe('sweep-rail:short-rail');
+    }
+  });
+
   it('refuses a curved path and a curved rail as unsupported', () => {
     const kernel = {
       getNurbsCurveData: () =>
