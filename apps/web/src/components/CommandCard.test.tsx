@@ -460,10 +460,7 @@ describe('CommandCard', () => {
   const railButtons = () =>
     screen
       .getAllByRole('button')
-      .map((b) => [
-        b.getAttribute('aria-label'),
-        greyed(b)
-      ]);
+      .map((b) => [b.getAttribute('aria-label'), greyed(b)]);
 
   it('holds the rail in place while a verb is dragged', () => {
     const face = { ...NOTHING, faceSelected: true, bodyCount: 1 };
@@ -564,9 +561,9 @@ describe('CommandCard', () => {
       expect(
         screen.queryByRole('region', { name: 'Offset Face operation' })
       ).toBeNull();
-      expect(
-        greyed(screen.getByRole('button', { name: /^More tools/ }))
-      ).toBe(false);
+      expect(greyed(screen.getByRole('button', { name: /^More tools/ }))).toBe(
+        false
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -613,9 +610,9 @@ describe('CommandCard', () => {
       );
       const toggle = () => screen.getByRole('button', { name: /^More tools/ });
       const observed = () =>
-        observers.filter((entry) => entry.live).flatMap((entry) => [
-          ...entry.targets
-        ]);
+        observers
+          .filter((entry) => entry.live)
+          .flatMap((entry) => [...entry.targets]);
       const drawerTabStops = () =>
         Array.from(
           container.querySelectorAll<HTMLElement>(
@@ -985,7 +982,8 @@ describe('CommandCard', () => {
       'circular-pattern',
       'grid-pattern',
       'point-pattern',
-      'path-pattern'
+      'path-pattern',
+      'mirror-pattern'
     ]);
     fireEvent.change(search, { target: { value: 'zzz' } });
     expect(container.querySelector('.command-flyout-empty')).toHaveTextContent(
@@ -1398,9 +1396,7 @@ describe('CommandCard', () => {
 
   describe('the rail as one tab stop', () => {
     const tabStops = (container: HTMLElement) =>
-      Array.from(
-        container.querySelectorAll<HTMLElement>('button.command-rail')
-      )
+      Array.from(container.querySelectorAll<HTMLElement>('button.command-rail'))
         .filter((button) => button.getAttribute('tabindex') === '0')
         .map((button) => button.getAttribute('aria-label'));
 
@@ -1413,9 +1409,7 @@ describe('CommandCard', () => {
       expect(
         container.querySelectorAll('button.command-rail').length
       ).toBeGreaterThan(8);
-      expect(tabStops(container)).toEqual([
-        expect.stringMatching(/^Sketch/)
-      ]);
+      expect(tabStops(container)).toEqual([expect.stringMatching(/^Sketch/)]);
     });
 
     it('walks the tools, greyed ones included, with the arrow keys', () => {
@@ -1429,9 +1423,7 @@ describe('CommandCard', () => {
       expect(greyed(extrude)).toBe(true);
       expect(extrude).toHaveFocus();
       expect(extrude).toHaveAccessibleName(/ — .+/);
-      expect(tabStops(container)).toEqual([
-        expect.stringMatching(/^Extrude/)
-      ]);
+      expect(tabStops(container)).toEqual([expect.stringMatching(/^Extrude/)]);
       fireEvent.keyDown(extrude, { key: 'End' });
       expect(screen.getByRole('button', { name: /^More tools/ })).toHaveFocus();
       fireEvent.keyDown(document.activeElement!, { key: 'Home' });
@@ -1474,9 +1466,7 @@ describe('CommandCard', () => {
       fireEvent.click(
         within(drawer).getByRole('button', { name: 'Close tools drawer' })
       );
-      expect(
-        screen.queryByRole('group', { name: 'Tools drawer' })
-      ).toBeNull();
+      expect(screen.queryByRole('group', { name: 'Tools drawer' })).toBeNull();
       expect(toggle).toHaveAttribute('aria-expanded', 'false');
       // The keyboard goes back to the button that opens it.
       expect(toggle).toHaveFocus();
@@ -1596,9 +1586,7 @@ describe('CommandCard', () => {
       openDrawer();
       const toggle = screen.getByRole('button', { name: /^More tools/ });
       fireEvent.keyDown(toggle, { key: 'Escape' });
-      expect(
-        screen.queryByRole('group', { name: 'Tools drawer' })
-      ).toBeNull();
+      expect(screen.queryByRole('group', { name: 'Tools drawer' })).toBeNull();
       // The key was the drawer's: the workspace does not also act on it.
       expect(onKeyDown).not.toHaveBeenCalled();
       // Closed, Escape is the workspace's again.
@@ -1676,9 +1664,9 @@ describe('CommandCard', () => {
       const stops = Array.from(
         container.querySelectorAll<HTMLElement>('button.command-rail')
       ).filter((button) => button.getAttribute('tabindex') === '0');
-      expect(stops.map((button) => button.getAttribute('aria-label'))).toEqual(
-        ['Deselect all']
-      );
+      expect(stops.map((button) => button.getAttribute('aria-label'))).toEqual([
+        'Deselect all'
+      ]);
       stops[0]!.focus();
       fireEvent.keyDown(stops[0]!, { key: 'ArrowDown' });
       expect(
@@ -1698,8 +1686,8 @@ describe('CommandCard', () => {
     );
     // Still found by the tool's name, as every other button of it is.
     expect(screen.getByRole('button', { name: /^Chamfer/ })).toBe(suggested);
-    expect(
-      screen.getByRole('group', { name: 'Suggested' })
-    ).toContainElement(suggested);
+    expect(screen.getByRole('group', { name: 'Suggested' })).toContainElement(
+      suggested
+    );
   });
 });

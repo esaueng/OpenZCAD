@@ -116,6 +116,9 @@ const RESPAWN_BUDGET_MS: Record<
   rebuilding: 15 * 60_000
 };
 
+// Small edits already fit the text transport cache. Compact bytes keep
+// hundreds of independent body topologies inside the same 8 MiB budget.
+const UTF8_TOPOLOGY_MIN_BODIES = 256;
 /** How often the watchdog samples worker silence. */
 const WATCHDOG_TICK_MS = 1_000;
 
@@ -1529,7 +1532,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       // default. Only an explicit demand opts one into the idle skip.
       const posted = postRequest(syncRequests.current, {
         type: 'sync',
-        topologyEncoding: 'json-v2',
+        topologyEncoding:
+          document.bodyOrder.length >= UTF8_TOPOLOGY_MIN_BODIES
+            ? 'utf8-v1'
+            : 'json-v2',
         document: documentForRebuild(document),
         ...(analysis ? { analysis } : {}),
         ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {}),

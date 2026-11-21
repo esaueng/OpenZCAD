@@ -8,6 +8,7 @@ export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './sketch-composite-targets';
+export * from './sketch-shape-targets';
 export * from './sketch-boundary-provenance';
 export * from './sketch-promotions';
 export * from './mass-density';
@@ -32,9 +33,15 @@ import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type {
+  SketchCompositeCenterTarget,
   SketchCompositeCornerTarget,
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
+import type {
+  SketchShapeCenterTarget,
+  SketchShapeCornerTarget,
+  SketchShapeSideTarget
+} from './sketch-shape-targets';
 import type { BoundaryProvenance } from './sketch-boundary-provenance';
 import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
@@ -465,7 +472,37 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // annotation's kind on its next save, so it must refuse. Builds on v116
 // (v115 and v116 are claimed by the M02 mirror and total-length pattern
 // PRs #1796 and #1797).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 117 as const;
+// v119 adds M02 mirror patterns (`patternKind: 'mirror'` and
+// `mirrorPlane`): the whole body, or the repeated holes, bosses and cuts,
+// copied once as their reflection in a plane. An older client has no such
+// arrangement and would build a linear pattern in its place, so it must
+// refuse. Builds on v117 (#1799); v118 is claimed by #1808. It was
+// claimed as v115, left unused, with v116, when #1799 landed first.
+// v120 adds M02 total-length linear patterns (`spacingMode: 'total'`): the
+// stored spacing is the distance from the original to the last copy, shared
+// out between the copies. Absent keeps the spacing between copies, so every
+// older document builds unchanged. An older client would space the copies
+// a whole total apart, so it must refuse. Builds on v119
+// (#1796); claimed as v116, left unused when #1799 landed first.
+// v121 adds the F01 extrude start offset (`startOffset` on a blind or
+// to-face extrude): the extrusion starts that far from its sketch plane
+// along the sketch normal instead of on it. An older client would start it
+// on the sketch plane, so it must refuse. Builds on v120 (v118 is claimed
+// by #1808).
+// v125 adds S02-D reference targets: a named shape's centre
+// (`composite-center`) and a legacy parametric rectangle's or regular
+// polygon's corner, side or centre (`shape-corner`, `shape-side`,
+// `shape-center`), measured without converting the shape. An older client
+// cannot read those targets and would refuse or drop the annotation, so it
+// must refuse the document. Builds on v121 (#1842); v122–v124 are claimed
+// by the open F01 PRs #1846, #1847 and #1851.
+// v126 adds F01 per-side draft (`draftAngleDeg` on a symmetric or two-sided
+// blind extrude, and `backDraftAngleDeg` for its other side): each side
+// tapers by its own angle from the start plane. An older client refuses a
+// draft on such an extrude and has no back draft, so it must refuse the
+// document. Builds on v125 (#1860); claimed as v122, renumbered when #1860
+// landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 126 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -579,7 +616,8 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
  * none, the consume-everything Boolean every document before v24 stores.
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
-export type PatternKind = 'linear' | 'circular' | 'grid' | 'points' | 'path';
+export type PatternKind =
+  'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
 
 /** M02 (schema v63): the sketch points a `points` pattern repeats at. */
 export interface PatternPoints {
@@ -1942,9 +1980,19 @@ export type SketchReferenceDistanceMode =
   'absolute' | 'horizontal' | 'vertical';
 
 /** Measured targets; driving constraints retain primitive point identities. */
+/**
+ * Composite centres and legacy-shape corners/centres arrive in schema v125
+ * (S02-D); a primitive point and a held-line corner keep their earlier forms.
+ */
 export type SketchReferencePointTarget =
-  SketchPointRef | SketchCompositeCornerTarget;
-export type SketchReferenceCurveTarget = EntityId | SketchCompositeSideTarget;
+  | SketchPointRef
+  | SketchCompositeCornerTarget
+  | SketchCompositeCenterTarget
+  | SketchShapeCornerTarget
+  | SketchShapeCenterTarget;
+/** Legacy-shape sides arrive in schema v125 (S02-D). */
+export type SketchReferenceCurveTarget =
+  EntityId | SketchCompositeSideTarget | SketchShapeSideTarget;
 
 export type SketchReferenceDimensionData =
   | {
@@ -2451,15 +2499,35 @@ export type FeatureData =
        */
       toFaceOffset?: ParamValue;
       /**
+       * F01 (schema v121): where the extrusion starts, as a signed length
+       * along the sketch normal from the sketch plane. The start plane takes
+       * the sketch plane's place for every extent measured from it: a blind
+       * distance, a back distance and a symmetric span run from it, a draft
+       * hinges on it, and a to-face extrude runs from it to the face (an
+       * offset that reaches or passes the face's end refuses by name).
+       * Through all refuses it. Like every extent it is resolved on each
+       * rebuild and never folded into `distance`. Absent or zero starts on
+       * the sketch plane.
+       */
+      startOffset?: ParamValue;
+      /**
        * F01 (schema v29): wall draft in degrees, measured from the sketch
        * normal. Positive tapers the walls inward as the extrusion leaves the
        * sketch plane (the profile is the widest section), negative flares
        * them outward. The sketch plane is the neutral plane, so the profile
-       * itself never changes. Absent or zero means straight walls. A one-sided
-       * blind or to-face extrusion only: symmetric, two-sided and through-all
-       * extents refuse it until per-side draft lands.
+       * itself never changes. Absent or zero means straight walls. From
+       * schema v126 a symmetric or two-sided blind extrusion takes it for the
+       * side its distance runs to; through all refuses it.
        */
       draftAngleDeg?: ParamValue;
+      /**
+       * F01 (schema v126): the draft of the side behind the start plane (the
+       * back distance, or a symmetric extrusion's other half), in degrees
+       * from the sketch normal. Positive narrows that side as it leaves the
+       * start plane, as `draftAngleDeg` does its side. A one-sided extrusion
+       * has no back side and refuses it. Absent or zero means straight walls.
+       */
+      backDraftAngleDeg?: ParamValue;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the
@@ -3202,6 +3270,20 @@ export type FeatureData =
        * are stored but not read.
        */
       path?: PatternPath;
+      /**
+       * M02 (schema v119), `patternKind: 'mirror'` only, and required
+       * there: the plane the one copy is reflected in, a datum plane or a
+       * stored origin and normal, as Mirror takes it. `count` (2), `axis`,
+       * `spacing` and `angleDeg` are stored but not read.
+       */
+      mirrorPlane?: ModelingPlaneReference;
+      /**
+       * M02 (schema v116), `patternKind: 'linear'` only: `'total'` reads
+       * `spacing` as the distance from the original to the last copy, so
+       * the copies stand `spacing / (count − 1)` apart and a changed count
+       * keeps the row's length. Absent is the spacing between copies.
+       */
+      spacingMode?: 'total';
     }
   | {
       featureKind: 'direct-edit';
@@ -5839,6 +5921,12 @@ export type AssistantReasoningEffort =
  * geometry/history stays portable and collaboration-safe when preferences
  * change on one device.
  */
+/** S02: reference dimensions follow the document's units, or one unit. */
+export type SketchReferenceDisplayUnit = 'document' | UnitSystem;
+
+export const SKETCH_REFERENCE_DISPLAY_UNITS: readonly SketchReferenceDisplayUnit[] =
+  ['document', 'mm', 'cm', 'm', 'inch'];
+
 export interface AppSettings {
   schemaVersion: typeof APP_SETTINGS_SCHEMA_VERSION;
   general: {
@@ -5911,6 +5999,12 @@ export interface AppSettings {
     autoConstrain: boolean;
     /** S08: name the engaged snap in text beside its glyph. */
     snapHints: boolean;
+    /**
+     * S02: the unit reference (measured) dimensions show their lengths in.
+     * `document` follows the document's units. Display only: the document,
+     * its expressions and every driving dimension keep their own units.
+     */
+    referenceDisplayUnit: SketchReferenceDisplayUnit;
     linearSnap: number;
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
@@ -6074,6 +6168,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     inferenceEnabled: true,
     autoConstrain: false,
     snapHints: true,
+    referenceDisplayUnit: 'document',
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,

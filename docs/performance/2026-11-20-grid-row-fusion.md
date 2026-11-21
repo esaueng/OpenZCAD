@@ -15,8 +15,11 @@ curved stock, touching rows, large world coordinates and failed qualification.
 
 ## Browser measurements
 
-Durations are milliseconds from the card input to Done becoming available for
-that exact preview. Each pair exercised both local builds in a fresh Chromium
+These historical durations used the test driver's clock. For 3×3 it started
+before a redundant body pick and read Done after the Objects panel closed.
+For count edits it started after the keypad input had already triggered the
+preview. The [matched rerun from the actual input event](2026-11-20-grid-preview-row-reuse.md)
+records when the corresponding preview became eligible to commit. Each pair exercised both local builds in a fresh Chromium
 context, on the same host with hardware rendering. The workload, probe and
 pinned packages were the same. Trial order was base/candidate,
 candidate/base, base/candidate.

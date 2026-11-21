@@ -776,9 +776,7 @@ function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
 /** Per-format file identity for exports from the Export mesh dialog. */
 const STL_EXPORT_FILE_INFO = {
   extension: 'stl',
-  contentType: 'model/stl',
   label: 'STL',
-  kind: 'stl-export' as const,
   binaryFormat: 'stl' as const
 };
 /**
@@ -808,40 +806,30 @@ const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
     extension: string;
-    contentType: string;
     label: string;
-    kind: ArtifactKind;
     binaryFormat: CadBinaryExportFormat;
   }
 > = {
   '3mf': {
     extension: '3mf',
-    contentType: 'model/3mf',
     label: '3MF',
-    kind: '3mf-export',
     binaryFormat: '3mf'
   },
   'stl-binary': STL_EXPORT_FILE_INFO,
   stl: STL_EXPORT_FILE_INFO,
   obj: {
     extension: 'obj',
-    contentType: 'model/obj',
     label: 'OBJ',
-    kind: 'obj-export',
     binaryFormat: 'obj'
   },
   glb: {
     extension: 'glb',
-    contentType: 'model/gltf-binary',
     label: 'glTF',
-    kind: 'gltf-export',
     binaryFormat: 'glb'
   },
   ply: {
     extension: 'ply',
-    contentType: 'application/octet-stream',
     label: 'PLY',
-    kind: 'ply-export',
     binaryFormat: 'ply'
   }
 };
@@ -1966,6 +1954,7 @@ import {
   keypadText,
   profileRegionLoops,
   isInPlacePatternTool,
+  booleanOperandRoles,
   booleanOperationSwitch,
   inPlaceBodyMode,
   inPlaceFaceMode,
@@ -2912,6 +2901,8 @@ export function App() {
   );
   const [shareSession, setShareSession] = useState<{
     token: string;
+    /** What the link lets its visitor do, plaintext or encrypted. */
+    mode: 'view' | 'tweak';
     encryptedMode?: 'view' | 'tweak';
     /** L08: a plaintext commenter link; its visitor may comment. */
     comments?: boolean;
@@ -7095,9 +7086,9 @@ export function App() {
   // A parameter change is still a document edit, so a read-only seat locks
   // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
   // the whole point of the visit.
-  // An encrypted link's verified statement says view or tweak (slice 5-11):
-  // a view-only link locks Tweak too. A plaintext link's visitor chooses.
-  const shareLinkViewOnly = shareSession?.encryptedMode === 'view';
+  // An encrypted link's verified statement says view or tweak (slice 5-11),
+  // and a plaintext link's record does: a view-only link locks Tweak too.
+  const shareLinkViewOnly = shareSession?.mode === 'view';
   const tweakModeDisabledReason = shareSession
     ? shareLinkViewOnly
       ? 'This link is view only — Make a copy to change its parameters'
@@ -13023,11 +13014,12 @@ export function App() {
     }
     const feature = faceProducingFeature(shownDocument, face);
     const problem = !feature
-      ? 'Click a face a hole, boss, cut, fillet or chamfer made.'
+      ? 'Click a face a hole, boss, cut, fillet, chamfer, wrap or rib made.'
       : patternSourceProblem(feature.data, feature.name);
     if (!feature || problem) {
       setStatus(
-        problem ?? 'Click a face a hole, boss, cut, fillet or chamfer made.'
+        problem ??
+          'Click a face a hole, boss, cut, fillet, chamfer, wrap or rib made.'
       );
       return null;
     }
@@ -16221,6 +16213,7 @@ export function App() {
         let shared: {
           name: string;
           document: ProjectDocument;
+          mode: 'view' | 'tweak';
           encryptedMode?: 'view' | 'tweak';
           comments?: boolean;
           encryptedComments?: LinkCommentsAccess | null;
@@ -16238,6 +16231,7 @@ export function App() {
           shared = opened && {
             name: opened.name,
             document: opened.document,
+            mode: opened.mode,
             encryptedMode: opened.mode,
             encryptedComments: opened.comments
           };
@@ -16252,6 +16246,9 @@ export function App() {
           shared = plaintext && {
             name: plaintext.project.name,
             document: plaintext.document,
+            // A plaintext link's mode is the owner's choice too; links from
+            // before it was offered are all Tweak.
+            mode: plaintext.project.mode === 'view' ? 'view' : 'tweak',
             ...(plaintext.project.comments ? { comments: true } : {})
           };
         }
@@ -16291,12 +16288,14 @@ export function App() {
         const opened = shared.encryptedMode
           ? {
               token: pendingShareToken,
+              mode: shared.mode,
               encryptedMode: shared.encryptedMode,
               comments: !!shared.encryptedComments,
               encryptedComments: shared.encryptedComments
             }
           : {
               token: pendingShareToken,
+              mode: shared.mode,
               ...(shared.comments ? { comments: true } : {})
             };
         setShareSession(opened);
@@ -16307,7 +16306,7 @@ export function App() {
         });
         setStatus(
           `${
-            shared.encryptedMode === 'view'
+            shared.mode === 'view'
               ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
               : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
           }${opening.note ? ` ${opening.note}` : ''}`
@@ -20256,25 +20255,18 @@ export function App() {
 
   /**
    * One export, reported in the activity pill from the kernel call to the
-   * archive. `produce` builds the file; the save prompt and the archive are
-   * shared. Cancel aborts whichever of the three is running; a save prompt
-   * the user dismisses ends the run quietly, because that is a cancel too.
+   * saved file. `produce` builds the file; the save prompt is shared. Cancel
+   * aborts whichever step is running; a save prompt the user dismisses ends
+   * the run quietly, because that is a cancel too. An export is a download
+   * only: no copy is uploaded to the project's cloud files.
    */
   async function runExportJob(input: {
     fileName: string;
     label: string;
-    kind: ArtifactKind;
-    contentType: string;
-    metadata: Record<string, string | number>;
     produce(options: {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
-    }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
-    /**
-     * Keeps a copy in the project's export archive; on by default. A slicer
-     * hand-off (L09) is local only and keeps none.
-     */
-    archive?: boolean;
+    }): Promise<{ save(): Promise<boolean>; warnings: number }>;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
   }) {
@@ -20288,13 +20280,7 @@ export function App() {
     sink.start({
       kind: 'export',
       fileName: input.fileName,
-      phases: [
-        'preparing',
-        'loading-kernel',
-        'building',
-        'writing',
-        'archiving'
-      ]
+      phases: ['preparing', 'loading-kernel', 'building', 'writing']
     });
     setStatus(`Exporting ${input.label}…`);
     const cancelled = () => {
@@ -20323,41 +20309,14 @@ export function App() {
       }
       sink.update({ phase: 'writing', fraction: null });
       const saved = await produced.save();
-      if (!saved || signal.aborted) {
+      // A Cancel that lands while the save is still in hand (a share sheet
+      // being staged) comes too late: the file is written, so the run is not
+      // reported as having written nothing.
+      if (!saved) {
         cancelled();
         return;
       }
       trackUsage('export_completed');
-      sink.update({ phase: 'archiving', fraction: null });
-      let archived = false;
-      if (input.archive !== false) {
-        try {
-          await archiveArtifact({
-            fileName: input.fileName,
-            contentType: input.contentType,
-            kind: input.kind,
-            body: produced.body,
-            // Cancel is honoured by the two awaits above; without it here the
-            // archive kept uploading the file the user had just stopped
-            // exporting, and finalized it into the File menu.
-            signal,
-            metadata: input.metadata
-          });
-          archived = true;
-        } catch {
-          // The local download has already completed successfully.
-        }
-      }
-      if (signal.aborted) {
-        // The file is on disk; only the copy was stopped.
-        setStatus(`${input.fileName} was saved; its archive was cancelled.`);
-        sink.finish({
-          tone: 'cancelled',
-          message: 'saved, archive cancelled',
-          landed: true
-        });
-        return;
-      }
       const hiddenNote = exportScopeInfo?.hiddenExcluded
         ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
         : '';
@@ -20367,26 +20326,11 @@ export function App() {
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
           : input.completed
             ? input.completed(bodies)
-            : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
+            : `Exported ${bodies} to ${input.fileName}.`;
       setStatus(
         exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
       );
-      // A missing archive is only worth amber where one was on offer: a
-      // signed-out or local-only session was never going to keep a copy,
-      // and flagging every export there would teach people to dismiss it.
-      const archiveExpected =
-        input.archive !== false &&
-        Boolean(session) &&
-        cloudProjectIds.has(doc.projectId);
-      sink.finish(
-        archived || !archiveExpected
-          ? { tone: 'ok', message: bodies, landed: true }
-          : {
-              tone: 'warning',
-              message: `${bodies} · not archived to the cloud`,
-              landed: true
-            }
-      );
+      sink.finish({ tone: 'ok', message: bodies, landed: true });
     } catch (error) {
       if (signal.aborted) {
         cancelled();
@@ -20511,14 +20455,12 @@ export function App() {
   function handleExportIges() {
     const target = readyExportTarget(null);
     if (!target || !doc) return;
-    const { version, units } = doc;
     const fileName = `${exportStemFor(null)}.igs`;
+    const { units } = doc;
     void import('./lib/igesImport').then((lazy) =>
       lazy.exportIges({
         target,
         fileName,
-        version,
-        documentUnits: units,
         units: exportUnitsFor(units),
         runExportJob,
         exportModel: geometry.exportModel
@@ -20533,18 +20475,9 @@ export function App() {
     }
     const { document: exported, bodyIds, allShownBodies, rowName } = target;
     const fileName = `${exportStemFor(rowName)}.step`;
-    const contentType = 'model/step';
     await runExportJob({
       fileName,
       label: rowName ? `STEP of ${rowName}` : 'STEP',
-      kind: 'step-export',
-      contentType,
-      metadata: {
-        bodyIds: bodyIds.join(','),
-        documentVersion: doc.version,
-        units: doc.units,
-        ...(rowName ? { configuration: rowName } : {})
-      },
       ...(rowName
         ? {
             completed: () => `Exported configuration ${rowName} to ${fileName}.`
@@ -20562,7 +20495,6 @@ export function App() {
           throw new Error('The STEP export returned no text.');
         }
         return {
-          body: new Blob([result.text], { type: contentType }),
           save: () => saveCadTextFile(fileName, 'step', result.text),
           warnings: result.warnings.length
         };
@@ -20584,7 +20516,7 @@ export function App() {
     if (!target || !doc) {
       return;
     }
-    const { version, units } = doc;
+    const { units } = doc;
     void import('./lib/meshExportPackage').then((lazy) =>
       lazy.exportMesh({
         format,
@@ -20592,8 +20524,6 @@ export function App() {
         options: tolerances,
         target,
         info: MESH_EXPORT_FILE_INFO[format],
-        version,
-        documentUnits: units,
         units: exportUnitsFor(units),
         stemOf: exportStemFor,
         setStatus,
@@ -20626,17 +20556,6 @@ export function App() {
     void runExportJob({
       fileName,
       label: slicer ? `3MF for ${slicer.label}` : '3MF for your slicer',
-      kind: info.kind,
-      contentType: info.contentType,
-      metadata: {
-        bodyIds: bodyIds.join(','),
-        documentVersion: doc.version,
-        units: doc.units,
-        format: '3mf',
-        deflectionMm: deflection,
-        ...(rowName ? { configuration: rowName } : {})
-      },
-      archive: false,
       completed: (bodies) =>
         slicer
           ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
@@ -20653,7 +20572,6 @@ export function App() {
           throw new Error('The 3MF export returned no file.');
         }
         return {
-          body: new Blob([result.data], { type: info.contentType }),
           save: () =>
             slicer
               ? openInDesktopSlicer(slicer.id, fileName, result.data)
@@ -21520,7 +21438,39 @@ export function App() {
           selection.hash,
           detail?.point
         );
-        return face ? command.pickFace(face) : true;
+        if (face) return command.pickFace(face);
+        // M02 (schema v113): with a feature picked, a flat face no feature
+        // made is a mirror pattern's plane, as Mirror takes one.
+        // An edit may keep a repeated feature that shows no face to pick
+        // (review), so a kept source counts as one picked.
+        if (
+          command.spec?.wantsPlane &&
+          (command.slots.faces.length > 0 ||
+            Boolean(command.options.keepSources))
+        ) {
+          const geometry = (
+            previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+            representations[selection.bodyId]
+          )?.topology?.faces.find(
+            (candidate) =>
+              candidate.topologyId === selection.topologyId ||
+              (selection.hash !== undefined &&
+                candidate.hash === selection.hash)
+          )?.geometry;
+          const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+          if (
+            geometry?.normal &&
+            on &&
+            geometry.surfaceType.toLowerCase() === 'plane'
+          ) {
+            return command.pickPlane({
+              kind: 'face',
+              origin: on,
+              normal: geometry.normal
+            });
+          }
+        }
+        return true;
       }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
@@ -22813,7 +22763,8 @@ export function App() {
         doc.units,
         sketch?.dimensionLabelPositions,
         sketch?.referenceDimensions,
-        sketch?.composites
+        sketch?.composites,
+        appSettings.sketching.referenceDisplayUnit
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -26424,7 +26375,9 @@ export function App() {
             ? { skippedInstances: request.skippedInstances }
             : {}),
           ...(request.points ? { points: request.points } : {}),
-          ...(request.path ? { path: request.path } : {})
+          ...(request.path ? { path: request.path } : {}),
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {}),
+          ...(request.spacingMode ? { spacingMode: request.spacingMode } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -26907,6 +26860,17 @@ export function App() {
   // Mirrored before paint for the tool availability computed above it.
   const inPlaceBooleanRunning =
     booleanOperationSwitch(inPlace.tool, 'union') !== null;
+  // U11: the viewport names each picked body Base or Tool, as Options does.
+  const inPlaceBodyPickRoles = useMemo(
+    () =>
+      inPlaceBooleanRunning
+        ? booleanOperandRoles(
+            inPlace.slots.bodies,
+            (id) => representations[id]?.name
+          )
+        : null,
+    [inPlaceBooleanRunning, inPlace.slots.bodies, representations]
+  );
   useLayoutEffect(() => {
     setBooleanCommandRunning(inPlaceBooleanRunning);
   }, [inPlaceBooleanRunning]);
@@ -27250,10 +27214,17 @@ export function App() {
             ? 'Back distance'
             : valueId === 'faceOffset'
               ? 'Offset from face'
-              : 'Draft angle',
+              : valueId === 'startOffset'
+                ? 'Start offset'
+                : valueId === 'backDraftAngle'
+                  ? 'Back draft angle'
+                  : 'Draft angle',
       initial: text,
       selectInitial: true,
-      unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
+      unitKind:
+        valueId === 'draftAngle' || valueId === 'backDraftAngle'
+          ? 'angle'
+          : 'length',
       baseline: value,
       baselineRaw: text,
       ...(at ? { fixedClientAnchor: at } : {})
@@ -27284,7 +27255,9 @@ export function App() {
       valueId !== 'distance' &&
       valueId !== 'backDistance' &&
       valueId !== 'faceOffset' &&
-      valueId !== 'draftAngle'
+      valueId !== 'startOffset' &&
+      valueId !== 'draftAngle' &&
+      valueId !== 'backDraftAngle'
     ) {
       return;
     }
@@ -27780,14 +27753,28 @@ export function App() {
     };
     // An edit has no region arrow: its distance gets one of its own.
     if (edited && !regionExtrudeState) return [];
+    // F01 (v121): the extrusion starts on its start plane, so its back
+    // arrow, draft rig and an edit's distance arrow stand there too.
+    const lift =
+      regionExtrudeState?.extent === 'through-all'
+        ? 0
+        : finite(regionExtrudeState?.startOffset, 0);
+    const lifted = (point: Vector3): Vector3 =>
+      lift === 0
+        ? point
+        : {
+            x: point.x + view.basis.normal.x * lift,
+            y: point.y + view.basis.normal.y * lift,
+            z: point.z + view.basis.normal.z * lift
+          };
     return extrudeHandles(
-      loops.outline,
+      loops.outline.map(lifted),
       view.basis.normal,
       edited
         ? `edit:${extrudeEditFeature!.featureId}`
         : `${pick.sketchId}:${pick.regionFingerprint}`,
       state,
-      loops.holes,
+      loops.holes.map((hole) => hole.map(lifted)),
       edited !== null
     ).map((shape) => {
       const handle = {
@@ -28751,6 +28738,15 @@ export function App() {
   }
 
   /** Armed region handle for the viewport. */
+  // F01 (v121): the region's arrow and ghost stand on the start plane.
+  // Through all takes none: a start typed before switching to it is held
+  // for switching back, not shown.
+  const regionStartOffset =
+    regionExtrudeState &&
+    regionExtrudeState.extent !== 'through-all' &&
+    Number.isFinite(regionExtrudeState.startOffset)
+      ? regionExtrudeState.startOffset
+      : 0;
   const regionHandleTarget = useMemo(() => {
     if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return null;
@@ -28761,6 +28757,7 @@ export function App() {
       regionFingerprint: anchor.regionFingerprint,
       samplePoint: anchor.samplePoint,
       area: anchor.area,
+      ...(regionStartOffset !== 0 ? { startOffset: regionStartOffset } : {}),
       initialValue: regionDraftDistance.current ?? interaction.lastValue ?? 0,
       followers: interaction.targets
         .filter((target) => target !== anchor)
@@ -28769,7 +28766,7 @@ export function App() {
           samplePoint: target.samplePoint
         }))
     };
-  }, [interaction]);
+  }, [interaction, regionStartOffset]);
 
   /**
    * The extrude a region gesture describes, before its operation is decided.
@@ -28822,7 +28819,9 @@ export function App() {
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       toFace: regionExtrudeSettings.current?.toFace,
       toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
+      startOffset: regionExtrudeSettings.current?.startOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
+      backDraftAngleDeg: regionExtrudeSettings.current?.backDraftAngleDeg,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
@@ -36696,6 +36695,14 @@ export function App() {
               resolve={resolveDocumentValue}
               disabled={sketchSolving || geometryBusy}
               onCommand={executeCommand}
+              displayUnit={appSettings.sketching.referenceDisplayUnit}
+              onDisplayUnitChange={(referenceDisplayUnit) => {
+                const current = appSettingsRef.current;
+                handleAppSettingsChange({
+                  ...current,
+                  sketching: { ...current.sketching, referenceDisplayUnit }
+                });
+              }}
             />
           ) : null
         }
@@ -37248,8 +37255,7 @@ export function App() {
           shareSession={
             shareSession
               ? {
-                  // A plaintext link always opens in Tweak.
-                  mode: shareSession.encryptedMode ?? 'tweak',
+                  mode: shareSession.mode,
                   onMakeCopy: requestShareCopy
                 }
               : null
@@ -37469,6 +37475,7 @@ export function App() {
             }
             sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
+            bodyPickRoles={inPlaceBodyPickRoles}
             selectedTopology={
               parameterPreview || currentGeometrySnapshot
                 ? null
@@ -37863,7 +37870,10 @@ export function App() {
               !modelingLocked &&
               (tool === 'sketch' ||
                 Boolean(
-                  inPlaceSpec?.wantsPlane && inPlace.slots.bodies.length > 0
+                  inPlaceSpec?.wantsPlane &&
+                  (inPlace.slots.bodies.length > 0 ||
+                    // M02: a mirror pattern's features, picked first.
+                    inPlace.slots.faces.some((face) => face.feature))
                 ) ||
                 // Not while edges are filtered for: a ghost plane in front
                 // of an edge would take the click meant for its end.
@@ -38367,6 +38377,13 @@ export function App() {
                           const valueId = keypad.commandValueId ?? '';
                           moveRegionExtrudeHandle(valueId, value);
                           setRegionExtrudeValue(valueId, value, raw, true);
+                          return;
+                        }
+                        if (keypad.kind === 'offset') {
+                          // The exact worker can build while the viewport prepares
+                          // the local deformation for the same typed value.
+                          handleOffsetPreview(value);
+                          offsetSetterRef.current?.(value);
                           return;
                         }
                         offsetSetterRef.current?.(value);

@@ -19,13 +19,50 @@ import type {
 import { ownEntry } from './document-validation';
 
 import {
+  isSketchCompositeCenterTarget,
   isSketchCompositeCornerTarget,
   isSketchCompositeSideTarget,
+  resolveSketchCompositeCenterIdentity,
+  resolveSketchCompositeCenterTarget,
   resolveSketchCompositeCornerTarget,
   resolveSketchCompositeSideTarget,
   resolveSketchCompositeTargetIdentity,
-  sketchCompositeTargetMemberIds
+  sketchCompositeCenterAliases,
+  sketchCompositeTargetMemberIds,
+  type SketchCompositeCornerTarget
 } from './sketch-composite-targets';
+import {
+  isSketchShapeCenterTarget,
+  isSketchShapeCornerTarget,
+  isSketchShapeSideTarget,
+  qualifySketchShapeTarget,
+  resolveSketchShapePointTarget,
+  resolveSketchShapeSideTarget
+} from './sketch-shape-targets';
+
+/** Every saved point-target form, including v125 shape centres and legacy shapes. */
+export function isSketchReferencePointTarget(
+  value: unknown
+): value is SketchReferencePointTarget {
+  return (
+    isSketchPointRef(value) ||
+    isSketchCompositeCornerTarget(value) ||
+    isSketchCompositeCenterTarget(value) ||
+    isSketchShapeCornerTarget(value) ||
+    isSketchShapeCenterTarget(value)
+  );
+}
+
+/** Every saved curve-target form, including v125 legacy-shape sides. */
+export function isSketchReferenceCurveTarget(
+  value: unknown
+): value is SketchReferenceCurveTarget {
+  return (
+    typeof value === 'string' ||
+    isSketchCompositeSideTarget(value) ||
+    isSketchShapeSideTarget(value)
+  );
+}
 
 /**
  * S02-A — shared types and pure resolver for driven/reference dimensions.
@@ -160,8 +197,8 @@ export function isSketchReferenceDimensionData(
   switch (value.dimensionKind) {
     case 'distance':
       return (
-        (isSketchPointRef(value.a) || isSketchCompositeCornerTarget(value.a)) &&
-        (isSketchPointRef(value.b) || isSketchCompositeCornerTarget(value.b)) &&
+        isSketchReferencePointTarget(value.a) &&
+        isSketchReferencePointTarget(value.b) &&
         isDistanceMode(value.distanceMode) &&
         Object.keys(value).length === ('distanceMode' in value ? 4 : 3)
       );
@@ -171,8 +208,8 @@ export function isSketchReferenceDimensionData(
       );
     case 'angle':
       return (
-        (typeof value.a === 'string' || isSketchCompositeSideTarget(value.a)) &&
-        (typeof value.b === 'string' || isSketchCompositeSideTarget(value.b)) &&
+        isSketchReferenceCurveTarget(value.a) &&
+        isSketchReferenceCurveTarget(value.b) &&
         Object.keys(value).length === 3
       );
     default:
@@ -258,14 +295,18 @@ export function hasSketchReferenceDimensions(
 export function sketchReferenceDimensionObjectIds(
   data: SketchReferenceDimensionData
 ): EntityId[] {
-  const pointIds = (target: SketchReferencePointTarget) =>
-    isSketchPointRef(target)
+  const pointIds = (target: SketchReferencePointTarget): EntityId[] =>
+    isSketchPointRef(target) ||
+    isSketchShapeCornerTarget(target) ||
+    isSketchShapeCenterTarget(target)
       ? [target.objectId]
       : sketchCompositeTargetMemberIds(target);
-  const curveIds = (target: SketchReferenceCurveTarget) =>
+  const curveIds = (target: SketchReferenceCurveTarget): EntityId[] =>
     typeof target === 'string'
       ? [target]
-      : sketchCompositeTargetMemberIds(target);
+      : isSketchShapeSideTarget(target)
+        ? [target.objectId]
+        : sketchCompositeTargetMemberIds(target);
   return [
     ...new Set(
       data.dimensionKind === 'distance'
@@ -277,25 +318,51 @@ export function sketchReferenceDimensionObjectIds(
   ];
 }
 
-type PrimitiveReferenceDimensionData =
+/**
+ * A lowered point operand: a primitive point the existing rules measure, or a
+ * point derived from a named shape (a composite centre, a legacy shape's
+ * corner or centre). `aliases` are the primitive points naming the same
+ * physical target, so one target picked through two names is refused.
+ */
+type PointOperand =
+  | { kind: 'ref'; ref: SketchPointRef; aliases: SketchPointRef[] }
+  | {
+      kind: 'derived';
+      key: string;
+      label: string;
+      aliases: SketchPointRef[];
+      /** Present only when lowered with a resolver. */
+      point?: SketchReferencePoint;
+    };
+
+/** A lowered curve operand: a real line, or a legacy shape's side. */
+type CurveOperand =
+  | { kind: 'id'; id: EntityId }
+  | {
+      kind: 'derived';
+      key: string;
+      label: string;
+      /** Present only when lowered with a resolver. */
+      start?: SketchReferencePoint;
+      end?: SketchReferencePoint;
+    };
+
+type LoweredReferenceDimensionData =
   | (Omit<
       Extract<SketchReferenceDimensionData, { dimensionKind: 'distance' }>,
       'a' | 'b'
     > & {
-      a: SketchPointRef;
-      b: SketchPointRef;
+      a: PointOperand;
+      b: PointOperand;
     })
   | Extract<SketchReferenceDimensionData, { dimensionKind: 'radius' }>
-  | { dimensionKind: 'angle'; a: EntityId; b: EntityId };
+  | { dimensionKind: 'angle'; a: CurveOperand; b: CurveOperand };
 
 type LoweredReferenceTargets =
-  | { ok: true; data: PrimitiveReferenceDimensionData }
+  | { ok: true; data: LoweredReferenceDimensionData }
   | { ok: false; reason: string };
 
-function pointTargetAliases(
-  target: SketchReferencePointTarget
-): SketchPointRef[] {
-  if (isSketchPointRef(target)) return [target];
+function cornerAliases(target: SketchCompositeCornerTarget): SketchPointRef[] {
   const { edgeIds } = target.topology;
   return [
     { objectId: edgeIds[target.index]!, point: 'start' },
@@ -306,98 +373,196 @@ function pointTargetAliases(
   ];
 }
 
+function sameRef(x: SketchPointRef, y: SketchPointRef): boolean {
+  return x.objectId === y.objectId && x.point === y.point;
+}
+
+function samePointOperand(a: PointOperand, b: PointOperand): boolean {
+  if (a.kind === 'derived' && b.kind === 'derived' && a.key === b.key)
+    return true;
+  return a.aliases.some((x) => b.aliases.some((y) => sameRef(x, y)));
+}
+
+function curveOperandName(operand: CurveOperand): string {
+  return operand.kind === 'id' ? String(operand.id) : operand.label;
+}
+
+function sameCurveOperand(a: CurveOperand, b: CurveOperand): boolean {
+  return a.kind === 'id' && b.kind === 'id'
+    ? a.id === b.id
+    : a.kind === 'derived' && b.kind === 'derived' && a.key === b.key;
+}
+
+function pointOperandLabel(operand: PointOperand): string {
+  return operand.kind === 'ref' ? pointTargetLabel(operand.ref) : operand.label;
+}
+
 function lowerReferenceTargets(
   objects: ReadonlyMap<EntityId, SketchObjectData>,
   data: SketchReferenceDimensionData,
   composites: readonly SketchComposite[],
   resolve?: ReferenceValueResolve
 ): LoweredReferenceTargets {
-  const point = (
-    target: SketchReferencePointTarget
-  ): { ok: true; ref: SketchPointRef } | { ok: false; reason: string } => {
-    if (isSketchPointRef(target)) return { ok: true, ref: target };
-    if (!isSketchCompositeCornerTarget(target))
-      return { ok: false, reason: 'the point target descriptor is malformed.' };
-    if (resolve) {
-      const result = resolveSketchCompositeCornerTarget(
+  type PointResult =
+    { ok: true; operand: PointOperand } | { ok: false; reason: string };
+  const point = (target: SketchReferencePointTarget): PointResult => {
+    if (isSketchPointRef(target))
+      return {
+        ok: true,
+        operand: { kind: 'ref', ref: target, aliases: [target] }
+      };
+    if (isSketchCompositeCornerTarget(target)) {
+      const aliases = cornerAliases(target);
+      if (resolve) {
+        const result = resolveSketchCompositeCornerTarget(
+          target,
+          composites,
+          objects,
+          resolve
+        );
+        return result.status === 'resolved'
+          ? {
+              ok: true,
+              operand: { kind: 'ref', ref: result.pointRef, aliases }
+            }
+          : { ok: false, reason: result.reason };
+      }
+      const identity = resolveSketchCompositeTargetIdentity(
         target,
         composites,
-        objects,
-        resolve
+        objects
       );
-      return result.status === 'resolved'
-        ? { ok: true, ref: result.pointRef }
-        : { ok: false, reason: result.reason };
-    }
-    const identity = resolveSketchCompositeTargetIdentity(
-      target,
-      composites,
-      objects
-    );
-    return identity.status === 'resolved'
-      ? {
-          ok: true,
-          ref: {
-            objectId: identity.composite.edgeIds[target.index]!,
-            point: 'start'
+      return identity.status === 'resolved'
+        ? {
+            ok: true,
+            operand: {
+              kind: 'ref',
+              ref: {
+                objectId: identity.composite.edgeIds[target.index]!,
+                point: 'start'
+              },
+              aliases
+            }
           }
-        }
-      : { ok: false, reason: identity.reason };
-  };
-  const curve = (
-    target: SketchReferenceCurveTarget
-  ): { ok: true; id: EntityId } | { ok: false; reason: string } => {
-    if (typeof target === 'string') return { ok: true, id: target };
-    if (!isSketchCompositeSideTarget(target))
-      return { ok: false, reason: 'the side target descriptor is malformed.' };
-    if (resolve) {
-      const result = resolveSketchCompositeSideTarget(
+        : { ok: false, reason: identity.reason };
+    }
+    if (isSketchCompositeCenterTarget(target)) {
+      const identity = resolveSketchCompositeCenterIdentity(
+        target,
+        composites,
+        objects
+      );
+      if (identity.status === 'unresolved')
+        return { ok: false, reason: identity.reason };
+      const operand: PointOperand = {
+        kind: 'derived',
+        key: `composite-center:${target.compositeId}`,
+        label: `composite "${target.compositeId}" centre`,
+        aliases: sketchCompositeCenterAliases(identity.composite)
+      };
+      if (!resolve) return { ok: true, operand };
+      const result = resolveSketchCompositeCenterTarget(
         target,
         composites,
         objects,
         resolve
       );
       return result.status === 'resolved'
-        ? { ok: true, id: result.objectId }
+        ? { ok: true, operand: { ...operand, point: result.point } }
         : { ok: false, reason: result.reason };
     }
-    const identity = resolveSketchCompositeTargetIdentity(
-      target,
-      composites,
-      objects
-    );
-    return identity.status === 'resolved'
-      ? { ok: true, id: identity.composite.edgeIds[target.index]! }
-      : { ok: false, reason: identity.reason };
+    if (
+      isSketchShapeCornerTarget(target) ||
+      isSketchShapeCenterTarget(target)
+    ) {
+      const qualified = qualifySketchShapeTarget(target, objects, resolve);
+      if (qualified.status === 'unresolved')
+        return { ok: false, reason: qualified.reason };
+      const operand: PointOperand = {
+        kind: 'derived',
+        key:
+          target.kind === 'shape-center'
+            ? `shape-center:${target.objectId}`
+            : `shape-corner:${target.objectId}:${target.index}`,
+        label:
+          target.kind === 'shape-center'
+            ? `shape "${target.objectId}" centre`
+            : `shape "${target.objectId}" corner ${target.index + 1}`,
+        aliases: []
+      };
+      if (!resolve) return { ok: true, operand };
+      const result = resolveSketchShapePointTarget(target, objects, resolve);
+      return result.status === 'resolved'
+        ? { ok: true, operand: { ...operand, point: result.point } }
+        : { ok: false, reason: result.reason };
+    }
+    return { ok: false, reason: 'the point target descriptor is malformed.' };
+  };
+  type CurveResult =
+    { ok: true; operand: CurveOperand } | { ok: false; reason: string };
+  const curve = (target: SketchReferenceCurveTarget): CurveResult => {
+    if (typeof target === 'string')
+      return { ok: true, operand: { kind: 'id', id: target } };
+    if (isSketchCompositeSideTarget(target)) {
+      if (resolve) {
+        const result = resolveSketchCompositeSideTarget(
+          target,
+          composites,
+          objects,
+          resolve
+        );
+        return result.status === 'resolved'
+          ? { ok: true, operand: { kind: 'id', id: result.objectId } }
+          : { ok: false, reason: result.reason };
+      }
+      const identity = resolveSketchCompositeTargetIdentity(
+        target,
+        composites,
+        objects
+      );
+      return identity.status === 'resolved'
+        ? {
+            ok: true,
+            operand: {
+              kind: 'id',
+              id: identity.composite.edgeIds[target.index]!
+            }
+          }
+        : { ok: false, reason: identity.reason };
+    }
+    if (isSketchShapeSideTarget(target)) {
+      const qualified = qualifySketchShapeTarget(target, objects, resolve);
+      if (qualified.status === 'unresolved')
+        return { ok: false, reason: qualified.reason };
+      const operand: CurveOperand = {
+        kind: 'derived',
+        key: `shape-side:${target.objectId}:${target.index}`,
+        label: `shape "${target.objectId}" side ${target.index + 1}`
+      };
+      if (!resolve) return { ok: true, operand };
+      const result = resolveSketchShapeSideTarget(target, objects, resolve);
+      return result.status === 'resolved'
+        ? {
+            ok: true,
+            operand: { ...operand, start: result.start, end: result.end }
+          }
+        : { ok: false, reason: result.reason };
+    }
+    return { ok: false, reason: 'the side target descriptor is malformed.' };
   };
   if (data.dimensionKind === 'distance') {
     const a = point(data.a);
     if (!a.ok) return a;
     const b = point(data.b);
     if (!b.ok) return b;
-    // A logical held-line corner names both persisted endpoints meeting there.
-    // Ordinary primitive points retain their existing distinct-identity rule.
-    const aliasesA = pointTargetAliases(data.a);
-    const aliasesB = pointTargetAliases(data.b);
-    if (
-      (!isSketchPointRef(data.a) || !isSketchPointRef(data.b)) &&
-      aliasesA.some((x) =>
-        aliasesB.some((y) => x.objectId === y.objectId && x.point === y.point)
-      )
-    )
-      return {
-        ok: false,
-        reason:
-          'a reference distance needs two distinct points, not the same target twice.'
-      };
-    return { ok: true, data: { ...data, a: a.ref, b: b.ref } };
+    return { ok: true, data: { ...data, a: a.operand, b: b.operand } };
   }
   if (data.dimensionKind === 'angle') {
     const a = curve(data.a);
     if (!a.ok) return a;
     const b = curve(data.b);
     if (!b.ok) return b;
-    return { ok: true, data: { ...data, a: a.id, b: b.id } };
+    return { ok: true, data: { ...data, a: a.operand, b: b.operand } };
   }
   return { ok: true, data };
 }
@@ -473,33 +638,24 @@ export function validateSketchReferenceDimensionData(
           'the reference distance mode is unknown.'
         );
       }
-      const aData = objectsById.get(data.a.objectId);
-      if (!aData) {
-        throw creationError(
-          annotationId,
-          `point target ${pointTargetLabel(data.a)} is not part of this sketch.`
-        );
+      for (const operand of [data.a, data.b]) {
+        if (operand.kind === 'ref' && !objectsById.get(operand.ref.objectId)) {
+          throw creationError(
+            annotationId,
+            `point target ${pointTargetLabel(operand.ref)} is not part of this sketch.`
+          );
+        }
       }
-      const bData = objectsById.get(data.b.objectId);
-      if (!bData) {
-        throw creationError(
-          annotationId,
-          `point target ${pointTargetLabel(data.b)} is not part of this sketch.`
-        );
-      }
-      if (
-        data.a.objectId === data.b.objectId &&
-        data.a.point === data.b.point
-      ) {
+      if (samePointOperand(data.a, data.b)) {
         throw creationError(
           annotationId,
           'a reference distance needs two distinct points, not the same target twice.'
         );
       }
-      for (const [ref, objectData] of [
-        [data.a, aData],
-        [data.b, bData]
-      ] as const) {
+      for (const operand of [data.a, data.b]) {
+        if (operand.kind !== 'ref') continue;
+        const ref = operand.ref;
+        const objectData = objectsById.get(ref.objectId)!;
         if (
           objectData.objectKind !== 'line' &&
           objectData.objectKind !== 'circle' &&
@@ -539,34 +695,27 @@ export function validateSketchReferenceDimensionData(
       return;
     }
     case 'angle': {
-      const aData = objectsById.get(data.a);
-      if (!aData) {
-        throw creationError(
-          annotationId,
-          `target "${String(data.a)}" is not part of this sketch.`
-        );
+      for (const operand of [data.a, data.b]) {
+        if (operand.kind === 'id' && !objectsById.get(operand.id)) {
+          throw creationError(
+            annotationId,
+            `target "${String(operand.id)}" is not part of this sketch.`
+          );
+        }
       }
-      const bData = objectsById.get(data.b);
-      if (!bData) {
-        throw creationError(
-          annotationId,
-          `target "${String(data.b)}" is not part of this sketch.`
-        );
-      }
-      if (data.a === data.b) {
+      if (sameCurveOperand(data.a, data.b)) {
         throw creationError(
           annotationId,
           'an angle reference needs two distinct lines.'
         );
       }
-      for (const [objectId, objectData] of [
-        [data.a, aData],
-        [data.b, bData]
-      ] as const) {
+      for (const operand of [data.a, data.b]) {
+        if (operand.kind !== 'id') continue;
+        const objectData = objectsById.get(operand.id)!;
         if (objectData.objectKind !== 'line') {
           throw creationError(
             annotationId,
-            `an angle reference applies to two lines, not ${objectData.objectKind} "${String(objectId)}".`
+            `an angle reference applies to two lines, not ${objectData.objectKind} "${String(operand.id)}".`
           );
         }
       }
@@ -678,6 +827,64 @@ function resolvePoint(
   return { ok: true, point: { x, y } };
 }
 
+function resolvePointOperand(
+  objectsById: ReadonlyMap<EntityId, SketchObjectData>,
+  operand: PointOperand,
+  resolve: ReferenceValueResolve
+): { ok: true; point: SketchReferencePoint } | { ok: false; reason: string } {
+  if (operand.kind === 'ref')
+    return resolvePoint(objectsById, operand.ref, resolve);
+  return operand.point
+    ? { ok: true, point: operand.point }
+    : {
+        ok: false,
+        reason: `target expression could not be resolved (${operand.label}).`
+      };
+}
+
+/** A line's resolved ends, or a legacy shape side's. */
+function resolveCurveOperand(
+  objectsById: ReadonlyMap<EntityId, SketchObjectData>,
+  operand: CurveOperand,
+  resolve: ReferenceValueResolve
+):
+  | { ok: true; start: SketchReferencePoint; end: SketchReferencePoint }
+  | { ok: false; reason: string } {
+  if (operand.kind === 'derived')
+    return operand.start && operand.end
+      ? { ok: true, start: operand.start, end: operand.end }
+      : {
+          ok: false,
+          reason: `target expression could not be resolved (${operand.label}).`
+        };
+  const data = objectsById.get(operand.id);
+  if (!data)
+    return {
+      ok: false,
+      reason: `target "${String(operand.id)}" is not part of this sketch.`
+    };
+  if (data.objectKind !== 'line')
+    return {
+      ok: false,
+      reason: `an angle reference applies to two lines, not ${data.objectKind} "${String(operand.id)}".`
+    };
+  const x1 = finiteOrUndefined(resolve(data.x1));
+  const y1 = finiteOrUndefined(resolve(data.y1));
+  const x2 = finiteOrUndefined(resolve(data.x2));
+  const y2 = finiteOrUndefined(resolve(data.y2));
+  if (
+    x1 === undefined ||
+    y1 === undefined ||
+    x2 === undefined ||
+    y2 === undefined
+  )
+    return {
+      ok: false,
+      reason: 'target expression could not be resolved (angle line endpoint).'
+    };
+  return { ok: true, start: { x: x1, y: y1 }, end: { x: x2, y: y2 } };
+}
+
 /**
  * Pure measurement of one reference dimension from current sketch geometry.
  * Never throws for target problems, never calls the solver, and never mutates
@@ -715,21 +922,18 @@ export function resolveSketchReferenceDimension(
           'the reference distance mode is unknown.'
         );
       }
-      if (
-        data.a.objectId === data.b.objectId &&
-        data.a.point === data.b.point
-      ) {
+      if (samePointOperand(data.a, data.b)) {
         return unresolved(
           data.dimensionKind,
           annotationId,
           'a reference distance needs two distinct points, not the same target twice.'
         );
       }
-      const a = resolvePoint(objectsById, data.a, resolve);
+      const a = resolvePointOperand(objectsById, data.a, resolve);
       if (!a.ok) {
         return unresolved(data.dimensionKind, annotationId, a.reason);
       }
-      const b = resolvePoint(objectsById, data.b, resolve);
+      const b = resolvePointOperand(objectsById, data.b, resolve);
       if (!b.ok) {
         return unresolved(data.dimensionKind, annotationId, b.reason);
       }
@@ -745,7 +949,7 @@ export function resolveSketchReferenceDimension(
         return unresolved(
           data.dimensionKind,
           annotationId,
-          `target expression could not be resolved (distance between ${pointTargetLabel(data.a)} and ${pointTargetLabel(data.b)}).`
+          `target expression could not be resolved (distance between ${pointOperandLabel(data.a)} and ${pointOperandLabel(data.b)}).`
         );
       }
       // Distinct points that currently coincide report a valid zero distance.
@@ -807,63 +1011,49 @@ export function resolveSketchReferenceDimension(
       };
     }
     case 'angle': {
-      if (data.a === data.b) {
+      if (sameCurveOperand(data.a, data.b)) {
         return unresolved(
           data.dimensionKind,
           annotationId,
           'an angle reference needs two distinct lines.'
         );
       }
-      const aData = objectsById.get(data.a);
-      const bData = objectsById.get(data.b);
-      if (!aData) {
+      for (const operand of [data.a, data.b]) {
+        if (operand.kind === 'id' && !objectsById.get(operand.id)) {
+          return unresolved(
+            data.dimensionKind,
+            annotationId,
+            `target "${String(operand.id)}" is not part of this sketch.`
+          );
+        }
+      }
+      // Kinds are judged before expressions, as they always were.
+      for (const operand of [data.a, data.b]) {
+        const objectData =
+          operand.kind === 'id' ? objectsById.get(operand.id) : undefined;
+        if (objectData && objectData.objectKind !== 'line') {
+          return unresolved(
+            data.dimensionKind,
+            annotationId,
+            `an angle reference applies to two lines, not ${objectData.objectKind} "${String(operand.kind === 'id' ? operand.id : '')}".`
+          );
+        }
+      }
+      const lineA = resolveCurveOperand(objectsById, data.a, resolve);
+      const lineB = lineA.ok
+        ? resolveCurveOperand(objectsById, data.b, resolve)
+        : lineA;
+      if (!lineA.ok || !lineB.ok) {
         return unresolved(
           data.dimensionKind,
           annotationId,
-          `target "${String(data.a)}" is not part of this sketch.`
+          (!lineA.ok ? lineA : (lineB as { reason: string })).reason
         );
       }
-      if (!bData) {
-        return unresolved(
-          data.dimensionKind,
-          annotationId,
-          `target "${String(data.b)}" is not part of this sketch.`
-        );
-      }
-      if (aData.objectKind !== 'line' || bData.objectKind !== 'line') {
-        const badId = aData.objectKind !== 'line' ? data.a : data.b;
-        const badKind =
-          aData.objectKind !== 'line' ? aData.objectKind : bData.objectKind;
-        return unresolved(
-          data.dimensionKind,
-          annotationId,
-          `an angle reference applies to two lines, not ${badKind} "${String(badId)}".`
-        );
-      }
-      const ax1 = finiteOrUndefined(resolve(aData.x1));
-      const ay1 = finiteOrUndefined(resolve(aData.y1));
-      const ax2 = finiteOrUndefined(resolve(aData.x2));
-      const ay2 = finiteOrUndefined(resolve(aData.y2));
-      const bx1 = finiteOrUndefined(resolve(bData.x1));
-      const by1 = finiteOrUndefined(resolve(bData.y1));
-      const bx2 = finiteOrUndefined(resolve(bData.x2));
-      const by2 = finiteOrUndefined(resolve(bData.y2));
-      if (
-        ax1 === undefined ||
-        ay1 === undefined ||
-        ax2 === undefined ||
-        ay2 === undefined ||
-        bx1 === undefined ||
-        by1 === undefined ||
-        bx2 === undefined ||
-        by2 === undefined
-      ) {
-        return unresolved(
-          data.dimensionKind,
-          annotationId,
-          'target expression could not be resolved (angle line endpoint).'
-        );
-      }
+      const { x: ax1, y: ay1 } = lineA.start;
+      const { x: ax2, y: ay2 } = lineA.end;
+      const { x: bx1, y: by1 } = lineB.start;
+      const { x: bx2, y: by2 } = lineB.end;
       const ux = ax2 - ax1;
       const uy = ay2 - ay1;
       const vx = bx2 - bx1;
@@ -878,7 +1068,7 @@ export function resolveSketchReferenceDimension(
         return unresolved(
           data.dimensionKind,
           annotationId,
-          `invalid line direction on "${String(lengthA <= 1e-9 ? data.a : data.b)}"; an angle reference needs finite non-zero direction.`
+          `invalid line direction on "${curveOperandName(lengthA <= 1e-9 ? data.a : data.b)}"; an angle reference needs finite non-zero direction.`
         );
       }
       const cosine = Math.max(
@@ -981,11 +1171,19 @@ export function describeSketchReferenceDimension(
   const pointName = (target: SketchReferencePointTarget) =>
     isSketchPointRef(target)
       ? `${nameOf(target.objectId)}.${target.point}`
-      : `${nameOfComposite(target.compositeId)} · Corner ${target.index + 1}`;
+      : isSketchShapeCornerTarget(target)
+        ? `${nameOf(target.objectId)} (parametric) · Corner ${target.index + 1}`
+        : isSketchShapeCenterTarget(target)
+          ? `${nameOf(target.objectId)} (parametric) · Centre`
+          : isSketchCompositeCenterTarget(target)
+            ? `${nameOfComposite(target.compositeId)} · Centre`
+            : `${nameOfComposite(target.compositeId)} · Corner ${target.index + 1}`;
   const curveName = (target: SketchReferenceCurveTarget) =>
     typeof target === 'string'
       ? nameOf(target)
-      : `${nameOfComposite(target.compositeId)} · Side ${target.index + 1}`;
+      : isSketchShapeSideTarget(target)
+        ? `${nameOf(target.objectId)} (parametric) · Side ${target.index + 1}`
+        : `${nameOfComposite(target.compositeId)} · Side ${target.index + 1}`;
   switch (data.dimensionKind) {
     case 'distance':
       return `Reference ${data.distanceMode && data.distanceMode !== 'absolute' ? `${data.distanceMode} ` : ''}distance · ${pointName(data.a)} ↔ ${pointName(data.b)}`;

@@ -1,5 +1,7 @@
 import {
   documentNodesWithHistory,
+  patternSpacingModeProblem,
+  type PatternKind,
   type ProjectDocument,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -289,6 +291,18 @@ export function assertPatternContentSchema(
     assertMinimumProjectSchema(version, 63, 'Patterns on sketch points');
   if (data.patternKind === 'path' || data.path !== undefined)
     assertMinimumProjectSchema(version, 112, 'Patterns along a sketch path');
+  if (data.patternKind === 'mirror' || data.mirrorPlane !== undefined)
+    assertMinimumProjectSchema(version, 119, 'Mirror patterns');
+  if (data.spacingMode !== undefined) {
+    assertMinimumProjectSchema(version, 120, 'Total-length patterns');
+    // Stored only on a linear pattern, as creating and editing one keep it
+    // (review): another kind would build without it and read as with it.
+    const problem = patternSpacingModeProblem({
+      patternKind: data.patternKind as PatternKind,
+      spacingMode: data.spacingMode
+    });
+    if (problem) throw new Error(problem);
+  }
 }
 
 /**

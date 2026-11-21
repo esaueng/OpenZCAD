@@ -59,10 +59,11 @@ export function inspectTriangleMeshClosure(
   // (notably after converting a holder to inches). Search adjacent cells
   // within the existing per-axis weld tolerance. Compare against the stored
   // representative, never an alias, so chains cannot bridge a larger gap.
-  const vertices = new Map<
-    string,
-    { id: number; x: number; y: number; z: number }
-  >();
+  type Vertex = { id: number; x: number; y: number; z: number };
+  // An empty plane or column rules out its neighbouring cells without
+  // building a coordinate string for each of the 26 possible neighbours.
+  const planes = new Map<number, Map<number, Map<number, Vertex>>>();
+  let cellCount = 0;
   const indexedIds = new Map<number, number>();
   const vertexId = (index: number): number => {
     const cached = indexedIds.get(index);
@@ -74,21 +75,24 @@ export function inspectTriangleMeshClosure(
     const cellX = Math.floor(x / positionQuantization);
     const cellY = Math.floor(y / positionQuantization);
     const cellZ = Math.floor(z / positionQuantization);
-    const key = `${cellX},${cellY},${cellZ}`;
+    let plane = planes.get(cellX);
+    let column = plane?.get(cellY);
     const coincides = (v: { x: number; y: number; z: number }) =>
       Math.abs(v.x - x) <= positionQuantization &&
       Math.abs(v.y - y) <= positionQuantization &&
       Math.abs(v.z - z) <= positionQuantization;
-    let vertex = vertices.get(key);
+    let vertex = column?.get(cellZ);
     if (!vertex || !coincides(vertex)) {
       vertex = undefined;
       search: for (let dx = -1; dx <= 1; dx++) {
+        const nearPlane = planes.get(cellX + dx);
+        if (!nearPlane) continue;
         for (let dy = -1; dy <= 1; dy++) {
+          const nearColumn = nearPlane.get(cellY + dy);
+          if (!nearColumn) continue;
           for (let dz = -1; dz <= 1; dz++) {
             if (dx === 0 && dy === 0 && dz === 0) continue;
-            const candidate = vertices.get(
-              `${cellX + dx},${cellY + dy},${cellZ + dz}`
-            );
+            const candidate = nearColumn.get(cellZ + dz);
             if (candidate && coincides(candidate)) {
               vertex = candidate;
               break search;
@@ -98,8 +102,19 @@ export function inspectTriangleMeshClosure(
       }
     }
     if (!vertex) {
-      vertex = { id: vertices.size, x, y, z };
-      vertices.set(key, vertex);
+      if (!plane) {
+        plane = new Map();
+        planes.set(cellX, plane);
+      }
+      if (!column) {
+        column = new Map();
+        plane.set(cellY, column);
+      }
+      vertex = { id: cellCount, x, y, z };
+      // A non-finite position can replace a non-coincident value in the
+      // same cell. Preserve numbering by distinct cells even in that case.
+      if (!column.has(cellZ)) cellCount += 1;
+      column.set(cellZ, vertex);
     }
     indexedIds.set(index, vertex.id);
     return vertex.id;
@@ -532,6 +547,33 @@ export function droppedUnionOperandWarning(
 interface BooleanFaceUnifier {
   copyAndTransformSolid(solid: number, matrix: Float64Array): number;
   unifyFacesChecked(solid: number): unknown;
+}
+
+/** Return a strictly healed copy, or the input when no strict merge was kept.
+ * A missing binding or kernel error leaves the checked-report path available. */
+export function unifyCopyIfStrict(
+  kernel: BooleanFaceUnifier & {
+    unifyFacesIfStrict?(solid: number): number;
+    deleteSolid(solid: number): void;
+  },
+  rawSolid: number
+): number | undefined {
+  if (!kernel.unifyFacesIfStrict) return undefined;
+  let candidate: number | undefined;
+  try {
+    candidate = kernel.copyAndTransformSolid(rawSolid, IDENTITY_MATRIX);
+    return kernel.unifyFacesIfStrict(candidate) > 0 ? candidate : rawSolid;
+  } catch {
+    if (candidate !== undefined) {
+      // The checked fallback creates its own copy of the raw solid.
+      try {
+        kernel.deleteSolid(candidate);
+      } catch {
+        // A kernel failure can also invalidate the temporary handle.
+      }
+    }
+    return undefined;
+  }
 }
 
 /** A face-unified copy of a boolean result and the kernel's report on it. */

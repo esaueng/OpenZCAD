@@ -4,6 +4,7 @@
  * the read-only bridge between kernel handles and the persisted topology
  * identity contracts in `topology-fingerprint`.
  */
+import { MEASUREMENT_DEFLECTION } from './measurement-deflection';
 import type { RemusKernel } from './remus-runtime';
 import type { Vec3 } from '@openzcad/geometry';
 import type {
@@ -37,7 +38,7 @@ import { topologyHashOfWitness } from './topology-lineage';
 import { surfaceTypeOf, syncReadMemoFor } from './exact-sync-memo';
 
 /** Chord tolerance for identity sampling; mirrors the display default. */
-export const MEASUREMENT_DEFLECTION = 0.08;
+export { MEASUREMENT_DEFLECTION };
 
 /**
  * Sample the ADR-011 edge identity quantities from a Remus edge.

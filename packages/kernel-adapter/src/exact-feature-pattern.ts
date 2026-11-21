@@ -26,12 +26,17 @@ import {
   type QuantizedTopologyPoint
 } from '@openzcad/shared';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  extrudeParamResolver,
+  listFeaturesInOrder,
+  validateExtrudeExtent
+} from '@openzcad/document-core';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import type { ExactShape } from './exact-types';
 import { AdapterRefusal } from './adapter-refusal';
 import {
   collapseShape,
+  faceComponentsOf,
   fuseUniformSolidChecked,
   unifyBooleanFaces,
   verdictRefusesUnion
@@ -39,6 +44,7 @@ import {
 import { exactCutWithCancellation } from './exact-cancellation';
 import {
   holeToolSolids,
+  measureCylinderFaces,
   missingHoleBore,
   type HoleToolSpec
 } from './exact-cylinder-ops';
@@ -56,6 +62,8 @@ import {
   type RemusLineageState
 } from './remus-lineage';
 import { buildSweep } from './exact-profile-builders';
+import { buildWrapSolids } from './exact-wrap';
+import { buildRibSolid } from './exact-rib';
 import { raiseFeatureWarning } from './exact-feature-warnings';
 import { bodyName, inheritMeshOrigin } from './exact-shape-utils';
 import { requireValidSolid } from './kernel-validation';
@@ -63,6 +71,22 @@ import type { RemusLineageDiagnostic } from './remus-lineage';
 import { throughAllSpan, unionBounds } from './through-all';
 
 type Vec3 = { x: number; y: number; z: number };
+
+/** Whether a copy's placement is a reflection (a negative determinant). */
+export function copyReflects(matrix: Float64Array): boolean {
+  const det =
+    matrix[0]! * (matrix[5]! * matrix[10]! - matrix[6]! * matrix[9]!) -
+    matrix[1]! * (matrix[4]! * matrix[10]! - matrix[6]! * matrix[8]!) +
+    matrix[2]! * (matrix[4]! * matrix[9]! - matrix[5]! * matrix[8]!);
+  return det < 0;
+}
+
+/** The hand a thread's mirror image winds: right becomes left. */
+export function mirroredHand(
+  hand: 'right' | 'left' | undefined
+): 'right' | 'left' {
+  return hand === 'left' ? 'right' : 'left';
+}
 
 /** One copy the pattern keeps, beside the original. */
 export interface FeaturePatternCopy {
@@ -306,6 +330,25 @@ interface RepeatedHole {
   tapped: boolean;
 }
 
+function requirePatternBores(
+  kernel: FeatureBuildContext['kernel'],
+  solid: number,
+  holes: readonly RepeatedHole[]
+): void {
+  if (holes.length === 0) return;
+  // The solid stays fixed throughout this check. A later cut or thread
+  // operation gets a fresh set of face measurements.
+  const cylinders = measureCylinderFaces(kernel, solid);
+  for (const { label, spec } of holes) {
+    const missing = missingHoleBore(cylinders, spec);
+    if (missing !== null) {
+      throw new Error(
+        `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
+      );
+    }
+  }
+}
+
 /**
  * Builds a feature pattern's body: the target with every kept copy of each
  * repeated feature cut into it or fused onto it, in history order.
@@ -425,6 +468,13 @@ export function buildFeaturePattern(
       seed = bores.flatMap(({ spec }) => holeToolSolids(kernel, spec));
       operation = 'cut';
     } else if (sourceData.featureKind === 'extrude') {
+      // The source's own stored extent, checked as its rebuild checks it: a
+      // copy never builds an extent the source refuses (a start offset a
+      // parameter moved off zero beside through all, say).
+      validateExtrudeExtent(
+        sourceData,
+        extrudeParamResolver(document, ctx.scope)
+      );
       operation = sourceData.operation === 'add' ? 'add' : 'cut';
       shapedSources.push(source.featureId);
       const sweepFeature =
@@ -439,9 +489,58 @@ export function buildFeaturePattern(
         result.sketchBases,
         (message) => raiseFeatureWarning(result, feature, message, 'advisory')
       ).solids;
+    } else if (sourceData.featureKind === 'wrap') {
+      // M02: the wrap's material made again from the cylinder or cone its
+      // build resolved, and repeated as a boss (emboss) or a cut (engrave).
+      operation = sourceData.mode === 'emboss' ? 'add' : 'cut';
+      shapedSources.push(source.featureId);
+      const frame = result.wrapFrames?.get(source.featureId);
+      const basis = result.sketchBases.get(sourceData.sketchId);
+      if (!frame || !basis) {
+        throw new Error(
+          `${source.name} did not build, so a pattern cannot repeat it; fix ${source.name} first.`
+        );
+      }
+      seed = buildWrapSolids(
+        kernel,
+        document,
+        sourceData,
+        frame,
+        basis,
+        ctx.scope,
+        (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
+        source.name
+      );
+    } else if (sourceData.featureKind === 'rib') {
+      // M02: the rib's material made again against the body it was made on,
+      // as its build makes it, and repeated as a boss.
+      operation = 'add';
+      shapedSources.push(source.featureId);
+      const before = result.shapes.get(sourceData.targetBodyId);
+      const basis = result.sketchBases.get(sourceData.profile.sketchId);
+      if (
+        !result.builtRibs?.has(source.featureId) ||
+        before?.solids.length !== 1 ||
+        !basis
+      ) {
+        throw new Error(
+          `${source.name} did not build, so a pattern cannot repeat it; fix ${source.name} first.`
+        );
+      }
+      seed = [
+        buildRibSolid(
+          kernel,
+          document,
+          sourceData,
+          before.solids[0]!,
+          basis,
+          ctx.scope,
+          (message) => raiseFeatureWarning(result, feature, message, 'advisory')
+        )
+      ];
     } else {
       throw new Error(
-        `${source.name} is not a hole, boss, cut, fillet or chamfer, so a feature pattern cannot repeat it.`
+        `${source.name} is not a hole, boss, cut, fillet, chamfer, wrap or rib, so a feature pattern cannot repeat it.`
       );
     }
     const repeated = repeat(seed);
@@ -508,39 +607,82 @@ export function buildFeaturePattern(
         }
         const copied = holes.filter((hole) => hole.source === source.featureId);
         // Proven plain first, as an untapped copy is below.
-        for (const { label, spec } of copied) {
-          const missing = missingHoleBore(kernel, solid, spec);
-          if (missing !== null) {
-            throw new Error(
-              `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
-            );
-          }
-        }
-        solid = tapHole(sourceData, solid, copied);
+        requirePatternBores(kernel, solid, copied);
+        // M02 (schema v119): a reflected copy's thread winds the other way,
+        // as a mirror image of the original's would (review).
+        const reflected = copies.some((copy) => copyReflects(copy.matrix));
+        solid = tapHole(
+          reflected
+            ? {
+                ...sourceData,
+                tapped: {
+                  ...sourceData.tapped,
+                  hand: mirroredHand(sourceData.tapped.hand)
+                }
+              }
+            : sourceData,
+          solid,
+          copied
+        );
         for (const hole of copied) hole.tapped = true;
       }
     } else {
-      const tools = repeated.solids.flat();
-      const union = fuseUniformSolidChecked(
-        kernel,
-        [solid, ...tools],
-        [
-          targetName,
-          ...copies.flatMap((copy, index) =>
-            (repeated.solids[index] ?? []).map(
-              () => `${source.name} copy ${copy.label}`
-            )
-          )
-        ]
-      );
-      if (verdictRefusesUnion(union.verdict)) {
-        throw new AdapterRefusal(
-          'union_not_solid',
-          'Union produced an open, non-manifold, or inconsistently ' +
-            'oriented result. Adjust the overlap or placement and try again.'
+      // A wrap's or a rib's copies are fused one at a time, as a wrap's own
+      // build fuses its pieces: the kernel declines several wrapped copies
+      // in one pass, though each fuses exactly on its own.
+      const batches =
+        sourceData.featureKind === 'wrap' || sourceData.featureKind === 'rib'
+          ? copies.map((copy, index) => ({
+              copy: copy.label,
+              tools: repeated.solids[index] ?? [],
+              labels: (repeated.solids[index] ?? []).map(
+                () => `${source.name} copy ${copy.label}`
+              )
+            }))
+          : [
+              {
+                copy: null as string | null,
+                tools: repeated.solids.flat(),
+                labels: copies.flatMap((copy, index) =>
+                  (repeated.solids[index] ?? []).map(
+                    () => `${source.name} copy ${copy.label}`
+                  )
+                )
+              }
+            ];
+      for (const { copy, tools, labels } of batches) {
+        if (tools.length === 0) continue;
+        // A copy fused on its own must join the body: one that lands clear
+        // of it near enough for its box to touch would fuse as a separate
+        // piece (review), which the union's own checks accept.
+        const piecesBefore =
+          copy === null ? null : faceComponentsOf(kernel, solid)?.length;
+        const union = fuseUniformSolidChecked(
+          kernel,
+          [solid, ...tools],
+          [targetName, ...labels]
         );
+        if (verdictRefusesUnion(union.verdict)) {
+          throw new AdapterRefusal(
+            'union_not_solid',
+            'Union produced an open, non-manifold, or inconsistently ' +
+              'oriented result. Adjust the overlap or placement and try again.'
+          );
+        }
+        if (copy !== null) {
+          const piecesAfter = faceComponentsOf(kernel, union.solid)?.length;
+          if (
+            piecesBefore === undefined ||
+            piecesAfter === undefined ||
+            piecesAfter > piecesBefore!
+          ) {
+            throw new Error(
+              `Copy ${copy} of ${source.name} does not join ${targetName}; skip it or change the pattern.`
+            );
+          }
+        }
+        solid = union.solid;
       }
-      solid = union.solid;
     }
   }
   requireValidSolid(
@@ -551,14 +693,11 @@ export function buildFeaturePattern(
   if (!(kernel.volume(solid, MEASUREMENT_DEFLECTION) > 0)) {
     throw new Error(`The feature pattern removed all of ${targetName}.`);
   }
-  for (const { label, spec } of holes.filter((hole) => !hole.tapped)) {
-    const missing = missingHoleBore(kernel, solid, spec);
-    if (missing !== null) {
-      throw new Error(
-        `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
-      );
-    }
-  }
+  requirePatternBores(
+    kernel,
+    solid,
+    holes.filter((hole) => !hole.tapped)
+  );
   // Faces the copies left alone keep their names; each copy's bore is named
   // by its own axis, the way a hole names its one.
   const lineage = carryAnalyticFaces(kernel, original, solid, target.lineage);

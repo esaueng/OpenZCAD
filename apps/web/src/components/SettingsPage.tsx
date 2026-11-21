@@ -410,6 +410,16 @@ const TANGENT_EDGE_OPTIONS: readonly SegmentOption<
   { value: 'hide', label: 'Hide' }
 ];
 
+const REFERENCE_DISPLAY_UNIT_OPTIONS: readonly SegmentOption<
+  AppSettings['sketching']['referenceDisplayUnit']
+>[] = [
+  { value: 'document', label: 'Document' },
+  { value: 'mm', label: 'mm' },
+  { value: 'cm', label: 'cm' },
+  { value: 'm', label: 'm' },
+  { value: 'inch', label: 'in' }
+];
+
 const RELATION_GLYPH_OPTIONS: readonly SegmentOption<
   AppSettings['sketching']['relationGlyphs']
 >[] = [
@@ -1841,6 +1851,24 @@ export function SettingsPage({
                     onChange={(snapHints) =>
                       patch({
                         sketching: { ...settings.sketching, snapHints }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Reference dimension units"
+                  hint="Show measured sketch references in another unit. The document and driving dimensions keep theirs."
+                >
+                  <Segmented
+                    label="Reference dimension units"
+                    value={settings.sketching.referenceDisplayUnit}
+                    options={REFERENCE_DISPLAY_UNIT_OPTIONS}
+                    onChange={(referenceDisplayUnit) =>
+                      patch({
+                        sketching: {
+                          ...settings.sketching,
+                          referenceDisplayUnit
+                        }
                       })
                     }
                   />

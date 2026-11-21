@@ -555,6 +555,136 @@ describe('face tools build the card state', () => {
     });
   });
 
+  it('gear: its teeth drag on the pitch circle at the same module (U11)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.gear;
+    const slots: InPlaceSlots = {
+      ...EMPTY,
+      plane: {
+        kind: 'principal',
+        plane: 'XY',
+        origin: { x: 0, y: 0, z: 0 },
+        normal: { x: 0, y: 0, z: 1 }
+      }
+    };
+    const options = { gearType: 'external', sizing: 'module' };
+    const handles = spec.handles(
+      slots,
+      { module: 2, teeth: 20, faceWidth: 10 },
+      CTX,
+      options
+    );
+    // Two drags on the gear, the face width and the teeth, and the module
+    // as a chip.
+    expect(handles.map((handle) => [handle.valueId, handle.kind])).toEqual([
+      ['faceWidth', 'linear'],
+      ['teeth', 'linear'],
+      ['module', 'chip']
+    ]);
+    const teeth = handles.find((handle) => handle.valueId === 'teeth')!;
+    // Half a module out per tooth: 20 teeth of module 2 put the head on the
+    // Ø40 pitch circle, and a drag lands on whole teeth.
+    expect(teeth).toMatchObject({
+      kind: 'linear',
+      params: {
+        origin: { x: 0, y: 0, z: 0 },
+        direction: { x: 1, y: 0, z: 0 },
+        scale: 1
+      },
+      step: 1
+    });
+    // A circular pitch of 3π is module 3: the arrow is rebuilt at its scale.
+    const coarse = spec
+      .handles(slots, { circularPitch: 3 * Math.PI, teeth: 20 }, CTX, {
+        ...options,
+        sizing: 'circular-pitch'
+      })
+      .find((handle) => handle.valueId === 'teeth')!;
+    expect(coarse.kind === 'linear' && coarse.params.scale).toBeCloseTo(1.5);
+    expect(coarse.key).not.toBe(teeth.key);
+    // A helical gear's module is normal: its teeth stand on the transverse
+    // pitch circle the kernel builds, 20 × 2 / cos 20° across (review).
+    const helical = spec
+      .handles(slots, { module: 2, teeth: 20, helixAngleDeg: 20 }, CTX, options)
+      .find((handle) => handle.valueId === 'teeth')!;
+    expect(helical.kind === 'linear' && helical.params.scale).toBeCloseTo(
+      1 / Math.cos((20 * Math.PI) / 180),
+      9
+    );
+    expect(helical.key).not.toBe(teeth.key);
+    // Ring, bevel and worm wheel teeth stand on a circle too; a rack's and a
+    // worm's count stays a chip.
+    for (const gearType of ['internal', 'bevel', 'worm-wheel']) {
+      expect(
+        spec
+          .handles(slots, { module: 2, teeth: 20 }, CTX, { gearType })
+          .find((handle) => handle.valueId === 'teeth')?.kind
+      ).toBe('linear');
+    }
+    expect(
+      spec
+        .handles(slots, { module: 2, teeth: 20 }, CTX, { gearType: 'rack' })
+        .find((handle) => handle.valueId === 'teeth')?.kind
+    ).toBe('chip');
+    expect(spec.hint(slots, options)).toBe(
+      'Drag the teeth arrow to add teeth, or the face width · tap a chip to type'
+    );
+    expect(spec.hint(slots, { gearType: 'rack' })).toBe(
+      'Drag the face width · tap a chip to type'
+    );
+  });
+
+  it('gear teeth: Options reads out what the picked face decides (U11)', () => {
+    const spec = IN_PLACE_TOOL_SPECS['gear-teeth'];
+    const boss: FacePick = {
+      bodyId: 'body_a' as BodyId,
+      hash: 11,
+      topologyId: 'f11',
+      surfaceType: 'cylinder',
+      point: { x: 11, y: 0, z: 10 },
+      cylinder: {
+        axisStart: { x: 0, y: 0, z: 0 },
+        axisEnd: { x: 0, y: 0, z: 12 },
+        radius: 11
+      }
+    };
+    const slots = { ...EMPTY, faces: [boss] };
+    const keep = { side: 'outside', fit: 'keep-diameter' };
+    // Before a pick, kept to a face, there is nothing to read out yet.
+    expect(
+      spec.summary?.({ options: keep, numbers: { teeth: 20 } }, 'mm', EMPTY)
+    ).toBeNull();
+    // Picked and untouched: the face sizes the teeth, which run all of it.
+    expect(
+      spec.summary?.(
+        { options: keep, numbers: { teeth: 20, faceWidth: 12 } },
+        'mm',
+        slots,
+        { touched: [] }
+      )
+    ).toBe('Sized from the Ø22 mm face · Teeth run the full 12 mm');
+    // Dragged short: how much of the face they run.
+    expect(
+      spec.summary?.(
+        { options: keep, numbers: { teeth: 20, faceWidth: 6, offset: 2 } },
+        'mm',
+        slots,
+        { touched: ['faceWidth', 'offset'] }
+      )
+    ).toBe('Sized from the Ø22 mm face · Teeth run 6 of 12 mm');
+    // Set to a module, the module and its pitch circle lead instead.
+    expect(
+      spec.summary?.(
+        {
+          options: { ...keep, fit: 'module', sizing: 'module' },
+          numbers: { teeth: 20, module: 1, faceWidth: 12 }
+        },
+        'mm',
+        slots,
+        { touched: [] }
+      )
+    ).toBe('Module 1 mm · Pitch Ø 20 mm · Teeth run the full 12 mm');
+  });
+
   it('gear: a worm sends its starts as teeth and a wheel as its mate', () => {
     const spec = IN_PLACE_TOOL_SPECS.gear;
     const slots: InPlaceSlots = {
@@ -809,12 +939,19 @@ describe('face tools build the card state', () => {
       spec.options?.find((entry) => entry.id === id)?.when?.(state) !== false;
     expect(option('hand')).toBe(true);
     expect(option('throat')).toBe(false);
-    // Its count chip is its teeth, as on a worm wheel.
-    const chips = spec
-      .handles(slots, { module: 2, teeth: 30 }, CTX, options)
-      .filter((handle) => handle.kind === 'chip')
-      .map((handle) => handle.valueId);
-    expect(chips).toEqual(['teeth', 'module']);
+    // Its teeth drag on its pitch circle, as a worm wheel's do; the module
+    // is a chip.
+    const handles = spec.handles(slots, { module: 2, teeth: 30 }, CTX, options);
+    expect(
+      handles
+        .filter((handle) => handle.kind === 'chip')
+        .map((handle) => handle.valueId)
+    ).toEqual(['module']);
+    expect(handles.find((handle) => handle.valueId === 'teeth')).toMatchObject({
+      kind: 'linear',
+      params: { scale: 1 },
+      step: 1
+    });
   });
 
   it('gear: a throated wheel sends its throat and outside diameter', () => {
@@ -1865,6 +2002,104 @@ describe('M02 feature patterns and skipped copies', () => {
     };
     expect(spec.ready(slots, {}, apart)).toBe(false);
     expect(spec.hint(slots, {}, apart)).toMatch(/join end to end/);
+  });
+
+  it('Mirror pattern: repeats the picked features reflected in a picked plane', () => {
+    const spec = IN_PLACE_TOOL_SPECS['mirror-pattern'];
+    const bore: FacePick = {
+      ...TOP,
+      point: { x: 5, y: 5, z: 4 },
+      feature: { featureId: 'hole_1' as FeatureId, name: 'Hole' }
+    };
+    const features = { repeat: 'features' };
+    expect(spec.hint({ ...EMPTY }, features, CTX)).toBe(
+      'Click a hole, boss or cut to repeat'
+    );
+    const picked = { ...EMPTY, faces: [bore] };
+    expect(spec.hint(picked, features, CTX)).toBe(
+      'Pick a plane or flat face to mirror in'
+    );
+    expect(spec.ready(picked, features, CTX)).toBe(false);
+    const slots: InPlaceSlots = {
+      ...picked,
+      plane: {
+        kind: 'face',
+        origin: { x: 20, y: 5, z: 2 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    };
+    expect(spec.ready(slots, features, CTX)).toBe(true);
+    // Slid 5 along the face's normal: the plane x = 25, as numbers.
+    expect(spec.request(slots, { offset: 5 }, features, CTX)).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      sourceFeatureIds: ['hole_1'],
+      patternKind: 'mirror',
+      count: 2,
+      axis: 'x',
+      mirrorPlane: {
+        origin: { x: 25, y: 5, z: 2 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    });
+    // A datum plane is stored by reference.
+    expect(
+      spec.request(
+        {
+          ...slots,
+          plane: { kind: 'datum', featureId: 'datum_1' as FeatureId }
+        },
+        {},
+        features,
+        CTX
+      )
+    ).toMatchObject({
+      mirrorPlane: { type: 'datum', datumFeatureId: 'datum_1' }
+    });
+    // The offset arrow stands on the picked feature, along the normal.
+    const arrow = spec
+      .handles(slots, { offset: 0 }, CTX, features)
+      .find((handle) => handle.valueId === 'offset');
+    expect(arrow?.kind).toBe('linear');
+  });
+
+  it('Linear pattern: a total length is shared out, its arrow on the last copy', () => {
+    const spec = IN_PLACE_TOOL_SPECS['linear-pattern'];
+    const slots = { ...EMPTY, bodies: [BODY] };
+    const options = { axis: 'x', extent: 'total' };
+    const numbers = { count: 3, total: 40 };
+    expect(spec.hint(slots, options, CTX)).toBe(
+      'Drag the last copy · tap a copy to skip it'
+    );
+    expect(spec.request(slots, numbers, options, CTX, numbers)).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 40,
+      spacingMode: 'total'
+    });
+    const handles = spec.handles(slots, numbers, CTX, options);
+    expect(handles[0]?.valueId).toBe('total');
+    // BODY's middle is (10, 5, 2): copies 20 apart over the 40.
+    expect(
+      handles.flatMap((handle) =>
+        handle.kind === 'instance'
+          ? [[handle.params.label, handle.params.anchor]]
+          : []
+      )
+    ).toEqual([
+      ['1', { x: 30, y: 5, z: 2 }],
+      ['2', { x: 50, y: 5, z: 2 }]
+    ]);
+    // Between copies, the stored spacing is the step, with no mode.
+    expect(
+      spec.request(slots, { count: 3, spacing: 15 }, { axis: 'x' }, CTX, {
+        count: 3,
+        spacing: 15
+      })
+    ).not.toHaveProperty('spacingMode');
   });
 
   it('toggles a copy in and out of the skip list', () => {

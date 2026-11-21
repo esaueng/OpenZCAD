@@ -15,6 +15,7 @@ import {
   type FeatureData,
   type FeatureId,
   type FeatureNode,
+  type ModelingPlaneReference,
   type ParamValue,
   type ParametricVector3,
   type SketchId,
@@ -342,6 +343,27 @@ export function inPlaceEditSeed(
     });
   };
 
+  // A Mirror's, a Split's or a mirror pattern's plane (M02, schema v119).
+  const seedPlane = (plane: ModelingPlaneReference) => {
+    if (isDatumPlaneRef(plane)) {
+      // A datum plane gone, or now after the feature, is not restored:
+      // the slot asks for another, as a clicked one would be refused.
+      if (ctx.datumPlaneUsable?.(plane.datumFeatureId) === false) {
+        missing.push('plane');
+      } else {
+        seed.slots.plane = { kind: 'datum', featureId: plane.datumFeatureId };
+      }
+    } else {
+      // A plane stored by its numbers opens typed, each on its own chip,
+      // expressions and all: the way it was given is the way it is edited.
+      seed.options.planeMode = 'typed';
+      for (const axis of ['x', 'y', 'z'] as const) {
+        value(`planeO${axis.toUpperCase()}`, plane.origin[axis]);
+        value(`planeN${axis.toUpperCase()}`, plane.normal[axis]);
+      }
+    }
+    value('offset', 0);
+  };
   switch (data.featureKind) {
     case 'revolve': {
       if (data.profile) {
@@ -753,27 +775,7 @@ export function inPlaceEditSeed(
     case 'mirror':
     case 'split': {
       body(data.targetBodyId);
-      if (isDatumPlaneRef(data.plane)) {
-        // A datum plane gone, or now after the feature, is not restored:
-        // the slot asks for another, as a clicked one would be refused.
-        if (ctx.datumPlaneUsable?.(data.plane.datumFeatureId) === false) {
-          missing.push('plane');
-        } else {
-          seed.slots.plane = {
-            kind: 'datum',
-            featureId: data.plane.datumFeatureId
-          };
-        }
-      } else {
-        // A plane stored by its numbers opens typed, each on its own chip,
-        // expressions and all: the way it was given is the way it is edited.
-        seed.options.planeMode = 'typed';
-        for (const axis of ['x', 'y', 'z'] as const) {
-          value(`planeO${axis.toUpperCase()}`, data.plane.origin[axis]);
-          value(`planeN${axis.toUpperCase()}`, data.plane.normal[axis]);
-        }
-      }
-      value('offset', 0);
+      seedPlane(data.plane);
       if (data.featureKind === 'split') {
         seed.options.keepOriginal = data.keepOriginal ? 'yes' : 'no';
       }
@@ -937,6 +939,10 @@ export function inPlaceEditSeed(
         }
         break;
       }
+      if (data.patternKind === 'mirror') {
+        if (data.mirrorPlane) seedPlane(data.mirrorPlane);
+        break;
+      }
       value('count', data.count);
       if (data.patternKind === 'path') {
         // M02 (schema v112): the path's curves as picks; its stored start
@@ -950,7 +956,13 @@ export function inPlaceEditSeed(
         break;
       }
       if (data.patternKind === 'linear') {
-        value('spacing', data.spacing);
+        // M02 (schema v120): a total length reopens as Total.
+        if (data.spacingMode === 'total') {
+          seed.options.extent = 'total';
+          value('total', data.spacing);
+        } else {
+          value('spacing', data.spacing);
+        }
         if (data.direction) {
           // Its repeat vector as stored, each part on its own chip.
           seed.options.axis = 'custom';
@@ -1476,7 +1488,9 @@ export function inPlaceFeatureUpdate(
             ? { skippedInstances: request.skippedInstances }
             : {}),
           ...(request.points ? { points: request.points } : {}),
-          ...(request.path ? { path: request.path } : {})
+          ...(request.path ? { path: request.path } : {}),
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {}),
+          ...(request.spacingMode ? { spacingMode: request.spacingMode } : {})
         },
         // R01: the world axis is the absent datum axis. M02: a pattern turned
         // back to its body, or with every copy back, stores neither list.
@@ -1490,6 +1504,10 @@ export function inPlaceFeatureUpdate(
               : []),
             ...(saved.skippedInstances && !request.skippedInstances
               ? ['skippedInstances']
+              : []),
+            // M02 (schema v120): back to the spacing between copies.
+            ...(saved.spacingMode && !request.spacingMode
+              ? ['spacingMode']
               : [])
           ];
           return cleared.length > 0 ? { clearData: cleared } : {};

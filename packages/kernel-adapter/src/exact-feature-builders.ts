@@ -1,3 +1,4 @@
+import type { PatternOverlapWorkers } from './pattern-overlap-workers';
 import {
   faceReferenceRepairCandidate,
   faceSelectionRepairCandidates
@@ -26,6 +27,7 @@ import {
 import {
   carryAnalyticFaces,
   draftLineage,
+  nameAddedFaces,
   SHELL_DRAFT_LINEAGE_FACE_LIMIT,
   shellLineage,
   holeLineage,
@@ -140,6 +142,7 @@ import {
   sharedShapeVolume,
   shapesShareMaterialOrTouch,
   sharedSolidVolume,
+  prepareLinearIntersections,
   solidsHavePositiveExactIntersection,
   solidsShareMaterialOrTouch,
   tessellatedFaceBounds,
@@ -2342,6 +2345,8 @@ function buildRibFeature(
   data: FeatureDataOf<'rib'>
 ): void {
   const { kernel, result } = ctx;
+  // M02: recorded again below only if this build succeeds.
+  result.builtRibs?.delete(feature.featureId);
   if (!feature.bodyId) throw new Error('Rib has no result body.');
   const target = result.shapes.get(data.targetBodyId);
   if (!target || target.solids.length !== 1) {
@@ -2367,14 +2372,26 @@ function buildRibFeature(
     [target.solids[0]!, rib],
     [`body of "${feature.name}"`, `rib "${feature.name}"`]
   );
+  // M02: the body's names carried where its faces are only trimmed, and the
+  // rib's own faces named after themselves, so a click on one names the rib
+  // and a feature pattern can name its copies.
+  const lineage = carryAnalyticFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage
+  );
+  nameAddedFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    lineage,
+    feature.featureId,
+    'rib.face'
+  );
+  (result.builtRibs ??= new Set()).add(feature.featureId);
   result.consumed.add(data.targetBodyId);
-  result.shapes.set(feature.bodyId, {
-    solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'rib',
-      'Rib topology has no verified output evolution relation.'
-    )
-  });
+  result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
@@ -2388,6 +2405,8 @@ function buildWrapFeature(
   data: FeatureDataOf<'wrap'>
 ): void {
   const { kernel, result } = ctx;
+  // M02: recorded again below only if this build succeeds.
+  result.wrapFrames?.delete(feature.featureId);
   if (!feature.bodyId) throw new Error('Wrap has no result body.');
   const target = result.shapes.get(data.targetBodyId);
   if (!target || target.solids.length !== 1) {
@@ -2436,14 +2455,26 @@ function buildWrapFeature(
       solid = validateGeneratedSolid(kernel, cut, `Engrave "${feature.name}"`);
     }
   }
+  // M02: the body's names carried where its faces are only trimmed, and the
+  // wrap's own faces named after themselves, so a click on one names the
+  // wrap and a feature pattern can name its copies.
+  const lineage = carryAnalyticFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage
+  );
+  nameAddedFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    lineage,
+    feature.featureId,
+    'wrap.face'
+  );
+  (result.wrapFrames ??= new Map()).set(feature.featureId, frame);
   result.consumed.add(data.targetBodyId);
-  result.shapes.set(feature.bodyId, {
-    solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'wrap',
-      'Wrap topology has no verified output evolution relation.'
-    )
-  });
+  result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
@@ -4134,6 +4165,55 @@ function pathPatternArm(
   };
 }
 
+/**
+ * M02 (schema v119): the mirror arm. Instance 1 is the original reflected in
+ * the plane, x ↦ x − 2((x − p)·n)n; it is labelled "1" as a linear pattern's
+ * second instance is. A reflection has no kernel pattern entry point, so it
+ * is the rigid copy-and-transform build, fused where it overlaps the
+ * original as any pattern's copies are.
+ */
+function mirrorPatternArm(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'pattern'>
+): PatternArm {
+  if (!data.mirrorPlane) {
+    throw new Error('A mirror pattern needs the plane it mirrors in.');
+  }
+  const { planePoint, planeNormal } = resolveOperationPlane(
+    ctx,
+    data.mirrorPlane,
+    'mirror'
+  );
+  const n = planeNormal && normalized(planeNormal);
+  if (!n) {
+    throw new Error('Mirror plane normal must be finite and non-zero.');
+  }
+  const along = 2 * dot(planePoint, n);
+  const reflection = affineMatrix([
+    1 - 2 * n.x * n.x,
+    -2 * n.x * n.y,
+    -2 * n.x * n.z,
+    along * n.x,
+    -2 * n.y * n.x,
+    1 - 2 * n.y * n.y,
+    -2 * n.y * n.z,
+    along * n.y,
+    -2 * n.z * n.x,
+    -2 * n.z * n.y,
+    1 - 2 * n.z * n.z,
+    along * n.z
+  ]);
+  return {
+    total: 2,
+    label: (index) => String(index),
+    matrix: (index) =>
+      index === 0
+        ? transformMatrix(PATTERN_ORIGIN, PATTERN_ORIGIN)
+        : reflection,
+    kernelCopies: null
+  };
+}
+
 /** Records a kernel refusal alongside whatever lineage the build published. */
 function withPatternDiagnostic(
   state: RemusLineageState,
@@ -4148,8 +4228,9 @@ function withPatternDiagnostic(
 function buildPatternFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
-  data: FeatureDataOf<'pattern'>
-): void {
+  data: FeatureDataOf<'pattern'>,
+  workers?: PatternOverlapWorkers
+): PendingPattern | void {
   const { kernel, scope, result } = ctx;
   if (!feature.bodyId) {
     throw new Error('Pattern has no result body.');
@@ -4187,10 +4268,13 @@ function buildPatternFeature(
   };
   // A points pattern makes one instance per point; its stored count is not
   // read (see FeatureData).
+  // A mirror pattern makes the original and its reflection.
   const count =
     data.patternKind === 'points'
       ? (data.points?.pointIds.length ?? 0)
-      : wholeCount(data.count, 'count');
+      : data.patternKind === 'mirror'
+        ? 2
+        : wholeCount(data.count, 'count');
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -4230,7 +4314,13 @@ function buildPatternFeature(
     if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern spacing cannot be zero.');
     }
-    arm = linearPatternArm(kernel, direction, spacing, count);
+    // M02 (schema v120): a total length is shared out between the copies.
+    arm = linearPatternArm(
+      kernel,
+      direction,
+      data.spacingMode === 'total' ? spacing / (count - 1) : spacing,
+      count
+    );
   } else if (data.patternKind === 'grid') {
     const spacing = resolveParamValue(
       data.spacing,
@@ -4266,6 +4356,8 @@ function buildPatternFeature(
     );
   } else if (data.patternKind === 'points') {
     arm = pointsPatternArm(ctx, data);
+  } else if (data.patternKind === 'mirror') {
+    arm = mirrorPatternArm(ctx, data);
   } else if (data.patternKind === 'path') {
     const spacing = resolveParamValue(
       data.spacing,
@@ -4405,7 +4497,7 @@ function buildPatternFeature(
   const instances = patternInstances(arm, perSource).filter(
     (_instance, index) => !skipped.has(index)
   );
-  buildPatternBody(
+  return buildPatternBody(
     ctx,
     feature,
     data,
@@ -4414,7 +4506,8 @@ function buildPatternFeature(
     instances,
     kept,
     declined,
-    count2
+    count2,
+    workers
   );
 }
 
@@ -4527,8 +4620,9 @@ function buildPatternBody(
   /** Each instance's index in the whole pattern, parallel to `instances`. */
   kept: readonly number[],
   declined: RemusLineageDiagnostic | null,
-  wholeGridRows: number
-): void {
+  wholeGridRows: number,
+  workers?: PatternOverlapWorkers
+): PendingPattern | void {
   const { kernel, scope, result } = ctx;
   if (!feature.bodyId) throw new Error('Pattern has no result body.');
   // The whole ring's count: a skipped copy leaves its place in the ring.
@@ -4564,21 +4658,64 @@ function buildPatternBody(
         )
       ) - 360
     ) <= GEOMETRY_EPSILON;
-  const shared = sharedSolidVolume(
-    kernel,
-    solids,
-    fullTurn
-      ? (left, right) => {
-          const width = target.solids.length;
-          const delta =
-            kept[Math.floor(right / width)]! - kept[Math.floor(left / width)]!;
-          const direct = `${left % width}:${right % width}:${delta}`;
-          const reversed = `${right % width}:${left % width}:${count - delta}`;
-          return direct < reversed ? direct : reversed;
-        }
-      : undefined
-  );
-  if (shared > 0) {
+  const linear = data.patternKind === 'linear' && target.solids.length === 1;
+  const batch =
+    linear && workers
+      ? prepareLinearIntersections(
+          kernel,
+          solids,
+          workers,
+          ctx.cancellation?.signal
+        )
+      : undefined;
+  const measureAll = () =>
+    sharedSolidVolume(
+      kernel,
+      solids,
+      fullTurn
+        ? (left, right) => {
+            const width = target.solids.length;
+            const delta =
+              kept[Math.floor(right / width)]! -
+              kept[Math.floor(left / width)]!;
+            const direct = `${left % width}:${right % width}:${delta}`;
+            const reversed = `${right % width}:${left % width}:${count - delta}`;
+            return direct < reversed ? direct : reversed;
+          }
+        : undefined,
+      linear,
+      workers
+    );
+  if (
+    batch &&
+    !(sharedSolidVolume(kernel, solids.slice(0, 2), undefined, true) > 0)
+  ) {
+    // A skipped instance can leave the first pair disjoint. Finish the
+    // ordinary overlap decision with the remaining pairs already measured.
+    return {
+      ready: batch.ready,
+      finish() {
+        batch.install();
+        buildPatternBody(
+          ctx,
+          feature,
+          data,
+          target,
+          arm,
+          instances,
+          kept,
+          declined,
+          wholeGridRows
+        );
+      }
+    };
+  }
+  const shared = batch ? undefined : measureAll();
+  const consume = () => {
+    result.consumed.add(data.targetBodyId);
+    inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  };
+  if (shared === undefined || shared > 0) {
     const summed = solids.reduce(
       (total, instance) =>
         total + kernel.volume(instance, MEASUREMENT_DEFLECTION),
@@ -4640,35 +4777,48 @@ function buildPatternBody(
     // out, because this defect survived precisely by being silent:
     // the reported volume and the enclosed mesh agreed, both summing
     // the same list.
-    const minimumRemoved = (2 * shared) / solids.length - summed * 1e-8;
-    if (removed < minimumRemoved) {
-      raiseFeatureWarning(
-        result,
-        feature,
-        'instances overlap but the merge did not take, so the reported volume counts shared material more than once.',
-        'advisory'
-      );
+    const finishFuse = (totalShared: number) => {
+      const minimumRemoved = (2 * totalShared) / solids.length - summed * 1e-8;
+      if (removed < minimumRemoved) {
+        raiseFeatureWarning(
+          result,
+          feature,
+          'instances overlap but the merge did not take, so the reported volume counts shared material more than once.',
+          'advisory'
+        );
+      }
+      const rectangularRow =
+        rectangular &&
+        complete &&
+        data.patternKind === 'linear' &&
+        !data.direction &&
+        removed >= minimumRemoved &&
+        kernel.getSolidFaces(fused).length === 6;
+      result.shapes.set(feature.bodyId!, {
+        solids: [fused],
+        ...(rectangularRow ? { rectangularStock: fused } : {}),
+        // The fuse rewrites the instance topology and reports no output
+        // relation across itself, so the instance names cannot survive it.
+        lineage: withPatternDiagnostic(
+          remusHashOnlyLineage(
+            'pattern',
+            'Overlapping instances were fused into one solid, which publishes no face output relation.'
+          ),
+          declined
+        )
+      });
+    };
+    if (shared === undefined && batch) {
+      return {
+        ready: batch.ready,
+        finish() {
+          batch.install();
+          finishFuse(measureAll());
+          consume();
+        }
+      };
     }
-    const rectangularRow =
-      rectangular &&
-      complete &&
-      data.patternKind === 'linear' &&
-      !data.direction &&
-      removed >= minimumRemoved &&
-      kernel.getSolidFaces(fused).length === 6;
-    result.shapes.set(feature.bodyId, {
-      solids: [fused],
-      ...(rectangularRow ? { rectangularStock: fused } : {}),
-      // The fuse rewrites the instance topology and reports no output
-      // relation across itself, so the instance names cannot survive it.
-      lineage: withPatternDiagnostic(
-        remusHashOnlyLineage(
-          'pattern',
-          'Overlapping instances were fused into one solid, which publishes no face output relation.'
-        ),
-        declined
-      )
-    });
+    finishFuse(shared!);
   } else {
     const lineage = withPatternDiagnostic(
       patternInstanceLineage(kernel, feature, target, instances),
@@ -4697,8 +4847,7 @@ function buildPatternBody(
   // mutable result — so a consume-mark set before the fallible fuse survived
   // the failure that cancelled the pattern, and the target vanished from the
   // viewport, the parts list and the STEP scope with nothing replacing it.
-  result.consumed.add(data.targetBodyId);
-  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  consume();
 }
 
 /**
@@ -4763,22 +4912,38 @@ function faceSelectionRepairs(
   }
 }
 
+export interface PendingPattern {
+  ready: Promise<void>;
+  finish(): void;
+}
+
 /** Per-feature-kind dispatch: one builder owns each history feature. */
 export function buildFeature(
   ctx: FeatureBuildContext,
-  feature: FeatureNode
-): void {
-  // Offered only once the feature has built: a throw below skips the push.
+  feature: FeatureNode,
+  workers?: PatternOverlapWorkers
+): PendingPattern | void {
   const faceRepairs = faceSelectionRepairs(ctx, feature);
-  buildFeatureByKind(ctx, feature);
-  if (faceRepairs.length > 0)
+  const pending = buildFeatureByKind(ctx, feature, workers);
+  if (!faceRepairs.length) return pending;
+  const recordRepairs = () =>
     (ctx.result.faceReferenceRepairs ??= []).push(...faceRepairs);
+  if (pending)
+    return {
+      ready: pending.ready,
+      finish() {
+        pending.finish();
+        recordRepairs();
+      }
+    };
+  recordRepairs();
 }
 
 function buildFeatureByKind(
   ctx: FeatureBuildContext,
-  feature: FeatureNode
-): void {
+  feature: FeatureNode,
+  workers?: PatternOverlapWorkers
+): PendingPattern | void {
   const data = feature.data;
   const targets = [
     ...('targetBodyId' in data && data.targetBodyId ? [data.targetBodyId] : []),
@@ -4876,8 +5041,7 @@ function buildFeatureByKind(
       buildEdgeModifierFeature(ctx, feature, feature.data);
       break;
     case 'pattern':
-      buildPatternFeature(ctx, feature, feature.data);
-      break;
+      return buildPatternFeature(ctx, feature, feature.data, workers);
     case 'datum-plane':
       buildDatumPlaneFeature(ctx, feature, feature.data);
       break;

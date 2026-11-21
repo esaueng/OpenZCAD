@@ -153,7 +153,7 @@ async function startExtrude(page: Page, canvas: Locator) {
   return bar;
 }
 
-test('Extrude in place: a draft dragged on its wall, typed on its chip, refused beside a back distance', { tag: '@ci-smoke' }, async ({
+test('Extrude in place: a draft dragged on its wall, typed on its chip, kept beside a back distance', { tag: '@ci-smoke' }, async ({
   page
 }, testInfo) => {
   test.setTimeout(150_000);
@@ -248,13 +248,13 @@ test('Extrude in place: a draft dragged on its wall, typed on its chip, refused 
   ).toContainText('3°');
   await options.locator('summary').click();
 
-  // A back distance beside it is refused by name, as the card refused it,
-  // and Done waits until it is cleared.
+  // F01 (v126): a back distance beside it is kept, the draft tapering the
+  // side the distance runs to, and Done stays on; cleared again for the rest.
   await enterCommandValue(page, 'backDistance', '2');
-  await expect(bar).toContainText(
-    'Draft tapers a one-sided extrusion; clear Back distance to draft it.'
-  );
-  await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
+  await expect(bar).not.toContainText('one-sided extrusion');
+  await expect(bar.getByRole('button', { name: 'Done' })).toBeEnabled({
+    timeout: 30_000
+  });
   await enterCommandValue(page, 'backDistance', '0');
   await expect(bar.getByRole('button', { name: 'Done' })).toBeEnabled({
     timeout: 30_000

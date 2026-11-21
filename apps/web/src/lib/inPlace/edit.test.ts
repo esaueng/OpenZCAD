@@ -1397,6 +1397,105 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(update).not.toHaveProperty('clearData');
   });
 
+  it('M02 mirror pattern: its plane reopens typed and writes back unchanged', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'mirror',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      angleDeg: 360,
+      mirrorPlane: {
+        // An expression, and a number written otherwise than a number
+        // prints: both come back as written (review).
+        origin: { x: 'half', y: '50.0', z: 0 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    };
+    const node = feature(data, 'body_m' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('mirror-pattern');
+    expect(armed.seed.options.planeMode).toBe('typed');
+    expect(armed.seed.values).toMatchObject({ planeNX: 1 });
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const values = { ...armed.seed.values, planeOX: 'half', planeOY: '50.0' };
+    const request = spec.request(
+      { ...armed.seed.slots, axis: null, refs: [], image: null },
+      values,
+      armed.seed.options,
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data
+      },
+      { ...armed.seed.values, planeOX: 50, planeOY: 50 }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      patternKind: 'mirror',
+      mirrorPlane: data.mirrorPlane
+    });
+    expect(update).not.toHaveProperty('clearData');
+  });
+
+  it('M02 total-length pattern: reopens as Total and writes back unchanged, or clears', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 4,
+      axis: 'x',
+      spacing: 60,
+      angleDeg: 360,
+      spacingMode: 'total'
+    };
+    const node = feature(data, 'body_t' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('linear-pattern');
+    expect(armed.seed.options.extent).toBe('total');
+    expect(armed.seed.values).toMatchObject({ total: 60, count: 4 });
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const ctx = {
+      sketchViews: [],
+      datumAxes: undefined,
+      datumLabel: () => 'Axis',
+      saved: data
+    };
+    const slots = { ...armed.seed.slots, axis: null, refs: [], image: null };
+    const request = spec.request(
+      slots,
+      armed.seed.values,
+      armed.seed.options,
+      ctx,
+      armed.seed.values
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({ spacing: 60, spacingMode: 'total' });
+    expect(update).not.toHaveProperty('clearData');
+    // Switched to Between copies, the mode is cleared.
+    const between = spec.request(
+      slots,
+      { ...armed.seed.values, spacing: 20 },
+      { ...armed.seed.options, extent: 'spacing' },
+      ctx,
+      { ...armed.seed.values, spacing: 20 }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        between
+      )
+    ).toMatchObject({ data: { spacing: 20 }, clearData: ['spacingMode'] });
+  });
+
   it('loft: a stored apex opens as a point, each coordinate editable', () => {
     const data: FeatureData = {
       featureKind: 'loft',

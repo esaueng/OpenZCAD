@@ -2,9 +2,12 @@ import type { BodyId, BodyTopology, ProjectDocument } from '@openzcad/shared';
 
 type Derived = ProjectDocument['derived'];
 export type TopologyJson = Record<string, string>;
-export type TopologyEncoding = 'json-v1' | 'json-v2';
+export type TopologyPayload = Record<string, string | Uint8Array>;
+export type TopologyEncoding = 'json-v1' | 'json-v2' | 'utf8-v1';
+const encoder = new TextEncoder();
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 interface EncodedTopology {
-  json: string;
+  json: string | Uint8Array;
   undefinedJson?: string;
   bytes: number;
   nodes: object[];
@@ -32,7 +35,7 @@ function plainDataRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Explicit rebuild replies repeatedly clone unchanged exact topology. Cache
- * its text only while the worker owns the immutable completed measurement.
+ * its encoded JSON while the worker owns the immutable completed measurement.
  * Each receiver parses a fresh graph, with the same ownership as postMessage.
  * This is an optional wire encoding, never a persisted format or cache key.
  *
@@ -44,6 +47,7 @@ function plainDataRecord(value: unknown): value is Record<string, unknown> {
  */
 export class TopologyTransport {
   private cache = new WeakMap<object, EncodedTopology | null>();
+  private binary = false;
   private bytes = 0;
   private entries = 0;
 
@@ -149,11 +153,15 @@ export class TopologyTransport {
         const undefinedJson = undefinedPaths.length
           ? JSON.stringify(undefinedPaths)
           : undefined;
+        const payload = this.binary ? encoder.encode(json) : json;
         encoded = {
-          json,
+          json: payload,
           ...(undefinedJson ? { undefinedJson } : {}),
           bytes:
-            (json.length + (undefinedJson?.length ?? 0)) * 2 +
+            (typeof payload === 'string'
+              ? payload.length * 2
+              : payload.byteLength) +
+            (undefinedJson?.length ?? 0) * 2 +
             nodes.length * 8 +
             64,
           nodes
@@ -175,13 +183,14 @@ export class TopologyTransport {
     return encoded;
   }
 
-  /** Input metadata must remain immutable until the real postMessage call. */
+  /** Input metadata stays immutable through postMessage. Binary cache entries
+   * are structured-cloned there. Only caller-owned mesh buffers transfer. */
   pack(
     derived: Derived,
     encoding: TopologyEncoding = 'json-v1'
   ): {
     derived: Derived;
-    topologyJson?: TopologyJson;
+    topologyJson?: TopologyPayload;
     topologyUndefined?: TopologyJson;
   } {
     // structuredClone reads enumerable getters once. An unsupported input
@@ -200,6 +209,13 @@ export class TopologyTransport {
       return { derived };
     const bodies = descriptor.value as Derived['bodyRepresentations'];
     const entries = Object.entries(bodies);
+    const binary = encoding === 'utf8-v1';
+    if (binary !== this.binary) {
+      this.cache = new WeakMap();
+      this.entries = 0;
+      this.bytes = 0;
+      this.binary = binary;
+    }
     if (entries.some(([, body]) => !plainDataRecord(body))) return { derived };
     const encoded: Array<[string, EncodedTopology]> = [];
     const encodedIds = new Set<string>();
@@ -211,7 +227,7 @@ export class TopologyTransport {
       if (!topology?.enumerable || !('value' in topology) || !topology.value)
         continue;
       const entry = this.encode(topology.value as BodyTopology);
-      if (!entry || (entry.undefinedJson && encoding !== 'json-v2'))
+      if (!entry || (entry.undefinedJson && encoding === 'json-v1'))
         return { derived };
       publicationBytes += entry.bytes + id.length * 6;
       if (publicationBytes > this.byteBudget) return { derived };
@@ -283,7 +299,7 @@ function invalidEncoding(): never {
 /** Decode only a received, caller-owned reply. Parse all entries before adoption. */
 export function unpackReplyTopologies(
   derived: Derived,
-  text?: TopologyJson,
+  text?: TopologyPayload,
   undefinedText?: TopologyJson
 ): void {
   if (text === undefined) {
@@ -298,11 +314,18 @@ export function unpackReplyTopologies(
   }
   const parsed: Array<[BodyId, BodyTopology]> = [];
   for (const [id, json] of Object.entries(text)) {
-    if (!Object.hasOwn(bodies, id) || typeof json !== 'string')
+    if (
+      !Object.hasOwn(bodies, id) ||
+      (typeof json !== 'string' && !(json instanceof Uint8Array))
+    )
       invalidEncoding();
-    bytes += (id.length + json.length) * 2;
+    bytes +=
+      id.length * 2 +
+      (typeof json === 'string' ? json.length * 2 : json.byteLength);
     if (bytes > BYTE_BUDGET) invalidEncoding();
-    const topology = JSON.parse(json) as BodyTopology | null;
+    const topology = JSON.parse(
+      typeof json === 'string' ? json : decoder.decode(json)
+    ) as BodyTopology | null;
     if (
       !topology ||
       !(['faces', 'edges'] as const).every(

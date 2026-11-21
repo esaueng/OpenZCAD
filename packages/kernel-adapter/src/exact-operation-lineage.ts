@@ -18,6 +18,7 @@ import {
   type RemusSemanticAssignment
 } from './remus-lineage';
 import {
+  faceWitnessName,
   topologyHashOfWitness,
   topologyWitnessesEqual
 } from './topology-lineage';
@@ -739,4 +740,100 @@ export function draftLineage(
       carried
     ])
   );
+}
+
+/**
+ * M02: names the faces a feature added to a body, after their exact
+ * witness: `<prefix>.w<128-bit witness name>`. Only a face `state` left
+ * unnamed whose surface the body before had no face on is the feature's own
+ * (a face of the body the feature trimmed keeps its carrier and stays
+ * unnamed); a cone, torus or sphere is read by its exact surface, as
+ * `carryAnalyticFaces` reads one. A face whose surface cannot be read, or
+ * whose witness another face of the result shares, stays unnamed too, and
+ * an edit that reshapes a face renames it, so a reference to one never moves
+ * to another.
+ */
+export function nameAddedFaces(
+  kernel: RemusKernel,
+  before: number,
+  solid: number,
+  state: RemusLineageState,
+  producer: FeatureId,
+  prefix: string
+): void {
+  const faces = (handle: number) =>
+    topologyCandidatesForSolid(kernel, handle).filter(
+      (candidate) => candidate.kind === 'face'
+    );
+  const witnessOf = (candidate: { witness: unknown }) =>
+    candidate.witness as FaceWitnessV1;
+  // A curved face with no analytic witness term is read by its exact
+  // surface; one that cannot be read leaves its kind unprovable.
+  const curvedKey = (candidate: { handle: number; witness: unknown }) =>
+    CURVED_CARRIERS.has(witnessOf(candidate).surfaceType) &&
+    witnessOf(candidate).analytic.kind === 'none'
+      ? curvedCarrierKey(kernel, candidate.handle)
+      : null;
+  const earlier = faces(before);
+  const earlierCarriers = earlier.map((c) => witnessOf(c).analytic);
+  const earlierCurved = new Set(
+    earlier.map((c) => curvedKey(c)).filter((key) => key !== null)
+  );
+  const unreadCurved = new Set(
+    earlier
+      .filter(
+        (c) =>
+          CURVED_CARRIERS.has(witnessOf(c).surfaceType) &&
+          witnessOf(c).analytic.kind === 'none' &&
+          curvedKey(c) === null
+      )
+      .map((c) => witnessOf(c).surfaceType)
+  );
+  const after = faces(solid);
+  // Where each vertex stands, to a micron, in a fixed order: two trims of
+  // one surface with the same perimeter and centre still differ here.
+  const cornersOf = (face: number) =>
+    Array.from(kernel.getFaceVertices(face), (vertex) =>
+      Array.from(kernel.getVertexPosition(vertex), (value) =>
+        Math.round(value * 1e6)
+      ).join(',')
+    )
+      .sort()
+      .join(';');
+  const names = new Map(
+    after.map((candidate) => [
+      candidate.handle,
+      faceWitnessName(witnessOf(candidate), cornersOf(candidate.handle))
+    ])
+  );
+  const nameOf = (candidate: (typeof after)[number]) =>
+    names.get(candidate.handle)!;
+  const counts = new Map<string, number>();
+  for (const candidate of after) {
+    counts.set(nameOf(candidate), (counts.get(nameOf(candidate)) ?? 0) + 1);
+  }
+  const assignments: RemusSemanticAssignment[] = [];
+  for (const candidate of after) {
+    if (state.faceReferences.has(candidate.handle)) continue;
+    const witness = witnessOf(candidate);
+    if (witness.analytic.kind === 'none') {
+      if (!CURVED_CARRIERS.has(witness.surfaceType)) continue;
+      if (unreadCurved.has(witness.surfaceType)) continue;
+      const key = curvedKey(candidate);
+      if (key === null || earlierCurved.has(key)) continue;
+    } else if (
+      earlierCarriers.some((other) =>
+        sameAnalyticCarrier(other, witness.analytic)
+      )
+    ) {
+      continue;
+    }
+    const name = nameOf(candidate);
+    if (counts.get(name) !== 1) continue;
+    assignments.push({ ...candidate, lineageName: `${prefix}.w${name}` });
+  }
+  if (assignments.length === 0) return;
+  const proven = createRemusSemanticLineage(producer, 'boolean', assignments);
+  for (const [handle, reference] of proven.faceReferences)
+    state.faceReferences.set(handle, reference);
 }

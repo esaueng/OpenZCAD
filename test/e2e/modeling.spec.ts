@@ -2836,18 +2836,17 @@ test('imports a STEP solid, fillets it, and re-exports it', { tag: '@ci-smoke' }
   expect(text).toContain('SPHERICAL_SURFACE');
   expect(text).not.toContain('B_SPLINE_SURFACE');
   expect(text.trimEnd().endsWith('END-ISO-10303-21;')).toBe(true);
-  // Only the two artifact-archive uploads (import and export) may fail, and
-  // only because the preview host has no /api/uploads. Anything else is a
-  // real console error and this stays an equality assertion so it shows up.
-  // The export's upload starts after the download it archives, so wait for
-  // its 404 rather than counting the instant the file has been read.
+  // Only the import's artifact-archive upload may fail, and only because the
+  // preview host has no /api/uploads. An export is a download only and
+  // uploads nothing. Anything else is a real console error and this stays an
+  // equality assertion so it shows up.
   await expect
     .poll(() => consoleErrors.filter((message) => message.includes('404')))
-    .toHaveLength(2);
+    .toHaveLength(1);
   expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
     []
   );
-  expect(consoleErrors).toHaveLength(2);
+  expect(consoleErrors).toHaveLength(1);
 });
 
 test('refuses an unparseable STEP file without leaving a feature behind', async ({
@@ -2903,112 +2902,44 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
-test('archives a browser-generated STEP export and lists the stored file', async ({
-  page
-}) => {
-  test.setTimeout(90_000);
-  await stubApi(page);
+test(
+  'a STEP export is a download only and uploads no copy',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
 
-  let projectId = '';
-  let uploadedStep = '';
-  let finalized = false;
-  const artifactId = 'artifact_e6_browser_export';
-  const uploadSessionId = 'upload_e6_browser_export';
-  const artifact = () => ({
-    artifactId,
-    projectId,
-    kind: 'step-export' as const,
-    name: 'Archived-Part.step',
-    objectKey: `${projectId}/uploads/archived-part.step`,
-    contentType: 'model/step',
-    bytes: uploadedStep.length,
-    createdAt: '2026-08-03T12:00:00.000Z',
-    metadata: { documentVersion: 1, units: 'mm' }
-  });
-
-  await page.route('**/api/projects/*/artifacts', (route) =>
-    route.fulfill({ json: { artifacts: finalized ? [artifact()] : [] } })
-  );
-  await page.route(`**/api/artifacts/${artifactId}`, (route) =>
-    route.fulfill({ json: { artifact: finalized ? artifact() : null } })
-  );
-  await page.route('**/api/artifacts/finalize', async (route) => {
-    const payload = route.request().postDataJSON() as {
-      uploadSessionId?: string;
-    };
-    if (payload.uploadSessionId !== uploadSessionId) return route.fallback();
-    expect(route.request().postDataJSON()).toEqual({
-      projectId,
-      uploadSessionId,
-      artifactId
+    // An upload session for an exported file is a cloud copy the user did not
+    // ask for. Other uploads (the project thumbnail) fall through to the stubs.
+    const exportUploads: string[] = [];
+    await page.route('**/api/uploads', async (route) => {
+      const payload = route.request().postDataJSON() as {
+        kind?: string;
+      } | null;
+      if (!payload?.kind?.endsWith('-export')) return route.fallback();
+      exportUploads.push(payload.kind);
+      await route.fulfill({ status: 500 });
     });
-    finalized = true;
-    await route.fulfill({ json: { artifactId } });
-  });
-  await page.route(
-    `**/api/uploads/${uploadSessionId}/content`,
-    async (route) => {
-      expect(route.request().method()).toBe('PUT');
-      expect(route.request().headers()['content-type']).toContain('model/step');
-      uploadedStep = route.request().postData() ?? '';
-      await route.fulfill({ status: 204 });
-    }
-  );
-  await page.route('**/api/uploads', async (route) => {
-    const payload = route.request().postDataJSON() as {
-      projectId: string;
-      fileName: string;
-      contentType: string;
-      kind: string;
-    };
-    if (payload.kind !== 'step-export') return route.fallback();
-    projectId = payload.projectId;
-    expect(payload).toMatchObject({
-      fileName: 'Archived-Part.step',
-      contentType: 'model/step',
-      kind: 'step-export'
-    });
-    await route.fulfill({
-      status: 201,
-      json: {
-        session: {
-          uploadSessionId,
-          artifactId,
-          projectId,
-          objectKey: `${projectId}/uploads/archived-part.step`,
-          uploadUrl: `/api/uploads/${uploadSessionId}/content`,
-          expiresAt: '2026-08-04T12:00:00.000Z',
-          fileName: payload.fileName,
-          contentType: payload.contentType,
-          kind: payload.kind,
-          metadata: {}
-        }
-      }
-    });
-  });
 
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Archived Part');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await createPrimitiveInPlace(page, 'box');
-  await expectBodyCount(page, 1);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Local Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
 
-  const fileMenu = page.locator('details.file-menu');
-  await fileMenu.locator('summary').click();
-  const downloadPromise = page.waitForEvent('download');
-  await fileMenu.getByRole('button', { name: /STEP/ }).click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('Archived-Part.step');
-  await expect(page.getByRole('contentinfo')).toContainText('and archived it');
-  expect(uploadedStep.startsWith('ISO-10303-21;')).toBe(true);
-  expect(uploadedStep).toContain('MANIFOLD_SOLID_BREP');
-
-  await expect(fileMenu.locator('summary')).toContainText('File 1');
-  await fileMenu.locator('summary').click();
-  await expect(
-    fileMenu.getByRole('link', { name: /Archived-Part\.step/ })
-  ).toHaveAttribute('href', `/api/artifacts/${artifactId}/download`);
-});
+    const fileMenu = page.locator('details.file-menu');
+    await fileMenu.locator('summary').click();
+    const downloadPromise = page.waitForEvent('download');
+    await fileMenu.getByRole('button', { name: /STEP/ }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('Local-Part.step');
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'to Local-Part.step.'
+    );
+    await expect(page.getByRole('contentinfo')).not.toContainText('archived');
+    expect(exportUploads).toEqual([]);
+  }
+);
 
 test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke' }, async ({
   page
@@ -4456,78 +4387,21 @@ test('an STL import that outlives its project does not land in the next one', as
 });
 
 /**
- * Cancelling an export used to leave its archive uploading.
- *
- * `handleExportMesh` honours the dialog's AbortSignal around the geometry
- * export, then hands the finished file to the archive without it. Archiving
- * is the long phase — the local download has already happened by then, and
- * the dialog's Cancel button stays live throughout — so pressing Cancel
- * stopped nothing, and the file the user had just abandoned was finalized
- * into the File menu's stored files.
+ * A mesh export is a download only: the 3MF is saved locally and no copy is
+ * uploaded to the project's cloud files.
  */
-test('cancelling an export stops its archive upload', async ({ page }) => {
+test('a mesh export is a download only and uploads no copy', async ({
+  page
+}) => {
   test.setTimeout(90_000);
   await stubApi(page);
 
-  const exportUploadSessionId = 'upload_export_e2e';
-  const exportArtifactId = 'artifact_export_e2e';
-  let releaseUpload: (() => void) | undefined;
-  let finalizeCalls = 0;
-
-  // Unlike the suite's default stub, this upload SUCCEEDS — the defect is
-  // only visible when the archive is able to run to completion.
+  const exportUploads: string[] = [];
   await page.route('**/api/uploads', async (route) => {
-    const payload = route.request().postDataJSON() as {
-      kind?: string;
-      projectId?: string;
-      fileName?: string;
-      contentType?: string;
-    };
-    if (payload.kind !== '3mf-export') {
-      return route.fallback();
-    }
-    return route.fulfill({
-      status: 201,
-      json: {
-        session: {
-          uploadSessionId: exportUploadSessionId,
-          artifactId: exportArtifactId,
-          projectId: payload.projectId,
-          objectKey: `${payload.projectId}/uploads/part.3mf`,
-          uploadUrl: `/api/uploads/${exportUploadSessionId}/content`,
-          expiresAt: '2099-01-01T00:00:00.000Z',
-          fileName: payload.fileName,
-          contentType: payload.contentType,
-          kind: payload.kind,
-          metadata: {}
-        }
-      }
-    });
-  });
-
-  const uploadReached = new Promise<void>((resolveReached) => {
-    const held = new Promise<void>((resolveHeld) => {
-      releaseUpload = resolveHeld;
-    });
-    void page.route(
-      `**/api/uploads/${exportUploadSessionId}/content`,
-      async (route) => {
-        resolveReached();
-        await held;
-        return route.fulfill({ status: 204, body: '' });
-      }
-    );
-  });
-
-  await page.route('**/api/artifacts/finalize', (route) => {
-    const payload = route.request().postDataJSON() as {
-      artifactId?: string;
-    };
-    if (payload.artifactId !== exportArtifactId) {
-      return route.fallback();
-    }
-    finalizeCalls += 1;
-    return route.fulfill({ json: { artifactId: exportArtifactId } });
+    const payload = route.request().postDataJSON() as { kind?: string } | null;
+    if (!payload?.kind?.endsWith('-export')) return route.fallback();
+    exportUploads.push(payload.kind);
+    return route.fulfill({ status: 500 });
   });
 
   await page.goto('/');
@@ -4536,10 +4410,7 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
 
   await createPrimitiveInPlace(page, 'box');
-  await page.locator('.feature-row-main', { hasText: 'Box' }).click();
-  await expect(page.locator('.panel-body')).toContainText('volume', {
-    ignoreCase: true
-  });
+  await expectBodyCount(page, 1);
 
   const fileMenu = page.locator('details.file-menu');
   await fileMenu.locator('summary').click();
@@ -4547,24 +4418,15 @@ test('cancelling an export stops its archive upload', async ({ page }) => {
   const dialog = page.getByRole('dialog', { name: /Export mesh/ });
   await expect(dialog).toBeVisible();
 
-  // The local file is written before the archive starts, so the download
-  // completing is what tells us the archive is the phase now running.
   const downloadPromise = page.waitForEvent('download');
   await dialog.getByRole('button', { name: /Export 3MF/ }).click();
-  await downloadPromise;
-  await uploadReached;
-
-  // Cancel while the archive is mid-upload. The dialog closed when the
-  // export started; the run is the activity pill's now, and so is Cancel.
-  await page
-    .getByRole('region', { name: 'File export' })
-    .getByRole('button', { name: 'Cancel' })
-    .click();
-  releaseUpload?.();
-
-  // Nothing is finalized, so nothing appears in the File menu's stored files.
-  await page.waitForTimeout(1500);
-  expect(finalizeCalls).toBe(0);
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('Print-Part.3mf');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'to Print-Part.3mf.'
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText('archived');
+  expect(exportUploads).toEqual([]);
 });
 
 test('an archive that outlives its project stays out of the next project’s File menu', async ({

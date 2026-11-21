@@ -1,3 +1,5 @@
+import type { PatternOverlapWorkers } from './pattern-overlap-workers';
+import type { BuildCancellationSignal } from './exact-cancellation';
 /**
  * Boolean and union support: fuse/unify wrappers, shared-volume probes for
  * operation inference, connectivity checks, and the tangent-union offset
@@ -22,6 +24,7 @@ import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh,
   unifyCopyChecked,
+  unifyCopyIfStrict,
   unionSwallowedCurvature
 } from './boolean-result-validation';
 import { type KernelUnifyReport, validationReport } from './kernel-validation';
@@ -258,15 +261,21 @@ export function unifyBooleanFaces(kernel: RemusKernel, solid: number): number {
  * it on validation alone sent a perfectly good raw union to the strict pass
  * as "open, non-manifold, or inconsistently oriented".
  *
- * The strict half is the kernel's own verdict from `unifyFacesChecked`; see
- * {@link unifyUnionFacesChecked}, which this returns the solid of.
+ * Use the kernel's strict candidate verdict when available. Older kernels
+ * provide the same decision through {@link unifyUnionFacesChecked}.
  */
 export function unifyUnionFaces(
   kernel: RemusKernel,
   solid: number,
   onAccepted?: (solid: number) => void
 ): number {
-  return unifyUnionFacesChecked(kernel, solid, onAccepted).solid;
+  const candidate = unifyCopyIfStrict(kernel, solid);
+  if (candidate === undefined)
+    return unifyUnionFacesChecked(kernel, solid, onAccepted).solid;
+  if (candidate === solid || !solidMeshIsClosed(kernel, candidate))
+    return solid;
+  onAccepted?.(candidate);
+  return candidate;
 }
 
 /**
@@ -1905,6 +1914,152 @@ function exactSharedSolidVolume(
   }
 }
 
+// Keep exact overlap measurements for adjacent pairs as the count changes.
+// Indexes only locate a candidate. Both placed solids must match byte for byte.
+const linearOverlaps = new WeakMap<
+  RemusKernel,
+  { operands: Uint8Array; volume: number }[]
+>();
+const MAX_LINEAR_PAIRS = 32;
+const MAX_PAIR_BYTES = 8192;
+
+// A single-source row contains only rigid copies of the same stock. Check
+// one before serializing: small face counts alone do not limit spline data.
+function compactLinearStock(kernel: RemusKernel, solid: number): boolean {
+  const faces = kernel.getSolidFaces(solid);
+  if (
+    faces.length > 8 ||
+    !faces.every((face) => {
+      const type = kernel.getSurfaceType(face);
+      return type === 'plane' || type === 'cylinder';
+    })
+  )
+    return false;
+  const edges = kernel.getSolidEdges(solid);
+  return (
+    edges.length <= 32 &&
+    edges.every((edge) => {
+      const type = kernel.getEdgeCurveType(edge);
+      return type === 'LINE' || type === 'CIRCLE';
+    })
+  );
+}
+
+function linearNeighbourProbe(
+  kernel: RemusKernel,
+  workers?: PatternOverlapWorkers
+) {
+  let eligible: boolean | undefined;
+  return (index: number, left: number, right: number): number => {
+    if (eligible === false || index >= MAX_LINEAR_PAIRS)
+      return exactSharedSolidVolume(kernel, left, right);
+    let operands: Uint8Array | undefined;
+    try {
+      eligible ??= compactLinearStock(kernel, left);
+      if (eligible)
+        operands = kernel.serializeSolids(Uint32Array.of(left, right));
+    } catch {
+      eligible = false;
+      return exactSharedSolidVolume(kernel, left, right);
+    }
+    if (!operands || operands.byteLength > MAX_PAIR_BYTES) {
+      eligible = false;
+      return exactSharedSolidVolume(kernel, left, right);
+    }
+    const entries = linearOverlaps.get(kernel) ?? [];
+    const prior = entries[index];
+    if (prior && sameOperandBytes(prior.operands, operands))
+      return prior.volume;
+    const volume = exactSharedSolidVolume(kernel, left, right);
+    if (volume > 0) workers?.warm();
+    entries[index] = { operands, volume };
+    linearOverlaps.set(kernel, entries);
+    return volume;
+  };
+}
+
+/** Start exact adjacent intersections that can overlap the live fuse. No
+ * worker holds live handles. Install results only on resuming the same build;
+ * the ordinary probe checks both operand bytes again before using them. */
+export function prepareLinearIntersections(
+  kernel: RemusKernel,
+  solids: number[],
+  workers: PatternOverlapWorkers,
+  signal?: BuildCancellationSignal
+): { ready: Promise<void>; install(): void } | undefined {
+  if (
+    !workers.available ||
+    solids.length < 8 ||
+    solids.length > MAX_LINEAR_PAIRS + 1
+  )
+    return;
+  const pairs: { index: number; bytes: Uint8Array }[] = [];
+  const entries = linearOverlaps.get(kernel);
+  try {
+    if (!compactLinearStock(kernel, solids[0]!)) return;
+    if (entries?.[0] && solids.length - 1 - entries.length < 6) {
+      const first = kernel.serializeSolids(
+        Uint32Array.of(solids[0]!, solids[1]!)
+      );
+      if (sameOperandBytes(first, entries[0].operands)) return;
+    }
+    const boxes = solids.map((solid) => kernel.boundingBox(solid));
+    // Pair zero stays on the live kernel and decides whether to start fusing.
+    for (let index = 1; index + 1 < solids.length; ++index) {
+      const left = boxes[index]!,
+        right = boxes[index + 1]!;
+      if (
+        [0, 1, 2].some(
+          (axis) =>
+            Math.min(left[axis + 3]!, right[axis + 3]!) <=
+            Math.max(left[axis]!, right[axis]!)
+        )
+      )
+        continue;
+      const bytes = kernel.serializeSolids(
+        Uint32Array.of(solids[index]!, solids[index + 1]!)
+      );
+      if (bytes.length > MAX_PAIR_BYTES) return;
+      const previous = entries?.[index];
+      if (!previous || !sameOperandBytes(bytes, previous.operands))
+        pairs.push({ index, bytes });
+    }
+  } catch {
+    return;
+  }
+  if (pairs.length < 6) return;
+  const batch = workers.measure(
+    pairs.map((pair) => pair.bytes),
+    signal
+  );
+  if (!batch) return;
+  let volumes: (number | null)[] | undefined;
+  return {
+    ready: batch.then((values) => {
+      volumes = values;
+    }),
+    install() {
+      if (!volumes || signal?.isCancelled()) return;
+      const cache = linearOverlaps.get(kernel) ?? [];
+      for (const [i, pair] of pairs.entries()) {
+        const volume = volumes[i];
+        if (
+          typeof volume === 'number' &&
+          Number.isFinite(volume) &&
+          volume >= 0
+        ) {
+          cache[pair.index] = { operands: pair.bytes, volume };
+        }
+      }
+      linearOverlaps.set(kernel, cache);
+    }
+  };
+}
+
+function sameOperandBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, index) => byte === b[index]);
+}
+
 /**
  * How much interior volume these solids share, summed over every pair.
  *
@@ -1938,12 +2093,17 @@ export function sharedSolidVolume(
   kernel: RemusKernel,
   solids: number[],
   /** Only callers proving rigid equivalence may reuse an exact intersection. */
-  pairClass?: (left: number, right: number) => string
+  pairClass?: (left: number, right: number) => string,
+  reuseLinearNeighbours = false,
+  workers?: PatternOverlapWorkers
 ): number {
   if (solids.length < 2) {
     return 0;
   }
   let total = 0;
+  const measureNeighbour = reuseLinearNeighbours
+    ? linearNeighbourProbe(kernel, workers)
+    : undefined;
   const exactByClass = new Map<string, number>();
   const boxes = solids.map((solid) => kernel.boundingBox(solid));
   for (let left = 0; left < solids.length; left += 1) {
@@ -1975,7 +2135,9 @@ export function sharedSolidVolume(
         const cached = key === undefined ? undefined : exactByClass.get(key);
         shared =
           cached ??
-          exactSharedSolidVolume(kernel, solids[left]!, solids[right]!);
+          (measureNeighbour && right === left + 1
+            ? measureNeighbour(left, solids[left]!, solids[right]!)
+            : exactSharedSolidVolume(kernel, solids[left]!, solids[right]!));
         if (key !== undefined) exactByClass.set(key, shared);
       } catch {
         // A refused intersection is not evidence of disjointness. The boxes

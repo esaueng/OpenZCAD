@@ -403,6 +403,7 @@ function previewPreparedParameter(
           // build shows them.
           d.patternKind === 'points' ||
           d.patternKind === 'path' ||
+          d.patternKind === 'mirror' ||
           d.sourceFeatureIds !== undefined ||
           d.skippedInstances !== undefined
         )
@@ -412,7 +413,10 @@ function previewPreparedParameter(
           d.patternKind === 'grid'
             ? Math.round(evaluate(d.count2 ?? d.count, after.scope, base.units))
             : 1;
-        const spacing = evaluate(d.spacing, after.scope, base.units),
+        // M02 (schema v120): a total length is shared out between copies.
+        const spacing =
+            evaluate(d.spacing, after.scope, base.units) /
+            (d.spacingMode === 'total' ? Math.max(count - 1, 1) : 1),
           spacing2 = evaluate(d.spacing2 ?? d.spacing, after.scope, base.units);
         if (
           count < 2 ||

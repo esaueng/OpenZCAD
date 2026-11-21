@@ -1,4 +1,10 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within
+} from '@testing-library/react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AuthSession } from '@openzcad/shared';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
@@ -28,6 +34,9 @@ function renderTopBar(
     encryption?: EncryptionIndicatorProps | null;
     shareSession?: { mode: 'view' | 'tweak'; onMakeCopy(): void } | null;
     buildModeDisabledReason?: string;
+    tweakModeDisabledReason?: string;
+    drawingModeDisabledReason?: string;
+    assembleModeDisabledReason?: string;
     warningCount?: number;
     reloadPrompt?: 'update' | 'interrupted' | null;
     conflictDeferred?: boolean;
@@ -88,7 +97,9 @@ function renderTopBar(
       workspaceMode="build"
       canRenameProject
       buildModeDisabledReason={options.buildModeDisabledReason ?? null}
-      tweakModeDisabledReason={null}
+      tweakModeDisabledReason={options.tweakModeDisabledReason ?? null}
+      drawingModeDisabledReason={options.drawingModeDisabledReason ?? null}
+      assembleModeDisabledReason={options.assembleModeDisabledReason ?? null}
       onArchiveLocalSources={vi.fn()}
       onGoHome={vi.fn()}
       onOpenSettings={vi.fn()}
@@ -1042,7 +1053,10 @@ describe('TopBar share-link session', () => {
     (mode, label) => {
       const onMakeCopy = vi.fn();
       renderTopBar({ saveState: 'local', shareSession: { mode, onMakeCopy } });
-      expect(screen.getByRole('status', { name: label })).toBeVisible();
+      const chip = screen.getByRole('status', { name: label });
+      expect(chip).toBeVisible();
+      // One word on the bar; the access is in the name and tooltip.
+      expect(chip.textContent).toBe('Shared');
       expect(screen.queryByText('Local only')).toBeNull();
       expect(screen.queryByText('Signed out')).toBeNull();
       expect(
@@ -1052,6 +1066,46 @@ describe('TopBar share-link session', () => {
       expect(onMakeCopy).toHaveBeenCalledOnce();
     }
   );
+});
+
+// A shared link's visitor sees only the modes the link opens, not greyed
+// tabs that each said "Make a copy".
+describe('TopBar share-link modes', () => {
+  const locked = {
+    buildModeDisabledReason: 'This is a shared link',
+    assembleModeDisabledReason: 'Not on a shared link',
+    drawingModeDisabledReason: 'This link shares no drawings'
+  };
+
+  it('offers only View and Tweak on a tweak link', () => {
+    renderTopBar({
+      ...locked,
+      shareSession: { mode: 'tweak', onMakeCopy: vi.fn() }
+    });
+    const modes = screen.getByRole('group', { name: 'Workspace mode' });
+    expect(
+      within(modes)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['View', 'Tweak']);
+  });
+
+  it('draws no mode switch when View is all a link opens', () => {
+    renderTopBar({
+      ...locked,
+      tweakModeDisabledReason: 'This link is view only',
+      shareSession: { mode: 'view', onMakeCopy: vi.fn() }
+    });
+    expect(
+      screen.queryByRole('group', { name: 'Workspace mode' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps locked modes visible, with their reason, outside a share link', () => {
+    renderTopBar(locked);
+    const modes = screen.getByRole('group', { name: 'Workspace mode' });
+    expect(within(modes).getByRole('button', { name: 'Build' })).toBeDisabled();
+  });
 });
 
 // Design review I8: one name for the unreachable cloud, and no call to an

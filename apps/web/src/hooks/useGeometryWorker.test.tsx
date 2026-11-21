@@ -650,13 +650,26 @@ describe('useGeometryWorker', () => {
     expect(host.onDerived).not.toHaveBeenCalled();
   });
 
-  it.each(['v1', 'v2', 'invalid-json', 'invalid-marker', 'marker-only'])(
+  it.each([
+    'v1',
+    'v2',
+    'utf8',
+    'invalid-json',
+    'invalid-marker',
+    'marker-only'
+  ])(
     'decodes topology before settling a one-off reply: %s',
     async (encoding) => {
       const malformed =
         encoding.startsWith('invalid') || encoding === 'marker-only';
       installWorker();
       const document = createProjectDocument('Transport', toUserId('user'));
+      if (encoding === 'v2' || encoding === 'utf8') {
+        document.bodyOrder = Array.from(
+          { length: encoding === 'utf8' ? 256 : 255 },
+          (_, i) => toBodyId(`body_${i}`)
+        );
+      }
       const host = {
         manager: () => null,
         onDerived: vi.fn(),
@@ -668,7 +681,9 @@ describe('useGeometryWorker', () => {
       const request = worker.postMessage.mock.calls.at(-1)![0] as {
         requestId: string;
       };
-      expect(request).toMatchObject({ topologyEncoding: 'json-v2' });
+      expect(request).toMatchObject({
+        topologyEncoding: encoding === 'utf8' ? 'utf8-v1' : 'json-v2'
+      });
       const settled = malformed
         ? expect(pending).rejects.toThrow('invalid topology encoding')
         : expect(pending).resolves.toMatchObject({
@@ -713,7 +728,11 @@ describe('useGeometryWorker', () => {
                   [bodyId]:
                     encoding === 'invalid-json'
                       ? '{'
-                      : '{"faces":[],"edges":[],"reference":null}'
+                      : encoding === 'utf8'
+                        ? new TextEncoder().encode(
+                            '{"faces":[],"edges":[],"reference":null}'
+                          )
+                        : '{"faces":[],"edges":[],"reference":null}'
                 }
               }),
           ...(encoding === 'v1'

@@ -28,6 +28,7 @@ import type {
 } from '@openzcad/shared';
 import type { TriangleMeshClosure } from './boolean-result-validation';
 import type { RemusLineageState } from './remus-lineage';
+import type { WrapFrame } from './exact-wrap';
 import type { RemusNativeVertexState } from './remus-native-vertices';
 
 export interface ExactShape {
@@ -157,6 +158,19 @@ export interface ExactBuildResult {
    * Build-local only, copied with retained history checkpoints.
    */
   blendEdgeWitnesses?: Map<FeatureId, EdgeWitnessV1[]>;
+  /**
+   * M02: the cylinder or cone each wrap resolved at its history position,
+   * keyed by feature id, from which a feature pattern repeating it builds
+   * its material again. Build-local only, copied with retained history
+   * checkpoints.
+   */
+  wrapFrames?: Map<FeatureId, WrapFrame>;
+  /**
+   * M02: the ribs that built, whose material a feature pattern repeating
+   * one makes again against the body the rib was made on. Build-local only,
+   * copied with retained history checkpoints.
+   */
+  builtRibs?: Set<FeatureId>;
 }
 
 /** Same-kernel measurement handles and the verdicts established for them. */
