@@ -54,14 +54,28 @@ function project(name: string): ProjectDocument {
   return createProjectDocument(name, toUserId('user_curved_face'));
 }
 
-/** The cylinder lying along Y with its axis at height `z`. */
-function log(document: ProjectDocument, z = 30) {
-  const made = addPrimitiveFeature(document, {
+/**
+ * The cylinder lying along Y with its axis at height `z`, first spun `spin`
+ * degrees about its own axis (which moves only its seam).
+ */
+function log(document: ProjectDocument, z = 30, spin = 0) {
+  let made = addPrimitiveFeature(document, {
     name: 'Log',
     primitiveKind: 'cylinder',
     dimensions: { radius: 10, height: 40 }
   });
   const bodyId = made.bodyOrder.at(-1)!;
+  if (spin !== 0) {
+    made = commandFactories
+      .transformBody({
+        name: 'Spin',
+        targetBodyId: bodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: spin },
+        pivot: { x: 0, y: 0, z: 0 }
+      })
+      .apply(made);
+  }
   const laid = commandFactories
     .transformBody({
       name: 'Lay',
@@ -103,9 +117,10 @@ describe('F01 to a curved face', { timeout: 60_000 }, () => {
   async function post(
     patch: Record<string, unknown> = {},
     sketchZ = 0,
-    profile = SQUARE
+    profile = SQUARE,
+    spin = 0
   ) {
-    const laid = log(project('Curved'));
+    const laid = log(project('Curved'), 30, spin);
     const target = await wall(laid.document, laid.bodyId);
     const sketched = addSketchFeature(laid.document, {
       name: 'Profile',
@@ -213,6 +228,51 @@ describe('F01 to a curved face', { timeout: 60_000 }, () => {
         4 * chordArea(10, 2),
         5
       );
+    });
+
+    describe('review', () => {
+      it('refuses a profile that straddles the cylinder from inside', async () => {
+        const result = await post({}, 30, { ...SQUARE, centerX: 9 });
+        const derived = await derive(result.document);
+        expect(derived.warnings.join('\n')).toMatch(
+          /part of the profile starts outside the curved face's cylinder/
+        );
+      });
+
+      it('takes the way from the stored sign inside, whatever the seam', async () => {
+        for (const spin of [0, 60, 150]) {
+          const result = await post({ distance: -1 }, 30, SQUARE, spin);
+          const derived = await derive(result.document);
+          expect(derived.warnings).toEqual([]);
+          const body = derived.bodyRepresentations[result.bodyId]!;
+          expect(body.volume).toBeCloseTo(4 * chordArea(10, 2), 5);
+          expect(body.bbox.max.z).toBeCloseTo(30, 9);
+        }
+      });
+
+      it('reaches a wall moved outward by a negative offset from inside', async () => {
+        const result = await post({ toFaceOffset: -2 }, 30);
+        const derived = await derive(result.document);
+        expect(derived.warnings).toEqual([]);
+        expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
+          4 * chordArea(12, 2),
+          5
+        );
+      });
+
+      it('validates the curved target body at command entry', async () => {
+        const result = await post();
+        const command = commandFactories.extrudeSketch({
+          name: 'Ghost',
+          sketchId: result.sketched.sketchId,
+          distance: 1,
+          endCondition: 'to-face',
+          toSurface: { ...result.target, bodyId: 'body_missing' as BodyId }
+        });
+        expect(() => command.validate(result.document)).toThrow(
+          /The target face's body body_missing does not exist/
+        );
+      });
     });
 
     it('follows the cylinder as it moves, with nothing derived stored', async () => {

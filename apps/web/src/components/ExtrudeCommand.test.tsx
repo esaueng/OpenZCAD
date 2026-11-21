@@ -14,6 +14,7 @@ import {
   toSketchId,
   toUserId,
   type ExtrudeToFaceTarget,
+  type ExtrudeToSurfaceTarget,
   type ParamValue
 } from '@openzcad/shared';
 import {
@@ -666,6 +667,34 @@ describe('in-place Extrude bar', () => {
         toFace: target,
         distance: 7
       })
+    );
+  });
+
+  it('offers Reverse up to a curved face, whose way the sign decides (review)', async () => {
+    const user = userEvent.setup();
+    const target = {
+      type: 'surface'
+    } as unknown as ExtrudeToSurfaceTarget;
+    const setterRef = createRef<
+      (target: ExtrudeFaceTarget) => void
+    >() as unknown as MutableRefObject<
+      ((target: ExtrudeFaceTarget) => void) | null
+    >;
+    const toFacePicking: ExtrudeToFacePicking = {
+      armed: false,
+      onPick: vi.fn(),
+      cancel: vi.fn(),
+      describe: () => ({ label: 'Log', distance: 0, slanted: true }),
+      setterRef
+    };
+    const { onSubmit } = setup({ toFacePicking });
+    await openOptions(user);
+    await user.click(choice('Extent', 'To face'));
+    act(() => setterRef.current?.(target));
+    await user.click(screen.getByRole('button', { name: 'Reverse direction' }));
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ toSurface: target, distance: -1 })
     );
   });
 

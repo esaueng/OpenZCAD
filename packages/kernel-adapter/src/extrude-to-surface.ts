@@ -14,7 +14,8 @@ import {
 } from './exact-shape-utils';
 import { resolveRevolutionFace } from './face-attachment';
 import { measureFaceGeometry } from './exact-measure';
-import { hasFaceOnPlane } from './extrude-to-next';
+import { facesOnPlane, hasFaceOnPlane } from './extrude-to-next';
+import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import {
   resolveExtrudeStartOffset,
   resolveToFaceOffset
@@ -146,14 +147,43 @@ export function planCurvedToFace(
     n,
     resolveExtrudeStartOffset(data, scope, document)
   );
-  // The way to the face is the side its middle lies on. From inside a whole
-  // cylinder its middle is on the axis, level with a start through it, and
-  // either way meets the wall: then the stored distance's sign (the
-  // direction the editor's Reverse sets) decides.
-  const height = dot(sub(geometry.center, start), n);
+  const {
+    endCondition: _endCondition,
+    toSurface: _toSurface,
+    toFaceOffset: _toFaceOffset,
+    ...rest
+  } = data;
+  // Where the profile starts: the middle of a unit probe sweep's exact
+  // bounds, moved back onto the start plane.
+  const { draftAngleDeg: _draft, ...straight } = rest;
+  const probe = buildSweep(
+    kernel,
+    document,
+    { ...feature, data: { ...straight, distance: 1 } },
+    scope,
+    sketchBases,
+    () => {}
+  );
+  const boxes = probe.solids.map((solid) => kernel.boundingBox(solid));
+  for (const solid of probe.solids) kernel.deleteSolid(solid);
+  const bounds = unionBounds(boxes);
+  const box = {
+    x: (bounds[0]! + bounds[3]!) / 2,
+    y: (bounds[1]! + bounds[4]!) / 2,
+    z: (bounds[2]! + bounds[5]!) / 2
+  };
+  const middle = along(box, n, -dot(sub(box, start), n));
+  const rho = fromAxis(middle, axisPoint, axis);
+  const inside = rho < radius;
+  // The way to the face: from outside, toward the axis where it passes the
+  // profile (never the face's seam, which a turn about the axis moves);
+  // from inside, either way meets the wall, so the stored distance's sign
+  // (the direction the editor's Reverse sets) decides.
   let sign: 1 | -1;
-  if (Math.abs(height) > 1e-6 * Math.max(1, radius)) {
-    sign = height < 0 ? -1 : 1;
+  const nearest = along(axisPoint, axis, dot(sub(middle, axisPoint), axis));
+  const toward = dot(sub(nearest, start), n);
+  if (!inside && Math.abs(toward) > 1e-9 * Math.max(1, radius)) {
+    sign = toward < 0 ? -1 : 1;
   } else {
     const distance = resolveParamValue(
       data.distance,
@@ -163,43 +193,12 @@ export function planCurvedToFace(
     );
     if (!Number.isFinite(distance) || distance === 0) {
       throw unresolved(
-        'the middle of the curved face lies on the start plane, so which way to extrude is unclear; reverse the direction to choose.'
+        'which way to reach the curved face from here is unclear; reverse the direction to choose.'
       );
     }
     sign = distance < 0 ? -1 : 1;
   }
   const direction = { x: n.x * sign, y: n.y * sign, z: n.z * sign };
-  const {
-    endCondition: _endCondition,
-    toSurface: _toSurface,
-    toFaceOffset: _toFaceOffset,
-    ...rest
-  } = data;
-  // Inside or outside is read where the profile starts: the middle of a
-  // unit probe sweep's exact bounds, moved back onto the start plane.
-  const { draftAngleDeg: _draft, ...straight } = rest;
-  const probe = buildSweep(
-    kernel,
-    document,
-    { ...feature, data: { ...straight, distance: sign } },
-    scope,
-    sketchBases,
-    () => {}
-  );
-  const boxes = probe.solids.map((solid) => kernel.boundingBox(solid));
-  for (const solid of probe.solids) kernel.deleteSolid(solid);
-  const bounds = unionBounds(boxes);
-  const middle = {
-    x: (bounds[0]! + bounds[3]!) / 2,
-    y: (bounds[1]! + bounds[4]!) / 2,
-    z: (bounds[2]! + bounds[5]!) / 2
-  };
-  const inside =
-    fromAxis(
-      along(middle, direction, -dot(sub(middle, start), direction)),
-      axisPoint,
-      axis
-    ) < radius;
   const offset = resolveToFaceOffset(data, scope, document);
   // Short of the face is toward the start: a smaller cylinder from inside,
   // a larger one from outside.
@@ -209,7 +208,7 @@ export function planCurvedToFace(
       `Offset from face ${offset} closes the cylinder up (radius ${Math.round(radius * 1e6) / 1e6}); make it smaller.`
     );
   }
-  let reach: number;
+  let reach = 0;
   try {
     reach = throughAllSpan(
       unionBounds(shape.solids.map((solid) => kernel.boundingBox(solid))),
@@ -218,11 +217,20 @@ export function planCurvedToFace(
       'forward'
     ).forward;
   } catch {
-    throw new Error(
-      `${owner}, which carries the curved face, lies entirely behind where the extrusion starts; move the start or pick another face.`
-    );
+    // The face's body lies behind the start; the reached cylinder may
+    // still lie ahead, and the bound below covers it.
   }
-  const length = reach + Math.max(reach * 0.05, 1e-3);
+  // A line from the start plane within the footprint meets the reached
+  // cylinder within (ρ + R′ + footprint) / sin φ, φ the angle between the
+  // axis and the extrusion: the sweep reaches past that and past the body.
+  const footprint = Math.hypot(
+    bounds[3]! - bounds[0]!,
+    bounds[4]! - bounds[1]!,
+    bounds[5]! - bounds[2]!
+  );
+  const sine = Math.sqrt(Math.max(0, 1 - dot(axis, n) ** 2));
+  const bound = Math.max(reach, (rho + reached + footprint) / sine);
+  const length = bound + Math.max(bound * 0.05, 1e-3);
   return {
     sweep: { ...feature, data: { ...rest, distance: sign * length } },
     curved: {
@@ -319,6 +327,35 @@ export function trimToCurvedFace(
     if (kept.length === 0) {
       throw new Error(
         `${label}: the profile does not start ${plan.inside ? 'inside' : 'outside'} the curved face's cylinder all over; keep it to one side.`
+      );
+    }
+    // The whole profile starts on the near side: the kept regions' faces on
+    // the start plane are this solid's own start face, by exact area and
+    // edge count. A profile straddling the cylinder loses some of it.
+    const startTolerance = 1e-9 * Math.max(1, plan.length);
+    const caps = (solids: readonly number[]) => {
+      const faces = solids.flatMap((one) =>
+        facesOnPlane(kernel, one, plan.start, plan.direction, startTolerance)
+      );
+      return {
+        area: faces.reduce(
+          (sum, face) => sum + kernel.faceArea(face, MEASUREMENT_DEFLECTION),
+          0
+        ),
+        edges: faces.reduce(
+          (sum, face) => sum + kernel.getFaceEdges(face).length,
+          0
+        )
+      };
+    };
+    const own = caps([solid]);
+    const reached = caps(kept);
+    if (
+      reached.edges !== own.edges ||
+      !(Math.abs(reached.area - own.area) <= 1e-9 * Math.max(1e-12, own.area))
+    ) {
+      throw new Error(
+        `${label}: part of the profile starts ${plan.inside ? 'outside' : 'inside'} the curved face's cylinder; keep the whole profile to one side.`
       );
     }
     if (
