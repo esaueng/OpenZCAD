@@ -111,8 +111,8 @@ export class PatternOverlapWorkers {
     signal?: BuildCancellationSignal
   ): Promise<(number | null)[] | undefined> | undefined {
     if (!this.available || signal?.isCancelled()) return;
-    const width = this.workers.length;
-    const chunks: Uint8Array[][] = this.workers.map(() => []);
+    const width = Math.min(pairs.length, this.workers.length);
+    const chunks: Uint8Array[][] = Array.from({ length: width }, () => []);
     for (const [index, pair] of pairs.entries())
       chunks[index % width]!.push(pair);
     // Post synchronously so the live kernel can fuse while the helpers run.
@@ -155,8 +155,8 @@ export class PatternOverlapWorkers {
     });
     try {
       return await Promise.all(
-        this.workers.map((worker, index) =>
-          request(worker, chunks[index]!, controller.signal, module)
+        chunks.map((chunk, index) =>
+          request(this.workers[index]!, chunk, controller.signal, module)
         )
       );
     } catch {

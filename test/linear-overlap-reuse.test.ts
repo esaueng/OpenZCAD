@@ -3,7 +3,9 @@ import { MEASUREMENT_DEFLECTION } from '../packages/kernel-adapter/src/exact-wit
 import {
   addPrimitiveFeature,
   createProjectDocument,
-  patternBody
+  patternBody,
+  listFeaturesInOrder,
+  updateFeature
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
@@ -132,9 +134,14 @@ describe('overlap measurements while editing a linear pattern', () => {
     }
   });
 
-  it.each([false, true])(
-    'uses independently measured pairs and preserves the complete solid and STEP (skip second copy: %s)',
-    async (skipSecond) => {
+  it.each([
+    { skipSecond: false, warm: false },
+    { skipSecond: true, warm: false },
+    { skipSecond: false, warm: true },
+    { skipSecond: true, warm: true }
+  ])(
+    'uses independently measured pairs and preserves the complete solid and STEP (skip second copy: $skipSecond, increment: $warm)',
+    async ({ skipSecond, warm }) => {
       const stock = addPrimitiveFeature(
         createProjectDocument('Parallel row', toUserId('maker')),
         {
@@ -148,7 +155,7 @@ describe('overlap measurements while editing a linear pattern', () => {
         targetBodyId: stock.bodyOrder[0]!,
         patternKind: 'linear',
         axis: 'x',
-        count: 13,
+        count: warm ? 12 : 13,
         spacing: 7,
         ...(skipSecond ? { skippedInstances: ['1'] } : {})
       });
@@ -156,16 +163,37 @@ describe('overlap measurements while editing a linear pattern', () => {
       const reference = await createExactKernelAdapter();
       const buildOptions = { lineageDemand: [], proposeCarry: true };
       const exportOptions = { timestamp: '2026-01-01T00:00:00Z' };
+      let document = row.document;
       try {
+        if (warm) {
+          // An edit holds the previous mesh deflection. Give both adapters
+          // the same display history before comparing the entire projection.
+          for (const instance of [adapter, reference]) {
+            await instance.syncDocument(
+              document,
+              undefined,
+              undefined,
+              undefined,
+              buildOptions
+            );
+          }
+          const pattern = listFeaturesInOrder(document).find(
+            (node) => node.data.featureKind === 'pattern'
+          )!;
+          document = updateFeature(document, {
+            featureId: pattern.featureId,
+            data: { count: 13 }
+          });
+        }
         const serial = await reference.syncDocument(
-          row.document,
+          document,
           undefined,
           undefined,
           undefined,
           buildOptions
         );
         const expectedStep = await reference.exportStep(
-          row.document,
+          document,
           [row.bodyId],
           exportOptions
         );
@@ -198,24 +226,26 @@ describe('overlap measurements while editing a linear pattern', () => {
             }
           });
         const actual = await adapter.syncDocument(
-          row.document,
+          document,
           undefined,
           undefined,
           undefined,
           buildOptions
         );
         expect(jobs).toHaveBeenCalledTimes(1);
-        expect(jobs.mock.calls[0]![0]).toHaveLength(skipSecond ? 10 : 11);
+        expect(jobs.mock.calls[0]![0]).toHaveLength(
+          warm ? 1 : skipSecond ? 10 : 11
+        );
         expect(
           calls.mock.calls.filter(([op]) => op === 'intersect')
-        ).toHaveLength(skipSecond ? 0 : 1);
+        ).toHaveLength(skipSecond || warm ? 0 : 1);
         expect(actual.bodyRepresentations[row.bodyId]).toEqual(
           serial.bodyRepresentations[row.bodyId]
         );
         expect(actual.warnings).toEqual(serial.warnings);
         expect(actual.featureWarnings).toEqual(serial.featureWarnings);
         expect(
-          await adapter.exportStep(row.document, [row.bodyId], exportOptions)
+          await adapter.exportStep(document, [row.bodyId], exportOptions)
         ).toBe(expectedStep);
       } finally {
         vi.restoreAllMocks();
