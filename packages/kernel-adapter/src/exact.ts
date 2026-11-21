@@ -1741,6 +1741,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * moment or on an edit's proposal; `syncDocument` promotes it to
    * {@link liveSession} with the projection it published.
    */
+  /**
+   * The digests of the last complete checked build, kept across the preview
+   * builds that clear {@link lastBuildRecord}: a drag preview finds the
+   * first feature it changed against them (see `displayOnlyFrom`). Only a
+   * hint for where display-only blends start; salted digests keep every
+   * display-only result away from checked builds whatever it says.
+   */
+  private lastCheckedHistory: {
+    projectId: string;
+    scopeKey: string;
+    digests: string[];
+    demand: ReadonlySet<BodyId> | undefined;
+  } | null = null;
   private lastBuildRecord: {
     kernel: RemusKernel;
     projectId: string;
@@ -2315,7 +2328,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // was not checkpointed) is built checked, so its checkpoint is one the
     // release's checked sync restores, together with the edit the preview
     // prepared on it, instead of replaying that prefix and the edit afresh.
-    const displayOnlyFrom = !displayOnlyBlends
+    let displayOnlyFrom = !displayOnlyBlends
       ? features.length
       : deferredDirectEditFeatureId
         ? features.length - 1
@@ -2413,6 +2426,37 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           )
         )
       : [];
+    // A drag that changes an earlier feature than the terminal direct edit
+    // (a face offset planned as a primitive dimension) must replay that
+    // feature and everything after it; none of those checkpoints is one the
+    // release could restore, since every later digest changes with it. Build
+    // them display-only too, so a blend after the edited feature skips its
+    // material and volume postconditions in the frame (the release rebuilds
+    // it checked). Found against the last complete checked build, under its
+    // own lineage demand; anything unknown keeps the terminal-only rule.
+    if (
+      displayOnlyBlends &&
+      deferredDirectEditFeatureId &&
+      cachingEnabled &&
+      this.lastCheckedHistory &&
+      this.lastCheckedHistory.projectId === document.projectId &&
+      this.lastCheckedHistory.scopeKey === scopeKey &&
+      this.lastCheckedHistory.digests.length === features.length
+    ) {
+      const record = this.lastCheckedHistory;
+      const firstChanged = features.findIndex(
+        (feature, index) =>
+          historyFeatureDigest(
+            document,
+            feature,
+            index,
+            scope,
+            record.demand
+          ) !== record.digests[index]
+      );
+      if (firstChanged >= 0 && firstChanged < displayOnlyFrom)
+        displayOnlyFrom = firstChanged;
+    }
     const digests = salted(demandBases, proposeCarry);
     // What a plain build of this document stores. A carry-proposing build
     // may restore a checkpoint under these only when it is `carryNeutral`
@@ -3356,6 +3400,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             build
           }
         : null;
+    if (this.lastBuildRecord) {
+      const {
+        projectId,
+        scopeKey: key,
+        digests: built,
+        demand
+      } = this.lastBuildRecord;
+      this.lastCheckedHistory = {
+        projectId,
+        scopeKey: key,
+        digests: built,
+        demand
+      };
+    }
     // The cache event is emitted by syncDocument AFTER the measure pass, so
     // it can carry the measure-reuse counts alongside the replay counts.
     return {

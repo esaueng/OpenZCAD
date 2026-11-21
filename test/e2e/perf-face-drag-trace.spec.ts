@@ -109,6 +109,12 @@ async function openDocument(
 
 async function startPage(page: Page, create = true) {
   await stubApi(page);
+  // OZ_EXACT_DRAG_STREAMING=1: the K11 prototype streams exact previews
+  // under the drag proxy instead of waiting for the hand to rest.
+  if (process.env.OZ_EXACT_DRAG_STREAMING === '1')
+    await page.addInitScript(() => {
+      window.localStorage.setItem('openzcad.exactDragStreaming', '1');
+    });
   await page.addInitScript(() => {
     const scope = window as typeof window & {
       __ozFaceDragTrace?: unknown[];

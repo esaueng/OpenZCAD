@@ -2363,6 +2363,18 @@ const EDGE_BLEND_REST_MS = 250;
 /** Check a generic face's viewport deformation once the hand rests. */
 const OFFSET_FACE_REST_MS = 250;
 /**
+ * K11 prototype: stream exact face-offset previews during a proxy-led drag
+ * (`localStorage['openzcad.exactDragStreaming'] = '1'`). Off by default
+ * until the face-drag probe qualifies it.
+ */
+function exactDragStreamingEnabled(): boolean {
+  try {
+    return window.localStorage.getItem('openzcad.exactDragStreaming') === '1';
+  } catch {
+    return false;
+  }
+}
+/**
  * M07: the coarse rate of a chained face set's whole-chain drag preview.
  * Its leading plane follows the hand every frame from a prepared move; the
  * whole chain is rebuilt at most this often, and once the hand rests.
@@ -30748,6 +30760,21 @@ export function App() {
       return;
     }
     offsetPreviewValueRef.current = offset;
+    // K11 prototype (flagged): while a proxy follows the pointer, also stream
+    // the exact preview instead of waiting for the hand to rest. The live
+    // preview keeps one request in flight and only the newest value pending,
+    // and an exact frame landing under the proxy is the same hand-off a
+    // pause mid-drag already makes.
+    if (
+      !exactGeometry &&
+      exactDragStreamingEnabled() &&
+      offsetHandleTarget?.stepProfilePreview &&
+      Math.abs(offset) > 1e-9
+    ) {
+      offsetLeadPreview.clear();
+      offsetPreview.request(offset);
+      return;
+    }
     if (!exactGeometry) {
       offsetPreview.clear();
       offsetLeadPreview.clear();
