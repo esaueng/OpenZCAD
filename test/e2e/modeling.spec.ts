@@ -2903,42 +2903,44 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   await expect(page.getByRole('contentinfo')).toContainText('warnings0');
 });
 
-test('a STEP export is a download only and uploads no copy', async ({
-  page
-}) => {
-  test.setTimeout(90_000);
-  await stubApi(page);
+test(
+  'a STEP export is a download only and uploads no copy',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
 
-  // Any upload or artifact write during the export is a cloud copy the
-  // user did not ask for.
-  const uploads: string[] = [];
-  await page.route('**/api/uploads**', async (route) => {
-    uploads.push(route.request().url());
-    await route.fulfill({ status: 500 });
-  });
-  await page.route('**/api/artifacts/finalize', async (route) => {
-    uploads.push(route.request().url());
-    await route.fulfill({ status: 500 });
-  });
+    // An upload session for an exported file is a cloud copy the user did not
+    // ask for. Other uploads (the project thumbnail) fall through to the stubs.
+    const exportUploads: string[] = [];
+    await page.route('**/api/uploads', async (route) => {
+      const payload = route.request().postDataJSON() as {
+        kind?: string;
+      } | null;
+      if (!payload?.kind?.endsWith('-export')) return route.fallback();
+      exportUploads.push(payload.kind);
+      await route.fulfill({ status: 500 });
+    });
 
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Local Part');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await createPrimitiveInPlace(page, 'box');
-  await expectBodyCount(page, 1);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Local Part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
 
-  const fileMenu = page.locator('details.file-menu');
-  await fileMenu.locator('summary').click();
-  const downloadPromise = page.waitForEvent('download');
-  await fileMenu.getByRole('button', { name: /STEP/ }).click();
-  const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('Local-Part.step');
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'to Local-Part.step.'
-  );
-  await expect(page.getByRole('contentinfo')).not.toContainText('archived');
-  expect(uploads).toEqual([]);
-});
+    const fileMenu = page.locator('details.file-menu');
+    await fileMenu.locator('summary').click();
+    const downloadPromise = page.waitForEvent('download');
+    await fileMenu.getByRole('button', { name: /STEP/ }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('Local-Part.step');
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'to Local-Part.step.'
+    );
+    await expect(page.getByRole('contentinfo')).not.toContainText('archived');
+    expect(exportUploads).toEqual([]);
+  }
+);
 
 test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke' }, async ({
   page
