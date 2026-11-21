@@ -49,11 +49,16 @@ while dragging) and the exact preview's round trip as separate rows.
 | Rounded box top face                         |                15 / 16 ms |                     16.6 / 17.9–18.2 ms |                     — |             167 ms |
 | Native holder +Z face                        |                15 / 16 ms |                     16.6 / 17.2–17.6 ms |                 64 ms |              76 ms |
 
-**Targets** (H02: 60 fps, first geometry within 100 ms, p95 under 50 ms):
+**Targets** (H02: 60 fps, first geometry within 100 ms, p95 under 50 ms).
+By owner decision on 2026-11-21 they apply to what follows the pointer:
+proxy-led dragging meets them. Exact geometry stays a measured, budgeted
+figure, and an exact preview fast enough to stream is
+[ROADMAP K11](../../ROADMAP.md#k11).
 
 - **Pointer → frame p95 under 50 ms: met.** All four cases are at 15–16 ms.
-- **First geometry within 100 ms: not met.** First exact geometry reached
-  the screen 2,309–2,697 ms after the first move (medians 2,681 / 2,483 /
+- **First geometry within 100 ms: met by the proxy; not met for exact
+  geometry.** Proxy frames follow the first move in about 15 ms (see the
+  caveat below). First exact geometry reached the screen 2,309–2,697 ms after the first move (medians 2,681 / 2,483 /
   2,311 ms on the filleted union, the filleted-union history and the
   holder). The drag requests exact geometry only once the hand rests, so
   this is mostly the drag's own length. The worker's kernel time for that
@@ -63,7 +68,8 @@ while dragging) and the exact preview's round trip as separate rows.
   15–16 ms (p50 and p95 across the drag; the first proxy frame is not timed
   separately), but they are disposable display geometry. Meeting the target
   for exact geometry needs exact previews while the pointer moves, and on
-  the filleted unions an exact build under 100 ms.
+  the filleted unions an exact build under 100 ms: that is
+  [ROADMAP K11](../../ROADMAP.md#k11), not an H02 blocker.
 - **60 fps: met.** Every case rendered 119–122 frames over the 2 s of
   pointer motion: frame intervals 16.6 ms p50, 17.2–18.2 ms p95, at most
   26 ms (read from the drag trace's frame events between the first and last

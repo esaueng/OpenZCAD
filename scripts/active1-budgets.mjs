@@ -77,7 +77,14 @@ export const ACTIVE1_BUDGETS = Object.freeze({
       releaseToFrameMs: 130
     })
   }),
-  /** H02's stated drag targets: 60 fps, first geometry ≤ 100 ms, p95 ≤ 50 ms. */
+  /**
+   * H02's drag targets: 60 fps, first geometry ≤ 100 ms, p95 ≤ 50 ms, for
+   * what follows the pointer (proxy frames, or streamed exact frames when a
+   * drag has no proxy). Owner decision 2026-11-21: proxy-led dragging meets
+   * them; first exact geometry stays a measured, budgeted row
+   * (`faceDrag[...].firstGeometryMs`), and an exact preview fast enough to
+   * stream is ROADMAP K11.
+   */
   faceDragTargets: Object.freeze({
     frameIntervalMs: 1000 / 60,
     firstGeometryMs: 100,
