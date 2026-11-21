@@ -477,7 +477,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older document builds unchanged. An older client would space the copies
 // a whole total apart, so it must refuse. Builds on v119
 // (#1796); claimed as v116, left unused when #1799 landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 120 as const;
+// v121 adds the F01 extrude start offset (`startOffset` on a blind or
+// to-face extrude): the extrusion starts that far from its sketch plane
+// along the sketch normal instead of on it. An older client would start it
+// on the sketch plane, so it must refuse. Builds on v120 (v118 is claimed
+// by #1808).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 121 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -2463,6 +2468,18 @@ export type FeatureData =
        * refuses by name. Absent or zero ends on the face itself.
        */
       toFaceOffset?: ParamValue;
+      /**
+       * F01 (schema v121): where the extrusion starts, as a signed length
+       * along the sketch normal from the sketch plane. The start plane takes
+       * the sketch plane's place for every extent measured from it: a blind
+       * distance, a back distance and a symmetric span run from it, a draft
+       * hinges on it, and a to-face extrude runs from it to the face (an
+       * offset that reaches or passes the face's end refuses by name).
+       * Through all refuses it. Like every extent it is resolved on each
+       * rebuild and never folded into `distance`. Absent or zero starts on
+       * the sketch plane.
+       */
+      startOffset?: ParamValue;
       /**
        * F01 (schema v29): wall draft in degrees, measured from the sketch
        * normal. Positive tapers the walls inward as the extrusion leaves the

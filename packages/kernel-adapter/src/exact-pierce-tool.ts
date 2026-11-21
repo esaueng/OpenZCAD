@@ -480,11 +480,7 @@ function pierceBandClear(
   for (const solid of partnerSolids) {
     for (const face of kernel.getSolidFaces(solid)) {
       if (excluded.has(face)) continue;
-      if (
-        kernel.getFaceEdges(face).some((edge) =>
-          boundingEdges.has(edge)
-        )
-      ) {
+      if (kernel.getFaceEdges(face).some((edge) => boundingEdges.has(edge))) {
         continue;
       }
       let bounds: Float64Array;
@@ -650,6 +646,18 @@ function piercedFeatureNode(
 ): FeatureNode | null {
   const data = feature.data;
   if (data.featureKind !== 'extrude' || data.symmetric) return null;
+  // F01 (v121): a start offset moves the start cap off the sketch plane.
+  if (
+    data.startOffset !== undefined &&
+    resolveParamValue(
+      data.startOffset,
+      scope,
+      'start offset',
+      documentUnits
+    ) !== 0
+  ) {
+    return null;
+  }
   if (
     data.backDistance !== undefined &&
     resolveParamValue(

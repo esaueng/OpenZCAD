@@ -4,7 +4,8 @@ import {
   MAX_EXTRUDE_DRAFT_DEG,
   coerceParamValue,
   extrudeSidesConflict,
-  toFaceOffsetEnd
+  toFaceOffsetEnd,
+  toFaceStartSpan
 } from '@openzcad/document-core';
 import type {
   BodyId,
@@ -49,6 +50,11 @@ export interface ExtrudeFormValue {
    * (a typed 0 is sent as absent). Positive stops short, negative passes.
    */
   toFaceOffset?: ParamValue;
+  /**
+   * F01 (v121): where the extrusion starts along the sketch normal; absent
+   * through all and when it starts on the sketch plane (a typed 0).
+   */
+  startOffset?: ParamValue;
   /** F01 (v29): absent for straight walls (a typed 0 is sent as absent). */
   draftAngleDeg?: ParamValue;
 }
@@ -96,6 +102,8 @@ export interface ExtrudeDraft {
   toFace?: ExtrudeToFaceTarget;
   /** F01 (v113): the offset from the face, as typed; read with To face. */
   faceOffset: string;
+  /** F01 (v121): the start offset, as typed; read except through all. */
+  startOffset: string;
   draftAngle: string;
 }
 
@@ -112,6 +120,7 @@ export interface ExtrudeDraftInitial {
   throughAllSide?: ThroughAllSide;
   toFace?: ExtrudeToFaceTarget;
   toFaceOffset?: ParamValue;
+  startOffset?: ParamValue;
   draftAngleDeg?: ParamValue;
 }
 
@@ -145,6 +154,7 @@ export function initialExtrudeDraft(
     throughAllSide: initial.throughAllSide ?? 'forward',
     ...(initial.toFace ? { toFace: initial.toFace } : {}),
     faceOffset: paramValueText(initial.toFaceOffset ?? 0),
+    startOffset: paramValueText(initial.startOffset ?? 0),
     draftAngle: paramValueText(initial.draftAngleDeg ?? 0)
   };
 }
@@ -238,6 +248,26 @@ export function extrudeToFaceOffsetProblem(
   return 'Offset from face reaches the sketch plane; make it smaller than the distance to the face.';
 }
 
+/**
+ * F01 (v121): a start offset that reaches or passes where a to-face
+ * extrusion ends, said before Apply; null when there is none, or while the
+ * face's reach or either offset is not known yet (the build decides then).
+ */
+export function extrudeStartOffsetProblem(
+  draft: ExtrudeDraft,
+  ctx: ExtrudeDraftContext
+): string | null {
+  if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
+  const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
+  const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
+  if (start === null || start === 0 || offset === null) return null;
+  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
+  if (reach === null) return null;
+  const end = offset === 0 ? reach : toFaceOffsetEnd(reach, offset);
+  if (end === null || toFaceStartSpan(end, start) !== null) return null;
+  return 'Start offset reaches where the extrusion ends at the face; move the start back toward the sketch plane.';
+}
+
 /** The stored face no longer resolves and has not been picked again. */
 export function extrudeToFaceUnresolved(
   draft: ExtrudeDraft,
@@ -320,6 +350,7 @@ export function extrudeFormValue(
   const typed = coerceParamValue(draft.distance);
   const draftAngleDeg = coerceParamValue(draft.draftAngle);
   const toFaceOffset = coerceParamValue(draft.faceOffset);
+  const startOffset = coerceParamValue(draft.startOffset);
   return {
     name: draft.name.trim(),
     sketchId: ctx.initial.sketchId,
@@ -344,6 +375,9 @@ export function extrudeFormValue(
     ...(toFace && draft.toFace ? { toFace: draft.toFace } : {}),
     ...(toFace && toFaceOffset !== 0 && toFaceOffset !== '0'
       ? { toFaceOffset }
+      : {}),
+    ...(!throughAll && startOffset !== 0 && startOffset !== '0'
+      ? { startOffset }
       : {}),
     ...(!throughAll && draftAngleDeg !== 0 && draftAngleDeg !== '0'
       ? { draftAngleDeg }
@@ -394,6 +428,16 @@ export function extrudeDraftRefusal(
     if (offsetProblem) return offsetProblem;
   }
   if (!throughAll) {
+    const start = previewExpression(
+      draft.startOffset,
+      ctx.scope,
+      lengthOf(ctx)
+    );
+    if (!start.ok || start.value === undefined) {
+      return `Start offset: ${start.text}.`;
+    }
+    const startProblem = extrudeStartOffsetProblem(draft, ctx);
+    if (startProblem) return startProblem;
     const angle = previewExpression(draft.draftAngle, ctx.scope, angleOf(ctx));
     if (!angle.ok || angle.value === undefined) {
       return `Draft angle: ${angle.text}.`;

@@ -6,6 +6,8 @@ import {
   toFaceOffsetEnd,
   toFaceOffsetReachesSketchMessage,
   toFaceSignedDistance,
+  toFaceStartPassesEndMessage,
+  toFaceStartSpan,
   resolveParamValue
 } from '@openzcad/document-core';
 import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
@@ -134,11 +136,34 @@ export function resolveToFaceOffset(
 }
 
 /**
+ * F01 (v121): where the extrusion starts, resolved, as a signed length along
+ * the sketch normal from the sketch plane; zero when it starts on the plane.
+ */
+export function resolveExtrudeStartOffset(
+  data: Pick<ExtrudeData, 'startOffset'>,
+  scope: Record<string, number>,
+  document: Pick<ProjectDocument, 'units'>
+): number {
+  if (data.startOffset === undefined) return 0;
+  const offset = resolveParamValue(
+    data.startOffset,
+    scope,
+    'start offset',
+    document.units
+  );
+  if (!Number.isFinite(offset)) {
+    throw new Error('Start offset must be a finite length.');
+  }
+  return offset;
+}
+
+/**
  * The blind extrude a to-face extrude stands for at this history position:
- * the derived distance (to the face, less any offset from it) replaces the
- * dormant one, and the extent fields are dropped so the sweep, overlap
- * check and boolean treat it as the blind extrude it now is. The stored
- * feature is never rewritten.
+ * the derived distance (to the face, less any offset from it, measured from
+ * where the extrusion starts) replaces the dormant one, and the extent
+ * fields are dropped so the sweep, overlap check and boolean treat it as the
+ * blind extrude it now is. A start offset stays, so the sweep starts where
+ * it says. The stored feature is never rewritten.
  */
 export function toFaceSweepFeature(
   kernel: RemusKernel,
@@ -157,13 +182,18 @@ export function toFaceSweepFeature(
     // help. The offset (or the face's new position) is what must change.
     throw new Error(toFaceOffsetReachesSketchMessage(faceDistance, offset));
   }
+  const start = resolveExtrudeStartOffset(data, scope, document);
+  const span = start === 0 ? distance : toFaceStartSpan(distance, start);
+  if (span === null) {
+    throw new Error(toFaceStartPassesEndMessage(distance, start));
+  }
   const {
     endCondition: _endCondition,
     toFace: _toFace,
     toFaceOffset: _toFaceOffset,
     ...rest
   } = data;
-  return { ...feature, data: { ...rest, distance } };
+  return { ...feature, data: { ...rest, distance: span } };
 }
 
 /**

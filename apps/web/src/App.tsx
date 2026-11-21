@@ -27283,7 +27283,9 @@ export function App() {
             ? 'Back distance'
             : valueId === 'faceOffset'
               ? 'Offset from face'
-              : 'Draft angle',
+              : valueId === 'startOffset'
+                ? 'Start offset'
+                : 'Draft angle',
       initial: text,
       selectInitial: true,
       unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
@@ -27317,6 +27319,7 @@ export function App() {
       valueId !== 'distance' &&
       valueId !== 'backDistance' &&
       valueId !== 'faceOffset' &&
+      valueId !== 'startOffset' &&
       valueId !== 'draftAngle'
     ) {
       return;
@@ -27813,14 +27816,25 @@ export function App() {
     };
     // An edit has no region arrow: its distance gets one of its own.
     if (edited && !regionExtrudeState) return [];
+    // F01 (v121): the extrusion starts on its start plane, so its back
+    // arrow, draft rig and an edit's distance arrow stand there too.
+    const lift = finite(regionExtrudeState?.startOffset, 0);
+    const lifted = (point: Vector3): Vector3 =>
+      lift === 0
+        ? point
+        : {
+            x: point.x + view.basis.normal.x * lift,
+            y: point.y + view.basis.normal.y * lift,
+            z: point.z + view.basis.normal.z * lift
+          };
     return extrudeHandles(
-      loops.outline,
+      loops.outline.map(lifted),
       view.basis.normal,
       edited
         ? `edit:${extrudeEditFeature!.featureId}`
         : `${pick.sketchId}:${pick.regionFingerprint}`,
       state,
-      loops.holes,
+      loops.holes.map((hole) => hole.map(lifted)),
       edited !== null
     ).map((shape) => {
       const handle = {
@@ -28855,6 +28869,7 @@ export function App() {
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       toFace: regionExtrudeSettings.current?.toFace,
       toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
+      startOffset: regionExtrudeSettings.current?.startOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
