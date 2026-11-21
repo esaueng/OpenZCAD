@@ -158,6 +158,7 @@
   "sketch-review-fixes.spec.ts": 20,
   "sketch-shape-reference-targets.spec.ts": 16,
   "sketch-transition-continuity.spec.ts": 26,
+  "upstream-sketch-edit.spec.ts": 4,
   "space-mouse.spec.ts": 4,
   "sphere-cylinder-union.spec.ts": 36,
   "staged-geometry.spec.ts": 6,
