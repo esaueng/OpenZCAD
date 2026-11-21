@@ -871,7 +871,10 @@ export type HandleSpec = (
    * up to the face's end), in place of the value's own `max`.
    */
   max?: number;
-  /** The step a drag lands on (1 for a whole count), in place of tenths. */
+  /**
+   * The step a drag lands on (1 for a whole count), in place of tenths;
+   * Shift does not lift it.
+   */
   step?: number;
 };
 
@@ -3307,6 +3310,14 @@ const gear: InPlaceToolSpec = {
     // coil's end winds turns at the same spacing. A worm's count is its
     // starts and a rack has no circle: those stay chips.
     const teethOnCircle = gearTeethOnPitchCircle(options) && module > 0;
+    // A helical gear's module is its normal module: the kernel stands its
+    // teeth on the transverse pitch circle, module / cos β per tooth across.
+    const helix =
+      gearTwists({ options, numbers: values }) &&
+      (values.helixAngleDeg ?? 0) > 0
+        ? ((values.helixAngleDeg ?? 0) * Math.PI) / 180
+        : 0;
+    const perTooth = module / (2 * Math.cos(helix));
     return [
       {
         valueId: 'faceWidth',
@@ -3318,10 +3329,10 @@ const gear: InPlaceToolSpec = {
         ? {
             valueId: 'teeth',
             kind: 'linear',
-            // Rebuilt when the module changes: the arrow's scale is half
-            // of it.
-            key: keyOf(base, 'teeth', radial.x, radial.y, radial.z, module),
-            params: { origin, direction: radial, scale: module / 2 },
+            // Rebuilt when the module or helix changes: the arrow's scale
+            // is the pitch radius per tooth.
+            key: keyOf(base, 'teeth', radial.x, radial.y, radial.z, perTooth),
+            params: { origin, direction: radial, scale: perTooth },
             step: 1
           }
         : {

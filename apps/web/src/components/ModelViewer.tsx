@@ -909,7 +909,8 @@ export type CommandHandleView = (
   max?: number;
   /**
    * The step a drag lands on, in place of a length's tenths: 1 for a whole
-   * count (a gear's teeth), so the arrow rests where the value does.
+   * count (a gear's teeth), so the arrow rests where the value does. Shift
+   * does not lift it.
    */
   step?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
@@ -11443,7 +11444,9 @@ export function ModelViewer({
             : draggedRig.kind === ANGLE_RIG_KIND
               ? 1
               : 0.1;
-        const free = freeValue(event);
+        // A whole count has no free value between its steps: Shift does not
+        // lift its step, or the arrow would rest between teeth.
+        const free = ownStep === undefined && freeValue(event);
         const snapsItself = draggedRig.kind === LINEAR_RIG_KIND;
         const next = draggedRig.valueFromRay?.(
           context.raycaster.ray,

@@ -601,6 +601,16 @@ describe('face tools build the card state', () => {
       .find((handle) => handle.valueId === 'teeth')!;
     expect(coarse.kind === 'linear' && coarse.params.scale).toBeCloseTo(1.5);
     expect(coarse.key).not.toBe(teeth.key);
+    // A helical gear's module is normal: its teeth stand on the transverse
+    // pitch circle the kernel builds, 20 × 2 / cos 20° across (review).
+    const helical = spec
+      .handles(slots, { module: 2, teeth: 20, helixAngleDeg: 20 }, CTX, options)
+      .find((handle) => handle.valueId === 'teeth')!;
+    expect(helical.kind === 'linear' && helical.params.scale).toBeCloseTo(
+      1 / Math.cos((20 * Math.PI) / 180),
+      9
+    );
+    expect(helical.key).not.toBe(teeth.key);
     // Ring, bevel and worm wheel teeth stand on a circle too; a rack's and a
     // worm's count stays a chip.
     for (const gearType of ['internal', 'bevel', 'worm-wheel']) {
