@@ -1718,6 +1718,12 @@ describe('M02 feature patterns and skipped copies', () => {
       ['2', 70, true],
       ['3', 100, false]
     ]);
+    const kept = spec
+      .handles(slots, { spacing: 30, count: 4 }, CTX, { axis: 'x' })
+      .filter((handle) => handle.kind === 'instance');
+    expect(toggles.map((handle) => handle.key)).toEqual(
+      kept.map((handle) => handle.key)
+    );
     expect(
       spec.request(slots, { spacing: 30, count: 4 }, options, CTX, {
         spacing: 30,
