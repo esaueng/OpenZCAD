@@ -115,6 +115,7 @@ import {
   isReservedRecordKey,
   ownEntry,
   patternMirrorProblem,
+  patternSpacingModeProblem,
   patternPathProblem,
   patternPointsProblem,
   holePointsProblem,
@@ -833,6 +834,8 @@ export interface PatternInput {
   path?: PatternPath;
   /** M02 (schema v119): required on a `mirror` pattern, absent otherwise. */
   mirrorPlane?: ModelingPlaneReference;
+  /** M02 (schema v120): a linear pattern's spacing is its total length. */
+  spacingMode?: 'total';
   ids?: BodyFeatureIds;
 }
 
@@ -4707,7 +4710,8 @@ export function patternBody(
       ...(input.path ? { path: patternPathOnly(input.path) } : {}),
       ...(input.mirrorPlane
         ? { mirrorPlane: deepClone(input.mirrorPlane) }
-        : {})
+        : {}),
+      ...(input.spacingMode ? { spacingMode: input.spacingMode } : {})
     },
     suppliedIds(input.ids)
   );
@@ -4887,6 +4891,7 @@ export function validatePatternDefinition(
     | 'points'
     | 'path'
     | 'mirrorPlane'
+    | 'spacingMode'
   >,
   ownFeatureId: FeatureId | null
 ): void {
@@ -4901,6 +4906,8 @@ export function validatePatternDefinition(
   const pathProblem = patternPathProblem(data);
   if (pathProblem) throw new Error(pathProblem);
   if (data.path) validatePatternPath(document, data.path, ownFeatureId);
+  const spacingModeProblem = patternSpacingModeProblem(data);
+  if (spacingModeProblem) throw new Error(spacingModeProblem);
   const mirrorProblem = patternMirrorProblem(data);
   if (mirrorProblem) throw new Error(mirrorProblem);
   if (data.mirrorPlane) {
@@ -5889,7 +5896,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'skippedInstances',
     'points',
     'path',
-    'mirrorPlane'
+    'mirrorPlane',
+    'spacingMode'
   ],
   gear: [
     'gearType',
@@ -5985,7 +5993,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // R01: clearing a datum axis returns to the sketch or world axis.
   // U09: clearing a revolve's region returns it to the first-object profile.
   revolve: ['axisRef', 'profile'],
-  pattern: ['axisRef', 'sourceFeatureIds', 'skippedInstances'],
+  pattern: ['axisRef', 'sourceFeatureIds', 'skippedInstances', 'spacingMode'],
   transform: ['axisRotation'],
   // M01: clearing a hole's sketch points (schema v64) drills it at its one
   // stored position again; clearing its standard (schema v65) drills its

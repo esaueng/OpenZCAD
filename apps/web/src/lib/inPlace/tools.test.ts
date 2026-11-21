@@ -1926,6 +1926,45 @@ describe('M02 feature patterns and skipped copies', () => {
     expect(arrow?.kind).toBe('linear');
   });
 
+  it('Linear pattern: a total length is shared out, its arrow on the last copy', () => {
+    const spec = IN_PLACE_TOOL_SPECS['linear-pattern'];
+    const slots = { ...EMPTY, bodies: [BODY] };
+    const options = { axis: 'x', extent: 'total' };
+    const numbers = { count: 3, total: 40 };
+    expect(spec.hint(slots, options, CTX)).toBe(
+      'Drag the last copy · tap a copy to skip it'
+    );
+    expect(spec.request(slots, numbers, options, CTX, numbers)).toEqual({
+      tool: 'pattern',
+      targetBodyId: 'body_a',
+      patternKind: 'linear',
+      count: 3,
+      axis: 'x',
+      spacing: 40,
+      spacingMode: 'total'
+    });
+    const handles = spec.handles(slots, numbers, CTX, options);
+    expect(handles[0]?.valueId).toBe('total');
+    // BODY's middle is (10, 5, 2): copies 20 apart over the 40.
+    expect(
+      handles.flatMap((handle) =>
+        handle.kind === 'instance'
+          ? [[handle.params.label, handle.params.anchor]]
+          : []
+      )
+    ).toEqual([
+      ['1', { x: 30, y: 5, z: 2 }],
+      ['2', { x: 50, y: 5, z: 2 }]
+    ]);
+    // Between copies, the stored spacing is the step, with no mode.
+    expect(
+      spec.request(slots, { count: 3, spacing: 15 }, { axis: 'x' }, CTX, {
+        count: 3,
+        spacing: 15
+      })
+    ).not.toHaveProperty('spacingMode');
+  });
+
   it('toggles a copy in and out of the skip list', () => {
     expect(toggledPatternSkip(undefined, '2')).toBe('2');
     expect(toggledPatternSkip('2', '3')).toBe('2,3');

@@ -322,7 +322,13 @@ type FeatureDataOf<K extends FeatureKind> = Extract<
  */
 const FEATURE_ENUM_FIELDS = {
   primitive: { primitiveKind: PRIMITIVE_KINDS },
-  pattern: { patternKind: PATTERN_KINDS, axis: AXIS_IDS, axis2: AXIS_IDS },
+  pattern: {
+    patternKind: PATTERN_KINDS,
+    axis: AXIS_IDS,
+    axis2: AXIS_IDS,
+    // M02 (schema v120).
+    spacingMode: valuesOf<'total'>({ total: true })
+  },
   boolean: {
     operation: valuesOf<BooleanOperation>({
       union: true,

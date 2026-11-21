@@ -471,7 +471,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // arrangement and would build a linear pattern in its place, so it must
 // refuse. Builds on v117 (#1799); v118 is claimed by #1808. It was
 // claimed as v115, left unused, with v116, when #1799 landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 119 as const;
+// v120 adds M02 total-length linear patterns (`spacingMode: 'total'`): the
+// stored spacing is the distance from the original to the last copy, shared
+// out between the copies. Absent keeps the spacing between copies, so every
+// older document builds unchanged. An older client would space the copies
+// a whole total apart, so it must refuse. Builds on v119
+// (#1796); claimed as v116, left unused when #1799 landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 120 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3216,6 +3222,13 @@ export type FeatureData =
        * `spacing` and `angleDeg` are stored but not read.
        */
       mirrorPlane?: ModelingPlaneReference;
+      /**
+       * M02 (schema v116), `patternKind: 'linear'` only: `'total'` reads
+       * `spacing` as the distance from the original to the last copy, so
+       * the copies stand `spacing / (count − 1)` apart and a changed count
+       * keeps the row's length. Absent is the spacing between copies.
+       */
+      spacingMode?: 'total';
     }
   | {
       featureKind: 'direct-edit';
