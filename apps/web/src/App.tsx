@@ -5124,7 +5124,7 @@ export function App() {
       }),
     track: trackKernelRefusal
   });
-  const { syncCandidate, syncParameterCandidate } = refusalHarvest;
+  const { syncCandidate, syncParameterCandidate, syncOperationForCommit } = refusalHarvest;
   const reachProjectionBuilderRef = useRef(geometry.syncOnce);
   reachProjectionBuilderRef.current = geometry.syncOnce;
   const reachProjectionRequestRef = useRef<{
@@ -23399,6 +23399,8 @@ export function App() {
     void validatedFeature.runTransaction(commands, {
       label,
       targets,
+      derive: (document) =>
+        syncOperationForCommit(document, geometry.liveLineageDemand()),
       successMessage: commandOutcomeMessage(label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
       cancelled: () => !editSessionIsCurrent(feature, editSession)
