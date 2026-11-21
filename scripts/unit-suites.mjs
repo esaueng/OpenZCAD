@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
 import process from 'node:process';
@@ -20,8 +20,13 @@ export function listRootUnitFiles(rootDir = fileURLToPath(repository)) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name === 'node_modules' || entry.name === 'dist') continue;
       const full = join(dir, entry.name);
-      if (entry.isDirectory()) visit(full);
-      else if (entry.isFile() && entry.name.endsWith('.test.ts')) {
+      // Vitest's include glob follows symlinks; so must the shard inventory.
+      const kind = entry.isSymbolicLink()
+        ? statSync(full, { throwIfNoEntry: false })
+        : entry;
+      if (!kind) continue;
+      if (kind.isDirectory()) visit(full);
+      else if (kind.isFile() && entry.name.endsWith('.test.ts')) {
         files.push(relative(rootDir, full).split(sep).join('/'));
       }
     }

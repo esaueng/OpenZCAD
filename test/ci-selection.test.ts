@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -28,10 +29,7 @@ import {
   UNIT_ROOT_WEIGHTS_PATH,
   weightsFromVitestReports
 } from '../scripts/run-ci-units.mjs';
-import {
-  listRootUnitFiles,
-  unitTestInclude
-} from '../scripts/unit-suites.mjs';
+import { listRootUnitFiles, unitTestInclude } from '../scripts/unit-suites.mjs';
 
 describe('critical and affected CI selection', () => {
   it('narrows only semantic additions that preserve both critical manifests', () => {
@@ -220,6 +218,72 @@ describe('critical and affected CI selection', () => {
         deletedPaths: ['test/e2e/deleted.spec.ts']
       })
     ).toEqual({ unit: 'full', e2e: 'full' });
+    // A docs deletion must not narrow combined-tree browser coverage of an
+    // edited spec: any deletion plus a spec change still runs the full matrix.
+    expect(
+      selectCI(
+        [
+          'docs/roadmap-evidence/f01--old.md',
+          'test/e2e/import-formats.spec.ts'
+        ],
+        {
+          deleted: true,
+          deletedPaths: ['docs/roadmap-evidence/f01--old.md']
+        }
+      ).e2e
+    ).toBe('full');
+  });
+
+  it('inventories symlinked root test files the way Vitest globs them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ci-unit-inventory-'));
+    try {
+      mkdirSync(join(dir, 'test/fixtures/linked'), { recursive: true });
+      mkdirSync(join(dir, 'packages/pkg/src'), { recursive: true });
+      writeFileSync(join(dir, 'test/plain.test.ts'), '');
+      writeFileSync(join(dir, 'test/fixtures/target.ts'), '');
+      writeFileSync(join(dir, 'test/fixtures/linked/inner.test.ts'), '');
+      writeFileSync(join(dir, 'packages/pkg/src/pkg.test.ts'), '');
+      symlinkSync(
+        join(dir, 'test/fixtures/target.ts'),
+        join(dir, 'test/linked-file.test.ts')
+      );
+      symlinkSync(
+        join(dir, 'test/fixtures/linked'),
+        join(dir, 'test/linked-dir')
+      );
+      symlinkSync(join(dir, 'missing.ts'), join(dir, 'test/dangling.test.ts'));
+      expect(listRootUnitFiles(dir)).toEqual([
+        'packages/pkg/src/pkg.test.ts',
+        'test/fixtures/linked/inner.test.ts',
+        'test/linked-dir/inner.test.ts',
+        'test/linked-file.test.ts',
+        'test/plain.test.ts'
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs every root file on a shard whose affected-test discovery fails', () => {
+    // Sibling shards discover independently; a shard that falls back cannot
+    // know which smoke files its siblings dropped, so it must not narrow to
+    // its own full-suite partition.
+    for (const shard of ['1/3', '2/3', '3/3']) {
+      let files: string[] | undefined;
+      const status = runUnits(
+        ['root', `--shard=${shard}`],
+        { OPENZCAD_UNIT_SUITE: 'smoke', CI_BASE_SHA: 'not-a-sha' },
+        (_file, _args, options) => {
+          files = (
+            JSON.parse(options.env.OPENZCAD_UNIT_FILES!) as { root: string[] }
+          ).root;
+          expect(options.env.OPENZCAD_UNIT_SUITE).toBe('full');
+          return { status: 0 };
+        }
+      );
+      expect(status).toBe(0);
+      expect(files).toEqual(listRootUnitFiles());
+    }
   });
 
   it('balances root unit shards deterministically and assigns every file once', () => {
@@ -248,7 +312,10 @@ describe('critical and affected CI selection', () => {
     );
     // d uses DEFAULT_UNIT_WEIGHT_SECONDS (2): 10 vs 6+5+2 -> 10+2=12 vs 6+5=11
     expect(toy).toEqual([
-      { files: ['a.test.ts', 'd.test.ts'], seconds: 10 + DEFAULT_UNIT_WEIGHT_SECONDS },
+      {
+        files: ['a.test.ts', 'd.test.ts'],
+        seconds: 10 + DEFAULT_UNIT_WEIGHT_SECONDS
+      },
       { files: ['b.test.ts', 'c.test.ts'], seconds: 11 }
     ]);
 

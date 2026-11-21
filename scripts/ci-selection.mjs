@@ -120,7 +120,8 @@ export function selectCI(
   // browser regression still requires the full remaining matrix.
   const browserFull =
     explicitFull ||
-    deletedList.some((p) => p.startsWith('test/e2e/') && p.endsWith('.spec.ts'));
+    (deletedList.length > 0 &&
+      paths.some((p) => p.startsWith('test/e2e/') && p.endsWith('.spec.ts')));
   return {
     unit: unitFull ? 'full' : 'smoke',
     e2e: browserFull ? 'full' : 'smoke'

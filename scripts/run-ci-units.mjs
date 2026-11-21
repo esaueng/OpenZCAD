@@ -131,14 +131,16 @@ export function partitionUnitFiles(files, weights, total) {
   return shards;
 }
 
-const ROOT_TEST_SUFFIX = /(?:^|\/)((?:test|packages\/[^/]+\/src)\/.+\.test\.ts)$/;
+const ROOT_TEST_SUFFIX =
+  /(?:^|\/)((?:test|packages\/[^/]+\/src)\/.+\.test\.ts)$/;
 
 /** Extract per-file durations (in seconds, rounded to 0.1s) from Vitest JSON reports. */
 export function weightsFromVitestReports(reports, rootDir = root) {
   const totals = {};
   for (const report of reports) {
     for (const entry of report?.testResults ?? []) {
-      const raw = typeof entry?.name === 'string' ? entry.name.split('\\').join('/') : '';
+      const raw =
+        typeof entry?.name === 'string' ? entry.name.split('\\').join('/') : '';
       if (!raw) continue;
       let file;
       if (isAbsolute(raw)) {
@@ -152,7 +154,8 @@ export function weightsFromVitestReports(reports, rootDir = root) {
       if (!file) continue;
       const start = Number(entry.startTime);
       const end = Number(entry.endTime);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) continue;
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
+        continue;
       totals[file] = Math.round(((end - start) / 1000) * 10) / 10;
     }
   }
@@ -212,6 +215,7 @@ export function runUnits(args, env = process.env, execute = spawnSync) {
     throw new Error('Unknown CI unit suite.');
   const temporary = mkdtempSync(resolve(tmpdir(), 'openzcad-ci-units-'));
   let files;
+  let discoveryFailed = false;
   try {
     if (suite === 'smoke') {
       try {
@@ -253,6 +257,7 @@ export function runUnits(args, env = process.env, execute = spawnSync) {
           `Affected-test discovery requires full validation: ${error.message}`
         );
         suite = 'full';
+        discoveryFailed = true;
       }
     }
 
@@ -272,7 +277,15 @@ export function runUnits(args, env = process.env, execute = spawnSync) {
         weights,
         shard.total
       );
-      const assigned = partitions[shard.shard - 1];
+      // Sibling shards discover independently. One that falls back to the
+      // full suite cannot know which smoke files its siblings dropped, so it
+      // runs every root file rather than only its full-suite partition.
+      const assigned = discoveryFailed
+        ? {
+            files: candidateFiles,
+            seconds: partitions.reduce((sum, part) => sum + part.seconds, 0)
+          }
+        : partitions[shard.shard - 1];
       if (!assigned.files.length) {
         throw new Error(
           `Unit shard ${shard.shard}/${shard.total} would run no test files.`
@@ -311,13 +324,7 @@ export function runUnits(args, env = process.env, execute = spawnSync) {
           2
         )
       );
-    const command = [
-      cli,
-      'run',
-      '--config',
-      configFile,
-      ...vitestArgs
-    ];
+    const command = [cli, 'run', '--config', configFile, ...vitestArgs];
     if (report)
       command.push(
         '--reporter=default',
