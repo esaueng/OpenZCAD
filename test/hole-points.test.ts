@@ -1,4 +1,6 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { drillFeatureBores } from '../packages/kernel-adapter/src/exact-point-hole-cuts';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
@@ -344,6 +346,109 @@ describe('M01 holes on sketch points: exact build', () => {
       )
     ).toEqual(ids.map((id) => `hole.face.at.${id}.bore`).sort());
   }, 120_000);
+
+  it('reuses only checked leading bores when editing a point on a plate', async () => {
+    const { document, sketchId } = await drill([
+      [10, 10],
+      [30, 10],
+      [50, 10],
+      [70, 10],
+      [10, 30],
+      [30, 30],
+      [50, 30],
+      [70, 30]
+    ]);
+    const ids = findSketch(document, sketchId)!.objectIds;
+    const move = (index: number, x: number, y: number) =>
+      updateSketchObject(document, {
+        sketchId,
+        objectId: ids[index]!,
+        data: { objectKind: 'point', x, y }
+      });
+    const cuts = vi.spyOn(RemusKernel.prototype, 'cutDetailed');
+    try {
+      expect(warningText(await adapter.syncDocument(document))).toBe('');
+      expect(cuts).toHaveBeenCalledTimes(8);
+      cuts.mockClear();
+      const edited = move(7, 80, 30);
+      const warm = await adapter.syncDocument(edited);
+      expect(warningText(warm)).toBe('');
+      expect(cuts).toHaveBeenCalledTimes(1);
+      expect(
+        lineageNames(warm, last(edited)).filter((name) =>
+          name.startsWith('hole.face.')
+        )
+      ).toEqual(ids.map((id) => `hole.face.at.${id}.bore`).sort());
+
+      const fresh = await createExactKernelAdapter();
+      try {
+        const cold = await fresh.syncDocument(edited);
+        expect(warm.bodyRepresentations[last(edited)]).toEqual(
+          cold.bodyRepresentations[last(edited)]
+        );
+      } finally {
+        fresh.dispose();
+      }
+
+      // A new last cut still has to remove material and names the refusing point.
+      const refused = await adapter.syncDocument(move(7, 50, 30));
+      expect(warningText(refused)).toContain(`At sketch point ${ids[7]}:`);
+      cuts.mockClear();
+      expect(warningText(await adapter.syncDocument(move(0, 13, 10)))).toBe('');
+      expect(cuts).toHaveBeenCalledTimes(8);
+    } finally {
+      cuts.mockRestore();
+    }
+  }, 120_000);
+
+  it('restores, extends and falls back from a checked prefix with exact solid bytes', () => {
+    const kernel = new RemusKernel();
+    const projectId = plate().projectId;
+    const cuts = vi.spyOn(kernel, 'cutDetailed');
+    const bores = Array.from({ length: 10 }, (_, i) => ({
+      pointId: String(i),
+      spec: {
+        surfacePoint: { x: 6 + i * 9, y: 20, z: 10 },
+        axis: { x: 0, y: 0, z: -1 },
+        radius: 3,
+        depth: 10,
+        style: 'simple' as const,
+        entryExtension: 1,
+        exitExtension: 1
+      }
+    }));
+    try {
+      const stock = kernel.makeBox(100, 40, 10);
+      const check = (input: number, count: number, expectedCuts: number) => {
+        const points = bores.slice(0, count);
+        cuts.mockClear();
+        const warm = drillFeatureBores(kernel, projectId, input, points, true);
+        expect(cuts).toHaveBeenCalledTimes(expectedCuts);
+        const cold = drillFeatureBores(kernel, projectId, input, points, false);
+        expect(kernel.serializeSolids(Uint32Array.of(warm))).toEqual(
+          kernel.serializeSolids(Uint32Array.of(cold))
+        );
+      };
+      check(stock, 9, 9);
+      check(stock, 8, 0);
+      check(stock, 10, 2);
+      const restore = vi
+        .spyOn(kernel, 'deserializeSolids')
+        .mockImplementationOnce(() => {
+          throw new Error('snapshot unavailable');
+        });
+      try {
+        check(stock, 10, 10);
+        expect(restore).toHaveBeenCalledOnce();
+      } finally {
+        restore.mockRestore();
+      }
+      check(kernel.makeBox(101, 40, 10), 10, 10);
+    } finally {
+      cuts.mockRestore();
+      kernel.free();
+    }
+  });
 
   it('drills blind counterbores at each point', async () => {
     const { document, ids } = await drill(

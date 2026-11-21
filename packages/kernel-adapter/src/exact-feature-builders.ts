@@ -15,6 +15,7 @@ import {
   resolveThread,
   threadPrintAdvisories
 } from './exact-thread';
+import { drillFeatureBores } from './exact-point-hole-cuts';
 import { requireValidSolid } from './kernel-validation';
 import {
   cutKeptToolMaterialMeshRefusal,
@@ -127,7 +128,6 @@ import {
 import { measureFaceGeometry } from './exact-measure';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
-  drillHole,
   tryExactCoaxialCylinderCut,
   type HoleToolSpec
 } from './exact-cylinder-ops';
@@ -2025,17 +2025,16 @@ function buildHoleFeature(
   const { bores, shape, targetSolid } = holeToolSpecFor(ctx, data);
   // One bore at a time, each proven as a single hole is: a bore that misses
   // the body or cuts nothing refuses by its point, never silently dropped.
-  let drilled = targetSolid;
-  for (const { spec, pointId } of bores) {
-    try {
-      drilled = drillHole(kernel, drilled, spec);
-    } catch (error) {
-      if (pointId === null || !(error instanceof Error)) throw error;
-      throw new Error(`At sketch point ${pointId}: ${error.message}`, {
-        cause: error
-      });
-    }
-  }
+  let drilled = drillFeatureBores(
+    kernel,
+    ctx.document.projectId,
+    targetSolid,
+    bores,
+    data.points !== undefined &&
+      data.style === 'simple' &&
+      !data.tapped &&
+      shape.rectangularStock === targetSolid
+  );
   // M01 (schema v66): each bore tapped with the standard's thread; a
   // cosmetic one (schema v67) is described, not cut.
   if (data.tapped && !data.tapped.cosmetic) {
