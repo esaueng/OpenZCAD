@@ -379,6 +379,15 @@ export function TopBar({
             ? assembleModeDisabledReason
             : null;
   const cycleTarget = nextWorkspaceMode(workspaceMode, modeLockedReason);
+  // A shared link's visitor sees only the modes the link opens: Build,
+  // Assemble and the rest were greyed tabs that only said "Make a copy".
+  // With View alone left, the switch has nothing to switch and goes.
+  const modeOptions = shareSession
+    ? WORKSPACE_MODE_OPTIONS.filter(
+        ({ mode }) => modeLockedReason(mode) === null
+      )
+    : WORKSPACE_MODE_OPTIONS;
+  const showModeSwitch = modeOptions.length > 1;
   const saveKey = keymap.label('file-save');
   const saveNamedKey = keymap.label('file-save-named');
   // A mesh payload is the import's internal triangles, not a file anyone
@@ -789,7 +798,7 @@ export function TopBar({
     if (topbarRef.current) {
       placeModeThumb(topbarRef.current);
     }
-  }, [workspaceMode]);
+  }, [workspaceMode, modeOptions.length]);
 
   const reloadDescriptionId = useId();
   const reloadMessage =
@@ -859,10 +868,11 @@ export function TopBar({
               tabIndex={0}
             >
               {/* The glyph stays when a phone's bar drops every chip's
-                  words (responsive.css), so the chip is never an empty box. */}
+                  words (responsive.css), so the chip is never an empty box.
+                  One word on the bar; the tooltip and the accessible name
+                  say what the visitor may do. */}
               <Link2 size={14} aria-hidden="true" />
-              Shared model ·{' '}
-              {shareSession.mode === 'view' ? 'View only' : 'Tweak only'}
+              Shared
             </span>
           </Tooltip>
         ) : saveChipActs ? (
@@ -950,47 +960,49 @@ export function TopBar({
           </button>
         ) : null}
       </div>
-      <div
-        className="mode-switch topbar-island"
-        data-active={workspaceMode}
-        role="group"
-        aria-label="Workspace mode"
-      >
-        {WORKSPACE_MODE_OPTIONS.map(({ mode, label, hint, Icon }) => {
-          const disabledReason = modeLockedReason(mode);
-          // The cycle key belongs to the mode it goes to next, not to each.
-          const cycleKey =
-            mode === cycleTarget
-              ? keymap.label('workspace-mode-cycle')
-              : undefined;
-          return (
-            <Tooltip
-              key={mode}
-              multiline
-              label={label}
-              description={disabledReason ?? hint}
-              shortcut={cycleKey}
-            >
-              <button
-                type="button"
-                className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
-                aria-pressed={workspaceMode === mode}
-                aria-label={label}
-                disabled={disabledReason !== null}
-                title={disabledReason ?? undefined}
-                onClick={() => onWorkspaceMode(mode)}
-                onPointerEnter={() => onWorkspaceModeIntent?.(mode)}
-                onFocus={() => onWorkspaceModeIntent?.(mode)}
+      {showModeSwitch ? (
+        <div
+          className="mode-switch topbar-island"
+          data-active={workspaceMode}
+          role="group"
+          aria-label="Workspace mode"
+        >
+          {modeOptions.map(({ mode, label, hint, Icon }) => {
+            const disabledReason = modeLockedReason(mode);
+            // The cycle key belongs to the mode it goes to next, not to each.
+            const cycleKey =
+              mode === cycleTarget
+                ? keymap.label('workspace-mode-cycle')
+                : undefined;
+            return (
+              <Tooltip
+                key={mode}
+                multiline
+                label={label}
+                description={disabledReason ?? hint}
+                shortcut={cycleKey}
               >
-                <Icon size={13} aria-hidden="true" />
-                <span className="mode-switch-label">
-                  <StableLabel reserve={[label]}>{label}</StableLabel>
-                </span>
-              </button>
-            </Tooltip>
-          );
-        })}
-      </div>
+                <button
+                  type="button"
+                  className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
+                  aria-pressed={workspaceMode === mode}
+                  aria-label={label}
+                  disabled={disabledReason !== null}
+                  title={disabledReason ?? undefined}
+                  onClick={() => onWorkspaceMode(mode)}
+                  onPointerEnter={() => onWorkspaceModeIntent?.(mode)}
+                  onFocus={() => onWorkspaceModeIntent?.(mode)}
+                >
+                  <Icon size={13} aria-hidden="true" />
+                  <span className="mode-switch-label">
+                    <StableLabel reserve={[label]}>{label}</StableLabel>
+                  </span>
+                </button>
+              </Tooltip>
+            );
+          })}
+        </div>
+      ) : null}
       {/* The island frame wraps the group rather than padding it: the
           group's children own exactly its width at every breakpoint. */}
       <div className="topbar-island topbar-actions-island">
