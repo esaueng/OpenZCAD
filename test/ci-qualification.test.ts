@@ -131,7 +131,7 @@ describe('complete application qualification', () => {
   it('shards affected tests and requires real browser coverage of combined queue trees', () => {
     const staged = readFileSync(CI_CHECKS_PATH, 'utf8');
     expect(staged).toContain(
-      'node scripts/run-ci-units.mjs root --shard=${{ matrix.shard }}/2'
+      'node scripts/run-ci-units.mjs root --shard=${{ matrix.shard }}/3'
     );
     expect(staged).toContain('node scripts/run-ci-units.mjs web');
     expect(staged).toContain('pnpm test:parity-corpus');

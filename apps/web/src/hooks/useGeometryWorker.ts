@@ -801,6 +801,26 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       > | null = null;
       worker.onmessage = (event: MessageEvent<GeometryWorkerResult>) => {
         let message = event.data;
+        if (message.type === 'prepare-pattern-display') {
+          const preview = message;
+          void import('@openzcad/viewport')
+            .then(({ preparePatternDisplay }) => {
+              const doc = hostRef.current.manager()?.document;
+              if (
+                worker === workerRef.current &&
+                doc?.projectId === preview.projectId &&
+                (preview.requestId
+                  ? syncRequests.current.has(preview.requestId)
+                  : doc.version === preview.version)
+              ) {
+                preparePatternDisplay(preview);
+              }
+            })
+            .catch(() => {
+              /* The accepted frame can always prepare its own geometry. */
+            });
+          return;
+        }
         if (
           message.type === 'sync' &&
           message.ok &&

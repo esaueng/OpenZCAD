@@ -1,3 +1,4 @@
+import { startMesh, warmMesh } from './point-pattern-mesh';
 /**
  * M02 feature patterns (schema v62): a pattern that repeats holes and
  * add/cut extrudes on its target body rather than copying the whole body.
@@ -28,6 +29,7 @@ import {
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
   extrudeParamResolver,
+  getParameterHiddenBodyIds,
   listFeaturesInOrder,
   validateExtrudeExtent
 } from '@openzcad/document-core';
@@ -41,7 +43,11 @@ import {
   unifyBooleanFaces,
   verdictRefusesUnion
 } from './exact-boolean-helpers';
-import { exactCutWithCancellation } from './exact-cancellation';
+import { patternCutPrefix } from './exact-pattern-cut-prefix';
+import {
+  exactCutWithCancellation,
+  throwIfBuildCancelled
+} from './exact-cancellation';
 import {
   holeToolSolids,
   measureCylinderFaces,
@@ -394,6 +400,7 @@ export function buildFeaturePattern(
   const shapedSources: FeatureId[] = [];
   let declined: RemusLineageDiagnostic | null = null;
   let solid = original;
+  let prefix: ReturnType<typeof patternCutPrefix>;
   for (const source of sources) {
     const sourceData = source.data;
     let seed: number[];
@@ -543,6 +550,28 @@ export function buildFeaturePattern(
         `${source.name} is not a hole, boss, cut, fillet, chamfer, wrap or rib, so a feature pattern cannot repeat it.`
       );
     }
+    // The exact mesh of the finished plate can run alongside bore and lineage checks.
+    const stock =
+      sourceData.featureKind === 'hole'
+        ? result.shapes.get(sourceData.targetBodyId)
+        : undefined;
+    const prepareMesh =
+      sources.length === 1 &&
+      data.patternKind === 'points' &&
+      (data.points?.pointIds.length ?? 0) >= 24 &&
+      copies.length >= 20 &&
+      bores.length === 1 &&
+      sourceData.featureKind === 'hole' &&
+      !sourceData.tapped &&
+      sourceData.style === 'simple' &&
+      sourceData.depthMode === 'through' &&
+      data.targetBodyId === source.bodyId &&
+      stock?.rectangularStock !== undefined &&
+      stock.rectangularStock === stock.solids[0] &&
+      stock.solids.length === 1 &&
+      document.featureOrder.at(-1) === feature.featureId &&
+      !getParameterHiddenBodyIds(document).has(feature.bodyId);
+    if (prepareMesh) warmMesh(kernel);
     const repeated = repeat(seed);
     declined ??= repeated.declined;
     const currentBounds = Array.from<number>(kernel.boundingBox(solid));
@@ -558,24 +587,46 @@ export function buildFeaturePattern(
       }
     });
     if (operation === 'cut') {
+      if (
+        data.patternKind === 'points' &&
+        sources.length === 1 &&
+        sourceData.featureKind === 'hole' &&
+        sourceData.style === 'simple' &&
+        !sourceData.tapped &&
+        bores.length === 1
+      ) {
+        prefix = patternCutPrefix(
+          kernel,
+          document.projectId,
+          original,
+          targetVolume,
+          repeated.solids
+        );
+        if (prefix) solid = prefix.solid;
+      }
       copies.forEach((copy, index) => {
-        const before = kernel.volume(solid, MEASUREMENT_DEFLECTION);
-        // One tool at a time, as a single hole is cut: the kernel's compound
-        // pass declines tool pairs that each cut exactly on their own.
-        for (const tool of repeated.solids[index] ?? []) {
-          solid = exactCutWithCancellation(
-            kernel,
-            solid,
-            tool,
-            ctx.cancellation,
-            [targetName, `${source.name} copy ${copy.label}`]
-          );
-        }
-        const after = kernel.volume(solid, MEASUREMENT_DEFLECTION);
-        if (!(after < before - targetVolume * REMOVED_VOLUME_FRACTION)) {
-          throw new Error(
-            `Copy ${copy.label} of ${source.name} removes nothing from ${targetName}; skip it or change the pattern.`
-          );
+        if (index < (prefix?.count ?? 0)) {
+          throwIfBuildCancelled(ctx.cancellation?.signal);
+        } else {
+          const before = kernel.volume(solid, MEASUREMENT_DEFLECTION);
+          // One tool at a time, as a single hole is cut: the kernel's compound
+          // pass declines tool pairs that each cut exactly on their own.
+          for (const tool of repeated.solids[index] ?? []) {
+            solid = exactCutWithCancellation(
+              kernel,
+              solid,
+              tool,
+              ctx.cancellation,
+              [targetName, `${source.name} copy ${copy.label}`]
+            );
+          }
+          const after = kernel.volume(solid, MEASUREMENT_DEFLECTION);
+          if (!(after < before - targetVolume * REMOVED_VOLUME_FRACTION)) {
+            throw new Error(
+              `Copy ${copy.label} of ${source.name} removes nothing from ${targetName}; skip it or change the pattern.`
+            );
+          }
+          prefix?.capture(index + 1, solid);
         }
         for (const { spec, pointId } of bores) {
           holes.push({
@@ -592,6 +643,14 @@ export function buildFeaturePattern(
         }
       });
       solid = unifyBooleanFaces(kernel, solid);
+      if (prepareMesh)
+        startMesh(
+          kernel,
+          solid,
+          ctx.heldDisplayDeflection?.(feature.bodyId),
+          ctx.cancellation?.signal
+        );
+
       // M01 (schema v66): the copies of a tapped hole are tapped as it is,
       // each bore checked to be one plain cylinder before it is threaded.
       // A cosmetic thread (schema v67) is described, not cut.
@@ -747,6 +806,7 @@ export function buildFeaturePattern(
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  prefix?.commit();
 }
 
 /**

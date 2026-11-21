@@ -71,6 +71,11 @@ export interface ExtrudeFormValue {
 export interface ExtrudeToFaceInfo {
   label: string;
   distance: number | null;
+  /**
+   * The face leans off parallel: `distance` is only where its own point
+   * lies, so the offset and start checks wait for the build.
+   */
+  slanted?: boolean;
   pending?: boolean;
   problem?: string;
 }
@@ -189,9 +194,12 @@ export function extrudeDraftNumber(
   return preview.ok && preview.value !== undefined ? preview.value : null;
 }
 
-/** Through all needs one explicit cut target, so only Cut offers it. */
+/**
+ * Through all needs one explicit target to span, so only Cut and Add offer
+ * it (an add through all fills the target's whole span and joins it).
+ */
 export function extrudeOffersThroughAll(draft: ExtrudeDraft): boolean {
-  return draft.choice.operation === 'cut';
+  return draft.choice.operation === 'cut' || draft.choice.operation === 'add';
 }
 
 /** F01 (v130): Up to next stops at an add or cut target's next face. */
@@ -204,9 +212,7 @@ export function extrudeIsToNext(draft: ExtrudeDraft): boolean {
 }
 
 export function extrudeIsThroughAll(draft: ExtrudeDraft): boolean {
-  return (
-    draft.choice.operation === 'cut' && draft.endCondition === 'through-all'
-  );
+  return extrudeOffersThroughAll(draft) && draft.endCondition === 'through-all';
 }
 
 /** F01 (v29): to-face replaces the distance with a picked face. */
@@ -246,6 +252,8 @@ export function extrudeToFaceProblem(
 ): string | null {
   if (!extrudeIsToFace(draft, ctx) || !draft.toFace) return null;
   const info = ctx.toFacePicking!.describe(draft.toFace);
+  // Where a slanted face is reached is the build's to judge.
+  if (info.slanted && info.distance !== null) return null;
   if (info.distance === 0) {
     const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
     return start === 0
@@ -257,7 +265,7 @@ export function extrudeToFaceProblem(
     info.problem ??
     (info.pending
       ? 'Checking the target face…'
-      : 'This face is not parallel to the sketch plane; pick a face parallel to the sketch.')
+      : 'This face is nearly perpendicular to the sketch plane; pick a face that faces the sketch.')
   );
 }
 
@@ -275,8 +283,12 @@ function extrudeToFaceExtentRefusal(
   const offset = extrudeDraftNumber(draft.faceOffset, 'length', ctx);
   const start = extrudeDraftNumber(draft.startOffset, 'length', ctx);
   if (offset === null || start === null) return null;
-  const reach = ctx.toFacePicking!.describe(draft.toFace).distance;
-  if (reach === null || (reach === 0 && start === 0)) return null;
+  const info = ctx.toFacePicking!.describe(draft.toFace);
+  const reach = info.distance;
+  // A slanted face's distance is only where its own point lies.
+  if (reach === null || info.slanted || (reach === 0 && start === 0)) {
+    return null;
+  }
   if (toFaceExtent(reach, start, offset) !== null) return null;
   if (start === 0) {
     return {
@@ -440,7 +452,8 @@ export function extrudeFormValue(
       : {
           backDistance: derived ? 0 : coerceParamValue(draft.backDistance)
         }),
-    choice: draft.choice,
+    // More bodies to cut through go only with a through-all cut.
+    choice: throughAll ? draft.choice : extrudeChoiceAlone(draft.choice),
     endCondition: throughAll
       ? 'through-all'
       : toFace
@@ -587,8 +600,37 @@ export function extrudeDraftRefusal(
     if (!ctx.bodies.some((body) => body.bodyId === targetBodyId)) {
       return 'Select a target before applying.';
     }
+    if (throughAll) {
+      const also = extrudeAlsoTargets(draft.choice);
+      if (
+        also.some(
+          (bodyId, index) =>
+            bodyId === targetBodyId ||
+            also.indexOf(bodyId) !== index ||
+            !ctx.bodies.some((body) => body.bodyId === bodyId)
+        )
+      ) {
+        return 'Pick each body the cut goes through once, from the bodies here.';
+      }
+    }
   }
   return null;
+}
+
+/**
+ * F01 multi-target through all: the further bodies a through-all cut goes
+ * through, beyond its target (each becomes its own through-all cut, created
+ * with it as one step).
+ */
+export function extrudeAlsoTargets(choice: ExtrudeChoice): BodyId[] {
+  return choice.operation === 'cut' ? (choice.alsoTargetBodyIds ?? []) : [];
+}
+
+/** The choice without further bodies to cut through. */
+export function extrudeChoiceAlone(choice: ExtrudeChoice): ExtrudeChoice {
+  if (choice.operation !== 'cut' || !choice.alsoTargetBodyIds) return choice;
+  const { alsoTargetBodyIds: _also, ...alone } = choice;
+  return alone;
 }
 
 /**

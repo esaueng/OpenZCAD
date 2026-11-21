@@ -1,3 +1,12 @@
+import {
+  beginPatternMeshBuild,
+  type PatternMeshSink,
+  pendingMesh,
+  takePatternMesh,
+  resetPatternMesh,
+  releasePatternMesh
+} from './point-pattern-mesh';
+import { clearPatternCutPrefix } from './exact-pattern-cut-prefix';
 import { PatternOverlapWorkers } from './pattern-overlap-workers';
 import {
   AxialExtentTracker,
@@ -801,6 +810,7 @@ export interface ExactKernelAdapter {
       cancellation?: BuildCancellationSignal;
       lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
       onGeometryReady?: (geometry: GeometryReadyState) => void;
+      onPatternMesh?: PatternMeshSink;
       /** Deliver incoming worker messages between indivisible kernel operations. */
       yieldControl?: () => Promise<void> | void;
       /**
@@ -1623,6 +1633,7 @@ export type {
 } from './kernel-step-import';
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
+  private patternMeshSink?: PatternMeshSink;
   private readonly patternWorkers = new PatternOverlapWorkers();
   readonly kind = 'remus' as const;
   constructor(private readonly options: ExactKernelAdapterOptions = {}) {
@@ -2048,6 +2059,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.previewDisplayCacheBytes = 0;
     this.topologyWitnessStore.clear();
     if (this.historyKernel) {
+      releasePatternMesh(this.historyKernel);
       this.historyKernel.free();
       this.historyKernel = null;
     }
@@ -3222,11 +3234,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Another project's bodies are a different set: start their held display
     // deflections fresh before the build (the union gate reads them).
     if (this.heldDisplayProjectId !== document.projectId) {
+      releasePatternMesh(activeKernel);
       this.patternWorkers.dispose();
       this.heldDisplayDeflections.clear();
       this.previewFaceGeometry.clear();
+      clearPatternCutPrefix(activeKernel);
       this.heldDisplayProjectId = document.projectId;
     }
+    beginPatternMeshBuild(activeKernel, this.patternMeshSink);
     // Kernel reads the replay shares with the measurement pass of the same
     // sync: surface classes, edge-to-face maps and topology witnesses.
     const readMemo = new SyncReadMemo(activeKernel, this.topologyWitnessStore);
@@ -3639,6 +3654,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           meshTessellation.linearDeflection,
           meshTessellation.angularDeflection
         ) ??
+        takePatternMesh(kernel, solid, meshTessellation) ??
         kernel.tessellateSolidGroupedBinary(
           solid,
           meshTessellation.linearDeflection,
@@ -4058,6 +4074,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       cancellation?: BuildCancellationSignal;
       lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
       onGeometryReady?: (geometry: GeometryReadyState) => void;
+      onPatternMesh?: PatternMeshSink;
       yieldControl?: () => Promise<void> | void;
       proposeCarry?: boolean;
       displayRefinement?: boolean;
@@ -4065,6 +4082,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }
   ): Promise<DerivedState> {
     return this.runHistoryJob(async () => {
+      this.patternMeshSink = options?.onPatternMesh;
       this.offeredSession = options?.persistedSession ?? null;
       // A complete sync ends a drag's draft and coarse-frame state. An idle
       // refinement that slipped into a paused drag hands it back unless the
@@ -4106,6 +4124,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : null;
         return result;
       } finally {
+        this.patternMeshSink = undefined;
+        if (this.historyKernel) resetPatternMesh(this.historyKernel);
         this.offeredSession = null;
         if (drag && kernel && this.historyKernel === kernel) {
           this.draftDisplaySource = drag.draftDisplaySource;
@@ -4274,6 +4294,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cancellation,
           options?.yieldControl
         );
+        releasePatternMesh(restored.kernel);
         restored.kernel.free();
         // The same state the live session published, in the new kernel.
         const record = this.lastBuildRecord;
@@ -5051,6 +5072,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             withSyncReadMemo(readMemo, () =>
               withFaceGeometryMemo(kernel, faces, work, faceGeometry)
             );
+          {
+            const ready = pendingMesh(kernel, shape.solids);
+            if (ready) await raceBuildCancellation(() => ready, cancellation);
+            throwIfBuildCancelled(cancellation);
+          }
           const prepared = inMeasurementScope(() =>
             this.prepareShapeMeasurement(
               kernel,
@@ -6943,6 +6969,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
+    if (this.historyKernel) releasePatternMesh(this.historyKernel);
     this.patternWorkers.dispose();
     this.historyGeneration += 1;
     this.clearCurrentMassSnapshot();

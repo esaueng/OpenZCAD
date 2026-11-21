@@ -577,6 +577,62 @@ describe('useGeometryWorker', () => {
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(worker.postMessage).toHaveBeenCalledTimes(posts);
   });
+  it('only prepares pattern meshes for the current document or a pending preview', async () => {
+    installWorker();
+    const viewport = await import('@openzcad/viewport');
+    const prepare = vi
+      .spyOn(viewport, 'preparePatternDisplay')
+      .mockImplementation(() => {});
+    const document = createProjectDocument('Plate', toUserId('user'));
+    const manager = { document } as CommandManager;
+    const { result, unmount } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => manager,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    const message = {
+      type: 'prepare-pattern-display' as const,
+      projectId: document.projectId,
+      version: document.version,
+      vertices: new Float32Array(),
+      indices: new Uint32Array(),
+      offsets: new Uint32Array()
+    };
+    try {
+      const controller = new AbortController();
+      const pending = result.current.syncOnce(document, undefined, undefined, {
+        signal: controller.signal
+      });
+      const { requestId } = worker.postMessage.mock.calls.at(-1)![0] as {
+        requestId: string;
+      };
+      worker.emit({ ...message, version: document.version - 1 });
+      worker.emit({
+        ...message,
+        projectId: createProjectDocument('Other', toUserId('user')).projectId,
+        requestId
+      });
+      worker.emit(message);
+      worker.emit({ ...message, requestId });
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+      expect(prepare.mock.calls.map(([m]) => m)).toEqual([
+        message,
+        { ...message, requestId }
+      ]);
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      worker.emit({ ...message, requestId });
+      unmount();
+      worker.emit(message);
+      await vi.dynamicImportSettled();
+      expect(prepare).toHaveBeenCalledTimes(2);
+    } finally {
+      prepare.mockRestore();
+    }
+  });
   it('cancels an abandoned one-off rebuild in the worker and discards its late reply', async () => {
     // QA 2026-11-14 #16: a large pattern's in-place preview kept the worker
     // building for its whole minute after Cancel closed the card.

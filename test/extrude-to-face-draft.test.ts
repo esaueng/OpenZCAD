@@ -257,7 +257,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
           endCondition: 'through-all',
           throughAllSide: 'forward'
         },
-        /through-all cut has no draft/
+        /through-all extrude has no draft/
       ]
     ])('refuses %o at entry', async (patch, message) => {
       const lifted = ceiling(project('Refusals'), 25);
@@ -842,24 +842,26 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       ).toEqual([]);
     });
 
-    it('refuses as unresolved when the face is no longer parallel', async () => {
+    it('refuses as unresolved when the face turns nearly perpendicular to the sketch', async () => {
       const result = await post(25);
       const lift = listFeaturesInOrder(result.document).find(
         (feature) => feature.name === 'Lift'
       )!;
+      // A slanted face is reached from the slanted to-face slice on; one
+      // turned 88° faces across the extrusion, not toward it.
       const tilted = updateFeature(result.document, {
         featureId: lift.featureId,
         data: {
           transform: {
             translation: { x: 0, y: 0, z: 25 },
-            rotationDeg: { x: 10, y: 0, z: 0 }
+            rotationDeg: { x: 88, y: 0, z: 0 }
           }
         }
       });
       const derived = await derive(tilted);
       expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
       expect(derived.warnings.join('\n')).toMatch(
-        /Feature "Post": Target face is unresolved: the face is no longer parallel/
+        /Feature "Post": Target face is unresolved: the face is nearly perpendicular to the sketch plane/
       );
       // Tilting it back resolves the same stored face again.
       const level = updateFeature(tilted, {
@@ -1093,7 +1095,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       const refused = await derive(tapered);
       expectPassedThrough(refused, cut.bodyId, block.bodyId);
       expect(refused.warnings.join('\n')).toMatch(
-        /through-all cut has no draft/
+        /through-all extrude has no draft/
       );
     });
 
