@@ -35,8 +35,8 @@ export const ACTIVE1_BUDGETS = Object.freeze({
    * preview is built once the hand rests. Regression ceilings from two runs
    * on the RX 6600 (Vulkan) in
    * docs/performance/2026-11-20-drag-orbit-sustained-baselines.md: medians
-   * proxy lag 14–15 / 15–16 ms (p50 / p95), frame interval 16.7 ms (p95
-   * 33 ms on the filleted unions, one hitch each), exact preview round trip
+   * proxy lag 14–15 / 15–16 ms (p50 / p95), frame interval over the whole
+   * pointer motion 16.6 / 17.2–18.2 ms (p50 / p95, 119–122 frames in 2 s), exact preview round trip
    * 63–404 ms, release → accepted 74–170 ms, and first exact geometry
    * (from the first move; built only at rest) 2.3–2.7 s, which misses the
    * H02 100 ms target. That budget is a regression ceiling only.
@@ -48,7 +48,7 @@ export const ACTIVE1_BUDGETS = Object.freeze({
       lagP95Ms: 30,
       exactPreviewMs: 600,
       frameIntervalP50Ms: 20,
-      frameIntervalP95Ms: 50,
+      frameIntervalP95Ms: 25,
       releaseToFrameMs: 160
     }),
     'public filleted union history': Object.freeze({
@@ -57,7 +57,7 @@ export const ACTIVE1_BUDGETS = Object.freeze({
       lagP95Ms: 30,
       exactPreviewMs: 280,
       frameIntervalP50Ms: 20,
-      frameIntervalP95Ms: 50,
+      frameIntervalP95Ms: 25,
       releaseToFrameMs: 250
     }),
     'rounded box top face (primitive proxy)': Object.freeze({

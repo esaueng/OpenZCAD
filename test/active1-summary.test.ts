@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   FACE_DRAG_CASES,
+  dragFrameCadence,
   summarize
 } from '../scripts/measure-active1-baselines.mjs';
 import { ACTIVE1_BUDGETS } from '../scripts/active1-budgets.mjs';
@@ -227,6 +228,35 @@ describe('Active 1 summary: face drags and orbits', () => {
     )!;
     expect(p95.median).toBe(16);
     expect(p95.withinBudget).toBe(false);
+  });
+});
+
+describe('Active 1 summary: drag frame cadence', () => {
+  it('reads every frame between the first and last pointer move', () => {
+    // 120 pointer moves 16 ms apart and a frame every 16.7 ms, plus an idle
+    // frame 40 ms before the drag: that gap is not a frame of the drag.
+    const trace = [
+      { stage: 'frame', t: -40 },
+      ...Array.from({ length: 120 }, (_, i) => ({
+        stage: 'pointer',
+        t: i * 16
+      })),
+      ...Array.from({ length: 115 }, (_, i) => ({
+        stage: 'frame',
+        t: 2 + i * 16.7
+      }))
+    ];
+    const cadence = dragFrameCadence({ trace })!;
+    expect(cadence.frames).toBe(114);
+    expect(cadence.p50).toBeCloseTo(16.7, 6);
+    expect(cadence.p95).toBeCloseTo(16.7, 6);
+    expect(cadence.max).toBeCloseTo(16.7, 6);
+    // A real stall during the motion is seen: no frame for about 60 ms.
+    const stalled = trace.filter(
+      (event) => event.stage !== 'frame' || event.t < 1_000 || event.t > 1_060
+    );
+    expect(dragFrameCadence({ trace: stalled })!.max).toBeGreaterThan(60);
+    expect(dragFrameCadence({})).toBeNull();
   });
 });
 
