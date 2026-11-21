@@ -7,6 +7,7 @@ import type { ExactShape } from './exact-types';
 import { collapseShape } from './exact-boolean-helpers';
 import { measureFaceGeometry } from './exact-measure';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { remusHashOnlyLineage } from './remus-lineage';
 import { resolveExtrudeStartOffset } from './extrude-options';
 import { throughAllSpan, unionBounds } from './through-all';
@@ -138,45 +139,6 @@ function facesOnPlane(
 }
 
 /**
- * The box behind an air pocket along the extrusion: the pocket's world box,
- * from just past its far side to the sweep's far end. Null when the pocket
- * already reaches the far end. For a direction off the axes the world box
- * is conservative, which can only refuse more, never cut more.
- */
-function shadowBox(
-  kernel: RemusKernel,
-  box: ArrayLike<number>,
-  reach: ToNextReach,
-  far: Vec3
-): number | null {
-  const d = reach.direction;
-  const lo = { x: box[0]!, y: box[1]!, z: box[2]! };
-  const hi = { x: box[3]!, y: box[4]!, z: box[5]! };
-  const margin = 1e-6 * Math.max(1, reach.length);
-  const min = { ...lo };
-  const max = { ...hi };
-  for (const axis of ['x', 'y', 'z'] as const) {
-    const component = d[axis];
-    if (Math.abs(component) < 1e-12) continue;
-    if (component > 0) {
-      min[axis] = hi[axis] + margin;
-      max[axis] = Math.max(hi[axis], far[axis]) + margin;
-    } else {
-      max[axis] = lo[axis] - margin;
-      min[axis] = Math.min(lo[axis], far[axis]) - margin;
-    }
-  }
-  const size = { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z };
-  if (!(size.x > margin && size.y > margin && size.z > margin)) return null;
-  const solid = kernel.makeBox(size.x, size.y, size.z);
-  kernel.transformSolid(
-    solid,
-    Float64Array.of(1, 0, 0, min.x, 0, 1, 0, min.y, 0, 0, 1, min.z, 0, 0, 0, 1)
-  );
-  return solid;
-}
-
-/**
  * F01 (v130): the part of the long sweep `extrusion` that runs from the
  * start plane up to the next face of `target`.
  *
@@ -203,16 +165,27 @@ export function trimToNext(
 ): ExactShape {
   const tool = collapseShape(kernel, extrusion);
   const body = collapseShape(kernel, target);
-  const regions = Array.from(
-    kernel.getCompoundSolids(
-      kernel.booleanRegions(
-        operation === 'add' ? 'cut' : 'intersect',
-        tool,
-        body
+  let regions: number[];
+  try {
+    regions = Array.from(
+      kernel.getCompoundSolids(
+        kernel.booleanRegions(
+          operation === 'add' ? 'cut' : 'intersect',
+          tool,
+          body
+        )
       )
-    )
-  );
+    );
+  } catch (error) {
+    throw new Error(
+      `${label} could not be split against ${targetName} exactly: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error }
+    );
+  }
   const tolerance = 1e-7 * Math.max(1, reach.length);
+  // The start plane itself, tightly: a face a thin ledge below it is not a
+  // start cap.
+  const startTolerance = 1e-9 * Math.max(1, reach.length);
   const far = {
     x: reach.start.x + reach.direction.x * reach.length,
     y: reach.start.y + reach.direction.y * reach.length,
@@ -221,7 +194,7 @@ export function trimToNext(
   // The regions stay owned by the kernel's region compound, which has no
   // release call: they are left to the build's arena, never deleted.
   const kept = regions.filter((region) =>
-    hasFaceOnPlane(kernel, region, reach.start, reach.direction, tolerance)
+    hasFaceOnPlane(kernel, region, reach.start, reach.direction, startTolerance)
   );
   if (kept.length === 0) {
     throw new Error(
@@ -240,19 +213,30 @@ export function trimToNext(
     );
   }
   // The whole profile starts on one side: the kept regions' faces on the
-  // start plane cover all of the sweep's own start face, exactly.
-  const area = (solids: readonly number[]) =>
-    solids.reduce(
-      (sum, solid) =>
-        sum +
-        facesOnPlane(kernel, solid, reach.start, reach.direction, tolerance)
-          .map((face) => kernel.faceArea(face, MEASUREMENT_DEFLECTION))
-          .reduce((a, b) => a + b, 0),
-      0
+  // start plane are the sweep's own start face, by exact area and by edge
+  // count (a notch or a hole under part of the profile changes one or both).
+  const capsOf = (solids: readonly number[]) =>
+    solids.flatMap((solid) =>
+      facesOnPlane(kernel, solid, reach.start, reach.direction, startTolerance)
     );
-  const profileArea = area([tool]);
+  const measure = (faces: readonly number[]) => ({
+    area: faces.reduce(
+      (sum, face) => sum + kernel.faceArea(face, MEASUREMENT_DEFLECTION),
+      0
+    ),
+    edges: faces.reduce(
+      (sum, face) => sum + kernel.getFaceEdges(face).length,
+      0
+    )
+  });
+  const profile = measure(capsOf([tool]));
+  const start = measure(capsOf(kept));
   if (
-    !(Math.abs(area(kept) - profileArea) <= 1e-6 * Math.max(1e-9, profileArea))
+    start.edges !== profile.edges ||
+    !(
+      Math.abs(start.area - profile.area) <=
+      1e-9 * Math.max(1e-12, profile.area)
+    )
   ) {
     throw new Error(
       operation === 'add'
@@ -261,21 +245,21 @@ export function trimToNext(
     );
   }
   if (operation === 'cut') {
-    // Each corner of the profile must start in the body or on its face: a
-    // start the slightest gap off the body is no start in it.
-    const touch = 1e-9 * Math.max(1, reach.length);
-    const outside = facesOnPlane(
-      kernel,
-      tool,
-      reach.start,
-      reach.direction,
-      tolerance
-    )
+    // Each corner of the profile must start in the body or on its face,
+    // within the kernel's own linear tolerance: a start a gap off the body
+    // is no start in it.
+    const outside = capsOf([tool])
       .flatMap((face) => Array.from(kernel.getFaceVertices(face)))
       .some((vertex) => {
         const p = kernel.getVertexPosition(vertex);
         return (
-          kernel.classifyPoint(body, p[0]!, p[1]!, p[2]!, touch) === 'outside'
+          kernel.classifyPoint(
+            body,
+            p[0]!,
+            p[1]!,
+            p[2]!,
+            GEOMETRY_LINEAR_TOLERANCE
+          ) === 'outside'
         );
       });
     if (outside) {
@@ -283,37 +267,59 @@ export function trimToNext(
         `${label} does not start in ${targetName}: the profile lies off the body's face; sketch on or inside the body.`
       );
     }
-    // A pocket of air inside the sweep with kept material beyond it means
-    // some of the profile left the body there and some did not: there is
-    // no one next face, so the cut is refused rather than run on past it.
-    const air = Array.from(
-      kernel.getCompoundSolids(kernel.booleanRegions('cut', tool, body))
-    ).filter(
-      (region) =>
-        !hasFaceOnPlane(kernel, region, reach.start, reach.direction, tolerance)
+  }
+  // Exactly one stretch per line of travel: every face of a kept region but
+  // its start caps faces forward along the extrusion, or runs along it. A
+  // region that wraps round a cavity, a vent or a post the profile only
+  // partly meets has a face turned back against the travel there (the far
+  // side of what it wrapped), so it is refused by name, never run on past
+  // the next face. Faces this cannot judge exactly are refused too.
+  for (const region of kept) {
+    const caps = new Set(
+      facesOnPlane(kernel, region, reach.start, reach.direction, startTolerance)
     );
-    for (const pocket of air) {
-      const beyond = shadowBox(kernel, kernel.boundingBox(pocket), reach, far);
-      if (beyond === null) continue;
-      const shared = kept.some((region) => {
-        let common: number;
-        try {
-          common = kernel.intersect(region, beyond);
-        } catch {
-          // Nothing shared: the kernel refuses an empty common.
-          return false;
+    for (const face of Array.from(kernel.getSolidFaces(region))) {
+      if (caps.has(face)) continue;
+      const surface = kernel.getSurfaceType(face).toLowerCase();
+      if (surface === 'plane') {
+        const n = kernel.getFaceNormal(face);
+        const facing =
+          n[0]! * reach.direction.x +
+          n[1]! * reach.direction.y +
+          n[2]! * reach.direction.z;
+        if (facing < -1e-9) {
+          throw new Error(
+            `${label} does not meet one next face of ${targetName} everywhere: under part of the profile the ${operation === 'add' ? 'body stands in the way and the extrusion would run on beside it' : 'body opens into a cavity and the cut would run on beside it'}. Keep the profile over one face, or use a distance.`
+          );
         }
-        return (
-          kernel.volume(common, MEASUREMENT_DEFLECTION) >
-          1e-9 * Math.max(1, profileArea * reach.length)
-        );
-      });
-      kernel.deleteSolid(beyond);
-      if (shared) {
-        throw new Error(
-          `${label} does not leave ${targetName} at one next face: under part of the profile the body opens into a cavity, and beside it the cut would run on. Sketch over the cavity alone, or use a distance.`
-        );
+        continue;
       }
+      if (surface === 'cylinder') {
+        const geometry = measureFaceGeometry(kernel, face);
+        if (geometry?.axisStart && geometry.axisEnd) {
+          const axis = {
+            x: geometry.axisEnd.x - geometry.axisStart.x,
+            y: geometry.axisEnd.y - geometry.axisStart.y,
+            z: geometry.axisEnd.z - geometry.axisStart.z
+          };
+          const size = Math.hypot(axis.x, axis.y, axis.z);
+          if (
+            size > 0 &&
+            Math.abs(
+              axis.x * reach.direction.x +
+                axis.y * reach.direction.y +
+                axis.z * reach.direction.z
+            ) /
+              size >=
+              1 - 1e-9
+          ) {
+            continue;
+          }
+        }
+      }
+      throw new Error(
+        `${label} meets a curved face of ${targetName} on the way; up to next stops on flat faces for now. Use a distance, or a face.`
+      );
     }
   }
   return {

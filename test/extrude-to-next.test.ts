@@ -377,7 +377,7 @@ describe('F01 up to next', { timeout: 90_000 }, () => {
           true,
           20,
           10,
-          /does not leave .* at one next face/
+          /does not meet one next face/
         ],
         [
           'a profile that starts partly off the cube',
@@ -407,6 +407,76 @@ describe('F01 up to next', { timeout: 90_000 }, () => {
         expect(
           derived.bodyRepresentations[result.bodyId]?.volume ?? 8000
         ).toBeCloseTo(cavity ? 8000 - 48 : 8000, 5);
+      });
+
+      /** `base` less a box `size` at `at` (a vent, a recess, a ledge cut). */
+      function minus(
+        base: { document: ProjectDocument; bodyId: BodyId },
+        size: { width: number; height: number; depth: number },
+        at: { x: number; y: number; z: number }
+      ) {
+        let document = addPrimitiveFeature(base.document, {
+          name: 'Notch',
+          primitiveKind: 'box',
+          dimensions: size
+        });
+        const notch = document.bodyOrder.at(-1)!;
+        document = commandFactories
+          .transformBody({
+            name: 'Place',
+            targetBodyId: notch,
+            translation: at
+          })
+          .apply(document);
+        document = commandFactories
+          .booleanBodies({
+            name: 'Notched',
+            operation: 'subtract',
+            targetBodyIds: [base.bodyId, notch]
+          })
+          .apply(document);
+        return { document, bodyId: document.bodyOrder.at(-1)! };
+      }
+
+      it('refuses a cavity vented through the floor that the profile only partly covers', async () => {
+        // Half of the cavity's floor opened through the bottom.
+        const vented = minus(
+          cube(true),
+          { width: 1, height: 2, depth: 5 },
+          { x: 9, y: 9, z: -0.5 }
+        );
+        const result = toNext('cut', 20, -1, {}, vented);
+        const derived = await derive(result.document);
+        expect(derived.warnings.join('\n')).toMatch(
+          /does not meet one next face/
+        );
+      });
+
+      it('refuses a profile over a small recess in the start face', async () => {
+        const recessed = minus(
+          cube(false),
+          { width: 0.5, height: 0.5, depth: 1 },
+          { x: 9.75, y: 9.75, z: 19.5 }
+        );
+        const result = toNext('cut', 20, -1, {}, recessed);
+        const derived = await derive(result.document);
+        expect(derived.warnings.join('\n')).toMatch(/starts partly outside/);
+      });
+
+      it('cuts a thin ledge at the top down to its underside', async () => {
+        // A 1 mm ledge over a void 2 mm tall below the profile.
+        const ledged = minus(
+          cube(false),
+          { width: 6, height: 6, depth: 2 },
+          { x: 7, y: 7, z: 17 }
+        );
+        const result = toNext('cut', 20, -1, {}, ledged);
+        const derived = await derive(result.document);
+        expect(derived.warnings).toEqual([]);
+        expect(derived.bodyRepresentations[result.bodyId]!.volume).toBeCloseTo(
+          8000 - 72 - 16 * 1,
+          5
+        );
       });
 
       it('cuts a tiny pocket through a broad plate (overlap at its own scale)', async () => {
