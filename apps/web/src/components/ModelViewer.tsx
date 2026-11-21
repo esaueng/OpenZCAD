@@ -889,7 +889,7 @@ export type CommandHandleView = (
     }
   | {
       kind: 'linear';
-      params: { origin: HandleVec3; direction: HandleVec3 };
+      params: { origin: HandleVec3; direction: HandleVec3; scale?: number };
     }
   | {
       kind: 'coil';
@@ -919,6 +919,12 @@ export type CommandHandleView = (
   drawnValue?: number;
   min?: number;
   max?: number;
+  /**
+   * The step a drag lands on, in place of a length's tenths: 1 for a whole
+   * count (a gear's teeth), so the arrow rests where the value does. Shift
+   * does not lift it.
+   */
+  step?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
   format(value: number): string;
   /** The command names this value in a refusal: its chip says so. */
@@ -11449,8 +11455,18 @@ export function ModelViewer({
         // Angles in whole degrees and lengths in tenths, unless Shift asks
         // for the free value. A length rig snaps before it clamps, so a drag
         // past an end that is no tenth (a thread's 12.04 face) reaches it.
-        const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-        const free = freeValue(event);
+        const ownStep = commandHandlesRef.current.find(
+          (handle) => handle.valueId === commandDrag.valueId
+        )?.step;
+        const step =
+          ownStep !== undefined && ownStep > 0
+            ? ownStep
+            : draggedRig.kind === ANGLE_RIG_KIND
+              ? 1
+              : 0.1;
+        // A whole count has no free value between its steps: Shift does not
+        // lift its step, or the arrow would rest between teeth.
+        const free = ownStep === undefined && freeValue(event);
         const snapsItself = draggedRig.kind === LINEAR_RIG_KIND;
         const next = draggedRig.valueFromRay?.(
           context.raycaster.ray,
