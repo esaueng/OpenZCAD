@@ -5866,6 +5866,12 @@ export type AssistantReasoningEffort =
  * geometry/history stays portable and collaboration-safe when preferences
  * change on one device.
  */
+/** S02: reference dimensions follow the document's units, or one unit. */
+export type SketchReferenceDisplayUnit = 'document' | UnitSystem;
+
+export const SKETCH_REFERENCE_DISPLAY_UNITS: readonly SketchReferenceDisplayUnit[] =
+  ['document', 'mm', 'cm', 'm', 'inch'];
+
 export interface AppSettings {
   schemaVersion: typeof APP_SETTINGS_SCHEMA_VERSION;
   general: {
@@ -5938,6 +5944,12 @@ export interface AppSettings {
     autoConstrain: boolean;
     /** S08: name the engaged snap in text beside its glyph. */
     snapHints: boolean;
+    /**
+     * S02: the unit reference (measured) dimensions show their lengths in.
+     * `document` follows the document's units. Display only: the document,
+     * its expressions and every driving dimension keep their own units.
+     */
+    referenceDisplayUnit: SketchReferenceDisplayUnit;
     linearSnap: number;
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
@@ -6101,6 +6113,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     inferenceEnabled: true,
     autoConstrain: false,
     snapHints: true,
+    referenceDisplayUnit: 'document',
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,

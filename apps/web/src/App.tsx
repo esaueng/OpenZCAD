@@ -22847,7 +22847,8 @@ export function App() {
         doc.units,
         sketch?.dimensionLabelPositions,
         sketch?.referenceDimensions,
-        sketch?.composites
+        sketch?.composites,
+        appSettings.sketching.referenceDisplayUnit
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -36741,6 +36742,14 @@ export function App() {
               resolve={resolveDocumentValue}
               disabled={sketchSolving || geometryBusy}
               onCommand={executeCommand}
+              displayUnit={appSettings.sketching.referenceDisplayUnit}
+              onDisplayUnitChange={(referenceDisplayUnit) => {
+                const current = appSettingsRef.current;
+                handleAppSettingsChange({
+                  ...current,
+                  sketching: { ...current.sketching, referenceDisplayUnit }
+                });
+              }}
             />
           ) : null
         }

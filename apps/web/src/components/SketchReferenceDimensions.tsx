@@ -13,9 +13,11 @@ import {
   type SketchReferencePointTarget,
   type SketchReferenceCurveTarget,
   type SketchReferenceDistanceMode,
-  type SketchReferenceDimensionData
+  type SketchReferenceDimensionData,
+  type SketchReferenceDisplayUnit
 } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
+import { referenceLengthText } from '../lib/sketch/dimensionAnnotations';
 import { sketchCompositeTargetNames } from '../lib/sketch/compositeTargetNames';
 import { SKETCH_SNAP_LIMITS } from '../lib/sketch/session';
 
@@ -26,7 +28,20 @@ interface Props {
   resolve(value: number | string): number | undefined;
   disabled: boolean;
   onCommand(command: AnyCommand): void;
+  /** S02: display only; the document keeps its units. */
+  displayUnit?: SketchReferenceDisplayUnit;
+  onDisplayUnitChange?(unit: SketchReferenceDisplayUnit): void;
 }
+
+const UNIT_NAMES: Record<
+  Exclude<SketchReferenceDisplayUnit, 'document'>,
+  string
+> = {
+  mm: 'Millimetres (mm)',
+  cm: 'Centimetres (cm)',
+  m: 'Metres (m)',
+  inch: 'Inches (in)'
+};
 
 /** Saved measurements are a separate instrument, never a numeric edit form. */
 export function SketchReferenceDimensions({
@@ -35,7 +50,9 @@ export function SketchReferenceDimensions({
   units,
   resolve,
   disabled,
-  onCommand
+  onCommand,
+  displayUnit = 'document',
+  onDisplayUnitChange
 }: Props) {
   const [kind, setKind] =
     useState<SketchReferenceDimensionData['dimensionKind']>('distance');
@@ -151,7 +168,7 @@ export function SketchReferenceDimensions({
       ? 'Unresolved'
       : outcome.dimensionKind === 'angle'
         ? `${formatNumber(outcome.valueDeg)}°`
-        : `${formatNumber(outcome.value)} ${units === 'inch' ? 'in' : units}`;
+        : referenceLengthText(outcome.value, units, displayUnit);
   const nameOf = (id: EntityId) =>
     namedObjects.find((o) => o.id === id)?.label ?? String(id);
   return (
@@ -161,6 +178,30 @@ export function SketchReferenceDimensions({
         Saved measured values. They do not constrain geometry. Horizontal and
         vertical distances follow the sketch axes.
       </p>
+      {onDisplayUnitChange ? (
+        <label>
+          Show lengths in
+          <select
+            value={displayUnit}
+            onChange={(event) =>
+              onDisplayUnitChange(
+                event.currentTarget.value as SketchReferenceDisplayUnit
+              )
+            }
+          >
+            <option value="document">
+              Document units ({units === 'inch' ? 'in' : units})
+            </option>
+            {(Object.keys(UNIT_NAMES) as (keyof typeof UNIT_NAMES)[]).map(
+              (unit) => (
+                <option key={unit} value={unit}>
+                  {UNIT_NAMES[unit]}
+                </option>
+              )
+            )}
+          </select>
+        </label>
+      ) : null}
       {compositeOptionsLimited ? (
         <p role="status">
           Composite targets are unavailable because this sketch exceeds the
