@@ -69,11 +69,14 @@ export {
   PROJECT_OBJECT_STORAGE_PREFIX,
   PROJECT_OBJECT_STORAGE_VERSION,
   ProjectObjectStorageError,
+  ProjectStorageAssetsMissingError,
   ProjectStorageUploadError,
   sha256Hex,
   splitProjectStorageAssets,
   splitProjectStorageUpload,
   type ClientProjectStorage,
+  type StoredProjectAssetReader,
+  type StoredProjectAssetRequest,
   type PreparedProjectStorageSnapshot,
   type ProjectStorageAssetKind,
   type ProjectStorageAssetObject,
@@ -81,7 +84,10 @@ export {
   type ProjectStorageSnapshot,
   type ProjectStorageSplit
 } from './project-storage-snapshot';
-import type { ClientProjectStorage } from './project-storage-snapshot';
+import type {
+  ClientProjectStorage,
+  StoredProjectAssetRequest
+} from './project-storage-snapshot';
 import { importArtifactIds } from './mesh-artifact-discard';
 export {
   importArtifactIds,
@@ -704,6 +710,16 @@ export interface PersistenceService {
     request: SaveProjectDocumentRequest,
     options?: ProjectWriteOptions
   ): Promise<SaveProjectDocumentResponse>;
+  /**
+   * The stored bodies of payloads a document write of `projectId` named
+   * without sending them (see `StoredProjectAssetReader`), once `userId` may
+   * write the project. A store without it refuses every such reference.
+   */
+  readStoredProjectAssets?(
+    userId: UserId,
+    projectId: string,
+    assets: readonly StoredProjectAssetRequest[]
+  ): Promise<ReadonlyMap<string, Uint8Array>>;
   /** What this account currently stores, and the limits it is measured against. */
   getStorageUsage(userId: UserId): Promise<AccountStorageUsage>;
   createUploadSession(

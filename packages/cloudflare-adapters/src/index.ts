@@ -186,6 +186,7 @@ import {
   sha256Hex,
   type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
+  type StoredProjectAssetRequest,
   type OwnedProjectInstance,
   type ProjectStorageAssetObject,
   type ProjectStorageAssetReference
@@ -5180,6 +5181,60 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   /**
+   * The stored bodies of payloads an autosave named without sending them:
+   * only those this project's `project_storage_assets` rows record under the
+   * same kind, checksum and logical size, whose object is present at the
+   * recorded stored size. The same proof the write's own reuse check asks
+   * before it skips a put, read with one D1 query for the whole write.
+   */
+  async readStoredProjectAssets(
+    userId: UserId,
+    projectId: string,
+    assets: readonly StoredProjectAssetRequest[]
+  ): Promise<ReadonlyMap<string, Uint8Array>> {
+    const found = new Map<string, Uint8Array>();
+    const bucket = this.projectStorageBucket();
+    if (!this.env.DB || !bucket || !assets.length) return found;
+    await this.requireRestProjectWrite(userId, projectId);
+    const { results } = await this.env.DB.prepare(
+      `SELECT kind, object_key, checksum_sha256, logical_bytes, stored_bytes
+       FROM project_storage_assets
+       WHERE project_id = ? AND content_encoding = 'gzip'
+         AND object_key IN (SELECT value FROM json_each(?))`
+    )
+      .bind(projectId, JSON.stringify(assets.map((asset) => asset.objectKey)))
+      .all<{
+        kind: string;
+        object_key: string;
+        checksum_sha256: string;
+        logical_bytes: number;
+        stored_bytes: number;
+      }>();
+    const rows = new Map(
+      (results ?? []).map((row) => [row.object_key, row] as const)
+    );
+    await Promise.all(
+      assets.map(async (asset) => {
+        const row = rows.get(asset.objectKey);
+        if (
+          !row ||
+          row.kind !== asset.kind ||
+          row.checksum_sha256 !== asset.checksumSha256 ||
+          row.logical_bytes !== asset.logicalBytes
+        ) {
+          return;
+        }
+        const object = await bucket.get(asset.objectKey);
+        if (!object) return;
+        const body = new Uint8Array(await object.arrayBuffer());
+        if (body.byteLength === row.stored_bytes)
+          found.set(asset.objectKey, body);
+      })
+    );
+    return found;
+  }
+
+  /**
    * The continuous-sync write: the same fenced update as `saveRevision`,
    * without the `revisions` insert. Splitting them is what makes autosave
    * affordable — a revision row is a whole extra copy of the document, and
@@ -7808,6 +7863,9 @@ export class D1R2PersistenceService implements PersistenceService {
       ? []
       : prepared.assets;
     for (const asset of assetsToCheck) {
+      // Read back from this project's recorded, present objects moments ago
+      // (`readStoredProjectAssets`): the same row and object proof below.
+      if (options?.storage?.storedObjectKeys?.has(asset.objectKey)) continue;
       const existing = await this.env
         .DB!.prepare(
           `SELECT stored_bytes FROM project_storage_assets WHERE project_id = ? AND checksum_sha256 = ? AND kind = ?`

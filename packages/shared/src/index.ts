@@ -5190,9 +5190,18 @@ export interface ProjectStorageAssetUpload {
   checksumSha256: string;
   /** Payload bytes before compression. */
   logicalBytes: number;
-  /** The gzip-compressed payload, base64-encoded. */
-  storedBody: string;
+  /**
+   * The gzip-compressed payload, base64-encoded. Omitted on a document write
+   * (`PUT /api/projects/:id/document`) for a payload the account already
+   * stores for this project: the account then reads its own stored copy, and
+   * refuses the write with `STORAGE_ASSET_MISSING` when it holds none. Only
+   * sent without a body after a save response set `storageAssetReferences`.
+   */
+  storedBody?: string;
 }
+
+/** The refusal of a write that referenced payloads the account does not hold. */
+export const STORAGE_ASSET_MISSING_CODE = 'STORAGE_ASSET_MISSING';
 
 /** Distinct split payloads one document write may carry. */
 export const MAX_PROJECT_STORAGE_ASSET_UPLOADS = 1_000;
@@ -5368,6 +5377,11 @@ export interface SaveProjectDocumentResponse {
   projectId: ProjectId;
   version: number;
   updatedAt: string;
+  /**
+   * The account accepts body-less `storageAssets` entries on later document
+   * writes of this project. Absent from Workers that predate them.
+   */
+  storageAssetReferences?: true;
 }
 
 export interface CreateUploadSessionRequest {

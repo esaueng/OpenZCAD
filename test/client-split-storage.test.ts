@@ -343,3 +343,268 @@ describe('browser-split document writes through the worker (ADR-024 Phase 1)', (
     }
   );
 });
+
+/** The payload keys a split write carries, by `kind:checksum`. */
+function assetIds(project: ProjectDocument): Promise<Set<string>> {
+  return splitProjectStorageUpload(project).then(
+    (split) =>
+      new Set(
+        split.storageAssets.map(
+          (asset) => `${asset.kind}:${asset.checksumSha256}`
+        )
+      )
+  );
+}
+
+/** An autosave of `next` naming every payload in `known` without its body. */
+async function autosaveWithReferences(
+  call: ReturnType<typeof setup>['call'],
+  expectedVersion: number,
+  next: ProjectDocument,
+  known: ReadonlySet<string>
+) {
+  const split = await splitProjectStorageUpload(next, {
+    isStored: (asset) => known.has(`${asset.kind}:${asset.checksumSha256}`)
+  });
+  return {
+    split,
+    response: await call('PUT', `/api/projects/${next.projectId}/document`, {
+      projectId: next.projectId,
+      expectedVersion,
+      ...split
+    })
+  };
+}
+
+function assetCalls(mock: { mock: { calls: unknown[][] } }): number {
+  return mock.mock.calls.filter(([key]) => String(key).includes('/assets/'))
+    .length;
+}
+
+describe('autosave payload references', () => {
+  it('stores a write that names stored payloads without bodies, reading them back instead of checking or putting them', async () => {
+    const { bucket, call } = setup();
+    const document = await created(call);
+    const known = await assetIds(document);
+    const putsBefore = assetCalls(bucket.put);
+    const headsBefore = assetCalls(bucket.head);
+    const next = { ...document, version: document.version + 1 };
+    const { split, response } = await autosaveWithReferences(
+      call,
+      document.version,
+      next,
+      known
+    );
+    expect(split.storageAssets).toHaveLength(2);
+    expect(split.storageAssets.every((asset) => !('storedBody' in asset))).toBe(
+      true
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      version: next.version,
+      storageAssetReferences: true
+    });
+    expect(assetCalls(bucket.put)).toBe(putsBefore);
+    // Read once each to hydrate; the reuse check's heads are not repeated.
+    expect(assetCalls(bucket.head)).toBe(headsBefore);
+    expect(assetCalls(bucket.get)).toBe(2);
+
+    const reloaded = (await (
+      await call('GET', `/api/projects/${document.projectId}`)
+    ).json()) as ProjectDocument;
+    expect(reloaded.version).toBe(next.version);
+    expect(reloaded.nodes).toEqual(document.nodes);
+    expect(reloaded.editHistory).toEqual(document.editHistory);
+  });
+
+  it('stores a write mixing references with a new payload body', async () => {
+    const { bucket, call } = setup();
+    const document = await created(call);
+    const known = await assetIds(document);
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Second STEP',
+        artifactId: 'artifact_split_step_second',
+        sourceName: 'second.step',
+        stepText: STEP_TEXT.replace('CLOSED_SHELL', 'OPEN_SHELL')
+      })
+    );
+    const next = {
+      ...withoutDerivedProjection(manager.document),
+      version: document.version + 1
+    };
+    const putsBefore = assetCalls(bucket.put);
+    const { split, response } = await autosaveWithReferences(
+      call,
+      document.version,
+      next,
+      known
+    );
+    expect(
+      split.storageAssets.filter((asset) => asset.storedBody !== undefined)
+    ).toHaveLength(1);
+    expect(response.status).toBe(200);
+    expect(assetCalls(bucket.put)).toBe(putsBefore + 1);
+    expect(assetKeys(bucket)).toHaveLength(3);
+    const reloaded = (await (
+      await call('GET', `/api/projects/${document.projectId}`)
+    ).json()) as ProjectDocument;
+    expect(reloaded.nodes).toEqual(next.nodes);
+  });
+
+  it('counts the same account storage whether payloads are referenced or sent', async () => {
+    const { db, call } = setup();
+    const document = await created(call);
+    const known = await assetIds(document);
+    // Account usage beside the head document object's own stored bytes.
+    const usage = async () => {
+      const response = (await (
+        await call('GET', '/api/account/storage')
+      ).json()) as { projectStorageBytes: number };
+      const head = db
+        .prepare(
+          `SELECT o.stored_bytes FROM projects p
+           JOIN project_document_objects o ON o.id = p.document_object_id
+           WHERE p.id = ?`
+        )
+        .get(document.projectId) as { stored_bytes: number };
+      const assets = db
+        .prepare(
+          'SELECT kind, stored_bytes, logical_bytes FROM project_storage_assets WHERE project_id = ? ORDER BY kind'
+        )
+        .all(document.projectId);
+      return {
+        beyondHead: response.projectStorageBytes - head.stored_bytes,
+        assets
+      };
+    };
+    const sent = await autosaveWithReferences(
+      call,
+      document.version,
+      { ...document, version: document.version + 1 },
+      new Set()
+    );
+    expect(sent.response.status).toBe(200);
+    const afterSent = await usage();
+    const referenced = await autosaveWithReferences(
+      call,
+      document.version + 1,
+      { ...document, version: document.version + 2 },
+      known
+    );
+    expect(referenced.response.status).toBe(200);
+    expect(await usage()).toEqual(afterSent);
+  });
+
+  it.each([
+    [
+      'a payload the project never stored',
+      async (db: ReturnType<typeof setup>['db'], projectId: string) => {
+        db.prepare(
+          'DELETE FROM project_storage_assets WHERE project_id = ? AND kind = ?'
+        ).run(projectId, 'step-source');
+      }
+    ],
+    [
+      'a recorded payload whose object is gone',
+      async (
+        _db: ReturnType<typeof setup>['db'],
+        _projectId: string,
+        bucket: ReturnType<typeof objectBucket>
+      ) => {
+        for (const key of assetKeys(bucket))
+          if (key.endsWith('step.txt.gz')) bucket.objects.delete(key);
+      }
+    ],
+    [
+      'a recorded payload of another logical size',
+      async (db: ReturnType<typeof setup>['db'], projectId: string) => {
+        db.prepare(
+          'UPDATE project_storage_assets SET logical_bytes = logical_bytes + 1 WHERE project_id = ? AND kind = ?'
+        ).run(projectId, 'step-source');
+      }
+    ]
+  ])(
+    'refuses a reference to %s with STORAGE_ASSET_MISSING and writes nothing',
+    async (_name, tamper) => {
+      const { db, bucket, call } = setup();
+      const document = await created(call);
+      const known = await assetIds(document);
+      await tamper(db, document.projectId, bucket);
+      const before = new Map(bucket.objects);
+      const putsBefore = bucket.put.mock.calls.length;
+      const next = { ...document, version: document.version + 1 };
+      const { split, response } = await autosaveWithReferences(
+        call,
+        document.version,
+        next,
+        known
+      );
+      expect(response.status).toBe(409);
+      const step = split.storageAssets.find(
+        (asset) => asset.kind === 'step-source'
+      )!;
+      expect(await response.json()).toMatchObject({
+        code: 'STORAGE_ASSET_MISSING',
+        missingChecksums: [step.checksumSha256]
+      });
+      expect(bucket.put.mock.calls.length).toBe(putsBefore);
+      expect(bucket.objects).toEqual(before);
+      expect(
+        db
+          .prepare('SELECT document_version FROM projects WHERE id = ?')
+          .get(document.projectId)
+      ).toEqual({ document_version: document.version });
+    }
+  );
+
+  it("refuses a reference to another project's stored payload", async () => {
+    const { db, bucket, call } = setup();
+    // Both projects import the same bytes; only the first still holds them.
+    await created(call);
+    const other = await created(call);
+    db.prepare('DELETE FROM project_storage_assets WHERE project_id = ?').run(
+      other.projectId
+    );
+    const putsBefore = bucket.put.mock.calls.length;
+    const next = { ...other, version: other.version + 1 };
+    const { response } = await autosaveWithReferences(
+      call,
+      other.version,
+      next,
+      await assetIds(other)
+    );
+    expect(response.status).toBe(409);
+    expect(
+      ((await response.json()) as { missingChecksums: string[] })
+        .missingChecksums
+    ).toHaveLength(2);
+    expect(bucket.put.mock.calls.length).toBe(putsBefore);
+  });
+
+  it('refuses references on a write route that does not read stored payloads', async () => {
+    const { call } = setup();
+    const document = await created(call);
+    const named = createSavedRevision(document, 'Named');
+    const known = await assetIds(document);
+    const response = await call(
+      'POST',
+      `/api/projects/${document.projectId}/revisions`,
+      {
+        projectId: document.projectId,
+        reason: 'Named',
+        expectedVersion: document.version,
+        savedRevisionId: named.revisions.at(-1)!.revisionId,
+        ...(await splitProjectStorageUpload(named, {
+          isStored: (asset) =>
+            known.has(`${asset.kind}:${asset.checksumSha256}`)
+        }))
+      }
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      code: 'STORAGE_ASSET_MISSING'
+    });
+  });
+});

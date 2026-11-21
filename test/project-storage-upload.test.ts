@@ -98,7 +98,7 @@ describe('browser-split project storage (ADR-024 Phase 1)', () => {
     // The wire carries compressed payloads, not the STEP text.
     const step = split.storageAssets.find((a) => a.kind === 'step-source')!;
     expect(step.logicalBytes).toBe(new TextEncoder().encode(STEP_TEXT).length);
-    expect(step.storedBody.length).toBeLessThan(step.logicalBytes / 10);
+    expect(step.storedBody!.length).toBeLessThan(step.logicalBytes / 10);
     expect(step.checksumSha256).toBe(
       await sha256Hex(new TextEncoder().encode(STEP_TEXT))
     );

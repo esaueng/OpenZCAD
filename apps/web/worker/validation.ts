@@ -43,7 +43,8 @@ import {
   isProjectCopyDocumentDigest,
   MAX_IMPORT_SOURCE_COPY_REFS,
   openProjectStorageUpload,
-  type ClientProjectStorage
+  type ClientProjectStorage,
+  type StoredProjectAssetReader
 } from '@openzcad/persistence';
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TYPES,
@@ -179,7 +180,9 @@ function requireString(
  */
 export async function openProjectStorageRequest(
   body: unknown,
-  projectIdFromPath?: string
+  projectIdFromPath?: string,
+  /** Where payloads named without bodies are read; without it they are refused. */
+  readStored?: StoredProjectAssetReader
 ): Promise<{ body: unknown; storage?: ClientProjectStorage }> {
   if (
     typeof body !== 'object' ||
@@ -206,7 +209,8 @@ export async function openProjectStorageRequest(
   const opened = await openProjectStorageUpload(
     document,
     storageAssets,
-    projectId
+    projectId,
+    readStored
   );
   return {
     body: { ...record, [field]: opened.document },

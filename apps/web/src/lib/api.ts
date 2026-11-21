@@ -71,6 +71,7 @@ import {
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   LEGACY_PROJECT_FRAME_CONTENT_TYPE,
+  STORAGE_ASSET_MISSING_CODE,
   toProjectId,
   type E2eeListProjectsExtension,
   type ProjectSummary
@@ -1700,6 +1701,53 @@ async function withSplitStorage<T extends object, K extends keyof T & string>(
   };
 }
 
+/**
+ * Per project, the split payloads (`kind:checksum`) the account acknowledged
+ * storing in its last document write, kept only while that Worker said it
+ * accepts body-less references. Autosave sends these as references, so an
+ * import's bytes cross the wire once rather than on every save. In memory
+ * only and bounded; a stale entry costs one refused write and a full resend.
+ */
+const knownStorageAssets = new Map<string, ReadonlySet<string>>();
+const KNOWN_STORAGE_ASSET_PROJECTS = 32;
+
+function storageAssetKey(asset: {
+  kind: string;
+  checksumSha256: string;
+}): string {
+  return `${asset.kind}:${asset.checksumSha256}`;
+}
+
+function rememberStorageAssets(
+  projectId: string,
+  assets: readonly { kind: string; checksumSha256: string }[] | null
+): void {
+  knownStorageAssets.delete(projectId);
+  if (!assets?.length) return;
+  knownStorageAssets.set(projectId, new Set(assets.map(storageAssetKey)));
+  while (knownStorageAssets.size > KNOWN_STORAGE_ASSET_PROJECTS) {
+    knownStorageAssets.delete(knownStorageAssets.keys().next().value!);
+  }
+}
+
+/** Test seam: forget every project's acknowledged payloads. */
+export function forgetKnownStorageAssets(): void {
+  knownStorageAssets.clear();
+}
+
+/**
+ * A refusal of a write that named payloads without bodies: this Worker no
+ * longer holds one (`STORAGE_ASSET_MISSING`), or an older Worker version
+ * still serving during a rollout cannot read the reference form at all.
+ */
+function isStorageReferenceRefusal(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === STORAGE_ASSET_MISSING_CODE ||
+      (error.status === 400 && error.code === 'STORAGE_ASSET_INVALID'))
+  );
+}
+
 /** One save state's document from the plaintext route; null once pruned. */
 async function loadPlaintextRevision(
   projectId: string,
@@ -2276,16 +2324,50 @@ export const api = {
         ).saveProjectDocument(payload)
       );
     }
-    const body = JSON.stringify(await withSplitStorage(payload, 'document'));
-    return requestJson<SaveProjectDocumentResponse>(
-      `/api/projects/${encodeURIComponent(payload.projectId)}/document`,
-      plaintextOf(payload.projectId, {
-        method: 'PUT',
-        body,
-        keepalive:
-          options?.keepalive === true && new Blob([body]).size <= 60_000
-      })
+    const projectId = payload.projectId;
+    let sentReferences = false;
+    const write = async (known: ReadonlySet<string> | undefined) => {
+      const split = await splitProjectStorageUpload(payload.document, {
+        isStored: known
+          ? (asset) => known.has(storageAssetKey(asset))
+          : undefined
+      });
+      const body = JSON.stringify({
+        ...payload,
+        document: split.document,
+        storageAssets: split.storageAssets
+      });
+      sentReferences = split.storageAssets.some(
+        (asset) => asset.storedBody === undefined
+      );
+      const response = await requestJson<SaveProjectDocumentResponse>(
+        `/api/projects/${encodeURIComponent(projectId)}/document`,
+        plaintextOf(projectId, {
+          method: 'PUT',
+          body,
+          keepalive:
+            options?.keepalive === true && new Blob([body]).size <= 60_000
+        })
+      );
+      return { split, response };
+    };
+    const known = knownStorageAssets.get(projectId);
+    let saved: Awaited<ReturnType<typeof write>>;
+    try {
+      saved = await write(known);
+    } catch (error) {
+      // Once, with every body, whatever the account said it was missing.
+      if (!sentReferences || !isStorageReferenceRefusal(error)) throw error;
+      rememberStorageAssets(projectId, null);
+      saved = await write(undefined);
+    }
+    rememberStorageAssets(
+      projectId,
+      saved.response.storageAssetReferences === true
+        ? saved.split.storageAssets
+        : null
     );
+    return saved.response;
   },
   createUploadSession: async (
     payload: CreateUploadSessionRequest,

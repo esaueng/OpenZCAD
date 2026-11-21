@@ -118,6 +118,7 @@ import {
   RevisionConflictError,
   RevisionIdCollisionError,
   SavePointRequestError,
+  ProjectStorageAssetsMissingError,
   ProjectStorageUploadError,
   RevisionNotFoundError
 } from '@openzcad/persistence';
@@ -271,8 +272,10 @@ import {
   LEGACY_PROJECT_FRAME_CONTENT_TYPE,
   importedSourceReferenceOf,
   PROJECT_SHARE_LINK_TTL_SECONDS,
+  STORAGE_ASSET_MISSING_CODE,
   toUserId,
-  type ProjectDocument
+  type ProjectDocument,
+  type SaveProjectDocumentResponse
 } from '@openzcad/shared';
 
 type Env = CloudflareEnv &
@@ -2937,9 +2940,20 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const documentMatch = PROJECT_DOCUMENT_ROUTE.exec(pathname);
   if (request.method === 'PUT' && documentMatch) {
+    // An autosave may name payloads this project already stores without
+    // sending them again; the decrypt-staging write always sends its own.
+    const readStored =
+      !decryptStaging && persistence.readStoredProjectAssets
+        ? persistence.readStoredProjectAssets.bind(
+            persistence,
+            userId,
+            documentMatch[1]!
+          )
+        : undefined;
     const opened = await openProjectStorageRequest(
       await readJsonBody(request, MAX_CLOUD_PROJECT_WRITE_BYTES, true),
-      documentMatch[1]
+      documentMatch[1],
+      readStored
     );
     const payload = parseSaveProjectDocumentRequest(
       opened.body,
@@ -2957,10 +2971,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         )
       );
     }
+    const saved = await persistence.saveDocument(userId, payload, {
+      storage: opened.storage
+    });
     return json(
-      await persistence.saveDocument(userId, payload, {
-        storage: opened.storage
-      })
+      readStored
+        ? ({
+            ...saved,
+            storageAssetReferences: true
+          } satisfies SaveProjectDocumentResponse)
+        : saved
     );
   }
 
@@ -3417,6 +3437,16 @@ async function dispatchApiRequest(
     }
     if (error instanceof SavePointRequestError) {
       return json({ error: error.message, code: 'SAVE_POINT_INVALID' }, 400);
+    }
+    if (error instanceof ProjectStorageAssetsMissingError) {
+      return json(
+        {
+          error: error.message,
+          code: STORAGE_ASSET_MISSING_CODE,
+          missingChecksums: error.missingChecksums
+        },
+        409
+      );
     }
     if (error instanceof ProjectStorageUploadError) {
       return json({ error: error.message, code: 'STORAGE_ASSET_INVALID' }, 400);

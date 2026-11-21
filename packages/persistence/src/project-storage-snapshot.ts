@@ -548,13 +548,52 @@ export interface ClientProjectStorage {
   document: Record<string, unknown>;
   /** Verified payloads by object key, shared by every hydration of this write. */
   readonly payloads: ReadonlyMap<string, VerifiedPayload>;
+  /**
+   * Object keys of payloads the request referenced without a body, read
+   * back from the account's own storage after it proved them stored for
+   * this project; a write need not check them again.
+   */
+  readonly storedObjectKeys?: ReadonlySet<string>;
 }
+
+/** A payload a document write named without its body. */
+export interface StoredProjectAssetRequest {
+  kind: ProjectStorageAssetKind;
+  checksumSha256: string;
+  logicalBytes: number;
+  objectKey: string;
+}
+
+/**
+ * Reads the stored (gzip) bodies of payloads a write referenced without
+ * sending them, keyed by object key. A payload is answered only when the
+ * account can prove it stores it for the project under exactly that kind,
+ * checksum and logical size; anything else is left out of the result.
+ */
+export type StoredProjectAssetReader = (
+  assets: readonly StoredProjectAssetRequest[]
+) => Promise<ReadonlyMap<string, Uint8Array>>;
 
 /** A browser-split write that cannot be stored as sent. */
 export class ProjectStorageUploadError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'ProjectStorageUploadError';
+  }
+}
+
+/**
+ * A write referenced payloads without their bodies that the account does not
+ * hold for this project. The browser sends the write again with the bodies.
+ */
+export class ProjectStorageAssetsMissingError extends ProjectStorageUploadError {
+  readonly missingChecksums: string[];
+  constructor(missingChecksums: string[]) {
+    super(
+      'The account does not hold every project asset this write references; send their contents.'
+    );
+    this.name = 'ProjectStorageAssetsMissingError';
+    this.missingChecksums = missingChecksums;
   }
 }
 
@@ -585,7 +624,17 @@ function bytesOfBase64(value: string): Uint8Array {
  * it hydrates to the document it keeps.
  */
 export async function splitProjectStorageUpload(
-  document: ProjectDocument
+  document: ProjectDocument,
+  options?: {
+    /**
+     * Payloads the account acknowledged storing for this project: sent as
+     * references, without their bodies. Only for document writes.
+     */
+    isStored?: (asset: {
+      kind: ProjectStorageAssetKind;
+      checksumSha256: string;
+    }) => boolean;
+  }
 ): Promise<{
   document: Record<string, unknown>;
   storageAssets: ProjectStorageAssetUpload[];
@@ -599,7 +648,9 @@ export async function splitProjectStorageUpload(
       kind: asset.kind,
       checksumSha256: asset.checksumSha256,
       logicalBytes: asset.logicalBytes,
-      storedBody: base64Of(asset.storedBody)
+      ...(options?.isStored?.(asset)
+        ? {}
+        : { storedBody: base64Of(asset.storedBody) })
     }))
   };
 }
@@ -611,6 +662,7 @@ const UPLOAD_FIELDS = [
   'logicalBytes',
   'storedBody'
 ].join();
+const REFERENCE_FIELDS = ['checksumSha256', 'kind', 'logicalBytes'].join();
 
 function parseAssetUploads(value: unknown): ProjectStorageAssetUpload[] {
   if (!Array.isArray(value)) {
@@ -623,16 +675,17 @@ function parseAssetUploads(value: unknown): ProjectStorageAssetUpload[] {
   }
   let declaredBytes = 0;
   return value.map((upload: unknown, index) => {
+    const fields = isRecord(upload) ? Object.keys(upload).sort().join() : '';
     if (
       !isRecord(upload) ||
-      Object.keys(upload).sort().join() !== UPLOAD_FIELDS ||
+      (fields !== UPLOAD_FIELDS && fields !== REFERENCE_FIELDS) ||
       (upload.kind !== 'step-source' && upload.kind !== 'mesh-payload') ||
       typeof upload.checksumSha256 !== 'string' ||
       !CHECKSUM_SHA256.test(upload.checksumSha256) ||
       typeof upload.logicalBytes !== 'number' ||
       !Number.isSafeInteger(upload.logicalBytes) ||
       upload.logicalBytes < 0 ||
-      typeof upload.storedBody !== 'string'
+      (fields === UPLOAD_FIELDS && typeof upload.storedBody !== 'string')
     ) {
       throw new ProjectStorageUploadError(
         `"storageAssets[${index}]" is not a split payload.`
@@ -652,7 +705,7 @@ function parseAssetUploads(value: unknown): ProjectStorageAssetUpload[] {
 
 async function verifiedUpload(
   projectId: string,
-  upload: ProjectStorageAssetUpload
+  upload: ProjectStorageAssetUpload & { storedBody: string }
 ): Promise<{ asset: ProjectStorageAssetObject; logicalBody: Uint8Array }> {
   let storedBody: Uint8Array;
   let logicalBody: Uint8Array;
@@ -679,20 +732,84 @@ async function verifiedUpload(
     );
   }
   return {
-    asset: {
-      marker: PROJECT_ASSET_REFERENCE_MARKER,
-      version: PROJECT_ASSET_REFERENCE_VERSION,
-      kind: upload.kind,
-      objectKey: assetObjectKey(projectId, upload.kind, upload.checksumSha256),
-      checksumSha256: upload.checksumSha256,
-      logicalBytes: upload.logicalBytes,
-      contentEncoding: 'gzip',
-      storedBody,
-      storedBytes: storedBody.byteLength,
-      contentType: contentTypeFor(upload.kind)
-    },
+    asset: storedAssetObject(projectId, upload, storedBody),
     logicalBody
   };
+}
+
+function storedAssetObject(
+  projectId: string,
+  upload: ProjectStorageAssetUpload,
+  storedBody: Uint8Array
+): ProjectStorageAssetObject {
+  return {
+    marker: PROJECT_ASSET_REFERENCE_MARKER,
+    version: PROJECT_ASSET_REFERENCE_VERSION,
+    kind: upload.kind,
+    objectKey: assetObjectKey(projectId, upload.kind, upload.checksumSha256),
+    checksumSha256: upload.checksumSha256,
+    logicalBytes: upload.logicalBytes,
+    contentEncoding: 'gzip',
+    storedBody,
+    storedBytes: storedBody.byteLength,
+    contentType: contentTypeFor(upload.kind)
+  };
+}
+
+/**
+ * The payloads a write referenced without bodies, from the account's own
+ * storage. The account wrote each of them only after checking its bytes
+ * against the checksum its key and row name, so a stored copy of the
+ * declared logical size is that payload; anything the reader cannot prove
+ * stored refuses the whole write with the checksums the browser must send.
+ */
+async function storedUploads(
+  projectId: string,
+  references: readonly ProjectStorageAssetUpload[],
+  readStored: StoredProjectAssetReader | undefined
+): Promise<
+  Array<{ asset: ProjectStorageAssetObject; logicalBody: Uint8Array }>
+> {
+  if (!references.length) return [];
+  const requests = references.map((upload) => ({
+    kind: upload.kind,
+    checksumSha256: upload.checksumSha256,
+    logicalBytes: upload.logicalBytes,
+    objectKey: assetObjectKey(projectId, upload.kind, upload.checksumSha256)
+  }));
+  const stored: ReadonlyMap<string, Uint8Array> = readStored
+    ? await readStored(requests)
+    : new Map();
+  const missing: string[] = [];
+  const opened: Array<{
+    asset: ProjectStorageAssetObject;
+    logicalBody: Uint8Array;
+  }> = [];
+  for (const [index, upload] of references.entries()) {
+    const storedBody = stored.get(requests[index]!.objectKey);
+    let logicalBody: Uint8Array | null = null;
+    if (storedBody) {
+      try {
+        logicalBody = await decodeProjectStorageBody(
+          Uint8Array.from(storedBody).buffer,
+          'gzip',
+          upload.logicalBytes
+        );
+      } catch {
+        logicalBody = null;
+      }
+    }
+    if (!storedBody || logicalBody?.byteLength !== upload.logicalBytes) {
+      missing.push(upload.checksumSha256);
+      continue;
+    }
+    opened.push({
+      asset: storedAssetObject(projectId, upload, storedBody),
+      logicalBody
+    });
+  }
+  if (missing.length) throw new ProjectStorageAssetsMissingError(missing);
+  return opened;
 }
 
 /** Hydrates a verified write from its own payloads, sharing their values. */
@@ -734,18 +851,37 @@ function hydrateClientStorage(
 export async function openProjectStorageUpload(
   document: unknown,
   storageAssets: unknown,
-  projectId: string
+  projectId: string,
+  readStored?: StoredProjectAssetReader
 ): Promise<{ document: ProjectDocument; storage: ClientProjectStorage }> {
   if (!isRecord(document)) {
     throw new ProjectStorageUploadError('"document" must be an object.');
   }
   const uploads = parseAssetUploads(storageAssets);
   const payloads = new Map<string, VerifiedPayload>();
+  const references = uploads.filter(
+    (upload) => upload.storedBody === undefined
+  );
+  // References first: a write the account must refuse for want of bodies
+  // is refused before it pays to decode the bodies it did carry.
+  const opened = (await storedUploads(projectId, references, readStored)).map(
+    (entry) => ({ ...entry, stored: true })
+  );
   for (const upload of uploads) {
-    const { asset, logicalBody } = await verifiedUpload(projectId, upload);
+    if (upload.storedBody === undefined) continue;
+    opened.push({
+      ...(await verifiedUpload(projectId, {
+        ...upload,
+        storedBody: upload.storedBody
+      })),
+      stored: false
+    });
+  }
+  const storedObjectKeys = new Set<string>();
+  for (const { asset, logicalBody, stored } of opened) {
     if (payloads.has(asset.objectKey)) {
       throw new ProjectStorageUploadError(
-        `The ${upload.kind} ${upload.checksumSha256} is uploaded twice.`
+        `The ${asset.kind} ${asset.checksumSha256} is uploaded twice.`
       );
     }
     payloads.set(asset.objectKey, {
@@ -755,8 +891,13 @@ export async function openProjectStorageUpload(
           ? textDecoder.decode(logicalBody)
           : meshArraysForUpload(logicalBody)
     });
+    if (stored) storedObjectKeys.add(asset.objectKey);
   }
-  const storage: ClientProjectStorage = { document, payloads };
+  const storage: ClientProjectStorage = {
+    document,
+    payloads,
+    ...(storedObjectKeys.size ? { storedObjectKeys } : {})
+  };
   const used = new Set<string>();
   let hydrated: ProjectDocument;
   try {
