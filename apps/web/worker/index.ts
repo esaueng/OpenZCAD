@@ -161,6 +161,7 @@ import {
   assistantProviderIdentity,
   authenticateBrowserSession,
   authenticateRequest,
+  takeRenewedSessionCookie,
   approveDesktopAuthorization,
   AuthFlowError,
   AuthenticationError,
@@ -253,6 +254,7 @@ import {
   parseSaveLibraryFolderSetRequest,
   saveLibraryFolderSet
 } from './libraryFolderSets';
+import { SESSION_COOKIE_NAME } from './sessionCredentials';
 import {
   CONSENTED_ASSISTANT_PROPOSAL_PATH,
   assistantConsentVersion,
@@ -3186,7 +3188,7 @@ async function handleAppRequest(request: Request, env: Env): Promise<Response> {
 
   assertSafeRuntimeConfiguration(env);
   const response = await dispatchApiRequest(request, env);
-  return withApiSecurityHeaders(response);
+  return withApiSecurityHeaders(response, takeRenewedSessionCookie(request));
 }
 
 export default {
@@ -3265,7 +3267,10 @@ export default {
  * the socket, and it serves no document to sniff or frame, so it passes
  * through untouched.
  */
-function withApiSecurityHeaders(response: Response): Response {
+function withApiSecurityHeaders(
+  response: Response,
+  renewedSessionCookie: string | null = null
+): Response {
   if (response.webSocket) {
     return response;
   }
@@ -3274,6 +3279,16 @@ function withApiSecurityHeaders(response: Response): Response {
     statusText: response.statusText,
     headers: response.headers
   });
+  // A session the request slid forward re-issues its cookie with the new
+  // lifetime, unless the response already sets or clears that cookie.
+  if (
+    renewedSessionCookie &&
+    !wrapped.headers
+      .getSetCookie()
+      .some((line) => line.startsWith(`${SESSION_COOKIE_NAME}=`))
+  ) {
+    wrapped.headers.append('set-cookie', renewedSessionCookie);
+  }
   wrapped.headers.set('x-content-type-options', 'nosniff');
   wrapped.headers.set('referrer-policy', 'no-referrer');
   wrapped.headers.set('cross-origin-resource-policy', 'same-origin');
