@@ -41,7 +41,11 @@ import {
   unifyBooleanFaces,
   verdictRefusesUnion
 } from './exact-boolean-helpers';
-import { exactCutWithCancellation } from './exact-cancellation';
+import { patternCutPrefix } from './exact-pattern-cut-prefix';
+import {
+  exactCutWithCancellation,
+  throwIfBuildCancelled
+} from './exact-cancellation';
 import {
   holeToolSolids,
   measureCylinderFaces,
@@ -394,6 +398,7 @@ export function buildFeaturePattern(
   const shapedSources: FeatureId[] = [];
   let declined: RemusLineageDiagnostic | null = null;
   let solid = original;
+  let prefix: ReturnType<typeof patternCutPrefix>;
   for (const source of sources) {
     const sourceData = source.data;
     let seed: number[];
@@ -558,24 +563,46 @@ export function buildFeaturePattern(
       }
     });
     if (operation === 'cut') {
+      if (
+        data.patternKind === 'points' &&
+        sources.length === 1 &&
+        sourceData.featureKind === 'hole' &&
+        sourceData.style === 'simple' &&
+        !sourceData.tapped &&
+        bores.length === 1
+      ) {
+        prefix = patternCutPrefix(
+          kernel,
+          document.projectId,
+          original,
+          targetVolume,
+          repeated.solids
+        );
+        if (prefix) solid = prefix.solid;
+      }
       copies.forEach((copy, index) => {
-        const before = kernel.volume(solid, MEASUREMENT_DEFLECTION);
-        // One tool at a time, as a single hole is cut: the kernel's compound
-        // pass declines tool pairs that each cut exactly on their own.
-        for (const tool of repeated.solids[index] ?? []) {
-          solid = exactCutWithCancellation(
-            kernel,
-            solid,
-            tool,
-            ctx.cancellation,
-            [targetName, `${source.name} copy ${copy.label}`]
-          );
-        }
-        const after = kernel.volume(solid, MEASUREMENT_DEFLECTION);
-        if (!(after < before - targetVolume * REMOVED_VOLUME_FRACTION)) {
-          throw new Error(
-            `Copy ${copy.label} of ${source.name} removes nothing from ${targetName}; skip it or change the pattern.`
-          );
+        if (index < (prefix?.count ?? 0)) {
+          throwIfBuildCancelled(ctx.cancellation?.signal);
+        } else {
+          const before = kernel.volume(solid, MEASUREMENT_DEFLECTION);
+          // One tool at a time, as a single hole is cut: the kernel's compound
+          // pass declines tool pairs that each cut exactly on their own.
+          for (const tool of repeated.solids[index] ?? []) {
+            solid = exactCutWithCancellation(
+              kernel,
+              solid,
+              tool,
+              ctx.cancellation,
+              [targetName, `${source.name} copy ${copy.label}`]
+            );
+          }
+          const after = kernel.volume(solid, MEASUREMENT_DEFLECTION);
+          if (!(after < before - targetVolume * REMOVED_VOLUME_FRACTION)) {
+            throw new Error(
+              `Copy ${copy.label} of ${source.name} removes nothing from ${targetName}; skip it or change the pattern.`
+            );
+          }
+          prefix?.capture(index + 1, solid);
         }
         for (const { spec, pointId } of bores) {
           holes.push({
@@ -747,6 +774,7 @@ export function buildFeaturePattern(
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  prefix?.commit();
 }
 
 /**
