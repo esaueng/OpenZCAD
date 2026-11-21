@@ -1,6 +1,6 @@
-import { clearCheckedHoleCuts } from './exact-point-hole-cuts';
 import { clearPatternCutPrefix } from './exact-pattern-cut-prefix';
 import { PatternOverlapWorkers } from './pattern-overlap-workers';
+import { clearCheckedHoleCuts } from './exact-point-hole-cuts';
 import {
   AxialExtentTracker,
   MIN_AXIAL_HISTORY_FEATURES,
