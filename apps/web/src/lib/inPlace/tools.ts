@@ -83,7 +83,14 @@ import {
   type RefKind,
   type RefPick
 } from './datums';
-import { faceSpan, threadSpec, type ThreadRequest } from './thread';
+import {
+  faceSpan,
+  lengthIsExplicit,
+  threadFace,
+  threadReach,
+  threadSpec,
+  type ThreadRequest
+} from './thread';
 import { referenceImage, type ImageSlot } from './image';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
 import { standardPartSpec, type StandardPartRequest } from './standardPart';
@@ -864,6 +871,8 @@ export type HandleSpec = (
    * up to the face's end), in place of the value's own `max`.
    */
   max?: number;
+  /** The step a drag lands on (1 for a whole count), in place of tenths. */
+  step?: number;
 };
 
 export interface InPlaceToolSpec {
@@ -2496,6 +2505,25 @@ function gearIsWorm(state: InPlacePanelState): boolean {
   );
 }
 
+/**
+ * A gear type whose teeth stand round a pitch circle of `module × teeth`
+ * across, so its teeth drag on that circle: spur, helical and ring gears,
+ * a bevel at its heel, and a worm's wheel. A worm counts starts and a rack
+ * runs straight.
+ */
+export function gearTeethOnPitchCircle(
+  options: Readonly<Record<string, string>>
+): boolean {
+  const type = options.gearType ?? 'external';
+  return (
+    type === 'external' ||
+    type === 'internal' ||
+    type === 'bevel' ||
+    type === 'worm-wheel' ||
+    type === 'enveloping-wheel'
+  );
+}
+
 /** The value a gear's chosen sizing reads its pitch from. */
 export function gearPitchValueId(
   options: Readonly<Record<string, string>>
@@ -2590,6 +2618,44 @@ function gearSummary(
     // A helical gear's diameters depend on how the kernel reads its module.
     parts.push(`Pitch Ø ${gearLength(module * teeth, units)}`);
   }
+  return parts.join(' · ');
+}
+
+/**
+ * U11: what Gear teeth's picked face decides, read out in Options as a
+ * thread's is: the diameter it keeps (or the module it is set to), then how
+ * much of the face the teeth run. Before a pick, what the sizing comes to.
+ */
+export function gearTeethSummary(
+  state: InPlacePanelState,
+  units: UnitSystem = 'mm',
+  slots?: Pick<InPlaceSlots, 'faces'>,
+  context?: InPlaceValueContext
+): string | null {
+  const geometry = threadFace(slots?.faces[0]);
+  if (!geometry) return gearSummary(state, units);
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  const parts = [
+    state.options.fit === 'module'
+      ? (gearSummary(state, units) ?? '')
+      : `Sized from the Ø${round(2 * geometry.radius)} ${units} face`
+  ].filter((part) => part !== '');
+  const offset = state.numbers.offset ?? 0;
+  const length =
+    state.numbers.faceWidth ?? Math.max(geometry.length - offset, 0);
+  const held = lengthIsExplicit(
+    geometry,
+    { ...state.numbers, ...(context?.raws ?? {}) },
+    state.numbers,
+    context ?? { touched: ['faceWidth'] },
+    'faceWidth'
+  );
+  const reached = threadReach({ held, offset, length, face: geometry });
+  parts.push(
+    reached.near && reached.far
+      ? `Teeth run the full ${round(geometry.length)} ${units}`
+      : `Teeth run ${round(length)} of ${round(geometry.length)} ${units}`
+  );
   return parts.join(' · ');
 }
 
@@ -3075,15 +3141,17 @@ const gear: InPlaceToolSpec = {
     const teeth = numbers.teeth ?? 20;
     return { rimDiameter: module * (teeth + 10.5) };
   },
-  hint(slots) {
-    // Module and teeth are chips on the placed gear: the summary names them
+  hint(slots, options) {
+    // Module and teeth are on the placed gear: the summary names them
     // before there is a field to change them, so the hint says where it is.
     if (!slots.plane)
       return 'Pick a plane or flat face · then set module and teeth on the gear';
     if (slots.plane.kind === 'datum') {
       return 'Pick a ghost plane or flat face instead';
     }
-    return 'Drag the face width · tap a chip to type';
+    return gearTeethOnPitchCircle(options ?? {})
+      ? 'Drag the teeth arrow to add teeth, or the face width · tap a chip to type'
+      : 'Drag the face width · tap a chip to type';
   },
   ready: (slots) => gearFrame(slots.plane) !== null,
   request(slots, values, options, ctx, numbers) {
@@ -3232,6 +3300,13 @@ const gear: InPlaceToolSpec = {
       y: origin.y + radial.y * by,
       z: origin.z + radial.z * by
     });
+    const module = gearModuleOf(options, values, ctx.units);
+    // U11: the teeth drag on the gear itself. An arrow from the axis whose
+    // head stands on the pitch circle (half a module out per tooth), so
+    // dragging it out adds teeth at the same module and the gear grows, as a
+    // coil's end winds turns at the same spacing. A worm's count is its
+    // starts and a rack has no circle: those stay chips.
+    const teethOnCircle = gearTeethOnPitchCircle(options) && module > 0;
     return [
       {
         valueId: 'faceWidth',
@@ -3239,12 +3314,22 @@ const gear: InPlaceToolSpec = {
         key: `${base}:faceWidth`,
         params: { origin, direction: normal }
       },
-      {
-        valueId: count,
-        kind: 'chip',
-        key: `${base}:${count}`,
-        params: { anchor: at(reach * 1.15) }
-      },
+      teethOnCircle
+        ? {
+            valueId: 'teeth',
+            kind: 'linear',
+            // Rebuilt when the module changes: the arrow's scale is half
+            // of it.
+            key: keyOf(base, 'teeth', radial.x, radial.y, radial.z, module),
+            params: { origin, direction: radial, scale: module / 2 },
+            step: 1
+          }
+        : {
+            valueId: count,
+            kind: 'chip',
+            key: `${base}:${count}`,
+            params: { anchor: at(reach * 1.15) }
+          },
       {
         // The pitch the sizing reads, so the chip edits what is built.
         valueId: pitch,
@@ -3348,7 +3433,7 @@ const gearTeeth: InPlaceToolSpec = {
     },
     ...GEAR_FORM_SECTIONS
   ],
-  summary: gearSummary,
+  summary: gearTeethSummary,
   optionCarries: gearSizingCarries,
   ...gearTeethSpan.behaviour,
   hint(slots, options) {
