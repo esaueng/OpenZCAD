@@ -233,10 +233,12 @@ describe(
         expect(
           rel(document.derived.bodyRepresentations[bodyId]!.volume, 4 * 10)
         ).toBeLessThan(1e-9);
-        // The solid reaches out to the arc's bulge, x = 4 − √50.
-        expect(
-          document.derived.bodyRepresentations[bodyId]!.bbox.min.x
-        ).toBeCloseTo(4 - Math.sqrt(50), 6);
+        // The solid reaches out to the arc's bulge, x = 4 − √50. The box is
+        // read from the tessellated mesh, whose points lie on the exact
+        // surface, so it sits just inside the bulge, never beyond it.
+        const minX = document.derived.bodyRepresentations[bodyId]!.bbox.min.x;
+        expect(minX).toBeGreaterThanOrEqual(4 - Math.sqrt(50) - 1e-9);
+        expect(minX).toBeLessThan(4 - Math.sqrt(50) + 1e-3);
       }
     });
 

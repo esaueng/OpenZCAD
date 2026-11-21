@@ -580,7 +580,9 @@ test('a loft picked with a curved guide arc follows it exactly (M04)', async ({
   // Every slice is the 2 × 2 square carried along the arc: area × height.
   const body = derived.bodyRepresentations[loft.bodyId!]!;
   expect(body.volume).toBeCloseTo(40, 6);
-  expect(body.bbox.min.x).toBeCloseTo(34 - Math.sqrt(50), 4);
+  // The mesh box sits just inside the arc's bulge, never beyond it.
+  expect(body.bbox.min.x).toBeGreaterThanOrEqual(34 - Math.sqrt(50) - 1e-9);
+  expect(body.bbox.min.x).toBeLessThan(34 - Math.sqrt(50) + 1e-3);
 });
 
 /** A document with a marker box, a profile sketch and the given path sketches. */
