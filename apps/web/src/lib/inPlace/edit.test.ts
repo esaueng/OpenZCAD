@@ -2153,6 +2153,41 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('sweep: a round corner goes out beside Parallel or a rail, to be refused rather than dropped (M04, v135)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const profile = {
+      sketchId: SKETCH,
+      reference: { all: true, sourceEntityIds: ['a'] },
+      regionFingerprint: 7
+    };
+    const path = [{ sketchId: SKETCH, entityId: 'p1' }];
+    const plain = { profiles: [profile], path, guide: [] };
+    const railed = {
+      ...plain,
+      guide: [{ sketchId: SKETCH, entityId: 'rail1' }]
+    };
+    const round = (slots: unknown, orientation?: string) =>
+      spec.request(
+        slots as InPlaceSlots,
+        { twist: 0, endScale: 1, cornerRadius: 3 },
+        {
+          build: 'exact',
+          corner: 'round',
+          ...(orientation ? { orientation } : {})
+        },
+        {} as never
+      );
+    expect(round(plain)).toMatchObject({ cornerRadius: 3 });
+    expect(round(plain, 'parallel')).toMatchObject({
+      orientation: 'parallel',
+      cornerRadius: 3
+    });
+    expect(round(railed)).toMatchObject({
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] },
+      cornerRadius: 3
+    });
+  });
+
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {
     const sweep = (entityIds: string[]): FeatureData => ({
       featureKind: 'sweep',

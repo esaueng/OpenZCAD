@@ -1800,9 +1800,13 @@ const sweep: InPlaceToolSpec = {
           },
           ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
           ...(isLiteral(endScale, 1) ? {} : { endScale }),
-          // Parallel beside a rail goes out too, to be refused by name.
+          // Parallel or a round corner beside a rail goes out too, to be
+          // refused by name.
           ...(options.orientation === 'parallel'
             ? { orientation: 'parallel' as const }
+            : {}),
+          ...(options.corner === 'round'
+            ? { cornerRadius: values.cornerRadius ?? 2 }
             : {})
         };
       }
@@ -1817,11 +1821,14 @@ const sweep: InPlaceToolSpec = {
         construction: 'in-place',
         ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
         ...(isLiteral(endScale, 1) ? {} : { endScale }),
+        // Each option goes out as chosen; a pair the exact sweep cannot
+        // build together is refused by name, never dropped unseen.
         ...(options.orientation === 'parallel'
           ? { orientation: 'parallel' as const }
-          : options.corner === 'round'
-            ? { cornerRadius: values.cornerRadius ?? 2 }
-            : {})
+          : {}),
+        ...(options.corner === 'round'
+          ? { cornerRadius: values.cornerRadius ?? 2 }
+          : {})
       };
     }
     const rail = slots.guide[0];
