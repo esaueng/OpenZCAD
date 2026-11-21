@@ -8,6 +8,7 @@ import {
   type PreparedBody
 } from '../../../../../packages/viewport/src/render/preparedBody';
 import type { FaceDragTraceEvent } from '../../lib/faceDragTrace';
+import { prepareBody } from './prepareBody';
 import { denseBodyNeedsPreparation } from './bodyPreparationPolicy';
 import {
   BODY_PREPARATION_TIMEOUT_MS,
@@ -78,6 +79,63 @@ function start() {
 }
 
 describe('dense body preparation', () => {
+  it('draws a 20-degree joint as tangent only for faceted stock', () => {
+    const part = body('kink', 2);
+    const radians = (20 * Math.PI) / 180;
+    part.mesh.vertices = Float32Array.of(
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      -Math.cos(radians),
+      Math.sin(radians)
+    );
+    part.mesh.indices = Uint32Array.of(0, 1, 2, 1, 0, 3);
+    part.topology = {
+      faces: [0, 1].map((i) => ({
+        topologyId: String(i),
+        hash: i + 1,
+        triangleStart: i,
+        triangleCount: 1
+      })),
+      edges: [
+        {
+          topologyId: 'joint',
+          hash: 3,
+          adjacentFaceHashes: [1, 2],
+          points: [0, 0, 0, 1, 0, 0]
+        }
+      ]
+    };
+    expect(prepareBody(part).tangentIds).toEqual(new Set());
+    expect(
+      prepareBody({ ...part, source: 'helical-sweep' }).tangentIds
+    ).toEqual(new Set(['joint']));
+  });
+
+  it('immediately falls back if a worker fails after hand-off', () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const source = [body()];
+    const view = renderHook(
+      ({ source }) => usePreparedBodies(source, undefined, true),
+      { initialProps: { source } }
+    );
+    const worker = FakeWorker.instances[0]!;
+    const next = [body()];
+    view.rerender({ source: next });
+    expect(worker.postMessage).toHaveBeenCalledOnce();
+    act(() => worker.onerror?.());
+    expect(worker.terminate).toHaveBeenCalledOnce();
+    expect(view.result.current.preparing).toBe(false);
+    expect(view.result.current.bodies).toBe(next);
+  });
+
   it('loads the worker when editing a dense sketch and sends only the replacement mesh', () => {
     vi.stubGlobal('Worker', FakeWorker);
     const source = [body()];

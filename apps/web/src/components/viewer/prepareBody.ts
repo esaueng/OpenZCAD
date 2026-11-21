@@ -21,8 +21,7 @@ export function prepareBody(body: GeometryBodyRepresentation): PreparedBody {
       ? tangentEdgeIds(
           body.mesh,
           body.topology,
-          faceted ? FACETED_JOINT_MAX_ANGLE : undefined,
-          faceted ? undefined : shadingPairs
+          faceted ? FACETED_JOINT_MAX_ANGLE : shadingPairs
         )
       : new Set(),
     silhouettes: body.topology
