@@ -40,6 +40,7 @@ import {
 import { exactCutWithCancellation } from './exact-cancellation';
 import {
   holeToolSolids,
+  measureCylinderFaces,
   missingHoleBore,
   type HoleToolSpec
 } from './exact-cylinder-ops';
@@ -325,6 +326,25 @@ interface RepeatedHole {
   tapped: boolean;
 }
 
+function requirePatternBores(
+  kernel: FeatureBuildContext['kernel'],
+  solid: number,
+  holes: readonly RepeatedHole[]
+): void {
+  if (holes.length === 0) return;
+  // The solid stays fixed throughout this check. A later cut or thread
+  // operation gets a fresh set of face measurements.
+  const cylinders = measureCylinderFaces(kernel, solid);
+  for (const { label, spec } of holes) {
+    const missing = missingHoleBore(cylinders, spec);
+    if (missing !== null) {
+      throw new Error(
+        `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
+      );
+    }
+  }
+}
+
 /**
  * Builds a feature pattern's body: the target with every kept copy of each
  * repeated feature cut into it or fused onto it, in history order.
@@ -576,14 +596,7 @@ export function buildFeaturePattern(
         }
         const copied = holes.filter((hole) => hole.source === source.featureId);
         // Proven plain first, as an untapped copy is below.
-        for (const { label, spec } of copied) {
-          const missing = missingHoleBore(kernel, solid, spec);
-          if (missing !== null) {
-            throw new Error(
-              `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
-            );
-          }
-        }
+        requirePatternBores(kernel, solid, copied);
         // M02 (schema v119): a reflected copy's thread winds the other way,
         // as a mirror image of the original's would (review).
         const reflected = copies.some((copy) => copyReflects(copy.matrix));
@@ -669,14 +682,11 @@ export function buildFeaturePattern(
   if (!(kernel.volume(solid, MEASUREMENT_DEFLECTION) > 0)) {
     throw new Error(`The feature pattern removed all of ${targetName}.`);
   }
-  for (const { label, spec } of holes.filter((hole) => !hole.tapped)) {
-    const missing = missingHoleBore(kernel, solid, spec);
-    if (missing !== null) {
-      throw new Error(
-        `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
-      );
-    }
-  }
+  requirePatternBores(
+    kernel,
+    solid,
+    holes.filter((hole) => !hole.tapped)
+  );
   // Faces the copies left alone keep their names; each copy's bore is named
   // by its own axis, the way a hole names its one.
   const lineage = carryAnalyticFaces(kernel, original, solid, target.lineage);

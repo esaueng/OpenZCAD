@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -16,6 +16,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import * as cylinderOps from '../packages/kernel-adapter/src/exact-cylinder-ops';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
@@ -245,7 +246,7 @@ describe('M02 patterns on sketch points: exact build', () => {
   });
 
   /** The plate drilled with a Ø6 through hole at (10, 20). */
-  async function drilled(): Promise<{
+  async function drilled(style: 'simple' | 'counterbore' = 'simple'): Promise<{
     document: ProjectDocument;
     holeId: FeatureId;
   }> {
@@ -258,7 +259,10 @@ describe('M02 patterns on sketch points: exact build', () => {
       targetBodyId: last(document),
       faceHash: face.hash,
       ...(face.reference ? { faceReference: face.reference } : {}),
-      style: 'simple',
+      style,
+      ...(style === 'counterbore'
+        ? { counterboreDiameter: 10, counterboreDepth: 2 }
+        : {}),
       diameter: 2 * HOLE_R,
       depthMode: 'through',
       position: { u: 0, v: 10 - (body.bbox.min.x + body.bbox.max.x) / 2 },
@@ -266,6 +270,54 @@ describe('M02 patterns on sketch points: exact build', () => {
     }).document;
     return { document: next, holeId: lastFeature(next) };
   }
+
+  it('checks both counterbore radii on each kept point after a skip', async () => {
+    const { document: holed, holeId } = await drilled('counterbore');
+    const { document, sketchId, ids } = pointsSketch(holed, PLATE.z, [
+      [10, 20],
+      [40, 10],
+      [70, 30],
+      [90, 20]
+    ]);
+    const patterned = onPoints(document, sketchId, ids, {
+      targetBodyId: last(holed),
+      sourceFeatureIds: [holeId],
+      skippedInstances: [ids[2]!]
+    });
+    const measure = vi.spyOn(cylinderOps, 'measureCylinderFaces');
+    let derived: DerivedState;
+    try {
+      derived = await adapter.syncDocument(patterned);
+      const solids = measure.mock.calls.map(([, solid]) => solid);
+      expect(solids.length).toBeGreaterThan(0);
+      expect(new Set(solids).size).toBe(solids.length);
+    } finally {
+      measure.mockRestore();
+    }
+    expect(derived.warnings).toEqual([]);
+    const result = derived.bodyRepresentations[last(patterned)]!;
+    const bores = result
+      .topology!.faces.flatMap(({ geometry }) =>
+        geometry?.surfaceType === 'cylinder' && geometry.axisStart
+          ? [
+              [
+                Math.round(geometry.axisStart.x),
+                Math.round(geometry.axisStart.y),
+                Number(geometry.radius!.toFixed(9))
+              ]
+            ]
+          : []
+      )
+      .sort(([x, , a], [y, , b]) => x! - y! || a! - b!);
+    expect(bores).toEqual([
+      [10, 20, 3],
+      [10, 20, 5],
+      [40, 10, 3],
+      [40, 10, 5],
+      [90, 20, 3],
+      [90, 20, 5]
+    ]);
+  });
 
   it('repeats a hole at each point, from the point it stands on', async () => {
     const { document: holed, holeId } = await drilled();
