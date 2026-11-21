@@ -5974,9 +5974,8 @@ function instanceHandles(
     return {
       valueId: `instance:${label}`,
       kind: 'instance' as const,
-      // The chip is drawn anew when it is skipped or brought back, or when
-      // its name moves (an earlier point picked again).
-      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}:${off ? 'skipped' : 'kept'}`,
+      // Toggling the copy keeps its button. A new pick-order name replaces it.
+      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}`,
       params: {
         anchor: point,
         label,

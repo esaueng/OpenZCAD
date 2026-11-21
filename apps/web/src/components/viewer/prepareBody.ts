@@ -10,13 +10,18 @@ import type { PreparedBody } from '../../../../../packages/viewport/src/render/p
 
 /** The worker and first-open fallback must produce the same disposable arrays. */
 export function prepareBody(body: GeometryBodyRepresentation): PreparedBody {
+  let shadingPairs: ((first: number, second: number) => boolean) | undefined;
+  const geometry = prepareBodyGeometry(body, (pairs) => {
+    shadingPairs = pairs;
+  });
+  const faceted = facetedSource(body.source);
   return {
-    geometry: prepareBodyGeometry(body),
+    geometry,
     tangentIds: body.topology
       ? tangentEdgeIds(
           body.mesh,
           body.topology,
-          facetedSource(body.source) ? FACETED_JOINT_MAX_ANGLE : undefined
+          faceted ? FACETED_JOINT_MAX_ANGLE : shadingPairs
         )
       : new Set(),
     silhouettes: body.topology

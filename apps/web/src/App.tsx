@@ -9036,8 +9036,22 @@ export function App() {
     localUserId,
     accountUserId: session?.userId
   });
-  useEffect(() => {
+  function syncWorkspaceGeometry() {
     geometry.sync(doc, lineageDemand, { persistSession });
+  }
+
+  // Submit an opened model before the viewer's passive WebGL setup. Both can
+  // start together. The regular sync below deduplicates a posted rebuild and
+  // still handles a worker that wasn't available during the layout effect.
+  useLayoutEffect(() => {
+    if (doc?.featureOrder.length) {
+      syncWorkspaceGeometry();
+    }
+    // An edit or a policy change stays on the regular sync path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId]);
+  useEffect(() => {
+    syncWorkspaceGeometry();
     // `geometry` is stable across renders; re-sync when the demanded set
     // grows so the probe runs without waiting for the next edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps

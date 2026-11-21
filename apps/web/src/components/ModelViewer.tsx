@@ -2756,19 +2756,23 @@ export function ModelViewer({
     drawingBodiesRef.current = result;
     return result;
   }, [suppliedBodies]);
-  const { bodies, preparing, presentation } = usePreparedBodies(renderBodies, {
-    selectedBodyIds: incomingSelectedBodyIds,
-    selectedTopology: incomingSelectedTopology,
-    previewFaceHighlights: incomingPreviewFaceHighlights,
-    focusFaces: incomingFocusFaces,
-    selectionCallout: incomingSelectionCallout,
-    pickLabel: incomingPickLabel,
-    focusGhostBodies: incomingFocusGhostBodies,
-    selectedEdges: incomingSelectedEdges,
-    offsetHandle: incomingOffsetHandle,
-    cylinderRadiusHandle: incomingCylinderRadiusHandle,
-    edgeHandle: incomingEdgeHandle
-  });
+  const { bodies, preparing, presentation } = usePreparedBodies(
+    renderBodies,
+    {
+      selectedBodyIds: incomingSelectedBodyIds,
+      selectedTopology: incomingSelectedTopology,
+      previewFaceHighlights: incomingPreviewFaceHighlights,
+      focusFaces: incomingFocusFaces,
+      selectionCallout: incomingSelectionCallout,
+      pickLabel: incomingPickLabel,
+      focusGhostBodies: incomingFocusGhostBodies,
+      selectedEdges: incomingSelectedEdges,
+      offsetHandle: incomingOffsetHandle,
+      cylinderRadiusHandle: incomingCylinderRadiusHandle,
+      edgeHandle: incomingEdgeHandle
+    },
+    sketchMode !== null
+  );
   // Selection and rigs describe the same projection as the bodies on screen,
   // including intermediate worker replies during rapid previews. Whether the
   // pick wears its chip rides with the chip's content: taken live while the
@@ -16905,10 +16909,8 @@ export function ModelViewer({
       };
       if (handle.kind === 'instance') {
         // A copy's chip is a toggle: it skips the copy or brings it back.
-        const { label, skipped } = handle.params;
+        const { label } = handle.params;
         chip.classList.add('handle-instance-chip');
-        chip.classList.toggle('is-skipped', skipped);
-        chip.setAttribute('aria-pressed', skipped ? 'false' : 'true');
         prepareCommandChip(chip, () =>
           onToggleCommandInstanceRef.current?.(label)
         );
@@ -16943,15 +16945,26 @@ export function ModelViewer({
     }
     context.requestRender();
   }, [commandHandlesKey, commandSetterRef]);
+  // A copy toggle keeps its button and focus as its pressed state changes.
   // A value that changes from outside the rig (a default the picks suggest,
   // an undo) moves its rig too: the rigs are rebuilt only for a new key, and
   // a stale one would draw one value and drag from it while another builds.
   useEffect(() => {
     for (const handle of commandHandles) {
       if (commandDragRef.current?.valueId === handle.valueId) continue;
-      const rig = commandRigsRef.current.get(handle.valueId)?.rig;
-      const drawn = handle.drawnValue ?? handle.value;
-      if (rig && rig.value() !== drawn) rig.setValue(drawn);
+      const entry = commandRigsRef.current.get(handle.valueId);
+      if (!entry) continue;
+      if (handle.kind === 'instance') {
+        const { chip } = entry;
+        const pressed = handle.params.skipped ? 'false' : 'true';
+        if (chip.getAttribute('aria-pressed') !== pressed) {
+          chip.classList.toggle('is-skipped', handle.params.skipped);
+          chip.setAttribute('aria-pressed', pressed);
+        }
+      } else {
+        const drawn = handle.drawnValue ?? handle.value;
+        if (entry.rig && entry.rig.value() !== drawn) entry.rig.setValue(drawn);
+      }
     }
     contextRef.current?.requestRender();
   }, [commandHandles]);
