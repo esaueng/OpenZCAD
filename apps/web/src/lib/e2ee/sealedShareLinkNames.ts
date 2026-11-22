@@ -90,7 +90,9 @@ function parseEntry(value: unknown): ShareLinkNameEntry | null {
  * A name book, or null for anything that is not one. Malformed entries are
  * dropped, not the whole book: one bad name must not hide the rest.
  */
-export function parseShareLinkNameBook(value: unknown): ShareLinkNameBook | null {
+export function parseShareLinkNameBook(
+  value: unknown
+): ShareLinkNameBook | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const book = value as Record<string, unknown>;
   if (book.version !== 1) return null;
@@ -188,24 +190,23 @@ export function shareLinkNamesFor(
 }
 
 /**
- * Prunes the names of a project's links that are no longer listed (revoked
- * elsewhere, or reissued under new ids): a tombstone replaces each, once the
- * name is older than `graceMs`, so a link another device created a moment
- * ago and this list has not caught up with keeps its name.
+ * Prunes the names of a project's revoked links (revoked on another device,
+ * or replaced by a reissue): a tombstone replaces each. Only links the
+ * project's signed link set tombstones count, and a tombstone is never
+ * lifted, so a link is never pruned for being missing from a list that has
+ * not caught up with it yet (PR 1921 review).
  */
-export function pruneUnlistedShareLinkNames(
+export function pruneRevokedShareLinkNames(
   book: ShareLinkNameBook,
   projectId: string,
-  listed: ReadonlySet<string>,
-  now: number,
-  graceMs = 24 * 60 * 60 * 1000
+  revoked: ReadonlySet<string>,
+  now: number
 ): ShareLinkNameBook {
   let next = book;
   for (const [shareId, entry] of Object.entries(
     book.projects[projectId] ?? {}
   )) {
-    if ('deleted' in entry || listed.has(shareId)) continue;
-    if (now - entry.stamp < graceMs) continue;
+    if ('deleted' in entry || !revoked.has(shareId)) continue;
     next = setShareLinkName(next, projectId, shareId, null, now);
   }
   return next;
@@ -230,42 +231,37 @@ function canonicalJson(book: ShareLinkNameBook): string {
 }
 
 /**
- * The book's sealed plaintext: tombstones past their age dropped, and while
- * it exceeds the record's cap the oldest tombstones next. Live names are
- * never dropped to fit: that throws instead.
+ * The book's sealed plaintext, with tombstones past their age dropped. No
+ * other entry is dropped to fit the record's cap, not even a recent
+ * tombstone: another device that missed the clear would bring the name back
+ * (PR 1921 review). Over the cap, the save is refused instead.
  */
 export function encodeShareLinkNameBook(
   book: ShareLinkNameBook,
   now: number
 ): Uint8Array {
-  const tombstones: [projectId: string, shareId: string, stamp: number][] =
-    [];
   const projects: Record<string, Record<string, ShareLinkNameEntry>> = {};
   for (const [projectId, links] of Object.entries(book.projects)) {
     const kept: Record<string, ShareLinkNameEntry> = {};
     for (const [shareId, entry] of Object.entries(links)) {
-      if ('deleted' in entry) {
-        if (now - entry.stamp > SHARE_LINK_NAME_TOMBSTONE_MS) continue;
-        tombstones.push([projectId, shareId, entry.stamp]);
-      }
+      if (
+        'deleted' in entry &&
+        now - entry.stamp > SHARE_LINK_NAME_TOMBSTONE_MS
+      )
+        continue;
       kept[shareId] = entry;
     }
     projects[projectId] = kept;
   }
-  tombstones.sort((a, b) => a[2] - b[2]);
-  const encoder = new TextEncoder();
-  for (;;) {
-    const bytes = encoder.encode(canonicalJson({ version: 1, projects }));
-    if (bytes.byteLength <= SHARE_LINK_NAMES_RECORD.maxPlaintextBytes)
-      return bytes;
-    const oldest = tombstones.shift();
-    if (!oldest) {
-      throw new RangeError(
-        'Too many named links to save to your account. Clear some names and try again.'
-      );
-    }
-    delete projects[oldest[0]]![oldest[1]];
+  const bytes = new TextEncoder().encode(
+    canonicalJson({ version: 1, projects })
+  );
+  if (bytes.byteLength > SHARE_LINK_NAMES_RECORD.maxPlaintextBytes) {
+    throw new RangeError(
+      'Too many named links to save to your account. Clear some names and try again.'
+    );
   }
+  return bytes;
 }
 
 // --- Device storage ---------------------------------------------------------
@@ -389,7 +385,10 @@ export class ShareLinkNamesConflict extends Error {
 export interface ShareLinkNamesApi {
   load(): Promise<ShareLinkNamesSnapshot>;
   /** Throws `ShareLinkNamesConflict` when the account copy moved on. */
-  save(expectedRevision: number, record: string): Promise<ShareLinkNamesSnapshot>;
+  save(
+    expectedRevision: number,
+    record: string
+  ): Promise<ShareLinkNamesSnapshot>;
 }
 
 export interface ShareLinkNameKeys {
@@ -399,18 +398,41 @@ export interface ShareLinkNameKeys {
   device: ShareLinkNameDeviceCopy;
   /** An older account key by its commitment (`olderAccountKey`). */
   olderKey?: (commitment: Uint8Array) => Promise<Uint8Array | null>;
+  /**
+   * Whether the session these keys came from is still the page's: false
+   * once the account signed out or locked, when teardown zeroes the key.
+   */
+  active?: () => boolean;
   now?: () => number;
+}
+
+/** Thrown when the session ended while a read or change was under way. */
+export class ShareLinkNamesSessionEnded extends Error {
+  constructor() {
+    super('The encryption session ended. Unlock again to name links.');
+    this.name = 'ShareLinkNamesSessionEnded';
+  }
+}
+
+function requireActive(keys: ShareLinkNameKeys): void {
+  if (keys.active && !keys.active()) throw new ShareLinkNamesSessionEnded();
+}
+
+function isZeroed(key: Uint8Array): boolean {
+  return key.every((byte) => byte === 0);
 }
 
 /**
  * What a stored record gives this device:
  * - `opened`: its book; the pin rose to its sequence.
- * - `replace`: nothing this device should keep, and nothing it loses by
- *   overwriting it: sealed under an account key a device removal replaced
- *   and this device cannot reach, or older than a record this device
- *   already opened or wrote (a rollback, refused).
- * - `unreadable`: a record this device cannot open and must not overwrite
- *   (altered, another layout, content that is not a book).
+ * - `replace`: older than a record this device already opened or wrote (a
+ *   rollback, refused): everything in it is already merged here.
+ * - `unreadable`: a record this device cannot open and must not overwrite:
+ *   altered, another layout, content that is not a book, or sealed under an
+ *   account key this device cannot reach now. That last one may be a newer
+ *   key this device has not caught up with, or an older one whose history
+ *   failed to load, so overwriting it could lose another device's names
+ *   (PR 1921 review).
  */
 export type OpenedShareLinkNames =
   | { readonly kind: 'opened'; readonly book: ShareLinkNameBook }
@@ -437,10 +459,14 @@ export async function openShareLinkNames(
       toHex(header.commitment) !==
       toHex(await accountKeyCommitment(keys.accountKey))
     ) {
-      // Sealed before an account-key rotation: open it with that older key
-      // through the account-key history, or replace it with this copy.
-      older = (await keys.olderKey?.(header.commitment)) ?? null;
-      if (!older) return { kind: 'replace' };
+      // Sealed under another account key: open it with that key through the
+      // account-key history, or leave it alone.
+      try {
+        older = (await keys.olderKey?.(header.commitment)) ?? null;
+      } catch {
+        older = null;
+      }
+      if (!older) return { kind: 'unreadable' };
       accountKey = older;
     }
     let plaintext: Uint8Array;
@@ -489,6 +515,8 @@ export async function readShareLinkNames(
   if (snapshot.record === null) return device;
   const opened = await openShareLinkNames(keys, snapshot.record);
   if (opened.kind !== 'opened') return device;
+  // A session that ended meanwhile must not put names back on the device.
+  requireActive(keys);
   const merged = mergeShareLinkNameBooks(device, opened.book);
   keys.device.write(merged);
   return merged;
@@ -519,12 +547,16 @@ export async function changeShareLinkNames(
   change: (book: ShareLinkNameBook, now: number) => ShareLinkNameBook
 ): Promise<ShareLinkNameBook> {
   const now = keys.now ?? Date.now;
+  requireActive(keys);
   let snapshot = await api.load();
   for (let attempt = 0; ; attempt++) {
     const opened =
       snapshot.record === null
         ? null
         : await openShareLinkNames(keys, snapshot.record);
+    // Every await may have ended the session: its teardown zeroes the key
+    // and forgets the device copy, which nothing here may bring back.
+    requireActive(keys);
     const device = keys.device.read();
     const base =
       opened?.kind === 'opened'
@@ -535,13 +567,23 @@ export async function changeShareLinkNames(
     keys.device.write(next);
     if (opened?.kind === 'unreadable') throw new ShareLinkNamesKeptOnDevice();
     const sequence = Math.max(keys.pins.read(), snapshot.sequence) + 1;
-    const sealed = await sealRecord(
-      SHARE_LINK_NAMES_RECORD,
-      keys.accountKey,
-      keys.userId,
-      sequence,
-      encodeShareLinkNameBook(next, at)
-    );
+    // Sealed with a copy taken now, while the session is known to be live:
+    // a teardown zeroing the shared key mid-seal cannot reach it.
+    const accountKey = keys.accountKey.slice();
+    let sealed: Uint8Array;
+    try {
+      if (isZeroed(accountKey)) throw new ShareLinkNamesSessionEnded();
+      sealed = await sealRecord(
+        SHARE_LINK_NAMES_RECORD,
+        accountKey,
+        keys.userId,
+        sequence,
+        encodeShareLinkNameBook(next, at)
+      );
+    } finally {
+      accountKey.fill(0);
+    }
+    requireActive(keys);
     try {
       await api.save(snapshot.revision, toBase64Url(sealed));
     } catch (error) {
@@ -564,8 +606,7 @@ function conflictSnapshot(error: unknown): ShareLinkNamesSnapshot | null {
     details?: { current?: unknown };
   } | null;
   const current = failure?.details?.current as
-    | Partial<ShareLinkNamesSnapshot>
-    | undefined;
+    Partial<ShareLinkNamesSnapshot> | undefined;
   return failure?.code === 'SHARE_LINK_NAMES_CONFLICT' &&
     current &&
     typeof current.revision === 'number' &&
@@ -615,19 +656,24 @@ async function pageKeys(userId: string): Promise<ShareLinkNameKeys | null> {
     userId,
     pins: localStorageShareLinkNamePins(userId),
     device: localStorageShareLinkNameCopy(userId),
-    olderKey: (commitment) => olderAccountKey(userId, commitment)
+    olderKey: (commitment) => olderAccountKey(userId, commitment),
+    // The same unlock, not merely an unlocked account: a sign-out and a new
+    // unlock in between is another session.
+    active: () =>
+      unlockedAccount(userId) === account && !isZeroed(account.accountKey)
   };
 }
 
 /**
  * The names of a project's listed links, for its share dialog. Names of
- * links no longer listed are pruned from the account record in the
- * background (`pruneUnlistedShareLinkNames`).
+ * the project's revoked links are pruned from the account record in the
+ * background (`pruneRevokedShareLinkNames`).
  */
 export async function pageShareLinkNames(
   userId: string,
   projectId: string,
-  listed: ReadonlySet<string>
+  listed: ReadonlySet<string>,
+  revoked: ReadonlySet<string>
 ): Promise<Record<string, string>> {
   const keys = await pageKeys(userId);
   const device = localStorageShareLinkNameCopy(userId);
@@ -635,9 +681,9 @@ export async function pageShareLinkNames(
   const api = await pageApi();
   const book = await readShareLinkNames(keys, api);
   const now = Date.now();
-  if (pruneUnlistedShareLinkNames(book, projectId, listed, now) !== book) {
+  if (pruneRevokedShareLinkNames(book, projectId, revoked, now) !== book) {
     void changeShareLinkNames(keys, api, (current, at) =>
-      pruneUnlistedShareLinkNames(current, projectId, listed, at)
+      pruneRevokedShareLinkNames(current, projectId, revoked, at)
     ).catch(() => {
       // Pruned again on the next list.
     });

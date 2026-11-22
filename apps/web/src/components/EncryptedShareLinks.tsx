@@ -120,7 +120,11 @@ export interface EncryptedShareLinkClient {
    * Names a link, or clears its name (`name` null, already normalized),
    * in the owner's sealed account record. Without it links cannot be named.
    */
-  rename?(projectId: string, shareId: string, name: string | null): Promise<void>;
+  rename?(
+    projectId: string,
+    shareId: string,
+    name: string | null
+  ): Promise<void>;
   /**
    * L08: the current model, frozen, replaces what a `frozen` link serves.
    * Its URL stays.
@@ -192,7 +196,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         pageShareLinkNames(
           ctx.groups.account.userId,
           projectId,
-          new Set(view.links.map((link) => link.shareId))
+          new Set(view.links.map((link) => link.shareId)),
+          new Set(view.revokedIds)
         )
       )
       .catch((): Record<string, string> => ({}));
@@ -865,9 +870,7 @@ export function EncryptedShareLinks({
 
       {created ? (
         <div className="sharing-share-output" role="status">
-          <p className="share-link-created-title">
-            {createdName} is ready
-          </p>
+          <p className="share-link-created-title">{createdName} is ready</p>
           <input
             className="sharing-share-url"
             type="text"

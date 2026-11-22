@@ -15,12 +15,13 @@ import {
   mergeShareLinkNameBooks,
   openShareLinkNames,
   parseShareLinkNameBook,
-  pruneUnlistedShareLinkNames,
+  pruneRevokedShareLinkNames,
   readShareLinkNames,
   setShareLinkName,
   SHARE_LINK_NAME_TOMBSTONE_MS,
   ShareLinkNamesConflict,
   ShareLinkNamesKeptOnDevice,
+  ShareLinkNamesSessionEnded,
   shareLinkNamesFor,
   type ShareLinkNameBook,
   type ShareLinkNameKeys,
@@ -118,7 +119,13 @@ describe('share link name books', () => {
   });
 
   it('lets a tombstone win a tie and stop an older name coming back', () => {
-    const cleared = setShareLinkName(named('X', 10), 'proj_x', 'shr_a', null, 0);
+    const cleared = setShareLinkName(
+      named('X', 10),
+      'proj_x',
+      'shr_a',
+      null,
+      0
+    );
     // Stamped past the name it clears, even with a clock behind it.
     expect(cleared.projects.proj_x!.shr_a).toEqual({
       deleted: true,
@@ -183,35 +190,32 @@ describe('share link name books', () => {
     expect(parseShareLinkNameBook([])).toBeNull();
   });
 
-  it('prunes names of links no longer listed, after a grace period', () => {
+  it('prunes only the names of revoked links, whatever their stamps', () => {
+    // A link another device made and named with a clock two days behind:
+    // old by its stamp, and not in a list read before it existed.
     const book = setShareLinkName(
       named('Gone', 0),
       'proj_x',
       'shr_new',
       'New',
-      3 * DAY
+      1 * DAY
     );
-    const pruned = pruneUnlistedShareLinkNames(
+    const pruned = pruneRevokedShareLinkNames(
       book,
       'proj_x',
-      new Set(['shr_other']),
-      3 * DAY + 1
+      new Set(['shr_a']),
+      3 * DAY
     );
-    // The fresh name of a link the list has not caught up with stays.
+    // PR 1921 review: the live link keeps its name.
     expect(shareLinkNamesFor(pruned, 'proj_x')).toEqual({ shr_new: 'New' });
     expect(pruned.projects.proj_x!.shr_a).toMatchObject({ deleted: true });
-    // Nothing to prune: the same book back.
-    expect(
-      pruneUnlistedShareLinkNames(
-        book,
-        'proj_x',
-        new Set(['shr_a', 'shr_new']),
-        0
-      )
-    ).toBe(book);
+    // Nothing revoked: the same book back.
+    expect(pruneRevokedShareLinkNames(book, 'proj_x', new Set(), 3 * DAY)).toBe(
+      book
+    );
   });
 
-  it('seals old tombstones away, and the oldest first when over the cap', () => {
+  it('seals old tombstones away and refuses, rather than drop a recent one, when over the cap', () => {
     const old = setShareLinkName(named('X', 0), 'proj_x', 'shr_a', null, 1);
     const fresh = setShareLinkName(
       old,
@@ -229,15 +233,20 @@ describe('share link name books', () => {
       shr_b: { deleted: true, stamp: SHARE_LINK_NAME_TOMBSTONE_MS }
     });
 
+    // PR 1921 review: over the cap with recent tombstones, the save is
+    // refused; dropping one would let a device that missed the clear bring
+    // the name back.
     let big: ShareLinkNameBook = EMPTY_SHARE_LINK_NAME_BOOK;
-    for (let i = 0; i < 2000; i++)
+    for (let i = 0; i < 4000; i++)
       big = setShareLinkName(big, 'proj_x', padded(i), null, 100 + i);
-    big = setShareLinkName(big, 'proj_x', 'shr_live', 'Keep me', 50);
-    const sealed = decode(encodeShareLinkNameBook(big, 5000))!;
-    const entries = sealed.projects.proj_x!;
-    expect(entries.shr_live).toEqual({ name: 'Keep me', stamp: 50 });
-    expect(entries[padded(0)]).toBeUndefined();
-    expect(entries[padded(1999)]).toBeDefined();
+    expect(() => encodeShareLinkNameBook(big, 5000)).toThrow(
+      /Too many named links/
+    );
+    // The same tombstones once past their age are sealed away.
+    expect(
+      decode(encodeShareLinkNameBook(big, SHARE_LINK_NAME_TOMBSTONE_MS + 5000))
+        ?.projects
+    ).toEqual({});
 
     let full: ShareLinkNameBook = EMPTY_SHARE_LINK_NAME_BOOK;
     for (let i = 0; i < 2000; i++)
@@ -334,15 +343,78 @@ describe('the sealed account record', () => {
     ).toEqual({ shr_a: 'Before rotation' });
     expect(older).toHaveBeenCalledOnce();
 
-    // Without the older key the record is replaced by this device's copy,
-    // sealed under the current key.
-    const without = memoryKeys();
-    without.device.write(named('Mine', 9, 'shr_b'));
-    await changeShareLinkNames(without, api, (book) => book);
-    expect(api.stored.sequence).toBe(5);
+    // PR 1921 review: without the key (history failed to load, or a newer
+    // key this device has not caught up with) the record is left alone.
+    for (const olderKey of [
+      vi.fn(async () => null),
+      vi.fn(async () => {
+        throw new Error('history unavailable');
+      })
+    ]) {
+      const without = memoryKeys(KEY, { olderKey });
+      without.device.write(named('Mine', 9, 'shr_b'));
+      await expect(
+        changeShareLinkNames(without, api, (book) => book)
+      ).rejects.toBeInstanceOf(ShareLinkNamesKeptOnDevice);
+    }
+    expect(api.stored.sequence).toBe(4);
     expect(
-      shareLinkNamesFor(await readShareLinkNames(memoryKeys(), api), 'proj_x')
-    ).toEqual({ shr_b: 'Mine' });
+      shareLinkNamesFor(
+        await readShareLinkNames(memoryKeys(KEY, { olderKey: older }), api),
+        'proj_x'
+      )
+    ).toEqual({ shr_a: 'Before rotation' });
+  });
+
+  it('neither saves nor keeps a change whose session ended while it waited', async () => {
+    const api = memoryApi();
+    let live = true;
+    const keys = memoryKeys(KEY.slice(), { active: () => live });
+    const load = api.load;
+    api.load = async () => {
+      const snapshot = await load();
+      // Signed out while the record was being fetched.
+      live = false;
+      keys.accountKey.fill(0);
+      return snapshot;
+    };
+    await expect(
+      changeShareLinkNames(keys, api, (book, now) =>
+        setShareLinkName(book, 'proj_x', 'shr_a', 'After sign-out', now)
+      )
+    ).rejects.toBeInstanceOf(ShareLinkNamesSessionEnded);
+    expect(api.saves).toBe(0);
+    expect(keys.copy()).toEqual(EMPTY_SHARE_LINK_NAME_BOOK);
+  });
+
+  it('never seals with a zeroed account key', async () => {
+    const api = memoryApi();
+    const keys = memoryKeys(new Uint8Array(32));
+    await expect(
+      changeShareLinkNames(keys, api, (book, now) =>
+        setShareLinkName(book, 'proj_x', 'shr_a', 'Zero', now)
+      )
+    ).rejects.toBeInstanceOf(ShareLinkNamesSessionEnded);
+    expect(api.saves).toBe(0);
+  });
+
+  it('does not write the device copy back for a read whose session ended', async () => {
+    const api = memoryApi();
+    await changeShareLinkNames(memoryKeys(), api, (book, now) =>
+      setShareLinkName(book, 'proj_x', 'shr_a', 'Synced', now)
+    );
+    let live = true;
+    const keys = memoryKeys(KEY, { active: () => live });
+    const load = api.load;
+    api.load = async () => {
+      const snapshot = await load();
+      live = false;
+      return snapshot;
+    };
+    await expect(readShareLinkNames(keys, api)).rejects.toBeInstanceOf(
+      ShareLinkNamesSessionEnded
+    );
+    expect(keys.copy()).toEqual(EMPTY_SHARE_LINK_NAME_BOOK);
   });
 
   it('keeps the change on this device and never overwrites a record it cannot open', async () => {

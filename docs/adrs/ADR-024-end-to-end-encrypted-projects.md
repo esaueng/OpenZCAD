@@ -1876,14 +1876,17 @@ settings, which an account whose library is not encrypted stores readable.
   then the name that sorts last, so every device converges. Clearing a name
   writes a tombstone, so an older copy on another device cannot bring it back.
 - **Revoked links.** Revoking a link tombstones its name. A list also prunes,
-  in the background, the names of a project's links it no longer lists
-  (revoked on another device, or reissued under new ids) once the name is a
-  day old, so a link another device made a moment ago keeps its name.
-  Tombstones older than 90 days are dropped when the record is sealed, and
-  the oldest tombstones next while it exceeds the cap; live names are never
-  dropped to fit, the save is refused instead. A device offline for longer
-  than 90 days could bring back a cleared name of a link that still exists;
-  a revoked link's name stays hidden because only listed links show one.
+  in the background, the names of the project's links its signed link set
+  tombstones (revoked on another device, or replaced by a reissue). A link
+  tombstone is permanent, so a name is never pruned for a link that is merely
+  missing from a list that has not caught up with another device's new link:
+  neither list age nor a device's clock decides it. Tombstones older than
+  90 days are dropped when the record is sealed; nothing else is dropped to
+  fit the cap, not even a recent tombstone, which another device that missed
+  the clear would otherwise undo. Over the cap, the save is refused. A device
+  offline for longer than 90 days could bring back a cleared name of a link
+  that still exists; a revoked link's name stays hidden because only listed
+  links show one.
 - **Writes.** A browser reads the account record, merges it into its own
   copy, applies the change and seals at a sequence above both its pin and
   the stored record's (read from the header, which needs no key), against
@@ -1899,15 +1902,24 @@ settings, which an account whose library is not encrypted stores readable.
   is not above the stored one, so no device or replayed request lowers it.
 - **Account-key rotation.** A record whose commitment names an older account
   key is opened with that key through the account-key history, as settings
-  are, and resealed under the current key on the next write. Where the older
-  key cannot be reached, the browser replaces the record with its own copy.
+  are, and resealed under the current key on the next write. A record sealed
+  under any key this browser cannot reach now is treated as unreadable, not
+  replaced: the key may be a newer one this browser has not caught up with,
+  or the history may have failed to load, and replacing it could lose names
+  only another device holds. Unlike folders, link names are never
+  overwritten on that basis.
 - **Refusals.** A record that fails authentication, has a layout version
   this build does not know, or does not hold a name book is never
   overwritten. The browser keeps and shows its own copy, applies changes to
   it, and reports them as saved on this device only.
 - **Device copy.** Each browser keeps its copy per account in device
   storage, so names show while the record cannot be read or fetched. It is
-  forgotten at sign-out, with the shelf's encrypted project names.
+  forgotten at sign-out and when the account is deleted, with the shelf's
+  encrypted project names. A read or change that outlives its session (a
+  sign-out or lock while it waits on the network) neither writes that copy
+  back nor seals or saves anything: it seals with a copy of the account key
+  taken while the session is live, so the key a teardown zeroes is never
+  used.
 - **What the server sees.** The record's length, write times, revision
   count, sequence and the account-key commitment in its header. Project and
   share ids, the number of named links and the names are inside the
