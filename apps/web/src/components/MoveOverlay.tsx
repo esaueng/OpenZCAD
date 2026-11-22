@@ -1,4 +1,4 @@
-import { Check, LocateFixed, SlidersHorizontal, X } from 'lucide-react';
+import { Check, LocateFixed, Spline, SlidersHorizontal, X } from 'lucide-react';
 import {
   displayLengthName,
   MAX_TRANSFORM_COPY_STAMPS,
@@ -65,6 +65,12 @@ interface MoveOverlayProps {
    */
   linked?: boolean;
   onLinked?(value: boolean): void;
+  /**
+   * M10: Move by two points. `picking` is null while off; otherwise what the
+   * first pick snapped to (`from`), or null before it.
+   */
+  pointPick?: { from: string | null } | null;
+  onPointPick?(on: boolean): void;
   /**
    * M10: the point the Move turns about, in document units: a placed pivot
    * or the body's centre. Omitted for a sketch move, which does not turn.
@@ -229,6 +235,8 @@ export function MoveOverlay({
   onStamps,
   linked,
   onLinked,
+  pointPick,
+  onPointPick,
   pivot,
   onPivot,
   pivotMode,
@@ -334,7 +342,16 @@ export function MoveOverlay({
       {/* The one place the step is said: it was also a toast, and the
           toast's guidance (rings, Shift) lives here now. */}
       <span className="in-place-command-hint" title={bodyName}>
-        {pivotMode ? (
+        {pointPick ? (
+          pointPick.from === null ? (
+            <>
+              Move <span className="move-target-name">{bodyName}</span> by two
+              points · pick the point to move from
+            </>
+          ) : (
+            <>From {pointPick.from} · pick the point to move it to</>
+          )
+        ) : pivotMode ? (
           <>
             Pivot of <span className="move-target-name">{bodyName}</span> · drag
             the handle onto a corner or centre · Shift moves freely
@@ -352,6 +369,20 @@ export function MoveOverlay({
           </>
         )}
       </span>
+      {/* M10: translate by two picked points, snapped to corners, midpoints
+          and centres; the second pick sets the move and ends the pick. */}
+      {onPointPick ? (
+        <button
+          type="button"
+          className="move-two-points"
+          aria-pressed={pointPick != null}
+          title="Move from one picked point to another"
+          onClick={() => onPointPick(pointPick == null)}
+        >
+          <Spline size={14} aria-hidden="true" />
+          Two points
+        </button>
+      ) : null}
       {/* M10: the pivot handle. While it is on, the arrows and the centre
           ball carry the turn's centre and the body stays where it is. */}
       {pivot && onPivotMode ? (

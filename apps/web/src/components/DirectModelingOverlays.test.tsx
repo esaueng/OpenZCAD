@@ -73,6 +73,37 @@ describe('Move overlay', () => {
     expect(onLinked).toHaveBeenLastCalledWith(false);
   });
 
+  it('walks Move by two points through its picks (M10)', () => {
+    const onPointPick = vi.fn();
+    const props: ComponentProps<typeof MoveOverlay> = {
+      bodyName: 'Box',
+      targetBodyId: 'box',
+      values: { translation: zero, rotationDeg: zero },
+      units: 'mm',
+      snap: null,
+      onChange: vi.fn(),
+      onConfirm: vi.fn(),
+      onCancel: vi.fn(),
+      pointPick: null,
+      onPointPick
+    };
+    const hint = () =>
+      screen
+        .getByRole('form', { name: 'Move controls' })
+        .querySelector('.in-place-command-hint')?.textContent;
+    const { rerender } = render(<MoveOverlay {...props} />);
+    const button = screen.getByRole('button', { name: 'Two points' });
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(button);
+    expect(onPointPick).toHaveBeenLastCalledWith(true);
+    rerender(<MoveOverlay {...props} pointPick={{ from: null }} />);
+    expect(hint()).toContain('pick the point to move from');
+    rerender(<MoveOverlay {...props} pointPick={{ from: 'Endpoint' }} />);
+    expect(hint()).toContain('From Endpoint · pick the point to move it to');
+    fireEvent.click(screen.getByRole('button', { name: 'Two points' }));
+    expect(onPointPick).toHaveBeenLastCalledWith(false);
+  });
+
   it('toggles the pivot handle and edits the pivot (M10)', () => {
     const onPivot = vi.fn();
     const onPivotMode = vi.fn();

@@ -13775,6 +13775,55 @@ export function App() {
   );
 
   /**
+   * M10: a Move-by-two-points pick. The first names the point to move from;
+   * the second sets the translation that carries it onto the second and
+   * ends the pick, leaving Done to commit it as any other Move.
+   */
+  function handleMovePointPick(pick: {
+    point: { x: number; y: number; z: number };
+    kind: string | null;
+  }) {
+    const current = movePreview;
+    if (!current?.pointPick) return;
+    const from = current.pointPick.from;
+    if (!from) {
+      setMovePreview({
+        ...current,
+        pointPick: { from: pick.point, fromKind: pick.kind }
+      });
+      return;
+    }
+    const translation = {
+      x: pick.point.x - from.x,
+      y: pick.point.y - from.y,
+      z: pick.point.z - from.z
+    };
+    setMovePreview({ ...current, translation, pointPick: undefined });
+    setStatus(
+      `Move by two points: ${pointPickLabel(current.pointPick.fromKind)} to ${pointPickLabel(pick.kind).toLowerCase()} · Done to apply.`
+    );
+  }
+
+  /** What a picked point snapped to, as the snap glyph names it. */
+  function pointPickLabel(kind: string | null | undefined): string {
+    switch (kind) {
+      case 'endpoint':
+        return 'Endpoint';
+      case 'midpoint':
+        return 'Midpoint';
+      case 'center':
+        return 'Center';
+      case 'intersection':
+        return 'Intersection';
+      case 'on-edge':
+        return 'Point on edge';
+      case 'on-face':
+      default:
+        return 'Point on face';
+    }
+  }
+
+  /**
    * M10: where a body Move turns: its placed pivot, or the body's centre as
    * every gizmo Move stores. Undefined for a body with no geometry yet.
    */
@@ -38315,6 +38364,7 @@ export function App() {
             }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
+            onPointPick={movePreview?.pointPick ? handleMovePointPick : null}
             regionHandle={
               modelingLocked || !extrudeBarReady ? null : regionHandleTarget
             }
@@ -39989,7 +40039,10 @@ export function App() {
                         ? {
                             ...current,
                             translation: values.translation,
-                            rotationDeg: values.rotationDeg
+                            rotationDeg: values.rotationDeg,
+                            // M10: a typed value ends Move by two points,
+                            // whose picks read the model at rest.
+                            pointPick: undefined
                           }
                         : current
                     )
@@ -40017,6 +40070,33 @@ export function App() {
                     setMovePreview((current) =>
                       current
                         ? { ...current, separateStamps: !linked }
+                        : current
+                    )
+                  }
+                  pointPick={
+                    movePreview.pointPick
+                      ? {
+                          from: movePreview.pointPick.from
+                            ? pointPickLabel(movePreview.pointPick.fromKind)
+                            : null
+                        }
+                      : null
+                  }
+                  onPointPick={(on) =>
+                    setMovePreview((current) =>
+                      current
+                        ? on
+                          ? {
+                              ...current,
+                              // Picks read the model where it rests, so the
+                              // pending move starts again from nothing.
+                              translation: { x: 0, y: 0, z: 0 },
+                              rotationDeg: { x: 0, y: 0, z: 0 },
+                              // The gizmo steps aside, so it places no pivot.
+                              pivotMode: false,
+                              pointPick: { from: null }
+                            }
+                          : { ...current, pointPick: undefined }
                         : current
                     )
                   }
