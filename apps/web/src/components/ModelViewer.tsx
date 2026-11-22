@@ -546,6 +546,18 @@ import {
 } from '../lib/topologyLabels';
 
 /**
+ * Gives a HUD chip, tag or pin back to the layer that made it, or just drops
+ * it from the DOM once the viewer (and its layer) is gone.
+ */
+function releaseHudElement(
+  release: MutableRefObject<((element: HTMLElement) => void) | null>,
+  element: HTMLElement
+) {
+  if (release.current) release.current(element);
+  else element.remove();
+}
+
+/**
  * What makes two hover picks "the same target" for the dwell: the topology
  * or region under the pointer, never the hit point, so a pointer sliding
  * along one face keeps its highlight while a boundary flicker is absorbed.
@@ -3222,6 +3234,15 @@ export function ModelViewer({
   commandHandlesRef.current = commandHandles;
   /** Lets the handle effect create chips on the viewer's HUD layer. */
   const commandChipFactoryRef = useRef<(() => HTMLDivElement) | null>(null);
+  /**
+   * Gives a factory-made chip, tag or pin back to the HUD layer; set when the
+   * viewer mounts. Removing one from the DOM alone left the layer holding
+   * it, its listeners and the render scopes they close over, so every
+   * command opened while a project stayed open kept a stale document alive.
+   */
+  const releaseHudElementRef = useRef<((element: HTMLElement) => void) | null>(
+    null
+  );
   const curvePickerRigRef = useRef<ReturnType<
     typeof buildCurvePickerRig
   > | null>(null);
@@ -5496,6 +5517,7 @@ export function ModelViewer({
     };
     axisLabelFactoryRef.current = () => hud.create('axis-pick-label');
     commentPinFactoryRef.current = () => hud.create('comment-pin');
+    releaseHudElementRef.current = (element) => hud.release(element);
     /** Sets each comment pin on its point; hides one behind the camera. */
     function updateCommentPins() {
       const pins = commentPinsRef.current;
@@ -14688,6 +14710,7 @@ export function ModelViewer({
       radiusLabelChip.removeEventListener('click', handleChipClick);
       resetSlotPlacement();
       hud.dispose();
+      releaseHudElementRef.current = null;
       resetSketchSlotRef.current = null;
       topologyPickListRef.current = null;
       // Dimension graphics own their own geometries and materials; clearing
@@ -17219,7 +17242,8 @@ export function ModelViewer({
     return () => {
       context.scene.remove(rig.group);
       rig.dispose();
-      for (const label of labels) label.element.remove();
+      for (const label of labels)
+        releaseHudElement(releaseHudElementRef, label.element);
       if (axisLabelsRef.current === labels) axisLabelsRef.current = [];
       if (axisPickerRigRef.current === rig) {
         axisPickerRigRef.current = null;
@@ -17284,7 +17308,8 @@ export function ModelViewer({
     commentPinsRef.current = pins;
     context.requestRender();
     return () => {
-      for (const pin of pins) pin.element.remove();
+      for (const pin of pins)
+        releaseHudElement(releaseHudElementRef, pin.element);
       if (commentPinsRef.current === pins) commentPinsRef.current = [];
       context.requestRender();
     };
@@ -17307,7 +17332,7 @@ export function ModelViewer({
         continue;
       }
       entry.rig?.dispose();
-      entry.chip.remove();
+      releaseHudElement(releaseHudElementRef, entry.chip);
       rigs.delete(valueId);
     }
     for (const handle of wanted) {
@@ -17427,7 +17452,7 @@ export function ModelViewer({
     () => () => {
       for (const entry of commandRigsRef.current.values()) {
         entry.rig?.dispose();
-        entry.chip.remove();
+        releaseHudElement(releaseHudElementRef, entry.chip);
       }
       commandRigsRef.current.clear();
     },
