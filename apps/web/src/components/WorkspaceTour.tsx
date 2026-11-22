@@ -25,6 +25,13 @@ interface WorkspaceTourProps extends WorkspaceTourSignals {
   minimized?: boolean;
   onMinimizedChange?(value: boolean): void;
   /**
+   * A command card or the inspector is up on a phone's stage. The guide
+   * shares the right lane's foot with them, and expanded it left the card
+   * a 13 px sliver (#1945), so it folds to its header until the card goes.
+   * Expand still opens it for this card; the saved preference is untouched.
+   */
+  yieldToCommand?: boolean;
+  /**
    * The step the tour had reached when the card last stood. The card leaves
    * the stage while a command or a sketch runs, and comes back mounted
    * anew: without this it counted its steps again from the first, and came
@@ -50,13 +57,20 @@ export function WorkspaceTour({
   onDismiss,
   minimized: minimizedProp,
   onMinimizedChange,
+  yieldToCommand = false,
   startIndex = 0,
   onIndexChange
 }: WorkspaceTourProps) {
   const keymap = useKeymap();
   const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
   const [localMinimized, setLocalMinimized] = useState(false);
-  const minimized = minimizedProp ?? localMinimized;
+  const savedMinimized = minimizedProp ?? localMinimized;
+  // Expand pressed while the guide was folded for a card: it stays open
+  // until that card goes, and the next card folds it again.
+  const [openedOverCommand, setOpenedOverCommand] = useState(false);
+  if (!yieldToCommand && openedOverCommand) setOpenedOverCommand(false);
+  const yielded = yieldToCommand && !openedOverCommand;
+  const minimized = savedMinimized || yielded;
   const [index, setIndex] = useState(() =>
     advanceThroughCompleted(startIndex, {
       featureCount,
@@ -201,6 +215,10 @@ export function WorkspaceTour({
           }
           aria-expanded={!minimized}
           onClick={() => {
+            // With a card up, opening it holds for that card alone, and
+            // folding it again only undoes that: the saved choice stands.
+            if (yieldToCommand) setOpenedOverCommand(minimized);
+            if (yieldToCommand && !savedMinimized) return;
             setLocalMinimized(!minimized);
             onMinimizedChange?.(!minimized);
           }}

@@ -27,6 +27,56 @@ describe('WorkspaceTour', () => {
       screen.getByRole('heading', { name: 'Create your first feature' })
     ).toBeVisible();
   });
+  it('folds for a phone command card and opens again when it goes (#1945)', () => {
+    const onMinimizedChange = vi.fn();
+    const props = { ...idle, onDismiss: vi.fn(), onMinimizedChange };
+    const heading = () =>
+      screen.queryByRole('heading', { name: 'Create your first feature' });
+    const { rerender } = render(<WorkspaceTour {...props} yieldToCommand />);
+    expect(heading()).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Expand modeling guide' })
+    ).toHaveAttribute('aria-expanded', 'false');
+    // Expand opens it over this card without changing the saved choice.
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand modeling guide' })
+    );
+    expect(heading()).toBeVisible();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Minimize modeling guide' })
+    );
+    expect(heading()).not.toBeInTheDocument();
+    expect(onMinimizedChange).not.toHaveBeenCalled();
+    // The card goes: the guide is back as it was.
+    rerender(<WorkspaceTour {...props} yieldToCommand={false} />);
+    expect(heading()).toBeVisible();
+    // Opened over one card, it folds again for the next.
+    rerender(<WorkspaceTour {...props} yieldToCommand />);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand modeling guide' })
+    );
+    rerender(<WorkspaceTour {...props} yieldToCommand={false} />);
+    rerender(<WorkspaceTour {...props} yieldToCommand />);
+    expect(heading()).not.toBeInTheDocument();
+  });
+
+  it('a guide minimized on purpose expands over a card for good', () => {
+    const onMinimizedChange = vi.fn();
+    render(
+      <WorkspaceTour
+        {...idle}
+        minimized
+        yieldToCommand
+        onDismiss={vi.fn()}
+        onMinimizedChange={onMinimizedChange}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand modeling guide' })
+    );
+    expect(onMinimizedChange).toHaveBeenCalledWith(false);
+  });
+
   it('opens on the create step and auto-advances as work happens', () => {
     const { rerender } = render(
       <WorkspaceTour {...idle} onDismiss={vi.fn()} />

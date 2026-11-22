@@ -14,6 +14,7 @@ import {
 } from '@openzcad/shared';
 import {
   keepMeasurement,
+  createPrimitiveInPlace,
   createProject,
   expect,
   expectBodyCount,
@@ -182,6 +183,62 @@ test('the modeling guide’s Finish stays clear of the phone’s panel (UX-001)'
   await expect(tour).toBeHidden();
   // Finished, the panel takes its usual place back.
   await expect(panel).toBeVisible();
+});
+
+// A 360 × 640 phone with the guide up on its second step (#1945). It
+// stood over the opened view tools, Measure under its text, and expanded
+// it left the measurement workbench a 13 px sliver of the lane. The rail
+// stands over it now, and it folds to its header while the card is up.
+test('the modeling guide folds for the measurement workbench on a short phone (#1945)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page, {
+    workspaceTour: true,
+    panelLayout: null,
+    commandFoldClosed: true
+  });
+  await createProject(page, 'Phone guide measure');
+  await createPrimitiveInPlace(page, 'box');
+  await page.setViewportSize({ width: 360, height: 640 });
+  const tour = page.locator('.workspace-tour');
+  await expect(tour).toContainText('Select to edit');
+  const expand = tour.getByRole('button', { name: 'Expand modeling guide' });
+  const minimize = tour.getByRole('button', {
+    name: 'Minimize modeling guide'
+  });
+  await expect(minimize).toBeVisible();
+
+  await page.getByRole('button', { name: 'More view tools' }).tap();
+  const measure = page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Measure', exact: true });
+  await expect.poll(() => reachable(measure)).toBe(true);
+  await measure.tap();
+  const workbench = page.locator('.measurement-dock');
+  await expect(workbench).toBeVisible();
+  await expect(expand).toHaveAttribute('aria-expanded', 'false');
+  await waitForSurfacesToSettle(page, ['.workspace-tour', '.measurement-dock']);
+  await shot(page, 'guide-folds-for-measure-360');
+  // The workbench has the lane: room to read, and Keep in reach once a
+  // pick gives it something to keep.
+  expect((await workbench.boundingBox())!.height).toBeGreaterThanOrEqual(150);
+  await expect
+    .poll(
+      async () => (await pickPlanarFace(page, { x: 0, y: 0, z: 1 })) !== null,
+      { timeout: 60_000 }
+    )
+    .toBe(true);
+  const keep = workbench.locator('.measurement-keep');
+  await keep.scrollIntoViewIfNeeded();
+  await expect.poll(() => reachable(keep)).toBe(true);
+  // The workbench closes and the guide is back as it was.
+  // Escape clears the pick, and once more closes the workbench.
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(workbench).toBeHidden();
+  await expect(minimize).toHaveAttribute('aria-expanded', 'true');
 });
 
 const PIVOT: AssemblyFrame = {

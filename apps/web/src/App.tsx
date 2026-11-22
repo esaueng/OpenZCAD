@@ -37937,6 +37937,100 @@ export function App() {
     onIsolate: isolateBody,
     onShowAll: showAllBodies
   };
+  // The command card the right lane shows, if any. Hoisted so the
+  // modeling guide can yield to it on a phone (#1945).
+  const commandCard = modelingLocked ? null : measurementDock ? (
+    measurementDock
+  ) : contextualToolCard ? (
+    hideSketchToolCard || calloutOperationModel ? null : (
+      <ToolCard
+        model={contextualToolCard}
+        selectAllEdges={
+          interaction.mode === 'edges' &&
+          edgeModifierBody?.topology &&
+          interaction.edges.length <
+            edgeModifierBody.topology.edges.filter(
+              (edge) =>
+                edge.displayRole !== 'seam' &&
+                (interaction.op !== 'chamfer' || edge.isSmooth !== true)
+            ).length
+            ? {
+                count: edgeModifierBody.topology.edges.filter(
+                  (edge) =>
+                    edge.displayRole !== 'seam' &&
+                    (interaction.op !== 'chamfer' || edge.isSmooth !== true)
+                ).length,
+                select: () => handleSelectAllEdges(edgeModifierBody)
+              }
+            : undefined
+        }
+        cancelableWhileValidating={interaction.mode === 'region'}
+        // A region's other profile tools, which take the same pick.
+        verbs={
+          interaction.mode === 'region' && tool === null
+            ? selectionCalloutVerbs({
+                kind: selectedProfiles.length > 1 ? 'regions' : 'region',
+                availability: shownAvailability
+              }).filter((verb) => verb.id !== 'tool:extrude')
+            : undefined
+        }
+        onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
+        onAction={handleSelectionAction}
+        onEditCulprit={handleEditCulpritFeature}
+        onViewDetails={openActivityLog}
+        {...(toolCardSaveReproduction
+          ? { onSaveReproduction: toolCardSaveReproduction }
+          : {})}
+        {...(keepLastValid ? { keepLastValid } : {})}
+        // Never up in sketch mode (the column header names the
+        // sketch), so a close is always a clear.
+        onClose={() => {
+          if (cancelPendingRegionExtrusion()) return;
+          if (interaction.mode !== 'idle' && interaction.phase === 'dragging') {
+            cancelDirectManipulationRef.current?.();
+            if (interaction.mode === 'edges') {
+              handleEdgeCancel();
+            }
+          }
+          dispatchInteraction({ type: 'clear' });
+        }}
+      />
+    )
+  ) : revertPill ? null : movePreview ? null : tool === 'sketch' ? (
+    <SketchPlanePrompt
+      document={doc}
+      offsetText={sketchPlaneOffsetText}
+      datumsReady={exactGeometryReady}
+      onOffsetTextChange={setSketchPlaneOffsetText}
+      onPickPlane={startSketchOnPlane}
+      onEnterSketch={(plane, message) => {
+        dispatchInteraction({ type: 'enter-sketch', plane });
+        setTool(null);
+        setStatus(message, { sticky: true });
+      }}
+      onCancel={() => {
+        cancelPanel();
+        setStatus('Sketch canceled · no plane was chosen.');
+      }}
+    />
+  ) : tool === null &&
+    selectedProfiles.length > 0 &&
+    selectedSketchProfileName ? (
+    // Only with no tool open: a tool keeps the selection to pre-fill
+    // its own card, and that card is the one command card in the lane.
+    <ProfileQuickAction
+      profileName={selectedSketchProfileName}
+      profileCount={selectedProfiles.length}
+      extrudeKey={keymap.label(
+        interaction.mode === 'sketch' ? 'sketch-extrude' : 'tool-extrude'
+      )}
+      onExtrude={() => startExtrude(selectedProfiles[0]!.sketchId as SketchId)}
+      onDismiss={() => {
+        setSelectedProfiles([]);
+        setSelectedSketchProfileId(null);
+      }}
+    />
+  ) : null;
   const workspace = (
     <WorkspaceAppShell
       covered={sharePage !== null}
@@ -39427,6 +39521,12 @@ export function App() {
             interaction.mode !== 'sketch' && (
               <WorkspaceTour
                 minimized={panelState.workspaceTourMinimized}
+                // On a phone the guide and a command card share the right
+                // lane's foot; expanded, it left the card a 13 px sliver
+                // (#1945). It folds to its header while one is up.
+                yieldToCommand={
+                  phoneStage && (commandCard !== null || inspectorActive)
+                }
                 onMinimizedChange={(workspaceTourMinimized) =>
                   setPanelState((current) => ({
                     ...current,
@@ -39539,106 +39639,7 @@ export function App() {
       // prompt, Move or revert pill is up. A Move's bar is not a card: it
       // takes the command row, as every in-place command's does, so here it
       // only holds the lane empty.
-      command={
-        modelingLocked ? null : measurementDock ? (
-          measurementDock
-        ) : contextualToolCard ? (
-          hideSketchToolCard || calloutOperationModel ? null : (
-            <ToolCard
-              model={contextualToolCard}
-              selectAllEdges={
-                interaction.mode === 'edges' &&
-                edgeModifierBody?.topology &&
-                interaction.edges.length <
-                  edgeModifierBody.topology.edges.filter(
-                    (edge) =>
-                      edge.displayRole !== 'seam' &&
-                      (interaction.op !== 'chamfer' || edge.isSmooth !== true)
-                  ).length
-                  ? {
-                      count: edgeModifierBody.topology.edges.filter(
-                        (edge) =>
-                          edge.displayRole !== 'seam' &&
-                          (interaction.op !== 'chamfer' ||
-                            edge.isSmooth !== true)
-                      ).length,
-                      select: () => handleSelectAllEdges(edgeModifierBody)
-                    }
-                  : undefined
-              }
-              cancelableWhileValidating={interaction.mode === 'region'}
-              // A region's other profile tools, which take the same pick.
-              verbs={
-                interaction.mode === 'region' && tool === null
-                  ? selectionCalloutVerbs({
-                      kind: selectedProfiles.length > 1 ? 'regions' : 'region',
-                      availability: shownAvailability
-                    }).filter((verb) => verb.id !== 'tool:extrude')
-                  : undefined
-              }
-              onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
-              onAction={handleSelectionAction}
-              onEditCulprit={handleEditCulpritFeature}
-              onViewDetails={openActivityLog}
-              {...(toolCardSaveReproduction
-                ? { onSaveReproduction: toolCardSaveReproduction }
-                : {})}
-              {...(keepLastValid ? { keepLastValid } : {})}
-              // Never up in sketch mode (the column header names the
-              // sketch), so a close is always a clear.
-              onClose={() => {
-                if (cancelPendingRegionExtrusion()) return;
-                if (
-                  interaction.mode !== 'idle' &&
-                  interaction.phase === 'dragging'
-                ) {
-                  cancelDirectManipulationRef.current?.();
-                  if (interaction.mode === 'edges') {
-                    handleEdgeCancel();
-                  }
-                }
-                dispatchInteraction({ type: 'clear' });
-              }}
-            />
-          )
-        ) : revertPill ? null : movePreview ? null : tool === 'sketch' ? (
-          <SketchPlanePrompt
-            document={doc}
-            offsetText={sketchPlaneOffsetText}
-            datumsReady={exactGeometryReady}
-            onOffsetTextChange={setSketchPlaneOffsetText}
-            onPickPlane={startSketchOnPlane}
-            onEnterSketch={(plane, message) => {
-              dispatchInteraction({ type: 'enter-sketch', plane });
-              setTool(null);
-              setStatus(message, { sticky: true });
-            }}
-            onCancel={() => {
-              cancelPanel();
-              setStatus('Sketch canceled · no plane was chosen.');
-            }}
-          />
-        ) : tool === null &&
-          selectedProfiles.length > 0 &&
-          selectedSketchProfileName ? (
-          // Only with no tool open: a tool keeps the selection to pre-fill
-          // its own card, and that card is the one command card in the lane.
-          <ProfileQuickAction
-            profileName={selectedSketchProfileName}
-            profileCount={selectedProfiles.length}
-            extrudeKey={keymap.label(
-              interaction.mode === 'sketch' ? 'sketch-extrude' : 'tool-extrude'
-            )}
-            onExtrude={() =>
-              startExtrude(selectedProfiles[0]!.sketchId as SketchId)
-            }
-            onDismiss={() => {
-              setSelectedProfiles([]);
-              setSelectedSketchProfileId(null);
-            }}
-          />
-        ) : null
-      }
+      command={commandCard}
       inspectorOwnsLane={tool !== null && tool !== 'sketch'}
       inspector={
         assembleMode ? null : inspectorActive ? (
