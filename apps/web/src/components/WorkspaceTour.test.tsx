@@ -69,21 +69,28 @@ describe('WorkspaceTour', () => {
     expect(heading()).not.toBeInTheDocument();
   });
 
-  it('a guide minimized on purpose expands over a card for good', () => {
+  it('a guide minimized on purpose is minimized again after a card', () => {
+    // PR review: expanded during Sketch's plane prompt, a guide the user
+    // had minimized stayed open after Cancel.
     const onMinimizedChange = vi.fn();
-    render(
-      <WorkspaceTour
-        {...idle}
-        minimized
-        yieldTo="measure"
-        onDismiss={vi.fn()}
-        onMinimizedChange={onMinimizedChange}
-      />
+    const props = {
+      ...idle,
+      minimized: true,
+      onDismiss: vi.fn(),
+      onMinimizedChange
+    };
+    const heading = () =>
+      screen.queryByRole('heading', { name: 'Create your first feature' });
+    const { rerender } = render(
+      <WorkspaceTour {...props} yieldTo="prompt:sketch" />
     );
     fireEvent.click(
       screen.getByRole('button', { name: 'Expand modeling guide' })
     );
-    expect(onMinimizedChange).toHaveBeenCalledWith(false);
+    expect(heading()).toBeVisible();
+    rerender(<WorkspaceTour {...props} yieldTo={null} />);
+    expect(heading()).not.toBeInTheDocument();
+    expect(onMinimizedChange).not.toHaveBeenCalled();
   });
 
   it('opens on the create step and auto-advances as work happens', () => {

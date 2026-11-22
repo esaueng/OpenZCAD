@@ -3622,6 +3622,17 @@ button.command-rail.is-suggested {
 }
 
 @media (max-width: 520px) {
+  /* With no panel in it the lane ran down to the cube's corner, past the
+     guide's foot: Measure's kept rows and the inspector stood over the
+     folded guide's Expand and Skip (#1945). With the guide up, the lane
+     ends above it, as the panel's does (below, which wins with a panel). */
+  .viewer-area:has(.workspace-tour) .stage-right {
+    bottom: max(
+      calc(var(--stage-corner-h) + var(--island-gap)),
+      calc(var(--stage-foot-claim) + var(--island-gap))
+    );
+  }
+
   /* Above the stage's foot claim too: with the modeling guide up, the panel
      stands over the card rather than across its text and Finish. */
   .viewer-area .stage-right:has(> .panel-lane-float) {

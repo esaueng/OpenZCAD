@@ -29,7 +29,8 @@ interface WorkspaceTourProps extends WorkspaceTourSignals {
    * so one card can be told from the next; null with none. The guide shares
    * the right lane's foot with them, and expanded it left the card a 13 px
    * sliver (#1945), so it folds to its header while one is up. Expand opens
-   * it for that card alone; the saved preference is untouched.
+   * it for that card alone; the saved preference, minimized or not, is
+   * untouched and returns when the card goes.
    */
   yieldTo?: string | null;
   /**
@@ -71,8 +72,9 @@ export function WorkspaceTour({
   const [openedOver, setOpenedOver] = useState<string | null>(null);
   if (openedOver !== null && openedOver !== yieldTo) setOpenedOver(null);
   const yieldToCommand = yieldTo !== null;
-  const yielded = yieldToCommand && openedOver !== yieldTo;
-  const minimized = savedMinimized || yielded;
+  // While a card is up the guide is folded unless opened over that card,
+  // whatever was saved; the saved choice returns with the card's close.
+  const minimized = yieldToCommand ? openedOver !== yieldTo : savedMinimized;
   const [index, setIndex] = useState(() =>
     advanceThroughCompleted(startIndex, {
       featureCount,
@@ -217,10 +219,12 @@ export function WorkspaceTour({
           }
           aria-expanded={!minimized}
           onClick={() => {
-            // With a card up, opening it holds for that card alone, and
-            // folding it again only undoes that: the saved choice stands.
-            if (yieldToCommand) setOpenedOver(minimized ? yieldTo : null);
-            if (yieldToCommand && !savedMinimized) return;
+            // With a card up, opening or folding it holds for that card
+            // alone: the saved choice stands (PR review).
+            if (yieldToCommand) {
+              setOpenedOver(minimized ? yieldTo : null);
+              return;
+            }
             setLocalMinimized(!minimized);
             onMinimizedChange?.(!minimized);
           }}

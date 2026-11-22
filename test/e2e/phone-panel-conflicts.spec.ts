@@ -210,6 +210,16 @@ test('the modeling guide folds for the measurement workbench on a short phone (#
   });
   await expect(minimize).toBeVisible();
 
+  // No panel in the lane: with one, the lane already ended above the guide.
+  const shownPanel = page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .locator('button[aria-pressed="true"]');
+  await expect(async () => {
+    if ((await shownPanel.count()) > 0) await shownPanel.first().tap();
+    await expect(page.locator('.panel-lane-float')).toHaveCount(0, {
+      timeout: 1_000
+    });
+  }).toPass();
   await page.getByRole('button', { name: 'More view tools' }).tap();
   const measure = page
     .getByRole('toolbar', { name: 'Viewer bar' })
@@ -233,9 +243,20 @@ test('the modeling guide folds for the measurement workbench on a short phone (#
   const keep = workbench.locator('.measurement-keep');
   await keep.scrollIntoViewIfNeeded();
   await expect.poll(() => reachable(keep)).toBe(true);
+  // Kept, the workbench grows, and ends above the folded guide: its rows
+  // stood over Expand and Skip (preview review).
+  await keep.tap();
+  await expect(workbench.locator('.measurement-row').first()).toBeVisible();
+  await waitForSurfacesToSettle(page, ['.workspace-tour', '.measurement-dock']);
+  await shot(page, 'guide-folded-under-kept-rows-360');
+  const folded = (await tour.boundingBox())!;
+  const card = (await workbench.boundingBox())!;
+  expect(card.y + card.height).toBeLessThanOrEqual(folded.y + 0.5);
+  await expect.poll(() => reachable(expand)).toBe(true);
+  await expect
+    .poll(() => reachable(tour.getByRole('button', { name: 'Skip the tour' })))
+    .toBe(true);
   // The workbench closes and the guide is back as it was.
-  // Escape clears the pick, and once more closes the workbench.
-  await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await expect(workbench).toBeHidden();
   await expect(minimize).toHaveAttribute('aria-expanded', 'true');
