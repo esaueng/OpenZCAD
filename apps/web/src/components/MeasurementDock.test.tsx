@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { formatMeasurement, type Measurement } from '../lib/measurements';
+import type {
+  FormattedMeasureReading,
+  MeasureSessionView
+} from '../lib/measureReadings';
 import { MEASUREMENT_UPDATING_MS, MeasurementDock } from './MeasurementDock';
 
 function measurement(): Measurement {
@@ -42,10 +46,7 @@ function renderDock(
     },
     enabled: true,
     activeMeasurementId: null,
-    mode: 'smart',
-    draftTargetLabel: null,
     display: { unit: 'mm', precision: 2, radialDisplay: 'diameter' },
-    onMode: vi.fn(),
     onUnit: vi.fn(),
     onPrecision: vi.fn(),
     onRadialDisplay: vi.fn(),
@@ -81,43 +82,89 @@ describe('MeasurementDock', () => {
     expect(onHover).toHaveBeenLastCalledWith(null);
   });
 
-  it('offers maximum, central and parallel distances with their instructions (M13)', () => {
-    const { rerender, props } = renderDock();
-    const modes = screen.getByRole('group', { name: 'Measurement type' });
+  it('asks for a pick before anything is picked, with no mode to choose', () => {
+    renderDock();
     expect(
-      Array.from(modes.querySelectorAll('button')).map((b) => b.textContent)
-    ).toEqual(['Smart', 'Distance', 'Angle', 'Maximum', 'Central', 'Parallel']);
-    fireEvent.click(screen.getByRole('button', { name: 'Parallel' }));
-    expect(props.onMode).toHaveBeenLastCalledWith('parallel');
-    rerender(<MeasurementDock {...props} mode="central" />);
-    expect(screen.getByText(/distance from its center or axis/)).toBeVisible();
+      screen.queryByRole('group', { name: 'Measurement type' })
+    ).toBeNull();
+    expect(
+      screen.getByText(/Pick an edge, face, hole or body to measure it/)
+    ).toHaveAttribute('aria-live', 'polite');
+    expect(screen.getByText('Pick A empty')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Keep/ })).toBeNull();
   });
 
-  it('offers a point kind only in Distance and says what each pick records (M13)', () => {
+  it('shows two picks, the reading large, and every other reading to choose (A)', () => {
+    const onChooseReading = vi.fn();
+    const onKeep = vi.fn();
+    const onClearPicks = vi.fn();
+    const onCopy = vi.fn();
+    const parallel = reading('parallel', 'Parallel distance', 5);
+    const angle = reading('angle', 'Angle', 0);
+    renderDock({
+      session: session({
+        first: { label: 'Top face' },
+        second: { label: 'Bottom face' },
+        readings: [parallel, angle],
+        primary: parallel
+      }),
+      onChooseReading,
+      onKeep,
+      onClearPicks,
+      onCopy
+    });
+    expect(screen.getByText('Pick A: Top face')).toBeInTheDocument();
+    expect(screen.getByText('Pick B: Bottom face')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('5.00 mm');
+    const others = screen.getByRole('group', { name: 'Other readings' });
+    const choices = Array.from(others.querySelectorAll('button'));
+    expect(
+      choices.map((button) => button.getAttribute('aria-pressed'))
+    ).toEqual(['true', 'false']);
+    fireEvent.click(choices[1]!);
+    expect(onChooseReading).toHaveBeenCalledWith('angle');
+    fireEvent.click(screen.getByRole('button', { name: /^Keep/ }));
+    expect(onKeep).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(onCopy).toHaveBeenCalledWith(parallel.measurement);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear picks' }));
+    expect(onClearPicks).toHaveBeenCalledTimes(1);
+  });
+
+  it('says why two picks read nothing', () => {
+    renderDock({
+      session: session({
+        first: { label: 'Edge 1' },
+        second: { label: 'Edge 2' },
+        distanceRefusal: 'Endpoint needs a straight edge.'
+      })
+    });
+    expect(screen.getByText('Endpoint needs a straight edge.')).toHaveAttribute(
+      'aria-live',
+      'polite'
+    );
+  });
+
+  it('keeps the display and point settings behind one menu (M13)', () => {
     const onPointKind = vi.fn();
-    const { rerender, props } = renderDock({ onPointKind });
-    expect(screen.queryByRole('group', { name: 'Point to pick' })).toBeNull();
-    rerender(<MeasurementDock {...props} mode="distance" />);
-    const kinds = screen.getByRole('group', { name: 'Point to pick' });
-    expect(
-      Array.from(kinds.querySelectorAll('button')).map((b) => b.textContent)
-    ).toEqual(['Auto', 'Endpoint', 'Midpoint', 'Center', 'Centroid']);
-    expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Midpoint' }));
+    renderDock({ onPointKind });
+    expect(screen.queryByLabelText('Measurement units')).toBeNull();
+    const toggle = screen.getByRole('button', {
+      name: 'Measurement settings'
+    });
+    expect(toggle).toHaveTextContent('mm');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const kinds = screen.getByLabelText<HTMLSelectElement>('Distance points');
+    expect([...kinds.options].map((option) => option.textContent)).toEqual([
+      'Auto',
+      'Endpoint',
+      'Midpoint',
+      'Center',
+      'Centroid'
+    ]);
+    fireEvent.change(kinds, { target: { value: 'midpoint' } });
     expect(onPointKind).toHaveBeenLastCalledWith('midpoint');
-    rerender(
-      <MeasurementDock {...props} mode="distance" pointKind="midpoint" />
-    );
-    expect(screen.getByRole('button', { name: 'Midpoint' })).toHaveAttribute(
-      'aria-pressed',
-      'true'
-    );
-    expect(
-      screen.getByText('Pick two targets. Each records its midpoint.')
-    ).toBeVisible();
   });
 
   it('marks saved rows updating and disables copies and CSV while analysis is pending', () => {
@@ -166,10 +213,11 @@ describe('MeasurementDock', () => {
     expect(screen.getByRole('button', { name: 'Copy all' })).toBeEnabled();
   });
 
-  it('exposes explicit Smart, Distance, and Angle workflows', () => {
-    const { props } = renderDock();
-    fireEvent.click(screen.getByRole('button', { name: 'Distance' }));
-    expect(props.onMode).toHaveBeenCalledWith('distance');
+  it('offers units, precision and radial display in its settings', () => {
+    renderDock();
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Measurement settings' })
+    );
     expect(screen.getByLabelText('Measurement units')).toHaveValue('mm');
     // Named with its visible label, so "click Precision" reaches it.
     expect(screen.getByLabelText('Measurement precision')).toHaveValue('2');
@@ -187,6 +235,9 @@ describe('MeasurementDock', () => {
     renderDock({
       display: { unit: 'mm', precision: 6, radialDisplay: 'diameter' }
     });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Measurement settings' })
+    );
     const select = screen.getByLabelText<HTMLSelectElement>(
       'Measurement precision'
     );
@@ -233,7 +284,7 @@ describe('MeasurementDock', () => {
     document.body.append(toggle);
     try {
       const { unmount } = renderDock();
-      screen.getByRole('button', { name: 'Distance' }).focus();
+      screen.getByRole('button', { name: 'Measurement settings' }).focus();
       unmount();
       expect(document.activeElement).toBe(toggle);
     } finally {
@@ -311,15 +362,64 @@ describe('MeasurementDock', () => {
     }
   });
 
-  it('announces the two-pick progress state', () => {
+  it('scrolls back to the reading when a new pick lands', () => {
+    const { rerender, props, container } = renderDock();
+    const body = container.querySelector<HTMLElement>(
+      '.measurement-dock-body'
+    )!;
+    body.scrollTop = 120;
+    expect(body.scrollTop).toBe(120);
+    rerender(
+      <MeasurementDock
+        {...props}
+        session={session({ first: { label: 'Edge 2' } })}
+      />
+    );
+    expect(body.scrollTop).toBe(0);
+  });
+
+  it('names the first pick and waits for a second', () => {
     renderDock({
-      mode: 'distance',
-      draftTargetLabel: 'Bracket · Hole center'
+      session: session({ first: { label: 'Bracket · Hole center' } })
     });
     expect(
-      screen.getByText(
-        'Bracket · Hole center selected. Pick the second target.'
-      )
-    ).toHaveAttribute('aria-live', 'polite');
+      screen.getByText('Pick A: Bracket · Hole center')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Compare…')).toBeInTheDocument();
   });
 });
+
+function session(overrides: Partial<MeasureSessionView>): MeasureSessionView {
+  return {
+    first: null,
+    second: null,
+    readings: [],
+    primary: null,
+    distanceRefusal: null,
+    ...overrides
+  };
+}
+
+function reading(
+  kind: FormattedMeasureReading['kind'],
+  title: string,
+  value: number
+): FormattedMeasureReading {
+  const base = measurement();
+  const figure: Measurement = {
+    ...base,
+    id: `${kind}:1`,
+    kind: kind === 'angle' ? 'angle' : 'parallel-distance',
+    result: { value, dimension: kind === 'angle' ? 'angle' : 'length' }
+  };
+  return {
+    kind,
+    title,
+    measurement: figure,
+    formatted: formatMeasurement(figure, {
+      unit: 'mm',
+      precision: 2,
+      radialDisplay: 'diameter'
+    })
+  };
+}

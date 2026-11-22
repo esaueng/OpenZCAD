@@ -155,24 +155,21 @@ test('exposes the full measurement workbench in View mode', async ({
   // Exact: the project, named alike, is in the title and the status names.
   const workbench = page.getByLabel('Measurement workbench', { exact: true });
   await expect(workbench).toBeVisible();
+  // No mode to choose first: the card asks for a pick.
   await expect(
-    workbench.getByRole('button', { name: 'Smart' })
-  ).toHaveAttribute('aria-pressed', 'true');
-  await expect(
-    workbench.getByRole('button', { name: 'Distance' })
+    workbench.getByText(/Pick an edge, face, hole or body to measure it/)
   ).toBeVisible();
-  await expect(workbench.getByRole('button', { name: 'Angle' })).toBeVisible();
+  await expect(workbench.getByText('Pick A empty')).toBeAttached();
+  // Units, precision and Ø/R wait behind one menu named for the unit.
+  const settings = workbench.getByRole('button', {
+    name: 'Measurement settings'
+  });
+  await expect(settings).toHaveText('mm');
+  await settings.click();
   await expect(workbench.getByLabel('Measurement units')).toHaveValue('mm');
   await expect(workbench.getByLabel('Measurement precision')).toHaveValue('2');
   await expect(
     workbench.getByRole('group', { name: 'Radial display' })
-  ).toBeVisible();
-
-  await workbench.getByRole('button', { name: 'Angle' }).click();
-  await expect(
-    workbench.getByText(
-      'Pick two straight edges, circular axes or planar faces.'
-    )
   ).toBeVisible();
 });
 

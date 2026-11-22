@@ -13,6 +13,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  keepMeasurement,
   createProject,
   expect,
   expectBodyCount,
@@ -84,6 +85,7 @@ async function measureTopFace(page: Page) {
       }
     )
     .toBe(true);
+  await keepMeasurement(page);
   const row = workbench.locator('.measurement-row').first();
   await expect(row).toBeVisible();
   return { more, workbench, row };
@@ -366,11 +368,20 @@ for (const { width, height } of [
     await expect.poll(() => reachable(more)).toBe(true);
     await shot(page, `review-objects-measure-rail-${width}`);
     await expectActionsFit(workbench, row);
-    // And the rest of the workbench, across its whole width.
+    // And the rest of the workbench, across its whole width. The first tap
+    // inside it may only fold the view tools away; the settings open on the
+    // tap that reaches them.
+    const settings = workbench.getByRole('button', {
+      name: 'Measurement settings'
+    });
+    await settings.tap();
+    if ((await settings.getAttribute('aria-expanded')) !== 'true') {
+      await settings.tap();
+    }
+    await expect(settings).toHaveAttribute('aria-expanded', 'true');
     const edge = (await workbench.boundingBox())!;
     for (const control of [
-      workbench.locator('.measurement-mode-tabs button').first(),
-      workbench.locator('.measurement-mode-tabs button').last(),
+      workbench.getByRole('button', { name: 'Measurement settings' }),
       workbench.getByRole('combobox', { name: 'Measurement units' }),
       workbench.getByRole('combobox', { name: 'Measurement precision' }),
       workbench.getByRole('button', { name: 'Radius', exact: true }),

@@ -597,19 +597,33 @@
   cursor: pointer;
 }
 
-.measurement-mode-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+/* The settings menu's toggle names the unit, which is all most people need
+   to see of the settings: they are set once per project. */
+.measurement-settings-toggle {
+  margin-left: auto;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
   gap: 3px;
-  padding: 7px 8px 0;
+  padding: 2px 4px 2px 6px;
+  color: var(--color-text-muted);
+  background: none;
+  border: var(--border-thin);
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  cursor: pointer;
 }
 
-/* M13: the point kind a Distance pick records, one row of five. */
-.measurement-point-kinds {
-  grid-template-columns: repeat(5, 1fr);
+.measurement-settings-toggle:hover,
+.measurement-settings-toggle[aria-expanded='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 
-.measurement-mode-tabs button,
 .measurement-radial-toggle button {
   min-height: 28px;
   color: var(--color-text-muted);
@@ -621,28 +635,225 @@
   cursor: pointer;
 }
 
-/* Hover is a neutral lift; only the chosen mode wears the accent. The two
-   used to share one rule, so pointing at a tab looked like choosing it. */
-.measurement-mode-tabs button:hover:not(.active),
+/* Hover is a neutral lift; only the chosen option wears the accent. */
 .measurement-radial-toggle button:hover:not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);
 }
 
-.measurement-mode-tabs button.active,
 .measurement-radial-toggle button.active {
   color: var(--color-accent-hi);
   background: var(--color-accent-dim);
   border-color: var(--color-accent-border);
 }
 
+/* The two picks, lettered as the viewport letters them. */
+.measurement-picks {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 5px;
+  align-items: center;
+  padding: 8px 8px 0;
+}
+
+.measurement-pick {
+  min-width: 0;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px 3px 5px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.measurement-pick.empty {
+  color: var(--color-text-subtle);
+  background: none;
+  border-style: dashed;
+}
+
+.measurement-pick-letter {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: var(--color-surface);
+  background: var(--color-accent);
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+}
+
+.measurement-pick[data-slot='B'] .measurement-pick-letter {
+  background: var(--color-warning, #d9a23a);
+}
+
+.measurement-pick.empty .measurement-pick-letter {
+  color: var(--color-text-subtle);
+  background: var(--color-surface-2);
+}
+
+.measurement-pick-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.measurement-picks-clear {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.measurement-picks-clear:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+/* The reading: one figure large, the rest a tap away beneath it. */
+.measurement-live {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px 10px;
+  border-bottom: var(--border-thin);
+}
+
+.measurement-live-title {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.measurement-live-value {
+  color: var(--color-text);
+  font-size: var(--fs-xl);
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.measurement-live-detail {
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
+.measurement-readings {
+  display: grid;
+  margin-top: 6px;
+}
+
+.measurement-readings button {
+  min-height: 26px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px;
+  color: var(--color-text-muted);
+  background: none;
+  border: 0;
+  border-top: var(--border-thin);
+  font: inherit;
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.measurement-readings button:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.measurement-readings button.active {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+}
+
+.measurement-reading-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.measurement-reading-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.measurement-readings button:focus-visible,
+.measurement-live-actions button:focus-visible,
+.measurement-settings-toggle:focus-visible,
+.measurement-picks-clear:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.measurement-live-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-1);
+  margin-top: 8px;
+}
+
+.measurement-live-actions button {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+.measurement-live-actions button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+.measurement-live-actions .measurement-keep {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-border);
+  font-weight: var(--fw-medium);
+}
+
+.measurement-live-actions .measurement-keep:hover:not(:disabled) {
+  color: var(--color-accent-hi);
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent);
+}
+
+.measurement-kept-head {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px 2px 10px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
 .measurement-dock-instruction {
-  /* Two lines: the longest instruction wraps at the dock's narrowest width,
-     and one reserved line let a mode change shift the list below. */
-  min-height: calc(2 * var(--lh-normal) * var(--fs-xs) + 14px);
   margin: 0;
-  padding: 7px 10px;
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
   line-height: var(--lh-normal);
@@ -650,10 +861,10 @@
 
 .measurement-display-controls {
   display: grid;
-  grid-template-columns: 1fr 1fr auto;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
   align-items: end;
-  padding: 0 8px 8px;
+  padding: 8px;
   border-bottom: var(--border-thin);
 }
 
@@ -664,7 +875,7 @@
   font-size: var(--fs-mini);
 }
 
-/* 28px like the mode tabs above: a min-height alone lost to the global
+/* 28px like the radial toggle: a min-height alone lost to the global
    30px field height, so the dock ran 28, 30, 26 and 18px controls. */
 .measurement-display-controls select,
 .measurement-row-editor input {
@@ -705,9 +916,15 @@
   line-height: var(--lh-normal);
 }
 
-.measurement-dock-list {
+.measurement-dock-body {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.measurement-dock-list {
+  min-height: 0;
 }
 
 .measurement-row {
@@ -759,7 +976,6 @@
 .measurement-row-main:focus-visible,
 .measurement-row-actions button:focus-visible,
 .measurement-dock-foot button:focus-visible,
-.measurement-mode-tabs button:focus-visible,
 .measurement-radial-toggle button:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;

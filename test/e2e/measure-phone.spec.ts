@@ -49,11 +49,10 @@ for (const width of [360, 390]) {
     await expect(more).toHaveAttribute('aria-expanded', 'false');
     const workbench = page.locator('.measurement-dock');
     await expect(workbench).toBeVisible();
-    for (const mode of ['Smart', 'Distance', 'Angle']) {
-      const tab = workbench.getByRole('radio', { name: mode, exact: true });
-      const control = (await tab.count())
-        ? tab
-        : workbench.getByRole('button', { name: mode, exact: true });
+    for (const control of [
+      workbench.getByRole('group', { name: 'Picks' }),
+      workbench.getByRole('button', { name: 'Measurement settings' })
+    ]) {
       await expect(control).toBeVisible();
       await expect.poll(() => reachable(control)).toBe(true);
     }

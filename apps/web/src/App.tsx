@@ -10541,11 +10541,9 @@ export function App() {
   const {
     measuring,
     setMeasuring,
-    measurementMode,
-    setMeasurementMode,
     measurementPointKind,
     setMeasurementPointKind,
-    measurementDraft,
+    measurementSession,
     measurements,
     setMeasurements,
     applyStoredMeasurements,
@@ -10558,6 +10556,8 @@ export function App() {
     measurementDisplay,
     previewMeasurement,
     clearMeasurementPicks,
+    chooseMeasurementReading,
+    keepMeasurementReading,
     handleMeasurementPick,
     measurementAnnotations,
     formattedMeasurements,
@@ -13724,7 +13724,7 @@ export function App() {
     clearMeasurementPicks();
     setStatus(
       next
-        ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+        ? 'Measure ready · pick one thing to read it, or two to compare them.'
         : 'Measure off · pinned results stay on the model.'
     );
   }
@@ -35523,11 +35523,9 @@ export function App() {
           }
           if (measuring) {
             event.preventDefault();
-            if (measurementDraft) {
+            if (measurementSession.first) {
               clearMeasurementPicks();
-              setStatus(
-                `${measurementMode === 'angle' ? 'Angle' : measurementMode === 'maximum' ? 'Maximum distance' : measurementMode === 'central' ? 'Central distance' : measurementMode === 'parallel' ? 'Parallel distance' : 'Distance'} measurement canceled · pick the first target.`
-              );
+              setStatus('Picks cleared · pick geometry to measure.');
             } else {
               toggleMeasure(false);
             }
@@ -35662,6 +35660,27 @@ export function App() {
             clearSelection();
           }
           return;
+        case 'Enter':
+          // Keeps the reading the Measure card shows. With nothing to keep
+          // the key is left to whoever else wants it, and so is a focused
+          // control: Enter on an alternative reading chooses it, on Copy
+          // copies. Only the reading already chosen passes Enter on to Keep,
+          // so choose-then-Enter keeps what was chosen.
+          if (
+            measuring &&
+            !typing &&
+            !(
+              target?.closest('button, a, select, [role="button"]') &&
+              !target.closest(
+                '.measurement-readings button[aria-pressed="true"]'
+              )
+            ) &&
+            keepMeasurementReading()
+          ) {
+            event.preventDefault();
+            return;
+          }
+          break;
         case 'Delete':
         case 'Backspace':
           if (modelingLocked) {
@@ -36270,35 +36289,22 @@ export function App() {
       enabled={measuring}
       geometryPending={measurementGeometryPending}
       activeMeasurementId={activeMeasurementId}
-      mode={measurementMode}
-      draftTargetLabel={measurementDraft?.label ?? null}
+      session={measurementSession}
       display={measurementDisplay}
-      onMode={(mode) => {
-        setMeasuring(true);
-        setMeasurementMode(mode);
-        clearMeasurementPicks();
-        setStatus(
-          mode === 'smart'
-            ? 'Smart measure · pick an edge, face, hole, or body.'
-            : mode === 'distance'
-              ? 'Distance · pick the first target.'
-              : mode === 'maximum'
-                ? 'Maximum distance · pick the first point, straight edge or full circle.'
-                : mode === 'central'
-                  ? 'Central distance · pick a circle, arc, cylinder or hole.'
-                  : mode === 'parallel'
-                    ? 'Parallel distance · pick the first edge, face, axis or circle.'
-                    : 'Angle · pick the first straight edge, circular axis or planar face.'
-        );
-      }}
       pointKind={measurementPointKind}
       onPointKind={(kind) => {
         setMeasurementPointKind(kind);
         setStatus(
           kind === 'auto'
-            ? 'Distance picks the point each target names.'
-            : `Distance picks each target's ${kind}.`
+            ? 'Distance reads the point each pick names.'
+            : `Distance reads each pick's ${kind}.`
         );
+      }}
+      onChooseReading={chooseMeasurementReading}
+      onKeep={() => void keepMeasurementReading()}
+      onClearPicks={() => {
+        clearMeasurementPicks();
+        setStatus('Picks cleared · pick geometry to measure.');
       }}
       onUnit={setMeasurementUnit}
       onPrecision={setMeasurementPrecision}
@@ -37217,19 +37223,11 @@ export function App() {
     .filter(Boolean)
     .join(' — ');
   const viewModeHint = measuring
-    ? measurementDraft
-      ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
-      : measurementMode === 'smart'
-        ? `Smart measure · pick geometry · Shift+Click totals edges · ${(modelingLocked && measureKey) || 'Esc'} exits`
-        : measurementMode === 'distance'
-          ? 'Distance · pick the first target · centers resolve automatically'
-          : measurementMode === 'maximum'
-            ? 'Maximum distance · pick a point, straight edge or full circle'
-            : measurementMode === 'central'
-              ? 'Central distance · pick a circle, arc, cylinder or hole'
-              : measurementMode === 'parallel'
-                ? 'Parallel distance · pick an edge, face, axis or circle'
-                : 'Angle · pick a straight edge, circular axis or planar face'
+    ? measurementSession.second
+      ? 'Enter keeps the reading · click to start over · Esc clears'
+      : measurementSession.first
+        ? `${measurementSession.first.label} selected · pick the second target · Enter keeps · Esc clears`
+        : `Measure · pick geometry · Shift+Click totals edges · ${(modelingLocked && measureKey) || 'Esc'} exits`
     : selectedTopology?.kind === 'face'
       ? faceSelectedHint
       : viewerBodies.length > 0
@@ -38882,9 +38880,7 @@ export function App() {
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             measureSnapKinds={
-              measuring && measurementMode === 'distance'
-                ? measureSnapKindsFor(measurementPointKind)
-                : null
+              measuring ? measureSnapKindsFor(measurementPointKind) : null
             }
             onPointPick={movePreview?.pointPick ? handleMovePointPick : null}
             regionHandle={
