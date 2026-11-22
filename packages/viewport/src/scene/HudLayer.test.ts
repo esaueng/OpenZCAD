@@ -97,6 +97,27 @@ describe('creating overlays', () => {
     expect(children).toHaveLength(0);
     restore();
   });
+
+  it('lets go of an overlay it releases, so churned chips are not kept', () => {
+    // A command's value chips are made per command and dropped when it
+    // closes. Dropping one from the DOM alone left the layer holding it,
+    // its click listener and the stale document that listener reached.
+    const { host, children, restore } = makeHost();
+    const layer = new HudLayer(host);
+    const kept = layer.create('handle-value-chip');
+    for (let i = 0; i < 50; i++) {
+      layer.release(layer.create('handle-value-chip'));
+    }
+    expect(layer.size).toBe(1);
+    expect(children).toEqual([kept]);
+
+    // Releasing again, or something the layer never made, only detaches it.
+    layer.release(kept);
+    layer.release(kept);
+    expect(layer.size).toBe(0);
+    expect(children).toHaveLength(0);
+    restore();
+  });
 });
 
 describe('positioning against the host', () => {

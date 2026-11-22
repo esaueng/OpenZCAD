@@ -136,6 +136,26 @@ export class HudLayer {
     }
   }
 
+  /**
+   * Removes one overlay and stops tracking it. Overlays made and dropped
+   * while the layer lives (a command's value chips, a picker's name tags)
+   * must leave through here: removing one from the DOM alone kept it in
+   * the layer's list, and with it every listener on it and every closure
+   * those listeners hold, until the viewer itself went away.
+   */
+  release(element: HTMLElement) {
+    const index = this.owned.indexOf(element);
+    if (index >= 0) {
+      this.owned.splice(index, 1);
+    }
+    element.remove();
+  }
+
+  /** How many overlays the layer currently holds. */
+  get size(): number {
+    return this.owned.length;
+  }
+
   /** Removes every overlay this layer created. */
   dispose() {
     for (const element of this.owned) {
