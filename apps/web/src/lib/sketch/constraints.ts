@@ -62,6 +62,7 @@ export interface ConstraintToolSpec {
     | readonly ['object', 'object']
     | readonly ['point', 'point']
     | readonly ['point', 'object']
+    | readonly ['either']
     | readonly ['either', 'either', 'object'];
   /** A completed pick sequence waits for a canvas placement before entry. */
   placement?: true;
@@ -176,8 +177,10 @@ export const CONSTRAINT_TOOL_SPECS: readonly ConstraintToolSpec[] = [
     kind: 'lock',
     label: 'Lock',
     picks: 1,
-    pickKinds: ['point'],
-    hint: 'Click a snap point to lock it where it is; click a locked point to unlock it.'
+    // A snap point locks that point; a line, circle or arc picked away
+    // from its points locks the whole entity.
+    pickKinds: ['either'],
+    hint: 'Click a snap point, or a line, circle or arc away from its points, to lock it where it is; click it again to unlock it.'
   },
   {
     kind: 'disconnect',
@@ -443,6 +446,14 @@ export function refusePick(
         : null;
     }
     case 'lock':
+      if (pick.kind === 'object') {
+        return data.objectKind === 'line' ||
+          data.objectKind === 'circle' ||
+          data.objectKind === 'arc'
+          ? null
+          : 'Lock holds a whole line, circle or arc; lock any other entity by its points.';
+      }
+      return pointPickRefusal(data, pick, 'Lock');
     case 'disconnect':
       return pointPickRefusal(data, pick, constraintToolSpec(kind).label);
   }
@@ -714,6 +725,23 @@ export function buildConstraint(
     }
     case 'lock': {
       const pick = picks[0]!;
+      if (pick.kind === 'object') {
+        const at = resolve
+          ? entityLockGeometry(document, sketch, pick.objectId, resolve)
+          : null;
+        return at
+          ? {
+              data: {
+                constraintKind: 'lock-entity',
+                objectId: pick.objectId as EntityId,
+                at
+              }
+            }
+          : {
+              error:
+                'Lock needs a line, circle or arc whose dimensions resolve.'
+            };
+      }
       const at = resolve
         ? pointPosition(document, sketch, pick, resolve)
         : null;
@@ -854,6 +882,66 @@ function entitySymmetry(
     data: symmetric(ref(aId, 'start'), ref(bId, crossed ? 'end' : 'start')),
     also: [symmetric(ref(aId, 'end'), ref(bId, crossed ? 'start' : 'end'))]
   };
+}
+
+/**
+ * The geometry an entity lock records: a line's ends, a circle's centre and
+ * radius, an arc's centre, radius and angles, all resolved now.
+ */
+function entityLockGeometry(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  objectId: string,
+  resolve: ResolveParam
+): number[] | null {
+  const data = sketchObjectData(document, sketch, objectId);
+  const values =
+    data?.objectKind === 'line'
+      ? [data.x1, data.y1, data.x2, data.y2]
+      : data?.objectKind === 'circle'
+        ? [data.centerX, data.centerY, data.radius]
+        : data?.objectKind === 'arc'
+          ? [
+              data.centerX,
+              data.centerY,
+              data.radius,
+              data.startAngleDeg,
+              data.endAngleDeg
+            ]
+          : null;
+  if (!values) return null;
+  const resolved = values.map((value) => resolve(value));
+  return resolved.every(
+    (value): value is number => value !== undefined && Number.isFinite(value)
+  )
+    ? resolved
+    : null;
+}
+
+/** Ids of the entity lock holding one whole entity (none or one). */
+export function entityLockConstraintIds(
+  sketch: SketchNode,
+  objectId: string
+): string[] {
+  return (sketch.constraints ?? [])
+    .filter(
+      ({ data }) =>
+        data.constraintKind === 'lock-entity' && data.objectId === objectId
+    )
+    .map(({ constraintId }) => constraintId);
+}
+
+/** Ids of the point locks on any point of one entity. */
+export function entityPointLockConstraintIds(
+  sketch: SketchNode,
+  objectId: string
+): string[] {
+  return (sketch.constraints ?? [])
+    .filter(
+      ({ data }) =>
+        data.constraintKind === 'lock' && data.point.objectId === objectId
+    )
+    .map(({ constraintId }) => constraintId);
 }
 
 /** Ids of the lock constraints holding one point. */
@@ -1072,6 +1160,8 @@ export function describeConstraint(
       return `Point on curve · ${pointName(data.point)} on ${nameOf(data.objectId)}`;
     case 'lock':
       return `Lock · ${pointName(data.point)}`;
+    case 'lock-entity':
+      return `Lock · ${nameOf(data.objectId)}`;
   }
 }
 
@@ -1189,6 +1279,8 @@ export function constraintReferencesObject(
       return refs(data.point) === objectId || data.objectId === objectId;
     case 'lock':
       return refs(data.point) === objectId;
+    case 'lock-entity':
+      return data.objectId === objectId;
     default:
       return refs(data.a) === objectId || refs(data.b) === objectId;
   }

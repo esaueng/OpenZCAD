@@ -145,6 +145,15 @@ export function assertWrapSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 111, 'Wraps');
 }
 
+/** S07 (schema v138): whole-entity locks, wherever a sketch or command holds one. */
+export function assertEntityLockSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 138, 'Sketch entity locks');
+}
+
+function isEntityLock(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'lock-entity';
+}
+
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
 export function assertSlotSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 59, 'Sketch slots');
@@ -1193,6 +1202,11 @@ export function assertDocumentContentCommandSchema(
             : null;
       if (sweep) assertSweepContentSchema(sweep, document.schemaVersion);
     }
+    if (
+      command.kind === 'sketch.constraint.add' &&
+      isEntityLock(command.payload.constraint)
+    )
+      assertEntityLockSchema(document.schemaVersion);
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1511,6 +1525,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertSlotSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isEntityLock(constraint.data)
+      )
+    )
+      assertEntityLockSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

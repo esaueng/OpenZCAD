@@ -324,6 +324,20 @@ export function planSketchFilletBatch(
     };
   }
   for (const { data } of sketch.constraints ?? []) {
+    if (data.constraintKind === 'lock-entity') {
+      // Trimming a wholly locked line moves it off its lock.
+      const line = lines.get(data.objectId);
+      const cornerId = line?.startCornerId ?? line?.endCornerId;
+      if (line && cornerId) {
+        return {
+          status: 'refuse',
+          reason:
+            'A selected corner is on a locked line. Unlock it before applying the fillet.',
+          lineIds: [line.objectId],
+          cornerIds: [cornerId]
+        };
+      }
+    }
     if (data.constraintKind === 'lock') {
       const line = lines.get(data.point.objectId);
       const end = data.point.point;

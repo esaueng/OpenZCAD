@@ -2169,6 +2169,8 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
       return [data.point.objectId, data.objectId];
     case 'lock':
       return [data.point.objectId];
+    case 'lock-entity':
+      return [data.objectId];
   }
 }
 
@@ -2421,8 +2423,58 @@ export function validateSketchConstraint(
       ) {
         throw new Error('That point is already locked.');
       }
+      if (entityLocked(sketch, data.point.objectId)) {
+        throw new Error(
+          'That point belongs to a locked entity. Unlock the entity first.'
+        );
+      }
       break;
+    case 'lock-entity': {
+      const kind = requireConstrainableObject(document, sketch, data.objectId, [
+        'line',
+        'circle',
+        'arc'
+      ]);
+      const length = kind === 'line' ? 4 : kind === 'circle' ? 3 : 5;
+      if (
+        !Array.isArray(data.at) ||
+        data.at.length !== length ||
+        !data.at.every(Number.isFinite)
+      ) {
+        throw new Error(
+          `A locked ${kind} needs its ${length} recorded finite values.`
+        );
+      }
+      if (kind !== 'line' && !(data.at[2]! > 0)) {
+        throw new Error(`A locked ${kind} needs a positive radius.`);
+      }
+      if (entityLocked(sketch, data.objectId)) {
+        throw new Error('That entity is already locked.');
+      }
+      // A whole lock fixes every point; a point lock beside it would be a
+      // second, redundant hold on the same point.
+      if (
+        (sketch.constraints ?? []).some(
+          (existing) =>
+            existing.data.constraintKind === 'lock' &&
+            existing.data.point.objectId === data.objectId
+        )
+      ) {
+        throw new Error(
+          'That entity has a locked point. Remove the point lock in the same edit, or unlock it first.'
+        );
+      }
+      break;
+    }
   }
+}
+
+function entityLocked(sketch: SketchNode, objectId: EntityId): boolean {
+  return (sketch.constraints ?? []).some(
+    (existing) =>
+      existing.data.constraintKind === 'lock-entity' &&
+      existing.data.objectId === objectId
+  );
 }
 
 function samePointRef(a: SketchPointRef, b: SketchPointRef): boolean {

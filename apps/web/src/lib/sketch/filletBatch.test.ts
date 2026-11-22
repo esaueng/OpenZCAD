@@ -265,6 +265,38 @@ describe('batch sketch fillet', () => {
     });
   });
 
+  it('refuses a corner on a wholly locked line before the solve', () => {
+    const { manager, rectangle, corners } = centeredRectangle();
+    const id = rectangle.edgeIds[0]!;
+    const corner = corners.find(
+      ({ a, b }) => a.objectId === id || b.objectId === id
+    )!;
+    const base = findSketch(manager.document, rectangle.sketchId)!;
+    // Lock the side where it lies.
+    const node = manager.document.nodes[id];
+    if (node?.kind !== 'sketch-object' || node.data.objectKind !== 'line')
+      throw new Error('expected a line');
+    const at = [node.data.x1, node.data.y1, node.data.x2, node.data.y2].map(
+      Number
+    );
+    const document = manager.runTransaction('Lock line', [
+      commandFactories.addSketchConstraint({
+        sketchId: base.sketchId,
+        constraint: { constraintKind: 'lock-entity', objectId: id, at }
+      })
+    ]);
+    const sketch = findSketch(document, rectangle.sketchId)!;
+    expect(
+      planSketchFilletBatch(document, sketch, [corner.id], 5, resolve)
+    ).toEqual({
+      status: 'refuse',
+      lineIds: [id],
+      cornerIds: [corner.id],
+      reason:
+        'A selected corner is on a locked line. Unlock it before applying the fillet.'
+    });
+  });
+
   it('accepts one rounded corner with a sub-tolerance legacy gap on an unrelated pair of lines', async () => {
     const { manager, rectangle, corners } = centeredRectangle();
     const { sketchId } = rectangle;

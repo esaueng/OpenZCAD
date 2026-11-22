@@ -627,6 +627,68 @@ export function solveSketchWithGcs(
         add(id, { type: 'fixY', point, value: data.y });
         break;
       }
+      case 'lock-entity': {
+        // S07: the whole entity at its recorded geometry, as exactly as many
+        // kernel equations as it has freedoms, so a lock is never redundant
+        // with itself: a line's two ends (4), a circle's centre and radius
+        // (3), an arc's centre and start (4) plus one coordinate of its end
+        // (1; the arc's own centre–end tie fixes the other). That end
+        // coordinate is the one the tie does not already pin, so the five
+        // stay independent wherever the end lies.
+        const target = objectHandles(data.objectId);
+        const at = data.at;
+        const fix = (ref: SketchPointRef, x: number, y: number) => {
+          const point = pointHandle(ref);
+          add(id, { type: 'fixX', point, value: x });
+          add(id, { type: 'fixY', point, value: y });
+        };
+        const ref = (point: SketchPointRef['point']) => ({
+          objectId: data.objectId,
+          point
+        });
+        if (target.kind === 'line') {
+          fix(ref('start'), at[0]!, at[1]!);
+          fix(ref('end'), at[2]!, at[3]!);
+        } else if (target.kind === 'circle') {
+          fix(ref('center'), at[0]!, at[1]!);
+          add(id, {
+            type: 'circleRadius',
+            circle: target.entity,
+            value: at[2]!
+          });
+        } else if (target.kind === 'arc') {
+          const [cx, cy, r, startDeg, endDeg] = at as [
+            number,
+            number,
+            number,
+            number,
+            number
+          ];
+          const start = startDeg * RADIANS_PER_DEGREE;
+          const end = endDeg * RADIANS_PER_DEGREE;
+          fix(ref('center'), cx, cy);
+          fix(ref('start'), cx + r * Math.cos(start), cy + r * Math.sin(start));
+          const endPoint = pointHandle(ref('end'));
+          if (Math.abs(Math.sin(end)) >= Math.abs(Math.cos(end))) {
+            add(id, {
+              type: 'fixX',
+              point: endPoint,
+              value: cx + r * Math.cos(end)
+            });
+          } else {
+            add(id, {
+              type: 'fixY',
+              point: endPoint,
+              value: cy + r * Math.sin(end)
+            });
+          }
+        } else {
+          throw new Error(
+            `Object ${data.objectId} is not a line, circle or arc to lock.`
+          );
+        }
+        break;
+      }
     }
   }
 

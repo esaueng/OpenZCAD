@@ -549,7 +549,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // one Move copy stamps repeated copies, each the same transform on from the
 // one before. An older client would build only the first, so it must refuse
 // the document. Builds on v136.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 137 as const;
+// v138 adds S07 entity locks (`lock-entity` sketch constraints): a whole
+// line, circle or arc held at a recorded position. An older client cannot
+// solve the relation, so it must refuse the document. Builds on v137.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 138 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -2030,7 +2033,16 @@ export type SketchConstraintData =
    * lock was made. An edit that would move it conflicts instead of dragging
    * the lock along; removing the constraint unlocks the point.
    */
-  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number };
+  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
+  /**
+   * S07 (v138): a whole line, circle or arc held where it was when the lock
+   * was made. `at` is that geometry in sketch coordinates — a line's
+   * `[x1, y1, x2, y2]`, a circle's `[centerX, centerY, radius]`, an arc's
+   * `[centerX, centerY, radius, startAngleDeg, endAngleDeg]` — so an edit
+   * that would move or resize it conflicts instead. Removing the constraint
+   * unlocks the entity.
+   */
+  | { constraintKind: 'lock-entity'; objectId: EntityId; at: number[] };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
@@ -6081,7 +6093,8 @@ export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [
   'symmetric',
   'point-on-object',
   'midpoint',
-  'lock'
+  'lock',
+  'lock-entity'
 ];
 
 /**
