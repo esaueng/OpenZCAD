@@ -70,7 +70,8 @@ import type { SketchDefinedState } from '../lib/sketch/constraints';
 import type { ConstraintInspectionTarget } from '../lib/sketch/constraintInspection';
 import {
   SKETCH_EDIT_TOOL_SPECS,
-  sketchMirrorSetHint
+  sketchMirrorSetHint,
+  sketchPatternSetHint
 } from '../lib/sketch/edits';
 import { DEFAULT_SKETCH_OFFSET_OPTIONS } from '../lib/sketch/offset';
 import { ArcGlyph, CONSTRAINT_ICONS } from './constraintIcons';
@@ -1286,7 +1287,11 @@ export function SketchToolRail({
                 kind,
                 kind === 'mirror' && selectedObjectCount > 0
                   ? sketchMirrorSetHint(selectedObjectCount)
-                  : hint
+                  : (kind === 'linear-pattern' ||
+                        kind === 'circular-pattern') &&
+                      selectedObjectCount > 0
+                    ? sketchPatternSetHint(kind, selectedObjectCount)
+                    : hint
               );
           }}
         >

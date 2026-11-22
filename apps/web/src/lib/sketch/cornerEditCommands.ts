@@ -92,7 +92,12 @@ export function addFilletCornerCommands(
   a: SketchPointRef,
   b: SketchPointRef,
   fillet: SketchFilletGeometry,
-  radius: ParamValue
+  radius: ParamValue,
+  /**
+   * S05: `b` is a circle the fillet only touches. It has no end to join, so
+   * the fillet is held on it by the tangency alone.
+   */
+  bIsCircle = false
 ): AnyCommand[] {
   const arcId = toEntityId(createId('ent'));
   const arcRefA: SketchPointRef = {
@@ -125,15 +130,17 @@ export function addFilletCornerCommands(
       },
       'Add fillet arc'
     ),
-    ...contacts.map(([line, arc]) =>
-      commandFactories.addSketchConstraint(
-        {
-          sketchId,
-          constraint: { constraintKind: 'coincident', a: line, b: arc }
-        },
-        'Join fillet to line'
-      )
-    ),
+    ...contacts
+      .filter(([, arc]) => !(bIsCircle && arc === arcRefB))
+      .map(([line, arc]) =>
+        commandFactories.addSketchConstraint(
+          {
+            sketchId,
+            constraint: { constraintKind: 'coincident', a: line, b: arc }
+          },
+          'Join fillet to line'
+        )
+      ),
     ...contacts.map(([line, arc]) =>
       commandFactories.addSketchConstraint(
         {

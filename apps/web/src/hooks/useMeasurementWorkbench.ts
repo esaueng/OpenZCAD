@@ -386,9 +386,33 @@ export function useMeasurementWorkbench({
         body,
         selection,
         point,
-        measurementMode
+        // M13: the entity distances store their picks as Distance does; the
+        // geometry they measure is read from the topology at measure time.
+        api.isEntityDistanceMode(measurementMode) ? 'distance' : measurementMode
       )
     );
+  }
+
+  /** The second pick's figure, for the click and its hover preview alike. */
+  function pairMeasurement(
+    api: NonNullable<typeof measurementApi>,
+    first: MeasurementTarget,
+    second: MeasurementTarget,
+    revision: number,
+    units: UnitSystem
+  ): Measurement | { refused: string } | null {
+    if (api.isEntityDistanceMode(measurementMode))
+      return api.createEntityDistanceMeasurement(
+        measurementMode,
+        viewerBodies,
+        first,
+        second,
+        revision,
+        units
+      );
+    return measurementMode === 'distance'
+      ? api.createDistanceMeasurement(first, second, revision, units)
+      : api.createAngleMeasurement(first, second, revision, units);
   }
 
   function previewMeasurement(
@@ -436,21 +460,14 @@ export function useMeasurementWorkbench({
     if (!measurementDraft) {
       return target.label;
     }
-    const measurement =
-      measurementMode === 'distance'
-        ? measurementApi.createDistanceMeasurement(
-            measurementDraft,
-            target,
-            doc.version,
-            doc.units
-          )
-        : measurementApi.createAngleMeasurement(
-            measurementDraft,
-            target,
-            doc.version,
-            doc.units
-          );
-    return measurement
+    const measurement = pairMeasurement(
+      measurementApi,
+      measurementDraft,
+      target,
+      doc.version,
+      doc.units
+    );
+    return measurement && !('refused' in measurement)
       ? measurementApi.formatMeasurement(measurement, measurementDisplay).value
       : null;
   }
@@ -571,21 +588,16 @@ export function useMeasurementWorkbench({
       setStatus(`${target.label} selected · pick the second target.`);
       return true;
     }
-    const measurement =
-      measurementMode === 'distance'
-        ? measurementApi.createDistanceMeasurement(
-            measurementDraft,
-            target,
-            doc.version,
-            doc.units
-          )
-        : measurementApi.createAngleMeasurement(
-            measurementDraft,
-            target,
-            doc.version,
-            doc.units
-          );
-    if (measurement) {
+    const measurement = pairMeasurement(
+      measurementApi,
+      measurementDraft,
+      target,
+      doc.version,
+      doc.units
+    );
+    if (measurement && 'refused' in measurement) {
+      setStatus(`${measurement.refused} The first target is still selected.`);
+    } else if (measurement) {
       recordMeasurement(measurement);
     } else {
       setStatus(

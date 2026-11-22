@@ -478,6 +478,55 @@ export function solveSketchWithGcs(
         // is stated at a contact point, which the document carries as `at`.
         const a = objectHandles(data.a);
         const b = objectHandles(data.b);
+        if (a.kind !== 'line' && b.kind !== 'line') {
+          // S05: curve to curve at an arc end — a fillet against an arc or
+          // a circle.
+          if (!data.at) {
+            throw new Error(
+              'A tangent between curves must name the arc point it touches.'
+            );
+          }
+          const point = pointHandle(data.at);
+          if (a.kind === 'arc' && b.kind === 'arc') {
+            // Joined end to end (validation requires the coincidence), the
+            // arcs touch tangentially exactly when the shared point is in
+            // line with both centres — inside or outside alike. The kernel's
+            // tangentArcArc holds one side only, and stating the point on
+            // the other arc again would repeat the coincidence.
+            add(id, {
+              type: 'pointLineDistance',
+              point,
+              line: kernel.gcsAddLine(
+                sketch,
+                pointHandle({ objectId: data.a, point: 'center' }),
+                pointHandle({ objectId: data.b, point: 'center' })
+              ),
+              value: 0
+            });
+            break;
+          }
+          // An arc touching a circle: the point is on the circle, and the
+          // two centres and the point are in line — two equations, the
+          // tangency the point-free line form also states as distances.
+          const [circle, arcId] =
+            a.kind === 'circle' ? [data.a, data.b] : [data.b, data.a];
+          add(id, {
+            type: 'pointOnCircle',
+            point,
+            circle: objectHandles(circle).entity
+          });
+          add(id, {
+            type: 'pointLineDistance',
+            point,
+            line: kernel.gcsAddLine(
+              sketch,
+              pointHandle({ objectId: circle, point: 'center' }),
+              pointHandle({ objectId: arcId, point: 'center' })
+            ),
+            value: 0
+          });
+          break;
+        }
         const [line, curve] = a.kind === 'line' ? [a, b] : [b, a];
         if (curve.kind === 'arc') {
           if (!data.at) {

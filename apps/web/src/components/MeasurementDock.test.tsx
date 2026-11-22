@@ -62,6 +62,37 @@ function renderDock(
 }
 
 describe('MeasurementDock', () => {
+  it('reports the row under the pointer or focus, for its highlight (M13)', () => {
+    const onHover = vi.fn();
+    renderDock({ onHover });
+    const row = document.querySelector<HTMLElement>('.measurement-row-main')!;
+    const item = row.closest<HTMLElement>('[role="listitem"]')!;
+    fireEvent.pointerEnter(item);
+    expect(onHover).toHaveBeenLastCalledWith('edge:b1/e1');
+    fireEvent.pointerLeave(item);
+    expect(onHover).toHaveBeenLastCalledWith(null);
+    fireEvent.focus(row);
+    expect(onHover).toHaveBeenLastCalledWith('edge:b1/e1');
+    // Tabbing to another action in the same row keeps it lit.
+    const action = item.querySelectorAll('button')[1]!;
+    fireEvent.blur(row, { relatedTarget: action });
+    expect(onHover).toHaveBeenLastCalledWith('edge:b1/e1');
+    fireEvent.blur(row, { relatedTarget: document.body });
+    expect(onHover).toHaveBeenLastCalledWith(null);
+  });
+
+  it('offers maximum, central and parallel distances with their instructions (M13)', () => {
+    const { rerender, props } = renderDock();
+    const modes = screen.getByRole('group', { name: 'Measurement type' });
+    expect(
+      Array.from(modes.querySelectorAll('button')).map((b) => b.textContent)
+    ).toEqual(['Smart', 'Distance', 'Angle', 'Maximum', 'Central', 'Parallel']);
+    fireEvent.click(screen.getByRole('button', { name: 'Parallel' }));
+    expect(props.onMode).toHaveBeenLastCalledWith('parallel');
+    rerender(<MeasurementDock {...props} mode="central" />);
+    expect(screen.getByText(/distance from its center or axis/)).toBeVisible();
+  });
+
   it('offers a point kind only in Distance and says what each pick records (M13)', () => {
     const onPointKind = vi.fn();
     const { rerender, props } = renderDock({ onPointKind });

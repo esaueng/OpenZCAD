@@ -81,8 +81,8 @@ describe('display units on the document', () => {
   });
 
   it('is stored, and refused on a document that declares an older schema', () => {
-    // v137 is the schema this builds on; v138–v142 are claimed by other
-    // pull requests, none of which knows display units.
+    // v141 is the schema this builds on and v142 is claimed by another
+    // pull request, which does not know display units.
     const beforeDisplayUnits = 142;
     const shown = setDisplayUnits(newDocument(), { units: 'inch' });
     expect(assertStorableDocument(shown).displayUnits).toBe('inch');
