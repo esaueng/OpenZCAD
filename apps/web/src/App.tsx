@@ -23754,7 +23754,8 @@ export function App() {
         sketchId,
         objectId,
         nextData,
-        (document, id) => geometry.solveSketch(document, id)
+        (document, id, anchor) =>
+          geometry.solveSketch(document, id, anchor ? { anchor } : undefined)
       );
       if (
         await commitSketchEdit(
@@ -24009,7 +24010,8 @@ export function App() {
             evalParamValue(value, getParameterScope(base).scope, base.units) ??
             undefined
         ),
-        (document, id) => geometry.solveSketch(document, id),
+        (document, id, anchor) =>
+          geometry.solveSketch(document, id, anchor ? { anchor } : undefined),
         `Resize ${noun}`,
         // An expression typed into the card keeps driving its size, and a
         // size already dimensioned takes the card's new value.

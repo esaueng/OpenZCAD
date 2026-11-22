@@ -29,6 +29,7 @@ import {
   resolvePatternPivot,
   type SketchModifyPlan
 } from '../apps/web/src/lib/sketch/modify';
+import { sketchEntityEditCommands } from '../apps/web/src/lib/sketch/editing';
 
 /**
  * S05 persistent pattern relation on the pinned kernel: the one relation a
@@ -164,6 +165,50 @@ describe('S05 pattern relation on the pinned kernel', () => {
       expect(at.centerY).toBeCloseTo(2, 8);
       expect(at.radius).toBeCloseTo(1.5, 8);
     });
+  });
+
+  it('an edit that moves the source holds it there and carries every instance', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 }
+    ]);
+    const [circle, direction] = fixture.ids as [string, string];
+    fixture.commit(
+      planSketchLinearPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        circle,
+        direction,
+        4,
+        3,
+        resolve
+      )
+    );
+    const copies = fixture.sketch().objectIds.map(String).slice(2);
+    fixture.constrain(lock(direction, 'start', 0, -3));
+    fixture.constrain(lock(direction, 'end', 10, -3));
+    // A drag of the source: a free solve would pull it back toward its
+    // instances, so the edit holds what was moved and lets the rest follow.
+    const commands = await sketchEntityEditCommands(
+      fixture.manager.document,
+      fixture.sketchId,
+      circle as EntityId,
+      { objectKind: 'circle', centerX: 0, centerY: 5, radius: 1 },
+      (document, sketchId, anchor) =>
+        adapter.solveSketch(document, sketchId, anchor ? { anchor } : {})
+    );
+    fixture.manager.runTransaction('Move circle', commands);
+    const node = (id: string) =>
+      fixture.manager.document.nodes[id as EntityId] as unknown as {
+        data: Record<string, number>;
+      };
+    expect(node(circle).data.centerY).toBe(5);
+    copies.forEach((copy, index) => {
+      expect(node(copy).data.centerX).toBeCloseTo(4 * (index + 1), 8);
+      expect(node(copy).data.centerY).toBeCloseTo(5, 8);
+    });
+    expectSettled(await fixture.solve());
   });
 
   it('turns rotated line instances with the source, and keeps uniform ones parallel', async () => {
