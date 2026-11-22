@@ -793,7 +793,12 @@ export function planSketchOffset(
   seedId: string,
   distance: number,
   pick: SketchOffsetPick,
-  resolve: Resolve
+  resolve: Resolve,
+  /**
+   * What the driving offset dimension stores: the typed expression, or by
+   * default the distance itself. Its sign is the side, kept per copy.
+   */
+  stored?: ParamValue
 ): SketchModifyPlan {
   if (!Number.isFinite(distance) || distance === 0) {
     return {
@@ -816,6 +821,18 @@ export function planSketchOffset(
     commandFactories.addSketchConstraint(
       { sketchId, constraint },
       'Link the offset'
+    );
+  // S05: the driving offset dimension every copy keeps from its source.
+  const value: ParamValue =
+    stored === undefined
+      ? Math.abs(distance)
+      : typeof stored === 'number'
+        ? Math.abs(stored)
+        : stored;
+  const drive = (pairs: { source: EntityId; copy: EntityId; side: 1 | -1 }[]) =>
+    commandFactories.addSketchConstraint(
+      { sketchId, constraint: { constraintKind: 'offset', pairs, value } },
+      'Drive the offset'
     );
   if (source.kind === 'circle') {
     const radius = source.curve.r + distance;
@@ -843,7 +860,10 @@ export function planSketchOffset(
             ids: { objectNodeIds: [id] }
           },
           'Add offset geometry'
-        )
+        ),
+        drive([
+          { source: source.objectId, copy: id, side: distance > 0 ? 1 : -1 }
+        ])
       ],
       optional: [
         relation({ constraintKind: 'concentric', a: id, b: source.objectId })
@@ -891,6 +911,27 @@ export function planSketchOffset(
       )
     );
   }
+  // Which side of its source each copy lies on: left of a line's stored
+  // start-to-end direction, or outside a round.
+  const pairs = pieces.flatMap((piece, index) => {
+    const member = piece.member;
+    if (!member) return [];
+    const copy = storedCurve(piece.travel);
+    const from = storedCurve(member.travel);
+    let side: 1 | -1;
+    if (copy.kind === 'line' && from.kind === 'line') {
+      // The chain may walk the source end to start; the solver's line runs
+      // as stored.
+      const [a, b] = member.reversed ? [from.b, from.a] : [from.a, from.b];
+      side = cross(sub(b, a), sub(copy.a, a)) > 0 ? 1 : -1;
+    } else if (copy.kind !== 'line' && from.kind !== 'line') {
+      side = copy.r > from.r ? 1 : -1;
+    } else {
+      return [];
+    }
+    return [{ source: member.objectId, copy: ids[index]!, side }];
+  });
+  if (pairs.length > 0) commands.push(drive(pairs));
   const optional: AnyCommand[] = [];
   pieces.forEach((piece, index) => {
     const id = ids[index]!;

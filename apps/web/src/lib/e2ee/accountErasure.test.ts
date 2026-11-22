@@ -3,6 +3,11 @@ import { eraseAccountWithKeyCleanup } from './accountErasure';
 import { memoryDeviceStore } from './deviceStore';
 import { SHELF_NAMES_PREFIX } from '../projectShelfNames';
 import { accountRowsKey, shelfEditsKey } from '../sealedShelfState';
+import {
+  EMPTY_SHARE_LINK_NAME_BOOK,
+  localStorageShareLinkNameCopy,
+  setShareLinkName
+} from './sealedShareLinkNames';
 
 const cleanup = vi.hoisted(() => ({
   removeMls: vi.fn(async () => {}),
@@ -56,6 +61,35 @@ describe('erased account title cleanup', () => {
     ).rejects.toThrow('MLS cleanup failed');
     expect(localStorage.getItem(cacheKey)).toBeNull();
     expect(cleanup.removeSharing).toHaveBeenCalledWith(userId);
+  });
+
+  // PR 1921 review: the names and ids of the erased account's share links
+  // must not stay readable in this browser.
+  it('forgets the erased account’s share-link names', async () => {
+    localStorageShareLinkNameCopy(userId).write(
+      setShareLinkName(
+        EMPTY_SHARE_LINK_NAME_BOOK,
+        'proj_x',
+        'shr_a',
+        'Client review',
+        1
+      )
+    );
+    await eraseAccountWithKeyCleanup({
+      userId,
+      isCurrentSession: () => true,
+      store: memoryDeviceStore(),
+      erase: async () => ({ signedOut: true }),
+      onSignedOut: () => {}
+    });
+    expect(localStorageShareLinkNameCopy(userId).read()).toEqual(
+      EMPTY_SHARE_LINK_NAME_BOOK
+    );
+    expect(
+      Object.keys(localStorage).some((key) =>
+        key.includes('shareLinkNames.device')
+      )
+    ).toBe(false);
   });
 
   it('forgets the erased account’s listed rows and its unsynced shelf edits', async () => {

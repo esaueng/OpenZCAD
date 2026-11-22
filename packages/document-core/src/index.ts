@@ -2147,6 +2147,16 @@ export function deleteSketchObject(
       if (!constraintObjectIds(constraint.data).includes(input.objectId)) {
         return [constraint];
       }
+      // An offset loses only the pairs the deleted curve belongs to.
+      if (constraint.data.constraintKind === 'offset') {
+        const pairs = constraint.data.pairs.filter(
+          ({ source, copy }) =>
+            source !== input.objectId && copy !== input.objectId
+        );
+        return pairs.length > 0
+          ? [{ ...constraint, data: { ...constraint.data, pairs } }]
+          : [];
+      }
       if (constraint.data.constraintKind !== 'pattern') return [];
       const data = patternWithout(constraint.data, input.objectId);
       return data ? [{ ...constraint, data }] : [];
@@ -2198,6 +2208,8 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
           ? data.layout.direction
           : data.layout.pivot.objectId
       ];
+    case 'offset':
+      return data.pairs.flatMap(({ source, copy }) => [source, copy]);
   }
 }
 
@@ -2636,6 +2648,41 @@ export function validateSketchConstraint(
           data.layout.orientation !== 'uniform'
         ) {
           throw new Error('A circular pattern rotates or keeps orientation.');
+        }
+      }
+      break;
+    }
+    case 'offset': {
+      if (data.pairs.length === 0) {
+        throw new Error('An offset dimension holds at least one copy.');
+      }
+      const copies = new Set<string>();
+      for (const { source, copy, side } of data.pairs) {
+        const sourceKind = requireConstrainableObject(
+          document,
+          sketch,
+          source,
+          ['line', 'circle', 'arc']
+        );
+        const copyKind = requireConstrainableObject(document, sketch, copy, [
+          'line',
+          'circle',
+          'arc'
+        ]);
+        if (source === copy || copies.has(copy)) {
+          throw new Error('Each offset copy is a separate curve, held once.');
+        }
+        copies.add(copy);
+        // A round pairs with a round: a full-turn arc offsets to a circle.
+        if ((sourceKind === 'line') !== (copyKind === 'line')) {
+          throw new Error(
+            sourceKind === 'line'
+              ? 'An offset of a line is a line too.'
+              : `An offset of a ${sourceKind} is a circle or an arc.`
+          );
+        }
+        if (side !== 1 && side !== -1) {
+          throw new Error('An offset copy lies on one side of its source.');
         }
       }
       break;

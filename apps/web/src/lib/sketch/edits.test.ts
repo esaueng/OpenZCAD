@@ -556,7 +556,8 @@ describe('sketch offset', () => {
       // Five convex corners take an arc; the reflex corner is trimmed.
       expect(added.filter((kind) => kind === 'arc')).toHaveLength(5);
       expect(added.filter((kind) => kind === 'line')).toHaveLength(6);
-      expect(next.constraints ?? []).toHaveLength(11);
+      // Eleven joins, and the one driving offset dimension (S05).
+      expect(next.constraints ?? []).toHaveLength(12);
     }
   });
 });
