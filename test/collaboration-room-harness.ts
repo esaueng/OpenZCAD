@@ -9,17 +9,12 @@ import { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 export interface FakeRoomStorage {
   values: Map<string, unknown>;
   reads: string[];
-  /** The one alarm the object may hold, and every `setAlarm` time asked for. */
-  alarm: { at: number | null; sets: number[]; reads: number };
   context: {
     storage: {
       get<T>(key: string): Promise<T | undefined>;
       put(keyOrEntries: unknown, value?: unknown): Promise<void>;
       delete(keyOrKeys: string | string[]): Promise<boolean | number>;
       deleteAll(): Promise<void>;
-      getAlarm(): Promise<number | null>;
-      setAlarm(scheduledTime: number): Promise<void>;
-      deleteAlarm(): Promise<void>;
     };
     blockConcurrencyWhile<T>(callback: () => Promise<T>): Promise<T>;
     acceptWebSocket(socket: WebSocket): void;
@@ -34,11 +29,9 @@ export function createRoomContext(
   const sockets = new Set<FakeWebSocket>();
   const reads: string[] = [];
   let activeRoom: ProjectCollaborationRoom | null = null;
-  const alarm: FakeRoomStorage['alarm'] = { at: null, sets: [], reads: 0 };
   return {
     values,
     reads,
-    alarm,
     context: {
       storage: {
         async get<T>(key: string) {
@@ -69,21 +62,7 @@ export function createRoomContext(
           return deleted;
         },
         async deleteAll() {
-          // Matches SQLite-backed objects, whose deleteAll also drops the
-          // alarm; the room deletes it explicitly as well.
           values.clear();
-          alarm.at = null;
-        },
-        async getAlarm() {
-          alarm.reads += 1;
-          return alarm.at;
-        },
-        async setAlarm(scheduledTime: number) {
-          alarm.at = scheduledTime;
-          alarm.sets.push(scheduledTime);
-        },
-        async deleteAlarm() {
-          alarm.at = null;
         }
       },
       async blockConcurrencyWhile<T>(callback: () => Promise<T>) {
@@ -284,13 +263,4 @@ export function installWorkerSocketGlobals(): {
       globals.Response = original.Response;
     }
   };
-}
-
-/** Runs the room's alarm the way the runtime does: the alarm is spent first. */
-export async function fireAlarm(
-  storage: FakeRoomStorage,
-  room: ProjectCollaborationRoom
-): Promise<void> {
-  storage.alarm.at = null;
-  await room.alarm();
 }

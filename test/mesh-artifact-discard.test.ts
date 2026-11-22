@@ -2350,3 +2350,93 @@ describe('room-serialized mesh cleanup', () => {
     }
   );
 });
+
+describe('room history index after eviction', () => {
+  // Matches MAX_ROOM_HISTORY in the room.
+  const MAX_ROOM_HISTORY = 20;
+
+  /**
+   * Fills a room to its history bound, wakes a fresh instance over the same
+   * storage (so its index comes from `room:meta`), then commits once more so
+   * the oldest indexed version is evicted.
+   */
+  async function evictedAfterWake() {
+    const state = roomFixture();
+    const { document, artifact } = await finalized(state.service);
+    const manager = new CommandManager(document);
+    let previous: number | null = null;
+    for (let step = 0; step <= MAX_ROOM_HISTORY; step += 1) {
+      if (step === MAX_ROOM_HISTORY) {
+        // Hibernation: the next instance loads its index from storage.
+        const woken = createTestRoom(state.context, state.env);
+        (
+          state.service as unknown as { env: { PROJECT_ROOM: unknown } }
+        ).env.PROJECT_ROOM = {
+          getByName: () => ({
+            fetch: (request: Request) => woken.fetch(request)
+          })
+        };
+        state.room = woken;
+      }
+      const next = manager.execute(
+        commandFactories.addPrimitive({
+          name: `Box ${step}`,
+          primitiveKind: 'box',
+          dimensions: { width: 1, height: 1, depth: 1 }
+        })
+      );
+      const response = await state.room.fetch(roomSubmission(next, previous));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ type: 'ack' });
+      previous = next.version;
+    }
+    const meta = state.values.get('room:meta') as {
+      historyVersions: number[];
+    };
+    expect(meta.historyVersions).toHaveLength(MAX_ROOM_HISTORY);
+    return { ...state, document, artifact };
+  }
+
+  function sourceCleanup(projectId: string, body: Record<string, unknown>) {
+    return new Request(
+      `https://room.test/_internal/source-cleanup?projectId=${projectId}`,
+      {
+        method: 'POST',
+        headers: { 'x-openzcad-internal-source-cleanup': 'v1' },
+        body: JSON.stringify({ userId: owner, ...body })
+      }
+    );
+  }
+
+  it('still discards an unreferenced payload once a woken room evicts an indexed version', async () => {
+    const { room, objects, document, artifact } = await evictedAfterWake();
+    const response = await room.fetch(
+      sourceCleanup(document.projectId, {
+        action: 'discard-mesh',
+        artifactId: artifact.artifactId
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: true });
+    expect(objects.has(artifact.objectKey)).toBe(false);
+  });
+
+  it('still checks retained history for a copy completion once a woken room evicts an indexed version', async () => {
+    const { room, document } = await evictedAfterWake();
+    // An identity that matches neither D1 nor the room: the request must
+    // reach the copy check and answer a conflict, not report the retained
+    // history unavailable.
+    const response = await room.fetch(
+      sourceCleanup(document.projectId, {
+        action: 'complete-copy',
+        expectedVersion: document.version,
+        expectedDocumentDigest: 'a'.repeat(64),
+        expectedDocumentJsonDigest: 'b'.repeat(64),
+        expectedDocumentObjectId: null,
+        archives: []
+      })
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'REVISION_CONFLICT' });
+  });
+});
