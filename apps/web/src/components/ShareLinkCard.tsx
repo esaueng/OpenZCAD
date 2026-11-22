@@ -440,6 +440,77 @@ function ShareLinkOption({
   );
 }
 
+/**
+ * The name field of an open link card: Save stores the owner-only name,
+ * Escape discards the edit. Used by plaintext and end-to-end encrypted links.
+ */
+export function ShareLinkNameField({
+  saved,
+  formLabel,
+  placeholder,
+  maxLength,
+  disabled,
+  onSave
+}: {
+  /** The stored name; empty when the link has none. */
+  saved: string;
+  /** The form's accessible name, e.g. "Rename View only link". */
+  formLabel: string;
+  /** What an unnamed link is called instead. */
+  placeholder: string;
+  maxLength: number;
+  disabled: boolean;
+  onSave(draft: string): unknown;
+}) {
+  const [draft, setDraft] = useState(saved);
+  const fieldId = useId();
+  // A rename saved here or elsewhere replaces the draft.
+  useEffect(() => setDraft(saved), [saved]);
+  const changed = draft.replace(/\s+/gu, ' ').trim() !== saved;
+  return (
+    <form
+      className="share-link-rename"
+      aria-label={formLabel}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (changed) void onSave(draft);
+      }}
+    >
+      <label className="share-link-field-label" htmlFor={fieldId}>
+        Name
+      </label>
+      <div className="share-link-rename-row">
+        <input
+          id={fieldId}
+          className="share-link-name-input"
+          type="text"
+          aria-label="Link name"
+          placeholder={placeholder}
+          maxLength={maxLength}
+          autoComplete="off"
+          value={draft}
+          disabled={disabled}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape' || !changed) return;
+            // Discards the edit only, not the whole dialog.
+            event.preventDefault();
+            event.stopPropagation();
+            setDraft(saved);
+          }}
+        />
+        <button
+          type="submit"
+          className="secondary"
+          disabled={disabled || !changed}
+        >
+          Save
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** Writes `url` to the clipboard; false when the page may not. */
 export async function writeClipboard(url: string): Promise<boolean> {
   try {

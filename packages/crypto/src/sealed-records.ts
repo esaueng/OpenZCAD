@@ -268,3 +268,18 @@ export const ACCOUNT_SETTINGS_RECORD: SealedRecordKind = {
   maxPlaintextBytes: 32 * 1024,
   noun: 'settings record'
 };
+
+/**
+ * The owner's names for the share links of end-to-end encrypted projects
+ * (ADR-024 amendment 2026-11-22). Only the owner's own devices read them:
+ * neither the server nor the projects' members.
+ */
+export const SHARE_LINK_NAMES_RECORD: SealedRecordKind = {
+  keyInfo: 'OpenZCAD E2EE v1 share link names key',
+  aadLabel: 'OpenZCAD E2EE v1 share link names\0',
+  // A name is at most 60 characters; 90 KiB holds about a thousand named
+  // links with their tombstones, and stays under the Worker's 128 KiB
+  // character cap once sealed and base64url-encoded.
+  maxPlaintextBytes: 90 * 1024,
+  noun: 'share link names record'
+};
