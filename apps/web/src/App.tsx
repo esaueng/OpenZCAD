@@ -497,7 +497,7 @@ import {
   type PinResetTarget
 } from './components/encryptedPinsState';
 import type { ProjectListingProgress } from './lib/api';
-import { saveShareLinkCopy } from './lib/shareLinkCopy';
+import { saveShareLinkCopy, shareLinkCopyName } from './lib/shareLinkCopy';
 import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
 import {
   assistantDisabledReason,
@@ -16419,7 +16419,7 @@ export function App() {
     try {
       const copy = await saveShareLinkCopy(
         source,
-        duplicateProjectName(
+        shareLinkCopyName(
           source.name,
           projects.map((summary) => summary.name)
         ),

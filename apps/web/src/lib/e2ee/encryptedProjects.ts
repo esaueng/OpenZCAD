@@ -151,6 +151,8 @@ export interface PageShareLinks {
   renewDelegation(
     authorization: UnlockAuthorization
   ): Promise<ShareDelegationState>;
+  /** Whether this account has a passkey that can confirm sharing. */
+  hasPasskey(): boolean;
 }
 
 let opened: Opened | null = null;
@@ -555,12 +557,36 @@ async function openStore(
     // Share links (slice 5-10): every active link's snapshot follows the
     // save, and the owner's page renews statements that are due.
     onVersionWritten: async (projectId, head) => {
-      if (!shareCtx || !head.shareLinks?.links.length) return;
-      const links = await import('./shareLinks');
-      await links.publishShareSnapshots(shareCtx, projectId, head);
-      await links
-        .issueShareAuthorities(shareCtx, projectId, { head })
-        .catch(() => undefined);
+      const ctx = shareCtx;
+      if (!ctx || !head.shareLinks?.links.length) return;
+      const [links, { withShareWorkLock }] = await Promise.all([
+        import('./shareLinks'),
+        import('./shareWorkStore')
+      ]);
+      // After any share-link action holding the lock: creating a link
+      // writes a version, and publishing that link's snapshot here, before
+      // the action issued its statement, sent the snapshot twice. Nothing
+      // waits on this hook, so waiting for the lock cannot deadlock.
+      await withShareWorkLock(
+        ctx.groups.account.userId,
+        projectId,
+        async () => {
+          // The wait may have let newer versions land (another member's
+          // save): work from the head as it is now, so a statement renewed
+          // here republishes the newest snapshot, not this version's.
+          // Without the current head, publish this version only: renewing
+          // from it could leave a newer snapshot older than the statement.
+          const latest = await ctx.store.shareHead(projectId).catch(() => null);
+          const current =
+            latest && latest.version >= head.version ? latest : head;
+          if (!current.shareLinks?.links.length) return;
+          await links.publishShareSnapshots(ctx, projectId, current);
+          if (!latest) return;
+          await links
+            .issueShareAuthorities(ctx, projectId, { head: current })
+            .catch(() => undefined);
+        }
+      );
     },
     // Geometry workers resolve sources from this device's blob store: put
     // the document's encrypted sources there before it is rebuilt.
@@ -600,6 +626,8 @@ async function openStore(
   const sharingCtx = shareCtx;
   const sharing: PageShareLinks = {
     ctx: sharingCtx,
+    hasPasskey: () =>
+      account.list.unlockTargets.some((target) => target.kind === 'passkey'),
     renewDelegation: async (authorization) => {
       const { renewShareDelegation, signWithIdentityKey } =
         await import('./shareLinks');
