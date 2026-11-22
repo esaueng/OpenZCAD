@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -799,11 +799,11 @@ describe('SketchToolRail', () => {
 
   it("rides Offset's corner join and Chain beside its slot while it is armed", async () => {
     const user = userEvent.setup();
-    const onOffsetOptions = vi.fn();
+    const onModifyOptions = vi.fn();
     const { props, rerender } = renderRail({
       canConstrain: true,
       pendingEdit: { kind: 'offset', picks: [] },
-      onOffsetOptions
+      onModifyOptions
     });
     const strip = screen.getByRole('group', { name: 'Offset options' });
     const joins = within(strip).getByRole('radiogroup', {
@@ -816,26 +816,112 @@ describe('SketchToolRail', () => {
         .map((radio) => radio.getAttribute('aria-checked'))
     ).toEqual(['true', 'false']);
     await user.click(within(joins).getByRole('radio', { name: 'Round' }));
-    expect(onOffsetOptions).toHaveBeenLastCalledWith({
+    expect(onModifyOptions).toHaveBeenLastCalledWith({
       join: 'round',
       chain: true
     });
     rerender(
       <SketchToolRail
         {...props}
-        offsetOptions={{ join: 'round', chain: true }}
+        modifyOptions={{ join: 'round', chain: true }}
       />
     );
     const chain = within(strip).getByRole('button', { name: 'Chain' });
     expect(chain).toHaveAttribute('aria-pressed', 'true');
     await user.click(chain);
-    expect(onOffsetOptions).toHaveBeenLastCalledWith({
+    expect(onModifyOptions).toHaveBeenLastCalledWith({
       join: 'round',
       chain: false
     });
     // The strip leaves with the tool.
     rerender(<SketchToolRail {...props} pendingEdit={null} />);
     expect(screen.queryByRole('group', { name: 'Offset options' })).toBeNull();
+  });
+
+  it('brings a folded pattern setting back without disarming the tool', async () => {
+    const user = userEvent.setup();
+    const onEditTool = vi.fn();
+    renderRail({
+      canConstrain: true,
+      pendingEdit: { kind: 'linear-pattern', picks: ['ent_source'] },
+      onEditTool
+    });
+    expect(
+      screen.getByRole('radiogroup', { name: 'Pattern spacing' })
+    ).toBeVisible();
+    // The source pick on the canvas folds the strip away.
+    const host = document.createElement('div');
+    host.className = 'viewer-host';
+    const canvas = document.createElement('canvas');
+    host.append(canvas);
+    document.body.append(host);
+    fireEvent.pointerDown(canvas);
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Pattern spacing' })
+    ).toBeNull();
+    // Choosing the armed tool again re-opens it, and keeps the tool armed.
+    await user.click(screen.getByRole('button', { name: 'More modify tools' }));
+    await user.click(screen.getByRole('button', { name: 'Linear pattern' }));
+    expect(
+      screen.getByRole('radiogroup', { name: 'Pattern spacing' })
+    ).toBeVisible();
+    expect(onEditTool).not.toHaveBeenCalled();
+    host.remove();
+  });
+
+  it("rides each pattern's setting beside its slot while it is armed", async () => {
+    const user = userEvent.setup();
+    const onModifyOptions = vi.fn();
+    const { props, rerender } = renderRail({
+      canConstrain: true,
+      pendingEdit: { kind: 'linear-pattern', picks: [] },
+      onModifyOptions
+    });
+    const spacing = screen.getByRole('radiogroup', { name: 'Pattern spacing' });
+    // A step spacing is the default.
+    expect(
+      within(spacing)
+        .getAllByRole('radio')
+        .map((radio) => radio.getAttribute('aria-checked'))
+    ).toEqual(['true', 'false']);
+    await user.click(within(spacing).getByRole('radio', { name: 'Extent' }));
+    expect(onModifyOptions).toHaveBeenLastCalledWith({
+      join: 'miter',
+      chain: true,
+      patternSpacing: 'extent'
+    });
+    rerender(
+      <SketchToolRail
+        {...props}
+        pendingEdit={{ kind: 'circular-pattern', picks: [] }}
+        modifyOptions={{
+          join: 'round',
+          chain: false,
+          patternSpacing: 'extent'
+        }}
+      />
+    );
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Pattern spacing' })
+    ).toBeNull();
+    const orientation = screen.getByRole('radiogroup', {
+      name: 'Pattern orientation'
+    });
+    const rotate = within(orientation).getByRole('radio', { name: 'Rotate' });
+    expect(rotate).toHaveAttribute('aria-checked', 'true');
+    // Arrow keys move the choice, as in every rail radio group.
+    rotate.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(onModifyOptions).toHaveBeenLastCalledWith({
+      join: 'round',
+      chain: false,
+      patternSpacing: 'extent',
+      patternOrientation: 'uniform'
+    });
+    rerender(<SketchToolRail {...props} pendingEdit={null} />);
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Pattern orientation' })
+    ).toBeNull();
   });
 
   it('marks solver-named constraints as actionable conflicts', async () => {

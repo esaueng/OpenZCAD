@@ -424,6 +424,69 @@ describe('S05 modify tools on the pinned kernel', () => {
   });
 });
 
+describe('S05 pattern settings on the pinned kernel', () => {
+  it('uniform instances stay parallel to and as long as their source', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 9, y1: -1, x2: 11, y2: 1 }
+    ]);
+    const [bar] = fixture.ids as [string];
+    await fixture.commit(
+      planSketchCircularPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        bar,
+        { x: 0, y: 0 },
+        4,
+        360,
+        resolve,
+        'uniform'
+      )
+    );
+    const copies = fixture.sketch().objectIds.map(String).slice(1);
+    expectGood(await fixture.solve());
+    // Turn and stretch the source: every instance follows its direction and
+    // length, not the rotated ones a turning pattern would hold.
+    fixture.constrain(lock(bar, 'start', 10, 0));
+    fixture.constrain(lock(bar, 'end', 10, 6));
+    const outcome = await fixture.solve();
+    expectGood(outcome);
+    for (const copy of copies) {
+      const line = solved(outcome, copy);
+      expect(line.x2! - line.x1!).toBeCloseTo(0, 6);
+      expect(Math.abs(line.y2! - line.y1!)).toBeCloseTo(6, 6);
+    }
+  });
+
+  it('an extent-spaced pattern solves like the step-spaced one it equals', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
+    ]);
+    const [circle, direction] = fixture.ids as [string, string];
+    await fixture.commit(
+      planSketchLinearPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        circle,
+        direction,
+        10,
+        3,
+        resolve,
+        'extent'
+      )
+    );
+    const outcome = await fixture.solve();
+    expectGood(outcome);
+    const copies = fixture.sketch().objectIds.map(String).slice(2);
+    expect(copies.map((copy) => solved(outcome, copy).centerX)).toEqual([
+      expect.closeTo(5, 9),
+      expect.closeTo(10, 9)
+    ]);
+  });
+});
+
 describe('S05 Mirror holds an on-axis joint only when the solver needs it', () => {
   type Fixture = ReturnType<typeof sketchWith>;
   const point = (objectId: string, name: 'start' | 'end' | 'center') => ({
