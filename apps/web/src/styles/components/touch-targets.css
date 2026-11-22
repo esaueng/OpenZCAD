@@ -302,6 +302,12 @@
     min-height: 44px;
     padding-block: 0;
   }
+
+  /* With no padding above it, Clear all meets the dock's clipped top edge:
+     draw its focus ring inside the button so keyboard focus stays visible. */
+  .measurement-dock-clear:focus-visible {
+    outline-offset: -2px;
+  }
 }
 
 /* A touch-only device has no keys to press: the hints that name them are
