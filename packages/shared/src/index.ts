@@ -896,9 +896,7 @@ export function filletRadiusStationsProblem(data: {
     stations.length === 0 ||
     stations.length > MAX_FILLET_RADIUS_STATIONS
   )
-    return MAX_FILLET_RADIUS_STATIONS === 1
-      ? 'A fillet holds one radius station.'
-      : `Fillet radius stations must be a list of 1 to ${MAX_FILLET_RADIUS_STATIONS}.`;
+    return 'A fillet holds one radius station.';
   // One way to vary the radius at a time, so the editor, which offers one,
   // reopens either exactly (review).
   if (data.vertexRadii !== undefined)
