@@ -2976,6 +2976,59 @@ describe('useInPlaceCommand: fillet edges', () => {
     expect(hook.result.current.slots.edges.map((e) => e.hash)).toEqual([1, 2]);
   });
 
+  it('moves a corner radius with its corner when the edge set changes (M03 review)', () => {
+    const lined = (hash: number, from: number[], to: number[]) => ({
+      ...edge('a', hash),
+      end: { x: to[0]!, y: to[1]!, z: to[2]! },
+      reference: {
+        kind: 'edge',
+        currentHash: hash,
+        witness: {
+          curveType: 'LINE',
+          length: 1,
+          closed: false,
+          endpoints: [from.map((v) => v * 1e6), to.map((v) => v * 1e6)],
+          midpoint: [0, 0, 0]
+        }
+      } as never
+    });
+    const first = lined(1, [0, 0, 0], [10, 0, 0]);
+    const second = lined(2, [10, 0, 0], [10, 5, 0]);
+    const { hook } = setup();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], {
+        edges: [first, second]
+      })
+    );
+    act(() => hook.result.current.setOption('law', 'linear'));
+    act(() => hook.result.current.setOption('radiusAt', 'vertices'));
+    // vertex3 is the far end of the second edge, (10, 5, 0).
+    act(() => {
+      hook.result.current.setValue('vertex3', 4);
+    });
+    act(() => {
+      hook.result.current.pickEdge(first);
+    });
+    // With the first edge gone that corner is vertex2, and keeps its 4;
+    // no value is left behind on a slot that now names another corner.
+    expect(hook.result.current.values.vertex2).toBe(4);
+    expect(hook.result.current.values.vertex3).toBeUndefined();
+
+    // A live refresh that reorders the edges rekeys the same way: with the
+    // first edge back in front, (10, 5, 0) is vertex3 again.
+    act(() => hook.result.current.setPicks({ edges: [first, second] }));
+    expect(hook.result.current.values.vertex3).toBe(4);
+    expect(hook.result.current.values.vertex2).not.toBe(4);
+
+    // Another body's edge ending at the same point does not take the value.
+    act(() => {
+      hook.result.current.pickEdge({ ...second, bodyId: 'b' as BodyId });
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.bodyId)).toEqual(['b']);
+    expect(hook.result.current.values.vertex2).not.toBe(4);
+    expect(hook.result.current.values.vertex3).toBeUndefined();
+  });
+
   it('refuses an edge while a command takes none', () => {
     const { hook } = setup();
     act(() => hook.result.current.start('shell'));

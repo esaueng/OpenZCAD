@@ -49,7 +49,7 @@ export interface VariableFilletSpec {
   readonly perEdge?: readonly {
     startRadius: number;
     endRadius: number;
-    /** M03 (v146): interior stations in the kernel edge's direction. */
+    /** M03 (v150): interior stations in the kernel edge's direction. */
     stations?: readonly { at: number; radius: number }[];
   }[];
 }
@@ -75,7 +75,8 @@ function runsAsPicked(
   kernel: Pick<RemusKernel, 'getEdgeVertices'>,
   handle: number | undefined,
   reference: { witness: { closed: boolean; endpoints?: unknown } } | undefined,
-  what: string
+  what: string,
+  recorded: boolean | undefined
 ): boolean {
   const endpoints = reference?.witness.endpoints as
     [[number, number, number], [number, number, number]] | undefined;
@@ -111,6 +112,17 @@ function runsAsPicked(
       `${what} names an edge that now runs across the direction it was picked in, so its ends cannot be told apart.`
     );
   }
+  // The way the edge ran when the radii were set must be the way it runs
+  // now relative to where it was picked. A body turned upstream (180° about
+  // an axis) or an edge rebuilt reversed swaps which physical corner sits at
+  // which picked end; position alone cannot tell, so it is refused rather
+  // than guessed (review).
+  if (recorded === undefined || recorded !== dot > 0) {
+    throw new AdapterRefusal(
+      'fillet_vertex_radius_unmatched',
+      `${what} names an edge that now runs the other way from when it was set, so its ends cannot be told apart; set it again.`
+    );
+  }
   return dot > 0;
 }
 
@@ -119,7 +131,7 @@ function runsAsPicked(
  * stations, in the kernel edge's own direction.
  *
  * Per-vertex radii (schema v142) name an end by the edge's stored witness
- * endpoints, and stations (v146) stand at fractions from witness end 0: both
+ * endpoints, and stations (v150) stand at fractions from witness end 0: both
  * are fixed by where the edge was picked, not by the direction the kernel
  * builds it in (see {@link runsAsPicked}). Ends without an entry keep
  * `startRadius` / `endRadius`.
@@ -133,6 +145,7 @@ export function perEdgeVertexRadii(
       currentHash: number;
       witness: { closed: boolean; endpoints?: unknown };
     }[];
+    edgeRuns?: readonly boolean[];
   },
   entries: readonly { edge: number; end: 0 | 1; radius: number }[],
   startRadius: number,
@@ -153,7 +166,8 @@ export function perEdgeVertexRadii(
       kernel,
       handle,
       reference(edge),
-      'A fillet radius station'
+      'A fillet radius station',
+      data.edgeRuns?.[edge]
     );
     return {
       startRadius,
@@ -170,7 +184,8 @@ export function perEdgeVertexRadii(
       kernel,
       selected[entry.edge],
       reference(entry.edge),
-      'A per-vertex fillet radius'
+      'A per-vertex fillet radius',
+      data.edgeRuns?.[entry.edge]
     );
     const kernelStart = forward ? entry.end === 0 : entry.end === 1;
     const radii = perEdge[entry.edge]!;
@@ -251,7 +266,7 @@ export function variableFilletRequest(
       start: spec.perEdge?.[index]?.startRadius ?? spec.startRadius,
       end: spec.perEdge?.[index]?.endRadius ?? spec.endRadius,
       ...(spec.perEdge?.[index]?.stations?.length
-        ? { stations: spec.perEdge[index]!.stations }
+        ? { stations: spec.perEdge[index].stations }
         : {})
     }))
   );
@@ -290,17 +305,27 @@ export function applyVariableRadiusFillet(
  */
 const BLEND_FAILURE_CODES: readonly string[] = [
   'blend-failed',
+  'cancelled',
+  'chamfer-tangent-chain-required',
+  'cliff-encountered',
+  'corner-failure',
   'edges-not-blended',
   'fillet-failed',
   'invalid-input',
   'partial-result',
+  'postcondition-failed',
   'radius-too-large',
   'resize-blend-failed',
+  'resource-limit',
   'setback-mismatch',
+  'trimming-failure',
   'unsupported-face-face-blend',
+  'unsupported-seam-crossing',
   'unsupported-setback-corner',
   'unsupported-support-pair',
   'unsupported-surface',
+  'unsupported-variable-boundary',
+  'unsupported-variable-support',
   'unsupported-vertex-blend'
 ];
 
@@ -336,17 +361,27 @@ const BLEND_FAILURE_CATEGORIES: Readonly<
   Record<string, KernelRefusalCategory>
 > = {
   'blend-failed': 'unsupported',
+  cancelled: 'cancelled',
+  'chamfer-tangent-chain-required': 'unsupported',
+  'cliff-encountered': 'invalid_input',
+  'corner-failure': 'unsupported',
   'edges-not-blended': 'unsupported',
   'fillet-failed': 'unsupported',
   'invalid-input': 'invalid_input',
   'partial-result': 'unsupported',
+  'postcondition-failed': 'unsupported',
   'radius-too-large': 'invalid_input',
   'resize-blend-failed': 'unsupported',
+  'resource-limit': 'resource_limit',
   'setback-mismatch': 'invalid_input',
+  'trimming-failure': 'unsupported',
   'unsupported-face-face-blend': 'unsupported',
+  'unsupported-seam-crossing': 'unsupported',
   'unsupported-setback-corner': 'unsupported',
   'unsupported-support-pair': 'unsupported',
   'unsupported-surface': 'unsupported',
+  'unsupported-variable-boundary': 'unsupported',
+  'unsupported-variable-support': 'unsupported',
   'unsupported-vertex-blend': 'unsupported'
 };
 

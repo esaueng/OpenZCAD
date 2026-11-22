@@ -910,6 +910,7 @@ export function planSketchEdit(
         : {
             kind,
             pivot: pivot!.pivot,
+            pivotRef: pivot!.ref,
             count: values[0]!,
             totalDeg: values[1]!,
             orientation: pattern?.orientation ?? 'rotate'
@@ -944,7 +945,8 @@ export function planSketchEdit(
       values[0]!,
       values[1]!,
       resolve,
-      pattern?.orientation
+      pattern?.orientation,
+      pivot.ref
     );
   }
   const amount = values[0]!;

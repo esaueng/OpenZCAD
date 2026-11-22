@@ -2705,7 +2705,7 @@ describe('fillet and chamfer run in place', () => {
     });
   });
 
-  describe('per-vertex radii (M03, v142)', () => {
+  describe('per-vertex radii (M03, v149)', () => {
     const witness = (
       from: [number, number, number],
       to: [number, number, number]
@@ -2772,7 +2772,9 @@ describe('fillet and chamfer run in place', () => {
           { edge: 0, end: 1, radius: 'r' },
           { edge: 1, end: 1, radius: 'r' },
           { edge: 1, end: 0, radius: 3 }
-        ]
+        ],
+        // Both edges are drawn towards (20, 0, 4), witness end 1 of each.
+        edgeRuns: [true, true]
       });
       const handles = spec.handles(slots, {}, CTX, perCorner);
       expect(handles.map((handle) => handle.valueId)).toEqual([
@@ -2795,7 +2797,7 @@ describe('fillet and chamfer run in place', () => {
       ).not.toHaveProperty('vertexRadii');
     });
 
-    it('stores one station along every edge, with its arrow there (v146)', () => {
+    it('stores one station along every edge, with its arrow there (v150)', () => {
       const spec = IN_PLACE_TOOL_SPECS.fillet;
       const slots = { ...EMPTY, edges: [A] };
       const along = { law: 'scurve', radiusAt: 'along' };
@@ -2820,6 +2822,31 @@ describe('fillet and chamfer run in place', () => {
       });
       const { reference: _named, ...unnamed } = A;
       expect(spec.ready({ ...EMPTY, edges: [unnamed] }, along)).toBe(false);
+    });
+
+    it('keys each corner value by its body and where its corner stands (review)', () => {
+      const keys = IN_PLACE_TOOL_SPECS.fillet.edgeValueKeys!;
+      expect(keys([A, B])).toEqual({
+        vertex1: 'body_a:0,0,4',
+        vertex2: 'body_a:20,0,4',
+        vertex3: 'body_a:20,10,4'
+      });
+      // B alone: its corners take the first two slots, keyed as before, so
+      // the session moves an edited value with its corner, not its slot.
+      expect(keys([B])).toEqual({
+        vertex1: 'body_a:20,10,4',
+        vertex2: 'body_a:20,0,4'
+      });
+    });
+
+    it('is not ready without a drawn edge end to read its direction from', () => {
+      const { end: _end, ...endless } = A;
+      expect(
+        IN_PLACE_TOOL_SPECS.fillet.ready(
+          { ...EMPTY, edges: [endless] },
+          perCorner
+        )
+      ).toBe(false);
     });
 
     it('is not ready without named edges or past its corner count', () => {

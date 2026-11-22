@@ -140,6 +140,9 @@ test(
       page.getByRole('button', { name: 'Make a copy', exact: true })
     ).toBeVisible({ timeout: SYNC_BUDGET_MS });
     await owner.links
+      .getByRole('button', { name: 'View only link', exact: true })
+      .click();
+    await owner.links
       .getByRole('button', { name: 'Revoke View only link' })
       .click();
     await owner.links.getByRole('button', { name: 'Revoke link' }).click();

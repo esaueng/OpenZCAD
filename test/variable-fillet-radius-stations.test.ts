@@ -15,7 +15,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * M03 radius stations (schema v146): a variable-radius fillet with interior
+ * M03 radius stations (schema v150): a variable-radius fillet with interior
  * radii along each edge, at fractions from the edge's witness end 0, the law
  * running between neighbouring stations. Built exactly by the kernel's
  * station law (esaueng/remus#1939): each piece of the law is a cubic, so the
@@ -50,7 +50,26 @@ function squareIntegral(
   return sum;
 }
 
-describe('fillet radius stations (M03, v146)', { timeout: 120_000 }, () => {
+/**
+ * Whether the kernel runs `edge` from its witness end 0 to end 1: its drawn
+ * polyline ends at witness end 1. What a pick records as `edgeRuns`.
+ */
+function runOf(edge: EdgeTopology): boolean {
+  const far = edge.points.slice(-3);
+  const witness = edge.reference!.witness;
+  if (witness.closed) throw new Error('Expected an open edge.');
+  const near = (end: 0 | 1) => {
+    const [x, y, z] = witness.endpoints[end];
+    return Math.hypot(
+      far[0]! - x * 1e-6,
+      far[1]! - y * 1e-6,
+      far[2]! - z * 1e-6
+    );
+  };
+  return near(1) < near(0);
+}
+
+describe('fillet radius stations (M03, v150)', { timeout: 120_000 }, () => {
   it('rounds the edge through its stations exactly, measured from where it was picked', async () => {
     const adapter = await createExactKernelAdapter();
     try {
@@ -79,7 +98,8 @@ describe('fillet radius stations (M03, v146)', { timeout: 120_000 }, () => {
           size: 1,
           endRadius: 2,
           radiusLaw: law,
-          radiusStations: [{ at: 0.25, radius: 3 }]
+          radiusStations: [{ at: 0.25, radius: 3 }],
+          edgeRuns: [runOf(edge)]
         });
         const derived = await adapter.syncDocument(rounded.document);
         expect(
@@ -108,7 +128,7 @@ describe('fillet radius stations (M03, v146)', { timeout: 120_000 }, () => {
         ).toBeCloseTo(expected, 3);
       }
 
-      // Malformed lists are refused at creation; a stored list needs v146.
+      // Malformed lists are refused at creation; a stored list needs v150.
       const base = {
         name: 'Round',
         targetBodyId: bodyId,
@@ -116,7 +136,8 @@ describe('fillet radius stations (M03, v146)', { timeout: 120_000 }, () => {
         edgeReferences: [edge.reference!],
         size: 1,
         endRadius: 2,
-        radiusLaw: 'linear' as const
+        radiusLaw: 'linear' as const,
+        edgeRuns: [runOf(edge)]
       };
       for (const radiusStations of [
         [],
@@ -129,7 +150,7 @@ describe('fillet radius stations (M03, v146)', { timeout: 120_000 }, () => {
         [{ at: 0.5, radius: Number.NaN }]
       ])
         expect(() =>
-          filletEdges(document, { ...base, radiusStations } as never)
+          filletEdges(document, { ...base, radiusStations })
         ).toThrow();
       expect(() =>
         filletEdges(document, {
@@ -156,6 +177,14 @@ describe('fillet radius stations (M03, v146)', { timeout: 120_000 }, () => {
           schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
         } as never)
       ).toThrow(/Fillet radius stations/);
+      // Stations without the way each edge ran are refused (review).
+      const { edgeRuns: _runs, ...runless } = base;
+      expect(() =>
+        filletEdges(document, {
+          ...runless,
+          radiusStations: [{ at: 0.5, radius: 3 }]
+        })
+      ).toThrow(/direction each selected edge ran/);
     } finally {
       adapter.dispose();
     }

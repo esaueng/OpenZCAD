@@ -34,6 +34,7 @@ import { sheetMetalCleared, sheetMetalEditOptions } from './sheetMetal';
 import {
   FILLET_VERTEX_SLOTS,
   IN_PLACE_TOOL_SPECS,
+  filletEdgeRuns,
   filletSelectionVertices,
   filletVertexValueId,
   type BodyPick,
@@ -910,7 +911,7 @@ export function inPlaceEditSeed(
         if (data.endRadius !== undefined) {
           value('endRadius', data.endRadius);
           seed.options.law = data.radiusLaw ?? 'linear';
-          // M03 (v142): each corner's stored radius into its value, the
+          // M03 (v149): each corner's stored radius into its value, the
           // corners counted as the tool counts them from the same picks.
           // Only when every stored edge is still there in its place: the
           // entries index the stored edge list.
@@ -919,7 +920,7 @@ export function inPlaceEditSeed(
             seed.slots.edges.length === data.edgeHashes.length
               ? filletSelectionVertices(seed.slots.edges)
               : null;
-          // M03 (v146): the editor holds one interior station; a stored
+          // M03 (v150): the editor holds one interior station; a stored
           // list of more is said, not silently cut to one.
           if (data.radiusStations?.[0]) {
             seed.options.radiusAt = 'along';
@@ -928,16 +929,47 @@ export function inPlaceEditSeed(
             if (data.radiusStations.length > 1)
               seed.notice = `This fillet has ${data.radiusStations.length} radius stations; Done keeps only the first.`;
           }
+          // An edge that now runs the other way from when its corners or
+          // stations were set keeps its stored run (review): Done then writes
+          // the same fillet back, which the build refuses by name, rather
+          // than a run read off the turned edge that would swap its radii
+          // end for end. Picking the edge again sets them afresh.
+          if (data.vertexRadii || data.radiusStations) {
+            const live = filletEdgeRuns(seed.slots.edges);
+            data.edgeRuns?.forEach((run, index) => {
+              const pick = seed.slots.edges[index];
+              const witness = pick?.reference?.witness;
+              if (!pick || !witness || witness.closed || live?.[index] === run)
+                return;
+              const [x, y, z] = witness.endpoints[run ? 1 : 0];
+              pick.end = { x: x * 1e-6, y: y * 1e-6, z: z * 1e-6 };
+            });
+          }
           if (data.vertexRadii && vertices) {
             seed.options.radiusAt = 'vertices';
             vertices.forEach((vertex, index) => {
+              if (index >= FILLET_VERTEX_SLOTS) return;
               const stored = data.vertexRadii!.find((entry) =>
                 vertex.ends.some(
                   (end) => end.edge === entry.edge && end.end === entry.end
                 )
               );
-              if (stored && index < FILLET_VERTEX_SLOTS)
+              if (stored) {
                 value(filletVertexValueId(index), stored.radius);
+                return;
+              }
+              // A corner with no entry kept what the start and end radii
+              // gave it, which depends on the way its edge ran (review):
+              // seed that, so an untouched Done writes the same fillet back.
+              const [first] = vertex.ends;
+              const run = first ? data.edgeRuns?.[first.edge] : undefined;
+              if (first && run !== undefined) {
+                const atStart = run ? first.end === 0 : first.end === 1;
+                value(
+                  filletVertexValueId(index),
+                  atStart ? data.radius : data.endRadius!
+                );
+              }
             });
           }
         } else {

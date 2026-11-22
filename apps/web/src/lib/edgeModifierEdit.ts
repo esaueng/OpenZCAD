@@ -22,10 +22,13 @@ export interface EdgeModifierFormValue {
   endRadius?: ParamValue;
   /** Fillet only: read only with `endRadius`; absent means 'linear'. */
   radiusLaw?: VariableFilletLaw;
-  /** Fillet only (M03, v142): per-vertex radii; absent means none. */
+  /** Fillet only (M03, v149): per-vertex radii; absent means none. */
   vertexRadii?: FilletVertexRadius[];
-  /** Fillet only (M03, v146): interior radius stations; absent means none. */
+  /** Fillet only (M03, v150): interior radius stations; absent means none. */
   radiusStations?: FilletRadiusStation[];
+  /** Fillet only, with `vertexRadii` or `radiusStations`: how each edge ran
+   * when they were set. */
+  edgeRuns?: boolean[];
   /** Chamfer only: setback on the other face; absent means symmetric. */
   distance2?: ParamValue;
 }
@@ -53,10 +56,20 @@ export function edgeModifierCommand(
   const clearData =
     kind === 'fillet'
       ? value.endRadius === undefined
-        ? ['endRadius', 'radiusLaw', 'vertexRadii', 'radiusStations']
+        ? [
+            'endRadius',
+            'radiusLaw',
+            'vertexRadii',
+            'radiusStations',
+            'edgeRuns'
+          ]
         : [
             ...(value.vertexRadii === undefined ? ['vertexRadii'] : []),
-            ...(value.radiusStations === undefined ? ['radiusStations'] : [])
+            ...(value.radiusStations === undefined ? ['radiusStations'] : []),
+            ...(value.vertexRadii === undefined &&
+            value.radiusStations === undefined
+              ? ['edgeRuns']
+              : [])
           ]
       : [
           ...(value.angleDeg === undefined ? ['angleDeg'] : []),
@@ -81,6 +94,11 @@ export function edgeModifierCommand(
                     radiusLaw: value.radiusLaw ?? 'linear',
                     ...(value.vertexRadii !== undefined
                       ? { vertexRadii: value.vertexRadii }
+                      : {}),
+                    ...(value.edgeRuns !== undefined &&
+                    (value.vertexRadii !== undefined ||
+                      value.radiusStations !== undefined)
+                      ? { edgeRuns: value.edgeRuns }
                       : {}),
                     ...(value.radiusStations !== undefined
                       ? { radiusStations: value.radiusStations }

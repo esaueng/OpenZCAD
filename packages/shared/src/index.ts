@@ -554,18 +554,23 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
-// v142 adds M03 per-vertex fillet radii (`vertexRadii` on a variable-radius
-// fillet): the radius at each end of each selected edge, named by the
-// edge's lineage witness. An older client would round every edge from
-// `radius` to `endRadius`, so it must refuse the document. Builds on v141
-// (#1911 on main; v138–v140 stay claimed by the open S05/S07 sketch PRs).
-// v146 adds M03 radius stations (`radiusStations` on a variable-radius
+// v150 adds M03 radius stations (`radiusStations` on a variable-radius
 // fillet): interior radii along each selected edge, at fractions from the
-// edge's witness end 0, the law running between neighbouring stations. An
-// older client would round each edge from `radius` to `endRadius` only, so
-// it must refuse the document. Builds on v142 (v143–v145 are claimed by the
-// open #1915, #1913 and #1917).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 146 as const;
+// edge's witness end 0, the law running between neighbouring stations, with
+// `edgeRuns` recording the way each edge ran. An older client would round
+// each edge from `radius` to `endRadius` only, so it must refuse the
+// document. Builds on v149.
+// v149 adds M03 per-vertex fillet radii (`vertexRadii` and `edgeRuns` on a
+// variable-radius fillet): the radius at each end of each selected edge,
+// named by the edge's lineage witness. An older client would round every
+// edge from `radius` to `endRadius`, so it must refuse the document. Builds
+// on v145 (#1917 on main); v150 to v148 are claimed by the S05 offset
+// dimension (#1919), the M01 hole anchor (#1808) and I03 unit switching
+// (#1915). v142, once claimed here, was skipped on main.
+// v145 adds S05 sketch pattern relations (`pattern` sketch constraints): a
+// linear or circular pattern's instance positions held by one relation. An
+// older client cannot solve it, so it must refuse the document.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 150 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -808,7 +813,7 @@ export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
 }
 
 /**
- * M03 (schema v142): the radius a variable-radius fillet reaches at one end
+ * M03 (schema v149): the radius a variable-radius fillet reaches at one end
  * of one selected edge.
  *
  * `edge` indexes the feature's `edgeHashes`; `end` names one of that edge's
@@ -826,8 +831,17 @@ export interface FilletVertexRadius {
   radius: ParamValue;
 }
 
+/*
+ * A fillet that stores `vertexRadii` also stores `edgeRuns`: for each
+ * selected edge, whether the kernel ran it from witness end 0 to end 1 when
+ * the radii were set. A rebuild that finds the edge running the other way
+ * relative to where it was picked (a body turned upstream, or an edge rebuilt
+ * reversed) cannot tell which physical corner each radius belongs to, and is
+ * refused by name rather than guessed.
+ */
+
 /**
- * M03 (schema v146): one interior radius station of a variable-radius
+ * M03 (schema v150): one interior radius station of a variable-radius
  * fillet, applied to every selected edge. `at` is the fraction of the edge
  * from its witness end 0 (`edgeReferences[…].witness.endpoints[0]`),
  * strictly inside (0, 1); the fillet's law (`radiusLaw`) runs between
@@ -852,6 +866,7 @@ export function filletRadiusStationsProblem(data: {
   edgeReferences?: readonly { currentHash: number }[];
   endRadius?: ParamValue;
   radiusStations?: unknown;
+  edgeRuns?: unknown;
 }): string | null {
   const stations = data.radiusStations;
   if (stations === undefined) return null;
@@ -891,6 +906,17 @@ export function filletRadiusStationsProblem(data: {
     )
   )
     return 'Fillet radius stations need the lineage reference of every selected edge.';
+  // Stations stand at fractions from witness end 0, so each edge's run is
+  // recorded as for per-vertex radii (review), once per edge.
+  if (new Set(data.edgeHashes).size !== data.edgeHashes.length)
+    return 'Fillet radius stations need a selection that names each edge once.';
+  const runs = data.edgeRuns;
+  if (
+    !Array.isArray(runs) ||
+    runs.length !== data.edgeHashes.length ||
+    runs.some((run) => typeof run !== 'boolean')
+  )
+    return 'Fillet radius stations need the direction each selected edge ran when they were set.';
   return null;
 }
 
@@ -904,13 +930,31 @@ export function filletVertexRadiiProblem(data: {
   edgeReferences?: readonly { currentHash: number }[];
   endRadius?: ParamValue;
   vertexRadii?: unknown;
+  edgeRuns?: unknown;
+  radiusStations?: unknown;
 }): string | null {
   const entries = data.vertexRadii;
-  if (entries === undefined) return null;
+  if (entries === undefined) {
+    // With stations the runs are checked by `filletRadiusStationsProblem`.
+    return data.edgeRuns === undefined || data.radiusStations !== undefined
+      ? null
+      : 'Fillet edge directions go only with per-vertex radii or radius stations.';
+  }
   if (!Array.isArray(entries) || entries.length === 0)
     return 'Per-vertex fillet radii must be a non-empty list.';
   if (data.endRadius === undefined)
     return 'Per-vertex fillet radii need a variable-radius fillet.';
+  // Entries name edges by position, so the selection must not repeat one
+  // (an edit patch can store a repeated hash that creation would refuse).
+  if (new Set(data.edgeHashes).size !== data.edgeHashes.length)
+    return 'Per-vertex fillet radii need a selection that names each edge once.';
+  const runs = data.edgeRuns;
+  if (
+    !Array.isArray(runs) ||
+    runs.length !== data.edgeHashes.length ||
+    runs.some((run) => typeof run !== 'boolean')
+  )
+    return 'Per-vertex fillet radii need the direction each selected edge ran when they were set.';
   const seen = new Set<string>();
   for (const entry of entries as unknown[]) {
     if (typeof entry !== 'object' || entry === null)
@@ -2185,7 +2229,32 @@ export type SketchConstraintData =
    * lock was made. An edit that would move it conflicts instead of dragging
    * the lock along; removing the constraint unlocks the point.
    */
-  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number };
+  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
+  /**
+   * S05 (v145): a sketch pattern held as one relation. Each instance is the
+   * source moved `step` steps: along the direction line by `spacing` a step
+   * (linear), or round the pivot by `stepDeg` a step (circular), turned with
+   * it or, `uniform`, kept in the source's orientation. Instances keep the
+   * source's size and shape too, so moving or resizing the source carries
+   * every instance, and moving an instance alone conflicts. An instance
+   * deleted leaves the others held at their own steps.
+   */
+  | {
+      constraintKind: 'pattern';
+      source: EntityId;
+      instances: { objectId: EntityId; step: number }[];
+      layout: SketchPatternLayout;
+    };
+
+/** How a {@link SketchConstraintData} `pattern` relation places its steps. */
+export type SketchPatternLayout =
+  | { kind: 'linear'; direction: EntityId; spacing: ParamValue }
+  | {
+      kind: 'circular';
+      pivot: SketchPointRef;
+      stepDeg: ParamValue;
+      orientation: 'rotate' | 'uniform';
+    };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
@@ -3525,16 +3594,22 @@ export type FeatureData =
        */
       radiusLaw?: VariableFilletLaw;
       /**
-       * M03 (schema v142): the radius at named ends of the selected edges,
+       * M03 (schema v149): the radius at named ends of the selected edges,
        * overriding `radius` and `endRadius` there; see
        * {@link FilletVertexRadius}. Only with `endRadius`.
        */
       vertexRadii?: FilletVertexRadius[];
       /**
-       * M03 (schema v146): interior radii along every selected edge; see
+       * M03 (schema v150): interior radii along every selected edge; see
        * {@link FilletRadiusStation}. Only with `endRadius`.
        */
       radiusStations?: FilletRadiusStation[];
+      /**
+       * M03 (schema v149): for each selected edge, whether the kernel ran it
+       * from witness end 0 to end 1 when `vertexRadii` or `radiusStations`
+       * were set. Present exactly when either is.
+       */
+      edgeRuns?: boolean[];
     }
   | {
       featureKind: 'chamfer';
@@ -6232,7 +6307,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle'
+  'distance' | 'radius' | 'angle' | 'pattern'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [

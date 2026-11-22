@@ -23,6 +23,7 @@
  * account-wrapped keys for an epoch (`POST …/keys`); only the owner creates
  * the group.
  */
+import { readBoundedRequestText } from './requestBody';
 import {
   decodeDeviceListEntry,
   fromBase64Url,
@@ -134,10 +135,9 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   if (Number(request.headers.get('content-length') ?? '0') > MAX_BODY_CHARS) {
     refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
   }
-  const text = await request.text();
-  if (text.length > MAX_BODY_CHARS) {
-    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
-  }
+  const text = await readBoundedRequestText(request, MAX_BODY_CHARS, () =>
+    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.')
+  );
   let value: unknown;
   try {
     value = JSON.parse(text);

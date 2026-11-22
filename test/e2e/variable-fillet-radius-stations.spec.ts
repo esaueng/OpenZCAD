@@ -14,7 +14,7 @@ import {
 } from './openzcad-fixtures';
 
 /**
- * M03 radius stations (schema v146): a variable fillet with a third radius
+ * M03 radius stations (schema v150): a variable fillet with a third radius
  * partway along the edge. The edge is picked on the canvas, Radius: Eased
  * and Radius at: Along the edge are chosen, and the middle arrow is dragged.
  * The saved fillet stores one station at its fraction, and an exact rebuild
@@ -92,7 +92,7 @@ function squareIntegral(stations: [number, number][]): number {
 }
 
 test(
-  'a middle radius dragged on a picked edge sets the station (M03, v146)',
+  'a middle radius dragged on a picked edge sets the station (M03, v150)',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(180_000);
