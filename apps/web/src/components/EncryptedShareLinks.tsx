@@ -293,7 +293,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     ]);
     const { ctx } = await encryptedShareLinks();
     await revokeShareLink(ctx, projectId, shareId);
-    // Its name goes with it. Best effort: a later list prunes it anyway.
+    // Its name goes with it. Best effort: left behind, it is never shown,
+    // since only listed links show a name.
     await import('../lib/e2ee/sealedShareLinkNames')
       .then(({ renamePageShareLink }) =>
         renamePageShareLink(ctx.groups.account.userId, projectId, shareId, null)

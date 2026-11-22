@@ -189,29 +189,6 @@ export function shareLinkNamesFor(
   return names;
 }
 
-/**
- * Prunes the names of a project's revoked links (revoked on another device,
- * or replaced by a reissue): a tombstone replaces each. Only links the
- * project's signed link set tombstones count, and a tombstone is never
- * lifted, so a link is never pruned for being missing from a list that has
- * not caught up with it yet (PR 1921 review).
- */
-export function pruneRevokedShareLinkNames(
-  book: ShareLinkNameBook,
-  projectId: string,
-  revoked: ReadonlySet<string>,
-  now: number
-): ShareLinkNameBook {
-  let next = book;
-  for (const [shareId, entry] of Object.entries(
-    book.projects[projectId] ?? {}
-  )) {
-    if ('deleted' in entry || !revoked.has(shareId)) continue;
-    next = setShareLinkName(next, projectId, shareId, null, now);
-  }
-  return next;
-}
-
 /** A reissued link and the revoked link it replaces (`ShareWork.replacements`). */
 export interface ShareLinkReplacement {
   readonly sourceId: string;
@@ -219,31 +196,68 @@ export interface ShareLinkReplacement {
 }
 
 /**
- * Gives each reissued link the name of the link it replaces. A replacement
- * that already has an entry keeps it, a name or a cleared one, so carrying
- * again (every list does) never undoes a rename made after the reissue; a
- * source whose name was cleared gives nothing.
+ * Gives each reissued link the name of the link it replaces, with that
+ * name's own stamp: the replacement inherits an edit made before it existed,
+ * so any rename or clear of the replacement, made after the reissue on any
+ * device, outranks it when copies merge (PR 1938 review). A replacement that
+ * already has an entry keeps it, and a source whose name was cleared or
+ * whose link was revoked from the dialog gives nothing.
+ *
+ * Callers apply this to the account's copy merged with this device's
+ * (`changeShareLinkNames`), never to a device copy alone, so the source's
+ * name is the latest one any device saved.
  */
 export function carryReissuedShareLinkNames(
   book: ShareLinkNameBook,
   projectId: string,
+  replacements: readonly ShareLinkReplacement[]
+): ShareLinkNameBook {
+  const links = book.projects[projectId] ?? {};
+  let carried: Record<string, ShareLinkNameEntry> | null = null;
+  for (const { sourceId, shareId } of replacements) {
+    const source = links[sourceId];
+    if (!validId(shareId) || !source || 'deleted' in source) continue;
+    if (links[shareId] || carried?.[shareId]) continue;
+    (carried ??= {})[shareId] = { name: source.name, stamp: source.stamp };
+  }
+  if (!carried) return book;
+  return {
+    version: 1,
+    projects: { ...book.projects, [projectId]: { ...links, ...carried } }
+  };
+}
+
+/**
+ * Clears the name of each reissued link's source once the replacement has
+ * an entry in the same copy. Only a reissue's own sources are cleared, and
+ * only by the device that holds the reissue's record of them: a link that
+ * is merely revoked keeps its name in the record (it is never shown, since
+ * only listed links show one). So a reissue that stops halfway, or links an
+ * identity change turned off before the owner reissues them, lose no name
+ * that a later replacement still needs (PR 1938 review).
+ */
+export function clearReissuedSourceNames(
+  book: ShareLinkNameBook,
+  projectId: string,
+  revoked: ReadonlySet<string>,
   replacements: readonly ShareLinkReplacement[],
   now: number
 ): ShareLinkNameBook {
-  const links = book.projects[projectId] ?? {};
   let next = book;
   for (const { sourceId, shareId } of replacements) {
+    const links = next.projects[projectId] ?? {};
     const source = links[sourceId];
-    if (!source || 'deleted' in source || links[shareId]) continue;
-    next = setShareLinkName(next, projectId, shareId, source.name, now);
+    if (!revoked.has(sourceId) || !source || 'deleted' in source) continue;
+    if (!links[shareId]) continue;
+    next = setShareLinkName(next, projectId, sourceId, null, now);
   }
   return next;
 }
 
 /**
- * What a list does to the names: reissued links take their sources' names
- * first, then the revoked sources' names are pruned. In that order, in one
- * change, so a reissue never loses a name to its own pruning.
+ * What a list does to the names: reissued links take their sources' names,
+ * then those sources' names are cleared. In that order, in one change on the
+ * merged copy, so a reissue never loses a name to its own clearing.
  */
 export function refreshShareLinkNames(
   book: ShareLinkNameBook,
@@ -252,10 +266,11 @@ export function refreshShareLinkNames(
   replacements: readonly ShareLinkReplacement[],
   now: number
 ): ShareLinkNameBook {
-  return pruneRevokedShareLinkNames(
-    carryReissuedShareLinkNames(book, projectId, replacements, now),
+  return clearReissuedSourceNames(
+    carryReissuedShareLinkNames(book, projectId, replacements),
     projectId,
     revoked,
+    replacements,
     now
   );
 }
@@ -733,9 +748,9 @@ async function pageKeys(userId: string): Promise<ShareLinkNameKeys | null> {
 
 /**
  * The names of a project's listed links, for its share dialog. Reissued
- * links take the names of the links they replace, and the names of the
- * project's revoked links are pruned (`refreshShareLinkNames`); the account
- * record takes both in the background.
+ * links take the names of the links they replace, whose names are then
+ * cleared (`refreshShareLinkNames`): shown at once, and saved to the
+ * account record in the background, merged with it first.
  */
 export async function pageShareLinkNames(
   userId: string,
@@ -754,18 +769,6 @@ export async function pageShareLinkNames(
       shareLinkNamesFor(refresh(device, Date.now()), projectId)
     );
   }
-  // Carried into this device's copy before the account's is merged: another
-  // device without the reissue's mapping may already have pruned the source
-  // name there, and the new link's entry, which it never wrote, survives
-  // the merge.
-  const device = keys.device.read();
-  const carried = carryReissuedShareLinkNames(
-    device,
-    projectId,
-    replacements,
-    Date.now()
-  );
-  if (carried !== device) keys.device.write(carried);
   const api = await pageApi();
   const book = await readShareLinkNames(keys, api);
   const shown = refresh(book, Date.now());
