@@ -94,6 +94,8 @@ const INVENTORY: Record<string, typeof PREFIX | readonly Sample[]> = {
     ['/api/settings/assistant-credential', 'none']
   ],
   '/api/settings/assistant/test': [['/api/settings/assistant/test', 'none']],
+  // Sealed under the account key in the browser: no project's content.
+  '/api/share-link-names': [['/api/share-link-names', 'none', ['PUT']]],
 
   // End-to-end encryption: encrypted by the route, or no content at all.
   '/api/e2ee/account': [['/api/e2ee/account', 'none']],

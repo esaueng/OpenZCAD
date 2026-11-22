@@ -3,6 +3,7 @@ import { fromHex, toHex } from './bytes';
 import { isE2eeError } from './errors';
 import {
   LIBRARY_FOLDERS_KEY_INFO,
+  openLibraryFolders,
   sealLibraryFolders
 } from './library-folders';
 import {
@@ -10,7 +11,8 @@ import {
   openRecord,
   readSealedRecordHeader,
   sealRecord,
-  sealRecordWith
+  sealRecordWith,
+  SHARE_LINK_NAMES_RECORD
 } from './sealed-records';
 import { PROJECT_PREFERENCES_MAC_INFO } from './account-records';
 import { patternBytes, queuedRandom } from './test-support';
@@ -114,6 +116,116 @@ describe('sealed account settings (ADR-024 amendment 2026-11-14)', () => {
           'user_alice',
           1,
           new Uint8Array(ACCOUNT_SETTINGS_RECORD.maxPlaintextBytes + 1)
+        )
+      )
+    ).toBe('limit-exceeded');
+  });
+});
+
+/**
+ * Fixed vector: account key 00..1f, user "user_alice", sequence 7, IV 40..4b,
+ * plaintext `{"version":1,"projects":{}}`. Checked against an independent
+ * implementation (Python `cryptography`: HKDF-SHA-256 and AES-GCM), which
+ * also reproduces the settings vector above. A change here is a
+ * storage-format change.
+ */
+const NAMES = new TextEncoder().encode('{"version":1,"projects":{}}');
+const SEALED_NAMES_HEX =
+  '01b121bfb3bada386980ca9e4ffe4303ba46d3996b23eac9cbd7ca22d659cd1084' +
+  '00000007404142434445464748494a4b6b60c914ec22cc135109a7ec9f62478f95' +
+  'fbecf1f4d52b85188c66a3626dbe246c9e63703de8ea27835157';
+
+describe('sealed share link names (ADR-024 amendment 2026-11-22)', () => {
+  it('matches the fixed vector and opens it', async () => {
+    expect(SHARE_LINK_NAMES_RECORD.keyInfo).toBe(
+      'OpenZCAD E2EE v1 share link names key'
+    );
+    expect(SHARE_LINK_NAMES_RECORD.aadLabel).toBe(
+      'OpenZCAD E2EE v1 share link names\0'
+    );
+    for (const other of [
+      LIBRARY_FOLDERS_KEY_INFO,
+      PROJECT_PREFERENCES_MAC_INFO,
+      ACCOUNT_SETTINGS_RECORD.keyInfo
+    ])
+      expect(SHARE_LINK_NAMES_RECORD.keyInfo).not.toBe(other);
+    const sealed = await sealRecordWith(
+      SHARE_LINK_NAMES_RECORD,
+      queuedRandom(patternBytes(12, 0x40)),
+      ACCOUNT_KEY,
+      'user_alice',
+      7,
+      NAMES
+    );
+    expect(toHex(sealed)).toBe(SEALED_NAMES_HEX);
+    expect(
+      await openRecord(
+        SHARE_LINK_NAMES_RECORD,
+        ACCOUNT_KEY,
+        'user_alice',
+        fromHex(SEALED_NAMES_HEX)
+      )
+    ).toEqual({ sequence: 7, plaintext: NAMES });
+  });
+
+  it('opens for its own account key, account and kind only', async () => {
+    const sealed = await sealRecord(
+      SHARE_LINK_NAMES_RECORD,
+      ACCOUNT_KEY,
+      'user_alice',
+      2,
+      NAMES
+    );
+    expect(
+      await code(
+        openRecord(SHARE_LINK_NAMES_RECORD, OTHER_KEY, 'user_alice', sealed)
+      )
+    ).toBe('context-mismatch');
+    expect(
+      await code(
+        openRecord(SHARE_LINK_NAMES_RECORD, ACCOUNT_KEY, 'user_bob', sealed)
+      )
+    ).toBe('authentication-failed');
+    // Settings never open as names, nor names as settings or folders.
+    const settings = await sealRecord(
+      ACCOUNT_SETTINGS_RECORD,
+      ACCOUNT_KEY,
+      'user_alice',
+      2,
+      NAMES
+    );
+    expect(
+      await code(
+        openRecord(SHARE_LINK_NAMES_RECORD, ACCOUNT_KEY, 'user_alice', settings)
+      )
+    ).toBe('authentication-failed');
+    expect(
+      await code(
+        openRecord(ACCOUNT_SETTINGS_RECORD, ACCOUNT_KEY, 'user_alice', sealed)
+      )
+    ).toBe('authentication-failed');
+    expect(
+      await code(openLibraryFolders(ACCOUNT_KEY, 'user_alice', sealed))
+    ).toBe('authentication-failed');
+    // The sequence is bound: raising it in the header breaks the tag.
+    const raised = sealed.slice();
+    raised[36] = (raised[36] ?? 0) + 1;
+    expect(
+      await code(
+        openRecord(SHARE_LINK_NAMES_RECORD, ACCOUNT_KEY, 'user_alice', raised)
+      )
+    ).toBe('authentication-failed');
+  });
+
+  it('refuses oversized names', async () => {
+    expect(
+      await code(
+        sealRecord(
+          SHARE_LINK_NAMES_RECORD,
+          ACCOUNT_KEY,
+          'user_alice',
+          1,
+          new Uint8Array(SHARE_LINK_NAMES_RECORD.maxPlaintextBytes + 1)
         )
       )
     ).toBe('limit-exceeded');
