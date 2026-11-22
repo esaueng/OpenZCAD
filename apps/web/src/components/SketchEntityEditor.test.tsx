@@ -1145,10 +1145,37 @@ describe('the construction toggle (ZC-024)', () => {
       />
     );
     const toggle = screen.getByRole('button', { name: 'Construction (3)' });
+    // Without a selection-wide state it reads the primary entity.
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
     expect(toggle).toHaveAttribute(
       'title',
       'Toggle construction for the 3 selected entities: all become construction unless every one already is'
     );
+  });
+
+  it('announces a mixed selection as mixed, not as the primary entity', () => {
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'line',
+          x1: 0,
+          y1: 0,
+          x2: 10,
+          y2: 0,
+          construction: true
+        }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleConstruction={vi.fn()}
+        selectionCount={2}
+        selectionConstruction="mixed"
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Construction (2)' })
+    ).toHaveAttribute('aria-pressed', 'mixed');
   });
 
   it('reads the flag as pressed and asks for the toggle, not an Apply', async () => {

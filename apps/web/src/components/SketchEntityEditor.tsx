@@ -100,6 +100,11 @@ interface SketchEntityEditorProps {
    * applies to all of them and says so.
    */
   selectionCount?: number;
+  /**
+   * Whether the selected entities are construction: all, none, or `mixed`.
+   * Absent reads the primary entity alone.
+   */
+  selectionConstruction?: boolean | 'mixed';
   onClose(): void;
   /**
    * The constraints section: what the entity is already held by. Adding one
@@ -543,6 +548,7 @@ export function SketchEntityEditor({
   onDelete,
   onToggleConstruction,
   selectionCount = 1,
+  selectionConstruction,
   onClose,
   constraints,
   onEditConstraint,
@@ -688,7 +694,11 @@ export function SketchEntityEditor({
               <button
                 type="button"
                 className="secondary sketch-entity-construction"
-                aria-pressed={data.construction === true}
+                aria-pressed={
+                  selectionCount > 1 && selectionConstruction !== undefined
+                    ? selectionConstruction
+                    : data.construction === true
+                }
                 title={
                   selectionCount > 1
                     ? `Toggle construction for the ${selectionCount} selected entities: all become construction unless every one already is`

@@ -22970,6 +22970,20 @@ export function App() {
   /** Where the text card's live outline sits; the viewport writes it. */
   const sketchTextAnchorRef = useRef<{ x: number; y: number } | null>(null);
 
+  // S05: whether a multi-selection is construction — all, none or mixed —
+  // for the Construction toggle that acts on all of it.
+  const sketchSelectionConstruction = useMemo(():
+    boolean | 'mixed' | undefined => {
+    if (interaction.mode !== 'sketch' || !doc) return undefined;
+    const ids = sketchSelectedObjectIds(interaction.session);
+    if (ids.length < 2) return undefined;
+    const flags = ids.map((id) => {
+      const node = ownEntry(doc.nodes, id as EntityId);
+      return node?.kind === 'sketch-object' && node.data.construction === true;
+    });
+    return flags.every(Boolean) ? true : flags.some(Boolean) ? 'mixed' : false;
+  }, [interaction, doc]);
+
   const selectedSketchEntity = useMemo(() => {
     if (
       interaction.mode !== 'sketch' ||
@@ -23937,6 +23951,16 @@ export function App() {
           ? interactionRef.current.session
           : { selectedObjectId: null }
       );
+      // The edit is for exactly this selection: a click that changes it
+      // while the downstream check runs drops the edit.
+      const selectionKey = selected.join('|');
+      const selectionCurrent = () => {
+        const live = interactionRef.current;
+        return (
+          live.mode === 'sketch' &&
+          sketchSelectedObjectIds(live.session).join('|') === selectionKey
+        );
+      };
       const plan =
         selected.length > 1
           ? planSketchConstructionSet(base, sketch, sketch.sketchId, selected)
@@ -23955,7 +23979,10 @@ export function App() {
           sketch.sketchId,
           plan.commands,
           plan.label,
-          target.raceObjectId
+          target.raceObjectId,
+          selected.length > 1
+            ? { isCurrent: selectionCurrent, checkCandidate: async () => {} }
+            : undefined
         )
       ) {
         setStatus(plan.message);
@@ -36879,6 +36906,7 @@ export function App() {
       }
       onToggleConstruction={() => void handleToggleSketchConstruction()}
       selectionCount={sketchSelectedObjectIds(interaction.session).length}
+      selectionConstruction={sketchSelectionConstruction}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);

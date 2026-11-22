@@ -1466,6 +1466,46 @@ describe('Patterns over a selection', () => {
     });
   });
 
+  it('refuses a construction instance that would duplicate existing geometry', () => {
+    // Review case: two equal construction circles a step apart. The first's
+    // instance would sit exactly on the second; the second's is clear.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 },
+      {
+        objectKind: 'circle',
+        centerX: 0,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      },
+      {
+        objectKind: 'circle',
+        centerX: 5,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      }
+    ]);
+    const [direction, first, second] = ids as [string, string, string];
+    const plan = planSketchPatternSet(
+      manager.document,
+      sketch(),
+      sketchId,
+      [first, second],
+      {
+        kind: 'linear-pattern',
+        directionId: direction,
+        distance: 5,
+        count: 2,
+        spacingMode: 'spacing'
+      },
+      resolve
+    );
+    expect(plan.status === 'commands' && plan.message).toBe(
+      'Linear pattern added 1 linked entity from 1 selected. 1 could not be repeated and was left out.'
+    );
+  });
+
   it('turns a selection round one pivot, uniform or rotated', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
       { objectKind: 'circle', centerX: 10, centerY: 0, radius: 1 },
@@ -2712,6 +2752,35 @@ describe('modify tool picking', () => {
     ).toEqual([
       { objectKind: 'circle', centerX: 5, centerY: 0, radius: 1 },
       { objectKind: 'circle', centerX: 5, centerY: 4, radius: 1 }
+    ]);
+  });
+
+  it('lets a selected circle be the pivot the rest of the selection turns about', () => {
+    // Review case: the circle is selected first, so it must not stand in
+    // as the source pick that the pivot pick then repeats.
+    const { manager, ids, sketch } = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 2 },
+      { objectKind: 'line', x1: 6, y1: -1, x2: 8, y2: 1 }
+    ]);
+    const [hub, bar] = ids as [string, string];
+    const applied: { commands: AnyCommand[]; label: string }[] = [];
+    const { host: driver, log } = host(applied);
+    const steps: unknown[] = [];
+    driver.askValue = (_kind, picks, label, _initial, step) => {
+      steps.push({ picks, label, sources: step?.sources });
+    };
+    advanceSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      { kind: 'circular-pattern', picks: [], sources: [hub, bar] },
+      hub
+    );
+    expect(log).toEqual([
+      'Circular pattern: enter how many instances, the source included.'
+    ]);
+    expect(steps).toEqual([
+      { picks: [bar, hub], label: 'Pattern count', sources: [hub, bar] }
     ]);
   });
 

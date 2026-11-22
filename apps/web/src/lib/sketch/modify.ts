@@ -17,7 +17,7 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { findSketch, resolvedSketchDocument } from '@openzcad/document-core';
+import { resolvedSketchDocument } from '@openzcad/document-core';
 import {
   boundedArcSweepDegrees,
   boundedPolygonSides,
@@ -2097,23 +2097,43 @@ function landsOnExisting(
   sourceId: string,
   curves: readonly Curve2[],
   resolve: Resolve,
-  tol: number
+  tol: number,
+  earlier: readonly PlannedCurve[] = []
 ): boolean {
   // Construction geometry never bounds a profile, so a construction copy
-  // may sit on anything and anything may sit on a construction guide.
-  if (sketchObject(document, sketch, sourceId)?.construction) {
-    return false;
-  }
-  const existing = sketch.objectIds.flatMap((objectId) => {
-    if (objectId === sourceId) {
-      return [];
-    }
-    const data = sketchObject(document, sketch, objectId);
-    return data && !data.construction ? cutterCurves(data, resolve) : [];
-  });
-  return curves.some((curve) =>
-    existing.some((other) => curvesOverlap(other, curve, tol))
+  // may overlap anything, profile geometry included (a guide over a real
+  // curve), and anything may overlap a construction guide; only an exact
+  // duplicate of another guide — which adds nothing — is refused for one.
+  const construction = Boolean(
+    sketchObject(document, sketch, sourceId)?.construction
   );
+  const clash = construction ? sameCurve : curvesOverlap;
+  const existing = [
+    ...sketch.objectIds.flatMap((objectId) => {
+      if (objectId === sourceId) {
+        return [];
+      }
+      const data = sketchObject(document, sketch, objectId);
+      return data && Boolean(data.construction) === construction
+        ? cutterCurves(data, resolve)
+        : [];
+    }),
+    ...earlier
+      .filter((planned) => Boolean(planned.data.construction) === construction)
+      .map((planned) => planned.curve)
+  ];
+  return curves.some((curve) =>
+    existing.some((other) => clash(other, curve, tol))
+  );
+}
+
+/**
+ * An instance another entity of the same pattern already placed, for a
+ * selection planned one entity at a time.
+ */
+interface PlannedCurve {
+  curve: Curve2;
+  data: SketchObjectData;
 }
 
 /**
@@ -2314,7 +2334,8 @@ export function planSketchLinearPattern(
   distance: number,
   count: number,
   resolve: Resolve,
-  spacingMode: 'spacing' | 'extent' = 'spacing'
+  spacingMode: 'spacing' | 'extent' = 'spacing',
+  earlier: readonly PlannedCurve[] = []
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2390,13 +2411,18 @@ export function planSketchLinearPattern(
         : 'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
+  if (
+    landsOnExisting(document, sketch, sourceId, copies, resolve, tol, earlier)
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   const clash = profileClash(
     document,
     sketch,
-    copies.map((copy) => curveObject(copy, source.data)),
+    [
+      ...earlier.map((planned) => planned.data),
+      ...copies.map((copy) => curveObject(copy, source.data))
+    ],
     resolve
   );
   if (clash) {
@@ -2434,7 +2460,8 @@ export function planSketchCircularPattern(
   count: number,
   totalDeg: number,
   resolve: Resolve,
-  orientation: 'rotate' | 'uniform' = 'rotate'
+  orientation: 'rotate' | 'uniform' = 'rotate',
+  earlier: readonly PlannedCurve[] = []
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2514,13 +2541,18 @@ export function planSketchCircularPattern(
         'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
+  if (
+    landsOnExisting(document, sketch, sourceId, copies, resolve, tol, earlier)
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   const clash = profileClash(
     document,
     sketch,
-    copies.map((copy) => curveObject(copy, source.data)),
+    [
+      ...earlier.map((planned) => planned.data),
+      ...copies.map((copy) => curveObject(copy, source.data))
+    ],
     resolve
   );
   if (clash) {
@@ -2591,48 +2623,54 @@ export function planSketchPatternSet(
         'The direction line is the only thing selected. Select what to repeat, then pick the line.'
     };
   }
-  let prospective = document;
   const commands: AnyCommand[] = [];
+  // Every entity is planned against the document as it is (so its own
+  // resolved geometry, linked projections included, is the live one), with
+  // the instances already planned for the entities before it passed in as
+  // geometry its own may not land on.
+  const earlier: PlannedCurve[] = [];
   let repeated = 0;
   let added = 0;
   let firstRefusal: string | null = null;
   for (const sourceId of sources) {
-    const currentSketch = findSketch(prospective, sketch.sketchId) ?? null;
-    const plan = currentSketch
-      ? spec.kind === 'linear-pattern'
+    const plan =
+      spec.kind === 'linear-pattern'
         ? planSketchLinearPattern(
-            prospective,
-            currentSketch,
+            document,
+            sketch,
             sketchId,
             sourceId,
             spec.directionId,
             spec.distance,
             spec.count,
             resolve,
-            spec.spacingMode
+            spec.spacingMode,
+            earlier
           )
         : planSketchCircularPattern(
-            prospective,
-            currentSketch,
+            document,
+            sketch,
             sketchId,
             sourceId,
             spec.pivot,
             spec.count,
             spec.totalDeg,
             resolve,
-            spec.orientation
-          )
-      : ({
-          status: 'refuse',
-          reason: 'That sketch is no longer in the document.'
-        } as const);
+            spec.orientation,
+            earlier
+          );
     if (plan.status !== 'commands') {
       firstRefusal ??= plan.reason;
       continue;
     }
     for (const command of plan.commands) {
-      command.validate(prospective);
-      prospective = command.apply(prospective);
+      if (command.kind !== 'sketch.object.add') continue;
+      const objects = (command.payload as { objects?: SketchObjectData[] })
+        .objects;
+      for (const data of objects ?? []) {
+        const curve = evaluateCurve(data, resolve);
+        if (curve) earlier.push({ curve, data });
+      }
     }
     commands.push(...plan.commands);
     repeated += 1;

@@ -1076,11 +1076,18 @@ export function advanceSketchEdit(
     );
     return;
   }
+  // The stand-in is a selected entity other than the one this click names
+  // (directly or by its snapped point), so a selected circle can still be
+  // the pivot the rest of the selection turns about.
+  const clicked = new Set([objectId, context.snapPoint?.objectId ?? null]);
+  const standIn = patternSet
+    ? (patternSet.find((id) => !clicked.has(id)) ?? patternSet[0]!)
+    : null;
   const outcome = advanceSketchEditPick(
     document,
     sketch,
     pending.kind,
-    patternSet ? [patternSet[0]!] : pending.picks,
+    standIn ? [standIn] : pending.picks,
     objectId,
     host.resolve,
     context
