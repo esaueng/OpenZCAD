@@ -1,5 +1,6 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  transformStampBodyIds,
   ownEntry,
   datumAxisPlaneSources,
   datumAxisPointSources,
@@ -395,6 +396,16 @@ export function affectedFeatureTargets(
         featureName: feature.name,
         featureId: feature.featureId,
         resultBodyId: data.secondBodyId,
+        dependent: true
+      });
+    }
+    // M10: so are a linked copy's further stamps.
+    for (const stampBodyId of transformStampBodyIds(data)) {
+      affectedBodies.add(stampBodyId);
+      targets.push({
+        featureName: feature.name,
+        featureId: feature.featureId,
+        resultBodyId: stampBodyId,
         dependent: true
       });
     }

@@ -253,6 +253,7 @@ import {
   normalizeDocument,
   reservedDocumentIdentifierError,
   numberedBodyName,
+  createBodyFeatureIds,
   numberedFeatureName,
   extrudeToFaceUnresolved,
   repairedDirectEditOperation,
@@ -13827,18 +13828,32 @@ export function App() {
       );
       return false;
     }
+    // Whatever the gizmo's Name field holds, falling back to the default
+    // rather than committing a feature with a blank name.
+    const moveFeatureName = moveName.trim() || (preview.copy ? 'Copy' : 'Move');
+    const stamps = preview.copy ? Math.max(1, preview.stamps ?? 1) : 1;
+    if (stamps > 1 && preview.separateStamps) {
+      setMovePreview(null);
+      return confirmSeparateCopyStamps(
+        preview,
+        values,
+        moveFeatureName,
+        stamps
+      );
+    }
     setMovePreview(null);
     const created = createFeature(
       commandFactories.transformBody({
-        // Whatever the gizmo's Name field holds, falling back to the default
-        // rather than committing a feature with a blank name.
-        name: newFeatureName(
-          moveName.trim() || (preview.copy ? 'Copy' : 'Move')
-        ),
+        name: newFeatureName(moveFeatureName),
         targetBodyId: preview.bodyId as BodyId,
         ...values,
         ...(preview.copy
-          ? { copy: true, bodyName: newCopyBodyName(preview.bodyId as BodyId) }
+          ? {
+              copy: true,
+              bodyName: newCopyBodyName(preview.bodyId as BodyId),
+              // M10: linked stamps are one History step owning every copy.
+              ...(stamps > 1 ? { stamps } : {})
+            }
           : {})
       })
     );
@@ -13849,6 +13864,78 @@ export function App() {
       setMoveCommitHold(preview);
     }
     return created;
+  }
+
+  /**
+   * M10: repeated copies as separate History steps. Each step copies the one
+   * before by the same move, so stamp k still lands where the move applied k
+   * times puts the source, and all of them are one transaction: one Undo
+   * removes every stamp.
+   */
+  function confirmSeparateCopyStamps(
+    preview: MovePreview,
+    values: {
+      translation: { x: number; y: number; z: number };
+      rotationDeg: { x: number; y: number; z: number };
+      pivot: { x: number; y: number; z: number };
+    },
+    featureName: string,
+    stamps: number
+  ): boolean {
+    const owner = managerRef.current;
+    if (!owner) return false;
+    const firstBodyName = newCopyBodyName(preview.bodyId as BodyId);
+    const stem = firstBodyName.replace(/\s[1-9]\d*$/, '');
+    const firstNumber = Number(/\s([1-9]\d*)$/.exec(firstBodyName)?.[1] ?? 1);
+    const firstFeatureName = newFeatureName(featureName);
+    const featureStem = firstFeatureName.replace(/\s[1-9]\d*$/, '');
+    const featureNumber = Number(
+      /\s([1-9]\d*)$/.exec(firstFeatureName)?.[1] ?? 1
+    );
+    let targetBodyId = preview.bodyId as BodyId;
+    const commands: AnyCommand[] = [];
+    const targets: {
+      featureName: string;
+      featureId: FeatureId;
+      resultBodyId: BodyId;
+    }[] = [];
+    for (let index = 0; index < stamps; index += 1) {
+      const ids = createBodyFeatureIds();
+      const name =
+        index === 0
+          ? firstFeatureName
+          : `${featureStem} ${featureNumber + index}`;
+      commands.push(
+        commandFactories.transformBody({
+          name,
+          targetBodyId,
+          ...values,
+          copy: true,
+          bodyName:
+            index === 0 ? firstBodyName : `${stem} ${firstNumber + index}`,
+          ids
+        })
+      );
+      targets.push({
+        featureName: name,
+        featureId: ids.featureId,
+        resultBodyId: ids.bodyId
+      });
+      targetBodyId = ids.bodyId;
+    }
+    // No pose hold: the validated transaction commits with its own derived
+    // state, so nothing would release a held pose if the check refused it.
+    void validatedFeature.runTransaction(commands, {
+      label: `${stamps} copies`,
+      targets,
+      validatingMessage: `Checking ${stamps} copies…`,
+      successMessage: `Added ${stamps} copies as separate steps.`,
+      onSuccess: () => {
+        if (managerRef.current !== owner) return;
+        finishFeatureCreation();
+      }
+    });
+    return true;
   }
 
   function clearSelection() {
@@ -39872,6 +39959,20 @@ export function App() {
                   onCopy={(copy) =>
                     setMovePreview((current) =>
                       current ? { ...current, copy } : current
+                    )
+                  }
+                  stamps={movePreview.stamps ?? 1}
+                  onStamps={(stamps) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, stamps } : current
+                    )
+                  }
+                  linked={movePreview.separateStamps !== true}
+                  onLinked={(linked) =>
+                    setMovePreview((current) =>
+                      current
+                        ? { ...current, separateStamps: !linked }
+                        : current
                     )
                   }
                   liveValuesRef={moveValuesSetterRef}

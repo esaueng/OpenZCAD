@@ -28,6 +28,51 @@ function moveTitle(): string | null {
 }
 
 describe('Move overlay', () => {
+  it('offers Copies and the link choice only for a copy (M10)', () => {
+    const onStamps = vi.fn();
+    const onLinked = vi.fn();
+    const props: ComponentProps<typeof MoveOverlay> = {
+      bodyName: 'Box',
+      targetBodyId: 'box',
+      values: { translation: { x: 30, y: 0, z: 0 }, rotationDeg: zero },
+      units: 'mm',
+      snap: null,
+      onChange: vi.fn(),
+      onConfirm: vi.fn(),
+      onCancel: vi.fn(),
+      copy: false,
+      onCopy: vi.fn(),
+      stamps: 1,
+      onStamps,
+      linked: true,
+      onLinked
+    };
+    const { rerender } = render(<MoveOverlay {...props} />);
+    expect(screen.queryByLabelText('Copies')).toBeNull();
+    rerender(<MoveOverlay {...props} copy />);
+    const copies = screen.getByLabelText('Copies');
+    expect(copies).toHaveValue(1);
+    // One copy has nothing to link.
+    expect(screen.queryByLabelText(/Link copies/)).toBeNull();
+    // A half-typed or out-of-range count is held, not sent.
+    fireEvent.change(copies, { target: { value: '' } });
+    fireEvent.change(copies, { target: { value: '51' } });
+    fireEvent.change(copies, { target: { value: '2.5' } });
+    expect(onStamps).not.toHaveBeenCalled();
+    fireEvent.change(copies, { target: { value: '4' } });
+    expect(onStamps).toHaveBeenLastCalledWith(4);
+    rerender(<MoveOverlay {...props} copy stamps={4} />);
+    expect(
+      screen
+        .getByRole('form', { name: 'Move controls' })
+        .querySelector('.in-place-command-hint')?.textContent
+    ).toContain('4 copies of Box');
+    const link = screen.getByLabelText('Link copies (one History step)');
+    expect(link).toBeChecked();
+    fireEvent.click(link);
+    expect(onLinked).toHaveBeenLastCalledWith(false);
+  });
+
   it('keeps streamed values when a parent recreates unchanged committed props', () => {
     const liveValuesRef: LiveValues = { current: null };
     const props: ComponentProps<typeof MoveOverlay> = {

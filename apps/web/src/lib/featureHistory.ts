@@ -1,5 +1,6 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  transformStampBodyIds,
   datumAxisPlaneSources,
   datumAxisPointSources,
   datumPlaneSources,
@@ -35,7 +36,8 @@ export function featureResultBodyIds(feature: FeatureNode): BodyId[] {
   return [
     ...new Set([
       ...(primary ? [primary] : []),
-      ...(data.featureKind === 'split' ? [data.secondBodyId] : [])
+      ...(data.featureKind === 'split' ? [data.secondBodyId] : []),
+      ...transformStampBodyIds(data)
     ])
   ];
 }
@@ -233,6 +235,8 @@ export function featureHistory(document: ProjectDocument) {
       bodyOwners.set(data.targetBodyId, feature.featureId);
     if (data.featureKind === 'split')
       bodyOwners.set(data.secondBodyId, feature.featureId);
+    for (const bodyId of transformStampBodyIds(data))
+      bodyOwners.set(bodyId, feature.featureId);
   }
   const downstream = (id: FeatureId): FeatureNode[] => {
     const affected = new Set([id]);

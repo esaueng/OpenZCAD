@@ -3852,29 +3852,35 @@ export function ModelViewer({
           const body = context.renderedBodies?.find(
             (candidate) => candidate.bodyId === preview.bodyId
           );
+          const createCopy = () => {
+            const resolution = context.fatLineResolution();
+            const copy = new THREE.Group();
+            const mesh = createObjectForBody(body!, resolution);
+            const edges = createBodyEdgeOverlay(body!, resolution);
+            edges.setDisplayMode(displayModeRef.current);
+            edges.setTangentEdgeStyle(tangentEdgesRef.current);
+            mesh.add(edges);
+            copy.add(mesh);
+            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
+            return copy;
+          };
           const target = moveCopyPreview.target(
             object,
             !!preview.copy && !!body,
-            () => {
-              const resolution = context.fatLineResolution();
-              const copy = new THREE.Group();
-              const mesh = createObjectForBody(body!, resolution);
-              const edges = createBodyEdgeOverlay(body!, resolution);
-              edges.setDisplayMode(displayModeRef.current);
-              edges.setTangentEdgeStyle(tangentEdgesRef.current);
-              mesh.add(edges);
-              copy.add(mesh);
-              applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
-              return copy;
-            }
+            createCopy
+          );
+          const final = composeMoveTransform(center, translation, rotationDeg);
+          target.rotation.copy(moveEuler(rotationDeg));
+          target.position.set(final.x, final.y, final.z);
+          // M10: a repeated copy shows every stamp, each the same move on.
+          moveCopyPreview.poseStamps(
+            preview.copy && body ? Math.max(0, (preview.stamps ?? 1) - 1) : 0,
+            createCopy
           );
           moveCopyPreview.refreshAppearance(
             displayModeRef.current,
             xrayRef.current
           );
-          const final = composeMoveTransform(center, translation, rotationDeg);
-          target.rotation.copy(moveEuler(rotationDeg));
-          target.position.set(final.x, final.y, final.z);
           // The mesh rotates about its own origin and then translates, so the
           // callout's anchor has to take the same two steps to stay over the
           // body — adding the translation alone would drift it off under any
@@ -3898,6 +3904,9 @@ export function ModelViewer({
       if (E2E_CANVAS_HOOKS_ENABLED) {
         renderer.domElement.dataset.e2eMoveCopyPreview = String(
           moveCopyPreview.active
+        );
+        renderer.domElement.dataset.e2eMoveCopyStamps = String(
+          moveCopyPreview.active ? moveCopyPreview.stampCount + 1 : 0
         );
       }
     }
