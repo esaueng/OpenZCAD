@@ -247,6 +247,38 @@ describe('the File menu Units row', () => {
     expect(onChange).toHaveBeenCalledWith('mm');
   });
 
+  it('is one Tab stop, moved and chosen with the arrow keys', () => {
+    const onChange = vi.fn();
+    render(<DisplayUnitsRow shown="inch" stored="mm" onChange={onChange} />);
+    const inch = screen.getByRole('radio', { name: 'Inches (in)' });
+    expect(inch).toHaveAttribute('tabindex', '0');
+    expect(
+      screen.getByRole('radio', { name: 'Millimeters (mm)' })
+    ).toHaveAttribute('tabindex', '-1');
+    fireEvent.keyDown(inch, { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenLastCalledWith('mm');
+    fireEvent.keyDown(inch, { key: 'ArrowLeft' });
+    expect(onChange).toHaveBeenLastCalledWith('m');
+  });
+
+  it('names a stored unit once, as the display unit', () => {
+    render(
+      <DisplayUnitsProvider units="inch">
+        <ExprInput
+          label="Radius (mm)"
+          value="25.4"
+          scope={{}}
+          quantity={LENGTH_MM}
+          onChange={vi.fn()}
+        />
+      </DisplayUnitsProvider>
+    );
+    expect(
+      screen.getByRole<HTMLInputElement>('textbox', { name: 'Radius (in)' })
+        .value
+    ).toBe('1');
+  });
+
   it('is read-only with the reason it cannot change', () => {
     render(
       <DisplayUnitsRow

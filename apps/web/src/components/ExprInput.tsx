@@ -77,6 +77,14 @@ export function ExprInput({
     stored !== undefined &&
     shown !== stored;
   const [typed, setTyped] = useState<string | null>(null);
+  // A caller that names the stored unit in its label ("Radius (mm)") gets
+  // the display unit in its place, not both.
+  const storedSuffix =
+    stored === undefined ? '' : ` (${displayLengthName(stored)})`;
+  const shownLabel =
+    converting && storedSuffix && label.endsWith(storedSuffix)
+      ? label.slice(0, -storedSuffix.length)
+      : label;
   const text =
     converting && stored !== undefined
       ? (typed ?? shownLengthText(value, stored, shown))
@@ -136,7 +144,7 @@ export function ExprInput({
   return (
     <div ref={rootRef} className="field expr-field">
       <label id={`${id}-label`} htmlFor={id}>
-        {label}
+        {shownLabel}
         {converting && (
           <span className="expr-unit"> ({displayLengthName(shown)})</span>
         )}

@@ -1515,6 +1515,25 @@ export function DisplayUnitsRow({
         role="radiogroup"
         aria-labelledby={labelId}
         aria-describedby={noteId}
+        // A native radio group's keys: Tab reaches the chosen unit only,
+        // and the arrows move to the next one and choose it.
+        onKeyDown={(event) => {
+          const step =
+            event.key === 'ArrowRight' || event.key === 'ArrowDown'
+              ? 1
+              : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                ? -1
+                : 0;
+          if (step === 0 || disabled) return;
+          event.preventDefault();
+          const count = DISPLAY_UNIT_CHOICES.length;
+          const at = DISPLAY_UNIT_CHOICES.indexOf(shown);
+          const next = DISPLAY_UNIT_CHOICES[(at + step + count) % count]!;
+          onChange(next);
+          event.currentTarget
+            .querySelector<HTMLButtonElement>(`[data-unit="${next}"]`)
+            ?.focus();
+        }}
       >
         {DISPLAY_UNIT_CHOICES.map((unit) => (
           <button
@@ -1523,6 +1542,8 @@ export function DisplayUnitsRow({
             role="radio"
             aria-checked={shown === unit}
             aria-label={UNIT_SYSTEM_NAMES[unit]}
+            data-unit={unit}
+            tabIndex={shown === unit ? 0 : -1}
             className={shown === unit ? 'active' : undefined}
             disabled={disabled}
             title={disabledReason ?? UNIT_SYSTEM_NAMES[unit]}
