@@ -619,6 +619,14 @@ function remapConstraint(
       const point = mapRef(data.point);
       return point ? { ...data, point } : null;
     }
+    case 'offset': {
+      // A reshaped curve leaves the offset; the other copies stay held.
+      const pairs = data.pairs.filter(
+        ({ source, copy }) => source !== id && copy !== id
+      );
+      if (pairs.length === data.pairs.length) return data;
+      return pairs.length > 0 ? { ...data, pairs } : null;
+    }
     case 'lock-entity':
       // The edit changes the locked geometry, so the lock goes with it (and
       // is counted with the other dropped relations).

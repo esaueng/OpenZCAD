@@ -250,3 +250,71 @@ export function placementTolerance(
   );
   return Math.max(1e-7 * Math.max(1, spread), 1024 * Number.EPSILON * far);
 }
+
+/**
+ * S05: the objects with every free offset copy started where its relation
+ * puts it — a round concentric with its source at the offset radius, a
+ * line moved square onto the offset carrier — so a solve after the source
+ * or the distance changes begins on the copy's recorded side, and the
+ * helper points the relation adds are seeded from there too.
+ */
+export function seedOffsetCopies(
+  objects: readonly ResolvedSketchObject[],
+  constraints: readonly SketchConstraint[],
+  resolveValue: (value: number | string, label: string) => number,
+  isHeld: (objectId: string) => boolean
+): ResolvedSketchObject[] {
+  let seeded = [...objects];
+  const at = (objectId: EntityId) =>
+    seeded.findIndex((entry) => entry.objectId === objectId);
+  for (const { data } of constraints) {
+    if (data.constraintKind !== 'offset') continue;
+    let value: number;
+    try {
+      value = resolveValue(data.value, 'distance');
+    } catch {
+      continue;
+    }
+    if (!(value > 0)) continue;
+    for (const { source, copy, side } of data.pairs) {
+      if (isHeld(copy)) continue;
+      const from = seeded[at(source)];
+      const index = at(copy);
+      const to = seeded[index];
+      if (!from || !to) continue;
+      let placed: ResolvedSketchObject | null = null;
+      if (from.kind === 'line' && to.kind === 'line') {
+        const length = Math.hypot(from.x2 - from.x1, from.y2 - from.y1);
+        if (!(length > 0)) continue;
+        // The left normal of the source's stored direction.
+        const nx = -(from.y2 - from.y1) / length;
+        const ny = (from.x2 - from.x1) / length;
+        const onto = (x: number, y: number) => {
+          const off = (x - from.x1) * nx + (y - from.y1) * ny - side * value;
+          return { x: x - off * nx, y: y - off * ny };
+        };
+        const a = onto(to.x1, to.y1);
+        const b = onto(to.x2, to.y2);
+        placed = { ...to, x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+      } else if (
+        (from.kind === 'circle' || from.kind === 'arc') &&
+        (to.kind === 'circle' || to.kind === 'arc')
+      ) {
+        const radius = from.radius + side * value;
+        if (!(radius > 0)) continue;
+        placed = {
+          ...to,
+          centerX: from.centerX,
+          centerY: from.centerY,
+          radius
+        };
+      }
+      if (!placed) continue;
+      const kept = placed;
+      seeded = seeded.map((entry, position) =>
+        position === index ? kept : entry
+      );
+    }
+  }
+  return seeded;
+}

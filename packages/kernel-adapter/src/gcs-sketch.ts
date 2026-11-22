@@ -8,6 +8,7 @@ import {
   patternInstanceAt,
   placementMiss,
   placementTolerance,
+  seedOffsetCopies,
   seedPatternInstances
 } from './gcs-pattern';
 
@@ -224,6 +225,11 @@ export function solveSketchWithGcs(
     maxIterations?: number;
     tolerance?: number;
     anchor?: SketchSolveAnchor;
+    /**
+     * S05: state an offset chain's every corner, even where two sources
+     * start collinear; set on the retry when a skipped corner missed.
+     */
+    stateEveryCorner?: boolean;
   } = {}
 ): SketchSolveOutcome {
   const sketch = kernel.gcsNew();
@@ -234,8 +240,17 @@ export function solveSketchWithGcs(
   );
   const held = (objectId: string, point: 'start' | 'end' | 'center') =>
     anchoredObjects.has(objectId) || anchoredPoints.has(`${objectId}:${point}`);
-  const objects = seedPatternInstances(
-    inputObjects,
+  const objects = seedOffsetCopies(
+    seedPatternInstances(
+      inputObjects,
+      constraints,
+      resolveValue,
+      (objectId) =>
+        anchoredObjects.has(objectId) ||
+        (['start', 'end', 'center'] as const).some((point) =>
+          anchoredPoints.has(`${objectId}:${point}`)
+        )
+    ),
     constraints,
     resolveValue,
     (objectId) =>
@@ -591,6 +606,202 @@ export function solveSketchWithGcs(
           `A ${source.kind} cannot be patterned by a sketch pattern relation.`
         );
       }
+    }
+  };
+
+  // S05 driving offset: each copy held `value` from its source, by exactly
+  // one equation per freedom the offset fixes — two for a line (its
+  // distance from the source line at both ends), one for a round (its
+  // radius against the source's, measured along a ray from the source's
+  // centre through two helper points that add as many equations as
+  // parameters). Direction and concentricity stay with the optional links
+  // the Offset tool keeps where they add rank.
+  const radiusOf = (objectId: EntityId): number => {
+    const object = objects.find((entry) => entry.objectId === objectId);
+    return object && 'radius' in object ? object.radius : 0;
+  };
+  // Points joined by coincidences, so a chain's shared corner is one key.
+  const joinedTo = new Map<string, string>();
+  const joinKey = (ref: SketchPointRef): string => {
+    let key = `${ref.objectId}:${ref.point}`;
+    while (joinedTo.has(key)) key = joinedTo.get(key)!;
+    return key;
+  };
+  for (const { data } of constraints) {
+    if (data.constraintKind !== 'coincident') continue;
+    const a = joinKey(data.a);
+    const b = joinKey(data.b);
+    if (a !== b) joinedTo.set(a, b);
+  }
+  const lineAt = (objectId: EntityId) => {
+    const object = objects.find((entry) => entry.objectId === objectId);
+    return object?.kind === 'line' ? object : null;
+  };
+  /** Whether two lines lie on one carrier, by their input geometry. */
+  const collinear = (a: EntityId, b: EntityId): boolean => {
+    const p = lineAt(a);
+    const q = lineAt(b);
+    if (!p || !q) return false;
+    const length = Math.hypot(p.x2 - p.x1, p.y2 - p.y1);
+    if (!(length > 0)) return false;
+    const off = (x: number, y: number) =>
+      Math.abs((p.x2 - p.x1) * (y - p.y1) - (p.y2 - p.y1) * (x - p.x1)) /
+      length;
+    const tolerance = 1e-9 * Math.max(1, length);
+    return off(q.x1, q.y1) <= tolerance && off(q.x2, q.y2) <= tolerance;
+  };
+  /** Each offset copy as the solve must leave it, read back afterwards. */
+  const offsetChecks: {
+    constraintId: string;
+    expected: number;
+    read: () => number | null;
+    /** Its equation was left out as a collinear corner's repeat. */
+    skipped?: boolean;
+  }[] = [];
+  const addOffsetRelation = (
+    id: string,
+    data: Extract<SketchConstraintData, { constraintKind: 'offset' }>
+  ) => {
+    const value = resolveValue(data.value, 'distance');
+    if (!(value > 0)) {
+      throw new Error(
+        'An offset distance is positive; its side stays with each copy.'
+      );
+    }
+    // A chain's copies share their corners; where two sources lie on one
+    // carrier, the shared corner's distance from it is stated once.
+    const heldFrom = new Map<string, EntityId[]>();
+    for (const { source, copy, side } of data.pairs) {
+      const from = objectHandles(source);
+      const to = objectHandles(copy);
+      if (from.kind === 'line' && to.kind === 'line') {
+        for (const end of ['start', 'end'] as const) {
+          const key = joinKey({ objectId: copy, point: end });
+          const earlier = heldFrom.get(key) ?? [];
+          const point = pointHandle({ objectId: copy, point: end });
+          const skipped =
+            !options.stateEveryCorner &&
+            earlier.some((other) => collinear(other, source));
+          offsetChecks.push({
+            constraintId: id,
+            expected: side * value,
+            skipped,
+            read: () => {
+              const line = solvedObjects.find(
+                (entry) => entry.objectId === source
+              );
+              if (line?.kind !== 'line') return null;
+              const at = readPoint(point);
+              const length = Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+              return length > 0
+                ? ((line.x2 - line.x1) * (at.y - line.y1) -
+                    (line.y2 - line.y1) * (at.x - line.x1)) /
+                    length
+                : null;
+            }
+          });
+          if (skipped) continue;
+          heldFrom.set(key, [...earlier, source]);
+          add(id, {
+            type: 'pointLineDistance',
+            point: pointHandle({ objectId: copy, point: end }),
+            line: from.entity,
+            value: side * value
+          });
+        }
+        continue;
+      }
+      if (
+        (from.kind !== 'circle' && from.kind !== 'arc') ||
+        (to.kind !== 'circle' && to.kind !== 'arc')
+      ) {
+        throw new Error(
+          `Offset ${copy} of ${source} pairs a line with a round.`
+        );
+      }
+      const centre = pointHandle({ objectId: source, point: 'center' });
+      const centreAt = resolvedPoint({ objectId: source, point: 'center' });
+      // P on the copy: an arc's start, or a helper held on the copy circle
+      // at its rightmost point.
+      let onCopy: number;
+      if (to.kind === 'arc') {
+        onCopy = pointHandle({ objectId: copy, point: 'start' });
+      } else {
+        const copyCentre = resolvedPoint({ objectId: copy, point: 'center' });
+        onCopy = kernel.gcsAddPoint(
+          sketch,
+          copyCentre.x + radiusOf(copy),
+          copyCentre.y,
+          false
+        );
+        add(id, { type: 'pointOnCircle', point: onCopy, circle: to.entity });
+        add(id, { type: 'horizontal', line: helperLine(centre, onCopy) });
+      }
+      const ray = helperLine(centre, onCopy);
+      // Q on the source along the same ray, where the source's radius
+      // meets it.
+      const copyPoint =
+        to.kind === 'arc'
+          ? resolvedPoint({ objectId: copy, point: 'start' })
+          : (() => {
+              const copyCentre = resolvedPoint({
+                objectId: copy,
+                point: 'center'
+              });
+              return { x: copyCentre.x + radiusOf(copy), y: copyCentre.y };
+            })();
+      const dx = copyPoint.x - centreAt.x;
+      const dy = copyPoint.y - centreAt.y;
+      const reach = Math.hypot(dx, dy) || 1;
+      const sourceRadius = radiusOf(source);
+      const onSource = kernel.gcsAddPoint(
+        sketch,
+        centreAt.x + (dx / reach) * sourceRadius,
+        centreAt.y + (dy / reach) * sourceRadius,
+        false
+      );
+      if (from.kind === 'circle') {
+        add(id, {
+          type: 'pointOnCircle',
+          point: onSource,
+          circle: from.entity
+        });
+      } else {
+        add(id, {
+          type: 'equalLength',
+          l1: helperLine(centre, onSource),
+          l2: helperLine(
+            centre,
+            pointHandle({ objectId: source, point: 'start' })
+          )
+        });
+      }
+      add(id, {
+        type: 'pointLineDistance',
+        point: onSource,
+        line: ray,
+        value: 0
+      });
+      add(id, { type: 'distance', a: onSource, b: onCopy, value });
+      // The ray runs both ways from the centre and the distance is
+      // unsigned: read the copy's signed reach past the source's radius.
+      offsetChecks.push({
+        constraintId: id,
+        expected: side * value,
+        read: () => {
+          const c = readPoint(centre);
+          const p = readPoint(onCopy);
+          const q = readPoint(onSource);
+          const sourceAt = solvedObjects.find(
+            (entry) => entry.objectId === source
+          );
+          if (!sourceAt || !('radius' in sourceAt)) return null;
+          const sameSide =
+            (p.x - c.x) * (q.x - c.x) + (p.y - c.y) * (q.y - c.y);
+          if (!(sameSide > 0)) return Number.NaN;
+          return Math.hypot(p.x - c.x, p.y - c.y) - sourceAt.radius;
+        }
+      });
     }
   };
 
@@ -963,6 +1174,9 @@ export function solveSketchWithGcs(
       case 'pattern':
         addPatternRelation(id, data);
         break;
+      case 'offset':
+        addOffsetRelation(id, data);
+        break;
     }
   }
 
@@ -1143,6 +1357,41 @@ export function solveSketchWithGcs(
         );
       }
     }
+  }
+  if (patternMisses.size > 0) classification = 'unsatisfied';
+
+  // S05 offsets: the equations leave each copy's side free; a copy on the
+  // wrong side, or at the wrong reach, fails its relation.
+  let skippedCornerMissed = false;
+  for (const check of offsetChecks) {
+    const actual = check.read();
+    if (actual === null) continue;
+    const miss = Number.isNaN(actual)
+      ? Infinity
+      : Math.abs(actual - check.expected);
+    // Never as loose as half the offset, so a wrong side always misses.
+    const tolerance = Math.min(
+      1e-7 * Math.max(1, Math.abs(check.expected)),
+      Math.abs(check.expected) / 2
+    );
+    if (miss > tolerance) {
+      if (check.skipped) skippedCornerMissed = true;
+      patternMisses.set(
+        check.constraintId,
+        Math.max(
+          patternMisses.get(check.constraintId) ?? 0,
+          Number.isFinite(miss) ? miss : Math.abs(check.expected) * 2
+        )
+      );
+    }
+  }
+  // Sources that started collinear moved apart during the solve, so the
+  // corner left out is no longer a repeat: solve again stating it.
+  if (skippedCornerMissed && !options.stateEveryCorner) {
+    return solveSketchWithGcs(kernel, inputObjects, constraints, resolveValue, {
+      ...options,
+      stateEveryCorner: true
+    });
   }
   if (patternMisses.size > 0) classification = 'unsatisfied';
 
