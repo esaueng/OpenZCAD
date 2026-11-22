@@ -33,6 +33,8 @@ export type FilletLeg =
       sweepRad: number;
       /** Which stored end the joint is. */
       end: 'start' | 'end';
+      /** A whole circle standing in as a (nearly) full-turn leg. */
+      circle?: true;
     };
 
 const TAU = Math.PI * 2;
@@ -87,7 +89,7 @@ function tangentOn(
   // A circle stands in as a (nearly) whole turn; its contact belongs to
   // this corner only within half a turn of the joint, or both corners of a
   // joint could reach the same contact the long way round.
-  if (leg.sweepRad > Math.PI * 1.9 && into >= Math.PI) return null;
+  if (leg.circle && into >= Math.PI) return null;
   const sign = leg.end === 'start' ? 1 : -1;
   return {
     point,

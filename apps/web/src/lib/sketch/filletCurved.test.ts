@@ -330,6 +330,47 @@ describe('Fillet with arc and circle inputs (S05)', () => {
     }
   });
 
+  it('takes a contact far round a long real arc (re-check case)', () => {
+    // A radius-5 arc 0°–350° and a 5-long line leaving its start at 250°:
+    // the radius-5 fillet's contact lies at about 326°, past half a turn,
+    // which only a circle (not a real arc) limits.
+    const fixture = sketchOf(
+      [
+        {
+          objectKind: 'arc',
+          centerX: 0,
+          centerY: 0,
+          radius: 5,
+          startAngleDeg: 0,
+          endAngleDeg: 350
+        },
+        {
+          objectKind: 'line',
+          x1: 5,
+          y1: 0,
+          x2: 5 + 5 * Math.cos((250 * Math.PI) / 180),
+          y2: 5 * Math.sin((250 * Math.PI) / 180)
+        }
+      ],
+      ([arc, line]) => [join(arc!, 'start', line!, 'start')]
+    );
+    const corners = listSketchFilletCorners(
+      fixture.manager.document,
+      fixture.sketch(),
+      resolve
+    );
+    expect(corners).toHaveLength(1);
+    expect(
+      planSketchFilletBatch(
+        fixture.manager.document,
+        fixture.sketch(),
+        [corners[0]!.id],
+        5,
+        resolve
+      ).status
+    ).toBe('ready');
+  });
+
   it('gives each side of a circle joint its own fillet (review case)', () => {
     // A radius-5 circle and a 1-long line leaving (5, 0) at 30°.
     const fixture = sketchOf([

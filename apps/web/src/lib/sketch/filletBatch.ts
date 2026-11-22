@@ -373,7 +373,8 @@ function catalogCorners(
           radius: circle.radius,
           startRad: way === 'ccw' ? angle : angle - sweep,
           sweepRad: sweep,
-          end: way === 'ccw' ? 'start' : 'end'
+          end: way === 'ccw' ? 'start' : 'end',
+          circle: true
         };
         // The two corners share their joint; each marker sits a little way
         // into its own corner so either can be picked.
@@ -390,8 +391,9 @@ function catalogCorners(
         };
         const size = Math.hypot(bisector.x, bisector.y);
         if (size <= 1e-9) continue;
-        // Far enough apart that the two markers never cover each other.
-        const nudge = 0.45 * Math.min(circle.radius, farLength);
+        // Far enough apart that the two markers do not cover each other,
+        // near enough that a joint by the viewport edge keeps them on it.
+        const nudge = 0.3 * Math.min(circle.radius, farLength);
         const point = {
           x: end.position.x + (bisector.x / size) * nudge,
           y: end.position.y + (bisector.y / size) * nudge
