@@ -33,6 +33,44 @@ import {
 } from './affectedFeatureTargets';
 
 describe('affected feature targets', () => {
+  it('reaches features on every stamp of an edited linked copy (M10)', () => {
+    const block = addPrimitiveFeature(
+      createProjectDocument('Stamped', toUserId('user_affected')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 10, depth: 10 }
+      }
+    );
+    const copied = transformBody(block, {
+      name: 'Copy',
+      targetBodyId: block.bodyOrder[0]!,
+      translation: { x: 30, y: 0, z: 0 },
+      copy: true,
+      stamps: 3
+    });
+    const [, first, second, third] = copied.document.bodyOrder;
+    const rounded = filletEdges(copied.document, {
+      name: 'Round stamp 2',
+      targetBodyId: second!,
+      edgeHashes: [101],
+      size: 1
+    });
+    const copy = listFeaturesInOrder(rounded.document)[1]!;
+    const targets = affectedFeatureTargets(rounded.document, copy.featureId);
+    expect(
+      targets.map(({ featureName, resultBodyId }) => [
+        featureName,
+        resultBodyId
+      ])
+    ).toEqual([
+      ['Copy', first],
+      ['Copy', second],
+      ['Copy', third],
+      ['Round stamp 2', rounded.bodyId]
+    ]);
+  });
+
   it('walks only the downstream body ancestry of the edited primitive', () => {
     const cylinder = addPrimitiveFeature(
       createProjectDocument('Affected branch', toUserId('user_affected')),

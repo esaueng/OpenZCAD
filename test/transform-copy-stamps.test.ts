@@ -344,6 +344,56 @@ describe('transform copy stamps (M10, v137)', { timeout: 90_000 }, () => {
     expect(most.document.bodyOrder).toHaveLength(MAX_TRANSFORM_COPY_STAMPS + 1);
   });
 
+  it('refuses stamps with supplied ids but no stamp identities, so replay stays deterministic', () => {
+    const { manager, blockId } = block();
+    expect(() =>
+      transformBody(manager.document, {
+        name: 'Copy',
+        targetBodyId: blockId,
+        translation: { x: 30, y: 0, z: 0 },
+        copy: true,
+        stamps: 3,
+        ids: createBodyFeatureIds()
+      })
+    ).toThrow(/one identity for each further stamp/);
+    // The command fills them, and a replay of its log keeps them.
+    const command = stampCommand(blockId);
+    expect(command.payload.stampIds).toHaveLength(2);
+    // An absurd count is refused before anything is allocated for it.
+    const absurd = commandFactories.transformBody({
+      name: 'Copy',
+      targetBodyId: blockId,
+      translation: { x: 1, y: 0, z: 0 },
+      copy: true,
+      stamps: 10_000_000
+    });
+    expect(absurd.payload.stampIds).toBeUndefined();
+    expect(() => manager.execute(absurd)).toThrow(/whole number from 1 to 50/);
+  });
+
+  it('refuses to write stamps into a document that declares v136', () => {
+    const { manager, blockId } = block();
+    const older = { ...manager.document, schemaVersion: 136 as never };
+    expect(() =>
+      transformBody(older, {
+        name: 'Copy',
+        targetBodyId: blockId,
+        translation: { x: 30, y: 0, z: 0 },
+        copy: true,
+        stamps: 2
+      })
+    ).toThrow(/137/);
+    // One copy is still fine there.
+    expect(() =>
+      transformBody(older, {
+        name: 'Copy',
+        targetBodyId: blockId,
+        translation: { x: 30, y: 0, z: 0 },
+        copy: true
+      })
+    ).not.toThrow();
+  });
+
   it('refuses replayed or stored stamps in a document older than v137', () => {
     expect(() =>
       assertDocumentContentCommandSchema({

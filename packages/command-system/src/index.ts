@@ -149,6 +149,7 @@ import {
   chamferEdges,
   createBodyFeatureIds,
   createTransformStampIds,
+  transformStampsProblem,
   createFeatureOnlyIds,
   createParameterIds,
   createSketchFeatureIds,
@@ -3088,7 +3089,12 @@ export const commandFactories = {
           : (payload.ids ??
             (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds())),
       // M10: each further stamp's body is named here too, so replay keeps it.
-      ...(payload.copy && (payload.stamps ?? 1) > 1 && !payload.stampIds
+      // Only for a count the document will accept, so an absurd one is
+      // refused by validation rather than allocated first.
+      ...(payload.copy &&
+      !payload.stampIds &&
+      transformStampsProblem(payload.stamps, payload.copy) === null &&
+      (payload.stamps ?? 1) > 1
         ? { stampIds: createTransformStampIds(payload.stamps!) }
         : {})
     };

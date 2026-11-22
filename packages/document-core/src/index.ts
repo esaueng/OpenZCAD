@@ -79,6 +79,7 @@ import {
   assertWrapSchema,
   assertStandardPartSchema,
   assertPatternContentSchema,
+  assertTransformStampsSchema,
   assertHoleContentSchema,
   assertSketchObjectContentSchema,
   assertThreadContentSchema
@@ -4441,6 +4442,9 @@ export function transformBody(
   validateCsysAlign(document, input.csysAlign, null);
   const stampsProblem = transformStampsProblem(input.stamps, input.copy);
   if (stampsProblem) throw new Error(stampsProblem);
+  // A document that declares an older schema cannot hold stamps: it would
+  // be refused the next time it opened.
+  assertTransformStampsSchema(input, document.schemaVersion);
   if (input.copy) {
     return transformCopyBody(document, input, transform);
   }
@@ -4522,6 +4526,11 @@ function transformCopyBody(
       : { ...createBodyFeatureIds(), ...supplied };
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
   const stampCount = input.stamps ?? 1;
+  // Supplied identities (a command, a replay) must name every stamp, or each
+  // replay would mint different BodyIds for stamps a later feature targets.
+  if (supplied && stampCount > 1 && !input.stampIds) {
+    throw new Error('A copy needs one identity for each further stamp.');
+  }
   const stampIds = input.stampIds ?? createTransformStampIds(stampCount);
   if (stampIds.length !== stampCount - 1) {
     throw new Error('A copy needs one identity for each further stamp.');

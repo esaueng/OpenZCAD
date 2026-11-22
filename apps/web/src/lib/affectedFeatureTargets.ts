@@ -147,6 +147,10 @@ export function affectedFeatureTargets(
   }
 
   const affectedBodies = new Set<BodyId>(sourceBodyId ? [sourceBodyId] : []);
+  // M10: an edit to a linked copy moves every stamp, so each stamp's
+  // downstream features are affected as the first copy's are.
+  const sourceStamps = transformStampBodyIds(source.data);
+  sourceStamps.forEach((bodyId) => affectedBodies.add(bodyId));
   // M11: editing a Boolean or Split can change which of its inputs it keeps,
   // and a later feature on an input that stops being kept loses its body.
   // So an edit walks the inputs' own downstream branches too; the inputs are
@@ -181,7 +185,12 @@ export function affectedFeatureTargets(
           featureName: source.name,
           featureId: source.featureId,
           resultBodyId: sourceBodyId
-        }
+        },
+        ...sourceStamps.map((resultBodyId) => ({
+          featureName: source.name,
+          featureId: source.featureId,
+          resultBodyId
+        }))
       ]
     : [];
 
