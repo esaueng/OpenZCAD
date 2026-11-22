@@ -29,6 +29,16 @@ export interface MovePreview {
   target?: 'body' | 'sketch';
   /** Preview a new body while leaving the source at its document pose. */
   copy?: boolean;
+  /**
+   * M10: the point the gizmo stands on and the rotation turns about, in
+   * world units. Omitted is the moved thing's centre.
+   */
+  pivot?: { x: number; y: number; z: number };
+  /**
+   * M10: the arrows and centre handle place the pivot instead of moving the
+   * body; the rings still turn it.
+   */
+  pivotMode?: boolean;
   translation: { x: number; y: number; z: number };
   rotationDeg: { x: number; y: number; z: number };
 }
