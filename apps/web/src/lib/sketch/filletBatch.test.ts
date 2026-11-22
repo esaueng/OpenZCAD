@@ -133,6 +133,47 @@ describe('batch sketch fillet', () => {
     }
   );
 
+  it('refuses a circle catalog with too many corners to show', () => {
+    // 101 coincident circles each meet 50 free line ends twice: 10,100
+    // corners from little comparison work, each of which would be a marker.
+    const ends = Array.from({ length: 50 }, (_, i) => {
+      const angle = (i * 2 * Math.PI) / 50;
+      return line(
+        5 * Math.cos(angle),
+        5 * Math.sin(angle),
+        9 * Math.cos(angle),
+        9 * Math.sin(angle)
+      );
+    });
+    const circles = Array.from({ length: 101 }, (): SketchObjectData => ({
+      objectKind: 'circle',
+      centerX: 0,
+      centerY: 0,
+      radius: 5
+    }));
+    const { document, sketch } = sketchOf([...ends, ...circles]);
+    expect(() => listSketchFilletCorners(document, sketch, resolve)).toThrow(
+      'This sketch has too many fillet corners to show safely.'
+    );
+    const plan = planSketchFilletBatch(
+      document,
+      sketch,
+      ['not-a-corner'],
+      2,
+      resolve
+    );
+    expect(plan.status).toBe('refuse');
+    if (plan.status !== 'refuse') throw new Error('Expected catalog refusal.');
+    expect(plan.reason).toContain(
+      'This sketch has too many fillet corners to show safely.'
+    );
+    // One circle with the same ends stays an ordinary catalog.
+    const one = sketchOf([...ends, circles[0]!]);
+    expect(
+      listSketchFilletCorners(one.document, one.sketch, resolve)
+    ).toHaveLength(100);
+  });
+
   it('refuses excessive candidate work even when no endpoints touch', () => {
     const { document, sketch } = sketchOf(
       Array.from({ length: 1500 }, (_, i) => line(0, i * 10, 0, i * 10 + 1))

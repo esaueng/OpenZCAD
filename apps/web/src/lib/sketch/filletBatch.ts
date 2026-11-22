@@ -192,10 +192,22 @@ function arcPoint(arc: SourceArc, angle: number): Sketch2dPoint {
 // ones far apart in y. Bound candidate work as well as stored neighbors.
 const MAX_ENDPOINT_PAIR_CHECKS = 1_000_000;
 
+// Each catalog corner becomes a picker marker in the editor, so the catalog
+// size is bounded too: a circle meets every free end lying on it twice.
+const MAX_CATALOG_CORNERS = 10_000;
+
 class SketchFilletCatalogLimitError extends Error {
-  constructor() {
-    super(
-      'This sketch has too many nearby endpoints to check safely. Split it into smaller sketches before using Sketch Fillet.'
+  constructor(
+    message = 'This sketch has too many nearby endpoints to check safely. Split it into smaller sketches before using Sketch Fillet.'
+  ) {
+    super(message);
+  }
+}
+
+function boundCatalogSize(corners: ReadonlyMap<string, unknown>): void {
+  if (corners.size > MAX_CATALOG_CORNERS) {
+    throw new SketchFilletCatalogLimitError(
+      'This sketch has too many fillet corners to show safely. Split it into smaller sketches before using Sketch Fillet.'
     );
   }
 }
@@ -362,6 +374,7 @@ function catalogCorners(
       ],
       curved
     });
+    boundCatalogSize(corners);
   }
   // S05 circle inputs: a free line or arc end lying on a circle meets it in
   // two corners, one each way round. The circle is a leg that runs (almost)
@@ -432,6 +445,7 @@ function catalogCorners(
           curved: true,
           circleLeg: circleId
         });
+        boundCatalogSize(corners);
       }
     }
   }
