@@ -1560,7 +1560,8 @@ const SKETCH_CONSTRAINT_FIELDS: Readonly<
   symmetric: { points: ['a', 'b'], objects: ['axis'] },
   'point-on-object': { points: ['point'], objects: ['objectId'] },
   lock: { points: ['point'] },
-  pattern: { objects: ['source'] }
+  pattern: { objects: ['source'] },
+  offset: { values: ['value'] }
 };
 
 function isSketchPointSelector(value: unknown): boolean {
@@ -1610,6 +1611,21 @@ export function sketchConstraintShapeError(data: unknown): string | null {
   )
     return 'Sketch lock constraint needs a numeric position.';
   if (kind === 'pattern') return sketchPatternShapeError(data);
+  if (
+    kind === 'offset' &&
+    (!Array.isArray(data.pairs) ||
+      data.pairs.length === 0 ||
+      !data.pairs.every(
+        (pair) =>
+          isDocumentRecord(pair) &&
+          typeof pair.source === 'string' &&
+          !RESERVED_RECORD_KEYS.has(pair.source) &&
+          typeof pair.copy === 'string' &&
+          !RESERVED_RECORD_KEYS.has(pair.copy) &&
+          (pair.side === 1 || pair.side === -1)
+      ))
+  )
+    return 'Sketch offset needs its source and copy pairs.';
   return null;
 }
 

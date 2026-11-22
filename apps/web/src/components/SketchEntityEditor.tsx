@@ -36,8 +36,8 @@ export interface SketchEntityProjection {
 /** One constraint the selected entity takes part in. */
 export interface EntityConstraintItem {
   constraintId: string;
-  /** The tool that makes it, or `pattern` for a pattern relation. */
-  kind: SketchConstraintToolKind | 'pattern';
+  /** The tool that makes it, or `pattern` / `offset` for those relations. */
+  kind: SketchConstraintToolKind | 'pattern' | 'offset';
   label: string;
   /** Driving dimensions open the keypad; the rest only delete. */
   editable: boolean;

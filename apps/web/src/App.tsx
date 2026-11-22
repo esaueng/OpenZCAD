@@ -24390,7 +24390,7 @@ export function App() {
   }
   const [sketchSolving, setSketchSolving] = useState(false);
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
-    kind: DrivingDimensionKind | 'radius';
+    kind: DrivingDimensionKind | 'radius' | 'offset';
     picks: ConstraintPick[];
     documentVersion: number;
     constraintId?: string;
@@ -24774,7 +24774,8 @@ export function App() {
           editable:
             data.constraintKind === 'distance' ||
             data.constraintKind === 'angle' ||
-            data.constraintKind === 'radius'
+            data.constraintKind === 'radius' ||
+            data.constraintKind === 'offset'
         };
       });
   }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels, sketchFreedom]);
@@ -24803,7 +24804,8 @@ export function App() {
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
-          data.constraintKind === 'radius'
+          data.constraintKind === 'radius' ||
+          data.constraintKind === 'offset'
       }));
   }, [editingSketchNode, doc, selectedSketchEntity, sketchLabels]);
 
@@ -25515,12 +25517,33 @@ export function App() {
     const constraint = editingSketchNode?.constraints?.find(
       (candidate) => String(candidate.constraintId) === constraintId
     );
+    if (!doc || !constraint) {
+      setStatus('Only driving dimensions have editable values.');
+      return;
+    }
+    if (constraint.data.constraintKind === 'offset') {
+      // S05: the Offset's driving distance; every copy follows it.
+      setSketchDimensionDraft({
+        kind: 'offset',
+        picks: [],
+        documentVersion: doc.version,
+        constraintId
+      });
+      dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+      setKeypad({
+        kind: 'sketch-dimension',
+        label: 'Offset distance',
+        initial: String(constraint.data.value),
+        unitKind: 'length',
+        fixedClientAnchor: anchor
+      });
+      setStatus('Edit the offset driving value.');
+      return;
+    }
     if (
-      !doc ||
-      !constraint ||
-      (constraint.data.constraintKind !== 'distance' &&
-        constraint.data.constraintKind !== 'angle' &&
-        constraint.data.constraintKind !== 'radius')
+      constraint.data.constraintKind !== 'distance' &&
+      constraint.data.constraintKind !== 'angle' &&
+      constraint.data.constraintKind !== 'radius'
     ) {
       setStatus('Only driving dimensions have editable values.');
       return;
@@ -25629,18 +25652,44 @@ export function App() {
     const storedValue: ParamValue = Number.isFinite(Number(raw))
       ? evaluatedValue
       : raw;
-    const built = buildConstraint(
-      base,
-      sketch,
-      draft.kind,
-      draft.picks,
-      storedValue
-    );
+    const offsetData =
+      draft.kind === 'offset'
+        ? sketch.constraints?.find(
+            (constraint) =>
+              String(constraint.constraintId) === draft.constraintId
+          )?.data
+        : undefined;
+    if (draft.kind === 'offset' && offsetData?.constraintKind !== 'offset') {
+      setStatus('The dimension changed before the edit could be applied.');
+      return;
+    }
+    if (
+      draft.kind === 'offset' &&
+      !(typeof storedValue === 'string' || storedValue > 0)
+    ) {
+      setStatus(
+        'An offset distance is positive; its side stays with each copy.'
+      );
+      return;
+    }
+    const built =
+      offsetData?.constraintKind === 'offset'
+        ? { data: { ...offsetData, value: storedValue } }
+        : buildConstraint(
+            base,
+            sketch,
+            draft.kind as DrivingDimensionKind | 'radius',
+            draft.picks,
+            storedValue
+          );
     if ('error' in built) {
       setStatus(built.error);
       return;
     }
-    const spec = constraintToolSpec(draft.kind);
+    const spec =
+      draft.kind === 'offset'
+        ? { label: 'Offset' }
+        : constraintToolSpec(draft.kind);
     const dimensionCommands: AnyCommand[] = [];
     if (draft.constraintId) {
       const existing = sketch.constraints?.find(
@@ -26279,7 +26328,9 @@ export function App() {
         ? 'dimension'
         : kind === 'pattern'
           ? 'pattern relation'
-          : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+          : kind === 'offset'
+            ? 'offset dimension'
+            : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
     dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
     setStatus(`Selected ${label}. Press Delete to remove it.`);
   }

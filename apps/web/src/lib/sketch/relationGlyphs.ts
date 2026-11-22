@@ -179,7 +179,8 @@ export function sketchRelationGlyphs(
       data.constraintKind === 'distance' ||
       data.constraintKind === 'radius' ||
       data.constraintKind === 'angle' ||
-      data.constraintKind === 'pattern'
+      data.constraintKind === 'pattern' ||
+      data.constraintKind === 'offset'
     ) {
       continue;
     }

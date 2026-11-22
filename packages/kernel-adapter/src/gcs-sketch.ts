@@ -542,6 +542,111 @@ export function solveSketchWithGcs(
     }
   };
 
+  // S05 driving offset: each copy held `value` from its source, by exactly
+  // one equation per freedom the offset fixes — two for a line (its
+  // distance from the source line at both ends), one for a round (its
+  // radius against the source's, measured along a ray from the source's
+  // centre through two helper points that add as many equations as
+  // parameters). Direction and concentricity stay with the optional links
+  // the Offset tool keeps where they add rank.
+  const radiusOf = (objectId: EntityId): number => {
+    const object = objects.find((entry) => entry.objectId === objectId);
+    return object && 'radius' in object ? object.radius : 0;
+  };
+  const addOffsetRelation = (
+    id: string,
+    data: Extract<SketchConstraintData, { constraintKind: 'offset' }>
+  ) => {
+    const value = Math.abs(resolveValue(data.value, 'distance'));
+    for (const { source, copy, side } of data.pairs) {
+      const from = objectHandles(source);
+      const to = objectHandles(copy);
+      if (from.kind === 'line' && to.kind === 'line') {
+        for (const end of ['start', 'end'] as const) {
+          add(id, {
+            type: 'pointLineDistance',
+            point: pointHandle({ objectId: copy, point: end }),
+            line: from.entity,
+            value: side * value
+          });
+        }
+        continue;
+      }
+      if (
+        (from.kind !== 'circle' && from.kind !== 'arc') ||
+        (to.kind !== 'circle' && to.kind !== 'arc')
+      ) {
+        throw new Error(
+          `Offset ${copy} of ${source} pairs a line with a round.`
+        );
+      }
+      const centre = pointHandle({ objectId: source, point: 'center' });
+      const centreAt = resolvedPoint({ objectId: source, point: 'center' });
+      // P on the copy: an arc's start, or a helper held on the copy circle
+      // at its rightmost point.
+      let onCopy: number;
+      if (to.kind === 'arc') {
+        onCopy = pointHandle({ objectId: copy, point: 'start' });
+      } else {
+        const copyCentre = resolvedPoint({ objectId: copy, point: 'center' });
+        onCopy = kernel.gcsAddPoint(
+          sketch,
+          copyCentre.x + radiusOf(copy),
+          copyCentre.y,
+          false
+        );
+        add(id, { type: 'pointOnCircle', point: onCopy, circle: to.entity });
+        add(id, { type: 'horizontal', line: helperLine(centre, onCopy) });
+      }
+      const ray = helperLine(centre, onCopy);
+      // Q on the source along the same ray, where the source's radius
+      // meets it.
+      const copyPoint =
+        to.kind === 'arc'
+          ? resolvedPoint({ objectId: copy, point: 'start' })
+          : (() => {
+              const copyCentre = resolvedPoint({
+                objectId: copy,
+                point: 'center'
+              });
+              return { x: copyCentre.x + radiusOf(copy), y: copyCentre.y };
+            })();
+      const dx = copyPoint.x - centreAt.x;
+      const dy = copyPoint.y - centreAt.y;
+      const reach = Math.hypot(dx, dy) || 1;
+      const sourceRadius = radiusOf(source);
+      const onSource = kernel.gcsAddPoint(
+        sketch,
+        centreAt.x + (dx / reach) * sourceRadius,
+        centreAt.y + (dy / reach) * sourceRadius,
+        false
+      );
+      if (from.kind === 'circle') {
+        add(id, {
+          type: 'pointOnCircle',
+          point: onSource,
+          circle: from.entity
+        });
+      } else {
+        add(id, {
+          type: 'equalLength',
+          l1: helperLine(centre, onSource),
+          l2: helperLine(
+            centre,
+            pointHandle({ objectId: source, point: 'start' })
+          )
+        });
+      }
+      add(id, {
+        type: 'pointLineDistance',
+        point: onSource,
+        line: ray,
+        value: 0
+      });
+      add(id, { type: 'distance', a: onSource, b: onCopy, value });
+    }
+  };
+
   for (const constraint of constraints) {
     const data = constraint.data;
     const id = constraint.constraintId;
@@ -769,6 +874,9 @@ export function solveSketchWithGcs(
       }
       case 'pattern':
         addPatternRelation(id, data);
+        break;
+      case 'offset':
+        addOffsetRelation(id, data);
         break;
     }
   }

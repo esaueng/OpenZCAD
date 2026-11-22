@@ -751,6 +751,138 @@ describe('S05 Offset on the pinned kernel', () => {
     });
   }
 
+  /** Re-drive the one offset dimension, as editing its value does. */
+  const setOffset = (
+    fixture: ReturnType<typeof sketchWith>,
+    value: number | string
+  ) => {
+    const existing = fixture
+      .sketch()
+      .constraints!.find(({ data }) => data.constraintKind === 'offset')!;
+    if (existing.data.constraintKind !== 'offset') throw new Error('no offset');
+    fixture.manager.execute(
+      composeCommands('Edit offset dimension', [
+        commandFactories.deleteSketchConstraint({
+          sketchId: fixture.sketchId,
+          constraintId: existing.constraintId
+        }),
+        commandFactories.addSketchConstraint({
+          sketchId: fixture.sketchId,
+          constraint: { ...existing.data, value },
+          ids: { constraintId: existing.constraintId }
+        })
+      ])
+    );
+    return existing.data;
+  };
+
+  for (const join of ['miter', 'round'] as const) {
+    it(`re-offsets a ${join} rectangle when its offset dimension changes`, async () => {
+      const fixture = sketchWith([]);
+      const shape = cornerRectangleShape({ x: 0, y: 0 }, { x: 20, y: 12 })!;
+      const drawn = compositeCommands(shape, {
+        kind: 'sketch',
+        sketchId: fixture.sketchId
+      });
+      fixture.manager.execute(composeCommands(drawn.label, drawn.commands));
+      await fixture.commit(
+        offsetPlan(fixture, String(drawn.edgeIds[0]!), 1, {
+          join,
+          chain: true,
+          side: 1
+        })
+      );
+      // Hold the source rectangle by two opposite corners (its four
+      // freedoms), then drive the offset from 1 to 2.5.
+      fixture.constrain(lock(String(drawn.edgeIds[0]!), 'start', 0, 0));
+      fixture.constrain(lock(String(drawn.edgeIds[2]!), 'start', 20, 12));
+      const data = setOffset(fixture, 2.5);
+      expect(data.pairs).toHaveLength(4);
+      const outcome = await fixture.solve();
+      expectGood(outcome);
+      const added = fixture
+        .sketch()
+        .objectIds.map(String)
+        .filter((id) => !drawn.edgeIds.map(String).includes(id))
+        .map((id) => solved(outcome, id));
+      const lines = added.filter((object) => 'x1' in object);
+      const xs = lines.flatMap((object) => [object.x1!, object.x2!]);
+      const ys = lines.flatMap((object) => [object.y1!, object.y2!]);
+      expect(Math.min(...xs)).toBeCloseTo(-2.5, 8);
+      expect(Math.max(...xs)).toBeCloseTo(22.5, 8);
+      expect(Math.min(...ys)).toBeCloseTo(-2.5, 8);
+      expect(Math.max(...ys)).toBeCloseTo(14.5, 8);
+      if (join === 'round') {
+        // The round joins follow: radius-2.5 arcs about the source corners.
+        const arcs = added.filter((object) => 'radius' in object);
+        expect(arcs).toHaveLength(4);
+        for (const arc of arcs) expect(arc.radius).toBeCloseTo(2.5, 8);
+      }
+    });
+  }
+
+  it('drives a circle and an arc offset, inward and outward, from their dimension', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
+      {
+        objectKind: 'arc',
+        centerX: 20,
+        centerY: 0,
+        radius: 4,
+        startAngleDeg: 10,
+        endAngleDeg: 150
+      }
+    ]);
+    const [circle, arc] = fixture.ids as [string, string];
+    await fixture.commit(
+      offsetPlan(fixture, circle, -1, { join: 'miter', chain: true, side: 1 })
+    );
+    const circleCopy = fixture.sketch().objectIds.map(String).at(-1)!;
+    fixture.constrain(lock(circle, 'center', 0, 0));
+    fixture.constrain({
+      constraintKind: 'radius',
+      objectId: circle as EntityId,
+      value: 5
+    });
+    expect(setOffset(fixture, 2).pairs).toEqual([
+      { source: circle, copy: circleCopy, side: -1 }
+    ]);
+    let outcome = await fixture.solve();
+    expectGood(outcome);
+    expect(solved(outcome, circleCopy).radius).toBeCloseTo(3, 8);
+    expect(solved(outcome, circleCopy).centerX).toBeCloseTo(0, 8);
+
+    const arcFixture = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 20,
+        centerY: 0,
+        radius: 4,
+        startAngleDeg: 10,
+        endAngleDeg: 150
+      }
+    ]);
+    const lone = arcFixture.ids[0]!;
+    await arcFixture.commit(
+      offsetPlan(arcFixture, lone, 1, { join: 'miter', chain: false, side: 1 })
+    );
+    const arcCopy = arcFixture.sketch().objectIds.map(String).at(-1)!;
+    arcFixture.constrain(lock(lone, 'center', 20, 0));
+    arcFixture.constrain({
+      constraintKind: 'radius',
+      objectId: lone as EntityId,
+      value: 4
+    });
+    setOffset(arcFixture, 1.5);
+    outcome = await arcFixture.solve();
+    expectGood(outcome);
+    // Offset outward of an arc picked on its outside: radius 4 + 1.5.
+    const copied = solved(outcome, arcCopy);
+    expect(Math.abs(copied.radius! - 4)).toBeCloseTo(1.5, 8);
+    expect(copied.centerX).toBeCloseTo(20, 8);
+    void arc;
+  });
+
   it('holds an offset circle concentric with its source through an edit', async () => {
     const fixture = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }

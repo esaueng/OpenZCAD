@@ -154,6 +154,15 @@ function isPatternRelation(value: unknown): boolean {
   return record(value) && value.constraintKind === 'pattern';
 }
 
+/** S05 (schema v140): driving offset dimensions. */
+export function assertOffsetDimensionSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 140, 'Sketch offset dimensions');
+}
+
+function isOffsetDimension(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'offset';
+}
+
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
 export function assertSlotSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 59, 'Sketch slots');
@@ -1207,6 +1216,11 @@ export function assertDocumentContentCommandSchema(
       isPatternRelation(command.payload.constraint)
     )
       assertPatternRelationSchema(document.schemaVersion);
+    if (
+      command.kind === 'sketch.constraint.add' &&
+      isOffsetDimension(command.payload.constraint)
+    )
+      assertOffsetDimensionSchema(document.schemaVersion);
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1533,6 +1547,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertPatternRelationSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isOffsetDimension(constraint.data)
+      )
+    )
+      assertOffsetDimensionSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

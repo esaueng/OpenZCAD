@@ -619,6 +619,14 @@ function remapConstraint(
       const point = mapRef(data.point);
       return point ? { ...data, point } : null;
     }
+    case 'offset': {
+      // A reshaped curve leaves the offset; the other copies stay held.
+      const pairs = data.pairs.filter(
+        ({ source, copy }) => source !== id && copy !== id
+      );
+      if (pairs.length === data.pairs.length) return data;
+      return pairs.length > 0 ? { ...data, pairs } : null;
+    }
     case 'pattern': {
       // Reshaping the source or the direction (or the pivot's owner) breaks
       // the pattern; a reshaped instance leaves it, and the others stay held.

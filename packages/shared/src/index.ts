@@ -554,7 +554,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client cannot solve it, so it must refuse the document. Builds on
 // v137; v138 is claimed by the S07 entity lock (#1913) and v141 by curved
 // tangency (#1911).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 139 as const;
+// v140 adds the S05 driving offset dimension (`offset` sketch constraints):
+// the distance an Offset's copies keep from their sources. An older client
+// cannot solve it, so it must refuse the document. Builds on v139.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 140 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -2050,6 +2053,18 @@ export type SketchConstraintData =
       source: EntityId;
       instances: { objectId: EntityId; step: number }[];
       layout: SketchPatternLayout;
+    }
+  /**
+   * S05 (v140): the driving distance of one Offset. Each pair is a source
+   * curve and the copy offset from it; `side` says which way (a line's
+   * left, +1, or right, -1, of its start-to-end direction; a round's
+   * outside, +1, or inside, -1). Every copy stays `value` from its source,
+   * so editing the value re-offsets them all.
+   */
+  | {
+      constraintKind: 'offset';
+      pairs: { source: EntityId; copy: EntityId; side: 1 | -1 }[];
+      value: ParamValue;
     };
 
 /** How a {@link SketchConstraintData} `pattern` relation places its steps. */
@@ -6096,7 +6111,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle' | 'pattern'
+  'distance' | 'radius' | 'angle' | 'pattern' | 'offset'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [

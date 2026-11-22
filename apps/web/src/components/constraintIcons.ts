@@ -44,10 +44,11 @@ export const ArcGlyph = createLucideIcon('SketchArc', [
 
 /** One glyph per constraint tool, shared by the rail and the entity editor. */
 export const CONSTRAINT_ICONS: Record<
-  SketchConstraintToolKind | 'pattern',
+  SketchConstraintToolKind | 'pattern' | 'offset',
   LucideIcon
 > = {
   pattern: Columns3,
+  offset: Ruler,
   horizontal: MoveHorizontal,
   vertical: MoveVertical,
   parallel: Parallel,
