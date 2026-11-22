@@ -8,7 +8,7 @@ import {
   useState
 } from 'react';
 import type { CSSProperties, RefObject } from 'react';
-import { Globe, Lock, UserRound, X } from 'lucide-react';
+import { Lock, Plus, UserRound, X } from 'lucide-react';
 import type {
   CollaborationMember,
   ProjectAccessRole,
@@ -38,18 +38,19 @@ import {
 import { withShareConfiguration } from '../lib/projectShareLink';
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
-import { StableLabel } from './StableLabel';
 import { ShareLinkRevokeConfirm } from './ShareLinkRevokeConfirm';
 import {
   EncryptedShareLinks,
-  type EncryptedShareLinkClient
+  type EncryptedShareLinkClient,
+  type EncryptedShareLinksSummary
 } from './EncryptedShareLinks';
 import { ShareLinkDrawings } from './ShareLinkDrawings';
 import {
-  SHARE_LINK_MODE_HINT,
-  SHARE_LINK_NO_HISTORY_HINT,
-  ShareLinkModePicker
-} from './ShareLinkModePicker';
+  ShareLinkCard,
+  ShareLinkComposer,
+  ShareLinkCopyButton,
+  ShareLinkFacts
+} from './ShareLinkCard';
 import type {
   InvitableContact,
   OwnerInvitation
@@ -493,7 +494,6 @@ export function ProjectSharingDialog({
     null
   );
   const removalCancelRef = useRef<HTMLButtonElement | null>(null);
-  const [shareLinkCopied, setShareLinkCopied] = useState(false);
   const [email, setEmail] = useState('');
   const personalInfoVisible = usePersonalInfoVisible();
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
@@ -510,6 +510,16 @@ export function ProjectSharingDialog({
   const [error, setError] = useState<PlainFailure | null>(null);
   const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
   const [confirmingLeave, setConfirmingLeave] = useState(false);
+  // The owner's two tabs: people (members and invitations) and links.
+  const [tab, setTab] = useState<'people' | 'links'>('people');
+  const tabsId = useId();
+  const [encryptedLinksSummary, setEncryptedLinksSummary] =
+    useState<EncryptedShareLinksSummary | null>(null);
+  const linksSummary: EncryptedShareLinksSummary | null = encrypted
+    ? encryptedLinksSummary
+    : hydrating
+      ? null
+      : { count: shareLinks.length, attention: false };
   const actionOriginRef = useRef<HTMLElement | null>(null);
   useModalFocus(dialogRef, { autoFocus: true });
 
@@ -582,17 +592,22 @@ export function ProjectSharingDialog({
     ]
   );
 
-  const copyShareLink = async (url: string) => {
+  const copyShareLink = async (url: string): Promise<boolean> => {
     try {
       await navigator.clipboard.writeText(url);
-      setShareLinkCopied(true);
+      return true;
     } catch {
+      // Without clipboard access, copy from the URL field: it holds the
+      // link as copied (with any configuration) for the moment it takes.
       const input = shareLinkUrlRef.current;
-      if (input) {
-        input.focus();
-        input.select();
-        setShareLinkCopied(document.execCommand('copy'));
-      }
+      if (!input) return false;
+      const shown = input.value;
+      input.value = url;
+      input.focus();
+      input.select();
+      const copied = document.execCommand('copy');
+      input.value = shown;
+      return copied;
     }
   };
 
@@ -928,689 +943,791 @@ export function ProjectSharingDialog({
             </section>
           ) : null}
           {isOwner ? (
-            <section className="sharing-section sharing-invite-section">
-              <form
-                className="sharing-invite"
-                aria-label="Invite a collaborator"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void mutate('invite', async () => {
-                    setInvitationSentTo(null);
-                    if (encrypted) {
-                      // Only the owner's explicit pick binds a contact.
-                      const contact = offeredContacts.find(
-                        (candidate) => candidate.userId === pickedContact
-                      );
-                      await encryptedClient.invite(
-                        projectId,
-                        email,
-                        inviteRole,
-                        contact
-                          ? {
-                              userId: contact.userId,
-                              identityKeyHash: contact.identityKeyHash
-                            }
-                          : undefined
-                      );
-                      setInvitationSentTo(email.trim().toLowerCase());
-                    } else {
-                      const created = await client.createInvitation(
-                        projectId,
-                        email,
-                        inviteRole
-                      );
-                      setInvitationSentTo(created.invitation.email);
-                    }
-                    setEmail('');
-                    await refresh();
-                  });
-                }}
+            <div
+              className="sharing-tabs"
+              role="tablist"
+              aria-label="Share with"
+              onKeyDown={(event) => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+                  return;
+                event.preventDefault();
+                const next = tab === 'people' ? 'links' : 'people';
+                setTab(next);
+                document.getElementById(`${tabsId}-${next}-tab`)?.focus();
+              }}
+            >
+              <button
+                id={`${tabsId}-people-tab`}
+                type="button"
+                role="tab"
+                className="sharing-tab"
+                aria-selected={tab === 'people'}
+                aria-controls={`${tabsId}-people`}
+                tabIndex={tab === 'people' ? 0 : -1}
+                onClick={() => setTab('people')}
               >
-                <PrivateEmailInput
-                  visible={personalInfoVisible}
-                  required
-                  aria-label="Email"
-                  placeholder="Add people by email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                />
-                <select
-                  aria-label="Role"
-                  value={inviteRole}
-                  onChange={(event) =>
-                    setInviteRole(event.target.value as ProjectMemberRole)
-                  }
+                People
+                <span className="sharing-tab-count">
+                  {people.length + pendingCount}
+                </span>
+              </button>
+              <button
+                id={`${tabsId}-links-tab`}
+                type="button"
+                role="tab"
+                className="sharing-tab"
+                aria-selected={tab === 'links'}
+                aria-controls={`${tabsId}-links`}
+                tabIndex={tab === 'links' ? 0 : -1}
+                onClick={() => setTab('links')}
+              >
+                Links
+                {linksSummary ? (
+                  <span className="sharing-tab-count">
+                    {linksSummary.count}
+                  </span>
+                ) : null}
+                {linksSummary?.attention ? (
+                  <span
+                    className="sharing-tab-attention"
+                    title="A link needs your attention"
+                  >
+                    <span className="visually-hidden">, needs attention</span>
+                  </span>
+                ) : null}
+              </button>
+            </div>
+          ) : null}
+          <div
+            id={`${tabsId}-people`}
+            className="sharing-panel"
+            {...(isOwner
+              ? {
+                  role: 'tabpanel',
+                  'aria-labelledby': `${tabsId}-people-tab`
+                }
+              : {})}
+            hidden={isOwner && tab !== 'people'}
+          >
+            {isOwner ? (
+              <section className="sharing-section sharing-invite-section">
+                <form
+                  className="sharing-invite"
+                  aria-label="Invite a collaborator"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void mutate('invite', async () => {
+                      setInvitationSentTo(null);
+                      if (encrypted) {
+                        // Only the owner's explicit pick binds a contact.
+                        const contact = offeredContacts.find(
+                          (candidate) => candidate.userId === pickedContact
+                        );
+                        await encryptedClient.invite(
+                          projectId,
+                          email,
+                          inviteRole,
+                          contact
+                            ? {
+                                userId: contact.userId,
+                                identityKeyHash: contact.identityKeyHash
+                              }
+                            : undefined
+                        );
+                        setInvitationSentTo(email.trim().toLowerCase());
+                      } else {
+                        const created = await client.createInvitation(
+                          projectId,
+                          email,
+                          inviteRole
+                        );
+                        setInvitationSentTo(created.invitation.email);
+                      }
+                      setEmail('');
+                      await refresh();
+                    });
+                  }}
                 >
-                  <option value="viewer">Viewer</option>
-                  <option
-                    value="editor"
-                    disabled={!editorsAllowed}
-                    title={
-                      editorsAllowed
-                        ? undefined
-                        : 'Editor invitations are not available yet.'
+                  <PrivateEmailInput
+                    visible={personalInfoVisible}
+                    required
+                    aria-label="Email"
+                    placeholder="Add people by email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                  />
+                  <select
+                    aria-label="Role"
+                    value={inviteRole}
+                    onChange={(event) =>
+                      setInviteRole(event.target.value as ProjectMemberRole)
                     }
                   >
-                    Editor
-                  </option>
-                </select>
-                <button
-                  type="submit"
-                  className="primary"
-                  disabled={interactionBusy}
-                >
-                  Invite
-                </button>
-              </form>
-              {offeredContacts.length ? (
-                <div
-                  className="sharing-confirm"
-                  role="radiogroup"
-                  aria-label="Who to add"
-                >
-                  <p className="sharing-confirm-title">
-                    Contacts lists a verified contact under this address.
-                  </p>
-                  <label className="sharing-invite-option">
-                    <input
-                      type="radio"
-                      name="sharing-invite-contact"
-                      checked={pickedContact === null}
-                      disabled={interactionBusy}
-                      onChange={() => setPickedContact(null)}
-                    />
-                    <span>Email only: you confirm whoever accepts</span>
-                  </label>
-                  {offeredContacts.map((contact) => (
-                    <label
-                      key={contact.userId}
-                      className="sharing-invite-option"
+                    <option value="viewer">Viewer</option>
+                    <option
+                      value="editor"
+                      disabled={!editorsAllowed}
+                      title={
+                        editorsAllowed
+                          ? undefined
+                          : 'Editor invitations are not available yet.'
+                      }
                     >
+                      Editor
+                    </option>
+                  </select>
+                  <button
+                    type="submit"
+                    className="primary"
+                    disabled={interactionBusy}
+                  >
+                    Invite
+                  </button>
+                </form>
+                {offeredContacts.length ? (
+                  <div
+                    className="sharing-confirm"
+                    role="radiogroup"
+                    aria-label="Who to add"
+                  >
+                    <p className="sharing-confirm-title">
+                      Contacts lists a verified contact under this address.
+                    </p>
+                    <label className="sharing-invite-option">
                       <input
                         type="radio"
                         name="sharing-invite-contact"
-                        checked={pickedContact === contact.userId}
+                        checked={pickedContact === null}
                         disabled={interactionBusy}
-                        onChange={() => setPickedContact(contact.userId)}
+                        onChange={() => setPickedContact(null)}
                       />
-                      <span>
-                        Invite{' '}
-                        {personalInfoVisible && contact.email
-                          ? contact.email
-                          : 'your verified contact'}{' '}
-                        (code{' '}
-                        <code className="encryption-code">{contact.code}</code>)
-                      </span>
+                      <span>Email only: you confirm whoever accepts</span>
                     </label>
-                  ))}
-                  <p className="sharing-hint">
-                    A contact you pick is added once they accept. Pick them only
-                    if this is the code Contacts shows for them.
-                  </p>
-                </div>
-              ) : null}
-              {invitationSentTo && (
-                <p className="sharing-invite-sent" role="status">
-                  {personalInfoVisible
-                    ? `Invitation sent to ${invitationSentTo}.`
-                    : 'Invitation sent.'}
-                </p>
-              )}
-            </section>
-          ) : null}
-          {!localProject && (people.length > 0 || isOwner) ? (
-            <section
-              className="sharing-section sharing-people"
-              aria-label="People"
-            >
-              <h3 className="sharing-section-label">
-                People with access · {people.length + pendingCount}
-              </h3>
-              <ul className="sharing-list">
-                {people.map((person, index) => {
-                  // Numbered among the others: the self row is "You", so
-                  // counting it started the list at Collaborator 2.
-                  const name = personalInfoVisible
-                    ? person.name
-                    : person.kind === 'self'
-                      ? 'You'
-                      : `Collaborator ${index + (people[0]?.kind === 'self' ? 0 : 1)}`;
-                  const member =
-                    person.kind === 'member'
-                      ? memberByUser.get(person.userId)
-                      : undefined;
-                  const manageable = Boolean(member && isOwner);
-                  if (
-                    member &&
-                    manageable &&
-                    confirmingRemoval === member.userId
-                  ) {
-                    return (
-                      <li key={person.key} className="sharing-confirm-row">
-                        <div
-                          className="sharing-confirm"
-                          role="group"
-                          aria-label={`Remove ${name}`}
-                        >
-                          <p className="sharing-confirm-title">
-                            Remove {name}?
-                          </p>
-                          <p className="sharing-hint">
-                            {encrypted
-                              ? 'Removing someone keeps them out of every later version. What they already opened or saved stays with them.'
-                              : 'They lose access to this project right away.'}
-                          </p>
-                          <div className="sharing-confirm-actions">
-                            <button
-                              ref={removalCancelRef}
-                              type="button"
-                              className="secondary"
-                              disabled={interactionBusy}
-                              onClick={() => setConfirmingRemoval(null)}
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              type="button"
-                              className="secondary danger"
-                              disabled={interactionBusy}
-                              onClick={() => removeMember(member)}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      </li>
-                    );
-                  }
-                  return (
-                    <li key={person.key}>
-                      <span
-                        className="sharing-avatar"
-                        data-presence={person.presence ?? undefined}
-                        aria-hidden="true"
+                    {offeredContacts.map((contact) => (
+                      <label
+                        key={contact.userId}
+                        className="sharing-invite-option"
                       >
-                        {personalInfoVisible ? (
-                          person.initial
-                        ) : (
-                          <HiddenPerson />
-                        )}
-                      </span>
-                      <span className="sharing-member-id">
-                        {name}
-                        {personalInfoVisible && person.you ? ' (you)' : ''}
-                      </span>
-                      {person.kind === 'self' && role ? (
-                        <span className="sharing-kind">
-                          {ROLE_LABELS[role]}
+                        <input
+                          type="radio"
+                          name="sharing-invite-contact"
+                          checked={pickedContact === contact.userId}
+                          disabled={interactionBusy}
+                          onChange={() => setPickedContact(contact.userId)}
+                        />
+                        <span>
+                          Invite{' '}
+                          {personalInfoVisible && contact.email
+                            ? contact.email
+                            : 'your verified contact'}{' '}
+                          (code{' '}
+                          <code className="encryption-code">
+                            {contact.code}
+                          </code>
+                          )
                         </span>
-                      ) : null}
-                      {person.kind === 'guest' ? (
-                        <span
-                          className="sharing-presence"
-                          data-status={person.presence ?? 'idle'}
-                        >
-                          {PRESENCE_LABELS[person.presence ?? 'idle']}
-                        </span>
-                      ) : null}
-                      {member && !isOwner ? (
-                        <span className="sharing-kind">
-                          {ROLE_LABELS[member.role]}
-                        </span>
-                      ) : null}
-                      {member && manageable ? (
-                        <>
-                          <select
-                            className="sharing-role-select"
-                            aria-label={`Role for ${name}`}
-                            value={member.role}
-                            disabled={interactionBusy}
-                            onChange={(event) =>
-                              void mutate(
-                                `member:${member.userId}`,
-                                async () => {
-                                  const nextRole = event.target
-                                    .value as ProjectMemberRole;
-                                  if (encrypted) {
-                                    await encryptedClient.changeRole(
-                                      projectId,
-                                      member.userId,
-                                      nextRole
-                                    );
-                                  } else {
-                                    await client.updateMemberRole(
-                                      projectId,
-                                      member.userId,
-                                      nextRole
-                                    );
-                                  }
-                                  await refresh();
-                                }
-                              )
-                            }
-                          >
-                            <option value="viewer">Viewer</option>
-                            <option
-                              value="editor"
-                              disabled={!encrypted && !editorInvitationsEnabled}
-                            >
-                              Editor
-                            </option>
-                          </select>
-                          <button
-                            type="button"
-                            className="sharing-row-action sharing-row-icon"
+                      </label>
+                    ))}
+                    <p className="sharing-hint">
+                      A contact you pick is added once they accept. Pick them
+                      only if this is the code Contacts shows for them.
+                    </p>
+                  </div>
+                ) : null}
+                {invitationSentTo && (
+                  <p className="sharing-invite-sent" role="status">
+                    {personalInfoVisible
+                      ? `Invitation sent to ${invitationSentTo}.`
+                      : 'Invitation sent.'}
+                  </p>
+                )}
+              </section>
+            ) : null}
+            {!localProject && (people.length > 0 || isOwner) ? (
+              <section
+                className="sharing-section sharing-people"
+                aria-label="People"
+              >
+                <h3 className="sharing-section-label">
+                  People with access · {people.length + pendingCount}
+                </h3>
+                <ul className="sharing-list">
+                  {people.map((person, index) => {
+                    // Numbered among the others: the self row is "You", so
+                    // counting it started the list at Collaborator 2.
+                    const name = personalInfoVisible
+                      ? person.name
+                      : person.kind === 'self'
+                        ? 'You'
+                        : `Collaborator ${index + (people[0]?.kind === 'self' ? 0 : 1)}`;
+                    const member =
+                      person.kind === 'member'
+                        ? memberByUser.get(person.userId)
+                        : undefined;
+                    const manageable = Boolean(member && isOwner);
+                    if (
+                      member &&
+                      manageable &&
+                      confirmingRemoval === member.userId
+                    ) {
+                      return (
+                        <li key={person.key} className="sharing-confirm-row">
+                          <div
+                            className="sharing-confirm"
+                            role="group"
                             aria-label={`Remove ${name}`}
-                            title="Remove access"
-                            disabled={interactionBusy}
-                            onClick={() => setConfirmingRemoval(member.userId)}
                           >
-                            <X size={13} aria-hidden="true" />
-                          </button>
-                        </>
-                      ) : null}
-                    </li>
-                  );
-                })}
-                {(sharing?.invitations ?? []).map((invitation, index) => (
-                  <li key={invitation.invitationId} className="sharing-pending">
-                    <span
-                      className="sharing-avatar sharing-avatar-pending"
-                      aria-hidden="true"
-                    >
-                      {personalInfoVisible ? (
-                        initialOf(invitation.email)
-                      ) : (
-                        <HiddenPerson />
-                      )}
-                    </span>
-                    <span className="sharing-row-text">
-                      <span className="sharing-member-id">
-                        {personalInfoVisible
-                          ? invitation.email
-                          : `Invitation ${index + 1}`}
-                      </span>
-                      <span className="sharing-row-detail">
-                        Invited · {ROLE_LABELS[invitation.role]} ·{' '}
-                        {expiryLabel(invitation.expiresAt)}
-                      </span>
-                    </span>
-                    <button
-                      type="button"
-                      className="sharing-row-action sharing-row-icon"
-                      aria-label={`Revoke invitation for ${personalInfoVisible ? invitation.email : `Invitation ${index + 1}`}`}
-                      title="Revoke invitation"
-                      disabled={interactionBusy}
-                      onClick={() =>
-                        void mutate(
-                          `revoke:${invitation.invitationId}`,
-                          async () => {
-                            await client.revokeInvitation(
-                              projectId,
-                              invitation.invitationId
-                            );
-                            await refresh();
-                          }
-                        )
-                      }
-                    >
-                      <X size={13} aria-hidden="true" />
-                    </button>
-                  </li>
-                ))}
-                {encrypted
-                  ? encryptedInvitations
-                      .filter((invitation) =>
-                        OPEN_ENCRYPTED_STATES.has(invitation.state)
-                      )
-                      .map((invitation, index) => {
-                        const label =
-                          personalInfoVisible && invitation.email
-                            ? invitation.email
-                            : `Invitation ${index + 1}`;
-                        const invitee = invitation.record.acceptedByUserId;
-                        const acceptor = invitation.acceptor;
-                        const statement = invitation.statement;
-                        if (
-                          CONFIRMABLE_STATES.has(invitation.state) &&
-                          acceptor &&
-                          statement?.projectId === projectId &&
-                          encryptedClient.confirmAdd
-                        ) {
-                          // Named from the verified acceptance and statement
-                          // only: the contact code Contacts shows, the role
-                          // this account signed.
-                          const who =
-                            personalInfoVisible && acceptor.email
-                              ? acceptor.email
-                              : 'Your verified contact';
-                          const id = invitation.record.invitationId;
-                          return (
-                            <li key={id} className="sharing-confirm-row">
-                              <div
-                                className="sharing-confirm"
-                                role="group"
-                                aria-label={`Confirm ${who}`}
+                            <p className="sharing-confirm-title">
+                              Remove {name}?
+                            </p>
+                            <p className="sharing-hint">
+                              {encrypted
+                                ? 'Removing someone keeps them out of every later version. What they already opened or saved stays with them.'
+                                : 'They lose access to this project right away.'}
+                            </p>
+                            <div className="sharing-confirm-actions">
+                              <button
+                                ref={removalCancelRef}
+                                type="button"
+                                className="secondary"
+                                disabled={interactionBusy}
+                                onClick={() => setConfirmingRemoval(null)}
                               >
-                                <p className="sharing-confirm-title">
-                                  {who} accepted your invitation to{' '}
-                                  {projectName ?? 'this project'} as{' '}
-                                  {ROLE_ARTICLES[statement.role]}. Add them?
-                                </p>
-                                <p className="sharing-hint">
-                                  {invitation.state === 'confirm-re-add'
-                                    ? 'You removed them from this project before. '
-                                    : ''}
-                                  Add them only if this is the contact code
-                                  Contacts shows for the person you invited:
-                                </p>
-                                <code
-                                  className="encryption-code"
-                                  aria-label="Their contact code"
-                                >
-                                  {acceptor.code}
-                                </code>
-                                <div className="sharing-confirm-actions">
-                                  {onVerifyContact ? (
-                                    <button
-                                      type="button"
-                                      className="secondary"
-                                      disabled={interactionBusy}
-                                      onClick={() =>
-                                        onVerifyContact(acceptor.userId)
-                                      }
-                                    >
-                                      Open contact
-                                    </button>
-                                  ) : null}
-                                  <button
-                                    type="button"
-                                    className="secondary"
-                                    disabled={interactionBusy}
-                                    onClick={() =>
-                                      void mutate(`decline:${id}`, async () => {
-                                        await encryptedClient.revoke(
-                                          projectId,
-                                          id
-                                        );
-                                        await refresh();
-                                      })
-                                    }
-                                  >
-                                    Decline
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="primary"
-                                    disabled={interactionBusy}
-                                    onClick={() =>
-                                      void mutate(
-                                        `confirm-add:${id}`,
-                                        async () => {
-                                          await encryptedClient.confirmAdd!(
-                                            projectId,
-                                            id,
-                                            acceptor.identityKeyHash
-                                          );
-                                          await refresh();
-                                        }
-                                      )
-                                    }
-                                  >
-                                    Add
-                                  </button>
-                                </div>
-                              </div>
-                            </li>
-                          );
-                        }
-                        return (
-                          <li
-                            key={invitation.record.invitationId}
-                            className="sharing-pending"
-                          >
-                            <span
-                              className="sharing-avatar sharing-avatar-pending"
-                              aria-hidden="true"
-                            >
-                              {personalInfoVisible && invitation.email ? (
-                                initialOf(invitation.email)
-                              ) : (
-                                <HiddenPerson />
-                              )}
-                            </span>
-                            <span className="sharing-row-text">
-                              <span className="sharing-member-id">{label}</span>
-                              <span
-                                className="sharing-row-detail"
-                                data-status={invitation.state}
-                              >
-                                {ENCRYPTED_STATE_LABELS[invitation.state]} ·{' '}
-                                {ROLE_LABELS[invitation.record.role]} ·{' '}
-                                {expiryLabel(
-                                  Math.floor(invitation.record.expiresAt / 1000)
-                                )}
-                              </span>
-                            </span>
-                            {invitation.state === 'waiting-for-verification' &&
-                            invitee &&
-                            onVerifyContact ? (
+                                Cancel
+                              </button>
                               <button
                                 type="button"
-                                className="secondary sharing-verify"
-                                aria-label={`Verify ${label}`}
+                                className="secondary danger"
                                 disabled={interactionBusy}
-                                onClick={() => onVerifyContact(invitee)}
+                                onClick={() => removeMember(member)}
                               >
-                                Verify
+                                Remove
                               </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              className="sharing-row-action sharing-row-icon"
-                              aria-label={`Revoke invitation for ${label}`}
-                              title="Revoke invitation"
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    }
+                    return (
+                      <li key={person.key}>
+                        <span
+                          className="sharing-avatar"
+                          data-presence={person.presence ?? undefined}
+                          aria-hidden="true"
+                        >
+                          {personalInfoVisible ? (
+                            person.initial
+                          ) : (
+                            <HiddenPerson />
+                          )}
+                        </span>
+                        <span className="sharing-member-id">
+                          {name}
+                          {personalInfoVisible && person.you ? ' (you)' : ''}
+                        </span>
+                        {person.kind === 'self' && role ? (
+                          <span className="sharing-kind">
+                            {ROLE_LABELS[role]}
+                          </span>
+                        ) : null}
+                        {person.kind === 'guest' ? (
+                          <span
+                            className="sharing-presence"
+                            data-status={person.presence ?? 'idle'}
+                          >
+                            {PRESENCE_LABELS[person.presence ?? 'idle']}
+                          </span>
+                        ) : null}
+                        {member && !isOwner ? (
+                          <span className="sharing-kind">
+                            {ROLE_LABELS[member.role]}
+                          </span>
+                        ) : null}
+                        {member && manageable ? (
+                          <>
+                            <select
+                              className="sharing-role-select"
+                              aria-label={`Role for ${name}`}
+                              value={member.role}
                               disabled={interactionBusy}
-                              onClick={() =>
+                              onChange={(event) =>
                                 void mutate(
-                                  `revoke:${invitation.record.invitationId}`,
+                                  `member:${member.userId}`,
                                   async () => {
-                                    await encryptedClient.revoke(
-                                      projectId,
-                                      invitation.record.invitationId
-                                    );
+                                    const nextRole = event.target
+                                      .value as ProjectMemberRole;
+                                    if (encrypted) {
+                                      await encryptedClient.changeRole(
+                                        projectId,
+                                        member.userId,
+                                        nextRole
+                                      );
+                                    } else {
+                                      await client.updateMemberRole(
+                                        projectId,
+                                        member.userId,
+                                        nextRole
+                                      );
+                                    }
                                     await refresh();
                                   }
                                 )
                               }
                             >
+                              <option value="viewer">Viewer</option>
+                              <option
+                                value="editor"
+                                disabled={
+                                  !encrypted && !editorInvitationsEnabled
+                                }
+                              >
+                                Editor
+                              </option>
+                            </select>
+                            <button
+                              type="button"
+                              className="sharing-row-action sharing-row-icon"
+                              aria-label={`Remove ${name}`}
+                              title="Remove access"
+                              disabled={interactionBusy}
+                              onClick={() =>
+                                setConfirmingRemoval(member.userId)
+                              }
+                            >
                               <X size={13} aria-hidden="true" />
                             </button>
-                          </li>
-                        );
-                      })
-                  : null}
-              </ul>
-            </section>
-          ) : null}
-
-          {!localProject && !isOwner ? (
-            <p className="sharing-hint sharing-owner-note">
-              {role === null
-                ? 'Connecting to project sharing. Your cloud access has not been confirmed yet.'
-                : 'Only the project owner can manage members and invitations.'}
-            </p>
-          ) : null}
-
-          {isOwner && !encrypted ? (
-            <PlaintextShareLinks
-              shareLinks={shareLinks}
-              created={createdShareLink}
-              copied={shareLinkCopied}
-              disabled={interactionBusy}
-              localImportSourceNames={localImportSourceNames}
-              urlRef={shareLinkUrlRef}
-              configurations={configurations}
-              onCopy={(url) => void copyShareLink(url)}
-              {...(onFreezeModel ? { canExcludeHistory: true } : {})}
-              onUpdate={(shareLink) =>
-                void mutate(
-                  `share-link:update:${shareLink.shareLinkId}`,
-                  async () => {
-                    if (!onFreezeModel) return;
-                    await shareLinkClient.updateProjectShareLinkSnapshot(
-                      projectId,
-                      shareLink.shareLinkId,
-                      await onFreezeModel()
+                          </>
+                        ) : null}
+                      </li>
                     );
-                    await refresh();
-                  }
-                )
-              }
-              onCreate={(mode, comments, history) =>
-                void mutate('share-link:create', async () => {
-                  // L08: a link without history is the model frozen in this
-                  // browser, so it waits on no save and needs no source file
-                  // in the account.
-                  const frozen =
-                    !history && onFreezeModel
-                      ? await onFreezeModel()
-                      : undefined;
-                  if (!frozen) await onBeforeCreateShareLink?.();
-                  setCreatedShareLink(null);
-                  setShareLinkCopied(false);
-                  // L08: only a commenter link names comments.
-                  const created = frozen
-                    ? await shareLinkClient.createProjectShareLink(
-                        projectId,
-                        'view',
-                        null,
-                        comments,
-                        frozen
-                      )
-                    : comments
-                      ? await shareLinkClient.createProjectShareLink(
-                          projectId,
-                          mode,
-                          null,
-                          true
+                  })}
+                  {(sharing?.invitations ?? []).map((invitation, index) => (
+                    <li
+                      key={invitation.invitationId}
+                      className="sharing-pending"
+                    >
+                      <span
+                        className="sharing-avatar sharing-avatar-pending"
+                        aria-hidden="true"
+                      >
+                        {personalInfoVisible ? (
+                          initialOf(invitation.email)
+                        ) : (
+                          <HiddenPerson />
+                        )}
+                      </span>
+                      <span className="sharing-row-text">
+                        <span className="sharing-member-id">
+                          {personalInfoVisible
+                            ? invitation.email
+                            : `Invitation ${index + 1}`}
+                        </span>
+                        <span className="sharing-row-detail">
+                          Invited · {ROLE_LABELS[invitation.role]} ·{' '}
+                          {expiryLabel(invitation.expiresAt)}
+                        </span>
+                      </span>
+                      <button
+                        type="button"
+                        className="sharing-row-action sharing-row-icon"
+                        aria-label={`Revoke invitation for ${personalInfoVisible ? invitation.email : `Invitation ${index + 1}`}`}
+                        title="Revoke invitation"
+                        disabled={interactionBusy}
+                        onClick={() =>
+                          void mutate(
+                            `revoke:${invitation.invitationId}`,
+                            async () => {
+                              await client.revokeInvitation(
+                                projectId,
+                                invitation.invitationId
+                              );
+                              await refresh();
+                            }
+                          )
+                        }
+                      >
+                        <X size={13} aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                  {encrypted
+                    ? encryptedInvitations
+                        .filter((invitation) =>
+                          OPEN_ENCRYPTED_STATES.has(invitation.state)
                         )
-                      : await shareLinkClient.createProjectShareLink(
-                          projectId,
-                          mode
-                        );
-                  setCreatedShareLink({
-                    url: buildShareLinkUrl(created.token),
-                    shareLinkId: created.shareLink.shareLinkId,
-                    mode: frozen ? 'view' : mode
-                  });
-                  await refresh();
-                })
-              }
-              onRename={(shareLink, draft) =>
-                mutate(
-                  `share-link:rename:${shareLink.shareLinkId}`,
-                  async () => {
-                    const label = normalizeShareLinkLabel(draft);
-                    if (label === shareLink.label) {
-                      return;
-                    }
-                    await shareLinkClient.renameProjectShareLink(
-                      projectId,
-                      shareLink.shareLinkId,
-                      label
-                    );
-                    await refresh();
-                  }
-                )
-              }
-              onRevoke={(shareLink) =>
-                void mutate(
-                  `share-link:revoke:${shareLink.shareLinkId}`,
-                  async () => {
-                    await shareLinkClient.revokeProjectShareLink(
-                      projectId,
-                      shareLink.shareLinkId
-                    );
-                    setCreatedShareLink(null);
-                    await refresh();
-                  }
-                )
-              }
-            />
-          ) : null}
+                        .map((invitation, index) => {
+                          const label =
+                            personalInfoVisible && invitation.email
+                              ? invitation.email
+                              : `Invitation ${index + 1}`;
+                          const invitee = invitation.record.acceptedByUserId;
+                          const acceptor = invitation.acceptor;
+                          const statement = invitation.statement;
+                          if (
+                            CONFIRMABLE_STATES.has(invitation.state) &&
+                            acceptor &&
+                            statement?.projectId === projectId &&
+                            encryptedClient.confirmAdd
+                          ) {
+                            // Named from the verified acceptance and statement
+                            // only: the contact code Contacts shows, the role
+                            // this account signed.
+                            const who =
+                              personalInfoVisible && acceptor.email
+                                ? acceptor.email
+                                : 'Your verified contact';
+                            const id = invitation.record.invitationId;
+                            return (
+                              <li key={id} className="sharing-confirm-row">
+                                <div
+                                  className="sharing-confirm"
+                                  role="group"
+                                  aria-label={`Confirm ${who}`}
+                                >
+                                  <p className="sharing-confirm-title">
+                                    {who} accepted your invitation to{' '}
+                                    {projectName ?? 'this project'} as{' '}
+                                    {ROLE_ARTICLES[statement.role]}. Add them?
+                                  </p>
+                                  <p className="sharing-hint">
+                                    {invitation.state === 'confirm-re-add'
+                                      ? 'You removed them from this project before. '
+                                      : ''}
+                                    Add them only if this is the contact code
+                                    Contacts shows for the person you invited:
+                                  </p>
+                                  <code
+                                    className="encryption-code"
+                                    aria-label="Their contact code"
+                                  >
+                                    {acceptor.code}
+                                  </code>
+                                  <div className="sharing-confirm-actions">
+                                    {onVerifyContact ? (
+                                      <button
+                                        type="button"
+                                        className="secondary"
+                                        disabled={interactionBusy}
+                                        onClick={() =>
+                                          onVerifyContact(acceptor.userId)
+                                        }
+                                      >
+                                        Open contact
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      disabled={interactionBusy}
+                                      onClick={() =>
+                                        void mutate(
+                                          `decline:${id}`,
+                                          async () => {
+                                            await encryptedClient.revoke(
+                                              projectId,
+                                              id
+                                            );
+                                            await refresh();
+                                          }
+                                        )
+                                      }
+                                    >
+                                      Decline
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="primary"
+                                      disabled={interactionBusy}
+                                      onClick={() =>
+                                        void mutate(
+                                          `confirm-add:${id}`,
+                                          async () => {
+                                            await encryptedClient.confirmAdd!(
+                                              projectId,
+                                              id,
+                                              acceptor.identityKeyHash
+                                            );
+                                            await refresh();
+                                          }
+                                        )
+                                      }
+                                    >
+                                      Add
+                                    </button>
+                                  </div>
+                                </div>
+                              </li>
+                            );
+                          }
+                          return (
+                            <li
+                              key={invitation.record.invitationId}
+                              className="sharing-pending"
+                            >
+                              <span
+                                className="sharing-avatar sharing-avatar-pending"
+                                aria-hidden="true"
+                              >
+                                {personalInfoVisible && invitation.email ? (
+                                  initialOf(invitation.email)
+                                ) : (
+                                  <HiddenPerson />
+                                )}
+                              </span>
+                              <span className="sharing-row-text">
+                                <span className="sharing-member-id">
+                                  {label}
+                                </span>
+                                <span
+                                  className="sharing-row-detail"
+                                  data-status={invitation.state}
+                                >
+                                  {ENCRYPTED_STATE_LABELS[invitation.state]} ·{' '}
+                                  {ROLE_LABELS[invitation.record.role]} ·{' '}
+                                  {expiryLabel(
+                                    Math.floor(
+                                      invitation.record.expiresAt / 1000
+                                    )
+                                  )}
+                                </span>
+                              </span>
+                              {invitation.state ===
+                                'waiting-for-verification' &&
+                              invitee &&
+                              onVerifyContact ? (
+                                <button
+                                  type="button"
+                                  className="secondary sharing-verify"
+                                  aria-label={`Verify ${label}`}
+                                  disabled={interactionBusy}
+                                  onClick={() => onVerifyContact(invitee)}
+                                >
+                                  Verify
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="sharing-row-action sharing-row-icon"
+                                aria-label={`Revoke invitation for ${label}`}
+                                title="Revoke invitation"
+                                disabled={interactionBusy}
+                                onClick={() =>
+                                  void mutate(
+                                    `revoke:${invitation.record.invitationId}`,
+                                    async () => {
+                                      await encryptedClient.revoke(
+                                        projectId,
+                                        invitation.record.invitationId
+                                      );
+                                      await refresh();
+                                    }
+                                  )
+                                }
+                              >
+                                <X size={13} aria-hidden="true" />
+                              </button>
+                            </li>
+                          );
+                        })
+                    : null}
+                </ul>
+              </section>
+            ) : null}
 
-          {isOwner && drawingSheets && drawingSheets.length > 0 ? (
-            <ShareLinkDrawings
-              sheets={drawingSheets}
-              sharedSheetIds={sharedSheetIds ?? []}
-              {...(onSharedSheetsChange
-                ? { onChange: onSharedSheetsChange }
-                : {})}
-            />
-          ) : null}
+            {!localProject && !isOwner ? (
+              <p className="sharing-hint sharing-owner-note">
+                {role === null
+                  ? 'Connecting to project sharing. Your cloud access has not been confirmed yet.'
+                  : 'Only the project owner can manage members and invitations.'}
+              </p>
+            ) : null}
 
-          {isOwner && encrypted ? (
-            <EncryptedShareLinks
-              projectId={projectId}
-              {...(encryptedShareLinkClient
-                ? { client: encryptedShareLinkClient }
-                : {})}
-              {...(onFreezeModel ? { onFreezeModel } : {})}
-            />
-          ) : null}
-
-          {!localProject &&
-          encrypted &&
-          (role === 'editor' || role === 'viewer') ? (
-            confirmingLeave ? (
-              <div
-                className="sharing-leave sharing-confirm"
-                role="group"
-                aria-label="Leave this project"
-              >
-                <p className="sharing-hint">
-                  You lose access to this project at once and are not told of
-                  later changes. To come back, the owner has to invite you
-                  again.
-                </p>
-                <div className="sharing-confirm-actions">
+            {!localProject &&
+            encrypted &&
+            (role === 'editor' || role === 'viewer') ? (
+              confirmingLeave ? (
+                <div
+                  className="sharing-leave sharing-confirm"
+                  role="group"
+                  aria-label="Leave this project"
+                >
+                  <p className="sharing-hint">
+                    You lose access to this project at once and are not told of
+                    later changes. To come back, the owner has to invite you
+                    again.
+                  </p>
+                  <div className="sharing-confirm-actions">
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={interactionBusy}
+                      onClick={() => setConfirmingLeave(false)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary danger"
+                      disabled={interactionBusy}
+                      onClick={() =>
+                        void mutate('leave', async () => {
+                          await encryptedClient.leave(projectId);
+                          setConfirmingLeave(false);
+                          onLeft?.();
+                        })
+                      }
+                    >
+                      Leave project
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="sharing-leave-row">
                   <button
                     type="button"
-                    className="secondary"
+                    className="sharing-leave-button"
                     disabled={interactionBusy}
-                    onClick={() => setConfirmingLeave(false)}
+                    onClick={() => setConfirmingLeave(true)}
                   >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary danger"
-                    disabled={interactionBusy}
-                    onClick={() =>
-                      void mutate('leave', async () => {
-                        await encryptedClient.leave(projectId);
-                        setConfirmingLeave(false);
-                        onLeft?.();
-                      })
-                    }
-                  >
-                    Leave project
+                    Leave project…
                   </button>
                 </div>
-              </div>
-            ) : (
-              <div className="sharing-leave-row">
-                <button
-                  type="button"
-                  className="sharing-leave-button"
+              )
+            ) : null}
+          </div>
+          {isOwner ? (
+            <div
+              id={`${tabsId}-links`}
+              className="sharing-panel"
+              role="tabpanel"
+              aria-labelledby={`${tabsId}-links-tab`}
+              hidden={tab !== 'links'}
+            >
+              {isOwner && !encrypted ? (
+                <PlaintextShareLinks
+                  shareLinks={shareLinks}
+                  created={createdShareLink}
                   disabled={interactionBusy}
-                  onClick={() => setConfirmingLeave(true)}
-                >
-                  Leave project…
-                </button>
-              </div>
-            )
+                  localImportSourceNames={localImportSourceNames}
+                  urlRef={shareLinkUrlRef}
+                  configurations={configurations}
+                  onCopy={copyShareLink}
+                  {...(onFreezeModel ? { canExcludeHistory: true } : {})}
+                  onUpdate={(shareLink) =>
+                    void mutate(
+                      `share-link:update:${shareLink.shareLinkId}`,
+                      async () => {
+                        if (!onFreezeModel) return;
+                        await shareLinkClient.updateProjectShareLinkSnapshot(
+                          projectId,
+                          shareLink.shareLinkId,
+                          await onFreezeModel()
+                        );
+                        await refresh();
+                      }
+                    )
+                  }
+                  onCreate={(mode, comments, history, name) =>
+                    void mutate('share-link:create', async () => {
+                      // Refused before anything is frozen or saved.
+                      const label = normalizeShareLinkLabel(name);
+                      // L08: a link without history is the model frozen in this
+                      // browser, so it waits on no save and needs no source file
+                      // in the account.
+                      const frozen =
+                        !history && onFreezeModel
+                          ? await onFreezeModel()
+                          : undefined;
+                      if (!frozen) await onBeforeCreateShareLink?.();
+                      setCreatedShareLink(null);
+                      // L08: only a commenter link names comments.
+                      const created = frozen
+                        ? await shareLinkClient.createProjectShareLink(
+                            projectId,
+                            'view',
+                            label,
+                            comments,
+                            frozen
+                          )
+                        : comments
+                          ? await shareLinkClient.createProjectShareLink(
+                              projectId,
+                              mode,
+                              label,
+                              true
+                            )
+                          : label
+                            ? await shareLinkClient.createProjectShareLink(
+                                projectId,
+                                mode,
+                                label
+                              )
+                            : await shareLinkClient.createProjectShareLink(
+                                projectId,
+                                mode
+                              );
+                      setCreatedShareLink({
+                        url: buildShareLinkUrl(created.token),
+                        shareLinkId: created.shareLink.shareLinkId,
+                        mode: frozen ? 'view' : mode
+                      });
+                      await refresh();
+                    })
+                  }
+                  onRename={(shareLink, draft) =>
+                    mutate(
+                      `share-link:rename:${shareLink.shareLinkId}`,
+                      async () => {
+                        const label = normalizeShareLinkLabel(draft);
+                        if (label === shareLink.label) {
+                          return;
+                        }
+                        await shareLinkClient.renameProjectShareLink(
+                          projectId,
+                          shareLink.shareLinkId,
+                          label
+                        );
+                        await refresh();
+                      }
+                    )
+                  }
+                  onRevoke={(shareLink) =>
+                    void mutate(
+                      `share-link:revoke:${shareLink.shareLinkId}`,
+                      async () => {
+                        await shareLinkClient.revokeProjectShareLink(
+                          projectId,
+                          shareLink.shareLinkId
+                        );
+                        setCreatedShareLink(null);
+                        await refresh();
+                      }
+                    )
+                  }
+                />
+              ) : null}
+
+              {isOwner && encrypted ? (
+                <EncryptedShareLinks
+                  projectId={projectId}
+                  {...(encryptedShareLinkClient
+                    ? { client: encryptedShareLinkClient }
+                    : {})}
+                  {...(onFreezeModel ? { onFreezeModel } : {})}
+                  onSummary={setEncryptedLinksSummary}
+                />
+              ) : null}
+
+              {isOwner && drawingSheets && drawingSheets.length > 0 ? (
+                <ShareLinkDrawings
+                  sheets={drawingSheets}
+                  sharedSheetIds={sharedSheetIds ?? []}
+                  {...(onSharedSheetsChange
+                    ? { onChange: onSharedSheetsChange }
+                    : {})}
+                />
+              ) : null}
+            </div>
           ) : null}
         </div>
 
@@ -1661,21 +1778,23 @@ interface PlaintextShareLinksProps {
     shareLinkId: string;
     mode: ProjectShareLinkMode;
   } | null;
-  copied: boolean;
   disabled: boolean;
   localImportSourceNames: readonly string[];
   urlRef: RefObject<HTMLInputElement | null>;
   configurations: readonly { id: string; name: string }[];
-  onCopy(url: string): void;
+  /** Copies a link; false when neither the clipboard nor a fallback could. */
+  onCopy(url: string): Promise<boolean>;
   /**
    * `mode`: what visitors may do (Tweak includes View). `comments`: L08
-   * commenter link, whose visitors may comment.
+   * commenter link, whose visitors may comment. `name`: the owner's name
+   * for it as typed; blank leaves it unnamed.
    */
   onCreate(
     mode: ProjectShareLinkMode,
     comments: boolean,
     /** L08: false shares the finished model without its history. */
-    history: boolean
+    history: boolean,
+    name: string
   ): void;
   /** L08: whether a link may leave the project's history out. */
   canExcludeHistory?: boolean;
@@ -1685,15 +1804,25 @@ interface PlaintextShareLinksProps {
   onRevoke(shareLink: ProjectShareLinkSummary): void;
 }
 
+/** A link's access, history, comments and expiry, for its card's summary. */
+function shareLinkSummary(shareLink: ProjectShareLinkSummary): string {
+  return [
+    linkAccessLabel(shareLink),
+    shareLink.comments ? 'Comments' : null,
+    shareLinkExpiryLabel(shareLink.createdAt)
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 /**
- * General access for an unencrypted project: one summary line saying who can
- * open it, the link just created (shown once, with an optional name), and
- * every unrevoked link with its owner-only name, rename and revoke.
+ * The Links tab of an unencrypted project: the link just created (its URL
+ * is shown once), the card that makes a new one, and a card per unrevoked
+ * link with its owner-only name, settings, update and revoke.
  */
 function PlaintextShareLinks({
   shareLinks,
   created,
-  copied,
   disabled,
   localImportSourceNames,
   urlRef,
@@ -1705,263 +1834,118 @@ function PlaintextShareLinks({
   onRename,
   onRevoke
 }: PlaintextShareLinksProps) {
-  // L08: whether the next link shares the project's history.
-  const [includeHistory, setIncludeHistory] = useState(true);
-  const withoutHistory = canExcludeHistory && !includeHistory;
-  // F06: the row the new link opens on, or '' for the one it was saved with.
-  const [opensOn, setOpensOn] = useState('');
-  const opensOnRow = configurations.some((row) => row.id === opensOn)
-    ? opensOn
-    : '';
-  const createdUrl = created
-    ? withShareConfiguration(created.url, opensOnRow || null)
-    : '';
-  const [editingId, setEditingId] = useState<string | null>(null);
-  // What the next link lets its visitors do; Tweak includes View.
-  const [mode, setMode] = useState<ProjectShareLinkMode>('tweak');
-  const detailId = useId();
-  // L08: whether the next link lets its visitors comment.
-  const [withComments, setWithComments] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   // The link whose Revoke is waiting for a yes (design review I2).
   const [revokingId, setRevokingId] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  // Keyed by link, so a newly created link starts unnamed.
-  const [createdDraft, setCreatedDraft] = useState({ id: '', name: '' });
-  const createdName =
-    created && createdDraft.id === created.shareLinkId ? createdDraft.name : '';
-  const renameInputRef = useRef<HTMLInputElement | null>(null);
-  const editingRowRef = useRef<string | null>(null);
-
+  // A new link closes the card that made it.
+  const createdId = created?.shareLinkId ?? null;
   useEffect(() => {
-    if (editingId !== null) {
-      renameInputRef.current?.focus();
-      renameInputRef.current?.select();
-    }
-  }, [editingId]);
-
+    if (createdId) setComposing(false);
+  }, [createdId]);
   const createdLink = created
     ? shareLinks.find((link) => link.shareLinkId === created.shareLinkId)
     : undefined;
-  const startRename = (shareLink: ProjectShareLinkSummary) => {
-    editingRowRef.current = shareLink.shareLinkId;
-    setDraft(shareLink.label ?? '');
-    setEditingId(shareLink.shareLinkId);
-  };
-  const stopRename = () => {
-    setEditingId(null);
-    const id = editingRowRef.current;
-    editingRowRef.current = null;
-    // Back to the control that started the edit, for the keyboard.
-    requestAnimationFrame(() =>
-      document
-        .querySelector<HTMLElement>(`[data-share-link-name="${id ?? ''}"]`)
-        ?.focus()
-    );
-  };
+  const showComposer = composing || (shareLinks.length === 0 && !created);
 
   return (
     <section
-      className="sharing-section sharing-access-section"
+      className="sharing-section share-links"
       aria-label="General access"
     >
-      <h3 className="sharing-section-label">General access</h3>
-      <div className="sharing-access">
-        <Globe className="sharing-access-icon" size={14} aria-hidden="true" />
-        <span className="sharing-access-title">
-          {shareLinks.length > 0
-            ? `Anyone with a link · ${shareLinks.length} active`
-            : 'Only invited people'}
-        </span>
-      </div>
-      <div className="sharing-link-create">
-        <ShareLinkModePicker
-          value={mode}
-          viewOnly={withoutHistory}
-          describedBy={detailId}
-          onChange={setMode}
-        />
-        {canExcludeHistory && (
-          <label className="sharing-link-comments">
-            <input
-              type="checkbox"
-              checked={includeHistory}
-              aria-describedby={detailId}
-              onChange={(event) => setIncludeHistory(event.target.checked)}
-            />
-            Include history
-          </label>
-        )}
-        <label className="sharing-link-comments">
-          <input
-            type="checkbox"
-            checked={withComments}
-            aria-describedby={detailId}
-            onChange={(event) => setWithComments(event.target.checked)}
-          />
-          Visitors can comment
-        </label>
-        <button
-          type="button"
-          className={shareLinks.length > 0 ? 'secondary' : 'primary'}
-          disabled={
-            disabled || (!withoutHistory && localImportSourceNames.length > 0)
-          }
-          onClick={() =>
-            onCreate(
-              withoutHistory ? 'view' : mode,
-              withComments,
-              !withoutHistory
-            )
-          }
-        >
-          Create link
-        </button>
-      </div>
-      <p id={detailId} className="sharing-access-detail">
-        {withoutHistory
-          ? SHARE_LINK_NO_HISTORY_HINT
-          : SHARE_LINK_MODE_HINT[mode]}
-        {withComments
-          ? ' They see every comment and sign theirs with a name.'
-          : ''}{' '}
-        Links expire after 30 days.
+      <p className="share-links-access">
+        {shareLinks.length > 0
+          ? `Anyone with a link · ${shareLinks.length} active`
+          : 'Only invited people'}
       </p>
-      {localImportSourceNames.length > 0 && !withoutHistory && (
-        <p className="sharing-hint" role="alert">
-          Save the source files for {localImportSourceNames.join(', ')} to your
-          account with File → Save before creating a link.
-        </p>
-      )}
-      {created && (
+      <p className="sharing-hint">
+        A link lets anyone who has it open this model without an account. Links
+        expire after 30 days.
+      </p>
+      {created ? (
         <div className="sharing-share-output" role="status">
-          <input
-            className="sharing-share-name"
-            type="text"
-            aria-label="New link name"
-            placeholder="Name this link (optional)"
-            maxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
-            value={createdName}
-            disabled={!createdLink}
-            onChange={(event) =>
-              setCreatedDraft({
-                id: created.shareLinkId,
-                name: event.target.value
-              })
-            }
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                event.currentTarget.blur();
-              }
-            }}
-            onBlur={() => {
-              if (createdLink) {
-                void onRename(createdLink, createdName);
-              }
-            }}
-          />
-          {configurations.length > 0 && (
-            <label className="sharing-share-configuration">
-              <span>Opens on</span>
-              <select
-                value={opensOnRow}
-                onChange={(event) => setOpensOn(event.target.value)}
-              >
-                <option value="">The saved configuration</option>
-                {configurations.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          <p className="share-link-created-title">
+            {createdLink?.label ?? `${LINK_MODE_LABELS[created.mode]} link`} is
+            ready
+          </p>
           <input
             ref={urlRef}
             className="sharing-share-url"
             type="text"
             readOnly
             aria-label="Share link"
-            value={createdUrl}
+            value={created.url}
             onFocus={(event) => event.target.select()}
           />
-          <button
-            type="button"
-            className="primary sharing-share-copy"
-            onClick={() => onCopy(createdUrl)}
-          >
-            <StableLabel reserve={['Copied', 'Copy']} align="center">
-              {copied ? 'Copied' : 'Copy'}
-            </StableLabel>
-          </button>
+          <ShareLinkCopyButton
+            url={created.url}
+            primary
+            configurations={configurations}
+            onCopy={(url, configurationId) =>
+              onCopy(withShareConfiguration(url, configurationId))
+            }
+          />
           <p className="sharing-share-once">
             {LINK_MODE_LABELS[created.mode]} link · shown once — copy it now.
           </p>
         </div>
+      ) : null}
+      {showComposer ? (
+        <ShareLinkComposer
+          canExcludeHistory={canExcludeHistory}
+          defaultMode="tweak"
+          nameable
+          nameMaxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
+          disabled={disabled}
+          commentsHint="Visitors see every comment and sign theirs with a name."
+          footnote="You see the address once, when the link is made."
+          {...(localImportSourceNames.length > 0
+            ? {
+                historyBlocker: (
+                  <p className="sharing-hint" role="alert">
+                    Save the source files for{' '}
+                    {localImportSourceNames.join(', ')} to your account with
+                    File → Save before creating a link.
+                  </p>
+                )
+              }
+            : {})}
+          {...(shareLinks.length > 0 || created
+            ? { onCancel: () => setComposing(false) }
+            : {})}
+          onCreate={(draft) =>
+            onCreate(draft.mode, draft.comments, draft.history, draft.name)
+          }
+        />
+      ) : (
+        <button
+          type="button"
+          className="secondary share-links-new"
+          disabled={disabled}
+          onClick={() => setComposing(true)}
+        >
+          <Plus size={13} aria-hidden="true" />
+          New link
+        </button>
       )}
-      {shareLinks.length > 0 && (
-        <ul className="sharing-list" aria-label="Share links">
+      {shareLinks.length > 0 ? (
+        <ul className="share-link-cards" aria-label="Share links">
           {shareLinks.map((shareLink) => {
+            const id = shareLink.shareLinkId;
             const name = shareLinkName(shareLink);
-            if (editingId === shareLink.shareLinkId) {
+            if (revokingId === id) {
               return (
-                <li key={shareLink.shareLinkId}>
-                  <form
-                    className="sharing-rename"
-                    aria-label={`Rename ${name}`}
-                    onSubmit={(event) => {
-                      event.preventDefault();
-                      void onRename(shareLink, draft).finally(stopRename);
-                    }}
-                  >
-                    <input
-                      ref={renameInputRef}
-                      type="text"
-                      aria-label="Link name"
-                      placeholder={`${LINK_MODE_LABELS[shareLink.mode]} link · ${createdLabel(shareLink.createdAt)}`}
-                      maxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Escape') {
-                          // Cancels the edit only, not the whole popover.
-                          event.preventDefault();
-                          event.stopPropagation();
-                          stopRename();
-                        }
-                      }}
-                    />
-                    <button
-                      type="submit"
-                      className="primary"
-                      disabled={disabled}
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={stopRename}
-                    >
-                      Cancel
-                    </button>
-                  </form>
-                </li>
-              );
-            }
-            if (revokingId === shareLink.shareLinkId) {
-              return (
-                <li key={shareLink.shareLinkId} className="sharing-confirm-row">
+                <li key={id} className="sharing-confirm-row">
                   <ShareLinkRevokeConfirm
                     name={name}
                     disabled={disabled}
                     onCancel={() => {
                       setRevokingId(null);
-                      // Back to the row's Revoke, for the keyboard.
+                      // Back to the card's Revoke, for the keyboard.
                       requestAnimationFrame(() =>
                         document
                           .querySelector<HTMLElement>(
-                            `[data-share-link-revoke="${shareLink.shareLinkId}"]`
+                            `[data-share-link-revoke="${id}"]`
                           )
                           ?.focus()
                       );
@@ -1974,58 +1958,140 @@ function PlaintextShareLinks({
                 </li>
               );
             }
+            const frozen = shareLink.history === false;
             return (
-              <li key={shareLink.shareLinkId}>
-                <span className="sharing-row-text">
-                  <button
-                    type="button"
-                    className="sharing-link-name"
-                    data-share-link-name={shareLink.shareLinkId}
-                    data-unnamed={shareLink.label === null || undefined}
-                    title="Rename"
-                    aria-label={`Rename ${name}`}
-                    disabled={disabled}
-                    onClick={() => startRename(shareLink)}
-                  >
-                    {name}
-                  </button>
-                  <span className="sharing-row-detail">
-                    {shareLink.label === null
-                      ? `${linkAccessLabel(shareLink)} · ${shareLinkExpiryLabel(shareLink.createdAt)}`
-                      : `${linkAccessLabel(shareLink)} · created ${createdLabel(shareLink.createdAt)} · ${shareLinkExpiryLabel(shareLink.createdAt)}`}
-                  </span>
-                </span>
-                {shareLink.history === false && canExcludeHistory && (
-                  <button
-                    type="button"
-                    className="sharing-row-action"
-                    title="Share the model as it is now through this link"
-                    aria-label={`Update ${name} to the current model`}
-                    disabled={disabled}
-                    onClick={() => onUpdate(shareLink)}
-                  >
-                    Update
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="sharing-row-action"
-                  aria-label={
-                    shareLink.label === null
-                      ? `Revoke share link created ${createdLabel(shareLink.createdAt)}`
-                      : `Revoke share link ${shareLink.label}`
-                  }
-                  data-share-link-revoke={shareLink.shareLinkId}
+              <ShareLinkCard
+                key={id}
+                name={name}
+                unnamed={shareLink.label === null}
+                summary={shareLinkSummary(shareLink)}
+                mode={frozen ? 'frozen' : shareLink.mode}
+                expanded={expandedId === id}
+                onToggle={() =>
+                  setExpandedId((open) => (open === id ? null : id))
+                }
+              >
+                <ShareLinkRename
+                  shareLink={shareLink}
                   disabled={disabled}
-                  onClick={() => setRevokingId(shareLink.shareLinkId)}
-                >
-                  Revoke
-                </button>
-              </li>
+                  onRename={onRename}
+                />
+                <ShareLinkFacts
+                  facts={[
+                    [
+                      'Visitors can',
+                      shareLink.mode === 'tweak'
+                        ? 'View and change parameters'
+                        : 'View, measure and export'
+                    ],
+                    [
+                      'History',
+                      frozen
+                        ? `Not included · model as of ${createdLabel(shareLink.frozenAt ?? shareLink.createdAt)}`
+                        : 'Included'
+                    ],
+                    ['Comments', shareLink.comments ? 'On' : 'Off'],
+                    ['Created', createdLabel(shareLink.createdAt)],
+                    ['Expires', shareLinkExpiryLabel(shareLink.createdAt)]
+                  ]}
+                />
+                <p className="sharing-hint">
+                  The address was shown once, when the link was made. If it is
+                  lost, revoke this link and make a new one.
+                </p>
+                <div className="share-link-card-actions">
+                  {frozen && canExcludeHistory ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      title="Share the model as it is now through this link"
+                      aria-label={`Update ${name} to the current model`}
+                      disabled={disabled}
+                      onClick={() => onUpdate(shareLink)}
+                    >
+                      Update snapshot
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="secondary danger"
+                    aria-label={
+                      shareLink.label === null
+                        ? `Revoke share link created ${createdLabel(shareLink.createdAt)}`
+                        : `Revoke share link ${shareLink.label}`
+                    }
+                    data-share-link-revoke={id}
+                    disabled={disabled}
+                    onClick={() => setRevokingId(id)}
+                  >
+                    Revoke
+                  </button>
+                </div>
+              </ShareLinkCard>
             );
           })}
         </ul>
-      )}
+      ) : null}
     </section>
+  );
+}
+
+/** The name field of an open link card: Save stores it, owner-only. */
+function ShareLinkRename({
+  shareLink,
+  disabled,
+  onRename
+}: {
+  shareLink: ProjectShareLinkSummary;
+  disabled: boolean;
+  onRename(shareLink: ProjectShareLinkSummary, draft: string): Promise<void>;
+}) {
+  const saved = shareLink.label ?? '';
+  const [draft, setDraft] = useState(saved);
+  const fieldId = useId();
+  // A rename saved here or elsewhere replaces the draft.
+  useEffect(() => setDraft(saved), [saved]);
+  const changed = draft.replace(/\s+/gu, ' ').trim() !== saved;
+  return (
+    <form
+      className="share-link-rename"
+      aria-label={`Rename ${shareLinkName(shareLink)}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (changed) void onRename(shareLink, draft);
+      }}
+    >
+      <label className="share-link-field-label" htmlFor={fieldId}>
+        Name
+      </label>
+      <div className="share-link-rename-row">
+        <input
+          id={fieldId}
+          className="share-link-name-input"
+          type="text"
+          aria-label="Link name"
+          placeholder={`${LINK_MODE_LABELS[shareLink.mode]} link · ${createdLabel(shareLink.createdAt)}`}
+          maxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
+          autoComplete="off"
+          value={draft}
+          disabled={disabled}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape' || !changed) return;
+            // Discards the edit only, not the whole dialog.
+            event.preventDefault();
+            event.stopPropagation();
+            setDraft(saved);
+          }}
+        />
+        <button
+          type="submit"
+          className="secondary"
+          disabled={disabled || !changed}
+        >
+          Save
+        </button>
+      </div>
+    </form>
   );
 }
