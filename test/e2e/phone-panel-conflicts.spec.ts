@@ -260,6 +260,29 @@ test('the modeling guide folds for the measurement workbench on a short phone (#
   await page.keyboard.press('Escape');
   await expect(workbench).toBeHidden();
   await expect(minimize).toHaveAttribute('aria-expanded', 'true');
+
+  // Opened over a card in the shorter lane that leaves, the card scrolls
+  // in it rather than running over the guide: Sketch's plane picker took
+  // the press on Minimize and started a sketch (preview re-check).
+  await page.keyboard.press('s');
+  const prompt = page.locator('.sketch-plane-prompt');
+  await expect(prompt).toBeVisible();
+  await expect(expand).toHaveAttribute('aria-expanded', 'false');
+  await expand.tap();
+  await expect(minimize).toHaveAttribute('aria-expanded', 'true');
+  await waitForSurfacesToSettle(page, ['.workspace-tour', '.command-float']);
+  await shot(page, 'guide-expanded-over-sketch-prompt-360');
+  const slot = (await page.locator('.command-float').boundingBox())!;
+  expect(slot.y + slot.height).toBeLessThanOrEqual(
+    (await tour.boundingBox())!.y + 0.5
+  );
+  await expect.poll(() => reachable(minimize)).toBe(true);
+  await minimize.tap();
+  await expect(prompt).toBeVisible();
+  await expect(expand).toHaveAttribute('aria-expanded', 'false');
+  await page.getByRole('button', { name: 'Cancel sketch' }).tap();
+  await expect(prompt).toBeHidden();
+  await expect(minimize).toHaveAttribute('aria-expanded', 'true');
 });
 
 const PIVOT: AssemblyFrame = {

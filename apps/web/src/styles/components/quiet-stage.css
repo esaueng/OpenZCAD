@@ -3633,6 +3633,15 @@ button.command-rail.is-suggested {
     );
   }
 
+  /* A card holds its height, so in the lane an expanded guide leaves (Expand
+     pressed over a card) one ran out of its foot and over the guide: Sketch's
+     plane picker took the press on the guide's Minimize and started a
+     sketch. The slot scrolls inside the lane instead. */
+  .viewer-area:has(.workspace-tour) .stage-right > .command-float {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
   /* Above the stage's foot claim too: with the modeling guide up, the panel
      stands over the card rather than across its text and Finish. */
   .viewer-area .stage-right:has(> .panel-lane-float) {
