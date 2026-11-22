@@ -956,6 +956,56 @@ test('Offset follows a rectangle, mitered then round, one undo step each', async
     .toBe(8);
 });
 
+test('the Offset distance stays a driving dimension that re-offsets every copy', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Offset dimension');
+  const a = at(0.35, 0.4);
+  const b = at(0.55, 0.65);
+  await drawRectangle(page, a, b);
+  const status = page.getByRole('contentinfo');
+  await modifyTool(page, 'Offset');
+  await offsetBy(page, { x: (a.x + b.x) / 2, y: b.y }, '1');
+  await expect(status).toContainText('Offset added 4 curves at 1.');
+
+  const palette = page.getByRole('button', {
+    name: 'Sketch palette',
+    exact: true
+  });
+  if ((await palette.getAttribute('aria-expanded')) !== 'true')
+    await palette.click();
+  const edit = page
+    .locator('.sketch-palette')
+    .getByRole('button', { name: /^Edit constraint: Offset 1 · / });
+  await expect(edit).toBeVisible();
+  await edit.click();
+  const value = page.getByRole('textbox', { name: 'Offset distance' });
+  await expect(value).toHaveValue('1');
+  await value.fill('3');
+  await value.press('Enter');
+  await expect(status).toContainText('dimension', { timeout: 30_000 });
+
+  // Every copy now sits 3 out: the copied rectangle is 6 wider and taller
+  // than its source, whatever the solve moved.
+  await expect
+    .poll(async () => {
+      const { objects } = await exportSketch(page);
+      const source = lineBounds(objects.slice(0, 4));
+      const copy = lineBounds(objects.slice(4));
+      return [
+        Math.round((copy.width - source.width) * 1e6) / 1e6,
+        Math.round((copy.height - source.height) * 1e6) / 1e6
+      ];
+    })
+    .toEqual([6, 6]);
+  await expect(
+    page
+      .locator('.sketch-palette')
+      .getByRole('button', { name: /^Edit constraint: Offset 3 · / })
+  ).toBeVisible();
+});
+
 test('Offset grows a circle, and refuses one that would vanish', async ({
   page
 }) => {
@@ -984,7 +1034,49 @@ test('Offset grows a circle, and refuses one that would vanish', async ({
     radius - 1,
     6
   );
-  expect(constraintKinds(constraints)).toEqual(['concentric']);
+  // Concentric, and the driving offset dimension that holds its radius.
+  expect(constraintKinds(constraints)).toEqual(['concentric', 'offset']);
+});
+
+test('dragging an offset source circle carries its copy at the offset distance', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Offset drag');
+  const center = at(0.4, 0.55);
+  await drawCircle(page, center, 40);
+  const status = page.getByRole('contentinfo');
+  await modifyTool(page, 'Offset');
+  await offsetBy(page, { x: center.x + 40, y: center.y }, '3');
+  await expect(status).toContainText('Offset added a circle of radius');
+  await page.keyboard.press('Escape');
+
+  // Pick the source by its rim, then drag it by its grab dot.
+  await page.mouse.click(center.x - 40, center.y);
+  const editor = page.getByRole('form', { name: 'Edit circle' });
+  await expect(editor).toBeVisible();
+  const before = Number(await editor.getByLabel('Center Y').inputValue());
+  const handle = page.locator('.sketch-grab-handle');
+  await expect(handle).toBeVisible();
+  await waitForStillViewport(page);
+  const box = (await handle.boundingBox())!;
+  const grab = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(grab.x, grab.y - 40, { steps: 12 });
+  await page.mouse.up();
+  await expect(status).toContainText('Moved circle.');
+
+  const { objects } = await exportSketch(page);
+  const [source, copy] = objects.map((object) => object.data) as [
+    Extract<SketchObjectData, { objectKind: 'circle' }>,
+    Extract<SketchObjectData, { objectKind: 'circle' }>
+  ];
+  expect(Number(source.centerY)).toBeGreaterThan(before + 1);
+  // The copy moved with it, still concentric and 3 out.
+  expect(Number(copy.centerX)).toBeCloseTo(Number(source.centerX), 6);
+  expect(Number(copy.centerY)).toBeCloseTo(Number(source.centerY), 6);
+  expect(Number(copy.radius) - Number(source.radius)).toBeCloseTo(3, 6);
 });
 
 test('the Offset value prompt says Esc cancels it, not that Esc leaves the sketch (I43)', async ({

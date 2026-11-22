@@ -2,10 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus } from 'lucide-react';
 import type { ProjectDocument } from '@openzcad/shared';
 import {
+  normalizeShareLinkLabel,
+  PROJECT_SHARE_LINK_LABEL_MAX_LENGTH
+} from '@openzcad/shared';
+import {
   ShareLinkCard,
   ShareLinkComposer,
   ShareLinkCopyButton,
   ShareLinkFacts,
+  ShareLinkNameField,
   writeClipboard,
   type ShareLinkDraft
 } from './ShareLinkCard';
@@ -49,6 +54,11 @@ export interface EncryptedShareLinkRow {
    * owner's current devices signed; absent where that is not known.
    */
   readonly comments?: boolean;
+  /**
+   * The owner's name for the link, sealed under their account key (ADR-024
+   * amendment 2026-11-22); absent when it has none or it is unknown here.
+   */
+  readonly name?: string | null;
 }
 
 export interface EncryptedShareLinksState {
@@ -105,7 +115,16 @@ export interface EncryptedShareLinkClient {
       readonly comments?: boolean;
       readonly frozenDocument?: ProjectDocument;
     }
-  ): Promise<{ url: string }>;
+  ): Promise<{ url: string; shareId: string }>;
+  /**
+   * Names a link, or clears its name (`name` null, already normalized),
+   * in the owner's sealed account record. Without it links cannot be named.
+   */
+  rename?(
+    projectId: string,
+    shareId: string,
+    name: string | null
+  ): Promise<void>;
   /**
    * L08: the current model, frozen, replaces what a `frozen` link serves.
    * Its URL stays.
@@ -115,6 +134,7 @@ export interface EncryptedShareLinkClient {
     shareId: string,
     frozenDocument: ProjectDocument
   ): Promise<void>;
+  /** Revokes the link and drops its name. */
   revoke(projectId: string, shareId: string): Promise<void>;
   /**
    * L08: lets an existing link's visitors comment, or signs its grant again
@@ -170,6 +190,30 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     const commenting = await Promise.resolve()
       .then(() => links.commentingShareLinks(ctx, projectId))
       .catch(() => null);
+    // Live links only: a link whose revocation is pending shows no name.
+    const live = new Set(
+      view.links
+        .filter((link) => link.status !== 'revocation-pending')
+        .map((link) => link.shareId)
+    );
+    const userId = ctx.groups.account.userId;
+    // The owner's sealed names; unnamed when they cannot be read here (the
+    // module included: the links still list without it).
+    const names = await import('../lib/e2ee/sealedShareLinkNames')
+      .then(async (sealedNames) => {
+        // A reissue that upkeep finished after it failed names its new
+        // links here. Best effort: the next list tries again.
+        await sealedNames
+          .nameReissuedPageShareLinks(
+            userId,
+            projectId,
+            work?.replacements ?? [],
+            live
+          )
+          .catch(() => {});
+        return sealedNames.pageShareLinkNames(userId, projectId, live);
+      })
+      .catch((): Record<string, string> => ({}));
     return {
       links: view.links.map((link) => ({
         shareId: link.shareId,
@@ -177,7 +221,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         url: link.url,
         status: link.status,
         expiresAt: link.expiresAt,
-        ...(commenting ? { comments: commenting.has(link.shareId) } : {})
+        ...(commenting ? { comments: commenting.has(link.shareId) } : {}),
+        name: names[link.shareId] ?? null
       })),
       needsConfirmation:
         view.isOwner && links.delegationNeedsRenewal(view.delegation),
@@ -213,7 +258,21 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         shareKey: created.fragment.shareKey
       });
     }
-    return { url: created.url };
+    return { url: created.url, shareId: created.shareId };
+  },
+  async rename(projectId, shareId, name) {
+    const [{ encryptedShareLinks }, { renamePageShareLink }] =
+      await Promise.all([
+        import('../lib/e2ee/encryptedProjects'),
+        import('../lib/e2ee/sealedShareLinkNames')
+      ]);
+    const { ctx } = await encryptedShareLinks();
+    await renamePageShareLink(
+      ctx.groups.account.userId,
+      projectId,
+      shareId,
+      name
+    );
   },
   async update(projectId, shareId, frozenDocument) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
@@ -243,11 +302,15 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    await revokeShareLink(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      shareId
-    );
+    const { ctx } = await encryptedShareLinks();
+    await revokeShareLink(ctx, projectId, shareId);
+    // Its name goes with it. Best effort: left behind, it is never shown,
+    // since only listed links show a name.
+    await import('../lib/e2ee/sealedShareLinkNames')
+      .then(({ renamePageShareLink }) =>
+        renamePageShareLink(ctx.groups.account.userId, projectId, shareId, null)
+      )
+      .catch(() => {});
   },
   async confirm(projectId, confirmation) {
     const [{ encryptedShareLinks }, { issueShareAuthorities }, crypto] =
@@ -277,15 +340,35 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     await issueShareAuthorities(page.ctx, projectId);
   },
   async reissue(projectId, links) {
-    const [{ encryptedShareLinks }, { reissueShareLinks }] = await Promise.all([
+    const [{ encryptedShareLinks }, shareLinks] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    await reissueShareLinks(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      links
-    );
+    const { ctx } = await encryptedShareLinks();
+    const created = await shareLinks.reissueShareLinks(ctx, projectId, links);
+    // Each new link is named after the one it replaces. Only the links this
+    // reissue returned count: a replacement revoked since takes no name.
+    const userId = ctx.groups.account.userId;
+    const sources = new Set(links.map((link) => link.shareId));
+    try {
+      const replacements = (
+        await shareLinks.shareWorkFor(ctx).read(userId, projectId)
+      ).replacements.filter((item) => sources.has(item.sourceId));
+      await import('../lib/e2ee/sealedShareLinkNames').then(
+        ({ nameReissuedPageShareLinks }) =>
+          nameReissuedPageShareLinks(
+            userId,
+            projectId,
+            replacements,
+            new Set(created.map((link) => link.shareId))
+          )
+      );
+    } catch (caught) {
+      throw new Error(
+        `The links were reissued, but their names were not carried over: ${message(caught)} Name them from their cards.`,
+        { cause: caught }
+      );
+    }
   },
   async dismissRemoval(projectId, notice) {
     const [{ encryptedShareLinks }, { acknowledgeShareRemoval }] =
@@ -403,9 +486,8 @@ export function EncryptedShareLinks({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
-  // The mode of the link in the output.
-  const [createdMode, setCreatedMode] =
-    useState<EncryptedShareLinkMode>('view');
+  // The new link's name in the output: the owner's, or its mode's.
+  const [createdName, setCreatedName] = useState('View only link');
   // The new-link card is open (it always is while there are no links).
   const [composing, setComposing] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -521,6 +603,8 @@ export function EncryptedShareLinks({
   };
 
   const createLink = async (draft: ShareLinkDraft) => {
+    // Refused before anything is frozen or made.
+    const label = client.rename ? normalizeShareLinkLabel(draft.name) : null;
     setCreated(null);
     const withoutHistory = Boolean(onFreezeModel) && !draft.history;
     const linkMode: EncryptedShareLinkMode = withoutHistory
@@ -530,19 +614,29 @@ export function EncryptedShareLinks({
     // makes no link at all.
     const frozenDocument =
       withoutHistory && onFreezeModel ? await onFreezeModel() : undefined;
-    setCreated(
-      (frozenDocument
-        ? await client.create(projectId, 'frozen', {
-            frozenDocument,
-            ...(draft.comments ? { comments: true } : {})
-          })
-        : draft.comments
-          ? await client.create(projectId, linkMode, { comments: true })
-          : await client.create(projectId, linkMode)
-      ).url
-    );
-    setCreatedMode(linkMode);
+    const made = frozenDocument
+      ? await client.create(projectId, 'frozen', {
+          frozenDocument,
+          ...(draft.comments ? { comments: true } : {})
+        })
+      : draft.comments
+        ? await client.create(projectId, linkMode, { comments: true })
+        : await client.create(projectId, linkMode);
+    setCreated(made.url);
+    setCreatedName(label ?? `${MODE_LABEL[linkMode]} link`);
     setComposing(false);
+    if (label && client.rename) {
+      // The link exists by now: a name that cannot be saved is reported,
+      // and can be given again from its card.
+      try {
+        await client.rename(projectId, made.shareId, label);
+      } catch (caught) {
+        throw new Error(
+          `The link was created, but its name was not saved: ${message(caught)}`,
+          { cause: caught }
+        );
+      }
+    }
   };
   // Inside the confirmation's own run: a refused confirmation creates nothing.
   const finishConfirm = async () => {
@@ -810,9 +904,7 @@ export function EncryptedShareLinks({
 
       {created ? (
         <div className="sharing-share-output" role="status">
-          <p className="share-link-created-title">
-            {MODE_LABEL[createdMode]} link is ready
-          </p>
+          <p className="share-link-created-title">{createdName} is ready</p>
           <input
             className="sharing-share-url"
             type="text"
@@ -831,7 +923,8 @@ export function EncryptedShareLinks({
       {showComposer ? (
         <ShareLinkComposer
           canExcludeHistory={Boolean(onFreezeModel)}
-          nameable={false}
+          nameable={Boolean(client.rename)}
+          nameMaxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
           disabled={busy !== null || awaitingConfirmation}
           createDisabled={state === null}
           commentsHint="Visitors see only this link’s comments."
@@ -856,7 +949,8 @@ export function EncryptedShareLinks({
       {links.length > 0 ? (
         <ul className="share-link-cards" aria-label="Active share links">
           {links.map((row) => {
-            const name = `${MODE_LABEL[row.mode]} link`;
+            const modeName = `${MODE_LABEL[row.mode]} link`;
+            const name = row.name || modeName;
             if (revokingId === row.shareId) {
               return (
                 <li key={row.shareId} className="sharing-confirm-row">
@@ -902,6 +996,7 @@ export function EncryptedShareLinks({
               <ShareLinkCard
                 key={row.shareId}
                 name={name}
+                unnamed={!row.name}
                 summary={linkSummary(row)}
                 attention={row.status !== 'active'}
                 mode={row.mode}
@@ -924,6 +1019,34 @@ export function EncryptedShareLinks({
                   ) : null
                 }
               >
+                {client.rename && row.status !== 'revocation-pending' ? (
+                  <ShareLinkNameField
+                    saved={row.name ?? ''}
+                    formLabel={`Rename ${name}`}
+                    placeholder={modeName}
+                    maxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
+                    disabled={busy !== null}
+                    onSave={(draft) =>
+                      run(`rename:${row.shareId}`, async () => {
+                        const label = normalizeShareLinkLabel(draft);
+                        if (label === (row.name ?? null)) return;
+                        await client.rename!(projectId, row.shareId, label);
+                        setState((current) =>
+                          current
+                            ? {
+                                ...current,
+                                links: current.links.map((link) =>
+                                  link.shareId === row.shareId
+                                    ? { ...link, name: label }
+                                    : link
+                                )
+                              }
+                            : current
+                        );
+                      })
+                    }
+                  />
+                ) : null}
                 <ShareLinkFacts
                   facts={[
                     [
@@ -976,7 +1099,7 @@ export function EncryptedShareLinks({
                       className="secondary"
                       disabled={busy !== null}
                       title="Share the model as it is now through this link"
-                      aria-label="Update No history link to the current model"
+                      aria-label={`Update ${name} to the current model`}
                       onClick={() =>
                         void run(`update:${row.shareId}`, async () =>
                           client.update!(

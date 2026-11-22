@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   holePositionAxes,
   holePositionFieldOrder,
+  holeAnchorPoint,
   holePositionFromPick,
+  newHoleAnchor,
+  savedHoleAnchor,
   holePositionFromPoint,
   holePositionLabels,
   worldAxisName
@@ -108,6 +111,29 @@ describe('hole position from a picked point (G7)', () => {
     expect(
       holePositionFromPoint(up, centre, { x: 50.2, y: 30.2, z: 6 }, 1)
     ).toEqual({ u: '0', v: '0' });
+  });
+
+  it('measures a new hole from the outer boundary, a saved one from its own anchor', () => {
+    const face = {
+      normal: up,
+      outerCentroid: { x: 50, y: 30, z: 6 },
+      centroid: { x: 49.8, y: 30.1, z: 6 },
+      center: { x: 40, y: 20, z: 6 }
+    };
+    expect(newHoleAnchor(face)).toBe('outer-centroid');
+    expect(newHoleAnchor({ centroid: face.centroid })).toBe('centroid');
+    expect(newHoleAnchor({ center: face.center })).toBe('center');
+    expect(savedHoleAnchor('outer-centroid')).toBe('outer-centroid');
+    expect(savedHoleAnchor('centroid')).toBe('centroid');
+    // No marker is every hole drilled before the centroid existed.
+    expect(savedHoleAnchor(undefined)).toBe('center');
+    expect(holeAnchorPoint(face, 'outer-centroid')).toEqual(face.outerCentroid);
+    expect(holeAnchorPoint(face, 'centroid')).toEqual(face.centroid);
+    expect(holeAnchorPoint(face, 'center')).toEqual(face.center);
+    // A click 40 along +X of the outer centroid reads V = 40 from it.
+    expect(
+      holePositionFromPick(face, 'outer-centroid', { x: 90, y: 30, z: 6 }, 1)
+    ).toEqual({ u: '0', v: '40' });
   });
 
   it('gives nothing for a face without a normal or its anchor', () => {

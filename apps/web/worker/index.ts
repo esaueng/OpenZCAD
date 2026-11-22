@@ -259,6 +259,16 @@ import {
   parseSaveLibraryFolderSetRequest,
   saveLibraryFolderSet
 } from './libraryFolderSets';
+import {
+  isShareLinkNameStorageReady,
+  loadShareLinkNames,
+  MAX_SHARE_LINK_NAMES_RECORD_CHARS,
+  parseSaveShareLinkNamesRequest,
+  saveShareLinkNames,
+  SHARE_LINK_NAMES_ROUTE,
+  ShareLinkNamesConflictError,
+  ShareLinkNamesRequestError
+} from './shareLinkNames';
 import { SESSION_COOKIE_NAME } from './sessionCredentials';
 import {
   CONSENTED_ASSISTANT_PROPOSAL_PATH,
@@ -2208,6 +2218,39 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     }
   }
 
+  if (pathname === SHARE_LINK_NAMES_ROUTE) {
+    // The owner's names for encrypted projects' share links, sealed under
+    // the account key (ADR-024 amendment 2026-11-22): opaque here.
+    if (!isE2eeProjectsEnabled(env, session.email ?? undefined)) {
+      return json(
+        {
+          error: 'Encrypted projects are not available for this account yet.',
+          code: 'SHARE_LINK_NAMES_DISABLED'
+        },
+        501
+      );
+    }
+    if (!(await isShareLinkNameStorageReady(env.DB))) {
+      return json(
+        {
+          error:
+            'Link names cannot be saved to your account yet. They stay on this device.',
+          code: 'SHARE_LINK_NAMES_UNAVAILABLE'
+        },
+        503
+      );
+    }
+    if (request.method === 'GET') {
+      return json(await loadShareLinkNames(env.DB!, userId));
+    }
+    if (request.method === 'PUT') {
+      const input = parseSaveShareLinkNamesRequest(
+        await readJsonBody(request, MAX_SHARE_LINK_NAMES_RECORD_CHARS + 1024)
+      );
+      return json(await saveShareLinkNames(env.DB!, userId, input));
+    }
+  }
+
   if (pathname === '/api/settings/assistant-credential') {
     if (request.method === 'PUT') {
       const token = parseAssistantCredential(await readJsonBody(request));
@@ -3512,6 +3555,19 @@ async function dispatchApiRequest(
     }
     if (error instanceof ProjectStorageUploadError) {
       return json({ error: error.message, code: 'STORAGE_ASSET_INVALID' }, 400);
+    }
+    if (error instanceof ShareLinkNamesRequestError) {
+      return json({ error: error.message, code: error.code }, error.status);
+    }
+    if (error instanceof ShareLinkNamesConflictError) {
+      return json(
+        {
+          error: error.message,
+          code: 'SHARE_LINK_NAMES_CONFLICT',
+          current: error.current
+        },
+        409
+      );
     }
     if (error instanceof LibraryFolderRequestError) {
       return json({ error: error.message, code: error.code }, error.status);

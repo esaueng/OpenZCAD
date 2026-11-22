@@ -2,6 +2,8 @@ import { createContext, useContext, type ReactNode } from 'react';
 import {
   convertLength,
   displayLengthName,
+  documentDisplayUnits,
+  type ProjectDocument,
   type UnitSystem
 } from '@openzcad/shared';
 import { formatNumber } from './model';
@@ -92,4 +94,70 @@ export function formatShownLength(
   shown: UnitSystem
 ): string {
   return `${formatNumber(convertLength(value, stored, shown))} ${displayLengthName(shown)}`;
+}
+
+/**
+ * I03: read-only figures in the display unit. A length scales once, an area
+ * twice, a volume three times and a unit-density moment of inertia five
+ * times; `unit` names the shown unit for each, as the measurement dock does.
+ */
+export interface LengthReadout {
+  stored: UnitSystem;
+  shown: UnitSystem;
+  /** A stored-unit length in the shown unit. */
+  length(value: number): number;
+  /** A stored-unit quantity of length to the `power` in the shown unit. */
+  power(value: number, power: number): number;
+  /** The shown unit's symbol: `in`, `mm`. */
+  symbol: string;
+}
+
+export function lengthReadout(
+  stored: UnitSystem,
+  shown: UnitSystem = stored
+): LengthReadout {
+  const scale = convertLength(1, stored, shown);
+  return {
+    stored,
+    shown,
+    length: (value) => (scale === 1 ? value : value * scale),
+    power: (value, power) => (scale === 1 ? value : value * scale ** power),
+    symbol: displayLengthName(shown)
+  };
+}
+
+/** {@link lengthReadout} in the open document's display unit. */
+export function useLengthReadout(stored: UnitSystem): LengthReadout {
+  return lengthReadout(stored, useDisplayUnits(stored));
+}
+
+/**
+ * I03: a stored-unit length as a sentence writes it, in the document's
+ * display unit: `0.787 in`. Without a document it is the bare number.
+ */
+export function formatDocumentLength(
+  document: Pick<ProjectDocument, 'units' | 'displayUnits'> | null | undefined,
+  value: number
+): string {
+  if (!document) return formatNumber(value);
+  return formatShownLength(
+    value,
+    document.units,
+    documentDisplayUnits(document)
+  );
+}
+
+/**
+ * I03: a stored value handed back to a field that reads plain numbers in
+ * the display unit, such as a refusal's proved size ("Try 2.5 mm") put into
+ * the in-place Options panel. A length is converted; an angle or a count is
+ * the same number in every unit.
+ */
+export function displayEntryText(
+  value: number,
+  isLength: boolean,
+  stored: UnitSystem,
+  shown: UnitSystem
+): string {
+  return String(isLength ? convertLength(value, stored, shown) : value);
 }

@@ -868,8 +868,9 @@ the envelope header fields, and each user's device list: device labels, when
 devices and unlock methods were added or removed, and their public keys.
 Project names, checkpoint names, revision reasons,
 upload file names, thumbnails, measurements, workspace view state, archived
-exports, library folders and the contacts list are encrypted (the list's
-entry count and write times stay visible; see the amendment of 2026-11-14).
+exports, library folders, share link names (amendment 2026-11-22) and the
+contacts list are encrypted (the list's entry count and write times stay
+visible; see the amendment of 2026-11-14).
 R2 keys use opaque ids only. Which projects are in the trash, and since
 when, stays readable; pins, manual order and the archive of an account whose
 library is encrypted do not (amendment 2026-11-14, shelf state).
@@ -1842,3 +1843,106 @@ before.
 T1 changes when the identity key is opened and removes a path the review
 packet describes, so the Phase 8 review packet (section 3.2) is updated to
 match.
+
+## Amendment 2026-11-22: share link names
+
+Plaintext share links have owner-only names the server stores readable
+(`project_share_links.label`). Share links of encrypted projects had none:
+their cards showed only the access mode. A name is the owner's own words,
+often whom the link is for, so for encrypted projects it is sealed under the
+account key and synced between the owner's devices
+(`/api/share-link-names`, migration 0067). The server and the projects'
+members never see it. Rejected: the encrypted project body, which every
+member opens and which would change the body format; and the sealed account
+settings, which an account whose library is not encrypted stores readable.
+
+- **One sealed record per account.** Every name the account gave any
+  encrypted project's link is one record, the
+  [library-folder layout](#amendment-2026-10-30-library-folders) through
+  `sealed-records.ts` (`SHARE_LINK_NAMES_RECORD`): HKDF-SHA-256 of the account
+  key, empty salt, info `OpenZCAD E2EE v1 share link names key`;
+  additional-data label `OpenZCAD E2EE v1 share link names`, a NUL, the user
+  id, a NUL and the whole header. The label is distinct from every other
+  account-key derivation, and a fixed vector pins the bytes.
+- **Content.** JSON `{"version":1,"projects":{projectId:{shareId:entry}}}`,
+  where an entry is `{"name","stamp"}` or the tombstone
+  `{"deleted":true,"stamp"}`. Names follow the plaintext rule
+  (`normalizeShareLinkLabel`: whitespace collapsed, no control characters,
+  at most 60 characters). Plaintext is at most 90 KiB, about a thousand named
+  links, which keeps the base64url record under the Worker's 128 KiB cap.
+- **Merge.** Per entry, last writer wins by stamp. A stamp is the writing
+  device's clock, raised past the entry it replaces, so a device whose clock
+  runs behind still wins with its own later edit. On a tie a tombstone wins,
+  then the name that sorts last, so every device converges. Clearing a name
+  writes a tombstone, so an older copy on another device cannot bring it back.
+- **Revoked links.** Revoking a link from the sharing dialog tombstones its
+  name. A link revoked any other way (on another device, or turned off by an
+  identity change) keeps its name in the record until a reissue replaces it
+  (below); the dialog never shows it, since it shows names only for live
+  links, not for one whose revocation is pending. Names are not cleared just
+  because the signed link set revokes a link: a device that does not know of
+  a pending or half-finished reissue would clear a name the replacement
+  still needs (PR 1938 review). So names of links revoked and never reissued
+  stay, unseen, and count toward the cap. Tombstones older than 90 days are
+  dropped when the record is sealed; nothing else is dropped to fit the cap,
+  not even a recent tombstone, which another device that missed the clear
+  would otherwise undo. Over the cap, the save is refused. A device offline
+  for longer than 90 days could bring back a cleared name of a link that
+  still exists.
+- **Reissued links.** A reissue (after a removal or an identity change)
+  revokes each link and makes a new one; the owner's device records which
+  new link replaces which (`ShareWork.replacements`). Right after the
+  reissue, that device names each live new link after the link it replaces
+  and clears that link's name, in one change with a fresh stamp, applied to
+  the account's copy merged with its own, so the name is the latest any
+  device saved. Unlike a typed rename, the change reaches this device's copy
+  only once the account has taken it: a retry after a conflict derives it
+  again from the account's newer copy, and a failed save leaves no guess
+  behind. Each list of the links on that device does the same for any
+  replacement still unnamed, which finishes a reissue that upkeep completed
+  after the reissue itself failed; a list saves only when something is left
+  to name. A new link that already has an entry keeps it, a replacement
+  revoked since takes no name, and running the step again changes nothing.
+  Where the names cannot be saved after a reissue, the dialog says so and
+  the links can be named from their cards. An edit made on another device
+  at the same moment resolves by stamp, as any two renames do.
+- **Writes.** A browser reads the account record, merges it into its own
+  copy, applies the change and seals at a sequence above both its pin and
+  the stored record's (read from the header, which needs no key), against
+  the revision it read. A concurrent write from another device answers
+  `SHARE_LINK_NAMES_CONFLICT` with the current copy, which the browser
+  merges before trying again. The name of a new link is saved once the link
+  exists; a name that cannot be saved is reported and can be given again
+  from the link's card.
+- **Rollback.** As for folders: each browser pins the highest sequence it
+  opened or wrote (in device storage, with an account-scoped memory floor),
+  and a record below the pin is not merged but replaced by its own copy at a
+  higher sequence. The Worker also refuses any write whose header sequence
+  is not above the stored one, so no device or replayed request lowers it.
+- **Account-key rotation.** A record whose commitment names an older account
+  key is opened with that key through the account-key history, across
+  identity generations (a recovery-key replacement keeps the old key only
+  there), and resealed under the current key on the next write. A record sealed
+  under any key this browser cannot reach now is treated as unreadable, not
+  replaced: the key may be a newer one this browser has not caught up with,
+  or the history may have failed to load, and replacing it could lose names
+  only another device holds. Unlike folders, link names are never
+  overwritten on that basis.
+- **Refusals.** A record that fails authentication, has a layout version
+  this build does not know, or does not hold a name book is never
+  overwritten. The browser keeps and shows its own copy, applies changes to
+  it, and reports them as saved on this device only.
+- **Device copy.** Each browser keeps its copy per account in device
+  storage, so names show while the record cannot be read or fetched. It is
+  forgotten at sign-out and when the account is deleted, with the shelf's
+  encrypted project names. A read or change that outlives its session (a
+  sign-out or lock while it waits on the network) neither writes that copy
+  back nor seals or saves anything: it seals with a copy of the account key
+  taken while the session is live, so the key a teardown zeroes is never
+  used.
+- **What the server sees.** The record's length, write times, revision
+  count, sequence and the account-key commitment in its header. Project and
+  share ids, the number of named links and the names are inside the
+  ciphertext. The account export includes the record as stored.
+- **Review.** This is a new account-key derivation and record format, so the
+  Phase 8 outside review covers it with the other account records.

@@ -77,6 +77,7 @@ export function ParametersPanel({
             parameter={parameter}
             value={parameterValues[parameter.name]}
             minimum={parameterMinimums?.[parameter.name]}
+            units={units}
             onSet={onSetParameter}
             {...(onSetParameterQuantity
               ? { onSetQuantity: onSetParameterQuantity }

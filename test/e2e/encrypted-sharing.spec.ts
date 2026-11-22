@@ -218,7 +218,9 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   const plaintextCalls: string[] = [];
   const recordPlaintext = (request: Request) => {
     const path = new URL(request.url()).pathname;
-    if (/^\/api\/(projects\/proj_|share)/.test(path)) {
+    // `/api/share` and `/api/share/…` are the plaintext share routes; the
+    // sealed link-names record (`/api/share-link-names`) is not one.
+    if (/^\/api\/(projects\/proj_|share(?:\/|$))/.test(path)) {
       plaintextCalls.push(`${request.method()} ${path}`);
     }
   };

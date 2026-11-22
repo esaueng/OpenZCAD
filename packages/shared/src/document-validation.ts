@@ -409,7 +409,7 @@ const FEATURE_ENUM_FIELDS = {
     }),
     positionAnchor: valuesOf<
       NonNullable<FeatureDataOf<'hole'>['positionAnchor']>
-    >({ centroid: true })
+    >({ centroid: true, 'outer-centroid': true })
   },
   gear: {
     gearType: GEAR_TYPES,
@@ -1579,7 +1579,8 @@ const SKETCH_CONSTRAINT_FIELDS: Readonly<
   'point-on-object': { points: ['point'], objects: ['objectId'] },
   lock: { points: ['point'] },
   'lock-entity': { objects: ['objectId'] },
-  pattern: { objects: ['source'] }
+  pattern: { objects: ['source'] },
+  offset: { values: ['value'] }
 };
 
 function isSketchPointSelector(value: unknown): boolean {
@@ -1637,6 +1638,21 @@ export function sketchConstraintShapeError(data: unknown): string | null {
   )
     return 'Sketch entity lock needs its recorded geometry.';
   if (kind === 'pattern') return sketchPatternShapeError(data);
+  if (
+    kind === 'offset' &&
+    (!Array.isArray(data.pairs) ||
+      data.pairs.length === 0 ||
+      !data.pairs.every(
+        (pair) =>
+          isDocumentRecord(pair) &&
+          typeof pair.source === 'string' &&
+          !RESERVED_RECORD_KEYS.has(pair.source) &&
+          typeof pair.copy === 'string' &&
+          !RESERVED_RECORD_KEYS.has(pair.copy) &&
+          (pair.side === 1 || pair.side === -1)
+      ))
+  )
+    return 'Sketch offset needs its source and copy pairs.';
   return null;
 }
 

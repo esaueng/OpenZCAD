@@ -125,6 +125,14 @@
     display: none;
   }
 
+  /* Opened, the rail stands over the modeling guide too. The guide keeps
+     to the stage between the one-column rails, and the rail's two new
+     columns opened under it: Measure and Section sat beneath its text, out
+     of a finger's reach (#1945). */
+  .instrument-rail:has(.rail-more-toggle[aria-expanded='true']) {
+    z-index: calc(var(--z-inspector-float) + 3);
+  }
+
   /* The section controls and the views open beside the whole rail rather
      than beside their own button, which may stand in its first column with
      no room to its left; and no wider than the stage beside it. */

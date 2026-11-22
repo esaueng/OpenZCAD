@@ -11,9 +11,7 @@ import { downloadText, exportFileStem } from '../lib/model';
 import type {
   Measurement,
   MeasurementDisplayOptions,
-  MeasurementMode,
   MeasurePointKind,
-  MeasurementTarget,
   MeasurementViewportAnnotation,
   RadialDisplay
 } from '../lib/measurements';
@@ -27,15 +25,23 @@ import {
   buildMeasurementRecord,
   measurementRecordContentKey
 } from '../lib/measurementRecord';
+import { EMPTY_MEASURE_SESSION, nextEdgeRun } from '../lib/measureSession';
 import {
-  EMPTY_MEASURE_SESSION,
-  edgeRunIsTotalable,
-  nextEdgeRun
-} from '../lib/measureSession';
+  measureReadings,
+  pickIsMeasurable,
+  pickLabel,
+  samePick,
+  type MeasurePick,
+  type MeasureReadingKind,
+  type MeasureReadingsInput,
+  type MeasureSessionView
+} from '../lib/measureReadings';
 import {
   loadProjectMeasurements,
   saveProjectMeasurements
 } from '../lib/localProjectStore';
+
+const NO_PICKS = { first: null, second: null } as const;
 
 export interface MeasurementWorkbenchInput {
   doc: ProjectDocument | null;
@@ -74,13 +80,20 @@ export function useMeasurementWorkbench({
 }: MeasurementWorkbenchInput) {
   /** View-only measurement session. None of this enters document/history. */
   const [measuring, setMeasuring] = useState(false);
-  const [measurementMode, setMeasurementMode] =
-    useState<MeasurementMode>('smart');
-  /** M13: the kind of point a Distance pick records ('auto' derives it). */
+  /** M13: the kind of point a Distance reading records ('auto' derives it). */
   const [measurementPointKind, setMeasurementPointKind] =
     useState<MeasurePointKind>('auto');
-  const [measurementDraft, setMeasurementDraft] =
-    useState<MeasurementTarget | null>(null);
+  /**
+   * The live pick session: up to two picks, read every way they can be.
+   * Nothing here is recorded until the reading is kept.
+   */
+  const [measurementPicks, setMeasurementPicks] = useState<{
+    first: MeasurePick | null;
+    second: MeasurePick | null;
+  }>(NO_PICKS);
+  /** The reading someone chose over the first one offered, if any. */
+  const [chosenReadingKind, setChosenReadingKind] =
+    useState<MeasureReadingKind | null>(null);
   /**
    * Edges accumulated by Shift+Click for a running total. Owned here rather
    * than read from `selectedEdges`, which is what let measuring rewrite the
@@ -315,181 +328,200 @@ export function useMeasurementWorkbench({
     measurementRestoreGeneration
   ]);
 
-  function recordMeasurement(measurement: Measurement) {
+  function recordMeasurement(measurement: Measurement): boolean {
     // Checked before the state update rather than inside it, so the refusal can
     // be reported. The list is capped rather than self-trimming: dropping the
     // oldest row to make room is data loss nobody was told about.
     if (!measurementApi || geometryPending) {
-      return;
+      return false;
     }
     if (!measurementApi.canAppendMeasurement(measurements, measurement)) {
       setStatus(measurementApi.MEASUREMENT_LIMIT_MESSAGE);
-      return;
+      return false;
     }
     setMeasurements((current) =>
       measurementApi.appendMeasurement(current, measurement)
     );
     setActiveMeasurementId(measurement.id);
-    setMeasurementDraft(null);
     setStatus(`${measurement.label} measured.`);
+    return true;
   }
 
+  const readingsInput: MeasureReadingsInput | null = doc
+    ? {
+        bodies: renderedRepresentations,
+        viewerBodies,
+        revision: doc.version,
+        units: doc.units,
+        pointKind: measurementPointKind
+      }
+    : null;
+
   /**
-   * What measuring this pick WOULD report, without recording anything.
+   * Every reading the current picks support, most useful first, and the one
+   * the card shows large: the chosen one while it still applies, otherwise
+   * the first.
+   */
+  const measurementSession = useMemo<MeasureSessionView>(() => {
+    const named = (pick: MeasurePick | null, label: string | null) =>
+      pick ? { label: label ?? 'Unavailable' } : null;
+    if (!measurementApi || !readingsInput || geometryPending) {
+      return {
+        first: named(measurementPicks.first, '…'),
+        second: named(measurementPicks.second, '…'),
+        readings: [],
+        primary: null,
+        distanceRefusal: null
+      };
+    }
+    const { readings, distanceRefusal } = measureReadings(
+      measurementApi,
+      readingsInput,
+      { ...measurementPicks, edgeRun: measurementEdgeRun }
+    );
+    const formatted = readings.map((reading) => ({
+      ...reading,
+      // A circle read as a radius is titled as one.
+      title:
+        reading.kind === 'single' &&
+        reading.measurement.kind === 'diameter' &&
+        measurementDisplay.radialDisplay === 'radius'
+          ? 'Radius'
+          : reading.title,
+      formatted: measurementApi.formatMeasurement(
+        reading.measurement,
+        measurementDisplay
+      )
+    }));
+    const label = (pick: MeasurePick | null) =>
+      named(pick, pick ? pickLabel(measurementApi, readingsInput, pick) : null);
+    return {
+      first:
+        measurementEdgeRun.length >= 2 && !measurementPicks.second
+          ? { label: `${measurementEdgeRun.length} edges` }
+          : label(measurementPicks.first),
+      second: label(measurementPicks.second),
+      readings: formatted,
+      primary:
+        formatted.find((reading) => reading.kind === chosenReadingKind) ??
+        formatted[0] ??
+        null,
+      distanceRefusal
+    };
+    // `readingsInput` is rebuilt every render from the values listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    measurementApi,
+    doc?.version,
+    doc?.units,
+    renderedRepresentations,
+    viewerBodies,
+    measurementPointKind,
+    measurementPicks,
+    measurementEdgeRun,
+    chosenReadingKind,
+    measurementDisplay,
+    geometryPending
+  ]);
+
+  /**
+   * What clicking here WOULD read, without picking anything.
    *
-   * A tool that only answers after you commit makes you record a row to find
-   * out whether you picked the right thing, then delete it. The preview runs
-   * the SAME derivation the click will run rather than a cheaper estimate that
-   * could disagree with the number that lands.
+   * The preview runs the SAME derivation the pick will run rather than a
+   * cheaper estimate that could disagree with the number the card shows.
+   * With a first pick waiting it previews the relation; otherwise the
+   * hovered entity on its own.
    *
    * Null when there is nothing honest to say, which includes an ambiguous
    * pick: a hover is not the place to explain ADR-011, and a silent absence
    * beats a confident wrong number.
    */
-  /**
-   * The target a two-pick measure records for a pick. A Distance pick that a
-   * snap locked onto records the edge point the glyph named; anything else
-   * keeps the selection's own derivation. Angle needs directions, which a
-   * snapped point does not carry, so it never takes this path.
-   */
-  function pickTarget(
-    api: NonNullable<typeof measurementApi>,
-    body: BodyRepresentation,
-    selection: TopologySelection,
-    point: { x: number; y: number; z: number } | undefined,
-    snap: PickSnap | undefined
-  ) {
-    // M13: a chosen point kind records that point of the pick, or nothing.
-    if (measurementMode === 'distance' && measurementPointKind !== 'auto') {
-      // A glyph names its own edge: the pick records that edge's point,
-      // which must land where the glyph stood, never a point of whatever
-      // the ray happened to hit beside it.
-      if (snap?.source && point) {
-        const target = api.pointKindTarget(
-          body,
-          api.snapSourceSelection(body, snap.source),
-          measurementPointKind,
-          point,
-          snap.source.role
-        );
-        return api.pointKindAgrees(body, target, point) ? target : null;
-      }
-      return api.pointKindTarget(body, selection, measurementPointKind, point);
-    }
-    const snapped =
-      measurementMode === 'distance' && snap?.source && point
-        ? api.measurementTargetFromSnap(body, snap.source, point)
-        : null;
-    return (
-      snapped ??
-      api.measurementTargetFromSelection(
-        body,
-        selection,
-        point,
-        // M13: the entity distances store their picks as Distance does; the
-        // geometry they measure is read from the topology at measure time.
-        api.isEntityDistanceMode(measurementMode) ? 'distance' : measurementMode
-      )
-    );
-  }
-
-  /** The second pick's figure, for the click and its hover preview alike. */
-  function pairMeasurement(
-    api: NonNullable<typeof measurementApi>,
-    first: MeasurementTarget,
-    second: MeasurementTarget,
-    revision: number,
-    units: UnitSystem
-  ): Measurement | { refused: string } | null {
-    if (api.isEntityDistanceMode(measurementMode))
-      return api.createEntityDistanceMeasurement(
-        measurementMode,
-        viewerBodies,
-        first,
-        second,
-        revision,
-        units
-      );
-    return measurementMode === 'distance'
-      ? api.createDistanceMeasurement(first, second, revision, units)
-      : api.createAngleMeasurement(first, second, revision, units);
-  }
-
   function previewMeasurement(
     selection: TopologySelection,
     point?: { x: number; y: number; z: number },
     snap?: PickSnap
   ): string | null {
-    if (!doc || !measuring || !measurementApi || geometryPending) {
+    if (!measuring || !measurementApi || !readingsInput || geometryPending) {
       return null;
     }
-    const body = renderedRepresentations[selection.bodyId];
-    if (!body) {
+    const hovered: MeasurePick = { selection, point, snap };
+    const { first, second } = measurementPicks;
+    const pairing =
+      first !== null &&
+      second === null &&
+      measurementEdgeRun.length < 2 &&
+      !samePick(measurementApi, readingsInput, first, hovered);
+    const reading = measureReadings(measurementApi, readingsInput, {
+      first: pairing ? first : hovered,
+      second: pairing ? hovered : null,
+      edgeRun: []
+    }).readings[0];
+    if (!reading) {
       return null;
     }
-    if (measurementMode === 'smart') {
-      const measurement = measurementApi.createSmartMeasurement(
-        body,
-        selection,
-        point,
-        doc.version,
-        doc.units
-      );
-      // Already recorded and drawn on the model: its own chip says it, and
-      // a second identical chip beside it ("80.00 mm" twice) said nothing
-      // more (I54).
-      if (
-        measurement &&
-        measurements.some(
-          (entry) => entry.id === measurement.id && entry.visible
-        )
-      ) {
-        return null;
-      }
-      return measurement
-        ? measurementApi.formatMeasurement(measurement, measurementDisplay)
-            .value
-        : null;
-    }
-    const target = pickTarget(measurementApi, body, selection, point, snap);
-    if (!target?.point) {
+    // Already recorded and drawn on the model: its own chip says it, and
+    // a second identical chip beside it ("80.00 mm" twice) said nothing
+    // more (I54).
+    if (
+      measurements.some(
+        (entry) => entry.id === reading.measurement.id && entry.visible
+      )
+    ) {
       return null;
     }
-    // The first of two picks has nothing to measure against yet, so it names
-    // the target rather than guessing at a distance.
-    if (!measurementDraft) {
-      return target.label;
-    }
-    const measurement = pairMeasurement(
-      measurementApi,
-      measurementDraft,
-      target,
-      doc.version,
-      doc.units
-    );
-    return measurement && !('refused' in measurement)
-      ? measurementApi.formatMeasurement(measurement, measurementDisplay).value
-      : null;
+    return measurementApi.formatMeasurement(
+      reading.measurement,
+      measurementDisplay
+    ).value;
   }
 
-  /**
-   * Abandons whatever pick was in progress: the two-pick draft and the running
-   * edge total both. Not called after a measurement is recorded — a run has to
-   * survive that, or a fourth Shift+Click could not extend a total of three.
-   */
+  /** Abandons the pick session: both picks and the running edge total. */
   function clearMeasurementPicks() {
-    setMeasurementDraft(null);
+    setMeasurementPicks(NO_PICKS);
+    setChosenReadingKind(null);
     setMeasurementEdgeRun(EMPTY_MEASURE_SESSION.edgeRun);
   }
 
+  /** Shows a reading other than the first one large, and keeps that one. */
+  function chooseMeasurementReading(kind: MeasureReadingKind) {
+    setChosenReadingKind(kind);
+  }
+
   /**
-   * Measures a pick, and reports whether it consumed it.
+   * Records the reading the card shows, then starts a fresh session. Returns
+   * whether there was one to keep, so Enter falls through when there is not.
+   */
+  function keepMeasurementReading(): boolean {
+    if (!measuring) {
+      return false;
+    }
+    if (geometryPending) {
+      setStatus(
+        'Measurements are unavailable while the model finishes updating.'
+      );
+      return true;
+    }
+    const primary = measurementSession.primary;
+    if (!primary) {
+      return false;
+    }
+    if (recordMeasurement(primary.measurement)) {
+      clearMeasurementPicks();
+    }
+    return true;
+  }
+
+  /**
+   * Takes a pick into the session, and reports whether it consumed it.
    *
    * The return value is the point. This used to be called for its side effects
    * and fall straight through into sketch entry, direct manipulation, and the
    * selection update — so measuring an edge in View mode silently replaced
    * whatever a modelling session had selected, and the two features quietly
    * shared one piece of state.
+   *
+   * A plain click fills the first empty slot, or starts over once both are
+   * full; a Shift+Click on an edge adds it to a running total instead.
    */
   function handleMeasurementPick(
     selection: TopologySelection,
@@ -513,7 +545,7 @@ export function useMeasurementWorkbench({
     // window is a frame or two on the first measure session only. It still
     // counts as consumed: falling through to selection would be the very
     // coupling this seam removes.
-    if (!measurementApi) {
+    if (!measurementApi || !readingsInput) {
       setStatus('Measure is still loading. Try that pick again.');
       return true;
     }
@@ -524,88 +556,77 @@ export function useMeasurementWorkbench({
       );
       return true;
     }
-    const point = detail?.point;
-    if (measurementMode === 'smart') {
-      if (selection.kind === 'edge') {
-        // The run lives in the measure session rather than in `selectedEdges`,
-        // which is what let measuring rewrite the workspace's selection.
-        const run = nextEdgeRun(measurementEdgeRun, selection, additive);
-        setMeasurementEdgeRun(run);
-        if (edgeRunIsTotalable(run)) {
-          const total = measurementApi.createEdgeTotalMeasurement(
-            viewerBodies,
-            run,
-            doc.version,
-            doc.units
-          );
-          if (total) {
-            recordMeasurement(total);
-            return true;
-          }
-        }
-      }
-      const measurement = measurementApi.createSmartMeasurement(
-        body,
-        selection,
-        point,
-        doc.version,
-        doc.units
-      );
-      if (measurement) {
-        recordMeasurement(measurement);
-      } else {
-        setStatus(
-          measurementApi.measurementSelectionFailure(body, selection) ??
-            'That selection does not expose a trustworthy measurement.'
-        );
-      }
-      return true;
-    }
-    const target = pickTarget(
-      measurementApi,
-      body,
+    const pick: MeasurePick = {
       selection,
-      point,
-      detail?.snap
-    );
-    if (!target?.point) {
+      point: detail?.point,
+      snap: detail?.snap
+    };
+    if (!pickIsMeasurable(measurementApi, readingsInput, pick)) {
       setStatus(
-        (measurementMode === 'distance' && measurementPointKind !== 'auto'
+        (measurementPointKind !== 'auto'
           ? measurementApi.pointKindFailure(
               measurementPointKind,
               selection.kind
             )
           : null) ??
           measurementApi.measurementSelectionFailure(body, selection) ??
-          (measurementMode === 'angle'
-            ? 'Angle needs a straight edge, circular axis or planar face.'
-            : 'That selection does not expose a trustworthy measurement point.')
+          'That selection does not expose a trustworthy measurement.'
       );
       return true;
     }
-    if (!measurementDraft) {
-      setMeasurementDraft(target);
-      setStatus(`${target.label} selected · pick the second target.`);
-      return true;
-    }
-    const measurement = pairMeasurement(
-      measurementApi,
-      measurementDraft,
-      target,
-      doc.version,
-      doc.units
-    );
-    if (measurement && 'refused' in measurement) {
-      setStatus(`${measurement.refused} The first target is still selected.`);
-    } else if (measurement) {
-      recordMeasurement(measurement);
-    } else {
+    setChosenReadingKind(null);
+    const label = pickLabel(measurementApi, readingsInput, pick) ?? 'Pick';
+
+    // The run lives in the measure session rather than in `selectedEdges`,
+    // which is what let measuring rewrite the workspace's selection.
+    if (additive && selection.kind === 'edge') {
+      const run = nextEdgeRun(measurementEdgeRun, selection, true);
+      setMeasurementEdgeRun(run);
+      setMeasurementPicks({ first: pick, second: null });
       setStatus(
-        measurementMode === 'angle'
-          ? 'Those targets do not provide two stable directions; the first target is still selected.'
-          : 'Those targets could not produce a stable distance; the first target is still selected.'
+        run.length >= 2
+          ? `${run.length} edges · Enter keeps their total length.`
+          : `${label} selected · Shift+Click more edges to total them.`
       );
+      return true;
     }
+
+    const { first, second } = measurementPicks;
+    // A whole body picked after one of its own faces or edges is the second
+    // click of a double-click, which selects the body: it starts over on the
+    // body rather than measuring a face against the body it bounds.
+    const bodyOfFirst =
+      first !== null &&
+      selection.kind === 'body' &&
+      first.selection.kind !== 'body' &&
+      first.selection.bodyId === selection.bodyId;
+    if (
+      first &&
+      !second &&
+      !bodyOfFirst &&
+      measurementEdgeRun.length < 2 &&
+      !samePick(measurementApi, readingsInput, first, pick)
+    ) {
+      setMeasurementPicks({ first, second: pick });
+      const reading = measureReadings(measurementApi, readingsInput, {
+        first,
+        second: pick,
+        edgeRun: []
+      }).readings[0];
+      setStatus(
+        reading
+          ? `${reading.title} ${measurementApi.formatMeasurement(reading.measurement, measurementDisplay).value} · Enter keeps it.`
+          : 'Those two picks share no distance or angle that can be trusted. Pick again to start over.'
+      );
+      return true;
+    }
+    setMeasurementPicks({ first: pick, second: null });
+    setMeasurementEdgeRun(
+      selection.kind === 'edge' ? [selection] : EMPTY_MEASURE_SESSION.edgeRun
+    );
+    setStatus(
+      `${label} selected · pick the second target to compare · Enter keeps.`
+    );
     return true;
   }
 
@@ -628,30 +649,29 @@ export function useMeasurementWorkbench({
       );
       return annotation ? [annotation] : [];
     });
-    return measurementDraft?.point
-      ? [
-          ...pinned,
-          {
-            id: 'measurement-draft',
-            // The pick's own name, as the dock's "Top face selected" gives
-            // it: the semantic is an internal tag, and a planar face read
-            // "A · pick".
-            label: `A · ${measurementDraft.label}`,
-            selected: true,
-            status: 'current' as const,
-            // The first of two picks marks a point; there is no second point
-            // to span to until it lands.
-            graphic: 'anchor' as const,
-            anchor: measurementDraft.point,
-            segments: []
-          }
-        ]
-      : pinned;
+    // The live reading draws as a pinned one would, selected, unless the
+    // same figure is already on the model.
+    const live = measurementSession.primary?.measurement;
+    if (live) {
+      if (measurements.some((entry) => entry.id === live.id && entry.visible)) {
+        return pinned;
+      }
+      const annotation = measurementApi.measurementToViewportAnnotation(
+        live,
+        measurementDisplay,
+        true,
+        viewerBodies
+      );
+      return annotation
+        ? [...pinned, { ...annotation, id: 'measurement-draft' }]
+        : pinned;
+    }
+    return pinned;
   }, [
     activeMeasurementId,
     geometryPending,
     measurementDisplay,
-    measurementDraft,
+    measurementSession.primary,
     measurements,
     measurementApi,
     viewerBodies
@@ -718,11 +738,9 @@ export function useMeasurementWorkbench({
   return {
     measuring,
     setMeasuring,
-    measurementMode,
-    setMeasurementMode,
     measurementPointKind,
     setMeasurementPointKind,
-    measurementDraft,
+    measurementSession,
     measurementEdgeRun,
     measurements,
     setMeasurements,
@@ -741,6 +759,8 @@ export function useMeasurementWorkbench({
     recordMeasurement,
     previewMeasurement,
     clearMeasurementPicks,
+    chooseMeasurementReading,
+    keepMeasurementReading,
     handleMeasurementPick,
     measurementAnnotations,
     formattedMeasurements,

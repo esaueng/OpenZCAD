@@ -1,4 +1,5 @@
 import { formatNumber } from './model';
+import { roundShownLength } from './liveLabels';
 import {
   selectionCalloutObstacleShift,
   type ScreenRect
@@ -117,10 +118,26 @@ export function offsetTotalReading(input: {
   mode: OffsetChipMode;
   span: number | null | undefined;
   sense: number;
+  /** I03: a reading converted into another unit; see {@link reading}. */
+  precise?: boolean;
 }): number | null {
-  const { rawValue, mode, span, sense } = input;
+  const { rawValue, mode, span, sense, precise } = input;
   if (mode !== 'total' || span === null || span === undefined) return null;
-  return Math.round((span + sense * rawValue) * 100) / 100;
+  return reading(span + sense * rawValue, precise);
+}
+
+/**
+ * Hundredths, as every offset reading has always been. A reading converted
+ * into a display unit (I03) keeps three significant figures below one
+ * instead, so −2 mm shown in metres reads −0.002 m, not +0 m.
+ */
+function reading(value: number, precise = false): number {
+  return precise ? roundShownLength(value) : Math.round(value * 100) / 100;
+}
+
+/** A reading as text: `formatNumber`'s thousandths would undo `precise`. */
+function shownNumber(value: number, precise = false): string {
+  return precise ? String(value) : formatNumber(value);
 }
 
 /** The offset chip's value text, before any warning marker. */
@@ -132,17 +149,18 @@ export function offsetChipText(input: {
   /** +1 when the offset grows the span, −1 when it shrinks it. */
   sense: number;
   units: string;
+  precise?: boolean;
 }): string {
-  const { rawValue, units } = input;
+  const { rawValue, units, precise } = input;
   // Both readings round to hundredths, so flipping the tag changes the number
   // it shows, never how precisely it shows it.
   const total = offsetTotalReading(input);
-  if (total !== null) return `${formatNumber(total)} ${units}`;
-  return `${signedHundredths(rawValue)} ${units}`;
+  if (total !== null) return `${shownNumber(total, precise)} ${units}`;
+  return `${signedHundredths(rawValue, precise)} ${units}`;
 }
 
-function signedHundredths(value: number): string {
-  const rounded = Math.round(value * 100) / 100;
+function signedHundredths(value: number, precise = false): string {
+  const rounded = reading(value, precise);
   return `${rounded >= 0 ? '+' : ''}${rounded}`;
 }
 
@@ -156,12 +174,14 @@ function signedHundredths(value: number): string {
 export function offsetFaceCommitMessage(
   offset: number,
   units: string,
-  total?: number | null
+  total?: number | null,
+  /** I03: the numbers were converted into a display unit. */
+  precise = false
 ): string {
-  const change = `Offset face by ${signedHundredths(offset)} ${units}`;
+  const change = `Offset face by ${signedHundredths(offset, precise)} ${units}`;
   return total === null || total === undefined
     ? `${change}.`
-    : `${change} · Total ${formatNumber(total)} ${units}.`;
+    : `${change} · Total ${shownNumber(total, precise)} ${units}.`;
 }
 
 /**
@@ -178,13 +198,14 @@ export function offsetLimitChipText(input: {
   span: number | null;
   sense: number;
   units: string;
+  precise?: boolean;
 }): string {
-  const { limit, mode, span, sense, units } = input;
+  const { limit, mode, span, sense, units, precise } = input;
   if (mode === 'total' && span !== null) {
-    const bound = Math.round((span + sense * limit) * 100) / 100;
-    return `${sense * limit < 0 ? 'min' : 'max'} ${formatNumber(bound)} ${units}`;
+    const bound = reading(span + sense * limit, precise);
+    return `${sense * limit < 0 ? 'min' : 'max'} ${shownNumber(bound, precise)} ${units}`;
   }
-  return `max ${formatNumber(Math.round(Math.abs(limit) * 100) / 100)} ${units}`;
+  return `max ${shownNumber(reading(Math.abs(limit), precise), precise)} ${units}`;
 }
 
 /**

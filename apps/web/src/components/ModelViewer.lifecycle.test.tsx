@@ -28,7 +28,14 @@ const gl = vi.hoisted(() => {
     created: 0,
     disposed: 0,
     contextsLost: 0,
-    shadowLightsDisposed: 0
+    shadowLightsDisposed: 0,
+    /** The parameters and last pixel ratio of each renderer made. */
+    renderers: [] as {
+      parameters: Record<string, unknown> | undefined;
+      ratio: () => number;
+    }[],
+    /** Scene draws, so a test can tell a drawn frame from a skipped one. */
+    draws: 0
   };
   class CountingRenderer {
     domElement: HTMLCanvasElement;
@@ -48,8 +55,9 @@ const gl = vi.hoisted(() => {
     toneMappingExposure = 1;
     contextLost = false;
     private ratio = 1;
-    constructor() {
+    constructor(parameters?: Record<string, unknown>) {
       state.created += 1;
+      state.renderers.push({ parameters, ratio: () => this.ratio });
       this.domElement = document.createElement('canvas');
     }
     setSize() {}
@@ -60,7 +68,9 @@ const gl = vi.hoisted(() => {
       return this.ratio;
     }
     setClearColor() {}
-    render() {}
+    render() {
+      state.draws += 1;
+    }
     getContext() {
       return { isContextLost: () => this.contextLost };
     }
@@ -343,8 +353,10 @@ afterEach(() => {
   rigEvents.length = 0;
   gl.state.created = 0;
   gl.state.disposed = 0;
+  gl.state.renderers.length = 0;
   gl.state.contextsLost = 0;
   gl.state.shadowLightsDisposed = 0;
+  gl.state.draws = 0;
 });
 
 describe('ModelViewer lifecycle', () => {
@@ -396,6 +408,115 @@ describe('ModelViewer lifecycle', () => {
       request.mockRestore();
       cancel.mockRestore();
       visibility.mockRestore();
+    }
+  });
+
+  it('draws nothing for a hover that changes nothing, and draws one that changes the hover target', () => {
+    // Sweeping the pointer over empty space used to draw every frame, as
+    // much work as an orbit, with nothing new on screen.
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let next = 0;
+    const request = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        callbacks.set(++next, callback);
+        return next;
+      });
+    const cancel = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation((id) => {
+        callbacks.delete(id);
+      });
+    // One square body across the origin, where the camera looks; its
+    // corners leave empty space toward the canvas corners.
+    const props = {
+      ...idleProps(),
+      bodies: [
+        {
+          bodyId: 'plate',
+          name: 'Plate',
+          source: 'primitive',
+          color: '#334455',
+          faceCount: 1,
+          consumed: false,
+          exportableStep: true,
+          bbox: { min: { x: -20, y: -20, z: 0 }, max: { x: 20, y: 20, z: 0 } },
+          mesh: {
+            kind: 'mesh',
+            vertices: Float32Array.of(
+              -20,
+              -20,
+              0,
+              20,
+              -20,
+              0,
+              20,
+              20,
+              0,
+              -20,
+              20,
+              0
+            ),
+            indices: Uint32Array.of(0, 1, 2, 0, 2, 3)
+          }
+        }
+      ]
+    } as unknown as ModelViewerProps;
+    const view = render(createElement(ModelViewer, props));
+    const canvas = view.container.querySelector('canvas')!;
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 800, 600);
+    let at = performance.now();
+    const step = () => {
+      const [id, callback] = callbacks.entries().next().value!;
+      callbacks.delete(id);
+      act(() => callback((at += 16)));
+    };
+    /** Runs frames until the loop sleeps; returns how many ran. */
+    const settle = () => {
+      let frames = 0;
+      while (callbacks.size > 0) {
+        expect(frames).toBeLessThan(500);
+        step();
+        frames += 1;
+      }
+      return frames;
+    };
+    const hover = (clientX: number, clientY: number) =>
+      fireEvent(
+        canvas,
+        new PointerEvent('pointermove', {
+          clientX,
+          clientY,
+          pointerId: 1,
+          pointerType: 'mouse',
+          bubbles: true
+        })
+      );
+    try {
+      settle();
+      const idle = gl.state.draws;
+      expect(idle).toBeGreaterThan(0);
+      // Empty space: the hover frame runs, and draws nothing.
+      hover(6, 6);
+      expect(settle()).toBe(1);
+      hover(12, 9);
+      expect(settle()).toBe(1);
+      expect(gl.state.draws).toBe(idle);
+      // Onto the body: preselection lights it, and the very frame that
+      // applies the hover draws it, not some later one.
+      hover(400, 300);
+      step();
+      expect(gl.state.draws).toBe(idle + 1);
+      settle();
+      const lit = gl.state.draws;
+      // Along the same body: nothing new, so nothing drawn.
+      hover(404, 303);
+      expect(settle()).toBe(1);
+      expect(gl.state.draws).toBe(lit);
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      cancel.mockRestore();
     }
   });
 
@@ -648,6 +769,75 @@ describe('ModelViewer lifecycle', () => {
       expect(chipShown()).toBe(true);
     } finally {
       view.unmount();
+    }
+  });
+
+  it('renders a high-DPI desktop without MSAA at a 2x backing store', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'devicePixelRatio'
+    );
+    const mountAt = (ratio: number) => {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        get: () => ratio
+      });
+      const view = render(createElement(ModelViewer, idleProps()));
+      const renderer = gl.state.renderers.at(-1)!;
+      const result = {
+        antialias: renderer.parameters?.antialias,
+        ratio: renderer.ratio()
+      };
+      view.unmount();
+      return result;
+    };
+    try {
+      expect(mountAt(1)).toEqual({ antialias: true, ratio: 1 });
+      expect(mountAt(1.5)).toEqual({ antialias: true, ratio: 1.5 });
+      expect(mountAt(2)).toEqual({ antialias: false, ratio: 2 });
+      expect(mountAt(3)).toEqual({ antialias: false, ratio: 2 });
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(window, 'devicePixelRatio', descriptor);
+      } else {
+        delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+      }
+    }
+  });
+
+  it('keeps the default export size at the display ratio after a supersampled view moves to 1x', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'devicePixelRatio'
+    );
+    let ratio = 2;
+    Object.defineProperty(window, 'devicePixelRatio', {
+      configurable: true,
+      get: () => ratio
+    });
+    try {
+      const imageRef: {
+        current: { viewSize(): { width: number; height: number } } | null;
+      } = { current: null };
+      const view = render(
+        createElement(ModelViewer, {
+          ...idleProps(),
+          viewportImageRef: imageRef as ModelViewerProps['viewportImageRef']
+        })
+      );
+      const source = imageRef.current!;
+      expect(source.viewSize()).toEqual({ width: 1600, height: 1200 });
+      // Dragged to a 1x display: the canvas stays 2x, the export does not.
+      ratio = 1;
+      expect(gl.state.renderers.at(-1)!.ratio()).toBe(2);
+      expect(source.viewSize()).toEqual({ width: 800, height: 600 });
+      view.unmount();
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(window, 'devicePixelRatio', descriptor);
+      } else {
+        delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+      }
     }
   });
 

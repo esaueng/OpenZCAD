@@ -24,7 +24,11 @@ import {
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
-import { DisplayUnitsProvider } from './lib/displayUnits';
+import {
+  DisplayUnitsProvider,
+  displayEntryText,
+  formatDocumentLength
+} from './lib/displayUnits';
 import { roundShownLength } from './lib/liveLabels';
 import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
@@ -733,6 +737,7 @@ import {
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
 import type { DemoDefinition } from './lib/demoDefinitions';
+import { reducesMotion } from './lib/reducedMotion';
 import { createProjectSharingClient } from './lib/projectSharing';
 import { collaborationSaveState } from './lib/collaborationSaveState';
 import {
@@ -7308,7 +7313,7 @@ export function App() {
       activeDemo?.initialWorkspace === 'assemble'
         ? doc?.assembly?.joints[0]?.id
         : undefined,
-    initialPlayback: appSettings.appearance.reducedMotion
+    initialPlayback: reducesMotion(appSettings.appearance.reducedMotion)
       ? undefined
       : activeDemo?.initialPlayback,
     execute: (command: AnyCommand) => executeCommand(command),
@@ -10536,11 +10541,9 @@ export function App() {
   const {
     measuring,
     setMeasuring,
-    measurementMode,
-    setMeasurementMode,
     measurementPointKind,
     setMeasurementPointKind,
-    measurementDraft,
+    measurementSession,
     measurements,
     setMeasurements,
     applyStoredMeasurements,
@@ -10553,6 +10556,8 @@ export function App() {
     measurementDisplay,
     previewMeasurement,
     clearMeasurementPicks,
+    chooseMeasurementReading,
+    keepMeasurementReading,
     handleMeasurementPick,
     measurementAnnotations,
     formattedMeasurements,
@@ -13093,6 +13098,9 @@ export function App() {
       ...(geometry?.surfaceType ? { surfaceType: geometry.surfaceType } : {}),
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
+      ...(geometry?.outerCentroid
+        ? { outerCentroid: geometry.outerCentroid }
+        : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(cylinder ? { cylinder } : {}),
       ...(geometry?.surfaceType.toLowerCase() === 'cone' &&
@@ -13716,7 +13724,7 @@ export function App() {
     clearMeasurementPicks();
     setStatus(
       next
-        ? 'Measure ready · Smart inspects one pick; Distance and Angle use two.'
+        ? 'Measure ready · pick one thing to read it, or two to compare them.'
         : 'Measure off · pinned results stay on the model.'
     );
   }
@@ -21188,7 +21196,7 @@ export function App() {
       // makes it untrue on the first press.
       offset === 0
         ? `Sketching on the ${plane} plane · Finish Sketch when done.`
-        : `Sketching on the ${plane} plane offset ${offset} ${doc?.units ?? ''} · Finish Sketch when done.`,
+        : `Sketching on the ${plane} plane offset ${formatDocumentLength(doc, offset)} · Finish Sketch when done.`,
       { sticky: true }
     );
   }
@@ -24455,7 +24463,7 @@ export function App() {
   }
   const [sketchSolving, setSketchSolving] = useState(false);
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
-    kind: DrivingDimensionKind | 'radius';
+    kind: DrivingDimensionKind | 'radius' | 'offset';
     picks: ConstraintPick[];
     documentVersion: number;
     constraintId?: string;
@@ -24839,7 +24847,8 @@ export function App() {
           editable:
             data.constraintKind === 'distance' ||
             data.constraintKind === 'angle' ||
-            data.constraintKind === 'radius'
+            data.constraintKind === 'radius' ||
+            data.constraintKind === 'offset'
         };
       });
   }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels, sketchFreedom]);
@@ -24870,7 +24879,8 @@ export function App() {
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
-          data.constraintKind === 'radius'
+          data.constraintKind === 'radius' ||
+          data.constraintKind === 'offset'
       }));
   }, [editingSketchNode, doc, selectedSketchEntity, sketchLabels]);
 
@@ -25610,12 +25620,33 @@ export function App() {
     const constraint = editingSketchNode?.constraints?.find(
       (candidate) => String(candidate.constraintId) === constraintId
     );
+    if (!doc || !constraint) {
+      setStatus('Only driving dimensions have editable values.');
+      return;
+    }
+    if (constraint.data.constraintKind === 'offset') {
+      // S05: the Offset's driving distance; every copy follows it.
+      setSketchDimensionDraft({
+        kind: 'offset',
+        picks: [],
+        documentVersion: doc.version,
+        constraintId
+      });
+      dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+      setKeypad({
+        kind: 'sketch-dimension',
+        label: 'Offset distance',
+        initial: String(constraint.data.value),
+        unitKind: 'length',
+        fixedClientAnchor: anchor
+      });
+      setStatus('Edit the offset driving value.');
+      return;
+    }
     if (
-      !doc ||
-      !constraint ||
-      (constraint.data.constraintKind !== 'distance' &&
-        constraint.data.constraintKind !== 'angle' &&
-        constraint.data.constraintKind !== 'radius')
+      constraint.data.constraintKind !== 'distance' &&
+      constraint.data.constraintKind !== 'angle' &&
+      constraint.data.constraintKind !== 'radius'
     ) {
       setStatus('Only driving dimensions have editable values.');
       return;
@@ -25724,18 +25755,45 @@ export function App() {
     const storedValue: ParamValue = Number.isFinite(Number(raw))
       ? evaluatedValue
       : raw;
-    const built = buildConstraint(
-      base,
-      sketch,
-      draft.kind,
-      draft.picks,
-      storedValue
-    );
+    const offsetData =
+      draft.kind === 'offset'
+        ? sketch.constraints?.find(
+            (constraint) =>
+              String(constraint.constraintId) === draft.constraintId
+          )?.data
+        : undefined;
+    if (draft.kind === 'offset' && offsetData?.constraintKind !== 'offset') {
+      setStatus('The dimension changed before the edit could be applied.');
+      return;
+    }
+    if (
+      draft.kind === 'offset' &&
+      // An expression is judged by its value too: `1 - 3` is not a distance.
+      !(evaluatedValue > 0)
+    ) {
+      setStatus(
+        'An offset distance is positive; its side stays with each copy.'
+      );
+      return;
+    }
+    const built =
+      offsetData?.constraintKind === 'offset'
+        ? { data: { ...offsetData, value: storedValue } }
+        : buildConstraint(
+            base,
+            sketch,
+            draft.kind as DrivingDimensionKind | 'radius',
+            draft.picks,
+            storedValue
+          );
     if ('error' in built) {
       setStatus(built.error);
       return;
     }
-    const spec = constraintToolSpec(draft.kind);
+    const spec =
+      draft.kind === 'offset'
+        ? { label: 'Offset' }
+        : constraintToolSpec(draft.kind);
     const dimensionCommands: AnyCommand[] = [];
     if (draft.constraintId) {
       const existing = sketch.constraints?.find(
@@ -26024,6 +26082,24 @@ export function App() {
     }
   };
 
+  /** A face offset's commit message, in the document's display unit. */
+  function documentOffsetMessage(
+    document: ProjectDocument | null | undefined,
+    offset: number,
+    total?: number | null
+  ): string {
+    if (!document) return offsetFaceCommitMessage(offset, '', total);
+    const shownUnits = documentDisplayUnits(document);
+    const shown = (value: number) =>
+      convertLength(value, document.units, shownUnits);
+    return offsetFaceCommitMessage(
+      shown(offset),
+      displayLengthName(shownUnits),
+      total === null || total === undefined ? total : shown(total),
+      shownUnits !== document.units
+    );
+  }
+
   /**
    * I03: shows and takes lengths in `units` (null: the document's own).
    * Undoable, and nothing rebuilds: only how lengths read changes. A
@@ -26150,7 +26226,8 @@ export function App() {
           sketch.constraints?.some(({ data }) => {
             const value =
               data.constraintKind === 'distance' ||
-              data.constraintKind === 'radius'
+              data.constraintKind === 'radius' ||
+              data.constraintKind === 'offset'
                 ? data.value
                 : data.constraintKind === 'angle'
                   ? data.valueDeg
@@ -26420,7 +26497,9 @@ export function App() {
         ? 'dimension'
         : kind === 'pattern'
           ? 'pattern relation'
-          : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+          : kind === 'offset'
+            ? 'offset dimension'
+            : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
     dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
     setStatus(`Selected ${label}. Press Delete to remove it.`);
   }
@@ -28259,7 +28338,10 @@ export function App() {
         const round = (value: number) => {
           const shown = displayedValue(valueSpec, value);
           // I03: a length reads in the display unit.
-          if (valueSpec?.unit === 'length' && inPlaceShownUnits !== inPlaceUnits)
+          if (
+            valueSpec?.unit === 'length' &&
+            inPlaceShownUnits !== inPlaceUnits
+          )
             return String(roundShownLength(inPlaceShown(shown)));
           return shown === Math.round(value * 100) / 100
             ? formatNumber(shown)
@@ -30342,7 +30424,7 @@ export function App() {
     void executeValidatedDirectEdit(
       reuse?.command ?? plan.command,
       target.bodyId as BodyId,
-      `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
+      `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatDocumentLength(doc, cylinderDimensionMode === 'diameter' ? radius * 2 : radius)}.`,
       radius,
       // The resized wall stays picked with its handle armed at the new size,
       // as a moved face does: falling back to the whole body swapped the
@@ -30883,7 +30965,7 @@ export function App() {
     void executeValidatedDirectEdit(
       command,
       resultBodyId,
-      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${committedEdgesPhrase(command.payload.edgeHashes, 'edgeReferences' in command.payload ? command.payload.edgeReferences : undefined)} at ${rounded} ${doc?.units ?? ''}.`,
+      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${committedEdgesPhrase(command.payload.edgeHashes, 'edgeReferences' in command.payload ? command.payload.edgeReferences : undefined)} at ${formatDocumentLength(doc, rounded)}.`,
       rounded,
       () => {
         clearEdgePreview();
@@ -31104,7 +31186,7 @@ export function App() {
           : current.target.nativeBlendDirectEdit
             ? 'Removed blend.'
             : 'Removed imported blend.'
-        : `Set ${feature?.name ?? (current.target.nativeBlendDirectEdit ? 'blend' : 'imported blend')} radius to R ${formatNumber(size)} ${base.units}.`,
+        : `Set ${feature?.name ?? (current.target.nativeBlendDirectEdit ? 'blend' : 'imported blend')} radius to R ${formatDocumentLength(base, size)}.`,
       size,
       removing
         ? () => clearEdgePreview()
@@ -31926,7 +32008,7 @@ export function App() {
             ? plan.primitive.data.primitiveKind
             : undefined,
           plan.dimension
-        ).toLowerCase()} set to ${formatNumber(plan.value)} ${base.units}.`,
+        ).toLowerCase()} set to ${formatDocumentLength(base, plan.value)}.`,
         validationTargets: affectedFeatureTargets(
           plan.command.commands ? plan.command.apply(base) : base,
           plan.primitive.featureId
@@ -31941,7 +32023,7 @@ export function App() {
         command: plan.command,
         bodyId,
         editedFeatureId: plan.feature.featureId,
-        successMessage: `${plan.feature.name} ${plan.kind === 'gear-width' ? 'face width' : 'distance'} set to ${formatNumber(plan.value)} ${base.units}.`,
+        successMessage: `${plan.feature.name} ${plan.kind === 'gear-width' ? 'face width' : 'distance'} set to ${formatDocumentLength(base, plan.value)}.`,
         validationTargets: affectedFeatureTargets(base, plan.feature.featureId),
         ...(plan.preflightRejection
           ? { preflightRejection: plan.preflightRejection }
@@ -31952,7 +32034,7 @@ export function App() {
       command: plan.command,
       bodyId,
       editedFeatureId: null,
-      successMessage: offsetFaceCommitMessage(offset, base.units),
+      successMessage: documentOffsetMessage(base, offset),
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
   }
@@ -32118,9 +32200,9 @@ export function App() {
       plan.editedFeatureId === null &&
       options?.total !== undefined &&
       !current.target.offsetFaceSet
-        ? offsetFaceCommitMessage(
+        ? documentOffsetMessage(
+            managerRef.current?.document,
             offset,
-            managerRef.current?.document.units ?? '',
             options.total
           )
         : reuse
@@ -32256,7 +32338,7 @@ export function App() {
         }
       }),
       selection.bodyId,
-      `Updated through-hole diameter to ${String(diameter)} ${doc?.units ?? ''}.`,
+      `Updated through-hole diameter to ${typeof diameter === 'number' ? formatDocumentLength(doc, diameter) : `${diameter} ${doc ? displayLengthName(doc.units) : ''}`.trim()}.`,
       typeof diameter === 'number' ? diameter : 0
     );
   }
@@ -32391,7 +32473,7 @@ export function App() {
       (interaction.mode === 'face' &&
         (interaction.op === 'offset-face' || interaction.op === 'edit-fillet')))
       ? {
-          label: `Keep ${formatNumber(keepValue)} ${doc?.units ?? ''}`.trim(),
+          label: `Keep ${formatDocumentLength(doc, keepValue)}`,
           keep: () => {
             if (interaction.mode === 'edges' || interaction.mode === 'face') {
               if (
@@ -35441,11 +35523,9 @@ export function App() {
           }
           if (measuring) {
             event.preventDefault();
-            if (measurementDraft) {
+            if (measurementSession.first) {
               clearMeasurementPicks();
-              setStatus(
-                `${measurementMode === 'angle' ? 'Angle' : measurementMode === 'maximum' ? 'Maximum distance' : measurementMode === 'central' ? 'Central distance' : measurementMode === 'parallel' ? 'Parallel distance' : 'Distance'} measurement canceled · pick the first target.`
-              );
+              setStatus('Picks cleared · pick geometry to measure.');
             } else {
               toggleMeasure(false);
             }
@@ -35580,6 +35660,27 @@ export function App() {
             clearSelection();
           }
           return;
+        case 'Enter':
+          // Keeps the reading the Measure card shows. With nothing to keep
+          // the key is left to whoever else wants it, and so is a focused
+          // control: Enter on an alternative reading chooses it, on Copy
+          // copies. Only the reading already chosen passes Enter on to Keep,
+          // so choose-then-Enter keeps what was chosen.
+          if (
+            measuring &&
+            !typing &&
+            !(
+              target?.closest('button, a, select, [role="button"]') &&
+              !target.closest(
+                '.measurement-readings button[aria-pressed="true"]'
+              )
+            ) &&
+            keepMeasurementReading()
+          ) {
+            event.preventDefault();
+            return;
+          }
+          break;
         case 'Delete':
         case 'Backspace':
           if (modelingLocked) {
@@ -36188,35 +36289,22 @@ export function App() {
       enabled={measuring}
       geometryPending={measurementGeometryPending}
       activeMeasurementId={activeMeasurementId}
-      mode={measurementMode}
-      draftTargetLabel={measurementDraft?.label ?? null}
+      session={measurementSession}
       display={measurementDisplay}
-      onMode={(mode) => {
-        setMeasuring(true);
-        setMeasurementMode(mode);
-        clearMeasurementPicks();
-        setStatus(
-          mode === 'smart'
-            ? 'Smart measure · pick an edge, face, hole, or body.'
-            : mode === 'distance'
-              ? 'Distance · pick the first target.'
-              : mode === 'maximum'
-                ? 'Maximum distance · pick the first point, straight edge or full circle.'
-                : mode === 'central'
-                  ? 'Central distance · pick a circle, arc, cylinder or hole.'
-                  : mode === 'parallel'
-                    ? 'Parallel distance · pick the first edge, face, axis or circle.'
-                    : 'Angle · pick the first straight edge, circular axis or planar face.'
-        );
-      }}
       pointKind={measurementPointKind}
       onPointKind={(kind) => {
         setMeasurementPointKind(kind);
         setStatus(
           kind === 'auto'
-            ? 'Distance picks the point each target names.'
-            : `Distance picks each target's ${kind}.`
+            ? 'Distance reads the point each pick names.'
+            : `Distance reads each pick's ${kind}.`
         );
+      }}
+      onChooseReading={chooseMeasurementReading}
+      onKeep={() => void keepMeasurementReading()}
+      onClearPicks={() => {
+        clearMeasurementPicks();
+        setStatus('Picks cleared · pick geometry to measure.');
       }}
       onUnit={setMeasurementUnit}
       onPrecision={setMeasurementPrecision}
@@ -36757,7 +36845,13 @@ export function App() {
       id: `file-display-units-${unit}`,
       label: `Show lengths in ${UNIT_SYSTEM_WORDS[unit]}`,
       group: 'File',
-      keywords: ['units', 'unit', displayLengthName(unit), 'metric', 'imperial'],
+      keywords: [
+        'units',
+        'unit',
+        displayLengthName(unit),
+        'metric',
+        'imperial'
+      ],
       icon: <Ruler size={16} aria-hidden="true" />,
       disabledReason: !doc
         ? 'Open a project first'
@@ -37129,19 +37223,11 @@ export function App() {
     .filter(Boolean)
     .join(' — ');
   const viewModeHint = measuring
-    ? measurementDraft
-      ? `${measurementDraft.label} selected · pick the second target · Esc cancels`
-      : measurementMode === 'smart'
-        ? `Smart measure · pick geometry · Shift+Click totals edges · ${(modelingLocked && measureKey) || 'Esc'} exits`
-        : measurementMode === 'distance'
-          ? 'Distance · pick the first target · centers resolve automatically'
-          : measurementMode === 'maximum'
-            ? 'Maximum distance · pick a point, straight edge or full circle'
-            : measurementMode === 'central'
-              ? 'Central distance · pick a circle, arc, cylinder or hole'
-              : measurementMode === 'parallel'
-                ? 'Parallel distance · pick an edge, face, axis or circle'
-                : 'Angle · pick a straight edge, circular axis or planar face'
+    ? measurementSession.second
+      ? 'Enter keeps the reading · click to start over · Esc clears'
+      : measurementSession.first
+        ? `${measurementSession.first.label} selected · pick the second target · Enter keeps · Esc clears`
+        : `Measure · pick geometry · Shift+Click totals edges · ${(modelingLocked && measureKey) || 'Esc'} exits`
     : selectedTopology?.kind === 'face'
       ? faceSelectedHint
       : viewerBodies.length > 0
@@ -37440,7 +37526,7 @@ export function App() {
           <SketchWorkflow
             plane={
               sketchOverviewPlane?.type === 'canonical'
-                ? `${sketchOverviewPlane.plane} plane${sketchOverviewOffset ? ` offset ${formatNumber(sketchOverviewOffset)} ${doc.units}` : ''}`
+                ? `${sketchOverviewPlane.plane} plane${sketchOverviewOffset ? ` offset ${formatDocumentLength(doc, sketchOverviewOffset)}` : ''}`
                 : sketchOverviewPlane?.type === 'face'
                   ? 'Attached face'
                   : 'Sketch plane'
@@ -37851,6 +37937,119 @@ export function App() {
     onIsolate: isolateBody,
     onShowAll: showAllBodies
   };
+  // The command card the right lane shows, if any. Hoisted so the
+  // modeling guide can yield to it on a phone (#1945).
+  const commandCard = modelingLocked ? null : measurementDock ? (
+    measurementDock
+  ) : contextualToolCard ? (
+    hideSketchToolCard || calloutOperationModel ? null : (
+      <ToolCard
+        model={contextualToolCard}
+        selectAllEdges={
+          interaction.mode === 'edges' &&
+          edgeModifierBody?.topology &&
+          interaction.edges.length <
+            edgeModifierBody.topology.edges.filter(
+              (edge) =>
+                edge.displayRole !== 'seam' &&
+                (interaction.op !== 'chamfer' || edge.isSmooth !== true)
+            ).length
+            ? {
+                count: edgeModifierBody.topology.edges.filter(
+                  (edge) =>
+                    edge.displayRole !== 'seam' &&
+                    (interaction.op !== 'chamfer' || edge.isSmooth !== true)
+                ).length,
+                select: () => handleSelectAllEdges(edgeModifierBody)
+              }
+            : undefined
+        }
+        cancelableWhileValidating={interaction.mode === 'region'}
+        // A region's other profile tools, which take the same pick.
+        verbs={
+          interaction.mode === 'region' && tool === null
+            ? selectionCalloutVerbs({
+                kind: selectedProfiles.length > 1 ? 'regions' : 'region',
+                availability: shownAvailability
+              }).filter((verb) => verb.id !== 'tool:extrude')
+            : undefined
+        }
+        onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
+        onAction={handleSelectionAction}
+        onEditCulprit={handleEditCulpritFeature}
+        onViewDetails={openActivityLog}
+        {...(toolCardSaveReproduction
+          ? { onSaveReproduction: toolCardSaveReproduction }
+          : {})}
+        {...(keepLastValid ? { keepLastValid } : {})}
+        // Never up in sketch mode (the column header names the
+        // sketch), so a close is always a clear.
+        onClose={() => {
+          if (cancelPendingRegionExtrusion()) return;
+          if (interaction.mode !== 'idle' && interaction.phase === 'dragging') {
+            cancelDirectManipulationRef.current?.();
+            if (interaction.mode === 'edges') {
+              handleEdgeCancel();
+            }
+          }
+          dispatchInteraction({ type: 'clear' });
+        }}
+      />
+    )
+  ) : revertPill ? null : movePreview ? null : tool === 'sketch' ? (
+    <SketchPlanePrompt
+      document={doc}
+      offsetText={sketchPlaneOffsetText}
+      datumsReady={exactGeometryReady}
+      onOffsetTextChange={setSketchPlaneOffsetText}
+      onPickPlane={startSketchOnPlane}
+      onEnterSketch={(plane, message) => {
+        dispatchInteraction({ type: 'enter-sketch', plane });
+        setTool(null);
+        setStatus(message, { sticky: true });
+      }}
+      onCancel={() => {
+        cancelPanel();
+        setStatus('Sketch canceled · no plane was chosen.');
+      }}
+    />
+  ) : tool === null &&
+    selectedProfiles.length > 0 &&
+    selectedSketchProfileName ? (
+    // Only with no tool open: a tool keeps the selection to pre-fill
+    // its own card, and that card is the one command card in the lane.
+    <ProfileQuickAction
+      profileName={selectedSketchProfileName}
+      profileCount={selectedProfiles.length}
+      extrudeKey={keymap.label(
+        interaction.mode === 'sketch' ? 'sketch-extrude' : 'tool-extrude'
+      )}
+      onExtrude={() => startExtrude(selectedProfiles[0]!.sketchId as SketchId)}
+      onDismiss={() => {
+        setSelectedProfiles([]);
+        setSelectedSketchProfileId(null);
+      }}
+    />
+  ) : null;
+  // Which card the modeling guide folds for on a phone (#1945): the
+  // command card and the inspector's tool or feature. A guide opened over
+  // one card folds again for the next, even when one replaces the other in
+  // a single update (Sketch's plane prompt to Measure).
+  const commandCardKey =
+    commandCard === null
+      ? ''
+      : measurementDock
+        ? 'measure'
+        : contextualToolCard
+          ? `card:${interaction.mode}:${contextualToolCard.icon}`
+          : `prompt:${tool ?? 'profile'}`;
+  const inspectorKey = inspectorActive
+    ? (tool ?? modelingEditFeature?.id ?? 'inspector')
+    : '';
+  const guideYieldKey =
+    phoneStage && (commandCardKey || inspectorKey)
+      ? `${commandCardKey}|${inspectorKey}`
+      : null;
   const workspace = (
     <WorkspaceAppShell
       covered={sharePage !== null}
@@ -38794,9 +38993,7 @@ export function App() {
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
             measureSnapKinds={
-              measuring && measurementMode === 'distance'
-                ? measureSnapKindsFor(measurementPointKind)
-                : null
+              measuring ? measureSnapKindsFor(measurementPointKind) : null
             }
             onPointPick={movePreview?.pointPick ? handleMovePointPick : null}
             regionHandle={
@@ -39343,6 +39540,10 @@ export function App() {
             interaction.mode !== 'sketch' && (
               <WorkspaceTour
                 minimized={panelState.workspaceTourMinimized}
+                // On a phone the guide and a command card share the right
+                // lane's foot; expanded, it left the card a 13 px sliver
+                // (#1945). It folds to its header while one is up.
+                yieldTo={guideYieldKey}
                 onMinimizedChange={(workspaceTourMinimized) =>
                   setPanelState((current) => ({
                     ...current,
@@ -39455,106 +39656,7 @@ export function App() {
       // prompt, Move or revert pill is up. A Move's bar is not a card: it
       // takes the command row, as every in-place command's does, so here it
       // only holds the lane empty.
-      command={
-        modelingLocked ? null : measurementDock ? (
-          measurementDock
-        ) : contextualToolCard ? (
-          hideSketchToolCard || calloutOperationModel ? null : (
-            <ToolCard
-              model={contextualToolCard}
-              selectAllEdges={
-                interaction.mode === 'edges' &&
-                edgeModifierBody?.topology &&
-                interaction.edges.length <
-                  edgeModifierBody.topology.edges.filter(
-                    (edge) =>
-                      edge.displayRole !== 'seam' &&
-                      (interaction.op !== 'chamfer' || edge.isSmooth !== true)
-                  ).length
-                  ? {
-                      count: edgeModifierBody.topology.edges.filter(
-                        (edge) =>
-                          edge.displayRole !== 'seam' &&
-                          (interaction.op !== 'chamfer' ||
-                            edge.isSmooth !== true)
-                      ).length,
-                      select: () => handleSelectAllEdges(edgeModifierBody)
-                    }
-                  : undefined
-              }
-              cancelableWhileValidating={interaction.mode === 'region'}
-              // A region's other profile tools, which take the same pick.
-              verbs={
-                interaction.mode === 'region' && tool === null
-                  ? selectionCalloutVerbs({
-                      kind: selectedProfiles.length > 1 ? 'regions' : 'region',
-                      availability: shownAvailability
-                    }).filter((verb) => verb.id !== 'tool:extrude')
-                  : undefined
-              }
-              onVerb={(id) => launchTool(id.slice('tool:'.length) as ToolId)}
-              onAction={handleSelectionAction}
-              onEditCulprit={handleEditCulpritFeature}
-              onViewDetails={openActivityLog}
-              {...(toolCardSaveReproduction
-                ? { onSaveReproduction: toolCardSaveReproduction }
-                : {})}
-              {...(keepLastValid ? { keepLastValid } : {})}
-              // Never up in sketch mode (the column header names the
-              // sketch), so a close is always a clear.
-              onClose={() => {
-                if (cancelPendingRegionExtrusion()) return;
-                if (
-                  interaction.mode !== 'idle' &&
-                  interaction.phase === 'dragging'
-                ) {
-                  cancelDirectManipulationRef.current?.();
-                  if (interaction.mode === 'edges') {
-                    handleEdgeCancel();
-                  }
-                }
-                dispatchInteraction({ type: 'clear' });
-              }}
-            />
-          )
-        ) : revertPill ? null : movePreview ? null : tool === 'sketch' ? (
-          <SketchPlanePrompt
-            document={doc}
-            offsetText={sketchPlaneOffsetText}
-            datumsReady={exactGeometryReady}
-            onOffsetTextChange={setSketchPlaneOffsetText}
-            onPickPlane={startSketchOnPlane}
-            onEnterSketch={(plane, message) => {
-              dispatchInteraction({ type: 'enter-sketch', plane });
-              setTool(null);
-              setStatus(message, { sticky: true });
-            }}
-            onCancel={() => {
-              cancelPanel();
-              setStatus('Sketch canceled · no plane was chosen.');
-            }}
-          />
-        ) : tool === null &&
-          selectedProfiles.length > 0 &&
-          selectedSketchProfileName ? (
-          // Only with no tool open: a tool keeps the selection to pre-fill
-          // its own card, and that card is the one command card in the lane.
-          <ProfileQuickAction
-            profileName={selectedSketchProfileName}
-            profileCount={selectedProfiles.length}
-            extrudeKey={keymap.label(
-              interaction.mode === 'sketch' ? 'sketch-extrude' : 'tool-extrude'
-            )}
-            onExtrude={() =>
-              startExtrude(selectedProfiles[0]!.sketchId as SketchId)
-            }
-            onDismiss={() => {
-              setSelectedProfiles([]);
-              setSelectedSketchProfileId(null);
-            }}
-          />
-        ) : null
-      }
+      command={commandCard}
       inspectorOwnsLane={tool !== null && tool !== 'sketch'}
       inspector={
         assembleMode ? null : inspectorActive ? (
@@ -40157,7 +40259,21 @@ export function App() {
                   refusalInput={inPlace.refusalInput}
                   unitLabel={displayLengthName(doc.units)}
                   onTrySize={(dimension, size) => {
-                    commitInPlacePanelValue(dimension, formatNumber(size));
+                    // The proved size is stored-unit; the panel reads a
+                    // plain number in the display unit (I03).
+                    const lengthValue =
+                      inPlaceSpec?.values.find(
+                        (candidate) => candidate.id === dimension
+                      )?.unit === 'length';
+                    commitInPlacePanelValue(
+                      dimension,
+                      displayEntryText(
+                        size,
+                        lengthValue,
+                        inPlaceUnits,
+                        inPlaceShownUnits
+                      )
+                    );
                   }}
                   canFinish={
                     inPlace.canFinish &&

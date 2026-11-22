@@ -171,6 +171,7 @@ const PLACEMENT_KEYS = new Set([
   'max',
   'point',
   'centroid',
+  'outerCentroid',
   'center',
   'normal',
   'origin',
@@ -243,6 +244,35 @@ function sessionFromSeed(
 interface EntryRefusal {
   valueId: string;
   message: string;
+}
+
+/**
+ * M03: `latest` with its edges set to `edges`, and every edge-bound value
+ * (the tool's `edgeValueKeys`) moved to the value id that now holds the same
+ * key; a value whose key is gone is dropped back to its default.
+ */
+function withEdges(latest: Session, edges: EdgePick[]): Session {
+  const spec = IN_PLACE_TOOL_SPECS[latest.tool];
+  const next = { ...latest, slots: { ...latest.slots, edges } };
+  if (!spec.edgeValueKeys) return next;
+  const before = spec.edgeValueKeys(latest.slots.edges);
+  const after = spec.edgeValueKeys(edges);
+  const keyed = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const values = { ...latest.values };
+  const raws = { ...latest.raws };
+  const touched = latest.touched.filter((id) => !keyed.has(id));
+  for (const id of keyed) {
+    delete values[id];
+    delete raws[id];
+  }
+  for (const [id, key] of Object.entries(after)) {
+    const from = Object.keys(before).find((old) => before[old] === key);
+    if (from === undefined) continue;
+    if (latest.values[from] !== undefined) values[id] = latest.values[from]!;
+    if (latest.raws[from] !== undefined) raws[id] = latest.raws[from]!;
+    if (latest.touched.includes(from)) touched.push(id);
+  }
+  return { ...next, values, raws, touched };
 }
 
 interface Session {
@@ -1471,17 +1501,19 @@ export function useInPlaceCommand(
         ) =>
           picks[key] !== undefined &&
           (!from || current.slots[key] === from[key]);
-        return {
+        const next = {
           ...current,
           slots: {
             ...current.slots,
             ...(take('path') ? { path: [...picks.path!] } : {}),
             ...(take('guide') ? { guide: [...picks.guide!] } : {}),
             ...(take('faces') ? { faces: [...picks.faces!] } : {}),
-            ...(take('bodies') ? { bodies: [...picks.bodies!] } : {}),
-            ...(take('edges') ? { edges: [...picks.edges!] } : {})
+            ...(take('bodies') ? { bodies: [...picks.bodies!] } : {})
           }
         };
+        // Edge-bound values follow their corners through a live refresh as
+        // through a pick (review).
+        return take('edges') ? withEdges(next, [...picks.edges!]) : next;
       });
     },
     []
@@ -1715,7 +1747,7 @@ export function useInPlaceCommand(
         : picked
           ? edges.filter((other) => other.hash !== edge.hash)
           : [...edges, edge];
-      return { ...latest, slots: { ...latest.slots, edges: next } };
+      return withEdges(latest, next);
     });
     return true;
   }, []);
@@ -1726,12 +1758,7 @@ export function useInPlaceCommand(
     const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
     if (!current || !toolSpec?.edgeMode) return false;
     setSession((latest) =>
-      latest
-        ? {
-            ...latest,
-            slots: { ...latest.slots, edges: sameBodyEdges(edges) }
-          }
-        : latest
+      latest ? withEdges(latest, sameBodyEdges(edges)) : latest
     );
     return true;
   }, []);

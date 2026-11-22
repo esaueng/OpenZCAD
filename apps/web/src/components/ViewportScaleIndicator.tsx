@@ -1,3 +1,5 @@
+import { convertLength } from '@openzcad/shared';
+import { useDisplayUnits } from '../lib/displayUnits';
 import { Grid3x3 } from 'lucide-react';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 import {
@@ -196,6 +198,15 @@ export function ViewportScaleIndicator({
   scaleSinkRef: MutableRefObject<ViewportScaleSink | null>;
   units: string;
 }) {
+  // I03: the rule reads in the display unit. The viewer measures in the
+  // stored unit; a round step is chosen again in the shown one.
+  const storedUnits = (['mm', 'cm', 'm', 'inch'] as const).find(
+    (unit) => unit === units
+  );
+  const shownUnits = useDisplayUnits(storedUnits ?? 'mm');
+  const shownFactor =
+    storedUnits === undefined ? 1 : convertLength(1, storedUnits, shownUnits);
+  const shownLabel = storedUnits === undefined ? units : shownUnits;
   const rootRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const valueRef = useRef<HTMLOutputElement | null>(null);
@@ -323,10 +334,10 @@ export function ViewportScaleIndicator({
       // The viewer offers the longest rule (200px); where the rule stands
       // may have less room, so the step is chosen again under that cap.
       const scale =
-        offered && offered.widthPx > maxLengthRef.current
+        offered && (shownFactor !== 1 || offered.widthPx > maxLengthRef.current)
           ? chooseViewportScale(
-              offered.value / offered.widthPx,
-              maxLengthRef.current
+              (offered.value / offered.widthPx) * shownFactor,
+              Math.min(maxLengthRef.current, DEFAULT_SCALE_BAR_MAX_WIDTH_PX)
             )
           : offered;
       const root = rootRef.current;
@@ -345,12 +356,12 @@ export function ViewportScaleIndicator({
         return;
       }
 
-      const label = formatViewportScale(scale.value, units);
+      const label = formatViewportScale(scale.value, shownLabel);
       const previous = lastRenderedRef.current;
       const valueTolerance = Math.max(Math.abs(scale.value), 1) * 1e-12;
       if (
         previous &&
-        previous.units === units &&
+        previous.units === shownLabel &&
         Math.abs(previous.value - scale.value) <= valueTolerance &&
         Math.abs(previous.widthPx - scale.widthPx) <= 0.05
       ) {
@@ -368,7 +379,7 @@ export function ViewportScaleIndicator({
       if (root.getAttribute('aria-label') !== accessibleLabel) {
         root.setAttribute('aria-label', accessibleLabel);
       }
-      lastRenderedRef.current = { ...scale, units };
+      lastRenderedRef.current = { ...scale, units: shownLabel };
     };
 
     scaleSinkRef.current = update;
@@ -388,7 +399,7 @@ export function ViewportScaleIndicator({
         scaleSinkRef.current = null;
       }
     };
-  }, [scaleSinkRef, units, measureTick]);
+  }, [scaleSinkRef, shownLabel, shownFactor, measureTick]);
 
   return (
     // One image named by its label ("Viewport scale … : 20 mm"), not a live

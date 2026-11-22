@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+  keepMeasurement,
   createPrimitiveInPlace,
   locateEdge,
   promptField,
@@ -95,6 +96,7 @@ test('F13: Measure is on Build’s instrument rail and in the palette, and yield
   await setSelectionFilter(page, 'Edge');
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
+  await keepMeasurement(page);
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
   await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
 

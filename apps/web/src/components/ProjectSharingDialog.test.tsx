@@ -1387,7 +1387,10 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
         needsConfirmation: false,
         retired: []
       })),
-      create: vi.fn(async () => ({ url: 'https://app.example/#share=x' })),
+      create: vi.fn(async () => ({
+        url: 'https://app.example/#share=x',
+        shareId: 'shr_x'
+      })),
       revoke: vi.fn(async () => undefined),
       confirm: vi.fn(async () => undefined),
       reissue: vi.fn(async () => undefined),

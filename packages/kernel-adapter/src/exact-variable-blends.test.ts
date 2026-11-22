@@ -17,9 +17,9 @@ import {
 } from '@openzcad/shared';
 import { RemusKernel } from './remus-runtime';
 import { createExactKernelAdapter } from './exact';
-import { approximateBlendAdvisory } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
+  displayedAtMost,
   variableBlendRefusal,
   variableBlendRefusalMessage,
   variableFilletRequest
@@ -229,7 +229,7 @@ describe('variable-radius fillet', { timeout: 60_000 }, () => {
     expect(() => assertQualifiedVariableFillet('linear', 1, 3)).not.toThrow();
   });
 
-  it('never writes a setback, which is the unqualified N-way vertex blend', () => {
+  it('asks for tangent-ball corners and never writes a setback (M03)', () => {
     const request = JSON.parse(
       variableFilletRequest([4, 9], {
         law: 'linear',
@@ -238,8 +238,8 @@ describe('variable-radius fillet', { timeout: 60_000 }, () => {
       })
     ) as Record<string, unknown>[];
     expect(request).toEqual([
-      { edge: 4, law: 'linear', start: 1, end: 3 },
-      { edge: 9, law: 'linear', start: 1, end: 3 }
+      { edge: 4, law: 'linear', start: 1, end: 3, ballCorners: true },
+      { edge: 9, law: 'linear', start: 1, end: 3, ballCorners: true }
     ]);
 
     // What the kernel says when one is written, and the reason the request
@@ -437,14 +437,10 @@ describe('variable blends through the document', { timeout: 120_000 }, () => {
       const constantDerived = await adapter.syncDocument(constant.document);
       expect(constantDerived.warnings).toEqual([]);
       const variableDerived = await adapter.syncDocument(variable.document);
-      // The kernel fits a variable band as NURBS (`filletVariableDetailed`
-      // reports `quality: "approximate"`), so the feature discloses it.
-      expect(variableDerived.warnings).toEqual([
-        `Feature "Round": ${approximateBlendAdvisory('fillet')}`
-      ]);
-      expect(
-        variableDerived.featureWarnings?.map((warning) => warning.kind)
-      ).toEqual(['advisory']);
+      // M03: the variable band is the exact rolling ball, built under
+      // exactOnly and reported exact, so there is nothing to disclose.
+      expect(variableDerived.warnings).toEqual([]);
+      expect(variableDerived.featureWarnings ?? []).toEqual([]);
 
       // 1 → 3 takes more out than a constant 2 does, end to end through the
       // document, not only at the kernel boundary.
@@ -597,6 +593,41 @@ describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
         kernelCode: 'blend-failed'
       });
     }
+  });
+
+  it("keeps the kernel's typed code and category over the sentence (M03)", () => {
+    const refusal = variableBlendRefusal('fillet', 1, 'no exact result', {
+      kernelCode: 'exact_only_unattainable',
+      category: 'quality_refused'
+    });
+    expect(refusal).toMatchObject({
+      family: 'blend',
+      category: 'quality_refused',
+      kernelCode: 'exact_only_unattainable'
+    });
+    expect(refusal.limit).toBeUndefined();
+  });
+
+  it('shows an overflow limit rounded down, so typing it back fits (M03)', () => {
+    expect(displayedAtMost(20)).toBe(20);
+    expect(displayedAtMost(20.00006)).toBe(20);
+    expect(displayedAtMost(0.123456789)).toBe(0.123456);
+    expect(displayedAtMost(7.999999)).toBe(7.99999);
+    for (const limit of [20.00006, 0.123456789, 7.999999, 3.3333335]) {
+      expect(displayedAtMost(limit)).toBeLessThanOrEqual(limit);
+    }
+    const refusal = variableBlendRefusal(
+      'fillet',
+      1,
+      'cliff-encountered: blend: radius 25 exceeds the faces',
+      {
+        kernelCode: 'cliff-encountered',
+        category: 'unsupported',
+        limit: 20.00006
+      }
+    );
+    expect(refusal.limit).toBe(20.00006);
+    expect(refusal.message).toMatch(/at most 20\.$/);
   });
 
   it('keeps the kernel sentence for every current blend failure code', () => {
@@ -799,3 +830,123 @@ describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
     }
   });
 });
+
+describe(
+  'exact setback corners and the overflow limit (M03)',
+  { timeout: 120_000 },
+  () => {
+    /** A 20 × 20 × 10 box and its three edges at the origin corner. */
+    async function cornerBox() {
+      const adapter = await createExactKernelAdapter();
+      const base = addPrimitiveFeature(createProjectDocument('Corner', user), {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 20, depth: 10 }
+      });
+      const bodyId = base.bodyOrder[0] as BodyId;
+      const built = await adapter.syncDocument(base);
+      const source = built.bodyRepresentations[bodyId]!;
+      const minimum = (axis: 0 | 1 | 2) =>
+        Math.min(
+          ...source.topology!.edges.flatMap((edge) =>
+            edge.points.filter((_, index) => index % 3 === axis)
+          )
+        );
+      const corner = [minimum(0), minimum(1), minimum(2)];
+      const atCorner = source.topology!.edges.filter((edge) => {
+        const ends = [edge.points.slice(0, 3), edge.points.slice(-3)];
+        return ends.some((end) =>
+          end.every((value, axis) => Math.abs(value - corner[axis]!) < 1e-9)
+        );
+      });
+      expect(atCorner).toHaveLength(3);
+      return { adapter, base, bodyId, source, atCorner };
+    }
+
+    it('closes a three-edge corner with the tangent ball, exactly', async () => {
+      const { adapter, base, bodyId, source, atCorner } = await cornerBox();
+      try {
+        const r = 1;
+        const rounded = filletEdges(base, {
+          name: 'Round',
+          targetBodyId: bodyId,
+          edgeHashes: atCorner.map((edge) => edge.hash),
+          size: r,
+          endRadius: r,
+          radiusLaw: 'scurve'
+        });
+        const derived = await adapter.syncDocument(rounded.document);
+        expect(derived.warnings).toEqual([]);
+        expect(derived.featureWarnings ?? []).toEqual([]);
+        // Each edge loses (1 − π/4)·r² along all but the setback r, and the
+        // corner the cube r³ less the ball's octant.
+        const lengths = atCorner.reduce((sum, edge) => sum + edge.length!, 0);
+        const removed =
+          (1 - Math.PI / 4) * r * r * (lengths - 3 * r) +
+          r ** 3 * (1 - Math.PI / 6);
+        // The bands are rational NURBS, integrated numerically: 3 places, far
+        // inside the corner term (0.48 at r = 1) a wrong corner would miss.
+        expect(derived.bodyRepresentations[rounded.bodyId]!.volume).toBeCloseTo(
+          source.volume - removed,
+          3
+        );
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    it('refuses a corner whose radii do not settle there, by code', async () => {
+      const { adapter, base, bodyId, atCorner } = await cornerBox();
+      try {
+        const ramped = filletEdges(base, {
+          name: 'Round',
+          targetBodyId: bodyId,
+          edgeHashes: atCorner.map((edge) => edge.hash),
+          size: 1,
+          endRadius: 2,
+          radiusLaw: 'linear'
+        });
+        const derived = await adapter.syncDocument(ramped.document);
+        const refusal = derived.featureWarnings?.find(
+          (warning) => warning.kernelRefusal
+        )?.kernelRefusal;
+        expect(refusal?.family).toBe('blend');
+        expect(refusal?.code).toBe('unsupported-setback-corner');
+      } finally {
+        adapter.dispose();
+      }
+    });
+
+    it('gives the largest radius the faces carry as data when one overflows', async () => {
+      const { adapter, base, bodyId, source } = await cornerBox();
+      try {
+        // A vertical edge: 10 long, between two faces 20 wide. A radius
+        // growing to 25 runs off them; the most they carry is 20.
+        const vertical = source.topology!.edges.find(
+          (edge) =>
+            Math.abs(edge.points[0]! - edge.points.at(-3)!) < 1e-9 &&
+            Math.abs(edge.points[1]! - edge.points.at(-2)!) < 1e-9
+        )!;
+        const overflowing = filletEdges(base, {
+          name: 'Round',
+          targetBodyId: bodyId,
+          edgeHashes: [vertical.hash],
+          size: 1,
+          endRadius: 25,
+          radiusLaw: 'linear'
+        });
+        const derived = await adapter.syncDocument(overflowing.document);
+        const refusal = derived.featureWarnings?.find(
+          (warning) => warning.kernelRefusal
+        )?.kernelRefusal;
+        expect(refusal?.code).toBe('cliff-encountered');
+        expect(refusal?.limit).toBeCloseTo(20, 9);
+        expect(derived.warnings.join(' ')).toMatch(
+          /carry a radius of at most 20\./
+        );
+      } finally {
+        adapter.dispose();
+      }
+    });
+  }
+);
