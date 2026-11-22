@@ -545,12 +545,15 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // sweep): where on the path the profile stands, sweeping both ways from
 // inside it. An older client would sweep from a path end, so it must refuse
 // the document. Builds on v135.
+// v137 adds M10 linked copy stamps (`stampBodyIds` on a transform copy):
+// one Move copy stamps repeated copies, each the same transform on from the
+// one before. An older client would build only the first, so it must refuse
+// the document. Builds on v136.
 // v141 adds S05 curved tangency (a `tangent` constraint between an arc and
 // another arc or a circle, at an arc end): what a fillet against an arc or
 // circle records. An older client refuses a tangent without a line, so it
-// must refuse the document. Builds on v136; v137 is claimed by #1900 (M10)
-// and v138 to v140 by the S07 entity lock and the S05 pattern relation and
-// offset dimension.
+// must refuse the document. Builds on v137; v138 to v140 are claimed by the
+// S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 141 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
@@ -2453,6 +2456,19 @@ export function isTransformCopy(data: FeatureData): data is Extract<
 }
 
 /**
+ * M10 (schema v137): the further copies a linked transform copy stamps after
+ * its first, in stamp order. Empty for every other feature.
+ */
+export function transformStampBodyIds(data: FeatureData): BodyId[] {
+  return data.featureKind === 'transform' && data.copy === true
+    ? (data.stampBodyIds ?? [])
+    : [];
+}
+
+/** M10: most copies one linked transform copy may stamp, its first included. */
+export const MAX_TRANSFORM_COPY_STAMPS = 50;
+
+/**
  * L15: a published custom-feature script, embedded in each instance so a
  * project is self-contained. A version is immutable: every instance of the
  * same `id` and `version` in a document carries the same `source`, and
@@ -2836,6 +2852,15 @@ export type FeatureData =
        * holds: it rewrites `targetBodyId` and has no body of its own.
        */
       copy?: true;
+      /**
+       * M10 (schema v137), copies only: repeated stamps in one history
+       * step. Each id names one more copy, stamped by the same transform
+       * from the copy before it, so stamp k sits where the transform applied
+       * k + 1 times would put the source. `bodyId` stays the first copy;
+       * absent (or empty) is the single copy every older document holds.
+       * Body wiring, not a parameter: never patchable.
+       */
+      stampBodyIds?: BodyId[];
       /**
        * R01 (schema v28): turn the body `angleDeg` degrees about a datum
        * axis, right-handed about its direction, before `transform` applies

@@ -1,5 +1,9 @@
 import { Check, LocateFixed, Spline, SlidersHorizontal, X } from 'lucide-react';
-import { displayLengthName, type UnitSystem } from '@openzcad/shared';
+import {
+  displayLengthName,
+  MAX_TRANSFORM_COPY_STAMPS,
+  type UnitSystem
+} from '@openzcad/shared';
 import { moveHasFiniteValues } from '../lib/moveCard';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 
@@ -49,6 +53,18 @@ interface MoveOverlayProps {
    */
   copy?: boolean;
   onCopy?(value: boolean): void;
+  /**
+   * M10: how many copies Done stamps, each the same move on from the one
+   * before. Offered only while `copy` is on.
+   */
+  stamps?: number;
+  onStamps?(value: number): void;
+  /**
+   * M10: whether repeated stamps land as one linked History step (true) or
+   * one step each (false).
+   */
+  linked?: boolean;
+  onLinked?(value: boolean): void;
   /**
    * M10: Move by two points. `picking` is null while off; otherwise what the
    * first pick snapped to (`from`), or null before it.
@@ -161,6 +177,44 @@ function MoveNumberInput({
   );
 }
 
+/**
+ * The Copies count: a whole number from 1 to the most one copy stamps. Like
+ * the move fields, it holds a half-typed entry until it is a valid count.
+ */
+function StampCountInput({
+  value,
+  onValue
+}: {
+  value: number;
+  onValue(next: number): void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input
+      type="number"
+      min={1}
+      max={MAX_TRANSFORM_COPY_STAMPS}
+      step={1}
+      value={draft ?? value}
+      aria-label="Copies"
+      onChange={(event) => {
+        const raw = event.target.value;
+        setDraft(raw);
+        const next = Number(raw);
+        if (
+          raw.trim() !== '' &&
+          Number.isInteger(next) &&
+          next >= 1 &&
+          next <= MAX_TRANSFORM_COPY_STAMPS
+        ) {
+          onValue(next);
+        }
+      }}
+      onBlur={() => setDraft(null)}
+    />
+  );
+}
+
 export function MoveOverlay({
   bodyName,
   values: committedValues,
@@ -177,6 +231,10 @@ export function MoveOverlay({
   onTargetBody,
   copy,
   onCopy,
+  stamps,
+  onStamps,
+  linked,
+  onLinked,
   pointPick,
   onPointPick,
   pivot,
@@ -300,7 +358,11 @@ export function MoveOverlay({
           </>
         ) : (
           <>
-            {copy ? 'A copy of ' : ''}
+            {copy
+              ? (stamps ?? 1) > 1
+                ? `${stamps} copies of `
+                : 'A copy of '
+              : ''}
             <span className="move-target-name">{bodyName}</span> ·{' '}
             {hideRotation ? 'drag the arrows' : 'drag the arrows or rings'} ·
             Shift moves freely
@@ -445,6 +507,22 @@ export function MoveOverlay({
                 onChange={(event) => onCopy(event.target.checked)}
               />
               <span>Keep original</span>
+            </label>
+          ) : null}
+          {copy && onStamps ? (
+            <label className="field transform-stamps">
+              <span>Copies</span>
+              <StampCountInput value={stamps ?? 1} onValue={onStamps} />
+            </label>
+          ) : null}
+          {copy && (stamps ?? 1) > 1 && onLinked ? (
+            <label className="field transform-copy transform-stamps-linked">
+              <input
+                type="checkbox"
+                checked={linked !== false}
+                onChange={(event) => onLinked(event.target.checked)}
+              />
+              <span>Link copies (one History step)</span>
             </label>
           ) : null}
         </div>

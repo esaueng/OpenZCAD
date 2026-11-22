@@ -340,6 +340,7 @@ import {
 } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import { snapRecordsExactly } from '../lib/measurePointKinds';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
@@ -1644,6 +1645,11 @@ export interface ModelViewerProps {
       ) => string | null)
     | null;
   /**
+   * M13: the snap kinds a measuring pick may lock onto (a Distance pick
+   * asked for midpoints offers only midpoints); null offers every kind.
+   */
+  measureSnapKinds?: readonly PickSnap['kind'][] | null;
+  /**
    * M10: a host picking model points (Move by two points). While set, a
    * click on the model reports the snapped point (an endpoint, midpoint or
    * centre the glyph names, else the surface point) and selects nothing;
@@ -2741,6 +2747,7 @@ export function ModelViewer({
   onCommentPinClick,
   commentPlacing = false,
   onMeasurePreview,
+  measureSnapKinds,
   onPointPick,
   regionHandle,
   modelPanelsHidden = false,
@@ -3129,6 +3136,8 @@ export function ModelViewer({
   onHoverRegionRef.current = onHoverRegion;
   const onMeasurePreviewRef = useRef(onMeasurePreview);
   onMeasurePreviewRef.current = onMeasurePreview;
+  const measureSnapKindsRef = useRef(measureSnapKinds);
+  measureSnapKindsRef.current = measureSnapKinds;
   const onPointPickRef = useRef(onPointPick);
   onPointPickRef.current = onPointPick;
   const onPickPlaneRef = useRef(onPickPlane);
@@ -3884,29 +3893,35 @@ export function ModelViewer({
           const body = context.renderedBodies?.find(
             (candidate) => candidate.bodyId === preview.bodyId
           );
+          const createCopy = () => {
+            const resolution = context.fatLineResolution();
+            const copy = new THREE.Group();
+            const mesh = createObjectForBody(body!, resolution);
+            const edges = createBodyEdgeOverlay(body!, resolution);
+            edges.setDisplayMode(displayModeRef.current);
+            edges.setTangentEdgeStyle(tangentEdgesRef.current);
+            mesh.add(edges);
+            copy.add(mesh);
+            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
+            return copy;
+          };
           const target = moveCopyPreview.target(
             object,
             !!preview.copy && !!body,
-            () => {
-              const resolution = context.fatLineResolution();
-              const copy = new THREE.Group();
-              const mesh = createObjectForBody(body!, resolution);
-              const edges = createBodyEdgeOverlay(body!, resolution);
-              edges.setDisplayMode(displayModeRef.current);
-              edges.setTangentEdgeStyle(tangentEdgesRef.current);
-              mesh.add(edges);
-              copy.add(mesh);
-              applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
-              return copy;
-            }
+            createCopy
+          );
+          const final = composeMoveTransform(center, translation, rotationDeg);
+          target.rotation.copy(moveEuler(rotationDeg));
+          target.position.set(final.x, final.y, final.z);
+          // M10: a repeated copy shows every stamp, each the same move on.
+          moveCopyPreview.poseStamps(
+            preview.copy && body ? Math.max(0, (preview.stamps ?? 1) - 1) : 0,
+            createCopy
           );
           moveCopyPreview.refreshAppearance(
             displayModeRef.current,
             xrayRef.current
           );
-          const final = composeMoveTransform(center, translation, rotationDeg);
-          target.rotation.copy(moveEuler(rotationDeg));
-          target.position.set(final.x, final.y, final.z);
           // The mesh rotates about its own origin and then translates, so the
           // callout's anchor has to take the same two steps to stay over the
           // body — adding the translation alone would drift it off under any
@@ -3930,6 +3945,9 @@ export function ModelViewer({
       if (E2E_CANVAS_HOOKS_ENABLED) {
         renderer.domElement.dataset.e2eMoveCopyPreview = String(
           moveCopyPreview.active
+        );
+        renderer.domElement.dataset.e2eMoveCopyStamps = String(
+          moveCopyPreview.active ? moveCopyPreview.stampCount + 1 : 0
         );
       }
     }
@@ -5137,8 +5155,26 @@ export function ModelViewer({
       if (!local) {
         return null;
       }
+      const kinds = measureSnapKindsRef.current;
+      const candidates = snapsFromEdges(scoped, { label: body?.name });
+      // A pick that asks for a kind offers only the points it records
+      // exactly: never a spline's sampled midpoint its click would refuse.
+      const byId = kinds
+        ? new Map(scoped.map((edge) => [edge.topologyId, edge]))
+        : null;
       return resolveSnap(
-        snapsFromEdges(scoped, { label: body?.name }),
+        kinds
+          ? candidates.filter((snap) => {
+              const edge = snap.source
+                ? byId!.get(snap.source.edgeTopologyId)
+                : undefined;
+              return (
+                kinds.includes(snap.kind) &&
+                !!edge &&
+                snapRecordsExactly(snap.kind, edge)
+              );
+            })
+          : candidates,
         local,
         (point) =>
           projectToScreen(

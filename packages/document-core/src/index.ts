@@ -79,6 +79,7 @@ import {
   assertWrapSchema,
   assertStandardPartSchema,
   assertPatternContentSchema,
+  assertTransformStampsSchema,
   assertHoleContentSchema,
   assertSketchObjectContentSchema,
   assertThreadContentSchema
@@ -132,7 +133,8 @@ import {
   type PatternPoints,
   type HolePoints,
   type HoleStandard,
-  type HoleTapped
+  type HoleTapped,
+  MAX_TRANSFORM_COPY_STAMPS
 } from '@openzcad/shared';
 import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
@@ -616,11 +618,56 @@ export interface TransformInput {
   copy?: boolean;
   /** Name of the copy's body; defaults to a numbered "<source> copy" name. */
   bodyName?: string;
+  /**
+   * M10 (schema v137), copies only: how many copies one step stamps, each
+   * the same transform on from the one before. Omitted or 1 is one copy.
+   */
+  stamps?: number;
+  /**
+   * The identities of the stamps after the first, in order; one per extra
+   * stamp. The command fills them so replay recreates the same BodyIds.
+   */
+  stampIds?: TransformStampIds[];
   /** R01 (schema v28): first turn the body about an earlier datum axis. */
   axisRotation?: { axis: DatumAxisRef; angleDeg: ParamValue };
   /** R01 (schema v99): see the transform `FeatureData`. */
   csysAlign?: { from?: DatumCsysRef; to: DatumCsysRef };
   ids?: FeatureOnlyIds | BodyFeatureIds;
+}
+
+/** M10: one further stamp of a linked transform copy. */
+export interface TransformStampIds {
+  bodyId: BodyId;
+  bodyNodeId: EntityId;
+}
+
+/** Fresh identities for the `count - 1` stamps after a copy's first. */
+export function createTransformStampIds(count: number): TransformStampIds[] {
+  return Array.from({ length: Math.max(0, count - 1) }, () => ({
+    bodyId: toBodyId(createId('body')),
+    bodyNodeId: toEntityId(createId('ent'))
+  }));
+}
+
+/**
+ * Why a stamp count cannot be stored, or null. Counted with the first copy,
+ * as a whole number from 1 to `MAX_TRANSFORM_COPY_STAMPS`; more than one
+ * only on a copy, since an in-place Move has no copies to repeat.
+ */
+export function transformStampsProblem(
+  stamps: number | undefined,
+  copy: boolean | undefined
+): string | null {
+  if (stamps === undefined) return null;
+  if (
+    !Number.isInteger(stamps) ||
+    stamps < 1 ||
+    stamps > MAX_TRANSFORM_COPY_STAMPS
+  )
+    return `Copies must be a whole number from 1 to ${MAX_TRANSFORM_COPY_STAMPS}.`;
+  if (stamps > 1 && copy !== true)
+    return 'Only a copy can stamp repeated copies.';
+  return null;
 }
 
 export interface MirrorInput {
@@ -4487,6 +4534,11 @@ export function transformBody(
     ...(input.pivot !== undefined ? { pivot: deepClone(input.pivot) } : {})
   };
   validateCsysAlign(document, input.csysAlign, null);
+  const stampsProblem = transformStampsProblem(input.stamps, input.copy);
+  if (stampsProblem) throw new Error(stampsProblem);
+  // A document that declares an older schema cannot hold stamps: it would
+  // be refused the next time it opened.
+  assertTransformStampsSchema(input, document.schemaVersion);
   if (input.copy) {
     return transformCopyBody(document, input, transform);
   }
@@ -4567,14 +4619,32 @@ function transformCopyBody(
       ? supplied
       : { ...createBodyFeatureIds(), ...supplied };
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
-  if (document.bodyOrder.includes(bodyId)) {
-    throw new Error(`Copy result body ${bodyId} already exists.`);
+  const stampCount = input.stamps ?? 1;
+  // Supplied identities (a command, a replay) must name every stamp, or each
+  // replay would mint different BodyIds for stamps a later feature targets.
+  if (supplied && stampCount > 1 && !input.stampIds) {
+    throw new Error('A copy needs one identity for each further stamp.');
+  }
+  const stampIds = input.stampIds ?? createTransformStampIds(stampCount);
+  if (stampIds.length !== stampCount - 1) {
+    throw new Error('A copy needs one identity for each further stamp.');
+  }
+  const bodyIds = [bodyId, ...stampIds.map((stamp) => stamp.bodyId)];
+  const nodeIds = [
+    featureNodeId,
+    bodyNodeId,
+    ...stampIds.map((stamp) => stamp.bodyNodeId)
+  ];
+  for (const id of bodyIds) {
+    if (document.bodyOrder.includes(id)) {
+      throw new Error(`Copy result body ${id} already exists.`);
+    }
   }
   if (
     document.featureOrder.includes(featureId) ||
-    ownEntry(document.nodes, featureNodeId) !== undefined ||
-    ownEntry(document.nodes, bodyNodeId) !== undefined ||
-    featureNodeId === bodyNodeId
+    nodeIds.some((id) => ownEntry(document.nodes, id) !== undefined) ||
+    new Set(nodeIds).size !== nodeIds.length ||
+    new Set(bodyIds).size !== bodyIds.length
   ) {
     throw new Error('Copy identifiers must be new and distinct.');
   }
@@ -4593,6 +4663,9 @@ function transformCopyBody(
       targetBodyId: input.targetBodyId,
       transform,
       copy: true,
+      ...(stampIds.length
+        ? { stampBodyIds: stampIds.map((stamp) => stamp.bodyId) }
+        : {}),
       ...axisRotationField(input),
       ...csysAlignField(input)
     }
@@ -4606,18 +4679,17 @@ function transformCopyBody(
     sourceFeature?.featureKind
   );
   const sourceOpacity = source?.metadata?.[BODY_OPACITY_METADATA_KEY];
-  next.nodes[bodyNodeId] = {
-    id: bodyNodeId,
+  const copyNode = (
+    id: EntityId,
+    ownBodyId: BodyId,
+    name: string
+  ): BodyNode => ({
+    id,
     kind: 'body',
-    name:
-      input.bodyName ??
-      numberedBodyName(
-        document,
-        `${derivedBodyName(document, input.targetBodyId, input.name)} copy`
-      ),
+    name,
     parentId: next.activePartId,
     revisionId: null,
-    bodyId,
+    bodyId: ownBodyId,
     featureId,
     bodyType: 'solid',
     representationSource: 'brep',
@@ -4631,10 +4703,32 @@ function transformCopyBody(
         ? { [BODY_OPACITY_METADATA_KEY]: sourceOpacity }
         : {})
     }
-  };
+  });
+  const firstName =
+    input.bodyName ??
+    numberedBodyName(
+      document,
+      `${derivedBodyName(document, input.targetBodyId, input.name)} copy`
+    );
+  next.nodes[bodyNodeId] = copyNode(bodyNodeId, bodyId, firstName);
+  // Each further stamp takes the next free number on the first copy's stem,
+  // so "Box copy 1", "Box copy 2", "Box copy 3" read in stamp order.
+  const stem = firstName.replace(/\s[1-9]\d*$/, '');
+  for (const stamp of stampIds) {
+    next.nodes[stamp.bodyNodeId] = copyNode(
+      stamp.bodyNodeId,
+      stamp.bodyId,
+      numberedBodyName(next, stem)
+    );
+  }
   next.featureOrder.push(featureId);
-  next.bodyOrder.push(bodyId);
-  attachToPart(next, featureNodeId, bodyNodeId);
+  next.bodyOrder.push(...bodyIds);
+  attachToPart(
+    next,
+    featureNodeId,
+    bodyNodeId,
+    ...stampIds.map((stamp) => stamp.bodyNodeId)
+  );
   next.version += 1;
   return { document: next, bodyId };
 }

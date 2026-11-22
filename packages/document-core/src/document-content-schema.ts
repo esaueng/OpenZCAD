@@ -62,6 +62,24 @@ export function hasDatumPointCsysContent(value: unknown): boolean {
   return false;
 }
 
+/**
+ * M10 linked copy stamps (schema v137): a transform copy, or the command
+ * that makes one, stamping more than one copy. An older reader would build
+ * only the first copy and lose the rest.
+ */
+export function assertTransformStampsSchema(
+  data: unknown,
+  version: unknown
+): void {
+  if (!record(data)) return;
+  if (
+    (Array.isArray(data.stampBodyIds) && data.stampBodyIds.length > 0) ||
+    (typeof data.stamps === 'number' && data.stamps > 1) ||
+    (Array.isArray(data.stampIds) && data.stampIds.length > 0)
+  )
+    assertMinimumProjectSchema(version, 137, 'Repeated copy stamps');
+}
+
 /** M06 ribs (schema v106). */
 export function assertRibSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 101, 'Ribs');
@@ -1113,6 +1131,8 @@ export function assertDocumentContentCommandSchema(
       assertCustomFeatureSchema(document.schemaVersion);
     if (command.kind === 'feature.pattern')
       assertPatternContentSchema(command.payload, document.schemaVersion);
+    if (command.kind === 'feature.transform')
+      assertTransformStampsSchema(command.payload, document.schemaVersion);
     if (command.kind === 'feature.hole')
       assertHoleContentSchema(command.payload, document.schemaVersion);
     // A hole patch names its kind (the History edit sends the whole data).
@@ -1485,6 +1505,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertCustomFeatureSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'pattern')
       assertPatternContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'transform')
+      assertTransformStampsSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'hole')
       assertHoleContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')

@@ -9,6 +9,8 @@ import type { DisplayMode } from '../types';
 export class MoveCopyPreview {
   private source: THREE.Object3D | null = null;
   private copy: THREE.Object3D | null = null;
+  /** M10: the further stamps of a repeated copy, after the first. */
+  private stampObjects: THREE.Object3D[] = [];
 
   get active(): boolean {
     return !!this.copy?.parent;
@@ -41,6 +43,43 @@ export class MoveCopyPreview {
     return this.copy!;
   }
 
+  /**
+   * M10: show `count` further stamps of the copy, each the copy's pose
+   * applied once more, as the build stamps them. Call after posing the copy.
+   */
+  poseStamps(count: number, createCopy: () => THREE.Object3D): void {
+    const copy = this.copy;
+    if (!copy || !this.source) count = 0;
+    while (this.stampObjects.length > count) {
+      const stamp = this.stampObjects.pop()!;
+      stamp.removeFromParent();
+      disposeObject(stamp);
+    }
+    if (!copy) return;
+    while (this.stampObjects.length < count) {
+      const stamp = createCopy();
+      stamp.traverse((child) => {
+        child.raycast = () => undefined;
+      });
+      stamp.matrixAutoUpdate = false;
+      copy.parent?.add(stamp);
+      this.stampObjects.push(stamp);
+    }
+    copy.updateMatrix();
+    const step = copy.matrix;
+    const pose = step.clone();
+    for (const stamp of this.stampObjects) {
+      pose.premultiply(step);
+      stamp.matrix.copy(pose);
+      stamp.matrixWorldNeedsUpdate = true;
+    }
+  }
+
+  /** How many further stamps are on screen (for tests and e2e hooks). */
+  get stampCount(): number {
+    return this.stampObjects.length;
+  }
+
   /** Match the installed source without replacing the cached copy or its pose. */
   refreshAppearance(mode: DisplayMode, xray: boolean): void {
     if (!this.source || !this.copy) return;
@@ -48,19 +87,26 @@ export class MoveCopyPreview {
     forEachMesh(this.source, (mesh) => {
       opacity = mesh.material.opacity;
     });
-    forEachMesh(this.copy, (mesh) => {
-      updateBodyMaterialOpacity(mesh.material, opacity);
-      mesh.material.visible = mode !== 'wireframe' || xray;
-    });
-    this.copy.traverse((child) => {
-      if (child instanceof BodyEdgeOverlay) {
-        child.setDisplayMode(mode);
-        child.setXrayView(xray);
-      }
-    });
+    for (const shown of [this.copy, ...this.stampObjects]) {
+      forEachMesh(shown, (mesh) => {
+        updateBodyMaterialOpacity(mesh.material, opacity);
+        mesh.material.visible = mode !== 'wireframe' || xray;
+      });
+      shown.traverse((child) => {
+        if (child instanceof BodyEdgeOverlay) {
+          child.setDisplayMode(mode);
+          child.setXrayView(xray);
+        }
+      });
+    }
   }
 
   clear(): void {
+    for (const stamp of this.stampObjects) {
+      stamp.removeFromParent();
+      disposeObject(stamp);
+    }
+    this.stampObjects = [];
     this.copy?.removeFromParent();
     if (this.copy) disposeObject(this.copy);
     if (this.source) delete this.source.userData.moveCopyPreview;

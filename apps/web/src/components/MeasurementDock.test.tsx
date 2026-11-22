@@ -62,6 +62,33 @@ function renderDock(
 }
 
 describe('MeasurementDock', () => {
+  it('offers a point kind only in Distance and says what each pick records (M13)', () => {
+    const onPointKind = vi.fn();
+    const { rerender, props } = renderDock({ onPointKind });
+    expect(screen.queryByRole('group', { name: 'Point to pick' })).toBeNull();
+    rerender(<MeasurementDock {...props} mode="distance" />);
+    const kinds = screen.getByRole('group', { name: 'Point to pick' });
+    expect(
+      Array.from(kinds.querySelectorAll('button')).map((b) => b.textContent)
+    ).toEqual(['Auto', 'Endpoint', 'Midpoint', 'Center', 'Centroid']);
+    expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Midpoint' }));
+    expect(onPointKind).toHaveBeenLastCalledWith('midpoint');
+    rerender(
+      <MeasurementDock {...props} mode="distance" pointKind="midpoint" />
+    );
+    expect(screen.getByRole('button', { name: 'Midpoint' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(
+      screen.getByText('Pick two targets. Each records its midpoint.')
+    ).toBeVisible();
+  });
+
   it('marks saved rows updating and disables copies and CSV while analysis is pending', () => {
     vi.useFakeTimers();
     const { props, container } = renderDock({ geometryPending: true });

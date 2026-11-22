@@ -108,6 +108,15 @@ export interface SketchSolveStatus {
   definedObjectIds?: string[];
   /** Constraints with measurable residuals, if the solver named any. */
   conflictingConstraintIds?: string[];
+  /**
+   * S03: the entities held solves showed can still move, with how many
+   * freedoms each keeps; absent until such a reading exists.
+   */
+  freeEntities?: readonly {
+    objectId: string;
+    label: string;
+    freedom: number;
+  }[];
 }
 
 interface SketchToolRailProps {
@@ -175,6 +184,8 @@ interface SketchToolRailProps {
   ): void;
   onDeleteConstraint(constraintId: string): void;
   onSelectConstraintObject(constraintId: string, objectId: string): void;
+  /** S03: select an entity the freedom reading lists as free. */
+  onSelectFreeEntity?(objectId: string): void;
   onSolve(): void;
   onDiagnostics(): void;
   onExtrude(): void;
@@ -755,6 +766,7 @@ export function SketchToolRail({
   onEditConstraint,
   onDeleteConstraint,
   onSelectConstraintObject,
+  onSelectFreeEntity,
   onSolve,
   onDiagnostics,
   onExtrude
@@ -829,6 +841,10 @@ export function SketchToolRail({
     }
   };
   const warning = solveStatus?.tone === 'warn';
+  const freeEntities =
+    solveStatus?.definedState === 'under-defined'
+      ? solveStatus.freeEntities
+      : undefined;
   // Only rows still present in the live sketch can be recovery targets. A
   // refused prospective dimension may have residuals for its uncommitted ID.
   const hasAttributedConflict = constraints.some((item) => item.conflicted);
@@ -839,7 +855,11 @@ export function SketchToolRail({
     : solveStatus?.definedState === 'fully-defined'
       ? 'All sketch geometry is fully constrained.'
       : solveStatus?.definedState === 'under-defined'
-        ? 'Remaining freedom is reported for the whole sketch, not individual entities.'
+        ? freeEntities
+          ? freeEntities.length === 0
+            ? 'The remaining freedom lies in geometry the solver cannot hold on its own, such as a spline.'
+            : `${freeEntities.length === 1 ? 'One entity' : `${freeEntities.length} entities`} can still move; green geometry is fully constrained.`
+          : 'Remaining freedom is reported for the whole sketch, not individual entities.'
         : null;
   const patchSettings = (patch: Partial<AppSettings['sketching']>) =>
     onSettings({ ...settings, ...patch });
@@ -1717,6 +1737,27 @@ export function SketchToolRail({
                 >
                   <strong>{solveStatus.label}</strong>
                   {solveExplanation && <p>{solveExplanation}</p>}
+                  {freeEntities && freeEntities.length > 0 && (
+                    <div
+                      className="sketch-constraint-targets"
+                      role="group"
+                      aria-label="Geometry that can still move"
+                    >
+                      <span>Can still move</span>
+                      {freeEntities.map(({ objectId, label, freedom }) => (
+                        <button
+                          key={objectId}
+                          type="button"
+                          aria-label={`Select free geometry: ${label}, ${freedom} ${freedom === 1 ? 'freedom' : 'freedoms'}`}
+                          aria-pressed={selectedObjectId === objectId}
+                          disabled={solving}
+                          onClick={() => onSelectFreeEntity?.(objectId)}
+                        >
+                          {label} · {freedom} DOF
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
               <ul className="sketch-constraint-list">

@@ -325,6 +325,31 @@ describe('featureValueSummary', () => {
     ).toBe('Mirrored');
   });
 
+  it("counts a linked copy's stamps and leaves other transforms bare (M10)", () => {
+    const transform = (data: Partial<FeatureData>) =>
+      feature({
+        featureKind: 'transform',
+        targetBodyId: 'body_source',
+        transform: {
+          translation: { x: 30, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        },
+        ...data
+      } as FeatureData);
+    expect(
+      featureValueSummary(
+        transform({
+          copy: true,
+          stampBodyIds: ['body_2', 'body_3'] as never
+        }),
+        {},
+        'mm'
+      )
+    ).toBe('× 3 copies');
+    expect(featureValueSummary(transform({ copy: true }), {}, 'mm')).toBeNull();
+    expect(featureValueSummary(transform({}), {}, 'mm')).toBeNull();
+  });
+
   it('summarises a worm by its starts and a worm wheel by its worm', () => {
     const gear = (data: Partial<FeatureData>) =>
       feature({ featureKind: 'gear', ...data } as FeatureData);

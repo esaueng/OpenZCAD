@@ -604,6 +604,11 @@
   padding: 7px 8px 0;
 }
 
+/* M13: the point kind a Distance pick records, one row of five. */
+.measurement-point-kinds {
+  grid-template-columns: repeat(5, 1fr);
+}
+
 .measurement-mode-tabs button,
 .measurement-radial-toggle button {
   min-height: 28px;

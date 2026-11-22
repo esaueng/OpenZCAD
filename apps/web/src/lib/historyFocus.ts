@@ -1,4 +1,4 @@
-import { ownEntry } from '@openzcad/shared';
+import { ownEntry, transformStampBodyIds } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -235,6 +235,8 @@ function lineageTracer(document: ProjectDocument) {
     if (feature.data.featureKind === 'split') {
       creators.set(feature.data.secondBodyId, feature);
     }
+    for (const bodyId of transformStampBodyIds(feature.data))
+      creators.set(bodyId, feature);
   }
   return (reference: FaceTopologyReferenceV5): FaceLineageTrace | null => {
     let current = byId.get(reference.producingFeatureId);
