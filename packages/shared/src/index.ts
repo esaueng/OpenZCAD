@@ -555,6 +555,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+// v151 adds M03 per-vertex fillet radii (`vertexRadii` and `edgeRuns` on a
+// variable-radius fillet): the radius at each end of each selected edge,
+// named by the edge's lineage witness. An older client would round every
+// edge from `radius` to `endRadius`, so it must refuse the document. Builds
+// on v150, which the M01 hole anchor (#1808) claims; v142 and v149, once
+// claimed here, were skipped.
 // v144 adds S07 entity locks (`lock-entity` sketch constraints): a whole
 // line, circle or arc held at a recorded position. An older client cannot
 // solve the relation, so it must refuse the document. Builds on v141; v142
@@ -582,7 +588,7 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // fall back to the vertex mean and drill the hole elsewhere, so it must
 // refuse. Builds on v148 (#1808); v149 is claimed by #1914. First claimed
 // as v118, then v147, and renumbered when later bumps landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 150 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 151 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -822,6 +828,99 @@ export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
     typeof law === 'string' &&
     (VARIABLE_FILLET_LAWS as readonly string[]).includes(law)
   );
+}
+
+/**
+ * M03 (schema v151): the radius a variable-radius fillet reaches at one end
+ * of one selected edge.
+ *
+ * `edge` indexes the feature's `edgeHashes`; `end` names one of that edge's
+ * two witness endpoints (`edgeReferences[…].witness.endpoints`), so the end
+ * is fixed by where the edge was picked, not by the direction the kernel
+ * happens to give it. An end with no entry keeps what `radius` (the edge's
+ * start) or `endRadius` (its end) gives it.
+ * Two selected edges that share a vertex each carry their own entry; the
+ * editor writes the same value to both, and the kernel refuses a corner whose
+ * stripes disagree there.
+ */
+export interface FilletVertexRadius {
+  edge: number;
+  end: 0 | 1;
+  radius: ParamValue;
+}
+
+/*
+ * A fillet that stores `vertexRadii` also stores `edgeRuns`: for each
+ * selected edge, whether the kernel ran it from witness end 0 to end 1 when
+ * the radii were set. A rebuild that finds the edge running the other way
+ * relative to where it was picked (a body turned upstream, or an edge rebuilt
+ * reversed) cannot tell which physical corner each radius belongs to, and is
+ * refused by name rather than guessed.
+ */
+
+/**
+ * Why a fillet's `vertexRadii` cannot be stored, or null when it can: it
+ * needs a variable law (`endRadius`), a lineage reference for every edge it
+ * names, and at most one entry per edge end.
+ */
+export function filletVertexRadiiProblem(data: {
+  edgeHashes: readonly number[];
+  edgeReferences?: readonly { currentHash: number }[];
+  endRadius?: ParamValue;
+  vertexRadii?: unknown;
+  edgeRuns?: unknown;
+}): string | null {
+  const entries = data.vertexRadii;
+  if (entries === undefined) {
+    return data.edgeRuns === undefined
+      ? null
+      : 'Fillet edge directions go only with per-vertex radii.';
+  }
+  if (!Array.isArray(entries) || entries.length === 0)
+    return 'Per-vertex fillet radii must be a non-empty list.';
+  if (data.endRadius === undefined)
+    return 'Per-vertex fillet radii need a variable-radius fillet.';
+  // Entries name edges by position, so the selection must not repeat one
+  // (an edit patch can store a repeated hash that creation would refuse).
+  if (new Set(data.edgeHashes).size !== data.edgeHashes.length)
+    return 'Per-vertex fillet radii need a selection that names each edge once.';
+  const runs = data.edgeRuns;
+  if (
+    !Array.isArray(runs) ||
+    runs.length !== data.edgeHashes.length ||
+    runs.some((run) => typeof run !== 'boolean')
+  )
+    return 'Per-vertex fillet radii need the direction each selected edge ran when they were set.';
+  const seen = new Set<string>();
+  for (const entry of entries as unknown[]) {
+    if (typeof entry !== 'object' || entry === null)
+      return 'Each per-vertex fillet radius must be an object.';
+    const { edge, end, radius } = entry as Record<string, unknown>;
+    if (
+      typeof edge !== 'number' ||
+      !Number.isInteger(edge) ||
+      edge < 0 ||
+      edge >= data.edgeHashes.length
+    )
+      return 'A per-vertex fillet radius names an edge the fillet does not select.';
+    if (end !== 0 && end !== 1)
+      return 'A per-vertex fillet radius must name end 0 or end 1 of its edge.';
+    if (
+      !(typeof radius === 'string' && radius.trim() !== '') &&
+      !(typeof radius === 'number' && Number.isFinite(radius))
+    )
+      return 'A per-vertex fillet radius must be a number or an expression.';
+    const key = `${edge}:${end}`;
+    if (seen.has(key))
+      return 'A per-vertex fillet radius names the same edge end twice.';
+    seen.add(key);
+    const hash = data.edgeHashes[edge];
+    if (
+      !data.edgeReferences?.some((reference) => reference.currentHash === hash)
+    )
+      return 'Per-vertex fillet radii need the lineage reference of each edge they name.';
+  }
+  return null;
 }
 
 /**
@@ -3459,6 +3558,18 @@ export type FeatureData =
        * `endRadius` is present; absent reads as `'linear'`.
        */
       radiusLaw?: VariableFilletLaw;
+      /**
+       * M03 (schema v151): the radius at named ends of the selected edges,
+       * overriding `radius` and `endRadius` there; see
+       * {@link FilletVertexRadius}. Only with `endRadius`.
+       */
+      vertexRadii?: FilletVertexRadius[];
+      /**
+       * M03 (schema v151): for each selected edge, whether the kernel ran it
+       * from witness end 0 to end 1 when `vertexRadii` were set. Present
+       * exactly when `vertexRadii` is.
+       */
+      edgeRuns?: boolean[];
     }
   | {
       featureKind: 'chamfer';

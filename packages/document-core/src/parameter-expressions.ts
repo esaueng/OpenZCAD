@@ -294,6 +294,8 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       return;
     case 'fillet':
       fields(data, ['radius', 'endRadius'], rewrite, 'length');
+      for (const vertex of data.vertexRadii ?? [])
+        fields(vertex, ['radius'], rewrite, 'length');
       return;
     case 'chamfer':
       fields(data, ['distance', 'distance2'], rewrite, 'length');

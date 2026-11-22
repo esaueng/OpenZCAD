@@ -1,6 +1,8 @@
 import {
   documentNodesWithHistory,
+  filletVertexRadiiProblem,
   patternSpacingModeProblem,
+  type FeatureData,
   type PatternKind,
   type ProjectDocument,
   type SketchObjectData
@@ -1279,6 +1281,23 @@ export function assertDocumentContentCommandSchema(
       isOffsetDimension(command.payload.constraint)
     )
       assertOffsetDimensionSchema(document.schemaVersion);
+    // M03: per-vertex fillet radii, created or patched.
+    {
+      const fillet =
+        command.kind === 'feature.fillet'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'fillet')
+            ? command.payload.data
+            : null;
+      if (fillet && fillet.vertexRadii !== undefined)
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          151,
+          'Per-vertex fillet radii'
+        );
+    }
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1320,6 +1339,21 @@ function assertSweepContentSchema(
     assertMinimumProjectSchema(version, 135, 'Round sweep corners');
   if (sweep.profilePosition !== undefined)
     assertMinimumProjectSchema(version, 136, 'Sweep profile position');
+}
+
+/**
+ * M03 (schema v151): a stored fillet's per-vertex radii need the version and
+ * a well-formed list (a variable law, a reference for each named edge, one
+ * entry per edge end).
+ */
+export function assertFilletContentSchema(
+  data: Extract<FeatureData, { featureKind: 'fillet' }>,
+  version: unknown
+): void {
+  if (data.vertexRadii === undefined && data.edgeRuns === undefined) return;
+  assertMinimumProjectSchema(version, 151, 'Per-vertex fillet radii');
+  const problem = filletVertexRadiiProblem(data);
+  if (problem) throw new Error(problem);
 }
 
 export function assertDocumentContentSchema(document: ProjectDocument): void {
@@ -1573,6 +1607,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'sweep')
       assertSweepContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'fillet')
+      assertFilletContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
       assertImportedStepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')

@@ -20,6 +20,7 @@ import {
 } from '@openzcad/shared';
 import type { RemusKernel } from './remus-runtime';
 import { KernelRefusal, type KernelRefusalCategory } from './kernel-refusal';
+import { AdapterRefusal } from './adapter-refusal';
 import { GEOMETRY_EPSILON } from './exact-math';
 
 /**
@@ -40,6 +41,110 @@ export interface VariableFilletSpec {
   /** Radius at the far end of the same edge. */
   readonly endRadius: number;
   readonly law: VariableFilletLaw;
+  /**
+   * M03 per-vertex radii: each selected edge's own start and end radius, in
+   * the kernel edge's direction, parallel to the selection. Absent gives
+   * every edge `startRadius`→`endRadius`.
+   */
+  readonly perEdge?: readonly { startRadius: number; endRadius: number }[];
+}
+
+/** An ADR-011 quantized witness point, in document units. */
+function witnessPoint([x, y, z]: readonly [number, number, number]): {
+  x: number;
+  y: number;
+  z: number;
+} {
+  return { x: x * 1e-6, y: y * 1e-6, z: z * 1e-6 };
+}
+
+/**
+ * M03 (schema v151): every selected edge's start and end radius, in the
+ * kernel edge's own direction, from a fillet's per-vertex radii.
+ *
+ * An entry names an end by the edge's stored witness endpoints, which fix
+ * where it was picked, not the direction the kernel builds it in. The
+ * resolved edge's direction is compared with the witness's: the kernel's
+ * start is witness end 0 when they agree and end 1 when they oppose, which
+ * holds through any upstream edit that moves or resizes the edge without
+ * turning it across itself. An edge that now runs across its picked
+ * direction cannot tell its ends apart and is refused by name rather than
+ * guessed. Ends without an entry keep `startRadius` / `endRadius`.
+ */
+export function perEdgeVertexRadii(
+  kernel: Pick<RemusKernel, 'getEdgeVertices'>,
+  selected: readonly number[],
+  data: {
+    edgeHashes: readonly number[];
+    edgeReferences?: readonly {
+      currentHash: number;
+      witness: { closed: boolean; endpoints?: unknown };
+    }[];
+    edgeRuns?: readonly boolean[];
+  },
+  entries: readonly { edge: number; end: 0 | 1; radius: number }[],
+  startRadius: number,
+  endRadius: number
+): { startRadius: number; endRadius: number }[] {
+  const perEdge = selected.map(() => ({ startRadius, endRadius }));
+  for (const entry of entries) {
+    const handle = selected[entry.edge];
+    const reference = data.edgeReferences?.find(
+      (candidate) => candidate.currentHash === data.edgeHashes[entry.edge]
+    );
+    const endpoints = reference?.witness.endpoints as
+      [[number, number, number], [number, number, number]] | undefined;
+    if (
+      handle === undefined ||
+      reference?.witness.closed !== false ||
+      !endpoints
+    ) {
+      throw new AdapterRefusal(
+        'fillet_vertex_radius_unmatched',
+        'A per-vertex fillet radius names an edge end the fillet cannot locate.'
+      );
+    }
+    const ends = Array.from(kernel.getEdgeVertices(handle));
+    const kernelDirection = [
+      ends[3]! - ends[0]!,
+      ends[4]! - ends[1]!,
+      ends[5]! - ends[2]!
+    ];
+    const [w0, w1] = endpoints.map(witnessPoint) as [
+      ReturnType<typeof witnessPoint>,
+      ReturnType<typeof witnessPoint>
+    ];
+    const pickedDirection = [w1.x - w0.x, w1.y - w0.y, w1.z - w0.z];
+    const dot =
+      kernelDirection[0]! * pickedDirection[0]! +
+      kernelDirection[1]! * pickedDirection[1]! +
+      kernelDirection[2]! * pickedDirection[2]!;
+    const scale =
+      Math.hypot(...kernelDirection) * Math.hypot(...pickedDirection);
+    if (!(scale > 0) || Math.abs(dot) <= 1e-6 * scale) {
+      throw new AdapterRefusal(
+        'fillet_vertex_radius_unmatched',
+        'A per-vertex fillet radius names an end of an edge that now runs across the direction it was picked in, so its ends cannot be told apart.'
+      );
+    }
+    // The direction the edge ran when the radii were set must be the one
+    // it runs now relative to where it was picked. A body turned upstream
+    // (180° about an axis) or an edge rebuilt reversed swaps which physical
+    // corner sits at which picked end; that cannot be told apart from
+    // position alone, so it is refused rather than guessed (review).
+    const recorded = data.edgeRuns?.[entry.edge];
+    if (recorded === undefined || recorded !== dot > 0) {
+      throw new AdapterRefusal(
+        'fillet_vertex_radius_unmatched',
+        'A per-vertex fillet radius names an edge that now runs the other way from when its corners were set, so its corners cannot be told apart; set the corner radii again.'
+      );
+    }
+    const kernelStart = dot > 0 ? entry.end === 0 : entry.end === 1;
+    const radii = perEdge[entry.edge]!;
+    if (kernelStart) radii.startRadius = entry.radius;
+    else radii.endRadius = entry.radius;
+  }
+  return perEdge;
 }
 
 export function isQualifiedVariableFilletLaw(
@@ -107,11 +212,11 @@ export function variableFilletRequest(
   spec: VariableFilletSpec
 ): string {
   return JSON.stringify(
-    edges.map((edge) => ({
+    edges.map((edge, index) => ({
       edge,
       law: spec.law,
-      start: spec.startRadius,
-      end: spec.endRadius
+      start: spec.perEdge?.[index]?.startRadius ?? spec.startRadius,
+      end: spec.perEdge?.[index]?.endRadius ?? spec.endRadius
     }))
   );
 }
@@ -128,6 +233,9 @@ export function applyVariableRadiusFillet(
   spec: VariableFilletSpec
 ): number {
   assertQualifiedVariableFillet(spec.law, spec.startRadius, spec.endRadius);
+  for (const radii of spec.perEdge ?? []) {
+    assertQualifiedVariableFillet(spec.law, radii.startRadius, radii.endRadius);
+  }
   return kernel.filletVariable(solid, variableFilletRequest(edges, spec));
 }
 
