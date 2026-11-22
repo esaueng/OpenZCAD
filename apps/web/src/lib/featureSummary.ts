@@ -1,5 +1,6 @@
 import {
   ownEntry,
+  transformStampBodyIds,
   type BooleanOperation,
   type DirectEditOperation,
   type EdgeTopologyReferenceV5,
@@ -567,6 +568,12 @@ export function featureValueSummary(
       return total !== null
         ? `× ${count} over ${total} ${unit}${gap}`
         : `× ${count}${gap}`;
+    }
+    case 'transform': {
+      // M10 (schema v137): a linked copy counts its stamps; any other
+      // transform has no single driving value.
+      const stamps = transformStampBodyIds(data).length;
+      return stamps > 0 ? `× ${stamps + 1} copies` : null;
     }
     default:
       return null;

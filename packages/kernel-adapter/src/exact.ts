@@ -26,7 +26,11 @@ import {
   type IdleLineageView
 } from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
-import { solveAssembly, transformToMatrix4 } from '@openzcad/shared';
+import {
+  solveAssembly,
+  transformStampBodyIds,
+  transformToMatrix4
+} from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
 import {
   beginDirectEditProfile,
@@ -1320,6 +1324,8 @@ function importedExactBodyIds(document: ProjectDocument): Set<BodyId> {
     if (targetIsImported && data.featureKind === 'split') {
       imported.add(data.secondBodyId);
     }
+    if (targetIsImported)
+      for (const bodyId of transformStampBodyIds(data)) imported.add(bodyId);
   }
   return imported;
 }

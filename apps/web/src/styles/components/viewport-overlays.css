@@ -315,6 +315,18 @@
   width: 100%;
 }
 
+/* M10: how many copies a copy stamps, a short count beside its label. */
+.transform-stamps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.transform-stamps input {
+  width: 5em;
+}
+
 /* M10: the pivot handle's toggle rests bare like Cancel and stays lit while
    the gizmo places the pivot. */
 .move-pivot-toggle {

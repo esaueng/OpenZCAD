@@ -187,6 +187,7 @@
   "tool-rail-pins.spec.ts": 5,
   "touch-navigation.spec.ts": 9,
   "touch-targets.spec.ts": 22,
+  "transform-copy.spec.ts": 10,
   "transform-pivot.spec.ts": 10,
   "u11-slotted-plate.spec.ts": 30,
   "upside-down-view-reload.spec.ts": 7,
