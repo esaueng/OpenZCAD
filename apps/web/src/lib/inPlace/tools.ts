@@ -670,7 +670,7 @@ export type InPlaceRequest =
       size: ParamValue;
       endRadius?: ParamValue;
       radiusLaw?: VariableFilletLaw;
-      /** M03 (v149): per-vertex radii, by picked edge and witness end. */
+      /** M03 (v151): per-vertex radii, by picked edge and witness end. */
       vertexRadii?: FilletVertexRadius[];
       /** With `vertexRadii`: how each picked edge ran when they were set. */
       edgeRuns?: boolean[];
@@ -7266,7 +7266,7 @@ export function edgeRefusedInputs(
     if (lawChanged) inputs.push('Radius');
     field('size', 'R');
     if (!lawChanged) field('endRadius', 'End R');
-    // M03 (v149): the corners, as one input; the bar names each R1, R2, …
+    // M03 (v151): the corners, as one input; the bar names each R1, R2, …
     if (!lawChanged && !sameParam(built.vertexRadii, refused.vertexRadii))
       inputs.push('Corner radii');
     return inputs;
@@ -7396,7 +7396,7 @@ const fillet: InPlaceToolSpec = {
       min: 0,
       exclusive: true
     },
-    // M03 (v149): the radius at each picked-edge corner, shown with its
+    // M03 (v151): the radius at each picked-edge corner, shown with its
     // handle there under Radius at: Each corner.
     ...Array.from({ length: FILLET_VERTEX_SLOTS }, (_, index) => ({
       id: filletVertexValueId(index),
@@ -7424,7 +7424,7 @@ const fillet: InPlaceToolSpec = {
       initial: 'constant'
     },
     {
-      // M03 (v149): a variable radius set at each corner of the picked
+      // M03 (v151): a variable radius set at each corner of the picked
       // edges, instead of at each edge's start and end.
       id: 'radiusAt',
       label: 'Radius at',

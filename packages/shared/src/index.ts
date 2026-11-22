@@ -555,13 +555,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
-// v149 adds M03 per-vertex fillet radii (`vertexRadii` and `edgeRuns` on a
+// v151 adds M03 per-vertex fillet radii (`vertexRadii` and `edgeRuns` on a
 // variable-radius fillet): the radius at each end of each selected edge,
 // named by the edge's lineage witness. An older client would round every
 // edge from `radius` to `endRadius`, so it must refuse the document. Builds
-// on v148 (#1915 on main); v146 and v150 are claimed by the S05 offset
-// dimension (#1919) and the M01 hole anchor (#1808). v142, once claimed
-// here, was skipped on main.
+// on v150, which the M01 hole anchor (#1808) claims; v142 and v149, once
+// claimed here, were skipped.
 // v144 adds S07 entity locks (`lock-entity` sketch constraints): a whole
 // line, circle or arc held at a recorded position. An older client cannot
 // solve the relation, so it must refuse the document. Builds on v141; v142
@@ -582,7 +581,7 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // unit while the user reads another, so it must refuse the document. Builds
 // on v145; v146 and v147 are claimed by the S05 offset dimension (#1919)
 // and the M01 hole anchor (#1808), v142 and v144 by #1914 and #1913.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 149 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 151 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -825,7 +824,7 @@ export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
 }
 
 /**
- * M03 (schema v149): the radius a variable-radius fillet reaches at one end
+ * M03 (schema v151): the radius a variable-radius fillet reaches at one end
  * of one selected edge.
  *
  * `edge` indexes the feature's `edgeHashes`; `end` names one of that edge's
@@ -3545,13 +3544,13 @@ export type FeatureData =
        */
       radiusLaw?: VariableFilletLaw;
       /**
-       * M03 (schema v149): the radius at named ends of the selected edges,
+       * M03 (schema v151): the radius at named ends of the selected edges,
        * overriding `radius` and `endRadius` there; see
        * {@link FilletVertexRadius}. Only with `endRadius`.
        */
       vertexRadii?: FilletVertexRadius[];
       /**
-       * M03 (schema v149): for each selected edge, whether the kernel ran it
+       * M03 (schema v151): for each selected edge, whether the kernel ran it
        * from witness end 0 to end 1 when `vertexRadii` were set. Present
        * exactly when `vertexRadii` is.
        */

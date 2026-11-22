@@ -59,7 +59,7 @@ function witnessPoint([x, y, z]: readonly [number, number, number]): {
 }
 
 /**
- * M03 (schema v149): every selected edge's start and end radius, in the
+ * M03 (schema v151): every selected edge's start and end radius, in the
  * kernel edge's own direction, from a fillet's per-vertex radii.
  *
  * An entry names an end by the edge's stored witness endpoints, which fix

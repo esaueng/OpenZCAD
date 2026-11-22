@@ -253,7 +253,7 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('R 1–2.5 mm');
-    // M03 (v149): a per-corner fillet reads its corners' range.
+    // M03 (v151): a per-corner fillet reads its corners' range.
     expect(
       featureValueSummary(
         feature({

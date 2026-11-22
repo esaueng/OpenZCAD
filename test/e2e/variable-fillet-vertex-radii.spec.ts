@@ -14,7 +14,7 @@ import {
 } from './openzcad-fixtures';
 
 /**
- * M03 per-vertex radius controls (schema v149): a variable fillet whose
+ * M03 per-vertex radius controls (schema v151): a variable fillet whose
  * radius is set at each corner of the picked edge. The edge is picked on the
  * canvas, Radius: Linear and Radius at: Each corner are chosen, and one
  * corner's arrow is dragged. The saved fillet stores the dragged corner's
@@ -72,7 +72,7 @@ async function choose(bar: Locator, choice: string) {
 }
 
 test(
-  'a corner arrow dragged on a picked edge sets that corner radius (M03, v149)',
+  'a corner arrow dragged on a picked edge sets that corner radius (M03, v151)',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(180_000);

@@ -61,12 +61,12 @@ describe('edge modifier edit command', () => {
     });
     expect(command.payload).toMatchObject({
       data: { radius: 1, endRadius: 3, radiusLaw: 'scurve' },
-      // M03 (v149): Start and end drops corners an earlier edit stored.
+      // M03 (v151): Start and end drops corners an earlier edit stored.
       clearData: ['vertexRadii', 'edgeRuns']
     });
   });
 
-  it('carries per-vertex radii and clears nothing (M03, v149)', () => {
+  it('carries per-vertex radii and clears nothing (M03, v151)', () => {
     const vertexRadii = [{ edge: 0, end: 0 as const, radius: 2 }];
     const command = edgeModifierCommand(feature, 'fillet', {
       name: 'Fillet edges',

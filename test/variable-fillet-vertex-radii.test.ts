@@ -21,7 +21,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * M03 per-vertex radius controls (schema v149): a variable-radius fillet's
+ * M03 per-vertex radius controls (schema v151): a variable-radius fillet's
  * radius at each end of each selected edge, named by the end where the edge
  * was picked (its witness endpoint), not by the kernel's edge direction.
  */
@@ -135,7 +135,7 @@ async function roundWith(radii: FilletVertexRadius[], edgeIndexOf?: number) {
   }
 }
 
-describe('per-vertex fillet radii (M03, v149)', { timeout: 120_000 }, () => {
+describe('per-vertex fillet radii (M03, v151)', { timeout: 120_000 }, () => {
   it('rounds each end of the edge at the radius set at that end', async () => {
     for (const [r0, r1] of [
       [1, 3],
@@ -181,7 +181,7 @@ describe('per-vertex fillet radii (M03, v149)', { timeout: 120_000 }, () => {
     expect(after!.volume).toBeCloseTo(BOX - (CORNER * LENGTH * 7) / 3, 3);
   });
 
-  it('refuses a malformed list at creation and on load, and needs v149', async () => {
+  it('refuses a malformed list at creation and on load, and needs v151', async () => {
     const { document, bodyId } = boxDocument();
     const adapter = await createExactKernelAdapter();
     let edge: EdgeTopology;

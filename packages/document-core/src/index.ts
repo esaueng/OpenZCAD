@@ -881,12 +881,12 @@ export interface EdgeModifierInput {
   /** Fillet only: read only with `endRadius`; absent reads as 'linear'. */
   radiusLaw?: VariableFilletLaw;
   /**
-   * Fillet only (M03, schema v149): the radius at named ends of the selected
+   * Fillet only (M03, schema v151): the radius at named ends of the selected
    * edges; see `FilletVertexRadius`. Needs `endRadius` and `edgeReferences`.
    */
   vertexRadii?: FilletVertexRadius[];
   /**
-   * Fillet only (M03, schema v149), with `vertexRadii`: whether each selected
+   * Fillet only (M03, schema v151), with `vertexRadii`: whether each selected
    * edge ran from its witness end 0 to end 1 when the radii were set.
    */
   edgeRuns?: boolean[];
@@ -5488,7 +5488,7 @@ export function filletEdges(
     if (problem) throw new Error(problem);
     assertMinimumProjectSchema(
       document.schemaVersion,
-      149,
+      151,
       'Per-vertex fillet radii'
     );
   }
@@ -7060,14 +7060,14 @@ export function updateFeature(
     if (feature.featureKind === 'hole') {
       assertHoleContentSchema(input.data, document.schemaVersion);
     }
-    // M03 (v149): a patch may not add per-vertex radii to an older document.
+    // M03 (v151): a patch may not add per-vertex radii to an older document.
     if (
       feature.featureKind === 'fillet' &&
       (input.data as { vertexRadii?: unknown }).vertexRadii !== undefined
     ) {
       assertMinimumProjectSchema(
         document.schemaVersion,
-        149,
+        151,
         'Per-vertex fillet radii'
       );
     }
@@ -7137,7 +7137,7 @@ export function updateFeature(
     validateKeepOriginals(feature.data);
     separateKeptResultName(next, feature);
   } else if (feature.data.featureKind === 'fillet') {
-    // M03 (v149): per-vertex radii go with the variable law; a patch that
+    // M03 (v151): per-vertex radii go with the variable law; a patch that
     // returns the fillet to a constant radius drops them.
     if (feature.data.endRadius === undefined) delete feature.data.vertexRadii;
     if (feature.data.vertexRadii === undefined) delete feature.data.edgeRuns;
