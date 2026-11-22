@@ -45,7 +45,36 @@ function Harness() {
   );
 }
 
+function TabbedModal() {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalFocus(dialogRef, { autoFocus: true });
+  return (
+    <div ref={dialogRef} role="dialog" aria-label="Tabbed" tabIndex={-1}>
+      <button type="button">First</button>
+      <div>
+        <button type="button">Last visible</button>
+      </div>
+      <div hidden>
+        <button type="button">In hidden panel</button>
+      </div>
+    </div>
+  );
+}
+
 describe('useModalFocus', () => {
+  // PR 1916 review: the share dialog keeps its inactive tab mounted but
+  // hidden, and the trap aimed its wrap at a control in it.
+  it('wraps Tab past controls inside a hidden panel', async () => {
+    const user = userEvent.setup();
+    render(<TabbedModal />);
+    const first = screen.getByRole('button', { name: 'First' });
+    await waitFor(() => expect(first).toHaveFocus());
+    await user.tab({ shift: true });
+    expect(screen.getByRole('button', { name: 'Last visible' })).toHaveFocus();
+    await user.tab();
+    expect(first).toHaveFocus();
+  });
+
   it('captures the opener before focusing, inerts the background, and restores focus', async () => {
     const user = userEvent.setup();
     render(

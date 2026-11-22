@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { Globe } from 'lucide-react';
-import type { ProjectDocument, ProjectShareLinkMode } from '@openzcad/shared';
-import { StableLabel } from './StableLabel';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Plus } from 'lucide-react';
+import type { ProjectDocument } from '@openzcad/shared';
 import {
-  SHARE_LINK_NO_HISTORY_HINT,
-  SHARE_LINK_MODE_HINT,
-  ShareLinkModePicker
-} from './ShareLinkModePicker';
+  ShareLinkCard,
+  ShareLinkComposer,
+  ShareLinkCopyButton,
+  ShareLinkFacts,
+  writeClipboard,
+  type ShareLinkDraft
+} from './ShareLinkCard';
 import { ShareLinkRevokeConfirm } from './ShareLinkRevokeConfirm';
 import type { ShareLinkUpkeep } from '../lib/e2ee/shareLinks';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
@@ -365,10 +367,27 @@ const message = (caught: unknown) =>
     ? caught.message
     : 'Something went wrong. Try again.';
 
+/** What the Links tab's label says of the links: how many, and whether one needs the owner. */
+export interface EncryptedShareLinksSummary {
+  readonly count: number;
+  readonly attention: boolean;
+  /**
+   * A problem the owner must read wherever the dialog opens, such as a
+   * revoked link the server may still serve.
+   */
+  readonly problem?: string | null;
+}
+
+/** A link's status and comments, for its card's summary (its name says the mode). */
+function linkSummary(row: EncryptedShareLinkRow): string {
+  return `${expiryText(row)}${row.comments ? ' · Visitors can comment' : ''}`;
+}
+
 export function EncryptedShareLinks({
   projectId,
   client = pageEncryptedShareLinkClient,
-  onFreezeModel
+  onFreezeModel,
+  onSummary
 }: {
   projectId: string;
   client?: EncryptedShareLinkClient;
@@ -377,27 +396,24 @@ export function EncryptedShareLinks({
    * the option to leave history out is not offered.
    */
   onFreezeModel?(): Promise<ProjectDocument>;
+  /** Reports the link count and whether a link needs the owner. */
+  onSummary?(summary: EncryptedShareLinksSummary): void;
 }) {
   const [state, setState] = useState<EncryptedShareLinksState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
-  // What the next link lets its visitors do; Tweak includes View.
-  const [mode, setMode] = useState<ProjectShareLinkMode>('view');
-  // L08: whether the next link shares the project's history.
-  const [includeHistory, setIncludeHistory] = useState(true);
-  const withoutHistory = Boolean(onFreezeModel) && !includeHistory;
-  // The mode of the link in the output: the picker may have moved on.
+  // The mode of the link in the output.
   const [createdMode, setCreatedMode] =
     useState<EncryptedShareLinkMode>('view');
-  const detailId = useId();
-  // L08: whether the next link's visitors may comment (plan decision 3a).
-  const [withComments, setWithComments] = useState(false);
+  // The new-link card is open (it always is while there are no links).
+  const [composing, setComposing] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   // The link whose Revoke is waiting for a yes (design review I2).
   const [revokingId, setRevokingId] = useState<string | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
-  // The confirmation was asked for by Create link, which finishes after it.
+  // The new link Create link asked for, made once sharing is confirmed.
+  const pendingDraft = useRef<ShareLinkDraft | null>(null);
   const [createAfterConfirm, setCreateAfterConfirm] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
   const [transientRemoval, setTransientRemoval] = useState<{
@@ -504,10 +520,12 @@ export function EncryptedShareLinks({
     }
   };
 
-  const createLink = async () => {
+  const createLink = async (draft: ShareLinkDraft) => {
     setCreated(null);
-    setCopied(null);
-    const linkMode: EncryptedShareLinkMode = withoutHistory ? 'frozen' : mode;
+    const withoutHistory = Boolean(onFreezeModel) && !draft.history;
+    const linkMode: EncryptedShareLinkMode = withoutHistory
+      ? 'frozen'
+      : draft.mode;
     // L08: frozen in this browser first, so a model that cannot be frozen
     // makes no link at all.
     const frozenDocument =
@@ -516,30 +534,26 @@ export function EncryptedShareLinks({
       (frozenDocument
         ? await client.create(projectId, 'frozen', {
             frozenDocument,
-            ...(withComments ? { comments: true } : {})
+            ...(draft.comments ? { comments: true } : {})
           })
-        : withComments
+        : draft.comments
           ? await client.create(projectId, linkMode, { comments: true })
           : await client.create(projectId, linkMode)
       ).url
     );
     setCreatedMode(linkMode);
+    setComposing(false);
   };
   // Inside the confirmation's own run: a refused confirmation creates nothing.
   const finishConfirm = async () => {
-    if (!createAfterConfirm) return;
+    const draft = pendingDraft.current;
+    if (!createAfterConfirm || !draft) return;
     setCreateAfterConfirm(false);
-    await createLink();
+    pendingDraft.current = null;
+    await createLink(draft);
   };
 
-  const copy = async (url: string, key: string) => {
-    try {
-      await navigator.clipboard.writeText(url);
-      setCopied(key);
-    } catch {
-      setCopied(null);
-    }
-  };
+  const copy = async (url: string) => writeClipboard(url);
 
   const links = state?.links ?? [];
   const transient =
@@ -572,96 +586,75 @@ export function EncryptedShareLinks({
   // it hold the other controls: a refresh that finds the confirmation
   // (in any order with the action that made it) frees them.
   const awaitingConfirmation = confirming && !!state?.needsConfirmation;
+  const showRemoval =
+    Boolean(transient || state?.removalNotice) && removalLinks.length > 0;
+  const showRetired = !!state && state.retired.length > 0;
+  const showComposer = composing || (links.length === 0 && !created);
+
+  // The Links tab's count, and a mark while a link needs the owner.
+  const linkCount = state === null ? null : links.length;
+  const revocationPending = links.some(
+    (row) => row.status === 'revocation-pending'
+  );
+  const attention =
+    showRemoval ||
+    showRetired ||
+    revocationPending ||
+    !!error ||
+    (links.length > 0 && !!state?.needsConfirmation);
+  useEffect(() => {
+    if (linkCount === null) return;
+    onSummary?.({ count: linkCount, attention, problem: error });
+  }, [onSummary, linkCount, attention, error]);
+
+  const requestCreate = (draft: ShareLinkDraft) => {
+    // One action (design review I79): Create link asks for the
+    // confirmation sharing needs, then makes the link.
+    if (!state?.needsConfirmation) {
+      void run('create', () => createLink(draft));
+      return;
+    }
+    pendingDraft.current = draft;
+    setCreateAfterConfirm(true);
+    if (!state.passkey) {
+      setConfirming(true);
+      return;
+    }
+    // Straight to the passkey prompt, in this click's activation.
+    // Cancelled or refused, the recovery key is the other way.
+    void run('confirm', async () => {
+      try {
+        await client.confirm(projectId, 'passkey');
+      } catch (caught) {
+        setConfirming(true);
+        throw caught;
+      }
+      setCreateAfterConfirm(false);
+      pendingDraft.current = null;
+      await createLink(draft);
+    });
+  };
 
   return (
     <section
-      className="sharing-section sharing-access-section"
+      className="sharing-section share-links"
       aria-label="Encrypted share links"
     >
-      <h3 className="sharing-section-label">General access</h3>
-      <div className="sharing-access">
-        <Globe className="sharing-access-icon" size={14} aria-hidden="true" />
-        <span className="sharing-access-title">
-          {state === null
-            ? 'Checking links…'
-            : links.length > 0
-              ? `Anyone with a link · ${links.length} ${
-                  links.every((row) => row.status === 'active')
-                    ? 'active'
-                    : 'listed'
-                }`
-              : 'Only invited people'}
-        </span>
-      </div>
-      <div className="sharing-link-create">
-        <ShareLinkModePicker
-          value={mode}
-          viewOnly={withoutHistory}
-          disabled={busy !== null || awaitingConfirmation}
-          describedBy={detailId}
-          onChange={setMode}
-        />
-        {onFreezeModel ? (
-          <label className="sharing-link-comments">
-            <input
-              type="checkbox"
-              checked={includeHistory}
-              disabled={busy !== null || awaitingConfirmation}
-              aria-describedby={detailId}
-              onChange={(event) => setIncludeHistory(event.target.checked)}
-            />
-            Include history
-          </label>
-        ) : null}
-        <label className="sharing-link-comments">
-          <input
-            type="checkbox"
-            checked={withComments}
-            disabled={busy !== null || awaitingConfirmation}
-            aria-describedby={detailId}
-            onChange={(event) => setWithComments(event.target.checked)}
-          />
-          Visitors can comment
-        </label>
-        <button
-          type="button"
-          className={links.length > 0 ? 'secondary' : 'primary'}
-          disabled={disabled || awaitingConfirmation}
-          onClick={() => {
-            // One action (design review I79): Create link asks for the
-            // confirmation sharing needs, then makes the link.
-            if (!state?.needsConfirmation) {
-              void run('create', createLink);
-              return;
-            }
-            setCreateAfterConfirm(true);
-            if (!state.passkey) {
-              setConfirming(true);
-              return;
-            }
-            // Straight to the passkey prompt, in this click's activation.
-            // Cancelled or refused, the recovery key is the other way.
-            void run('confirm', async () => {
-              try {
-                await client.confirm(projectId, 'passkey');
-              } catch (caught) {
-                setConfirming(true);
-                throw caught;
-              }
-              setCreateAfterConfirm(false);
-              await createLink();
-            });
-          }}
-        >
-          Create link
-        </button>
-      </div>
-      <p id={detailId} className="sharing-access-detail">
-        {withoutHistory
-          ? SHARE_LINK_NO_HISTORY_HINT
-          : SHARE_LINK_MODE_HINT[mode]}
-        {withComments ? ' They see only this link’s comments.' : ''} End-to-end
-        encrypted: the key is in the link.
+      <p className="share-links-access">
+        {state === null
+          ? 'Checking links…'
+          : links.length > 0
+            ? `Anyone with a link · ${links.length} ${
+                links.every((row) => row.status === 'active')
+                  ? 'active'
+                  : 'listed'
+              }`
+            : 'Only invited people'}
+      </p>
+      <p className="sharing-hint">
+        {links.length > 0
+          ? 'A link opens this model without an account. The key is in the link, so share it like a password.'
+          : 'A link lets anyone who has it open this model without an account.'}
       </p>
 
       {error ? (
@@ -731,6 +724,7 @@ export function EncryptedShareLinks({
                 onClick={() => {
                   setConfirming(false);
                   setCreateAfterConfirm(false);
+                  pendingDraft.current = null;
                   setRecoveryKey('');
                 }}
               >
@@ -757,30 +751,7 @@ export function EncryptedShareLinks({
         ) : null
       ) : null}
 
-      {created ? (
-        <div className="sharing-share-output" role="status">
-          <input
-            className="sharing-share-url"
-            type="text"
-            readOnly
-            aria-label="Share link"
-            value={created}
-            onFocus={(event) => event.target.select()}
-          />
-          <button
-            type="button"
-            className="sharing-share-copy"
-            onClick={() => void copy(created, 'created')}
-          >
-            <StableLabel reserve={['Copied', 'Copy']} align="center">
-              {copied === 'created' ? 'Copied' : 'Copy'}
-            </StableLabel>
-          </button>
-          <p className="sharing-share-mode">{MODE_LABEL[createdMode]} link</p>
-        </div>
-      ) : null}
-
-      {(transient || state?.removalNotice) && removalLinks.length > 0 ? (
+      {showRemoval ? (
         <div className="sharing-share-notice" role="status">
           <span className="sharing-tag">
             Someone lost access to this project. They can still open later
@@ -815,7 +786,7 @@ export function EncryptedShareLinks({
         </div>
       ) : null}
 
-      {state && state.retired.length > 0 ? (
+      {showRetired ? (
         <div className="sharing-share-notice" role="status">
           <span className="sharing-tag">
             Your encryption identity changed, so your links were turned off.
@@ -837,124 +808,202 @@ export function EncryptedShareLinks({
         </div>
       ) : null}
 
+      {created ? (
+        <div className="sharing-share-output" role="status">
+          <p className="share-link-created-title">
+            {MODE_LABEL[createdMode]} link is ready
+          </p>
+          <input
+            className="sharing-share-url"
+            type="text"
+            readOnly
+            aria-label="Share link"
+            value={created}
+            onFocus={(event) => event.target.select()}
+          />
+          <ShareLinkCopyButton url={created} primary onCopy={copy} />
+          <p className="sharing-share-mode">
+            End-to-end encrypted: the key is in the link.
+          </p>
+        </div>
+      ) : null}
+
+      {showComposer ? (
+        <ShareLinkComposer
+          canExcludeHistory={Boolean(onFreezeModel)}
+          nameable={false}
+          disabled={busy !== null || awaitingConfirmation}
+          createDisabled={state === null}
+          commentsHint="Visitors see only this link’s comments."
+          footnote="End-to-end encrypted: the key is in the link."
+          {...(links.length > 0 || created
+            ? { onCancel: () => setComposing(false) }
+            : {})}
+          onCreate={requestCreate}
+        />
+      ) : (
+        <button
+          type="button"
+          className="secondary share-links-new"
+          disabled={disabled}
+          onClick={() => setComposing(true)}
+        >
+          <Plus size={13} aria-hidden="true" />
+          New link
+        </button>
+      )}
+
       {links.length > 0 ? (
-        <ul className="sharing-list" aria-label="Active share links">
-          {links.map((row) =>
-            revokingId === row.shareId ? (
-              <li key={row.shareId} className="sharing-confirm-row">
-                <ShareLinkRevokeConfirm
-                  name={`${MODE_LABEL[row.mode]} link`}
-                  disabled={busy !== null}
-                  onCancel={() => {
-                    setRevokingId(null);
-                    requestAnimationFrame(() =>
-                      document
-                        .querySelector<HTMLElement>(
-                          `[data-share-link-revoke="${row.shareId}"]`
-                        )
-                        ?.focus()
-                    );
-                  }}
-                  onRevoke={() => {
-                    setRevokingId(null);
-                    void run(`revoke:${row.shareId}`, async () => {
-                      await client.revoke(projectId, row.shareId);
-                      setCreated(null);
-                      // Revoked: gone from the list at once, so it is not
-                      // copyable while (or if) the refresh lags or fails.
-                      setState((current) =>
-                        current
-                          ? {
-                              ...current,
-                              links: current.links.filter(
-                                (link) => link.shareId !== row.shareId
-                              )
-                            }
-                          : current
+        <ul className="share-link-cards" aria-label="Active share links">
+          {links.map((row) => {
+            const name = `${MODE_LABEL[row.mode]} link`;
+            if (revokingId === row.shareId) {
+              return (
+                <li key={row.shareId} className="sharing-confirm-row">
+                  <ShareLinkRevokeConfirm
+                    name={name}
+                    disabled={busy !== null}
+                    onCancel={() => {
+                      setRevokingId(null);
+                      // Its card stays open, so focus has its Revoke to go back to.
+                      setExpandedId(row.shareId);
+                      requestAnimationFrame(() =>
+                        document
+                          .querySelector<HTMLElement>(
+                            `[data-share-link-revoke="${row.shareId}"]`
+                          )
+                          ?.focus()
                       );
-                    });
-                  }}
+                    }}
+                    onRevoke={() => {
+                      setRevokingId(null);
+                      void run(`revoke:${row.shareId}`, async () => {
+                        await client.revoke(projectId, row.shareId);
+                        setCreated(null);
+                        // Revoked: gone from the list at once, so it is not
+                        // copyable while (or if) the refresh lags or fails.
+                        setState((current) =>
+                          current
+                            ? {
+                                ...current,
+                                links: current.links.filter(
+                                  (link) => link.shareId !== row.shareId
+                                )
+                              }
+                            : current
+                        );
+                      });
+                    }}
+                  />
+                </li>
+              );
+            }
+            return (
+              <ShareLinkCard
+                key={row.shareId}
+                name={name}
+                summary={linkSummary(row)}
+                attention={row.status !== 'active'}
+                mode={row.mode}
+                expanded={expandedId === row.shareId}
+                onToggle={() =>
+                  setExpandedId((open) =>
+                    open === row.shareId ? null : row.shareId
+                  )
+                }
+                copy={
+                  // The link just created is copied from its box above:
+                  // one place to copy it from, not two.
+                  row.url && row.url !== created ? (
+                    <ShareLinkCopyButton
+                      url={row.url}
+                      name={name}
+                      disabled={busy !== null || row.status !== 'active'}
+                      onCopy={copy}
+                    />
+                  ) : null
+                }
+              >
+                <ShareLinkFacts
+                  facts={[
+                    [
+                      'Visitors can',
+                      row.mode === 'tweak'
+                        ? 'View and change parameters'
+                        : 'View, measure and export'
+                    ],
+                    [
+                      'History',
+                      row.mode === 'frozen'
+                        ? 'Not included: the model as last updated'
+                        : 'Included'
+                    ],
+                    [
+                      'Comments',
+                      row.comments === undefined
+                        ? 'Unknown on this device'
+                        : row.comments
+                          ? 'On'
+                          : 'Off'
+                    ],
+                    ['Status', expiryText(row)]
+                  ]}
                 />
-              </li>
-            ) : (
-              <li key={row.shareId}>
-                <span className="sharing-row-text">
-                  <span className="sharing-member-id">
-                    {MODE_LABEL[row.mode]} link
-                  </span>
-                  <span className="sharing-row-detail" data-status={row.status}>
-                    {expiryText(row)}
-                    {row.comments ? ' · Visitors can comment' : ''}
-                  </span>
-                </span>
-                {row.comments === false &&
-                row.status === 'active' &&
-                client.allowComments ? (
-                  <button
-                    type="button"
-                    className="sharing-row-action"
-                    disabled={busy !== null}
-                    aria-label={`Allow comments on ${MODE_LABEL[row.mode]} link`}
-                    onClick={() =>
-                      void run(`comments:${row.shareId}`, () =>
-                        client.allowComments!(projectId, row.shareId)
-                      )
-                    }
-                  >
-                    Allow comments
-                  </button>
-                ) : null}
-                {row.mode === 'frozen' &&
-                row.status !== 'revocation-pending' &&
-                onFreezeModel &&
-                client.update ? (
-                  <button
-                    type="button"
-                    className="sharing-row-action"
-                    disabled={busy !== null}
-                    title="Share the model as it is now through this link"
-                    aria-label="Update No history link to the current model"
-                    onClick={() =>
-                      void run(`update:${row.shareId}`, async () =>
-                        client.update!(
-                          projectId,
-                          row.shareId,
-                          await onFreezeModel()
+                <div className="share-link-card-actions">
+                  {row.comments === false &&
+                  row.status === 'active' &&
+                  client.allowComments ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy !== null}
+                      aria-label={`Allow comments on ${name}`}
+                      onClick={() =>
+                        void run(`comments:${row.shareId}`, () =>
+                          client.allowComments!(projectId, row.shareId)
                         )
-                      )
-                    }
-                  >
-                    Update
-                  </button>
-                ) : null}
-                {/* The link just created is copied from its box above:
-                    one place to copy it from, not two. */}
-                {row.url && row.url !== created ? (
+                      }
+                    >
+                      Allow comments
+                    </button>
+                  ) : null}
+                  {row.mode === 'frozen' &&
+                  row.status !== 'revocation-pending' &&
+                  onFreezeModel &&
+                  client.update ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      disabled={busy !== null}
+                      title="Share the model as it is now through this link"
+                      aria-label="Update No history link to the current model"
+                      onClick={() =>
+                        void run(`update:${row.shareId}`, async () =>
+                          client.update!(
+                            projectId,
+                            row.shareId,
+                            await onFreezeModel()
+                          )
+                        )
+                      }
+                    >
+                      Update snapshot
+                    </button>
+                  ) : null}
                   <button
                     type="button"
-                    className="sharing-row-copy"
-                    disabled={busy !== null || row.status !== 'active'}
-                    aria-label={`Copy ${MODE_LABEL[row.mode]} link`}
-                    onClick={() => void copy(row.url!, row.shareId)}
+                    className="secondary danger"
+                    disabled={busy !== null}
+                    aria-label={`Revoke ${name}`}
+                    data-share-link-revoke={row.shareId}
+                    onClick={() => setRevokingId(row.shareId)}
                   >
-                    <StableLabel reserve={['Copied', 'Copy']} align="center">
-                      {copied === row.shareId ? 'Copied' : 'Copy'}
-                    </StableLabel>
+                    Revoke
                   </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="sharing-row-action"
-                  disabled={busy !== null}
-                  aria-label={`Revoke ${MODE_LABEL[row.mode]} link`}
-                  data-share-link-revoke={row.shareId}
-                  onClick={() => setRevokingId(row.shareId)}
-                >
-                  Revoke
-                </button>
-              </li>
-            )
-          )}
+                </div>
+              </ShareLinkCard>
+            );
+          })}
         </ul>
       ) : null}
     </section>
