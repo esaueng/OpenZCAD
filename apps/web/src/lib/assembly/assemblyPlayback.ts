@@ -54,10 +54,8 @@ export function playbackFrame(
     if (!joint) return null;
     // A coupled joint sweeps only as far as the joints it moves allow, so
     // the sweep never stalls against a mate's limit.
-    const range = jointSweepRange(
-      { kind: joint.kind, limits: coupledJointLimits(set, joint) },
-      playback.dof
-    );
+    const limits = coupledJointLimits(set, joint);
+    const range = jointSweepRange({ kind: joint.kind, limits }, playback.dof);
     if (!range) return null;
     let { value, done } = jointSweepValue(
       range,
@@ -74,7 +72,16 @@ export function playbackFrame(
     ) {
       // Every cycle ends at the range start; one last forward sweep runs
       // until it reaches the saved value, so stopping there does not jump.
-      const rest = joint.values[playback.dof] ?? range.min;
+      let rest = joint.values[playback.dof] ?? range.min;
+      // An unlimited angle sweeps one full turn: the saved angle shows the
+      // same pose a whole number of turns away, so meet it inside the turn.
+      const turn = range.max - range.min;
+      if (
+        !limits[playback.dof] &&
+        ASSEMBLY_JOINT_DOFS[joint.kind][playback.dof] === 'deg' &&
+        turn > 0
+      )
+        rest = range.min + ((((rest - range.min) % turn) + turn) % turn);
       const settle = jointSweepValue(
         range,
         'once',

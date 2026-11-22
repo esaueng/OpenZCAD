@@ -145,6 +145,25 @@ it('stops a finite joint sweep after its cycles, back on the saved pose', () => 
   unmount();
 });
 
+it('settles an unlimited angle on its saved pose a whole turn away', () => {
+  const assembly = pivotProject().document.assembly!;
+  const set = {
+    ...assembly,
+    joints: assembly.joints.map((joint) =>
+      joint.id === 'j_pivot' ? { ...joint, values: [-90] } : joint
+    )
+  };
+  act(() => assemblyRuntime.startJointSweep('j_pivot', 0, 'ping-pong', 1, 1));
+  const playback = getAssemblyRuntime().playback!;
+  const at = (s: number) => playbackFrame(set, playback, 1000 + s * 1000);
+  // Unlimited: the sweep is 0-360°, so -90° is met at 270°, not at once.
+  expect(at(2)?.overrides.get('j_pivot')).toEqual([0]);
+  const late = at(2.6)?.overrides.get('j_pivot')?.[0];
+  expect(late).toBeGreaterThan(180);
+  expect(late).toBeLessThan(270);
+  expect(at(3)).toMatchObject({ done: true, settled: true });
+});
+
 it('keeps an unbounded joint sweep running past any cycle count', () => {
   const set = pivotProject().document.assembly!;
   act(() => assemblyRuntime.startJointSweep('j_pivot', 0, 'ping-pong', 1));
