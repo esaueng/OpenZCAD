@@ -556,6 +556,83 @@ test('Linear pattern spreads its instances over an extent chosen beside its slot
   }
 });
 
+test('a pattern and Construction act on a box selection in one step each', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Pattern selection');
+  const a = at(0.35, 0.4);
+  const b = at(0.35, 0.5);
+  await drawCircle(page, a, 14);
+  await drawCircle(page, b, 14);
+  await drawLine(page, at(0.3, 0.7), at(0.5, 0.7));
+  await page.keyboard.press('Escape');
+  const status = page.getByRole('contentinfo');
+
+  // A left-to-right box takes the two circles, not the line below them.
+  const from = at(0.3, 0.33);
+  const to = at(0.4, 0.57);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 10 });
+  await page.mouse.up();
+
+  await modifyTool(page, 'Linear pattern');
+  await expect(status).toContainText(
+    'Linear pattern: click a line for the direction to repeat 2 selected entities along.'
+  );
+  await page.mouse.click(at(0.4, 0.7).x, at(0.4, 0.7).y);
+  const spacing = page.getByRole('textbox', { name: 'Pattern spacing' });
+  await expect(spacing).toBeVisible();
+  await spacing.fill('40');
+  await spacing.press('Enter');
+  const count = page.getByRole('textbox', { name: 'Pattern count' });
+  await expect(count).toBeVisible();
+  await count.fill('2');
+  await count.press('Enter');
+  await expect(status).toContainText(
+    'Linear pattern added 2 linked entities from 2 selected.'
+  );
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length)
+    .toBe(5);
+
+  // Box the two new circles and mark them construction together.
+  const { objects } = await exportSketch(page);
+  expect(kindsOf(objects)).toEqual([
+    'circle',
+    'circle',
+    'line',
+    'circle',
+    'circle'
+  ]);
+  await page.keyboard.press('Escape');
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.keyboard.press(`${modifier}+a`);
+  const toggle = page.getByRole('button', { name: 'Construction (5)' });
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+  await expect(status).toContainText(
+    '5 entities are construction geometry now; they no longer bound a profile.'
+  );
+  await expect
+    .poll(async () =>
+      (await exportSketch(page)).objects.every(
+        (object) => object.data.construction === true
+      )
+    )
+    .toBe(true);
+  // One undo step restores all five.
+  await undo(page);
+  await expect
+    .poll(async () =>
+      (await exportSketch(page)).objects.some(
+        (object) => object.data.construction === true
+      )
+    )
+    .toBe(false);
+});
+
 test('Circular pattern turns an entity about a picked circle’s centre', async ({
   page
 }) => {

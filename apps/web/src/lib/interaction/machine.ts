@@ -259,8 +259,9 @@ export interface PendingSketchEdit {
   kind: SketchEditToolKind;
   picks: string[];
   /**
-   * Mirror armed over a selection: these entities are the sources, so the
-   * one pick left is the axis. Absent for the pick-the-source flow.
+   * Mirror or a pattern armed over a selection: these entities are the
+   * sources, so the one pick left is the axis, the direction line or the
+   * pivot. Absent for the pick-the-source flow.
    */
   sources?: readonly string[];
 }
@@ -1268,8 +1269,11 @@ function reduceInteraction(
             ? {
                 kind: event.kind,
                 picks: [],
-                // Mirror over a selection asks only for the axis.
-                ...(event.kind === 'mirror' &&
+                // Mirror or a pattern over a selection asks only for the
+                // axis, direction or pivot.
+                ...((event.kind === 'mirror' ||
+                  event.kind === 'linear-pattern' ||
+                  event.kind === 'circular-pattern') &&
                 sketchSelectedObjectIds(state.session).length > 0
                   ? { sources: sketchSelectedObjectIds(state.session) }
                   : {})

@@ -23929,14 +23929,23 @@ export function App() {
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
     try {
-      const { planSketchConstructionToggle } =
+      const { planSketchConstructionSet, planSketchConstructionToggle } =
         await import('./lib/sketch/modify');
-      const plan = planSketchConstructionToggle(
-        base,
-        sketch,
-        sketch.sketchId,
-        target.objectId
+      // A multi-selection toggles together; one entity keeps its own plan.
+      const selected = sketchSelectedObjectIds(
+        interactionRef.current.mode === 'sketch'
+          ? interactionRef.current.session
+          : { selectedObjectId: null }
       );
+      const plan =
+        selected.length > 1
+          ? planSketchConstructionSet(base, sketch, sketch.sketchId, selected)
+          : planSketchConstructionToggle(
+              base,
+              sketch,
+              sketch.sketchId,
+              target.objectId
+            );
       if (plan.status === 'refuse') {
         setSketchEditError(plan.reason);
         setStatus(plan.reason);
@@ -24246,6 +24255,7 @@ export function App() {
     raws?: string[];
     offset?: SketchOffsetPick;
     pattern?: SketchPatternOptions;
+    sources?: readonly string[];
     anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
@@ -36868,6 +36878,7 @@ export function App() {
           : undefined
       }
       onToggleConstruction={() => void handleToggleSketchConstruction()}
+      selectionCount={sketchSelectedObjectIds(interaction.session).length}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);

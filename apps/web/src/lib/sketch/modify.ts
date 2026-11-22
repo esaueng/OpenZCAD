@@ -17,7 +17,7 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { resolvedSketchDocument } from '@openzcad/document-core';
+import { findSketch, resolvedSketchDocument } from '@openzcad/document-core';
 import {
   boundedArcSweepDegrees,
   boundedPolygonSides,
@@ -2542,6 +2542,121 @@ export function planSketchCircularPattern(
   };
 }
 
+/** One pattern's definition, shared by every entity a selection repeats. */
+export type SketchPatternSetSpec =
+  | {
+      kind: 'linear-pattern';
+      directionId: string;
+      distance: number;
+      count: number;
+      spacingMode: 'spacing' | 'extent';
+    }
+  | {
+      kind: 'circular-pattern';
+      pivot: Point2;
+      count: number;
+      totalDeg: number;
+      orientation: 'rotate' | 'uniform';
+    };
+
+/**
+ * Repeat a selection with one pattern, in one transaction. Each entity is
+ * planned as the single-entity pattern would plan it, against the sketch
+ * with the instances already planned for the entities before it, so no
+ * entity's instances may land on another's. An entity the pattern cannot
+ * repeat (a point, text, a held shape, one whose instances would clash) is
+ * left out and counted; the direction line is skipped if it was selected.
+ * Only when nothing can be repeated is the set refused, with the first
+ * reason.
+ */
+export function planSketchPatternSet(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  sourceIds: readonly string[],
+  spec: SketchPatternSetSpec,
+  resolve: Resolve
+): SketchModifyPlan {
+  const label =
+    spec.kind === 'linear-pattern' ? 'Linear pattern' : 'Circular pattern';
+  const sources = [...new Set(sourceIds)].filter(
+    (id) =>
+      (spec.kind !== 'linear-pattern' || id !== spec.directionId) &&
+      sketchObject(document, sketch, id) !== null
+  );
+  if (sources.length === 0) {
+    return {
+      status: 'refuse',
+      reason:
+        'The direction line is the only thing selected. Select what to repeat, then pick the line.'
+    };
+  }
+  let prospective = document;
+  const commands: AnyCommand[] = [];
+  let repeated = 0;
+  let added = 0;
+  let firstRefusal: string | null = null;
+  for (const sourceId of sources) {
+    const currentSketch = findSketch(prospective, sketch.sketchId) ?? null;
+    const plan = currentSketch
+      ? spec.kind === 'linear-pattern'
+        ? planSketchLinearPattern(
+            prospective,
+            currentSketch,
+            sketchId,
+            sourceId,
+            spec.directionId,
+            spec.distance,
+            spec.count,
+            resolve,
+            spec.spacingMode
+          )
+        : planSketchCircularPattern(
+            prospective,
+            currentSketch,
+            sketchId,
+            sourceId,
+            spec.pivot,
+            spec.count,
+            spec.totalDeg,
+            resolve,
+            spec.orientation
+          )
+      : ({
+          status: 'refuse',
+          reason: 'That sketch is no longer in the document.'
+        } as const);
+    if (plan.status !== 'commands') {
+      firstRefusal ??= plan.reason;
+      continue;
+    }
+    for (const command of plan.commands) {
+      command.validate(prospective);
+      prospective = command.apply(prospective);
+    }
+    commands.push(...plan.commands);
+    repeated += 1;
+    added += spec.count - 1;
+  }
+  if (repeated === 0) {
+    return {
+      status: 'refuse',
+      reason: firstRefusal ?? 'Nothing selected can be repeated.'
+    };
+  }
+  const skipped = sources.length - repeated;
+  return {
+    status: 'commands',
+    label,
+    message:
+      `${label} added ${added} linked ${added === 1 ? 'entity' : 'entities'} from ${repeated} selected.` +
+      (skipped > 0
+        ? ` ${skipped} could not be repeated and ${skipped === 1 ? 'was' : 'were'} left out.`
+        : ''),
+    commands
+  };
+}
+
 /**
  * The point a uniform circular pattern carries round the pivot: a line's
  * midpoint, a circle's or arc's centre.
@@ -2595,6 +2710,61 @@ export function resolvePatternPivot(
 
 // ---------------------------------------------------------------------------
 // Construction
+
+/**
+ * Turn a selection into construction geometry, or back, in one undo step:
+ * when any selected entity is regular they all become construction, and
+ * when every one already is they all become regular again — the toggle a
+ * mixed selection expects. Each entity changes exactly as
+ * {@link planSketchConstructionToggle} changes it alone; one already in
+ * the target state is left as it is.
+ */
+export function planSketchConstructionSet(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  objectIds: readonly string[]
+): SketchModifyPlan {
+  const entries = [...new Set(objectIds)].flatMap((objectId) => {
+    const node = ownEntry(document.nodes, objectId as EntityId);
+    return sketch.objectIds.includes(objectId as EntityId) &&
+      node?.kind === 'sketch-object'
+      ? [{ objectId, data: node.data }]
+      : [];
+  });
+  if (entries.length === 0) {
+    return {
+      status: 'refuse',
+      reason: 'The selected entities are no longer in this sketch.'
+    };
+  }
+  const making = entries.some(({ data }) => data.construction !== true);
+  const label = making ? 'Make construction' : 'Make regular';
+  const commands = entries.flatMap(({ objectId, data }) => {
+    if ((data.construction === true) === making) {
+      return [];
+    }
+    const { construction: _was, ...rest } = data;
+    const next = (
+      making ? { ...rest, construction: true } : rest
+    ) as SketchObjectData;
+    return [
+      commandFactories.updateSketchObject(
+        { sketchId, objectId: objectId as EntityId, data: next },
+        label
+      )
+    ];
+  });
+  const changed = commands.length;
+  return {
+    status: 'commands',
+    label,
+    message: making
+      ? `${changed} ${changed === 1 ? 'entity is' : 'entities are'} construction geometry now; they no longer bound a profile.`
+      : `${changed} ${changed === 1 ? 'entity is' : 'entities are'} regular geometry again.`,
+    commands
+  };
+}
 
 /**
  * Turn one existing entity into construction geometry, or back into regular
