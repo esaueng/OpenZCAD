@@ -34,6 +34,7 @@ import { sheetMetalCleared, sheetMetalEditOptions } from './sheetMetal';
 import {
   FILLET_VERTEX_SLOTS,
   IN_PLACE_TOOL_SPECS,
+  filletEdgeRuns,
   filletSelectionVertices,
   filletVertexValueId,
   type BodyPick,
@@ -921,6 +922,20 @@ export function inPlaceEditSeed(
               : null;
           if (data.vertexRadii && vertices) {
             seed.options.radiusAt = 'vertices';
+            // An edge that now runs the other way from when its corners were
+            // set keeps its stored run (review): Done then writes the same
+            // fillet back, which the build refuses by name, rather than a
+            // run read off the turned edge that would swap its corners'
+            // radii. Picking the edge again sets its corners afresh.
+            const live = filletEdgeRuns(seed.slots.edges);
+            data.edgeRuns?.forEach((run, index) => {
+              const pick = seed.slots.edges[index];
+              const witness = pick?.reference?.witness;
+              if (!pick || !witness || witness.closed || live?.[index] === run)
+                return;
+              const [x, y, z] = witness.endpoints[run ? 1 : 0];
+              pick.end = { x: x * 1e-6, y: y * 1e-6, z: z * 1e-6 };
+            });
             vertices.forEach((vertex, index) => {
               if (index >= FILLET_VERTEX_SLOTS) return;
               const stored = data.vertexRadii!.find((entry) =>

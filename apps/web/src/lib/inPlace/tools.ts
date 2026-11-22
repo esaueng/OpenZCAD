@@ -7515,15 +7515,17 @@ const fillet: InPlaceToolSpec = {
         : {})
     };
   },
-  // Each corner value is keyed by where its corner stands, so it follows
-  // the corner as edges are picked or dropped (review).
+  // Each corner value is keyed by its body and where its corner stands, so
+  // it follows the corner as edges are picked or dropped, and never passes
+  // to another body's corner at the same point (review).
   edgeValueKeys: (edges) => {
     const keys: Record<string, string> = {};
+    const body = edges[0]?.bodyId ?? '';
     (filletSelectionVertices(edges) ?? [])
       .slice(0, FILLET_VERTEX_SLOTS)
       .forEach((vertex, index) => {
         keys[filletVertexValueId(index)] =
-          `${vertex.point.x},${vertex.point.y},${vertex.point.z}`;
+          `${body}:${vertex.point.x},${vertex.point.y},${vertex.point.z}`;
       });
     return keys;
   },

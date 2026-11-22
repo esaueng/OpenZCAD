@@ -281,6 +281,19 @@ describe('per-vertex fillet radii (M03, v149)', { timeout: 120_000 }, () => {
         schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
       } as never)
     ).toThrow(/Per-vertex fillet radii/);
+
+    // Edge runs without corner radii are refused, at creation and on load,
+    // rather than silently dropped or carried (review).
+    expect(() => filletEdges(document, base)).toThrow(
+      /edge directions go only with per-vertex radii/
+    );
+    const orphan = structuredClone(stored);
+    const fillet = listNodesByKind(orphan, 'feature').find(
+      (node) => node.data.featureKind === 'fillet'
+    )!;
+    if (fillet.data.featureKind !== 'fillet') throw new Error('No fillet.');
+    delete fillet.data.vertexRadii;
+    expect(() => assertDocumentContentSchema(orphan)).toThrow();
   });
 
   it('refuses by name when an upstream turn swaps which corner is which', async () => {

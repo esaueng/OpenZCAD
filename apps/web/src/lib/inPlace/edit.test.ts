@@ -1940,6 +1940,47 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('fillet: an edge turned since its corners were set keeps its stored run (review)', () => {
+    // Stored running end 1 → end 0; the live edge now ends at (10, 0, 0),
+    // witness end 1, so it reads as running the other way.
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21],
+      edgeReferences: [
+        {
+          kind: 'edge',
+          currentHash: 21,
+          stored: true,
+          witness: {
+            curveType: 'LINE',
+            length: 1,
+            closed: false,
+            endpoints: [
+              [0, 0, 0],
+              [10e6, 0, 0]
+            ],
+            midpoint: [0, 0, 0]
+          }
+        }
+      ] as never[],
+      radius: 1,
+      endRadius: 3,
+      radiusLaw: 'linear',
+      vertexRadii: [
+        { edge: 0, end: 0, radius: 1 },
+        { edge: 0, end: 1, radius: 3 }
+      ],
+      edgeRuns: [false]
+    };
+    // Done writes the stored run back, so the build refuses the turn by
+    // name instead of taking a run that swaps the two corners' radii.
+    expect(untouched(feature(data, 'body_f' as BodyId))).toMatchObject({
+      vertexRadii: data.vertexRadii,
+      edgeRuns: [false]
+    });
+  });
+
   it('fillet: an untouched sparse per-vertex fillet writes the same radii back (review)', () => {
     const named = (hash: number, from: number[], to: number[]) => ({
       kind: 'edge',

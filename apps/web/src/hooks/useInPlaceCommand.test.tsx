@@ -3013,6 +3013,20 @@ describe('useInPlaceCommand: fillet edges', () => {
     // no value is left behind on a slot that now names another corner.
     expect(hook.result.current.values.vertex2).toBe(4);
     expect(hook.result.current.values.vertex3).toBeUndefined();
+
+    // A live refresh that reorders the edges rekeys the same way: with the
+    // first edge back in front, (10, 5, 0) is vertex3 again.
+    act(() => hook.result.current.setPicks({ edges: [first, second] }));
+    expect(hook.result.current.values.vertex3).toBe(4);
+    expect(hook.result.current.values.vertex2).not.toBe(4);
+
+    // Another body's edge ending at the same point does not take the value.
+    act(() => {
+      hook.result.current.pickEdge({ ...second, bodyId: 'b' as BodyId });
+    });
+    expect(hook.result.current.slots.edges.map((e) => e.bodyId)).toEqual(['b']);
+    expect(hook.result.current.values.vertex2).not.toBe(4);
+    expect(hook.result.current.values.vertex3).toBeUndefined();
   });
 
   it('refuses an edge while a command takes none', () => {

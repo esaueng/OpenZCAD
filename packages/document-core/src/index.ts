@@ -5364,6 +5364,11 @@ export function filletEdges(
   input: EdgeModifierInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const edgeHashes = [...new Set(input.edgeHashes)];
+  // Edge runs alone mean nothing; refused rather than dropped (review).
+  if (input.vertexRadii === undefined && input.edgeRuns !== undefined) {
+    const problem = filletVertexRadiiProblem({ ...input, edgeHashes });
+    if (problem) throw new Error(problem);
+  }
   if (input.vertexRadii !== undefined) {
     if (edgeHashes.length !== input.edgeHashes.length)
       throw new Error(

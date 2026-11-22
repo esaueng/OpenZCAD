@@ -1299,7 +1299,7 @@ export function assertFilletContentSchema(
   data: Extract<FeatureData, { featureKind: 'fillet' }>,
   version: unknown
 ): void {
-  if (data.vertexRadii === undefined) return;
+  if (data.vertexRadii === undefined && data.edgeRuns === undefined) return;
   assertMinimumProjectSchema(version, 149, 'Per-vertex fillet radii');
   const problem = filletVertexRadiiProblem(data);
   if (problem) throw new Error(problem);

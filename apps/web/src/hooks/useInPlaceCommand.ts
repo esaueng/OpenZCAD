@@ -1500,17 +1500,19 @@ export function useInPlaceCommand(
         ) =>
           picks[key] !== undefined &&
           (!from || current.slots[key] === from[key]);
-        return {
+        const next = {
           ...current,
           slots: {
             ...current.slots,
             ...(take('path') ? { path: [...picks.path!] } : {}),
             ...(take('guide') ? { guide: [...picks.guide!] } : {}),
             ...(take('faces') ? { faces: [...picks.faces!] } : {}),
-            ...(take('bodies') ? { bodies: [...picks.bodies!] } : {}),
-            ...(take('edges') ? { edges: [...picks.edges!] } : {})
+            ...(take('bodies') ? { bodies: [...picks.bodies!] } : {})
           }
         };
+        // Edge-bound values follow their corners through a live refresh as
+        // through a pick (review).
+        return take('edges') ? withEdges(next, [...picks.edges!]) : next;
       });
     },
     []
