@@ -49,7 +49,8 @@ import {
   ShareLinkCard,
   ShareLinkComposer,
   ShareLinkCopyButton,
-  ShareLinkFacts
+  ShareLinkFacts,
+  ShareLinkNameField
 } from './ShareLinkCard';
 import type {
   InvitableContact,
@@ -2075,52 +2076,14 @@ function ShareLinkRename({
   disabled: boolean;
   onRename(shareLink: ProjectShareLinkSummary, draft: string): Promise<void>;
 }) {
-  const saved = shareLink.label ?? '';
-  const [draft, setDraft] = useState(saved);
-  const fieldId = useId();
-  // A rename saved here or elsewhere replaces the draft.
-  useEffect(() => setDraft(saved), [saved]);
-  const changed = draft.replace(/\s+/gu, ' ').trim() !== saved;
   return (
-    <form
-      className="share-link-rename"
-      aria-label={`Rename ${shareLinkName(shareLink)}`}
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (changed) void onRename(shareLink, draft);
-      }}
-    >
-      <label className="share-link-field-label" htmlFor={fieldId}>
-        Name
-      </label>
-      <div className="share-link-rename-row">
-        <input
-          id={fieldId}
-          className="share-link-name-input"
-          type="text"
-          aria-label="Link name"
-          placeholder={`${LINK_MODE_LABELS[shareLink.mode]} link · ${createdLabel(shareLink.createdAt)}`}
-          maxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
-          autoComplete="off"
-          value={draft}
-          disabled={disabled}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Escape' || !changed) return;
-            // Discards the edit only, not the whole dialog.
-            event.preventDefault();
-            event.stopPropagation();
-            setDraft(saved);
-          }}
-        />
-        <button
-          type="submit"
-          className="secondary"
-          disabled={disabled || !changed}
-        >
-          Save
-        </button>
-      </div>
-    </form>
+    <ShareLinkNameField
+      saved={shareLink.label ?? ''}
+      formLabel={`Rename ${shareLinkName(shareLink)}`}
+      placeholder={`${LINK_MODE_LABELS[shareLink.mode]} link · ${createdLabel(shareLink.createdAt)}`}
+      maxLength={PROJECT_SHARE_LINK_LABEL_MAX_LENGTH}
+      disabled={disabled}
+      onSave={(draft) => onRename(shareLink, draft)}
+    />
   );
 }

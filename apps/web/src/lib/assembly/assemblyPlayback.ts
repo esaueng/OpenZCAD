@@ -36,6 +36,11 @@ export interface PlaybackFrame {
   /** The study playhead, for a study. */
   studyTimeS?: number;
   done: boolean;
+  /**
+   * A finite joint sweep came back to the saved pose: stop and show the
+   * saved values, as Pause does, so nothing is left overridden.
+   */
+  settled?: boolean;
 }
 
 export function playbackFrame(
@@ -49,17 +54,45 @@ export function playbackFrame(
     if (!joint) return null;
     // A coupled joint sweeps only as far as the joints it moves allow, so
     // the sweep never stalls against a mate's limit.
-    const range = jointSweepRange(
-      { kind: joint.kind, limits: coupledJointLimits(set, joint) },
-      playback.dof
-    );
+    const limits = coupledJointLimits(set, joint);
+    const range = jointSweepRange({ kind: joint.kind, limits }, playback.dof);
     if (!range) return null;
-    const { value, done } = jointSweepValue(
+    let { value, done } = jointSweepValue(
       range,
       playback.mode,
       playback.sweepS,
       elapsedS
     );
+    const cycleS =
+      playback.mode === 'ping-pong' ? 2 * playback.sweepS : playback.sweepS;
+    if (
+      playback.cycles !== undefined &&
+      playback.mode !== 'once' &&
+      elapsedS >= playback.cycles * cycleS
+    ) {
+      // Every cycle ends at the range start; one last forward sweep runs
+      // until it reaches the saved value, so stopping there does not jump.
+      let rest = joint.values[playback.dof] ?? range.min;
+      // An unlimited angle sweeps one full turn: the saved angle shows the
+      // same pose a whole number of turns away, so meet it inside the turn.
+      const turn = range.max - range.min;
+      if (
+        !limits[playback.dof] &&
+        ASSEMBLY_JOINT_DOFS[joint.kind][playback.dof] === 'deg' &&
+        turn > 0
+      )
+        rest = range.min + ((((rest - range.min) % turn) + turn) % turn);
+      const settle = jointSweepValue(
+        range,
+        'once',
+        playback.sweepS,
+        elapsedS - playback.cycles * cycleS
+      );
+      if (settle.done || settle.value >= rest)
+        return { overrides: new Map(), drivers: [], done: true, settled: true };
+      value = settle.value;
+      done = false;
+    }
     const values = [...joint.values];
     values[playback.dof] = value;
     return {
@@ -137,7 +170,7 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
         const runtime = getAssemblyRuntime();
         if (runtime.playback) {
           const next = playbackFrame(set, runtime.playback, now);
-          if (!next) {
+          if (!next || next.settled) {
             assemblyRuntime.stop();
             return;
           }

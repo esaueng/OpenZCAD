@@ -132,6 +132,15 @@ describe('History row values', () => {
     expect(featureValueSummary(pattern, {}, 'mm', undefined, 'inch')).toBe(
       '× 4 over 4 in'
     );
+    const corners = feature({
+      featureKind: 'fillet',
+      radius: 1,
+      edgeHashes: [1],
+      vertexRadii: [{ radius: 12.7 }, { radius: 25.4 }]
+    } as never);
+    expect(featureValueSummary(corners, {}, 'mm', undefined, 'inch')).toContain(
+      'R 0.5–1 in by corner'
+    );
     // Without a display unit, the stored one, exactly as before.
     expect(featureValueSummary(box, {}, 'mm')).toBe('25.4 × 50.8 × 76.2 mm');
   });

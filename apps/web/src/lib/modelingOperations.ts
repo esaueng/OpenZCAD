@@ -713,6 +713,12 @@ export interface ModelingFaceOption {
    */
   hasCentroid?: boolean;
   /**
+   * Whether the face reports its outer boundary loop's own centroid, which
+   * a new hole is positioned from (M01, schema v150) because other holes in
+   * the face never move it.
+   */
+  hasOuterCentroid?: boolean;
+  /**
    * Outward normal of a planar face, which fixes the frame a hole's U and V
    * run in — the form names the world axis each field moves along.
    */
@@ -863,6 +869,7 @@ export function modelingFaceOptions(
       surfaceType: face.geometry?.surfaceType,
       reference: face.reference,
       hasCentroid: face.geometry?.centroid !== undefined,
+      hasOuterCentroid: face.geometry?.outerCentroid !== undefined,
       ...(face.geometry?.normal ? { normal: face.geometry.normal } : {})
     };
   });
@@ -1372,12 +1379,18 @@ export function buildModelingOperationSubmission(
           u: coerceParamValue(state.value.position.u),
           v: coerceParamValue(state.value.position.v)
         },
-        // (0, 0) means the middle of the face, which is its area centroid and
-        // not the vertex mean the rebuild anchored on before this marker
-        // existed. A face whose boundary could not be walked reports no
-        // centroid and keeps the old anchor, which the absent marker then
-        // tells the rebuild to reuse.
-        ...(entry!.hasCentroid ? { positionAnchor: 'centroid' as const } : {}),
+        // (0, 0) means the middle of the face's outer boundary: not its area
+        // centroid, which every other hole drilled into the face moves (so a
+        // hole typed at a 10 mm inset drifted with each earlier one), and not
+        // the vertex mean the rebuild anchored on before any marker existed.
+        // A face whose boundary could not be walked reports neither centroid
+        // and keeps the old anchor, which the absent marker then tells the
+        // rebuild to reuse.
+        ...(entry!.hasOuterCentroid
+          ? { positionAnchor: 'outer-centroid' as const }
+          : entry!.hasCentroid
+            ? { positionAnchor: 'centroid' as const }
+            : {}),
         ...(state.value.points
           ? {
               points: {

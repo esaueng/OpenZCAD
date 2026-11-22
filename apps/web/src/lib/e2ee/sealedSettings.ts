@@ -222,3 +222,66 @@ export async function olderAccountKey(
     return null;
   }
 }
+
+/**
+ * An account key of this account by its commitment, from any identity
+ * generation: the current identity's keys through its device list, and
+ * those of identities a recovery-key replacement retired through the
+ * account-key history, which keeps them wrapped under their successors.
+ * Null when no key of this account has that commitment (a newer key this
+ * page has not caught up with, or another account's); it throws when the
+ * keys are locked or the history cannot be read, so a caller can tell a
+ * key that does not exist from one it failed to reach.
+ */
+export async function accountKeyByCommitment(
+  userId: string,
+  commitment: Uint8Array
+): Promise<Uint8Array | null> {
+  const [accountKeys, { createE2eeApi }, { deviceKeyStore }, keySession] =
+    await Promise.all([
+      import('./accountKeys'),
+      import('./e2eeApi'),
+      import('./keychainDeviceKeys'),
+      import('./keySession')
+    ]);
+  const revision = keySession.getKeySessionRevision();
+  const ctx = {
+    userId,
+    api: createE2eeApi(),
+    store: deviceKeyStore(),
+    isCurrent: () => keySession.getKeySessionRevision() === revision
+  };
+  const state = await accountKeys.loadEncryption(ctx);
+  if (state.kind !== 'ready' || !state.account.unlocked)
+    throw new Error('Unlock encryption on this device first.');
+  const { account } = state;
+  const target = toHex(commitment);
+  const current = accountKeySequences(account.list).find((sequence) =>
+    account.list.entries.some(
+      ({ entry }) =>
+        entry.sequence === sequence &&
+        toHex(entry.accountKeyCommitment) === target
+    )
+  );
+  if (current !== undefined)
+    return accountKeys.openAccountKeyChain(ctx, account, current);
+  // Retired identities: newest first, each opened back from the current key
+  // and recognised by its commitment, which only the key itself gives.
+  const { history } = await ctx.api.accountKeyHistory();
+  const older = history
+    .filter((row) => row.generation < account.generation)
+    .sort(
+      (a, b) => b.generation - a.generation || b.keySequence - a.keySequence
+    );
+  for (const row of older) {
+    const key = await accountKeys.openAccountKeyChain(
+      ctx,
+      account,
+      row.keySequence,
+      row.generation
+    );
+    if (toHex(await accountKeyCommitment(key)) === target) return key;
+    key.fill(0);
+  }
+  return null;
+}

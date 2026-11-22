@@ -524,6 +524,21 @@ export function featureValueSummary(
         return null;
       }
       const end = data.endRadius === undefined ? null : len(data.endRadius);
+      // M03 (v151): a per-corner fillet's range is its corners' radii.
+      const corners = (data.vertexRadii ?? [])
+        .map((entry) => evalParamValue(entry.radius, scope))
+        .filter((value): value is number => value !== null);
+      if (corners.length > 0) {
+        const low = formatNumber(shown(Math.min(...corners)));
+        const high = formatNumber(shown(Math.max(...corners)));
+        return withEdgeCount(
+          data.edgeHashes,
+          data.edgeReferences,
+          low === high
+            ? `R ${low} ${unit} at each corner`
+            : `R ${low}–${high} ${unit} by corner`
+        );
+      }
       return withEdgeCount(
         data.edgeHashes,
         data.edgeReferences,

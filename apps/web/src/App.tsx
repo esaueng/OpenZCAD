@@ -737,6 +737,7 @@ import {
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
 import type { DemoDefinition } from './lib/demoDefinitions';
+import { reducesMotion } from './lib/reducedMotion';
 import { createProjectSharingClient } from './lib/projectSharing';
 import { collaborationSaveState } from './lib/collaborationSaveState';
 import {
@@ -865,7 +866,8 @@ import {
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
-  outlineChamferChain
+  outlineChamferChain,
+  tangentChainAdditions
 } from './lib/interaction/chamferChain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
@@ -7311,7 +7313,7 @@ export function App() {
       activeDemo?.initialWorkspace === 'assemble'
         ? doc?.assembly?.joints[0]?.id
         : undefined,
-    initialPlayback: appSettings.appearance.reducedMotion
+    initialPlayback: reducesMotion(appSettings.appearance.reducedMotion)
       ? undefined
       : activeDemo?.initialPlayback,
     execute: (command: AnyCommand) => executeCommand(command),
@@ -13096,6 +13098,9 @@ export function App() {
       ...(geometry?.surfaceType ? { surfaceType: geometry.surfaceType } : {}),
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
+      ...(geometry?.outerCentroid
+        ? { outerCentroid: geometry.outerCentroid }
+        : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(cylinder ? { cylinder } : {}),
       ...(geometry?.surfaceType.toLowerCase() === 'cone' &&
@@ -24458,7 +24463,7 @@ export function App() {
   }
   const [sketchSolving, setSketchSolving] = useState(false);
   const [sketchDimensionDraft, setSketchDimensionDraft] = useState<{
-    kind: DrivingDimensionKind | 'radius';
+    kind: DrivingDimensionKind | 'radius' | 'offset';
     picks: ConstraintPick[];
     documentVersion: number;
     constraintId?: string;
@@ -24842,7 +24847,8 @@ export function App() {
           editable:
             data.constraintKind === 'distance' ||
             data.constraintKind === 'angle' ||
-            data.constraintKind === 'radius'
+            data.constraintKind === 'radius' ||
+            data.constraintKind === 'offset'
         };
       });
   }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels, sketchFreedom]);
@@ -24873,7 +24879,8 @@ export function App() {
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
-          data.constraintKind === 'radius'
+          data.constraintKind === 'radius' ||
+          data.constraintKind === 'offset'
       }));
   }, [editingSketchNode, doc, selectedSketchEntity, sketchLabels]);
 
@@ -25613,12 +25620,33 @@ export function App() {
     const constraint = editingSketchNode?.constraints?.find(
       (candidate) => String(candidate.constraintId) === constraintId
     );
+    if (!doc || !constraint) {
+      setStatus('Only driving dimensions have editable values.');
+      return;
+    }
+    if (constraint.data.constraintKind === 'offset') {
+      // S05: the Offset's driving distance; every copy follows it.
+      setSketchDimensionDraft({
+        kind: 'offset',
+        picks: [],
+        documentVersion: doc.version,
+        constraintId
+      });
+      dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+      setKeypad({
+        kind: 'sketch-dimension',
+        label: 'Offset distance',
+        initial: String(constraint.data.value),
+        unitKind: 'length',
+        fixedClientAnchor: anchor
+      });
+      setStatus('Edit the offset driving value.');
+      return;
+    }
     if (
-      !doc ||
-      !constraint ||
-      (constraint.data.constraintKind !== 'distance' &&
-        constraint.data.constraintKind !== 'angle' &&
-        constraint.data.constraintKind !== 'radius')
+      constraint.data.constraintKind !== 'distance' &&
+      constraint.data.constraintKind !== 'angle' &&
+      constraint.data.constraintKind !== 'radius'
     ) {
       setStatus('Only driving dimensions have editable values.');
       return;
@@ -25727,18 +25755,45 @@ export function App() {
     const storedValue: ParamValue = Number.isFinite(Number(raw))
       ? evaluatedValue
       : raw;
-    const built = buildConstraint(
-      base,
-      sketch,
-      draft.kind,
-      draft.picks,
-      storedValue
-    );
+    const offsetData =
+      draft.kind === 'offset'
+        ? sketch.constraints?.find(
+            (constraint) =>
+              String(constraint.constraintId) === draft.constraintId
+          )?.data
+        : undefined;
+    if (draft.kind === 'offset' && offsetData?.constraintKind !== 'offset') {
+      setStatus('The dimension changed before the edit could be applied.');
+      return;
+    }
+    if (
+      draft.kind === 'offset' &&
+      // An expression is judged by its value too: `1 - 3` is not a distance.
+      !(evaluatedValue > 0)
+    ) {
+      setStatus(
+        'An offset distance is positive; its side stays with each copy.'
+      );
+      return;
+    }
+    const built =
+      offsetData?.constraintKind === 'offset'
+        ? { data: { ...offsetData, value: storedValue } }
+        : buildConstraint(
+            base,
+            sketch,
+            draft.kind as DrivingDimensionKind | 'radius',
+            draft.picks,
+            storedValue
+          );
     if ('error' in built) {
       setStatus(built.error);
       return;
     }
-    const spec = constraintToolSpec(draft.kind);
+    const spec =
+      draft.kind === 'offset'
+        ? { label: 'Offset' }
+        : constraintToolSpec(draft.kind);
     const dimensionCommands: AnyCommand[] = [];
     if (draft.constraintId) {
       const existing = sketch.constraints?.find(
@@ -26171,7 +26226,8 @@ export function App() {
           sketch.constraints?.some(({ data }) => {
             const value =
               data.constraintKind === 'distance' ||
-              data.constraintKind === 'radius'
+              data.constraintKind === 'radius' ||
+              data.constraintKind === 'offset'
                 ? data.value
                 : data.constraintKind === 'angle'
                   ? data.valueDeg
@@ -26441,7 +26497,9 @@ export function App() {
         ? 'dimension'
         : kind === 'pattern'
           ? 'pattern relation'
-          : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+          : kind === 'offset'
+            ? 'offset dimension'
+            : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
     dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
     setStatus(`Selected ${label}. Press Delete to remove it.`);
   }
@@ -28280,7 +28338,10 @@ export function App() {
         const round = (value: number) => {
           const shown = displayedValue(valueSpec, value);
           // I03: a length reads in the display unit.
-          if (valueSpec?.unit === 'length' && inPlaceShownUnits !== inPlaceUnits)
+          if (
+            valueSpec?.unit === 'length' &&
+            inPlaceShownUnits !== inPlaceUnits
+          )
             return String(roundShownLength(inPlaceShown(shown)));
           return shown === Math.round(value * 100) / 100
             ? formatNumber(shown)
@@ -28566,7 +28627,26 @@ export function App() {
           (inPlace.tool !== 'chamfer' || edge.isSmooth !== true)
       ) ?? [])
     : [];
+  // M03: the smooth run through the last picked edge, offered as one pick.
+  const inPlaceChainSeed = inPlace.slots.edges.at(-1);
+  const inPlaceChainAdditions =
+    inPlaceSpec?.edgeMode && inPlaceChainSeed
+      ? tangentChainAdditions(
+          representations[inPlaceChainSeed.bodyId],
+          inPlace.slots.edges,
+          inPlaceChainSeed.bodyId,
+          inPlace.tool === 'chamfer'
+        )
+      : [];
   const inPlaceActions = [
+    ...(inPlaceChainAdditions.length > 0
+      ? [
+          {
+            id: 'tangent-chain',
+            label: `Add the tangent chain (${inPlaceChainAdditions.length} more ${inPlaceChainAdditions.length === 1 ? 'edge' : 'edges'})`
+          }
+        ]
+      : []),
     ...(inPlaceBodyEdges.length > 0
       ? [
           inPlace.slots.edges.length === inPlaceBodyEdges.length
@@ -28610,6 +28690,18 @@ export function App() {
           return pick ? [pick] : [];
         })
       );
+    } else if (actionId === 'tangent-chain' && inPlaceChainSeed) {
+      command.setEdges([
+        ...command.slots.edges,
+        ...inPlaceChainAdditions.flatMap((selection) => {
+          const pick = inPlaceEdgePick(
+            inPlaceChainSeed.bodyId,
+            selection.topologyId,
+            selection.hash
+          );
+          return pick ? [pick] : [];
+        })
+      ]);
     } else if (actionId === 'clear-edges') {
       command.setEdges([]);
     } else if (actionId === 'swap-distances') {
@@ -36747,7 +36839,13 @@ export function App() {
       id: `file-display-units-${unit}`,
       label: `Show lengths in ${UNIT_SYSTEM_WORDS[unit]}`,
       group: 'File',
-      keywords: ['units', 'unit', displayLengthName(unit), 'metric', 'imperial'],
+      keywords: [
+        'units',
+        'unit',
+        displayLengthName(unit),
+        'metric',
+        'imperial'
+      ],
       icon: <Ruler size={16} aria-hidden="true" />,
       disabledReason: !doc
         ? 'Open a project first'

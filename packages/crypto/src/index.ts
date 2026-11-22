@@ -374,6 +374,7 @@ export {
   readSealedRecordHeader,
   sealRecord,
   SEALED_RECORD_VERSION_1,
+  SHARE_LINK_NAMES_RECORD,
   type SealedRecordHeader,
   type SealedRecordKind
 } from './sealed-records';
