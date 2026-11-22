@@ -1193,9 +1193,6 @@ export function TopBar({
                   </small>
                 )}
               </button>
-              {displayUnits ? (
-                <DisplayUnitsRow {...displayUnits} />
-              ) : null}
               {onOpenComments ? (
                 <>
                   <div className="topbar-menu-sep" />
@@ -1419,6 +1416,11 @@ export function TopBar({
                     </small>
                   </button>
                 </>
+              ) : null}
+              {/* I03: after Export, so adding it moved none of the actions
+                  above it under panels that float over the menu. */}
+              {displayUnits ? (
+                <DisplayUnitsRow {...displayUnits} />
               ) : null}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">
