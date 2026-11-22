@@ -52,6 +52,9 @@ interface AdapterRefusalSpec {
  * - `edge_modifier_refused`: a fillet or chamfer neither the kernel built
  *   nor the adapter accepted, with no typed kernel refusal behind it (an
  *   acceptance rule declined the kernel's result).
+ * - `fillet_vertex_radius_unmatched`: a per-vertex fillet radius whose
+ *   edge end cannot be told apart on the rebuilt body (its edge now runs
+ *   across the direction it was picked in).
  * - `blend_radius_negative`: a blend resize to a negative radius.
  * - `radius_not_positive`: a cylindrical-face resize to a radius of zero or
  *   less.
@@ -85,6 +88,10 @@ export const ADAPTER_REFUSALS = {
     category: 'invalid_input'
   },
   edge_modifier_refused: { family: 'blend', category: 'quality_refused' },
+  fillet_vertex_radius_unmatched: {
+    family: 'reference',
+    category: 'invalid_input'
+  },
   blend_radius_negative: { family: 'direct-edit', category: 'invalid_input' },
   radius_not_positive: { family: 'direct-edit', category: 'invalid_input' }
 } as const satisfies Record<string, AdapterRefusalSpec>;

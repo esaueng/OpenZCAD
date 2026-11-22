@@ -16,6 +16,7 @@ import { TOOL_META } from '../tools';
 import { placementFrame } from './primitives';
 import {
   IN_PLACE_TOOL_SPECS,
+  filletSelectionVertices,
   axisCandidatesFor,
   clampValue,
   displayedValue,
@@ -2260,6 +2261,28 @@ describe('review: values the cards accepted stay expressible', () => {
     expect(spread).toBeCloseTo(8);
   });
 
+  it('an unclicked new hole stands its handles on the outer-boundary anchor', () => {
+    // A plate face whose full-area centroid an off-center bore has moved.
+    const face = {
+      ...TOP,
+      point: undefined,
+      centroid: { x: 20, y: 0, z: 4 },
+      outerCentroid: { x: 10, y: 0, z: 4 }
+    };
+    const [diameter] = IN_PLACE_TOOL_SPECS.hole.handles(
+      { ...EMPTY, faces: [face] },
+      { diameter: 4 },
+      CTX,
+      {}
+    );
+    const origin =
+      diameter && 'origin' in diameter.params ? diameter.params.origin : null;
+    // The rebuild drills (0, 0) from the outer centroid, so the handle is
+    // within a radius of it, not of the full-face centroid.
+    expect(origin).not.toBeNull();
+    expect(Math.hypot(origin!.x - 10, origin!.y)).toBeLessThanOrEqual(2 + 1e-9);
+  });
+
   it('a typed hole names the world axis each position chip runs along', () => {
     const handles = IN_PLACE_TOOL_SPECS.hole.handles(
       { ...EMPTY, faces: [TOP] },
@@ -2697,8 +2720,176 @@ describe('fillet and chamfer run in place', () => {
     expect(
       spec.handles(slots, {}, CTX, { law: 'linear' }).map((h) => h.valueId)
     ).toEqual(['radius', 'endRadius']);
-    expect(spec.defaults?.(slots, CTX, { radius: 5 })).toEqual({
-      endRadius: 5
+    expect(spec.defaults?.(slots, CTX, { radius: 5 })).toMatchObject({
+      endRadius: 5,
+      vertex1: 5,
+      vertex8: 5
+    });
+  });
+
+  describe('per-vertex radii (M03, v151)', () => {
+    const witness = (
+      from: [number, number, number],
+      to: [number, number, number]
+    ) =>
+      ({
+        kind: 'edge',
+        currentHash: 0,
+        witness: {
+          curveType: 'LINE',
+          length: 1,
+          closed: false,
+          endpoints: [from.map((v) => v * 1e6), to.map((v) => v * 1e6)],
+          midpoint: [0, 0, 0]
+        }
+      }) as never;
+    const A: EdgePick = {
+      ...EDGE,
+      hash: 31,
+      reference: witness([0, 0, 4], [20, 0, 4])
+    };
+    const B: EdgePick = {
+      ...EDGE,
+      hash: 32,
+      reference: witness([20, 10, 4], [20, 0, 4])
+    };
+    const perCorner = { law: 'linear', radiusAt: 'vertices' };
+
+    it('counts each shared corner once, in pick order', () => {
+      expect(filletSelectionVertices([A, B])).toEqual([
+        expect.objectContaining({
+          point: { x: 0, y: 0, z: 4 },
+          ends: [{ edge: 0, end: 0 }]
+        }),
+        expect.objectContaining({
+          point: { x: 20, y: 0, z: 4 },
+          ends: [
+            { edge: 0, end: 1 },
+            { edge: 1, end: 1 }
+          ]
+        }),
+        expect.objectContaining({
+          point: { x: 20, y: 10, z: 4 },
+          ends: [{ edge: 1, end: 0 }]
+        })
+      ]);
+    });
+
+    it('stores every edge end at its corner radius, one handle per corner', () => {
+      const spec = IN_PLACE_TOOL_SPECS.fillet;
+      const slots = { ...EMPTY, edges: [A, B] };
+      expect(spec.ready(slots, perCorner)).toBe(true);
+      expect(
+        spec.request(
+          slots,
+          { radius: 2, endRadius: 2, vertex1: 1, vertex2: 'r', vertex3: 3 },
+          perCorner,
+          CTX
+        )
+      ).toMatchObject({
+        size: 2,
+        radiusLaw: 'linear',
+        vertexRadii: [
+          { edge: 0, end: 0, radius: 1 },
+          { edge: 0, end: 1, radius: 'r' },
+          { edge: 1, end: 1, radius: 'r' },
+          { edge: 1, end: 0, radius: 3 }
+        ],
+        // Both edges are drawn towards (20, 0, 4), witness end 1 of each.
+        edgeRuns: [true, true]
+      });
+      const handles = spec.handles(slots, {}, CTX, perCorner);
+      expect(handles.map((handle) => handle.valueId)).toEqual([
+        'vertex1',
+        'vertex2',
+        'vertex3'
+      ]);
+      expect(handles[1]).toMatchObject({
+        kind: 'linear',
+        params: { origin: { x: 20, y: 0, z: 4 } }
+      });
+      // Start and end keeps the two-radius request and its handles.
+      expect(
+        spec.request(
+          slots,
+          { radius: 2, endRadius: 3 },
+          { law: 'linear', radiusAt: 'ends' },
+          CTX
+        )
+      ).not.toHaveProperty('vertexRadii');
+    });
+
+    it('stores one station along every edge, with its arrow there (v152)', () => {
+      const spec = IN_PLACE_TOOL_SPECS.fillet;
+      const slots = { ...EMPTY, edges: [A] };
+      const along = { law: 'scurve', radiusAt: 'along' };
+      expect(
+        spec.request(
+          slots,
+          { radius: 1, endRadius: 2, midRadius: 'm', midAt: 25 },
+          along,
+          CTX,
+          { radius: 1, endRadius: 2, midRadius: 3, midAt: 25 }
+        )
+      ).toMatchObject({
+        radiusLaw: 'scurve',
+        radiusStations: [{ at: 0.25, radius: 'm' }]
+      });
+      const station = spec
+        .handles(slots, { midAt: 25 }, CTX, along)
+        .find((handle) => handle.valueId === 'midRadius');
+      expect(station).toMatchObject({
+        kind: 'linear',
+        params: { origin: { x: 5, y: 0, z: 4 } }
+      });
+      const { reference: _named, ...unnamed } = A;
+      expect(spec.ready({ ...EMPTY, edges: [unnamed] }, along)).toBe(false);
+    });
+
+    it('keys each corner value by its body and where its corner stands (review)', () => {
+      const keys = IN_PLACE_TOOL_SPECS.fillet.edgeValueKeys!;
+      expect(keys([A, B])).toEqual({
+        vertex1: 'body_a:0,0,4',
+        vertex2: 'body_a:20,0,4',
+        vertex3: 'body_a:20,10,4'
+      });
+      // B alone: its corners take the first two slots, keyed as before, so
+      // the session moves an edited value with its corner, not its slot.
+      expect(keys([B])).toEqual({
+        vertex1: 'body_a:20,10,4',
+        vertex2: 'body_a:20,0,4'
+      });
+    });
+
+    it('is not ready without a drawn edge end to read its direction from', () => {
+      const { end: _end, ...endless } = A;
+      expect(
+        IN_PLACE_TOOL_SPECS.fillet.ready(
+          { ...EMPTY, edges: [endless] },
+          perCorner
+        )
+      ).toBe(false);
+    });
+
+    it('is not ready without named edges or past its corner count', () => {
+      const spec = IN_PLACE_TOOL_SPECS.fillet;
+      const { reference: _named, ...unnamed } = A;
+      expect(spec.ready({ ...EMPTY, edges: [unnamed] }, perCorner)).toBe(false);
+      expect(spec.hint({ ...EMPTY, edges: [unnamed] }, perCorner)).toMatch(
+        /needs edges the body names/
+      );
+      const many = Array.from({ length: 5 }, (_, index) => ({
+        ...A,
+        hash: 40 + index,
+        reference: witness([index * 30, 0, 0], [index * 30 + 20, 0, 0])
+      }));
+      expect(spec.ready({ ...EMPTY, edges: many }, perCorner)).toBe(false);
+      expect(spec.hint({ ...EMPTY, edges: many }, perCorner)).toMatch(
+        /up to 8 corners/
+      );
+      expect(
+        spec.request({ ...EMPTY, edges: many }, { radius: 1 }, perCorner, CTX)
+      ).toBeNull();
     });
   });
 

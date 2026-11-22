@@ -295,6 +295,8 @@ export function TweakPanel({
                 Change a value and press Enter, or use an on/off toggle.
                 {units && (
                   <span className="tweak-model-units">
+                    {/* The unit a typed parameter value is read in: the
+                        stored one, whatever the display unit (I03). */}
                     Model units: {units}
                   </span>
                 )}
@@ -331,6 +333,7 @@ export function TweakPanel({
                       parameter={parameter}
                       value={parameterValues[parameter.name]}
                       minimum={parameterMinimums?.[parameter.name]}
+                      {...(units ? { units } : {})}
                       onSet={onSetParameter}
                       onViewDetails={onViewActivityLog}
                       onPreview={onPreviewParameter}

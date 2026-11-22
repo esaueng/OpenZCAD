@@ -98,6 +98,8 @@ import {
   millimetresPerUnit,
   isDatumPlaneRef,
   transformStampBodyIds,
+  filletVertexRadiiProblem,
+  filletRadiusStationsProblem,
   type BodyId,
   type DatumPlaneSource,
   type DatumPointSource,
@@ -142,6 +144,7 @@ import {
 import {
   assertQualifiedVariableFillet,
   variableBlendRefusal,
+  perEdgeVertexRadii,
   type VariableFilletSpec
 } from './exact-variable-blends';
 import {
@@ -2392,13 +2395,27 @@ export function holeToolSpecFor(
     // edge it sits on the rim, a whole radius from the centroid.
     // Re-anchoring a hole that was drilled against the rim would silently
     // relocate it.
+    //
+    // M01 (schema v150): `outer-centroid` is the outer boundary loop's own
+    // centroid, which drilling or resizing another hole in the face leaves
+    // where it was; the full area centroid (`centroid`) does not, so a hole
+    // measured from it drifts with every hole drilled before it.
     if (data.positionAnchor === 'centroid' && !geometry.centroid) {
       throw new Error(
         'The hole entry face no longer reports an area centroid, and this hole is positioned from one.'
       );
     }
+    if (data.positionAnchor === 'outer-centroid' && !geometry.outerCentroid) {
+      throw new Error(
+        'The hole entry face no longer reports the centroid of its outer boundary, and this hole is positioned from it.'
+      );
+    }
     const anchor =
-      data.positionAnchor === 'centroid' ? geometry.centroid! : geometry.center;
+      data.positionAnchor === 'outer-centroid'
+        ? geometry.outerCentroid!
+        : data.positionAnchor === 'centroid'
+          ? geometry.centroid!
+          : geometry.center;
     entries = [
       {
         pointId: null,
@@ -3527,6 +3544,10 @@ export function edgeModifierSettings(
   size: number;
   chamferAngleRadians: number | undefined;
   variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
+  /** M03 (v151): resolved per-vertex radii, by selected edge and witness end. */
+  vertexRadii: { edge: number; end: 0 | 1; radius: number }[] | undefined;
+  /** M03 (v152): resolved radius stations, from witness end 0. */
+  radiusStations: { at: number; radius: number }[] | undefined;
   chamferSecondDistance: number | undefined;
 } {
   const { document, scope } = ctx;
@@ -3563,6 +3584,8 @@ export function edgeModifierSettings(
   // stored field being present, so a document that never carried one runs the
   // constant/symmetric path it always ran.
   let variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
+  let vertexRadii: { edge: number; end: 0 | 1; radius: number }[] | undefined;
+  let radiusStations: { at: number; radius: number }[] | undefined;
   if (data.featureKind === 'fillet' && data.endRadius !== undefined) {
     const endRadius = resolveParamValue(
       data.endRadius,
@@ -3577,6 +3600,21 @@ export function edgeModifierSettings(
     const law: string = data.radiusLaw ?? 'linear';
     assertQualifiedVariableFillet(law, size, endRadius);
     variableRadius = { law, endRadius };
+    if (data.vertexRadii !== undefined) {
+      // M03 (v151): checked again here because a document is untrusted.
+      const problem = filletVertexRadiiProblem(data);
+      if (problem) throw new Error(problem);
+      vertexRadii = data.vertexRadii.map((entry) => ({
+        edge: entry.edge,
+        end: entry.end,
+        radius: resolveParamValue(
+          entry.radius,
+          scope,
+          'vertex radius',
+          document.units
+        )
+      }));
+    }
   }
   let chamferSecondDistance: number | undefined;
   if (data.featureKind === 'chamfer' && data.distance2 !== undefined) {
@@ -3595,7 +3633,30 @@ export function edgeModifierSettings(
       throw new Error('Chamfer second distance must be greater than zero.');
     }
   }
-  return { size, chamferAngleRadians, variableRadius, chamferSecondDistance };
+  if (data.featureKind === 'fillet' && data.radiusStations !== undefined) {
+    // M03 (v152): checked again here because a document is untrusted.
+    if (variableRadius === undefined)
+      throw new Error('Fillet radius stations need a variable-radius fillet.');
+    const problem = filletRadiusStationsProblem(data);
+    if (problem) throw new Error(problem);
+    radiusStations = data.radiusStations.map((station) => ({
+      at: station.at,
+      radius: resolveParamValue(
+        station.radius,
+        scope,
+        'station radius',
+        document.units
+      )
+    }));
+  }
+  return {
+    size,
+    chamferAngleRadians,
+    variableRadius,
+    vertexRadii,
+    radiusStations,
+    chamferSecondDistance
+  };
 }
 
 function buildEdgeModifierFeature(
@@ -3636,8 +3697,25 @@ function buildEdgeModifierFeature(
       : undefined,
     ctx.onUnresolvedEdgeHash
   );
-  const { size, chamferAngleRadians, variableRadius, chamferSecondDistance } =
-    edgeModifierSettings(ctx, data);
+  const settings = edgeModifierSettings(ctx, data);
+  const { size, chamferAngleRadians, chamferSecondDistance } = settings;
+  const variableRadius =
+    settings.variableRadius &&
+    (settings.vertexRadii || settings.radiusStations) &&
+    data.featureKind === 'fillet'
+      ? {
+          ...settings.variableRadius,
+          perEdge: perEdgeVertexRadii(
+            kernel,
+            selected,
+            data,
+            settings.vertexRadii ?? [],
+            size,
+            settings.variableRadius.endRadius,
+            settings.radiusStations ?? []
+          )
+        }
+      : settings.variableRadius;
   // M02: where these edges stand now, measured before they are rounded, for
   // a feature pattern that repeats this one (review: an upstream edit moves
   // them away from the stored pick).
@@ -3676,7 +3754,8 @@ function buildEdgeModifierFeature(
       throw variableBlendRefusal(
         data.featureKind,
         selected.length,
-        reportedRefusal
+        reportedRefusal,
+        reportedKernelRefusal
       );
     }
     const refusal = edgeModifierRefusal(
@@ -4762,6 +4841,16 @@ function buildPatternFeature(
         ) {
           throw new Error(
             "its faces are set back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly."
+          );
+        }
+        // M03 (v151): per-vertex radii name the original edges' ends; a
+        // copy's edges are other edges.
+        if (
+          settings.vertexRadii !== undefined ||
+          settings.radiusStations !== undefined
+        ) {
+          throw new Error(
+            "its radii are set per vertex on the original edges, which a copy's edges are not, so a pattern repeats only a fillet with one start and end radius; fillet the copies' edges directly."
           );
         }
         let refusal: string | null = null;

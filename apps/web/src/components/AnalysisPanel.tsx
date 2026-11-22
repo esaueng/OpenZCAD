@@ -592,14 +592,18 @@ function useBesideDisplayButton(
         });
     }
     if (root) mutation?.observe(root, { childList: true, subtree: true });
-    root?.addEventListener('transitionend', schedule);
+    // Tweak's View bar slides in on a keyframe animation rather than a
+    // transition: a placement taken mid-slide stays off by the remaining
+    // offset unless it is taken again once the animation settles.
+    const settled = ['transitionend', 'animationend', 'animationcancel'];
+    for (const type of settled) root?.addEventListener(type, schedule);
     window.addEventListener('resize', schedule);
     place();
     return () => {
       if (frame) cancelAnimationFrame(frame);
       resize?.disconnect();
       mutation?.disconnect();
-      root?.removeEventListener('transitionend', schedule);
+      for (const type of settled) root?.removeEventListener(type, schedule);
       window.removeEventListener('resize', schedule);
     };
   }, [panelRef]);

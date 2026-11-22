@@ -477,6 +477,30 @@ describe('modeling operation form contracts', () => {
       input: { faceHash: 42, positionAnchor: 'centroid' }
     });
 
+    // M01 (schema v150): a face that also reports its outer boundary's own
+    // centroid anchors the hole there, which other holes never move.
+    const outlined: BodyTopology = {
+      ...centred,
+      faces: [
+        {
+          ...centred.faces[0]!,
+          geometry: {
+            ...centred.faces[0]!.geometry!,
+            outerCentroid: { x: 5, y: 9, z: 30 }
+          }
+        }
+      ]
+    };
+    expect(
+      buildModelingOperationSubmission(
+        holeState(42),
+        modelingFaceOptions(outlined)
+      )
+    ).toMatchObject({
+      operation: 'hole',
+      input: { faceHash: 42, positionAnchor: 'outer-centroid' }
+    });
+
     // A face that cannot report one keeps the old anchor, and says so by
     // leaving the marker off — the rebuild reads its absence, not its value.
     const submission = buildModelingOperationSubmission(

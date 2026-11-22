@@ -20,6 +20,11 @@ import {
 } from '@openzcad/shared';
 import type { RemusKernel } from './remus-runtime';
 import { KernelRefusal, type KernelRefusalCategory } from './kernel-refusal';
+import { AdapterRefusal } from './adapter-refusal';
+import {
+  variableFilletOutcome,
+  type BlendQuality
+} from './exact-blend-refusal';
 import { GEOMETRY_EPSILON } from './exact-math';
 
 /**
@@ -40,6 +45,158 @@ export interface VariableFilletSpec {
   /** Radius at the far end of the same edge. */
   readonly endRadius: number;
   readonly law: VariableFilletLaw;
+  /**
+   * M03 per-vertex radii: each selected edge's own start and end radius, in
+   * the kernel edge's direction, parallel to the selection. Absent gives
+   * every edge `startRadius`→`endRadius`.
+   */
+  readonly perEdge?: readonly {
+    startRadius: number;
+    endRadius: number;
+    /** M03 (v152): interior stations in the kernel edge's direction. */
+    stations?: readonly { at: number; radius: number }[];
+  }[];
+}
+
+/** An ADR-011 quantized witness point, in document units. */
+function witnessPoint([x, y, z]: readonly [number, number, number]): {
+  x: number;
+  y: number;
+  z: number;
+} {
+  return { x: x * 1e-6, y: y * 1e-6, z: z * 1e-6 };
+}
+
+/**
+ * Whether a resolved edge runs in the direction it was picked in: its
+ * kernel start is witness end 0. Compares the kernel edge's direction with
+ * the stored witness's, which holds through any upstream edit that moves or
+ * resizes the edge without turning it across itself; an edge that now runs
+ * across its picked direction cannot tell its ends apart and is refused by
+ * name rather than guessed.
+ */
+function runsAsPicked(
+  kernel: Pick<RemusKernel, 'getEdgeVertices'>,
+  handle: number | undefined,
+  reference: { witness: { closed: boolean; endpoints?: unknown } } | undefined,
+  what: string,
+  recorded: boolean | undefined
+): boolean {
+  const endpoints = reference?.witness.endpoints as
+    [[number, number, number], [number, number, number]] | undefined;
+  if (
+    handle === undefined ||
+    reference?.witness.closed !== false ||
+    !endpoints
+  ) {
+    throw new AdapterRefusal(
+      'fillet_vertex_radius_unmatched',
+      `${what} names an edge the fillet cannot locate by where it was picked.`
+    );
+  }
+  const ends = Array.from(kernel.getEdgeVertices(handle));
+  const kernelDirection = [
+    ends[3]! - ends[0]!,
+    ends[4]! - ends[1]!,
+    ends[5]! - ends[2]!
+  ];
+  const [w0, w1] = endpoints.map(witnessPoint) as [
+    ReturnType<typeof witnessPoint>,
+    ReturnType<typeof witnessPoint>
+  ];
+  const pickedDirection = [w1.x - w0.x, w1.y - w0.y, w1.z - w0.z];
+  const dot =
+    kernelDirection[0]! * pickedDirection[0]! +
+    kernelDirection[1]! * pickedDirection[1]! +
+    kernelDirection[2]! * pickedDirection[2]!;
+  const scale = Math.hypot(...kernelDirection) * Math.hypot(...pickedDirection);
+  if (!(scale > 0) || Math.abs(dot) <= 1e-6 * scale) {
+    throw new AdapterRefusal(
+      'fillet_vertex_radius_unmatched',
+      `${what} names an edge that now runs across the direction it was picked in, so its ends cannot be told apart.`
+    );
+  }
+  // The way the edge ran when the radii were set must be the way it runs
+  // now relative to where it was picked. A body turned upstream (180° about
+  // an axis) or an edge rebuilt reversed swaps which physical corner sits at
+  // which picked end; position alone cannot tell, so it is refused rather
+  // than guessed (review).
+  if (recorded === undefined || recorded !== dot > 0) {
+    throw new AdapterRefusal(
+      'fillet_vertex_radius_unmatched',
+      `${what} names an edge that now runs the other way from when it was set, so its ends cannot be told apart; set it again.`
+    );
+  }
+  return dot > 0;
+}
+
+/**
+ * M03: every selected edge's start and end radius, and its interior
+ * stations, in the kernel edge's own direction.
+ *
+ * Per-vertex radii (schema v142) name an end by the edge's stored witness
+ * endpoints, and stations (v152) stand at fractions from witness end 0: both
+ * are fixed by where the edge was picked, not by the direction the kernel
+ * builds it in (see {@link runsAsPicked}). Ends without an entry keep
+ * `startRadius` / `endRadius`.
+ */
+export function perEdgeVertexRadii(
+  kernel: Pick<RemusKernel, 'getEdgeVertices'>,
+  selected: readonly number[],
+  data: {
+    edgeHashes: readonly number[];
+    edgeReferences?: readonly {
+      currentHash: number;
+      witness: { closed: boolean; endpoints?: unknown };
+    }[];
+    edgeRuns?: readonly boolean[];
+  },
+  entries: readonly { edge: number; end: 0 | 1; radius: number }[],
+  startRadius: number,
+  endRadius: number,
+  stations: readonly { at: number; radius: number }[] = []
+): {
+  startRadius: number;
+  endRadius: number;
+  stations?: { at: number; radius: number }[];
+}[] {
+  const reference = (edge: number) =>
+    data.edgeReferences?.find(
+      (candidate) => candidate.currentHash === data.edgeHashes[edge]
+    );
+  const perEdge = selected.map((handle, edge) => {
+    if (stations.length === 0) return { startRadius, endRadius };
+    const forward = runsAsPicked(
+      kernel,
+      handle,
+      reference(edge),
+      'A fillet radius station',
+      data.edgeRuns?.[edge]
+    );
+    return {
+      startRadius,
+      endRadius,
+      stations: forward
+        ? stations.map((station) => ({ ...station }))
+        : stations
+            .map((station) => ({ at: 1 - station.at, radius: station.radius }))
+            .reverse()
+    };
+  });
+  for (const entry of entries) {
+    const forward = runsAsPicked(
+      kernel,
+      selected[entry.edge],
+      reference(entry.edge),
+      'A per-vertex fillet radius',
+      data.edgeRuns?.[entry.edge]
+    );
+    const kernelStart = forward ? entry.end === 0 : entry.end === 1;
+    const radii = perEdge[entry.edge]!;
+    if (kernelStart) radii.startRadius = entry.radius;
+    else radii.endRadius = entry.radius;
+  }
+  return perEdge;
 }
 
 export function isQualifiedVariableFilletLaw(
@@ -97,38 +254,61 @@ export function assertQualifiedVariableFillet(
  * the feature stores one law for the selection, so a per-edge payload here
  * would be a shape the document cannot round-trip.
  *
- * `startSetback`/`endSetback` are never written. They are the N-way vertex
- * blend, which the kernel refuses unless EVERY stripe meeting at a 3-or-more
- * way corner declares a positive setback — and which its own documentation
- * places outside the qualified set even then.
+ * `startSetback`/`endSetback` are never written. M03 setback corners come
+ * from `ballCorners` instead: at a corner where three or more selected edges
+ * meet and no setback is declared, the kernel sets each stripe back to the
+ * one ball tangent to their planar supports and closes the corner with that
+ * ball's exact spherical cap, or refuses the corner by code
+ * (`unsupported-setback-corner`). A declared setback could only be exact
+ * when it equals that ball's, which a caller cannot know, so none is sent.
  */
 export function variableFilletRequest(
   edges: readonly number[],
   spec: VariableFilletSpec
 ): string {
   return JSON.stringify(
-    edges.map((edge) => ({
+    edges.map((edge, index) => ({
       edge,
       law: spec.law,
-      start: spec.startRadius,
-      end: spec.endRadius
+      start: spec.perEdge?.[index]?.startRadius ?? spec.startRadius,
+      end: spec.perEdge?.[index]?.endRadius ?? spec.endRadius,
+      ...(spec.perEdge?.[index]?.stations?.length
+        ? { stations: spec.perEdge[index].stations }
+        : {}),
+      ballCorners: true
     }))
   );
 }
 
 /**
- * Run a qualified variable-radius fillet. Throws the kernel's own refusal
- * when the blend fails; the caller applies the adapter's acceptance rules to
- * a result that comes back.
+ * Run a qualified variable-radius fillet on the exact route: the kernel's
+ * typed twin with `exactOnly` (see {@link variableFilletOutcome}). Throws
+ * the typed {@link BlendRefusal} when the kernel refuses; the caller applies
+ * the adapter's acceptance rules to a result that comes back.
  */
 export function applyVariableRadiusFillet(
   kernel: RemusKernel,
   solid: number,
   edges: readonly number[],
-  spec: VariableFilletSpec
+  spec: VariableFilletSpec,
+  /** Receives the kernel's disclosed quality of a result it returns. */
+  reportQuality?: (quality: BlendQuality) => void
 ): number {
   assertQualifiedVariableFillet(spec.law, spec.startRadius, spec.endRadius);
-  return kernel.filletVariable(solid, variableFilletRequest(edges, spec));
+  for (const radii of spec.perEdge ?? []) {
+    assertQualifiedVariableFillet(spec.law, radii.startRadius, radii.endRadius);
+    for (const station of radii.stations ?? []) {
+      assertQualifiedVariableFillet(spec.law, station.radius, station.radius);
+    }
+  }
+  const outcome = variableFilletOutcome(
+    kernel,
+    solid,
+    variableFilletRequest(edges, spec)
+  );
+  if (outcome.status === 'refused') throw outcome.refusal;
+  reportQuality?.(outcome.quality);
+  return outcome.solid;
 }
 
 /**
@@ -224,6 +404,17 @@ const BLEND_FAILURE_CATEGORIES: Readonly<
 };
 
 /**
+ * `limit` to six significant digits, rounded down: a maximum shown rounded
+ * up (20.00006 as 20.0001) would overflow again when typed back in.
+ */
+export function displayedAtMost(limit: number): number {
+  const shown = Number(limit.toPrecision(6));
+  if (shown <= limit) return shown;
+  const step = 10 ** (Math.floor(Math.log10(Math.abs(limit))) - 5);
+  return Number((shown - step).toPrecision(6));
+}
+
+/**
  * The typed refusal for a variable-radius fillet or asymmetric chamfer the
  * kernel did not build, carrying {@link variableBlendFailureMessage} as its
  * sentence. The code is the kernel's `blend_failure_code` prefix; a report
@@ -233,22 +424,44 @@ const BLEND_FAILURE_CATEGORIES: Readonly<
 export function variableBlendRefusal(
   featureKind: 'fillet' | 'chamfer',
   edgeCount: number,
-  reported: string | null
+  reported: string | null,
+  /**
+   * M03: the kernel's typed refusal, when it gave one. Its code stands
+   * over the one read from `reported`, its category over `unsupported` for
+   * a code the table below does not list, and a
+   * `cliff-encountered` refusal's `limit` is the largest radius the edge's
+   * faces carry (see {@link KernelRefusal.limit}).
+   */
+  typed?: Pick<KernelRefusal, 'kernelCode' | 'category' | 'limit'> | null
 ): KernelRefusal {
-  const message = variableBlendFailureMessage(featureKind, edgeCount, reported);
   const kernelReason = variableBlendRefusalMessage(reported);
   const code =
-    kernelReason === null
+    typed?.kernelCode ??
+    (kernelReason === null
       ? 'blend-failed'
-      : kernelReason.slice(0, kernelReason.indexOf(':'));
+      : kernelReason.slice(0, kernelReason.indexOf(':')));
+  const overflow =
+    typed?.limit !== undefined && code === 'cliff-encountered'
+      ? typed.limit
+      : undefined;
+  // M03: the limit is the kernel's typed measurement, said from the data.
+  const message =
+    variableBlendFailureMessage(featureKind, edgeCount, reported) +
+    (overflow === undefined
+      ? ''
+      : ` The faces along the edge carry a radius of at most ${displayedAtMost(overflow)}.`);
   return new KernelRefusal({
     family: 'blend',
-    category: BLEND_FAILURE_CATEGORIES[code] ?? 'unsupported',
+    // The adapter's table files the codes it knows (an overflow is the
+    // caller's input); a code it does not list keeps the kernel's category.
+    category:
+      BLEND_FAILURE_CATEGORIES[code] ?? typed?.category ?? 'unsupported',
     kernelCode: code,
     kernelMessage:
       reported?.trim() || 'the exact modeling engine gave no further detail',
     message,
-    reason: message
+    reason: message,
+    ...(overflow === undefined ? {} : { limit: overflow })
   });
 }
 
