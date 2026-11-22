@@ -385,6 +385,15 @@ function shareLinkName(shareLink: ProjectShareLinkSummary): string {
   );
 }
 
+/** The expiry date and the time left, for an open link card. */
+function shareLinkExpiryDetail(createdAt: number): string {
+  const expiresAt = createdAt + PROJECT_SHARE_LINK_TTL_SECONDS;
+  const remaining = expiryLabel(expiresAt);
+  return remaining === 'expired'
+    ? `${createdLabel(expiresAt)} · expired`
+    : `${createdLabel(expiresAt)} · in ${remaining}`;
+}
+
 function shareLinkExpiryLabel(createdAt: number): string {
   const remaining = expiryLabel(createdAt + PROJECT_SHARE_LINK_TTL_SECONDS);
   return remaining === 'expired' ? 'Expired' : `Expires in ${remaining}`;
@@ -2012,7 +2021,7 @@ function PlaintextShareLinks({
                     ],
                     ['Comments', shareLink.comments ? 'On' : 'Off'],
                     ['Created', createdLabel(shareLink.createdAt)],
-                    ['Expires', shareLinkExpiryLabel(shareLink.createdAt)]
+                    ['Expires', shareLinkExpiryDetail(shareLink.createdAt)]
                   ]}
                 />
                 <p className="sharing-hint">

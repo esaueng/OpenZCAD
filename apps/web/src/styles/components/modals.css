@@ -2355,6 +2355,7 @@
 }
 
 /* The card that makes a new link: name, access, options, Create link. */
+/* A secondary button, drawn as ghost in a dialog like the others. */
 .share-links-new {
   justify-self: start;
 }
