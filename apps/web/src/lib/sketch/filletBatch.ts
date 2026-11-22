@@ -188,6 +188,30 @@ function arcPoint(arc: SourceArc, angle: number): Sketch2dPoint {
   };
 }
 
+// A narrow x band can still contain a whole sketch's endpoints, including
+// ones far apart in y. Bound candidate work as well as stored neighbors.
+const MAX_ENDPOINT_PAIR_CHECKS = 1_000_000;
+
+// Each catalog corner becomes a picker marker in the editor, so the catalog
+// size is bounded too: a circle meets every free end lying on it twice.
+const MAX_CATALOG_CORNERS = 10_000;
+
+class SketchFilletCatalogLimitError extends Error {
+  constructor(
+    message = 'This sketch has too many nearby endpoints to check safely. Split it into smaller sketches before using Sketch Fillet.'
+  ) {
+    super(message);
+  }
+}
+
+function boundCatalogSize(corners: ReadonlyMap<string, unknown>): void {
+  if (corners.size > MAX_CATALOG_CORNERS) {
+    throw new SketchFilletCatalogLimitError(
+      'This sketch has too many fillet corners to show safely. Split it into smaller sketches before using Sketch Fillet.'
+    );
+  }
+}
+
 function sourceLines(
   document: ProjectDocument,
   sketch: SketchNode,
@@ -305,28 +329,31 @@ function catalogCorners(
     }
   }
   endpoints.sort((a, b) => a.position.x - b.position.x);
-  const neighbors = new Map<Endpoint, Endpoint[]>(
-    endpoints.map((endpoint) => [endpoint, []])
-  );
+  // Only a unique neighbor can form a corner. Keep that one, or null once
+  // the endpoint is branched; retaining the entire branch is unnecessary.
+  const neighbors = new Map<Endpoint, Endpoint | null>();
+  let pairChecks = 0;
   for (const [index, a] of endpoints.entries()) {
     for (let next = index + 1; next < endpoints.length; next += 1) {
       const b = endpoints[next]!;
       if (b.position.x - a.position.x > JOINT_TOLERANCE) break;
+      if (++pairChecks > MAX_ENDPOINT_PAIR_CHECKS) {
+        throw new SketchFilletCatalogLimitError();
+      }
       if (
         a.ref.objectId === b.ref.objectId ||
         !sameSketchPoint(a.position, b.position)
       )
         continue;
-      neighbors.get(a)!.push(b);
-      neighbors.get(b)!.push(a);
+      neighbors.set(a, neighbors.has(a) ? null : b);
+      neighbors.set(b, neighbors.has(b) ? null : a);
     }
   }
 
   const corners = new Map<string, CatalogCorner>();
-  for (const [a, adjacent] of neighbors) {
-    if (a.linked || adjacent.length !== 1) continue;
-    const b = adjacent[0]!;
-    if (b.linked || neighbors.get(b)!.length !== 1) continue;
+  for (const a of endpoints) {
+    const b = neighbors.get(a);
+    if (a.linked || !b || b.linked || neighbors.get(b) !== a) continue;
     if (endpointKey(a.ref) >= endpointKey(b.ref)) continue;
     const curved = a.leg.kind === 'arc' || b.leg.kind === 'arc';
     // Two lines meet where their supporting lines cross, so a rounded or
@@ -347,14 +374,19 @@ function catalogCorners(
       ],
       curved
     });
+    boundCatalogSize(corners);
   }
   // S05 circle inputs: a free line or arc end lying on a circle meets it in
   // two corners, one each way round. The circle is a leg that runs (almost)
   // a whole turn from the joint, and is never trimmed.
   for (const [circleId, circle] of circles) {
     if (circle.linked) continue;
-    for (const [end, adjacent] of neighbors) {
-      if (end.linked || adjacent.length !== 0) continue;
+    for (const end of endpoints) {
+      if (++pairChecks > MAX_ENDPOINT_PAIR_CHECKS) {
+        throw new SketchFilletCatalogLimitError();
+      }
+      // A free end has no coincident neighbor at all.
+      if (end.linked || neighbors.has(end)) continue;
       const reach = Math.hypot(
         end.position.x - circle.center.x,
         end.position.y - circle.center.y
@@ -413,6 +445,7 @@ function catalogCorners(
           curved: true,
           circleLeg: circleId
         });
+        boundCatalogSize(corners);
       }
     }
   }
@@ -422,7 +455,9 @@ function catalogCorners(
 /**
  * Finds the selectable, unbranched corners of the resolved sketch: where two
  * lines, a line and an arc, or two arcs meet end to end (S05 arc inputs),
- * leaving out smooth continuations.
+ * leaving out smooth continuations. Refuses excessive candidate work rather
+ * than returning a partial catalog that could reinterpret a branched endpoint
+ * as a corner.
  */
 export function listSketchFilletCorners(
   document: ProjectDocument,
@@ -495,11 +530,22 @@ export function planSketchFilletBatch(
   }
   const base = sourceLines(document, sketch, resolve);
   const baseArcs = sourceArcs(document, sketch, resolve);
-  const catalog = catalogCorners(
-    base,
-    baseArcs,
-    sourceCircles(document, sketch, resolve)
-  );
+  let catalog: ReturnType<typeof catalogCorners>;
+  try {
+    catalog = catalogCorners(
+      base,
+      baseArcs,
+      sourceCircles(document, sketch, resolve)
+    );
+  } catch (error) {
+    if (!(error instanceof SketchFilletCatalogLimitError)) throw error;
+    return {
+      status: 'refuse',
+      reason: error.message,
+      lineIds: [],
+      cornerIds
+    };
+  }
   const circleCorners = new Map<string, EntityId>();
   const lines = new Map<EntityId, SketchFilletBatchLine>();
   const trimmedArcs = new Map<

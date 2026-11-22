@@ -74,6 +74,7 @@ import { isProjectCommentStorageReady } from './projectComments';
  * 0031–0034 and 0042, 503 without them; the reverse path also needs
  * E2EE_REVERSE_ENABLED and migration 0043.
  */
+import { readBoundedRequestText } from './requestBody';
 import { toBase64Url } from '@openzcad/crypto';
 import {
   DECRYPT_STAGED_BLOB_METADATA_KEY,
@@ -477,11 +478,10 @@ function newLeaseId(): string {
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {
-  const text = await request.text();
+  const text = await readBoundedRequestText(request, MAX_BODY_CHARS, () =>
+    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.')
+  );
   if (text.length === 0) return {};
-  if (text.length > MAX_BODY_CHARS) {
-    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
-  }
   try {
     return record(JSON.parse(text), 'Body');
   } catch (error) {
@@ -3185,10 +3185,11 @@ async function stageDetails(
   lease: string | null
 ): Promise<Response> {
   const held = await requireDecryptLease(ctx, projectId, lease);
-  const text = await request.text();
-  if (text.length > MAX_DETAILS_BODY_CHARS) {
-    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
-  }
+  const text = await readBoundedRequestText(
+    request,
+    MAX_DETAILS_BODY_CHARS,
+    () => refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.')
+  );
   let body: Record<string, unknown>;
   try {
     body = record(JSON.parse(text), 'Body');

@@ -154,6 +154,15 @@ function isEntityLock(value: unknown): boolean {
   return record(value) && value.constraintKind === 'lock-entity';
 }
 
+/** S05 (schema v145): pattern relations, wherever a sketch or command holds one. */
+export function assertPatternRelationSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 145, 'Sketch pattern relations');
+}
+
+function isPatternRelation(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'pattern';
+}
+
 /** S05 (schema v141): a tangent between two curves (no line in it). */
 export function assertCurvedTangentSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 141, 'Curve-to-curve tangency');
@@ -1228,6 +1237,11 @@ export function assertDocumentContentCommandSchema(
       isEntityLock(command.payload.constraint)
     )
       assertEntityLockSchema(document.schemaVersion);
+    if (
+      command.kind === 'sketch.constraint.add' &&
+      isPatternRelation(command.payload.constraint)
+    )
+      assertPatternRelationSchema(document.schemaVersion);
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1551,11 +1565,7 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       Array.isArray(node.constraints) &&
       node.constraints.some(
         (constraint) =>
-          record(constraint) &&
-          isCurvedTangent(
-            constraint.data,
-            document.nodes
-          )
+          record(constraint) && isCurvedTangent(constraint.data, document.nodes)
       )
     )
       assertCurvedTangentSchema(document.schemaVersion);
@@ -1567,6 +1577,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertEntityLockSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isPatternRelation(constraint.data)
+      )
+    )
+      assertPatternRelationSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

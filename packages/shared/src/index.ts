@@ -559,7 +559,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // solve the relation, so it must refuse the document. Builds on v141; v142
 // and v143 are claimed by M03 per-vertex radii (#1914) and I03 unit
 // switching (#1915).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 144 as const;
+// v145 adds S05 sketch pattern relations (`pattern` sketch constraints): a
+// linear or circular pattern's instance positions held by one relation. An
+// older client cannot solve it, so it must refuse the document. Builds on
+// v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
+// switching (#1915) and the S07 entity lock (#1913).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 145 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -2052,7 +2057,32 @@ export type SketchConstraintData =
    * that would move or resize it conflicts instead. Removing the constraint
    * unlocks the entity.
    */
-  | { constraintKind: 'lock-entity'; objectId: EntityId; at: number[] };
+  | { constraintKind: 'lock-entity'; objectId: EntityId; at: number[] }
+  /**
+   * S05 (v145): a sketch pattern held as one relation. Each instance is the
+   * source moved `step` steps: along the direction line by `spacing` a step
+   * (linear), or round the pivot by `stepDeg` a step (circular), turned with
+   * it or, `uniform`, kept in the source's orientation. Instances keep the
+   * source's size and shape too, so moving or resizing the source carries
+   * every instance, and moving an instance alone conflicts. An instance
+   * deleted leaves the others held at their own steps.
+   */
+  | {
+      constraintKind: 'pattern';
+      source: EntityId;
+      instances: { objectId: EntityId; step: number }[];
+      layout: SketchPatternLayout;
+    };
+
+/** How a {@link SketchConstraintData} `pattern` relation places its steps. */
+export type SketchPatternLayout =
+  | { kind: 'linear'; direction: EntityId; spacing: ParamValue }
+  | {
+      kind: 'circular';
+      pivot: SketchPointRef;
+      stepDeg: ParamValue;
+      orientation: 'rotate' | 'uniform';
+    };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
@@ -6088,7 +6118,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle'
+  'distance' | 'radius' | 'angle' | 'pattern'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [

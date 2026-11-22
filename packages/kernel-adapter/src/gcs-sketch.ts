@@ -1,8 +1,15 @@
 import type {
   EntityId,
   SketchConstraint,
+  SketchConstraintData,
   SketchPointRef
 } from '@openzcad/shared';
+import {
+  patternInstanceAt,
+  placementMiss,
+  placementTolerance,
+  seedPatternInstances
+} from './gcs-pattern';
 
 /**
  * Document sketch → kernel GCS mapping.
@@ -210,7 +217,7 @@ function solvedEntitySize(object: ResolvedSketchObject): number {
  */
 export function solveSketchWithGcs(
   kernel: GcsKernelSurface,
-  objects: ResolvedSketchObject[],
+  inputObjects: ResolvedSketchObject[],
   constraints: SketchConstraint[],
   resolveValue: (value: number | string, label: string) => number,
   options: {
@@ -227,6 +234,16 @@ export function solveSketchWithGcs(
   );
   const held = (objectId: string, point: 'start' | 'end' | 'center') =>
     anchoredObjects.has(objectId) || anchoredPoints.has(`${objectId}:${point}`);
+  const objects = seedPatternInstances(
+    inputObjects,
+    constraints,
+    resolveValue,
+    (objectId) =>
+      anchoredObjects.has(objectId) ||
+      (['start', 'end', 'center'] as const).some((point) =>
+        anchoredPoints.has(`${objectId}:${point}`)
+      )
+  );
 
   for (const object of objects) {
     if (handles.has(object.objectId)) {
@@ -409,6 +426,173 @@ export function solveSketchWithGcs(
       }
     }
   }
+
+  // S05 pattern relations. Every instance is stated against the source
+  // directly (never against its neighbour), so an instance deleted leaves
+  // the others exact, and each instance gets exactly its own freedoms:
+  // two for where its anchor lies, the rest for its size and turn.
+  const resolvedPoint = (ref: SketchPointRef): { x: number; y: number } => {
+    const object = objects.find((entry) => entry.objectId === ref.objectId);
+    if (object?.kind === 'line') {
+      return ref.point === 'end'
+        ? { x: object.x2, y: object.y2 }
+        : { x: object.x1, y: object.y1 };
+    }
+    if (object?.kind === 'arc' && ref.point !== 'center') {
+      const angle =
+        (ref.point === 'start' ? object.startAngleDeg : object.endAngleDeg) *
+        RADIANS_PER_DEGREE;
+      return {
+        x: object.centerX + object.radius * Math.cos(angle),
+        y: object.centerY + object.radius * Math.sin(angle)
+      };
+    }
+    if (object && 'centerX' in object) {
+      return { x: object.centerX, y: object.centerY };
+    }
+    if (object?.kind === 'point') return { x: object.x, y: object.y };
+    throw new Error(`Object ${ref.objectId} has no point to pattern about.`);
+  };
+  const helperLine = (a: number, b: number) => kernel.gcsAddLine(sketch, a, b);
+  const addPatternRelation = (
+    id: string,
+    data: Extract<SketchConstraintData, { constraintKind: 'pattern' }>
+  ) => {
+    const source = objectHandles(data.source);
+    const at = (objectId: EntityId, point: SketchPointRef['point']) =>
+      pointHandle({ objectId, point });
+    const layout = data.layout;
+    // The point that carries an instance's position: a line's start, a
+    // round's centre — or, for a turning pattern whose pivot sits on that
+    // point, the next point along, which the turn does move.
+    const pivotAt =
+      layout.kind === 'circular' ? resolvedPoint(layout.pivot) : null;
+    const candidates: SketchPointRef['point'][] =
+      source.kind === 'line'
+        ? ['start', 'end']
+        : source.kind === 'arc'
+          ? ['center', 'start']
+          : ['center'];
+    const anchor =
+      candidates.find((point) => {
+        if (!pivotAt) return true;
+        const there = resolvedPoint({ objectId: data.source, point });
+        return Math.hypot(there.x - pivotAt.x, there.y - pivotAt.y) > 1e-9;
+      }) ?? candidates[0]!;
+    // A uniform circular pattern carries a line round by its midpoint, as
+    // the tool placed it: a helper point held there (two parameters, two
+    // equations) stands in for the anchor.
+    const midAnchors =
+      source.kind === 'line' &&
+      layout.kind === 'circular' &&
+      layout.orientation === 'uniform';
+    const midpointOf = (objectId: EntityId): number => {
+      const line = objects.find((entry) => entry.objectId === objectId);
+      if (line?.kind !== 'line') {
+        throw new Error(`Pattern instance ${objectId} is not a line.`);
+      }
+      const point = kernel.gcsAddPoint(
+        sketch,
+        (line.x1 + line.x2) / 2,
+        (line.y1 + line.y2) / 2,
+        false
+      );
+      add(id, {
+        type: 'midpoint',
+        point,
+        line: objectHandles(objectId).entity
+      });
+      return point;
+    };
+    const anchorOf = (objectId: EntityId): number =>
+      midAnchors ? midpointOf(objectId) : at(objectId, anchor);
+    const sourceAnchor = anchorOf(data.source);
+    const pivot = layout.kind === 'circular' ? pointHandle(layout.pivot) : -1;
+    const radial0 = pivot >= 0 ? helperLine(pivot, sourceAnchor) : -1;
+    // Signed: a negative spacing runs against the direction line.
+    const spacing =
+      layout.kind === 'linear' ? resolveValue(layout.spacing, 'distance') : 0;
+    const stepRad =
+      layout.kind === 'circular'
+        ? resolveValue(layout.stepDeg, 'angle') * RADIANS_PER_DEGREE
+        : 0;
+    for (const { objectId, step } of data.instances) {
+      const instance = objectHandles(objectId);
+      if (instance.kind !== source.kind) {
+        throw new Error(
+          `Pattern instance ${objectId} is not a ${source.kind} like its source.`
+        );
+      }
+      const instanceAnchor = anchorOf(objectId);
+      // Position: two equations. They also admit the source's other side;
+      // the seed starts each free instance at its step and the read-back
+      // after the solve refuses the mirror.
+      if (layout.kind === 'linear') {
+        add(id, {
+          type: 'parallel',
+          l1: helperLine(sourceAnchor, instanceAnchor),
+          l2: objectHandles(layout.direction).entity
+        });
+        add(id, {
+          type: 'distance',
+          a: sourceAnchor,
+          b: instanceAnchor,
+          value: Math.abs(spacing * step)
+        });
+      } else {
+        const radial = helperLine(pivot, instanceAnchor);
+        add(id, { type: 'equalLength', l1: radial0, l2: radial });
+        add(id, {
+          type: 'angle',
+          l1: radial0,
+          l2: radial,
+          value: stepRad * step
+        });
+      }
+      // Size and turn: the entity's remaining freedoms.
+      const turned =
+        layout.kind === 'circular' && layout.orientation === 'rotate';
+      const sameTurn = (l1: number, l2: number) =>
+        add(
+          id,
+          turned
+            ? { type: 'angle', l1, l2, value: stepRad * step }
+            : { type: 'parallel', l1, l2 }
+        );
+      if (source.kind === 'line') {
+        add(id, {
+          type: 'equalLength',
+          l1: source.entity,
+          l2: instance.entity
+        });
+        sameTurn(source.entity, instance.entity);
+      } else if (source.kind === 'circle') {
+        add(id, {
+          type: 'equalRadiusCircleCircle',
+          circle1: source.entity,
+          circle2: instance.entity
+        });
+      } else if (source.kind === 'arc') {
+        add(id, {
+          type: 'equalRadiusArcArc',
+          arc1: source.entity,
+          arc2: instance.entity
+        });
+        // The arc's turn and sweep: its centre-to-start and centre-to-end
+        // directions, each turned (or kept) like the pattern.
+        for (const end of ['start', 'end'] as const) {
+          sameTurn(
+            helperLine(at(data.source, 'center'), at(data.source, end)),
+            helperLine(at(objectId, 'center'), at(objectId, end))
+          );
+        }
+      } else {
+        throw new Error(
+          `A ${source.kind} cannot be patterned by a sketch pattern relation.`
+        );
+      }
+    }
+  };
 
   for (const constraint of constraints) {
     const data = constraint.data;
@@ -776,6 +960,9 @@ export function solveSketchWithGcs(
         }
         break;
       }
+      case 'pattern':
+        addPatternRelation(id, data);
+        break;
     }
   }
 
@@ -790,7 +977,7 @@ export function solveSketchWithGcs(
   const dofRecord = parseKernelJson(kernel.gcsDof(sketch), 'sketch DOF');
 
   const classificationRaw = diagnostics.classification;
-  const kernelClassification:
+  let classification:
     'solved' | 'underConstrained' | 'redundant' | 'unsatisfied' =
     classificationRaw === 'solved' ||
     classificationRaw === 'underConstrained' ||
@@ -821,7 +1008,6 @@ export function solveSketchWithGcs(
 
   // A locked arc whose end settled on the mirror solution satisfies every
   // equation yet has a different sweep: report the lock as unsatisfied.
-  let classification = kernelClassification;
   for (const lock of arcEndLocks) {
     const at = readPoint(lock.handle);
     const miss = Math.hypot(at.x - lock.x, at.y - lock.y);
@@ -931,13 +1117,46 @@ export function solveSketchWithGcs(
     }
   }
 
+  // S05: the pattern equations admit mirror branches; an instance that
+  // settled anywhere but the source carried to its step fails its relation.
+  const patternMisses = new Map<string, number>();
+  for (const { constraintId, data } of constraints) {
+    if (data.constraintKind !== 'pattern') continue;
+    for (const { objectId, step } of data.instances) {
+      const actual = solvedObjects.find((entry) => entry.objectId === objectId);
+      const expected = patternInstanceAt(
+        solvedObjects,
+        data,
+        step,
+        resolveValue,
+        objectId
+      );
+      const source = solvedObjects.find(
+        (entry) => entry.objectId === data.source
+      );
+      if (!actual || !expected || !source) continue;
+      const miss = placementMiss(expected, actual);
+      if (miss > placementTolerance(expected, source)) {
+        patternMisses.set(
+          constraintId,
+          Math.max(patternMisses.get(constraintId) ?? 0, miss)
+        );
+      }
+    }
+  }
+  if (patternMisses.size > 0) classification = 'unsatisfied';
+
   return {
     classification,
-    converged: diagnostics.converged === true && lockMisses.size === 0,
+    converged:
+      diagnostics.converged === true &&
+      lockMisses.size === 0 &&
+      patternMisses.size === 0,
     iterations: requireNumber(diagnostics, 'iterations'),
     maxResidual: Math.max(
       requireNumber(diagnostics, 'maxResidual'),
-      ...lockMisses.values()
+      ...lockMisses.values(),
+      ...patternMisses.values()
     ),
     rolledBack: diagnostics.rolledBack === true,
     dof: {
@@ -951,7 +1170,8 @@ export function solveSketchWithGcs(
         .reduce((byConstraint, { constraintId, handle }) => {
           const residual = Math.max(
             residualByHandle.get(handle) ?? 0,
-            lockMisses.get(constraintId) ?? 0
+            lockMisses.get(constraintId) ?? 0,
+            patternMisses.get(constraintId) ?? 0
           );
           byConstraint.set(
             constraintId,

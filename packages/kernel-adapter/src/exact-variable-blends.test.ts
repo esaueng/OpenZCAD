@@ -599,6 +599,76 @@ describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
     }
   });
 
+  it('keeps the kernel sentence for every current blend failure code', () => {
+    for (const [code, category] of [
+      ['postcondition-failed', 'unsupported'],
+      ['unsupported-variable-support', 'unsupported'],
+      ['unsupported-vertex-blend', 'unsupported'],
+      ['unsupported-variable-boundary', 'unsupported'],
+      ['unsupported-seam-crossing', 'unsupported'],
+      ['trimming-failure', 'unsupported'],
+      ['corner-failure', 'unsupported'],
+      ['chamfer-tangent-chain-required', 'unsupported'],
+      ['resource-limit', 'resource_limit'],
+      ['cancelled', 'cancelled'],
+      ['setback-mismatch', 'invalid_input']
+    ] as const) {
+      const reported = `${code}: blend: the kernel's own reason`;
+      const refusal = variableBlendRefusal('fillet', 1, reported);
+      expect(refusal, code).toMatchObject({
+        family: 'blend',
+        category,
+        kernelCode: code
+      });
+      expect(refusal.message, code).toContain(reported);
+    }
+  });
+
+  it('refuses an overflow by type and relays the width the kernel measured', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const document = addPrimitiveFeature(
+        createProjectDocument('Overflow', user),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 60, height: 40, depth: 20 }
+        }
+      );
+      const bodyId = document.bodyOrder[0] as BodyId;
+      const built = await adapter.syncDocument(document);
+      const edge = built.bodyRepresentations[bodyId]!.topology!.edges.find(
+        (candidate) =>
+          candidate.curve?.type === 'LINE' &&
+          Math.abs((candidate.length ?? 0) - 60) < 1e-6
+      )!;
+      const variable = filletEdges(document, {
+        name: 'Round',
+        targetBodyId: bodyId,
+        edgeHashes: [edge.hash],
+        ...(edge.reference ? { edgeReferences: [edge.reference] } : {}),
+        size: 1,
+        endRadius: 45,
+        radiusLaw: 'linear'
+      });
+      const derived = await adapter.syncDocument(variable.document);
+      const refusal = derived.featureWarnings?.find(
+        (warning) => warning.kernelRefusal?.family === 'blend'
+      );
+      expect(refusal?.kernelRefusal).toMatchObject({
+        code: 'cliff-encountered',
+        category: 'invalid_input'
+      });
+      // Relayed, not parsed: the kernel's own sentence names the radius
+      // asked for and the width the support face has there.
+      expect(refusal?.message).toMatch(
+        /requested radius [\d.]+, available radius (20|40)\b/
+      );
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   /**
    * M03 qualification: a variable fillet on an edge of a box that also
    * carries a cylindrical boss. Up to the 2026.1.145 pin the kernel failed

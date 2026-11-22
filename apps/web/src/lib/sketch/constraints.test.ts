@@ -9,6 +9,7 @@ import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
   type EntityId,
+  type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
 import {
@@ -313,6 +314,46 @@ describe('sketch constraint picking', () => {
     };
     expect(pairs(same!)).toEqual(['start-start', 'end-end']);
     expect(pairs(reversed!)).toEqual(['start-end', 'end-start']);
+  });
+
+  it('S05: names a pattern relation and every entity it holds', () => {
+    const names: Record<string, string> = {
+      c1: 'Circle 1',
+      c2: 'Circle 2',
+      c3: 'Circle 3',
+      l1: 'Line 1',
+      h: 'Hub'
+    };
+    const nameOf = (id: EntityId) => names[id] ?? 'entity';
+    const linear: SketchConstraintData = {
+      constraintKind: 'pattern',
+      source: 'c1' as EntityId,
+      instances: [
+        { objectId: 'c2' as EntityId, step: 1 },
+        { objectId: 'c3' as EntityId, step: 2 }
+      ],
+      layout: { kind: 'linear', direction: 'l1' as EntityId, spacing: 5 }
+    };
+    expect(describeConstraint(linear, nameOf)).toBe(
+      'Linear pattern 5 · Circle 1 ×3 along Line 1'
+    );
+    const circular: SketchConstraintData = {
+      ...linear,
+      layout: {
+        kind: 'circular',
+        pivot: { objectId: 'h' as EntityId, point: 'center' },
+        stepDeg: 90,
+        orientation: 'uniform'
+      }
+    };
+    expect(describeConstraint(circular, nameOf)).toBe(
+      'Circular pattern 90° · Circle 1 ×3 about center of Hub, uniform'
+    );
+    for (const id of ['c1', 'c3', 'l1']) {
+      expect(constraintReferencesObject(linear, id)).toBe(true);
+    }
+    expect(constraintReferencesObject(circular, 'h')).toBe(true);
+    expect(constraintReferencesObject(circular, 'l1')).toBe(false);
   });
 
   it('S07: a point goes on a line, circle or arc, never on its own object', () => {
