@@ -1,5 +1,0 @@
----
-row: M13
----
-
-Hover-to-highlight the measured entity (no schema or kernel change). Pointing at a Measure row, or giving it keyboard focus, lights the edges and faces that measurement measured on the model, drawn in the pointer hover's own colours (`SELECTION_SEMANTICS.hover`: the face film and the wide hover edge) on each body's object, so a moving preview carries them; leaving the row clears them, and selection is never touched. A whole-body figure lights nothing, since the hover draws entities rather than solids. The row-to-entity mapping (`measurementHighlightTargets`) sits outside the deferred measurement library, and the viewer's new `measureHighlights` prop builds and disposes its overlays per change. Existing X/Y/Z deltas and the show/hide annotation toggle are unchanged. Evidence: `apps/web/src/lib/measureHighlights.test.ts`, `MeasurementDock.test.tsx` (pointer and focus enter and leave) and the Chromium smoke case "hovering a measurement row highlights the edge it measured" in `test/e2e/measure.spec.ts` (an edge recorded in View, its row hovered and focused lights one overlay, and moving off or blurring clears it).
