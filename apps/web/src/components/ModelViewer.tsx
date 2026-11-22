@@ -368,6 +368,7 @@ import {
   snapCylinderRadius,
   radiusFromRadialDelta
 } from '../lib/interaction/cylinderRadius';
+import { edgeLabelPlacement } from '../lib/edgeLabelLayout';
 import {
   blendDragStep,
   snapBlendValue
@@ -9088,9 +9089,24 @@ export function ModelViewer({
       // are therefore the last frame's; a frame that changes what they show
       // renders once more, so the next one measures and places them again.
       const chipWidth = chip.offsetWidth;
+      const chipHeight = chip.offsetHeight;
       const labelWidth = radiusLabelChip.offsetWidth;
       const pairWidth = edgeChipPair.offsetWidth;
       const pairHeight = edgeChipPair.offsetHeight;
+      // The tool drawers a dragged edge label keeps clear of, read here with
+      // the other sizes before anything is written this frame.
+      const drawerRects =
+        edgeDragActiveRef.current && edgeRigRef.current
+          ? [
+              ...(renderer.domElement
+                .closest('.viewer-area')
+                ?.querySelectorAll<HTMLElement>(
+                  '.workspace-column, .command-flyout'
+                ) ?? [])
+            ]
+              .map((element) => element.getBoundingClientRect())
+              .filter((rect) => rect.width > 0 && rect.height > 0)
+          : [];
       const laneLeft = rightLaneLeft(true);
       // Above the bottom lane, where a command's bar stands (the in-place
       // Extrude's, under the region arrow it extrudes): a chip held there
@@ -9554,61 +9570,36 @@ export function ModelViewer({
         const half = LINE_LABEL_GAP_PX / 2;
         const valueReach = chipWidth / 2 + half;
         if (edgeLabelLine) {
-          // Out past the arrow along the leader, or, where that has no room
-          // (under the right lane or the bottom lane, or off the stage),
-          // back along the leader on the arrow's other side. Either way the
-          // pill stays off the arrow: the panel dodge below would otherwise
-          // push a pill that reached under a lane back over the grab target.
+          // Out past the arrow along the leader, back along it where that has
+          // no room, held inside the stage in a corner (`edgeLabelPlacement`).
+          // Shown directly, not through `place`: the panel dodge was measured
+          // on last frame's layout (the upright pair, at the drag's start),
+          // and the placement already keeps the pill out from under panels.
           const { pinX, pinY, alongX: outX, alongY: outY } = edgeLabelLine;
           // The pill's size as last measured shown: a frame that just
           // revealed it measures 0×0, and laid out at no length it reached
           // back over the arrow.
           if (chipWidth > 0) {
             edgeLabelSize.width = chipWidth;
-            edgeLabelSize.height = chip.offsetHeight;
+            edgeLabelSize.height = chipHeight;
           }
-          const out =
-            edgeLabelLine.reach + LINE_LABEL_GAP_PX + edgeLabelSize.width / 2;
-          // The tilted pill's half extents on screen.
-          const halfLength = edgeLabelSize.width / 2;
-          const halfThickness = edgeLabelSize.height / 2;
-          const extentX =
-            Math.abs(outX) * halfLength + Math.abs(outY) * halfThickness;
-          const extentY =
-            Math.abs(outY) * halfLength + Math.abs(outX) * halfThickness;
-          const right = (laneLeft ?? stageRect.width) - CHIP_LANE_MARGIN_PX;
-          const bottom = (footTop ?? stageRect.height) - COMMAND_CHIP_MARGIN_PX;
-          // Clear of the stage's edges, the lanes, every panel the dodge would
-          // move the pill out from under and the tool drawers (in canvas
-          // coordinates).
-          const drawers = [
-            ...(renderer.domElement
-              .closest('.viewer-area')
-              ?.querySelectorAll<HTMLElement>(
-                '.workspace-column, .command-flyout'
-              ) ?? [])
-          ]
-            .map((element) => element.getBoundingClientRect())
-            .filter((rect) => rect.width > 0 && rect.height > 0);
-          const fits = (x: number, y: number) =>
-            x - extentX >= CHIP_LANE_MARGIN_PX &&
-            x + extentX <= right &&
-            y - extentY >= CHIP_LANE_MARGIN_PX &&
-            y + extentY <= bottom &&
-            [...otherPanels, ...drawers].every(
-              (panel) =>
-                x + extentX <= panel.left - stageRect.left ||
-                x - extentX >= panel.right - stageRect.left ||
-                y + extentY <= panel.top - stageRect.top ||
-                y - extentY >= panel.bottom - stageRect.top
-            );
-          let x = pinX + outX * out;
-          let y = pinY + outY * out;
-          if (!fits(x, y) && fits(pinX - outX * out, pinY - outY * out)) {
-            x = pinX - outX * out;
-            y = pinY - outY * out;
-          }
-          place(chip, x, y);
+          const placed = edgeLabelPlacement({
+            pin: { x: pinX, y: pinY },
+            along: { x: outX, y: outY },
+            reach: edgeLabelLine.reach,
+            size: edgeLabelSize,
+            gap: LINE_LABEL_GAP_PX,
+            margin: CHIP_LANE_MARGIN_PX,
+            right: (laneLeft ?? stageRect.width) - CHIP_LANE_MARGIN_PX,
+            bottom: (footTop ?? stageRect.height) - COMMAND_CHIP_MARGIN_PX,
+            obstacles: [...otherPanels, ...drawerRects].map((panel) => ({
+              left: panel.left - stageRect.left,
+              top: panel.top - stageRect.top,
+              right: panel.right - stageRect.left,
+              bottom: panel.bottom - stageRect.top
+            }))
+          });
+          hud.showAt(chip, placed.x, placed.y);
           // Exact entry opens where it always has, beside the arrow on its
           // right, clear of the right lane: laid out from the tilted pill it
           // could open under a tool drawer or the command bar.
