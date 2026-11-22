@@ -627,6 +627,10 @@ function remapConstraint(
       if (pairs.length === data.pairs.length) return data;
       return pairs.length > 0 ? { ...data, pairs } : null;
     }
+    case 'lock-entity':
+      // The edit changes the locked geometry, so the lock goes with it (and
+      // is counted with the other dropped relations).
+      return data.objectId === id ? null : data;
     case 'pattern': {
       // Reshaping the source or the direction (or the pivot's owner) breaks
       // the pattern; a reshaped instance leaves it, and the others stay held.

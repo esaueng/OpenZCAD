@@ -360,9 +360,12 @@ import {
   constraintToolSpec,
   describeConstraint,
   disconnectConstraintIds,
+  entityLockConstraintIds,
+  entityPointLockConstraintIds,
   fullyDefinedIds,
   lockConstraintIds,
   measureDrivingDimension,
+  movedEntityLock,
   planConstraintFromSelection,
   refusePick,
   relationSolveAnchor,
@@ -24856,7 +24859,9 @@ export function App() {
       )
       .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
-        kind: data.constraintKind,
+        // An entity lock is made and removed with the Lock tool.
+        kind:
+          data.constraintKind === 'lock-entity' ? 'lock' : data.constraintKind,
         label: describeConstraint(
           data,
           nameOf,
@@ -25202,14 +25207,22 @@ export function App() {
         objectId: point.objectId as EntityId,
         point: point.kind === 'point' ? point.point : 'center'
       } as const;
-      // A second Lock on a locked point unlocks it; Disconnect only removes.
+      // A second Lock on a locked point or entity unlocks it; Disconnect
+      // only removes.
+      const wholeEntity = point.kind === 'object';
       const removals =
-        pending.kind === 'lock'
-          ? lockConstraintIds(editingSketchNode, ref)
-          : disconnectConstraintIds(editingSketchNode, ref);
+        pending.kind !== 'lock'
+          ? disconnectConstraintIds(editingSketchNode, ref)
+          : wholeEntity
+            ? entityLockConstraintIds(editingSketchNode, point.objectId)
+            : lockConstraintIds(editingSketchNode, ref);
       if (removals.length > 0) {
         const verb =
-          pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
+          pending.kind !== 'lock'
+            ? 'Disconnect point'
+            : wholeEntity
+              ? 'Unlock entity'
+              : 'Unlock point';
         if (
           executeTransaction(verb, [
             ...retainSketchGeometryCommands(
@@ -25227,7 +25240,9 @@ export function App() {
           setSketchSolveStatus(null);
           setStatus(
             pending.kind === 'lock'
-              ? 'Point unlocked.'
+              ? wholeEntity
+                ? 'Entity unlocked.'
+                : 'Point unlocked.'
               : `Disconnected · removed ${removals.length} relation${removals.length === 1 ? '' : 's'}.`
           );
         }
@@ -25254,7 +25269,16 @@ export function App() {
     if ('error' in built) {
       setStatus(built.error);
     } else {
-      void applySketchRelation(built.data, picks, spec.label, built.also);
+      void applySketchRelation(
+        built.data,
+        picks,
+        spec.label,
+        built.also,
+        // Locking a whole entity takes over its point locks in the same edit.
+        built.data.constraintKind === 'lock-entity'
+          ? entityPointLockConstraintIds(editingSketchNode, built.data.objectId)
+          : []
+      );
     }
     dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
     return true;
@@ -25312,7 +25336,8 @@ export function App() {
     data: SketchConstraintData,
     picks: readonly ConstraintPick[],
     label: string,
-    also: readonly SketchConstraintData[] = []
+    also: readonly SketchConstraintData[] = [],
+    replacing: readonly string[] = []
   ) {
     if (!doc || !editingSketchNode) return;
     if (
@@ -25329,9 +25354,17 @@ export function App() {
     const base = doc;
     const sketchId = editingSketchNode.sketchId;
     const verb = `Add ${label.toLowerCase()} constraint`;
-    const adds = [data, ...also].map((constraint) =>
-      commandFactories.addSketchConstraint({ sketchId, constraint }, verb)
-    );
+    const adds = [
+      ...replacing.map((constraintId) =>
+        commandFactories.deleteSketchConstraint(
+          { sketchId, constraintId: toSketchConstraintId(constraintId) },
+          verb
+        )
+      ),
+      ...[data, ...also].map((constraint) =>
+        commandFactories.addSketchConstraint({ sketchId, constraint }, verb)
+      )
+    ];
     let prospective: ProjectDocument = base;
     try {
       for (const add of adds) {
@@ -26179,6 +26212,22 @@ export function App() {
             );
           }) ?? false
       );
+      for (const sketch of listNodesByKind(prospective, 'sketch')) {
+        const locked = movedEntityLock(
+          prospective,
+          sketch,
+          (value) =>
+            evalParamValue(value, beforeScope, base.units) ?? undefined,
+          (value) =>
+            evalParamValue(value, afterScope, prospective.units) ?? undefined
+        );
+        if (locked) {
+          return {
+            kind: 'refused',
+            message: `${name} would move a locked entity in ${sketch.name}. Unlock it first.`
+          };
+        }
+      }
       const commands: AnyCommand[] = [parameterCommand];
       setStatus(`Checking ${name}…`);
       for (const sketch of constrainedSketches) {
