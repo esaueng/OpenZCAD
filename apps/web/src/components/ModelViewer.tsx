@@ -340,6 +340,7 @@ import {
 } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import { snapRecordsExactly } from '../lib/measurePointKinds';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
@@ -5127,9 +5128,23 @@ export function ModelViewer({
       }
       const kinds = measureSnapKindsRef.current;
       const candidates = snapsFromEdges(scoped, { label: body?.name });
+      // A pick that asks for a kind offers only the points it records
+      // exactly: never a spline's sampled midpoint its click would refuse.
+      const byId = kinds
+        ? new Map(scoped.map((edge) => [edge.topologyId, edge]))
+        : null;
       return resolveSnap(
         kinds
-          ? candidates.filter((snap) => kinds.includes(snap.kind))
+          ? candidates.filter((snap) => {
+              const edge = snap.source
+                ? byId!.get(snap.source.edgeTopologyId)
+                : undefined;
+              return (
+                kinds.includes(snap.kind) &&
+                !!edge &&
+                snapRecordsExactly(snap.kind, edge)
+              );
+            })
           : candidates,
         local,
         (point) =>

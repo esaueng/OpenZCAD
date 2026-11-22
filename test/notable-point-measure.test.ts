@@ -14,8 +14,10 @@ import {
   measurementToViewportAnnotation,
   measureSnapKindsFor,
   notablePointTarget,
+  pointKindAgrees,
   pointKindFailure,
   pointKindTarget,
+  snapSourceSelection,
   refreshMeasurements,
   type Measurement,
   type MeasurementDisplayOptions,
@@ -26,6 +28,7 @@ import {
   buildMeasurementRecord,
   parseStoredMeasurements
 } from '../apps/web/src/lib/measurementStore';
+import { snapRecordsExactly } from '../apps/web/src/lib/measurePointKinds';
 
 const BODY_ID = 'body-notch' as BodyId;
 const DISPLAY: MeasurementDisplayOptions = {
@@ -791,5 +794,77 @@ describe('point-kind picks', () => {
     )!;
     expect(measured.result.value).toBeCloseTo(Math.hypot(2, 4, 15), 12);
     expect(measured.quality).toBe('exact-analytic');
+  });
+});
+
+/** M13 review fixes: glyph identity, closed rims, refresh and snap scope. */
+describe('point-kind picks, review fixes', () => {
+  const line = selection('edge', 'edge:line', 11);
+
+  it('refuses an endpoint on a closed rim, which has no ends', () => {
+    const body = meshBody([closedCircleEdge()], []);
+    expect(
+      pointKindTarget(body, selection('edge', 'edge:rim', 14), 'endpoint', {
+        x: 2,
+        y: 0,
+        z: 10
+      })
+    ).toBeNull();
+    expect(pointKindFailure('endpoint', 'edge')).toMatch(/closed rim/);
+  });
+
+  it("records the glyph's own edge, and only where the glyph stood", () => {
+    const body = meshBody([lineEdge(), minorArcEdge()], [lFace()]);
+    const source = { edgeTopologyId: 'edge:line', edgeHash: 11 };
+    const mid = pointKindTarget(
+      body,
+      snapSourceSelection(body, source),
+      'midpoint'
+    );
+    expect(mid?.point).toEqual({ x: 5, y: 0, z: 0 });
+    expect(pointKindAgrees(body, mid, { x: 5, y: 0, z: 0 })).toBe(true);
+    // A glyph standing anywhere else does not name this point.
+    expect(pointKindAgrees(body, mid, { x: 5.5, y: 0, z: 0 })).toBe(false);
+  });
+
+  it('keeps a picked end through a move and swaps it only for a reversed edge', () => {
+    const body = meshBody([lineEdge()], [holeFace()]);
+    const end = pointKindTarget(body, line, 'endpoint', { x: 9, y: 0, z: 0 })!;
+    expect(end.point).toEqual({ x: 10, y: 0, z: 0 });
+    const centre = pointKindTarget(
+      body,
+      selection('face', 'face:hole', 25),
+      'center'
+    )!;
+    const row = createDistanceMeasurement(end, centre, 1, 'mm')!;
+    const moved = meshBody(
+      [{ ...lineEdge(), points: [10, 0, 0, 20, 0, 0] }],
+      [holeFace()]
+    );
+    // The old end (10) is now the start: the row keeps the end, at 20.
+    const [afterMove] = refreshMeasurements([row], [moved], 2);
+    expect(afterMove!.targets[0]!.point).toEqual({ x: 20, y: 0, z: 0 });
+    const reversed = meshBody(
+      [{ ...lineEdge(), points: [10, 0, 0, 0, 0, 0] }],
+      [holeFace()]
+    );
+    // The same edge reversed: its end is now its start, still at 10.
+    const [afterReverse] = refreshMeasurements([row], [reversed], 2);
+    expect(afterReverse!.targets[0]!.point).toEqual({ x: 10, y: 0, z: 0 });
+  });
+
+  it('offers only the snaps a kind records exactly', () => {
+    const spline = {
+      curve: { type: 'BSPLINE_CURVE' },
+      points: [0, 0, 0, 1, 2, 0, 3, 1, 0]
+    };
+    expect(snapRecordsExactly('midpoint', spline)).toBe(false);
+    expect(snapRecordsExactly('endpoint', spline)).toBe(true);
+    expect(snapRecordsExactly('midpoint', lineEdge())).toBe(true);
+    expect(snapRecordsExactly('midpoint', minorArcEdge())).toBe(true);
+    expect(snapRecordsExactly('center', minorArcEdge())).toBe(true);
+    expect(snapRecordsExactly('center', lineEdge())).toBe(false);
+    expect(snapRecordsExactly('endpoint', closedCircleEdge())).toBe(false);
+    expect(snapRecordsExactly('midpoint', closedCircleEdge())).toBe(false);
   });
 });

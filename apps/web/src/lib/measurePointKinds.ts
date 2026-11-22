@@ -1,3 +1,5 @@
+import type { EdgeTopology } from '@openzcad/shared';
+
 /*
  * M13: the point kinds a Distance pick can ask for. Its own small module so
  * the workspace can scope the viewport's snaps without loading the
@@ -41,4 +43,27 @@ export function measureSnapKindsFor(
     case 'centroid':
       return [];
   }
+}
+
+/**
+ * M13: whether a snap of `kind` on `edge` names a point Measure records
+ * exactly. Ends of an open edge, midpoints of lines and arcs, and centres of
+ * circles and arcs do; a spline's sampled midpoint does not, so a pick that
+ * asks for a kind never shows a glyph its click would refuse.
+ */
+export function snapRecordsExactly(
+  kind: 'endpoint' | 'midpoint' | 'center' | string,
+  edge: Pick<EdgeTopology, 'curve' | 'points'>
+): boolean {
+  const n = edge.points.length;
+  const closed =
+    n >= 6 &&
+    edge.points[0] === edge.points[n - 3] &&
+    edge.points[1] === edge.points[n - 2] &&
+    edge.points[2] === edge.points[n - 1];
+  if (kind === 'endpoint') return !closed;
+  if (kind === 'midpoint')
+    return !closed && (edge.curve?.type === 'LINE' || !!edge.curve?.circle);
+  if (kind === 'center') return !!edge.curve?.circle;
+  return false;
 }

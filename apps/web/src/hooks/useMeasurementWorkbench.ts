@@ -338,14 +338,27 @@ export function useMeasurementWorkbench({
     snap: PickSnap | undefined
   ) {
     // M13: a chosen point kind records that point of the pick, or nothing.
-    if (measurementMode === 'distance' && measurementPointKind !== 'auto')
+    if (measurementMode === 'distance' && measurementPointKind !== 'auto') {
+      // A glyph names its own edge: the pick records that edge's point,
+      // which must land where the glyph stood, never a point of whatever
+      // the ray happened to hit beside it.
+      if (snap?.source && point) {
+        const target = api.pointKindTarget(
+          body,
+          api.snapSourceSelection(body, snap.source),
+          measurementPointKind,
+          point,
+          snap.source.role
+        );
+        return api.pointKindAgrees(body, target, point) ? target : null;
+      }
       return api.pointKindTarget(
         body,
         selection,
         measurementPointKind,
-        point,
-        snap?.source?.role
+        point
       );
+    }
     const snapped =
       measurementMode === 'distance' && snap?.source && point
         ? api.measurementTargetFromSnap(body, snap.source, point)

@@ -709,6 +709,9 @@ export function notablePointTarget(
         reference: edge.reference,
         label: `${label} ${kind === 'vertex-start' ? 'start' : 'end'}`,
         point: kind === 'vertex-start' ? ends[0] : ends[1],
+        // M13: the edge's ends as picked, so a refresh can tell a reversed
+        // edge (its ends swapped) from a moved one (both shifted together).
+        endpoints: ends,
         semantic: kind,
         quality: 'exact-analytic'
       };
@@ -847,6 +850,16 @@ export function pointKindTarget(
 ): MeasurementTarget | null {
   if (kind === 'endpoint') {
     if (selection.kind !== 'edge') return null;
+    // A closed rim's polyline starts wherever its sampler began, not at a
+    // vertex anyone can name: it has no ends to pick.
+    const picked = findEdge(body, selection);
+    const pickedEnds = picked ? edgeEndpoints(picked) : null;
+    if (
+      !pickedEnds ||
+      distance(pickedEnds[0], pickedEnds[1]) <=
+        SNAP_AGREEMENT * Math.max(1, distance(body.bbox.min, body.bbox.max))
+    )
+      return null;
     let end: NotablePointKind = 'vertex-start';
     if (snapRole === 'start' || snapRole === 'end') {
       end = snapRole === 'start' ? 'vertex-start' : 'vertex-end';
@@ -872,6 +885,44 @@ export function pointKindTarget(
     : null;
 }
 
+/**
+ * M13: the edge a snap glyph was read off, as a selection, so a pick
+ * records that edge's point rather than one of whatever the ray hit.
+ */
+export function snapSourceSelection(
+  body: BodyRepresentation,
+  source: {
+    edgeTopologyId: string;
+    edgeHash: number;
+    edgeReference?: EdgeTopologyReferenceV5;
+  }
+): TopologySelection {
+  return {
+    bodyId: body.bodyId,
+    kind: 'edge',
+    topologyId: source.edgeTopologyId,
+    hash: source.edgeHash,
+    ...(source.edgeReference ? { reference: source.edgeReference } : {})
+  };
+}
+
+/**
+ * M13: whether a pick of `kind` recorded `target` where its glyph stood.
+ * A glyph and the point it names are read through separate arithmetic, so
+ * they agree to rounding, not bit for bit.
+ */
+export function pointKindAgrees(
+  body: BodyRepresentation,
+  target: MeasurementTarget | null,
+  glyph: Vector3
+): boolean {
+  return (
+    !!target?.point &&
+    distance(target.point, glyph) <=
+      SNAP_AGREEMENT * Math.max(1, distance(body.bbox.min, body.bbox.max))
+  );
+}
+
 /** M13: why a pick has no point of `kind`, as the status line says it. */
 export function pointKindFailure(
   kind: Exclude<MeasurePointKind, 'auto'>,
@@ -880,7 +931,7 @@ export function pointKindFailure(
   switch (kind) {
     case 'endpoint':
       return selection === 'edge'
-        ? 'That edge has no exact ends to pick.'
+        ? 'That edge has no ends to pick (a closed rim has none).'
         : 'Endpoint picks an edge: pick an edge near the end you mean.';
     case 'midpoint':
       return selection === 'edge'
@@ -1499,6 +1550,26 @@ function resolveNotableTarget(
         notablePointTarget(body, selection, end)
       );
       const size = distance(body.bbox.min, body.bbox.max);
+      const tolerance = SNAP_AGREEMENT * Math.max(1, size);
+      // M13: a row that kept its edge's ends decides reversal from the pair.
+      // The ends swapped is the same edge reversed: take the other role.
+      // Anything else (the edge moved, or changed length) keeps the stored
+      // role, so a translation never rebinds to whichever end now sits
+      // where the old one was.
+      const was = target.endpoints;
+      const now = ends[0]?.point && ends[1]?.point;
+      if (was && now) {
+        const reversed =
+          distance(ends[0]!.point!, was[1]) <= tolerance &&
+          distance(ends[1]!.point!, was[0]) <= tolerance &&
+          distance(was[0], was[1]) > tolerance;
+        const role: NotablePointKind = reversed
+          ? kind === 'vertex-start'
+            ? 'vertex-end'
+            : 'vertex-start'
+          : kind;
+        return notablePointTarget(body, selection, role);
+      }
       const stored = target.point;
       const same = ends.find(
         (end) =>
