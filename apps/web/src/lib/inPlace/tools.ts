@@ -66,7 +66,10 @@ import type { ModelingOperationFormState } from '../modelingOperations';
 import {
   holePositionAxes,
   holePositionFieldOrder,
+  holeAnchorPoint,
   holePositionFromPick,
+  newHoleAnchor,
+  savedHoleAnchor,
   holePositionLabels
 } from '../holePositionAxes';
 import { PRIMITIVE_ANCHORS, PRIMITIVE_FIELDS } from '../primitivePlacement';
@@ -239,6 +242,8 @@ export interface FacePick {
   surfaceType?: string;
   normal?: Vector3;
   centroid?: Vector3;
+  /** The outer boundary loop's own centroid: a new hole's anchor (M01). */
+  outerCentroid?: Vector3;
   center?: Vector3;
   /** Where the click landed on it (a hole goes there). */
   point?: Vector3;
@@ -4052,15 +4057,12 @@ const hole: InPlaceToolSpec = {
     const points = options.place === 'points' ? holePointsPicked(slots) : null;
     if (options.place === 'points' && !points) return null;
     const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
-    // A new hole measures from the face's centroid; an edited one keeps the
+    // A new hole measures from the centroid of the face's outer boundary,
+    // which other holes in the face never move; an edited one keeps the
     // anchor it was drilled against, which no edit may change.
     const anchor = saved
-      ? saved.positionAnchor === 'centroid'
-        ? 'centroid'
-        : 'center'
-      : face.centroid
-        ? 'centroid'
-        : 'center';
+      ? savedHoleAnchor(saved.positionAnchor)
+      : newHoleAnchor(face);
     // Rounded to the sketch snap, exactly as the card placed a clicked hole;
     // a typed one as typed, expressions and all.
     // On sketch points the position is stored as it was, but not read.
@@ -4125,7 +4127,15 @@ const hole: InPlaceToolSpec = {
   },
   handles(slots, values, ctx, options) {
     const face = slots.faces[0];
-    const clicked = face ? faceAnchor(face) : null;
+    // With no click (a face chosen from the selection), a new hole stands
+    // at (0, 0) from the anchor it is measured from, not the face centroid.
+    const clicked = face
+      ? (face.point ??
+        (ctx.saved?.featureKind === 'hole'
+          ? null
+          : holeAnchorPoint(face, newHoleAnchor(face))) ??
+        faceAnchor(face))
+      : null;
     if (!face || !clicked || !face.normal) return [];
     const axes = holePositionAxes(face.normal);
     if (!axes) return [];
@@ -4370,11 +4380,10 @@ function typedHoleEntry(
 ): Vector3 | null {
   const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
   // The anchor it is measured from, as the request stores it.
-  const anchor = saved
-    ? saved.positionAnchor === 'centroid'
-      ? (face.centroid ?? face.center)
-      : (face.center ?? face.centroid)
-    : (face.centroid ?? face.center);
+  const anchor = holeAnchorPoint(
+    face,
+    saved ? savedHoleAnchor(saved.positionAnchor) : newHoleAnchor(face)
+  );
   if (!anchor) return null;
   const u = values.positionU ?? 0;
   const v = values.positionV ?? 0;

@@ -2394,13 +2394,27 @@ export function holeToolSpecFor(
     // edge it sits on the rim, a whole radius from the centroid.
     // Re-anchoring a hole that was drilled against the rim would silently
     // relocate it.
+    //
+    // M01 (schema v150): `outer-centroid` is the outer boundary loop's own
+    // centroid, which drilling or resizing another hole in the face leaves
+    // where it was; the full area centroid (`centroid`) does not, so a hole
+    // measured from it drifts with every hole drilled before it.
     if (data.positionAnchor === 'centroid' && !geometry.centroid) {
       throw new Error(
         'The hole entry face no longer reports an area centroid, and this hole is positioned from one.'
       );
     }
+    if (data.positionAnchor === 'outer-centroid' && !geometry.outerCentroid) {
+      throw new Error(
+        'The hole entry face no longer reports the centroid of its outer boundary, and this hole is positioned from it.'
+      );
+    }
     const anchor =
-      data.positionAnchor === 'centroid' ? geometry.centroid! : geometry.center;
+      data.positionAnchor === 'outer-centroid'
+        ? geometry.outerCentroid!
+        : data.positionAnchor === 'centroid'
+          ? geometry.centroid!
+          : geometry.center;
     entries = [
       {
         pointId: null,

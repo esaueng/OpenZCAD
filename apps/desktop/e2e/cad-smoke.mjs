@@ -348,7 +348,10 @@ try {
         return candidate.textContent.includes('Mounting Bracket');
       }
     );
-    if (!button) return false;
+    // The cards stay disabled while the start screen loads, and a click on
+    // a disabled button does nothing. On a fresh launch, as on every CI
+    // runner, the cards render disabled first, so wait until one is usable.
+    if (!button || button.disabled) return false;
     button.click();
     return true;`
   );
