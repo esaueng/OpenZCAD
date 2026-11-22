@@ -73,6 +73,9 @@ export function applyDisplayMode(
 ) {
   const facesVisible = mode !== 'wireframe' || xray;
   bodyGroup.traverse((child: THREE.Object3D) => {
+    // M13: a hovered measurement's highlight is drawn as it was made,
+    // whatever the mode; it lives only while its row is hovered.
+    if (child.userData.measureHighlight === true) return;
     if (child.userData.exactSection === true) {
       // Only the cut SURFACE follows the display mode. The section curves
       // are an outline — the same kind of thing wireframe keeps the body's

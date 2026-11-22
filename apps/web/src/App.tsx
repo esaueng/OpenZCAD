@@ -844,6 +844,7 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
+import { measurementHighlightTargets } from './lib/measureHighlights';
 import { measureSnapKindsFor } from './lib/measurePointKinds';
 import {
   relocateMovePivot,
@@ -2868,6 +2869,9 @@ function refreshedEdgePicks(
   });
   return { edges, moved };
 }
+
+/** M13: the stable empty list while no measurement row is hovered. */
+const NO_MEASURE_HIGHLIGHTS: TopologySelection[] = [];
 
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
@@ -10542,6 +10546,26 @@ export function App() {
     viewerBodies: completedViewerBodies,
     setStatus
   });
+  /**
+   * M13: the measurement row under the pointer or focus. Its edges and
+   * faces are lit in the viewport while Measure is on; a body or a row no
+   * longer listed lights nothing.
+   */
+  const [hoveredMeasurementId, setHoveredMeasurementId] = useState<
+    string | null
+  >(null);
+  // The dock unmounts when Measure turns off, with no pointer-leave to clear
+  // the row it held: a reopened dock must not light a stale row.
+  useEffect(() => {
+    if (!measuring) setHoveredMeasurementId(null);
+  }, [measuring]);
+  const hoveredMeasurementTargets = useMemo<TopologySelection[]>(() => {
+    if (!measuring || !hoveredMeasurementId) return NO_MEASURE_HIGHLIGHTS;
+    const row = measurements.find(
+      (measurement) => measurement.id === hoveredMeasurementId
+    );
+    return row ? measurementHighlightTargets(row) : NO_MEASURE_HIGHLIGHTS;
+  }, [measuring, hoveredMeasurementId, measurements]);
   /** What a Move launched now would act on, read live by a held launch: the
    * project and selection (a replaced project can share an empty one), and
    * which command holds the lane, so Measure, a tool or a sketch taken up
@@ -23082,6 +23106,20 @@ export function App() {
   /** Where the text card's live outline sits; the viewport writes it. */
   const sketchTextAnchorRef = useRef<{ x: number; y: number } | null>(null);
 
+  // S05: whether a multi-selection is construction — all, none or mixed —
+  // for the Construction toggle that acts on all of it.
+  const sketchSelectionConstruction = useMemo(():
+    boolean | 'mixed' | undefined => {
+    if (interaction.mode !== 'sketch' || !doc) return undefined;
+    const ids = sketchSelectedObjectIds(interaction.session);
+    if (ids.length < 2) return undefined;
+    const flags = ids.map((id) => {
+      const node = ownEntry(doc.nodes, id as EntityId);
+      return node?.kind === 'sketch-object' && node.data.construction === true;
+    });
+    return flags.every(Boolean) ? true : flags.some(Boolean) ? 'mixed' : false;
+  }, [interaction, doc]);
+
   const selectedSketchEntity = useMemo(() => {
     if (
       interaction.mode !== 'sketch' ||
@@ -24037,18 +24075,44 @@ export function App() {
       target && base && findSketch(base, target.sketchId as SketchId);
     if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
     if (!requireCurrentSketchGeometry(sketch.sketchId)) return;
+    // The edit is for exactly the selection the toggle was pressed on,
+    // captured before anything awaits: a click that changes it while the
+    // module loads or the downstream check runs drops the edit.
+    const selected = sketchSelectedObjectIds(
+      interactionRef.current.mode === 'sketch'
+        ? interactionRef.current.session
+        : { selectedObjectId: null }
+    );
+    const selectionKey = selected.join('|');
+    const selectionCurrent = () => {
+      const live = interactionRef.current;
+      return (
+        live.mode === 'sketch' &&
+        sketchSelectedObjectIds(live.session).join('|') === selectionKey
+      );
+    };
     setSketchSolving(true);
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
     try {
-      const { planSketchConstructionToggle } =
+      const { planSketchConstructionSet, planSketchConstructionToggle } =
         await import('./lib/sketch/modify');
-      const plan = planSketchConstructionToggle(
-        base,
-        sketch,
-        sketch.sketchId,
-        target.objectId
-      );
+      if (selected.length > 1 && !selectionCurrent()) {
+        setStatus(
+          'The selection changed before the construction change applied. Try again.'
+        );
+        return;
+      }
+      // A multi-selection toggles together; one entity keeps its own plan.
+      const plan =
+        selected.length > 1
+          ? planSketchConstructionSet(base, sketch, sketch.sketchId, selected)
+          : planSketchConstructionToggle(
+              base,
+              sketch,
+              sketch.sketchId,
+              target.objectId
+            );
       if (plan.status === 'refuse') {
         setSketchEditError(plan.reason);
         setStatus(plan.reason);
@@ -24058,7 +24122,10 @@ export function App() {
           sketch.sketchId,
           plan.commands,
           plan.label,
-          target.raceObjectId
+          target.raceObjectId,
+          selected.length > 1
+            ? { isCurrent: selectionCurrent, checkCandidate: async () => {} }
+            : undefined
         )
       ) {
         setStatus(plan.message);
@@ -24358,6 +24425,7 @@ export function App() {
     raws?: string[];
     offset?: SketchOffsetPick;
     pattern?: SketchPatternOptions;
+    sources?: readonly string[];
     anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
@@ -35978,6 +36046,7 @@ export function App() {
       onPrecision={setMeasurementPrecision}
       onRadialDisplay={setRadialDisplay}
       onSelect={setActiveMeasurementId}
+      onHover={setHoveredMeasurementId}
       onToggleVisibility={(id) =>
         setMeasurements((current) =>
           current.map((measurement) =>
@@ -37113,6 +37182,8 @@ export function App() {
           : undefined
       }
       onToggleConstruction={() => void handleToggleSketchConstruction()}
+      selectionCount={sketchSelectedObjectIds(interaction.session).length}
+      selectionConstruction={sketchSelectionConstruction}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);
@@ -38101,6 +38172,7 @@ export function App() {
             // card (View, Tweak, a running tool) the pick keeps its name.
             pickLabel={calloutWithOperation === null}
             focusGhostBodies={focusGhostBodies}
+            measureHighlights={hoveredMeasurementTargets}
             {...((inPlaceFocusFaces ?? focusFaces)
               ? { focusFaces: inPlaceFocusFaces ?? focusFaces }
               : {})}

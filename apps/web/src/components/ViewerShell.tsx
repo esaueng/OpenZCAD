@@ -239,6 +239,8 @@ interface ViewerShellProps {
   focusGhostBodies?: readonly BodyRepresentation[];
   /** The surviving faces a History row brings into focus, lit as selected. */
   focusFaces?: readonly TopologySelection[];
+  /** M13: a hovered measurement's edges and faces (see `ModelViewer`). */
+  measureHighlights?: readonly TopologySelection[];
   canUndo: boolean;
   /** Undo is spent because older steps were dropped, not because none exist. */
   undoFloorTrimmed?: boolean;
@@ -552,6 +554,7 @@ export function ViewerShell({
   pickLabel,
   focusGhostBodies,
   focusFaces,
+  measureHighlights,
   canUndo,
   undoFloorTrimmed = false,
   canRedo,
@@ -999,6 +1002,7 @@ export function ViewerShell({
         pickLabel={pickLabel}
         {...(focusGhostBodies ? { focusGhostBodies } : {})}
         {...(focusFaces ? { focusFaces } : {})}
+        {...(measureHighlights ? { measureHighlights } : {})}
         selectedEdges={selectedEdges}
         pickListEnabled={pickListEnabled}
         settings={settings}

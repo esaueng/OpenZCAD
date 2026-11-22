@@ -2317,10 +2317,61 @@ export function validateSketchConstraint(
         'arc',
         'circle'
       ]);
-      if ((a === 'line') === (b === 'line')) {
+      if (a === 'line' && b === 'line') {
         throw new Error(
           'A tangent constraint pairs one line with one circle or arc.'
         );
+      }
+      if (data.a === data.b) {
+        throw new Error('A tangent constraint pairs two different entities.');
+      }
+      if (a !== 'line' && b !== 'line') {
+        // S05 (v141): curve to curve, at an end of an arc in the pair.
+        if (a === 'circle' && b === 'circle') {
+          throw new Error('Two circles touch at no named point; use an arc.');
+        }
+        if (!data.at) {
+          throw new Error(
+            'A tangent between curves must name the arc point where they touch.'
+          );
+        }
+        const owners = [
+          a === 'arc' ? data.a : null,
+          b === 'arc' ? data.b : null
+        ];
+        if (!owners.includes(data.at.objectId)) {
+          throw new Error(
+            'A tangent contact point must belong to an arc it constrains.'
+          );
+        }
+        if (data.at.point !== 'start' && data.at.point !== 'end') {
+          throw new Error('A tangent contact point is an arc start or end.');
+        }
+        requireConstraintPoint(document, sketch, data.at);
+        if (a === 'arc' && b === 'arc') {
+          // Two arcs touch where they are joined end to end.
+          const other = data.at.objectId === data.a ? data.b : data.a;
+          const at = data.at;
+          const joined = (sketch.constraints ?? []).some(
+            ({ data: existing }) =>
+              existing.constraintKind === 'coincident' &&
+              [
+                [existing.a, existing.b],
+                [existing.b, existing.a]
+              ].some(
+                ([mine, theirs]) =>
+                  samePointRef(mine!, at) &&
+                  theirs!.objectId === other &&
+                  theirs!.point !== 'center'
+              )
+          );
+          if (!joined) {
+            throw new Error(
+              'Two arcs are tangent where they join: join the contact point to an end of the other arc first.'
+            );
+          }
+        }
+        break;
       }
       const arcSide = a === 'arc' ? data.a : b === 'arc' ? data.b : null;
       if (arcSide === null) {
@@ -2458,6 +2509,45 @@ export function addSketchConstraint(
   return { document: next, constraintId };
 }
 
+/**
+ * S05: two arcs are tangent where they are joined, so a curve-to-curve
+ * tangent goes with the coincidence that joined its contact point to the
+ * other arc — unless another coincidence still joins them there.
+ */
+function withoutUnjoinedArcTangents(
+  document: ProjectDocument,
+  constraints: SketchConstraint[],
+  removed: SketchConstraintData
+): SketchConstraint[] {
+  if (removed.constraintKind !== 'coincident') return constraints;
+  const isArc = (id: EntityId) => {
+    const node = getNode(document, id);
+    return node?.kind === 'sketch-object' && node.objectKind === 'arc';
+  };
+  const joins = (at: SketchPointRef, other: EntityId) =>
+    constraints.some(
+      ({ data }) =>
+        data.constraintKind === 'coincident' &&
+        ((samePointRef(data.a, at) && data.b.objectId === other) ||
+          (samePointRef(data.b, at) && data.a.objectId === other))
+    );
+  return constraints.filter(({ data }) => {
+    if (
+      data.constraintKind !== 'tangent' ||
+      !data.at ||
+      !isArc(data.a) ||
+      !isArc(data.b)
+    ) {
+      return true;
+    }
+    const other = data.at.objectId === data.a ? data.b : data.a;
+    const unjoinedNow =
+      [removed.a, removed.b].some((ref) => samePointRef(ref, data.at!)) &&
+      [removed.a, removed.b].some((ref) => ref.objectId === other);
+    return !unjoinedNow || joins(data.at, other);
+  });
+}
+
 export function deleteSketchConstraint(
   document: ProjectDocument,
   input: SketchConstraintDeleteInput
@@ -2485,7 +2575,14 @@ export function deleteSketchConstraint(
       `Sketch ${input.sketchId} has no constraint ${input.constraintId}.`
     );
   }
-  sketch.constraints = remaining;
+  const removed = (sketch.constraints ?? []).find(
+    (constraint) => constraint.constraintId === input.constraintId
+  )!;
+  sketch.constraints = withoutUnjoinedArcTangents(
+    next,
+    remaining,
+    removed.data
+  );
   // Keep an orphaned position in the additive map. Replacing a driving
   // constraint during value editing deletes and re-adds the same identity in
   // one transaction; retaining it preserves the user's label placement.
