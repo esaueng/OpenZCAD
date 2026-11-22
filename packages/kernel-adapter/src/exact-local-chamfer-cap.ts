@@ -3,6 +3,7 @@ import { RemusKernel } from './remus-runtime';
 import type { RemusMoveFacesRelation } from './remus-lineage';
 import { faceFingerprint } from './exact-witnesses';
 import { surfaceTypeOf } from './exact-sync-memo';
+import { AdapterRefusal } from './adapter-refusal';
 import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
@@ -297,7 +298,8 @@ function moveEnd(
   )
     return false;
   if (shoulder.axial + offset - fixed.axial <= GEOMETRY_EPSILON)
-    throw new Error(
+    throw new AdapterRefusal(
+      'offset_collapses_cylindrical_wall',
       'That distance would leave no cylindrical wall before the shoulder.'
     );
   for (const [band, rings] of [

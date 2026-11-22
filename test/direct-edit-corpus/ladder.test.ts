@@ -44,6 +44,10 @@ import {
 } from './reference-parts';
 
 const BUDGET_MS = 30_000;
+const UNSPECIFIC_REFUSALS = [
+  GENERIC_REFUSAL,
+  'The exact kernel failed internally on this operation.'
+];
 const INITIAL_CENSUS = {
   A: 'cone,cylinder:12,plane:7,sphere:8,torus:2',
   B: 'cylinder:12,plane:6,sphere:8',
@@ -93,23 +97,30 @@ function magnitudes(limit: number | null, span: number): [string, number][] {
       ];
 }
 
-function diagnostic(derived: DerivedState, cell: string) {
+function diagnostic(
+  derived: DerivedState,
+  bodyId: ReferencePart['bodyId'],
+  cell: string
+) {
   const warning = derived.featureWarnings?.find(
     (entry) => entry.kind === 'build-failed' || entry.kind === 'refusal'
   );
-  expect(warning, `${cell}: ${refusal(derived, cell)?.evidence}`).toBeDefined();
+  if (!warning) {
+    expect(refusal(derived, cell), cell).toBeNull();
+    return undefined;
+  }
   const rejected = validatedFeatureRejection({
-    featureId: warning!.featureId,
-    featureName: warning!.featureName,
-    bodyPresent: true,
+    featureId: warning.featureId,
+    featureName: warning.featureName,
+    bodyPresent: derived.bodyRepresentations[bodyId] !== undefined,
     documentMoved: false,
     warnings: derived.warnings,
     featureWarnings: derived.featureWarnings!
   });
-  expect(warning!.kernelRefusal, cell).toBeDefined();
+  expect(warning.kernelRefusal, cell).toBeDefined();
   expect(rejected?.message, cell).toBeTruthy();
-  expect(rejected?.message, cell).not.toBe(GENERIC_REFUSAL);
-  const { family, category, code } = warning!.kernelRefusal!;
+  expect(UNSPECIFIC_REFUSALS, cell).not.toContain(rejected?.message);
+  const { family, category, code } = warning.kernelRefusal!;
   return {
     family,
     category,
@@ -213,7 +224,6 @@ function assertMovedPlanes(
         volumeTolerance(g.area),
         `${cell}: cap area`
       );
-      expect(faceCensus(body), cell).toBe(faceCensus(base.body));
     }
   }
   if (target.section !== undefined) {
@@ -259,12 +269,18 @@ function assertMovedPlanes(
         );
       }
     }
-    const expected = base.body.volume + target.section * delta;
+  }
+  const volumeDelta =
+    target.volumeDelta?.(delta) ??
+    (target.section === undefined ? undefined : target.section * delta);
+  if (volumeDelta !== undefined) {
+    expect(faceCensus(body), cell).toBe(faceCensus(base.body));
+    const expected = base.body.volume + volumeDelta;
     near(
       body.volume,
       expected,
       volumeTolerance(expected),
-      `${cell}: constant-section volume`
+      `${cell}: analytic volume change`
     );
   }
 }
@@ -292,20 +308,22 @@ async function checkCell(
 
   const command = target.command(delta);
   const candidate = await preview([command]);
-  if (refusal(candidate, cell)) {
-    const observed = diagnostic(candidate, cell);
+  const observed = diagnostic(candidate, base.bodyId, cell);
+  if (observed) {
+    // A failed direct edit also promises to pass through the last solid in
+    // the speculative rebuild. A source edit may invalidate its own inputs.
     if (command.kind === 'feature.direct-edit') {
       expect(
         snapshot(candidate.bodyRepresentations[base.bodyId]!),
         cell
       ).toEqual(before);
     }
-    expect(withoutDerivedProjection(manager.document), cell).toEqual(original);
-    expect(manager.canUndo, cell).toBe(false);
     const kept = await sync(session, manager.document, base.bodyId);
     expect(snapshot(kept.bodyRepresentations[base.bodyId]!), cell).toEqual(
       before
     );
+    expect(withoutDerivedProjection(manager.document), cell).toEqual(original);
+    expect(manager.canUndo, cell).toBe(false);
     return { observed };
   }
 

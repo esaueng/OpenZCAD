@@ -363,12 +363,18 @@ describe('local chamfered end offsets on stepped imported bodies', () => {
           kernel.getFaceNormal(f)[2]! < -0.99
       )!;
       const source = kernel.serializeSolid(solid);
-      expect(() =>
-        tryExactLocalChamferCapOffset(kernel, solid, face, -100)
-      ).toThrow(/no cylindrical wall/);
-      expect(() =>
-        tryExactLocalChamferCapOffset(kernel, solid, face, -43)
-      ).toThrow(/no cylindrical wall/);
+      for (const offset of [-100, -43]) {
+        expect(() =>
+          tryExactLocalChamferCapOffset(kernel, solid, face, offset)
+        ).toThrow(
+          expect.objectContaining({
+            message: expect.stringMatching(/no cylindrical wall/),
+            family: 'direct-edit',
+            category: 'invalid_topology',
+            kernelCode: 'offset_collapses_cylindrical_wall'
+          })
+        );
+      }
       // A positive wall length alone cannot prove clearance to a rounded
       // shoulder. A move beyond its conservative support bound declines.
       expect(

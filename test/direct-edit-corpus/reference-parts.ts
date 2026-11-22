@@ -38,6 +38,10 @@ const ROUND = 1.5;
 const CHAMFER = 1;
 const LENGTH_TOLERANCE = 1e-6;
 
+function roundedSection(width: number, height: number) {
+  return width * height - (4 - Math.PI) * ROUND ** 2;
+}
+
 export interface ReferencePart {
   document: ProjectDocument;
   bodyId: BodyId;
@@ -232,6 +236,8 @@ export interface Target {
   movedPlanes?: readonly FaceTopology[];
   /** Cross-section of a prismatic move with a rigid end group. */
   section?: number;
+  /** Volume change of coordinated moves whose cross-sections change together. */
+  volumeDelta?: (delta: number) => number;
   /** Independently rebuild the part with its source dimension changed. */
   rebuildSource?: (
     adapter: ExactKernelAdapter,
@@ -328,7 +334,13 @@ export function targets(part: Part, base: ReferencePart): Target[] {
       POST_HEIGHT - PLATE_DEPTH - 2 * ROUND,
       apex.z - POST_HEIGHT
     );
-    offset('bottom', plane(body, 'z', -1, 0), PLATE_DEPTH - 2 * ROUND);
+    offset(
+      'bottom',
+      plane(body, 'z', -1, 0),
+      PLATE_DEPTH - 2 * ROUND,
+      null,
+      roundedSection(WIDTH, HEIGHT)
+    );
     const right = plane(body, 'x', 1, WIDTH);
     const back = plane(body, 'y', 1, HEIGHT);
     const root = face(
@@ -340,13 +352,19 @@ export function targets(part: Part, base: ReferencePart): Target[] {
     const junctionExtent = root.geometry!.majorRadius! + ROUND;
     const rightClearance = WIDTH / 2 - junctionExtent;
     const backClearance = HEIGHT / 2 - junctionExtent;
-    offset('right', right, rightClearance);
-    offset('back', back, backClearance);
+    const rightSection = roundedSection(HEIGHT, PLATE_DEPTH);
+    const backSection = roundedSection(WIDTH, PLATE_DEPTH);
+    offset('right', right, rightClearance, null, rightSection);
+    offset('back', back, backClearance, null, backSection);
     targets.push({
       name: 'right-and-back',
       inward: Math.min(rightClearance, backClearance),
       outward: null,
       movedPlanes: [right, back],
+      // The second move spans the width changed by the first. The root
+      // blend and the rounded box corners preserve their volumes.
+      volumeDelta: (delta) =>
+        delta * (rightSection + backSection + PLATE_DEPTH * delta),
       command: (delta) => {
         const command = buildOffsetFaces({
           document,
@@ -370,7 +388,7 @@ export function targets(part: Part, base: ReferencePart): Target[] {
     blend('rim-blend', rim, TAPER_END - ROUND);
   }
   if (part === 'B') {
-    const section = WIDTH * HEIGHT - (4 - Math.PI) * ROUND ** 2;
+    const section = roundedSection(WIDTH, HEIGHT);
     offset(
       'top',
       plane(body, 'z', 1, PLATE_DEPTH),
@@ -439,7 +457,8 @@ export function targets(part: Part, base: ReferencePart): Target[] {
       'shoulder',
       plane(body, 'z', 1, PLATE_DEPTH),
       PLATE_DEPTH,
-      POST_HEIGHT - PLATE_DEPTH - ROUND
+      POST_HEIGHT - PLATE_DEPTH - ROUND,
+      WIDTH * HEIGHT - Math.PI * POST_RADIUS ** 2
     );
     offset(
       'boss-cap',

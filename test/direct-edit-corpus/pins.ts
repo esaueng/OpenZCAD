@@ -170,17 +170,23 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
       'A/top/+L-0.1',
       'A/top/+L',
       'A/top/+L+0.1',
-      'A/top/+2L',
-      'C/shoulder/+2L'
+      'A/top/+2L'
     ],
     {
       family: 'direct-edit',
       category: 'internal',
       code: 'offset_face_refused',
-      message: 'The exact kernel failed internally on this operation.'
-    },
-    'U02'
+      message:
+        'The fillet between this cap and the tapered wall could not be rebuilt. Edit the fillet or taper in History.'
+    }
   ),
+  ...ladderRefusals(['C/shoulder/+L', 'C/shoulder/+L+0.1', 'C/shoulder/+2L'], {
+    family: 'direct-edit',
+    category: 'internal',
+    code: 'offset_face_refused',
+    message:
+      'The moving blend would run into the fixed rim. Try a smaller offset.'
+  }),
   ...ladderRefusals(
     ['A/bottom/-L', 'A/bottom/-L+0.1', 'B/top/-L', 'B/top/-L+0.1'],
     {
@@ -289,10 +295,10 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     ],
     {
       family: 'blend',
-      category: 'quality_refused',
+      category: 'unsupported',
       code: 'blend-cluster-reblend-failed',
       message:
-        "The adjoining blends couldn't be rebuilt at that radius. Try a smaller radius or edit the blends in History."
+        "The adjoining blends couldn't be rebuilt at that radius. Edit the blends in History."
     }
   ),
   ...ladderRefusals(
@@ -331,12 +337,6 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     code: 'unsupported-vertex-blend',
     message:
       'Fillet could not be created on 12 selected edges with radius 10.5. Try a smaller radius: radius 5.85 builds here.'
-  }),
-  ...ladderRefusals(['C/shoulder/+L', 'C/shoulder/+L+0.1'], {
-    family: 'direct-edit',
-    category: 'internal',
-    code: 'offset_face_refused',
-    message: 'The blend does not fit here. Try a smaller size.'
   }),
   ...ladderRefusals(['C/cylinder-radius/-L-0.1'], {
     family: 'validation',

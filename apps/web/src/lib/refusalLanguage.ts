@@ -114,7 +114,7 @@ const FILLETS_NOT_REBUILT =
  */
 const BLEND_RESIZE_SENTENCES: Readonly<Record<string, string>> = {
   'blend-cluster-reblend-failed':
-    "The adjoining blends couldn't be rebuilt at that radius. Try a smaller radius or edit the blends in History.",
+    "The adjoining blends couldn't be rebuilt at that radius. Edit the blends in History.",
   'unsupported-support-pair':
     "This fillet joins faces that removing or resizing a fillet can't rebuild yet; that works for fillets between flat and cylindrical faces. Edit the fillet in History instead.",
   'band-touches-freeform':
@@ -190,6 +190,16 @@ function sentenceOf(translation: Translation, text: string): string {
 }
 
 const TRANSLATIONS: readonly Translation[] = [
+  {
+    pattern: /resize blend: unsupported analytic support pair: plane x cone/i,
+    sentence:
+      'The fillet between this cap and the tapered wall could not be rebuilt. Edit the fillet or taper in History.'
+  },
+  {
+    pattern: /moving blend reaches fixed rim face/i,
+    sentence:
+      'The moving blend would run into the fixed rim. Try a smaller offset.'
+  },
   {
     pattern: /unsupported STEP entity:/i,
     sentence:

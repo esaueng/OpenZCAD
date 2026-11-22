@@ -23,8 +23,12 @@ because the root blend would be left behind. Both D caps build to within
 
 The suite checks kept geometry and history on refusal, literal user
 sentences and typed classifications, exact undo/redo and command replay,
-closed meshes, independent volume and source-route checks, and the rigid-end
-volume delta on the rounded box, boss cap and chamfered cylinder. Typed
+closed meshes, independent volume and source-route checks. The analytic
+volume deltas cover the rounded box and tapered union's plate faces, the
+boss cap and shoulder, and both chamfered caps. The four ladder tests took
+25.53 seconds locally. Typed
 coverage exposed gaps at a consumed chamfered-cylinder wall, non-positive
 cylinder height and failed blend-cluster reconstruction. These now carry
-classifications at the adapter boundary.
+classifications at the adapter boundary. The tapered cap still refuses
+before reaching the apex check and now identifies the fillet that could
+not be rebuilt.

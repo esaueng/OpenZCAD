@@ -25,7 +25,7 @@ export const RESIZE_BLEND_REFUSAL_CATEGORIES: Readonly<
   'blend-radius-mismatch': 'invalid_input',
   'band-touches-freeform': 'unsupported',
   'unsupported-support-pair': 'unsupported',
-  'blend-cluster-reblend-failed': 'quality_refused',
+  'blend-cluster-reblend-failed': 'unsupported',
   'radius-too-large': 'invalid_input',
   'resize-blend-failed': 'unsupported'
 };
