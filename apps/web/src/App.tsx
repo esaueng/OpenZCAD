@@ -38031,6 +38031,25 @@ export function App() {
       }}
     />
   ) : null;
+  // Which card the modeling guide folds for on a phone (#1945): the
+  // command card and the inspector's tool or feature. A guide opened over
+  // one card folds again for the next, even when one replaces the other in
+  // a single update (Sketch's plane prompt to Measure).
+  const commandCardKey =
+    commandCard === null
+      ? ''
+      : measurementDock
+        ? 'measure'
+        : contextualToolCard
+          ? `card:${interaction.mode}:${contextualToolCard.icon}`
+          : `prompt:${tool ?? 'profile'}`;
+  const inspectorKey = inspectorActive
+    ? (tool ?? modelingEditFeature?.id ?? 'inspector')
+    : '';
+  const guideYieldKey =
+    phoneStage && (commandCardKey || inspectorKey)
+      ? `${commandCardKey}|${inspectorKey}`
+      : null;
   const workspace = (
     <WorkspaceAppShell
       covered={sharePage !== null}
@@ -39524,9 +39543,7 @@ export function App() {
                 // On a phone the guide and a command card share the right
                 // lane's foot; expanded, it left the card a 13 px sliver
                 // (#1945). It folds to its header while one is up.
-                yieldToCommand={
-                  phoneStage && (commandCard !== null || inspectorActive)
-                }
+                yieldTo={guideYieldKey}
                 onMinimizedChange={(workspaceTourMinimized) =>
                   setPanelState((current) => ({
                     ...current,

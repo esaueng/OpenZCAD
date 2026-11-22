@@ -32,7 +32,7 @@ describe('WorkspaceTour', () => {
     const props = { ...idle, onDismiss: vi.fn(), onMinimizedChange };
     const heading = () =>
       screen.queryByRole('heading', { name: 'Create your first feature' });
-    const { rerender } = render(<WorkspaceTour {...props} yieldToCommand />);
+    const { rerender } = render(<WorkspaceTour {...props} yieldTo="measure" />);
     expect(heading()).not.toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Expand modeling guide' })
@@ -48,15 +48,24 @@ describe('WorkspaceTour', () => {
     expect(heading()).not.toBeInTheDocument();
     expect(onMinimizedChange).not.toHaveBeenCalled();
     // The card goes: the guide is back as it was.
-    rerender(<WorkspaceTour {...props} yieldToCommand={false} />);
+    rerender(<WorkspaceTour {...props} yieldTo={null} />);
     expect(heading()).toBeVisible();
     // Opened over one card, it folds again for the next.
-    rerender(<WorkspaceTour {...props} yieldToCommand />);
+    rerender(<WorkspaceTour {...props} yieldTo="measure" />);
     fireEvent.click(
       screen.getByRole('button', { name: 'Expand modeling guide' })
     );
-    rerender(<WorkspaceTour {...props} yieldToCommand={false} />);
-    rerender(<WorkspaceTour {...props} yieldToCommand />);
+    rerender(<WorkspaceTour {...props} yieldTo={null} />);
+    rerender(<WorkspaceTour {...props} yieldTo="measure" />);
+    expect(heading()).not.toBeInTheDocument();
+    // Also when the next card replaces it in one update (PR review: from
+    // Sketch's plane prompt straight to Measure).
+    rerender(<WorkspaceTour {...props} yieldTo="prompt:sketch" />);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Expand modeling guide' })
+    );
+    expect(heading()).toBeVisible();
+    rerender(<WorkspaceTour {...props} yieldTo="measure" />);
     expect(heading()).not.toBeInTheDocument();
   });
 
@@ -66,7 +75,7 @@ describe('WorkspaceTour', () => {
       <WorkspaceTour
         {...idle}
         minimized
-        yieldToCommand
+        yieldTo="measure"
         onDismiss={vi.fn()}
         onMinimizedChange={onMinimizedChange}
       />
