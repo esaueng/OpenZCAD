@@ -494,7 +494,12 @@ function buildDirectEditFeature(
     deferOutputLineage,
     (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
     data.operation.kind === 'offset-face'
-      ? chamferSetbacksBefore(document, feature.featureId, scope)
+      ? chamferSetbacksBefore(
+          document,
+          feature.featureId,
+          data.targetBodyId,
+          scope
+        )
       : []
   );
   if (deferOutputLineage) {

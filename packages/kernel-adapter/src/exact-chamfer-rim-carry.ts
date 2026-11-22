@@ -303,20 +303,63 @@ function sameSetback(a: ChamferSetback, b: ChamferSetback): boolean {
 }
 
 /**
- * The [first, second] setbacks of every chamfer feature that precedes
- * `featureId` in the document's history, resolved in `scope`. A chamfer
- * whose sizes do not resolve contributes nothing.
+ * The bodies `bodyId` was built from: itself, the bodies its producing
+ * feature consumed, and theirs. A feature's inputs are read from every body
+ * id its data names, which can only over-include an input, never drop one.
+ */
+function bodyAncestry(document: ProjectDocument, bodyId: string): Set<string> {
+  const producers = new Map<string, unknown>();
+  for (const node of Object.values(document.nodes)) {
+    if (node.kind === 'feature' && 'bodyId' in node && node.bodyId)
+      producers.set(node.bodyId, node.data);
+  }
+  const inputsOf = (data: unknown): string[] =>
+    data && typeof data === 'object'
+      ? Object.values(data).flatMap((value: unknown) =>
+          (Array.isArray(value) ? value : [value]).filter(
+            (item): item is string =>
+              typeof item === 'string' && item.startsWith('body_')
+          )
+        )
+      : [];
+  const seen = new Set<string>();
+  const queue = [bodyId];
+  while (queue.length) {
+    const next = queue.pop()!;
+    if (seen.has(next)) continue;
+    seen.add(next);
+    queue.push(...inputsOf(producers.get(next)));
+  }
+  return seen;
+}
+
+/**
+ * The [first, second] setbacks of every chamfer that precedes `featureId`
+ * in the history and built `bodyId` or one of the bodies it came from,
+ * resolved in `scope`. A chamfer elsewhere in the document cannot have made
+ * a band on this body. A chamfer whose sizes do not resolve contributes
+ * nothing.
  */
 export function chamferSetbacksBefore(
   document: ProjectDocument,
   featureId: FeatureId,
+  bodyId: string,
   scope: Record<string, number>
 ): ChamferSetback[] {
   const setbacks: ChamferSetback[] = [];
+  const ancestry = bodyAncestry(document, bodyId);
   for (const id of document.featureOrder) {
     if (id === featureId) break;
-    const data = findFeature(document, id)?.data;
+    const node = findFeature(document, id);
+    const data = node?.data;
     if (data?.featureKind !== 'chamfer') continue;
+    if (
+      !node ||
+      !('bodyId' in node) ||
+      !node.bodyId ||
+      !ancestry.has(node.bodyId)
+    )
+      continue;
     try {
       const first = resolveParamValue(
         data.distance,

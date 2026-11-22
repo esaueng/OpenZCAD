@@ -26,6 +26,7 @@ import {
 } from '@openzcad/document-core';
 import { RemusKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
+  toFeatureId,
   toUserId,
   type BodyId,
   type EdgeTopology,
@@ -34,7 +35,10 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { RemusKernel } from '../../packages/kernel-adapter/src/remus-runtime';
-import { tryCarryChamferRim } from '../../packages/kernel-adapter/src/exact-chamfer-rim-carry';
+import {
+  chamferSetbacksBefore,
+  tryCarryChamferRim
+} from '../../packages/kernel-adapter/src/exact-chamfer-rim-carry';
 
 const X = 60;
 const Y = 40;
@@ -251,6 +255,22 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
       }
     });
   }
+
+  it('counts only the chamfers that built the edited body', () => {
+    const f = fixtures.get('sharp')!;
+    const other = addPrimitiveFeature(f.document, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const otherBody = other.bodyOrder.at(-1)!;
+    const later = toFeatureId('feat_later');
+    expect(chamferSetbacksBefore(other, later, f.bodyId, {})).toEqual([
+      [CHAMFER, CHAMFER]
+    ]);
+    // A chamfer elsewhere in the document cannot have made a band here.
+    expect(chamferSetbacksBefore(other, later, otherBody, {})).toEqual([]);
+  });
 
   describe('the carry on bare kernel bodies', () => {
     const bottomOf = (kernel: RemusKernel, solid: number) =>
