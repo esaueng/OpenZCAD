@@ -5,7 +5,11 @@ import {
   type EdgeTopology,
   type TopologySelection
 } from '@openzcad/shared';
-import { faceBoundaryEdges, outlineChamferChain } from './chamferChain';
+import {
+  faceBoundaryEdges,
+  outlineChamferChain,
+  tangentChainAdditions
+} from './chamferChain';
 const bodyId = toBodyId('chain-body');
 const edge = (index: number, support = 10): EdgeTopology => ({
   hash: index,
@@ -104,5 +108,50 @@ describe('edges around a picked face', () => {
       []
     );
     expect(faceBoundaryEdges(undefined, face)).toEqual([]);
+  });
+});
+
+describe('tangent-chain additions (M03)', () => {
+  const run = body(-1, 10, 'plane', [
+    { ...edge(2), points: [2, 0, 0, 3, 0, 0], vertexIds: [2, 3] }
+  ]);
+  it('adds the rest of the run through the last pick, in run order', () => {
+    expect(
+      tangentChainAdditions(run, [picked], bodyId, false).map((e) => e.hash)
+    ).toEqual([1, 2]);
+  });
+  it('leaves out what is picked already, and is empty for a lone edge', () => {
+    expect(
+      tangentChainAdditions(
+        run,
+        [picked, { hash: 2, topologyId: 'e2' }],
+        bodyId,
+        false
+      ).map((e) => e.hash)
+    ).toEqual([1]);
+    expect(
+      tangentChainAdditions(
+        body(-1, 10, 'plane'),
+        [{ hash: 99, topologyId: 'missing' }],
+        bodyId,
+        false
+      )
+    ).toEqual([]);
+  });
+  it('keeps a chamfer off an edge that is already smooth', () => {
+    const smooth = body(-1, 10, 'plane', [
+      {
+        ...edge(2),
+        points: [2, 0, 0, 3, 0, 0],
+        vertexIds: [2, 3],
+        isSmooth: true
+      }
+    ]);
+    expect(
+      tangentChainAdditions(smooth, [picked], bodyId, true).map((e) => e.hash)
+    ).toEqual([1]);
+    expect(
+      tangentChainAdditions(smooth, [picked], bodyId, false).map((e) => e.hash)
+    ).toEqual([1, 2]);
   });
 });

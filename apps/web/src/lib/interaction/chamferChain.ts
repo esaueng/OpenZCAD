@@ -98,3 +98,40 @@ export function faceBoundaryEdges(
     )
     .map((edge) => selectionOf(face.bodyId, edge));
 }
+
+/**
+ * M03: the edges a tangent-chain pick adds to a blend's picks — the smooth
+ * run through the last picked edge, in run order, less the edges already
+ * picked and anything the blend cannot take (a seam, or for a chamfer a
+ * boundary that is already smooth).
+ *
+ * Empty when the last pick is on no shown body or its run is just itself.
+ * The chain is offered, never applied for the user: a run can climb a round
+ * the user meant to leave, and the blend then decides each edge exactly or
+ * refuses it by name (a variable radius along an arc is one it refuses).
+ */
+export function tangentChainAdditions(
+  body: TopologyBody,
+  picks: readonly Pick<TopologySelection, 'topologyId' | 'hash'>[],
+  bodyId: TopologySelection['bodyId'],
+  chamfer: boolean
+): TopologySelection[] {
+  const edges = body?.topology?.edges;
+  const seed = picks.at(-1);
+  if (!edges || !seed?.topologyId) return [];
+  if (!edges.some((edge) => edge.topologyId === seed.topologyId)) return [];
+  const picked = new Set(picks.map((pick) => pick.hash));
+  return edgeRunSelections(edges, seed.topologyId, bodyId).filter(
+    (selection) => {
+      if (picked.has(selection.hash)) return false;
+      const edge = edges.find(
+        (candidate) => candidate.topologyId === selection.topologyId
+      );
+      return (
+        edge !== undefined &&
+        edge.displayRole !== 'seam' &&
+        (!chamfer || edge.isSmooth !== true)
+      );
+    }
+  );
+}
