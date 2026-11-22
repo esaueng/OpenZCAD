@@ -9943,12 +9943,6 @@ export class ProjectCollaborationRoom extends DurableObject {
    * write it each time: undefined until read, null when none is set.
    */
   private idleTrimAlarmAt: number | null | undefined;
-  /**
-   * When this instance last accepted or lost a socket. In memory only (no
-   * write per connection): it keeps an alarm that fires just after the last
-   * socket closed from trimming a room that was in use moments ago.
-   */
-  private lastSocketActivityAt: number | null = null;
   private projectId: string | null = null;
   private erasing = false;
   /**
@@ -10273,7 +10267,6 @@ export class ProjectCollaborationRoom extends DurableObject {
       const client = pair[0];
       const server = pair[1];
       this.roomContext.acceptWebSocket(server);
-      this.lastSocketActivityAt = Date.now();
       roomWebSocket(server).serializeAttachment({
         schema: 1,
         userId,
@@ -10323,14 +10316,28 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
   }
 
-  webSocketClose(socket: WebSocket): void {
-    this.lastSocketActivityAt = Date.now();
+  async webSocketClose(socket: WebSocket): Promise<void> {
     this.removeSocket(socket);
+    await this.deferIdleHistoryTrim();
   }
 
-  webSocketError(socket: WebSocket): void {
-    this.lastSocketActivityAt = Date.now();
+  async webSocketError(socket: WebSocket): Promise<void> {
     this.removeSocket(socket);
+    await this.deferIdleHistoryTrim();
+  }
+
+  /**
+   * A closing socket means the room was in use just now, so the idle trim
+   * moves to at least {@link ROOM_IDLE_HISTORY_TRIM_MS} from now. It moves
+   * the stored alarm rather than an in-memory time, which a hibernated room
+   * would lose; the slack keeps that to one write per day per room.
+   */
+  private async deferIdleHistoryTrim(): Promise<void> {
+    await this.ready;
+    await this.scheduleIdleHistoryTrim().catch(() => {
+      this.idleTrimAlarmAt = undefined;
+      console.error('Collaboration idle-trim alarm could not be scheduled.');
+    });
   }
 
   /** Internal-only hard deletion used by the account erasure coordinator. */
@@ -12781,9 +12788,8 @@ export class ProjectCollaborationRoom extends DurableObject {
   /**
    * The idle-trim alarm. Commits push it out (see
    * {@link scheduleIdleHistoryTrim}), so when it fires the room has not
-   * committed for at least {@link ROOM_IDLE_HISTORY_TRIM_MS}. A room with an
-   * open socket, or one that held a socket within that window, is still in
-   * use and only reschedules.
+   * committed or closed a socket for at least {@link ROOM_IDLE_HISTORY_TRIM_MS}.
+   * A room with an open socket is still in use and only reschedules.
    */
   async alarm(): Promise<void> {
     await this.ready;
@@ -12791,13 +12797,13 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.idleTrimAlarmAt = null;
     await this.enqueueLeaseOperation(async () => {
       if (this.erasing || this.roomFormat === 2) return;
-      // A commit queued ahead of this handler already scheduled the next
-      // alarm: the room is not idle.
-      if (this.idleTrimAlarmAt !== null) return;
+      // A commit or socket close since this handler started means the room
+      // is not idle. It either scheduled the next alarm (a number), or failed
+      // to (undefined), in which case this handler schedules it instead.
+      if (typeof this.idleTrimAlarmAt === 'number') return;
       if (
-        this.roomContext.getWebSockets().length > 0 ||
-        (this.lastSocketActivityAt !== null &&
-          Date.now() - this.lastSocketActivityAt < ROOM_IDLE_HISTORY_TRIM_MS)
+        this.idleTrimAlarmAt === undefined ||
+        this.roomContext.getWebSockets().length > 0
       ) {
         await this.scheduleIdleHistoryTrim();
         return;

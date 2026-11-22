@@ -330,7 +330,7 @@ describe('collaboration room idle history trim', () => {
     expect(storage.alarm.at).toBe(clock + 8 * DAY);
   });
 
-  it('reschedules when the last socket closed moments before the alarm', async () => {
+  it('reschedules when the last socket closed moments before the alarm, across hibernation', async () => {
     const { storage, room, first } = await threeVersionRoom('Just closed');
     setNow(clock + 8 * DAY - 60_000);
     const accepted = await room.fetch(
@@ -346,12 +346,56 @@ describe('collaboration room idle history trim', () => {
     expect(accepted.status).toBe(101);
     const socket = globals.serverSockets.at(-1)!;
     socket.close(1000, 'done');
-    room.webSocketClose(socket as unknown as WebSocket);
+    await room.webSocketClose(socket as unknown as WebSocket);
+    expect(storage.alarm.at).toBe(clock + 8 * DAY);
 
+    // The room hibernates and loses its memory; the moved alarm is stored,
+    // so the old day-eight time never fires on the woken instance.
     setNow(clock + 60_000);
-    await fireAlarm(storage, room);
-
+    await settleRoom(createTestRoom(storage.context, {}));
+    expect(storage.alarm.at).toBeGreaterThan(clock + 6 * DAY);
     expect(historyKeys(storage)).toHaveLength(3);
+  });
+
+  it('reschedules itself when the commit ahead of it could not', async () => {
+    const { storage, room, third } =
+      await threeVersionRoom('Failed reschedule');
+    setNow(clock + 8 * DAY);
+    const target = storage.context.storage;
+    const setAlarm = target.setAlarm.bind(target);
+    target.setAlarm = async () => {
+      target.setAlarm = setAlarm;
+      throw new Error('alarm unavailable');
+    };
+    const put = target.put.bind(target);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached!: () => void;
+    const atPut = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    target.put = async (keyOrEntries: unknown, value?: unknown) => {
+      target.put = put;
+      reached();
+      await gate;
+      return put(keyOrEntries, value);
+    };
+    const next = new CommandManager(third).execute(
+      commandFactories.addPrimitive({
+        name: 'Racing',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
+    );
+    const committing = commit(room, next, third.version);
+    await atPut;
+    const alarm = fireAlarm(storage, room);
+    release();
+    await Promise.all([committing, alarm]);
+
+    expect(historyKeys(storage)).toHaveLength(4);
     expect(storage.alarm.at).toBe(clock + 8 * DAY);
   });
 
