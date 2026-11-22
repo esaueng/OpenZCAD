@@ -102,6 +102,7 @@ import {
   ownEntry,
   reservedIdentifierError,
   COMMAND_FEATURE_KINDS,
+  transformStampBodyIds,
   type FeatureKind
 } from '@openzcad/shared';
 import {
@@ -147,6 +148,8 @@ import {
   type BooleanInput,
   chamferEdges,
   createBodyFeatureIds,
+  createTransformStampIds,
+  transformStampsProblem,
   createFeatureOnlyIds,
   createParameterIds,
   createSketchFeatureIds,
@@ -2461,8 +2464,11 @@ function validateModelingFeatureUpdate(
       }
       if (
         feature.data.copy &&
-        feature.bodyId !== undefined &&
-        feature.data.targetBodyId === feature.bodyId
+        ((feature.bodyId !== undefined &&
+          feature.data.targetBodyId === feature.bodyId) ||
+          transformStampBodyIds(feature.data).includes(
+            feature.data.targetBodyId
+          ))
       ) {
         throw new Error('A copy cannot target its own body.');
       }
@@ -3081,7 +3087,16 @@ export const commandFactories = {
         payload.copy && payload.ids && !('bodyId' in payload.ids)
           ? { ...createBodyFeatureIds(), ...payload.ids }
           : (payload.ids ??
-            (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds()))
+            (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds())),
+      // M10: each further stamp's body is named here too, so replay keeps it.
+      // Only for a count the document will accept, so an absurd one is
+      // refused by validation rather than allocated first.
+      ...(payload.copy &&
+      !payload.stampIds &&
+      transformStampsProblem(payload.stamps, payload.copy) === null &&
+      (payload.stamps ?? 1) > 1
+        ? { stampIds: createTransformStampIds(payload.stamps!) }
+        : {})
     };
     return makeCommand(
       'feature.transform',
@@ -7323,6 +7338,10 @@ export function duplicateFeatureCommands(
         targetBodyId: data.targetBodyId,
         ...data.transform,
         ...(data.copy === true ? { copy: true } : {}),
+        // M10: a duplicated linked copy stamps as many copies, as new bodies.
+        ...(transformStampBodyIds(data).length
+          ? { stamps: transformStampBodyIds(data).length + 1 }
+          : {}),
         ids
       });
       break;

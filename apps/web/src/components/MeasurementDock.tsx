@@ -17,8 +17,18 @@ import type {
   Measurement,
   MeasurementDisplayOptions,
   MeasurementMode,
+  MeasurePointKind,
   RadialDisplay
 } from '../lib/measurements';
+
+/** M13: the point kinds a Distance pick can ask for, in the order offered. */
+const POINT_KIND_LABELS: Record<MeasurePointKind, string> = {
+  auto: 'Auto',
+  endpoint: 'Endpoint',
+  midpoint: 'Midpoint',
+  center: 'Center',
+  centroid: 'Centroid'
+};
 
 const MODE_LABELS: Record<MeasurementMode, string> = {
   smart: 'Smart',
@@ -51,6 +61,12 @@ interface MeasurementDockProps {
   draftTargetLabel: string | null;
   display: MeasurementDisplayOptions;
   onMode(mode: MeasurementMode): void;
+  /**
+   * M13: which point a Distance pick records. Offered only in Distance;
+   * omitted, the dock offers no choice.
+   */
+  pointKind?: MeasurePointKind;
+  onPointKind?(kind: MeasurePointKind): void;
   onUnit(unit: UnitSystem): void;
   onPrecision(precision: number): void;
   onRadialDisplay(display: RadialDisplay): void;
@@ -80,6 +96,8 @@ export function MeasurementDock({
   draftTargetLabel,
   display,
   onMode,
+  pointKind = 'auto',
+  onPointKind,
   onUnit,
   onPrecision,
   onRadialDisplay,
@@ -144,7 +162,9 @@ export function MeasurementDock({
       ? 'Measure is off. Choose a mode to resume.'
       : draftTargetLabel
         ? `${draftTargetLabel} selected. Pick the second target.`
-        : MODE_INSTRUCTIONS[mode];
+        : mode === 'distance' && pointKind !== 'auto'
+          ? `Pick two targets. Each records its ${POINT_KIND_LABELS[pointKind].toLowerCase()}.`
+          : MODE_INSTRUCTIONS[mode];
 
   return (
     <aside
@@ -185,6 +205,28 @@ export function MeasurementDock({
           </button>
         ))}
       </div>
+
+      {mode === 'distance' && onPointKind ? (
+        <div
+          className="measurement-mode-tabs measurement-point-kinds"
+          role="group"
+          aria-label="Point to pick"
+        >
+          {(Object.keys(POINT_KIND_LABELS) as MeasurePointKind[]).map(
+            (candidate) => (
+              <button
+                type="button"
+                key={candidate}
+                className={candidate === pointKind ? 'active' : undefined}
+                aria-pressed={candidate === pointKind}
+                onClick={() => onPointKind(candidate)}
+              >
+                {POINT_KIND_LABELS[candidate]}
+              </button>
+            )
+          )}
+        </div>
+      ) : null}
 
       <p className="measurement-dock-instruction" aria-live="polite">
         {instruction}

@@ -3,6 +3,7 @@ import {
   type FeatureUpdateInput
 } from '@openzcad/document-core';
 import {
+  transformStampBodyIds,
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isDatumPlaneRef,
@@ -267,7 +268,8 @@ export function inPlaceEditSeed(
       ('targetBodyId' in data ? data.targetBodyId : undefined),
     ownBodyIds: [
       ...(feature.bodyId ? [feature.bodyId] : []),
-      ...(data.featureKind === 'split' ? [data.secondBodyId] : [])
+      ...(data.featureKind === 'split' ? [data.secondBodyId] : []),
+      ...transformStampBodyIds(data)
     ],
     slots: {
       profiles: [],

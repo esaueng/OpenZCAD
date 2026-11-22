@@ -11,6 +11,7 @@ import type {
   Measurement,
   MeasurementDisplayOptions,
   MeasurementMode,
+  MeasurePointKind,
   MeasurementTarget,
   MeasurementViewportAnnotation,
   RadialDisplay
@@ -74,6 +75,9 @@ export function useMeasurementWorkbench({
   const [measuring, setMeasuring] = useState(false);
   const [measurementMode, setMeasurementMode] =
     useState<MeasurementMode>('smart');
+  /** M13: the kind of point a Distance pick records ('auto' derives it). */
+  const [measurementPointKind, setMeasurementPointKind] =
+    useState<MeasurePointKind>('auto');
   const [measurementDraft, setMeasurementDraft] =
     useState<MeasurementTarget | null>(null);
   /**
@@ -333,6 +337,23 @@ export function useMeasurementWorkbench({
     point: { x: number; y: number; z: number } | undefined,
     snap: PickSnap | undefined
   ) {
+    // M13: a chosen point kind records that point of the pick, or nothing.
+    if (measurementMode === 'distance' && measurementPointKind !== 'auto') {
+      // A glyph names its own edge: the pick records that edge's point,
+      // which must land where the glyph stood, never a point of whatever
+      // the ray happened to hit beside it.
+      if (snap?.source && point) {
+        const target = api.pointKindTarget(
+          body,
+          api.snapSourceSelection(body, snap.source),
+          measurementPointKind,
+          point,
+          snap.source.role
+        );
+        return api.pointKindAgrees(body, target, point) ? target : null;
+      }
+      return api.pointKindTarget(body, selection, measurementPointKind, point);
+    }
     const snapped =
       measurementMode === 'distance' && snap?.source && point
         ? api.measurementTargetFromSnap(body, snap.source, point)
@@ -510,7 +531,13 @@ export function useMeasurementWorkbench({
     );
     if (!target?.point) {
       setStatus(
-        measurementApi.measurementSelectionFailure(body, selection) ??
+        (measurementMode === 'distance' && measurementPointKind !== 'auto'
+          ? measurementApi.pointKindFailure(
+              measurementPointKind,
+              selection.kind
+            )
+          : null) ??
+          measurementApi.measurementSelectionFailure(body, selection) ??
           (measurementMode === 'angle'
             ? 'Angle needs a straight edge, circular axis or planar face.'
             : 'That selection does not expose a trustworthy measurement point.')
@@ -659,6 +686,8 @@ export function useMeasurementWorkbench({
     setMeasuring,
     measurementMode,
     setMeasurementMode,
+    measurementPointKind,
+    setMeasurementPointKind,
     measurementDraft,
     measurementEdgeRun,
     measurements,
