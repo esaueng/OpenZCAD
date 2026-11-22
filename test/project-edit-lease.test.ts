@@ -9,6 +9,8 @@ import {
 } from 'vitest';
 import type { ProjectCollaborationRoom } from '@openzcad/cloudflare-adapters';
 import {
+  PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS,
+  PROJECT_EDIT_LEASE_TTL_MS,
   toUserId,
   type CollaborationServerMessage,
   type ProjectDocument,
@@ -28,6 +30,11 @@ import {
 } from './collaboration-room-harness';
 
 let globals: ReturnType<typeof installWorkerSocketGlobals>;
+
+const TTL = PROJECT_EDIT_LEASE_TTL_MS;
+const RENEW = PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS;
+/** The room's `PROJECT_EDIT_LEASE_PERSIST_GAP_MS`. */
+const GAP = 30_000;
 
 beforeAll(() => {
   globals = installWorkerSocketGlobals();
@@ -88,8 +95,8 @@ async function acquire(
 
 /** The record the room stores for `lease` when it writes that renewal. */
 function storedLease(lease: ProjectEditLease) {
-  const renewedAt = lease.expiresAt - 30_000;
-  return { ...lease, expiresAt: renewedAt + 60_000, renewedAt };
+  const renewedAt = lease.expiresAt - TTL;
+  return { ...lease, expiresAt: renewedAt + TTL + GAP, renewedAt };
 }
 
 function documentFrame(
@@ -408,7 +415,7 @@ describe('project edit lease', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(2_000_000_000_000);
     const { document, room, first, second, firstLease, secondLease } =
       await twoBrowsers();
-    now.mockReturnValue(2_000_000_020_000);
+    now.mockReturnValue(2_000_000_000_000 + RENEW);
     await second.receive(
       JSON.stringify({
         type: 'lease-renew',
@@ -416,7 +423,7 @@ describe('project edit lease', () => {
         leaseId: secondLease.leaseId
       })
     );
-    now.mockReturnValue(2_000_000_030_001);
+    now.mockReturnValue(2_000_000_000_000 + TTL + 1);
     await first.receive(
       documentFrame(document, 'client_first', firstLease.leaseId)
     );
@@ -441,9 +448,9 @@ describe('project edit lease', () => {
     expect(other.lastFrame()).toMatchObject({
       type: 'lease-denied',
       reason: 'held',
-      expiresAt: 2_000_000_050_000
+      expiresAt: 2_000_000_000_000 + RENEW + TTL
     });
-    now.mockReturnValue(2_000_000_050_001);
+    now.mockReturnValue(2_000_000_000_000 + RENEW + TTL + 1);
     await acquire(other, 'client_other');
   });
 
@@ -599,7 +606,7 @@ describe('project edit lease', () => {
     );
     const lease = await acquire(owner, 'client_heartbeat');
 
-    now.mockReturnValue(startedAt + 10_000);
+    now.mockReturnValue(startedAt + RENEW);
     await owner.receive(
       JSON.stringify({
         type: 'lease-renew',
@@ -613,16 +620,16 @@ describe('project edit lease', () => {
         { type: 'lease-granted' }
       >
     ).lease;
-    expect(renewed.expiresAt).toBe(startedAt + 40_000);
+    expect(renewed.expiresAt).toBe(startedAt + RENEW + TTL);
 
     owner.close(1006, 'network lost');
     // The renewal was coalesced: storage still holds the grant, whose
-    // stored expiry (grant + 60 s) covers the renewal's +40 s.
+    // stored expiry (grant + 90 s) covers the renewal's +85 s.
     expect(values.get('room:edit-lease')).toEqual(storedLease(lease));
 
     // The room stays awake, so the lease ends exactly at its acknowledged
     // expiry (eviction is covered by "coalesced lease renewal writes").
-    now.mockReturnValue(startedAt + 30_001);
+    now.mockReturnValue(startedAt + TTL + 1);
     const beforeExpiry = room;
     const waiting = await openSocket(
       beforeExpiry,
@@ -639,7 +646,7 @@ describe('project edit lease', () => {
       reason: 'held'
     });
 
-    now.mockReturnValue(startedAt + 40_001);
+    now.mockReturnValue(startedAt + RENEW + TTL + 1);
     const takeover = await openSocket(
       beforeExpiry,
       document.projectId,
@@ -1062,8 +1069,6 @@ describe('project edit lease', () => {
 
 describe('coalesced lease renewal writes', () => {
   const startedAt = 2_000_000_000_000;
-  const TTL = 30_000;
-  const GAP = 30_000;
 
   function renewFrame(clientId: string, leaseId: string): string {
     return JSON.stringify({ type: 'lease-renew', clientId, leaseId });
@@ -1101,7 +1106,8 @@ describe('coalesced lease renewal writes', () => {
     const frame = owner.lastFrame();
     expect(frame).toMatchObject({
       type: 'lease-granted',
-      lease: { leaseId: lease.leaseId, expiresAt: at + TTL }
+      lease: { leaseId: lease.leaseId, expiresAt: at + TTL },
+      renewIntervalMs: RENEW
     });
     return (
       frame as Extract<CollaborationServerMessage, { type: 'lease-granted' }>
@@ -1120,59 +1126,89 @@ describe('coalesced lease renewal writes', () => {
     return other.lastFrame();
   }
 
-  it('writes a 10 s heartbeat renewal about once every 30 s', async () => {
+  it('keeps one late or lost renewal inside the TTL, and every other renewal unwritten', () => {
+    // A renewal one interval late still lands 10 s before expiry.
+    expect(TTL - 2 * RENEW).toBeGreaterThanOrEqual(10_000);
+    // The renewal one interval after a write is skipped, the next written.
+    expect(GAP).toBeGreaterThan(RENEW);
+    expect(GAP).toBeLessThanOrEqual(2 * RENEW);
+  });
+
+  it('writes a 25 s heartbeat renewal about once every 50 s', async () => {
     const { now, owner, lease, values, leaseWrites } = await heldLease();
     const writesAt: number[] = [];
-    for (let at = startedAt + 10_000; at <= startedAt + 120_000; at += 10_000) {
+    for (let at = startedAt + RENEW; at <= startedAt + 8 * RENEW; at += RENEW) {
       now.mockReturnValue(at);
       const before = leaseWrites();
       const granted = await renew(owner, lease, at);
-      // The client still sees the 30 s TTL on every heartbeat.
+      // The client still sees the full TTL on every heartbeat.
       expect(granted).toEqual({ ...lease, expiresAt: at + TTL });
       if (leaseWrites() > before) writesAt.push(at - startedAt);
     }
-    expect(writesAt).toEqual([30_000, 60_000, 90_000, 120_000]);
+    expect(writesAt).toEqual([50_000, 100_000, 150_000, 200_000]);
     expect(values.get('room:edit-lease')).toEqual({
       ...lease,
-      renewedAt: startedAt + 120_000,
-      expiresAt: startedAt + 120_000 + TTL + GAP
+      renewedAt: startedAt + 200_000,
+      expiresAt: startedAt + 200_000 + TTL + GAP
+    });
+  });
+
+  it('writes a late renewal early instead of stretching the stored expiry', async () => {
+    const { now, owner, lease, values, leaseWrites } = await heldLease();
+    const writesAt: number[] = [];
+    // The +55 s renewal is 5 s late (a throttled timer or a slow network):
+    // GAP has passed since the grant, so it is written.
+    for (const offset of [25_000, 55_000, 80_000, 105_000]) {
+      const at = startedAt + offset;
+      now.mockReturnValue(at);
+      const before = leaseWrites();
+      await renew(owner, lease, at);
+      if (leaseWrites() > before) writesAt.push(offset);
+    }
+    expect(writesAt).toEqual([55_000, 105_000]);
+    expect(values.get('room:edit-lease')).toEqual({
+      ...lease,
+      renewedAt: startedAt + 105_000,
+      expiresAt: startedAt + 105_000 + TTL + GAP
     });
   });
 
   it('keeps a lease to its acknowledged expiry when the close wakes an evicted room (review 1)', async () => {
     const { now, context, owner, lease, document } = await heldLease();
-    for (let at = startedAt + 10_000; at <= startedAt + 50_000; at += 10_000) {
+    for (let at = startedAt + RENEW; at <= startedAt + 3 * RENEW; at += RENEW) {
       now.mockReturnValue(at);
       await renew(owner, lease, at);
     }
-    // Acknowledged expiry: +80 s. The room hibernates, then the holder's
-    // close at +62 s wakes it with no holder socket left.
+    // Acknowledged expiry: +135 s (the +75 s renewal was not written). The
+    // room hibernates, then the holder's close at +100 s wakes it with no
+    // holder socket left.
+    const acknowledged = startedAt + 3 * RENEW + TTL;
     owner.close(1006, 'network lost');
-    now.mockReturnValue(startedAt + 62_000);
+    now.mockReturnValue(startedAt + 100_000);
     const woken = createTestRoom(context, leaseEnv);
     woken.webSocketClose(owner as unknown as WebSocket);
 
-    now.mockReturnValue(startedAt + 63_000);
+    now.mockReturnValue(startedAt + 101_000);
     const early = await contend(woken, document.projectId);
     expect(early).toMatchObject({ type: 'lease-denied', reason: 'held' });
-    now.mockReturnValue(startedAt + 80_000);
+    now.mockReturnValue(acknowledged);
     expect(
       await contend(woken, document.projectId, 'client_other_2')
     ).toMatchObject({ type: 'lease-denied', reason: 'held' });
 
     // At most GAP past the acknowledged expiry, the lease is free.
-    now.mockReturnValue(startedAt + 80_000 + GAP + 1);
+    now.mockReturnValue(acknowledged + GAP + 1);
     expect(
       await contend(woken, document.projectId, 'client_other_3')
     ).toMatchObject({ type: 'lease-granted' });
   });
 
-  it('never restores a lease before its last acknowledged expiry, nor more than 30 s after it', async () => {
+  it('never restores a lease before its last acknowledged expiry, nor more than GAP after it', async () => {
     for (let renewals = 0; renewals <= 9; renewals += 1) {
       const { now, context, owner, lease, document } = await heldLease();
       let acknowledged = lease.expiresAt;
       for (let step = 1; step <= renewals; step += 1) {
-        const at = startedAt + step * 10_000;
+        const at = startedAt + step * RENEW;
         now.mockReturnValue(at);
         acknowledged = (await renew(owner, lease, at)).expiresAt;
       }
@@ -1190,12 +1226,12 @@ describe('coalesced lease renewal writes', () => {
 
   it('does not extend a lease for another account reusing its clientId (review 2)', async () => {
     const { now, context, room, owner, document } = await heldLease();
-    // Acknowledged expiry: +30 s. The holder leaves; a different account
-    // then says hello with the same clientId.
+    // Acknowledged expiry: +60 s, stored +90 s. The holder leaves; a
+    // different account then says hello with the same clientId in between.
     now.mockReturnValue(startedAt + 5_000);
     owner.close(1006, 'network lost');
     room.webSocketClose(owner as unknown as WebSocket);
-    now.mockReturnValue(startedAt + 50_000);
+    now.mockReturnValue(startedAt + TTL + 20_000);
     const impostor = await openSocket(
       room,
       document.projectId,
@@ -1216,14 +1252,16 @@ describe('coalesced lease renewal writes', () => {
   it('leaves the lease unchanged when a renewal write is rejected (review 3)', async () => {
     const { now, room, put, owner, lease, document, values } =
       await heldLease();
-    for (let at = startedAt + 10_000; at <= startedAt + 50_000; at += 10_000) {
+    for (let at = startedAt + RENEW; at <= startedAt + 3 * RENEW; at += RENEW) {
       now.mockReturnValue(at);
       await renew(owner, lease, at);
     }
     const stored = values.get('room:edit-lease');
 
-    // The renewal at +61 s is due a write, and storage rejects it.
-    now.mockReturnValue(startedAt + 61_000);
+    // The last write was at +50 s, so the renewal at +81 s is due a write,
+    // and storage rejects it.
+    const rejectedAt = startedAt + 2 * RENEW + GAP + 1;
+    now.mockReturnValue(rejectedAt);
     put.mockRejectedValueOnce(new Error('storage unavailable'));
     await owner.receive(renewFrame(lease.clientId, lease.leaseId));
     expect(owner.lastFrame()).toMatchObject({ type: 'error' });
@@ -1233,14 +1271,14 @@ describe('coalesced lease renewal writes', () => {
         .some(
           (frame) =>
             frame.type === 'lease-granted' &&
-            frame.lease.expiresAt === startedAt + 61_000 + TTL
+            frame.lease.expiresAt === rejectedAt + TTL
         )
     ).toBe(false);
     expect(values.get('room:edit-lease')).toBe(stored);
 
     // A later write for another reason (the owner's second tab takes a
     // lease) stores the last acknowledged renewal, not the rejected one.
-    now.mockReturnValue(startedAt + 62_000);
+    now.mockReturnValue(rejectedAt + 1_000);
     const secondTab = await openSocket(
       room,
       document.projectId,
@@ -1251,12 +1289,12 @@ describe('coalesced lease renewal writes', () => {
     await acquire(secondTab, 'client_owner_tab');
     expect(values.get('room:edit-lease')).toMatchObject({
       leaseId: lease.leaseId,
-      renewedAt: startedAt + 50_000,
-      expiresAt: startedAt + 50_000 + TTL + GAP
+      renewedAt: startedAt + 3 * RENEW,
+      expiresAt: startedAt + 3 * RENEW + TTL + GAP
     });
 
-    // In memory the lease still ends at its acknowledged +80 s.
-    now.mockReturnValue(startedAt + 80_001);
+    // In memory the lease still ends at its acknowledged +135 s.
+    now.mockReturnValue(startedAt + 3 * RENEW + TTL + 1);
     await owner.receive(renewFrame(lease.clientId, lease.leaseId));
     expect(owner.lastFrame()).toMatchObject({
       type: 'lease-lost',
@@ -1267,20 +1305,18 @@ describe('coalesced lease renewal writes', () => {
   it('does not store a renewal whose socket closed before it was granted (re-check 1)', async () => {
     const { now, context, owner, lease, document, leaseWrites } =
       await heldLease();
-    for (let at = startedAt + 10_000; at <= startedAt + 20_000; at += 10_000) {
-      now.mockReturnValue(at);
-      await renew(owner, lease, at);
-    }
-    // Acknowledged expiry: +50 s. The +30 s renewal is due a write, but the
+    now.mockReturnValue(startedAt + RENEW);
+    await renew(owner, lease, startedAt + RENEW);
+    // Acknowledged expiry: +85 s. The +50 s renewal is due a write, but the
     // socket closes while the room is still checking membership.
-    now.mockReturnValue(startedAt + 30_000);
+    now.mockReturnValue(startedAt + 2 * RENEW);
     const writes = leaseWrites();
     owner.close(1006, 'network lost');
     await owner.receive(renewFrame(lease.clientId, lease.leaseId));
     expect(leaseWrites()).toBe(writes);
 
-    // After eviction the lease ends no later than GAP past +50 s.
-    now.mockReturnValue(startedAt + 50_000 + GAP + 1);
+    // After eviction the lease ends no later than GAP past +85 s.
+    now.mockReturnValue(startedAt + RENEW + TTL + GAP + 1);
     const woken = createTestRoom(context, leaseEnv);
     expect(await contend(woken, document.projectId)).toMatchObject({
       type: 'lease-granted'
@@ -1365,7 +1401,7 @@ describe('coalesced lease renewal writes', () => {
   });
 
   it('restores an encrypted room’s leases from their stored renewals alone', async () => {
-    vi.spyOn(Date, 'now').mockReturnValue(startedAt + 70_000);
+    vi.spyOn(Date, 'now').mockReturnValue(startedAt + TTL + GAP + 10_000);
     const { context, values } = createRoomContext();
     const projectId = 'project_encrypted_leases';
     values.set('room:meta', {
@@ -1384,7 +1420,7 @@ describe('coalesced lease renewal writes', () => {
       expiresAt: renewedAt + TTL + GAP
     });
     const owner = stored('client_owner', 'user_owner', startedAt + 30_000);
-    // Its holder's socket is still open, but its stored renewal is 70 s old.
+    // Its holder's socket is still open, but its stored renewal is 100 s old.
     const lapsed = stored('client_owner_desktop', 'user_owner', startedAt);
     // Its holder has gone, but its stored expiry has not passed.
     const departed = stored('client_editor', 'user_editor', startedAt + 20_000);

@@ -132,6 +132,8 @@ import {
   type ProjectBranchPoint,
   type ProjectAccessRole as SharedProjectAccessRole,
   type ProjectEditLease,
+  PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS,
+  PROJECT_EDIT_LEASE_TTL_MS,
   type ProjectInvitationSummary,
   type ProjectSharingResponse,
   type ProjectShareLinkMode,
@@ -9648,13 +9650,20 @@ const SOCKET_TICKET_TTL_MS = 30_000;
 
 /** Largest HTTP snapshot body accepted, sized to fit one storable document. */
 const MAX_SNAPSHOT_PAYLOAD_BYTES = 1_600_000;
-const PROJECT_EDIT_LEASE_TTL_MS = 30_000;
 /**
  * How long a renewal may go without reaching storage. Clients renew every
- * 10 s; the room writes a renewal only when its last stored renewal is at
- * least this old (or the lease set changed), so a held lease costs about one
- * storage write per 30 s instead of one per heartbeat. The in-memory lease,
- * and every `lease-granted` frame, keeps the 30 s TTL.
+ * {@link PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS} (25 s); the room writes a
+ * renewal only when its last stored renewal is at least this old (or the
+ * lease set changed). With 25 s renewals the one 25 s after a write is
+ * skipped and the one 50 s after it is written, so a held lease costs about
+ * one storage write per 50 s. A renewal that arrives 5 s or more late is
+ * written early, which costs a write and never shortens the lease. A gap of
+ * 25 s or less would write every renewal (one per 25 s, twice the writes);
+ * a longer one keeps one write per 50 s up to a 50 s gap but lengthens the
+ * time a departed holder's lease can outlive its acknowledged expiry after
+ * eviction (see `restoreEditLease`), so 30 s stays. The in-memory lease,
+ * and every `lease-granted` frame, keeps the
+ * {@link PROJECT_EDIT_LEASE_TTL_MS} TTL.
  */
 const PROJECT_EDIT_LEASE_PERSIST_GAP_MS = 30_000;
 
@@ -11407,7 +11416,11 @@ export class ProjectCollaborationRoom extends DurableObject {
         renewedAt: lease.expiresAt - PROJECT_EDIT_LEASE_TTL_MS
       }
     );
-    this.send(socket, { type: 'lease-granted', lease });
+    this.send(socket, {
+      type: 'lease-granted',
+      lease,
+      renewIntervalMs: PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS
+    });
   }
 
   private async renewEditLease(
@@ -11467,7 +11480,11 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.editLeases = leases;
       this.leaseRenewedAt.set(lease.leaseId, now);
     }
-    this.send(socket, { type: 'lease-granted', lease });
+    this.send(socket, {
+      type: 'lease-granted',
+      lease,
+      renewIntervalMs: PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS
+    });
   }
 
   private async releaseEditLease(
