@@ -871,6 +871,8 @@ test('a picked line and arc take a round corner beside the arc, exactly (M04, v1
       return bar.textContent();
     })
     .toContain('Pick the path');
+  // Round first, so the arc's pick is confirmed by the path count alone.
+  await chooseOption(bar, 'Round');
   await pickCurve(page, canvas, bar, [30, 0, 10], 'Path of 1');
   // The arc's midpoint: sketch (30 + 5√2, −30 + 5√2).
   await pickCurve(
@@ -878,13 +880,21 @@ test('a picked line and arc take a round corner beside the arc, exactly (M04, v1
     canvas,
     bar,
     [30 + 5 * Math.SQRT2, 0, 30 - 5 * Math.SQRT2],
-    // A mitre beside an arc is refused by name before Round is chosen.
-    'A mitre is cut only between straight lines'
+    'Path of 2'
+  );
+  // A mitre beside the arc is refused by name; no click depends on it.
+  await chooseOption(bar, 'Mitre');
+  await expect(bar).toContainText(
+    'A mitre is cut only between straight lines',
+    {
+      timeout: 30_000
+    }
   );
   await chooseOption(bar, 'Round');
+  // A radius other than the default, so the typed value is what builds.
   await bar.locator('summary[aria-label$=" options"]').click();
   const radius = bar.getByRole('textbox', { name: /Corner radius/ });
-  await radius.fill('2');
+  await radius.fill('3');
   await radius.press('Enter');
   await bar.locator('summary[aria-label$=" options"]').click();
   await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
@@ -893,16 +903,16 @@ test('a picked line and arc take a round corner beside the arc, exactly (M04, v1
   await bar.getByRole('button', { name: /Done/ }).click();
   await expect(bar).toHaveCount(0);
   const { saved, sweep, data } = await savedSweep(page);
-  expect(data).toMatchObject({ construction: 'in-place', cornerRadius: 2 });
+  expect(data).toMatchObject({ construction: 'in-place', cornerRadius: 3 });
   const derived = await rebuilt(saved);
   expect(derived.featureWarnings ?? []).toEqual([]);
-  // The line offset by 2 meets the arc's circle offset to 12: the line
-  // keeps 20 − (√140 − 10), the fillet and the arc each π/2 − θ, sin θ = 1/6.
-  const theta = Math.asin(1 / 6);
+  // The line offset by 3 meets the arc's circle offset to 13: the line
+  // keeps 30 − √160, the fillet and the arc each π/2 − θ, sin θ = 3/13.
+  const theta = Math.asin(3 / 13);
   const centreLine =
-    20 -
-    (Math.sqrt(140) - 10) +
-    2 * (Math.PI / 2 - theta) +
+    30 -
+    Math.sqrt(160) +
+    3 * (Math.PI / 2 - theta) +
     10 * (Math.PI / 2 - theta);
   expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
     Math.PI * centreLine,
