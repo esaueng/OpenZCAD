@@ -39907,7 +39907,10 @@ export function App() {
                         ? {
                             ...current,
                             translation: values.translation,
-                            rotationDeg: values.rotationDeg
+                            rotationDeg: values.rotationDeg,
+                            // M10: a typed value ends Move by two points,
+                            // whose picks read the model at rest.
+                            pointPick: undefined
                           }
                         : current
                     )

@@ -2276,6 +2276,8 @@ const SELECTED_FACE_HIDDEN_OPACITY =
   SELECTION_SEMANTICS.selected.hiddenFaceOpacity;
 /** Stable default, so an absent prop does not rerun the bodies pass. */
 const NO_FOCUS_FACES: readonly TopologySelection[] = [];
+/** M10: how long after a point pick a native double click still belongs to it. */
+const POINT_PICK_DOUBLE_CLICK_MS = 800;
 /**
  * Face opacity of a body Assemble shows only as context (not a component),
  * on top of its own opacity and X-ray.
@@ -3791,7 +3793,10 @@ export function ModelViewer({
       regionGroup,
       sketchGroup,
       bodyGroup,
-      filter: () => selectionFilterRef.current,
+      // M10: a point pick reads faces and edges whatever the filter, so its
+      // snaps can scope to the edge or face under the pointer.
+      filter: () =>
+        onPointPickRef.current ? 'any' : selectionFilterRef.current,
       selectThrough: () => xrayRef.current,
       clippingPlane: () =>
         sectionViewRef.current
@@ -7871,6 +7876,9 @@ export function ModelViewer({
     }
     placeCommentRef.current = (event) => placeComment(picker.pickAll(event));
 
+    /** M10: when the last point pick landed, so its double click is ignored. */
+    let lastPointPickAt: number | null = null;
+
     function selectAtPointer(event: PointerEvent) {
       // The release that got here was a click, not the end of a gesture.
       gestureReleases[1] = false;
@@ -7900,16 +7908,24 @@ export function ModelViewer({
       // M10: a point pick takes the snapped model point and selects nothing.
       const pointPick = onPointPickRef.current;
       if (pointPick) {
-        if (!result) return;
-        const snapped = resolveMeasureSnap(event, result)?.candidate ?? null;
+        // Always the nearest thing under the pointer: a second click at the
+        // same spot is the next pick, not a request for the one behind.
+        depthCycle = null;
+        lastPointPickAt = event.timeStamp;
+        const top = stack[0] ?? null;
+        if (!top) return;
+        const snapped = resolveMeasureSnap(event, top)?.candidate ?? null;
+        // An edge hit reports where the ray passed near the edge; the point
+        // on the edge itself is what a pick means.
+        const onGeometry =
+          top.selection?.kind === 'edge'
+            ? ((top.hit as { pointOnLine?: THREE.Vector3 }).pointOnLine ??
+              top.hit.point)
+            : top.hit.point;
         pointPick({
           point: snapped
             ? { ...snapped.point }
-            : {
-                x: result.hit.point.x,
-                y: result.hit.point.y,
-                z: result.hit.point.z
-              },
+            : { x: onGeometry.x, y: onGeometry.y, z: onGeometry.z },
           kind: snapped?.kind ?? null
         });
         return;
@@ -13285,6 +13301,14 @@ export function ModelViewer({
     document.addEventListener('pointerdown', handleDocumentPointerDown, true);
     const handleDoubleClick = (event: MouseEvent) => {
       if (gestureReleases[0] || gestureReleases[1]) return;
+      // M10: a point pick's clicks are picks; a double click selects nothing,
+      // including the one whose second click just finished the pick.
+      if (
+        onPointPickRef.current ||
+        (lastPointPickAt !== null &&
+          event.timeStamp - lastPointPickAt < POINT_PICK_DOUBLE_CLICK_MS)
+      )
+        return;
       depthCycle = null;
       // Double-clicking an edge takes the whole smooth run it belongs to.
       // Rounding a lip means selecting every edge around it, and a filleted

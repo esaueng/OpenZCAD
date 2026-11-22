@@ -122,10 +122,17 @@ test(
     await expect(twoPoints).toHaveAttribute('aria-pressed', 'true');
     await expect(overlay).toContainText('pick the point to move from');
 
+    // Under Move's default (body) filter the hover still reads the edge, so
+    // the glyph names an exact point of it.
     await page.mouse.move(first.x - 40, first.y - 40);
     await page.mouse.move(first.x, first.y);
+    await expect(page.locator('.snap-glyph')).toHaveText(
+      /Endpoint|Midpoint|Center/
+    );
     await page.mouse.click(first.x, first.y);
-    await expect(overlay).toContainText('pick the point to move it to');
+    await expect(overlay).toContainText(
+      /From (Endpoint|Midpoint|Center) · pick the point to move it to/
+    );
     // A pick selects nothing: no apply-first question, no selection card.
     await expect(
       page.getByRole('alertdialog', { name: 'Apply the Move first?' })
@@ -137,6 +144,30 @@ test(
     await expect(page.getByRole('contentinfo')).toContainText(
       'Move by two points:'
     );
+
+    // A double click under Two points picks, never selects a body: no
+    // apply-first question, and the Move stays open.
+    await twoPoints.click();
+    await page.mouse.dblclick(first.x, first.y);
+    await expect(overlay).toContainText(/From |by two points/);
+    await expect(
+      page.getByRole('alertdialog', { name: 'Apply the Move first?' })
+    ).toHaveCount(0);
+    await expect(overlay).toBeVisible();
+    // Typing a value ends a pick in progress.
+    if ((await twoPoints.getAttribute('aria-pressed')) !== 'true')
+      await twoPoints.click();
+    await expect(twoPoints).toHaveAttribute('aria-pressed', 'true');
+    await openMoveOptions(overlay);
+    await overlay.getByLabel('Move X in mm').fill('3');
+    await expect(twoPoints).toHaveAttribute('aria-pressed', 'false');
+    // Pick the two edges again for the move this test commits, with
+    // Options closed so the picks land on the model.
+    await overlay.locator('details.in-place-command-options summary').click();
+    await twoPoints.click();
+    await page.mouse.click(first.x, first.y);
+    await page.mouse.click(second.x, second.y);
+    await expect(twoPoints).toHaveAttribute('aria-pressed', 'false');
 
     // The move is the difference of the picks: not nothing, and Done is on.
     await openMoveOptions(overlay);
