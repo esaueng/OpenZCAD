@@ -24766,7 +24766,7 @@ export function App() {
           : null;
     if (!pick) {
       setStatus(
-        (expectedPickKind === 'point' && unreferencedSnap
+        (expectedPickKind !== 'object' && unreferencedSnap
           ? unreferencedSnapRefusal(
               doc,
               editingSketchNode,

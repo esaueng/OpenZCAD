@@ -414,6 +414,49 @@ describe('S07 whole-entity symmetry on the pinned kernel', () => {
     expect(image.radius).toBeCloseTo(2, 9);
   });
 
+  it('refuses a second arc nearer the complement than the mirror image', () => {
+    // Review case: about the y axis, the radius-2 arc at (5, 0) sweeping
+    // 0°–90° mirrors to one at (-5, 0) sweeping 90°–180°. The radius-2 arc
+    // at (-7, 2) sweeping 0°–270° already meets both end symmetries and the
+    // equal radius, so the relations alone would keep it.
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      {
+        objectKind: 'arc',
+        centerX: 5,
+        centerY: 0,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      {
+        objectKind: 'arc',
+        centerX: -7,
+        centerY: 2,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 270
+      }
+    ]);
+    const [axis, a, b] = fixture.ids as unknown as [string, string, string];
+    const built = buildConstraint(
+      fixture.manager.document,
+      findSketch(fixture.manager.document, fixture.sketchId)!,
+      'symmetric',
+      [
+        { kind: 'object', objectId: a },
+        { kind: 'object', objectId: b },
+        { kind: 'object', objectId: axis }
+      ],
+      undefined,
+      resolve
+    );
+    expect(built).toEqual({
+      error:
+        "The second arc sweeps 270°, nearer the other way round than the 90° of the first arc's mirror image. Pick an arc of matching sweep, or use Mirror to make the image."
+    });
+  });
+
   it('mirrors a whole arc, reversing its direction', async () => {
     // A quarter arc about (5,0) from 0° to 90°: its image about the y axis
     // is centred on (-5,0) and, still counter-clockwise, runs 90° to 180°.

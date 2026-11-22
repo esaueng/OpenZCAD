@@ -201,6 +201,14 @@ describe('sketch constraint picking', () => {
     });
   });
 
+  it('S07: an either step still names an unreferenced snap it cannot use', () => {
+    const { document, sketch } = fixture();
+    // The App shows this when an either step's click hits no entity.
+    expect(
+      unreferencedSnapRefusal(document, sketch, 'symmetric', { kind: 'origin' })
+    ).toMatch(/^Symmetric can't use the sketch origin/);
+  });
+
   it('S07: two mirrored lines pair the ends nearest their images', () => {
     const { document, sketchId } = addSketchFeature(
       createProjectDocument('Pairs', toUserId('user_sketch')),

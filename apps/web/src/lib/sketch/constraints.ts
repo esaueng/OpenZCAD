@@ -785,7 +785,30 @@ function entitySymmetry(
       also: [equal]
     };
   }
-  if (a.objectKind === 'arc') {
+  if (a.objectKind === 'arc' && b.objectKind === 'arc') {
+    // Two mirrored ends and a shared radius are met by two arcs: the true
+    // image, and its complement swept the other way round from a centre
+    // mirrored across their chord. The solver keeps whichever the second
+    // arc starts nearer, so an arc nearer the complement is refused rather
+    // than left as a 270° "mirror" of a 90° arc.
+    const sweepOf = (data: typeof a) => {
+      const start = resolve?.(data.startAngleDeg);
+      const end = resolve?.(data.endAngleDeg);
+      return start === undefined || end === undefined
+        ? null
+        : (((end - start) % 360) + 360) % 360;
+    };
+    const sa = sweepOf(a);
+    const sb = sweepOf(b);
+    if (
+      sa !== null &&
+      sb !== null &&
+      Math.abs(sb - (360 - sa)) < Math.abs(sb - sa)
+    ) {
+      return {
+        error: `The second arc sweeps ${Math.round(sb)}°, nearer the other way round than the ${Math.round(sa)}° of the first arc's mirror image. Pick an arc of matching sweep, or use Mirror to make the image.`
+      };
+    }
     return {
       data: symmetric(ref(aId, 'start'), ref(bId, 'end')),
       also: [symmetric(ref(aId, 'end'), ref(bId, 'start')), equal]
