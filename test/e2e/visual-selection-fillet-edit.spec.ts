@@ -647,6 +647,66 @@ test('still refuses an oversize radius after a slow blend preview', async ({
   await expect(chip).not.toHaveAttribute('data-state', 'warning');
 });
 
+test('a refused fillet drag leaves no ghost behind', async ({ page }) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  // Every preview of an oversize radius is refused, and so is its release:
+  // the part never changes, so only the handle re-arming can drop the ghost
+  // of the part the drag took. It used to stay in the scene.
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refused blend ghost');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box');
+  const canvas = page.locator('.viewer-host canvas');
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate(
+          (element) =>
+            new Promise<boolean>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-edge', {
+                  detail: {
+                    resolve: (selection: unknown) => resolve(selection !== null)
+                  }
+                })
+              );
+            })
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+  const chip = page.getByTestId('direct-manipulation-value');
+  await expect(chip).toHaveText('R 0 mm');
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const box = (await canvas.boundingBox())!;
+  const start = { x: box.x + handle.x, y: box.y + handle.y };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  // 30 is genuinely oversize for this box; see the first test.
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 30,
+    start.y + handle.dy * handle.pixelsPerUnit * 30,
+    { steps: 1 }
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-edge-ghost', '1');
+  await expect(chip).toHaveAttribute('data-state', 'warning', {
+    timeout: 30_000
+  });
+  await page.mouse.up();
+  await expect(canvas).not.toHaveAttribute('data-e2e-edge-ghost', /.*/, {
+    timeout: 30_000
+  });
+  expect(await readBlend(canvas)).toBeNull();
+});
+
 interface BlendPreviewGate {
   hold: boolean;
   held: number;

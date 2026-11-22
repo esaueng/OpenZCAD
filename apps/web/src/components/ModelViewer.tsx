@@ -16570,6 +16570,10 @@ export function ModelViewer({
     if (!context || edgeDragActiveRef.current) {
       return;
     }
+    // The drag is over and the handle moved on (validating, re-armed or
+    // gone). A refused release leaves the bodies as they were, so waiting
+    // for new bodies would leave its ghost behind.
+    edgeGhostClearRef.current?.();
     const previous = edgeRigRef.current;
     const built = edgeRigBuiltRef.current;
     if (!edgeHandle) {

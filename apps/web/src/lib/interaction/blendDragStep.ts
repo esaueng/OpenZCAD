@@ -37,7 +37,14 @@ export function blendDragStep(
   return COARSEST_BLEND_STEP;
 }
 
-/** Snaps a document-unit value to `step` shown units. */
+/**
+ * Snaps a document-unit value to `step` shown units.
+ *
+ * A positive value never snaps to zero: on a fillet R0 removes it, so a step
+ * coarser than a small blend (a 1 mm fillet shown in half inches) would turn
+ * a pull that grows it into a deletion. Such a value keeps hundredths, as a
+ * free drag does; only a drag that reaches zero itself rounds to none.
+ */
 export function snapBlendValue(
   value: number,
   step: number,
@@ -45,5 +52,6 @@ export function snapBlendValue(
 ): number {
   const shown = Math.round((value * shownScale) / step) * step;
   // Round off binary noise, so 0.1-unit steps read 0.3 rather than 0.30000004.
-  return Number((shown / shownScale).toPrecision(12));
+  const snapped = Number((shown / shownScale).toPrecision(12));
+  return snapped === 0 && value > 0 ? Math.round(value * 100) / 100 : snapped;
 }

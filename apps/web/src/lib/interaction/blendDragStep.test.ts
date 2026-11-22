@@ -39,4 +39,13 @@ describe('snapBlendValue', () => {
     // 0.5 in steps on a millimetre document.
     expect(snapBlendValue(14, 0.5, 1 / 25.4)).toBeCloseTo(12.7, 9);
   });
+
+  it('never snaps a positive value to zero, which would remove a fillet', () => {
+    // 6 mm on a half-inch step rounds to 0 in; it keeps hundredths instead.
+    expect(snapBlendValue(6, 0.5, 1 / 25.4)).toBe(6);
+    expect(snapBlendValue(0.4, 1, 1)).toBe(0.4);
+    // Only a drag that reaches zero itself rounds to none.
+    expect(snapBlendValue(0, 1, 1)).toBe(0);
+    expect(snapBlendValue(0.004, 1, 1)).toBe(0);
+  });
 });
