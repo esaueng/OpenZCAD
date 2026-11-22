@@ -162,6 +162,9 @@ import {
   assistantProviderIdentity,
   authenticateBrowserSession,
   authenticateRequest,
+  clearRejectedEmailSession,
+  dropRenewedSessionCookie,
+  takeRenewedSessionCookie,
   approveDesktopAuthorization,
   AuthFlowError,
   AuthenticationError,
@@ -203,10 +206,12 @@ import {
   acceptInvitation,
   createInvitation,
   createShareLink,
+  hashFrozenShareLinkToken,
   hashProjectInvitationToken,
   parseCreateInvitation,
   parseProjectMemberRole,
   parseRenameShareLink,
+  parseShareLinkSnapshot,
   parseShareLinkToken,
   sendProjectInvitationEmail,
   SharingRequestError
@@ -254,6 +259,7 @@ import {
   parseSaveLibraryFolderSetRequest,
   saveLibraryFolderSet
 } from './libraryFolderSets';
+import { SESSION_COOKIE_NAME } from './sessionCredentials';
 import {
   CONSENTED_ASSISTANT_PROPOSAL_PATH,
   assistantConsentVersion,
@@ -1217,8 +1223,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         }
       });
     }
-    const shared =
-      await sharedPersistence.loadSharedProjectByTokenHash(tokenHash);
+    // The one read a link without history answers, by its own token-hash
+    // domain; the source and asset reads above look up the bare hash only.
+    const shared = await sharedPersistence.loadSharedProjectByTokenHash(
+      tokenHash,
+      await hashFrozenShareLinkToken(token)
+    );
     if (!shared) {
       return sharedNotFound();
     }
@@ -1238,7 +1248,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           projectId: shared.projectId,
           name: shared.name,
           mode: shared.mode,
-          ...(shared.comments ? { comments: true } : {})
+          ...(shared.comments ? { comments: true } : {}),
+          ...(shared.history === false ? { history: false } : {})
         },
         document: shared.document
       },
@@ -1276,15 +1287,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const link = await commentLinkProject(
       env.DB!,
       await hashProjectInvitationToken(token),
-      Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
+      Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS,
+      await hashFrozenShareLinkToken(token)
     );
     if (!link) return notFound();
     if (request.method === 'GET')
-      return json(
-        { comments: await listLinkComments(env.DB!, link.projectId) },
-        200,
-        { 'cache-control': 'no-store' }
-      );
+      return json({ comments: await listLinkComments(env.DB!, link) }, 200, {
+        'cache-control': 'no-store'
+      });
     const { name, input } = parseLinkCommentRequest(
       await readJsonBody(request, 8 * 1024)
     );
@@ -2465,7 +2475,41 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'PATCH' && shareLinkMatch) {
-    const { label } = parseRenameShareLink(await readJsonBody(request));
+    const body = await readJsonBody(request);
+    // L08: the owner's Update of a link without history replaces its frozen
+    // model. It publishes project content, so it passes the same gates as
+    // creating a link.
+    if (
+      typeof body === 'object' &&
+      body !== null &&
+      'document' in body &&
+      !('label' in body)
+    ) {
+      if (!(await isProjectSharingPreferenceEnabled(userId, env)))
+        return json(
+          {
+            error: 'Project sharing is disabled for this account.',
+            code: 'FEATURE_DISABLED'
+          },
+          403
+        );
+      if (isE2eeDefaultOn(env, session.email)) {
+        assertShareableProject(
+          await persistence.requireProjectOwner(userId, shareLinkMatch[1]!)
+        );
+        assertPlaintextSharingAllowed(env, session);
+      }
+      return json({
+        shareLink: await persistence.updateProjectShareLinkSnapshot(
+          userId,
+          shareLinkMatch[1]!,
+          shareLinkMatch[2]!,
+          parseShareLinkSnapshot(body) as ProjectDocument,
+          now
+        )
+      });
+    }
+    const { label } = parseRenameShareLink(body);
     return json({
       shareLink: await persistence.renameProjectShareLink(
         userId,
@@ -3187,7 +3231,32 @@ async function handleAppRequest(request: Request, env: Env): Promise<Response> {
 
   assertSafeRuntimeConfiguration(env);
   const response = await dispatchApiRequest(request, env);
-  return withApiSecurityHeaders(response);
+  let renewedSessionCookie: string | null = null;
+  if (mayCarryRenewedSessionCookie(response)) {
+    renewedSessionCookie = await takeRenewedSessionCookie(request);
+  } else {
+    dropRenewedSessionCookie(request);
+  }
+  return withApiSecurityHeaders(response, renewedSessionCookie);
+}
+
+/**
+ * A renewed session cookie rides only on a response that authenticated and
+ * left the session cookie alone: never on a WebSocket upgrade, a 401/403, or
+ * a response that sets or clears the cookie itself (sign-in, sign-out,
+ * account erasure, a rejected session).
+ */
+function mayCarryRenewedSessionCookie(response: Response): boolean {
+  if (
+    response.webSocket ||
+    response.status === 401 ||
+    response.status === 403
+  ) {
+    return false;
+  }
+  return !response.headers
+    .getSetCookie()
+    .some((line) => line.startsWith(`${SESSION_COOKIE_NAME}=`));
 }
 
 export default {
@@ -3266,7 +3335,10 @@ export default {
  * the socket, and it serves no document to sniff or frame, so it passes
  * through untouched.
  */
-function withApiSecurityHeaders(response: Response): Response {
+function withApiSecurityHeaders(
+  response: Response,
+  renewedSessionCookie: string | null = null
+): Response {
   if (response.webSocket) {
     return response;
   }
@@ -3275,6 +3347,19 @@ function withApiSecurityHeaders(response: Response): Response {
     statusText: response.statusText,
     headers: response.headers
   });
+  // A session the request slid forward re-issues its cookie with the new
+  // lifetime. The response then carries the session token, so no shared
+  // cache may store it: anything short of `no-store` becomes `no-store`.
+  if (renewedSessionCookie) {
+    wrapped.headers.append('set-cookie', renewedSessionCookie);
+    if (
+      !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(
+        wrapped.headers.get('cache-control') ?? ''
+      )
+    ) {
+      wrapped.headers.set('cache-control', 'no-store');
+    }
+  }
   wrapped.headers.set('x-content-type-options', 'nosniff');
   wrapped.headers.set('referrer-policy', 'no-referrer');
   wrapped.headers.set('cross-origin-resource-policy', 'same-origin');
@@ -3314,12 +3399,14 @@ async function dispatchApiRequest(
       return json({ error: error.message, code: error.code }, error.status);
     }
     if (error instanceof AuthenticationError) {
+      const clearing =
+        error.failure === 'invalid'
+          ? await clearRejectedEmailSession(request, env)
+          : null;
       return json(
         { error: error.message, code: 'AUTH_REQUIRED' },
         401,
-        error.failure === 'invalid'
-          ? { 'set-cookie': await destroyEmailSession(request, env) }
-          : undefined
+        clearing ? { 'set-cookie': clearing } : undefined
       );
     }
     if (error instanceof AccountDeletionError) {
@@ -3362,7 +3449,11 @@ async function dispatchApiRequest(
           ? 429
           : error.code.endsWith('_NOT_FOUND')
             ? 404
-            : 409;
+            : error.code === 'SHARE_LINK_SNAPSHOT_INVALID'
+              ? 400
+              : error.code === 'SHARE_LINK_SNAPSHOT_TOO_LARGE'
+                ? 413
+                : 409;
       return json({ error: error.message, code: error.code }, status);
     }
     if (error instanceof ProjectAdoptionError) {

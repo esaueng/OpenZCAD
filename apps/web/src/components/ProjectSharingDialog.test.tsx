@@ -8,9 +8,13 @@ import {
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  frozenShareDocument
+} from '@openzcad/document-core';
 import {
   toUserId,
+  type ProjectDocument,
   type AcceptProjectInvitationResponse,
   type CreateProjectInvitationResponse,
   type ProjectMemberRole,
@@ -108,20 +112,40 @@ function shareLinkClient(): ProjectShareLinkClient {
     createdAt: number;
     revokedAt: null;
     label: string | null;
+    history?: false;
+    frozenAt?: number;
   }> = [];
   return {
     createProjectShareLink: vi.fn(
-      async (projectId: string, mode: 'tweak' | 'view') => {
+      async (
+        projectId: string,
+        mode: 'tweak' | 'view',
+        _label?: string | null,
+        _comments?: boolean,
+        frozenDocument?: ProjectDocument
+      ) => {
+        const createdAt = Math.floor(Date.now() / 1000);
         const shareLink = {
           shareLinkId: `share_${links.length + 1}`,
           projectId,
           mode,
-          createdAt: Math.floor(Date.now() / 1000),
+          createdAt,
           revokedAt: null,
-          label: null
+          label: null,
+          ...(frozenDocument
+            ? { history: false as const, frozenAt: createdAt }
+            : {})
         };
         links.push(shareLink);
         return { shareLink, token: 'a'.repeat(43) };
+      }
+    ),
+    updateProjectShareLinkSnapshot: vi.fn(
+      async (_projectId: string, shareLinkId: string) => {
+        const link = links.find((entry) => entry.shareLinkId === shareLinkId);
+        if (!link) throw new Error('Project share link not found.');
+        link.frozenAt = Math.floor(Date.now() / 1000);
+        return { ...link };
       }
     ),
     listProjectShareLinks: vi.fn(async () =>
@@ -1631,5 +1655,178 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     expect(
       await screen.findByRole('combobox', { name: /Role for/ })
     ).toBeVisible();
+  });
+});
+
+describe('ProjectSharingDialog links without history (L08)', () => {
+  const owner = toUserId('user_owner');
+  const frozenOf = (document: ProjectDocument, name = 'Plate') =>
+    frozenShareDocument(document, [
+      { name, stepText: 'ISO-10303-21;', color: null, opacity: null }
+    ]);
+
+  function open(
+    links: ProjectShareLinkClient,
+    props: Partial<Parameters<typeof ProjectSharingDialog>[0]> = {}
+  ) {
+    const base = createProjectDocument('Bracket', owner);
+    render(
+      <ProjectSharingDialog
+        projectId={base.projectId}
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onClose={vi.fn()}
+        {...props}
+      />
+    );
+    return base;
+  }
+
+  it('includes history by default and offers no choice where a model cannot be frozen', async () => {
+    const links = shareLinkClient();
+    const base = open(links);
+    await screen.findByRole('button', { name: 'Create link' });
+    expect(
+      screen.queryByRole('checkbox', { name: 'Include history' })
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'tweak'
+      )
+    );
+  });
+
+  it('keeps today’s link when Include history stays ticked', async () => {
+    const links = shareLinkClient();
+    const onFreezeModel = vi.fn();
+    const base = open(links, { onFreezeModel });
+    expect(
+      await screen.findByRole('checkbox', { name: 'Include history' })
+    ).toBeChecked();
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'tweak'
+      )
+    );
+    expect(onFreezeModel).not.toHaveBeenCalled();
+  });
+
+  it('shares only the frozen model, view only, when history is left out', async () => {
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    let frozen: ProjectDocument | null = null;
+    const onBeforeCreateShareLink = vi.fn();
+    const base = open(links, {
+      onBeforeCreateShareLink,
+      // A source file only on this device blocks a link to the project,
+      // but a frozen model needs no file from the account.
+      localImportSourceNames: ['bracket.step'],
+      onFreezeModel: vi.fn(async () => (frozen = frozenOf(base)))
+    });
+    const history = await screen.findByRole('checkbox', {
+      name: 'Include history'
+    });
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+    await user.click(history);
+    const access = screen.getByRole('radiogroup', { name: 'Link access' });
+    expect(within(access).getByRole('radio', { name: 'View' })).toBeChecked();
+    expect(within(access).getByRole('radio', { name: 'Tweak' })).toBeDisabled();
+    expect(history).toHaveAccessibleDescription(
+      /finished model only: no features, sketches or parameters/
+    );
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'view',
+        null,
+        false,
+        frozen
+      )
+    );
+    expect(frozen).not.toBeNull();
+    // No save is awaited: the model comes from this browser.
+    expect(onBeforeCreateShareLink).not.toHaveBeenCalled();
+    // The owner's list says so, and offers Update.
+    expect(await screen.findByText(/View · No history, as of/)).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: /^Update .* to the current model$/ })
+    ).toBeVisible();
+  });
+
+  it('makes no link when the model cannot be frozen', async () => {
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    open(links, {
+      onFreezeModel: vi.fn(async () => {
+        throw new Error('This model has no solid body to share.');
+      })
+    });
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Include history' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(
+      await screen.findByText(/This model has no solid body to share\./)
+    ).toBeVisible();
+    expect(links.createProjectShareLink).not.toHaveBeenCalled();
+  });
+
+  it('Update freezes the current model into the same link', async () => {
+    const links = shareLinkClient();
+    const user = userEvent.setup();
+    const models: ProjectDocument[] = [];
+    const base = open(links, {
+      onFreezeModel: vi.fn(async () => {
+        const next = frozenOf(base, `Plate v${models.length + 1}`);
+        models.push(next);
+        return next;
+      })
+    });
+    await user.click(
+      await screen.findByRole('checkbox', { name: 'Include history' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await user.click(
+      await screen.findByRole('button', {
+        name: /^Update .* to the current model$/
+      })
+    );
+    await waitFor(() =>
+      expect(links.updateProjectShareLinkSnapshot).toHaveBeenCalledWith(
+        base.projectId,
+        'share_1',
+        models[1]
+      )
+    );
+    expect(models).toHaveLength(2);
+    // One link throughout: Update made no new one.
+    expect(links.createProjectShareLink).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no Update on a link that shares its history', async () => {
+    const links = shareLinkClient();
+    const base = open(links, { onFreezeModel: vi.fn() });
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'tweak'
+      )
+    );
+    await screen.findByRole('list', { name: /share links/i }).catch(() => null);
+    expect(
+      screen.queryByRole('button', { name: /to the current model$/ })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/No history/)).not.toBeInTheDocument();
   });
 });

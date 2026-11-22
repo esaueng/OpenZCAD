@@ -127,10 +127,26 @@ export const MAX_SHARE_LINK_TOMBSTONE_BYTES =
  * What a link visitor may do, as `ProjectShareLinkMode` in
  * `@openzcad/shared`: `view` is read-only, `tweak` opens the
  * parameters-only workspace.
+ *
+ * `frozen` (L08) is read-only too, and its snapshot is not the project: it
+ * is the finished model as the owner froze it, without its history, and
+ * publishers never put the live document in it. It is a mode of its own,
+ * in the owner-signed grant, so that every member's browser learns it with
+ * the link, and a build from before it refuses the link set (an unknown
+ * mode code is `malformed`) rather than republishing the project's history
+ * into such a link on its next save.
  */
-export const SHARE_LINK_MODES = Object.freeze(['view', 'tweak'] as const);
+export const SHARE_LINK_MODES = Object.freeze([
+  'view',
+  'tweak',
+  'frozen'
+] as const);
 export type ShareLinkMode = (typeof SHARE_LINK_MODES)[number];
-const MODE_CODES: Record<ShareLinkMode, number> = { view: 1, tweak: 2 };
+const MODE_CODES: Record<ShareLinkMode, number> = {
+  view: 1,
+  tweak: 2,
+  frozen: 3
+};
 
 // --- Errors ----------------------------------------------------------------
 
@@ -155,6 +171,11 @@ export type ShareLinkFailure =
   | 'link-mismatch'
   /** The snapshot's signing key is not one the statement names. */
   | 'author-not-named'
+  /**
+   * A `frozen` link's snapshot is signed by a key that is not one of the
+   * owner's delegated devices (an editor's, say).
+   */
+  | 'author-not-owner'
   /** The snapshot's signature is not valid. */
   | 'snapshot-signature'
   /** The snapshot is not a share snapshot of the statement's project. */
@@ -191,6 +212,7 @@ const FAILURE_CODES: Record<ShareLinkFailure, E2eeErrorCode> = {
   'authority-not-yet-valid': 'context-mismatch',
   'link-mismatch': 'context-mismatch',
   'author-not-named': 'authentication-failed',
+  'author-not-owner': 'authentication-failed',
   'snapshot-signature': 'authentication-failed',
   'snapshot-mismatch': 'context-mismatch',
   'snapshot-predates-authority': 'context-mismatch',
@@ -844,6 +866,15 @@ export interface VerifiedSharedSnapshot {
  * allowed, since author and owner clocks differ). The author's own device
  * list is not consulted: a visitor has no pin for it.
  *
+ * A `frozen` link (L08) takes one more: the snapshot's signing key must be
+ * one of the devices the owner's delegation names (`author-not-owner`).
+ * Such a link serves the model the owner froze, not the project, so what
+ * goes into it is the owner's to approve: an editor is an author the
+ * statement names, and could otherwise publish the project itself, history
+ * included, into a link whose visitors hold the key to open it. The
+ * delegation is signed by the owner's identity key, which the link names,
+ * so neither an editor nor the server can widen that set.
+ *
  * Freshness: a visitor keeps no pins, so the ordering check is all it can
  * tell about freshness. It stops a newer statement from vouching for an
  * older snapshot, which is why the owner's browser republishes a link's
@@ -930,6 +961,16 @@ export async function verifySharedSnapshot(
     refuse(
       'author-not-named',
       'The snapshot is signed by a key the statement does not name'
+    );
+  }
+  // 5a. A link without history: one of the owner's delegated devices.
+  if (
+    authority.mode === 'frozen' &&
+    !delegation.deviceKeys.some((delegated) => equalBytes(delegated, raw))
+  ) {
+    refuse(
+      'author-not-owner',
+      'The snapshot of a link without history is not signed by its owner'
     );
   }
   const verified = await verifyProjectEnvelopeSignature(
