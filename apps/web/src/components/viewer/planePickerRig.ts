@@ -101,8 +101,11 @@ export interface PlanePickerRig {
   group: THREE.Group;
   /** Panels to raycast; the hit object carries `userData.pickPlane`. */
   targets(): THREE.Object3D[];
-  /** Highlights one plane and dims the others, or clears it with null. */
-  setHover(plane: PlaneId | null): void;
+  /**
+   * Highlights one plane and dims the others, or clears it with null.
+   * Returns whether that changed anything, so a hover frame can skip a draw.
+   */
+  setHover(plane: PlaneId | null): boolean;
   /** Re-dims the borders against a new stage colour, for a theme change. */
   setBackdrop(color: THREE.ColorRepresentation): void;
   /**
@@ -454,10 +457,11 @@ export function buildPlanePickerRig(
     },
     setHover(plane) {
       if (plane === hovered) {
-        return;
+        return false;
       }
       hovered = plane;
       paint();
+      return true;
     },
     setOffset(offset) {
       offsetDistance = Number.isFinite(offset) ? offset : 0;

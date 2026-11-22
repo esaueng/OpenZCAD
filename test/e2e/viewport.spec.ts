@@ -13,7 +13,8 @@ import {
   finishInPlaceCommand,
   extrudeBar,
   openMoveOptions,
-  pressTool
+  pressTool,
+  waitForStillViewport
 } from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
 
@@ -2807,6 +2808,52 @@ test('the render loop stops drawing once the scene is still', async ({
       { timeout: 15_000 }
     )
     .toBe(0);
+});
+
+/**
+ * A hover frame draws only when the hover changes something drawn. Sweeping
+ * the pointer over empty space once drew every frame — as much GPU work as an
+ * orbit, with nothing new on screen — and the scene looked right throughout,
+ * so again only the frame count can see it.
+ */
+test('a hover over empty space draws nothing, and a new hover target draws', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Idle Hover');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled();
+
+  const canvas = page.locator('.viewer-host canvas');
+  const frames = async () =>
+    Number(
+      (await canvas.evaluate(
+        (element) => (element as HTMLElement).dataset.e2eFrames
+      )) ?? '0'
+    );
+  const bounds = await canvas.boundingBox();
+  if (!bounds) {
+    throw new Error('viewer canvas not laid out');
+  }
+  // The same empty corner the idle-loop test deselects on.
+  await page.mouse.move(bounds.x + 12, bounds.y + 12);
+  await waitForStillViewport(page);
+
+  const still = await frames();
+  await page.mouse.move(bounds.x + 60, bounds.y + 30, { steps: 20 });
+  await page.mouse.move(bounds.x + 12, bounds.y + 12, { steps: 20 });
+  await page.waitForTimeout(300);
+  expect(await frames()).toBe(still);
+
+  // Onto the box: its preselection is drawn.
+  await page.mouse.move(
+    bounds.x + bounds.width / 2,
+    bounds.y + bounds.height / 2,
+    { steps: 4 }
+  );
+  await expect.poll(frames).toBeGreaterThan(still);
 });
 
 test('two fingers pan while a wheel notch still zooms', async ({ page }) => {

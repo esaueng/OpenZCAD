@@ -4001,10 +4001,47 @@ export function ModelViewer({
      */
     let dragAppliedThisFrame = false;
     let resizePending = false;
+    /**
+     * Whether the next frame has to draw. Every `requestRender` sets it, so
+     * anything that changes what is on screen and asks for a frame gets one
+     * drawn, as it always has. Only a frame scheduled by `requestHoverFrame`
+     * leaves it alone: that frame picks under the pointer and draws only if
+     * the pick changed something and asked for a render while doing so.
+     * Starts set, for the first frame.
+     */
+    let drawPending = true;
 
     function requestRender() {
+      drawPending = true;
+      requestHoverFrame();
+    }
+
+    /**
+     * Schedules a frame to apply `pendingHoverEvent` without promising a
+     * draw. Sweeping the pointer over empty space, or along one face, changes
+     * nothing on screen, yet drawing each of those frames cost as much as an
+     * orbit. A hover that does change something — preselection, a plane or
+     * handle lighting up — goes through `requestRender` where it changes it,
+     * so it is drawn in the same frame, with no added latency.
+     */
+    function requestHoverFrame() {
       if (animationFrame === null) {
         animationFrame = window.requestAnimationFrame(animate);
+      }
+    }
+
+    /**
+     * Lights or dims a handle under the pointer, asking for a draw only when
+     * that changes it. `setHot` is idempotent in every rig, so the last value
+     * sent is the rig's state; a rig not seen yet counts as changed.
+     */
+    const rigHotness = new WeakMap<DragRig, boolean>();
+    function setRigHot(rig: DragRig, hot: boolean) {
+      if (!rig.setHot) return;
+      rig.setHot(hot);
+      if (rigHotness.get(rig) !== hot) {
+        rigHotness.set(rig, hot);
+        requestRender();
       }
     }
 
@@ -8109,7 +8146,7 @@ export function ModelViewer({
       // a part at the origin usually is (see ghostPlaneTakesPick).
       const ghost = facesOnly ? null : pickGhostPlane(event);
       if (ghost && ghostPlaneTakesPick(ghost.distance, result)) {
-        planePickerRigRef.current?.setHover(null);
+        if (planePickerRigRef.current?.setHover(null)) requestRender();
         onPickPlaneRef.current(ghost.plane, ghost.point);
         return;
       }
@@ -8318,6 +8355,7 @@ export function ModelViewer({
         (moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ?? null;
       if (!isSameMoveGizmoFocus(previous, focus)) {
         applyMoveGizmoFocus(moveGizmoGroup, focus);
+        requestRender();
       }
     }
 
@@ -8550,10 +8588,10 @@ export function ModelViewer({
       const hot = context.raycaster
         .intersectObjects(rig.group.children, true)
         .some((hit) => hit.object.userData.directHandle === true);
-      rig.setHot(hot);
+      setRigHot(rig, hot);
       const follower = hot ? null : regionFollowerUnderRay();
       for (const candidate of regionFollowerRigsRef.current) {
-        candidate.setHot?.(candidate === follower);
+        setRigHot(candidate, candidate === follower);
       }
       return hot || follower !== null;
     }
@@ -8612,24 +8650,25 @@ export function ModelViewer({
           ? (shiftPickStack(event)[0] ?? null)
           : (acceptedFacesUnder(event)?.[0] ?? pick(event));
       if (ghost && ghostPlaneTakesPick(ghost.distance, solid)) {
-        planePickerRigRef.current?.setHover(ghost.plane);
+        if (planePickerRigRef.current?.setHover(ghost.plane)) requestRender();
         applyHover(null);
         renderer.domElement.style.cursor = 'pointer';
         updateMeasurePreview(event);
-        requestRender();
         return;
       }
-      planePickerRigRef.current?.setHover(null);
+      if (planePickerRigRef.current?.setHover(null)) requestRender();
       // `applyHover` owns the cursor here, including clearing it over empty
       // space, now that it no longer skips a write on a stale cache. A change
       // of target waits out the dwell first; while it waits, the same event
-      // is re-queued so a pointer that has stopped moving still settles.
+      // is re-queued so a pointer that has stopped moving still settles. The
+      // frames it waits through show nothing new, so they ask for no draw;
+      // the commit that ends the wait asks for its own through the selection.
       const verdict = hoverDwellRef.current.propose(solid, performance.now());
       if (verdict.commit) {
         applyHover(verdict.candidate);
       } else if (verdict.pending) {
         pendingHoverEvent = event;
-        requestRender();
+        requestHoverFrame();
       }
       updateMeasurePreview(event);
     }
@@ -11724,7 +11763,14 @@ export function ModelViewer({
         return;
       }
       pendingHoverEvent = event;
-      requestRender();
+      // In a sketch the same move has already posed the sketch rig's guides
+      // (`updateSketchInProgress` above), which change what is drawn without
+      // asking for a render; those frames keep drawing as they always have.
+      if (sketchModeRef.current) {
+        requestRender();
+      } else {
+        requestHoverFrame();
+      }
     };
 
     /**
@@ -11800,6 +11846,9 @@ export function ModelViewer({
         return;
       }
       if (event.buttons === 0) {
+        // Each picker asks for a draw only when its highlight changes: moving
+        // along one candidate repaints nothing but the cursor, which is not
+        // drawn by the canvas.
         const axisPickerRig = axisPickerRigRef.current;
         if (axisPickerRig) {
           axisPickerRig.group.updateMatrixWorld(true);
@@ -11810,10 +11859,9 @@ export function ModelViewer({
           )[0];
           const axisId =
             (axisHit?.object.userData.pickAxis as string | undefined) ?? null;
-          axisPickerRig.setHover(axisId);
+          if (axisPickerRig.setHover(axisId)) requestRender();
           if (axisId) {
             renderer.domElement.style.cursor = 'pointer';
-            requestRender();
             return;
           }
         }
@@ -11824,10 +11872,9 @@ export function ModelViewer({
             context.raycaster.ray,
             curvePickThreshold(event)
           );
-          curvePickerRig.setHover(curveId);
+          if (curvePickerRig.setHover(curveId)) requestRender();
           if (curveId) {
             renderer.domElement.style.cursor = 'pointer';
-            requestRender();
             return;
           }
         }
@@ -11841,12 +11888,11 @@ export function ModelViewer({
             context.raycaster
               .intersectObjects(commandRig.group.children, true)
               .some((hit) => hit.object.userData.directHandle === true);
-          commandRig.setHot?.(over);
+          setRigHot(commandRig, over);
           overHandle ||= over;
         }
         if (overHandle) {
           renderer.domElement.style.cursor = 'grab';
-          requestRender();
           return;
         }
       }
@@ -13889,6 +13935,11 @@ export function ModelViewer({
     document.addEventListener('visibilitychange', resetAnimationContinuity);
     function animate(now: number) {
       animationFrame = null;
+      // Read and cleared before anything this frame can ask again: a request
+      // made while the frame runs is drawn by it and by the next one too,
+      // exactly as when every frame drew.
+      const drawRequested = drawPending;
+      drawPending = false;
       const frameStarted = performance.now();
       const continuous =
         loopWasAnimating &&
@@ -13920,10 +13971,6 @@ export function ModelViewer({
       } else {
         cubeBox = null;
       }
-      if (e2eCanvasHooksEnabled) {
-        framesDrawn += 1;
-        renderer.domElement.dataset.e2eFrames = String(framesDrawn);
-      }
       if (resizePending) {
         resizePending = false;
         const width = viewerHost.clientWidth;
@@ -13954,6 +14001,32 @@ export function ModelViewer({
       pendingHoverEvent = null;
       if (hoverEvent) {
         applyHoverAt(hoverEvent);
+      }
+      // A frame that only applied a hover, and whose hover changed nothing
+      // drawn, ends here: the pointer swept empty space or stayed on what it
+      // was already over. Whatever that pick did change on screen called
+      // `requestRender` as it changed it, and so lands in `drawPending`. Every
+      // other reason to draw — a camera step, a drag, a resize, an easing the
+      // last frame left running (it asked for this frame through
+      // `requestRender`), the loupe, a fresh cube link — still draws. The
+      // hover itself is not deferred: this frame applied it at once, and a
+      // later change still draws in the frame it lands in.
+      if (
+        !drawRequested &&
+        !drawPending &&
+        !dragEvent &&
+        !tweening &&
+        !zooming &&
+        !sixDofMoving &&
+        !controlsChanged &&
+        !cubeLinkFresh &&
+        !touchLoupe.visible
+      ) {
+        return;
+      }
+      if (e2eCanvasHooksEnabled) {
+        framesDrawn += 1;
+        renderer.domElement.dataset.e2eFrames = String(framesDrawn);
       }
       // The perspective camera stays the pose master; mirror it while the
       // ortho camera drives so switches and fits never jump.
