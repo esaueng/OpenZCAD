@@ -242,7 +242,9 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
           'boreDiameter',
           'rimDiameter',
           'backDepth',
-          'wormLength'
+          'wormLength',
+          // A throated wheel's tip diameter: the kernel reads a length.
+          'outsideDiameter'
         ],
         rewrite,
         'length'
@@ -253,7 +255,6 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
           'teeth',
           'mateTeeth',
           'diameterFactor',
-          'outsideDiameter',
           'profileShift',
           'addendum',
           'dedendum',
