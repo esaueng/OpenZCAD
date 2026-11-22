@@ -1901,8 +1901,9 @@ settings, which an account whose library is not encrypted stores readable.
   higher sequence. The Worker also refuses any write whose header sequence
   is not above the stored one, so no device or replayed request lowers it.
 - **Account-key rotation.** A record whose commitment names an older account
-  key is opened with that key through the account-key history, as settings
-  are, and resealed under the current key on the next write. A record sealed
+  key is opened with that key through the account-key history, across
+  identity generations (a recovery-key replacement keeps the old key only
+  there), and resealed under the current key on the next write. A record sealed
   under any key this browser cannot reach now is treated as unreadable, not
   replaced: the key may be a newer one this browser has not caught up with,
   or the history may have failed to load, and replacing it could lose names

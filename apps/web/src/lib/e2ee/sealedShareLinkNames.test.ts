@@ -240,7 +240,7 @@ describe('share link name books', () => {
     for (let i = 0; i < 4000; i++)
       big = setShareLinkName(big, 'proj_x', padded(i), null, 100 + i);
     expect(() => encodeShareLinkNameBook(big, 5000)).toThrow(
-      /Too many named links/
+      /Too many link names/
     );
     // The same tombstones once past their age are sealed away.
     expect(
@@ -252,7 +252,7 @@ describe('share link name books', () => {
     for (let i = 0; i < 2000; i++)
       full = setShareLinkName(full, 'proj_x', padded(i), 'x'.repeat(60), 1);
     expect(() => encodeShareLinkNameBook(full, 1)).toThrow(
-      /Too many named links/
+      /Too many link names/
     );
   });
 });
@@ -385,6 +385,33 @@ describe('the sealed account record', () => {
     ).rejects.toBeInstanceOf(ShareLinkNamesSessionEnded);
     expect(api.saves).toBe(0);
     expect(keys.copy()).toEqual(EMPTY_SHARE_LINK_NAME_BOOK);
+  });
+
+  it('seals with the live key when a second unlock of the same key replaced the buffer', async () => {
+    const api = memoryApi();
+    const first = KEY.slice();
+    const second = KEY.slice();
+    let current = first;
+    const keys = memoryKeys(first, {
+      active: () => true,
+      liveKey: () => current
+    });
+    const load = api.load;
+    api.load = async () => {
+      const snapshot = await load();
+      // Another load unlocked the same key into a new buffer and zeroed the
+      // one this change captured: still the same session.
+      current = second;
+      first.fill(0);
+      return snapshot;
+    };
+    await changeShareLinkNames(keys, api, (book, now) =>
+      setShareLinkName(book, 'proj_x', 'shr_a', 'Still here', now)
+    );
+    expect(api.saves).toBe(1);
+    expect(
+      shareLinkNamesFor(await readShareLinkNames(memoryKeys(), api), 'proj_x')
+    ).toEqual({ shr_a: 'Still here' });
   });
 
   it('never seals with a zeroed account key', async () => {

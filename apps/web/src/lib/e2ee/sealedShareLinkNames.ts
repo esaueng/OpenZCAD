@@ -258,7 +258,7 @@ export function encodeShareLinkNameBook(
   );
   if (bytes.byteLength > SHARE_LINK_NAMES_RECORD.maxPlaintextBytes) {
     throw new RangeError(
-      'Too many named links to save to your account. Clear some names and try again.'
+      'Too many link names to save to your account. Cleared names count for 90 days, so clearing more may not help at once.'
     );
   }
   return bytes;
@@ -396,8 +396,14 @@ export interface ShareLinkNameKeys {
   userId: string;
   pins: ShareLinkNameSequencePins;
   device: ShareLinkNameDeviceCopy;
-  /** An older account key by its commitment (`olderAccountKey`). */
+  /** Another account key by its commitment (`accountKeyByCommitment`). */
   olderKey?: (commitment: Uint8Array) => Promise<Uint8Array | null>;
+  /**
+   * The session's account key as it is now, for sealing: an unlock of the
+   * same key may have replaced the buffer `accountKey` names (and zeroed
+   * it). Null once the session ended. Without it, `accountKey`.
+   */
+  liveKey?: () => Uint8Array | null;
   /**
    * Whether the session these keys came from is still the page's: false
    * once the account signed out or locked, when teardown zeroes the key.
@@ -454,10 +460,9 @@ export async function openShareLinkNames(
       return { kind: 'unreadable' };
     }
     if (header.sequence < keys.pins.read()) return { kind: 'replace' };
-    let accountKey = keys.accountKey;
+    let accountKey = (keys.liveKey ? keys.liveKey() : null) ?? keys.accountKey;
     if (
-      toHex(header.commitment) !==
-      toHex(await accountKeyCommitment(keys.accountKey))
+      toHex(header.commitment) !== toHex(await accountKeyCommitment(accountKey))
     ) {
       // Sealed under another account key: open it with that key through the
       // account-key history, or leave it alone.
@@ -569,7 +574,9 @@ export async function changeShareLinkNames(
     const sequence = Math.max(keys.pins.read(), snapshot.sequence) + 1;
     // Sealed with a copy taken now, while the session is known to be live:
     // a teardown zeroing the shared key mid-seal cannot reach it.
-    const accountKey = keys.accountKey.slice();
+    const live = keys.liveKey ? keys.liveKey() : keys.accountKey;
+    if (!live) throw new ShareLinkNamesSessionEnded();
+    const accountKey = live.slice();
     let sealed: Uint8Array;
     try {
       if (isZeroed(accountKey)) throw new ShareLinkNamesSessionEnded();
@@ -645,23 +652,35 @@ async function pageApi(): Promise<ShareLinkNamesApi> {
 
 /** This page's keys for the account's names, or null while they are locked. */
 async function pageKeys(userId: string): Promise<ShareLinkNameKeys | null> {
-  const [{ unlockedAccount }, { olderAccountKey }] = await Promise.all([
+  const [{ unlockedAccount }, { accountKeyByCommitment }] = await Promise.all([
     import('./unlockedKeys'),
     import('./sealedSettings')
   ]);
   const account = unlockedAccount(userId);
   if (!account) return null;
+  const unlocked = account;
   return {
     accountKey: account.accountKey,
     userId,
     pins: localStorageShareLinkNamePins(userId),
     device: localStorageShareLinkNameCopy(userId),
-    olderKey: (commitment) => olderAccountKey(userId, commitment),
-    // The same unlock, not merely an unlocked account: a sign-out and a new
-    // unlock in between is another session.
-    active: () =>
-      unlockedAccount(userId) === account && !isZeroed(account.accountKey)
+    // Across identity generations: a recovery-key replacement keeps the
+    // old account key only in the history (PR 1921 review).
+    olderKey: (commitment) => accountKeyByCommitment(userId, commitment),
+    // The same key still unlocked: a sign-out ends it; a second unlock of
+    // the same key (its own buffer) does not.
+    active: () => sameUnlock(unlockedAccount(userId)) !== null,
+    liveKey: () => sameUnlock(unlockedAccount(userId))?.accountKey ?? null
   };
+
+  function sameUnlock(current: typeof account | undefined) {
+    return current &&
+      current.generation === unlocked.generation &&
+      current.commitment === unlocked.commitment &&
+      !isZeroed(current.accountKey)
+      ? current
+      : null;
+  }
 }
 
 /**
