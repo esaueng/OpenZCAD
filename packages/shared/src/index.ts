@@ -17,6 +17,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './print-clearance';
+export * from './display-units';
 export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
@@ -559,15 +560,21 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client cannot solve it, so it must refuse the document. Builds on
 // v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
 // switching (#1915) and the S07 entity lock (#1913).
-// v147 adds the M01 outer-boundary hole anchor (`positionAnchor:
+// v148 adds I03 display units (`displayUnits` and its `displayUnits.set`
+// command): the unit lengths are shown and typed in, which may differ from
+// the unit the document stores. An older client would replay the command
+// log without knowing the command and would show every length in the stored
+// unit while the user reads another, so it must refuse the document. Builds
+// on v145; v146 and v147 are claimed by the S05 offset dimension (#1919)
+// and the M01 hole anchor (#1808), v142 and v144 by #1914 and #1913.
+// v150 adds the M01 outer-boundary hole anchor (`positionAnchor:
 // 'outer-centroid'` on a hole): a typed position is measured from the
 // centroid of the entry face's outer boundary loop alone, so drilling or
 // resizing another hole in that face never moves it. An older client would
 // fall back to the vertex mean and drill the hole elsewhere, so it must
-// refuse. Builds on v145 (#1808); v142 to v144 and v146 are claimed by
-// #1914, #1915, #1913 and #1919. First claimed as v118, renumbered when those
-// landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 147 as const;
+// refuse. Builds on v148 (#1808); v149 is claimed by #1914. First claimed
+// as v118, then v147, and renumbered when later bumps landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 150 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -2963,7 +2970,7 @@ export type FeatureData =
        * because upstream features move the body underneath it, and a value
        * that is never read back would be exactly that stale world point.
        *
-       * M01 (schema v147): `'outer-centroid'` measures from the area centroid
+       * M01 (schema v150): `'outer-centroid'` measures from the area centroid
        * of the face's OUTER boundary loop alone (see
        * `FaceGeometry.outerCentroid`). The full area centroid moves whenever
        * another hole is drilled into or resized on the face, so a hole typed
@@ -3918,7 +3925,7 @@ export interface FaceGeometry {
   /**
    * The area centroid of the planar face's OUTER boundary loop alone, as if
    * every inner loop (hole) were filled: the anchor a new hole's typed
-   * position is measured from (M01, schema v147). Unlike {@link centroid} it
+   * position is measured from (M01, schema v150). Unlike {@link centroid} it
    * does not move when a hole is drilled into, resized on or removed from
    * the face. Equal to `centroid` on a face with one boundary loop. Read
    * from the kernel's own outer wire, which is walked alone, so it is
@@ -5082,6 +5089,13 @@ export interface ProjectDocument {
    * document-core.
    */
   shareLinkSheetIds?: string[];
+  /**
+   * I03 (schema v148): the unit lengths are shown and typed in. Absent means
+   * `units`. Every stored length stays in `units` — a rebuild, an export and
+   * every persisted reference read `units` and never this — so switching it
+   * changes no geometry. See `display-units.ts`.
+   */
+  displayUnits?: UnitSystem;
 }
 
 export interface SerializedCommand<TPayload = unknown> {

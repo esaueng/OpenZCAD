@@ -477,7 +477,7 @@ describe('modeling operation form contracts', () => {
       input: { faceHash: 42, positionAnchor: 'centroid' }
     });
 
-    // M01 (schema v147): a face that also reports its outer boundary's own
+    // M01 (schema v150): a face that also reports its outer boundary's own
     // centroid anchors the hole there, which other holes never move.
     const outlined: BodyTopology = {
       ...centred,

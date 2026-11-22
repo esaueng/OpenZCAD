@@ -368,7 +368,7 @@ describe('selected-face exact hole proposals', { timeout: 120_000 }, () => {
       proposalFor('Drill a hole')
     );
     expect(commands.map((command) => command.kind)).toEqual(['feature.hole']);
-    // M01 (schema v147): measured from the face's outer boundary, as the
+    // M01 (schema v150): measured from the face's outer boundary, as the
     // manual Hole tool measures a new hole.
     expect(commands[0]!.payload).toMatchObject({
       positionAnchor: 'outer-centroid',

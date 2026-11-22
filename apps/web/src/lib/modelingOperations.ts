@@ -714,7 +714,7 @@ export interface ModelingFaceOption {
   hasCentroid?: boolean;
   /**
    * Whether the face reports its outer boundary loop's own centroid, which
-   * a new hole is positioned from (M01, schema v147) because other holes in
+   * a new hole is positioned from (M01, schema v150) because other holes in
    * the face never move it.
    */
   hasOuterCentroid?: boolean;

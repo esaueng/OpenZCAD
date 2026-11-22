@@ -537,7 +537,7 @@ export type CadPatchOperation =
        * F03: one simple hole drilled into a planar face of an existing body,
        * built by the manual Hole command (`feature.hole`), which consumes the
        * body. `position` is measured from the area centroid of the face's
-       * outer boundary (holes in the face ignored, M01 schema v147) along
+       * outer boundary (holes in the face ignored, M01 schema v150) along
        * the Hole tool's U and V (`frameFromFace`: u = normalize(r × n),
        * v = n × u, r = world Z, or world X when |n.z| ≥ 0.9). That is not
        * the digest's `attachmentFrame`, whose axes differ. `depth` is the
@@ -771,7 +771,7 @@ export interface CadDigestBodyTopology {
     center?: Vector3;
     /**
      * Where `add_hole`'s position {u: 0, v: 0} stands on a planar face: the
-     * area centroid of its outer boundary (M01, schema v147), which holes
+     * area centroid of its outer boundary (M01, schema v150), which holes
      * already in the face do not move. Not the snapshot's `centroid`.
      */
     holeOrigin?: Vector3;

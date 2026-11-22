@@ -154,7 +154,7 @@ export function holePositionFromPoint(
 /**
  * The point on an entry face a hole's (u, v) is measured from:
  * `outer-centroid` is the centroid of the face's outer boundary loop alone
- * (M01, schema v147), `centroid` its full area centroid, and `center` the
+ * (M01, schema v150), `centroid` its full area centroid, and `center` the
  * vertex mean every hole saved without a marker was drilled against.
  */
 export type HolePositionAnchor = 'outer-centroid' | 'centroid' | 'center';

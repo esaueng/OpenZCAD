@@ -274,7 +274,7 @@ function loopSums(
  * inner loop were filled, or null when that wire cannot be walked.
  *
  * This is what a new hole's typed position is measured from (M01, schema
- * v147): drilling, resizing or removing another hole in the face changes its
+ * v150): drilling, resizing or removing another hole in the face changes its
  * inner loops but not this point, whereas the full {@link planarFaceCentroid}
  * moves with every one. The outer wire is the kernel's own
  * (`getFaceOuterWire`), not the largest loop by sampled area, and the inner

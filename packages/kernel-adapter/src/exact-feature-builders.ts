@@ -2393,7 +2393,7 @@ export function holeToolSpecFor(
     // Re-anchoring a hole that was drilled against the rim would silently
     // relocate it.
     //
-    // M01 (schema v147): `outer-centroid` is the outer boundary loop's own
+    // M01 (schema v150): `outer-centroid` is the outer boundary loop's own
     // centroid, which drilling or resizing another hole in the face leaves
     // where it was; the full area centroid (`centroid`) does not, so a hole
     // measured from it drifts with every hole drilled before it.

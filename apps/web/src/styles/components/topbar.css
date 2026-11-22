@@ -539,6 +539,40 @@
   text-transform: uppercase;
 }
 
+/* I03: the File menu's Units switch, four compact radio chips. */
+.topbar-units {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.topbar-units button {
+  padding: 4px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.topbar-units button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.topbar-units button.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.topbar-units-note {
+  display: block;
+  padding: 4px 8px 2px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
 .topbar-menu-label + .topbar-menu-item {
   margin-top: 0;
 }

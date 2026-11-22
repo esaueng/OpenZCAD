@@ -271,7 +271,7 @@ function measureFaceGeometryOnce(
         geometry.centroidProvenance = measured.provenance;
       }
       // Measured on its own: an inner loop that cannot be walked blanks the
-      // area centroid but must not cost a hole its anchor (M01, v147).
+      // area centroid but must not cost a hole its anchor (M01, v150).
       const outerCentroid = planarFaceOuterCentroid(
         kernel,
         face,

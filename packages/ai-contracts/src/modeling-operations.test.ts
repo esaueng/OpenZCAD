@@ -205,7 +205,7 @@ describe('AI deterministic modeling operation contracts', () => {
       document.derived.bodyRepresentations[toBodyId('body_source')]!.topology!
         .faces[0]!.geometry!;
     // A plate top with a bore already in it: the area centroid is pulled off
-    // the middle, the outer boundary's is not (M01, schema v147).
+    // the middle, the outer boundary's is not (M01, schema v150).
     geometry.centroid = { x: 49.8, y: 29.9, z: 10 };
     geometry.outerCentroid = { x: 50, y: 30, z: 10 };
     const face =
