@@ -24424,34 +24424,41 @@ export function App() {
     setSketchSolveDiagnosticObjectIds([]);
     setSketchDefinedObjectIds([]);
   }, [currentSketchSolveKey, editingSketchNode?.sketchId]);
-  // Once an under-defined solve settles, measure where its freedom lives.
-  // A newer edit or solve cancels the reading; a reading for a key that is
-  // no longer current is dropped.
+  // Once an under-defined solve settles, measure where its freedom lives,
+  // once per solve evidence key. The effect keys on that evidence alone and
+  // reads the live document and worker through refs: depending on render
+  // objects would start a fresh reading every render, and each reading's
+  // own state change would render again. A newer edit or solve cancels the
+  // reading; a reading for a key that is no longer current is dropped.
+  const sketchFreedomKeyRef = useRef<string | null>(null);
+  const definedState = sketchSolveStatus?.definedState;
   useEffect(() => {
     const key = currentSketchSolveKey;
+    const sketchId = activeSolveSketchId as SketchId | null;
     if (
-      !doc ||
-      !editingSketchNode ||
       !key ||
+      !sketchId ||
       sketchSolving ||
-      sketchSolveStatus?.definedState !== 'under-defined'
+      definedState !== 'under-defined' ||
+      sketchFreedomKeyRef.current === key
     ) {
       return;
     }
+    const live = managerRef.current?.document;
+    const sketch = live ? findSketch(live, sketchId) : undefined;
+    if (!live || !sketch || sketchSolveEvidenceKey(live, sketchId) !== key) {
+      return;
+    }
     let cancelled = false;
-    const sketchId = editingSketchNode.sketchId;
-    geometry
-      .sketchEntityFreedom(
-        doc,
-        sketchId,
-        editingSketchNode.objectIds.map(String)
-      )
+    geometryRef.current
+      .sketchEntityFreedom(live, sketchId, sketch.objectIds.map(String))
       .then((report) => {
         if (
           !cancelled &&
           report &&
           sketchSolveEvidenceKey(managerRef.current?.document, sketchId) === key
         ) {
+          sketchFreedomKeyRef.current = key;
           setSketchEntityFreedom({ key, report });
         }
       })
@@ -24461,14 +24468,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [
-    currentSketchSolveKey,
-    sketchSolveStatus?.definedState,
-    sketchSolving,
-    doc,
-    editingSketchNode,
-    geometry
-  ]);
+  }, [currentSketchSolveKey, activeSolveSketchId, definedState, sketchSolving]);
   const sketchFreedom =
     sketchEntityFreedom?.key === currentSketchSolveKey
       ? sketchEntityFreedom.report
