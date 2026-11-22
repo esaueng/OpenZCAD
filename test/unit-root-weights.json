@@ -358,6 +358,7 @@
   "test/desktop-release-privacy.test.ts": 0,
   "test/detached-text-cache.test.ts": 5,
   "test/direct-edit-corpus/corpus.test.ts": 2,
+  "test/direct-edit-corpus/ladder.test.ts": 21,
   "test/direct-edit-face-repair.test.ts": 0.2,
   "test/direct-edit-kernel-reads.test.ts": 1.6,
   "test/direct-edit-lineage-pins.test.ts": 1.9,

@@ -113,6 +113,8 @@ const FILLETS_NOT_REBUILT =
  * category sentence.
  */
 const BLEND_RESIZE_SENTENCES: Readonly<Record<string, string>> = {
+  'blend-cluster-reblend-failed':
+    "The adjoining blends couldn't be rebuilt at that radius. Try a smaller radius or edit the blends in History.",
   'unsupported-support-pair':
     "This fillet joins faces that removing or resizing a fillet can't rebuild yet; that works for fillets between flat and cylindrical faces. Edit the fillet in History instead.",
   'band-touches-freeform':
@@ -128,6 +130,9 @@ const BLEND_RESIZE_SENTENCES: Readonly<Record<string, string>> = {
  * because untyped paths (move-faces, previews) reach the same sentences.
  */
 function typedSentence(typed: RefusalClassification): string | null {
+  if (typed.code === 'cylinder_height_not_positive') {
+    return 'The cylinder height must be greater than zero.';
+  }
   const blendResize = typed.code ? BLEND_RESIZE_SENTENCES[typed.code] : null;
   if (blendResize) {
     return blendResize;

@@ -4,6 +4,7 @@ import type { RemusKernel } from './remus-runtime';
 import type { RemusMoveFacesRelation } from './remus-lineage';
 import { analyticSurfaceRecord, brepEdgeCircle } from './exact-brep';
 import { revolveRadialProfile } from './exact-cylinder-ops';
+import { AdapterRefusal } from './adapter-refusal';
 import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
@@ -216,7 +217,8 @@ export function tryExactChamferedCylinderCapOffset(
     }
   }));
   if (ends[1]!.shoulder.axial - ends[0]!.shoulder.axial <= GEOMETRY_EPSILON) {
-    throw new Error(
+    throw new AdapterRefusal(
+      'offset_collapses_cylindrical_wall',
       'That distance would leave no cylindrical wall between the end faces.'
     );
   }
