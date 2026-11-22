@@ -1,11 +1,6 @@
 import { Copy, Download, SlidersHorizontal, X } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import {
-  displayLengthName,
-  type ParameterNode,
-  type UnitSystem
-} from '@openzcad/shared';
-import { useDisplayUnits } from '../lib/displayUnits';
+import type { ParameterNode, UnitSystem } from '@openzcad/shared';
 import { ParameterRow, parameterTable } from './ParameterRows';
 import { Tooltip } from './Tooltip';
 import { PartsListModeProvider } from './ViewModeRail';
@@ -107,7 +102,6 @@ export function TweakPanel({
   parts
 }: TweakPanelProps) {
   const phone = useMediaQuery('(max-width: 479px)');
-  const shownUnits = useDisplayUnits(units ?? 'mm');
   const [phonePanel, setPhonePanel] = useState<'parameters' | 'parts'>(
     'parameters'
   );
@@ -301,8 +295,9 @@ export function TweakPanel({
                 Change a value and press Enter, or use an on/off toggle.
                 {units && (
                   <span className="tweak-model-units">
-                    {/* I03: the unit lengths read in, as everywhere else. */}
-                    Model units: {displayLengthName(shownUnits)}
+                    {/* The unit a typed parameter value is read in: the
+                        stored one, whatever the display unit (I03). */}
+                    Model units: {units}
                   </span>
                 )}
               </p>

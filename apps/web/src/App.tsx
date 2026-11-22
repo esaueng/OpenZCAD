@@ -26040,7 +26040,8 @@ export function App() {
     return offsetFaceCommitMessage(
       shown(offset),
       displayLengthName(shownUnits),
-      total === null || total === undefined ? total : shown(total)
+      total === null || total === undefined ? total : shown(total),
+      shownUnits !== document.units
     );
   }
 

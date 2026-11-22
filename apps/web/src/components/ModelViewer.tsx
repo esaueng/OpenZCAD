@@ -8852,7 +8852,8 @@ export function ModelViewer({
                 ? spanShown
                 : spanShown * shownScaleRef.current,
             sense: totalSense,
-            units: shownLabelRef.current
+            units: shownLabelRef.current,
+            precise: shownScaleRef.current !== 1
           });
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
@@ -8866,7 +8867,8 @@ export function ModelViewer({
                     ? spanShown
                     : spanShown * shownScaleRef.current,
                 sense: totalSense,
-                units: shownLabelRef.current
+                units: shownLabelRef.current,
+                precise: shownScaleRef.current !== 1
               })}`;
             }
           }
@@ -9454,9 +9456,14 @@ export function ModelViewer({
       axis: DirectEditAxis
     ) {
       const label = axisDimensionLabel(axis);
+      // I03: in the display unit, as the dimension callout reads.
       setElementText(
         dragHud,
-        `${label} ${Math.round(value * 100) / 100} ${unitLabelRef.current}`
+        `${label} ${
+          shownScaleRef.current === 1
+            ? Math.round(value * 100) / 100
+            : roundShownLength(value * shownScaleRef.current)
+        } ${shownLabelRef.current}`
       );
       hud.showAtPointer(dragHud, event, 14, -36);
     }

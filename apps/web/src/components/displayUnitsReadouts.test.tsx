@@ -14,6 +14,11 @@ import {
   lengthReadout
 } from '../lib/displayUnits';
 import { featureValueSummary } from '../lib/featureSummary';
+import {
+  offsetChipText,
+  offsetFaceCommitMessage,
+  offsetLimitChipText
+} from '../lib/offsetChip';
 import { BodyStats } from './Inspector';
 import { ParameterRow } from './ParameterRows';
 import {
@@ -208,5 +213,44 @@ describe('the viewport rule', () => {
       .getByTestId('viewport-scale-indicator')
       .querySelector('output');
     expect(output?.textContent).toBe('2 in');
+  });
+});
+
+describe('face offsets converted into a small display unit', () => {
+  // −2 mm shown in metres: hundredths read it as +0 m (review #1936).
+  it('keeps their size and sign', () => {
+    const chip = {
+      mode: 'offset' as const,
+      span: null,
+      sense: 1,
+      units: 'm'
+    };
+    expect(offsetChipText({ ...chip, rawValue: -0.002, precise: true })).toBe(
+      '-0.002 m'
+    );
+    expect(offsetFaceCommitMessage(-0.002, 'm', null, true)).toBe(
+      'Offset face by -0.002 m.'
+    );
+    expect(offsetLimitChipText({ ...chip, limit: 0.0064, precise: true })).toBe(
+      'max 0.0064 m'
+    );
+    // Total keeps its significant figures too.
+    expect(
+      offsetChipText({
+        ...chip,
+        mode: 'total',
+        span: 0.024,
+        rawValue: 0.0005,
+        precise: true
+      })
+    ).toBe('0.0245 m');
+  });
+
+  it('round to hundredths as always without a conversion', () => {
+    const chip = { mode: 'offset' as const, span: null, sense: 1, units: 'mm' };
+    expect(offsetChipText({ ...chip, rawValue: 10.254 })).toBe('+10.25 mm');
+    expect(offsetFaceCommitMessage(10.254, 'mm')).toBe(
+      'Offset face by +10.25 mm.'
+    );
   });
 });
