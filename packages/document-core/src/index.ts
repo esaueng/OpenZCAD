@@ -7217,6 +7217,14 @@ export function updateFeature(
   ) {
     delete feature.data.edgeReferences;
   }
+  // Per-vertex radii and stations name their edges by lineage reference,
+  // so they are checked again once the references are final (review).
+  if (feature.data.featureKind === 'fillet') {
+    const problem =
+      filletVertexRadiiProblem(feature.data) ??
+      filletRadiusStationsProblem(feature.data);
+    if (problem) throw new Error(problem);
+  }
   next.version += 1;
   return next;
 }

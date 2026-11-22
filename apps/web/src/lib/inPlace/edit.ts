@@ -888,7 +888,12 @@ export function inPlaceEditSeed(
       // stored with (or none): an untouched edit writes the same set back.
       const named = data.edgeReferences?.length === data.edgeHashes.length;
       data.edgeHashes.forEach((hash, index) => {
-        const stored = named ? data.edgeReferences![index]! : undefined;
+        // By hash, as the build and validation pair them, then by place
+        // (review): a list stored in another order keeps each edge's name.
+        const stored =
+          data.edgeReferences?.find(
+            (reference) => reference.currentHash === hash
+          ) ?? (named ? data.edgeReferences![index]! : undefined);
         const edge = ctx.edge(data.targetBodyId, hash, stored);
         // An edge that no longer resolves is left out, as a face or a path
         // curve is: a click then picks its replacement rather than adding

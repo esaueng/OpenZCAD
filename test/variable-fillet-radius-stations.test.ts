@@ -234,6 +234,19 @@ describe('fillet radius stations (M03, v151)', { timeout: 120_000 }, () => {
           }
         )
       ).toThrow(/Fillet radius stations/);
+      // A patch that drops the lineage names stations need is refused, not
+      // returned to fail on load (review).
+      const stationed = filletEdges(document, {
+        ...base,
+        radiusStations: [{ at: 0.5, radius: 3 }]
+      }).document;
+      const stationFillet = listNodesByKind(stationed, 'feature').at(-1)!;
+      expect(() =>
+        updateFeature(stationed, {
+          featureId: stationFillet.featureId,
+          data: { edgeHashes: [edge.hash] }
+        })
+      ).toThrow(/lineage reference/);
     } finally {
       adapter.dispose();
     }

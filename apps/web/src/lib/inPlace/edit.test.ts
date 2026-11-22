@@ -2000,9 +2000,10 @@ describe('an untouched edit writes the feature back as stored', () => {
       featureKind: 'fillet',
       targetBodyId: BODY,
       edgeHashes: [20, 21],
+      // Stored in the other order: each edge keeps its own name (review).
       edgeReferences: [
-        named(20, [0, 5, 0], [10, 5, 0]),
-        named(21, [0, 0, 0], [10, 0, 0])
+        named(21, [0, 0, 0], [10, 0, 0]),
+        named(20, [0, 5, 0], [10, 5, 0])
       ] as never[],
       radius: 1,
       endRadius: 2,
@@ -2019,6 +2020,11 @@ describe('an untouched edit writes the feature back as stored', () => {
     // from the wrong end.
     expect(request.edgeHashes).toEqual([21]);
     expect(request.edgeRuns).toEqual([false]);
+    expect(
+      (
+        request as { edgeReferences?: { currentHash: number }[] }
+      ).edgeReferences?.map((reference) => reference.currentHash)
+    ).toEqual([21]);
   });
 
   it('fillet: an untouched sparse per-vertex fillet writes the same radii back (review)', () => {
