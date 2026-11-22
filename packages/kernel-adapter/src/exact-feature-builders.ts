@@ -3754,7 +3754,8 @@ function buildEdgeModifierFeature(
       throw variableBlendRefusal(
         data.featureKind,
         selected.length,
-        reportedRefusal
+        reportedRefusal,
+        reportedKernelRefusal
       );
     }
     const refusal = edgeModifierRefusal(

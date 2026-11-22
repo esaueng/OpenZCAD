@@ -211,5 +211,6 @@
   "selected-face-hole.spec.ts": 15,
   "fillet-tangent-chain.spec.ts": 12,
   "variable-fillet-vertex-radii.spec.ts": 12,
-  "variable-fillet-radius-stations.spec.ts": 12
+  "variable-fillet-radius-stations.spec.ts": 12,
+  "variable-fillet-ball-corners.spec.ts": 12
 }
