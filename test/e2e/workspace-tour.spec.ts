@@ -274,6 +274,19 @@ for (const view of [
       await expect(bar).toBeHidden();
       await expect(tour).toContainText('Select to edit');
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+      // Enter on the guide's own buttons is theirs, not the command's Done:
+      // on Skip it made a second Box and left the guide open (PR review).
+      if (!view.touch) {
+        await page.keyboard.press('b');
+        await expect(bar).toBeVisible();
+        await expect(bar.getByRole('button', { name: /^Done/ })).toBeEnabled();
+        await tour.getByRole('button', { name: 'Skip the tour' }).focus();
+        await page.keyboard.press('Enter');
+        await expect(tour).toHaveCount(0);
+        await expect(bar).toBeVisible();
+        await expect(page.locator('.feature-row')).toHaveCount(1);
+      }
     });
   });
 }

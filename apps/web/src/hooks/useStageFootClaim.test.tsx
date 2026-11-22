@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { useRef } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stageFootClaim, useStageFootClaim } from './useStageFootClaim';
@@ -20,9 +20,9 @@ describe('stageFootClaim', () => {
   });
 });
 
-function Card({ shown, cause }: { shown: boolean; cause?: string }) {
+function Card({ shown }: { shown: boolean }) {
   const ref = useRef<HTMLElement | null>(null);
-  useStageFootClaim(ref, '--workspace-tour-claim', shown, cause);
+  useStageFootClaim(ref, '--workspace-tour-claim', shown);
   return (
     <div className="viewer-area" data-testid="stage">
       {shown && <section ref={ref} data-testid="card" />}
@@ -59,21 +59,19 @@ describe('useStageFootClaim', () => {
     expect(stage.style.getPropertyValue('--workspace-tour-claim')).toBe('');
   });
 
-  it('measures again when the cause of a move without a resize changes', () => {
-    // The guide lifted over an in-place command's bar (#1947): moved by the
-    // stylesheet, no observer reports it.
+  it('measures again when the stage’s style moves the card', async () => {
+    // The guide lifted over an in-place command's bar by the height the bar
+    // publishes on the stage (#1947): moved, not resized.
     const top = { value: 404 };
     layOut(top);
-    const { getByTestId, rerender } = render(<Card shown cause="none" />);
+    const { getByTestId } = render(<Card shown />);
     const stage = getByTestId('stage');
     top.value = 300;
-    rerender(<Card shown cause="none" />);
-    expect(stage.style.getPropertyValue('--workspace-tour-claim')).toBe(
-      '440px'
-    );
-    rerender(<Card shown cause="in-place:1" />);
-    expect(stage.style.getPropertyValue('--workspace-tour-claim')).toBe(
-      '544px'
+    stage.style.setProperty('--in-place-command-h', '164px');
+    await waitFor(() =>
+      expect(stage.style.getPropertyValue('--workspace-tour-claim')).toBe(
+        '544px'
+      )
     );
   });
 

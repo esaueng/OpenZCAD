@@ -35097,11 +35097,13 @@ export function App() {
         // opens or runs it, not Done; so does Enter on the command bar's own
         // controls (Options, a pick's remove button, Cancel), which act for
         // themselves. Any other focused button, such as the rail tool just
-        // clicked, still leaves Enter to the command (U01).
+        // clicked, still leaves Enter to the command (U01). The modeling
+        // guide's buttons too, now that it stays up through the command
+        // (#1947): Enter on Skip created the Box and left the guide open.
         const control =
           target instanceof Element &&
           target.closest(
-            '[aria-haspopup], [role="menu"], .in-place-command'
+            '[aria-haspopup], [role="menu"], .in-place-command, .workspace-tour'
           ) !== null;
         if (event.key === 'Enter' && !typing && !control) {
           event.preventDefault();

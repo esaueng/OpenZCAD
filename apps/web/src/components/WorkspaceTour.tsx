@@ -196,14 +196,7 @@ export function WorkspaceTour({
 
   // A phone's panel shares the card's corner of the stage; it ends above
   // the card rather than over its Next and Finish (UX-001).
-  // It moves above an in-place command's bar, which a resize alone does not
-  // report (#1947).
-  useStageFootClaim(
-    cardRef,
-    '--workspace-tour-claim',
-    !finished && !!step,
-    yieldTo
-  );
+  useStageFootClaim(cardRef, '--workspace-tour-claim', !finished && !!step);
 
   if (finished || !step) {
     return null;
