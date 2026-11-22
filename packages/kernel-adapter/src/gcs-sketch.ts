@@ -8,6 +8,7 @@ import {
   patternInstanceAt,
   placementMiss,
   placementTolerance,
+  seedOffsetCopies,
   seedPatternInstances
 } from './gcs-pattern';
 
@@ -239,8 +240,17 @@ export function solveSketchWithGcs(
   );
   const held = (objectId: string, point: 'start' | 'end' | 'center') =>
     anchoredObjects.has(objectId) || anchoredPoints.has(`${objectId}:${point}`);
-  const objects = seedPatternInstances(
-    inputObjects,
+  const objects = seedOffsetCopies(
+    seedPatternInstances(
+      inputObjects,
+      constraints,
+      resolveValue,
+      (objectId) =>
+        anchoredObjects.has(objectId) ||
+        (['start', 'end', 'center'] as const).some((point) =>
+          anchoredPoints.has(`${objectId}:${point}`)
+        )
+    ),
     constraints,
     resolveValue,
     (objectId) =>

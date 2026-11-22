@@ -41,6 +41,7 @@ import {
   planSketchOffset,
   type SketchOffsetPick
 } from '../apps/web/src/lib/sketch/offset';
+import { sketchEntityEditCommands } from '../apps/web/src/lib/sketch/editing';
 
 /**
  * S05 Trim, Mirror and patterns on the pinned kernel's solver: the relations
@@ -917,6 +918,45 @@ describe('S05 Offset on the pinned kernel', () => {
         schemaVersion: 145 as typeof saved.schemaVersion
       })
     ).toThrow(/Sketch offset dimensions/);
+  });
+
+  it('a dragged source circle carries its offset copies, and a new value moves only the copies', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    const [circle] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, circle, 3, { join: 'miter', chain: true, side: 1 })
+    );
+    const copy = fixture.sketch().objectIds.map(String).at(-1)!;
+    const data = (id: string) =>
+      (
+        fixture.manager.document.nodes[id as EntityId] as unknown as {
+          data: Record<string, number>;
+        }
+      ).data;
+    // Drag the source's centre to (10, 0).
+    const commands = await sketchEntityEditCommands(
+      fixture.manager.document,
+      fixture.sketchId,
+      circle as EntityId,
+      { objectKind: 'circle', centerX: 10, centerY: 0, radius: 5 },
+      (document, sketchId, anchor) =>
+        adapter.solveSketch(document, sketchId, anchor ? { anchor } : {})
+    );
+    fixture.manager.runTransaction('Move circle', commands);
+    expect(data(circle).centerX).toBe(10);
+    expect(data(circle).radius).toBe(5);
+    expect(data(copy).centerX).toBeCloseTo(10, 8);
+    expect(data(copy).radius).toBeCloseTo(8, 8);
+
+    // A new driving value moves the copy and leaves the free source alone.
+    setOffset(fixture, 6);
+    const outcome = await fixture.solve();
+    expectGood(outcome);
+    expect(solved(outcome, circle).radius).toBeCloseTo(5, 8);
+    expect(solved(outcome, circle).centerX).toBeCloseTo(10, 8);
+    expect(solved(outcome, copy).radius).toBeCloseTo(11, 8);
   });
 
   it('refuses a round copy on the wrong side of its source', async () => {
