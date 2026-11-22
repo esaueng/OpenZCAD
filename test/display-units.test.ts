@@ -23,7 +23,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * I03 display units (schema v142): a project created in one unit shows and
+ * I03 display units (schema v143): a project created in one unit shows and
  * takes lengths in another. Only `displayUnits` changes; every stored length
  * stays in `units`, so the model is untouched.
  */
@@ -81,9 +81,9 @@ describe('display units on the document', () => {
   });
 
   it('is stored, and refused on a document that declares an older schema', () => {
-    // v137 is the schema this builds on; v138–v141 are claimed by other
+    // v137 is the schema this builds on; v138–v142 are claimed by other
     // pull requests, none of which knows display units.
-    const beforeDisplayUnits = 141;
+    const beforeDisplayUnits = 142;
     const shown = setDisplayUnits(newDocument(), { units: 'inch' });
     expect(assertStorableDocument(shown).displayUnits).toBe('inch');
     for (const bad of ['ft', 1, {}, null])
@@ -95,13 +95,13 @@ describe('display units on the document', () => {
         ...shown,
         schemaVersion: beforeDisplayUnits
       } as never)
-    ).toThrow(/Display units require project schema v142/);
+    ).toThrow(/Display units require project schema v143/);
     expect(() =>
       setDisplayUnits(
         { ...newDocument(), schemaVersion: beforeDisplayUnits } as never,
         { units: 'inch' }
       )
-    ).toThrow(/v142/);
+    ).toThrow(/v143/);
   });
 
   it('is one undoable, replayable, geometry-free command', () => {

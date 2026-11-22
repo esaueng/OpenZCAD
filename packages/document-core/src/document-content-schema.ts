@@ -172,12 +172,12 @@ export function assertPrintClearanceSchema(version: unknown): void {
 }
 
 /**
- * I03 display units (schema v142): `displayUnits` and its command. An older
+ * I03 display units (schema v143): `displayUnits` and its command. An older
  * reader would show every length in the stored unit while the user reads
  * another, and cannot replay the command.
  */
 export function assertDisplayUnitsSchema(version: unknown): void {
-  assertMinimumProjectSchema(version, 142, 'Display units');
+  assertMinimumProjectSchema(version, 143, 'Display units');
 }
 
 /**

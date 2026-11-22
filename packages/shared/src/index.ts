@@ -550,13 +550,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // one Move copy stamps repeated copies, each the same transform on from the
 // one before. An older client would build only the first, so it must refuse
 // the document. Builds on v136.
-// v142 adds I03 display units (`displayUnits` and its `displayUnits.set`
+// v143 adds I03 display units (`displayUnits` and its `displayUnits.set`
 // command): the unit lengths are shown and typed in, which may differ from
 // the unit the document stores. An older client would replay the command
 // log without knowing the command and would show every length in the stored
 // unit while the user reads another, so it must refuse the document. Builds
-// on v137; v138–v141 are claimed by open sketch PRs.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 142 as const;
+// on v137; v138–v142 are claimed by open sketch and fillet PRs.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 143 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -5024,7 +5024,7 @@ export interface ProjectDocument {
    */
   shareLinkSheetIds?: string[];
   /**
-   * I03 (schema v142): the unit lengths are shown and typed in. Absent means
+   * I03 (schema v143): the unit lengths are shown and typed in. Absent means
    * `units`. Every stored length stays in `units` — a rebuild, an export and
    * every persisted reference read `units` and never this — so switching it
    * changes no geometry. See `display-units.ts`.
