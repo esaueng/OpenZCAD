@@ -368,6 +368,16 @@ describe('per-vertex fillet radii (M03, v149)', { timeout: 120_000 }, () => {
       { edge: 0, end: 0, radius: 3 }
     ]);
     const fillet = listNodesByKind(rounded, 'feature').at(-1)!;
+    // A patch that drops the lineage names the corners need is refused,
+    // not returned to fail on load (review).
+    expect(() =>
+      updateFeature(rounded, {
+        featureId: fillet.featureId,
+        data: {
+          edgeHashes: (fillet.data as { edgeHashes: number[] }).edgeHashes
+        }
+      })
+    ).toThrow(/lineage reference/);
     const constant = updateFeature(rounded, {
       featureId: fillet.featureId,
       clearData: ['endRadius', 'radiusLaw']
