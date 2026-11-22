@@ -1,10 +1,11 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UnitSystem } from '@openzcad/shared';
 import { ExprInput } from './ExprInput';
 import { NumericKeypad, type KeypadRequest } from './NumericKeypad';
 import { DisplayUnitsRow } from './TopBar';
+import { roundShownLength, setLiveDiameter } from '../lib/liveLabels';
 import {
   DisplayUnitsProvider,
   fieldNumberText,
@@ -150,13 +151,18 @@ describe('the keypad in a project shown in other units', () => {
     });
   });
 
-  function renderKeypad(initial: string, shown: UnitSystem = 'inch') {
+  function renderKeypad(
+    initial: string,
+    shown: UnitSystem = 'inch',
+    extra: Partial<KeypadRequest> = {}
+  ) {
     const onCommit = vi.fn();
     const request: KeypadRequest = {
       kind: 'offset',
       label: 'Height',
       initial,
-      unitKind: 'length'
+      unitKind: 'length',
+      ...extra
     };
     render(
       <DisplayUnitsProvider units={shown}>
@@ -199,6 +205,22 @@ describe('the keypad in a project shown in other units', () => {
     expect(onCommit).toHaveBeenCalledWith(25.4, '25.4');
   });
 
+  it('reads captured keys as typed, and a proved stored size as stored', () => {
+    // A key captured to open the pad was typed in the display unit.
+    const typed = renderKeypad('2', 'inch', { selectInitial: false });
+    fireEvent.keyDown(typed.input, { key: 'Enter' });
+    expect(typed.onCommit).toHaveBeenCalledWith(50.8, '50.8');
+    cleanup();
+    // "Try 2.5 mm" seeds a document-unit size unselected (review #1915).
+    const proved = renderKeypad('2.5', 'inch', {
+      selectInitial: false,
+      initialIsStored: true
+    });
+    expect(proved.input.value).toBe(String(Number((2.5 / 25.4).toPrecision(12))));
+    fireEvent.keyDown(proved.input, { key: 'Enter' });
+    expect(proved.onCommit).toHaveBeenCalledWith(2.5, '2.5');
+  });
+
   it('opens an expression prefill on the stored unit, where it means the same', () => {
     renderKeypad('5 + 5');
     expect(screen.getByRole('radio', { name: 'mm' })).toHaveAttribute(
@@ -236,5 +258,24 @@ describe('the File menu Units row', () => {
     );
     for (const radio of screen.getAllByRole('radio'))
       expect(radio).toBeDisabled();
+  });
+});
+
+describe('read-outs converted into a display unit', () => {
+  it('keep small values instead of rounding them to zero', () => {
+    expect(roundShownLength(0.002)).toBe(0.002);
+    expect(roundShownLength(0.0123456)).toBe(0.0123);
+    expect(roundShownLength(12.3456)).toBe(12.35);
+    expect(roundShownLength(0)).toBe(0);
+  });
+
+  it('rewrite a scaled live diameter in the shown unit', () => {
+    const root = document.createElement('div');
+    root.innerHTML =
+      '<span data-live-diameter-detail="2" data-units="m" data-unit-scale="0.001"></span>';
+    setLiveDiameter(root, 6);
+    expect(root.textContent).toBe('Ø 0.006 m');
+    setLiveDiameter(root, null);
+    expect(root.textContent).toBe('Ø 0.002 m');
   });
 });

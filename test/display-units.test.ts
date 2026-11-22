@@ -113,6 +113,7 @@ describe('display units on the document', () => {
     );
     expect(isGeometryFreeCommandKind('displayUnits.set')).toBe(true);
     expect(manager.undoIsGeometryFree).toBe(true);
+    expect(manager.undoIsDisplayUnitsOnly).toBe(true);
     const projectId = manager.document.projectId;
     expect(isDocumentHistory(manager.document.editHistory, projectId)).toBe(
       true
@@ -120,6 +121,7 @@ describe('display units on the document', () => {
     manager.undo();
     expect(manager.document.displayUnits).toBeUndefined();
     expect(manager.redoIsGeometryFree).toBe(true);
+    expect(manager.redoIsDisplayUnitsOnly).toBe(true);
     expect(
       Object.keys(JSON.parse(JSON.stringify(manager.document)) as object)
     ).not.toContain('displayUnits');

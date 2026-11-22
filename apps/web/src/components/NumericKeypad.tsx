@@ -75,6 +75,12 @@ export interface KeypadRequest {
   initial: string;
   /** Captured first keys continue at the caret; measured prefills select all. */
   selectInitial?: boolean;
+  /**
+   * I03: an unselected prefill that is a document-unit value rather than
+   * typed keys (a refusal's proved size), so it is shown converted into the
+   * display unit like a selected one.
+   */
+  initialIsStored?: boolean;
   /** A count is a plain whole number: no unit chips, no conversion. */
   unitKind: 'length' | 'angle' | 'count';
   /** Radial display/entry notation; committed values are always radii. */
@@ -445,9 +451,10 @@ export function NumericKeypad({
   // notation, whose number the chip would rescale) opens on the document's
   // own unit, as every length did before display units. A prefill that is
   // not selected is what was typed to open the pad, so it is already in
-  // the display unit.
+  // the display unit, unless the host says it is a stored value.
   const shown = useDisplayUnits(units);
-  const selectedPrefill = request.selectInitial !== false;
+  const selectedPrefill =
+    request.selectInitial !== false || request.initialIsStored === true;
   const convertsPrefill =
     request.unitKind === 'length' &&
     shown !== units &&

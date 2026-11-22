@@ -27,6 +27,17 @@ export const LIVE_DIAMETER_ATTRIBUTE = 'data-live-diameter';
  */
 export const LIVE_DIAMETER_DETAIL_ATTRIBUTE = 'data-live-diameter-detail';
 
+/**
+ * I03: a length converted into a display unit, rounded as a read-out prints
+ * it: hundredths, but three significant figures below one, so 2 mm shown in
+ * metres reads 0.002 m instead of 0 m.
+ */
+export function roundShownLength(value: number): number {
+  return value !== 0 && Math.abs(value) < 1
+    ? Number(value.toPrecision(3))
+    : Math.round(value * 100) / 100;
+}
+
 /** A measurement line's spelling of a diameter, as the readout prints it. */
 export function formatDiameterDetail(diameter: number, units: string): string {
   return `Ø ${Math.round(diameter * 100) / 100} ${units}`;
@@ -93,9 +104,9 @@ export function setLiveDiameter(
       continue;
     }
     const scale = Number(node.dataset.unitScale ?? 1);
-    node.textContent = formatDiameterDetail(
-      value * (Number.isFinite(scale) && scale > 0 ? scale : 1),
-      node.dataset.units ?? ''
-    );
+    node.textContent =
+      Number.isFinite(scale) && scale > 0 && scale !== 1
+        ? `Ø ${roundShownLength(value * scale)} ${node.dataset.units ?? ''}`
+        : formatDiameterDetail(value, node.dataset.units ?? '');
   }
 }

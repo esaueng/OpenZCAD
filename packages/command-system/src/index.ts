@@ -6525,6 +6525,15 @@ export class CommandManager {
       displayUnitsOnly(this.history?.entries[this.history.cursor])
     );
   }
+  /** I03: whether undo would only switch the display units back. */
+  get undoIsDisplayUnitsOnly(): boolean {
+    return displayUnitsOnly(
+      this.history?.entries[(this.history?.cursor ?? 0) - 1]
+    );
+  }
+  get redoIsDisplayUnitsOnly(): boolean {
+    return displayUnitsOnly(this.history?.entries[this.history.cursor]);
+  }
   /** D07: whether undo would revert PMI edits only, leaving the geometry. */
   get undoIsModelPmiOnly(): boolean {
     return modelPmiOnly(this.history?.entries[(this.history?.cursor ?? 0) - 1]);

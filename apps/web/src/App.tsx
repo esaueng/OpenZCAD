@@ -25,6 +25,7 @@ import {
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
 import { DisplayUnitsProvider } from './lib/displayUnits';
+import { roundShownLength } from './lib/liveLabels';
 import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
   noteProjectMigrating,
@@ -10344,7 +10345,10 @@ export function App() {
     const shownUnits = documentDisplayUnits(doc);
     const units = displayLengthName(shownUnits);
     const scale = convertLength(1, doc.units, shownUnits);
-    const round = (value: number) => Math.round(value * scale * 100) / 100;
+    const round = (value: number) =>
+      scale === 1
+        ? Math.round(value * 100) / 100
+        : roundShownLength(value * scale);
     const scaled = scale === 1 ? {} : { scale };
     if (selectedEdges.length > 1) {
       let sampled = false;
@@ -18081,7 +18085,16 @@ export function App() {
     const folderOnly = managerRef.current.undoIsObjectFolderOnly;
     const imageOnly = managerRef.current.undoIsGeometryFree;
     const assemblyOnly = managerRef.current.undoIsAssemblyOnly;
-    if (drawingOnly) {
+    // I03: switching units back is the project-level change it undoes,
+    // available wherever the switch itself was.
+    const unitsOnly = managerRef.current.undoIsDisplayUnitsOnly;
+    if (unitsOnly) {
+      const reason = projectRenameDisabledReasonRef.current;
+      if (reason) {
+        setStatus(cannotSentence('undo', reason));
+        return;
+      }
+    } else if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
     } else if (assemblyOnly) {
       if (!ensureCanEditAssembly('undo')) return;
@@ -18163,7 +18176,16 @@ export function App() {
     const folderOnly = managerRef.current.redoIsObjectFolderOnly;
     const imageOnly = managerRef.current.redoIsGeometryFree;
     const assemblyOnly = managerRef.current.redoIsAssemblyOnly;
-    if (drawingOnly) {
+    // I03: switching units back is the project-level change it undoes,
+    // available wherever the switch itself was.
+    const unitsOnly = managerRef.current.redoIsDisplayUnitsOnly;
+    if (unitsOnly) {
+      const reason = projectRenameDisabledReasonRef.current;
+      if (reason) {
+        setStatus(cannotSentence('redo', reason));
+        return;
+      }
+    } else if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
     } else if (assemblyOnly) {
       if (!ensureCanEditAssembly('redo')) return;
@@ -30741,7 +30763,9 @@ export function App() {
         ? {
             ...current,
             initial: String(Math.round(size * 100) / 100),
-            selectInitial: false
+            selectInitial: false,
+            // A proved document-unit size, not typed keys (I03).
+            initialIsStored: true
           }
         : current
     );
