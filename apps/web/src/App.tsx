@@ -26275,7 +26275,9 @@ export function App() {
     const label =
       kind === 'distance' || kind === 'radius' || kind === 'angle'
         ? 'dimension'
-        : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+        : kind === 'pattern'
+          ? 'pattern relation'
+          : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
     dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
     setStatus(`Selected ${label}. Press Delete to remove it.`);
   }

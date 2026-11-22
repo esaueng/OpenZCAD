@@ -1072,6 +1072,12 @@ export function describeConstraint(
       return `Point on curve · ${pointName(data.point)} on ${nameOf(data.objectId)}`;
     case 'lock':
       return `Lock · ${pointName(data.point)}`;
+    case 'pattern': {
+      const count = data.instances.length + 1;
+      return data.layout.kind === 'linear'
+        ? `Linear pattern ${String(data.layout.spacing)} · ${nameOf(data.source)} ×${count} along ${nameOf(data.layout.direction)}`
+        : `Circular pattern ${String(data.layout.stepDeg)}° · ${nameOf(data.source)} ×${count} about ${pointName(data.layout.pivot)}${data.layout.orientation === 'uniform' ? ', uniform' : ''}`;
+    }
   }
 }
 
@@ -1189,6 +1195,14 @@ export function constraintReferencesObject(
       return refs(data.point) === objectId || data.objectId === objectId;
     case 'lock':
       return refs(data.point) === objectId;
+    case 'pattern':
+      return (
+        data.source === objectId ||
+        data.instances.some((instance) => instance.objectId === objectId) ||
+        (data.layout.kind === 'linear'
+          ? data.layout.direction === objectId
+          : data.layout.pivot.objectId === objectId)
+      );
     default:
       return refs(data.a) === objectId || refs(data.b) === objectId;
   }

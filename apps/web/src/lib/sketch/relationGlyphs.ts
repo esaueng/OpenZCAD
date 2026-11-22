@@ -173,10 +173,13 @@ export function sketchRelationGlyphs(
   for (const constraint of constraints) {
     if (constraint.origin === 'promotion-structure') continue;
     const data = constraint.data;
+    // Dimensions carry their own labels; a pattern relation is listed with
+    // the constraints, its instances already showing the pattern.
     if (
       data.constraintKind === 'distance' ||
       data.constraintKind === 'radius' ||
-      data.constraintKind === 'angle'
+      data.constraintKind === 'angle' ||
+      data.constraintKind === 'pattern'
     ) {
       continue;
     }

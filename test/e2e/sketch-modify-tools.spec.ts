@@ -502,7 +502,8 @@ test('Linear pattern asks for spacing then count and repeats along a line', asyn
     );
     expect(Number(circle.radius)).toBeCloseTo(Number(circles[0]!.radius), 9);
   }
-  expect(constraintKinds(constraints)).toEqual(['equal', 'equal']);
+  // One relation holds both instances' positions and sizes.
+  expect(constraintKinds(constraints)).toEqual(['pattern']);
 });
 
 test('Linear pattern spreads its instances over an extent chosen beside its slot', async ({

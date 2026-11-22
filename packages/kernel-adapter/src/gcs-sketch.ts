@@ -1,6 +1,7 @@
 import type {
   EntityId,
   SketchConstraint,
+  SketchConstraintData,
   SketchPointRef
 } from '@openzcad/shared';
 
@@ -402,6 +403,145 @@ export function solveSketchWithGcs(
     }
   }
 
+  // S05 pattern relations. Every instance is stated against the source
+  // directly (never against its neighbour), so an instance deleted leaves
+  // the others exact, and each instance gets exactly its own freedoms:
+  // two for where its anchor lies, the rest for its size and turn.
+  const resolvedPoint = (ref: SketchPointRef): { x: number; y: number } => {
+    const object = objects.find((entry) => entry.objectId === ref.objectId);
+    if (object?.kind === 'line') {
+      return ref.point === 'end'
+        ? { x: object.x2, y: object.y2 }
+        : { x: object.x1, y: object.y1 };
+    }
+    if (object?.kind === 'arc' && ref.point !== 'center') {
+      const angle =
+        (ref.point === 'start' ? object.startAngleDeg : object.endAngleDeg) *
+        RADIANS_PER_DEGREE;
+      return {
+        x: object.centerX + object.radius * Math.cos(angle),
+        y: object.centerY + object.radius * Math.sin(angle)
+      };
+    }
+    if (object && 'centerX' in object) {
+      return { x: object.centerX, y: object.centerY };
+    }
+    if (object?.kind === 'point') return { x: object.x, y: object.y };
+    throw new Error(`Object ${ref.objectId} has no point to pattern about.`);
+  };
+  const helperLine = (a: number, b: number) => kernel.gcsAddLine(sketch, a, b);
+  const addPatternRelation = (
+    id: string,
+    data: Extract<SketchConstraintData, { constraintKind: 'pattern' }>
+  ) => {
+    const source = objectHandles(data.source);
+    const at = (objectId: EntityId, point: SketchPointRef['point']) =>
+      pointHandle({ objectId, point });
+    const layout = data.layout;
+    // The point that carries an instance's position: a line's start, a
+    // round's centre — or, for a turning pattern whose pivot sits on that
+    // point, the next point along, which the turn does move.
+    const pivotAt =
+      layout.kind === 'circular' ? resolvedPoint(layout.pivot) : null;
+    const candidates: SketchPointRef['point'][] =
+      source.kind === 'line'
+        ? ['start', 'end']
+        : source.kind === 'arc'
+          ? ['center', 'start']
+          : ['center'];
+    const anchor =
+      candidates.find((point) => {
+        if (!pivotAt) return true;
+        const there = resolvedPoint({ objectId: data.source, point });
+        return Math.hypot(there.x - pivotAt.x, there.y - pivotAt.y) > 1e-9;
+      }) ?? candidates[0]!;
+    const sourceAnchor = at(data.source, anchor);
+    const pivot = layout.kind === 'circular' ? pointHandle(layout.pivot) : -1;
+    const radial0 = pivot >= 0 ? helperLine(pivot, sourceAnchor) : -1;
+    const spacing =
+      layout.kind === 'linear'
+        ? Math.abs(resolveValue(layout.spacing, 'distance'))
+        : 0;
+    const stepRad =
+      layout.kind === 'circular'
+        ? resolveValue(layout.stepDeg, 'angle') * RADIANS_PER_DEGREE
+        : 0;
+    for (const { objectId, step } of data.instances) {
+      const instance = objectHandles(objectId);
+      if (instance.kind !== source.kind) {
+        throw new Error(
+          `Pattern instance ${objectId} is not a ${source.kind} like its source.`
+        );
+      }
+      const instanceAnchor = at(objectId, anchor);
+      // Position: two equations.
+      if (layout.kind === 'linear') {
+        add(id, {
+          type: 'parallel',
+          l1: helperLine(sourceAnchor, instanceAnchor),
+          l2: objectHandles(layout.direction).entity
+        });
+        add(id, {
+          type: 'distance',
+          a: sourceAnchor,
+          b: instanceAnchor,
+          value: spacing * step
+        });
+      } else {
+        const radial = helperLine(pivot, instanceAnchor);
+        add(id, { type: 'equalLength', l1: radial0, l2: radial });
+        add(id, {
+          type: 'angle',
+          l1: radial0,
+          l2: radial,
+          value: stepRad * step
+        });
+      }
+      // Size and turn: the entity's remaining freedoms.
+      const turned =
+        layout.kind === 'circular' && layout.orientation === 'rotate';
+      const sameTurn = (l1: number, l2: number) =>
+        add(
+          id,
+          turned
+            ? { type: 'angle', l1, l2, value: stepRad * step }
+            : { type: 'parallel', l1, l2 }
+        );
+      if (source.kind === 'line') {
+        add(id, {
+          type: 'equalLength',
+          l1: source.entity,
+          l2: instance.entity
+        });
+        sameTurn(source.entity, instance.entity);
+      } else if (source.kind === 'circle') {
+        add(id, {
+          type: 'equalRadiusCircleCircle',
+          circle1: source.entity,
+          circle2: instance.entity
+        });
+      } else if (source.kind === 'arc') {
+        add(id, {
+          type: 'equalRadiusArcArc',
+          arc1: source.entity,
+          arc2: instance.entity
+        });
+        // The arc's turn and sweep: its centre-to-start and centre-to-end
+        // directions, each turned (or kept) like the pattern.
+        for (const end of ['start', 'end'] as const) {
+          sameTurn(
+            helperLine(at(data.source, 'center'), at(data.source, end)),
+            helperLine(at(objectId, 'center'), at(objectId, end))
+          );
+        }
+      } else {
+        throw new Error(
+          `A ${source.kind} cannot be patterned by a sketch pattern relation.`
+        );
+      }
+    }
+  };
+
   for (const constraint of constraints) {
     const data = constraint.data;
     const id = constraint.constraintId;
@@ -627,6 +767,9 @@ export function solveSketchWithGcs(
         add(id, { type: 'fixY', point, value: data.y });
         break;
       }
+      case 'pattern':
+        addPatternRelation(id, data);
+        break;
     }
   }
 
