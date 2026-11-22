@@ -368,7 +368,10 @@ describe('entity distance measurements (M13)', () => {
 
 /** M13 review fixes: edge picks, roundoff, tiny arcs, resize, rim spans. */
 describe('entity distances, review fixes', () => {
-  function plate(edges: EdgeTopology[], faces: NonNullable<BodyRepresentation['topology']>['faces'] = []): BodyRepresentation {
+  function plate(
+    edges: EdgeTopology[],
+    faces: NonNullable<BodyRepresentation['topology']>['faces'] = []
+  ): BodyRepresentation {
     return {
       ...ring(),
       bbox: { min: p(0, 0, 0), max: p(10, 4, 10) },
@@ -397,9 +400,23 @@ describe('entity distances, review fixes', () => {
       )!;
     const a = pick('edge:a', 1);
     const b = pick('edge:b', 2);
-    const most = createEntityDistanceMeasurement('maximum', [body], a, b, 1, 'mm') as Measurement;
+    const most = createEntityDistanceMeasurement(
+      'maximum',
+      [body],
+      a,
+      b,
+      1,
+      'mm'
+    ) as Measurement;
     expect(most.result.value).toBeCloseTo(Math.hypot(10, 4), 12);
-    const apart = createEntityDistanceMeasurement('parallel', [body], a, b, 1, 'mm') as Measurement;
+    const apart = createEntityDistanceMeasurement(
+      'parallel',
+      [body],
+      a,
+      b,
+      1,
+      'mm'
+    ) as Measurement;
     expect(apart.result.value).toBeCloseTo(4, 12);
   });
 
@@ -428,9 +445,17 @@ describe('entity distances, review fixes', () => {
       },
       points: [r, 0, 0, r * Math.cos(sweep), r * Math.sin(sweep), 0]
     };
-    const body = plate([arc, lineEdge('edge:far', 3, [2 * r, 0, 0], [2 * r, 1, 0])]);
+    const body = plate([
+      arc,
+      lineEdge('edge:far', 3, [2 * r, 0, 0], [2 * r, 1, 0])
+    ]);
     const target = (id: string, hash: number) =>
-      measurementTargetFromSelection(body, select('edge', id, hash), undefined, 'distance')!;
+      measurementTargetFromSelection(
+        body,
+        select('edge', id, hash),
+        undefined,
+        'distance'
+      )!;
     const made = createEntityDistanceMeasurement(
       'maximum',
       [body],
@@ -457,9 +482,22 @@ describe('entity distances, review fixes', () => {
         normal: z > 0 ? Z : p(0, 0, -1)
       }
     });
-    const before = plate([], [face('face:top', 21, 10), face('face:bottom', 22, 0)]);
-    const pick = (body: BodyRepresentation, id: string, hash: number, z: number) =>
-      measurementTargetFromSelection(body, select('face', id, hash), p(3, 1, z), 'distance')!;
+    const before = plate(
+      [],
+      [face('face:top', 21, 10), face('face:bottom', 22, 0)]
+    );
+    const pick = (
+      body: BodyRepresentation,
+      id: string,
+      hash: number,
+      z: number
+    ) =>
+      measurementTargetFromSelection(
+        body,
+        select('face', id, hash),
+        p(3, 1, z),
+        'distance'
+      )!;
     const row = createEntityDistanceMeasurement(
       'parallel',
       [before],
@@ -470,14 +508,21 @@ describe('entity distances, review fixes', () => {
     ) as Measurement;
     expect(row.result.value).toBeCloseTo(10, 12);
     // The top face moved up: same identity, new place.
-    const after = plate([], [face('face:top', 21, 20), face('face:bottom', 22, 0)]);
+    const after = plate(
+      [],
+      [face('face:top', 21, 20), face('face:bottom', 22, 0)]
+    );
     const [refreshed] = refreshMeasurements([row], [after], 2);
     expect(refreshed!.status).toBe('current');
     expect(refreshed!.result.value).toBeCloseTo(20, 12);
   });
 
   it('ends a radial difference on each picked rim', () => {
-    const answer = parallelDistance(circle([0, 0, 0], 6), circle([0, 0, 10], 4), 20);
+    const answer = parallelDistance(
+      circle([0, 0, 0], 6),
+      circle([0, 0, 10], 4),
+      20
+    );
     expect(value(answer)).toBeCloseTo(2, 12);
     if ('refused' in answer) throw new Error(answer.refused);
     expect(answer.from.z).toBe(0);

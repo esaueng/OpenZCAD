@@ -1738,10 +1738,7 @@ function resolvedEntityTarget(
       ? resolveEdge(body, selection)
       : resolveFace(body, selection);
   if (!found.ok) return null;
-  if (
-    target.semantic === 'vertex-start' ||
-    target.semantic === 'vertex-end'
-  )
+  if (target.semantic === 'vertex-start' || target.semantic === 'vertex-end')
     return resolveNotableTarget(target, body);
   return (
     measurementTargetFromSelection(body, selection, undefined, 'distance') ?? {
