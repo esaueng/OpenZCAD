@@ -842,6 +842,7 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
+import { measurementHighlightTargets } from './lib/measureHighlights';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
@@ -2855,6 +2856,9 @@ function refreshedEdgePicks(
   });
   return { edges, moved };
 }
+
+/** M13: the stable empty list while no measurement row is hovered. */
+const NO_MEASURE_HIGHLIGHTS: TopologySelection[] = [];
 
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
@@ -10527,6 +10531,21 @@ export function App() {
     viewerBodies: completedViewerBodies,
     setStatus
   });
+  /**
+   * M13: the measurement row under the pointer or focus. Its edges and
+   * faces are lit in the viewport while Measure is on; a body or a row no
+   * longer listed lights nothing.
+   */
+  const [hoveredMeasurementId, setHoveredMeasurementId] = useState<
+    string | null
+  >(null);
+  const hoveredMeasurementTargets = useMemo<TopologySelection[]>(() => {
+    if (!measuring || !hoveredMeasurementId) return NO_MEASURE_HIGHLIGHTS;
+    const row = measurements.find(
+      (measurement) => measurement.id === hoveredMeasurementId
+    );
+    return row ? measurementHighlightTargets(row) : NO_MEASURE_HIGHLIGHTS;
+  }, [measuring, hoveredMeasurementId, measurements]);
   /** What a Move launched now would act on, read live by a held launch: the
    * project and selection (a replaced project can share an empty one), and
    * which command holds the lane, so Measure, a tool or a sketch taken up
@@ -35644,6 +35663,7 @@ export function App() {
       onPrecision={setMeasurementPrecision}
       onRadialDisplay={setRadialDisplay}
       onSelect={setActiveMeasurementId}
+      onHover={setHoveredMeasurementId}
       onToggleVisibility={(id) =>
         setMeasurements((current) =>
           current.map((measurement) =>
@@ -37760,6 +37780,7 @@ export function App() {
             // card (View, Tweak, a running tool) the pick keeps its name.
             pickLabel={calloutWithOperation === null}
             focusGhostBodies={focusGhostBodies}
+            measureHighlights={hoveredMeasurementTargets}
             {...((inPlaceFocusFaces ?? focusFaces)
               ? { focusFaces: inPlaceFocusFaces ?? focusFaces }
               : {})}

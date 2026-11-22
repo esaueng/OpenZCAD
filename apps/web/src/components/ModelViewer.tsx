@@ -1224,6 +1224,12 @@ export interface ModelViewerProps {
    */
   focusFaces?: readonly TopologySelection[];
   /**
+   * M13: the edges and faces a hovered measurement measured, drawn as the
+   * pointer's hover draws one (the hover face film and edge), without
+   * changing selection.
+   */
+  measureHighlights?: readonly TopologySelection[];
+  /**
    * What the selection chip anchored to the pick carries besides its name:
    * measurement, verbs, clear. Null leaves the name-only label.
    */
@@ -2606,6 +2612,7 @@ export function ModelViewer({
   selectedTopology: incomingSelectedTopology,
   previewFaceHighlights: incomingPreviewFaceHighlights,
   focusFaces: incomingFocusFaces = NO_FOCUS_FACES,
+  measureHighlights = NO_FOCUS_FACES,
   selectionCallout: incomingSelectionCallout = null,
   pickLabel: incomingPickLabel = true,
   focusGhostBodies: incomingFocusGhostBodies,
@@ -15580,6 +15587,93 @@ export function ModelViewer({
     context.requestRender();
   }, [parameterVisualPreview, bodies, initialView]);
   useEffect(() => () => parameterPreviewController.current?.dispose(), []);
+
+  // M13: a hovered measurement lights the edges and faces it measured, in
+  // the pointer hover's own colours, on each body's object so a Move preview
+  // carries them along. Nothing here touches selection.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) return;
+    const overlays: THREE.Object3D[] = [];
+    const hover = SELECTION_SEMANTICS.hover;
+    for (const target of measureHighlights) {
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === target.bodyId && !candidate.consumed
+      );
+      const object = context.objectsByBodyId.get(target.bodyId);
+      if (!body?.topology || !object) continue;
+      let overlay: THREE.Object3D | null = null;
+      if (target.kind === 'face') {
+        const face = body.topology.faces.find(
+          (entry) =>
+            entry.topologyId === target.topologyId ||
+            (target.topologyId === undefined && entry.hash === target.hash)
+        );
+        const geometry = face && createFaceHighlightGeometry(object, face);
+        if (geometry) {
+          const mesh = new THREE.Mesh(
+            geometry,
+            new THREE.MeshBasicMaterial({
+              color: hover.face,
+              transparent: true,
+              opacity: hover.faceOpacity,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+              polygonOffset: true,
+              polygonOffsetFactor: -3,
+              toneMapped: false
+            })
+          );
+          mesh.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+          overlay = mesh;
+        }
+      } else if (target.kind === 'edge') {
+        const edge = body.topology.edges.find(
+          (entry) =>
+            entry.topologyId === target.topologyId ||
+            (target.topologyId === undefined && entry.hash === target.hash)
+        );
+        if (edge && edge.points.length >= 6) {
+          const points: THREE.Vector3[] = [];
+          for (let index = 0; index + 2 < edge.points.length; index += 3)
+            points.push(
+              new THREE.Vector3(
+                edge.points[index],
+                edge.points[index + 1],
+                edge.points[index + 2]
+              )
+            );
+          const line = createFatLine(points, {
+            color: hover.edge,
+            linewidth: hover.edgeWidth,
+            resolution: context.fatLineResolution()
+          });
+          line.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+          overlay = line;
+        }
+      }
+      if (!overlay) continue;
+      overlay.name = 'measure-hover-highlight';
+      overlay.userData.selectionOverlay = true;
+      overlay.raycast = () => undefined;
+      object.add(overlay);
+      overlays.push(overlay);
+    }
+    if (E2E_CANVAS_HOOKS_ENABLED)
+      context.renderer.domElement.dataset.e2eMeasureHighlights = String(
+        overlays.length
+      );
+    context.requestRender();
+    return () => {
+      for (const overlay of overlays) {
+        overlay.removeFromParent();
+        disposeObject(overlay);
+      }
+      if (E2E_CANVAS_HOOKS_ENABLED)
+        context.renderer.domElement.dataset.e2eMeasureHighlights = '0';
+      context.requestRender();
+    };
+  }, [measureHighlights, bodies]);
 
   // Move/Rotate gizmo: translation arrows, rotation rings, and a free-move
   // center handle at the target body's center. The active drag owns the

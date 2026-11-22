@@ -62,6 +62,20 @@ function renderDock(
 }
 
 describe('MeasurementDock', () => {
+  it('reports the row under the pointer or focus, for its highlight (M13)', () => {
+    const onHover = vi.fn();
+    renderDock({ onHover });
+    const row = document.querySelector<HTMLElement>('.measurement-row-main')!;
+    fireEvent.pointerEnter(row);
+    expect(onHover).toHaveBeenLastCalledWith('edge:b1/e1');
+    fireEvent.pointerLeave(row);
+    expect(onHover).toHaveBeenLastCalledWith(null);
+    fireEvent.focus(row);
+    expect(onHover).toHaveBeenLastCalledWith('edge:b1/e1');
+    fireEvent.blur(row);
+    expect(onHover).toHaveBeenLastCalledWith(null);
+  });
+
   it('marks saved rows updating and disables copies and CSV while analysis is pending', () => {
     vi.useFakeTimers();
     const { props, container } = renderDock({ geometryPending: true });

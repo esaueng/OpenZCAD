@@ -55,6 +55,11 @@ interface MeasurementDockProps {
   onPrecision(precision: number): void;
   onRadialDisplay(display: RadialDisplay): void;
   onSelect(id: string): void;
+  /**
+   * M13: the row under the pointer or keyboard focus, whose measured edges
+   * and faces the viewport highlights; null when none is.
+   */
+  onHover?(id: string | null): void;
   onToggleVisibility(id: string): void;
   onRename(id: string, label: string, note: string): void;
   onDelete(id: string): void;
@@ -84,6 +89,7 @@ export function MeasurementDock({
   onPrecision,
   onRadialDisplay,
   onSelect,
+  onHover,
   onToggleVisibility,
   onRename,
   onDelete,
@@ -325,6 +331,10 @@ export function MeasurementDock({
                       type="button"
                       className="measurement-row-main"
                       onClick={() => onSelect(entry.id)}
+                      onPointerEnter={() => onHover?.(entry.id)}
+                      onPointerLeave={() => onHover?.(null)}
+                      onFocus={() => onHover?.(entry.id)}
+                      onBlur={() => onHover?.(null)}
                       aria-pressed={activeMeasurementId === entry.id}
                     >
                       <span className="measurement-row-heading">
