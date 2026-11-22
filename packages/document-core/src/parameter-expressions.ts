@@ -83,6 +83,7 @@ function directEdit(data: DirectEditOperation, rewrite: Rewrite): void {
       fields(data, ['angleRadians'], rewrite, 'number');
       return;
     case 'offset-face':
+    case 'offset-faces':
       fields(data, ['offset'], rewrite, 'length');
       return;
     case 'set-face-distance':
@@ -109,8 +110,13 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       fields(data.dimensions, Object.keys(data.dimensions), rewrite, 'length');
       return;
     case 'extrude':
-      fields(data, ['distance', 'backDistance'], rewrite, 'length');
-      fields(data, ['draftAngleDeg'], rewrite, 'angle');
+      fields(
+        data,
+        ['distance', 'backDistance', 'toFaceOffset', 'startOffset'],
+        rewrite,
+        'length'
+      );
+      fields(data, ['draftAngleDeg', 'backDraftAngleDeg'], rewrite, 'angle');
       return;
     case 'revolve':
       fields(data, ['angleDeg'], rewrite, 'angle');
@@ -297,6 +303,11 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       fields(data, ['spacing', 'spacing2'], rewrite, 'length');
       fields(data, ['angleDeg'], rewrite, 'angle');
       vector(data.direction, rewrite, null);
+      // M02 (schema v119): a mirror pattern's plane, as Mirror's.
+      if (data.mirrorPlane && 'origin' in data.mirrorPlane) {
+        vector(data.mirrorPlane.origin, rewrite, 'length');
+        vector(data.mirrorPlane.normal, rewrite, null);
+      }
       return;
     case 'direct-edit':
       directEdit(data.operation, rewrite);
@@ -341,8 +352,15 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       // declare, and the build checks it against that.
       fields(data.inputs, Object.keys(data.inputs), rewrite, null);
       return;
-    case 'sketch':
     case 'sweep':
+      // M04 (v132): an exact sweep's twist is an angle, its end scale a
+      // unit-free ratio.
+      fields(data, ['twistDeg'], rewrite, 'angle');
+      fields(data, ['endScale'], rewrite, 'number');
+      // M04 (v135): a round corner's radius is a length.
+      fields(data, ['cornerRadius'], rewrite, 'length');
+      return;
+    case 'sketch':
     case 'imported-mesh':
     case 'imported-step':
       return;

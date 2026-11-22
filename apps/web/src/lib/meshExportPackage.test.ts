@@ -59,9 +59,7 @@ describe('packageMeshExport (I04)', () => {
 describe('exportMesh (I04)', () => {
   const STL = {
     extension: 'stl',
-    contentType: 'model/stl',
     label: 'STL',
-    kind: 'stl-export' as const,
     binaryFormat: 'stl' as const
   };
 
@@ -88,8 +86,6 @@ describe('exportMesh (I04)', () => {
         rowName
       },
       info: STL,
-      version: 4,
-      documentUnits: 'mm',
       units: 'inch',
       stemOf: (name) => (name ? `Part ${name}` : 'Part'),
       setStatus: (message) => statuses.push(message),
@@ -110,16 +106,7 @@ describe('exportMesh (I04)', () => {
     const job = jobs[0]!;
     expect(job).toMatchObject({
       fileName: 'Part.stl',
-      label: 'STL',
-      kind: 'stl-export',
-      contentType: 'model/stl',
-      metadata: {
-        bodyIds: 'body_a',
-        documentVersion: 4,
-        units: 'mm',
-        format: 'stl-binary',
-        deflectionMm: 0.05
-      }
+      label: 'STL'
     });
     expect(job.completed).toBeUndefined();
     const signal = new AbortController().signal;
@@ -151,8 +138,7 @@ describe('exportMesh (I04)', () => {
     exportMesh(input);
     expect(jobs[0]).toMatchObject({
       fileName: 'Part Wide.stl',
-      label: 'STL of Wide',
-      metadata: { configuration: 'Wide' }
+      label: 'STL of Wide'
     });
     expect(jobs[0]!.completed!('')).toBe(
       'Exported configuration Wide to Part Wide.stl.'
@@ -166,10 +152,7 @@ describe('exportMesh (I04)', () => {
     exportMesh(input);
     expect(jobs[0]).toMatchObject({
       fileName: 'Part.zip',
-      label: 'Mesh package',
-      kind: 'stl-export',
-      contentType: 'application/zip',
-      metadata: { format: 'stl-binary,obj', perBody: 'no' }
+      label: 'Mesh package'
     });
   });
 

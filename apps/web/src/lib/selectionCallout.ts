@@ -34,7 +34,49 @@ import { activeKeymap, toolCommandId } from './keymap';
  * blend), which have no History step to open them from.
  */
 export type SelectionCalloutVerbId =
-  `action:${SelectionActionId}` | `tool:${ToolId}` | 'edit-face';
+  | `action:${SelectionActionId}`
+  | `tool:${ToolId}`
+  | 'edit-face'
+  | 'text-on-face'
+  | 'offset-faces';
+
+/**
+ * Text on a flat face, in one step: a sketch on the face with the text card
+ * open and the word pinned where the face was picked. It shares the Sketch
+ * verb's availability, since it is a sketch on the same face.
+ */
+function textOnFaceVerb(
+  sketch: SelectionCalloutVerb,
+  note: string | undefined
+): SelectionCalloutVerb {
+  const title = 'Sketch text on this face, centred where you picked it';
+  return {
+    id: 'text-on-face',
+    label: 'Text',
+    // What Sketch says about where its sketch will lie (a fixed plane on a
+    // face a rebuild cannot find again) holds for the text's sketch too.
+    title: sketch.disabled ? sketch.title : note ? `${title}. ${note}` : title,
+    disabled: sketch.disabled,
+    pressed: false
+  };
+}
+
+/** `verbs` with Text after the face's Sketch verb, when it has one. */
+function withTextAfterSketch(
+  verbs: SelectionCalloutVerb[],
+  sketchNote?: string
+): SelectionCalloutVerb[] {
+  const at = verbs.findIndex(
+    (verb) => verb.id === 'tool:sketch' || verb.id === 'action:sketch-on-face'
+  );
+  return at < 0
+    ? verbs
+    : [
+        ...verbs.slice(0, at + 1),
+        textOnFaceVerb(verbs[at]!, sketchNote),
+        ...verbs.slice(at + 1)
+      ];
+}
 
 /**
  * An imported face with no edit of its own (a blind hole, a boss, a pocket):
@@ -96,7 +138,10 @@ export interface SelectionCalloutContent {
   /** The key measurement: area or diameter, length, or overall size. */
   detail?: string;
   /** When `detail` is a diameter, its value, so a drag can rewrite it live. */
-  detailDiameter?: { diameter: number; units: string } | undefined;
+  /** `scale` (I03): document to printed units, absent when they match. */
+  detailDiameter?:
+    | { diameter: number; units: string; scale?: number }
+    | undefined;
   verbs: readonly SelectionCalloutVerb[];
   /**
    * Where the chip hangs: over the selected body, or over the geometry a
@@ -166,6 +211,12 @@ export interface SelectionCalloutVerbInput {
   /** The selection action already armed, drawn pressed. */
   pressedAction?: SelectionActionId | null;
   /**
+   * A face set's Offset (M07): offered on two or more picked faces, disabled
+   * with the reason when the set cannot move together (faces on several
+   * bodies, a curved face), and drawn pressed while its handle is armed.
+   */
+  faceSetOffset?: { disabledReason: string | null; pressed: boolean };
+  /**
    * Why the pick cannot be a datum's source (Plane on a flat face, Axis on
    * a round face or an edge): a face or edge with no identity a rebuild can
    * find again, or a curved edge. The datum verb is then disabled with it.
@@ -175,8 +226,9 @@ export interface SelectionCalloutVerbInput {
    * The picked face's kind, read from its topology: what the tools are
    * chosen by when the machine does not hold the face (direct manipulation
    * off). Absent, a face is offered the tools any face takes a start from.
+   * A cone turns about an axis as a cylinder does, but takes no thread.
    */
-  faceSurface?: 'planar' | 'cylindrical' | 'other';
+  faceSurface?: 'planar' | 'cylindrical' | 'conical' | 'other';
   availability: ToolAvailability;
 }
 
@@ -184,9 +236,16 @@ export interface SelectionCalloutVerbInput {
 const ACTION_LABELS: Partial<Record<SelectionActionId, string>> = {
   'resize-body': 'Resize',
   'offset-face': 'Offset',
-  'sketch-on-face': 'Sketch',
-  'resize-radial-face': 'Radius'
+  'sketch-on-face': 'Sketch'
 };
+
+/**
+ * A cylinder's own edit is named by the quantity its drag and keypad enter:
+ * Diameter by default, Radius once the value chip is switched to R.
+ */
+function radialFaceLabel(capability: SelectionCapability): string {
+  return capability.valueKind === 'radius' ? 'Radius' : 'Diameter';
+}
 
 function actionVerb(
   capability: SelectionCapability,
@@ -194,7 +253,10 @@ function actionVerb(
 ): SelectionCalloutVerb {
   return {
     id: `action:${capability.action}`,
-    label: ACTION_LABELS[capability.action] ?? capability.label,
+    label:
+      capability.action === 'resize-radial-face'
+        ? radialFaceLabel(capability)
+        : (ACTION_LABELS[capability.action] ?? capability.label),
     title: capability.disabledReason ?? capability.note ?? capability.label,
     disabled: !capability.enabled,
     pressed: pressedAction === capability.action
@@ -270,9 +332,10 @@ function edgeVerb(
 /**
  * The verbs for a pick, in the order they are usually reached for (U09 §5):
  * a face offers its own edit (Resize and Offset on a primitive, Offset, or
- * Radius on a cylinder) and the tools that take it — Sketch, Hole, Shell,
- * Draft, Thicken and Plane for a flat face, Axis and Shell for a round one;
- * several faces (a box sweep) Shell and Draft; edges Fillet, Chamfer and
+ * Radius on a cylinder) and the tools that take it — Sketch, Text, Hole, Shell,
+ * Draft, Thicken and Plane for a flat face, Thread, Axis and Shell for a
+ * cylinder, Axis and Shell for a cone;
+ * several faces (a box sweep or Shift picks) Offset, Shell and Draft; edges Fillet, Chamfer and
  * Axis; a body Move, Rotate, Scale, Mirror, Split, Pattern and Solid
  * offset; several bodies the booleans and Move; a sketch region Extrude,
  * Revolve, Sweep and Loft. The verb rail shows them all, in this order.
@@ -296,15 +359,19 @@ export function selectionCalloutVerbs(
         const byKind = (() => {
           switch (input.faceSurface) {
             case 'planar':
-              return tools(
-                'sketch',
-                'hole',
-                'shell',
-                'draft',
-                'thicken',
-                'datum-plane'
+              return withTextAfterSketch(
+                tools(
+                  'sketch',
+                  'hole',
+                  'shell',
+                  'draft',
+                  'thicken',
+                  'datum-plane'
+                )
               );
             case 'cylindrical':
+              return tools('thread', 'datum-axis', 'shell');
+            case 'conical':
               return tools('datum-axis', 'shell');
             case 'other':
               return tools('shell');
@@ -314,8 +381,13 @@ export function selectionCalloutVerbs(
         })();
         return [...byKind, ...faceEdgeVerbs(input)];
       }
-      const verbs = capabilities.map((capability) =>
-        actionVerb(capability, input.pressedAction)
+      const verbs = withTextAfterSketch(
+        capabilities.map((capability) =>
+          actionVerb(capability, input.pressedAction)
+        ),
+        capabilities.find(
+          (capability) => capability.action === 'sketch-on-face'
+        )?.note
       );
       if (input.resizeBody) {
         // The switch the column-top chip carried as "Resize body | Offset
@@ -345,12 +417,28 @@ export function selectionCalloutVerbs(
           (capability) => capability.action === 'resize-radial-face'
         )
       ) {
-        verbs.push(...tools('datum-axis', 'shell'));
+        // A shaft or bore is what Thread is for: it leads the tools.
+        verbs.push(...tools('thread', 'datum-axis', 'shell'));
       }
       return verbs;
     }
     case 'faces':
-      return tools('shell', 'draft');
+      return [
+        ...(input.faceSetOffset
+          ? [
+              {
+                id: 'offset-faces' as const,
+                label: 'Offset',
+                title:
+                  input.faceSetOffset.disabledReason ??
+                  'Push or pull these faces together by one distance',
+                disabled: input.faceSetOffset.disabledReason !== null,
+                pressed: input.faceSetOffset.pressed
+              }
+            ]
+          : []),
+        ...tools('shell', 'draft')
+      ];
     case 'edges':
       return [
         edgeVerb('fillet', input),

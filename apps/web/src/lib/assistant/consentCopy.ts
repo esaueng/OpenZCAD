@@ -3,9 +3,10 @@
  * lists it (ADR-024 Phase 6, slice 6-1). Plain data, no crypto: the panel
  * and the dialog import it statically.
  *
- * The inventory is exact. `assistantStream.ts` posts one JSON body to
- * `/api/assistant/proposals` with these top-level fields and nothing else,
- * and the digest inside it has only the fields listed below. Tests pin both
+ * The inventory is exact. Encrypted requests send these fields and an
+ * account consent version. The Worker checks the version and strips it
+ * before passing the payload on. The digest has only the fields listed
+ * below. Tests pin both
  * lists to `ASSISTANT_CONSENT_COPY_VERSION`: a request or digest field added
  * later fails them until the copy says what it sends and the version is
  * bumped, which asks every user again.

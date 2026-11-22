@@ -173,6 +173,7 @@ const CALLBACKS = [
   'onHoverRegion',
   'onPickPlane',
   'onMeasurePreview',
+  'onPointPick',
   'onSketchCommit',
   'onEditSketchDimension',
   'onMoveSketchDimension',

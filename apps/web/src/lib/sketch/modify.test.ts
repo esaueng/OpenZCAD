@@ -14,6 +14,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import {
+  advanceSketchEdit,
   advanceSketchEditPick,
   runSketchEdit,
   type SketchEditHost
@@ -24,7 +25,9 @@ import {
   planSketchExtend,
   planSketchLinearPattern,
   planSketchMirror,
+  planSketchConstructionSet,
   planSketchMirrorSet,
+  planSketchPatternSet,
   planSketchTrim,
   resolvePatternPivot,
   settleOptionalRelations,
@@ -1360,6 +1363,251 @@ describe('Mirror over a selection', () => {
   });
 });
 
+describe('Patterns over a selection', () => {
+  it('repeats every selected entity with one pattern in one transaction', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -2, x2: 10, y2: -2 },
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: 3, x2: 1, y2: 4 }
+    ]);
+    const [direction, circle, bar] = ids as [string, string, string];
+    const before = sketch().objectIds.length;
+    // The direction line sits in the selection too: it is skipped.
+    const plan = commit(
+      planSketchPatternSet(
+        manager.document,
+        sketch(),
+        sketchId,
+        [direction, circle, 'ent_gone', bar],
+        {
+          kind: 'linear-pattern',
+          directionId: direction,
+          distance: 8,
+          count: 3,
+          spacingMode: 'extent'
+        },
+        resolve
+      )
+    );
+    expect(plan.message).toBe(
+      'Linear pattern added 4 linked entities from 2 selected.'
+    );
+    const copies = sketch().objectIds.map(String).slice(before);
+    expect(copies.map((id) => object(id))).toEqual([
+      { objectKind: 'circle', centerX: 4, centerY: 0, radius: 1 },
+      { objectKind: 'circle', centerX: 8, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 4, y1: 3, x2: 5, y2: 4 },
+      { objectKind: 'line', x1: 8, y1: 3, x2: 9, y2: 4 }
+    ]);
+    // Each source holds its own instances.
+    expect(kinds(sketch().constraints ?? [])).toEqual(['pattern', 'pattern']);
+    manager.undo();
+    expect(sketch().objectIds).toHaveLength(before);
+  });
+
+  it('plans each entity against the instances already planned, and counts what it leaves out', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -2, x2: 10, y2: -2 },
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      // A step ahead of the first circle: its instance would land on this
+      // one, so the first circle is left out.
+      { objectKind: 'circle', centerX: 5, centerY: 0, radius: 1 },
+      { objectKind: 'point', x: 0, y: 5 }
+    ]);
+    const [direction, first, second, point] = ids as [
+      string,
+      string,
+      string,
+      string
+    ];
+    const plan = planSketchPatternSet(
+      manager.document,
+      sketch(),
+      sketchId,
+      [first, second, point],
+      {
+        kind: 'linear-pattern',
+        directionId: direction,
+        distance: 5,
+        count: 2,
+        spacingMode: 'spacing'
+      },
+      resolve
+    );
+    expect(plan.status === 'commands' && plan.message).toBe(
+      'Linear pattern added 1 linked entity from 1 selected. 2 could not be repeated and were left out.'
+    );
+    expect(
+      planSketchPatternSet(
+        manager.document,
+        sketch(),
+        sketchId,
+        [direction],
+        {
+          kind: 'linear-pattern',
+          directionId: direction,
+          distance: 5,
+          count: 2,
+          spacingMode: 'spacing'
+        },
+        resolve
+      )
+    ).toEqual({
+      status: 'refuse',
+      reason:
+        'The direction line is the only thing selected. Select what to repeat, then pick the line.'
+    });
+  });
+
+  it('refuses a construction instance that would duplicate existing geometry', () => {
+    // Review case: two equal construction circles a step apart. The first's
+    // instance would sit exactly on the second; the second's is clear.
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 },
+      {
+        objectKind: 'circle',
+        centerX: 0,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      },
+      {
+        objectKind: 'circle',
+        centerX: 5,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      }
+    ]);
+    const [direction, first, second] = ids as [string, string, string];
+    const plan = planSketchPatternSet(
+      manager.document,
+      sketch(),
+      sketchId,
+      [first, second],
+      {
+        kind: 'linear-pattern',
+        directionId: direction,
+        distance: 5,
+        count: 2,
+        spacingMode: 'spacing'
+      },
+      resolve
+    );
+    expect(plan.status === 'commands' && plan.message).toBe(
+      'Linear pattern added 1 linked entity from 1 selected. 1 could not be repeated and was left out.'
+    );
+  });
+
+  it('turns a selection round one pivot, uniform or rotated', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'circle', centerX: 10, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 9, y1: 2, x2: 11, y2: 2 }
+    ]);
+    const [circle, bar] = ids as [string, string];
+    commit(
+      planSketchPatternSet(
+        manager.document,
+        sketch(),
+        sketchId,
+        [circle, bar],
+        {
+          kind: 'circular-pattern',
+          pivot: { x: 0, y: 0 },
+          count: 2,
+          totalDeg: 360,
+          orientation: 'uniform'
+        },
+        resolve
+      )
+    );
+    const [circleCopy, barCopy] = sketch().objectIds.map(String).slice(2);
+    expectClose(object(circleCopy!), { centerX: -10, centerY: 0 });
+    // Kept in the source's orientation: still horizontal, its midpoint
+    // carried half a turn from (10, 2) to (-10, -2).
+    expectClose(object(barCopy!), { x1: -11, y1: -2, x2: -9, y2: -2 });
+  });
+});
+
+describe('Mirror of construction guides', () => {
+  it('still mirrors a guide onto an equal one, as before (review case)', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      {
+        objectKind: 'circle',
+        centerX: -4,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      },
+      {
+        objectKind: 'circle',
+        centerX: 4,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      }
+    ]);
+    expect(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[1]!,
+        ids[0]!,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+  });
+});
+
+describe('Construction over a selection', () => {
+  it('makes a mixed selection construction, then regular, one undo step each', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'circle', centerX: 0, centerY: 5, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: 2, x2: 4, y2: 2, construction: true }
+    ]);
+    const plan = commit(
+      planSketchConstructionSet(manager.document, sketch(), sketchId, ids)
+    );
+    expect(plan.label).toBe('Make construction');
+    // The one already construction is left as it is.
+    expect(plan.commands).toHaveLength(2);
+    expect(plan.message).toBe(
+      '2 entities are construction geometry now; they no longer bound a profile.'
+    );
+    expect(ids.map((id) => object(id).construction)).toEqual([
+      true,
+      true,
+      true
+    ]);
+    const back = commit(
+      planSketchConstructionSet(manager.document, sketch(), sketchId, ids)
+    );
+    expect(back.label).toBe('Make regular');
+    expect(ids.map((id) => object(id).construction)).toEqual([
+      undefined,
+      undefined,
+      undefined
+    ]);
+    manager.undo();
+    expect(ids.map((id) => object(id).construction)).toEqual([
+      true,
+      true,
+      true
+    ]);
+    expect(
+      planSketchConstructionSet(manager.document, sketch(), sketchId, [
+        'ent_gone'
+      ])
+    ).toEqual({
+      status: 'refuse',
+      reason: 'The selected entities are no longer in this sketch.'
+    });
+  });
+});
+
 describe('Mirror', () => {
   it('mirrors a line about an axis with symmetric relations, coincident on the axis', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
@@ -1745,7 +1993,7 @@ describe('Mirror', () => {
 });
 
 describe('Patterns', () => {
-  it('repeats a circle along a direction line, each instance equal to the source', () => {
+  it('repeats a circle along a direction line, held by one pattern relation', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
       { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 4 }
@@ -1769,14 +2017,22 @@ describe('Patterns', () => {
       { objectKind: 'circle', centerX: 0, centerY: 5, radius: 1 },
       { objectKind: 'circle', centerX: 0, centerY: 10, radius: 1 }
     ]);
-    expect((sketch().constraints ?? []).map((c) => c.data)).toEqual(
-      copies.map((copy) => ({ constraintKind: 'equal', a: circle, b: copy }))
-    );
+    expect((sketch().constraints ?? []).map((c) => c.data)).toEqual([
+      {
+        constraintKind: 'pattern',
+        source: circle,
+        instances: copies.map((objectId, index) => ({
+          objectId,
+          step: index + 1
+        })),
+        layout: { kind: 'linear', direction, spacing: 5 }
+      }
+    ]);
     manager.undo();
     expect(sketch().objectIds).toHaveLength(2);
   });
 
-  it('keeps pattern lines parallel and equal to the source', () => {
+  it('holds pattern lines with one relation, not separate links', () => {
     const { manager, sketchId, ids, sketch, commit } = sketchWith([
       { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 4 },
       { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
@@ -1793,7 +2049,7 @@ describe('Patterns', () => {
         resolve
       )
     );
-    expect(kinds(sketch().constraints ?? [])).toEqual(['equal', 'parallel']);
+    expect(kinds(sketch().constraints ?? [])).toEqual(['pattern']);
   });
 
   it('refuses a linear pattern whose lines overlap along the direction, but lets them touch', () => {
@@ -2256,6 +2512,179 @@ describe('Patterns', () => {
     ).toMatchObject({ status: 'refuse' });
   });
 
+  it('spreads a linear pattern over its total extent', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 4 }
+    ]);
+    const [circle, direction] = ids as [string, string];
+    const plan = commit(
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        circle,
+        direction,
+        12,
+        4,
+        resolve,
+        'extent'
+      )
+    );
+    expect(plan.message).toBe('Linear pattern added 3 linked circles.');
+    // The last instance lies the extent from the source: steps of 12 / 3.
+    expect(
+      sketch()
+        .objectIds.map(String)
+        .slice(2)
+        .map((id) => object(id))
+    ).toEqual([
+      { objectKind: 'circle', centerX: 0, centerY: 4, radius: 1 },
+      { objectKind: 'circle', centerX: 0, centerY: 8, radius: 1 },
+      { objectKind: 'circle', centerX: 0, centerY: 12, radius: 1 }
+    ]);
+    manager.undo();
+    expect(sketch().objectIds).toHaveLength(2);
+  });
+
+  it('refuses a zero extent, and an extent too short for its steps, by name', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'line', x1: 0, y1: -5, x2: 10, y2: -5 }
+    ]);
+    const plan = (extent: number, count: number) =>
+      planSketchLinearPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        ids[1]!,
+        extent,
+        count,
+        resolve,
+        'extent'
+      );
+    expect(plan(0, 3)).toEqual({
+      status: 'refuse',
+      reason: 'A pattern extent must be a non-zero distance.'
+    });
+    // Steps of 3 overlap a line 4 long; steps of 4 just touch.
+    expect(plan(6, 3)).toMatchObject({
+      status: 'refuse',
+      reason:
+        'Some instances would overlap others. Use a longer extent or fewer instances, so each step is at least as long as the entity along the direction.'
+    });
+    expect(plan(8, 3)).toMatchObject({ status: 'commands' });
+  });
+
+  it('carries uniform circular instances round the pivot without turning them', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      { objectKind: 'line', x1: 9, y1: -1, x2: 11, y2: 1 }
+    ]);
+    const plan = commit(
+      planSketchCircularPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 0 },
+        4,
+        360,
+        resolve,
+        'uniform'
+      )
+    );
+    expect(plan.message).toBe('Circular pattern added 3 linked lines.');
+    // Each midpoint is the source's (10, 0) turned a quarter at a time; each
+    // instance keeps the source's 45° direction and length.
+    const copies = sketch().objectIds.map(String).slice(1);
+    const expected = [
+      [0, 10],
+      [-10, 0],
+      [0, -10]
+    ];
+    copies.forEach((id, index) => {
+      const [mx, my] = expected[index]!;
+      expectClose(object(id), {
+        x1: mx! - 1,
+        y1: my! - 1,
+        x2: mx! + 1,
+        y2: my! + 1
+      });
+    });
+    // Moved without turning, a line stays parallel to its source as well as
+    // equal to it.
+    expect(kinds(sketch().constraints ?? [])).toEqual([
+      'equal',
+      'equal',
+      'equal',
+      'parallel',
+      'parallel',
+      'parallel'
+    ]);
+  });
+
+  it('keeps a uniform arc instance in the source orientation', () => {
+    const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 10,
+        centerY: 0,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      }
+    ]);
+    commit(
+      planSketchCircularPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 0 },
+        2,
+        180,
+        resolve,
+        'uniform'
+      )
+    );
+    const copy = object(sketch().objectIds.map(String)[1]!);
+    expectClose(copy, {
+      centerX: -10,
+      centerY: 0,
+      radius: 2
+    });
+    // A rotated copy would start at 180°; a uniform one keeps 0°–90°.
+    expect(copy).toMatchObject({ objectKind: 'arc' });
+    const arc = copy as Extract<SketchObjectData, { objectKind: 'arc' }>;
+    expect(arc.startAngleDeg).toBeCloseTo(0, 9);
+    expect(arc.endAngleDeg).toBeCloseTo(90, 9);
+    expect(kinds(sketch().constraints ?? [])).toEqual(['equal']);
+  });
+
+  it('refuses a uniform pattern of an entity anchored on the pivot', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: -1, y1: -1, x2: 1, y2: 1 }
+    ]);
+    const plan = (orientation: 'rotate' | 'uniform') =>
+      planSketchCircularPattern(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[0]!,
+        { x: 0, y: 0 },
+        4,
+        360,
+        resolve,
+        orientation
+      );
+    expect(plan('uniform')).toEqual({
+      status: 'refuse',
+      reason:
+        'That entity is centred on the pivot, so kept in its orientation every instance would land on it.'
+    });
+  });
+
   it('resolves the pivot from a circle centre or a snapped line end', () => {
     const { manager, ids, sketch } = sketchWith([
       { objectKind: 'circle', centerX: 3, centerY: 4, radius: 1 },
@@ -2263,8 +2692,14 @@ describe('Patterns', () => {
     ]);
     const pivot = (pick: string) =>
       resolvePatternPivot(manager.document, sketch(), pick, resolve);
-    expect(pivot(ids[0]!)).toEqual({ pivot: { x: 3, y: 4 } });
-    expect(pivot(`${ids[1]!}#end`)).toEqual({ pivot: { x: 7, y: 9 } });
+    expect(pivot(ids[0]!)).toEqual({
+      pivot: { x: 3, y: 4 },
+      ref: { objectId: ids[0], point: 'center' }
+    });
+    expect(pivot(`${ids[1]!}#end`)).toEqual({
+      pivot: { x: 7, y: 9 },
+      ref: { objectId: ids[1], point: 'end' }
+    });
     expect('error' in pivot(ids[1]!)).toBe(true);
   });
 });
@@ -2294,6 +2729,99 @@ describe('modify tool picking', () => {
     };
     return { host: value, log, asked };
   }
+
+  it('arms a pattern over a selection: one pick, then the values, then one transaction', async () => {
+    const { manager, ids, sketch, object } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 },
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'circle', centerX: 0, centerY: 4, radius: 1 }
+    ]);
+    const [direction, a, b] = ids as [string, string, string];
+    const applied: { commands: AnyCommand[]; label: string }[] = [];
+    const { host: driver, log } = host(applied);
+    const steps: unknown[] = [];
+    driver.askValue = (_kind, picks, label, _initial, step) => {
+      steps.push({ picks, label, sources: step?.sources });
+    };
+    const pending = {
+      kind: 'linear-pattern' as const,
+      picks: [],
+      sources: [a, 'ent_gone', b]
+    };
+    // A click on nothing re-states the selection hint.
+    advanceSketchEdit(driver, manager.document, sketch(), pending, null);
+    expect(log.at(-1)).toBe(
+      'Linear pattern: click a line for the direction to repeat 2 selected entities along. Then enter the spacing (or the extent) and the count.'
+    );
+    advanceSketchEdit(driver, manager.document, sketch(), pending, direction);
+    // Only the entities still in the sketch ride along.
+    expect(steps).toEqual([
+      { picks: [a, direction], label: 'Pattern spacing', sources: [a, b] }
+    ]);
+    await runSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      'linear-pattern',
+      [a, direction],
+      5,
+      '5',
+      { values: [], raws: [], sources: [a, b] }
+    );
+    await runSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      'linear-pattern',
+      [a, direction],
+      2,
+      '2',
+      { values: [5], raws: ['5'], sources: [a, b] }
+    );
+    expect(applied).toHaveLength(1);
+    expect(log.at(-1)).toBe(
+      'Linear pattern added 2 linked entities from 2 selected.'
+    );
+    manager.execute(composeCommands('Linear pattern', applied[0]!.commands));
+    expect(
+      sketch()
+        .objectIds.map(String)
+        .slice(3)
+        .map((id) => object(id))
+    ).toEqual([
+      { objectKind: 'circle', centerX: 5, centerY: 0, radius: 1 },
+      { objectKind: 'circle', centerX: 5, centerY: 4, radius: 1 }
+    ]);
+  });
+
+  it('lets a selected circle be the pivot the rest of the selection turns about', () => {
+    // Review case: the circle is selected first, so it must not stand in
+    // as the source pick that the pivot pick then repeats.
+    const { manager, ids, sketch } = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 2 },
+      { objectKind: 'line', x1: 6, y1: -1, x2: 8, y2: 1 }
+    ]);
+    const [hub, bar] = ids as [string, string];
+    const applied: { commands: AnyCommand[]; label: string }[] = [];
+    const { host: driver, log } = host(applied);
+    const steps: unknown[] = [];
+    driver.askValue = (_kind, picks, label, _initial, step) => {
+      steps.push({ picks, label, sources: step?.sources });
+    };
+    advanceSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      { kind: 'circular-pattern', picks: [], sources: [hub, bar] },
+      hub
+    );
+    expect(log).toEqual([
+      'Circular pattern: enter how many instances, the source included.'
+    ]);
+    expect(steps).toEqual([
+      { picks: [bar, hub], label: 'Pattern count', sources: [hub, bar] }
+    ]);
+  });
 
   it('runs Trim at the click and needs no value', () => {
     const { manager, ids, sketch } = sketchWith([
@@ -2457,5 +2985,75 @@ describe('modify tool picking', () => {
     expect(applied).toHaveLength(1);
     expect(applied[0]!.label).toBe('Linear pattern');
     expect(log.at(-1)).toBe('Linear pattern added 3 linked circles.');
+  });
+
+  it('reads the pattern setting when the picks complete and keeps it through the values', async () => {
+    const { manager, ids, sketch, object } = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 }
+    ]);
+    const [circle, line] = ids as [string, string];
+    const outcome = advanceSketchEditPick(
+      manager.document,
+      sketch(),
+      'linear-pattern',
+      [circle],
+      line,
+      resolve,
+      { options: { join: 'miter', chain: true, patternSpacing: 'extent' } }
+    );
+    expect(outcome).toMatchObject({
+      status: 'value',
+      label: 'Pattern extent',
+      initial: 4,
+      pattern: { spacing: 'extent', orientation: 'rotate' }
+    });
+    // With no setting a pattern is step-spaced and rotated, as before.
+    expect(
+      advanceSketchEditPick(
+        manager.document,
+        sketch(),
+        'circular-pattern',
+        [circle],
+        line,
+        resolve,
+        { snapPoint: { objectId: line, point: 'end' } }
+      )
+    ).toMatchObject({ pattern: { spacing: 'spacing', orientation: 'rotate' } });
+    const applied: { commands: AnyCommand[]; label: string }[] = [];
+    const { host: driver, asked } = host(applied);
+    const pattern = { spacing: 'extent', orientation: 'rotate' } as const;
+    await runSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      'linear-pattern',
+      [circle, line],
+      8,
+      '8',
+      { values: [], raws: [], pattern }
+    );
+    expect(asked).toEqual(['linear-pattern 2 Pattern count 3 count 8']);
+    await runSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      'linear-pattern',
+      [circle, line],
+      3,
+      '3',
+      { values: [8], raws: ['8'], pattern }
+    );
+    expect(applied).toHaveLength(1);
+    manager.execute(composeCommands('Linear pattern', applied[0]!.commands));
+    expect(
+      sketch()
+        .objectIds.map(String)
+        .slice(2)
+        .map((id) => object(id))
+    ).toEqual([
+      { objectKind: 'circle', centerX: 4, centerY: 0, radius: 1 },
+      { objectKind: 'circle', centerX: 8, centerY: 0, radius: 1 }
+    ]);
   });
 });

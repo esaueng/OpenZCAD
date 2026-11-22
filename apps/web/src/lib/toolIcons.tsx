@@ -222,6 +222,27 @@ export const pointPatternGlyph = glyph(
   </>
 );
 
+/** M02: copies spaced along a curved sketch path. */
+export const pathPatternGlyph = glyph(
+  <>
+    <path d="M3 19C7 19 9 5 21 5" strokeDasharray="1 2.5" />
+    <rect x="2" y="15" width="5" height="5" rx="1" />
+    <rect x="9.5" y="8.5" width="5" height="5" rx="1" />
+    <rect x="17" y="3" width="5" height="5" rx="1" />
+  </>
+);
+
+/** M02: a copy reflected across a dashed plane. */
+export const mirrorPatternGlyph = glyph(
+  <>
+    <path d="M12 2v20" strokeDasharray="1 2.5" />
+    <rect x="3" y="7" width="6" height="6" rx="1" />
+    <rect x="15" y="7" width="6" height="6" rx="1" />
+    <circle cx="5.5" cy="9.5" r="0.6" />
+    <circle cx="18.5" cy="9.5" r="0.6" />
+  </>
+);
+
 export const gridPatternGlyph = glyph(
   <>
     <rect x="3" y="3" width="6" height="6" rx="1" />

@@ -11,6 +11,7 @@ import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import {
   ownEntry,
+  transformStampBodyIds,
   MATERIAL_DENSITY_PRESETS,
   MAX_CUSTOM_DENSITY_KG_PER_M3,
   UNIT_MASS_DENSITY_SELECTION,
@@ -64,6 +65,7 @@ import {
   FEATURE_KIND_LABELS,
   formatMeasuredQuantity,
   formatNumber,
+  paramValueText,
   previewExpression
 } from '../lib/model';
 import { edgeLabel, edgeLength, faceLabel } from '../lib/topologyLabels';
@@ -130,6 +132,11 @@ export interface InspectorCallbacks {
   /** M16: opens a sheet-metal feature's flat-pattern view. */
   onOpenFlatPattern?(featureId: FeatureId): void;
   onApplyTransform(feature: FeatureNode, value: TransformFormValue): void;
+  /**
+   * A face set offset's History card (M07): the distance it moves its faces,
+   * changed and rebuilt. Absent, the card only reads the distance out.
+   */
+  onApplyDirectEditOffset?(feature: FeatureNode, offset: ParamValue): void;
   onResizeThroughHole(
     selection: TopologySelection,
     geometry: FaceGeometry,
@@ -1137,6 +1144,58 @@ function FaceDirectEdit({
 }
 
 /**
+ * The distance a face set offset moves its faces, editable from its History
+ * card: reopening the step is how its value is changed after the commit.
+ * Apply stays off until the entry changes to a non-zero distance.
+ */
+function DirectEditOffsetForm({
+  offset,
+  scope,
+  units,
+  disabled,
+  onApply
+}: {
+  offset: ParamValue;
+  scope: Record<string, number>;
+  units: UnitSystem;
+  disabled: boolean;
+  onApply(offset: ParamValue): void;
+}) {
+  const [text, setText] = useState(() => paramValueText(offset));
+  const value = coerceParamValue(text);
+  const preview = previewExpression(text, scope);
+  const evaluated = evalParamValue(value, scope);
+  const canApply =
+    !disabled &&
+    preview.ok &&
+    evaluated !== null &&
+    Math.abs(evaluated) > 1e-9 &&
+    text.trim() !== paramValueText(offset);
+  return (
+    <form
+      className="feature-form direct-diameter-form"
+      aria-label="Offset faces"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canApply) onApply(value);
+      }}
+    >
+      <ExprInput
+        label={`Offset (${unitLabel('length', units)})`}
+        value={text}
+        scope={scope}
+        onChange={setText}
+      />
+      <div className="form-actions">
+        <button type="submit" className="primary" disabled={!canApply}>
+          Apply offset
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/**
  * Contextual properties panel. Renders the active tool's creation form or the
  * selected feature's edit form (plus edge/face context); the parent hides it
  * entirely when idle.
@@ -1368,6 +1427,9 @@ export function Inspector(props: InspectorProps) {
               ? { pivot: data.transform.pivot }
               : {}),
             ...(data.copy ? { copy: true } : {}),
+            ...(transformStampBodyIds(data).length
+              ? { stamps: transformStampBodyIds(data).length + 1 }
+              : {}),
             ...(data.axisRotation ? { axisRotation: data.axisRotation } : {})
           }}
           datumAxes={datumAxisChoices(
@@ -1400,7 +1462,9 @@ export function Inspector(props: InspectorProps) {
                           ? 'resize imported blend'
                           : data.operation.kind === 'offset-face'
                             ? 'offset face'
-                            : 'remove face feature'}
+                            : data.operation.kind === 'offset-faces'
+                              ? 'offset faces'
+                              : 'remove face feature'}
           </span>
           <b>source face</b>
           <span>
@@ -1503,8 +1567,31 @@ export function Inspector(props: InspectorProps) {
               </span>
             </>
           )}
+          {data.operation.kind === 'offset-faces' && (
+            <>
+              <b>faces</b>
+              <span>{data.operation.additionalFaces.length + 1}</span>
+            </>
+          )}
         </div>
       );
+      if (data.operation.kind === 'offset-faces') {
+        const onApply = props.onApplyDirectEditOffset;
+        const feature = selectedFeature;
+        form = (
+          <>
+            {form}
+            <DirectEditOffsetForm
+              key={`offset-${feature.id}-${props.documentVersion ?? 0}`}
+              offset={data.operation.offset}
+              scope={scope}
+              units={units}
+              disabled={!onApply}
+              onApply={(offset) => onApply?.(feature, offset)}
+            />
+          </>
+        );
+      }
     } else if (data.featureKind === 'imported-mesh') {
       form = (
         <div className="kv-grid">

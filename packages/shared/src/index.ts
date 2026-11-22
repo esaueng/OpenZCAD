@@ -8,6 +8,8 @@ export * from './imported-mesh-payload';
 export * from './sketch-reference-dimensions';
 export * from './sketch-composites';
 export * from './sketch-composite-targets';
+export * from './sketch-shape-targets';
+export * from './sketch-datum-targets';
 export * from './sketch-boundary-provenance';
 export * from './sketch-promotions';
 export * from './mass-density';
@@ -15,6 +17,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './print-clearance';
+export * from './display-units';
 export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
@@ -32,9 +35,19 @@ import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type {
+  SketchCompositeCenterTarget,
   SketchCompositeCornerTarget,
   SketchCompositeSideTarget
 } from './sketch-composite-targets';
+import type {
+  SketchAxisTarget,
+  SketchOriginTarget
+} from './sketch-datum-targets';
+import type {
+  SketchShapeCenterTarget,
+  SketchShapeCornerTarget,
+  SketchShapeSideTarget
+} from './sketch-shape-targets';
 import type { BoundaryProvenance } from './sketch-boundary-provenance';
 import type { SheetMetalFeatureFields } from './sheet-metal';
 import type { SketchPromotion } from './sketch-promotions';
@@ -446,15 +459,142 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // engraved into a cylinder or cone): an older client cannot build one, so
 // it must refuse. Builds on v110 (v109 was left unused when L15 landed
 // first).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 111 as const;
+// v112 adds M02 patterns along a sketch path (`patternKind: 'path'` and
+// `path`): copies spaced by arc length along joined sketch lines and arcs,
+// moved or also turned with the path. An older client has no such
+// arrangement and would build a linear pattern in its place, so it must
+// refuse. Builds on v111.
+// v113 adds the F01 offset-from-face extent (`toFaceOffset` on a to-face
+// extrude): the extrusion stops that far short of its face (or, negative,
+// passes it). An older client would build to the face itself, so it must
+// refuse. Builds on v112 (#1785, M02 path patterns).
+// v114 adds AS03 exploded drawing views (`exploded` on a drawing view): the
+// view draws each assembly part at its solved pose plus its stored exploded
+// offset. An older client would draw it as modelled, so it must refuse the
+// document. Builds on v113.
+// v117 adds M01 hole tables on drawing sheets (a `hole-table` drawing
+// annotation): a table of one view's bores, read from the model each time
+// the sheet is drawn. An older client cannot draw it and would refuse the
+// annotation's kind on its next save, so it must refuse. Builds on v116
+// (v115 and v116 are claimed by the M02 mirror and total-length pattern
+// PRs #1796 and #1797).
+// v119 adds M02 mirror patterns (`patternKind: 'mirror'` and
+// `mirrorPlane`): the whole body, or the repeated holes, bosses and cuts,
+// copied once as their reflection in a plane. An older client has no such
+// arrangement and would build a linear pattern in its place, so it must
+// refuse. Builds on v117 (#1799); v118 is claimed by #1808. It was
+// claimed as v115, left unused, with v116, when #1799 landed first.
+// v120 adds M02 total-length linear patterns (`spacingMode: 'total'`): the
+// stored spacing is the distance from the original to the last copy, shared
+// out between the copies. Absent keeps the spacing between copies, so every
+// older document builds unchanged. An older client would space the copies
+// a whole total apart, so it must refuse. Builds on v119
+// (#1796); claimed as v116, left unused when #1799 landed first.
+// v121 adds the F01 extrude start offset (`startOffset` on a blind or
+// to-face extrude): the extrusion starts that far from its sketch plane
+// along the sketch normal instead of on it. An older client would start it
+// on the sketch plane, so it must refuse. Builds on v120 (v118 is claimed
+// by #1808).
+// v125 adds S02-D reference targets: a named shape's centre
+// (`composite-center`) and a legacy parametric rectangle's or regular
+// polygon's corner, side or centre (`shape-corner`, `shape-side`,
+// `shape-center`), measured without converting the shape. An older client
+// cannot read those targets and would refuse or drop the annotation, so it
+// must refuse the document. Builds on v121 (#1842); v122–v124 are claimed
+// by the open F01 PRs #1846, #1847 and #1851.
+// v126 adds F01 per-side draft (`draftAngleDeg` on a symmetric or two-sided
+// blind extrude, and `backDraftAngleDeg` for its other side): each side
+// tapers by its own angle from the start plane. An older client refuses a
+// draft on such an extrude and has no back draft, so it must refuse the
+// document. Builds on v125 (#1860); claimed as v122, renumbered when #1860
+// landed first.
+// v129 adds S02-D datum reference targets: the sketch origin
+// (`sketch-origin`) and its X/Y axes (`sketch-axis`), measured in the
+// sketch-local frame. An older client cannot read them, so it must refuse.
+// Builds on v126 (#1846). It was claimed as v126 and renumbered when F01
+// took that number; v127 and v128 are claimed by the open F01 PRs #1847 and
+// #1851.
+// v130 adds the F01 up-to-next extent (`endCondition: 'to-next'` on an add or
+// cut extrude with one target): the extrusion runs from its start plane to
+// the next face of the target it meets. An older client has no such extent
+// and must refuse the document. Builds on v129 (#1864); claimed as v123,
+// then v127, renumbered when #1860 and #1864 landed first.
+// v131 adds F01 to-face on a curved face (`toSurface` on a to-face
+// extrude, beside `toFace`): the extrusion ends on a cylindrical face named
+// by lineage. An older client has no such target and must refuse the
+// document. Builds on v130.
+// v132 adds M04 exact sweep twist and scale (`twistDeg` and `endScale` on an
+// in-place sweep): the profile turns about and scales along a straight
+// path. An older client would sweep it plain, so it must refuse the
+// document. Builds on v131 (#1851). First claimed as v129, renumbered when
+// #1864, #1847 and #1851 landed first.
+// v133 adds M04 loft connections and guides (`connections` and `guides` on a
+// loft): the vertex each section's correspondence starts from, given or
+// fixed by one straight guide. An older client would loft from each
+// section's own start, so it must refuse the document. Builds on v132
+// (#1882). First claimed as v136, renumbered to the next unclaimed number
+// when #1882 landed.
+// v134 adds M04 sweep orientation (`orientation: 'parallel'` on an in-place
+// sweep): the profile is translated along the path unturned, along splines
+// and through corners. An older client would turn it with the path, so it
+// must refuse the document. Builds on v133.
+// v135 adds M04 round sweep corners (`cornerRadius` on an in-place sweep):
+// each corner is rounded by a tangent arc of that radius. An older client
+// would mitre or refuse the corner, so it must refuse the document. Builds
+// on v134.
+// v136 adds M04 sweep profile position (`profilePosition` on an in-place
+// sweep): where on the path the profile stands, sweeping both ways from
+// inside it. An older client would sweep from a path end, so it must refuse
+// the document. Builds on v135.
+// v137 adds M10 linked copy stamps (`stampBodyIds` on a transform copy):
+// one Move copy stamps repeated copies, each the same transform on from the
+// one before. An older client would build only the first, so it must refuse
+// the document. Builds on v136.
+// v141 adds S05 curved tangency (a `tangent` constraint between an arc and
+// another arc or a circle, at an arc end): what a fillet against an arc or
+// circle records. An older client refuses a tangent without a line, so it
+// must refuse the document. Builds on v137; v138 to v140 are claimed by the
+// S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+// v144 adds S07 entity locks (`lock-entity` sketch constraints): a whole
+// line, circle or arc held at a recorded position. An older client cannot
+// solve the relation, so it must refuse the document. Builds on v141; v142
+// and v143 are claimed by M03 per-vertex radii (#1914) and I03 unit
+// switching (#1915).
+// v145 adds S05 sketch pattern relations (`pattern` sketch constraints): a
+// linear or circular pattern's instance positions held by one relation. An
+// older client cannot solve it, so it must refuse the document. Builds on
+// v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
+// switching (#1915) and the S07 entity lock (#1913).
+// v148 adds I03 display units (`displayUnits` and its `displayUnits.set`
+// command): the unit lengths are shown and typed in, which may differ from
+// the unit the document stores. An older client would replay the command
+// log without knowing the command and would show every length in the stored
+// unit while the user reads another, so it must refuse the document. Builds
+// on v145; v146 and v147 are claimed by the S05 offset dimension (#1919)
+// and the M01 hole anchor (#1808), v142 and v144 by #1914 and #1913.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 148 as const;
+/** M04 (v133): a section vertex a loft connection starts from. */
+export type LoftConnectionVertex =
+  | {
+      kind: 'curve-end';
+      /** A line or arc of the section's sketch. */
+      entityId: EntityId;
+      end: 'start' | 'end';
+    }
+  | SketchShapeCornerTarget;
+
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 /** F05: what a typed parameter measures. Absent on a node is unitless. */
 export type ParameterKind = 'length' | 'angle' | 'number';
-/** F01 extrude extents; to-next/offset-from-face are later slices. */
-export type ExtrudeEndCondition = 'blind' | 'through-all' | 'to-face';
+/**
+ * F01 extrude extents. Offset from a face rides on `to-face`
+ * (`toFaceOffset`); `to-next` arrived in v130.
+ */
+export type ExtrudeEndCondition =
+  'blind' | 'through-all' | 'to-face' | 'to-next';
 export type ThroughAllSide = 'forward' | 'backward' | 'both';
 export type PlaneId = 'XY' | 'XZ' | 'YZ';
 /** See `SketchPlaneRef`'s `basisRevision`; absent means revision 1. */
@@ -560,7 +700,8 @@ export type BooleanOperation = 'union' | 'subtract' | 'intersect';
  * none, the consume-everything Boolean every document before v24 stores.
  */
 export type BooleanKeepOriginals = 'all' | 'target' | 'tools';
-export type PatternKind = 'linear' | 'circular' | 'grid' | 'points';
+export type PatternKind =
+  'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
 
 /** M02 (schema v63): the sketch points a `points` pattern repeats at. */
 export interface PatternPoints {
@@ -569,6 +710,31 @@ export interface PatternPoints {
   pointIds: string[];
   /** Where the original stands; it makes no copy and cannot be skipped. */
   referencePointId: string;
+}
+
+/**
+ * M02 (schema v112): the sketch path a `path` pattern repeats along. Its
+ * lines and arcs join end to end in one chain, open or closed; the copies
+ * stand at whole multiples of the pattern's spacing along it, measured from
+ * its start, where the original stands.
+ */
+export interface PatternPath {
+  sketchId: SketchId;
+  /** Line and arc entity ids, each once, in any order. */
+  entityIds: string[];
+  /**
+   * Start at the other end. An open path starts at the free end of the
+   * earliest-listed of its two end curves (a lone line at its first point,
+   * a lone arc at its start angle); a closed one where its first-listed
+   * curve begins.
+   */
+  reversed?: boolean;
+  /**
+   * `'tangent'` also turns each copy, in the sketch plane, by how far the
+   * path has turned from its start; absent keeps every copy square to the
+   * original, only moved.
+   */
+  orientation?: 'tangent';
 }
 
 /**
@@ -930,6 +1096,32 @@ export type DirectEditOperation =
       additionalFaces: RemovedFaceSnapshot[];
     }
   | {
+      /**
+       * Push or pull several planar faces of one body together, by one
+       * signed distance along each face's own outward normal. The faces may
+       * lie on parallel planes at different heights (a stepped top) and may
+       * face different directions, meeting at edges or apart (a pocket's
+       * walls, a boss's sides); no two may face opposite ways. Faces on one
+       * plane move in one Remus `moveFaces` group; a set that spans several
+       * planes moves as a chain of such groups, one per plane. The face fields name the
+       * first face, as every direct edit names one; `additionalFaces` are the
+       * rest, each pinned the same way. A separate kind from `offset-face`
+       * so an older build refuses it instead of moving only the first face.
+       */
+      kind: 'offset-faces';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceSurfaceType: 'plane';
+      sourceArea: number;
+      sourceCenter: Vector3;
+      /** The first face's outward unit normal when picked. */
+      sourceNormal: Vector3;
+      /** Signed distance along each face's normal; positive adds material. */
+      offset: ParamValue;
+      /** The other faces moved with the first; at least one. */
+      additionalFaces: OffsetFaceSnapshot[];
+    }
+  | {
       kind: 'offset-face';
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
@@ -1009,6 +1201,17 @@ export interface RemovedFaceSnapshot {
   sourceSurfaceType: string;
   sourceArea: number;
   sourceCenter: Vector3;
+}
+
+/** One face an `offset-faces` edit moves, pinned as it was when picked. */
+export interface OffsetFaceSnapshot extends RemovedFaceSnapshot {
+  sourceSurfaceType: 'plane';
+  /**
+   * Its own outward unit normal when picked, which it moves along. It may
+   * point another way than the other faces' normals, but a set with two
+   * faces pointing opposite ways is refused.
+   */
+  sourceNormal: Vector3;
 }
 
 /** Exact analytic carrier of one blend band, as `resize-blend` records it. */
@@ -1202,6 +1405,20 @@ export type FacePlaneSource = Extract<SketchPlaneRef, { type: 'face' }> & {
  * resolver and one re-pick repair serve both.
  */
 export type ExtrudeToFaceTarget = FacePlaneSource;
+
+/**
+ * F01 (schema v131): a curved face an extrude reaches, named by verified
+ * lineage like a wrap's face. Today a cylindrical face: the extrusion ends
+ * on its cylinder, from outside or from inside, re-found at the feature's
+ * history position on every rebuild. `sourceCentroid` is the pick-time
+ * snapshot the editor reads before a build; the build never uses it.
+ */
+export interface ExtrudeToSurfaceTarget {
+  type: 'surface';
+  bodyId: BodyId;
+  faceReference: FaceTopologyReferenceV5;
+  sourceCentroid: Vector3;
+}
 
 /**
  * Schema v99: a principal plane of a coordinate system, as a datum source.
@@ -1798,6 +2015,9 @@ export type SketchConstraintData =
    * `at` names that arc point; it is what a sketch fillet records about the
    * arc it inserted. A constraint written before the arc form existed has no
    * `at` and replays exactly as it did.
+   *
+   * S05 (v141): an arc may also touch another arc or a circle at `at`, an end
+   * of an arc in the pair — what a fillet records against a curved leg.
    */
   | {
       constraintKind: 'tangent';
@@ -1836,7 +2056,41 @@ export type SketchConstraintData =
    * lock was made. An edit that would move it conflicts instead of dragging
    * the lock along; removing the constraint unlocks the point.
    */
-  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number };
+  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
+  /**
+   * S07 (v144): a whole line, circle or arc held where it was when the lock
+   * was made. `at` is that geometry in sketch coordinates — a line's
+   * `[x1, y1, x2, y2]`, a circle's `[centerX, centerY, radius]`, an arc's
+   * `[centerX, centerY, radius, startAngleDeg, endAngleDeg]` — so an edit
+   * that would move or resize it conflicts instead. Removing the constraint
+   * unlocks the entity.
+   */
+  | { constraintKind: 'lock-entity'; objectId: EntityId; at: number[] }
+  /**
+   * S05 (v145): a sketch pattern held as one relation. Each instance is the
+   * source moved `step` steps: along the direction line by `spacing` a step
+   * (linear), or round the pivot by `stepDeg` a step (circular), turned with
+   * it or, `uniform`, kept in the source's orientation. Instances keep the
+   * source's size and shape too, so moving or resizing the source carries
+   * every instance, and moving an instance alone conflicts. An instance
+   * deleted leaves the others held at their own steps.
+   */
+  | {
+      constraintKind: 'pattern';
+      source: EntityId;
+      instances: { objectId: EntityId; step: number }[];
+      layout: SketchPatternLayout;
+    };
+
+/** How a {@link SketchConstraintData} `pattern` relation places its steps. */
+export type SketchPatternLayout =
+  | { kind: 'linear'; direction: EntityId; spacing: ParamValue }
+  | {
+      kind: 'circular';
+      pivot: SketchPointRef;
+      stepDeg: ParamValue;
+      orientation: 'rotate' | 'uniform';
+    };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
@@ -1861,9 +2115,23 @@ export type SketchReferenceDistanceMode =
   'absolute' | 'horizontal' | 'vertical';
 
 /** Measured targets; driving constraints retain primitive point identities. */
+/**
+ * Composite centres and legacy-shape corners/centres arrive in schema v125
+ * (S02-D); a primitive point and a held-line corner keep their earlier forms.
+ */
 export type SketchReferencePointTarget =
-  SketchPointRef | SketchCompositeCornerTarget;
-export type SketchReferenceCurveTarget = EntityId | SketchCompositeSideTarget;
+  | SketchPointRef
+  | SketchCompositeCornerTarget
+  | SketchCompositeCenterTarget
+  | SketchShapeCornerTarget
+  | SketchShapeCenterTarget
+  | SketchOriginTarget;
+/** Legacy-shape sides arrive in schema v125 (S02-D); datum axes in v129. */
+export type SketchReferenceCurveTarget =
+  | EntityId
+  | SketchCompositeSideTarget
+  | SketchShapeSideTarget
+  | SketchAxisTarget;
 
 export type SketchReferenceDimensionData =
   | {
@@ -2240,6 +2508,19 @@ export function isTransformCopy(data: FeatureData): data is Extract<
 }
 
 /**
+ * M10 (schema v137): the further copies a linked transform copy stamps after
+ * its first, in stamp order. Empty for every other feature.
+ */
+export function transformStampBodyIds(data: FeatureData): BodyId[] {
+  return data.featureKind === 'transform' && data.copy === true
+    ? (data.stampBodyIds ?? [])
+    : [];
+}
+
+/** M10: most copies one linked transform copy may stamp, its first included. */
+export const MAX_TRANSFORM_COPY_STAMPS = 50;
+
+/**
  * L15: a published custom-feature script, embedded in each instance so a
  * project is self-contained. A version is immutable: every instance of the
  * same `id` and `version` in a document carries the same `source`, and
@@ -2344,7 +2625,16 @@ export type FeatureData =
        * stores. `through-all` cuts through the whole target along the sketch
        * normal: the span is recomputed from the target at the feature's
        * history position on every rebuild and never stored, and `distance`
-       * is kept only so switching back to blind restores it.
+       * is kept only so switching back to blind restores it. An add may run
+       * through all too (no schema change: an older client refuses it): it
+       * fills the target's whole span and joins it.
+       * From schema v130 `to-next` runs an add or a cut with one explicit
+       * target from the start plane to the next face of that target, the
+       * way the stored distance's sign points (its size is dormant). It is
+       * derived on every rebuild from the target at the feature's history
+       * position; nothing derived is stored. A profile that does not meet
+       * the target everywhere, an add that starts inside it, or a cut that
+       * starts outside it refuses by name.
        */
       endCondition?: ExtrudeEndCondition;
       /** Required with `through-all`; which side(s) of the sketch plane. */
@@ -2361,15 +2651,52 @@ export type FeatureData =
        */
       toFace?: ExtrudeToFaceTarget;
       /**
+       * F01 (schema v131): with `to-face`, the curved face it reaches instead
+       * of a planar `toFace` (exactly one of the two). A cylindrical face:
+       * each rebuild re-finds it by lineage and the extrusion stops on its
+       * cylinder; a deleted, ambiguous or non-cylindrical face refuses as
+       * unresolved, as a planar target does.
+       */
+      toSurface?: ExtrudeToSurfaceTarget;
+      /**
+       * F01 (schema v113): offset from the `toFace` face, with `to-face`
+       * only. Positive stops the extrusion that far short of the face
+       * (toward the sketch plane), negative carries it that far past. Like
+       * the face distance it is applied on every rebuild, never folded into
+       * `distance`; an offset that reaches or crosses the sketch plane
+       * refuses by name. Absent or zero ends on the face itself.
+       */
+      toFaceOffset?: ParamValue;
+      /**
+       * F01 (schema v121): where the extrusion starts, as a signed length
+       * along the sketch normal from the sketch plane. The start plane takes
+       * the sketch plane's place for every extent measured from it: a blind
+       * distance, a back distance and a symmetric span run from it, a draft
+       * hinges on it, and a to-face extrude runs from it to the face (an
+       * offset that reaches or passes the face's end refuses by name).
+       * Through all refuses it. Like every extent it is resolved on each
+       * rebuild and never folded into `distance`. Absent or zero starts on
+       * the sketch plane.
+       */
+      startOffset?: ParamValue;
+      /**
        * F01 (schema v29): wall draft in degrees, measured from the sketch
        * normal. Positive tapers the walls inward as the extrusion leaves the
        * sketch plane (the profile is the widest section), negative flares
        * them outward. The sketch plane is the neutral plane, so the profile
-       * itself never changes. Absent or zero means straight walls. A one-sided
-       * blind or to-face extrusion only: symmetric, two-sided and through-all
-       * extents refuse it until per-side draft lands.
+       * itself never changes. Absent or zero means straight walls. From
+       * schema v126 a symmetric or two-sided blind extrusion takes it for the
+       * side its distance runs to; through all refuses it.
        */
       draftAngleDeg?: ParamValue;
+      /**
+       * F01 (schema v126): the draft of the side behind the start plane (the
+       * back distance, or a symmetric extrusion's other half), in degrees
+       * from the sketch normal. Positive narrows that side as it leaves the
+       * start plane, as `draftAngleDeg` does its side. A one-sided extrusion
+       * has no back side and refuses it. Absent or zero means straight walls.
+       */
+      backDraftAngleDeg?: ParamValue;
       /**
        * When present, extrudes one detected closed region of the sketch
        * instead of the whole profile. Resolution fails closed: if neither the
@@ -2434,6 +2761,22 @@ export type FeatureData =
        * order instead. See `HANDOFF.md` for the measurement.
        */
       endPoint?: ParametricVector3;
+      /**
+       * M04 (v133): one vertex per section, in section order, where the
+       * loft's correspondence starts (the kernel's `loftWithOptions`
+       * `connections`): vertex k of every section joins vertex k of the next,
+       * counted from these. A line's or arc's end, or a rectangle's or
+       * polygon's corner, named by identity. Absent keeps each section's own
+       * start, as before. Not with an apex point or a guide.
+       */
+      connections?: LoftConnectionVertex[];
+      /**
+       * M04 (v133): one straight guide curve (a sketch line) through a vertex
+       * of every section, which fixes the correspondence along it: a ruled
+       * loft's edge between those vertices is exactly the guide. Ruled only;
+       * a curved guide, or several, is refused by name.
+       */
+      guides?: SketchPathReference[];
     }
   | {
       featureKind: 'sweep';
@@ -2456,13 +2799,63 @@ export type FeatureData =
        * path's rigid motions (a line moves it along, an arc turns it about
        * the arc's axis) as exact surfaces — planes, cylinders, cones, tori
        * and rational NURBS, never facets (the kernel's `sweepExact`). The
-       * path must be tangent-continuous; a corner, a guide rail or a profile
-       * that would fold is refused by name, never sampled instead. `mode`
+       * path must be tangent-continuous; a corner or a profile that would
+       * fold is refused by name, never sampled instead. A `guide` rail on an
+       * in-place sweep (M04) must be one straight line beside a straight
+       * path, in one plane with it, from the profile's plane to the path's
+       * far end: the profile then scales to follow it, exactly (any other
+       * rail is refused by name). `mode`
        * is kept but builds nothing. Absent means the unchanged sampled
        * `sweepWithOptions`/`sweepAlongEdges` call every sweep authored before
        * this field existed took, so those documents replay identically.
        */
       construction?: 'in-place';
+      /**
+       * M04 (v132), `'in-place'` only: the profile's total turn about the
+       * path, in degrees, right-handed about the direction of travel and
+       * linear in the distance travelled (the kernel's
+       * `sweepExactWithOptions`). The path must be straight and the profile
+       * square to it; anything else is refused by name, never sampled.
+       * Absent or zero turns nothing, so a sweep authored before this field
+       * existed replays identically.
+       */
+      twistDeg?: ParamValue;
+      /**
+       * M04 (v132), `'in-place'` only: the profile's scale at the far end of
+       * the path, about the point where the path crosses it, linear in the
+       * distance travelled. Positive; absent or one scales nothing. Held to
+       * the same straight, square path as `twistDeg`.
+       */
+      endScale?: ParamValue;
+      /**
+       * M04 (v134), `'in-place'` only: `'parallel'` keeps the profile's
+       * orientation, translating it along the path unturned (the kernel's
+       * `sweepExactWithOptions` orientation `"parallel"`): every face is the
+       * exact translational surface of a profile edge along a path edge, so
+       * the path may hold splines and corners. Absent turns the profile with
+       * the path, as every sweep before it did.
+       */
+      orientation?: 'parallel';
+      /**
+       * M04 (v135), `'in-place'` only: each corner of the path (between
+       * straight runs, or beside an arc in the corner's plane) is rounded by
+       * the arc of this radius tangent to both sides, swept exactly. Absent
+       * mitres a corner between straight runs and refuses one next to an
+       * arc, as before. Not with a parallel orientation, a twist, a scale
+       * or a rail.
+       */
+      cornerRadius?: ParamValue;
+      /**
+       * M04 (v136), `'in-place'` only: where on its path the profile stands
+       * (the kernel's `sweepExactWithOptions` `"position"`), measured from
+       * the profile's area centroid: where the path crosses the profile's
+       * plane (`'intersection'`), its closest point or closest endpoint, or
+       * `'auto'` (the crossing, else the closest endpoint). The profile
+       * never moves; from inside the path the sweep runs both ways. Absent
+       * starts from the path end nearer the profile's plane, as before.
+       */
+      profilePosition?:
+        'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
     }
   | {
       featureKind: 'helical-sweep';
@@ -2511,6 +2904,15 @@ export type FeatureData =
        * holds: it rewrites `targetBodyId` and has no body of its own.
        */
       copy?: true;
+      /**
+       * M10 (schema v137), copies only: repeated stamps in one history
+       * step. Each id names one more copy, stamped by the same transform
+       * from the copy before it, so stamp k sits where the transform applied
+       * k + 1 times would put the source. `bodyId` stays the first copy;
+       * absent (or empty) is the single copy every older document holds.
+       * Body wiring, not a parameter: never patchable.
+       */
+      stampBodyIds?: BodyId[];
       /**
        * R01 (schema v28): turn the body `angleDeg` degrees about a datum
        * axis, right-handed about its direction, before `transform` applies
@@ -3105,6 +3507,27 @@ export type FeatureData =
        * `axis`, `spacing` and `angleDeg` are stored but not read.
        */
       points?: PatternPoints;
+      /**
+       * M02 (schema v112), `patternKind: 'path'` only, and required there:
+       * `count` instances, the original's included, `spacing` apart by arc
+       * length along this sketch path from its start. `axis` and `angleDeg`
+       * are stored but not read.
+       */
+      path?: PatternPath;
+      /**
+       * M02 (schema v119), `patternKind: 'mirror'` only, and required
+       * there: the plane the one copy is reflected in, a datum plane or a
+       * stored origin and normal, as Mirror takes it. `count` (2), `axis`,
+       * `spacing` and `angleDeg` are stored but not read.
+       */
+      mirrorPlane?: ModelingPlaneReference;
+      /**
+       * M02 (schema v116), `patternKind: 'linear'` only: `'total'` reads
+       * `spacing` as the distance from the original to the last copy, so
+       * the copies stand `spacing / (count − 1)` apart and a changed count
+       * keeps the row's length. Absent is the spacing between copies.
+       */
+      spacingMode?: 'total';
     }
   | {
       featureKind: 'direct-edit';
@@ -4653,6 +5076,13 @@ export interface ProjectDocument {
    * document-core.
    */
   shareLinkSheetIds?: string[];
+  /**
+   * I03 (schema v148): the unit lengths are shown and typed in. Absent means
+   * `units`. Every stored length stays in `units` — a rebuild, an export and
+   * every persisted reference read `units` and never this — so switching it
+   * changes no geometry. See `display-units.ts`.
+   */
+  displayUnits?: UnitSystem;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -5703,7 +6133,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle'
+  'distance' | 'radius' | 'angle' | 'pattern'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [
@@ -5718,7 +6148,8 @@ export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [
   'symmetric',
   'point-on-object',
   'midpoint',
-  'lock'
+  'lock',
+  'lock-entity'
 ];
 
 /**
@@ -5742,6 +6173,12 @@ export type AssistantReasoningEffort =
  * geometry/history stays portable and collaboration-safe when preferences
  * change on one device.
  */
+/** S02: reference dimensions follow the document's units, or one unit. */
+export type SketchReferenceDisplayUnit = 'document' | UnitSystem;
+
+export const SKETCH_REFERENCE_DISPLAY_UNITS: readonly SketchReferenceDisplayUnit[] =
+  ['document', 'mm', 'cm', 'm', 'inch'];
+
 export interface AppSettings {
   schemaVersion: typeof APP_SETTINGS_SCHEMA_VERSION;
   general: {
@@ -5814,6 +6251,12 @@ export interface AppSettings {
     autoConstrain: boolean;
     /** S08: name the engaged snap in text beside its glyph. */
     snapHints: boolean;
+    /**
+     * S02: the unit reference (measured) dimensions show their lengths in.
+     * `document` follows the document's units. Display only: the document,
+     * its expressions and every driving dimension keep their own units.
+     */
+    referenceDisplayUnit: SketchReferenceDisplayUnit;
     linearSnap: number;
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
@@ -5977,6 +6420,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     inferenceEnabled: true,
     autoConstrain: false,
     snapHints: true,
+    referenceDisplayUnit: 'document',
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,
@@ -6222,6 +6666,13 @@ export interface ProjectShareLinkSummary {
   label: string | null;
   /** L08: visitors may read and write comments (migration 0059). */
   comments?: boolean;
+  /**
+   * L08: false when the link serves the finished model without its history
+   * (migration 0065); absent means the live project, history included.
+   */
+  history?: false;
+  /** Unix seconds the model of a link without history was last frozen. */
+  frozenAt?: number;
 }
 
 /** Longest share-link label, in Unicode code points (SQLite's `length`). */
@@ -6256,6 +6707,22 @@ export interface CreateProjectShareLinkRequest {
   label?: string | null;
   /** L08: a commenter link; visitors may read and write comments. */
   comments?: boolean;
+  /**
+   * L08: false shares the finished model without its history. The link is
+   * then view only and needs `document`, the frozen model the owner's
+   * browser built (`frozenShareDocument`).
+   */
+  history?: boolean;
+  document?: ProjectDocument;
+}
+
+/** L08: replaces the frozen model of a link without history. */
+export interface UpdateProjectShareLinkSnapshotRequest {
+  document: ProjectDocument;
+}
+
+export interface UpdateProjectShareLinkSnapshotResponse {
+  shareLink: ProjectShareLinkSummary;
 }
 
 export interface UpdateProjectShareLinkRequest {
@@ -6281,6 +6748,8 @@ export interface SharedProjectResponse {
     mode: ProjectShareLinkMode;
     /** L08: a commenter link; absent or false is view or tweak only. */
     comments?: boolean;
+    /** L08: false when `document` is the finished model without history. */
+    history?: false;
   };
   document: ProjectDocument;
 }
@@ -6292,6 +6761,30 @@ export interface ProjectEditLease {
   userId: UserId;
   expiresAt: number;
 }
+
+/**
+ * Server-time lifetime of a project edit lease, counted from its last grant
+ * or renewal. A holder that stops renewing (closed or crashed tab) frees the
+ * lease this long after its last acknowledged renewal, plus at most the
+ * room's persist gap if the room was evicted meanwhile.
+ */
+export const PROJECT_EDIT_LEASE_TTL_MS = 60_000;
+
+/**
+ * How often a holder renews its lease. The room advertises it on every
+ * `lease-granted` frame (`renewIntervalMs`), so the cadence follows the
+ * room's TTL across rolling deploys and rollbacks. Each renewal wakes the
+ * hibernating room, which is what the room is billed for, so the cadence is
+ * as slow as the margin allows: one late or lost renewal (2 × 25 s = 50 s)
+ * still lands 10 s before the 60 s TTL.
+ */
+export const PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS = 25_000;
+
+/**
+ * The cadence a browser keeps when a room does not advertise one: a room
+ * build from before the advertisement, whose TTL is 30 s.
+ */
+export const LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS = 10_000;
 
 /** The save revision reason a "Keep this device's version" choice records. */
 export const KEPT_LOCAL_VERSION_REASON = 'Kept this device’s version';
@@ -6350,7 +6843,15 @@ export type CollaborationServerMessage =
    * browser and resubmits against `document.version` (ADR-024 Phase 1).
    */
   | { type: 'conflict'; document: ProjectDocument; base?: ProjectDocument }
-  | { type: 'lease-granted'; lease: ProjectEditLease }
+  | {
+      type: 'lease-granted';
+      lease: ProjectEditLease;
+      /**
+       * How often to renew this lease. Absent from rooms that predate it;
+       * see {@link LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS}.
+       */
+      renewIntervalMs?: number;
+    }
   | {
       type: 'lease-denied';
       reason: 'held' | 'read-only';
@@ -6865,6 +7366,26 @@ export function isoMetricThreadForBore(boreMm: number): IsoMetricThreadSize {
       ? size
       : best
   );
+}
+
+/** The nominal size before fit clearance or crest truncation, in document units. */
+export function metricThreadSizeOnFace(
+  kind: 'external' | 'internal',
+  diameter: number,
+  mmPerUnit: number,
+  majorDiameter?: number,
+  pitch?: number
+): { nominal: number; pitch: number } {
+  const nominal =
+    majorDiameter ??
+    (kind === 'external'
+      ? diameter
+      : isoMetricThreadForBore(diameter * mmPerUnit).nominal / mmPerUnit);
+  return {
+    nominal,
+    pitch:
+      pitch ?? nearestIsoMetricThread(nominal * mmPerUnit).pitch / mmPerUnit
+  };
 }
 
 /** `M6×1`: a metric thread's callout from its diameter and pitch in mm. */

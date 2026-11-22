@@ -38,6 +38,7 @@ import {
   type SketchId,
   type SketchNode,
   type SketchObjectData,
+  type SketchPatternLayout,
   type SketchPointRef
 } from '@openzcad/shared';
 
@@ -534,16 +535,24 @@ function referenceMeasuresPoint(
   return (sketch.referenceDimensions ?? []).some(({ data }) => {
     if (data.dimensionKind === 'distance')
       return [data.a, data.b].some((point) =>
-        'objectId' in point
-          ? point.objectId === ref.objectId && point.point === ref.point
-          : sketchCompositeTargetMemberIds(point).includes(ref.objectId)
+        !('objectId' in point) && !('topology' in point)
+          ? false // The sketch origin moves with no trim.
+          : 'topology' in point
+            ? sketchCompositeTargetMemberIds(point).includes(ref.objectId)
+            : 'point' in point
+              ? point.objectId === ref.objectId && point.point === ref.point
+              : // A legacy shape's corner or centre moves with the whole shape.
+                point.objectId === ref.objectId
       );
     return (
       data.dimensionKind === 'angle' &&
       [data.a, data.b].some(
         (side) =>
           typeof side !== 'string' &&
-          sketchCompositeTargetMemberIds(side).includes(ref.objectId)
+          side.kind !== 'sketch-axis' &&
+          ('topology' in side
+            ? sketchCompositeTargetMemberIds(side).includes(ref.objectId)
+            : side.objectId === ref.objectId)
       )
     );
   });
@@ -609,6 +618,27 @@ function remapConstraint(
     case 'lock': {
       const point = mapRef(data.point);
       return point ? { ...data, point } : null;
+    }
+    case 'lock-entity':
+      // The edit changes the locked geometry, so the lock goes with it (and
+      // is counted with the other dropped relations).
+      return data.objectId === id ? null : data;
+    case 'pattern': {
+      // Reshaping the source or the direction (or the pivot's owner) breaks
+      // the pattern; a reshaped instance leaves it, and the others stay held.
+      if (
+        data.source === id ||
+        (data.layout.kind === 'linear'
+          ? data.layout.direction === id
+          : data.layout.pivot.objectId === id)
+      ) {
+        return null;
+      }
+      const instances = data.instances.filter(
+        (instance) => instance.objectId !== id
+      );
+      if (instances.length === data.instances.length) return data;
+      return instances.length > 0 ? { ...data, instances } : null;
     }
     case 'point-on-object': {
       const point = mapRef(data.point);
@@ -719,6 +749,15 @@ function remapCommands(
     }
     if (!next) {
       dropped += 1;
+    }
+    // Deleting a replaced instance already narrows its pattern to the
+    // others; restating it would add the same relation a second time.
+    if (
+      next &&
+      plan.replacement &&
+      constraint.data.constraintKind === 'pattern'
+    ) {
+      continue;
     }
     if (!plan.replacement) {
       release.push(
@@ -2089,23 +2128,51 @@ function landsOnExisting(
   sourceId: string,
   curves: readonly Curve2[],
   resolve: Resolve,
-  tol: number
+  tol: number,
+  earlier: readonly PlannedCurve[] = [],
+  /**
+   * Patterns: refuse a construction copy that exactly duplicates another
+   * guide. Mirror keeps such an image, which follows its own source.
+   */
+  refuseGuideDuplicates = false
 ): boolean {
   // Construction geometry never bounds a profile, so a construction copy
-  // may sit on anything and anything may sit on a construction guide.
-  if (sketchObject(document, sketch, sourceId)?.construction) {
+  // may overlap anything, profile geometry included (a guide over a real
+  // curve), and anything may overlap a construction guide; a pattern only
+  // refuses an exact duplicate of another guide, which adds nothing.
+  const construction = Boolean(
+    sketchObject(document, sketch, sourceId)?.construction
+  );
+  if (construction && !refuseGuideDuplicates) {
     return false;
   }
-  const existing = sketch.objectIds.flatMap((objectId) => {
-    if (objectId === sourceId) {
-      return [];
-    }
-    const data = sketchObject(document, sketch, objectId);
-    return data && !data.construction ? cutterCurves(data, resolve) : [];
-  });
+  const clash = construction ? sameCurve : curvesOverlap;
+  const existing = [
+    ...sketch.objectIds.flatMap((objectId) => {
+      if (objectId === sourceId) {
+        return [];
+      }
+      const data = sketchObject(document, sketch, objectId);
+      return data && Boolean(data.construction) === construction
+        ? cutterCurves(data, resolve)
+        : [];
+    }),
+    ...earlier
+      .filter((planned) => Boolean(planned.data.construction) === construction)
+      .map((planned) => planned.curve)
+  ];
   return curves.some((curve) =>
-    existing.some((other) => curvesOverlap(other, curve, tol))
+    existing.some((other) => clash(other, curve, tol))
   );
+}
+
+/**
+ * An instance another entity of the same pattern already placed, for a
+ * selection planned one entity at a time.
+ */
+interface PlannedCurve {
+  curve: Curve2;
+  data: SketchObjectData;
 }
 
 /**
@@ -2241,10 +2308,13 @@ const ZERO_LENGTH =
   'That line has no length, so there is nothing to copy. Give it a length first.';
 
 /**
- * Copies of one source, each tied back to it: equal length or radius always,
- * and parallel too for the lines of a linear pattern, so resizing the source
- * and solving resizes every instance. Positions are not linked yet — that is
- * the persistent pattern relation the roadmap keeps open.
+ * Copies of one source, held by one pattern relation (S05): each instance
+ * is the source moved its step along the layout, at the source's size and
+ * shape, so moving or resizing the source and solving carries every
+ * instance. Without a layout (a circular pivot that is no stored point)
+ * each copy is tied back by equal length or radius, and parallel too where
+ * `parallel` says it keeps its direction, as patterns were before the
+ * relation.
  */
 function patternCommands(
   sketchId: SketchId,
@@ -2252,11 +2322,31 @@ function patternCommands(
   data: SketchObjectData,
   copies: Curve2[],
   parallel: boolean,
-  label: string
+  label: string,
+  layout?: SketchPatternLayout
 ): AnyCommand[] {
   const ids = copies.map(() => newEntityId());
   const links: AnyCommand[] = [];
-  for (const copyId of ids) {
+  if (layout) {
+    links.push(
+      commandFactories.addSketchConstraint(
+        {
+          sketchId,
+          constraint: {
+            constraintKind: 'pattern',
+            source: sourceId,
+            instances: ids.map((objectId, index) => ({
+              objectId,
+              step: index + 1
+            })),
+            layout
+          }
+        },
+        `Hold the ${label.toLowerCase()}`
+      )
+    );
+  }
+  for (const copyId of layout ? [] : ids) {
     links.push(
       commandFactories.addSketchConstraint(
         {
@@ -2292,8 +2382,10 @@ function patternCommands(
 }
 
 /**
- * `count` instances of the source (the source is the first), `spacing`
- * apart along the picked direction line, measured from its start to its end.
+ * `count` instances of the source (the source is the first) along the picked
+ * direction line, measured from its start to its end: `distance` apart, or,
+ * when `spacingMode` is `extent`, spread so the last instance lies `distance`
+ * from the source.
  */
 export function planSketchLinearPattern(
   document: ProjectDocument,
@@ -2301,9 +2393,11 @@ export function planSketchLinearPattern(
   sketchId: SketchId,
   sourceId: string,
   directionId: string,
-  spacing: number,
+  distance: number,
   count: number,
-  resolve: Resolve
+  resolve: Resolve,
+  spacingMode: 'spacing' | 'extent' = 'spacing',
+  earlier: readonly PlannedCurve[] = []
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2324,10 +2418,21 @@ export function planSketchLinearPattern(
   if (countRefusal) {
     return { status: 'refuse', reason: countRefusal };
   }
-  if (!Number.isFinite(spacing) || Math.abs(spacing) <= ON_CURVE) {
+  const extent = spacingMode === 'extent';
+  if (!Number.isFinite(distance) || Math.abs(distance) <= ON_CURVE) {
     return {
       status: 'refuse',
-      reason: 'Pattern spacing must be a non-zero distance.'
+      reason: extent
+        ? 'A pattern extent must be a non-zero distance.'
+        : 'Pattern spacing must be a non-zero distance.'
+    };
+  }
+  const spacing = extent ? distance / (count - 1) : distance;
+  if (Math.abs(spacing) <= ON_CURVE) {
+    return {
+      status: 'refuse',
+      reason:
+        'That extent is too short for so many instances. Use a longer extent or fewer instances.'
     };
   }
   const d = sub(direction.b, direction.a);
@@ -2363,17 +2468,32 @@ export function planSketchLinearPattern(
   ) {
     return {
       status: 'refuse',
-      reason:
-        'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
+      reason: extent
+        ? 'Some instances would overlap others. Use a longer extent or fewer instances, so each step is at least as long as the entity along the direction.'
+        : 'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
+  if (
+    landsOnExisting(
+      document,
+      sketch,
+      sourceId,
+      copies,
+      resolve,
+      tol,
+      earlier,
+      true
+    )
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   const clash = profileClash(
     document,
     sketch,
-    copies.map((copy) => curveObject(copy, source.data)),
+    [
+      ...earlier.map((planned) => planned.data),
+      ...copies.map((copy) => curveObject(copy, source.data))
+    ],
     resolve
   );
   if (clash) {
@@ -2389,15 +2509,19 @@ export function planSketchLinearPattern(
       source.data,
       copies,
       source.curve.kind === 'line',
-      'Linear pattern'
+      'Linear pattern',
+      { kind: 'linear', direction: directionId as EntityId, spacing }
     )
   };
 }
 
 /**
- * `count` instances of the source rotated about `pivot`. A full 360° turn
+ * `count` instances of the source carried round `pivot`. A full 360° turn
  * spaces them evenly with no instance on top of the source; a partial turn
- * puts the last instance at the end of the angle.
+ * puts the last instance at the end of the angle. Each instance turns with
+ * the pattern, or with `orientation` `uniform` keeps the source's
+ * orientation: it is only moved, so its anchor (a line's midpoint, a circle's
+ * or arc's centre) lands where the turn takes the source's anchor.
  */
 export function planSketchCircularPattern(
   document: ProjectDocument,
@@ -2407,7 +2531,10 @@ export function planSketchCircularPattern(
   pivot: Point2,
   count: number,
   totalDeg: number,
-  resolve: Resolve
+  resolve: Resolve,
+  orientation: 'rotate' | 'uniform' = 'rotate',
+  pivotRef?: SketchPointRef,
+  earlier: readonly PlannedCurve[] = []
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2426,17 +2553,22 @@ export function planSketchCircularPattern(
   const full = Math.abs(totalDeg - 360) < 1e-9;
   const stepRad =
     ((full ? 360 / count : totalDeg / (count - 1)) * Math.PI) / 180;
+  const uniform = orientation === 'uniform';
+  const anchor = patternAnchor(source.curve);
   if (
     // A partial arc about its own centre still sweeps new quadrants; only
-    // a full round turns onto itself.
-    (source.curve.kind === 'circle' ||
+    // a full round turns onto itself. Moved without turning, anything
+    // anchored on the pivot stays where it is.
+    (uniform ||
+      source.curve.kind === 'circle' ||
       (source.curve.kind === 'arc' && source.curve.sweep >= TAU - 1e-9)) &&
-    distance(source.curve.c, pivot) <= ON_CURVE
+    distance(anchor, pivot) <= ON_CURVE
   ) {
     return {
       status: 'refuse',
-      reason:
-        'That entity is centred on the pivot, so every instance would land on it.'
+      reason: uniform
+        ? 'That entity is centred on the pivot, so kept in its orientation every instance would land on it.'
+        : 'That entity is centred on the pivot, so every instance would land on it.'
     };
   }
   const copies: Curve2[] = [];
@@ -2444,16 +2576,20 @@ export function planSketchCircularPattern(
     const angle = stepRad * index;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
-    copies.push(
-      transformCurve(
-        source.curve,
-        (p) => ({
-          x: pivot.x + (p.x - pivot.x) * cos - (p.y - pivot.y) * sin,
-          y: pivot.y + (p.x - pivot.x) * sin + (p.y - pivot.y) * cos
-        }),
-        angle
-      )
-    );
+    const turn = (p: Point2): Point2 => ({
+      x: pivot.x + (p.x - pivot.x) * cos - (p.y - pivot.y) * sin,
+      y: pivot.y + (p.x - pivot.x) * sin + (p.y - pivot.y) * cos
+    });
+    if (uniform) {
+      const moved = turn(anchor);
+      const dx = moved.x - anchor.x;
+      const dy = moved.y - anchor.y;
+      copies.push(
+        transformCurve(source.curve, (p) => ({ x: p.x + dx, y: p.y + dy }), 0)
+      );
+    } else {
+      copies.push(transformCurve(source.curve, turn, angle));
+    }
   }
   // A line through the pivot lands back on itself after half a turn, so
   // an even count would stack duplicates that break profiles.
@@ -2478,13 +2614,27 @@ export function planSketchCircularPattern(
         'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
+  if (
+    landsOnExisting(
+      document,
+      sketch,
+      sourceId,
+      copies,
+      resolve,
+      tol,
+      earlier,
+      true
+    )
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   const clash = profileClash(
     document,
     sketch,
-    copies.map((copy) => curveObject(copy, source.data)),
+    [
+      ...earlier.map((planned) => planned.data),
+      ...copies.map((copy) => curveObject(copy, source.data))
+    ],
     resolve
   );
   if (clash) {
@@ -2499,10 +2649,153 @@ export function planSketchCircularPattern(
       sourceId as EntityId,
       source.data,
       copies,
-      false,
-      'Circular pattern'
+      // Moved without turning, a line stays parallel to its source.
+      uniform && source.curve.kind === 'line',
+      'Circular pattern',
+      pivotRef
+        ? {
+            kind: 'circular',
+            pivot: pivotRef,
+            stepDeg: (stepRad * 180) / Math.PI,
+            orientation
+          }
+        : undefined
     )
   };
+}
+
+/** One pattern's definition, shared by every entity a selection repeats. */
+export type SketchPatternSetSpec =
+  | {
+      kind: 'linear-pattern';
+      directionId: string;
+      distance: number;
+      count: number;
+      spacingMode: 'spacing' | 'extent';
+    }
+  | {
+      kind: 'circular-pattern';
+      pivot: Point2;
+      /** The stored point the pivot is, held by the pattern relation. */
+      pivotRef?: SketchPointRef;
+      count: number;
+      totalDeg: number;
+      orientation: 'rotate' | 'uniform';
+    };
+
+/**
+ * Repeat a selection with one pattern, in one transaction. Each entity is
+ * planned as the single-entity pattern would plan it, against the sketch
+ * with the instances already planned for the entities before it, so no
+ * entity's instances may land on another's. An entity the pattern cannot
+ * repeat (a point, text, a held shape, one whose instances would clash) is
+ * left out and counted; the direction line is skipped if it was selected.
+ * Only when nothing can be repeated is the set refused, with the first
+ * reason.
+ */
+export function planSketchPatternSet(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  sourceIds: readonly string[],
+  spec: SketchPatternSetSpec,
+  resolve: Resolve
+): SketchModifyPlan {
+  const label =
+    spec.kind === 'linear-pattern' ? 'Linear pattern' : 'Circular pattern';
+  const sources = [...new Set(sourceIds)].filter(
+    (id) =>
+      (spec.kind !== 'linear-pattern' || id !== spec.directionId) &&
+      sketchObject(document, sketch, id) !== null
+  );
+  if (sources.length === 0) {
+    return {
+      status: 'refuse',
+      reason:
+        'The direction line is the only thing selected. Select what to repeat, then pick the line.'
+    };
+  }
+  const commands: AnyCommand[] = [];
+  // Every entity is planned against the document as it is (so its own
+  // resolved geometry, linked projections included, is the live one), with
+  // the instances already planned for the entities before it passed in as
+  // geometry its own may not land on.
+  const earlier: PlannedCurve[] = [];
+  let repeated = 0;
+  let added = 0;
+  let firstRefusal: string | null = null;
+  for (const sourceId of sources) {
+    const plan =
+      spec.kind === 'linear-pattern'
+        ? planSketchLinearPattern(
+            document,
+            sketch,
+            sketchId,
+            sourceId,
+            spec.directionId,
+            spec.distance,
+            spec.count,
+            resolve,
+            spec.spacingMode,
+            earlier
+          )
+        : planSketchCircularPattern(
+            document,
+            sketch,
+            sketchId,
+            sourceId,
+            spec.pivot,
+            spec.count,
+            spec.totalDeg,
+            resolve,
+            spec.orientation,
+            spec.pivotRef,
+            earlier
+          );
+    if (plan.status !== 'commands') {
+      firstRefusal ??= plan.reason;
+      continue;
+    }
+    for (const command of plan.commands) {
+      if (command.kind !== 'sketch.object.add') continue;
+      const objects = (command.payload as { objects?: SketchObjectData[] })
+        .objects;
+      for (const data of objects ?? []) {
+        const curve = evaluateCurve(data, resolve);
+        if (curve) earlier.push({ curve, data });
+      }
+    }
+    commands.push(...plan.commands);
+    repeated += 1;
+    added += spec.count - 1;
+  }
+  if (repeated === 0) {
+    return {
+      status: 'refuse',
+      reason: firstRefusal ?? 'Nothing selected can be repeated.'
+    };
+  }
+  const skipped = sources.length - repeated;
+  return {
+    status: 'commands',
+    label,
+    message:
+      `${label} added ${added} linked ${added === 1 ? 'entity' : 'entities'} from ${repeated} selected.` +
+      (skipped > 0
+        ? ` ${skipped} could not be repeated and ${skipped === 1 ? 'was' : 'were'} left out.`
+        : ''),
+    commands
+  };
+}
+
+/**
+ * The point a uniform circular pattern carries round the pivot: a line's
+ * midpoint, a circle's or arc's centre.
+ */
+function patternAnchor(curve: Curve2): Point2 {
+  return curve.kind === 'line'
+    ? { x: (curve.a.x + curve.b.x) / 2, y: (curve.a.y + curve.b.y) / 2 }
+    : curve.c;
 }
 
 /**
@@ -2514,8 +2807,12 @@ export function resolvePatternPivot(
   sketch: SketchNode,
   pick: string,
   resolve: Resolve
-): { pivot: Point2 } | { error: string } {
+): { pivot: Point2; ref: SketchPointRef } | { error: string } {
   const [objectId, point] = pick.split('#') as [string, PointName | undefined];
+  const ref = (name: PointName): SketchPointRef => ({
+    objectId: objectId as EntityId,
+    point: name
+  });
   const data = sketchObject(document, sketch, objectId);
   if (!data) {
     return { error: 'That object is not part of this sketch.' };
@@ -2529,16 +2826,17 @@ export function resolvePatternPivot(
   }
   if (point === 'start' || point === 'end') {
     if (curve.kind === 'line') {
-      return { pivot: point === 'start' ? curve.a : curve.b };
+      return { pivot: point === 'start' ? curve.a : curve.b, ref: ref(point) };
     }
     if (curve.kind === 'arc') {
       return {
-        pivot: pointOnCurve(curve, point === 'start' ? 0 : curve.sweep)
+        pivot: pointOnCurve(curve, point === 'start' ? 0 : curve.sweep),
+        ref: ref(point)
       };
     }
   }
   if (curve.kind !== 'line') {
-    return { pivot: curve.c };
+    return { pivot: curve.c, ref: ref('center') };
   }
   return {
     error:
@@ -2548,6 +2846,61 @@ export function resolvePatternPivot(
 
 // ---------------------------------------------------------------------------
 // Construction
+
+/**
+ * Turn a selection into construction geometry, or back, in one undo step:
+ * when any selected entity is regular they all become construction, and
+ * when every one already is they all become regular again — the toggle a
+ * mixed selection expects. Each entity changes exactly as
+ * {@link planSketchConstructionToggle} changes it alone; one already in
+ * the target state is left as it is.
+ */
+export function planSketchConstructionSet(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  objectIds: readonly string[]
+): SketchModifyPlan {
+  const entries = [...new Set(objectIds)].flatMap((objectId) => {
+    const node = ownEntry(document.nodes, objectId as EntityId);
+    return sketch.objectIds.includes(objectId as EntityId) &&
+      node?.kind === 'sketch-object'
+      ? [{ objectId, data: node.data }]
+      : [];
+  });
+  if (entries.length === 0) {
+    return {
+      status: 'refuse',
+      reason: 'The selected entities are no longer in this sketch.'
+    };
+  }
+  const making = entries.some(({ data }) => data.construction !== true);
+  const label = making ? 'Make construction' : 'Make regular';
+  const commands = entries.flatMap(({ objectId, data }) => {
+    if ((data.construction === true) === making) {
+      return [];
+    }
+    const { construction: _was, ...rest } = data;
+    const next = (
+      making ? { ...rest, construction: true } : rest
+    ) as SketchObjectData;
+    return [
+      commandFactories.updateSketchObject(
+        { sketchId, objectId: objectId as EntityId, data: next },
+        label
+      )
+    ];
+  });
+  const changed = commands.length;
+  return {
+    status: 'commands',
+    label,
+    message: making
+      ? `${changed} ${changed === 1 ? 'entity is' : 'entities are'} construction geometry now; they no longer bound a profile.`
+      : `${changed} ${changed === 1 ? 'entity is' : 'entities are'} regular geometry again.`,
+    commands
+  };
+}
 
 /**
  * Turn one existing entity into construction geometry, or back into regular

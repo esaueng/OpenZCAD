@@ -595,6 +595,80 @@ describe('Workers rate-limit bindings', () => {
     ).toEqual([]);
   });
 
+  it.each(['/api/projects', '/api/e2ee/projects'])(
+    'count signed-in writes to %s in the write binding alone, writing no D1 limiter row',
+    async (path) => {
+      const { env, sqlite, statements } = hostedEnv();
+      const { userId, cookie } = await signedIn(sqlite);
+      const admit = limiter(true);
+      statements.length = 0;
+      const admitted = await worker.fetch(
+        new Request(`https://example.com${path}`, {
+          method: 'POST',
+          headers: { cookie, 'content-type': 'application/json' },
+          body: '{}'
+        }),
+        { ...env, API_WRITE_LIMITER: admit }
+      );
+      expect(admitted.status).not.toBe(429);
+      expect(admit.limit).toHaveBeenCalledWith({ key: `api:${userId}` });
+      expect(
+        statements.filter((sql) => sql.includes('auth_rate_limits'))
+      ).toEqual([]);
+
+      const refuse = limiter(false);
+      statements.length = 0;
+      const refused = await worker.fetch(
+        new Request(`https://example.com${path}`, {
+          method: 'POST',
+          headers: { cookie, 'content-type': 'application/json' },
+          body: '{}'
+        }),
+        { ...env, API_WRITE_LIMITER: refuse }
+      );
+      expect(refused.status).toBe(429);
+      expect(refuse.limit).toHaveBeenCalledWith({ key: `api:${userId}` });
+      expect(
+        statements.filter((sql) => sql.includes('auth_rate_limits'))
+      ).toEqual([]);
+    }
+  );
+
+  it.each([
+    ['missing', undefined],
+    [
+      'unavailable',
+      {
+        limit: vi.fn(async () => {
+          throw new Error('unavailable');
+        })
+      }
+    ]
+  ])(
+    'count signed-in writes in D1 when the write binding is %s',
+    async (_label, binding) => {
+      fixMinute();
+      const { env, sqlite } = hostedEnv();
+      const { userId, cookie } = await signedIn(sqlite);
+      const limitedEnv = { ...env, API_WRITE_LIMITER: binding };
+      const write = () =>
+        worker.fetch(
+          new Request('https://example.com/api/projects', {
+            method: 'POST',
+            headers: { cookie, 'content-type': 'application/json' },
+            body: '{}'
+          }),
+          limitedEnv
+        );
+      expect((await write()).status).not.toBe(429);
+      expect(
+        sqlite.prepare('SELECT bucket FROM auth_rate_limits').all()
+      ).toEqual([{ bucket: `api:${userId}` }]);
+      spendAddressBudget(sqlite, REQUEST_LIMITS.API_WRITE_LIMITER);
+      expect((await write()).status).toBe(429);
+    }
+  );
+
   it('never count the session read against the account read budget', async () => {
     const { env, sqlite } = hostedEnv();
     const { userId, cookie } = await signedIn(sqlite);

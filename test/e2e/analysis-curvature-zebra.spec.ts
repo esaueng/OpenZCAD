@@ -104,10 +104,11 @@ test(
       { timeout: 60_000 }
     );
     await expect(curvature.getByRole('list', { name: 'Legend' })).toContainText(
-      'Convex · 0.125 1/mm'
+      'Convex 0.125 1/mm'
     );
+    await curvature.getByText('Details', { exact: true }).click();
     await expect(curvature.getByRole('note')).toContainText(
-      '8 of 8 face ranges exact.'
+      '8 of 8 faces exact.'
     );
     await expect(curvature).toContainText('one tight face mutes the rest');
     await expect
@@ -119,9 +120,7 @@ test(
       .toEqual(onScreen);
 
     // Gaussian measures again: 1/64 mm⁻² on the ball.
-    await curvature
-      .getByRole('combobox', { name: 'Measure' })
-      .selectOption('gaussian');
+    await curvature.getByRole('radio', { name: 'Gaussian' }).click();
     await expect(curvature.getByRole('status')).toHaveText(
       /Gaussian curvature 0 1\/mm² to 0\.0156 1\/mm²\.$/,
       { timeout: 60_000 }
@@ -139,7 +138,7 @@ test(
     await expect
       .poll(async () => (await renderState(page)).analysisOverlays.length)
       .toBe(2);
-    await zebra.getByRole('spinbutton', { name: 'Stripes' }).fill('20');
+    await zebra.getByRole('slider', { name: 'Stripes' }).fill('20');
     await expect(zebra.getByRole('status')).toHaveText(
       /exact normals on 8 faces\.$/
     );

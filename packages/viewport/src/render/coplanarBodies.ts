@@ -4,6 +4,7 @@ import * as THREE from 'three';
 interface PlanarPatch {
   normal: THREE.Vector3;
   offset: number;
+  normalKey?: string;
   bounds: THREE.Box3;
   ranges: { start: number; end: number }[];
 }
@@ -55,8 +56,11 @@ const planesByMesh = new WeakMap<
     topology: GeometryBodyRepresentation['topology'];
     patches: PlanarPatch[];
     index: Map<string, PlanarPatch[]>;
+    nearbyBuckets: Map<string, PlanarPatch[][]>;
   }
 >();
+
+const MAX_CACHED_NORMAL_CELLS = 32;
 
 const normalCell = (normal: THREE.Vector3) =>
   [normal.x, normal.y, normal.z].map((n) => Math.round(n * 1e4));
@@ -67,29 +71,39 @@ function* candidates(
   patch: PlanarPatch
 ): Generator<PlanarPatch> {
   planarPatches(body);
-  const index = planesByMesh.get(body.mesh)!.index;
-  const [x, y, z] = normalCell(patch.normal) as [number, number, number];
-  const tolerance = Math.max(1, Math.abs(patch.offset)) * 2e-10;
-  for (let dx = -1; dx <= 1; dx++)
-    for (let dy = -1; dy <= 1; dy++)
-      for (let dz = -1; dz <= 1; dz++) {
-        const bucket = index.get(`${x + dx},${y + dy},${z + dz}`);
-        if (!bucket) continue;
-        let low = 0,
-          high = bucket.length;
-        while (low < high) {
-          const middle = (low + high) >>> 1;
-          if (bucket[middle]!.offset < patch.offset - tolerance)
-            low = middle + 1;
-          else high = middle;
+  const { index, nearbyBuckets } = planesByMesh.get(body.mesh)!;
+  const key = (patch.normalKey ??= normalCell(patch.normal).join(','));
+  let buckets = nearbyBuckets.get(key);
+  if (!buckets) {
+    // Only the neighbourhood depends on the rounded normal. The offset range
+    // and exact plane/footprint tests still belong to each individual patch.
+    buckets = [];
+    const [x, y, z] = normalCell(patch.normal) as [number, number, number];
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dz = -1; dz <= 1; dz++) {
+          const bucket = index.get(`${x + dx},${y + dy},${z + dz}`);
+          if (bucket) buckets.push(bucket);
         }
-        for (
-          let i = low;
-          i < bucket.length && bucket[i]!.offset <= patch.offset + tolerance;
-          i++
-        )
-          yield bucket[i]!;
-      }
+    if (nearbyBuckets.size < MAX_CACHED_NORMAL_CELLS)
+      nearbyBuckets.set(key, buckets);
+  }
+  const tolerance = Math.max(1, Math.abs(patch.offset)) * 2e-10;
+  for (const bucket of buckets) {
+    let low = 0,
+      high = bucket.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (bucket[middle]!.offset < patch.offset - tolerance) low = middle + 1;
+      else high = middle;
+    }
+    for (
+      let i = low;
+      i < bucket.length && bucket[i]!.offset <= patch.offset + tolerance;
+      i++
+    )
+      yield bucket[i]!;
+  }
 }
 
 function planarPatches(body: GeometryBodyRepresentation): PlanarPatch[] {
@@ -159,7 +173,12 @@ function planarPatches(body: GeometryBodyRepresentation): PlanarPatch[] {
       if (!planar) continue;
     }
     if (!Number.isFinite(offset) || bounds.isEmpty()) continue;
-    const patch = { normal, offset, bounds, ranges: [{ start, end }] };
+    const patch = {
+      normal,
+      offset,
+      bounds,
+      ranges: [{ start, end }]
+    };
     // A flat mesh reference can have tens of thousands of triangles. Merge
     // their plane/footprint tests while retaining the original index spans.
     // The key is just a bucket; samePlane still verifies the equation.
@@ -183,13 +202,19 @@ function planarPatches(body: GeometryBodyRepresentation): PlanarPatch[] {
   const index = new Map<string, PlanarPatch[]>();
   for (const patch of patches) {
     const key = normalCell(patch.normal).join(',');
+    patch.normalKey = key;
     const bucket = index.get(key) ?? [];
     bucket.push(patch);
     index.set(key, bucket);
   }
   for (const bucket of index.values())
     bucket.sort((a, b) => a.offset - b.offset);
-  planesByMesh.set(body.mesh, { topology: body.topology, patches, index });
+  planesByMesh.set(body.mesh, {
+    topology: body.topology,
+    patches,
+    index,
+    nearbyBuckets: new Map()
+  });
   return patches;
 }
 

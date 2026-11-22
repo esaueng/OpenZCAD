@@ -7,6 +7,7 @@ import {
 } from '@openzcad/ai-contracts';
 import {
   isCloudflareFeatureEnabled,
+  type CloudflareBooleanFlag,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
 import type {
@@ -14,8 +15,10 @@ import type {
   AssistantReasoningEffort
 } from '@openzcad/shared';
 import {
+  gateAssistantResponse,
   observeAssistantResponse,
   validateAssistantResponse,
+  type AssistantReplyRejection,
   type AssistantResponseFailureClassification
 } from './assistantStreamDiagnostics';
 import {
@@ -99,7 +102,7 @@ Rules: declare an alias before referencing it; each alias is unique within the p
 
 # 5. Hollowing, openings, and holes
 
-Use \`add_shell\` or \`add_solid_offset\` only when the rollout-capability block appended to these instructions explicitly enables that operation. Otherwise hollow parts are made by subtracting an inner solid from an outer one.
+Use \`add_shell\`, \`add_hole\` or \`add_solid_offset\` only when the rollout-capability block appended to these instructions explicitly enables that operation. Otherwise hollow parts are made by subtracting an inner solid from an outer one.
 
 To hollow a box with wall thickness \`wall\` and floor \`floor_t\`, leaving the top open:
 - cavity size = (width - 2*wall, height - 2*wall, depth - floor_t)
@@ -209,7 +212,9 @@ Return only the strict structured output required by the response schema.`;
  */
 export const DRAWING_SHEET_INSTRUCTIONS = `# Dimensioning the Draw sheet
 
-The user is on the Draw sheet in \`digest.drawing\`. Its model is locked: answer with \`add_drawing_annotations\` or \`remove_drawing_annotations\` on that sheetId, and no model operation in the same proposal. If they ask for a model change, say in a message that it is made in Build.
+The user is on the Draw sheet in \`digest.drawing\`. Its model is locked: answer with \`auto_dimension_drawing\`, \`add_drawing_annotations\` or \`remove_drawing_annotations\` on that sheetId, and no model operation in the same proposal. If they ask for a model change, say in a message that it is made in Build.
+
+- To dimension the sheet, or part of it ("dimension this", "only the front view", "skip the radii"), propose \`auto_dimension_drawing\` alone: the app's generator then adds every missing dimension, each once and in a view that sees it true size. You choose only the scope: \`viewIds\` (null for every view; never the isometric view) and \`dimensionKinds\` (null for every kind). The app reports what the scope leaves out. Use \`add_drawing_annotations\` for a specific dimension or note the user describes.
 
 - Every edge comes from \`digest.drawing.views[].edges\` of the view the annotation belongs to, by its \`ref\`. Never invent a ref, and never use a ref from another view.
 - Coordinates are paper millimetres, y up, from the view's centre: \`ends\` are an open edge's ends in page order (\`first\` is the left one, or the lower when level), \`center\` a circle's centre. A linear dimension measures between two points (an end of an open edge, or the centre of a circle the view sees true shape); \`horizontal\` measures along the page, \`vertical\` up it, and both points must differ along that direction. An edge whose two ends coincide on the page runs into the view: it marks a point, not a length.
@@ -457,7 +462,13 @@ export function assistantEndpointIdentity(
   }
 }
 
-const ROLLOUT_OPERATION_FLAGS = [
+/**
+ * The one table of rollout-gated operation kinds. The prompt, the strict
+ * reply schema and the Worker's reply gate (`rolloutReplyRejection`) all read
+ * it, so a kind listed here is withheld from the provider AND refused if the
+ * provider returns it anyway.
+ */
+export const ROLLOUT_OPERATION_FLAGS = [
   ['add_direct_edit', 'AI_PATCH_DIRECT_EDIT_ENABLED'],
   ['add_growing_holder_recipe', 'AI_PATCH_GROWING_HOLDER_ENABLED'],
   ['add_growing_holder_hole_control', 'AI_PATCH_HOLE_CONTROL_ENABLED'],
@@ -465,6 +476,7 @@ const ROLLOUT_OPERATION_FLAGS = [
   ['add_multi_profile_extrude', 'AI_PATCH_MULTI_PROFILE_EXTRUDE_ENABLED'],
   ['add_mirror', 'AI_PATCH_MIRROR_ENABLED'],
   ['add_shell', 'AI_PATCH_SHELL_ENABLED'],
+  ['add_hole', 'AI_PATCH_HOLE_ENABLED'],
   ['add_solid_offset', 'AI_PATCH_SOLID_OFFSET_ENABLED'],
   ['add_datum_plane', 'AI_PATCH_DATUM_PLANE_ENABLED'],
   ['add_datum_sketch', 'AI_PATCH_DATUM_PLANE_ENABLED'],
@@ -485,6 +497,7 @@ const ROLLOUT_OPERATION_FLAGS = [
  * parser rejects these, so it is never offered them.
  */
 const NEGOTIATED_OPERATIONS: ReadonlySet<string> = new Set([
+  'add_hole',
   'add_datum_plane',
   'add_datum_sketch',
   'add_datum_mirror',
@@ -529,7 +542,7 @@ export function assistantEnvForClient(
  * the whole branch would withdraw a working capability. The property is
  * pruned instead, from both `properties` and `required`.
  */
-const ROLLOUT_OPERATION_PROPERTY_FLAGS = [
+export const ROLLOUT_OPERATION_PROPERTY_FLAGS = [
   ['add_revolve', 'angleDeg', 'AI_PATCH_PARTIAL_REVOLVE_ENABLED']
 ] as const;
 
@@ -562,6 +575,7 @@ When enabled:
 - \`add_multi_profile_extrude\` uses distinct digest-backed sample points from one existing sketch.
 - \`add_mirror\` creates a separate reflected body and keeps its source.
 - \`add_shell\` requires one or more explicitly referenced opening faces.
+- \`add_hole\` drills one simple hole (no counterbore or countersink) into one planar face the user selected or named, copying its exact hash and reference from the digest; the drilled body replaces the target. \`position\` is measured from the face's area centroid in the Hole tool's own face frame, which is NOT the face's \`attachmentFrame\`: with n the outward face normal and r = world Z (world X when |n.z| >= 0.9), u = normalize(r × n) and v = n × u. Send {u: 0, v: 0}, the middle of the face, unless the user gives an offset. A blind hole needs a positive \`depth\`; a through hole sends null. Ask which face when none is selected or named, and never drill a curved face.
 - \`add_solid_offset\` uses a positive outward distance and may still be refused by exact kernel topology limits.
 - \`add_datum_plane\` creates a named reference plane that later operations reuse: an \`offset\` plane a signed distance along a source plane's normal (positive follows the source normal), or a \`midplane\` halfway between two parallel sources. A source is a principal plane (XY/XZ/YZ with an offset) or a datum — a datum-plane featureId from the digest or the \`$localId\` of an earlier \`add_datum_plane\`. Give it a \`localId\` when anything later uses it. Fill only the fields its kind uses and send null for the rest. Drive the offset with a parameter when the user names the distance.
 - \`add_datum_sketch\` sketches on a datum plane, in the plane's own 2D coordinates, exactly like \`add_sketch\`; a later \`add_extrude\` extrudes it along the datum normal. \`add_datum_mirror\` creates a separate reflected body across a datum plane and keeps its source. \`add_datum_split\` cuts a body in two at a datum plane and replaces it: \`localId\` names the half the datum normal points toward, \`secondLocalId\` the other; the plane must cross the body through flat faces. Use these instead of repeating plane numbers when several features share one plane.
@@ -577,6 +591,78 @@ Rollout-controlled operation fields (the operations themselves stay available ei
 Copy every face reference, face snapshot, attachment frame, sketch id, body id, and selected profile point verbatim from the current digest. New topology sources must target existing live digest bodies, never same-proposal body aliases. Datum updates may retain only verbatim historical sources from the target definition when current topology is unavailable. Recognized imported-feature edits remain disabled until their exact diagnostics and command path mature.`;
 }
 
+function plainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/**
+ * The Worker's enforcement of the rollout flags on what the provider actually
+ * returned. Pruning the schema only stops a provider that honors it; one that
+ * ignores the requested format can still answer with a disabled operation (or
+ * a disabled field of an enabled one), and the browser would build a proposal
+ * from it. The browser does not know the deployment's flags, so the Worker is
+ * the boundary: it reads the reply exactly as the browser will
+ * (`parseAssistantReply` takes `proposal.operations` of a `patch` reply) and
+ * refuses the whole reply, by name, when anything in it is switched off.
+ * Replies that are not valid JSON or not patches pass through; the browser
+ * rejects or renders those itself.
+ */
+export function rolloutReplyRejection(
+  env: CloudflareEnv,
+  replyText: string
+): AssistantReplyRejection | undefined {
+  let reply: unknown;
+  try {
+    reply = JSON.parse(replyText) as unknown;
+  } catch {
+    return undefined;
+  }
+  const candidate = plainRecord(reply);
+  if (candidate?.replyKind !== 'patch') return undefined;
+  const operations = plainRecord(candidate.proposal)?.operations;
+  if (!Array.isArray(operations)) return undefined;
+
+  const operationFlags = new Map<string, CloudflareBooleanFlag>(
+    ROLLOUT_OPERATION_FLAGS
+  );
+  const refused = new Map<string, CloudflareBooleanFlag>();
+  for (const raw of operations) {
+    const operation = plainRecord(raw);
+    const kind = operation?.kind;
+    if (typeof kind !== 'string') continue;
+    const flag = operationFlags.get(kind);
+    if (flag !== undefined && !isCloudflareFeatureEnabled(env, flag)) {
+      refused.set(kind, flag);
+    }
+    for (const [
+      gatedKind,
+      property,
+      propertyFlag
+    ] of ROLLOUT_OPERATION_PROPERTY_FLAGS) {
+      if (
+        kind === gatedKind &&
+        operation![property] !== undefined &&
+        operation![property] !== null &&
+        !isCloudflareFeatureEnabled(env, propertyFlag)
+      ) {
+        refused.set(`${kind}.${property}`, propertyFlag);
+      }
+    }
+  }
+  if (refused.size === 0) return undefined;
+  const named = [...refused].map(
+    ([operation, flag]) => `\`${operation}\` (${flag})`
+  );
+  return {
+    code: 'AI_OPERATION_DISABLED',
+    message: `The modeling assistant proposed ${named.join(', ')}, which ${
+      refused.size === 1 ? 'is' : 'are'
+    } turned off for this deployment, so the proposal was discarded. Nothing was changed; try asking again.`
+  };
+}
+
 type MutableJsonSchema = Record<string, unknown>;
 
 function schemaRecord(value: unknown): MutableJsonSchema | undefined {
@@ -586,9 +672,10 @@ function schemaRecord(value: unknown): MutableJsonSchema | undefined {
 }
 
 /**
- * Strict structured output is the enforcement boundary for rollout flags.
- * Prompt instructions help the model choose well, but pruning disabled
- * branches prevents a compliant provider from producing them at all.
+ * Strict structured output keeps a compliant provider from producing a
+ * disabled operation at all; prompt instructions help the model choose well.
+ * Neither binds a provider that ignores the format, so the Worker also gates
+ * the returned reply (`rolloutReplyRejection`).
  */
 export function assistantReplySchemaFor(env: CloudflareEnv): unknown {
   const schema = structuredClone(
@@ -1214,8 +1301,21 @@ function jsonSchemaInstructions(env: CloudflareEnv, retry = false): string {
   return `\n\n# Required JSON reply\nReturn only one JSON object matching this exact JSON Schema. Include every required field, use null only where allowed, and do not add extra keys.\n${JSON.stringify(assistantReplySchemaFor(env))}${retry ? '\nThe previous reply failed validation. Regenerate the complete reply against this schema; check every operation, required field, value type and enum before answering.' : ''}`;
 }
 
+/**
+ * Format validation for providers whose reply the Worker checks before
+ * streaming it. It accepts rollout-disabled operations on purpose: the
+ * stream gate refuses those by name (`rolloutReplyRejection`), where a
+ * pruned schema would only report malformed output.
+ */
 function jsonReplyValidator(env: CloudflareEnv, digest?: CadDocumentDigest) {
-  const schema = assistantReplySchemaFor(env);
+  const everyRolloutEnabled: Record<string, unknown> = { ...env };
+  for (const [, flag] of ROLLOUT_OPERATION_FLAGS) {
+    everyRolloutEnabled[flag] = 'true';
+  }
+  for (const [, , flag] of ROLLOUT_OPERATION_PROPERTY_FLAGS) {
+    everyRolloutEnabled[flag] = 'true';
+  }
+  const schema = assistantReplySchemaFor(everyRolloutEnabled);
   return (text: string): boolean => {
     try {
       const value: unknown = JSON.parse(text);
@@ -1481,7 +1581,14 @@ export async function streamAssistantProposal(
   }
 
   return new Response(
-    observeAssistantResponse(upstream.body, { requestId, provider, model }),
+    observeAssistantResponse(
+      gateAssistantResponse(
+        upstream.body,
+        (replyText) => rolloutReplyRejection(env, replyText),
+        { requestId }
+      ),
+      { requestId, provider, model }
+    ),
     {
       status: 200,
       headers: {

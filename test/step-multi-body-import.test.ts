@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 import { expect, it } from 'vitest';
 import { CommandManager, replayCommands } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
-import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import {
+  createExactKernelAdapter,
+  discoverStepLayout
+} from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
 import {
   RemusKernel,
@@ -188,6 +191,10 @@ it('discovers original indices after rejecting an open middle shell', async () =
     const inspection = await adapter.inspectStep(source);
     expect(inspection.solidIndices).toEqual([0, 2]);
     expect(inspection.reason).toContain('open shell');
+    expect(
+      (await discoverStepLayout(new TextEncoder().encode(source).buffer, false))
+        .solidIndices
+    ).toEqual([0, 2]);
   } finally {
     adapter.dispose();
     kernel.free();

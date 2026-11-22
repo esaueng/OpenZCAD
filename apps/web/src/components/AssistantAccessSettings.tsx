@@ -7,6 +7,7 @@ import {
   assistantConsentContext,
   consentFloor,
   createAssistantConsentApi,
+  loadAssistantConsent,
   localStorageConsentPins,
   saveAssistantConsent,
   verifyListedConsent,
@@ -14,6 +15,8 @@ import {
   type AssistantConsentState,
   type ConsentPinStore
 } from '../lib/e2ee/assistantConsent';
+import { stopAssistantGrant } from '../lib/e2ee/assistantConsentGrants';
+import { E2eeApiError } from '../lib/e2ee/e2eeApi';
 import { verifyShelfEntries } from '../lib/e2ee/progressiveShelf';
 import { isRateLimitError } from '../lib/rateLimit';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
@@ -143,15 +146,35 @@ export function AssistantAccessSettings({
   const revoke = async (entry: Listed) => {
     const ctx = context();
     if (!ctx) return;
+    // This device stops sending first, before anything is awaited, and
+    // stays stopped whatever the account answers (a panel's Allow still in
+    // flight included).
+    stopAssistantGrant(ctx.userId, entry.projectId);
     setBusy(entry.projectId);
     setError(null);
-    try {
-      const state = await saveAssistantConsent(
+    const saveRevocation = (floor: number) =>
+      saveAssistantConsent(
         ctx,
         entry.projectId,
         { allowed: false, route: '' },
-        consentFloor(entry.state)
+        floor
       );
+    try {
+      let state: AssistantConsentState;
+      try {
+        state = await saveRevocation(consentFloor(entry.state));
+      } catch (caught) {
+        if (
+          !(caught instanceof E2eeApiError) ||
+          caught.code !== 'E2EE_ASSISTANT_CONSENT_STALE'
+        ) {
+          throw caught;
+        }
+        const latest = await loadAssistantConsent(ctx, entry.projectId);
+        state = await saveRevocation(
+          Math.max(consentFloor(entry.state), consentFloor(latest))
+        );
+      }
       setListed((entries) =>
         entries.map((candidate) =>
           candidate.projectId === entry.projectId

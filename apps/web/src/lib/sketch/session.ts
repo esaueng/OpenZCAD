@@ -12,10 +12,13 @@ import {
 import type { SketchMoveHandle } from '../interaction/machine';
 import {
   MAX_SKETCH_SPLINE_POINTS,
+  createSketchCompositeCenterTarget,
   createSketchCompositeCornerTarget,
   createSketchCompositeSideTarget,
+  resolveSketchCompositeCenterTarget,
   resolveSketchCompositeCornerTarget,
   type SketchComposite,
+  type SketchCompositeCenterTarget,
   type SketchCompositeCornerTarget,
   type SketchCompositeSideTarget,
   type SketchObjectData,
@@ -712,7 +715,10 @@ export interface SnapTarget extends SketchPoint {
    */
   pointRef?: 'start' | 'end' | 'center';
   /** Logical identity accompanies, never replaces, the driving primitive alias. */
-  compositeTarget?: SketchCompositeCornerTarget | SketchCompositeSideTarget;
+  compositeTarget?:
+    | SketchCompositeCornerTarget
+    | SketchCompositeSideTarget
+    | SketchCompositeCenterTarget;
   /** Qualified shape/corner name displayed by the existing snap marker. */
   label?: string;
 }
@@ -1119,6 +1125,13 @@ export function collectSketchSnapTargets(
     string,
     { composite: SketchComposite; index: number }
   >();
+  // A helper's snap that lands on its shape's centre names that centre: a
+  // polygon's circumcircle centre, a centre rectangle's diagonal midpoints
+  // and crossing, a slot's centre-line midpoint. No snap point is added.
+  const helpers = new Map<
+    string,
+    { composite: SketchComposite; center: SketchPoint }
+  >();
   for (const composite of composites) {
     // A broken record still has ordinary line snaps, but cannot truthfully
     // name them as corners or sides of the shape it used to describe.
@@ -1133,8 +1146,44 @@ export function collectSketchSnapTargets(
       continue;
     for (const [index, id] of composite.edgeIds.entries())
       sides.set(id, { composite, index });
+    const center = resolveSketchCompositeCenterTarget(
+      createSketchCompositeCenterTarget(composite),
+      composites,
+      byId,
+      resolveCompositeValue
+    );
+    if (center.status === 'resolved')
+      for (const id of composite.helperIds ?? [])
+        helpers.set(id, { composite, center: center.point });
   }
   return targets.map((target) => {
+    // Where a centre rectangle's diagonals cross, the crossing outranks
+    // their midpoints, so a crossing of two of one shape's helpers names
+    // that shape's centre too.
+    const crossing =
+      target.kind === 'intersection' && target.sourceIds
+        ? target.sourceIds.map((id) => helpers.get(id))
+        : undefined;
+    const helper = crossing
+      ? crossing[0] && crossing[0].composite === crossing[1]?.composite
+        ? crossing[0]
+        : undefined
+      : target.sourceId
+        ? helpers.get(target.sourceId)
+        : undefined;
+    if (
+      helper &&
+      (target.kind === 'center' ||
+        target.kind === 'midpoint' ||
+        target.kind === 'intersection') &&
+      Math.hypot(target.x - helper.center.x, target.y - helper.center.y) <=
+        1e-9 * Math.max(1, Math.hypot(helper.center.x, helper.center.y))
+    )
+      return {
+        ...target,
+        compositeTarget: createSketchCompositeCenterTarget(helper.composite),
+        label: `${names.get(helper.composite.compositeId)!} · Centre`
+      };
     const member = target.sourceId ? sides.get(target.sourceId) : undefined;
     if (!member) return target;
     const { composite, index } = member;

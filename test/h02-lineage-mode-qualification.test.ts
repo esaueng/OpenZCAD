@@ -412,6 +412,29 @@ async function qualify(
 afterEach(() => vi.restoreAllMocks());
 
 describe('H02 mode-specific cached lineage', { timeout: 120_000 }, () => {
+  it('starts tracking alternate lineage when a boolean is appended to a cached history', async () => {
+    const prefix = addPrimitiveFeature(
+      createProjectDocument('Append boolean', toUserId('test')),
+      {
+        name: 'Base',
+        primitiveKind: 'box',
+        dimensions: { width: 8, height: 8, depth: 8 }
+      }
+    );
+    const subject = await harness();
+    const tracker = vi.spyOn(IdleLineageViewBuilder.prototype, 'begin');
+    try {
+      await qualify(subject, prefix);
+      expect(tracker).not.toHaveBeenCalled();
+      const { document } = fusedPlateDocument(prefix);
+      await qualify(subject, document);
+      expect(tracker).toHaveBeenCalled();
+      await qualify(subject, document, []);
+    } finally {
+      subject.adapter.dispose();
+    }
+  });
+
   it('matches fresh after eager-to-idle transitions without probing idle requests', async () => {
     const { document } = fusedPlateDocument();
     const subject = await harness();

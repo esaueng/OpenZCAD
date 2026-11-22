@@ -59,6 +59,13 @@ export interface FaceTarget extends FaceCapabilityTarget {
   /** Explicit local extrusion instead of the default source-body resize. */
   localFaceOffset?: boolean;
   /**
+   * The other faces of a picked face set that move with this one (M07): set
+   * only by the face set's Offset verb, which arms the one shared handle on
+   * the last-picked face. The offset is then a single `offset-faces` edit of
+   * every face together, never a primitive resize or a one-face move.
+   */
+  offsetFaceSet?: OffsetFaceSetMember[];
+  /**
    * The face this one is, moved: set only when a committed face offset
    * re-selects the face it moved (which renumbers it), so what the chip was
    * switched to on that face carries over to it, and to no other face.
@@ -67,6 +74,19 @@ export interface FaceTarget extends FaceCapabilityTarget {
   blendSurfaceClass?: 'torus' | 'cylinder';
   blendCenter?: [number, number, number];
   blendAxis?: [number, number, number];
+}
+
+/** A face of a picked face set, as the face set's Offset carries it. */
+export interface OffsetFaceSetMember {
+  topologyId: string;
+  hash: number;
+}
+
+/** The faces a face target's set offset names, as a key fragment. */
+function offsetFaceSetKey(target: FaceTarget): string {
+  return target.offsetFaceSet
+    ? target.offsetFaceSet.map((face) => face.topologyId).join(',')
+    : '';
 }
 
 export interface RegionTarget {
@@ -239,8 +259,9 @@ export interface PendingSketchEdit {
   kind: SketchEditToolKind;
   picks: string[];
   /**
-   * Mirror armed over a selection: these entities are the sources, so the
-   * one pick left is the axis. Absent for the pick-the-source flow.
+   * Mirror or a pattern armed over a selection: these entities are the
+   * sources, so the one pick left is the axis, the direction line or the
+   * pivot. Absent for the pick-the-source flow.
    */
   sources?: readonly string[];
 }
@@ -255,6 +276,28 @@ export type SketchOffsetJoin = 'miter' | 'round';
 export interface SketchOffsetOptions {
   join: SketchOffsetJoin;
   chain: boolean;
+}
+
+/**
+ * What a linear pattern's typed distance means: the step between neighbouring
+ * instances, or the extent from the source to the last instance.
+ */
+export type SketchPatternSpacing = 'spacing' | 'extent';
+
+/**
+ * How a circular pattern places each instance: turned with the pattern, or
+ * kept in the source's orientation and only carried round the pivot.
+ */
+export type SketchPatternOrientation = 'rotate' | 'uniform';
+
+/**
+ * The modify tools' settings that outlive one arming: Offset's corner join
+ * and chain, and the patterns' spacing and orientation. Absent pattern
+ * settings are a step spacing and rotated instances, as before they existed.
+ */
+export interface SketchModifyOptions extends SketchOffsetOptions {
+  patternSpacing?: SketchPatternSpacing;
+  patternOrientation?: SketchPatternOrientation;
 }
 
 /**
@@ -287,16 +330,31 @@ export interface SketchTextDraft {
   /** Em size: the layout scales the face by `size / unitsPerEm`. */
   size: ParamValue;
   align: TextAlign;
+  /**
+   * Where a text started from a face pick goes: the picked point in the
+   * plane's coordinates. The outline stays on it while the pointer travels
+   * to the card, and Place puts the text there; a click on the plane still
+   * places it where clicked. Absent, the outline follows the pointer.
+   */
+  anchor?: { x: number; y: number };
 }
 
-/** A fresh, empty draft in the default face (Open Sans) at em size 10. */
-export function newSketchTextDraft(): SketchTextDraft {
+/**
+ * A fresh, empty draft in the default face (Open Sans) at em size 10. With
+ * an anchor (text started from a face pick) the word is centred on it, so it
+ * grows evenly about the point that was picked.
+ */
+export function newSketchTextDraft(anchor?: {
+  x: number;
+  y: number;
+}): SketchTextDraft {
   return {
     text: '',
     fontFamily: 'open-sans',
     fontStyle: 'regular',
     size: 10,
-    align: 'left'
+    align: anchor ? 'center' : 'left',
+    ...(anchor ? { anchor } : {})
   };
 }
 
@@ -334,8 +392,8 @@ export interface SketchSessionState {
   pendingConstraint: PendingSketchConstraint | null;
   /** Armed modify tool, if any; picking routes here instead of select. */
   pendingEdit: PendingSketchEdit | null;
-  /** The Offset tool's settings; absent is a mitered chain. */
-  offsetOptions?: SketchOffsetOptions;
+  /** The modify tools' settings; absent is a mitered chain and step-spaced, rotated patterns. */
+  modifyOptions?: SketchModifyOptions;
   /**
    * I01: whether the Project tool keeps what it projects linked to its edge
    * or copies it once; absent is linked.
@@ -428,7 +486,7 @@ interface OperationLifecycle {
 }
 
 export type InteractionState =
-  | { mode: 'idle' }
+  | { mode: 'idle'; boxSelectProfiles?: true }
   | ({
       mode: 'face';
       target: FaceTarget;
@@ -457,12 +515,15 @@ export type InteractionState =
        */
       targets: RegionTarget[];
       extrudeChoice?: ExtrudeChoice;
+      /** An explicit Extrude launch gives sweeps to profiles. */
+      boxSelectProfiles?: true;
     } & OperationLifecycle)
   | { mode: 'sketch'; session: SketchSessionState };
 
 export type InteractionEvent =
   | { type: 'select-face'; target: FaceTarget }
   | { type: 'select-edge'; selection: TopologySelection; additive: boolean }
+  | { type: 'pick-extrude-profiles' }
   | {
       type: 'select-region';
       target: RegionTarget;
@@ -479,6 +540,7 @@ export type InteractionEvent =
        * stands for itself alone.
        */
       group?: RegionTarget[];
+      boxSelectProfiles?: true;
     }
   | { type: 'set-extrude-choice'; choice: ExtrudeChoice }
   | { type: 'drag-engage' }
@@ -515,7 +577,12 @@ export type InteractionEvent =
   | { type: 'recover' }
   | { type: 'reset-value' }
   | { type: 'enter-sketch'; plane: SketchPlaneRef; sketchId?: string }
-  | { type: 'sketch-tool'; tool: SketchToolId }
+  | {
+      type: 'sketch-tool';
+      tool: SketchToolId;
+      /** Text only: a new draft pinned here (see `SketchTextDraft.anchor`). */
+      textAnchor?: { x: number; y: number };
+    }
   | { type: 'sketch-circle-mode'; mode: SketchCircleMode }
   | { type: 'sketch-rectangle-mode'; mode: SketchRectangleMode }
   | { type: 'sketch-polygon-sides'; sides: number }
@@ -541,7 +608,7 @@ export type InteractionEvent =
     }
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
-  | { type: 'sketch-offset-options'; options: SketchOffsetOptions }
+  | { type: 'sketch-modify-options'; options: SketchModifyOptions }
   | { type: 'sketch-project-mode'; mode: SketchProjectionMode }
   | { type: 'sketch-edit-pick'; objectId: string }
   | {
@@ -590,7 +657,8 @@ export function operationSelectionKey(state: InteractionState): string | null {
         state.op,
         state.target.bodyId,
         state.target.topologyId,
-        Boolean(state.target.localFaceOffset)
+        Boolean(state.target.localFaceOffset),
+        offsetFaceSetKey(state.target)
       ]);
     case 'edges':
       return JSON.stringify([state.mode, state.op, state.edges]);
@@ -723,7 +791,7 @@ export function escapeTarget(
   | 'exit-sketch'
   | 'none' {
   if (state.mode === 'idle') {
-    return 'none';
+    return state.boxSelectProfiles ? 'clear-selection' : 'none';
   }
   if (state.mode === 'sketch') {
     // A held object drag is the innermost rung of all: one press drops the
@@ -903,6 +971,10 @@ function reduceInteraction(
         ...ARMED
       };
     }
+    case 'pick-extrude-profiles':
+      return state.mode === 'sketch'
+        ? state
+        : { mode: 'idle', boxSelectProfiles: true };
     case 'select-region': {
       if (state.mode === 'sketch') {
         return state;
@@ -916,6 +988,10 @@ function reduceInteraction(
       const sameSketch =
         state.mode === 'region' &&
         state.target.sketchId === event.target.sketchId;
+      const boxSelectProfiles =
+        event.boxSelectProfiles ||
+        ((state.mode === 'idle' || state.mode === 'region') &&
+          state.boxSelectProfiles);
       const targets = nextRegionTargets(
         event.additive && sameSketch ? state.targets : [],
         regionPickGroup(event.target, event.group)
@@ -929,6 +1005,7 @@ function reduceInteraction(
           targets.find((target) => sameRegion(target, event.target)) ??
           targets[targets.length - 1]!,
         targets,
+        ...(boxSelectProfiles ? { boxSelectProfiles } : {}),
         ...(sameSketch ? { extrudeChoice: state.extrudeChoice } : {}),
         ...ARMED
       };
@@ -1135,7 +1212,9 @@ function reduceInteraction(
           // key again keeps what is being typed. Any other tool drops it.
           textDraft:
             event.tool === 'text'
-              ? (composingTextDraft(state) ?? newSketchTextDraft())
+              ? event.textAnchor
+                ? newSketchTextDraft(event.textAnchor)
+                : (composingTextDraft(state) ?? newSketchTextDraft())
               : null
         }
       };
@@ -1190,8 +1269,11 @@ function reduceInteraction(
             ? {
                 kind: event.kind,
                 picks: [],
-                // Mirror over a selection asks only for the axis.
-                ...(event.kind === 'mirror' &&
+                // Mirror or a pattern over a selection asks only for the
+                // axis, direction or pivot.
+                ...((event.kind === 'mirror' ||
+                  event.kind === 'linear-pattern' ||
+                  event.kind === 'circular-pattern') &&
                 sketchSelectedObjectIds(state.session).length > 0
                   ? { sources: sketchSelectedObjectIds(state.session) }
                   : {})
@@ -1218,13 +1300,13 @@ function reduceInteraction(
             }
           }
         : state;
-    case 'sketch-offset-options':
+    case 'sketch-modify-options':
       // A setting of the tool, like the polygon's side count: it never
       // disarms the tool or drops a pick.
       return state.mode === 'sketch'
         ? {
             ...state,
-            session: { ...state.session, offsetOptions: event.options }
+            session: { ...state.session, modifyOptions: event.options }
           }
         : state;
     case 'sketch-edit-pick':
@@ -1533,9 +1615,10 @@ function commandIdentityFor(state: InteractionState): CommandIdentity | null {
             : {
                 id: 'offset-face',
                 icon: 'offset-face',
-                title:
-                  state.target.resizeBodyFeatureId &&
-                  !state.target.localFaceOffset
+                title: state.target.offsetFaceSet
+                  ? 'Offset Faces'
+                  : state.target.resizeBodyFeatureId &&
+                      !state.target.localFaceOffset
                     ? 'Resize Body'
                     : 'Offset Face',
                 eyebrow: 'direct'
@@ -1619,7 +1702,8 @@ export function commandSessionFor(
  */
 export function faceOffsetPlanKey(state: InteractionState): string | null {
   if (state.mode !== 'face' || state.op !== 'offset-face') return null;
-  return `${state.op}:${state.target.bodyId}:${state.target.topologyId}:${Boolean(state.target.localFaceOffset)}`;
+  const set = offsetFaceSetKey(state.target);
+  return `${state.op}:${state.target.bodyId}:${state.target.topologyId}:${Boolean(state.target.localFaceOffset)}${set ? `:${set}` : ''}`;
 }
 
 /** What the latest face-offset plan for a selection does to history. */
@@ -1696,6 +1780,47 @@ export function holdsRefusal(state: InteractionState): boolean {
     (state.phase === 'failed' ||
       (state.phase === 'dragging' && state.error !== null))
   );
+}
+
+/**
+ * What a refused edit was made on, for the top bar's "Edit not applied" chip:
+ * the face (or face set), edges or regions, whatever command and offset mode
+ * held them, since a re-pick of the same face rebuilds its target in the
+ * default mode. Null when the machine holds nothing; a sketch is a subject of
+ * its own.
+ */
+export function refusalSubjectKey(state: InteractionState): string | null {
+  switch (state.mode) {
+    case 'idle':
+      return null;
+    case 'sketch':
+      return JSON.stringify(['sketch']);
+    case 'face':
+      return JSON.stringify([
+        state.mode,
+        state.target.bodyId,
+        state.target.topologyId,
+        offsetFaceSetKey(state.target)
+      ]);
+    default:
+      return operationSelectionKey(state);
+  }
+}
+
+/**
+ * Whether the selection has moved on from a refused edit made on
+ * `refusedKey`: `current` is the subject now picked (`refusalSubjectKey`, or
+ * the workspace's own key for a pick the machine does not hold), null when
+ * nothing is. Picking something else has; the chip described the earlier
+ * pick and was stale beside the new one. A plain deselection has not; the
+ * chip stays as its link to the refusal's Activity log entry (#1596).
+ * Neither has re-picking the refused subject.
+ */
+export function movedOnFromRefusal(
+  current: string | null,
+  refusedKey: string | null
+): boolean {
+  return current !== null && current !== refusedKey;
 }
 
 /**

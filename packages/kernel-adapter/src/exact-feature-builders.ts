@@ -1,3 +1,4 @@
+import type { PatternOverlapWorkers } from './pattern-overlap-workers';
 import {
   faceReferenceRepairCandidate,
   faceSelectionRepairCandidates
@@ -14,6 +15,7 @@ import {
   resolveThread,
   threadPrintAdvisories
 } from './exact-thread';
+import { drillFeatureBores } from './exact-point-hole-cuts';
 import { requireValidSolid } from './kernel-validation';
 import {
   cutKeptToolMaterialMeshRefusal,
@@ -26,6 +28,7 @@ import {
 import {
   carryAnalyticFaces,
   draftLineage,
+  nameAddedFaces,
   SHELL_DRAFT_LINEAGE_FACE_LIMIT,
   shellLineage,
   holeLineage,
@@ -44,10 +47,26 @@ import {
   validateKeepOriginals
 } from '@openzcad/document-core';
 import { throughAllSpan, unionBounds } from './through-all';
-import { toFaceSweepFeature } from './extrude-options';
+import { resolveToFaceTarget, toFaceSweepFeature } from './extrude-options';
+import {
+  planSlantedToFace,
+  trimToSlantedFace
+} from './extrude-to-face-slanted';
+import { planCurvedToFace, trimToCurvedFace } from './extrude-to-surface';
+import {
+  toNextReach,
+  toNextSweepFeature,
+  trimToNext,
+  type ToNextReach
+} from './extrude-to-next';
 import {
   axisPlaneDatumPoint,
   axisRotationMatrix,
+  chainPathCurves,
+  pathPatternCurves,
+  pathPatternFitProblem,
+  pathStationAt,
+  pathTurnDeg,
   csysAlignMatrix,
   csysDatumAxis,
   offsetDatumPoint,
@@ -67,6 +86,7 @@ import {
   type PlaneBasis,
   type Vec3
 } from '@openzcad/geometry';
+import { fuseSeparatedGridRows } from './exact-grid-row-fusion';
 import { buildFeaturePattern } from './exact-feature-pattern';
 import {
   FULL_REVOLVE_ANGLE_DEG,
@@ -77,6 +97,7 @@ import {
   ownEntry,
   millimetresPerUnit,
   isDatumPlaneRef,
+  transformStampBodyIds,
   type BodyId,
   type DatumPlaneSource,
   type DatumPointSource,
@@ -107,8 +128,8 @@ import {
   type RemusNativeVertexState
 } from './remus-native-vertices';
 import { measureFaceGeometry } from './exact-measure';
+import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
-  drillHole,
   tryExactCoaxialCylinderCut,
   type HoleToolSpec
 } from './exact-cylinder-ops';
@@ -134,6 +155,7 @@ import {
   sharedShapeVolume,
   shapesShareMaterialOrTouch,
   sharedSolidVolume,
+  prepareLinearIntersections,
   solidsHavePositiveExactIntersection,
   solidsShareMaterialOrTouch,
   tessellatedFaceBounds,
@@ -168,7 +190,7 @@ import {
   importStepWithOwnBudget,
   stepImportEmptyReason
 } from './kernel-step-import';
-import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
+import { MEASUREMENT_DEFLECTION, edgeWitnessOf } from './exact-witnesses';
 import { isBlendFace } from './exact-brep';
 import { priorBlendFaceTest } from './exact-prior-blend';
 import { importedMeshCacheKey } from './exact-imported-mesh-cache';
@@ -448,9 +470,12 @@ function buildDirectEditFeature(
   }
   const deferOutputLineage =
     ctx.deferredDirectEditFeatureId === feature.featureId &&
-    ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
-      data.operation.kind
-    ) &&
+    [
+      'offset-face',
+      'offset-faces',
+      'resize-blend',
+      'resize-cylindrical-face'
+    ].includes(data.operation.kind) &&
     target.solids.length === 1;
   const repair =
     !deferOutputLineage && !data.operation.faceReference
@@ -723,12 +748,17 @@ function throughAllSweepFeature(
   const side = data.throughAllSide!;
   let span: { forward: number; backward: number };
   try {
-    span = throughAllSpan(
-      unionBounds(target.solids.map((solid) => kernel.boundingBox(solid))),
-      basis.origin,
-      basis.normal,
-      side
-    );
+    span =
+      data.operation === 'add'
+        ? exactAddSpan(kernel, target.solids, basis, side, targetName)
+        : throughAllSpan(
+            unionBounds(
+              target.solids.map((solid) => kernel.boundingBox(solid))
+            ),
+            basis.origin,
+            basis.normal,
+            side
+          );
   } catch (error) {
     throw new Error(
       `${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')} (target ${targetName}, side ${side}).`,
@@ -752,6 +782,203 @@ function throughAllSweepFeature(
   return { ...feature, data: { ...rest, ...extent } };
 }
 
+/**
+ * F01 (v130): an extrude up to the next face, resolved at this history
+ * position: its one add or cut target (missing, consumed or mesh targets
+ * refuse by name, as for any stored add or cut), and the long blind sweep
+ * whose regions `trimToNext` keeps.
+ */
+function toNextFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'extrude'>
+): {
+  sweep: FeatureNode;
+  target: ExactShape;
+  targetName: string;
+  operation: 'add' | 'cut';
+  reach: ToNextReach;
+} {
+  const { kernel, document, result, scope } = ctx;
+  const operation = data.operation;
+  if (operation !== 'add' && operation !== 'cut') {
+    throw new Error('Up to next is available for an add or a cut only.');
+  }
+  const targetBodyId = data.targetBodyId!;
+  const targetName = bodyName(document, targetBodyId);
+  if (result.consumed.has(targetBodyId)) {
+    throw new Error(`Up-to-next target ${targetName} was already consumed.`);
+  }
+  if (result.meshBodies.has(targetBodyId)) {
+    throw meshBooleanUnsupportedError(targetName);
+  }
+  const target = result.shapes.get(targetBodyId);
+  if (!target) {
+    throw new Error(`Up-to-next target ${targetName} is unavailable.`);
+  }
+  const basis = result.sketchBases.get(data.sketchId);
+  if (!basis) {
+    throw new Error('Up-to-next sketch plane did not resolve.');
+  }
+  const reach = toNextReach(
+    kernel,
+    document,
+    data,
+    basis,
+    target,
+    targetName,
+    scope
+  );
+  const sign =
+    reach.direction.x * basis.normal.x +
+      reach.direction.y * basis.normal.y +
+      reach.direction.z * basis.normal.z <
+    0
+      ? -1
+      : 1;
+  return {
+    sweep: toNextSweepFeature(feature, data, reach, sign),
+    target,
+    targetName,
+    operation,
+    reach
+  };
+}
+
+/**
+ * F01: an add through all must stop exactly where the target does along the
+ * sketch normal, since any overshoot is new material (a cut's conservative
+ * box span only removes the target's own). The extremes are bounded edge by
+ * edge, within the kernel's linear tolerance:
+ * - a straight edge by its ends;
+ * - a full circle exactly, by its centre's height ± r·sin(tilt);
+ * - an arc only when its plane is square to the normal (its whole run at
+ *   one height);
+ * and faces: planar faces reach their extremes on their edges, and a
+ * cylinder does when its axis runs along the normal (r·sin(tilt) within the
+ * tolerance). Any other edge or face (an ellipse, a spline, a leaning
+ * cylinder, a sphere) refuses by name rather than add material past the
+ * target or stop short of it.
+ */
+function exactAddSpan(
+  kernel: RemusKernel,
+  solids: readonly number[],
+  basis: PlaneBasis,
+  side: NonNullable<FeatureDataOf<'extrude'>['throughAllSide']>,
+  targetName: string
+): { forward: number; backward: number } {
+  const n = basis.normal;
+  const along = (p: ArrayLike<number>) =>
+    (p[0]! - basis.origin.x) * n.x +
+    (p[1]! - basis.origin.y) * n.y +
+    (p[2]! - basis.origin.z) * n.z;
+  const refuse = (what: string) =>
+    new Error(
+      `An add through all reaches exactly as far as its target, and ${targetName} has ${what} whose extent along the sketch normal cannot be read exactly; use Up to next or a distance.`
+    );
+  // sin of the angle between a unit vector and the normal.
+  const tilt = (v: { x: number; y: number; z: number }) => {
+    const c = v.x * n.x + v.y * n.y + v.z * n.z;
+    return Math.sqrt(Math.max(0, 1 - c * c));
+  };
+  let high = -Infinity;
+  let low = Infinity;
+  const reach = (t: number) => {
+    high = Math.max(high, t);
+    low = Math.min(low, t);
+  };
+  for (const solid of solids) {
+    for (const face of Array.from(kernel.getSolidFaces(solid))) {
+      const surface = kernel.getSurfaceType(face).toLowerCase();
+      if (surface === 'plane') continue;
+      if (surface === 'cylinder') {
+        const geometry = measureFaceGeometry(kernel, face);
+        if (geometry?.axisStart && geometry.axisEnd && geometry.radius) {
+          const axis = {
+            x: geometry.axisEnd.x - geometry.axisStart.x,
+            y: geometry.axisEnd.y - geometry.axisStart.y,
+            z: geometry.axisEnd.z - geometry.axisStart.z
+          };
+          const size = Math.hypot(axis.x, axis.y, axis.z);
+          if (
+            size > 0 &&
+            geometry.radius *
+              tilt({ x: axis.x / size, y: axis.y / size, z: axis.z / size }) <=
+              GEOMETRY_LINEAR_TOLERANCE
+          ) {
+            continue;
+          }
+        }
+      }
+      throw refuse(`a ${surface} face`);
+    }
+    for (const edge of Array.from(kernel.getSolidEdges(solid))) {
+      const type = kernel.getEdgeCurveType(edge);
+      const span = kernel.getEdgeParamSpan(edge);
+      const at = (t: number) => kernel.evaluateEdgeCurve(edge, t);
+      const t0 = span[0]!;
+      const t1 = span[1]!;
+      if (type === 'LINE') {
+        reach(along(at(t0)));
+        reach(along(at(t1)));
+        continue;
+      }
+      if (type === 'CIRCLE') {
+        // The circle's plane and centre from three exact points on it.
+        const a = at(t0);
+        const b = at(t0 + (t1 - t0) / 3);
+        const c = at(t0 + (2 * (t1 - t0)) / 3);
+        const u = { x: b[0]! - a[0]!, y: b[1]! - a[1]!, z: b[2]! - a[2]! };
+        const v = { x: c[0]! - a[0]!, y: c[1]! - a[1]!, z: c[2]! - a[2]! };
+        const w = {
+          x: u.y * v.z - u.z * v.y,
+          y: u.z * v.x - u.x * v.z,
+          z: u.x * v.y - u.y * v.x
+        };
+        const size = Math.hypot(w.x, w.y, w.z);
+        if (!(size > 0)) throw refuse('a degenerate round edge');
+        const normal = { x: w.x / size, y: w.y / size, z: w.z / size };
+        // Circumradius of the three points.
+        const lu = Math.hypot(u.x, u.y, u.z);
+        const lv = Math.hypot(v.x, v.y, v.z);
+        const uv = Math.hypot(b[0]! - c[0]!, b[1]! - c[1]!, b[2]! - c[2]!);
+        const radius = (lu * lv * uv) / (2 * size);
+        const lean = radius * tilt(normal);
+        const full = Math.abs(Math.abs(t1 - t0) - 2 * Math.PI) <= 1e-9;
+        if (lean <= GEOMETRY_LINEAR_TOLERANCE) {
+          reach(along(a));
+          continue;
+        }
+        if (!full) throw refuse('a leaning arc');
+        // A whole circle's extremes: its centre ± r·sin(tilt).
+        const mid = at(t0 + (t1 - t0) / 2);
+        const centre = [
+          (a[0]! + mid[0]!) / 2,
+          (a[1]! + mid[1]!) / 2,
+          (a[2]! + mid[2]!) / 2
+        ];
+        reach(along(centre) + lean);
+        reach(along(centre) - lean);
+        continue;
+      }
+      throw refuse(`a ${type.toLowerCase()} edge`);
+    }
+  }
+  const forward = Math.max(0, high);
+  const backward = Math.max(0, -low);
+  if (
+    (side === 'forward' && !(forward > 1e-9)) ||
+    (side === 'backward' && !(backward > 1e-9)) ||
+    (side === 'both' && !(forward > 1e-9 || backward > 1e-9))
+  ) {
+    throw new Error('Through-all has no target in the selected direction.');
+  }
+  return {
+    forward: side === 'backward' ? 0 : forward,
+    backward: side === 'forward' ? 0 : backward
+  };
+}
+
 function buildExtrudeFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -769,20 +996,102 @@ function buildExtrudeFeature(
     // the ordinary cut it then is. The stored feature is never rewritten.
     // A to-face extrude likewise sweeps the blind distance its face resolves
     // to here, or refuses as unresolved when the face no longer does.
+    // F01 (v130): an extrude up to the next face sweeps past the whole
+    // target and keeps the regions standing on its start plane (see
+    // `trimToNext`); everything after that treats them as the extrusion.
+    const toNext =
+      data.endCondition === 'to-next'
+        ? toNextFeature(ctx, feature, data)
+        : null;
+    // A face parallel to the sketch keeps the derived blind distance it
+    // always had; a slanted one sweeps past it and is split by its plane.
+    // F01 (v131): a curved face sweeps past it and keeps the near side of
+    // its cylinder.
+    const curved =
+      data.endCondition === 'to-face' && data.toSurface !== undefined
+        ? planCurvedToFace(
+            kernel,
+            document,
+            feature,
+            data,
+            result.sketchBases.get(data.sketchId)!,
+            result.sketchBases,
+            result,
+            scope
+          )
+        : null;
+    const toFace =
+      data.endCondition === 'to-face' && !curved
+        ? resolveToFaceTarget(kernel, document, feature, data, result)
+        : null;
+    const slanted =
+      toFace?.kind === 'slanted'
+        ? planSlantedToFace(
+            kernel,
+            document,
+            feature,
+            data,
+            toFace.frame,
+            result.sketchBases.get(data.sketchId)!,
+            result.sketchBases,
+            scope
+          )
+        : null;
     const sweepFeature =
       data.endCondition === 'through-all'
         ? throughAllSweepFeature(ctx, feature, data)
-        : data.endCondition === 'to-face'
-          ? toFaceSweepFeature(kernel, document, feature, data, result)
-          : feature;
-    const extrusion = buildSweep(
-      kernel,
-      document,
-      sweepFeature,
-      scope,
-      result.sketchBases,
-      (message) => raiseFeatureWarning(result, feature, message, 'advisory')
-    );
+        : curved
+          ? curved.sweep
+          : slanted
+            ? slanted.sweep
+            : data.endCondition === 'to-face'
+              ? toFaceSweepFeature(
+                  kernel,
+                  document,
+                  feature,
+                  data,
+                  result,
+                  scope,
+                  toFace?.kind === 'parallel' ? toFace.distance : undefined
+                )
+              : toNext
+                ? toNext.sweep
+                : feature;
+    const sweepOf = (node: FeatureNode) =>
+      buildSweep(kernel, document, node, scope, result.sketchBases, (message) =>
+        raiseFeatureWarning(result, feature, message, 'advisory')
+      );
+    // A curved face's full sweep may be longer than a narrowing draft can
+    // run before it closes; its body-reach sweep is the one fallback.
+    let curvedPlan = curved?.curved;
+    let swept: ExactShape;
+    try {
+      swept = sweepOf(sweepFeature);
+    } catch (error) {
+      if (!curved?.fallback) throw error;
+      swept = sweepOf(curved.fallback.sweep);
+      curvedPlan = curved.fallback.curved;
+    }
+    const extrusion = curvedPlan
+      ? trimToCurvedFace(kernel, swept, curvedPlan, `Extrude "${feature.name}"`)
+      : slanted
+        ? trimToSlantedFace(
+            kernel,
+            swept,
+            slanted.slanted,
+            `Extrude "${feature.name}"`
+          )
+        : toNext
+          ? trimToNext(
+              kernel,
+              swept,
+              toNext.target,
+              toNext.operation,
+              toNext.reach,
+              `Extrude "${feature.name}"`,
+              toNext.targetName
+            )
+          : swept;
     const operation = data.operation ?? 'new-body';
     if (operation === 'new-body') {
       // Recorded so a later boolean can rebuild this exact tool with pierce
@@ -847,7 +1156,9 @@ function buildExtrudeFeature(
       extrusion,
       targetBody,
       extrusionBody,
-      throughAll ? overlapRegionTolerance(targetBody, extrusionBody) : undefined
+      throughAll || toNext
+        ? overlapRegionTolerance(targetBody, extrusionBody)
+        : undefined
     );
     // A cut needs shared material: with none there is nothing to remove, and
     // that can be settled before doing any work. That holds for through-all
@@ -932,7 +1243,9 @@ function buildExtrudeFeature(
       combined = retryCoplanarRefusal(
         error,
         () =>
-          operation === 'intersect'
+          // A to-next tool is regions of the target, not the swept feature
+          // a pierced twin rebuilds.
+          operation === 'intersect' || toNext || slanted || curved
             ? null
             : piercedExtrudeTool(
                 ctx,
@@ -949,7 +1262,7 @@ function buildExtrudeFeature(
     // typed coplanar refusal; never accept an invalid result or extend a
     // tool through an existing hole or a thin cavity roof.
     if (combined.union && verdictRefusesUnion(combined.union.verdict)) {
-      if (combined.tool === extrusion) {
+      if (combined.tool === extrusion && !toNext && !slanted && !curved) {
         const pierced = piercedExtrudeTool(
           ctx,
           sweepFeature,
@@ -1282,8 +1595,25 @@ function buildTransformFeature(
     allowUniformScale
   );
   result.shapes.set(resultBodyId, transformed);
+  // M10 (schema v137): each further stamp is the same transform on from the
+  // copy before it, so stamp k lands where k + 1 applications would put the
+  // source, and its edges stay addressable through the same verified copy.
+  const stamps = transformStampBodyIds(data);
+  let previous = transformed;
+  for (const stampBodyId of stamps) {
+    previous = copyShapeWithVerifiedLineage(
+      kernel,
+      previous,
+      matrix,
+      allowUniformScale
+    );
+    result.shapes.set(stampBodyId, previous);
+    inheritMeshOrigin(result, data.targetBodyId, stampBodyId);
+  }
   try {
-    if (data.axisRotation || data.csysAlign) ctx.idleLineageView?.abandon();
+    // The alternate view follows one result body per transform.
+    if (data.axisRotation || data.csysAlign || stamps.length)
+      ctx.idleLineageView?.abandon();
     else
       ctx.idleLineageView?.transform(
         kernel,
@@ -1740,17 +2070,16 @@ function buildHoleFeature(
   const { bores, shape, targetSolid } = holeToolSpecFor(ctx, data);
   // One bore at a time, each proven as a single hole is: a bore that misses
   // the body or cuts nothing refuses by its point, never silently dropped.
-  let drilled = targetSolid;
-  for (const { spec, pointId } of bores) {
-    try {
-      drilled = drillHole(kernel, drilled, spec);
-    } catch (error) {
-      if (pointId === null || !(error instanceof Error)) throw error;
-      throw new Error(`At sketch point ${pointId}: ${error.message}`, {
-        cause: error
-      });
-    }
-  }
+  let drilled = drillFeatureBores(
+    kernel,
+    ctx.document.projectId,
+    targetSolid,
+    bores,
+    data.points !== undefined &&
+      data.style === 'simple' &&
+      !data.tapped &&
+      shape.rectangularStock === targetSolid
+  );
   // M01 (schema v66): each bore tapped with the standard's thread; a
   // cosmetic one (schema v67) is described, not cut.
   if (data.tapped && !data.tapped.cosmetic) {
@@ -2333,6 +2662,8 @@ function buildRibFeature(
   data: FeatureDataOf<'rib'>
 ): void {
   const { kernel, result } = ctx;
+  // M02: recorded again below only if this build succeeds.
+  result.builtRibs?.delete(feature.featureId);
   if (!feature.bodyId) throw new Error('Rib has no result body.');
   const target = result.shapes.get(data.targetBodyId);
   if (!target || target.solids.length !== 1) {
@@ -2358,14 +2689,26 @@ function buildRibFeature(
     [target.solids[0]!, rib],
     [`body of "${feature.name}"`, `rib "${feature.name}"`]
   );
+  // M02: the body's names carried where its faces are only trimmed, and the
+  // rib's own faces named after themselves, so a click on one names the rib
+  // and a feature pattern can name its copies.
+  const lineage = carryAnalyticFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage
+  );
+  nameAddedFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    lineage,
+    feature.featureId,
+    'rib.face'
+  );
+  (result.builtRibs ??= new Set()).add(feature.featureId);
   result.consumed.add(data.targetBodyId);
-  result.shapes.set(feature.bodyId, {
-    solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'rib',
-      'Rib topology has no verified output evolution relation.'
-    )
-  });
+  result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
@@ -2379,6 +2722,8 @@ function buildWrapFeature(
   data: FeatureDataOf<'wrap'>
 ): void {
   const { kernel, result } = ctx;
+  // M02: recorded again below only if this build succeeds.
+  result.wrapFrames?.delete(feature.featureId);
   if (!feature.bodyId) throw new Error('Wrap has no result body.');
   const target = result.shapes.get(data.targetBodyId);
   if (!target || target.solids.length !== 1) {
@@ -2386,7 +2731,9 @@ function buildWrapFeature(
   }
   const basis = result.sketchBases.get(data.sketchId);
   if (!basis) {
-    throw new Error('The wrap sketch plane did not resolve at its history position.');
+    throw new Error(
+      'The wrap sketch plane did not resolve at its history position.'
+    );
   }
   const frame = resolveWrapFrame(
     kernel,
@@ -2412,7 +2759,10 @@ function buildWrapFeature(
     solid = fuseUniformSolidChecked(
       kernel,
       [target.solids[0]!, ...pieces],
-      [`body of "${feature.name}"`, ...pieces.map(() => `wrap "${feature.name}"`)]
+      [
+        `body of "${feature.name}"`,
+        ...pieces.map(() => `wrap "${feature.name}"`)
+      ]
     ).solid;
   } else {
     solid = target.solids[0]!;
@@ -2422,14 +2772,26 @@ function buildWrapFeature(
       solid = validateGeneratedSolid(kernel, cut, `Engrave "${feature.name}"`);
     }
   }
+  // M02: the body's names carried where its faces are only trimmed, and the
+  // wrap's own faces named after themselves, so a click on one names the
+  // wrap and a feature pattern can name its copies.
+  const lineage = carryAnalyticFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage
+  );
+  nameAddedFaces(
+    kernel,
+    target.solids[0]!,
+    solid,
+    lineage,
+    feature.featureId,
+    'wrap.face'
+  );
+  (result.wrapFrames ??= new Map()).set(feature.featureId, frame);
   result.consumed.add(data.targetBodyId);
-  result.shapes.set(feature.bodyId, {
-    solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'wrap',
-      'Wrap topology has no verified output evolution relation.'
-    )
-  });
+  result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
@@ -3154,42 +3516,20 @@ function combineBooleanOperands(
   }
 }
 
-function buildEdgeModifierFeature(
+/**
+ * A fillet's or chamfer's resolved size and options, checked as its build
+ * checks them; shared with M02 patterns that repeat it.
+ */
+export function edgeModifierSettings(
   ctx: FeatureBuildContext,
-  feature: FeatureNode,
   data: FeatureDataOf<'fillet' | 'chamfer'>
-): void {
-  const { kernel, document, scope, result } = ctx;
-  if (!feature.bodyId) {
-    throw new Error('Edge modifier has no result body.');
-  }
-  const storedTarget = result.shapes.get(data.targetBodyId);
-  if (!storedTarget) {
-    throw new Error('Edge modifier target is unavailable.');
-  }
-  const target = collapseShape(kernel, storedTarget);
-  const {
-    handles: selected,
-    repairedReferences,
-    carriedHashes
-  } = resolveEdgeModifierEdges(
-    kernel,
-    storedTarget,
-    target,
-    data.edgeHashes,
-    data.edgeReferences,
-    ctx.edgeSelections
-      ? {
-          memory: ctx.edgeSelections,
-          key: edgeSelectionKey(document.projectId, feature.featureId),
-          propose: ctx.proposeCarry === true,
-          // The build's state so far: the frames earlier features resolved.
-          upstream: () =>
-            upstreamSnapshot(document, feature.featureId, ctx.result)
-        }
-      : undefined,
-    ctx.onUnresolvedEdgeHash
-  );
+): {
+  size: number;
+  chamferAngleRadians: number | undefined;
+  variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
+  chamferSecondDistance: number | undefined;
+} {
+  const { document, scope } = ctx;
   const size = resolveParamValue(
     data.featureKind === 'fillet' ? data.radius : data.distance,
     scope,
@@ -3255,6 +3595,53 @@ function buildEdgeModifierFeature(
       throw new Error('Chamfer second distance must be greater than zero.');
     }
   }
+  return { size, chamferAngleRadians, variableRadius, chamferSecondDistance };
+}
+
+function buildEdgeModifierFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode,
+  data: FeatureDataOf<'fillet' | 'chamfer'>
+): void {
+  const { kernel, document, result } = ctx;
+  // M02: recorded again below only if this build succeeds (re-check).
+  result.blendEdgeWitnesses?.delete(feature.featureId);
+  if (!feature.bodyId) {
+    throw new Error('Edge modifier has no result body.');
+  }
+  const storedTarget = result.shapes.get(data.targetBodyId);
+  if (!storedTarget) {
+    throw new Error('Edge modifier target is unavailable.');
+  }
+  const target = collapseShape(kernel, storedTarget);
+  const {
+    handles: selected,
+    repairedReferences,
+    carriedHashes
+  } = resolveEdgeModifierEdges(
+    kernel,
+    storedTarget,
+    target,
+    data.edgeHashes,
+    data.edgeReferences,
+    ctx.edgeSelections
+      ? {
+          memory: ctx.edgeSelections,
+          key: edgeSelectionKey(document.projectId, feature.featureId),
+          propose: ctx.proposeCarry === true,
+          // The build's state so far: the frames earlier features resolved.
+          upstream: () =>
+            upstreamSnapshot(document, feature.featureId, ctx.result)
+        }
+      : undefined,
+    ctx.onUnresolvedEdgeHash
+  );
+  const { size, chamferAngleRadians, variableRadius, chamferSecondDistance } =
+    edgeModifierSettings(ctx, data);
+  // M02: where these edges stand now, measured before they are rounded, for
+  // a feature pattern that repeats this one (review: an upstream edit moves
+  // them away from the stored pick).
+  const builtEdges = selected.map((edge) => edgeWitnessOf(kernel, edge));
   let reportedRefusal: string | null = null;
   // The kernel's typed refusal of the requested size, kept beside its text
   // so the thrown refusal carries the kernel's classification. Cleared by a
@@ -3398,6 +3785,7 @@ function buildEdgeModifierFeature(
       'advisory'
     );
   }
+  (result.blendEdgeWitnesses ??= new Map()).set(feature.featureId, builtEdges);
   // Only a feature that actually rebuilt earns a repair: a thrown
   // modifier above skips this, and the legacy selection stays as it
   // was for the user to fix.
@@ -4019,6 +4407,130 @@ function pointsPatternArm(
   };
 }
 
+/**
+ * M02 (schema v112): the arm along a sketch path. Instance `i` stands `i ×
+ * spacing` along the chained lines and arcs from the path's start, where
+ * the original stands, moved there and, with `orientation: 'tangent'`, also
+ * turned in the sketch plane by how far the path has turned. A path has no
+ * kernel pattern entry point, so every copy is the rigid copy-and-transform
+ * build, fused where copies overlap as any pattern's are.
+ */
+function pathPatternArm(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'pattern'>,
+  count: number,
+  spacing: number
+): PatternArm {
+  const path = data.path;
+  if (!path) {
+    throw new Error('A pattern along a path needs its sketch and curves.');
+  }
+  const basis = ctx.result.sketchBases.get(path.sketchId);
+  const sketch = findSketch(ctx.document, path.sketchId);
+  if (!sketch || !basis) {
+    throw new Error(
+      `The sketch this pattern runs along${sketch ? ` (${sketch.name})` : ''} did not resolve.`
+    );
+  }
+  const curves = pathPatternCurves(ctx.document, path, (value, label) =>
+    resolveParamValue(value, ctx.scope, label, ctx.document.units)
+  );
+  if (typeof curves === 'string') throw new Error(curves);
+  const chain = chainPathCurves(curves, path.reversed === true);
+  if (typeof chain === 'string') {
+    throw new Error(`${chain} (${sketch.name})`);
+  }
+  const fit = pathPatternFitProblem(chain, count, spacing);
+  if (fit) throw new Error(fit);
+  const world = (point: { x: number; y: number }) => ({
+    x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+    y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+    z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+  });
+  const stations = Array.from({ length: count }, (_unused, index) => {
+    const station = pathStationAt(chain, spacing * index);
+    if (!station) throw new Error('A copy fell past the end of the path.');
+    return station;
+  });
+  const start = stations[0]!;
+  const from = world(start.point);
+  const normal = normalized(cross(basis.u, basis.v)) ?? basis.normal;
+  const turning = path.orientation === 'tangent';
+  return {
+    total: count,
+    label: (index) => String(index),
+    matrix: (index) => {
+      const to = world(stations[index]!.point);
+      const moved = transformMatrix(
+        { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z },
+        PATTERN_ORIGIN
+      );
+      if (!turning || index === 0) return moved;
+      // Turned about the sketch normal through the start, then moved: the
+      // copy keeps its place relative to the path's direction.
+      return composeAffine(
+        moved,
+        affineMatrix(
+          axisRotationMatrix(
+            { origin: from, direction: normal },
+            pathTurnDeg(start, stations[index]!)
+          )
+        )
+      );
+    },
+    kernelCopies: null
+  };
+}
+
+/**
+ * M02 (schema v119): the mirror arm. Instance 1 is the original reflected in
+ * the plane, x ↦ x − 2((x − p)·n)n; it is labelled "1" as a linear pattern's
+ * second instance is. A reflection has no kernel pattern entry point, so it
+ * is the rigid copy-and-transform build, fused where it overlaps the
+ * original as any pattern's copies are.
+ */
+function mirrorPatternArm(
+  ctx: FeatureBuildContext,
+  data: FeatureDataOf<'pattern'>
+): PatternArm {
+  if (!data.mirrorPlane) {
+    throw new Error('A mirror pattern needs the plane it mirrors in.');
+  }
+  const { planePoint, planeNormal } = resolveOperationPlane(
+    ctx,
+    data.mirrorPlane,
+    'mirror'
+  );
+  const n = planeNormal && normalized(planeNormal);
+  if (!n) {
+    throw new Error('Mirror plane normal must be finite and non-zero.');
+  }
+  const along = 2 * dot(planePoint, n);
+  const reflection = affineMatrix([
+    1 - 2 * n.x * n.x,
+    -2 * n.x * n.y,
+    -2 * n.x * n.z,
+    along * n.x,
+    -2 * n.y * n.x,
+    1 - 2 * n.y * n.y,
+    -2 * n.y * n.z,
+    along * n.y,
+    -2 * n.z * n.x,
+    -2 * n.z * n.y,
+    1 - 2 * n.z * n.z,
+    along * n.z
+  ]);
+  return {
+    total: 2,
+    label: (index) => String(index),
+    matrix: (index) =>
+      index === 0
+        ? transformMatrix(PATTERN_ORIGIN, PATTERN_ORIGIN)
+        : reflection,
+    kernelCopies: null
+  };
+}
+
 /** Records a kernel refusal alongside whatever lineage the build published. */
 function withPatternDiagnostic(
   state: RemusLineageState,
@@ -4033,8 +4545,9 @@ function withPatternDiagnostic(
 function buildPatternFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
-  data: FeatureDataOf<'pattern'>
-): void {
+  data: FeatureDataOf<'pattern'>,
+  workers?: PatternOverlapWorkers
+): PendingPattern | void {
   const { kernel, scope, result } = ctx;
   if (!feature.bodyId) {
     throw new Error('Pattern has no result body.');
@@ -4072,10 +4585,13 @@ function buildPatternFeature(
   };
   // A points pattern makes one instance per point; its stored count is not
   // read (see FeatureData).
+  // A mirror pattern makes the original and its reflection.
   const count =
     data.patternKind === 'points'
       ? (data.points?.pointIds.length ?? 0)
-      : wholeCount(data.count, 'count');
+      : data.patternKind === 'mirror'
+        ? 2
+        : wholeCount(data.count, 'count');
   if (count < 2 || count > 100) {
     throw new Error('Pattern count must be between 2 and 100.');
   }
@@ -4115,7 +4631,13 @@ function buildPatternFeature(
     if (Math.abs(spacing) <= GEOMETRY_EPSILON) {
       throw new Error('Pattern spacing cannot be zero.');
     }
-    arm = linearPatternArm(kernel, direction, spacing, count);
+    // M02 (schema v120): a total length is shared out between the copies.
+    arm = linearPatternArm(
+      kernel,
+      direction,
+      data.spacingMode === 'total' ? spacing / (count - 1) : spacing,
+      count
+    );
   } else if (data.patternKind === 'grid') {
     const spacing = resolveParamValue(
       data.spacing,
@@ -4151,6 +4673,16 @@ function buildPatternFeature(
     );
   } else if (data.patternKind === 'points') {
     arm = pointsPatternArm(ctx, data);
+  } else if (data.patternKind === 'mirror') {
+    arm = mirrorPatternArm(ctx, data);
+  } else if (data.patternKind === 'path') {
+    const spacing = resolveParamValue(
+      data.spacing,
+      scope,
+      'spacing',
+      ctx.document.units
+    );
+    arm = pathPatternArm(ctx, data, count, spacing);
   } else {
     const angle = resolveParamValue(
       data.angleDeg,
@@ -4216,7 +4748,57 @@ function buildPatternFeature(
       },
       (hole) => holeToolSpecFor(ctx, hole),
       // M01 (schema v66): a tapped hole's copies are tapped as it is.
-      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores)
+      (hole, solid, bores) => tapHoleBores(ctx, feature, hole, solid, bores),
+      // M02: a repeated fillet or chamfer, at each copy's edges, as its own
+      // build applies it; an approximate blend is disclosed as its is.
+      (blend, solid, edges) => {
+        const settings = edgeModifierSettings(ctx, blend);
+        // Two setbacks a copy could swap repeat only when they are equal
+        // (re-check: two equal distances are an even chamfer).
+        if (
+          settings.chamferSecondDistance !== undefined &&
+          Math.abs(settings.chamferSecondDistance - settings.size) >
+            1e-9 * Math.max(1, settings.size)
+        ) {
+          throw new Error(
+            "its faces are set back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly."
+          );
+        }
+        let refusal: string | null = null;
+        let approximate = false;
+        const blended = applyEdgeModifier(
+          kernel,
+          solid,
+          edges,
+          blend.featureKind,
+          settings.size,
+          (message) => {
+            refusal = message;
+          },
+          undefined,
+          settings.chamferAngleRadians,
+          settings.variableRadius,
+          settings.chamferSecondDistance,
+          false,
+          (quality) => {
+            approximate ||= quality.approximate;
+          }
+        );
+        if (blended === null) {
+          throw new Error(
+            refusal ?? `The kernel could not make this ${blend.featureKind}.`
+          );
+        }
+        if (approximate) {
+          raiseFeatureWarning(
+            result,
+            feature,
+            approximateBlendAdvisory(blend.featureKind),
+            'advisory'
+          );
+        }
+        return blended;
+      }
     );
     return;
   }
@@ -4232,7 +4814,18 @@ function buildPatternFeature(
   const instances = patternInstances(arm, perSource).filter(
     (_instance, index) => !skipped.has(index)
   );
-  buildPatternBody(ctx, feature, data, target, arm, instances, kept, declined);
+  return buildPatternBody(
+    ctx,
+    feature,
+    data,
+    target,
+    arm,
+    instances,
+    kept,
+    declined,
+    count2,
+    workers
+  );
 }
 
 /**
@@ -4343,8 +4936,10 @@ function buildPatternBody(
   instances: readonly PatternInstanceBuild[],
   /** Each instance's index in the whole pattern, parallel to `instances`. */
   kept: readonly number[],
-  declined: RemusLineageDiagnostic | null
-): void {
+  declined: RemusLineageDiagnostic | null,
+  wholeGridRows: number,
+  workers?: PatternOverlapWorkers
+): PendingPattern | void {
   const { kernel, scope, result } = ctx;
   if (!feature.bodyId) throw new Error('Pattern has no result body.');
   // The whole ring's count: a skipped copy leaves its place in the ring.
@@ -4380,21 +4975,64 @@ function buildPatternBody(
         )
       ) - 360
     ) <= GEOMETRY_EPSILON;
-  const shared = sharedSolidVolume(
-    kernel,
-    solids,
-    fullTurn
-      ? (left, right) => {
-          const width = target.solids.length;
-          const delta =
-            kept[Math.floor(right / width)]! - kept[Math.floor(left / width)]!;
-          const direct = `${left % width}:${right % width}:${delta}`;
-          const reversed = `${right % width}:${left % width}:${count - delta}`;
-          return direct < reversed ? direct : reversed;
-        }
-      : undefined
-  );
-  if (shared > 0) {
+  const linear = data.patternKind === 'linear' && target.solids.length === 1;
+  const batch =
+    linear && workers
+      ? prepareLinearIntersections(
+          kernel,
+          solids,
+          workers,
+          ctx.cancellation?.signal
+        )
+      : undefined;
+  const measureAll = () =>
+    sharedSolidVolume(
+      kernel,
+      solids,
+      fullTurn
+        ? (left, right) => {
+            const width = target.solids.length;
+            const delta =
+              kept[Math.floor(right / width)]! -
+              kept[Math.floor(left / width)]!;
+            const direct = `${left % width}:${right % width}:${delta}`;
+            const reversed = `${right % width}:${left % width}:${count - delta}`;
+            return direct < reversed ? direct : reversed;
+          }
+        : undefined,
+      linear,
+      workers
+    );
+  if (
+    batch &&
+    !(sharedSolidVolume(kernel, solids.slice(0, 2), undefined, true) > 0)
+  ) {
+    // A skipped instance can leave the first pair disjoint. Finish the
+    // ordinary overlap decision with the remaining pairs already measured.
+    return {
+      ready: batch.ready,
+      finish() {
+        batch.install();
+        buildPatternBody(
+          ctx,
+          feature,
+          data,
+          target,
+          arm,
+          instances,
+          kept,
+          declined,
+          wholeGridRows
+        );
+      }
+    };
+  }
+  const shared = batch ? undefined : measureAll();
+  const consume = () => {
+    result.consumed.add(data.targetBodyId);
+    inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  };
+  if (shared === undefined || shared > 0) {
     const summed = solids.reduce(
       (total, instance) =>
         total + kernel.volume(instance, MEASUREMENT_DEFLECTION),
@@ -4405,15 +5043,32 @@ function buildPatternBody(
     // original at index 0. A refused fuse then names the copy the exact
     // engine declined rather than the whole row.
     const solidsPerInstance = Math.max(1, target.solids.length);
-    const fused = fuseUniformSolid(
-      kernel,
-      solids,
-      solids.map((_solid, index) =>
-        index < solidsPerInstance
-          ? 'the original'
-          : `instance ${kept[Math.floor(index / solidsPerInstance)]! + 1}`
-      )
-    );
+    const rectangular =
+      target.solids.length === 1 &&
+      target.rectangularStock === target.solids[0];
+    const complete = kept.length === count;
+    const raw =
+      rectangular && complete && data.patternKind === 'grid' && !data.direction
+        ? fuseSeparatedGridRows(
+            kernel,
+            solids,
+            wholeGridRows,
+            data.axis2 ?? 'y',
+            arm.matrix
+          )
+        : undefined;
+    const fused =
+      raw !== undefined
+        ? unifyUnionFaces(kernel, raw)
+        : fuseUniformSolid(
+            kernel,
+            solids,
+            solids.map((_solid, index) =>
+              index < solidsPerInstance
+                ? 'the original'
+                : `instance ${kept[Math.floor(index / solidsPerInstance)]! + 1}`
+            )
+          );
     const removed = summed - kernel.volume(fused, MEASUREMENT_DEFLECTION);
     // The fuse is NOT guaranteed to merge. On shallow overlaps it
     // returns the operands essentially untouched — measured on three
@@ -4439,26 +5094,48 @@ function buildPatternBody(
     // out, because this defect survived precisely by being silent:
     // the reported volume and the enclosed mesh agreed, both summing
     // the same list.
-    if (removed < (2 * shared) / solids.length - summed * 1e-8) {
-      raiseFeatureWarning(
-        result,
-        feature,
-        'instances overlap but the merge did not take, so the reported volume counts shared material more than once.',
-        'advisory'
-      );
+    const finishFuse = (totalShared: number) => {
+      const minimumRemoved = (2 * totalShared) / solids.length - summed * 1e-8;
+      if (removed < minimumRemoved) {
+        raiseFeatureWarning(
+          result,
+          feature,
+          'instances overlap but the merge did not take, so the reported volume counts shared material more than once.',
+          'advisory'
+        );
+      }
+      const rectangularRow =
+        rectangular &&
+        complete &&
+        data.patternKind === 'linear' &&
+        !data.direction &&
+        removed >= minimumRemoved &&
+        kernel.getSolidFaces(fused).length === 6;
+      result.shapes.set(feature.bodyId!, {
+        solids: [fused],
+        ...(rectangularRow ? { rectangularStock: fused } : {}),
+        // The fuse rewrites the instance topology and reports no output
+        // relation across itself, so the instance names cannot survive it.
+        lineage: withPatternDiagnostic(
+          remusHashOnlyLineage(
+            'pattern',
+            'Overlapping instances were fused into one solid, which publishes no face output relation.'
+          ),
+          declined
+        )
+      });
+    };
+    if (shared === undefined && batch) {
+      return {
+        ready: batch.ready,
+        finish() {
+          batch.install();
+          finishFuse(measureAll());
+          consume();
+        }
+      };
     }
-    result.shapes.set(feature.bodyId, {
-      solids: [fused],
-      // The fuse rewrites the instance topology and reports no output
-      // relation across itself, so the instance names cannot survive it.
-      lineage: withPatternDiagnostic(
-        remusHashOnlyLineage(
-          'pattern',
-          'Overlapping instances were fused into one solid, which publishes no face output relation.'
-        ),
-        declined
-      )
-    });
+    finishFuse(shared!);
   } else {
     const lineage = withPatternDiagnostic(
       patternInstanceLineage(kernel, feature, target, instances),
@@ -4487,8 +5164,7 @@ function buildPatternBody(
   // mutable result — so a consume-mark set before the fallible fuse survived
   // the failure that cancelled the pattern, and the target vanished from the
   // viewport, the parts list and the STEP scope with nothing replacing it.
-  result.consumed.add(data.targetBodyId);
-  inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  consume();
 }
 
 /**
@@ -4553,22 +5229,38 @@ function faceSelectionRepairs(
   }
 }
 
+export interface PendingPattern {
+  ready: Promise<void>;
+  finish(): void;
+}
+
 /** Per-feature-kind dispatch: one builder owns each history feature. */
 export function buildFeature(
   ctx: FeatureBuildContext,
-  feature: FeatureNode
-): void {
-  // Offered only once the feature has built: a throw below skips the push.
+  feature: FeatureNode,
+  workers?: PatternOverlapWorkers
+): PendingPattern | void {
   const faceRepairs = faceSelectionRepairs(ctx, feature);
-  buildFeatureByKind(ctx, feature);
-  if (faceRepairs.length > 0)
+  const pending = buildFeatureByKind(ctx, feature, workers);
+  if (!faceRepairs.length) return pending;
+  const recordRepairs = () =>
     (ctx.result.faceReferenceRepairs ??= []).push(...faceRepairs);
+  if (pending)
+    return {
+      ready: pending.ready,
+      finish() {
+        pending.finish();
+        recordRepairs();
+      }
+    };
+  recordRepairs();
 }
 
 function buildFeatureByKind(
   ctx: FeatureBuildContext,
-  feature: FeatureNode
-): void {
+  feature: FeatureNode,
+  workers?: PatternOverlapWorkers
+): PendingPattern | void {
   const data = feature.data;
   const targets = [
     ...('targetBodyId' in data && data.targetBodyId ? [data.targetBodyId] : []),
@@ -4666,8 +5358,7 @@ function buildFeatureByKind(
       buildEdgeModifierFeature(ctx, feature, feature.data);
       break;
     case 'pattern':
-      buildPatternFeature(ctx, feature, feature.data);
-      break;
+      return buildPatternFeature(ctx, feature, feature.data, workers);
     case 'datum-plane':
       buildDatumPlaneFeature(ctx, feature, feature.data);
       break;

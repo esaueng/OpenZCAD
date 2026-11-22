@@ -834,6 +834,11 @@ export interface TransformFormValue {
    */
   copy?: boolean;
   /**
+   * M10: how many copies a linked copy stamps (read-only here: the stamps
+   * are bodies of their own, fixed when the Move is made).
+   */
+  stamps?: number;
+  /**
    * R01: first turn the body about a datum axis. Absent turns about none;
    * an edit that clears it removes the stored turn.
    */
@@ -986,7 +991,12 @@ export function TransformForm({
       {/* M10: a copy is fixed when the Move is made — it owns a body of its
           own — so an edit names what it is instead of offering a toggle. */}
       {copy && (
-        <p className="field-hint">Copy: the source body stays in place.</p>
+        <p className="field-hint">
+          Copy: the source body stays in place.
+          {(initial.stamps ?? 1) > 1
+            ? ` Stamps ${initial.stamps} copies, each moved on from the one before.`
+            : ''}
+        </p>
       )}
       {showTurn ? (
         <>

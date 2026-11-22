@@ -8,7 +8,7 @@ import {
   geometryPreviewSelectionKey,
   newBlendValidationTarget
 } from './blendPreview';
-import type { InteractionState } from './machine';
+import { faceOffsetPlanKey, type InteractionState } from './machine';
 
 const document = createProjectDocument('Blend', toUserId('user_preview'));
 const selection: Extract<InteractionState, { mode: 'edges' }> = {
@@ -148,6 +148,18 @@ describe('geometry preview selection key', () => {
     expect(geometryPreviewSelectionKey(offset)).toBe(
       'offset-face:body_1:face:2:false'
     );
+    // A face set's offset previews under its plan key, set and all: keyed
+    // by the handle's face alone, no set preview was ever shown (M07).
+    const set = {
+      ...offset,
+      target: {
+        ...offset.target,
+        localFaceOffset: true,
+        offsetFaceSet: [{ topologyId: 'face:7', hash: 7 }]
+      }
+    };
+    expect(geometryPreviewSelectionKey(set)).toBe(faceOffsetPlanKey(set));
+    expect(geometryPreviewSelectionKey(set)).toContain('face:7');
     expect(geometryPreviewSelectionKey({ mode: 'idle' })).toBeNull();
     // A blend preview never stands in for a face drag, or the reverse.
     expect(geometryPreviewSelectionKey(offset)).not.toBe(

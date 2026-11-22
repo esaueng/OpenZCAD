@@ -48,6 +48,7 @@ import {
   type SketchModeState,
   type SketchViewData,
   type OffsetHandleTarget,
+  type ViewerBodyPickRole,
   type ViewerPmiLabel
 } from './ModelViewer';
 import type {
@@ -56,6 +57,7 @@ import type {
   MovePreview,
   MoveSnap,
   PickDetail,
+  PickSnap,
   ProjectionMode,
   SectionOverlapPair,
   SectionPlaneId,
@@ -172,6 +174,8 @@ interface ViewerShellProps {
   measurementCloudSync?: MeasurementCloudSyncState;
   projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
+  /** U11: each picked body's role in the running command (Base, Tool). */
+  bodyPickRoles?: Readonly<Record<string, ViewerBodyPickRole>> | null;
   selectedTopology: TopologySelection | null;
   previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
@@ -235,6 +239,8 @@ interface ViewerShellProps {
   focusGhostBodies?: readonly BodyRepresentation[];
   /** The surviving faces a History row brings into focus, lit as selected. */
   focusFaces?: readonly TopologySelection[];
+  /** M13: a hovered measurement's edges and faces (see `ModelViewer`). */
+  measureHighlights?: readonly TopologySelection[];
   canUndo: boolean;
   /** Undo is spent because older steps were dropped, not because none exist. */
   undoFloorTrimmed?: boolean;
@@ -280,6 +286,8 @@ interface ViewerShellProps {
   /** See `ModelViewerProps.topologyPicksHeld`. */
   topologyPicksHeld?: boolean;
   offsetHandle: OffsetHandleTarget | null;
+  /** See `ModelViewerProps.offsetSetTicks`. */
+  offsetSetTicks?: ModelViewerProps['offsetSetTicks'];
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   onOffsetCommit: ModelViewerProps['onOffsetCommit'];
@@ -328,6 +336,7 @@ interface ViewerShellProps {
   onToggleEdgeOp?(): void;
   onDirectManipulationChange(dragging: boolean, source?: 'move'): void;
   sketchMode: SketchModeState | null;
+  sketchFillet?: ModelViewerProps['sketchFillet'];
   /** Where the text card's live outline sits; the card's Place reads it. */
   sketchTextAnchorRef?: MutableRefObject<{ x: number; y: number } | null>;
   onSketchCommit(object: SketchObjectData): void;
@@ -354,6 +363,7 @@ interface ViewerShellProps {
     region: RegionPickData,
     modifiers: { additive: boolean; toggle: boolean }
   ): void;
+  onBoxSelectRegions?: ModelViewerProps['onBoxSelectRegions'];
   onHoverRegion(region: RegionPickData | null): void;
   planePickerArmed: boolean;
   planePickerOffset: number;
@@ -410,13 +420,25 @@ interface ViewerShellProps {
   onMeasurePreview?:
     | ((
         selection: TopologySelection,
-        point: { x: number; y: number; z: number }
+        point: { x: number; y: number; z: number },
+        snap?: PickSnap
       ) => string | null)
+    | null;
+  /** M13: the snap kinds a measuring pick may lock onto (see `ModelViewer`). */
+  measureSnapKinds?: readonly PickSnap['kind'][] | null;
+  /** M10: a host picking model points (see `ModelViewer`). */
+  onPointPick?:
+    | ((pick: {
+        point: { x: number; y: number; z: number };
+        kind: PickSnap['kind'] | null;
+      }) => void)
     | null;
   regionHandle: RegionHandleTarget | null;
   modelPanelsHidden?: boolean;
   /** F01: a click picks only a body face (see `ModelViewer`). */
   facePickOnly?: boolean;
+  /** The surfaces a running command takes, picked through others (see `ModelViewer`). */
+  facePickSurfaces?: readonly string[] | null;
   /** Shift adds faces of this body to a held face set (see `ModelViewer`). */
   faceSetPickBodyId?: string | null;
   onSelectSketchProfile(sketchId: string): void;
@@ -501,6 +523,7 @@ export function ViewerShell({
   measurementCloudSync,
   projectThumbnailSync,
   selectedBodyIds,
+  bodyPickRoles = null,
   selectedTopology,
   previewFaceHighlights,
   selectedEdges,
@@ -531,6 +554,7 @@ export function ViewerShell({
   pickLabel,
   focusGhostBodies,
   focusFaces,
+  measureHighlights,
   canUndo,
   undoFloorTrimmed = false,
   canRedo,
@@ -554,6 +578,7 @@ export function ViewerShell({
   onBoxSelect,
   onBoxSelectTopology,
   offsetHandle,
+  offsetSetTicks,
   offsetDragTarget,
   onOffsetPreview,
   onOffsetCommit,
@@ -584,6 +609,7 @@ export function ViewerShell({
   onToggleEdgeOp,
   onDirectManipulationChange,
   sketchMode,
+  sketchFillet,
   sketchTextAnchorRef,
   onSketchCommit,
   onSketchCommitComposite,
@@ -603,6 +629,7 @@ export function ViewerShell({
   selectedProfileIds,
   profileSelectionMode,
   onSelectRegion,
+  onBoxSelectRegions,
   onHoverRegion,
   planePickerArmed,
   planePickerOffset,
@@ -635,9 +662,12 @@ export function ViewerShell({
   datumOffsetDraft = null,
   onDatumOffsetEntry,
   onMeasurePreview,
+  measureSnapKinds,
+  onPointPick,
   regionHandle,
   modelPanelsHidden,
   facePickOnly,
+  facePickSurfaces,
   faceSetPickBodyId = null,
   onSelectSketchProfile,
   onResizePrimitiveFace,
@@ -866,6 +896,7 @@ export function ViewerShell({
     };
   }, [datumHandleKey]);
   const orientationDragRef = useRef<OrientationDragControls | null>(null);
+  const normalToSketchRef = useRef<(() => void) | null>(null);
   const scaleIndicatorRef = useRef<ViewportScaleSink | null>(null);
   const sketchGridReadoutRef = useRef<SketchGridReadoutSink | null>(null);
   const frameStatsRef = useRef<FrameStatsSink | null>(null);
@@ -897,6 +928,9 @@ export function ViewerShell({
       onTouchModifiersChange={setTouchModifiers}
       onToggleGrid={onToggleGrid}
       onFit={onFit}
+      onNormalToSketch={
+        sketchMode ? () => normalToSketchRef.current?.() : undefined
+      }
       measuring={measuring}
       {...(onMeasure ? { onMeasure } : {})}
       onView={onView}
@@ -961,12 +995,14 @@ export function ViewerShell({
         measurementAnnotations={placedMeasurements}
         pmiLabels={pmiLabels}
         selectedBodyIds={selectedBodyIds}
+        bodyPickRoles={bodyPickRoles}
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}
         selectionCallout={selectionCallout}
         pickLabel={pickLabel}
         {...(focusGhostBodies ? { focusGhostBodies } : {})}
         {...(focusFaces ? { focusFaces } : {})}
+        {...(measureHighlights ? { measureHighlights } : {})}
         selectedEdges={selectedEdges}
         pickListEnabled={pickListEnabled}
         settings={settings}
@@ -995,6 +1031,7 @@ export function ViewerShell({
         onWheelDeviceLearned={onWheelDeviceLearned}
         orientationRef={orientationRef}
         orientationDragRef={orientationDragRef}
+        normalToSketchRef={normalToSketchRef}
         scaleIndicatorRef={scaleIndicatorRef}
         sketchGridReadoutRef={sketchGridReadoutRef}
         frameStatsRef={frameStatsRef}
@@ -1029,6 +1066,8 @@ export function ViewerShell({
         {...(xrayOpacity !== undefined ? { xrayOpacity } : {})}
         {...(tangentEdges !== undefined ? { tangentEdges } : {})}
         offsetHandle={offsetHandle ?? datumOffsetTarget}
+        // A datum's offset handle is never a face set's.
+        offsetSetTicks={offsetHandle ? offsetSetTicks : null}
         offsetDragTarget={offsetDragTarget ?? datumOffsetTarget}
         onOffsetPreview={
           datumOffsetTarget && datumHandle
@@ -1084,6 +1123,7 @@ export function ViewerShell({
         onToggleEdgeOp={onToggleEdgeOp}
         onDirectManipulationChange={onDirectManipulationChange}
         sketchMode={sketchMode}
+        sketchFillet={sketchFillet}
         sketchTextAnchorRef={sketchTextAnchorRef}
         onSketchCommit={onSketchCommit}
         onSketchCommitComposite={onSketchCommitComposite}
@@ -1103,6 +1143,7 @@ export function ViewerShell({
         selectedProfileIds={selectedProfileIds}
         profileSelectionMode={profileSelectionMode}
         onSelectRegion={onSelectRegion}
+        onBoxSelectRegions={onBoxSelectRegions}
         onHoverRegion={onHoverRegion}
         planePickerArmed={planePickerArmed}
         planePickerOffset={planePickerOffset}
@@ -1165,9 +1206,12 @@ export function ViewerShell({
         {...(onCommentPinClick ? { onCommentPinClick } : {})}
         commentPlacing={commentPlacing}
         onMeasurePreview={onMeasurePreview}
+        measureSnapKinds={measureSnapKinds}
+        onPointPick={onPointPick}
         regionHandle={regionHandle}
         modelPanelsHidden={modelPanelsHidden}
         {...(facePickOnly ? { facePickOnly } : {})}
+        {...(facePickSurfaces ? { facePickSurfaces } : {})}
         faceSetPickBodyId={faceSetPickBodyId}
         onSelectSketchProfile={onSelectSketchProfile}
         onResizePrimitiveFace={onResizePrimitiveFace}

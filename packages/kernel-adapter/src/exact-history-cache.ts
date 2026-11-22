@@ -69,6 +69,50 @@ export const MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES = 128 * 1024 * 1024;
 export const MAX_HISTORY_REPLAY_WORK = 512;
 
 /**
+ * Arena retention (H02 whole-worker retention). A checkpoint restore retires
+ * every later slot as a tombstone that keeps its value, and slots are never
+ * reused, so each edit leaves its replay's entities behind: a feature that
+ * is cheap to count (one fillet) can retire ten thousand slots. Every
+ * checkpoint copy and every copy-on-write after one clones those tombstones
+ * too, so a long session grows the worker's memory and slows each edit even
+ * while {@link MAX_HISTORY_REPLAY_WORK} is far off. Once retired slots reach
+ * {@link HISTORY_ARENA_COMPACT_RETIRED_SLOTS} and outnumber the live ones
+ * {@link HISTORY_ARENA_RETIRED_PER_LIVE} times over, the kernel is worn: idle
+ * work replays the history into a fresh kernel and swaps it in. A session
+ * that never idles is recycled before its next build at
+ * {@link HISTORY_ARENA_RECYCLE_RETIRED_SLOTS}.
+ */
+export const HISTORY_ARENA_COMPACT_RETIRED_SLOTS = 65_536;
+export const HISTORY_ARENA_RECYCLE_RETIRED_SLOTS = 262_144;
+export const HISTORY_ARENA_RETIRED_PER_LIVE = 4;
+
+export interface HistoryArenaRetentionLimits {
+  compactRetiredSlots?: number;
+  recycleRetiredSlots?: number;
+}
+
+/** How worn a history kernel's arena is, from its checkpoint memory stats. */
+export function historyArenaWear(
+  memory: Pick<CheckpointMemoryStats, 'allocatedSlots' | 'retiredSlots'>,
+  limits: HistoryArenaRetentionLimits = {}
+): 'fresh' | 'worn' | 'exhausted' {
+  const retired = memory.retiredSlots;
+  const live = Math.max(0, memory.allocatedSlots - retired);
+  if (retired < HISTORY_ARENA_RETIRED_PER_LIVE * live) return 'fresh';
+  if (
+    retired >=
+    (limits.recycleRetiredSlots ?? HISTORY_ARENA_RECYCLE_RETIRED_SLOTS)
+  )
+    return 'exhausted';
+  if (
+    retired >=
+    (limits.compactRetiredSlots ?? HISTORY_ARENA_COMPACT_RETIRED_SLOTS)
+  )
+    return 'worn';
+  return 'fresh';
+}
+
+/**
  * Stable feature positions for retained checkpoints. A position cannot depend
  * on document length: appending a feature must not invalidate earlier kernel
  * checkpoints. Keep short histories dense, spend four slots at the first
@@ -445,6 +489,9 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     shapes.set(bodyId, {
       solids: [...shape.solids],
       ...(shape.referenceMesh ? { referenceMesh: shape.referenceMesh } : {}),
+      ...(shape.rectangularStock !== undefined
+        ? { rectangularStock: shape.rectangularStock }
+        : {}),
       ...(shape.sweepSource ? { sweepSource: shape.sweepSource } : {}),
       ...(shape.nativeVertices
         ? {
@@ -515,6 +562,11 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
       : {}),
     ...(result.sketchObjectOverrides
       ? { sketchObjectOverrides: new Map(result.sketchObjectOverrides) }
+      : {}),
+    ...(result.wrapFrames ? { wrapFrames: new Map(result.wrapFrames) } : {}),
+    ...(result.builtRibs ? { builtRibs: new Set(result.builtRibs) } : {}),
+    ...(result.blendEdgeWitnesses
+      ? { blendEdgeWitnesses: new Map(result.blendEdgeWitnesses) }
       : {}),
     ...(result.sketchProjectionFailures
       ? { sketchProjectionFailures: new Map(result.sketchProjectionFailures) }
@@ -656,11 +708,12 @@ export function measurementWitness(
 
 export function measurementProvenanceKey(
   shape: ExactShape,
-  importedDiagnostics: ImportedStepDiagnostics | undefined
+  importedDiagnostics: ImportedStepDiagnostics | undefined,
+  encoding: 'canonical' | 'snapshot' = 'canonical'
 ): string {
   const lineage = shape.lineage;
   const native = shape.nativeVertices;
-  return measurementJson({
+  const data = {
     importedDiagnostics,
     nativeVertices: native && {
       qualified: [...native.bySolid]
@@ -681,7 +734,22 @@ export function measurementProvenanceKey(
       edges: [...lineage.edgeReferences].sort(([a], [b]) => a - b),
       diagnostics: lineage.diagnostics
     }
-  });
+  };
+  return encoding === 'snapshot' ? JSON.stringify(data) : measurementJson(data);
+}
+
+/** Live cache entries normally have identical property order. Snapshot every
+ * value on each read (witnesses can mutate) and pay for canonical ordering
+ * only if two JSON spellings could differ solely by object member order. */
+export function sameMeasurementProvenance(
+  left: string,
+  right: string
+): boolean {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      measurementJson(JSON.parse(left)) === measurementJson(JSON.parse(right)))
+  );
 }
 
 /** Same canonical JSON, without a native-to-JS replacer call for every scalar. */
@@ -751,14 +819,23 @@ export interface RebuildCacheEvent {
    * this sync replayed the history instead.
    */
   sessionRestore?: 'restored' | 'rejected';
-  /** The old history kernel was retired after exhausting its replay budget. */
-  recycleReason?: 'replay-budget';
+  /**
+   * The old history kernel was retired before this sync: it exhausted its
+   * replay budget, or its arena held too many retired slots
+   * ({@link HISTORY_ARENA_RECYCLE_RETIRED_SLOTS}).
+   */
+  recycleReason?: 'replay-budget' | 'arena-retention';
   /** Features replayed by this sync (total on a full rebuild). */
   replayed: number;
   /** Features restored from the cache (0 on a full rebuild). */
   restored: number;
   /** Independent primitive features kept in the current kernel after the prefix. */
   reusedPrimitives?: number;
+  /**
+   * Of those, imported STEP bodies kept in the live arena (the H02 detached
+   * Text cache): a fixed import after the edited suffix is not re-imported.
+   */
+  reusedImports?: number;
   /** Audited immutable transform/carving branches reused in the same arena. */
   reusedPreparedFeatures?: number;
   /** Checked prefix features reused by qualified axial extent transport. */

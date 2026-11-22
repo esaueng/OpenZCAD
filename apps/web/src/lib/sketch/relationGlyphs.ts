@@ -38,7 +38,8 @@ export const SKETCH_RELATION_GLYPHS: Record<
   midpoint: { symbol: '△', label: 'Midpoint' },
   symmetric: { symbol: '↔', label: 'Symmetric' },
   'point-on-object': { symbol: '◇', label: 'Point on curve' },
-  lock: { symbol: '▲', label: 'Lock' }
+  lock: { symbol: '▲', label: 'Lock' },
+  'lock-entity': { symbol: '▲', label: 'Locked entity' }
 };
 
 export interface SketchRelationGlyph {
@@ -173,10 +174,13 @@ export function sketchRelationGlyphs(
   for (const constraint of constraints) {
     if (constraint.origin === 'promotion-structure') continue;
     const data = constraint.data;
+    // Dimensions carry their own labels; a pattern relation is listed with
+    // the constraints, its instances already showing the pattern.
     if (
       data.constraintKind === 'distance' ||
       data.constraintKind === 'radius' ||
-      data.constraintKind === 'angle'
+      data.constraintKind === 'angle' ||
+      data.constraintKind === 'pattern'
     ) {
       continue;
     }
@@ -224,6 +228,9 @@ export function sketchRelationGlyphs(
         break;
       case 'lock':
         onPoint(data.point, glyph);
+        break;
+      case 'lock-entity':
+        onObject(data.objectId, glyph);
         break;
       case 'symmetric':
         onPoint(data.a, glyph);

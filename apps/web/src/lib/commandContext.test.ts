@@ -97,6 +97,20 @@ describe('commandContextFor', () => {
     const face = commandContextFor(EVERY_KIND.face);
     expect(toolApplies(face, 'hole')).toBe(true);
     expect(toolApplies(face, 'union')).toBe(false);
+    expect(toolApplies(face, 'thread')).toBe(false);
+  });
+
+  it('matches Thread, not Sketch or Hole, to a cylinder wall', () => {
+    const wall = commandContextFor({
+      ...EVERY_KIND.face,
+      cylindricalFace: true
+    });
+    expect(wall.kind).toBe('face');
+    expect(wall.primary).toBeNull();
+    for (const tool of ['thread', 'gear-teeth', 'datum-axis', 'shell'] as const)
+      expect(toolApplies(wall, tool)).toBe(true);
+    for (const tool of ['sketch', 'hole', 'datum-plane'] as const)
+      expect(toolApplies(wall, tool)).toBe(false);
   });
 });
 
@@ -118,6 +132,9 @@ describe('commandContextLabel', () => {
     expect(commandContextLabel(EVERY_KIND.body)).toBe('1 body');
     expect(commandContextLabel(EVERY_KIND.bodies)).toBe('2 bodies');
     expect(commandContextLabel(EVERY_KIND.face)).toBe('1 face');
+    expect(
+      commandContextLabel({ ...EVERY_KIND.face, cylindricalFace: true })
+    ).toBe('1 cylindrical face');
     expect(commandContextLabel(EVERY_KIND.edges)).toBe('3 edges');
     expect(commandContextLabel({ ...NOTHING, edgeCount: 1 })).toBe('1 edge');
     expect(commandContextLabel({ ...NOTHING, regionCount: 2 })).toBe(

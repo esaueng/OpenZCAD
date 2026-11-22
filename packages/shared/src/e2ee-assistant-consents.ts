@@ -85,6 +85,22 @@ export interface E2eeAssistantConsentRecord {
   revokedAt: string | null;
 }
 
+/** Older Workers have no handler for consent-bound requests. */
+export const CONSENTED_ASSISTANT_PROPOSAL_PATH =
+  '/api/assistant/consented-proposals';
+
+export type AssistantConsentVersion = Pick<
+  E2eeAssistantConsentRecord,
+  'route' | 'sequence' | 'copyVersion'
+>;
+
+/** Identifies the verified account consent behind an encrypted request. */
+export function assistantConsentVersion(
+  consent: AssistantConsentVersion
+): string {
+  return JSON.stringify([consent.route, consent.sequence, consent.copyVersion]);
+}
+
 export interface E2eeAssistantConsentResponse {
   consent: E2eeAssistantConsentRecord | null;
 }

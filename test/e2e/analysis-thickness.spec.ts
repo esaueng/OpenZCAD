@@ -105,9 +105,12 @@ test(
       { timeout: 60_000 }
     );
     // Parallel planes are exact; the pin's wall is traced through its axis.
+    // The notes wait behind Details, closed by default.
+    await expect(panel.getByRole('note')).toBeHidden();
+    await panel.getByText('Details', { exact: true }).click();
     const note = panel.getByRole('note');
     await expect(note).toContainText('Approximate: ');
-    await expect(note).toContainText('8 of 9 face ranges exact.');
+    await expect(note).toContainText('8 of 9 faces exact.');
     await expect(note).toContainText('Resolution ');
     await expect(panel).toContainText('not a slicer’s or a simulation’s check');
     await expect
@@ -120,14 +123,12 @@ test(
 
     // A 3 mm print minimum: the plate's two broad faces fall below it,
     // recoloured from the same measurement.
-    await panel
-      .getByRole('spinbutton', { name: 'Minimum wall (mm)' })
-      .fill('3');
+    await panel.getByRole('spinbutton', { name: 'Min wall (mm)' }).fill('3');
     await expect(status).toHaveText(
       /^Thinnest wall 2 mm \(exact\) on Plate, face \d+\. 2 faces below the 3 mm minimum\.$/
     );
     await expect(panel.getByRole('list', { name: 'Legend' })).toContainText(
-      'Under 3 mm · 2'
+      '< 3 mm · 2'
     );
 
     await panel.getByRole('button', { name: 'Turn off' }).click();

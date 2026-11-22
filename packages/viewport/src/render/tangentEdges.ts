@@ -50,11 +50,15 @@ export const FACETED_JOINT_MAX_ANGLE = THREE.MathUtils.degToRad(25);
 export function tangentEdgeIds(
   mesh: Pick<MeshGeometry, 'vertices' | 'indices'>,
   topology: Pick<BodyTopology, 'faces' | 'edges'>,
-  maxAngle: number = TANGENT_EDGE_MAX_ANGLE
+  angleOrPairs:
+    number | ReturnType<typeof tangentFacePairs> = TANGENT_EDGE_MAX_ANGLE
 ): Set<string> {
   const tangent = new Set<string>();
   const faces = topology.faces;
-  const isTangentPair = tangentFacePairs(mesh, faces, maxAngle);
+  const isTangentPair =
+    typeof angleOrPairs === 'number'
+      ? tangentFacePairs(mesh, faces, angleOrPairs)
+      : angleOrPairs;
   // A hash two faces share names neither of them.
   const faceByHash = new Map<number, number>();
   faces.forEach((face, index) => {
@@ -81,7 +85,9 @@ const NEVER_TANGENT = () => false;
  */
 export function tangentFacePairs(
   mesh: Pick<MeshGeometry, 'vertices' | 'indices'>,
-  faces: BodyTopology['faces'],
+  faces: ReadonlyArray<
+    Pick<BodyTopology['faces'][number], 'triangleStart' | 'triangleCount'>
+  >,
   maxAngle: number = TANGENT_EDGE_MAX_ANGLE
 ): (first: number, second: number) => boolean {
   const faceCount = faces.length;
@@ -92,7 +98,7 @@ export function tangentFacePairs(
   }
   const indices = mesh.indices;
   const positions = mesh.vertices;
-  const triangleRange = (face: BodyTopology['faces'][number]) =>
+  const triangleRange = (face: (typeof faces)[number]) =>
     [
       Math.max(0, Math.floor(face.triangleStart)),
       Math.min(

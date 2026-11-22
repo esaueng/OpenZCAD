@@ -1,5 +1,6 @@
 import {
   addPrimitiveFeature,
+  booleanBodies,
   createProjectDocument,
   listFeaturesInOrder
 } from '@openzcad/document-core';
@@ -39,6 +40,30 @@ function boss(radius = 6): ProjectDocument {
       dimensions: { radius, height: 12 }
     }
   );
+}
+
+function bore(): ProjectDocument {
+  let document = addPrimitiveFeature(
+    createProjectDocument('Internal thread', toUserId('user_e2e')),
+    {
+      name: 'Stock',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 9, height: 8 }
+    }
+  );
+  document = addPrimitiveFeature(document, {
+    name: 'Tap drill',
+    primitiveKind: 'cylinder',
+    dimensions: { radius: 2.5, height: 12 }
+  });
+  return booleanBodies(document, {
+    name: 'Bore',
+    bodyName: 'Bored stock',
+    operation: 'subtract',
+    targetBodyIds: listFeaturesInOrder(document).flatMap((feature) =>
+      feature.bodyId ? [feature.bodyId] : []
+    )
+  }).document;
 }
 
 async function openDocument(page: Page, document: ProjectDocument) {
@@ -153,6 +178,9 @@ test(
     // where the thread starts all come from that face.
     await setSelectionFilter(page, 'Face');
     await clickWorldPoint(page, [0, -6, 10]);
+    await expect(bar.getByRole('status')).toContainText(
+      'External thread · Ø12 mm nominal · 1.75 mm pitch'
+    );
     await expect(bar).toContainText('Drag the arrow');
     const length = page.getByTestId('command-handle-length');
     await expect(length).toHaveText('Length 12 mm');
@@ -216,6 +244,9 @@ test(
       .click();
     const edit = page.getByRole('group', { name: 'Edit Thread command' });
     await expect(edit).toBeVisible();
+    await expect(edit.getByRole('status')).toContainText(
+      'External thread · Ø12 mm nominal · 1.75 mm pitch'
+    );
     await expect(page.getByTestId('command-handle-length')).toBeVisible();
     await expect(edit.getByRole('button', { name: /Done/ })).toBeEnabled({
       timeout: 120_000
@@ -225,6 +256,155 @@ test(
       timeout: 30_000
     });
     expect(await storedThreads(page)).toEqual([created]);
+  }
+);
+
+for (const directManipulation of [true, false]) {
+  test(
+    `A picked shaft offers Thread on its card, starting at the picked end (direct manipulation ${directManipulation ? 'on' : 'off'})`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(180_000);
+      await stubApi(page, { panelLayout: MODEL_ONLY });
+      await page.addInitScript((enabled) => {
+        const key = 'openzcad-app-settings:v1';
+        const stored = JSON.parse(localStorage.getItem(key) ?? '{}') as {
+          experiments?: Record<string, unknown>;
+        };
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            ...stored,
+            experiments: {
+              ...stored.experiments,
+              directManipulation: enabled
+            }
+          })
+        );
+      }, directManipulation);
+      const canvas = await openDocument(page, boss());
+      // No tool first: the wall is picked near its top, and its card
+      // names what it is for.
+      await setSelectionFilter(page, 'Face');
+      await clickWorldPoint(page, [0, -6, 10]);
+      const card = page.locator('.selection-rail');
+      const thread = card.getByRole('button', { name: 'Selection: Thread' });
+      await expect(thread).toBeEnabled({ timeout: 60_000 });
+      // A curved wall takes no sketch and no hole.
+      await expect(
+        card.getByRole('button', { name: 'Selection: Sketch' })
+      ).toHaveCount(0);
+      await expect(
+        card.getByRole('button', { name: 'Selection: Hole' })
+      ).toHaveCount(0);
+
+      // The pick is the thread's face: no second click, sized at once.
+      await thread.click();
+      const bar = page.getByRole('group', { name: 'Thread command' });
+      await expect(bar).toBeVisible();
+      await expect(bar).not.toContainText('near the end the thread starts at');
+      await expect(page.getByTestId('command-handle-length')).toHaveText(
+        'Length 12 mm'
+      );
+      // It starts at the top, where the wall was clicked: the arrow on its
+      // free end stands at the bottom.
+      await waitForStillViewport(page);
+      await expect
+        .poll(async () => (await commandHandles(canvas)).length?.value ?? 0)
+        .toBeCloseTo(12, 6);
+      const grip = (await commandHandles(canvas)).length!;
+      const top = await projected(canvas, [0, -6, 12]);
+      const bottom = await projected(canvas, [0, -6, 0]);
+      expect(Math.hypot(grip.x - bottom.x, grip.y - bottom.y)).toBeLessThan(
+        Math.hypot(grip.x - top.x, grip.y - top.y)
+      );
+      await bar.locator('summary').click();
+      await expect(bar).toContainText('Sized from the Ø12 mm face');
+      await bar.getByRole('button', { name: 'Cancel' }).click();
+      await expect(bar).toHaveCount(0);
+      expect(await storedThreads(page)).toEqual([]);
+    }
+  );
+}
+
+test(
+  'Thread readout shows the bore’s inferred nominal and pitch through History',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    await openDocument(page, bore());
+    const moreTools = page.getByRole('button', { name: /^More tools/ });
+    if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
+      await moreTools.click();
+    }
+    await pressTool(page, /^Thread\b/);
+    const bar = page.getByRole('group', { name: 'Thread command' });
+    await setSelectionFilter(page, 'Face');
+    await clickWorldPoint(page, [0, 2.5, 7]);
+    const size = 'Internal thread · Ø6 mm nominal · 1 mm pitch';
+    await expect(bar.getByRole('status')).toContainText(size);
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+      timeout: 60_000
+    });
+    await finishInPlaceCommand(page, 'Thread');
+    const [created] = await storedThreads(page);
+    expect(created).toBeDefined();
+    expect(created!.majorDiameter).toBeUndefined();
+    expect(created!.pitch).toBeUndefined();
+
+    await revealModelPanel(page, 'History');
+    await page
+      .locator('.feature-row', { hasText: 'Thread' })
+      .locator('.feature-row-main')
+      .click();
+    const edit = page.getByRole('group', { name: 'Edit Thread command' });
+    await expect(edit.getByRole('status')).toContainText(size);
+    await edit.getByRole('button', { name: 'Cancel' }).click();
+    expect(await storedThreads(page)).toEqual([created]);
+  }
+);
+
+test(
+  'Thread takes a bore wall hidden behind the host, through the face in front',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    await openDocument(page, bore());
+    // Deep on the bore's far wall: from this view the stock's flat top is
+    // in front of it, so an ordinary click takes the top.
+    const HIDDEN_WALL: [number, number, number] = [0, 2.5, 0.4];
+    await setSelectionFilter(page, 'Face');
+    await clickWorldPoint(page, HIDDEN_WALL);
+    const rail = page.locator('.selection-rail');
+    await expect(
+      rail.getByRole('button', { name: 'Selection: Sketch' })
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(
+      rail.getByRole('button', { name: 'Selection: Thread' })
+    ).toHaveCount(0);
+    // A second click on the same spot would step down through what is under
+    // it; a click elsewhere first keeps the next one a plain pick.
+    await clickWorldPoint(page, [-8, -5, 8]);
+    await page.keyboard.press('Escape');
+
+    // Thread waits for a cylinder: the same click goes through the top to
+    // the wall behind it, and the bore is sized at once.
+    const moreTools = page.getByRole('button', { name: /^More tools/ });
+    if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
+      await moreTools.click();
+    }
+    await pressTool(page, /^Thread\b/);
+    const bar = page.getByRole('group', { name: 'Thread command' });
+    await expect(bar).toBeVisible();
+    await clickWorldPoint(page, HIDDEN_WALL);
+    await expect(bar.getByRole('status')).toContainText(
+      'Internal thread · Ø6 mm nominal · 1 mm pitch'
+    );
+    await bar.getByRole('button', { name: 'Cancel' }).click();
+    await expect(bar).toHaveCount(0);
+    expect(await storedThreads(page)).toEqual([]);
   }
 );
 
@@ -303,6 +483,9 @@ test(
     await expect(bar).toContainText('Drag the arrow');
     await bar.locator('summary').click();
     await choose(bar, 'Profile', 'NPT');
+    await expect(bar.getByRole('status')).toContainText(
+      'External thread · 1/4-18 NPT · 1.411 mm pitch'
+    );
     // Sized from the pipe; it stops where its crest meets the boss, short of
     // the standard's length, and runs out there.
     await expect(bar).toContainText('1/4-18 NPT from the Ø13.716 mm face');

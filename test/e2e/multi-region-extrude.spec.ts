@@ -17,7 +17,10 @@ import {
   revealModelPanel,
   MODEL_ONLY,
   bodyCardFromHistory,
-  extrudeBar
+  extrudeBar,
+  pressTool,
+  setBarValues,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 interface RegionHandle {
@@ -106,6 +109,149 @@ async function exportedDocument(page: Page): Promise<ProjectDocument> {
     }
   ).document;
 }
+
+test(
+  'window and crossing sweeps choose the profiles for one Extrude',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    page.setDefaultTimeout(12_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    let document = createProjectDocument(
+      'Box-picked pockets',
+      toUserId('user_e2e')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 74, height: 53, depth: 8 }
+    });
+    document = addSketchFeature(document, {
+      name: 'Pockets',
+      plane: 'XY',
+      offset: 8,
+      objects: [
+        ...[20, 50].map((centerX) => ({
+          objectKind: 'rectangle' as const,
+          width: 10,
+          height: 10,
+          centerX,
+          centerY: 20
+        })),
+        { objectKind: 'circle', centerX: 20, centerY: 20, radius: 2 }
+      ]
+    }).document;
+    document = addSketchFeature(document, {
+      name: 'Open outline',
+      plane: 'XY',
+      offset: 8,
+      objects: [{ objectKind: 'line', x1: 60, y1: 40, x2: 65, y2: 42 }]
+    }).document;
+    await openDocument(page, document);
+    const canvas = page.locator('.viewer-host canvas');
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+      timeout: 30_000
+    });
+    await page.getByRole('button', { name: 'Standard views' }).click();
+    await page
+      .getByRole('group', { name: 'Standard views' })
+      .getByRole('button', { name: /^Top view/ })
+      .click();
+    await waitForStillViewport(page);
+    const editor = extrudeBar(page);
+    const corners = await canvas.evaluate(
+      (element) =>
+        new Promise<{ x: number; y: number }[]>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-project-points', {
+              detail: {
+                points: [
+                  [10, 29, 8],
+                  [51, 11, 8],
+                  [82, 45, 8],
+                  [70, 35, 8],
+                  [42, 29, 8],
+                  [58, 11, 8]
+                ],
+                resolve: (state: { points: { x: number; y: number }[] }) =>
+                  resolve(state.points)
+              }
+            })
+          );
+        })
+    );
+    const [left, right, bodyRight, bodyLeft, toggleLeft, toggleRight] = corners;
+    expect(left!.x).toBeLessThan(right!.x);
+    async function sweep(
+      from: { x: number; y: number },
+      to: { x: number; y: number }
+    ) {
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(to.x, to.y, { steps: 8 });
+      await page.mouse.up();
+    }
+    // A plain profile click shows an Extrude handle. A normal sweep starting
+    // outside the plate still selects it until the user launches Extrude.
+    await pickProfile(canvas, 0);
+    await expect(editor).toBeVisible();
+    await sweep(bodyRight!, bodyLeft!);
+    const status = page.getByRole('contentinfo');
+    await expect(status).toContainText('1 body selected.');
+    await expect(editor).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    await page.keyboard.press('e');
+    await expect(status).toContainText('Open outline is not closed');
+    await expect(editor).toHaveCount(0);
+    // Image takes over the tool without installing a panel or changing the
+    // selection. Dismissing its file picker must leave normal body sweeps.
+    const chooser = page.waitForEvent('filechooser');
+    await pressTool(page, /^Image — /);
+    await (await chooser).setFiles([]);
+    await sweep(bodyRight!, bodyLeft!);
+    await expect(status).toContainText('1 body selected.');
+    await expect(editor).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    await page.keyboard.press('e');
+    await expect(status).toContainText('Open outline is not closed');
+    // The same rectangle encloses the first profile (with an opening) and
+    // crosses the second. It must not cut the center of the first as well.
+    await sweep(left!, right!);
+    await expect.poll(async () => (await regionHandles(canvas)).length).toBe(1);
+    await sweep(right!, left!);
+    await expect(editor).toContainText('2 profiles');
+    await expect.poll(async () => (await regionHandles(canvas)).length).toBe(2);
+
+    await page.keyboard.down('Control');
+    try {
+      await sweep(toggleLeft!, toggleRight!);
+      await expect
+        .poll(async () => (await regionHandles(canvas)).length)
+        .toBe(1);
+      await sweep(toggleLeft!, toggleRight!);
+      await expect
+        .poll(async () => (await regionHandles(canvas)).length)
+        .toBe(2);
+    } finally {
+      await page.keyboard.up('Control');
+    }
+
+    await setBarValues(page, editor, { Distance: '-3' });
+    await expect(editor).toContainText('Preview: Cut');
+    await editor.getByRole('button', { name: 'Done' }).click();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'cut into the body'
+    );
+    const features = listFeaturesInOrder(await exportedDocument(page));
+    const cuts = features.filter(({ data }) => data.featureKind === 'extrude');
+    expect(cuts).toHaveLength(1);
+    expect(cuts[0]!.data).toMatchObject({
+      profiles: [expect.any(Object), expect.any(Object)]
+    });
+  }
+);
 
 test('Shift-picked regions extrude together from any one of their arrows', async ({
   page

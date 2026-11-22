@@ -63,6 +63,7 @@ const fixture = (file: string) =>
 
 interface StageLog {
   t: number;
+  projectId?: string;
   requestId?: string;
   version?: number;
   stage: string;
@@ -74,6 +75,7 @@ interface StageLog {
 interface StateLog {
   t: number;
   phase: string;
+  projectId?: string;
   stale: boolean;
   requestId?: string;
   version?: number;
@@ -85,7 +87,7 @@ interface EditSample {
   inputAt: number;
   /** `oz:parameter.preview.install` measure, if a preview was presented. */
   previewInstallMs: number | null;
-  /** Enter → status readout no longer pending and worker ready+fresh. */
+  /** Enter → committed exact analysis ready on the application thread. */
   exactMs: number;
   /** The status readout once the edit settled. */
   statusText: string;
@@ -93,7 +95,7 @@ interface EditSample {
   states: StateLog[];
   cacheEvents: RebuildCacheEvent[];
   preflight: { firstStageAt: number; readyAt: number; stages: StageLog[] };
-  live: { readyAt: number; stages: StageLog[] };
+  live: { readyAt: number; adopted: boolean; stages: StageLog[] };
 }
 
 declare global {
@@ -115,6 +117,7 @@ async function installWorkerLog(page: Page) {
           const data = event.data as {
             type?: string;
             phase?: string;
+            projectId?: string;
             stale?: boolean;
             requestId?: string;
             version?: number;
@@ -146,6 +149,7 @@ async function installWorkerLog(page: Page) {
             window.__ozWorkerLog.push({
               t: performance.now(),
               phase: data.phase ?? '',
+              projectId: data.projectId,
               stale: !!data.stale,
               requestId: data.requestId,
               version: data.version
@@ -318,16 +322,45 @@ async function measureEdit(
   const log = (await workerLog(page)).slice(logStart);
   const readyStates = log.filter((s) => s.phase === 'ready' && !s.stale);
   const preflightReady = readyStates.find((s) => s.requestId);
-  const liveReady = [...readyStates].reverse().find((s) => !s.requestId);
   expect(
     preflightReady,
     'The edit must complete exact preflight'
   ).toBeDefined();
+  // The checked result can become the live result without a second rebuild.
+  // The worker posts its ready notification after the result, so the commit
+  // can precede that notification. Match the input, project and revision.
+  const checked = preflightReady!;
+  const liveReady = await page.evaluate(
+    ({ before, start }) => {
+      // Both a broadcast and an adoption mark the committed result before
+      // onDerived. A later broadcast supersedes an earlier adoption.
+      const completions = performance
+        .getEntriesByName('oz:edit.analysis-ready', 'measure')
+        .map((entry) => {
+          const { projectId, version, adopted } = (entry as PerformanceMeasure)
+            .detail as { projectId: string; version: number; adopted?: number };
+          return {
+            projectId,
+            version,
+            adopted: adopted === 1,
+            t: entry.startTime + entry.duration
+          };
+        })
+        .filter(
+          (entry) =>
+            entry.projectId === before.projectId &&
+            entry.version > before.version! &&
+            entry.t >= start
+        )
+        .sort((a, b) => b.t - a.t);
+      return completions[0];
+    },
+    { before: checked, start: inputAt }
+  );
   expect(
     liveReady,
-    'The committed edit must complete a fresh live sync'
+    'A committed revision must have completed exact analysis'
   ).toBeDefined();
-  expect(liveReady!.version).toBeGreaterThan(preflightReady!.version!);
   const exactEnd = liveReady!.t;
   const previewInstallMs = await page.evaluate(
     () =>
@@ -343,7 +376,18 @@ async function measureEdit(
     ...s,
     t: s.t - offset
   }));
-  const preflightId = preflightReady?.requestId;
+  const preflightId = checked.requestId;
+  const liveStages = editStages.filter(
+    (stage) =>
+      !stage.requestId &&
+      stage.projectId === checked.projectId &&
+      stage.version === liveReady!.version
+  );
+  if (liveReady!.adopted)
+    expect(
+      liveStages,
+      'An adopted commit must not hide a second live build'
+    ).toHaveLength(0);
   return {
     label,
     value,
@@ -360,8 +404,9 @@ async function measureEdit(
       stages: editStages.filter((s) => s.requestId === preflightId)
     },
     live: {
-      readyAt: liveReady?.t ?? NaN,
-      stages: editStages.filter((s) => !s.requestId)
+      readyAt: exactEnd,
+      adopted: liveReady!.adopted,
+      stages: liveStages
     }
   };
 }

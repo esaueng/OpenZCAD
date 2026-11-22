@@ -539,6 +539,40 @@
   text-transform: uppercase;
 }
 
+/* I03: the File menu's Units switch, four compact radio chips. */
+.topbar-units {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.topbar-units button {
+  padding: 4px 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.topbar-units button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.topbar-units button.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.topbar-units-note {
+  display: block;
+  padding: 4px 8px 2px;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-mini);
+}
+
 .topbar-menu-label + .topbar-menu-item {
   margin-top: 0;
 }
@@ -689,28 +723,36 @@ button.save-state:active:not(:disabled),
   cursor: default;
 }
 
-/* A share-link visitor's session (design review I73): one plain chip in
-   place of the save, presence and account chips, none of which applied. */
+/* A share-link visitor's session (design review I73): one readout in place
+   of the save, presence and account chips, none of which applied. Drawn as
+   the save readout is, straight on the island: its own filled, bordered
+   chip read as a box in a box. */
 .topbar-share-state {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 30px;
-  padding: 0 9px;
-  color: var(--color-text);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-  font-size: var(--fs-xs);
+  gap: 5px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 7px;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
   white-space: nowrap;
   cursor: default;
 }
 
-.topbar-share-copy {
-  display: inline-flex;
-  align-items: center;
+/* The bar's one call to action, at the row's 28px like File and Settings
+   beside it: `.primary`'s 32px filled the island to its edges. The
+   `.topbar-actions` scope outranks `.primary`, imported after this sheet. */
+.topbar-actions .topbar-share-copy {
   gap: 6px;
-  min-height: 30px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0 10px;
+  margin-right: 4px;
+  border-radius: var(--radius-sm);
   white-space: nowrap;
 }
 

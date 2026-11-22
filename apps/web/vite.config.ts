@@ -10,7 +10,7 @@ import {
   PDFJS_ASSET_DIRS
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
-import { checkAppVersion } from '../../scripts/app-version.mjs';
+import { buildAppVersion } from '../../scripts/app-version.mjs';
 import { localRemusPackages } from './build/localRemus';
 import {
   remusArtifactGate,
@@ -290,8 +290,21 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     ...(remusArtifacts && !localRemus ? { artifacts: remusArtifacts } : {})
   };
   const commit = sourceCommit();
-  // Fails the build when a manifest disagrees with package.json.
-  const appVersion = checkAppVersion(repoRoot);
+  // Fails when a manifest disagrees with package.json. A build counts the
+  // user-facing merges since the base version, deepening a shallow CI or
+  // Workers Builds clone, and fails rather than report the bare base: a
+  // deploy must never ship a number below what users already saw. Dev and
+  // preview servers never fetch and fall back to the base.
+  const appBuildVersion = buildAppVersion(repoRoot, {
+    fetch: command === 'build',
+    required: command === 'build'
+  });
+  if (!appBuildVersion.exact) {
+    console.warn(
+      `OpenZCAD: reporting base app version ${appBuildVersion.base} (${appBuildVersion.reason}).`
+    );
+  }
+  const appVersion = appBuildVersion.version;
   const isDesktop = mode === 'desktop';
   const isIPad = mode === 'ipad';
   const isBundled = isDesktop || isIPad;
@@ -411,6 +424,23 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
       // The plugin supports several Vite majors, so narrow its cross-version
       // return type to the Vite version used by this workspace.
       plugins: (): PluginOption[] => [
+        {
+          name: 'openzcad-worker-core-wasm-loader',
+          enforce: 'pre',
+          resolveId(source, importer) {
+            if (
+              source === '/__vite-plugin-wasm-helper' &&
+              importer?.endsWith('/remus_wasm_bg.wasm')
+            ) {
+              return fileURLToPath(
+                new URL(
+                  '../../packages/kernel-adapter/src/load-pattern-kernel.ts',
+                  import.meta.url
+                )
+              );
+            }
+          }
+        },
         wasm() as PluginOption,
         remusTranslatorRetry()
       ]
@@ -426,6 +456,12 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         ),
         '@openzcad/kernel-adapter/exact': fileURLToPath(
           new URL('../../packages/kernel-adapter/src/exact.ts', import.meta.url)
+        ),
+        '@openzcad/kernel-adapter/sketch-2d-ops': fileURLToPath(
+          new URL(
+            '../../packages/kernel-adapter/src/sketch-2d-ops.ts',
+            import.meta.url
+          )
         ),
         // The mesh import format table is reached only from the lazy mesh
         // import client and its worker. Importing it through the adapter's
@@ -612,10 +648,11 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
               // with the preloaded model helpers too.
               id.includes('/apps/web/src/lib/modelingOperations.ts') ||
               id.includes('/apps/web/src/lib/featureSummary.ts') ||
-              // M17: the Standard part command's spec is pure too (its
-              // catalogue choices, placements and hole matching, over the
-              // shared catalogue). Keep it with them, off the entry chunk.
+              // Standard part and Thread resolve sizes and build requests
+              // from the shared catalogues. Keep those specs with the
+              // existing preloaded model helpers.
               id.includes('/apps/web/src/lib/inPlace/standardPart.ts') ||
+              id.includes('/apps/web/src/lib/inPlace/thread.ts') ||
               // Canonical worker transport and revision/reference helpers are
               // already workspace dependencies. Reuse the preloaded model
               // chunk rather than adding another first-paint request.
@@ -676,6 +713,10 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             // is measured against a per-file budget meant to catch launcher
             // growth, not a regrouping of workspace modules it already
             // preloaded.
+            // The batch fillet planner runs only while the tool is armed.
+            if (id.endsWith('/apps/web/src/lib/sketch/filletBatch.ts')) {
+              return undefined;
+            }
             if (
               id.includes('/apps/web/src/lib/sketch/') ||
               id.includes('/apps/web/src/lib/interaction/')

@@ -32,7 +32,13 @@ import {
   UserPlus,
   Users
 } from 'lucide-react';
-import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
+import {
+  displayLengthName,
+  UNIT_SYSTEM_NAMES,
+  type ArtifactRecord,
+  type AuthSession,
+  type UnitSystem
+} from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { preloadableSlot } from './PreloadableSlot';
@@ -142,7 +148,12 @@ interface TopBarProps {
    * "Shared model · Tweak only" instead of "Local only", "Signed out" and
    * "Offline", none of which describe it, and offers a labelled Make a copy.
    */
-  shareSession?: { mode: 'view' | 'tweak'; onMakeCopy(): void } | null;
+  shareSession?: {
+    mode: 'view' | 'tweak';
+    /** L08: the owner shared the finished model without its history. */
+    withoutHistory?: boolean;
+    onMakeCopy(): void;
+  } | null;
   workspaceMode: WorkspaceMode;
   canRenameProject: boolean;
   /**
@@ -186,8 +197,24 @@ interface TopBarProps {
   onExportIges?(): void;
   /** Opens the mesh export dialog (3MF / STL with quality control). */
   onOpenMeshExport(): void;
+  /**
+   * L09: writes the CNC cut layout DXF — the export's bodies laid flat,
+   * their upward faces on a layer per height. Absent hides the item.
+   */
+  onExportCncLayout?(): void;
   /** Opens the image export dialog (view PNG / sketch SVG). */
   onOpenImageExport?(): void;
+  /**
+   * I03: the unit lengths are shown and typed in, the unit the project
+   * stores, and the switch between them. Absent hides the Units row.
+   */
+  displayUnits?: {
+    shown: UnitSystem;
+    stored: UnitSystem;
+    onChange(units: UnitSystem): void;
+    /** Why the unit cannot change now; the row is read-only then. */
+    disabledReason?: string | null;
+  };
   /**
    * M16: opens the sheet-metal flat-pattern view (layered DXF, SVG, bend
    * table). Absent when the project has no sheet-metal part.
@@ -347,8 +374,10 @@ export function TopBar({
   onDownloadArtifact,
   onExportStep,
   onExportIges,
+  onExportCncLayout,
   onOpenMeshExport,
   onOpenImageExport,
+  displayUnits,
   onOpenFlatPattern,
   onArchiveLocalSources,
   onRenameProject,
@@ -373,6 +402,15 @@ export function TopBar({
             ? assembleModeDisabledReason
             : null;
   const cycleTarget = nextWorkspaceMode(workspaceMode, modeLockedReason);
+  // A shared link's visitor sees only the modes the link opens: Build,
+  // Assemble and the rest were greyed tabs that only said "Make a copy".
+  // With View alone left, the switch has nothing to switch and goes.
+  const modeOptions = shareSession
+    ? WORKSPACE_MODE_OPTIONS.filter(
+        ({ mode }) => modeLockedReason(mode) === null
+      )
+    : WORKSPACE_MODE_OPTIONS;
+  const showModeSwitch = modeOptions.length > 1;
   const saveKey = keymap.label('file-save');
   const saveNamedKey = keymap.label('file-save-named');
   // A mesh payload is the import's internal triangles, not a file anyone
@@ -543,6 +581,11 @@ export function TopBar({
   function exportIgesFromMenu() {
     closeFileMenuForDialog();
     onExportIges?.();
+  }
+
+  function exportCncLayoutFromMenu() {
+    closeFileMenuForDialog();
+    onExportCncLayout?.();
   }
 
   function openImageExportFromMenu() {
@@ -778,7 +821,7 @@ export function TopBar({
     if (topbarRef.current) {
       placeModeThumb(topbarRef.current);
     }
-  }, [workspaceMode]);
+  }, [workspaceMode, modeOptions.length]);
 
   const reloadDescriptionId = useId();
   const reloadMessage =
@@ -835,23 +878,26 @@ export function TopBar({
           <Tooltip
             label="Shared model"
             description={
-              shareSession.mode === 'view'
-                ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
-                : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'
+              shareSession.withoutHistory
+                ? 'The owner shared this model without its history: you have the finished solid, with no features, sketches or parameters. Make a copy to keep or change it.'
+                : shareSession.mode === 'view'
+                  ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
+                  : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'
             }
             multiline
           >
             <span
               className="topbar-share-state topbar-action"
               role="status"
-              aria-label={`Shared model · ${shareSession.mode === 'view' ? 'View only' : 'Tweak only'}`}
+              aria-label={`Shared model · ${shareSession.mode === 'view' ? 'View only' : 'Tweak only'}${shareSession.withoutHistory ? ' · No history' : ''}`}
               tabIndex={0}
             >
               {/* The glyph stays when a phone's bar drops every chip's
-                  words (responsive.css), so the chip is never an empty box. */}
+                  words (responsive.css), so the chip is never an empty box.
+                  One word on the bar; the tooltip and the accessible name
+                  say what the visitor may do. */}
               <Link2 size={14} aria-hidden="true" />
-              Shared model ·{' '}
-              {shareSession.mode === 'view' ? 'View only' : 'Tweak only'}
+              Shared
             </span>
           </Tooltip>
         ) : saveChipActs ? (
@@ -939,47 +985,49 @@ export function TopBar({
           </button>
         ) : null}
       </div>
-      <div
-        className="mode-switch topbar-island"
-        data-active={workspaceMode}
-        role="group"
-        aria-label="Workspace mode"
-      >
-        {WORKSPACE_MODE_OPTIONS.map(({ mode, label, hint, Icon }) => {
-          const disabledReason = modeLockedReason(mode);
-          // The cycle key belongs to the mode it goes to next, not to each.
-          const cycleKey =
-            mode === cycleTarget
-              ? keymap.label('workspace-mode-cycle')
-              : undefined;
-          return (
-            <Tooltip
-              key={mode}
-              multiline
-              label={label}
-              description={disabledReason ?? hint}
-              shortcut={cycleKey}
-            >
-              <button
-                type="button"
-                className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
-                aria-pressed={workspaceMode === mode}
-                aria-label={label}
-                disabled={disabledReason !== null}
-                title={disabledReason ?? undefined}
-                onClick={() => onWorkspaceMode(mode)}
-                onPointerEnter={() => onWorkspaceModeIntent?.(mode)}
-                onFocus={() => onWorkspaceModeIntent?.(mode)}
+      {showModeSwitch ? (
+        <div
+          className="mode-switch topbar-island"
+          data-active={workspaceMode}
+          role="group"
+          aria-label="Workspace mode"
+        >
+          {modeOptions.map(({ mode, label, hint, Icon }) => {
+            const disabledReason = modeLockedReason(mode);
+            // The cycle key belongs to the mode it goes to next, not to each.
+            const cycleKey =
+              mode === cycleTarget
+                ? keymap.label('workspace-mode-cycle')
+                : undefined;
+            return (
+              <Tooltip
+                key={mode}
+                multiline
+                label={label}
+                description={disabledReason ?? hint}
+                shortcut={cycleKey}
               >
-                <Icon size={13} aria-hidden="true" />
-                <span className="mode-switch-label">
-                  <StableLabel reserve={[label]}>{label}</StableLabel>
-                </span>
-              </button>
-            </Tooltip>
-          );
-        })}
-      </div>
+                <button
+                  type="button"
+                  className={`mode-switch-option${workspaceMode === mode ? ' active' : ''}`}
+                  aria-pressed={workspaceMode === mode}
+                  aria-label={label}
+                  disabled={disabledReason !== null}
+                  title={disabledReason ?? undefined}
+                  onClick={() => onWorkspaceMode(mode)}
+                  onPointerEnter={() => onWorkspaceModeIntent?.(mode)}
+                  onFocus={() => onWorkspaceModeIntent?.(mode)}
+                >
+                  <Icon size={13} aria-hidden="true" />
+                  <span className="mode-switch-label">
+                    <StableLabel reserve={[label]}>{label}</StableLabel>
+                  </span>
+                </button>
+              </Tooltip>
+            );
+          })}
+        </div>
+      ) : null}
       {/* The island frame wraps the group rather than padding it: the
           group's children own exactly its width at every breakpoint. */}
       <div className="topbar-island topbar-actions-island">
@@ -1269,17 +1317,35 @@ export function TopBar({
                   </button>
                 )}
               </div>
-              <button
-                type="button"
-                className="topbar-menu-item"
-                disabled={!canExport}
-                title={exportTitle('3MF, STL, OBJ, glTF or PLY')}
-                onClick={openMeshExportFromMenu}
-              >
-                <Download size={13} aria-hidden="true" />
-                <span>Export mesh…</span>
-                <small>3MF · STL · OBJ · glTF · PLY</small>
-              </button>
+              {/* The CNC cut layout shares the mesh row, as IGES shares
+                  STEP's: both are maker hand-offs, and a row of its own
+                  would push the File menu past a 900px window. */}
+              <div className="topbar-menu-item-row">
+                <button
+                  type="button"
+                  className="topbar-menu-item"
+                  disabled={!canExport}
+                  title={exportTitle('3MF, STL, OBJ, glTF or PLY')}
+                  onClick={openMeshExportFromMenu}
+                >
+                  <Download size={13} aria-hidden="true" />
+                  <span>Export mesh…</span>
+                  <small>3MF · STL · OBJ · glTF · PLY</small>
+                </button>
+                {onExportCncLayout && (
+                  <button
+                    type="button"
+                    className="topbar-menu-item topbar-menu-item-compact"
+                    disabled={!canExport}
+                    title="CNC cut layout: the bodies laid flat on their largest flat faces, their upward faces as DXF outlines, one layer per height"
+                    aria-label="Export CNC cut layout (DXF)"
+                    onClick={exportCncLayoutFromMenu}
+                  >
+                    <Download size={13} aria-hidden="true" />
+                    <span>CNC DXF</span>
+                  </button>
+                )}
+              </div>
               {onOpenImageExport && (
                 <button
                   type="button"
@@ -1351,6 +1417,11 @@ export function TopBar({
                   </button>
                 </>
               ) : null}
+              {/* I03: after Export, so adding it moved none of the actions
+                  above it under panels that float over the menu. */}
+              {displayUnits ? (
+                <DisplayUnitsRow {...displayUnits} />
+              ) : null}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">
                 <Files size={12} aria-hidden="true" />
@@ -1416,5 +1487,81 @@ export function TopBar({
         </div>
       </div>
     </header>
+  );
+}
+
+const DISPLAY_UNIT_CHOICES: readonly UnitSystem[] = ['mm', 'cm', 'm', 'inch'];
+
+/**
+ * I03: the File menu's Units row. A radio group, so the menu stays open
+ * while the choice is read back: switching only changes how lengths read,
+ * and the note says the model itself is untouched.
+ */
+export function DisplayUnitsRow({
+  shown,
+  stored,
+  onChange,
+  disabledReason
+}: NonNullable<TopBarProps['displayUnits']>) {
+  const labelId = useId();
+  const noteId = useId();
+  const disabled = Boolean(disabledReason);
+  return (
+    <>
+      <div className="topbar-menu-sep" />
+      <strong className="topbar-menu-label" id={labelId}>
+        Units
+      </strong>
+      <div
+        className="topbar-units"
+        role="radiogroup"
+        aria-labelledby={labelId}
+        aria-describedby={noteId}
+        // A native radio group's keys: Tab reaches the chosen unit only,
+        // and the arrows move to the next one and choose it.
+        onKeyDown={(event) => {
+          const step =
+            event.key === 'ArrowRight' || event.key === 'ArrowDown'
+              ? 1
+              : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+                ? -1
+                : 0;
+          if (step === 0 || disabled) return;
+          event.preventDefault();
+          const count = DISPLAY_UNIT_CHOICES.length;
+          const at = DISPLAY_UNIT_CHOICES.indexOf(shown);
+          const next = DISPLAY_UNIT_CHOICES[(at + step + count) % count]!;
+          onChange(next);
+          event.currentTarget
+            .querySelector<HTMLButtonElement>(`[data-unit="${next}"]`)
+            ?.focus();
+        }}
+      >
+        {DISPLAY_UNIT_CHOICES.map((unit) => (
+          <button
+            key={unit}
+            type="button"
+            role="radio"
+            aria-checked={shown === unit}
+            aria-label={UNIT_SYSTEM_NAMES[unit]}
+            data-unit={unit}
+            tabIndex={shown === unit ? 0 : -1}
+            className={shown === unit ? 'active' : undefined}
+            disabled={disabled}
+            title={disabledReason ?? UNIT_SYSTEM_NAMES[unit]}
+            onClick={() => {
+              if (unit !== shown) onChange(unit);
+            }}
+          >
+            {displayLengthName(unit)}
+          </button>
+        ))}
+      </div>
+      <small className="topbar-units-note" id={noteId}>
+        {shown === stored
+          ? `Lengths are shown and typed in ${displayLengthName(shown)}.`
+          : `Shown and typed in ${displayLengthName(shown)}. The model is stored in ${displayLengthName(stored)} and keeps its exact size.`}
+      </small>
+    </>
   );
 }

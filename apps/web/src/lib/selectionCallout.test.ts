@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { selectionCapabilities } from './interaction/capabilities';
+import { UNSTABLE_FACE_SKETCH_REASON } from './faceSketchAttachment';
 import { LIVE_DIAMETER_ATTRIBUTE } from './liveLabels';
 import {
   editFaceVerb,
@@ -46,6 +47,7 @@ describe('selectionCalloutVerbs', () => {
     expect(verbs.map((verb) => verb.label)).toEqual([
       'Offset',
       'Sketch',
+      'Text',
       'Hole',
       'Shell',
       'Draft',
@@ -55,6 +57,7 @@ describe('selectionCalloutVerbs', () => {
     expect(verbs.map((verb) => verb.id)).toEqual([
       'action:offset-face',
       'action:sketch-on-face',
+      'text-on-face',
       'tool:hole',
       'tool:shell',
       'tool:draft',
@@ -64,6 +67,7 @@ describe('selectionCalloutVerbs', () => {
     // The armed operation reads as pressed; the others do not.
     expect(verbs.map((verb) => verb.pressed)).toEqual([
       true,
+      false,
       false,
       false,
       false,
@@ -80,13 +84,14 @@ describe('selectionCalloutVerbs', () => {
       faceEdgesAvailable: true,
       availability: READY
     });
-    expect(verbs.map((verb) => verb.id).slice(0, 4)).toEqual([
+    expect(verbs.map((verb) => verb.id).slice(0, 5)).toEqual([
       'action:offset-face',
       'action:sketch-on-face',
+      'text-on-face',
       'action:fillet-face-edges',
       'action:chamfer-face-edges'
     ]);
-    expect(verbs[3]).toMatchObject({
+    expect(verbs[4]).toMatchObject({
       label: 'Chamfer edges',
       title: 'Chamfer every edge around this face',
       disabled: false,
@@ -117,7 +122,7 @@ describe('selectionCalloutVerbs', () => {
     expect(chamfer?.title).not.toBe('Chamfer every edge around this face');
   });
 
-  it('offers a cylindrical face its diameter, an axis and a shell', () => {
+  it('offers a cylindrical face its diameter, then Thread, an axis and a shell', () => {
     const verbs = selectionCalloutVerbs({
       kind: 'face',
       faceCapabilities: selectionCapabilities({
@@ -126,11 +131,48 @@ describe('selectionCalloutVerbs', () => {
       }),
       availability: READY
     });
-    expect(verbs.slice(-2).map((verb) => verb.id)).toEqual([
+    expect(verbs.map((verb) => verb.id)).toEqual([
+      'action:resize-radial-face',
+      'tool:thread',
       'tool:datum-axis',
       'tool:shell'
     ]);
     expect(verbs.map((verb) => verb.id)).not.toContain('tool:hole');
+  });
+
+  it('names a cylinder’s edit by the quantity it enters, Diameter or Radius', () => {
+    const radial = (mode?: 'diameter' | 'radius') =>
+      selectionCalloutVerbs({
+        kind: 'face',
+        faceCapabilities: selectionCapabilities(
+          {
+            kind: 'face',
+            target: { surfaceType: 'cylindrical', hash: 8, radius: 5 }
+          },
+          mode
+        ),
+        availability: READY
+      }).find((verb) => verb.id === 'action:resize-radial-face');
+    expect(radial()).toMatchObject({
+      label: 'Diameter',
+      title: 'Adjust Diameter'
+    });
+    expect(radial('diameter')?.label).toBe('Diameter');
+    expect(radial('radius')).toMatchObject({
+      label: 'Radius',
+      title: 'Adjust Radius'
+    });
+  });
+
+  it('greys Thread on a cylinder with the reason while it cannot run', () => {
+    const thread = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: null,
+      faceSurface: 'cylindrical',
+      availability: { ...READY, exactGeometryReady: false }
+    }).find((verb) => verb.id === 'tool:thread');
+    expect(thread?.disabled).toBe(true);
+    expect(thread?.title).toContain('Waiting for exact geometry');
   });
 
   it('falls back to the tools when the machine does not hold the face', () => {
@@ -147,7 +189,7 @@ describe('selectionCalloutVerbs', () => {
   });
 
   it('chooses an unarmed face its tools by the kind of face it is', () => {
-    const ids = (faceSurface: 'planar' | 'cylindrical' | 'other') =>
+    const ids = (faceSurface: 'planar' | 'cylindrical' | 'conical' | 'other') =>
       selectionCalloutVerbs({
         kind: 'face',
         faceCapabilities: null,
@@ -156,13 +198,20 @@ describe('selectionCalloutVerbs', () => {
       }).map((verb) => verb.id);
     expect(ids('planar')).toEqual([
       'tool:sketch',
+      'text-on-face',
       'tool:hole',
       'tool:shell',
       'tool:draft',
       'tool:thicken',
       'tool:datum-plane'
     ]);
-    expect(ids('cylindrical')).toEqual(['tool:datum-axis', 'tool:shell']);
+    expect(ids('cylindrical')).toEqual([
+      'tool:thread',
+      'tool:datum-axis',
+      'tool:shell'
+    ]);
+    // A cone turns about an axis but takes no thread.
+    expect(ids('conical')).toEqual(['tool:datum-axis', 'tool:shell']);
     expect(ids('other')).toEqual(['tool:shell']);
   });
 
@@ -240,6 +289,41 @@ describe('selectionCalloutVerbs', () => {
     ).toEqual(['Shell', 'Draft']);
   });
 
+  it('offers a face set its Offset, disabled with the reason it cannot move', () => {
+    const offered = selectionCalloutVerbs({
+      kind: 'faces',
+      faceSetOffset: { disabledReason: null, pressed: false },
+      availability: READY
+    });
+    expect(offered.map((verb) => verb.label)).toEqual([
+      'Offset',
+      'Shell',
+      'Draft'
+    ]);
+    expect(offered[0]).toMatchObject({
+      id: 'offset-faces',
+      disabled: false,
+      pressed: false
+    });
+    const reason = 'Offset moves flat faces together. Select only flat faces.';
+    const [refused] = selectionCalloutVerbs({
+      kind: 'faces',
+      faceSetOffset: { disabledReason: reason, pressed: false },
+      availability: READY
+    });
+    expect(refused).toMatchObject({
+      id: 'offset-faces',
+      disabled: true,
+      title: reason
+    });
+    const [armed] = selectionCalloutVerbs({
+      kind: 'faces',
+      faceSetOffset: { disabledReason: null, pressed: true },
+      availability: READY
+    });
+    expect(armed?.pressed).toBe(true);
+  });
+
   it('disables a datum verb on a pick no datum can follow, and says why', () => {
     const reason = 'An axis runs along a straight edge; this edge is curved.';
     const axis = selectionCalloutVerbs({
@@ -278,7 +362,7 @@ describe('selectionCalloutVerbs', () => {
       ['action:resize-body', true],
       ['action:offset-face', false],
       ['action:sketch-on-face', false],
-      ['tool:hole', false]
+      ['text-on-face', false]
     ]);
     expect(verbs[0]?.label).toBe('Resize');
   });
@@ -297,6 +381,68 @@ describe('selectionCalloutVerbs', () => {
     ).toEqual(['tool:extrude']);
   });
 
+  it('offers Text beside Sketch on a flat face, refused when Sketch is', () => {
+    const blocked: ToolAvailability = {
+      ...READY,
+      editDisabledReason: 'This project is read-only'
+    };
+    const sketch = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: null,
+      faceSurface: 'planar',
+      availability: blocked
+    })[0]!;
+    const text = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: null,
+      faceSurface: 'planar',
+      availability: blocked
+    })[1]!;
+    expect(sketch.disabled).toBe(true);
+    expect(text).toMatchObject({
+      id: 'text-on-face',
+      label: 'Text',
+      disabled: true,
+      title: sketch.title
+    });
+    expect(
+      selectionCalloutVerbs({
+        kind: 'face',
+        faceCapabilities: null,
+        faceSurface: 'planar',
+        availability: READY
+      })[1]
+    ).toMatchObject({
+      disabled: false,
+      title: 'Sketch text on this face, centred where you picked it'
+    });
+    // A face a rebuild cannot find again: Text says, as Sketch does, that
+    // its sketch lands on a fixed plane.
+    const unstable = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: planarFace,
+      availability: READY
+    });
+    const unstableSketch = unstable.find(
+      (verb) => verb.id === 'action:sketch-on-face'
+    )!;
+    expect(unstableSketch.title).toBe(UNSTABLE_FACE_SKETCH_REASON);
+    expect(unstable.find((verb) => verb.id === 'text-on-face')?.title).toBe(
+      `Sketch text on this face, centred where you picked it. ${UNSTABLE_FACE_SKETCH_REASON}`
+    );
+    // Not on a face no sketch can lie on.
+    for (const faceSurface of ['cylindrical', 'conical', 'other'] as const) {
+      expect(
+        selectionCalloutVerbs({
+          kind: 'face',
+          faceCapabilities: null,
+          faceSurface,
+          availability: READY
+        }).map((verb) => verb.id)
+      ).not.toContain('text-on-face');
+    }
+  });
+
   it('leads a primitive face with its own edits', () => {
     // The rail reads top down: the face's own edits come before the tools
     // that take it as a start.
@@ -309,7 +455,7 @@ describe('selectionCalloutVerbs', () => {
       })
         .slice(0, 4)
         .map((verb) => verb.label)
-    ).toEqual(['Resize', 'Offset', 'Sketch', 'Hole']);
+    ).toEqual(['Resize', 'Offset', 'Sketch', 'Text']);
   });
 });
 
@@ -382,15 +528,15 @@ describe('renderSelectionCallout', () => {
     expect(verbs.map((verb) => verb.textContent).slice(0, 3)).toEqual([
       'Offset',
       'Sketch',
-      'Hole'
+      'Text'
     ]);
     expect(verbs[0]?.getAttribute('aria-pressed')).toBe('true');
     // Never named like the rail's own Hole or the tool card's Sketch.
     expect(
       verbs.map((verb) => verb.getAttribute('aria-label')).slice(0, 3)
-    ).toEqual(['Selection: Offset', 'Selection: Sketch', 'Selection: Hole']);
+    ).toEqual(['Selection: Offset', 'Selection: Sketch', 'Selection: Text']);
     verbs[2]?.click();
-    expect(filled.onVerb).toHaveBeenCalledWith('tool:hole');
+    expect(filled.onVerb).toHaveBeenCalledWith('text-on-face');
     element
       .querySelector<HTMLButtonElement>('[aria-label="Deselect all"]')
       ?.click();

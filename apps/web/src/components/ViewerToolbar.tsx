@@ -9,6 +9,7 @@ import {
   Orbit,
   Redo2,
   Ruler,
+  Scan,
   SquareSplitVertical,
   Undo2
 } from 'lucide-react';
@@ -95,6 +96,7 @@ interface ViewerToolbarProps {
   onRedo(): void;
   onToggleGrid(): void;
   onFit(): void;
+  onNormalToSketch?(): void;
   /** Measure is switched on: the rail's ruler reads pressed. */
   measuring?: boolean;
   /**
@@ -232,6 +234,7 @@ export function ViewerToolbar({
   onRedo,
   onToggleGrid,
   onFit,
+  onNormalToSketch,
   measuring = false,
   onMeasure,
   onView,
@@ -668,6 +671,21 @@ export function ViewerToolbar({
             <Maximize2 size={16} aria-hidden="true" />
           </button>
         </Tooltip>
+        {onNormalToSketch && (
+          <Tooltip
+            label="Normal to sketch"
+            description="Face the active sketch plane"
+          >
+            <button
+              type="button"
+              className="rail-button"
+              onClick={onNormalToSketch}
+              aria-label="Normal to sketch"
+            >
+              <Scan size={16} aria-hidden="true" />
+            </button>
+          </Tooltip>
+        )}
         <Tooltip label="Toggle grid" shortcut={keymap.label('view-grid')}>
           <button
             type="button"

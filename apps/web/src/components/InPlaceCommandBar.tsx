@@ -14,6 +14,7 @@ import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
 import { plainRefusal } from '../lib/refusalLanguage';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
+import { booleanOperandRole, type BodyPick } from '../lib/inPlace/tools';
 import { spokenValueName } from '../lib/inPlace/chipNames';
 import {
   blendRefusalText,
@@ -98,6 +99,11 @@ export interface InPlaceCommandBarProps {
   locked?: boolean;
   /** Shown instead of the hint while a refusal stands, in the warning tone. */
   refusal?: string | null;
+  /**
+   * The input whose change the kernel refused ("Draft angle"), named ahead
+   * of the refusal so it says what to change, not only that it failed.
+   */
+  refusalInput?: string | null;
   /** The document's length unit, after each size a refusal quotes. */
   unitLabel?: string | null;
   /**
@@ -119,6 +125,10 @@ export interface InPlaceCommandBarProps {
   onOption?(optionId: string, value: string): void;
   /** Opens exact numeric entry on the current draft before committing. */
   onPreciseValues?(): void;
+  /** A command with one editable measurement can name it on the button. */
+  preciseValue?: { id: string; label: string; text: string };
+  /** Exact entry returns focus here. A held Enter must not also apply it. */
+  ignoreRepeatedEnter?: boolean;
   /**
    * One-off actions beside the choices (a fillet's Select all edges, a
    * chamfer's Swap the two faces), under the same disclosure.
@@ -136,6 +146,11 @@ export interface InPlaceCommandBarProps {
     items: readonly { id: string; name: string; owner?: string }[];
   } | null;
   onRemovePick?(id: string): void;
+  booleanOperands?: {
+    bodies: readonly BodyPick[];
+    name(id: BodyPick['bodyId']): string | undefined;
+    remove(body: BodyPick): void;
+  };
   /** Exact numbers behind the same disclosure, each opening the keypad. */
   values?: readonly InPlaceOptionValue[];
   /** A value's button was pressed, at this client point (for the keypad). */
@@ -191,16 +206,20 @@ export function InPlaceCommandBar({
   previewPending = false,
   locked = false,
   refusal = null,
+  refusalInput = null,
   unitLabel = null,
   onTrySize,
   recovery,
   options = [],
   onOption,
   onPreciseValues,
+  preciseValue,
+  ignoreRepeatedEnter = false,
   actions = [],
   onAction,
-  picks = null,
+  picks: listedPicks = null,
   onRemovePick,
+  booleanOperands,
   values = [],
   onValue,
   onValueCommit,
@@ -213,6 +232,16 @@ export function InPlaceCommandBar({
   onDone,
   onCancel
 }: InPlaceCommandBarProps) {
+  const picks: InPlaceCommandBarProps['picks'] = booleanOperands
+    ? {
+        label: 'Boolean operands',
+        minimum: 0,
+        items: booleanOperands.bodies.map((body, index) => ({
+          id: body.bodyId,
+          name: `${booleanOperandRole(index)} · ${booleanOperands.name(body.bodyId) ?? 'Body'}`
+        }))
+      }
+    : listedPicks;
   const commandRef = useRef<HTMLDivElement>(null);
   const recoveryEnterHeld = useRef(false);
   const restoreRecoveryFocus = useCallback(
@@ -295,9 +324,13 @@ export function InPlaceCommandBar({
         )
       )
     : null;
-  const shown =
+  const sentence =
     refusalSummary ??
     (plain ? blendRefusalText(plain.message, unitLabel) : null);
+  // Named after translation: a kernel sentence is rewritten whole, which
+  // would drop a prefix written ahead of it.
+  const shown =
+    sentence && refusalInput ? `${refusalInput}: ${sentence}` : sentence;
   const technical = refusalSummary || plain?.detail ? refusal : null;
   const smaller = refusal && onTrySize ? smallerSizeIn(refusal) : null;
   const hintRef = useRef<HTMLSpanElement>(null);
@@ -350,7 +383,8 @@ export function InPlaceCommandBar({
         event.stopPropagation();
         // An Enter that revealed the model can still be held after the
         // button disappears and focus returns here.
-        if (event.repeat && recoveryEnterHeld.current) return;
+        if (event.repeat && (ignoreRepeatedEnter || recoveryEnterHeld.current))
+          return;
         recoveryEnterHeld.current = false;
         if (canFinish && !locked) onDone();
         else if (previewPending && !locked && !refusal) setQueued(true);
@@ -422,10 +456,14 @@ export function InPlaceCommandBar({
         <button
           type="button"
           className="in-place-command-cancel in-place-command-precise"
+          data-testid={
+            preciseValue ? `command-handle-${preciseValue.id}` : undefined
+          }
+          aria-label={preciseValue?.label}
           onClick={onPreciseValues}
           disabled={locked}
         >
-          Precise values…
+          {preciseValue?.text ?? 'Precise values…'}
         </button>
       )}
       {shownRecovery && (
@@ -491,7 +529,11 @@ export function InPlaceCommandBar({
                             : 'Remove'
                         }
                         disabled={locked || picks.items.length <= picks.minimum}
-                        onClick={() => onRemovePick?.(item.id)}
+                        onClick={() => {
+                          const operand = booleanOperands?.bodies[index];
+                          if (operand) booleanOperands?.remove(operand);
+                          else onRemovePick?.(item.id);
+                        }}
                       >
                         <X size={12} aria-hidden="true" />
                       </button>

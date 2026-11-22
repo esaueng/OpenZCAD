@@ -174,6 +174,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Automatic inferencing',
       'Auto-constrain',
       'Snap hints',
+      'Reference dimension units',
       'Relation glyphs',
       'Glyph kinds'
     ]

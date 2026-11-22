@@ -6,6 +6,8 @@ import { quantizeCoordinate } from './topology-fingerprint';
 
 /** Entries kept before the cache starts over; a few drags' worth of faces. */
 const DEFAULT_CAPACITY = 8192;
+// A project opened only for viewing retains at most this many raw face records.
+const MAX_SOURCE_FACES = 256;
 
 /** The kernel reads that identify a face's measurement inputs. */
 export type FaceShapeKernel = Pick<
@@ -159,6 +161,39 @@ export class PreviewFaceGeometryCache {
       });
     }
     return { witness, geometry };
+  }
+
+  sourceDigests(
+    kernel: RemusKernel,
+    faces: readonly number[]
+  ): readonly string[] | null {
+    if (
+      this.byDigest.size + faces.length >
+      Math.min(this.capacity, MAX_SOURCE_FACES)
+    )
+      return null;
+    return faceContentDigestsOf(kernel, Uint32Array.from(faces));
+  }
+
+  // Store the raw face measurement before its owning solid adds blend or
+  // through-hole roles. A preview uses only face-local information.
+  rememberSource(
+    digest: string,
+    witness: FaceWitnessV1,
+    geometry: FaceGeometry | undefined
+  ): void {
+    if (
+      this.byDigest.has(digest) ||
+      this.byDigest.size >= Math.min(this.capacity, MAX_SOURCE_FACES)
+    )
+      return;
+    this.byDigest.set(digest, {
+      witness,
+      geometry:
+        witness.surfaceType === 'bspline'
+          ? undefined
+          : structuredClone(geometry)
+    });
   }
 
   clear(): void {

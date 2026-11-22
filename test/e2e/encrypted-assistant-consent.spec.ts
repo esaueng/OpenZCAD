@@ -1,5 +1,4 @@
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
-import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from '../../apps/web/src/lib/assistant/encryptedProject';
 import { d1Database } from '../d1-sqlite';
 import {
   askAssistant,
@@ -71,16 +70,7 @@ const consentRow = (server: E2eeServer) =>
     .get(E2E_USER_ID) as
     { allowed: number; sequence: number; revoked: number } | undefined;
 
-/**
- * PR #1418, owner decision 2026-11-14: the assistant is off for every
- * project this device holds as encrypted, with no consent exception, until
- * the consent work returns in a follow-up (branch
- * `feat/e2ee-assistant-consent-log`). It says so, asks nothing, stores no
- * consent and sends nothing. The real `/api/e2ee/*` Worker routes run over
- * SQLite; the provider is a stub that records every request the browser
- * makes.
- */
-test('is off for an encrypted project on this device, asks nothing and sends nothing', async ({
+test('a settled encrypted project sends only while this device has consent', async ({
   page,
   context
 }) => {
@@ -91,7 +81,7 @@ test('is off for an encrypted project on this device, asks nothing and sends not
   const server = createE2eeServer({ projectsEnabled: true });
   await installE2eeServer(context, server);
   const proposals: Record<string, unknown>[] = [];
-  await page.route('**/api/assistant/proposals', async (route) => {
+  await page.route('**/api/assistant/*proposals', async (route) => {
     proposals.push(route.request().postDataJSON() as Record<string, unknown>);
     await route.fulfill({
       status: 200,
@@ -146,16 +136,28 @@ test('is off for an encrypted project on this device, asks nothing and sends not
   expect(projectId).toBeTruthy();
 
   await openAssistant(page);
-  await expect(
-    page
-      .locator('.assistant-panel')
-      .getByText(ENCRYPTED_PROJECT_ASSISTANT_NOTICE)
-  ).toBeVisible();
   await askAssistant(page, 'How big is the block?');
-  await expect(page.getByRole('dialog', { name: CONSENT_DIALOG })).toHaveCount(
-    0
-  );
+  const dialog = page.getByRole('dialog', { name: CONSENT_DIALOG });
+  await expect(dialog).toBeVisible();
   expect(proposals).toEqual([]);
   expect(consentRow(server)).toBeUndefined();
+
+  await dialog.getByRole('button', { name: 'Allow for this project' }).click();
+  await expect.poll(() => proposals.length).toBe(1);
+  expect(proposals[0]).toMatchObject({ digest: { projectId } });
+  await expect
+    .poll(() => consentRow(server))
+    .toEqual({ allowed: 1, sequence: 1, revoked: 0 });
+
+  await page
+    .getByRole('button', { name: 'Stop the assistant reading this project' })
+    .click();
+  await expect
+    .poll(() => consentRow(server))
+    .toEqual({ allowed: 0, sequence: 2, revoked: 1 });
+  await askAssistant(page, 'How wide is the block?');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Not now' }).click();
+  expect(proposals).toHaveLength(1);
   expect(errors).toEqual([]);
 });

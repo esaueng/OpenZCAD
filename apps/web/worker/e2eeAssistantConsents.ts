@@ -26,6 +26,7 @@ import {
 } from '@openzcad/crypto';
 import {
   ASSISTANT_CONSENT_COPY_VERSION,
+  type AssistantConsentVersion,
   type E2eeAssistantConsentListResponse,
   type E2eeAssistantConsentRecord,
   type E2eeAssistantConsentResponse,
@@ -156,20 +157,19 @@ function projectIdOf(raw: string): string | null {
  * the current copy exists, else null. Callers check the flag and storage
  * readiness first; plaintext projects never reach this.
  */
-export async function liveAssistantConsentRoute(
+export async function liveAssistantConsent(
   db: D1Database,
   userId: string,
   projectId: string
-): Promise<string | null> {
-  const row = await db
+): Promise<AssistantConsentVersion | null> {
+  return db
     .prepare(
-      `SELECT route FROM e2ee_assistant_consents
+      `SELECT route, sequence, copy_version AS copyVersion FROM e2ee_assistant_consents
        WHERE user_id = ? AND project_id = ? AND allowed = 1
          AND revoked_at IS NULL AND copy_version >= ?`
     )
     .bind(userId, projectId, ASSISTANT_CONSENT_COPY_VERSION)
-    .first<{ route: string }>();
-  return row ? row.route : null;
+    .first<AssistantConsentVersion>();
 }
 
 /** Profile erasure removes the account's consents with the key tables. */

@@ -1657,127 +1657,310 @@
   letter-spacing: 0.04em;
 }
 
-/* M09: the analysis panel. Its own island at the head of the stage, under
-   the top bar's mode switch: the foot holds the command bar and its cards,
-   the corners the cube and the rails, the sides the docks. It scrolls
-   rather than grow over the model. */
+/* M09: the analysis panel. A small card that stands beside the Display
+   button which switched it on (AnalysisPanel places it from the button's
+   rect); until it is measured, and with no button on screen, it waits at
+   the right edge, clear of the rail. Under the rail's own flyouts, so the
+   Display menu opens over it. */
 .analysis-panel {
   position: absolute;
-  top: calc(60px + var(--island-gap, 8px));
-  left: 50%;
-  z-index: 6;
+  top: 50%;
+  right: calc(var(--island-gap, 10px) + 46px);
+  z-index: calc(var(--z-viewer-overlay) - 1);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  width: min(360px, calc(100% - 24px));
-  max-height: min(45%, 400px);
-  padding: 8px 10px;
+  gap: 8px;
+  width: min(240px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  padding: 8px 10px 6px;
   overflow-y: auto;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
   background: var(--color-surface);
   color: var(--color-text);
   font-size: var(--fs-xs);
   line-height: var(--lh-normal);
-  transform: translateX(-50%);
+  transform: translateY(-50%);
   box-shadow: var(--shadow-popover);
 }
 
 .analysis-panel-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
+}
+
+.analysis-panel-icon {
+  flex: 0 0 auto;
+  color: var(--color-accent-hi);
 }
 
 .analysis-panel-title {
+  flex: 1 1 auto;
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
 .analysis-panel-off {
-  padding: 2px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--color-text);
-  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
   cursor: pointer;
 }
 
 .analysis-panel-off:hover {
   background: var(--color-surface-hover);
+  color: var(--color-text);
 }
 
 .analysis-panel-fields {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px 12px;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.analysis-panel-field {
+.analysis-field {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
   color: var(--color-text-muted);
 }
 
-.analysis-panel-field select,
-.analysis-panel-field input {
-  max-width: 6em;
-  font-size: var(--fs-xs);
+.analysis-field-label {
+  flex: 0 0 auto;
+}
+
+.analysis-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px 0 0;
+  border: var(--border-thin);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+
+.analysis-number input {
+  width: 4.5em;
+  padding: 3px 0 3px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  text-align: right;
+}
+
+.analysis-number input:focus {
+  outline: none;
+}
+
+.analysis-number:focus-within {
+  border-color: var(--color-accent-border);
+}
+
+.analysis-unit {
+  color: var(--color-text-subtle);
+}
+
+.analysis-segmented {
+  display: flex;
+  flex: 1 1 auto;
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+}
+
+.analysis-segment {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 22px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.analysis-segment:hover {
+  color: var(--color-text);
+}
+
+.analysis-segment[aria-checked='true'] {
+  background: var(--color-accent-dim);
+  color: var(--color-accent-hi);
+}
+
+.analysis-field-wide label {
+  flex: 0 0 auto;
+}
+
+.analysis-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--color-accent);
+}
+
+.analysis-slider-value {
+  min-width: 2ch;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .analysis-legend {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.analysis-legend li {
-  display: flex;
+.analysis-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.analysis-chip-count {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .analysis-swatch {
   flex: 0 0 auto;
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
-.analysis-panel-status {
-  margin: 0;
+.analysis-ramp {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.analysis-ramp-bar {
+  height: 6px;
+  border-radius: 3px;
+}
+
+.analysis-ramp-ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-ramp-end {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.analysis-ramp-end:nth-child(2):not(:last-child) {
+  align-items: center;
+}
+
+.analysis-ramp-end:last-child {
+  align-items: flex-end;
+}
+
+.analysis-ramp-name {
   color: var(--color-text);
 }
 
-.analysis-panel-note {
+.analysis-ramp-value {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.analysis-panel-status {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
   margin: 0;
+  padding-top: 6px;
+  border-top: var(--border-thin);
+  color: var(--color-text);
+}
+
+.analysis-panel-status:empty {
+  display: none;
+}
+
+.analysis-panel-status.is-failed {
+  color: var(--color-error-text);
+}
+
+.analysis-spinner {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.analysis-about {
+  color: var(--color-text-muted);
+}
+
+.analysis-about > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  list-style: none;
+}
+
+.analysis-about > summary::-webkit-details-marker {
+  display: none;
+}
+
+.analysis-about > summary:hover,
+.analysis-about[open] > summary {
+  color: var(--color-text);
+}
+
+.analysis-notes {
+  display: grid;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding-left: 14px;
   color: var(--color-text-muted);
   overflow-wrap: anywhere;
 }
 
 .analysis-unsupported {
-  margin: 0;
+  margin: 6px 0 0;
   padding-left: 16px;
   color: var(--color-text-muted);
   overflow-wrap: anywhere;
 }
 
-/* A phone's top bar takes two rows (identity, then the mode switch): the
-   panel stands under both and gives the model more of the height. */
+/* A phone's stage has no room beside the rail: the card stands under the
+   two-row top bar, between the side rails, clear of the bottom sheets. */
 @media (max-width: 640px) {
   .analysis-panel {
     top: 112px;
-    max-height: 38%;
+    right: auto;
+    left: 50%;
+    z-index: calc(var(--z-viewer-overlay) + 1);
+    width: min(240px, calc(100% - 112px));
+    max-height: 40%;
+    transform: translateX(-50%);
   }
-}
-
-/* M09 zebra legend: black and white bands, as the overlay draws them. */
-.analysis-swatch-zebra {
-  background: repeating-linear-gradient(90deg, #0f0f0f 0 2px, #f5f5f5 2px 4px);
 }

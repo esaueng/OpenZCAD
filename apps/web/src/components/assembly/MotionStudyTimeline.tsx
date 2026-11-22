@@ -386,7 +386,9 @@ export function MotionStudyTimeline({
     }
     const { study: keyed, changed } = result;
     if (!changed) return true;
-    if (!commit(keyed, 'Key pose', 'This animation holds as many keys as it can.'))
+    if (
+      !commit(keyed, 'Key pose', 'This animation holds as many keys as it can.')
+    )
       // Refused: the parts go back to what the study shows.
       showAt(set, base, at);
     return true;

@@ -93,3 +93,27 @@ describe('ViewModeRail Make a copy (ADR-024 slice 5-11)', () => {
     expect(onMakeCopy).toHaveBeenCalledOnce();
   });
 });
+
+describe('SharedLinkCopyDialog for a link without history (L08)', () => {
+  it('says the copy holds the finished model only', () => {
+    render(
+      <SharedLinkCopyDialog
+        withoutHistory
+        accountEncrypts={false}
+        onChoose={vi.fn()}
+      />
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Make a copy' });
+    expect(dialog).toHaveTextContent(
+      'it holds the finished model as imported solids, without the owner’s features, sketches or parameters'
+    );
+    expect(dialog).not.toHaveTextContent('its parameters and history');
+  });
+
+  it('keeps the usual wording for a link that shares its history', () => {
+    render(<SharedLinkCopyDialog accountEncrypts={false} onChoose={vi.fn()} />);
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'it keeps the model, its parameters and history'
+    );
+  });
+});

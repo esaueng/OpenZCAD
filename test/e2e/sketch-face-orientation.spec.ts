@@ -6,6 +6,7 @@ import {
 import {
   toUserId,
   type ProjectDocument,
+  type SketchObjectData,
   type SketchPlaneRef
 } from '@openzcad/shared';
 import {
@@ -24,7 +25,10 @@ import {
  */
 
 interface ProjectedSketch {
+  objects: { data: SketchObjectData }[];
   screen: { x: number; y: number }[];
+  target: [number, number, number];
+  projection: 'perspective' | 'orthographic';
 }
 
 /** Plane points of the live sketch, in client pixels. */
@@ -94,79 +98,204 @@ function expectRightAndUp(steps: Awaited<ReturnType<typeof screenSteps>>) {
   expect(Math.abs(steps.v.x)).toBeLessThan(0.5);
 }
 
-test('a top-face sketch reads +u rightward and +v upward', async ({ page }) => {
-  test.setTimeout(60_000);
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await stubApi(page);
-  await page.setViewportSize({ width: 1280, height: 720 });
-  await createProject(page, 'Face Sketch Axes');
-  await createPrimitiveInPlace(page, 'box');
-
-  const canvas = page.locator('.viewer-host canvas');
-  await expect
-    .poll(() =>
-      canvas.evaluate(
-        (element) =>
-          new Promise<boolean>((resolve) => {
-            element.dispatchEvent(
-              new CustomEvent('openzcad:e2e-select-planar-face', {
-                detail: {
-                  normal: { x: 0, y: 0, z: 1 },
-                  resolve: (face: { hasReference: boolean } | null) =>
-                    resolve(face?.hasReference === true)
+async function interruptSketchEntry(page: Page, action: 'return' | 'wheel') {
+  // Register before opening the sketch so test-driver round-trip time
+  // cannot make the entry glide finish before the interruption.
+  await page.evaluate((entryAction) => {
+    const observer = new MutationObserver(() => {
+      const button = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Normal to sketch"]'
+      );
+      if (!button) return;
+      observer.disconnect();
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const canvas = document.querySelector('.viewer-host canvas');
+          if (!canvas) return;
+          canvas.dispatchEvent(
+            new CustomEvent('openzcad:e2e-sketch-state', {
+              detail: {
+                resolve: (state: ProjectedSketch | null) => {
+                  document.body.dataset.sketchEntryProjection =
+                    state?.projection ?? '';
                 }
-              })
-            );
-          })
+              }
+            })
+          );
+          if (entryAction === 'return') {
+            button.click();
+            return;
+          }
+          const bounds = canvas.getBoundingClientRect();
+          canvas.dispatchEvent(
+            new WheelEvent('wheel', {
+              bubbles: true,
+              cancelable: true,
+              deltaY: 100,
+              clientX: bounds.x + bounds.width / 2,
+              clientY: bounds.y + bounds.height / 2
+            })
+          );
+        })
+      );
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }, action);
+}
+
+test(
+  'a top-face sketch reads +u rightward and +v upward',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(60_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await stubApi(page);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await createProject(page, 'Face Sketch Axes');
+    await createPrimitiveInPlace(page, 'box');
+
+    const canvas = page.locator('.viewer-host canvas');
+    await expect
+      .poll(() =>
+        canvas.evaluate(
+          (element) =>
+            new Promise<boolean>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-planar-face', {
+                  detail: {
+                    normal: { x: 0, y: 0, z: 1 },
+                    resolve: (face: { hasReference: boolean } | null) =>
+                      resolve(face?.hasReference === true)
+                  }
+                })
+              );
+            })
+        )
       )
-    )
-    .toBe(true);
-  await page
-    .getByRole('region', { name: 'Resize Body operation' })
-    .getByRole('button', { name: 'Selection: Sketch' })
-    .click();
-  await expect(
-    page.getByRole('toolbar', { name: 'Sketch tools' })
-  ).toBeVisible();
-  await expect(page.locator('.viewport-dock-grid')).toBeVisible();
-  await waitForStillViewport(page);
+      .toBe(true);
+    await interruptSketchEntry(page, 'return');
+    await page
+      .getByRole('region', { name: 'Resize Body operation' })
+      .getByRole('button', { name: 'Selection: Sketch' })
+      .click();
+    await expect(
+      page.getByRole('toolbar', { name: 'Sketch tools' })
+    ).toBeVisible();
+    await expect(page.locator('body')).toHaveAttribute(
+      'data-sketch-entry-projection',
+      'perspective'
+    );
+    await expect
+      .poll(async () => (await projectPlanePoints(canvas, []))?.projection)
+      .toBe('orthographic');
+    await expect(page.locator('.viewport-dock-grid')).toBeVisible();
+    await waitForStillViewport(page);
 
-  const entered = await screenSteps(canvas);
-  expectRightAndUp(entered);
+    const entered = await screenSteps(canvas);
+    expectRightAndUp(entered);
 
-  // Panning (OrbitControls' own middle-drag pan) keeps the axes. Which
-  // gestures release a held roll is pinned in CameraController.test.ts: on
-  // a horizontal face the pole nudge already makes world up agree with v.
-  const bounds = (await canvas.boundingBox())!;
-  const grab = {
-    x: bounds.x + bounds.width * 0.3,
-    y: bounds.y + bounds.height * 0.3
-  };
-  await page.mouse.move(grab.x, grab.y);
-  await page.mouse.down({ button: 'middle' });
-  await page.mouse.move(grab.x + 90, grab.y + 60, { steps: 8 });
-  await page.mouse.up({ button: 'middle' });
-  await waitForStillViewport(page);
-  const panned = await screenSteps(canvas);
-  // Premise: the drag panned the view.
-  expect(
-    Math.hypot(
-      panned.origin.x - entered.origin.x,
-      panned.origin.y - entered.origin.y
-    )
-  ).toBeGreaterThan(20);
-  expectRightAndUp(panned);
+    // Panning (OrbitControls' own middle-drag pan) keeps the axes. Which
+    // gestures release a held roll is pinned in CameraController.test.ts: on
+    // a horizontal face the pole nudge already makes world up agree with v.
+    const bounds = (await canvas.boundingBox())!;
+    const grab = {
+      x: bounds.x + bounds.width * 0.3,
+      y: bounds.y + bounds.height * 0.3
+    };
+    await page.mouse.move(grab.x, grab.y);
+    await page.mouse.down({ button: 'middle' });
+    await page.mouse.move(grab.x + 90, grab.y + 60, { steps: 8 });
+    await page.mouse.up({ button: 'middle' });
+    await waitForStillViewport(page);
+    const panned = await screenSteps(canvas);
+    // Premise: the drag panned the view.
+    expect(
+      Math.hypot(
+        panned.origin.x - entered.origin.x,
+        panned.origin.y - entered.origin.y
+      )
+    ).toBeGreaterThan(20);
+    expectRightAndUp(panned);
 
-  // Leaving the sketch glides back cleanly.
-  await page
-    .getByRole('button', { name: 'Finish Sketch', exact: true })
-    .click();
-  await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toHaveCount(
-    0
-  );
-  expect(errors).toEqual([]);
-});
+    // Start a circle before moving to another view. Neither camera command
+    // should finish the placement or rebuild the active sketch rig.
+    const circle = page.getByRole('button', { name: 'Circle: Center circle' });
+    await circle.click();
+    const center = {
+      x: bounds.x + bounds.width / 2,
+      y: bounds.y + bounds.height / 2
+    };
+    await page.mouse.click(center.x, center.y);
+    await page.getByRole('button', { name: 'Standard views' }).click();
+    await page.getByRole('button', { name: /^Front view/ }).click();
+    await waitForStillViewport(page);
+    const tilted = await screenSteps(canvas);
+    expect(Math.abs(tilted.u.x)).toBeLessThan(panned.u.x / 2);
+    const beforeReturn = await projectPlanePoints(canvas, []);
+    expect(beforeReturn?.target).toHaveLength(3);
+    await page
+      .getByRole('button', { name: 'Normal to sketch', exact: true })
+      .click({ timeout: 8_000 });
+    await waitForStillViewport(page);
+    const returned = await screenSteps(canvas);
+    expectRightAndUp(returned);
+    expect(returned.u.x).toBeCloseTo(panned.u.x, 0);
+    expect(returned.v.y).toBeCloseTo(panned.v.y, 0);
+    expect((await projectPlanePoints(canvas, []))?.target).toEqual(
+      beforeReturn?.target
+    );
+    await expect(circle).toHaveAttribute('aria-pressed', 'true');
+    await page.mouse.click(center.x + 35, center.y);
+    await expect
+      .poll(async () =>
+        (await projectPlanePoints(canvas, []))?.objects.map(
+          ({ data }) => data.objectKind
+        )
+      )
+      .toEqual(['circle']);
+
+    // Leaving the sketch glides back cleanly.
+    await page
+      .getByRole('button', { name: 'Finish Sketch', exact: true })
+      .click();
+    await expect(
+      page.getByRole('toolbar', { name: 'Sketch tools' })
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole('button', { name: 'Normal to sketch' })
+    ).toHaveCount(0);
+    expect(errors).toEqual([]);
+  }
+);
+
+test(
+  'Normal to sketch preserves perspective after entry was cancelled',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await createProject(page, 'Cancelled Sketch Glide');
+    await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+    await interruptSketchEntry(page, 'wheel');
+    await page.getByRole('button', { name: 'Top (XY)' }).click();
+    await expect(page.locator('body')).toHaveAttribute(
+      'data-sketch-entry-projection',
+      'perspective'
+    );
+    await waitForStillViewport(page);
+    const canvas = page.locator('.viewer-host canvas');
+    expect((await projectPlanePoints(canvas, []))?.projection).toBe(
+      'perspective'
+    );
+
+    await page.getByRole('button', { name: 'Normal to sketch' }).click();
+    await waitForStillViewport(page);
+    expect((await projectPlanePoints(canvas, []))?.projection).toBe(
+      'perspective'
+    );
+    expectRightAndUp(await screenSteps(canvas));
+  }
+);
 
 test('a Top (XY) sketch keeps +u rightward and +v upward', async ({ page }) => {
   await stubApi(page);

@@ -1,7 +1,7 @@
 # Fast PR checks and complete qualification
 
 `.github/workflows/checks.yml` separates lint and typecheck, partitions root
-unit tests over two runners, and combines the critical unit manifest with
+unit tests over three duration-balanced runners, and combines the critical unit manifest with
 Vitest's affected-file inventory from the full project. Changed tests are
 eligible even when they are absent from the smoke manifest. Missing Git
 history, failed discovery and invalid inventories select the complete

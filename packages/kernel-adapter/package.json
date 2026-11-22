@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./exact": "./src/exact.ts",
+    "./sketch-2d-ops": "./src/sketch-2d-ops.ts",
     "./face-attachment": "./src/face-attachment.ts",
     "./topology-lineage": "./src/topology-lineage.ts",
     "./extrude-inference": "./src/extrude-inference.ts",
@@ -22,7 +23,7 @@
     "@openzcad/io-stl": "workspace:*",
     "@openzcad/shared": "workspace:*",
     "fflate": "0.8.3",
-    "remus-wasm": "github:esaueng/remus#88de02388774102a1aaa2d7a2978c04b0dfe7325&path:/crates/wasm/pkg",
-    "remus-wasm-io": "github:esaueng/remus#88de02388774102a1aaa2d7a2978c04b0dfe7325&path:/crates/wasm-io/pkg"
+    "remus-wasm": "github:esaueng/remus#a732c84d43efdffdb051eadfa003d3ca39f1af9a&path:/crates/wasm/pkg",
+    "remus-wasm-io": "github:esaueng/remus#a732c84d43efdffdb051eadfa003d3ca39f1af9a&path:/crates/wasm-io/pkg"
   }
 }

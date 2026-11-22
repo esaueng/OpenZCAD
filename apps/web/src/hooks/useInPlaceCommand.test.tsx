@@ -2987,6 +2987,151 @@ describe('useInPlaceCommand: fillet edges', () => {
   });
 });
 
+// U11: a radius or distance the kernel refuses is said after the input that
+// changed since the last request that built, and that frame stays on screen.
+describe('useInPlaceCommand: a refused fillet or chamfer value', () => {
+  // Placed, so the size arrow (and an entry refused on it) stands.
+  const edge = (hash: number) => ({
+    bodyId: 'body_a' as BodyId,
+    hash,
+    topologyId: `e${hash}`,
+    middle: { x: 0, y: 0, z: 10 },
+    outward: { x: 1, y: 0, z: 0 }
+  });
+  const refusing = () => {
+    let builds = true;
+    const frames: ProjectDocument[] = [];
+    const harness = setup({
+      buildCommand: () => ({
+        validate: () => undefined,
+        apply: () => {
+          const frame = fakeDocument(builds);
+          frames.push(frame);
+          return frame;
+        },
+        resultBodyId: BODY
+      })
+    });
+    return {
+      ...harness,
+      frames,
+      refuse: (next: boolean) => {
+        builds = !next;
+      }
+    };
+  };
+
+  it('names the radius and keeps the last fillet that built', async () => {
+    const { hook, publishPreview, frames, refuse } = refusing();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(1)] })
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    const good = frames.at(-1);
+    expect(publishPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ derived: good?.derived })
+    );
+    refuse(true);
+    act(() => {
+      hook.result.current.setValue('radius', 30);
+    });
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBe('R');
+    // The arrow stands on the radius the kept frame built from, at the
+    // edge, while the value held (and the chip's text) is the refused one.
+    expect(hook.result.current.keptValues?.radius).toBe(2);
+    expect(hook.result.current.values.radius).toBe(30);
+    expect(hook.result.current.canFinish).toBe(false);
+    // Review of the refused-chip fix: a typed value the entry refuses (0)
+    // leaves the refused radius held, and its arrow on the kept one.
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('radius', 0);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/takes more than 0/);
+    expect(hook.result.current.values.radius).toBe(30);
+    expect(hook.result.current.keptValues?.radius).toBe(2);
+    // The refused radius typed again takes the entry refusal away, and the
+    // kernel's refusal of it stands.
+    act(() => {
+      hook.result.current.setValue('radius', 30);
+    });
+    expect(hook.result.current.refusalInput).toBe('R');
+    // Not taken down: the radius 2 fillet is still what the model shows.
+    expect(publishPreview).not.toHaveBeenLastCalledWith(null);
+    expect(publishPreview).toHaveBeenLastCalledWith(
+      expect.objectContaining({ derived: good?.derived })
+    );
+
+    // A second change while refused is named too: either one, changed back,
+    // returns to the shape on screen.
+    act(() => hook.result.current.setOption('law', 'linear'));
+    await waitFor(() =>
+      expect(hook.result.current.refusalInput).toBe('Radius and R')
+    );
+
+    refuse(false);
+    act(() => hook.result.current.setOption('law', 'constant'));
+    act(() => {
+      hook.result.current.setValue('radius', 3);
+    });
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.refusal).toBeNull();
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+  });
+
+  it("names a chamfer's shape and picked edges", async () => {
+    const { hook, refuse } = refusing();
+    act(() =>
+      hook.result.current.start('chamfer', [], [], [], { edges: [edge(1)] })
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    refuse(true);
+    act(() => hook.result.current.setOption('shape', 'angle'));
+    await waitFor(() => expect(hook.result.current.refusalInput).toBe('Shape'));
+    act(() => hook.result.current.setOption('shape', 'equal'));
+    act(() => {
+      hook.result.current.pickEdge(edge(2));
+    });
+    await waitFor(() => expect(hook.result.current.refusalInput).toBe('Edges'));
+  });
+
+  // Review of #1771: a frame taken down with an emptied pick is not there to
+  // keep, so a refusal after it is said plainly and shows the body bare.
+  it('keeps nothing once the picks were emptied', async () => {
+    const { hook, publishPreview, refuse } = refusing();
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(1)] })
+    );
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.pickEdge(edge(1));
+    });
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+    refuse(true);
+    act(() => {
+      hook.result.current.pickEdge(edge(2));
+    });
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it('refuses a first request plainly, with nothing built to keep', async () => {
+    const { hook, publishPreview, refuse } = refusing();
+    refuse(true);
+    act(() =>
+      hook.result.current.start('fillet', [], [], [], { edges: [edge(1)] })
+    );
+    await waitFor(() => expect(hook.result.current.refusal).not.toBeNull());
+    expect(hook.result.current.refusalInput).toBeNull();
+    expect(hook.result.current.keptValues).toBeNull();
+    expect(publishPreview).toHaveBeenLastCalledWith(null);
+  });
+});
+
 describe("useInPlaceCommand: editing a fillet's edge set", () => {
   const named = (hash: number) => ({
     bodyId: 'body_a' as BodyId,

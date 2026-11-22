@@ -4,9 +4,13 @@ import {
   createSketchReferenceAnnotationId,
   deepClone,
   documentNodesWithHistory,
+  isSketchCompositeCenterTarget,
   isSketchCompositeCornerTarget,
   isSketchCompositeSideTarget,
   isSketchReferenceDimension,
+  isSketchShapeTarget,
+  isSketchDatumTarget,
+  sketchShapeSideCount,
   isSketchReferenceDimensionData,
   resolveSketchReferenceDimension,
   sketchCompositeMemberIds,
@@ -19,6 +23,7 @@ import {
   type SketchComposite,
   type SketchId,
   type SketchNode,
+  type SketchObjectData,
   type SketchReferenceAnnotationId,
   type SketchReferenceDimensionData
 } from '@openzcad/shared';
@@ -45,6 +50,10 @@ export interface SketchReferenceLabelPositionInput extends SketchReferenceDimens
 }
 
 const COMPOSITE_REFERENCE_SCHEMA_VERSION = 36;
+/** S02-D: composite centres and legacy-shape corner/side/centre targets. */
+const SHAPE_REFERENCE_SCHEMA_VERSION = 125;
+/** S02-D: the sketch origin and X/Y axes. */
+const DATUM_REFERENCE_SCHEMA_VERSION = 129;
 const REFERENCE_DISTANCE_MODE_SCHEMA_VERSION = 35;
 
 function assertReferenceDataSchema(
@@ -63,6 +72,27 @@ function assertReferenceDataSchema(
       schemaVersion,
       COMPOSITE_REFERENCE_SCHEMA_VERSION,
       'Composite reference targets'
+    );
+  if (
+    data.dimensionKind !== 'radius' &&
+    [data.a, data.b].some(
+      (target) =>
+        isSketchCompositeCenterTarget(target) || isSketchShapeTarget(target)
+    )
+  )
+    assertMinimumProjectSchema(
+      schemaVersion,
+      SHAPE_REFERENCE_SCHEMA_VERSION,
+      'Shape centre and legacy shape reference targets'
+    );
+  if (
+    data.dimensionKind !== 'radius' &&
+    [data.a, data.b].some((target) => isSketchDatumTarget(target))
+  )
+    assertMinimumProjectSchema(
+      schemaVersion,
+      DATUM_REFERENCE_SCHEMA_VERSION,
+      'Sketch origin and axis reference targets'
     );
   if (data.dimensionKind === 'distance' && data.distanceMode !== undefined)
     assertMinimumProjectSchema(
@@ -131,7 +161,8 @@ export function referenceDimensionObjectIds(
   for (const target of targets) {
     if (
       !isSketchCompositeCornerTarget(target) &&
-      !isSketchCompositeSideTarget(target)
+      !isSketchCompositeSideTarget(target) &&
+      !isSketchCompositeCenterTarget(target)
     )
       continue;
     // Keep both the captured topology and the current owner protected, even
@@ -275,7 +306,12 @@ export function restoreSketchReferenceDimensionForReplay(
     ![input.data.a, input.data.b].some(
       (target) =>
         isSketchCompositeCornerTarget(target) ||
-        isSketchCompositeSideTarget(target)
+        isSketchCompositeSideTarget(target) ||
+        isSketchCompositeCenterTarget(target) ||
+        isSketchShapeTarget(target) ||
+        // A datum target is restored by identity too: its other operand may
+        // measure against geometry only the exact build resolves (review).
+        isSketchDatumTarget(target)
     )
   )
     return addSketchReferenceDimension(document, input);
@@ -352,5 +388,61 @@ export function assertNoReferenceDimensionDependents(
   if (dependents.length)
     throw new Error(
       `Delete the reference dimensions first: ${dependents.map((r) => `${r.data.dimensionKind} (${r.annotationId})`).join(', ')}. The geometry was kept.`
+    );
+}
+
+/**
+ * S02-D: a legacy-shape target names its shape by kind, and a corner or side
+ * by index within the shape's side count. A direct edit that changes a
+ * measured shape's kind (a rectangle into a four-sided polygon would move
+ * corner 0 from the lower-left corner to the top vertex), or changes the
+ * count a corner or side is indexed in, would silently retarget, so it
+ * refuses and names the annotations. Only the edit's own change is judged:
+ * an annotation already unresolved by a parameter edit does not block an
+ * unrelated edit, and a centre, which no count moves, allows a count edit.
+ */
+export function assertShapeReferenceTargetsPreserved(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  objectId: EntityId,
+  data: SketchObjectData
+): void {
+  const targets = (sketch.referenceDimensions ?? []).flatMap((reference) =>
+    reference.data.dimensionKind === 'radius'
+      ? []
+      : [reference.data.a, reference.data.b]
+          .filter(
+            (target) =>
+              isSketchShapeTarget(target) && target.objectId === objectId
+          )
+          .map((target) => ({ reference, target }))
+  );
+  if (targets.length === 0) return;
+  const node = ownEntry(document.nodes, objectId);
+  if (node?.kind !== 'sketch-object') return;
+  const scope = getParameterScope(document).scope;
+  const resolve = (value: string | number) => {
+    try {
+      return resolveParamValue(value, scope, undefined, document.units);
+    } catch {
+      return undefined;
+    }
+  };
+  const kindChanged = node.data.objectKind !== data.objectKind;
+  const countChanged =
+    sketchShapeSideCount(node.data, resolve) !==
+    sketchShapeSideCount(data, resolve);
+  const changed = [
+    ...new Set(
+      targets
+        .filter(
+          ({ target }) => kindChanged || (countChanged && 'count' in target)
+        )
+        .map(({ reference }) => reference)
+    )
+  ];
+  if (changed.length)
+    throw new Error(
+      `Reference dimensions measure this shape's corners, sides or centre: ${changed.map((r) => `${r.data.dimensionKind} (${r.annotationId})`).join(', ')}. Delete them before changing its kind or side count. The shape was kept.`
     );
 }

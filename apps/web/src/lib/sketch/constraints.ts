@@ -62,7 +62,8 @@ export interface ConstraintToolSpec {
     | readonly ['object', 'object']
     | readonly ['point', 'point']
     | readonly ['point', 'object']
-    | readonly ['point', 'point', 'object'];
+    | readonly ['either']
+    | readonly ['either', 'either', 'object'];
   /** A completed pick sequence waits for a canvas placement before entry. */
   placement?: true;
   /** Instruction shown while the tool is armed. */
@@ -160,8 +161,10 @@ export const CONSTRAINT_TOOL_SPECS: readonly ConstraintToolSpec[] = [
     kind: 'symmetric',
     label: 'Symmetric',
     picks: 3,
-    pickKinds: ['point', 'point', 'object'],
-    hint: 'Click two snap points, then the line they mirror about.'
+    // Two snap points, or two whole entities of one kind: the first pick
+    // decides which, and the second follows it.
+    pickKinds: ['either', 'either', 'object'],
+    hint: 'Click two snap points, or two lines, circles or arcs away from their points, then the line they mirror about.'
   },
   {
     kind: 'point-on-object',
@@ -174,8 +177,10 @@ export const CONSTRAINT_TOOL_SPECS: readonly ConstraintToolSpec[] = [
     kind: 'lock',
     label: 'Lock',
     picks: 1,
-    pickKinds: ['point'],
-    hint: 'Click a snap point to lock it where it is; click a locked point to unlock it.'
+    // A snap point locks that point; a line, circle or arc picked away
+    // from its points locks the whole entity.
+    pickKinds: ['either'],
+    hint: 'Click a snap point, or a line, circle or arc away from its points, to lock it where it is; click it again to unlock it.'
   },
   {
     kind: 'disconnect',
@@ -215,8 +220,31 @@ function samePick(a: ConstraintPick, b: ConstraintPick): boolean {
   return a.kind === 'object' || a.point === (b as { point: string }).point;
 }
 
+/**
+ * A completed relation. `also` holds the relations added with `data` in the
+ * same edit when one pick sequence states several (two entities mirrored
+ * about a line).
+ */
 export type BuildConstraintResult =
-  { data: SketchConstraintData } | { error: string };
+  | { data: SketchConstraintData; also?: SketchConstraintData[] }
+  | { error: string };
+
+/**
+ * What the next pick of an armed tool must be. A tool that takes either a
+ * point or an object at one step lets its first such pick decide, and every
+ * later `either` step follows that pick's kind; `either` is returned only
+ * when nothing has decided yet. Undefined once every pick is in.
+ */
+export function constraintPickKind(
+  kind: PendingConstraintKind,
+  existing: readonly ConstraintPick[]
+): 'point' | 'object' | 'either' | undefined {
+  const expected = constraintToolSpec(kind).pickKinds[existing.length];
+  if (expected !== 'either') {
+    return expected;
+  }
+  return existing[0]?.kind ?? 'either';
+}
 
 /**
  * Validate one pick against the armed tool, before it is accepted into the
@@ -232,11 +260,11 @@ export function refusePick(
   pick: ConstraintPick
 ): string | null {
   const spec = constraintToolSpec(kind);
-  const expectedPickKind = spec.pickKinds[existing.length];
+  const expectedPickKind = constraintPickKind(kind, existing);
   if (!expectedPickKind) {
     return `${spec.label} already has all of its picks.`;
   }
-  if (pick.kind !== expectedPickKind) {
+  if (expectedPickKind !== 'either' && pick.kind !== expectedPickKind) {
     return expectedPickKind === 'point'
       ? 'Pick a snap point (endpoint or center), not a whole object.'
       : 'Pick an object, not a point.';
@@ -377,11 +405,29 @@ export function refusePick(
         if (data.objectKind !== 'line') {
           return 'The symmetry axis must be a line.';
         }
+        // A whole entity picked again is refused above as a repeat pick.
         return existing.some((entry) => entry.objectId === pick.objectId)
           ? 'The axis cannot be a line whose point it mirrors.'
           : null;
       }
-      return pointPickRefusal(data, pick, 'Symmetric');
+      if (pick.kind === 'point') {
+        return pointPickRefusal(data, pick, 'Symmetric');
+      }
+      if (
+        data.objectKind !== 'line' &&
+        data.objectKind !== 'circle' &&
+        data.objectKind !== 'arc'
+      ) {
+        return 'Symmetric mirrors two lines, two circles or two arcs.';
+      }
+      const first = existing[0];
+      if (first) {
+        const firstData = sketchObjectData(document, sketch, first.objectId);
+        if (firstData && firstData.objectKind !== data.objectKind) {
+          return `Symmetric needs another ${firstData.objectKind} to mirror the first.`;
+        }
+      }
+      return null;
     }
     case 'point-on-object': {
       if (existing.length === 0) {
@@ -400,6 +446,14 @@ export function refusePick(
         : null;
     }
     case 'lock':
+      if (pick.kind === 'object') {
+        return data.objectKind === 'line' ||
+          data.objectKind === 'circle' ||
+          data.objectKind === 'arc'
+          ? null
+          : 'Lock holds a whole line, circle or arc; lock any other entity by its points.';
+      }
+      return pointPickRefusal(data, pick, 'Lock');
     case 'disconnect':
       return pointPickRefusal(data, pick, constraintToolSpec(kind).label);
   }
@@ -627,6 +681,20 @@ export function buildConstraint(
     case 'symmetric': {
       const [a, b, axis] = picks;
       if (
+        a?.kind === 'object' &&
+        b?.kind === 'object' &&
+        axis?.kind === 'object'
+      ) {
+        return entitySymmetry(
+          document,
+          sketch,
+          a.objectId,
+          b.objectId,
+          axis.objectId,
+          resolve
+        );
+      }
+      if (
         a?.kind !== 'point' ||
         b?.kind !== 'point' ||
         axis?.kind !== 'object'
@@ -657,6 +725,23 @@ export function buildConstraint(
     }
     case 'lock': {
       const pick = picks[0]!;
+      if (pick.kind === 'object') {
+        const at = resolve
+          ? entityLockGeometry(document, sketch, pick.objectId, resolve)
+          : null;
+        return at
+          ? {
+              data: {
+                constraintKind: 'lock-entity',
+                objectId: pick.objectId as EntityId,
+                at
+              }
+            }
+          : {
+              error:
+                'Lock needs a line, circle or arc whose dimensions resolve.'
+            };
+      }
       const at = resolve
         ? pointPosition(document, sketch, pick, resolve)
         : null;
@@ -675,6 +760,218 @@ export function buildConstraint(
     case 'disconnect':
       return { error: 'Disconnect removes relations; it adds none.' };
   }
+}
+
+/**
+ * Two whole entities mirrored about a line, stated as the point symmetries
+ * (and equal radius) that fix the second exactly once on the solver, so the
+ * set adds no redundancy:
+ *
+ * - two lines: each end of the first mirrors the end of the second nearer
+ *   its image (4 equations, a line's 4 freedoms);
+ * - two circles: the centres mirror and the radii are equal (3 of 3);
+ * - two arcs: reflection reverses an arc's direction, so the first's start
+ *   mirrors the second's end and its end the second's start, and the radii
+ *   are equal (5 of an arc's 5; the centre follows from the ends and the
+ *   radius).
+ */
+function entitySymmetry(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  aId: string,
+  bId: string,
+  axisId: string,
+  resolve: ResolveParam | undefined
+): BuildConstraintResult {
+  const a = sketchObjectData(document, sketch, aId);
+  const b = sketchObjectData(document, sketch, bId);
+  if (!a || !b || a.objectKind !== b.objectKind) {
+    return { error: 'Symmetric mirrors two entities of the same kind.' };
+  }
+  const axis = axisId as EntityId;
+  const ref = (objectId: string, point: SketchPointRef['point']) => ({
+    objectId: objectId as EntityId,
+    point
+  });
+  const symmetric = (
+    p: SketchPointRef,
+    q: SketchPointRef
+  ): SketchConstraintData => ({
+    constraintKind: 'symmetric',
+    a: p,
+    b: q,
+    axis
+  });
+  const equal: SketchConstraintData = {
+    constraintKind: 'equal',
+    a: aId as EntityId,
+    b: bId as EntityId
+  };
+  if (a.objectKind === 'circle') {
+    return {
+      data: symmetric(ref(aId, 'center'), ref(bId, 'center')),
+      also: [equal]
+    };
+  }
+  if (a.objectKind === 'arc' && b.objectKind === 'arc') {
+    // Two mirrored ends and a shared radius are met by two arcs: the true
+    // image, and its complement swept the other way round from a centre
+    // mirrored across their chord. The solver keeps whichever the second
+    // arc starts nearer, so an arc nearer the complement is refused rather
+    // than left as a 270° "mirror" of a 90° arc.
+    const sweepOf = (data: typeof a) => {
+      const start = resolve?.(data.startAngleDeg);
+      const end = resolve?.(data.endAngleDeg);
+      return start === undefined || end === undefined
+        ? null
+        : (((end - start) % 360) + 360) % 360;
+    };
+    const sa = sweepOf(a);
+    const sb = sweepOf(b);
+    if (
+      sa !== null &&
+      sb !== null &&
+      Math.abs(sb - (360 - sa)) < Math.abs(sb - sa)
+    ) {
+      return {
+        error: `The second arc sweeps ${Math.round(sb)}°, nearer the other way round than the ${Math.round(sa)}° of the first arc's mirror image. Pick an arc of matching sweep, or use Mirror to make the image.`
+      };
+    }
+    return {
+      data: symmetric(ref(aId, 'start'), ref(bId, 'end')),
+      also: [symmetric(ref(aId, 'end'), ref(bId, 'start')), equal]
+    };
+  }
+  if (a.objectKind !== 'line') {
+    return { error: 'Symmetric mirrors two lines, two circles or two arcs.' };
+  }
+  // Pair the ends the way they already nearly lie, so the solve moves the
+  // second line as little as it can and never crosses it over.
+  const at = (objectId: string, point: 'start' | 'end') =>
+    resolve
+      ? pointPosition(
+          document,
+          sketch,
+          { kind: 'point', objectId, point },
+          resolve
+        )
+      : null;
+  const axisData = sketchObjectData(document, sketch, axisId);
+  const p = at(aId, 'start');
+  const q0 = at(bId, 'start');
+  const q1 = at(bId, 'end');
+  const axisA = at(axisId, 'start');
+  const axisB = at(axisId, 'end');
+  let crossed = false;
+  if (axisData?.objectKind === 'line' && p && q0 && q1 && axisA && axisB) {
+    const dx = axisB.x - axisA.x;
+    const dy = axisB.y - axisA.y;
+    const length2 = dx * dx + dy * dy;
+    if (length2 > 0) {
+      const t = ((p.x - axisA.x) * dx + (p.y - axisA.y) * dy) / length2;
+      const image = {
+        x: 2 * (axisA.x + t * dx) - p.x,
+        y: 2 * (axisA.y + t * dy) - p.y
+      };
+      crossed =
+        Math.hypot(q1.x - image.x, q1.y - image.y) <
+        Math.hypot(q0.x - image.x, q0.y - image.y);
+    }
+  }
+  return {
+    data: symmetric(ref(aId, 'start'), ref(bId, crossed ? 'end' : 'start')),
+    also: [symmetric(ref(aId, 'end'), ref(bId, crossed ? 'start' : 'end'))]
+  };
+}
+
+/**
+ * The geometry an entity lock records: a line's ends, a circle's centre and
+ * radius, an arc's centre, radius and angles, all resolved now.
+ */
+function entityLockGeometry(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  objectId: string,
+  resolve: ResolveParam
+): number[] | null {
+  const data = sketchObjectData(document, sketch, objectId);
+  const values =
+    data?.objectKind === 'line'
+      ? [data.x1, data.y1, data.x2, data.y2]
+      : data?.objectKind === 'circle'
+        ? [data.centerX, data.centerY, data.radius]
+        : data?.objectKind === 'arc'
+          ? [
+              data.centerX,
+              data.centerY,
+              data.radius,
+              data.startAngleDeg,
+              data.endAngleDeg
+            ]
+          : null;
+  if (!values) return null;
+  const resolved = values.map((value) => resolve(value));
+  return resolved.every(
+    (value): value is number => value !== undefined && Number.isFinite(value)
+  )
+    ? resolved
+    : null;
+}
+
+/**
+ * The first whole-locked entity whose own dimensions resolve differently
+ * under `after` than under `before` (say across a parameter edit); null when
+ * the edit leaves every locked entity where it is. A parameter feeding a
+ * locked entity's field would otherwise move it without a solve. Equal to
+ * floating-point precision: any real change, however small, counts.
+ */
+export function movedEntityLock(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  before: ResolveParam,
+  after: ResolveParam
+): string | null {
+  for (const { data } of sketch.constraints ?? []) {
+    if (data.constraintKind !== 'lock-entity') continue;
+    const was = entityLockGeometry(document, sketch, data.objectId, before);
+    const now = entityLockGeometry(document, sketch, data.objectId, after);
+    const moved =
+      !was ||
+      !now ||
+      now.some(
+        (value, index) =>
+          Math.abs(value - was[index]!) >
+          16 * Number.EPSILON * Math.max(1, Math.abs(value))
+      );
+    if (moved) return data.objectId;
+  }
+  return null;
+}
+
+/** Ids of the entity lock holding one whole entity (none or one). */
+export function entityLockConstraintIds(
+  sketch: SketchNode,
+  objectId: string
+): string[] {
+  return (sketch.constraints ?? [])
+    .filter(
+      ({ data }) =>
+        data.constraintKind === 'lock-entity' && data.objectId === objectId
+    )
+    .map(({ constraintId }) => constraintId);
+}
+
+/** Ids of the point locks on any point of one entity. */
+export function entityPointLockConstraintIds(
+  sketch: SketchNode,
+  objectId: string
+): string[] {
+  return (sketch.constraints ?? [])
+    .filter(
+      ({ data }) =>
+        data.constraintKind === 'lock' && data.point.objectId === objectId
+    )
+    .map(({ constraintId }) => constraintId);
 }
 
 /** Ids of the lock constraints holding one point. */
@@ -893,6 +1190,14 @@ export function describeConstraint(
       return `Point on curve · ${pointName(data.point)} on ${nameOf(data.objectId)}`;
     case 'lock':
       return `Lock · ${pointName(data.point)}`;
+    case 'lock-entity':
+      return `Lock · ${nameOf(data.objectId)}`;
+    case 'pattern': {
+      const count = data.instances.length + 1;
+      return data.layout.kind === 'linear'
+        ? `Linear pattern ${String(data.layout.spacing)} · ${nameOf(data.source)} ×${count} along ${nameOf(data.layout.direction)}`
+        : `Circular pattern ${String(data.layout.stepDeg)}° · ${nameOf(data.source)} ×${count} about ${pointName(data.layout.pivot)}${data.layout.orientation === 'uniform' ? ', uniform' : ''}`;
+    }
   }
 }
 
@@ -1010,6 +1315,16 @@ export function constraintReferencesObject(
       return refs(data.point) === objectId || data.objectId === objectId;
     case 'lock':
       return refs(data.point) === objectId;
+    case 'lock-entity':
+      return data.objectId === objectId;
+    case 'pattern':
+      return (
+        data.source === objectId ||
+        data.instances.some((instance) => instance.objectId === objectId) ||
+        (data.layout.kind === 'linear'
+          ? data.layout.direction === objectId
+          : data.layout.pivot.objectId === objectId)
+      );
     default:
       return refs(data.a) === objectId || refs(data.b) === objectId;
   }

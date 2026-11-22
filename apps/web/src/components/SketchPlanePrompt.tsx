@@ -1,7 +1,9 @@
-import type {
-  PlaneId,
-  ProjectDocument,
-  SketchPlaneRef
+import {
+  displayLengthName,
+  documentDisplayUnits,
+  type PlaneId,
+  type ProjectDocument,
+  type SketchPlaneRef
 } from '@openzcad/shared';
 import { earlierDatumPlanes } from '../lib/datumPlaneDisplay';
 import { PLANE_LABELS } from '../lib/model';
@@ -125,7 +127,9 @@ export function SketchPlanePrompt({
           aria-label="Sketch plane offset"
           onChange={(event) => onOffsetTextChange(event.target.value)}
         />
-        <span className="sketch-plane-offset-units">{document.units}</span>
+        <span className="sketch-plane-offset-units">
+          {displayLengthName(documentDisplayUnits(document))}
+        </span>
       </label>
     </div>
   );

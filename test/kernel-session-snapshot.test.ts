@@ -24,7 +24,8 @@ import {
 import {
   kernelSnapshotSupport,
   projectionMatches,
-  projectionSignature
+  projectionSignature,
+  reuseStateDigest
 } from '../packages/kernel-adapter/src/exact-session-snapshot';
 import { MAX_HISTORY_REPLAY_WORK } from '../packages/kernel-adapter/src/exact-history-cache';
 
@@ -590,6 +591,184 @@ describe.skipIf(!supported)('persisted history sessions', () => {
     expect(comparable(derived)).toEqual(
       comparable(await freshReplay(document))
     );
+  });
+
+  it("reuses the capturing session's independent results on the first edit", async () => {
+    const document = await filletedPart();
+    const session = await capturedSession(document);
+    expect(session.reuse?.primitives.length).toBeGreaterThan(0);
+    // The Post is independent of the pocketed plate: a session that knows
+    // the plate's two primitives need not rebuild them.
+    const post = listFeaturesInOrder(document).find(
+      (feature) => feature.name === 'Post'
+    )!;
+    const edited = updateFeature(document, {
+      featureId: post.featureId,
+      data: { dimensions: { width: 7, height: 6, depth: 12 } }
+    });
+    const features = listFeaturesInOrder(document).length;
+    const firstEdit = async (stored: PersistedHistorySession) => {
+      const { reopened, events } = await reopen(document, stored);
+      expect(events[0]!.sessionRestore).toBe('restored');
+      const derived = await reopened.syncDocument(
+        edited,
+        undefined,
+        undefined,
+        undefined,
+        IDLE
+      );
+      return { derived, event: events[1]! };
+    };
+    // A record written before the tables existed replays everything.
+    const {
+      reuse: _reuse,
+      reuseDigest: _reuseDigest,
+      ...withoutReuse
+    } = session;
+    const before = await firstEdit(withoutReuse);
+    expect(before.event).toMatchObject({ replayed: features, restored: 0 });
+    const after = await firstEdit(session);
+    expect(after.event.kind).toBe('independent-reuse');
+    expect(
+      (after.event.reusedPrimitives ?? 0) +
+        (after.event.reusedPreparedFeatures ?? 0)
+    ).toBeGreaterThanOrEqual(2);
+    expect(after.event.replayed).toBeLessThan(before.event.replayed);
+    const fresh = comparable(await freshReplay(edited));
+    expect(comparable(after.derived)).toEqual(fresh);
+    expect(comparable(before.derived)).toEqual(fresh);
+  });
+
+  it('drops reuse entries that no longer match the restored history', async () => {
+    const document = await filletedPart();
+    const session = await capturedSession(document);
+    // Damaged into another shape: the whole record is refused.
+    expect(
+      isPersistedHistorySession({
+        ...session,
+        reuse: { primitives: [['x', { index: 'a' }]], prepared: [] }
+      })
+    ).toBe(false);
+    // A stale digest is only that entry's miss: the restore still matches
+    // and the edit replays what the entry would have reused.
+    const stale = structuredClone(session);
+    for (const [, entry] of stale.reuse!.primitives) entry.digest += '-stale';
+    for (const [, entry] of stale.reuse!.prepared) entry.digest += '-stale';
+    stale.reuseDigest = reuseStateDigest(stale.reuse!)!;
+    expect(isPersistedHistorySession(stale)).toBe(true);
+    const { reopened, events } = await reopen(document, stale);
+    expect(events[0]!.sessionRestore).toBe('restored');
+    const plate = listFeaturesInOrder(document)[0]!;
+    const edited = updateFeature(document, {
+      featureId: plate.featureId,
+      data: { dimensions: { width: 41, height: 24, depth: 10 } }
+    });
+    const derived = await reopened.syncDocument(
+      edited,
+      undefined,
+      undefined,
+      undefined,
+      IDLE
+    );
+    expect(events[1]!.reusedPrimitives ?? 0).toBe(0);
+    expect(comparable(derived)).toEqual(comparable(await freshReplay(edited)));
+  });
+
+  it('never trusts damaged reuse tables', async () => {
+    const document = await filletedPart();
+    const session = await capturedSession(document);
+    const features = listFeaturesInOrder(document);
+    const post = features.find((feature) => feature.name === 'Post')!;
+    const edited = updateFeature(document, {
+      featureId: post.featureId,
+      data: { dimensions: { width: 7, height: 6, depth: 12 } }
+    });
+    // Another valid solid swapped into an entry, digest left as stored: the
+    // tables no longer match their digest and are dropped whole, so the
+    // first edit replays and still equals a fresh replay.
+    const swapped = structuredClone(session);
+    const [first, second] = swapped.reuse!.primitives;
+    expect(second).toBeDefined();
+    [first![1].shape, second![1].shape] = [second![1].shape, first![1].shape];
+    expect(isPersistedHistorySession(swapped)).toBe(true);
+    const { reopened, events } = await reopen(document, swapped);
+    expect(events[0]!.sessionRestore).toBe('restored');
+    const derived = await reopened.syncDocument(
+      edited,
+      undefined,
+      undefined,
+      undefined,
+      IDLE
+    );
+    expect(events[1]!.reusedPrimitives ?? 0).toBe(0);
+    expect(comparable(derived)).toEqual(comparable(await freshReplay(edited)));
+
+    // A lineage table turned into a plain object that encodes like a map
+    // is refused, and no longer shares the table's digest.
+    const objectLineage = structuredClone(session);
+    const entry = objectLineage.reuse!.primitives.find(
+      ([, candidate]) => candidate.shape.lineage
+    )?.[1];
+    expect(entry).toBeDefined();
+    const references = entry!.shape.lineage!.faceReferences;
+    (entry!.shape.lineage as { faceReferences: unknown }).faceReferences = {
+      $map: [...references]
+    };
+    expect(reuseStateDigest(objectLineage.reuse!)).not.toBe(
+      session.reuseDigest
+    );
+    expect(isPersistedHistorySession(objectLineage)).toBe(false);
+
+    // Shapes the import could not read are refused with the record.
+    const prepared = (patch: Record<string, unknown>) => ({
+      ...session,
+      reuse: {
+        primitives: [],
+        prepared: [
+          [
+            'feature',
+            {
+              index: 1,
+              digest: 'd',
+              inputs: [
+                {
+                  bodyId: 'tool',
+                  shape: { solids: [3] },
+                  consumed: false,
+                  mesh: false,
+                  partialRevolve: false
+                }
+              ],
+              shapes: new Map([['tool', { solids: [4] }]]),
+              consumed: [],
+              mesh: [],
+              partialRevolve: [],
+              ...patch
+            }
+          ]
+        ]
+      }
+    });
+    expect(isPersistedHistorySession(prepared({}))).toBe(true);
+    // Consuming a body it neither reads nor makes.
+    expect(isPersistedHistorySession(prepared({ consumed: ['other'] }))).toBe(
+      false
+    );
+    expect(isPersistedHistorySession(prepared({ inputs: [null] }))).toBe(false);
+    // A hole survives structured clone and skips `every`.
+    expect(
+      isPersistedHistorySession(
+        structuredClone({
+          ...session,
+          reuse: { primitives: new Array(1), prepared: [] }
+        })
+      )
+    ).toBe(false);
+    // Tables without a digest, or a digest without tables, are refused.
+    const { reuseDigest: _digest, ...undigested } = session;
+    expect(isPersistedHistorySession(undigested)).toBe(false);
+    const { reuse: _tables, ...tableless } = session;
+    expect(isPersistedHistorySession(tableless)).toBe(false);
   });
 
   it('ignores a session for another project', async () => {

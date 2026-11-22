@@ -5,12 +5,14 @@ import type {
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
-import type { PickDetail } from '@openzcad/viewport';
+import type { PickDetail, PickSnap } from '@openzcad/viewport';
+import { documentDisplayUnits } from '@openzcad/shared';
 import { downloadText, exportFileStem } from '../lib/model';
 import type {
   Measurement,
   MeasurementDisplayOptions,
   MeasurementMode,
+  MeasurePointKind,
   MeasurementTarget,
   MeasurementViewportAnnotation,
   RadialDisplay
@@ -74,6 +76,9 @@ export function useMeasurementWorkbench({
   const [measuring, setMeasuring] = useState(false);
   const [measurementMode, setMeasurementMode] =
     useState<MeasurementMode>('smart');
+  /** M13: the kind of point a Distance pick records ('auto' derives it). */
+  const [measurementPointKind, setMeasurementPointKind] =
+    useState<MeasurePointKind>('auto');
   const [measurementDraft, setMeasurementDraft] =
     useState<MeasurementTarget | null>(null);
   /**
@@ -137,7 +142,8 @@ export function useMeasurementWorkbench({
       return;
     }
     const projectId = doc.projectId;
-    setMeasurementUnit(doc.units);
+    // I03: a project measures in the unit it shows lengths in.
+    setMeasurementUnit(documentDisplayUnits(doc));
     setMeasurementPrecision(2);
     setRadialDisplay('diameter');
     let cancelled = false;
@@ -170,6 +176,26 @@ export function useMeasurementWorkbench({
       cancelled = true;
     };
   }, [applyStoredMeasurements, doc?.projectId]);
+
+  /**
+   * I03: switching the project's display unit switches the measurements
+   * with it. Only a switch while the project is open: opening one restores
+   * the unit its measurements were last read in.
+   */
+  const displayUnits = doc ? documentDisplayUnits(doc) : null;
+  const shownUnitsRef = useRef<{
+    projectId: string;
+    units: UnitSystem;
+  } | null>(null);
+  useEffect(() => {
+    if (!doc || displayUnits === null) return;
+    const last = shownUnitsRef.current;
+    shownUnitsRef.current = { projectId: doc.projectId, units: displayUnits };
+    if (last?.projectId === doc.projectId && last.units !== displayUnits)
+      setMeasurementUnit(displayUnits);
+    // Keyed on the project and its display unit, not every document edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId, displayUnits]);
 
   /**
    * Writes the measurement list back, debounced.
@@ -320,9 +346,79 @@ export function useMeasurementWorkbench({
    * pick: a hover is not the place to explain ADR-011, and a silent absence
    * beats a confident wrong number.
    */
+  /**
+   * The target a two-pick measure records for a pick. A Distance pick that a
+   * snap locked onto records the edge point the glyph named; anything else
+   * keeps the selection's own derivation. Angle needs directions, which a
+   * snapped point does not carry, so it never takes this path.
+   */
+  function pickTarget(
+    api: NonNullable<typeof measurementApi>,
+    body: BodyRepresentation,
+    selection: TopologySelection,
+    point: { x: number; y: number; z: number } | undefined,
+    snap: PickSnap | undefined
+  ) {
+    // M13: a chosen point kind records that point of the pick, or nothing.
+    if (measurementMode === 'distance' && measurementPointKind !== 'auto') {
+      // A glyph names its own edge: the pick records that edge's point,
+      // which must land where the glyph stood, never a point of whatever
+      // the ray happened to hit beside it.
+      if (snap?.source && point) {
+        const target = api.pointKindTarget(
+          body,
+          api.snapSourceSelection(body, snap.source),
+          measurementPointKind,
+          point,
+          snap.source.role
+        );
+        return api.pointKindAgrees(body, target, point) ? target : null;
+      }
+      return api.pointKindTarget(body, selection, measurementPointKind, point);
+    }
+    const snapped =
+      measurementMode === 'distance' && snap?.source && point
+        ? api.measurementTargetFromSnap(body, snap.source, point)
+        : null;
+    return (
+      snapped ??
+      api.measurementTargetFromSelection(
+        body,
+        selection,
+        point,
+        // M13: the entity distances store their picks as Distance does; the
+        // geometry they measure is read from the topology at measure time.
+        api.isEntityDistanceMode(measurementMode) ? 'distance' : measurementMode
+      )
+    );
+  }
+
+  /** The second pick's figure, for the click and its hover preview alike. */
+  function pairMeasurement(
+    api: NonNullable<typeof measurementApi>,
+    first: MeasurementTarget,
+    second: MeasurementTarget,
+    revision: number,
+    units: UnitSystem
+  ): Measurement | { refused: string } | null {
+    if (api.isEntityDistanceMode(measurementMode))
+      return api.createEntityDistanceMeasurement(
+        measurementMode,
+        viewerBodies,
+        first,
+        second,
+        revision,
+        units
+      );
+    return measurementMode === 'distance'
+      ? api.createDistanceMeasurement(first, second, revision, units)
+      : api.createAngleMeasurement(first, second, revision, units);
+  }
+
   function previewMeasurement(
     selection: TopologySelection,
-    point?: { x: number; y: number; z: number }
+    point?: { x: number; y: number; z: number },
+    snap?: PickSnap
   ): string | null {
     if (!doc || !measuring || !measurementApi || geometryPending) {
       return null;
@@ -355,12 +451,7 @@ export function useMeasurementWorkbench({
             .value
         : null;
     }
-    const target = measurementApi.measurementTargetFromSelection(
-      body,
-      selection,
-      point,
-      measurementMode
-    );
+    const target = pickTarget(measurementApi, body, selection, point, snap);
     if (!target?.point) {
       return null;
     }
@@ -369,21 +460,14 @@ export function useMeasurementWorkbench({
     if (!measurementDraft) {
       return target.label;
     }
-    const measurement =
-      measurementMode === 'distance'
-        ? measurementApi.createDistanceMeasurement(
-            measurementDraft,
-            target,
-            doc.version,
-            doc.units
-          )
-        : measurementApi.createAngleMeasurement(
-            measurementDraft,
-            target,
-            doc.version,
-            doc.units
-          );
-    return measurement
+    const measurement = pairMeasurement(
+      measurementApi,
+      measurementDraft,
+      target,
+      doc.version,
+      doc.units
+    );
+    return measurement && !('refused' in measurement)
       ? measurementApi.formatMeasurement(measurement, measurementDisplay).value
       : null;
   }
@@ -477,15 +561,22 @@ export function useMeasurementWorkbench({
       }
       return true;
     }
-    const target = measurementApi.measurementTargetFromSelection(
+    const target = pickTarget(
+      measurementApi,
       body,
       selection,
       point,
-      measurementMode
+      detail?.snap
     );
     if (!target?.point) {
       setStatus(
-        measurementApi.measurementSelectionFailure(body, selection) ??
+        (measurementMode === 'distance' && measurementPointKind !== 'auto'
+          ? measurementApi.pointKindFailure(
+              measurementPointKind,
+              selection.kind
+            )
+          : null) ??
+          measurementApi.measurementSelectionFailure(body, selection) ??
           (measurementMode === 'angle'
             ? 'Angle needs a straight edge, circular axis or planar face.'
             : 'That selection does not expose a trustworthy measurement point.')
@@ -497,21 +588,16 @@ export function useMeasurementWorkbench({
       setStatus(`${target.label} selected · pick the second target.`);
       return true;
     }
-    const measurement =
-      measurementMode === 'distance'
-        ? measurementApi.createDistanceMeasurement(
-            measurementDraft,
-            target,
-            doc.version,
-            doc.units
-          )
-        : measurementApi.createAngleMeasurement(
-            measurementDraft,
-            target,
-            doc.version,
-            doc.units
-          );
-    if (measurement) {
+    const measurement = pairMeasurement(
+      measurementApi,
+      measurementDraft,
+      target,
+      doc.version,
+      doc.units
+    );
+    if (measurement && 'refused' in measurement) {
+      setStatus(`${measurement.refused} The first target is still selected.`);
+    } else if (measurement) {
       recordMeasurement(measurement);
     } else {
       setStatus(
@@ -634,6 +720,8 @@ export function useMeasurementWorkbench({
     setMeasuring,
     measurementMode,
     setMeasurementMode,
+    measurementPointKind,
+    setMeasurementPointKind,
     measurementDraft,
     measurementEdgeRun,
     measurements,

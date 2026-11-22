@@ -4,15 +4,20 @@
  * and autosaves through the encrypted store, a viewer gets the read-only UI.
  * The role comes from the project's MLS roles (`memberships.ts`), never the
  * server's mirror. It is read when the project opens, when the window
- * regains focus, every `REFRESH_MS`, and whenever something here learns the
- * role may have moved (`refreshEncryptedMemberRole`: a write the browser or
- * the Worker refused as read-only). The crypto loads only for such a
- * project.
+ * regains focus or the tab becomes visible, every `REFRESH_MS` while the tab
+ * is visible, and whenever something here learns the role may have moved
+ * (`refreshEncryptedMemberRole`: a write the browser or the Worker refused as
+ * read-only). A hidden tab skips the timer, since each read costs account
+ * requests and nobody can edit there; the Worker still refuses a demoted
+ * account's writes. The crypto loads only for such a project.
  */
 import { useEffect, useState } from 'react';
 import type { ProjectAccessRole } from '@openzcad/shared';
 
-/** Judgment: a demotion reaches an open page within this, at the latest. */
+/**
+ * Judgment: a demotion reaches an open, visible page within this, at the
+ * latest. A hidden page reads it as soon as it is shown again.
+ */
 export const REFRESH_MS = 20_000;
 
 const listeners = new Set<(projectId: string) => void>();
@@ -62,15 +67,23 @@ export function useEncryptedMemberRole(
     };
     void read();
     const onFocus = () => void read();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void read();
+    };
+    const onTick = () => {
+      if (document.visibilityState !== 'hidden') void read();
+    };
     const listener = (id: string) => {
       if (id === projectId) void read();
     };
     window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     listeners.add(listener);
-    const timer = window.setInterval(() => void read(), REFRESH_MS);
+    const timer = window.setInterval(onTick, REFRESH_MS);
     return () => {
       cancelled = true;
       window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       listeners.delete(listener);
       window.clearInterval(timer);
     };

@@ -118,6 +118,7 @@ export interface AssistantProposalRequest {
   digest: CadDocumentDigest;
   history: AssistantHistoryTurn[];
   attachments: AssistantAttachment[];
+  expectedConsent?: string;
   /**
    * 1 when the client is automatically retrying a request whose first stream
    * produced unusable output. Varies the provider sticky-routing key so the
@@ -881,9 +882,19 @@ export function parseAssistantProposalRequest(
       `"customInstructions" must be text of at most ${MAX_CUSTOM_INSTRUCTIONS_LENGTH} characters.`
     );
   }
+  const expectedConsent = record.expectedConsent;
+  if (
+    expectedConsent !== undefined &&
+    (typeof expectedConsent !== 'string' || expectedConsent.length > 512)
+  ) {
+    throw badRequest(
+      '"expectedConsent" must be text of at most 512 characters.'
+    );
+  }
   return {
     prompt,
     digest: digest as unknown as CadDocumentDigest,
+    ...(expectedConsent === undefined ? {} : { expectedConsent }),
     history: parseAssistantHistory(record.history),
     attachments: parseAssistantAttachments(record.attachments),
     retryAttempt: record.retryAttempt === 1 ? 1 : 0,

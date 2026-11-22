@@ -144,6 +144,9 @@
   .start-learn-toggle,
   .start-tile-menu [role='menuitem'],
   .topbar-menu-item,
+  /* I03: the File menu's Units chips sit side by side, so each is drawn
+     44 px tall rather than reaching past its neighbours. */
+  .topbar-units button,
   .palette-row,
   .assistant-suggestion,
   .assistant-verified-action,
@@ -286,6 +289,24 @@
   .command-flyout-search,
   .command-flyout-filter button {
     min-height: 44px;
+  }
+}
+
+/* The measurement workbench's head held its 44 px Clear all between 7 px
+   of padding, 59 px in all. Six measurement types take two rows of tabs
+   (M13), and on a short phone with the view tools open the result list kept
+   40 px, under one action's 44: Hide stood out of the list's top. There the
+   head is the 44 px target's own height, with or without Clear all. */
+@media (pointer: coarse) and (max-height: 700px) {
+  .measurement-dock-head {
+    min-height: 44px;
+    padding-block: 0;
+  }
+
+  /* With no padding above it, Clear all meets the dock's clipped top edge:
+     draw its focus ring inside the button so keyboard focus stays visible. */
+  .measurement-dock-clear:focus-visible {
+    outline-offset: -2px;
   }
 }
 

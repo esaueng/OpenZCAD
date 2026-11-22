@@ -6,6 +6,47 @@ import { createBodyEdgeOverlay } from '../render/edgeOverlay';
 import { toBodyId } from '@openzcad/shared';
 
 describe('a pending Move copy', () => {
+  it('ghosts repeated stamps, each the copy pose applied once more (M10)', () => {
+    const root = new THREE.Group();
+    const source = new THREE.Mesh(
+      new THREE.BoxGeometry(),
+      new THREE.MeshPhongMaterial()
+    );
+    root.add(source);
+    const preview = new MoveCopyPreview();
+    const make = () =>
+      new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshPhongMaterial());
+    const copy = preview.target(source, true, make);
+    copy.position.set(10, 0, 0);
+    copy.rotation.set(0, 0, Math.PI / 2);
+    preview.poseStamps(2, make);
+    expect(preview.stampCount).toBe(2);
+    const stamps = root.children.filter(
+      (child) => child !== source && child !== copy
+    );
+    expect(stamps).toHaveLength(2);
+    // The local point (1, 0, 0): the copy puts it at (10, 1); once more,
+    // (9, 10); once more again, (0, 9).
+    const at = (object: THREE.Object3D) =>
+      new THREE.Vector3(1, 0, 0)
+        .applyMatrix4(object.matrix)
+        .toArray()
+        .map((value) => Math.round(value * 1e9) / 1e9 || 0);
+    expect(at(stamps[0]!)).toEqual([9, 10, 0]);
+    expect(at(stamps[1]!)).toEqual([0, 9, 0]);
+    // Stamps never take picks.
+    const hits: THREE.Intersection[] = [];
+    stamps[0]!.raycast(new THREE.Raycaster(), hits);
+    expect(hits).toEqual([]);
+    preview.poseStamps(1, () => {
+      throw new Error('a kept stamp was rebuilt');
+    });
+    expect(preview.stampCount).toBe(1);
+    preview.clear();
+    expect(preview.stampCount).toBe(0);
+    expect(root.children).toEqual([source]);
+  });
+
   it('updates cached copy surface visibility when wireframe X-ray changes', () => {
     const root = new THREE.Group();
     const source = new THREE.Mesh(

@@ -3,8 +3,10 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor
+  waitFor,
+  within
 } from '@testing-library/react';
+import { toBodyId } from '@openzcad/shared';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -16,6 +18,37 @@ import {
 } from './forms/parameterDefinition';
 
 describe('InPlaceCommandBar', () => {
+  it('lists Boolean operands by role and removes the named tool pick', () => {
+    const base = {
+      bodyId: toBodyId('base'),
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 10, y: 10, z: 10 }
+    };
+    const tool = { ...base, bodyId: toBodyId('tool') };
+    const remove = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Union"
+        hint="2 bodies"
+        canFinish
+        booleanOperands={{
+          bodies: [base, tool],
+          name: (id) => (id === base.bodyId ? 'Plate' : 'Boss'),
+          remove
+        }}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    screen.getByLabelText('Union options').closest('details')!.open = true;
+    const list = within(screen.getByRole('list', { name: 'Boolean operands' }));
+    const [first, second] = list.getAllByRole('listitem');
+    expect(first).toHaveTextContent('Base · Plate');
+    expect(second).toHaveTextContent('Tool · Boss');
+    fireEvent.click(list.getByRole('button', { name: 'Remove 2 Tool · Boss' }));
+    expect(remove).toHaveBeenCalledExactlyOnceWith(tool);
+  });
+
   it('confirms from the focused instructions only when ready and leaves child controls their Enter key', () => {
     const onDone = vi.fn();
     const command = (canFinish: boolean, locked = false) => (
@@ -109,6 +142,30 @@ describe('InPlaceCommandBar', () => {
       expect(disclosure?.textContent).toContain(diagnostic);
     }
   );
+
+  // U11: a kernel refusal names the input to change, ahead of the sentence
+  // its translation writes (a prefix on the raw text would be rewritten away).
+  it('names the refused input ahead of a translated kernel sentence', () => {
+    const diagnostic =
+      'Remus draft refused: the draft moves a corner of curved face 139; re-trimming a curved neighbour against the taper is not implemented';
+    render(
+      <InPlaceCommandBar
+        title="Draft"
+        hint="Pick faces"
+        refusal={diagnostic}
+        refusalInput="Draft angle"
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status').textContent).toBe(
+      "Draft angle: A face next to this one is curved, and re-trimming a curved face to fit isn't supported yet. Try faces that only meet flat faces."
+    );
+    expect(
+      screen.getByText('Technical details').closest('details')?.textContent
+    ).toContain(diagnostic);
+  });
 
   it('shows an adapter sentence as it is, with nothing to disclose', () => {
     const sentence =

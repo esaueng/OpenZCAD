@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FeatureWarning, ProjectDocument } from '@openzcad/shared';
+import type { BodyId, FeatureWarning, ProjectDocument } from '@openzcad/shared';
+import { listFeaturesInOrder } from '@openzcad/document-core';
 import type { GeometryWorkerApi } from './useGeometryWorker';
 import type { KernelRefusalObservation } from '../lib/analytics';
 import type { RefusalCapture, RefusalHarvester } from '../lib/refusalHarvest';
@@ -84,6 +85,25 @@ export function useRefusalHarvest(options: {
       ++pending.generation;
     };
   }, [projectId, version]);
+
+  function syncForCommit(
+    owner: string,
+    document: ProjectDocument,
+    lineageDemand?: readonly BodyId[]
+  ) {
+    // Legacy blends can propose a changed edge pick during an edit. Keep
+    // their full validation and ordinary commit replay.
+    const mayCarry = listFeaturesInOrder(document).some(
+      ({ data }) =>
+        (data.featureKind === 'fillet' || data.featureKind === 'chamfer') &&
+        data.edgeReferences === undefined
+    );
+    return mayCarry
+      ? syncFor(owner, document)
+      : syncFor(owner, document, undefined, lineageDemand, {
+          proposeCarry: false
+        });
+  }
 
   async function syncFor(
     owner: string,
@@ -179,7 +199,14 @@ export function useRefusalHarvest(options: {
     },
     syncCandidate: ((...args) =>
       syncFor('operation', ...args)) as GeometryWorkerApi['syncOnce'],
-    syncParameterCandidate: (name: string, document: ProjectDocument) =>
-      syncFor(`parameter:${name}`, document)
+    syncOperationForCommit: (
+      document: ProjectDocument,
+      demand: readonly BodyId[]
+    ) => syncForCommit('operation', document, demand),
+    syncParameterCandidate: (
+      name: string,
+      document: ProjectDocument,
+      lineageDemand?: readonly BodyId[]
+    ) => syncForCommit(`parameter:${name}`, document, lineageDemand)
   };
 }

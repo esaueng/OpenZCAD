@@ -8,7 +8,13 @@ test(
     const converterRequests: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     page.on('request', (request) => {
-      if (/occt|freecad/i.test(new URL(request.url()).pathname)) {
+      // Judge the file's name, not Vite's content hash: a chunk once hashed
+      // `ParameterRows-DOcCTisO.js` read as an OCCT converter.
+      const file = new URL(request.url()).pathname.replace(
+        /-[A-Za-z0-9_-]{8}(\.[a-z0-9]+)$/i,
+        '$1'
+      );
+      if (/occt|freecad/i.test(file)) {
         converterRequests.push(request.url());
       }
     });

@@ -24,6 +24,8 @@ import {
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
+import { DisplayUnitsProvider } from './lib/displayUnits';
+import { roundShownLength } from './lib/liveLabels';
 import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
   noteProjectMigrating,
@@ -46,6 +48,7 @@ import {
   trackKernelRefusal
 } from './lib/analytics';
 import type { RefusalCapture } from './lib/refusalHarvest';
+import type * as FaceSetOffsetChain from './lib/faceSetOffsetChain';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
   checkpointLabel,
@@ -223,6 +226,7 @@ import type {
   CadSelectionContext
 } from '@openzcad/ai-contracts';
 import type { DrawingAssistantSource } from './lib/drawing/assistantContext';
+import type { AutoDimensionPreview } from './lib/drawing/assistantPreflight';
 import type { PatchSource } from './components/modelPanels/modelPanelProps';
 import {
   appendRevision,
@@ -251,12 +255,14 @@ import {
   normalizeDocument,
   reservedDocumentIdentifierError,
   numberedBodyName,
+  createBodyFeatureIds,
   numberedFeatureName,
   extrudeToFaceUnresolved,
   repairedDirectEditOperation,
   staleDirectEditFaceRepair,
   withEchoedSavePoints,
   withoutDerivedProjection,
+  isSharedWithoutHistory,
   type ExtrudeInput,
   type StaleDirectEditFaceRepair
 } from '@openzcad/document-core';
@@ -268,6 +274,7 @@ import {
   computeSketchProfileAnalysis,
   computeSketchRegions,
   newCanonicalPlaneRef,
+  pathPatternCurves,
   polygonProfile,
   rectangleProfile,
   type PlaneBasis,
@@ -285,7 +292,6 @@ import type {
   BodyTopology,
   BodyRepresentation,
   EntityId,
-  ExtrudeToFaceTarget,
   FeatureId,
   FeatureNode,
   FeatureWarning,
@@ -320,7 +326,10 @@ import {
   BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
+  convertLength,
   displayLengthName,
+  documentDisplayUnits,
+  UNIT_SYSTEM_WORDS,
   duplicateProjectName,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureManuallySuppressed,
@@ -347,12 +356,16 @@ import {
   buildConstraint,
   constraintReferencesObject,
   constraintToolsForObject,
+  constraintPickKind,
   constraintToolSpec,
   describeConstraint,
   disconnectConstraintIds,
+  entityLockConstraintIds,
+  entityPointLockConstraintIds,
   fullyDefinedIds,
   lockConstraintIds,
   measureDrivingDimension,
+  movedEntityLock,
   planConstraintFromSelection,
   refusePick,
   relationSolveAnchor,
@@ -475,11 +488,11 @@ import {
   accountSettingsAdopted,
   ApiError,
   api,
+  assistantHeldUnsettled,
   carryEncryptionRequirement,
   encryptedPinProblem,
   encryptedPinsResetElsewhere,
   encryptedProjectResetElsewhere,
-  encryptionRequired,
   encryptsAccountLibrary,
   encryptsNewProjects,
   isEncryptedPinProblemError,
@@ -495,11 +508,11 @@ import {
   type PinResetTarget
 } from './components/encryptedPinsState';
 import type { ProjectListingProgress } from './lib/api';
-import { saveShareLinkCopy } from './lib/shareLinkCopy';
+import { saveShareLinkCopy, shareLinkCopyName } from './lib/shareLinkCopy';
 import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
 import {
   assistantDisabledReason,
-  ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+  UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE
 } from './lib/assistant/encryptedProject';
 import {
   refreshEncryptedMemberRole,
@@ -622,6 +635,7 @@ import { useDocumentFonts } from './lib/textFonts';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
 import type * as InteractionDiagnostics from './lib/interactionDiagnostics';
 import { KERNEL_BUILD, supportsBlendGroupEdits } from './lib/kernelBuild';
+import { sampledShoulderMove } from './lib/interaction/sampledShoulderMove';
 import {
   chordFromEvent,
   chordLeavesTypingAlone,
@@ -773,9 +787,7 @@ function exportProgressFor(state: GeometryWorkerState): ExportProgress | null {
 /** Per-format file identity for exports from the Export mesh dialog. */
 const STL_EXPORT_FILE_INFO = {
   extension: 'stl',
-  contentType: 'model/stl',
   label: 'STL',
-  kind: 'stl-export' as const,
   binaryFormat: 'stl' as const
 };
 /**
@@ -805,40 +817,30 @@ const MESH_EXPORT_FILE_INFO: Record<
   MeshExportDialogFormat,
   {
     extension: string;
-    contentType: string;
     label: string;
-    kind: ArtifactKind;
     binaryFormat: CadBinaryExportFormat;
   }
 > = {
   '3mf': {
     extension: '3mf',
-    contentType: 'model/3mf',
     label: '3MF',
-    kind: '3mf-export',
     binaryFormat: '3mf'
   },
   'stl-binary': STL_EXPORT_FILE_INFO,
   stl: STL_EXPORT_FILE_INFO,
   obj: {
     extension: 'obj',
-    contentType: 'model/obj',
     label: 'OBJ',
-    kind: 'obj-export',
     binaryFormat: 'obj'
   },
   glb: {
     extension: 'glb',
-    contentType: 'model/gltf-binary',
     label: 'glTF',
-    kind: 'gltf-export',
     binaryFormat: 'glb'
   },
   ply: {
     extension: 'ply',
-    contentType: 'application/octet-stream',
     label: 'PLY',
-    kind: 'ply-export',
     binaryFormat: 'ply'
   }
 };
@@ -850,10 +852,17 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
+import { measurementHighlightTargets } from './lib/measureHighlights';
+import { measureSnapKindsFor } from './lib/measurePointKinds';
+import {
+  relocateMovePivot,
+  translationForRoundedMove
+} from '@openzcad/viewport/move-transform';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
-  outlineChamferChain
+  outlineChamferChain,
+  tangentChainAdditions
 } from './lib/interaction/chamferChain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
@@ -865,7 +874,11 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
-import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
+import {
+  heldFaceSetBody,
+  sameFacePick,
+  toggleFaceInSet
+} from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import { facePickCylinder, facePickKey } from './lib/inPlace/cylinderSide';
 import {
@@ -942,6 +955,8 @@ import {
   interactionReducer,
   commandSessionFor,
   holdsRefusal,
+  movedOnFromRefusal,
+  refusalSubjectKey,
   refusalDiscardedByHistoryStep,
   isOperationState,
   isStaleSelectionError,
@@ -964,11 +979,19 @@ import {
   type SketchEditToolKind
 } from './lib/interaction/machine';
 import type { SketchClipboard } from './lib/sketch/clipboard';
+import {
+  fixedEntityIds,
+  freeEntityRows,
+  type SketchEntityFreedomReport
+} from './lib/sketch/entityFreedom';
 import type {
   SketchEditHost,
   SketchEditPickContext,
-  SketchOffsetPick
+  SketchOffsetPick,
+  SketchPatternOptions
 } from './lib/sketch/edits';
+import type { SketchEditValidation } from './lib/sketch/editing';
+import { useSketchFilletDraft } from './lib/sketch/useSketchFilletDraft';
 import {
   planFaceOffset,
   withFaceTravelHint
@@ -1039,8 +1062,8 @@ import {
 } from './lib/objectPolyline';
 import type { RegionPickData } from './components/viewer/regionOverlay';
 import type { PaletteCommand } from './components/CommandBar';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
-import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from './lib/displayMode';
@@ -1071,6 +1094,7 @@ import {
 } from './lib/resolvedExtrudePreview';
 import { isExtrudeChangeClipped } from './lib/extrudeSectionVisibility';
 import type {
+  ExtrudeFaceTarget,
   ExtrudeFormValue,
   ExtrudeToFacePicking
 } from './lib/extrudeDraft';
@@ -1087,7 +1111,7 @@ import {
   extrudeToFaceRepair,
   extrudeHistoryDocument,
   extrudeToFaceTargetFromPick,
-  toFaceDistanceEstimate,
+  toFaceReachEstimate,
   toFaceTargetLabel
 } from './lib/extrudeToFace';
 import {
@@ -1165,6 +1189,23 @@ function localBlendGroupBoss(
       body?.topology?.faces.some((f) => f.geometry?.featureType === 'blend')
     )
   );
+}
+
+function regionPickForSketch(
+  sketchId: string,
+  region: Omit<RegionPickData, 'sketchId'>
+): RegionPickData {
+  return {
+    sketchId,
+    profileId: region.profileId,
+    regionFingerprint: region.regionFingerprint,
+    samplePoint: region.samplePoint,
+    centroid: region.centroid,
+    boundingBox: region.boundingBox,
+    sourceEntityIds: region.sourceEntityIds,
+    sourceBoundaryLoops: region.sourceBoundaryLoops,
+    area: region.area
+  };
 }
 
 /** The interaction machine's view of one picked region. */
@@ -1551,6 +1592,10 @@ const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
   }))
 );
 /** Longest an account conflict waits for the project's room to connect. */
+/** Where the measurement workbench is a sheet across the stage's foot. */
+const MEASUREMENT_SHEET_MEDIA = '(max-width: 620px)';
+/** Where View's parts list stands over the middle of the model. */
+const PHONE_PARTS_LIST_MEDIA = `(max-width: ${PANEL_LANE_REST_MAX_WIDTH}px)`;
 const ROOM_SETTLE_TIMEOUT_MS = 5000;
 
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
@@ -1940,9 +1985,11 @@ import {
   keypadText,
   profileRegionLoops,
   isInPlacePatternTool,
+  booleanOperandRoles,
   booleanOperationSwitch,
   inPlaceBodyMode,
   inPlaceFaceMode,
+  inPlaceFacePickSurfaces,
   takesFeatureFaces,
   toggledPatternSkip,
   patternCopyChip,
@@ -1977,6 +2024,7 @@ import type * as DatumPicks from './lib/inPlace/datumPicks';
 import type { PreparedReferenceImage } from './lib/referenceImageInsert';
 import {
   parseCurveCandidateId,
+  isPathPatternCurve,
   sketchCurveCandidates,
   sketchPointCandidates,
   sketchCurveMiddle,
@@ -2012,6 +2060,13 @@ import {
   newBlendValidationTarget
 } from './lib/interaction/blendPreview';
 import { errorMessage } from './lib/errors';
+import {
+  buildOffsetFaces,
+  faceSetOffsetStart,
+  faceSetOffsetTicks,
+  faceSetOffsetUnavailable,
+  offsetFacesCommitMessage
+} from './lib/faceSetOffset';
 import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
@@ -2101,7 +2156,11 @@ import {
   type ToastModel
 } from './lib/toasts';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
-import { keptOffsetValue, offsetFaceCommitMessage } from './lib/offsetChip';
+import {
+  keptOffsetValue,
+  offsetFaceCommitMessage,
+  offsetRefusalInTotal
+} from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
@@ -2323,6 +2382,12 @@ const CYLINDER_RADIUS_REST_MS = 250;
 const EDGE_BLEND_REST_MS = 250;
 /** Check a generic face's viewport deformation once the hand rests. */
 const OFFSET_FACE_REST_MS = 250;
+/**
+ * M07: the coarse rate of a chained face set's whole-chain drag preview.
+ * Its leading plane follows the hand every frame from a prepared move; the
+ * whole chain is rebuilt at most this often, and once the hand rests.
+ */
+const OFFSET_SET_CHAIN_PREVIEW_MS = 250;
 /**
  * Where the inspector floats over the stage rather than beside it (the
  * phone and narrow-tablet lanes in quiet-stage.css).
@@ -2814,6 +2879,9 @@ function refreshedEdgePicks(
   return { edges, moved };
 }
 
+/** M13: the stable empty list while no measurement row is hovered. */
+const NO_MEASURE_HIGHLIGHTS: TopologySelection[] = [];
+
 export function App() {
   // Counts this component's commits for the interaction probes. Deliberately
   // dependency-free so it runs after every commit, and deliberately inside
@@ -2867,6 +2935,8 @@ export function App() {
   );
   const [shareSession, setShareSession] = useState<{
     token: string;
+    /** What the link lets its visitor do, plaintext or encrypted. */
+    mode: 'view' | 'tweak';
     encryptedMode?: 'view' | 'tweak';
     /** L08: a plaintext commenter link; its visitor may comment. */
     comments?: boolean;
@@ -3507,11 +3577,11 @@ export function App() {
     | null
   >(null);
   const regionToFaceSetter = useRef<
-    ((target: ExtrudeToFaceTarget) => void) | null
+    ((target: ExtrudeFaceTarget) => void) | null
   >(null);
-  const editToFaceSetter = useRef<
-    ((target: ExtrudeToFaceTarget) => void) | null
-  >(null);
+  const editToFaceSetter = useRef<((target: ExtrudeFaceTarget) => void) | null>(
+    null
+  );
   /** The open Plane card's handler for a drag of its datum's handle. */
   const datumOffsetDragRef = useRef<((delta: number) => void) | null>(null);
   /** The open Plane card's draft Offset, drawn ahead of its Apply. */
@@ -3656,7 +3726,11 @@ export function App() {
   const [sketchPlaneOffsetText, setSketchPlaneOffsetText] = useState('0');
   const sketchPlaneOffset = (() => {
     const parsed = Number(sketchPlaneOffsetText);
-    return Number.isFinite(parsed) ? parsed : 0;
+    if (!Number.isFinite(parsed)) return 0;
+    // I03: typed in the display unit; the sketch stores document units.
+    return doc
+      ? convertLength(parsed, documentDisplayUnits(doc), doc.units)
+      : parsed;
   })();
   const [sketchEditError, setSketchEditError] = useState<string | null>(null);
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
@@ -4515,11 +4589,6 @@ export function App() {
       if (action) spaceMouseActionRef.current(action);
     });
   }, []);
-  const [presentedGeometry, setPresentedGeometry] = useState<{
-    projectId: string;
-    generation: number;
-    visible: boolean;
-  } | null>(null);
   /**
    * What the section view is currently showing. The clipped preview owns the
    * drag; the kernel's exact section is asked for once the plane rests, and
@@ -4581,6 +4650,13 @@ export function App() {
   const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
   const lastPickDetailRef = useRef<PickDetail | null>(null);
+  /** The topology that click landed on, so its point is only reused there. */
+  const lastPickTopologyRef = useRef<TopologySelection | null>(null);
+  /** Where the latest right-click landed on a face, and on which face. */
+  const menuFaceHitRef = useRef<{
+    selection: TopologySelection;
+    detail: PickDetail;
+  } | null>(null);
   /** Selection-first direct-manipulation mode machine (behind experiment flag). */
   const [interaction, dispatchInteraction] = useReducer(
     interactionReducer,
@@ -4655,6 +4731,12 @@ export function App() {
     interaction: InteractionState;
     value: number;
     startedAt: number;
+    /**
+     * The user picked something else while this edit was being checked. A
+     * refusal landing afterwards posts no top bar chip, even if that pick
+     * has since been cleared.
+     */
+    selectionMovedOn?: boolean;
   } | null>(null);
 
   /** Whether the selection is still the one a direct edit was checked for. */
@@ -4702,6 +4784,9 @@ export function App() {
     if (!document) {
       return;
     }
+    // A face set's offset is recorded as the `offset-faces` edit it builds:
+    // the handle's face first, then the set's other faces in pick order. The
+    // log's module names the op and reads each face's reference itself.
     const pick =
       interaction.mode === 'face'
         ? {
@@ -4713,7 +4798,8 @@ export function App() {
                 ? { hash: interaction.target.hash }
                 : {}),
               hasReference: interaction.target.reference !== undefined
-            }
+            },
+            additionalFaces: interaction.target.offsetFaceSet
           }
         : interaction.mode === 'edges' && interaction.edges[0]
           ? {
@@ -5072,12 +5158,13 @@ export function App() {
     // commit stores it in the edit's own revision (`withCarriedSelections`).
     rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
-        ...options,
-        proposeCarry: true
+        proposeCarry: true,
+        ...options
       }),
     track: trackKernelRefusal
   });
-  const { syncCandidate, syncParameterCandidate } = refusalHarvest;
+  const { syncCandidate, syncParameterCandidate, syncOperationForCommit } =
+    refusalHarvest;
   const reachProjectionBuilderRef = useRef(geometry.syncOnce);
   reachProjectionBuilderRef.current = geometry.syncOnce;
   const reachProjectionRequestRef = useRef<{
@@ -5535,11 +5622,44 @@ export function App() {
     projectId: ProjectDocument['projectId'];
     version: number;
     message: string;
+    /** The refused operation's selection; picking another retires it. */
+    selectionKey: string | null;
   } | null>(null);
   useEffect(
     () => setLastDirectEditFailure(null),
     [doc?.projectId, doc?.version]
   );
+  // What is picked now, for retiring a refusal the user has moved on from.
+  // A face set and a History pick leave the machine idle, so the workspace's
+  // own selection stands in for them. A body ID alone does not: deselecting
+  // the last edge leaves its body selected.
+  const refusalSubject =
+    interaction.mode !== 'idle'
+      ? refusalSubjectKey(interaction)
+      : boxSelectedFaces
+        ? JSON.stringify(['faces', boxSelectedFaces.map((f) => f.topologyId)])
+        : selectedFeatureNode?.source === 'pinned'
+          ? JSON.stringify(['feature', selectedFeatureNode.id])
+          : null;
+  // Also checked when a refusal lands. An edit still being checked notes a
+  // pick away from it, so its late refusal posts no chip (see
+  // `selectionMovedOn`), even if that pick was cleared before it landed.
+  useEffect(() => {
+    const pending = pendingDirectEditRef.current;
+    if (
+      pending &&
+      movedOnFromRefusal(refusalSubject, refusalSubjectKey(pending.interaction))
+    ) {
+      pending.selectionMovedOn = true;
+    }
+    if (
+      lastDirectEditFailure &&
+      movedOnFromRefusal(refusalSubject, lastDirectEditFailure.selectionKey)
+    ) {
+      setLastDirectEditFailure(null);
+    }
+  }, [refusalSubject, lastDirectEditFailure]);
+
   /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
@@ -5562,7 +5682,9 @@ export function App() {
       previewBaseIsCurrent(candidate) &&
       current.mode === 'face' &&
       candidate.selectionKey ===
-        `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`
+        // An offset's key also names a face set's other faces.
+        (faceOffsetPlanKey(current) ??
+          `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`)
     );
   }
   /**
@@ -5753,7 +5875,7 @@ export function App() {
           setPreviewVerdict({ value: offset, status: 'unchecked' });
         return base && plan && candidate && current.mode === 'face'
           ? {
-              selectionKey: `${current.op}:${current.target.bodyId}:${current.target.topologyId}:${Boolean(current.target.localFaceOffset)}`,
+              selectionKey: faceOffsetPlanKey(current) ?? '',
               document: candidate,
               offset,
               bodyId: plan.bodyId,
@@ -5823,10 +5945,15 @@ export function App() {
       },
       isCurrent: previewSelectionIsCurrent,
       ...GEOMETRY_PREVIEW_SCHEDULING,
+      minIntervalMs: () =>
+        offsetChainedRef.current
+          ? OFFSET_SET_CHAIN_PREVIEW_MS
+          : GEOMETRY_PREVIEW_SCHEDULING.minIntervalMs,
       presentationTimeMs: () => previewPresentationMs.current,
       publish: (preview) => {
         if (!preview) {
           reusableOffsetPreviewRef.current = null;
+          shownOffsetLaneRef.current = null;
           setPreviewDoc(null);
           setFaceGeometryPreview(null);
           setRenderedOffsetPreview(null);
@@ -5834,13 +5961,23 @@ export function App() {
         }
         traceFaceDragPublish(preview.document.offset, preview.document);
         reusableOffsetPreviewRef.current = { candidate: preview.document };
-        setPreviewDoc(null);
-        setFaceGeometryPreview({
-          ...preview.document,
-          document: preview.document.document,
-          geometry: preview.derived
-        });
-        setRenderedOffsetPreview(preview.document.offset);
+        // A chained set's coarse whole-chain frame for a value the hand has
+        // left would put its leading plane back behind the hand: it still
+        // answers for its value, and the display waits for the hand's own.
+        const handLeft =
+          offsetChainedRef.current &&
+          preview.document.offset !== offsetPreviewValueRef.current &&
+          shownOffsetLaneRef.current === 'lead';
+        if (!handLeft) {
+          shownOffsetLaneRef.current = 'full';
+          setPreviewDoc(null);
+          setFaceGeometryPreview({
+            ...preview.document,
+            document: preview.document.document,
+            geometry: preview.derived
+          });
+          setRenderedOffsetPreview(preview.document.offset);
+        }
         setLastValidPreview(preview.document.offset);
         setPreviewVerdict({ value: preview.document.offset, status: 'built' });
         recoverPreviewInteraction();
@@ -5851,6 +5988,8 @@ export function App() {
       onFailure: ({ error, value }) => {
         const message = errorMessage(error, 'Exact offset preview failed.');
         traceFaceDrag('refusal', { value, message });
+        // A chained set's lead frame never stands beside a refusal.
+        offsetLeadPreview.clear();
         reportPreviewFailure(
           error instanceof PreviewRefusalError ? error.diagnostic : message,
           value
@@ -5867,6 +6006,115 @@ export function App() {
           value: offsetPreviewValueRef.current ?? 0
         });
       }
+    })
+  ).current;
+
+  /**
+   * M07: whether the armed face set offset is a chained move (its faces on
+   * parallel planes at different heights), and which lane drew the frame on
+   * screen. A chained set previews in two lanes: `offsetLeadPreview` shows
+   * the chain's leading plane alone every frame, from the kernel's prepared
+   * move, and `offsetPreview` rebuilds the whole chain at a coarse rate
+   * (`OFFSET_SET_CHAIN_PREVIEW_MS`). Only the whole-chain lane gives a
+   * verdict, names a refusal or hands a release its candidate; a lead frame
+   * is display only, and release always replays the whole set with full
+   * checks.
+   */
+  const offsetChainedRef = useRef(false);
+  /** The chain's ordering (`faceSetOffsetChain`), loaded when a set arms. */
+  const offsetChainRef = useRef<typeof FaceSetOffsetChain | null>(null);
+  const shownOffsetLaneRef = useRef<'full' | 'lead' | null>(null);
+  const offsetLeadPreview = useRef(
+    new LivePreview<OffsetPreviewCandidate, GeometryReadyState>({
+      build: (offset) => {
+        const base = managerRef.current?.document;
+        const current = interactionRef.current;
+        if (
+          !base ||
+          current.mode !== 'face' ||
+          current.op !== 'offset-face' ||
+          !current.target.offsetFaceSet ||
+          current.target.hash === undefined
+        ) {
+          return null;
+        }
+        const command = offsetChainRef.current?.buildOffsetFaceSetLead({
+          document: base,
+          bodyId: current.target.bodyId as BodyId,
+          face: {
+            topologyId: current.target.topologyId,
+            hash: current.target.hash
+          },
+          members: current.target.offsetFaceSet,
+          offset
+        });
+        if (!command) return null;
+        return {
+          selectionKey: faceOffsetPlanKey(current) ?? '',
+          document: command.apply(base),
+          offset,
+          bodyId: current.target.bodyId as BodyId,
+          command,
+          label: command.label,
+          successMessage: '',
+          baseProjectId: base.projectId,
+          baseVersion: base.version
+        };
+      },
+      derive: async (candidate, signal) => {
+        const derived = await geometry.previewGeometry(candidate.document, {
+          signal,
+          deferTopology: true
+        });
+        const rejection = offsetPreviewRejection({
+          label: candidate.label,
+          bodyId: candidate.bodyId,
+          command: candidate.command,
+          derived,
+          documentMoved: !previewBaseIsCurrent(candidate)
+        });
+        if (rejection) throw new PreviewRefusalError(rejection);
+        return derived;
+      },
+      isCurrent: previewSelectionIsCurrent,
+      ...GEOMETRY_PREVIEW_SCHEDULING,
+      presentationTimeMs: () => previewPresentationMs.current,
+      publish: (preview) => {
+        if (!preview) {
+          // Cleared: take its frame down only while it is the one shown.
+          if (shownOffsetLaneRef.current === 'lead') {
+            shownOffsetLaneRef.current = null;
+            setFaceGeometryPreview(null);
+          }
+          return;
+        }
+        // Only the hand's own value, and never over the whole chain's frame
+        // for that same value.
+        if (
+          preview.document.offset !== offsetPreviewValueRef.current ||
+          (shownOffsetLaneRef.current === 'full' &&
+            reusableOffsetPreviewRef.current?.candidate.offset ===
+              preview.document.offset)
+        ) {
+          return;
+        }
+        shownOffsetLaneRef.current = 'lead';
+        setPreviewDoc(null);
+        setFaceGeometryPreview({
+          ...preview.document,
+          document: preview.document.document,
+          geometry: preview.derived
+        });
+      },
+      // Silent: its move is the chain's first step, so the whole-chain lane
+      // names the same refusal for the same value, on the card.
+      onFailure: ({ error, value }) =>
+        traceFaceDrag('refusal', {
+          value,
+          message: errorMessage(error, 'Leading plane preview failed.')
+        }),
+      acceptValue: (offset) =>
+        Number.isFinite(offset) && Math.abs(offset) > 1e-9
     })
   ).current;
 
@@ -5888,13 +6136,21 @@ export function App() {
   /** The region card's extent takes its depth from the build (F01). */
   const regionExtentIsDerived = () => {
     const extent = regionExtrudeSettings.current?.endCondition;
-    return extent === 'to-face' || extent === 'through-all';
+    return (
+      extent === 'to-face' || extent === 'through-all' || extent === 'to-next'
+    );
   };
   const regionDistanceSetter = useRef<((value: ParamValue) => void) | null>(
     null
   );
   /** U09: the in-place Extrude's bar, for Enter, its keypad and handles. */
   const regionExtrudeCommandRef = useRef<ExtrudeCommandHandle | null>(null);
+  /**
+   * The Extrude value its bar names a kernel refusal after: its chip on the
+   * model, and no other, is marked refused. Null when the bar names none.
+   */
+  const [extrudeRefusedValue, setExtrudeRefusedValue] =
+    useState<ExtrudeValueId | null>(null);
   /**
    * U09: the extrude a History row re-armed the in-place Extrude on, by its
    * feature; each arming is its own session (`generation`).
@@ -5970,7 +6226,8 @@ export function App() {
           !base ||
           current.mode !== 'region' ||
           (regionExtrudeSettings.current?.endCondition === 'to-face' &&
-            !regionExtrudeSettings.current.toFace)
+            !regionExtrudeSettings.current.toFace &&
+            !regionExtrudeSettings.current.toSurface)
         ) {
           setRegionExtrudeChecking(false);
           return null;
@@ -6121,6 +6378,7 @@ export function App() {
       stopCylinderRadiusRestCheck();
       cylinderRadiusPreview.stop();
       offsetPreview.stop();
+      offsetLeadPreview.stop();
       const document = managerRef.current?.document;
       pendingDirectEditRef.current = document
         ? {
@@ -6139,12 +6397,14 @@ export function App() {
       if (
         current &&
         pending?.document.projectId === current.projectId &&
-        pending.document.version === current.version
+        pending.document.version === current.version &&
+        !pending.selectionMovedOn
       ) {
         setLastDirectEditFailure({
           projectId: current.projectId,
           version: current.version,
-          message: diagnostic.message
+          message: diagnostic.message,
+          selectionKey: refusalSubjectKey(pending.interaction)
         });
       }
       recordDirectEditOutcome('refused', {
@@ -6172,9 +6432,12 @@ export function App() {
         pending.document.projectId === acceptedOffset.baseProjectId &&
         pending.document.version === acceptedOffset.baseVersion &&
         acceptedOffset.selectionKey ===
-          `${pending.interaction.op}:${pending.interaction.target.bodyId}:${pending.interaction.target.topologyId}:${Boolean(pending.interaction.target.localFaceOffset)}` &&
+          faceOffsetPlanKey(pending.interaction) &&
         previewSelectionIsCurrent(acceptedOffset) &&
+        // A chained set's display-only lead frame is not the accepted shape.
+        shownOffsetLaneRef.current !== 'lead' &&
         !isStaleSelectionError(diagnostic);
+      offsetLeadPreview.clear();
       if (retainOffset) {
         offsetPreview.stop();
       } else {
@@ -6226,6 +6489,7 @@ export function App() {
       }
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      offsetLeadPreview.clear();
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
@@ -6235,6 +6499,18 @@ export function App() {
       if (!directEditOwnsSelection(pending)) return;
       setSelectedEdges([]);
       if (
+        pending?.interaction.mode === 'face' &&
+        pending.interaction.op === 'offset-face' &&
+        pending.interaction.target.offsetFaceSet
+      ) {
+        // A face set's offset ends with nothing picked: its faces were
+        // renumbered by the move, and re-arming the handle on one of them
+        // would offer a one-face offset where a set was moved. Its History
+        // row is where the distance is changed again.
+        dispatchInteraction({ type: 'commit-complete' });
+        setSelectedTopology(null);
+        setSelectedBodyIds([]);
+      } else if (
         pending?.interaction.mode === 'face' &&
         pending.interaction.op === 'offset-face'
       ) {
@@ -6305,7 +6581,9 @@ export function App() {
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
     deriveCancellable: (document, signal) =>
+      geometry.prepareFirstStepImport(document, signal) ??
       rebuildInDisposableWorker(document, signal),
+    releaseCancellable: (signal) => geometry.releasePreparedImport(signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -6420,14 +6698,25 @@ export function App() {
     requestedFeatureNodeId
   ]);
 
+  /**
+   * An Extrude edit's refusal as its bar says it: the bar's title already
+   * names the edited feature, so its own name is not repeated ahead of the
+   * input's. A later feature's refusal keeps the name of that feature.
+   */
+  function ownExtrudeRefusal(message: string, name: string): string {
+    const prefix = `${name}: `;
+    return message.startsWith(prefix) ? message.slice(prefix.length) : message;
+  }
+
+  /** Previews an Extrude edit; returns the refusal known at once, if any. */
   function previewExtrudeForm(
     feature: FeatureNode,
     value: ExtrudeFormValue | null
-  ) {
+  ): string | null {
     setFeatureFormError(null);
     if (!value || geometryBusy || !feature.bodyId || !managerRef.current) {
       edgeFormPreview.clear();
-      return;
+      return null;
     }
     try {
       const command = extrudeEditCommand(feature, value);
@@ -6444,10 +6733,11 @@ export function App() {
       );
     } catch (error) {
       edgeFormPreview.clear();
-      setFeatureFormError(
-        errorMessage(error, 'Unable to preview this extrusion.')
-      );
+      const message = errorMessage(error, 'Unable to preview this extrusion.');
+      setFeatureFormError(message);
+      return message;
     }
+    return null;
   }
 
   function applyExtrudeForm(feature: FeatureNode, value: ExtrudeFormValue) {
@@ -6874,13 +7164,20 @@ export function App() {
   // A parameter change is still a document edit, so a read-only seat locks
   // Tweak exactly as it locks Build. A shared link is the opposite: Tweak is
   // the whole point of the visit.
-  // An encrypted link's verified statement says view or tweak (slice 5-11):
-  // a view-only link locks Tweak too. A plaintext link's visitor chooses.
-  const shareLinkViewOnly = shareSession?.encryptedMode === 'view';
+  // An encrypted link's verified statement says view or tweak (slice 5-11),
+  // and a plaintext link's record does: a view-only link locks Tweak too.
+  const shareLinkViewOnly = shareSession?.mode === 'view';
+  // L08: the owner shared the finished model only. The document says so
+  // itself, for a plaintext and an encrypted link alike.
+  const sharedWithoutHistory = Boolean(
+    shareSession && doc && isSharedWithoutHistory(doc)
+  );
   const tweakModeDisabledReason = shareSession
-    ? shareLinkViewOnly
-      ? 'This link is view only — Make a copy to change its parameters'
-      : null
+    ? sharedWithoutHistory
+      ? 'The owner shared this model without its history, so it has no parameters to change'
+      : shareLinkViewOnly
+        ? 'This link is view only — Make a copy to change its parameters'
+        : null
     : buildModeDisabledReason;
   // The stored preference resolves against what the project allows: a
   // read-only share pins the workspace to View whatever this device prefers,
@@ -7028,7 +7325,6 @@ export function App() {
     canBuild: canNavigateToBuild,
     onSwitch: () => handleWorkspaceMode('build'),
     onLaunch: launchTool,
-    onPrepare: () => prepareResponsiveFrame.prepare(),
     onExpired: () =>
       setStatus(
         'Unable to open Build. Switch to Build and choose the tool again.'
@@ -8821,8 +9117,22 @@ export function App() {
     localUserId,
     accountUserId: session?.userId
   });
-  useEffect(() => {
+  function syncWorkspaceGeometry() {
     geometry.sync(doc, lineageDemand, { persistSession });
+  }
+
+  // Submit an opened model before the viewer's passive WebGL setup. Both can
+  // start together. The regular sync below deduplicates a posted rebuild and
+  // still handles a worker that wasn't available during the layout effect.
+  useLayoutEffect(() => {
+    if (doc?.featureOrder.length) {
+      syncWorkspaceGeometry();
+    }
+    // An edit or a policy change stays on the regular sync path.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId]);
+  useEffect(() => {
+    syncWorkspaceGeometry();
     // `geometry` is stable across renders; re-sync when the demanded set
     // grows so the probe runs without waiting for the next edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -8915,8 +9225,7 @@ export function App() {
     () => doc?.derived.bodyRepresentations ?? {},
     [doc?.derived.bodyRepresentations]
   );
-  // Set up motion centres its axis on, and sizes its slide from, these boxes.
-  const assemblyBodyBounds = useMemo(
+  const bodyMeshBounds = useMemo(
     () => meshBoundsLookup(representations),
     [representations]
   );
@@ -9876,13 +10185,16 @@ export function App() {
         }
       : projects.find((project) => project.projectId === doc.projectId)
     : undefined;
-  // PR #1418: the assistant is off for every project this device holds as
-  // encrypted (pinned, switch unresolved, or carrying an encryption
-  // requirement), whatever consent the account holds. No consent gate is
-  // mounted for it, so nothing asks; the send gate refuses it as well.
-  // Re-read on every render, which `useEncryptedPins` triggers on change.
+  // PR #1418: the assistant is off for a project this device holds as
+  // encrypted unless it is pinned and settled as encrypted here: not while
+  // its switch is unresolved, another tab reset it, the pins are degraded,
+  // or it only carries an encryption requirement. No consent gate is
+  // mounted for such a project, so nothing asks; the send gate refuses it
+  // as well. A settled one gets the gate, and sends only with this
+  // device's grant of its verified consent. Re-read on every render, which
+  // `useEncryptedPins` triggers on change.
   const assistantHeldEncrypted = doc
-    ? encryptionRequired(doc.projectId)
+    ? assistantHeldUnsettled(doc.projectId)
     : false;
   const assistantConsent = useAssistantConsentGate(
     session?.userId ?? null,
@@ -10035,14 +10347,21 @@ export function App() {
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
-    detailDiameter?: { diameter: number; units: string };
+    detailDiameter?: { diameter: number; units: string; scale?: number };
   } | null>(() => {
     if (!doc || tool === 'sketch' || currentGeometrySnapshot !== null) {
       return null;
     }
-    // `in`, not the `inch` enum, as the dock and the Inspector print it.
-    const units = displayLengthName(doc.units);
-    const round = (value: number) => Math.round(value * 100) / 100;
+    // I03: in the display unit. `in`, not the `inch` enum, as the dock and
+    // the Inspector print it.
+    const shownUnits = documentDisplayUnits(doc);
+    const units = displayLengthName(shownUnits);
+    const scale = convertLength(1, doc.units, shownUnits);
+    const round = (value: number) =>
+      scale === 1
+        ? Math.round(value * 100) / 100
+        : roundShownLength(value * scale);
+    const scaled = scale === 1 ? {} : { scale };
     if (selectedEdges.length > 1) {
       let sampled = false;
       const total = selectedEdges.reduce((sum, edge) => {
@@ -10146,7 +10465,7 @@ export function App() {
         return {
           label: textLabelSegments('Through hole'),
           detail: value,
-          detailDiameter: { diameter: geometry.diameter, units }
+          detailDiameter: { diameter: geometry.diameter, units, ...scaled }
         };
       }
       const label = topologySelectionLabelSegments(namingBody, namingTopology);
@@ -10163,13 +10482,15 @@ export function App() {
       return {
         label,
         ...(cylinderDiameter !== undefined
-          ? { detailDiameter: { diameter: cylinderDiameter, units } }
+          ? {
+              detailDiameter: { diameter: cylinderDiameter, units, ...scaled }
+            }
           : {}),
         detail:
           cylinderDiameter !== undefined
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
-              ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
+              ? `${formatMeasuredQuantity(geometry.area * scale * scale)} ${units}²`
               : fromSource
                 ? `— ${units}²`
                 : undefined
@@ -10217,6 +10538,8 @@ export function App() {
     setMeasuring,
     measurementMode,
     setMeasurementMode,
+    measurementPointKind,
+    setMeasurementPointKind,
     measurementDraft,
     measurements,
     setMeasurements,
@@ -10245,6 +10568,26 @@ export function App() {
     viewerBodies: completedViewerBodies,
     setStatus
   });
+  /**
+   * M13: the measurement row under the pointer or focus. Its edges and
+   * faces are lit in the viewport while Measure is on; a body or a row no
+   * longer listed lights nothing.
+   */
+  const [hoveredMeasurementId, setHoveredMeasurementId] = useState<
+    string | null
+  >(null);
+  // The dock unmounts when Measure turns off, with no pointer-leave to clear
+  // the row it held: a reopened dock must not light a stale row.
+  useEffect(() => {
+    if (!measuring) setHoveredMeasurementId(null);
+  }, [measuring]);
+  const hoveredMeasurementTargets = useMemo<TopologySelection[]>(() => {
+    if (!measuring || !hoveredMeasurementId) return NO_MEASURE_HIGHLIGHTS;
+    const row = measurements.find(
+      (measurement) => measurement.id === hoveredMeasurementId
+    );
+    return row ? measurementHighlightTargets(row) : NO_MEASURE_HIGHLIGHTS;
+  }, [measuring, hoveredMeasurementId, measurements]);
   /** What a Move launched now would act on, read live by a held launch: the
    * project and selection (a replaced project can share an empty one), and
    * which command holds the lane, so Measure, a tool or a sketch taken up
@@ -10565,6 +10908,20 @@ export function App() {
       setEditFaceKey((current) =>
         current === selectionKey ? null : selectionKey
       );
+    } else if (id === 'text-on-face' || id === 'tool:sketch') {
+      // Both follow the pick: the face picked is the face sketched on. With
+      // no flat face to take, Sketch asks for a plane as the tool does.
+      const target = selectedPlanarFaceTarget();
+      if (!target) {
+        if (id === 'tool:sketch') launchTool('sketch');
+        else setStatus('Pick a flat face to put text on.');
+        return;
+      }
+      if (!requireExactGeometryReady()) return;
+      if (id === 'text-on-face') startTextOnFace(target);
+      else startSketchOnFace(target);
+    } else if (id === 'offset-faces') {
+      handleOffsetFaceSet();
     } else if (id.startsWith('action:')) {
       handleSelectionAction(id.slice('action:'.length) as SelectionActionId);
     } else {
@@ -10586,7 +10943,10 @@ export function App() {
             : null;
   const calloutFaceCapabilities =
     interaction.mode === 'face'
-      ? selectionCapabilities({ kind: 'face', target: interaction.target })
+      ? selectionCapabilities(
+          { kind: 'face', target: interaction.target },
+          cylinderDimensionMode
+        )
       : null;
   const calloutPressedAction: SelectionActionId | null =
     interaction.mode === 'edges'
@@ -10702,9 +11062,8 @@ export function App() {
       ?.geometry?.surfaceType.toLowerCase();
     if (!surface) return undefined;
     if (surface === 'plane') return 'planar';
-    return surface === 'cylinder' || surface === 'cone'
-      ? 'cylindrical'
-      : 'other';
+    if (surface === 'cylinder') return 'cylindrical';
+    return surface === 'cone' ? 'conical' : 'other';
   })();
   const calloutVerbsKey =
     calloutKind && calloutInteractive
@@ -10728,6 +11087,20 @@ export function App() {
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
             pressedAction: calloutPressedAction,
+            ...(calloutKind === 'faces' && boxSelectedFaces && doc
+              ? {
+                  faceSetOffset: {
+                    disabledReason: faceSetOffsetUnavailable(
+                      doc,
+                      boxSelectedFaces
+                    ),
+                    pressed:
+                      interaction.mode === 'face' &&
+                      interaction.op === 'offset-face' &&
+                      interaction.target.offsetFaceSet !== undefined
+                  }
+                }
+              : {}),
             datumRefusal: calloutDatumRefusal,
             faceSurface: calloutFaceSurface,
             availability: shownAvailability
@@ -11600,17 +11973,8 @@ export function App() {
       (candidate) => candidate.sketchId === sketchId
     );
     const available =
-      view?.regions.map((region): RegionPickData => ({
-        sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      })) ?? [];
+      view?.regions.map((region) => regionPickForSketch(sketchId, region)) ??
+      [];
     if (available.length === 0) {
       setStatus(
         extrudeSketchGuidance([
@@ -11679,7 +12043,8 @@ export function App() {
     dispatchInteraction({
       type: 'select-region',
       target: regionTargetFor(anchor),
-      group: chosen.map(regionTargetFor)
+      group: chosen.map(regionTargetFor),
+      boxSelectProfiles: true
     });
     setStatus(
       chosen.length === 1
@@ -11794,13 +12159,19 @@ export function App() {
           )
         : // A face picked with direct manipulation off never arms the
           // machine: the selection itself names it (a hole then starts at
-          // the face's middle, there being no click point to keep).
+          // the face's middle). A thread starts at the end nearer the click,
+          // so the click that picked this face keeps its point for Thread;
+          // a face selected another way has none to keep.
           selectedTopology?.kind === 'face'
           ? inPlaceFacePick(
               selectedTopology.bodyId,
               selectedTopology.topologyId,
               selectedTopology.hash,
-              undefined
+              tool === 'thread' &&
+                lastPickTopologyRef.current &&
+                sameFacePick(lastPickTopologyRef.current, selectedTopology)
+                ? (lastPickDetailRef.current?.point ?? undefined)
+                : undefined
             )
           : null;
     // Faces a box swept first are a face-list command's faces, on one body;
@@ -12121,7 +12492,7 @@ export function App() {
     );
     if (!body || !edge) return null;
     const points = edge.points ?? [];
-    const box = inPlaceBodyPick(bodyId as BodyId);
+    const box = bodyMeshBounds(bodyId as BodyId);
     const centre = box
       ? {
           x: (box.min.x + box.max.x) / 2,
@@ -12268,7 +12639,9 @@ export function App() {
           feature.data.featureKind === 'sheet-metal',
           (feature.data.featureKind === 'pattern' &&
             feature.data.patternKind === 'points') ||
-            feature.data.featureKind === 'hole'
+            feature.data.featureKind === 'hole',
+          feature.data.featureKind === 'pattern' &&
+            feature.data.patternKind === 'path'
         ),
       body: (bodyId) => inPlaceBodyPick(bodyId),
       laterTransforms: laterInPlaceSteps(current, feature),
@@ -12533,18 +12906,25 @@ export function App() {
     entityId: string,
     bendLine = false,
     /** M02: a pattern on sketch points picks point entities instead. */
-    point = false
+    point = false,
+    /** M02: a pattern along a path takes lines and arcs, construction too. */
+    pathCurve = false
   ): boolean {
     const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
-      (point
-        ? node.data.objectKind === 'point'
-        : bendLine
-          ? node.data.objectKind === 'line'
-          : !node.data.construction &&
-            (node.data.objectKind === 'line' ||
-              node.data.objectKind === 'arc')) &&
+      (pathCurve
+        ? isPathPatternCurve(node.data)
+        : point
+          ? node.data.objectKind === 'point'
+          : bendLine
+            ? node.data.objectKind === 'line'
+            : !node.data.construction &&
+              (node.data.objectKind === 'line' ||
+                node.data.objectKind === 'arc' ||
+                // M04 (v134): an exact sweep follows a spline exactly when
+                // it keeps the profile parallel.
+                node.data.objectKind === 'spline')) &&
       (findSketch(current, sketchId)?.objectIds.includes(
         entityId as EntityId
       ) ??
@@ -12766,10 +13146,13 @@ export function App() {
     }
     const feature = faceProducingFeature(shownDocument, face);
     const problem = !feature
-      ? 'Click a face a hole, boss or cut made.'
+      ? 'Click a face a hole, boss, cut, fillet, chamfer, wrap or rib made.'
       : patternSourceProblem(feature.data, feature.name);
     if (!feature || problem) {
-      setStatus(problem ?? 'Click a face a hole, boss or cut made.');
+      setStatus(
+        problem ??
+          'Click a face a hole, boss, cut, fillet, chamfer, wrap or rib made.'
+      );
       return null;
     }
     const named = { featureId: feature.featureId, name: feature.name };
@@ -13056,11 +13439,10 @@ export function App() {
     // captured `interaction` predates both. Reading it live is what lets the
     // disarm below actually fire for the handle the right-click just armed.
     const liveInteraction = interactionRef.current;
-    // A toolbar command owns the next gesture. Preserve the body selection
-    // that pre-fills Move/boolean forms, but disarm any selection-first face or
-    // edge handle so two manipulators can never claim the same pointer.
+    // A toolbar command owns the next gesture. Keep the body selection for
+    // Move/boolean forms and release any armed handles or Extrude profile picks.
     cancelDirectManipulationRef.current?.();
-    if (liveInteraction.mode !== 'idle') {
+    if (liveInteraction.mode !== 'idle' || liveInteraction.boxSelectProfiles) {
       cylinderRadiusPreview.clear();
       clearEdgePreview();
       dispatchInteraction({ type: 'clear' });
@@ -13107,21 +13489,25 @@ export function App() {
       if (sketchId) {
         startExtrude(sketchId);
       } else {
-        // No sketch to resolve, and there is no picking mode any more: a
-        // click on any shaded closed profile arms the drag-arrow rig
-        // directly, so the hint is the whole flow — and it names any sketch
-        // that has no closed profile to shade.
-        setStatus(
-          extrudeSketchGuidance(
-            sketchOptions.map((option) => ({
-              name: option.name,
-              closed: Boolean(
-                sketchViews.find(
-                  (candidate) => candidate.sketchId === option.sketchId
-                )?.regions.length
-              )
-            }))
+        const sketches = sketchOptions.map((option) => ({
+          name: option.name,
+          closed: Boolean(
+            sketchViews.find((view) => view.sketchId === option.sketchId)
+              ?.regions.length
           )
+        }));
+        const canPick = sketches.some(({ closed }) => closed);
+        if (canPick) {
+          setTool(null);
+          setExtrudeCreateGeneration((current) => current + 1);
+          extrudeReturnRef.current = null;
+          dispatchInteraction({ type: 'pick-extrude-profiles' });
+        }
+        const guidance = extrudeSketchGuidance(sketches);
+        setStatus(
+          canPick
+            ? `${guidance} You can also drag a box around profiles.`
+            : guidance
         );
       }
       return true;
@@ -13237,6 +13623,10 @@ export function App() {
 
   /** Closes the feature panel alone, leaving the selection where it is. */
   function closeFeaturePanel() {
+    const current = interactionRef.current;
+    if (current.mode === 'idle' && current.boxSelectProfiles) {
+      dispatchInteraction({ type: 'clear' });
+    }
     // An in-place command is the panel it replaced: whatever closes panels
     // (another tool, a workspace switch, Measure) ends it too, quietly,
     // since the action that closed it says what happened.
@@ -13422,15 +13812,89 @@ export function App() {
     (
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg'],
-      snap: MoveSnap
+      snap: MoveSnap,
+      pivot?: MovePreview['translation']
     ) => {
       setMoveSnap(snap);
       setMovePreview((current) =>
-        current ? { ...current, translation, rotationDeg } : current
+        current
+          ? {
+              ...current,
+              translation,
+              rotationDeg,
+              ...(pivot ? { pivot } : {})
+            }
+          : current
       );
     },
     []
   );
+
+  /**
+   * M10: a Move-by-two-points pick. The first names the point to move from;
+   * the second sets the translation that carries it onto the second and
+   * ends the pick, leaving Done to commit it as any other Move.
+   */
+  function handleMovePointPick(pick: {
+    point: { x: number; y: number; z: number };
+    kind: string | null;
+  }) {
+    const current = movePreview;
+    if (!current?.pointPick) return;
+    const from = current.pointPick.from;
+    if (!from) {
+      setMovePreview({
+        ...current,
+        pointPick: { from: pick.point, fromKind: pick.kind }
+      });
+      return;
+    }
+    const translation = {
+      x: pick.point.x - from.x,
+      y: pick.point.y - from.y,
+      z: pick.point.z - from.z
+    };
+    setMovePreview({ ...current, translation, pointPick: undefined });
+    setStatus(
+      `Move by two points: ${pointPickLabel(current.pointPick.fromKind)} to ${pointPickLabel(pick.kind).toLowerCase()} · Done to apply.`
+    );
+  }
+
+  /** What a picked point snapped to, as the snap glyph names it. */
+  function pointPickLabel(kind: string | null | undefined): string {
+    switch (kind) {
+      case 'endpoint':
+        return 'Endpoint';
+      case 'midpoint':
+        return 'Midpoint';
+      case 'center':
+        return 'Center';
+      case 'intersection':
+        return 'Intersection';
+      case 'on-edge':
+        return 'Point on edge';
+      case 'on-face':
+      default:
+        return 'Point on face';
+    }
+  }
+
+  /**
+   * M10: where a body Move turns: its placed pivot, or the body's centre as
+   * every gizmo Move stores. Undefined for a body with no geometry yet.
+   */
+  function movePivotOf(
+    preview: MovePreview
+  ): { x: number; y: number; z: number } | undefined {
+    if (preview.pivot) return preview.pivot;
+    const body = representations[preview.bodyId as BodyId];
+    if (!body) return undefined;
+    return {
+      x: (body.bbox.min.x + body.bbox.max.x) / 2,
+      y: (body.bbox.min.y + body.bbox.max.y) / 2,
+      z: (body.bbox.min.z + body.bbox.max.z) / 2
+    };
+  }
 
   /** Commits the Move card; true when the move landed. */
   function confirmMove(): boolean {
@@ -13459,31 +13923,46 @@ export function App() {
     if (!body) {
       return false;
     }
-    const center = {
+    // M10: rotation turns about the gizmo centre, stored as the Move's pivot
+    // on every gizmo Move, so a rotation or scale added by a later edit still
+    // turns the body in place rather than about the world origin. A pivot
+    // placed with the pivot handle is that centre.
+    const center = preview.pivot ?? {
       x: (body.bbox.min.x + body.bbox.max.x) / 2,
       y: (body.bbox.min.y + body.bbox.max.y) / 2,
       z: (body.bbox.min.z + body.bbox.max.z) / 2
     };
-    // M10: rotation turns about the gizmo centre, stored as the Move's pivot
-    // on every gizmo Move, so a rotation or scale added by a later edit still
-    // turns the body in place rather than about the world origin.
     const round = (value: number) => Math.round(value * 1000) / 1000;
+    const rotationDeg = {
+      x: round(preview.rotationDeg.x),
+      y: round(preview.rotationDeg.y),
+      z: round(preview.rotationDeg.z)
+    };
+    const pivot = {
+      x: round(center.x),
+      y: round(center.y),
+      z: round(center.z)
+    };
+    // M10: the stored values are rounded, so the translation is re-derived
+    // from where the preview put the body under the rounded turn and pivot.
+    // Rounding all three independently undid the compensation a placed
+    // pivot carries: a far pivot turned the rounding of a tiny angle into
+    // a visible shift.
+    const translation = translationForRoundedMove(
+      center,
+      preview.translation,
+      preview.rotationDeg,
+      pivot,
+      rotationDeg
+    );
     const values = {
       translation: {
-        x: round(preview.translation.x),
-        y: round(preview.translation.y),
-        z: round(preview.translation.z)
+        x: round(translation.x),
+        y: round(translation.y),
+        z: round(translation.z)
       },
-      rotationDeg: {
-        x: round(preview.rotationDeg.x),
-        y: round(preview.rotationDeg.y),
-        z: round(preview.rotationDeg.z)
-      },
-      pivot: {
-        x: round(center.x),
-        y: round(center.y),
-        z: round(center.z)
-      }
+      rotationDeg,
+      pivot
     };
     // Finite inputs can still overflow during rounding.
     if (
@@ -13498,18 +13977,32 @@ export function App() {
       );
       return false;
     }
+    // Whatever the gizmo's Name field holds, falling back to the default
+    // rather than committing a feature with a blank name.
+    const moveFeatureName = moveName.trim() || (preview.copy ? 'Copy' : 'Move');
+    const stamps = preview.copy ? Math.max(1, preview.stamps ?? 1) : 1;
+    if (stamps > 1 && preview.separateStamps) {
+      setMovePreview(null);
+      return confirmSeparateCopyStamps(
+        preview,
+        values,
+        moveFeatureName,
+        stamps
+      );
+    }
     setMovePreview(null);
     const created = createFeature(
       commandFactories.transformBody({
-        // Whatever the gizmo's Name field holds, falling back to the default
-        // rather than committing a feature with a blank name.
-        name: newFeatureName(
-          moveName.trim() || (preview.copy ? 'Copy' : 'Move')
-        ),
+        name: newFeatureName(moveFeatureName),
         targetBodyId: preview.bodyId as BodyId,
         ...values,
         ...(preview.copy
-          ? { copy: true, bodyName: newCopyBodyName(preview.bodyId as BodyId) }
+          ? {
+              copy: true,
+              bodyName: newCopyBodyName(preview.bodyId as BodyId),
+              // M10: linked stamps are one History step owning every copy.
+              ...(stamps > 1 ? { stamps } : {})
+            }
           : {})
       })
     );
@@ -13520,6 +14013,78 @@ export function App() {
       setMoveCommitHold(preview);
     }
     return created;
+  }
+
+  /**
+   * M10: repeated copies as separate History steps. Each step copies the one
+   * before by the same move, so stamp k still lands where the move applied k
+   * times puts the source, and all of them are one transaction: one Undo
+   * removes every stamp.
+   */
+  function confirmSeparateCopyStamps(
+    preview: MovePreview,
+    values: {
+      translation: { x: number; y: number; z: number };
+      rotationDeg: { x: number; y: number; z: number };
+      pivot: { x: number; y: number; z: number };
+    },
+    featureName: string,
+    stamps: number
+  ): boolean {
+    const owner = managerRef.current;
+    if (!owner) return false;
+    const firstBodyName = newCopyBodyName(preview.bodyId as BodyId);
+    const stem = firstBodyName.replace(/\s[1-9]\d*$/, '');
+    const firstNumber = Number(/\s([1-9]\d*)$/.exec(firstBodyName)?.[1] ?? 1);
+    const firstFeatureName = newFeatureName(featureName);
+    const featureStem = firstFeatureName.replace(/\s[1-9]\d*$/, '');
+    const featureNumber = Number(
+      /\s([1-9]\d*)$/.exec(firstFeatureName)?.[1] ?? 1
+    );
+    let targetBodyId = preview.bodyId as BodyId;
+    const commands: AnyCommand[] = [];
+    const targets: {
+      featureName: string;
+      featureId: FeatureId;
+      resultBodyId: BodyId;
+    }[] = [];
+    for (let index = 0; index < stamps; index += 1) {
+      const ids = createBodyFeatureIds();
+      const name =
+        index === 0
+          ? firstFeatureName
+          : `${featureStem} ${featureNumber + index}`;
+      commands.push(
+        commandFactories.transformBody({
+          name,
+          targetBodyId,
+          ...values,
+          copy: true,
+          bodyName:
+            index === 0 ? firstBodyName : `${stem} ${firstNumber + index}`,
+          ids
+        })
+      );
+      targets.push({
+        featureName: name,
+        featureId: ids.featureId,
+        resultBodyId: ids.bodyId
+      });
+      targetBodyId = ids.bodyId;
+    }
+    // No pose hold: the validated transaction commits with its own derived
+    // state, so nothing would release a held pose if the check refused it.
+    void validatedFeature.runTransaction(commands, {
+      label: `${stamps} copies`,
+      targets,
+      validatingMessage: `Checking ${stamps} copies…`,
+      successMessage: `Added ${stamps} copies as separate steps.`,
+      onSuccess: () => {
+        if (managerRef.current !== owner) return;
+        finishFeatureCreation();
+      }
+    });
+    return true;
   }
 
   function clearSelection() {
@@ -13546,7 +14111,10 @@ export function App() {
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
     setSelectedProfiles([]);
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
   }
@@ -15952,6 +16520,7 @@ export function App() {
         let shared: {
           name: string;
           document: ProjectDocument;
+          mode: 'view' | 'tweak';
           encryptedMode?: 'view' | 'tweak';
           comments?: boolean;
           encryptedComments?: LinkCommentsAccess | null;
@@ -15969,6 +16538,7 @@ export function App() {
           shared = opened && {
             name: opened.name,
             document: opened.document,
+            mode: opened.mode,
             encryptedMode: opened.mode,
             encryptedComments: opened.comments
           };
@@ -15983,6 +16553,9 @@ export function App() {
           shared = plaintext && {
             name: plaintext.project.name,
             document: plaintext.document,
+            // A plaintext link's mode is the owner's choice too; links from
+            // before it was offered are all Tweak.
+            mode: plaintext.project.mode === 'view' ? 'view' : 'tweak',
             ...(plaintext.project.comments ? { comments: true } : {})
           };
         }
@@ -16022,12 +16595,14 @@ export function App() {
         const opened = shared.encryptedMode
           ? {
               token: pendingShareToken,
+              mode: shared.mode,
               encryptedMode: shared.encryptedMode,
               comments: !!shared.encryptedComments,
               encryptedComments: shared.encryptedComments
             }
           : {
               token: pendingShareToken,
+              mode: shared.mode,
               ...(shared.comments ? { comments: true } : {})
             };
         setShareSession(opened);
@@ -16038,9 +16613,11 @@ export function App() {
         });
         setStatus(
           `${
-            shared.encryptedMode === 'view'
-              ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
-              : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+            isSharedWithoutHistory(opening.document)
+              ? `Opened shared model ${shared.name} · view only. The owner shared it without its history. Make a copy to build on it.`
+              : shared.mode === 'view'
+                ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+                : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
           }${opening.note ? ` ${opening.note}` : ''}`
         );
       } catch (error) {
@@ -16088,7 +16665,7 @@ export function App() {
     try {
       const copy = await saveShareLinkCopy(
         source,
-        duplicateProjectName(
+        shareLinkCopyName(
           source.name,
           projects.map((summary) => summary.name)
         ),
@@ -17540,7 +18117,16 @@ export function App() {
     const folderOnly = managerRef.current.undoIsObjectFolderOnly;
     const imageOnly = managerRef.current.undoIsGeometryFree;
     const assemblyOnly = managerRef.current.undoIsAssemblyOnly;
-    if (drawingOnly) {
+    // I03: switching units back is the project-level change it undoes,
+    // available wherever the switch itself was.
+    const unitsOnly = managerRef.current.undoIsDisplayUnitsOnly;
+    if (unitsOnly) {
+      const reason = projectRenameDisabledReasonRef.current;
+      if (reason) {
+        setStatus(cannotSentence('undo', reason));
+        return;
+      }
+    } else if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
     } else if (assemblyOnly) {
       if (!ensureCanEditAssembly('undo')) return;
@@ -17622,7 +18208,16 @@ export function App() {
     const folderOnly = managerRef.current.redoIsObjectFolderOnly;
     const imageOnly = managerRef.current.redoIsGeometryFree;
     const assemblyOnly = managerRef.current.redoIsAssemblyOnly;
-    if (drawingOnly) {
+    // I03: switching units back is the project-level change it undoes,
+    // available wherever the switch itself was.
+    const unitsOnly = managerRef.current.redoIsDisplayUnitsOnly;
+    if (unitsOnly) {
+      const reason = projectRenameDisabledReasonRef.current;
+      if (reason) {
+        setStatus(cannotSentence('redo', reason));
+        return;
+      }
+    } else if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
     } else if (assemblyOnly) {
       if (!ensureCanEditAssembly('redo')) return;
@@ -18346,29 +18941,55 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
-  // Bumped when something opens over the stage that the model should stay
-  // clear of: the viewer reframes only if part of the model is covered.
+  /**
+   * D06: the document an auto-dimension proposal was previewed on. The
+   * generator plans again on Apply, so Apply refuses unless the document
+   * is still the one the preview showed it on.
+   */
+  const autoDimensionPreviewRef = useRef<AutoDimensionPreview | null>(null);
+  // Bumped when an AI preview is shown, or a phone's sheet comes up over
+  // the stage: the viewer reframes only if part of the model is covered.
+  // Otherwise panels, menus, workbenches and mode changes never move the
+  // camera; the model stays where it was, and closing one never moves it
+  // back.
   const [clearStageRequest, setClearStageRequest] = useState(0);
-  const sectionControlsShown =
-    viewerSettings.sectionView !== undefined &&
-    panelState.sectionPanelOpen !== false;
+  const requestClearStage = useCallback(
+    () => setClearStageRequest((request) => request + 1),
+    []
+  );
+  // On a phone the parts list beside View's rail opens over the middle of
+  // the model: once, as it comes up (opened, or shown again on a return to
+  // View), the model slides into the stage it leaves. Judged at the width
+  // the window has now, not the one the project opened at: a wider stage
+  // never moves the camera.
+  const phoneStage = useMediaQuery(PHONE_PARTS_LIST_MEDIA);
+  const phonePartsShown =
+    phoneStage &&
+    viewMode &&
+    (phonePartsOpen ?? panelState.viewModeRailOpen) === true;
   useEffect(() => {
-    if (sectionControlsShown) setClearStageRequest((request) => request + 1);
-  }, [sectionControlsShown]);
-  // The measurement workbench floats over View's and Tweak's stage (a
-  // phone's sheet across its foot, I47): what it measures stays in view.
-  // Build's workbench is a command card and never moves the camera.
+    if (phonePartsShown) requestClearStage();
+  }, [phonePartsShown, requestClearStage]);
+  // View's and Tweak's measurement workbench docks across a narrow stage's
+  // foot (I47): once, as it opens, what it measures slides above it. Wider,
+  // it floats beside the model and the camera stays. Build's workbench is a
+  // command card and never moves the camera.
   const measuringOverStage = measuring && modelingLocked;
   useEffect(() => {
-    if (measuringOverStage) setClearStageRequest((request) => request + 1);
-  }, [measuringOverStage]);
+    if (
+      measuringOverStage &&
+      window.matchMedia(MEASUREMENT_SHEET_MEDIA).matches
+    )
+      requestClearStage();
+  }, [measuringOverStage, requestClearStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {
     return proposal.operations.some(
       (operation) =>
         operation.kind === 'add_drawing_annotations' ||
-        operation.kind === 'remove_drawing_annotations'
+        operation.kind === 'remove_drawing_annotations' ||
+        operation.kind === 'auto_dimension_drawing'
     );
   }
 
@@ -18393,16 +19014,27 @@ export function App() {
           await import('./lib/drawing/assistantPreflight');
         if (epoch !== aiPreviewEpochRef.current)
           return { ok: false, reason: 'A newer preview replaced this one.' };
-        const { sheet } = preflightDrawingPatch(
+        const { sheet, leftOut, commands } = preflightDrawingPatch(
           current,
           proposal,
           drawingModeRef.current ? drawingAssistantRef.current : null
         );
+        // Kept for Apply, which applies exactly this plan.
+        autoDimensionPreviewRef.current = proposal.operations.some(
+          (operation) => operation.kind === 'auto_dimension_drawing'
+        )
+          ? { proposal, document: current, commands }
+          : null;
         setDrawingPreview({
           sheetId: sheet.sheetId,
           annotations: sheet.annotations ?? []
         });
-        setStatus('Previewing the proposed annotations.');
+        // An auto-dimension request says what its scope leaves out.
+        setStatus(
+          leftOut.length > 0
+            ? `Previewing the proposed annotations. Left out: ${leftOut.join('; ')}.`
+            : 'Previewing the proposed annotations.'
+        );
         return { ok: true };
       } catch (error) {
         if (epoch === aiPreviewEpochRef.current) setDrawingPreview(null);
@@ -18475,18 +19107,24 @@ export function App() {
       return false;
     }
     try {
-      const { preflightDrawingPatch } =
+      const { previewedAutoDimensionCommands, preflightDrawingPatch } =
         await import('./lib/drawing/assistantPreflight');
       const live = managerRef.current?.document;
       if (!live || live !== current)
         throw new Error(
           'The document changed while the proposal was checked. Review it again.'
         );
-      const { commands } = preflightDrawingPatch(
-        current,
-        proposal,
-        drawingModeRef.current ? drawingAssistantRef.current : null
-      );
+      const commands =
+        previewedAutoDimensionCommands(
+          proposal,
+          autoDimensionPreviewRef.current,
+          current
+        ) ??
+        preflightDrawingPatch(
+          current,
+          proposal,
+          drawingModeRef.current ? drawingAssistantRef.current : null
+        ).commands;
       const applied = executeTransaction('Apply AI annotations', commands);
       if (applied) setDrawingPreview(null);
       return applied;
@@ -19963,25 +20601,18 @@ export function App() {
 
   /**
    * One export, reported in the activity pill from the kernel call to the
-   * archive. `produce` builds the file; the save prompt and the archive are
-   * shared. Cancel aborts whichever of the three is running; a save prompt
-   * the user dismisses ends the run quietly, because that is a cancel too.
+   * saved file. `produce` builds the file; the save prompt is shared. Cancel
+   * aborts whichever step is running; a save prompt the user dismisses ends
+   * the run quietly, because that is a cancel too. An export is a download
+   * only: no copy is uploaded to the project's cloud files.
    */
   async function runExportJob(input: {
     fileName: string;
     label: string;
-    kind: ArtifactKind;
-    contentType: string;
-    metadata: Record<string, string | number>;
     produce(options: {
       signal: AbortSignal;
       onState(state: GeometryWorkerState): void;
-    }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
-    /**
-     * Keeps a copy in the project's export archive; on by default. A slicer
-     * hand-off (L09) is local only and keeps none.
-     */
-    archive?: boolean;
+    }): Promise<{ save(): Promise<boolean>; warnings: number }>;
     /** The status once the file is saved, when not the export's own. */
     completed?(bodies: string): string;
   }) {
@@ -19995,13 +20626,7 @@ export function App() {
     sink.start({
       kind: 'export',
       fileName: input.fileName,
-      phases: [
-        'preparing',
-        'loading-kernel',
-        'building',
-        'writing',
-        'archiving'
-      ]
+      phases: ['preparing', 'loading-kernel', 'building', 'writing']
     });
     setStatus(`Exporting ${input.label}…`);
     const cancelled = () => {
@@ -20030,41 +20655,14 @@ export function App() {
       }
       sink.update({ phase: 'writing', fraction: null });
       const saved = await produced.save();
-      if (!saved || signal.aborted) {
+      // A Cancel that lands while the save is still in hand (a share sheet
+      // being staged) comes too late: the file is written, so the run is not
+      // reported as having written nothing.
+      if (!saved) {
         cancelled();
         return;
       }
       trackUsage('export_completed');
-      sink.update({ phase: 'archiving', fraction: null });
-      let archived = false;
-      if (input.archive !== false) {
-        try {
-          await archiveArtifact({
-            fileName: input.fileName,
-            contentType: input.contentType,
-            kind: input.kind,
-            body: produced.body,
-            // Cancel is honoured by the two awaits above; without it here the
-            // archive kept uploading the file the user had just stopped
-            // exporting, and finalized it into the File menu.
-            signal,
-            metadata: input.metadata
-          });
-          archived = true;
-        } catch {
-          // The local download has already completed successfully.
-        }
-      }
-      if (signal.aborted) {
-        // The file is on disk; only the copy was stopped.
-        setStatus(`${input.fileName} was saved; its archive was cancelled.`);
-        sink.finish({
-          tone: 'cancelled',
-          message: 'saved, archive cancelled',
-          landed: true
-        });
-        return;
-      }
       const hiddenNote = exportScopeInfo?.hiddenExcluded
         ? ` (${exportScopeInfo.hiddenExcluded} hidden left out)`
         : '';
@@ -20074,26 +20672,11 @@ export function App() {
           ? `Exported ${input.label} with ${countLabel(produced.warnings, 'warning', 'warnings')}.`
           : input.completed
             ? input.completed(bodies)
-            : `Exported ${bodies} to ${input.fileName}${archived ? ' and archived it' : ''}.`;
+            : `Exported ${bodies} to ${input.fileName}.`;
       setStatus(
         exportWithheldMessage ? `${outcome} ${exportWithheldMessage}` : outcome
       );
-      // A missing archive is only worth amber where one was on offer: a
-      // signed-out or local-only session was never going to keep a copy,
-      // and flagging every export there would teach people to dismiss it.
-      const archiveExpected =
-        input.archive !== false &&
-        Boolean(session) &&
-        cloudProjectIds.has(doc.projectId);
-      sink.finish(
-        archived || !archiveExpected
-          ? { tone: 'ok', message: bodies, landed: true }
-          : {
-              tone: 'warning',
-              message: `${bodies} · not archived to the cloud`,
-              landed: true
-            }
-      );
+      sink.finish({ tone: 'ok', message: bodies, landed: true });
     } catch (error) {
       if (signal.aborted) {
         cancelled();
@@ -20193,18 +20776,37 @@ export function App() {
     return target;
   }
 
+  /**
+   * L09: File › CNC cut layout, run from its lazy module: the export
+   * scope's bodies laid flat as one layered DXF.
+   */
+  function handleExportCncLayout() {
+    const target = readyExportTarget(null);
+    if (!target || !doc) return;
+    const stem = exportStemFor(null);
+    const units = exportUnitsFor(doc.units);
+    void import('./lib/cncLayoutDxf').then((lazy) =>
+      lazy.writeCncLayoutDxf({
+        geometry,
+        target,
+        units,
+        stem,
+        save: saveCadTextFile,
+        announce: setStatus
+      })
+    );
+  }
+
   /** I06: File › Export IGES, run from its lazy module. */
   function handleExportIges() {
     const target = readyExportTarget(null);
     if (!target || !doc) return;
-    const { version, units } = doc;
     const fileName = `${exportStemFor(null)}.igs`;
+    const { units } = doc;
     void import('./lib/igesImport').then((lazy) =>
       lazy.exportIges({
         target,
         fileName,
-        version,
-        documentUnits: units,
         units: exportUnitsFor(units),
         runExportJob,
         exportModel: geometry.exportModel
@@ -20219,18 +20821,9 @@ export function App() {
     }
     const { document: exported, bodyIds, allShownBodies, rowName } = target;
     const fileName = `${exportStemFor(rowName)}.step`;
-    const contentType = 'model/step';
     await runExportJob({
       fileName,
       label: rowName ? `STEP of ${rowName}` : 'STEP',
-      kind: 'step-export',
-      contentType,
-      metadata: {
-        bodyIds: bodyIds.join(','),
-        documentVersion: doc.version,
-        units: doc.units,
-        ...(rowName ? { configuration: rowName } : {})
-      },
       ...(rowName
         ? {
             completed: () => `Exported configuration ${rowName} to ${fileName}.`
@@ -20248,7 +20841,6 @@ export function App() {
           throw new Error('The STEP export returned no text.');
         }
         return {
-          body: new Blob([result.text], { type: contentType }),
           save: () => saveCadTextFile(fileName, 'step', result.text),
           warnings: result.warnings.length
         };
@@ -20270,7 +20862,7 @@ export function App() {
     if (!target || !doc) {
       return;
     }
-    const { version, units } = doc;
+    const { units } = doc;
     void import('./lib/meshExportPackage').then((lazy) =>
       lazy.exportMesh({
         format,
@@ -20278,8 +20870,6 @@ export function App() {
         options: tolerances,
         target,
         info: MESH_EXPORT_FILE_INFO[format],
-        version,
-        documentUnits: units,
         units: exportUnitsFor(units),
         stemOf: exportStemFor,
         setStatus,
@@ -20312,17 +20902,6 @@ export function App() {
     void runExportJob({
       fileName,
       label: slicer ? `3MF for ${slicer.label}` : '3MF for your slicer',
-      kind: info.kind,
-      contentType: info.contentType,
-      metadata: {
-        bodyIds: bodyIds.join(','),
-        documentVersion: doc.version,
-        units: doc.units,
-        format: '3mf',
-        deflectionMm: deflection,
-        ...(rowName ? { configuration: rowName } : {})
-      },
-      archive: false,
       completed: (bodies) =>
         slicer
           ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
@@ -20339,7 +20918,6 @@ export function App() {
           throw new Error('The 3MF export returned no file.');
         }
         return {
-          body: new Blob([result.data], { type: info.contentType }),
           save: () =>
             slicer
               ? openInDesktopSlicer(slicer.id, fileName, result.data)
@@ -20639,7 +21217,112 @@ export function App() {
     }
   }
 
-  function startSketchOnFace(target: FaceTarget): boolean {
+  /**
+   * The picked flat face as a sketch target, whichever way it was picked:
+   * the face the drag handle is armed on, or (direct manipulation off) the
+   * selected face, at the point its click landed on. A face picked some
+   * other way (a History row, a filter sweep) is taken at its centroid.
+   */
+  function selectedPlanarFaceTarget(): FaceTarget | null {
+    const target = selectedPlanarFace();
+    // A right-click on the face since it was picked: that is the point meant.
+    const menuHit = menuFaceHitRef.current;
+    if (
+      !target ||
+      !menuHit ||
+      !sameFacePick(menuHit.selection, {
+        bodyId: target.bodyId as BodyId,
+        kind: 'face',
+        topologyId: target.topologyId,
+        hash: target.hash
+      })
+    ) {
+      return target;
+    }
+    const { point, normal } = menuHit.detail;
+    return {
+      ...target,
+      point: [point.x, point.y, point.z],
+      ...(normal ? { normal: [normal.x, normal.y, normal.z] } : {})
+    };
+  }
+
+  function selectedPlanarFace(): FaceTarget | null {
+    if (interaction.mode === 'face') {
+      return interaction.target.surfaceType === 'planar'
+        ? interaction.target
+        : null;
+    }
+    const selection = selectedTopology;
+    if (
+      selection?.kind !== 'face' ||
+      !selection.topologyId ||
+      selection.hash === undefined
+    ) {
+      return null;
+    }
+    const face = representations[selection.bodyId]?.topology?.faces.find(
+      (candidate) => candidate.topologyId === selection.topologyId
+    );
+    const geometry = face?.geometry;
+    if (geometry?.surfaceType !== 'plane' || !geometry.normal) return null;
+    const detail =
+      lastPickTopologyRef.current &&
+      sameFacePick(lastPickTopologyRef.current, selection)
+        ? lastPickDetailRef.current
+        : null;
+    const point = detail?.point ?? geometry.centroid ?? geometry.center;
+    const normal = detail?.normal ?? geometry.normal;
+    return {
+      bodyId: selection.bodyId,
+      topologyId: selection.topologyId,
+      hash: selection.hash,
+      ...(face?.reference ? { reference: face.reference } : {}),
+      point: [point.x, point.y, point.z],
+      normal: [normal.x, normal.y, normal.z],
+      surfaceType: 'planar'
+    };
+  }
+
+  /**
+   * A sketch on the face with the text card open, the word pinned where the
+   * face was picked: what Text on a face's rail does in one step instead of
+   * Sketch, then T, then a click.
+   */
+  function startTextOnFace(target: FaceTarget): void {
+    const current = managerRef.current?.document;
+    const planeRef = current ? startSketchOnFace(target) : null;
+    if (!current || !planeRef) return;
+    let anchor: { x: number; y: number } | undefined;
+    try {
+      const basis = resolvedSketchPlaneBasis(
+        current,
+        planeRef,
+        sketchValueResolver(parameterScope.scope, current.units),
+        'Sketch'
+      );
+      const offset = {
+        x: target.point[0] - basis.origin.x,
+        y: target.point[1] - basis.origin.y,
+        z: target.point[2] - basis.origin.z
+      };
+      const dot = (axis: { x: number; y: number; z: number }) =>
+        offset.x * axis.x + offset.y * axis.y + offset.z * axis.z;
+      anchor = { x: dot(basis.u), y: dot(basis.v) };
+    } catch {
+      // A plane that does not resolve yet: the outline follows the pointer,
+      // as T in any sketch does.
+      anchor = undefined;
+    }
+    dispatchInteraction({
+      type: 'sketch-tool',
+      tool: 'text',
+      ...(anchor ? { textAnchor: anchor } : {})
+    });
+  }
+
+  /** Starts a sketch on the face; the plane it took, or null if refused. */
+  function startSketchOnFace(target: FaceTarget): SketchPlaneRef | null {
     const faceTopology = representations[
       target.bodyId as BodyId
     ]?.topology?.faces.find((face) => face.topologyId === target.topologyId);
@@ -20650,7 +21333,7 @@ export function App() {
     });
     if (!attachment.ok) {
       setStatus(attachment.reason);
-      return false;
+      return null;
     }
     dispatchInteraction({
       type: 'enter-sketch',
@@ -20671,7 +21354,7 @@ export function App() {
         : 'Sketching on the selected face · Finish Sketch when done.',
       { sticky: true }
     );
-    return true;
+    return attachment.planeRef;
   }
 
   /** Whether a face or edge pick names topology the current derived state holds. */
@@ -20841,6 +21524,40 @@ export function App() {
     return loop.length > 1 ? loop : [selection];
   }
 
+  /** Resolve every member before changing the command's edge selection. */
+  function pickInPlaceEdgeRun(
+    selections: TopologySelection[],
+    toggle: boolean
+  ) {
+    const command = inPlaceRef.current;
+    const picks: EdgePick[] = [];
+    for (const selection of selections) {
+      const edge = inPlaceEdgeForSelection(selection);
+      if (!edge) {
+        if (!toggle) {
+          setStatus(
+            'This edge run could not be matched to the original body. Pick another edge or clear the edge selection.'
+          );
+        }
+        return true;
+      }
+      picks.push(edge);
+    }
+    if (!toggle) return command.setEdges(picks);
+
+    // The pieces of one circle go in or come out together on a single click.
+    const held = command.slots.edges.filter(
+      (edge) => edge.bodyId === picks[0]!.bodyId
+    );
+    const pickedHashes = new Set(picks.map((edge) => edge.hash));
+    const rest = held.filter((edge) => !pickedHashes.has(edge.hash));
+    return command.setEdges(
+      held.some((edge) => edge.hash === picks[0]!.hash)
+        ? rest
+        : [...rest, ...picks]
+    );
+  }
+
   // L08 review comments: a plaintext project in the account, for every
   // member. An encrypted project's are not offered until they can travel as
   // encrypted records, so nothing about them is sent in plaintext.
@@ -20974,23 +21691,7 @@ export function App() {
           const edge = inPlaceEdgeForSelection(selection);
           return edge ? command.pickEdge(edge) : true;
         }
-        const picks: EdgePick[] = [];
-        for (const piece of pieces) {
-          const edge = inPlaceEdgeForSelection(piece);
-          if (!edge) return true;
-          picks.push(edge);
-        }
-        // The whole circle goes in or comes out together, as one edge would.
-        const held = command.slots.edges.filter(
-          (edge) => edge.bodyId === picks[0]!.bodyId
-        );
-        const pickedHashes = new Set(picks.map((edge) => edge.hash));
-        const rest = held.filter((edge) => !pickedHashes.has(edge.hash));
-        return command.setEdges(
-          held.some((edge) => edge.hash === picks[0]!.hash)
-            ? rest
-            : [...rest, ...picks]
-        );
+        return pickInPlaceEdgeRun(pieces, true);
       }
       // A datum's sources: a face is a plane or a cylinder's axis, an edge
       // is its nearer end or (for an Axis) the edge itself.
@@ -21083,7 +21784,39 @@ export function App() {
           selection.hash,
           detail?.point
         );
-        return face ? command.pickFace(face) : true;
+        if (face) return command.pickFace(face);
+        // M02 (schema v113): with a feature picked, a flat face no feature
+        // made is a mirror pattern's plane, as Mirror takes one.
+        // An edit may keep a repeated feature that shows no face to pick
+        // (review), so a kept source counts as one picked.
+        if (
+          command.spec?.wantsPlane &&
+          (command.slots.faces.length > 0 ||
+            Boolean(command.options.keepSources))
+        ) {
+          const geometry = (
+            previewDoc?.derived.bodyRepresentations[selection.bodyId] ??
+            representations[selection.bodyId]
+          )?.topology?.faces.find(
+            (candidate) =>
+              candidate.topologyId === selection.topologyId ||
+              (selection.hash !== undefined &&
+                candidate.hash === selection.hash)
+          )?.geometry;
+          const on = geometry?.centroid ?? geometry?.center ?? detail?.point;
+          if (
+            geometry?.normal &&
+            on &&
+            geometry.surfaceType.toLowerCase() === 'plane'
+          ) {
+            return command.pickPlane({
+              kind: 'face',
+              origin: on,
+              normal: geometry.normal
+            });
+          }
+        }
+        return true;
       }
       if (selection?.kind === 'face' && command.spec?.faceMode) {
         const face = inPlaceFacePick(
@@ -21407,6 +22140,8 @@ export function App() {
     // The pick detail (click point + normal) anchors selection-first drag
     // handles; stashed for the direct-manipulation flow.
     lastPickDetailRef.current = detail ?? null;
+    lastPickTopologyRef.current = detail ? (selection ?? null) : null;
+    menuFaceHitRef.current = null;
     setSelectedSketchProfileId(null);
     if (!selection) {
       if (!additive) {
@@ -21832,6 +22567,40 @@ export function App() {
     selectEdgeChainFromViewer(selections);
   }
 
+  function handleViewportEdgeRun(selections: TopologySelection[]) {
+    if (!inPlaceRef.current.spec?.edgeMode) {
+      handleSelectEdgeChainFromViewer(selections);
+    } else if (
+      !extrudeEditRef.current &&
+      selections.length > 0 &&
+      topologyBatchReady(selections)
+    ) {
+      pickInPlaceEdgeRun(selections, false);
+    }
+  }
+
+  function topologyBatchReady(selections: TopologySelection[]): boolean {
+    if (!doc) return false;
+    if (currentGeometrySnapshot !== null) {
+      setStatus(
+        'The model is still updating. Try that selection again when it finishes.'
+      );
+      return false;
+    }
+    if (
+      !exactGeometryReady &&
+      selections.some(
+        (selection) => !selectionResolvesInDerived(doc, selection)
+      )
+    ) {
+      setStatus(
+        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
+      );
+      return false;
+    }
+    return true;
+  }
+
   function selectEdgeChainFromViewer(selections: TopologySelection[]) {
     const first = selections[0];
     if (!doc || !first) {
@@ -21901,7 +22670,10 @@ export function App() {
     // manipulation target belongs to that old face or edge, so retaining it
     // would leave a handle capable of editing geometry that is no longer
     // selected.
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
     setSelectedSketchProfileId(null);
@@ -21953,24 +22725,7 @@ export function App() {
       handleBoxSelectFromViewer([]);
       return;
     }
-    if (!doc) return;
-    if (currentGeometrySnapshot !== null) {
-      setStatus(
-        'The model is still updating. Try that selection again when it finishes.'
-      );
-      return;
-    }
-    if (
-      !exactGeometryReady &&
-      selections.some(
-        (selection) => !selectionResolvesInDerived(doc, selection)
-      )
-    ) {
-      setStatus(
-        'Exact geometry is still rebuilding. Topology actions are temporarily unavailable.'
-      );
-      return;
-    }
+    if (!topologyBatchReady(selections)) return;
     // A box sweep during an in-place Fillet or Chamfer adds to its edges,
     // each taken as a click would take it, none toggled back out.
     if (kind === 'edge' && inPlaceRef.current.spec?.edgeMode) {
@@ -22047,7 +22802,10 @@ export function App() {
       const faces = inPlaceFacesFor(selections);
       if (inPlaceRef.current.addFaces(faces) !== null) return;
     }
-    if (interaction.mode !== 'idle' && interaction.mode !== 'sketch') {
+    if (
+      interaction.mode !== 'sketch' &&
+      (interaction.mode !== 'idle' || interaction.boxSelectProfiles)
+    ) {
       dispatchInteraction({ type: 'clear' });
     }
     const bodyIds = [...new Set(selections.map((face) => face.bodyId))];
@@ -22073,7 +22831,9 @@ export function App() {
     const open =
       (interaction.mode === 'sketch' &&
         (keypadRef.current?.kind === 'sketch-dimension' ||
-          keypadRef.current?.kind === 'sketch-edit')) ||
+          keypadRef.current?.kind === 'sketch-edit' ||
+          (keypadRef.current?.kind === 'sketch-fillet' &&
+            interaction.session.pendingEdit?.kind === 'fillet'))) ||
       (interaction.mode !== 'idle' &&
         interaction.mode !== 'sketch' &&
         (interaction.phase === 'exact-entry' ||
@@ -22106,20 +22866,25 @@ export function App() {
     () => () => {
       cylinderRadiusPreview.clear();
       offsetPreview.clear();
+      offsetLeadPreview.clear();
     },
-    [doc?.projectId, doc?.version, cylinderRadiusPreview, offsetPreview]
+    [
+      doc?.projectId,
+      doc?.version,
+      cylinderRadiusPreview,
+      offsetPreview,
+      offsetLeadPreview
+    ]
   );
 
-  const offsetInteractionKey =
-    interaction.mode === 'face' && interaction.op === 'offset-face'
-      ? `${interaction.target.bodyId}:${interaction.target.topologyId}:${Boolean(interaction.target.localFaceOffset)}`
-      : null;
+  const offsetInteractionKey = faceOffsetPlanKey(interaction);
   useEffect(() => {
     offsetPreview.clear();
+    offsetLeadPreview.clear();
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
     setLastValidPreview(null);
-  }, [offsetInteractionKey, offsetPreview]);
+  }, [offsetInteractionKey, offsetPreview, offsetLeadPreview]);
 
   // An Extrude keypad belongs to the value as it left it. Once anything else
   // changes that value (Reverse, a drag, the arrow) or stops offering it (an
@@ -22216,6 +22981,12 @@ export function App() {
   const [sketchDefinedObjectIds, setSketchDefinedObjectIds] = useState<
     string[]
   >([]);
+  // S03: each entity's remaining freedom, measured by held solves after an
+  // under-defined solve settles, for the solve evidence key it was read at.
+  const [sketchEntityFreedom, setSketchEntityFreedom] = useState<{
+    key: string;
+    report: SketchEntityFreedomReport;
+  } | null>(null);
   const sketchDocumentRef = useRef(doc);
   sketchDocumentRef.current = doc;
   const sketchSessionNameRef = useRef(sketchSessionName);
@@ -22330,7 +23101,16 @@ export function App() {
       units: doc.units,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       textOutlineBudgetError,
-      definedObjectIds: sketchDefinedObjectIds,
+      // Measured per-entity freedom names the fixed entities on its own;
+      // without it only a fully-defined sketch paints anything defined.
+      // Only a reading of this very document: on the first render after an
+      // edit the old one must not paint a now-movable entity fixed.
+      definedObjectIds:
+        sketchEntityFreedom &&
+        sketchEntityFreedom.key ===
+          sketchSolveEvidenceKey(doc, session.sketchId ?? null)
+          ? fixedEntityIds(sketchEntityFreedom.report)
+          : sketchDefinedObjectIds,
       textDraft,
       textDraftBudgetError:
         textDraft && textDraft.text.length > 0
@@ -22344,7 +23124,9 @@ export function App() {
         doc.units,
         sketch?.dimensionLabelPositions,
         sketch?.referenceDimensions,
-        sketch?.composites
+        sketch?.composites,
+        appSettings.sketching.referenceDisplayUnit,
+        documentDisplayUnits(doc)
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -22358,11 +23140,26 @@ export function App() {
     sketchDiagnosticPoints,
     sketchSolveDiagnosticObjectIds,
     textOutlineBudgetError,
-    sketchDefinedObjectIds
+    sketchDefinedObjectIds,
+    sketchEntityFreedom
   ]);
 
   /** Where the text card's live outline sits; the viewport writes it. */
   const sketchTextAnchorRef = useRef<{ x: number; y: number } | null>(null);
+
+  // S05: whether a multi-selection is construction — all, none or mixed —
+  // for the Construction toggle that acts on all of it.
+  const sketchSelectionConstruction = useMemo(():
+    boolean | 'mixed' | undefined => {
+    if (interaction.mode !== 'sketch' || !doc) return undefined;
+    const ids = sketchSelectedObjectIds(interaction.session);
+    if (ids.length < 2) return undefined;
+    const flags = ids.map((id) => {
+      const node = ownEntry(doc.nodes, id as EntityId);
+      return node?.kind === 'sketch-object' && node.data.construction === true;
+    });
+    return flags.every(Boolean) ? true : flags.some(Boolean) ? 'mixed' : false;
+  }, [interaction, doc]);
 
   const selectedSketchEntity = useMemo(() => {
     if (
@@ -22921,7 +23718,8 @@ export function App() {
     sketchId: SketchId,
     commands: AnyCommand[],
     label: string,
-    objectId?: string
+    objectId?: string,
+    validation?: SketchEditValidation
   ) {
     const { checkSketchEdit, sketchEditRaceRefusal } =
       await import('./lib/sketch/editing');
@@ -22929,8 +23727,10 @@ export function App() {
       base,
       sketchId,
       commands,
-      (document) => syncCandidate(document)
+      (document) => syncCandidate(document),
+      validation?.checkCandidate
     );
+    if (validation && !validation.isCurrent()) return false;
     const refusal = sketchEditRaceRefusal(
       base,
       sketchId,
@@ -22974,6 +23774,8 @@ export function App() {
     void validatedFeature.runTransaction(commands, {
       label,
       targets,
+      derive: (document) =>
+        syncOperationForCommit(document, geometry.liveLineageDemand()),
       successMessage: commandOutcomeMessage(label),
       onSuccess: () => finishFeatureEdit(feature, editSession),
       cancelled: () => !editSessionIsCurrent(feature, editSession)
@@ -23017,7 +23819,8 @@ export function App() {
         sketchId,
         objectId,
         nextData,
-        (document, id) => geometry.solveSketch(document, id)
+        (document, id, anchor) =>
+          geometry.solveSketch(document, id, anchor ? { anchor } : undefined)
       );
       if (
         await commitSketchEdit(
@@ -23272,7 +24075,8 @@ export function App() {
             evalParamValue(value, getParameterScope(base).scope, base.units) ??
             undefined
         ),
-        (document, id) => geometry.solveSketch(document, id),
+        (document, id, anchor) =>
+          geometry.solveSketch(document, id, anchor ? { anchor } : undefined),
         `Resize ${noun}`,
         // An expression typed into the card keeps driving its size, and a
         // size already dimensioned takes the card's new value.
@@ -23314,18 +24118,44 @@ export function App() {
       target && base && findSketch(base, target.sketchId as SketchId);
     if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
     if (!requireCurrentSketchGeometry(sketch.sketchId)) return;
+    // The edit is for exactly the selection the toggle was pressed on,
+    // captured before anything awaits: a click that changes it while the
+    // module loads or the downstream check runs drops the edit.
+    const selected = sketchSelectedObjectIds(
+      interactionRef.current.mode === 'sketch'
+        ? interactionRef.current.session
+        : { selectedObjectId: null }
+    );
+    const selectionKey = selected.join('|');
+    const selectionCurrent = () => {
+      const live = interactionRef.current;
+      return (
+        live.mode === 'sketch' &&
+        sketchSelectedObjectIds(live.session).join('|') === selectionKey
+      );
+    };
     setSketchSolving(true);
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
     try {
-      const { planSketchConstructionToggle } =
+      const { planSketchConstructionSet, planSketchConstructionToggle } =
         await import('./lib/sketch/modify');
-      const plan = planSketchConstructionToggle(
-        base,
-        sketch,
-        sketch.sketchId,
-        target.objectId
-      );
+      if (selected.length > 1 && !selectionCurrent()) {
+        setStatus(
+          'The selection changed before the construction change applied. Try again.'
+        );
+        return;
+      }
+      // A multi-selection toggles together; one entity keeps its own plan.
+      const plan =
+        selected.length > 1
+          ? planSketchConstructionSet(base, sketch, sketch.sketchId, selected)
+          : planSketchConstructionToggle(
+              base,
+              sketch,
+              sketch.sketchId,
+              target.objectId
+            );
       if (plan.status === 'refuse') {
         setSketchEditError(plan.reason);
         setStatus(plan.reason);
@@ -23335,7 +24165,10 @@ export function App() {
           sketch.sketchId,
           plan.commands,
           plan.label,
-          target.raceObjectId
+          target.raceObjectId,
+          selected.length > 1
+            ? { isCurrent: selectionCurrent, checkCandidate: async () => {} }
+            : undefined
         )
       ) {
         setStatus(plan.message);
@@ -23634,6 +24467,8 @@ export function App() {
     values?: number[];
     raws?: string[];
     offset?: SketchOffsetPick;
+    pattern?: SketchPatternOptions;
+    sources?: readonly string[];
     anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
@@ -23651,7 +24486,8 @@ export function App() {
       setSketchEditDraft(null);
       if (
         keypadRef.current?.kind === 'sketch-dimension' ||
-        keypadRef.current?.kind === 'sketch-edit'
+        keypadRef.current?.kind === 'sketch-edit' ||
+        keypadRef.current?.kind === 'sketch-fillet'
       ) {
         setKeypad(null);
       }
@@ -23662,6 +24498,21 @@ export function App() {
     interaction.mode === 'sketch' && interaction.session.sketchId && doc
       ? (findSketch(doc, interaction.session.sketchId as SketchId) ?? null)
       : null;
+  const sketchFilletPending =
+    interaction.mode === 'sketch' &&
+    interaction.session.pendingEdit?.kind === 'fillet'
+      ? interaction.session.pendingEdit
+      : null;
+  const filletKeypadOpen = keypad?.kind === 'sketch-fillet';
+  const sketchFillet = useSketchFilletDraft(
+    doc,
+    editingSketchNode,
+    sketchFilletPending !== null,
+    parameterScope.scope,
+    filletKeypadOpen,
+    geometryBusy || sketchSolving,
+    setKeypad
+  );
   const selectedSketchConstraintId =
     interaction.mode === 'sketch'
       ? (interaction.session.selectedConstraintId ?? null)
@@ -23779,6 +24630,40 @@ export function App() {
         : new Map<string, string>(),
     [editingSketchNode, sketchReadDocument]
   );
+  const {
+    active: filletArmed,
+    checking: filletChecking,
+    cornerIds: filletCornerIds,
+    corners: filletCorners,
+    firstLine: filletFirstLine,
+    plan: filletPlan,
+    toggle: toggleFilletCorner
+  } = sketchFillet;
+  const filletHud = useMemo(
+    () =>
+      filletArmed
+        ? {
+            corners: filletCorners,
+            selectedIds: filletCornerIds ?? [],
+            firstLine: filletFirstLine,
+            labels: sketchLabels,
+            plan: filletPlan,
+            disabled: filletChecking || filletKeypadOpen,
+            onToggle: toggleFilletCorner
+          }
+        : null,
+    [
+      filletArmed,
+      filletChecking,
+      filletCornerIds,
+      filletCorners,
+      filletFirstLine,
+      filletKeypadOpen,
+      filletPlan,
+      sketchLabels,
+      toggleFilletCorner
+    ]
+  );
 
   const sketchOverview = useMemo(() => {
     const objects =
@@ -23832,12 +24717,85 @@ export function App() {
     // same batch as the document change. Clearing the colours here as well
     // dropped every committed classification, so a fully constrained sketch
     // stayed blue until a manual Solve (I38). Only a stale status is cleared.
+    setSketchEntityFreedom((current) =>
+      current?.key === currentSketchSolveKey ? current : null
+    );
     if (sketchSolveSnapshotRef.current?.key === currentSketchSolveKey) {
       return;
     }
     setSketchSolveDiagnosticObjectIds([]);
     setSketchDefinedObjectIds([]);
   }, [currentSketchSolveKey, editingSketchNode?.sketchId]);
+  // Once an under-defined solve settles, measure where its freedom lives,
+  // once per solve evidence key. The effect keys on that evidence alone and
+  // reads the live document and worker through refs: depending on render
+  // objects would start a fresh reading every render, and each reading's
+  // own state change would render again. A newer edit or solve cancels the
+  // reading; a reading for a key that is no longer current is dropped.
+  const definedState = sketchSolveStatus?.definedState;
+  // The reading in hand, if it is for this key: a cleared reading (another
+  // edit, or the sketch left and reopened) is measured again.
+  const measuredFreedomKey = sketchEntityFreedom?.key ?? null;
+  useEffect(() => {
+    const key = currentSketchSolveKey;
+    const sketchId = activeSolveSketchId as SketchId | null;
+    if (
+      !key ||
+      !sketchId ||
+      sketchSolving ||
+      definedState !== 'under-defined' ||
+      measuredFreedomKey === key
+    ) {
+      return;
+    }
+    const live = managerRef.current?.document;
+    const sketch = live ? findSketch(live, sketchId) : undefined;
+    if (!live || !sketch || sketchSolveEvidenceKey(live, sketchId) !== key) {
+      return;
+    }
+    let cancelled = false;
+    geometryRef.current
+      .sketchEntityFreedom(live, sketchId, sketch.objectIds.map(String))
+      .then((report) => {
+        if (
+          !cancelled &&
+          report &&
+          sketchSolveEvidenceKey(managerRef.current?.document, sketchId) === key
+        ) {
+          setSketchEntityFreedom({ key, report });
+        }
+      })
+      // Freedom is an annotation: a failed reading leaves the sketch-wide
+      // status, which already stands.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentSketchSolveKey,
+    activeSolveSketchId,
+    definedState,
+    sketchSolving,
+    measuredFreedomKey
+  ]);
+  const sketchFreedom =
+    sketchEntityFreedom?.key === currentSketchSolveKey
+      ? sketchEntityFreedom.report
+      : null;
+  const sketchRailSolveStatus = useMemo(
+    () =>
+      sketchSolveStatus && sketchFreedom && editingSketchNode
+        ? {
+            ...sketchSolveStatus,
+            freeEntities: freeEntityRows(
+              sketchFreedom,
+              editingSketchNode.objectIds.map(String),
+              (objectId) => sketchLabels.get(objectId) ?? 'entity'
+            )
+          }
+        : sketchSolveStatus,
+    [sketchSolveStatus, sketchFreedom, editingSketchNode, sketchLabels]
+  );
   useEffect(() => {
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
@@ -23853,28 +24811,38 @@ export function App() {
       sketchSolveStatus?.conflictingConstraintIds ?? []
     );
     const fullyDefined = sketchSolveStatus?.definedState === 'fully-defined';
+    // With measured freedom a relation reads defined when everything it
+    // references is fixed, the way the viewport colours that geometry.
+    const fixed = sketchFreedom ? new Set(fixedEntityIds(sketchFreedom)) : null;
     return (editingSketchNode.constraints ?? [])
       .filter(({ origin }) => origin !== 'promotion-structure')
-      .map(({ constraintId, data }) => ({
-        constraintId: String(constraintId),
-        label: describeConstraint(
-          data,
-          nameOf,
-          sketchPointNamer(editingSketchNode, sketchLabels)
-        ),
-        targets: constraintInspectionTargets(
+      .map(({ constraintId, data }) => {
+        const targets = constraintInspectionTargets(
           doc,
           editingSketchNode,
           String(constraintId)
-        ),
-        conflicted: conflicting.has(String(constraintId)),
-        defined: fullyDefined,
-        editable:
-          data.constraintKind === 'distance' ||
-          data.constraintKind === 'angle' ||
-          data.constraintKind === 'radius'
-      }));
-  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels]);
+        );
+        return {
+          constraintId: String(constraintId),
+          label: describeConstraint(
+            data,
+            nameOf,
+            sketchPointNamer(editingSketchNode, sketchLabels)
+          ),
+          targets,
+          conflicted: conflicting.has(String(constraintId)),
+          defined:
+            fullyDefined ||
+            (fixed !== null &&
+              targets.length > 0 &&
+              targets.every(({ objectId }) => fixed.has(objectId))),
+          editable:
+            data.constraintKind === 'distance' ||
+            data.constraintKind === 'angle' ||
+            data.constraintKind === 'radius'
+        };
+      });
+  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels, sketchFreedom]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -23891,7 +24859,9 @@ export function App() {
       )
       .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
-        kind: data.constraintKind,
+        // An entity lock is made and removed with the Lock tool.
+        kind:
+          data.constraintKind === 'lock-entity' ? 'lock' : data.constraintKind,
         label: describeConstraint(
           data,
           nameOf,
@@ -24187,18 +25157,18 @@ export function App() {
       dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
       return true;
     }
-    const expectedPickKind = spec.pickKinds[pending.picks.length];
+    const expectedPickKind = constraintPickKind(pending.kind, pending.picks);
+    // An `either` step takes the snap point under the click when there is
+    // one, else the entity.
     const pick: ConstraintPick | null =
-      expectedPickKind === 'point'
-        ? snapPoint
-          ? { kind: 'point', ...snapPoint }
-          : null
-        : objectId
+      expectedPickKind !== 'object' && snapPoint
+        ? { kind: 'point', ...snapPoint }
+        : expectedPickKind !== 'point' && objectId
           ? { kind: 'object', objectId }
           : null;
     if (!pick) {
       setStatus(
-        (expectedPickKind === 'point' && unreferencedSnap
+        (expectedPickKind !== 'object' && unreferencedSnap
           ? unreferencedSnapRefusal(
               doc,
               editingSketchNode,
@@ -24236,14 +25206,22 @@ export function App() {
         objectId: point.objectId as EntityId,
         point: point.kind === 'point' ? point.point : 'center'
       } as const;
-      // A second Lock on a locked point unlocks it; Disconnect only removes.
+      // A second Lock on a locked point or entity unlocks it; Disconnect
+      // only removes.
+      const wholeEntity = point.kind === 'object';
       const removals =
-        pending.kind === 'lock'
-          ? lockConstraintIds(editingSketchNode, ref)
-          : disconnectConstraintIds(editingSketchNode, ref);
+        pending.kind !== 'lock'
+          ? disconnectConstraintIds(editingSketchNode, ref)
+          : wholeEntity
+            ? entityLockConstraintIds(editingSketchNode, point.objectId)
+            : lockConstraintIds(editingSketchNode, ref);
       if (removals.length > 0) {
         const verb =
-          pending.kind === 'lock' ? 'Unlock point' : 'Disconnect point';
+          pending.kind !== 'lock'
+            ? 'Disconnect point'
+            : wholeEntity
+              ? 'Unlock entity'
+              : 'Unlock point';
         if (
           executeTransaction(verb, [
             ...retainSketchGeometryCommands(
@@ -24261,7 +25239,9 @@ export function App() {
           setSketchSolveStatus(null);
           setStatus(
             pending.kind === 'lock'
-              ? 'Point unlocked.'
+              ? wholeEntity
+                ? 'Entity unlocked.'
+                : 'Point unlocked.'
               : `Disconnected · removed ${removals.length} relation${removals.length === 1 ? '' : 's'}.`
           );
         }
@@ -24288,7 +25268,16 @@ export function App() {
     if ('error' in built) {
       setStatus(built.error);
     } else {
-      void applySketchRelation(built.data, picks, spec.label);
+      void applySketchRelation(
+        built.data,
+        picks,
+        spec.label,
+        built.also,
+        // Locking a whole entity takes over its point locks in the same edit.
+        built.data.constraintKind === 'lock-entity'
+          ? entityPointLockConstraintIds(editingSketchNode, built.data.objectId)
+          : []
+      );
     }
     dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
     return true;
@@ -24339,12 +25328,15 @@ export function App() {
    * so the others move to meet it (ZC-041). When the hold makes it
    * unsatisfiable (only the first pick can move), it applies free and says
    * so; when it cannot solve at all, nothing changes, as with a driving
-   * dimension.
+   * dimension. `also` are relations the same picks state alongside `data`
+   * (two entities mirrored about a line); they land in the same edit.
    */
   async function applySketchRelation(
     data: SketchConstraintData,
     picks: readonly ConstraintPick[],
-    label: string
+    label: string,
+    also: readonly SketchConstraintData[] = [],
+    replacing: readonly string[] = []
   ) {
     if (!doc || !editingSketchNode) return;
     if (
@@ -24361,14 +25353,23 @@ export function App() {
     const base = doc;
     const sketchId = editingSketchNode.sketchId;
     const verb = `Add ${label.toLowerCase()} constraint`;
-    const add = commandFactories.addSketchConstraint(
-      { sketchId, constraint: data },
-      verb
-    );
-    let prospective: ProjectDocument;
+    const adds = [
+      ...replacing.map((constraintId) =>
+        commandFactories.deleteSketchConstraint(
+          { sketchId, constraintId: toSketchConstraintId(constraintId) },
+          verb
+        )
+      ),
+      ...[data, ...also].map((constraint) =>
+        commandFactories.addSketchConstraint({ sketchId, constraint }, verb)
+      )
+    ];
+    let prospective: ProjectDocument = base;
     try {
-      add.validate(base);
-      prospective = add.apply(base);
+      for (const add of adds) {
+        add.validate(prospective);
+        prospective = add.apply(prospective);
+      }
     } catch (error) {
       setStatus(errorMessage(error, `${label} constraint is invalid.`));
       return;
@@ -24417,7 +25418,7 @@ export function App() {
         return;
       }
       const solved = solvedSketchCommands(prospective, sketchId, outcome);
-      if (await commitSketchEdit(base, sketchId, [add, ...solved], verb)) {
+      if (await commitSketchEdit(base, sketchId, [...adds, ...solved], verb)) {
         // A held solve counts the held points as fixed, so its DOF is not
         // the sketch's; only a free solve's status is shown.
         setSketchSolveStatus(
@@ -24494,6 +25495,35 @@ export function App() {
     };
   }
 
+  function closeSketchFillet() {
+    sketchFillet.reset();
+    dispatchInteraction({ type: 'sketch-edit-tool', kind: null });
+  }
+
+  async function applySketchFillet() {
+    const document = managerRef.current?.document;
+    const sketchId = editingSketchNode?.sketchId;
+    if (!document || !sketchId || !requireCurrentSketchGeometry(sketchId))
+      return;
+    const label = await sketchFillet.commit({
+      document,
+      commit: commitSketchEdit,
+      solve: geometry.solveSketch,
+      isCurrent: () => {
+        const live = interactionRef.current;
+        return (
+          live.mode === 'sketch' &&
+          live.session.sketchId === sketchId &&
+          live.session.pendingEdit === sketchFilletPending
+        );
+      }
+    });
+    if (!label) return;
+    closeSketchFillet();
+    setSketchSolveStatus(null);
+    setStatus(`${label} applied.`);
+  }
+
   /**
    * Routes a sketch click while a modify tool is armed. Returns true when the
    * click was consumed, exactly like the constraint picking above: an armed
@@ -24516,14 +25546,18 @@ export function App() {
       !requireCurrentSketchGeometry(session.sketchId as SketchId)
     )
       return true;
+    if (pending.kind === 'fillet') {
+      sketchFillet.pickLine(objectId);
+      return true;
+    }
     if (doc && editingSketchNode) {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
-      const offset = session?.offsetOptions;
+      const options = session?.modifyOptions;
       void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
         advanceSketchEdit(host, doc, sketch, pending, objectId, {
           ...context,
-          offset
+          options
         })
       );
     }
@@ -24990,6 +26024,36 @@ export function App() {
     }
   };
 
+  /**
+   * I03: shows and takes lengths in `units` (null: the document's own).
+   * Undoable, and nothing rebuilds: only how lengths read changes. A
+   * project-level setting, as its name is: whoever may rename the project
+   * may switch it, in any workspace mode.
+   */
+  function handleSetDisplayUnits(units: UnitSystem | null): boolean {
+    const manager = managerRef.current;
+    if (!manager) return false;
+    const target = units ?? manager.document.units;
+    if (documentDisplayUnits(manager.document) === target) return true;
+    const reason = projectRenameDisabledReasonRef.current;
+    if (reason) {
+      setStatus(cannotSentence('change the units', reason));
+      return false;
+    }
+    const changed = executeCommand(
+      commandFactories.setDisplayUnits({ units }),
+      undefined,
+      'rename'
+    );
+    if (changed)
+      setStatus(
+        target === manager.document.units
+          ? `Lengths are shown in ${displayLengthName(target)}, the project's own units.`
+          : `Lengths are shown in ${displayLengthName(target)}. The model is unchanged: it is still stored in ${displayLengthName(manager.document.units)}.`
+      );
+    return changed;
+  }
+
   /** L09: sets or clears the print clearance; answers with a refusal. */
   function handleSetPrintClearance(value: ParamValue | null): string | null {
     const manager = managerRef.current;
@@ -25098,6 +26162,22 @@ export function App() {
             );
           }) ?? false
       );
+      for (const sketch of listNodesByKind(prospective, 'sketch')) {
+        const locked = movedEntityLock(
+          prospective,
+          sketch,
+          (value) =>
+            evalParamValue(value, beforeScope, base.units) ?? undefined,
+          (value) =>
+            evalParamValue(value, afterScope, prospective.units) ?? undefined
+        );
+        if (locked) {
+          return {
+            kind: 'refused',
+            message: `${name} would move a locked entity in ${sketch.name}. Unlock it first.`
+          };
+        }
+      }
       const commands: AnyCommand[] = [parameterCommand];
       setStatus(`Checking ${name}…`);
       for (const sketch of constrainedSketches) {
@@ -25130,7 +26210,11 @@ export function App() {
       try {
         derived = await parameterChecks.request(() => {
           if (!current()) return Promise.reject(new ParameterCheckStale());
-          return syncParameterCandidate(name, prospective);
+          return syncParameterCandidate(
+            name,
+            prospective,
+            geometry.liveLineageDemand()
+          );
         });
       } catch (error) {
         if (error instanceof ParameterCheckStale) return stale();
@@ -25255,6 +26339,32 @@ export function App() {
       : 'The parameter could not be renamed.';
   }
 
+  /** S03: select an entity the freedom reading says can still move. */
+  function handleSelectFreeEntity(objectId: string) {
+    const live = managerRef.current?.document;
+    const session = interactionRef.current;
+    if (
+      !live ||
+      session.mode !== 'sketch' ||
+      !session.session.sketchId ||
+      sketchSolving ||
+      geometryBusy
+    ) {
+      return;
+    }
+    const sketch = findSketch(live, session.session.sketchId as SketchId);
+    if (!sketch?.objectIds.includes(objectId as EntityId)) {
+      setStatus('That geometry is no longer in the sketch.');
+      return;
+    }
+    // Inspection only: the normal selection path, no command written.
+    dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+    dispatchInteraction({ type: 'sketch-select-object', objectId });
+    setStatus(
+      `Selected ${sketchLabels.get(objectId) ?? 'the geometry'}, which can still move.`
+    );
+  }
+
   function handleSelectConstraintObject(
     constraintId: string,
     objectId: string
@@ -25308,7 +26418,9 @@ export function App() {
     const label =
       kind === 'distance' || kind === 'radius' || kind === 'angle'
         ? 'dimension'
-        : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
+        : kind === 'pattern'
+          ? 'pattern relation'
+          : `${SKETCH_RELATION_GLYPHS[kind].label} relation`;
     dispatchInteraction({ type: 'sketch-select-constraint', constraintId });
     setStatus(`Selected ${label}. Press Delete to remove it.`);
   }
@@ -25704,7 +26816,15 @@ export function App() {
           bodyName,
           sections: request.sections,
           mode: request.mode,
-          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+          ...(request.endPoint ? { endPoint: request.endPoint } : {}),
+          ...(request.guides
+            ? {
+                guides: request.guides.map((guide) => ({
+                  sketchId: guide.sketchId,
+                  entityIds: guide.entityIds as EntityId[]
+                }))
+              }
+            : {})
         });
       case 'sweep':
         return commandFactories.sweepProfile({
@@ -25726,7 +26846,22 @@ export function App() {
             : {}),
           ...(request.construction === undefined
             ? {}
-            : { construction: request.construction })
+            : { construction: request.construction }),
+          ...(request.twistDeg === undefined
+            ? {}
+            : { twistDeg: request.twistDeg }),
+          ...(request.endScale === undefined
+            ? {}
+            : { endScale: request.endScale }),
+          ...(request.orientation === undefined
+            ? {}
+            : { orientation: request.orientation }),
+          ...(request.cornerRadius === undefined
+            ? {}
+            : { cornerRadius: request.cornerRadius }),
+          ...(request.profilePosition === undefined
+            ? {}
+            : { profilePosition: request.profilePosition })
         });
       case 'rib':
         return commandFactories.ribBody({
@@ -25862,7 +26997,10 @@ export function App() {
           ...(request.skippedInstances
             ? { skippedInstances: request.skippedInstances }
             : {}),
-          ...(request.points ? { points: request.points } : {})
+          ...(request.points ? { points: request.points } : {}),
+          ...(request.path ? { path: request.path } : {}),
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {}),
+          ...(request.spacingMode ? { spacingMode: request.spacingMode } : {})
         });
       case 'edge-modifier':
         // Through the card's own command, so a fillet or chamfer made in
@@ -25990,22 +27128,8 @@ export function App() {
   }
   /** A body as an in-place command's body slot holds it, with its box. */
   function inPlaceBodyPick(bodyId: BodyId): BodyPick | null {
-    const vertices = representations[bodyId]?.mesh.vertices;
-    if (!vertices || vertices.length < 3) return null;
-    const min = { x: Infinity, y: Infinity, z: Infinity };
-    const max = { x: -Infinity, y: -Infinity, z: -Infinity };
-    for (let index = 0; index + 2 < vertices.length; index += 3) {
-      const x = vertices[index]!;
-      const y = vertices[index + 1]!;
-      const z = vertices[index + 2]!;
-      if (x < min.x) min.x = x;
-      if (y < min.y) min.y = y;
-      if (z < min.z) min.z = z;
-      if (x > max.x) max.x = x;
-      if (y > max.y) max.y = y;
-      if (z > max.z) max.z = z;
-    }
-    return { bodyId, min, max };
+    const box = bodyMeshBounds(bodyId);
+    return box ? { bodyId, min: { ...box.min }, max: { ...box.max } } : null;
   }
   /**
    * U09 phase 7: an edit's request as the `updateFeature` its Done commits.
@@ -26139,6 +27263,28 @@ export function App() {
             sketchValueResolver(parameterScope.scope, doc.units)
           )
         : [],
+    // M02: a pattern along a path reads its lines and arcs on their plane.
+    sketchPath: (sketchId, entityIds) => {
+      const view = availableSketchViews.find(
+        (candidate) => candidate.sketchId === sketchId
+      );
+      if (!doc || !view) return null;
+      const resolve = sketchValueResolver(parameterScope.scope, doc.units);
+      try {
+        // The solved sketch, as the build reads it: a line a linked
+        // projection turned is where the copies go.
+        const curves = pathPatternCurves(
+          sketchReadDocument ?? doc,
+          { sketchId, entityIds: [...entityIds] },
+          (value) => resolve(value)
+        );
+        return typeof curves === 'string'
+          ? curves
+          : { curves, basis: view.basis };
+      } catch {
+        return null;
+      }
+    },
     curveMiddle: (sketchId, entityId) =>
       doc
         ? sketchCurveMiddle(
@@ -26337,29 +27483,20 @@ export function App() {
   // Mirrored before paint for the tool availability computed above it.
   const inPlaceBooleanRunning =
     booleanOperationSwitch(inPlace.tool, 'union') !== null;
+  // U11: the viewport names each picked body Base or Tool, as Options does.
+  const inPlaceBodyPickRoles = useMemo(
+    () =>
+      inPlaceBooleanRunning
+        ? booleanOperandRoles(
+            inPlace.slots.bodies,
+            (id) => representations[id]?.name
+          )
+        : null,
+    [inPlaceBooleanRunning, inPlace.slots.bodies, representations]
+  );
   useLayoutEffect(() => {
     setBooleanCommandRunning(inPlaceBooleanRunning);
   }, [inPlaceBooleanRunning]);
-  const prepareResponsiveFrame = useResponsiveFraming({
-    projectId: doc?.projectId ?? null,
-    mode: resolvedWorkspaceMode,
-    layout: panelLayout,
-    // A parts list asked for on a phone changes the clear stage. Resting it
-    // on the way in does not: that first frame is the viewer's to make.
-    panels: `${panelState.tweakPanelOpen}:${panelState.viewModeRailOpen}${
-      phonePartsOpen ? ':asked' : ''
-    }`,
-    enabled:
-      displayedGeometryComplete &&
-      presentedGeometry?.projectId === doc?.projectId &&
-      presentedGeometry?.generation === resumeViewGeneration &&
-      presentedGeometry?.visible === true &&
-      !tool &&
-      !inPlace.active &&
-      interaction.mode === 'idle' &&
-      !parameterDraftActive,
-    onFit: () => setFitSignal((value) => value + 1)
-  });
   // Every open edit: an in-place command's, and the in-place Extrude's.
   cancelInPlaceRef.current = () => {
     inPlaceRef.current.cancel(true);
@@ -26483,6 +27620,11 @@ export function App() {
   >(null);
   const inPlaceSpec = inPlace.spec;
   const inPlaceUnits = doc?.units ?? 'mm';
+  // I03: in-place lengths read in the display unit; values stay stored.
+  const inPlaceShownUnits = doc ? documentDisplayUnits(doc) : inPlaceUnits;
+  const inPlaceShownName = displayLengthName(inPlaceShownUnits);
+  const inPlaceShown = (length: number) =>
+    convertLength(length, inPlaceUnits, inPlaceShownUnits);
   // M16: Bend. Started on a body rather than from History, it becomes the
   // edit of that body's sheet-metal feature, as its History row would arm.
   const bendBodyId =
@@ -26678,10 +27820,19 @@ export function App() {
           ? 'Distance'
           : valueId === 'backDistance'
             ? 'Back distance'
-            : 'Draft angle',
+            : valueId === 'faceOffset'
+              ? 'Offset from face'
+              : valueId === 'startOffset'
+                ? 'Start offset'
+                : valueId === 'backDraftAngle'
+                  ? 'Back draft angle'
+                  : 'Draft angle',
       initial: text,
       selectInitial: true,
-      unitKind: valueId === 'draftAngle' ? 'angle' : 'length',
+      unitKind:
+        valueId === 'draftAngle' || valueId === 'backDraftAngle'
+          ? 'angle'
+          : 'length',
       baseline: value,
       baselineRaw: text,
       ...(at ? { fixedClientAnchor: at } : {})
@@ -26711,7 +27862,10 @@ export function App() {
     if (
       valueId !== 'distance' &&
       valueId !== 'backDistance' &&
-      valueId !== 'draftAngle'
+      valueId !== 'faceOffset' &&
+      valueId !== 'startOffset' &&
+      valueId !== 'draftAngle' &&
+      valueId !== 'backDraftAngle'
     ) {
       return;
     }
@@ -26958,14 +28112,19 @@ export function App() {
           (value.unit === 'angle'
             ? '°'
             : value.unit === 'length'
-              ? inPlaceUnits
+              ? inPlaceShownName
               : undefined);
+        const displayed = displayedValue(value, number);
         return {
           id: value.id,
           label: labelOf(value),
           text:
             inPlace.raws[value.id] ??
-            formatNumber(displayedValue(value, number)),
+            formatNumber(
+              value.unit === 'length' && value.suffix === undefined
+                ? inPlaceShown(displayed)
+                : displayed
+            ),
           ...(suffix ? { suffix } : {}),
           value: number,
           step: inPlaceValueStep(value, number),
@@ -27000,7 +28159,8 @@ export function App() {
     inPlace.optionSpecs,
     inPlace.touched,
     inPlace.editing,
-    inPlaceUnits
+    inPlaceUnits,
+    inPlaceShownUnits
   ]);
   /**
    * A value typed in the Options panel: a number or an expression, as the
@@ -27013,8 +28173,9 @@ export function App() {
     if (!valueSpec) return false;
     const evaluation = evaluateKeypadInput(
       text,
+      // I03: a plain number is read in the display unit, as it was shown.
       valueSpec.unit === 'length'
-        ? inPlaceUnits
+        ? inPlaceShownUnits
         : valueSpec.unit === 'angle'
           ? 'deg'
           : 'count',
@@ -27097,6 +28258,9 @@ export function App() {
         // A value two places would show as a refused one is shown in full.
         const round = (value: number) => {
           const shown = displayedValue(valueSpec, value);
+          // I03: a length reads in the display unit.
+          if (valueSpec?.unit === 'length' && inPlaceShownUnits !== inPlaceUnits)
+            return String(roundShownLength(inPlaceShown(shown)));
           return shown === Math.round(value * 100) / 100
             ? formatNumber(shown)
             : String(shown);
@@ -27114,22 +28278,39 @@ export function App() {
                   ? (value: number) => `${label} ${round(value)}`
                   : (value: number) => `${round(value)} ${label.toLowerCase()}`
                 : (value: number) =>
-                    `${label} ${round(value)} ${inPlaceUnits}`.trim();
+                    `${label} ${round(value)} ${inPlaceShownName}`.trim();
+        const value = inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
+        // A refused value the kept preview did not build from: its arrow
+        // stands on the value that built, at the model, under the refusal.
+        const kept = inPlace.keptValues?.[handle.valueId];
         return {
           ...handle,
-          value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
+          value,
+          ...(kept === undefined || kept === value ? {} : { drawnValue: kept }),
           ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
           ...(handle.max === undefined && valueSpec?.max === undefined
             ? {}
             : { max: handle.max ?? valueSpec!.max! }),
           format,
           describe: (value: number) =>
-            commandChipName(label, round(value), valueSpec?.unit, inPlaceUnits)
+            commandChipName(
+              label,
+              round(value),
+              valueSpec?.unit,
+              inPlaceShownName
+            )
         };
       }),
     // The viewer keys its rigs on `key`, so a value change here only moves
     // a chip-only value's text; it never rebuilds a rig.
-    [inPlace.handles, inPlace.values, inPlaceSpec, inPlaceUnits]
+    [
+      inPlace.handles,
+      inPlace.values,
+      inPlace.keptValues,
+      inPlaceSpec,
+      inPlaceUnits,
+      inPlaceShownUnits
+    ]
   );
   /**
    * U09: the in-place Extrude's back arrow and draft rig, beside the
@@ -27196,17 +28377,35 @@ export function App() {
     };
     // An edit has no region arrow: its distance gets one of its own.
     if (edited && !regionExtrudeState) return [];
+    // F01 (v121): the extrusion starts on its start plane, so its back
+    // arrow, draft rig and an edit's distance arrow stand there too.
+    const lift =
+      regionExtrudeState?.extent === 'through-all'
+        ? 0
+        : finite(regionExtrudeState?.startOffset, 0);
+    const lifted = (point: Vector3): Vector3 =>
+      lift === 0
+        ? point
+        : {
+            x: point.x + view.basis.normal.x * lift,
+            y: point.y + view.basis.normal.y * lift,
+            z: point.z + view.basis.normal.z * lift
+          };
     return extrudeHandles(
-      loops.outline,
+      loops.outline.map(lifted),
       view.basis.normal,
       edited
         ? `edit:${extrudeEditFeature!.featureId}`
         : `${pick.sketchId}:${pick.regionFingerprint}`,
       state,
-      loops.holes,
+      loops.holes.map((hole) => hole.map(lifted)),
       edited !== null
-    ).map((handle) =>
-      handle.valueId === 'draftAngle'
+    ).map((shape) => {
+      const handle = {
+        ...shape,
+        warning: extrudeRefusedValue === shape.valueId
+      };
+      return handle.valueId === 'draftAngle'
         ? {
             ...handle,
             value: state.draftAngle,
@@ -27219,17 +28418,18 @@ export function App() {
               ...handle,
               value: state.distance,
               format: (value: number) =>
-                `${formatNumber(value)} ${inPlaceUnits}`
+                `${formatNumber(inPlaceShown(value))} ${inPlaceShownName}`
             }
           : {
               ...handle,
               value: state.backDistance,
               min: 0,
               format: (value: number) =>
-                `Back ${formatNumber(value)} ${inPlaceUnits}`
-            }
-    );
+                `Back ${formatNumber(inPlaceShown(value))} ${inPlaceShownName}`
+            };
+    });
   }, [
+    extrudeRefusedValue,
     regionExtrudeTarget,
     regionExtrudeLastValue,
     regionExtrudeState,
@@ -27237,7 +28437,8 @@ export function App() {
     inPlace.active,
     extrudeBarReady,
     availableSketchViews,
-    inPlaceUnits
+    inPlaceUnits,
+    inPlaceShownUnits
   ]);
   // A new fillet's or chamfer's picked edges are the selection, lit as the
   // card's list was. An edit leaves the selection alone: History already
@@ -27344,7 +28545,26 @@ export function App() {
           (inPlace.tool !== 'chamfer' || edge.isSmooth !== true)
       ) ?? [])
     : [];
+  // M03: the smooth run through the last picked edge, offered as one pick.
+  const inPlaceChainSeed = inPlace.slots.edges.at(-1);
+  const inPlaceChainAdditions =
+    inPlaceSpec?.edgeMode && inPlaceChainSeed
+      ? tangentChainAdditions(
+          representations[inPlaceChainSeed.bodyId],
+          inPlace.slots.edges,
+          inPlaceChainSeed.bodyId,
+          inPlace.tool === 'chamfer'
+        )
+      : [];
   const inPlaceActions = [
+    ...(inPlaceChainAdditions.length > 0
+      ? [
+          {
+            id: 'tangent-chain',
+            label: `Add the tangent chain (${inPlaceChainAdditions.length} more ${inPlaceChainAdditions.length === 1 ? 'edge' : 'edges'})`
+          }
+        ]
+      : []),
     ...(inPlaceBodyEdges.length > 0
       ? [
           inPlace.slots.edges.length === inPlaceBodyEdges.length
@@ -27388,6 +28608,18 @@ export function App() {
           return pick ? [pick] : [];
         })
       );
+    } else if (actionId === 'tangent-chain' && inPlaceChainSeed) {
+      command.setEdges([
+        ...command.slots.edges,
+        ...inPlaceChainAdditions.flatMap((selection) => {
+          const pick = inPlaceEdgePick(
+            inPlaceChainSeed.bodyId,
+            selection.topologyId,
+            selection.hash
+          );
+          return pick ? [pick] : [];
+        })
+      ]);
     } else if (actionId === 'clear-edges') {
       command.setEdges([]);
     } else if (actionId === 'swap-distances') {
@@ -27413,6 +28645,7 @@ export function App() {
   );
   // M01: where the Hole tool places its hole; sketch points are picked.
   const inPlacePlace = inPlace.options.place;
+  const inPlaceSections = inPlace.slots.profiles;
   const inPlaceCurveCandidates = useMemo(() => {
     if (!doc || !inPlaceSpec?.wantsPath) return null;
     const resolve = sketchValueResolver(parameterScope.scope, doc.units);
@@ -27431,6 +28664,24 @@ export function App() {
         )
       );
       return bendLineCandidates(doc, views, blank, (value) => resolve(value));
+    }
+    // M02: a pattern along a path picks lines and arcs, construction ones
+    // included; an edit offers only sketches made before it.
+    if (inPlaceSpec.id === 'path-pattern') {
+      const views = inPlaceEditing
+        ? availableSketchViews.filter((view) =>
+            featurePrecedes(
+              producingFeatureOf({ sketchId: view.sketchId }),
+              inPlaceEditing.featureId
+            )
+          )
+        : availableSketchViews;
+      return sketchCurveCandidates(
+        doc,
+        views,
+        (value) => resolve(value),
+        isPathPatternCurve
+      );
     }
     // M02: a pattern on sketch points picks point entities, not curves.
     if (inPlaceSpec.id === 'point-pattern') {
@@ -27452,6 +28703,35 @@ export function App() {
         : availableSketchViews;
       return sketchPointCandidates(doc, views, (value) => resolve(value));
     }
+    // M04: a loft guide is a line, an arc or an open spline, offered only once two sections
+    // are picked and never from a section's own sketch, so a click on a
+    // section's edge still picks the section.
+    if (inPlaceSpec.id === 'loft') {
+      if (inPlaceSections.length < 2) return null;
+      const sectionSketches = new Set(
+        inPlaceSections.map((pick) => pick.sketchId)
+      );
+      const views = (
+        inPlaceEditing
+          ? availableSketchViews.filter((view) =>
+              featurePrecedes(
+                producingFeatureOf({ sketchId: view.sketchId }),
+                inPlaceEditing.featureId
+              )
+            )
+          : availableSketchViews
+      ).filter((view) => !sectionSketches.has(view.sketchId));
+      return sketchCurveCandidates(
+        doc,
+        views,
+        (value) => resolve(value),
+        (data) =>
+          data.construction !== true &&
+          (data.objectKind === 'line' ||
+            data.objectKind === 'arc' ||
+            (data.objectKind === 'spline' && data.closed !== true))
+      );
+    }
     // Every sketch's curves, the profile's own included: one sketch may hold
     // both a closed profile and the open spine it sweeps along. An edit
     // offers only sketches made before its feature, as it takes profiles.
@@ -27470,7 +28750,8 @@ export function App() {
     availableSketchViews,
     parameterScope,
     inPlaceEditing,
-    inPlacePlace
+    inPlacePlace,
+    inPlaceSections
   ]);
   const inPlaceCurvePicker = useMemo(
     () =>
@@ -27653,7 +28934,8 @@ export function App() {
             pick.sketchId,
             pick.entityId,
             inPlace.tool === 'bend',
-            inPlace.tool === 'point-pattern' || inPlace.tool === 'hole'
+            inPlace.tool === 'point-pattern' || inPlace.tool === 'hole',
+            inPlace.tool === 'path-pattern'
           ),
         inPlace.tool === 'bend'
       );
@@ -27894,21 +29176,7 @@ export function App() {
                 Math.max(selected.area * 0.01, 1e-9)
           ) ??
           (sourceMatches.length === 1 ? sourceMatches[0] : undefined);
-        return profile
-          ? [
-              {
-                sketchId: selected.sketchId,
-                profileId: profile.profileId,
-                regionFingerprint: profile.regionFingerprint,
-                samplePoint: profile.samplePoint,
-                centroid: profile.centroid,
-                boundingBox: profile.boundingBox,
-                sourceEntityIds: profile.sourceEntityIds,
-                sourceBoundaryLoops: profile.sourceBoundaryLoops,
-                area: profile.area
-              }
-            ]
-          : [];
+        return profile ? [regionPickForSketch(selected.sketchId, profile)] : [];
       });
       const unchanged =
         remapped.length === current.length &&
@@ -28020,17 +29288,7 @@ export function App() {
             new Map(objects.map(({ id, data }) => [id, data]))
           )
         }
-      ).map((region) => ({
-        sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      }));
+      ).map((region) => regionPickForSketch(sketchId, region));
     } catch {
       return null;
     }
@@ -28038,15 +29296,15 @@ export function App() {
 
   function selectRegionFromViewer(
     region: RegionPickData,
-    modifiers: { additive: boolean; toggle: boolean }
-  ) {
-    // A glyph stands for its whole text object: the commit builds the whole
-    // word, so the pick selects, arms and previews the whole word too.
-    const group = profilesBuiltWith(
+    modifiers: { additive: boolean; toggle: boolean },
+    group: readonly RegionPickData[] = profilesBuiltWith(
       region,
       regionPicksForSketch(region.sketchId),
       entityWideProfileSource
-    );
+    )
+  ) {
+    // A glyph stands for its whole text object: the commit builds the whole
+    // word, so the pick selects, arms and previews the whole word too.
     const nextProfiles = updateProfileSelection(
       selectedProfiles,
       region,
@@ -28085,23 +29343,67 @@ export function App() {
     );
   }
 
+  function handleBoxSelectRegions(
+    regions: RegionPickData[],
+    additive: boolean
+  ) {
+    // As with Extrude's selection of a whole sketch, leave the inner cells
+    // that represent openings out of a bulk pick. They still take clicks.
+    const eligible = new Map(
+      [...new Set(regions.map(({ sketchId }) => sketchId))].map((sketchId) => [
+        sketchId,
+        new Set(
+          regionsOutsideHoles(
+            sketchViews.find((view) => view.sketchId === sketchId)?.regions ??
+              []
+          ).map(({ profileId }) => profileId)
+        )
+      ])
+    );
+    const hits = regions.filter(({ sketchId, profileId }) =>
+      eligible.get(sketchId)?.has(profileId)
+    );
+    const current = interactionRef.current;
+    const currentSketch =
+      current.mode === 'region'
+        ? hits.filter(({ sketchId }) => sketchId === current.target.sketchId)
+        : [];
+    const picked = currentSketch.length > 0 ? currentSketch : hits;
+    const first = picked[0];
+    if (!first) {
+      setStatus('No closed sketch profiles in the box.');
+      return;
+    }
+    if (picked.some((region) => region.sketchId !== first.sketchId)) {
+      setStatus('Extrude profiles from one sketch at a time.');
+      return;
+    }
+    const allowed = eligible.get(first.sketchId)!;
+    const available = regionPicksForSketch(first.sketchId).filter(
+      ({ profileId }) => allowed.has(profileId)
+    );
+    const group = new Map<string, RegionPickData>();
+    for (const region of picked) {
+      for (const member of profilesBuiltWith(
+        region,
+        available,
+        entityWideProfileSource
+      )) {
+        group.set(member.profileId, member);
+      }
+    }
+    selectRegionFromViewer(first, { additive, toggle: false }, [
+      ...group.values()
+    ]);
+  }
+
   /** Every detected region of one sketch view, as pick data. */
   function regionPicksForSketch(sketchId: string): RegionPickData[] {
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === sketchId
     );
     return (
-      view?.regions.map((candidate) => ({
-        sketchId,
-        profileId: candidate.profileId,
-        regionFingerprint: candidate.regionFingerprint,
-        samplePoint: candidate.samplePoint,
-        centroid: candidate.centroid,
-        boundingBox: candidate.boundingBox,
-        sourceEntityIds: candidate.sourceEntityIds,
-        sourceBoundaryLoops: candidate.sourceBoundaryLoops,
-        area: candidate.area
-      })) ?? []
+      view?.regions.map((region) => regionPickForSketch(sketchId, region)) ?? []
     );
   }
 
@@ -28113,7 +29415,7 @@ export function App() {
         setStatus('Closed sketch profile — click to select.');
       return;
     }
-    if (tool === 'extrude') {
+    if (interaction.mode === 'idle' && interaction.boxSelectProfiles) {
       setStatus(
         selectedProfiles.length > 0
           ? `${selectedProfiles.length} profile${selectedProfiles.length === 1 ? '' : 's'} selected.`
@@ -28123,6 +29425,15 @@ export function App() {
   }
 
   /** Armed region handle for the viewport. */
+  // F01 (v121): the region's arrow and ghost stand on the start plane.
+  // Through all takes none: a start typed before switching to it is held
+  // for switching back, not shown.
+  const regionStartOffset =
+    regionExtrudeState &&
+    regionExtrudeState.extent !== 'through-all' &&
+    Number.isFinite(regionExtrudeState.startOffset)
+      ? regionExtrudeState.startOffset
+      : 0;
   const regionHandleTarget = useMemo(() => {
     if (interaction.mode !== 'region' || interaction.phase === 'validating') {
       return null;
@@ -28133,6 +29444,7 @@ export function App() {
       regionFingerprint: anchor.regionFingerprint,
       samplePoint: anchor.samplePoint,
       area: anchor.area,
+      ...(regionStartOffset !== 0 ? { startOffset: regionStartOffset } : {}),
       initialValue: regionDraftDistance.current ?? interaction.lastValue ?? 0,
       followers: interaction.targets
         .filter((target) => target !== anchor)
@@ -28141,7 +29453,7 @@ export function App() {
           samplePoint: target.samplePoint
         }))
     };
-  }, [interaction]);
+  }, [interaction, regionStartOffset]);
 
   /**
    * The extrude a region gesture describes, before its operation is decided.
@@ -28193,7 +29505,11 @@ export function App() {
       endCondition: regionExtrudeSettings.current?.endCondition,
       throughAllSide: regionExtrudeSettings.current?.throughAllSide,
       toFace: regionExtrudeSettings.current?.toFace,
+      toSurface: regionExtrudeSettings.current?.toSurface,
+      toFaceOffset: regionExtrudeSettings.current?.toFaceOffset,
+      startOffset: regionExtrudeSettings.current?.startOffset,
       draftAngleDeg: regionExtrudeSettings.current?.draftAngleDeg,
+      backDraftAngleDeg: regionExtrudeSettings.current?.backDraftAngleDeg,
       profiles: profileReferencesForSelection(profiles, entityWideProfileSource)
     };
   }
@@ -28346,10 +29662,17 @@ export function App() {
         );
         if (!isCurrent()) return;
         if (mixed) throw new Error(mixed);
-        const command = resolved.command;
-        const resultBodyId = command.payload.ids?.bodyId;
+        const resultBodyId = resolved.command.payload.ids?.bodyId;
         if (!resultBodyId)
           throw new Error('Extrude could not reserve a result body.');
+        // F01: a through-all cut through several bodies is one through-all
+        // extrude per body, created (and undone) as one step.
+        const command = resolved.extraCommands?.length
+          ? composeCommands(resolved.command.label, [
+              resolved.command,
+              ...resolved.extraCommands
+            ])
+          : resolved.command;
         const committed = await executeValidatedDirectEdit(
           command,
           resultBodyId,
@@ -28363,7 +29686,15 @@ export function App() {
             finishFeatureCreation();
             setRevertPill({ sketchId: target.sketchId as SketchId });
           },
-          undefined,
+          // F01: several cuts are judged each by its own feature and body,
+          // never by a shared label another feature might carry.
+          resolved.extraCommands?.length
+            ? [resolved.command, ...resolved.extraCommands].map((leaf) => ({
+                featureName: leaf.payload.name,
+                featureId: leaf.payload.ids!.featureId,
+                resultBodyId: leaf.payload.ids!.bodyId
+              }))
+            : undefined,
           {
             baseProjectId: base.projectId,
             baseVersion: base.version,
@@ -28445,6 +29776,29 @@ export function App() {
     E2E_EXACT_FACE_DRAG,
     keypad?.kind === 'offset' ? offsetPreviewValueRef.current : null
   );
+
+  // M07: the armed face set's faces, for their direction ticks.
+  const offsetSetTarget =
+    interaction.mode === 'face' &&
+    interaction.op === 'offset-face' &&
+    interaction.target.offsetFaceSet
+      ? interaction.target
+      : null;
+  const offsetSetTicks = useMemo(() => {
+    if (!doc || !offsetSetTarget || offsetSetTarget.hash === undefined) {
+      return null;
+    }
+    const ticks = faceSetOffsetTicks({
+      document: doc,
+      bodyId: offsetSetTarget.bodyId as BodyId,
+      face: {
+        topologyId: offsetSetTarget.topologyId,
+        hash: offsetSetTarget.hash
+      },
+      members: offsetSetTarget.offsetFaceSet!
+    });
+    return ticks.length > 0 ? ticks : null;
+  }, [doc, offsetSetTarget]);
 
   const cylinderRadiusHandleTarget = useMemo(() => {
     // Validation keeps the handle, locked where it was let go, as the offset
@@ -29588,7 +30942,9 @@ export function App() {
         ? {
             ...current,
             initial: String(Math.round(size * 100) / 100),
-            selectInitial: false
+            selectInitial: false,
+            // A proved document-unit size, not typed keys (I03).
+            initialIsStored: true
           }
         : current
     );
@@ -30038,6 +31394,9 @@ export function App() {
         ? offset
         : Math.round(offset * 1000) / 1000;
       regionDragDistance.current = distance;
+      // The bar sets the distance on release; a refusal before then is
+      // still the distance's to change.
+      regionExtrudeCommandRef.current?.holdValue('distance');
       if (Math.abs(distance) <= 1e-9) {
         regionExtrudePreview.clear();
         setPreviewDeferred(false);
@@ -30062,6 +31421,7 @@ export function App() {
     offsetPreviewValueRef.current = offset;
     if (!exactGeometry) {
       offsetPreview.clear();
+      offsetLeadPreview.clear();
       setPreviewDeferred(false);
       setPreviewVerdict({ value: offset, status: 'unchecked' });
       recoverPreviewInteraction();
@@ -30084,10 +31444,34 @@ export function App() {
     }
     if (Math.abs(offset) <= 1e-9) {
       offsetPreview.clear();
+      offsetLeadPreview.clear();
       setPreviewDeferred(false);
       setPreviewVerdict({ value: offset, status: 'unchecked' });
       recoverPreviewInteraction();
       return;
+    }
+    const base = managerRef.current?.document;
+    const set = current.target.offsetFaceSet;
+    const planes =
+      base && set && current.target.hash !== undefined
+        ? offsetChainRef.current?.faceSetOffsetPlanes(
+            {
+              document: base,
+              bodyId: current.target.bodyId as BodyId,
+              face: {
+                topologyId: current.target.topologyId,
+                hash: current.target.hash
+              },
+              members: set
+            },
+            offset
+          )
+        : null;
+    offsetChainedRef.current = (planes?.length ?? 0) > 1;
+    if (offsetChainedRef.current) {
+      // M07: a chained set's leading plane follows the hand; the whole
+      // chain catches up at a coarse rate (its lane's `minIntervalMs`).
+      offsetLeadPreview.request(offset);
     }
     // A value the preview turns away (a slow gesture past its budget) gets
     // no verdict to wait for: the commit checks it exactly instead.
@@ -30103,8 +31487,10 @@ export function App() {
       // A set-aside release lands at the value already on screen: keep its
       // exact frame up until the commit replaces it, as after a release.
       offsetPreview.stop();
+      offsetLeadPreview.stop();
     } else {
       offsetPreview.clear();
+      offsetLeadPreview.clear();
       setRenderedOffsetPreview(null);
       setLastValidPreview(null);
     }
@@ -30138,6 +31524,7 @@ export function App() {
     stopOffsetRestCheck();
     regionExtrudePreview.clear();
     offsetPreview.clear();
+    offsetLeadPreview.clear();
     cylinderRadiusPreview.clear();
     cylinderRadiusRestCheck.clear();
     if (cylinderRadiusRestTimer.current !== null) {
@@ -30168,7 +31555,8 @@ export function App() {
     cylinderRadiusRestCheck,
     edgePreview,
     edgeRestCheck,
-    stopOffsetRestCheck
+    stopOffsetRestCheck,
+    offsetLeadPreview
   ]);
 
   // A preview must never outlive the command that made it. Whatever returns
@@ -30228,6 +31616,8 @@ export function App() {
     } else if (open.kind === 'sketch-dimension') {
       setSketchDimensionDraft(null);
       setStatus('Dimension entry canceled.');
+    } else if (open.kind === 'sketch-fillet') {
+      sketchFillet.previewRadius(null);
     } else if (open.kind === 'sketch-edit') {
       setSketchEditDraft(null);
       setStatus('Modify tool canceled.');
@@ -30370,6 +31760,63 @@ export function App() {
   }
 
   /**
+   * M07: the face set's Offset. The single-face offset handle and keypad arm
+   * on the last-picked face, carrying the other faces, and its edit moves
+   * them all as one `offset-faces` step. A set that is not one plane is
+   * refused here, by name, before any handle appears.
+   */
+  function handleOffsetFaceSet() {
+    const faces = boxSelectedFaces;
+    const base = managerRef.current?.document;
+    if (!faces || !base || !requireExactGeometryReady()) return;
+    if (interaction.mode === 'face' && interaction.phase === 'validating') {
+      return;
+    }
+    if (interaction.mode === 'face' && interaction.target.offsetFaceSet) {
+      // Pressed again: put the handle away and keep the faces picked.
+      handleOffsetCancel();
+      dispatchInteraction({ type: 'clear' });
+      return;
+    }
+    let start: ReturnType<typeof faceSetOffsetStart>;
+    try {
+      start = faceSetOffsetStart(base, faces);
+    } catch (error) {
+      setStatus(errorMessage(error, 'These faces cannot be offset together.'), {
+        sticky: true
+      });
+      return;
+    }
+    // Optional: unloaded, a drag previews the whole chain alone.
+    import('./lib/faceSetOffsetChain').then(
+      (chain) => {
+        offsetChainRef.current = chain;
+      },
+      () => {}
+    );
+    const center = start.face.geometry!.center;
+    const point: [number, number, number] = [center.x, center.y, center.z];
+    dispatchInteraction({
+      type: 'select-face',
+      target: {
+        bodyId: start.bodyId,
+        topologyId: start.face.topologyId,
+        hash: start.face.hash,
+        ...(start.face.reference ? { reference: start.face.reference } : {}),
+        point,
+        normal: [start.normal.x, start.normal.y, start.normal.z],
+        surfaceCenter: point,
+        surfaceType: 'planar',
+        localFaceOffset: true,
+        offsetFaceSet: start.members
+      }
+    });
+    setStatus(
+      `Drag the arrow to offset ${faces.length} faces together, or type a value.`
+    );
+  }
+
+  /**
    * A cap drag on a cylinder means "make it this tall", not "push this disc".
    * Once the rim is filleted the blend belongs to the edge, so offsetting the
    * flat remainder alone leaves a step where the part should simply have
@@ -30408,6 +31855,31 @@ export function App() {
     }
     const target = current.target;
     const bodyId = target.bodyId as BodyId;
+    if (target.offsetFaceSet) {
+      // A face set moves as one `offset-faces` edit, never as a resize of
+      // whatever built the handle's face.
+      if (target.hash === undefined) return null;
+      const command = buildOffsetFaces({
+        document: base,
+        bodyId,
+        face: { topologyId: target.topologyId, hash: target.hash },
+        members: target.offsetFaceSet,
+        offset,
+        ...(exact === undefined ? {} : { exact })
+      });
+      return command
+        ? {
+            command,
+            bodyId,
+            editedFeatureId: null,
+            successMessage: offsetFacesCommitMessage(
+              target.offsetFaceSet.length + 1,
+              offset,
+              base.units
+            )
+          }
+        : null;
+    }
     const face = ownEntry(
       base.derived.bodyRepresentations,
       bodyId
@@ -30419,43 +31891,26 @@ export function App() {
     if (!face || target.hash === undefined) {
       return null;
     }
-    const capBoundary =
-      ownEntry(
-        base.derived.bodyRepresentations,
-        bodyId
-      )?.topology?.edges.filter((e) =>
-        e.adjacentFaceHashes?.includes(face.hash)
-      ) ?? [];
-    const sampledShoulderCap =
-      supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
-      offset < 0 &&
-      (face.geometry?.normal?.z ?? 0) > 0.999 &&
-      capBoundary.length > 0 &&
-      capBoundary.every((e) => e.curve?.type === 'CIRCLE') &&
-      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
-        (f) =>
-          f.geometry?.surfaceType === 'torus' &&
-          f.geometry.featureType === 'blend'
-      ) &&
-      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
-        (f) =>
-          f.geometry?.surfaceType === 'cylinder' &&
-          f.geometry.featureType === 'blend'
-      );
+    const sampledShoulder = sampledShoulderMove(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology,
+      face,
+      offset,
+      KERNEL_BUILD.packageVersion
+    );
     const plan = planFaceOffset({
       document: base,
       bodyId,
       face,
       faceHash: target.hash,
       offset,
-      localOnly: target.localFaceOffset || sampledShoulderCap,
+      localOnly: target.localFaceOffset || sampledShoulder,
       ...(exact === undefined ? {} : { exact })
     });
     if (
       !plan ||
       (target.resizeBodyFeatureId &&
         !target.localFaceOffset &&
-        !sampledShoulderCap &&
+        !sampledShoulder &&
         (plan.kind !== 'primitive-dimension' ||
           plan.primitive.featureId !== target.resizeBodyFeatureId))
     ) {
@@ -30604,7 +32059,13 @@ export function App() {
     // A refused value is not committed from a failed card; the value the
     // last passing preview showed is, and validation judges it again. A
     // release on a refused frame reads the drag before its release renders.
-    if (holdsRefusal(current) && !options?.keepingLastValid) {
+    if (
+      holdsRefusal(current) &&
+      !options?.keepingLastValid &&
+      // A chained set's coarse lane can still hold an older value's refusal
+      // when the hand lets go elsewhere: validation judges that value.
+      !(current.target.offsetFaceSet && current.lastValue !== offset)
+    ) {
       setStatus(
         current.error?.message ?? 'The current offset preview is invalid.'
       );
@@ -30640,6 +32101,9 @@ export function App() {
         ? candidate
         : null;
     offsetPreview.stop();
+    // A chained set's lead frame stays on screen until the commit replaces
+    // it; it never authors the commit, which replays the whole set.
+    offsetLeadPreview.stop();
     offsetPreviewValueRef.current = null;
     // Let go where the set-aside release was, it commits from the rebuild
     // already running for it; anywhere else, the new value replaces it.
@@ -30651,7 +32115,9 @@ export function App() {
     // A plain face offset released from a Total reading names that Total
     // beside the change its history row records.
     const successMessage =
-      plan.editedFeatureId === null && options?.total !== undefined
+      plan.editedFeatureId === null &&
+      options?.total !== undefined &&
+      !current.target.offsetFaceSet
         ? offsetFaceCommitMessage(
             offset,
             managerRef.current?.document.units ?? '',
@@ -30946,6 +32412,38 @@ export function App() {
       : null;
 
   /**
+   * U11: the refusal as the open keypad reads it. A face offset entered as
+   * a Total hears its limit, its remedy and its Keep as Totals too; the
+   * kernel's offset numbers stay in the cause and the technical details.
+   */
+  function keypadRefusalOperation(
+    operation: SelectionCalloutOperation,
+    request: KeypadRequest
+  ): SelectionCalloutOperation {
+    if (
+      request.kind !== 'offset' ||
+      request.totalBaseline === undefined ||
+      !operation.error
+    ) {
+      return operation;
+    }
+    const read = offsetRefusalInTotal(
+      operation.error,
+      operation.keepLastValidLabel ? keepValue : null,
+      {
+        baseline: request.totalBaseline,
+        sense: request.totalSense ?? 1,
+        units: doc?.units ?? ''
+      }
+    );
+    return {
+      ...operation,
+      error: read.error,
+      keepLastValidLabel: read.keepLabel ?? undefined
+    };
+  }
+
+  /**
    * A selection-first pick's operation rides the selection chip: its phase,
    * its refusal and the way out, with the chip's pressed verbs as its
    * switch. The column-top chip that said the same was one more surface lit
@@ -31236,17 +32734,9 @@ export function App() {
       const perReference = references.map((reference) =>
         regionsForReference(view, reference)
       );
-      const highlighted = perReference.flat().map((region) => ({
-        sketchId: extrudeData.sketchId,
-        profileId: region.profileId,
-        regionFingerprint: region.regionFingerprint,
-        samplePoint: region.samplePoint,
-        centroid: region.centroid,
-        boundingBox: region.boundingBox,
-        sourceEntityIds: region.sourceEntityIds,
-        sourceBoundaryLoops: region.sourceBoundaryLoops,
-        area: region.area
-      }));
+      const highlighted = perReference
+        .flat()
+        .map((region) => regionPickForSketch(extrudeData.sketchId, region));
       setSelectedProfiles(highlighted);
       // Only with a rendered view to resolve against. A consumed sketch is
       // hidden by default, and a face-attached one drops out of `sketchViews`
@@ -32414,10 +33904,16 @@ export function App() {
     // owns the question first; a menu here would act on the old selection.
     // The keyboard's menu is for the selection as it stands, so it picks
     // nothing (a multi-selection stays whole).
-    if (
+    const landing =
       !options.keyboard &&
-      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
-    ) {
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y });
+    // After the pick, which forgets every earlier hit point: the menu's
+    // point-taking verbs (Text on face) start where this right-click landed.
+    menuFaceHitRef.current =
+      options.faceHit && selection?.kind === 'face'
+        ? { selection, detail: options.faceHit }
+        : null;
+    if (landing) {
       setContextMenu(null);
       return;
     }
@@ -32664,6 +34160,7 @@ export function App() {
   function faceRepairPickHint(repair: StaleDirectEditFaceRepair): string {
     switch (repair.operationKind) {
       case 'offset-face':
+      case 'offset-faces':
         return 'planar face';
       case 'resize-cylindrical-face':
         return 'cylindrical face';
@@ -32696,11 +34193,13 @@ export function App() {
         const history =
           key && reachProjection?.key === key ? reachProjection : null;
         const source = kind === 'edit' ? history?.document : doc;
+        const reach = source
+          ? toFaceReachEstimate(source, sketchId, target)
+          : null;
         return {
           label: doc ? toFaceTargetLabel(doc, target) : 'face',
-          distance: source
-            ? toFaceDistanceEstimate(source, sketchId, target)
-            : null,
+          distance: reach?.height ?? null,
+          ...(reach?.slanted ? { slanted: true } : {}),
           ...(kind === 'edit' && !source
             ? { pending: !history?.error, problem: history?.error }
             : {})
@@ -32720,7 +34219,7 @@ export function App() {
             : { kind: 'create' }
         );
         setStatus(
-          'Click a planar face parallel to the sketch for the extrusion to reach · Esc cancels.'
+          'Click a planar or cylindrical face facing the sketch for the extrusion to reach · Esc cancels.'
         );
       }
     };
@@ -32740,7 +34239,7 @@ export function App() {
       featureName: feature.name
     });
     setStatus(
-      `Re-pick the face "${feature.name}" reaches: click a planar face parallel to its sketch · Esc cancels.`
+      `Re-pick the face "${feature.name}" reaches: click a planar or cylindrical face facing its sketch · Esc cancels.`
     );
   }
 
@@ -33632,6 +35131,27 @@ export function App() {
         }
         return;
       }
+      if (sketchFilletPending && !event.defaultPrevented) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          if (!event.repeat && !cancelOpenKeypad()) closeSketchFillet();
+          return;
+        }
+        if (
+          target?.matches(
+            '.in-place-command[aria-label="Sketch Fillet command"]'
+          ) &&
+          !meta &&
+          !event.altKey &&
+          !event.repeat &&
+          /^[\d.]$/.test(event.key) &&
+          sketchFillet.cornerIds?.length
+        ) {
+          event.preventDefault();
+          sketchFillet.openRadius(event.key);
+          return;
+        }
+      }
       if (global === 'file-save') {
         event.preventDefault();
         void handleSave();
@@ -33924,7 +35444,7 @@ export function App() {
             if (measurementDraft) {
               clearMeasurementPicks();
               setStatus(
-                `${measurementMode === 'angle' ? 'Angle' : 'Distance'} measurement canceled · pick the first target.`
+                `${measurementMode === 'angle' ? 'Angle' : measurementMode === 'maximum' ? 'Maximum distance' : measurementMode === 'central' ? 'Central distance' : measurementMode === 'parallel' ? 'Parallel distance' : 'Distance'} measurement canceled · pick the first target.`
               );
             } else {
               toggleMeasure(false);
@@ -34030,7 +35550,12 @@ export function App() {
             return;
           }
           event.preventDefault();
-          if (tool || selectedFeatureNodeId || interaction.mode !== 'idle') {
+          if (
+            tool ||
+            selectedFeatureNodeId ||
+            interaction.mode !== 'idle' ||
+            interaction.boxSelectProfiles
+          ) {
             cancelPanel();
           } else if (
             toolFold.commandFoldOpen &&
@@ -34675,13 +36200,29 @@ export function App() {
             ? 'Smart measure · pick an edge, face, hole, or body.'
             : mode === 'distance'
               ? 'Distance · pick the first target.'
-              : 'Angle · pick the first straight edge, circular axis or planar face.'
+              : mode === 'maximum'
+                ? 'Maximum distance · pick the first point, straight edge or full circle.'
+                : mode === 'central'
+                  ? 'Central distance · pick a circle, arc, cylinder or hole.'
+                  : mode === 'parallel'
+                    ? 'Parallel distance · pick the first edge, face, axis or circle.'
+                    : 'Angle · pick the first straight edge, circular axis or planar face.'
+        );
+      }}
+      pointKind={measurementPointKind}
+      onPointKind={(kind) => {
+        setMeasurementPointKind(kind);
+        setStatus(
+          kind === 'auto'
+            ? 'Distance picks the point each target names.'
+            : `Distance picks each target's ${kind}.`
         );
       }}
       onUnit={setMeasurementUnit}
       onPrecision={setMeasurementPrecision}
       onRadialDisplay={setRadialDisplay}
       onSelect={setActiveMeasurementId}
+      onHover={setHoveredMeasurementId}
       onToggleVisibility={(id) =>
         setMeasurements((current) =>
           current.map((measurement) =>
@@ -34856,6 +36397,8 @@ export function App() {
     edgeCount: selectedEdges.length,
     ...(edgeSelectionNaming ? { edgeNoun: edgeSelectionNaming.noun } : {}),
     faceSelected: renderedSelectedTopology?.kind === 'face',
+    // The kind the selection card already read for its verbs.
+    cylindricalFace: calloutFaceSurface === 'cylindrical',
     bodyCount: selectedBodyIds.length,
     regionCount: selectedProfiles.length
   };
@@ -35156,6 +36699,21 @@ export function App() {
       }
     },
     {
+      // L09: the CNC cut layout, every export body laid flat in one DXF.
+      id: 'file-export-cnc-layout',
+      label: 'Export CNC cut layout (DXF)',
+      group: 'File',
+      keywords: ['cnc', 'laser', 'router', 'lay flat', 'cut', 'dxf', 'plate'],
+      icon: <Download size={16} aria-hidden="true" />,
+      disabledReason:
+        currentGeometrySnapshot !== null
+          ? 'Wait for the model to finish updating'
+          : exportBodyIds.length === 0
+            ? emptyExportReason
+            : null,
+      run: () => handleExportCncLayout()
+    },
+    {
       // M16: the sheet-metal flat pattern, its layered DXF and bend table.
       id: 'file-export-flat-pattern',
       label: 'Flat pattern…',
@@ -35194,6 +36752,20 @@ export function App() {
             : null,
       run: () => setMeshExportOpen(true)
     },
+    // I03: one command per unit, found by its name and by "units".
+    ...(['mm', 'cm', 'm', 'inch'] as const).map((unit) => ({
+      id: `file-display-units-${unit}`,
+      label: `Show lengths in ${UNIT_SYSTEM_WORDS[unit]}`,
+      group: 'File',
+      keywords: ['units', 'unit', displayLengthName(unit), 'metric', 'imperial'],
+      icon: <Ruler size={16} aria-hidden="true" />,
+      disabledReason: !doc
+        ? 'Open a project first'
+        : documentDisplayUnits(doc) === unit
+          ? `Lengths are already shown in ${displayLengthName(unit)}`
+          : projectRenameDisabledReason,
+      run: () => void handleSetDisplayUnits(unit)
+    })),
     {
       id: 'file-export-image',
       label: 'Export image…',
@@ -35563,7 +37135,13 @@ export function App() {
         ? `Smart measure · pick geometry · Shift+Click totals edges · ${(modelingLocked && measureKey) || 'Esc'} exits`
         : measurementMode === 'distance'
           ? 'Distance · pick the first target · centers resolve automatically'
-          : 'Angle · pick a straight edge, circular axis or planar face'
+          : measurementMode === 'maximum'
+            ? 'Maximum distance · pick a point, straight edge or full circle'
+            : measurementMode === 'central'
+              ? 'Central distance · pick a circle, arc, cylinder or hole'
+              : measurementMode === 'parallel'
+                ? 'Parallel distance · pick an edge, face, axis or circle'
+                : 'Angle · pick a straight edge, circular axis or planar face'
     : selectedTopology?.kind === 'face'
       ? faceSelectedHint
       : viewerBodies.length > 0
@@ -35794,6 +37372,8 @@ export function App() {
           : undefined
       }
       onToggleConstruction={() => void handleToggleSketchConstruction()}
+      selectionCount={sketchSelectedObjectIds(interaction.session).length}
+      selectionConstruction={sketchSelectionConstruction}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);
@@ -35843,6 +37423,14 @@ export function App() {
               resolve={resolveDocumentValue}
               disabled={sketchSolving || geometryBusy}
               onCommand={executeCommand}
+              displayUnit={appSettings.sketching.referenceDisplayUnit}
+              onDisplayUnitChange={(referenceDisplayUnit) => {
+                const current = appSettingsRef.current;
+                handleAppSettingsChange({
+                  ...current,
+                  sketching: { ...current.sketching, referenceDisplayUnit }
+                });
+              }}
             />
           ) : null
         }
@@ -35910,23 +37498,27 @@ export function App() {
         }
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingEdit={interaction.session.pendingEdit}
-        offsetOptions={interaction.session.offsetOptions}
-        onOffsetOptions={(options) =>
-          dispatchInteraction({ type: 'sketch-offset-options', options })
+        modifyOptions={interaction.session.modifyOptions}
+        onModifyOptions={(options) =>
+          dispatchInteraction({ type: 'sketch-modify-options', options })
         }
         constraints={sketchConstraintItems}
         selectedObjectId={interaction.session.selectedObjectId}
         selectedObjectCount={sketchModeState?.selectedObjectIds?.length ?? 0}
-        solveStatus={sketchSolveStatus}
+        solveStatus={sketchRailSolveStatus}
         solving={sketchSolving}
         onEditTool={(kind, hint) => {
+          if (kind === 'fillet' || sketchFilletPending) sketchFillet.reset();
           dispatchInteraction({ type: 'sketch-edit-tool', kind });
-          if (hint) {
+          if (kind === 'fillet') {
+            setStatus('Pick the corners to round.');
+          } else if (hint) {
             setStatus(hint);
           }
         }}
         onDeleteConstraint={handleDeleteSketchConstraint}
         onSelectConstraintObject={handleSelectConstraintObject}
+        onSelectFreeEntity={handleSelectFreeEntity}
         onEditConstraint={handleEditSketchDimension}
         onSolve={() => {
           void handleSolveSketch();
@@ -36335,7 +37927,13 @@ export function App() {
             void handleDownloadProjectArtifact(artifact)
           }
           projectName={doc.name}
-          units={doc.units}
+          units={documentDisplayUnits(doc)}
+          displayUnits={{
+            shown: documentDisplayUnits(doc),
+            stored: doc.units,
+            onChange: (units) => void handleSetDisplayUnits(units),
+            disabledReason: projectRenameDisabledReason
+          }}
           canExport={
             exportBodyIds.length > 0 &&
             !parameterEditPending &&
@@ -36392,8 +37990,8 @@ export function App() {
           shareSession={
             shareSession
               ? {
-                  // A plaintext link always opens in Tweak.
-                  mode: shareSession.encryptedMode ?? 'tweak',
+                  mode: shareSession.mode,
+                  ...(sharedWithoutHistory ? { withoutHistory: true } : {}),
                   onMakeCopy: requestShareCopy
                 }
               : null
@@ -36414,6 +38012,7 @@ export function App() {
           onImportFiles={(files) => void handleImportFiles(files)}
           onExportStep={() => void handleExportStep()}
           onExportIges={() => void handleExportIges()}
+          onExportCncLayout={handleExportCncLayout}
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal
@@ -36491,11 +38090,7 @@ export function App() {
       sidebar={
         viewMode || drawingMode || assembleMode ? null : tweakMode ? (
           <TweakPanel
-            onLayoutChange={(reason) =>
-              reason === 'mount'
-                ? prepareResponsiveFrame.mounted()
-                : prepareResponsiveFrame.request()
-            }
+            onPhoneSheetShown={requestClearStage}
             units={doc?.units}
             modelError={parameterModelError}
             parameters={exposedParameters}
@@ -36612,6 +38207,7 @@ export function App() {
             }
             sketches={viewerSketches}
             selectedBodyIds={selectedBodyIds}
+            bodyPickRoles={inPlaceBodyPickRoles}
             selectedTopology={
               parameterPreview || currentGeometrySnapshot
                 ? null
@@ -36772,6 +38368,7 @@ export function App() {
             // card (View, Tweak, a running tool) the pick keeps its name.
             pickLabel={calloutWithOperation === null}
             focusGhostBodies={focusGhostBodies}
+            measureHighlights={hoveredMeasurementTargets}
             {...((inPlaceFocusFaces ?? focusFaces)
               ? { focusFaces: inPlaceFocusFaces ?? focusFaces }
               : {})}
@@ -36786,20 +38383,8 @@ export function App() {
             initialView={initialView}
             onViewChange={handleViewportChange}
             onViewSettled={handleViewportSettled}
-            onGeometryPresented={(ms, visible) => {
+            onGeometryPresented={(ms) => {
               previewPresentationMs.current = ms;
-              if (doc)
-                setPresentedGeometry((current) =>
-                  current?.projectId === doc.projectId &&
-                  current.generation === resumeViewGeneration &&
-                  current.visible === visible
-                    ? current
-                    : {
-                        projectId: doc.projectId,
-                        generation: resumeViewGeneration,
-                        visible
-                      }
-                );
             }}
             onBodiesDrawnElsewhere={setBodiesDrawnElsewhere}
             onWheelDeviceLearned={handleWheelDeviceLearned}
@@ -36811,6 +38396,7 @@ export function App() {
                 ? null
                 : offsetHandleTarget
             }
+            offsetSetTicks={offsetSetTicks}
             offsetDragTarget={
               interaction.mode === 'face' && interaction.op === 'offset-face'
                 ? interaction.target
@@ -36833,7 +38419,13 @@ export function App() {
               );
             }}
             onOffsetCancel={handleViewerOffsetCancel}
-            offsetPreviewInvalid={holdsRefusal(interaction)}
+            // A new extrude's arrow is its distance: marked only when the
+            // bar names the distance, not for a draft angle's refusal.
+            offsetPreviewInvalid={
+              holdsRefusal(interaction) &&
+              (interaction.mode !== 'region' ||
+                extrudeRefusedValue === 'distance')
+            }
             offsetPreviewLimit={
               holdsRefusal(interaction) &&
               interaction.mode === 'face' &&
@@ -36890,6 +38482,7 @@ export function App() {
               });
             }}
             sketchMode={modelingLocked ? null : sketchModeForViewer}
+            sketchFillet={modelingLocked ? null : filletHud}
             sketchTextAnchorRef={sketchTextAnchorRef}
             onSketchCommit={handleSketchCommit}
             onSketchCommitComposite={handleSketchCommitComposite}
@@ -36969,18 +38562,39 @@ export function App() {
             // region under the preview solid is still how a profile is
             // retargeted, or a Loft's next section picked.
             profileSelectionMode={
-              tool === 'extrude' ||
+              (tool === null &&
+                interaction.mode === 'idle' &&
+                Boolean(interaction.boxSelectProfiles)) ||
               (inPlace.active &&
                 inPlaceSpec !== null &&
                 inPlaceSpec.profileMode !== 'none')
             }
             onSelectRegion={handleSelectRegion}
+            onBoxSelectRegions={
+              !modelingLocked &&
+              tool === null &&
+              !inPlace.active &&
+              !extrudeEditFeature &&
+              !toFacePick &&
+              !keypad &&
+              (selectionFilter === 'any' || selectionFilter === 'sketch') &&
+              ((interaction.mode === 'idle' && interaction.boxSelectProfiles) ||
+                (interaction.mode === 'region' &&
+                  interaction.boxSelectProfiles &&
+                  (interaction.phase === 'armed' ||
+                    interaction.phase === 'failed')))
+                ? handleBoxSelectRegions
+                : undefined
+            }
             onHoverRegion={handleHoverRegion}
             planePickerArmed={
               !modelingLocked &&
               (tool === 'sketch' ||
                 Boolean(
-                  inPlaceSpec?.wantsPlane && inPlace.slots.bodies.length > 0
+                  inPlaceSpec?.wantsPlane &&
+                  (inPlace.slots.bodies.length > 0 ||
+                    // M02: a mirror pattern's features, picked first.
+                    inPlace.slots.faces.some((face) => face.feature))
                 ) ||
                 // Not while edges are filtered for: a ghost plane in front
                 // of an edge would take the click meant for its end.
@@ -37179,6 +38793,12 @@ export function App() {
             }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
+            measureSnapKinds={
+              measuring && measurementMode === 'distance'
+                ? measureSnapKindsFor(measurementPointKind)
+                : null
+            }
+            onPointPick={movePreview?.pointPick ? handleMovePointPick : null}
             regionHandle={
               modelingLocked || !extrudeBarReady ? null : regionHandleTarget
             }
@@ -37239,6 +38859,11 @@ export function App() {
                 }
               : {})}
             facePickOnly={toFacePick !== null}
+            facePickSurfaces={
+              inPlace.active
+                ? inPlaceFacePickSurfaces(inPlaceSpec, inPlace.options)
+                : null
+            }
             faceSetPickBodyId={
               tool === null && interaction.mode !== 'sketch'
                 ? heldFaceSetBody(heldFaces)
@@ -37394,6 +39019,20 @@ export function App() {
                     onCancel={cancelOpenKeypad}
                   />
                 ) : null
+              ) : filletKeypadOpen && sketchFillet.active && keypad ? (
+                <NumericKeypad
+                  request={keypad}
+                  units={doc.units}
+                  scope={parameterScope.scope}
+                  anchorRef={keypadAnchorRef}
+                  onUiStateChange={setKeypadUi}
+                  onPreview={sketchFillet.previewRadius}
+                  onEntryError={(error) => {
+                    if (error) sketchFillet.previewRadius(null);
+                  }}
+                  onCommit={sketchFillet.acceptRadius}
+                  onCancel={cancelOpenKeypad}
+                />
               ) : sketchSlotEntry &&
                 interaction.mode === 'sketch' &&
                 interaction.session.tool === 'slot' &&
@@ -37467,6 +39106,13 @@ export function App() {
                           setRegionExtrudeValue(valueId, value, raw, true);
                           return;
                         }
+                        if (keypad.kind === 'offset') {
+                          // The exact worker can build while the viewport prepares
+                          // the local deformation for the same typed value.
+                          handleOffsetPreview(value);
+                          offsetSetterRef.current?.(value);
+                          return;
+                        }
                         offsetSetterRef.current?.(value);
                         if (keypad.kind === 'radius') {
                           handleCylinderRadiusPreview(value);
@@ -37497,7 +39143,10 @@ export function App() {
                       refusal={
                         calloutWithOperation?.operation?.error
                           ? {
-                              operation: calloutWithOperation.operation,
+                              operation: keypadRefusalOperation(
+                                calloutWithOperation.operation,
+                                keypad
+                              ),
                               onPickAnother: pickAnotherAfterRefusal,
                               pickAnotherLabel:
                                 interaction.mode === 'edges'
@@ -37622,7 +39271,7 @@ export function App() {
               currentGeometrySnapshot !== null ||
               currentFaceGeometryPreview?.geometry.topology === 'pending'
             }
-            onSelectEdgeChain={handleSelectEdgeChainFromViewer}
+            onSelectEdgeChain={handleViewportEdgeRun}
             // Assemble's picks are parts. Once an assembly exists its own
             // viewport takes the primary button; before one does (the
             // "Start an assembly" first run) a click fell through to
@@ -37775,9 +39424,10 @@ export function App() {
                       : undefined
                   )
                 }
-                bodyBounds={assemblyBodyBounds}
+                bodyBounds={bodyMeshBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
                 checkInterference={geometry.assemblyInterference}
+                checkInterferenceSweep={geometry.assemblyInterferenceSweep}
               />
             </div>
           </ErrorBoundary>
@@ -38197,6 +39847,28 @@ export function App() {
                     feature.bodyId ?? value.targetBodyId
                   )
                 }
+                onApplyDirectEditOffset={(feature, offset) => {
+                  if (
+                    feature.data.featureKind !== 'direct-edit' ||
+                    feature.data.operation.kind !== 'offset-faces'
+                  ) {
+                    return;
+                  }
+                  applyValidatedFeature(
+                    commandFactories.updateFeature(
+                      {
+                        featureId: feature.featureId,
+                        data: {
+                          operation: { ...feature.data.operation, offset }
+                        }
+                      },
+                      `Edit ${feature.name}`
+                    ),
+                    feature,
+                    feature.name,
+                    feature.data.targetBodyId
+                  );
+                }}
                 onResizeThroughHole={handleResizeThroughHole}
                 onRemoveFaceFeature={handleRemoveFaceFeature}
                 onPinFeature={(feature) =>
@@ -38239,7 +39911,7 @@ export function App() {
               onActivity={setAssistantActivity}
               disabledReason={
                 assistantHeldEncrypted
-                  ? ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+                  ? UNSETTLED_ENCRYPTED_PROJECT_ASSISTANT_NOTICE
                   : assistantDisabledReason(assistantProject, assistantConsent)
               }
               consent={assistantHeldEncrypted ? null : assistantConsent}
@@ -38438,7 +40110,40 @@ export function App() {
               ) : null
             }
             commandRow={
-              inPlace.active && inPlaceSpec ? (
+              sketchFillet.active && !modelingLocked ? (
+                <InPlaceCommandBar
+                  title="Sketch Fillet"
+                  ignoreRepeatedEnter
+                  hint={
+                    sketchFillet.checking
+                      ? 'Checking the rounded sketch…'
+                      : sketchFillet.firstLine
+                        ? 'Pick a line that meets the highlighted line.'
+                        : sketchFillet.cornerIds?.length
+                          ? `${countLabel(sketchFillet.cornerIds.length, 'corner', 'corners')} selected · Pick a corner to add or remove it`
+                          : sketchFillet.loading
+                            ? 'Preparing Sketch Fillet…'
+                            : sketchFillet.corners.length
+                              ? 'Pick a corner, or pick two connected lines.'
+                              : 'Fillet needs two straight lines that meet at a corner.'
+                  }
+                  refusal={sketchFillet.checking ? null : sketchFillet.refusal}
+                  canFinish={sketchFillet.canFinish}
+                  locked={sketchFillet.checking}
+                  preciseValue={{
+                    id: 'sketch-fillet-radius',
+                    label: `Fillet radius ${formatNumber(sketchFillet.radius)} ${displayLengthName(doc.units)}`,
+                    text: `R ${formatNumber(sketchFillet.radius)} ${displayLengthName(doc.units)}`
+                  }}
+                  onPreciseValues={
+                    sketchFillet.cornerIds?.length
+                      ? () => sketchFillet.openRadius()
+                      : undefined
+                  }
+                  onDone={() => void applySketchFillet()}
+                  onCancel={closeSketchFillet}
+                />
+              ) : inPlace.active && inPlaceSpec ? (
                 <InPlaceCommandBar
                   title={
                     inPlace.editing
@@ -38447,6 +40152,9 @@ export function App() {
                   }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
+                  // U11: a kernel refusal says the input it is about; the
+                  // last request that built stays on screen meanwhile.
+                  refusalInput={inPlace.refusalInput}
                   unitLabel={displayLengthName(doc.units)}
                   onTrySize={(dimension, size) => {
                     commitInPlacePanelValue(dimension, formatNumber(size));
@@ -38478,6 +40186,15 @@ export function App() {
                   actions={inPlaceActions}
                   onAction={runInPlaceAction}
                   picks={inPlacePicks}
+                  booleanOperands={
+                    inPlaceBooleanRunning
+                      ? {
+                          bodies: inPlace.slots.bodies,
+                          name: (id) => representations[id]?.name,
+                          remove: inPlace.pickBody
+                        }
+                      : undefined
+                  }
                   onRemovePick={(id) => {
                     const edge = inPlace.slots.edges.find(
                       (candidate) => String(candidate.hash) === id
@@ -38539,7 +40256,13 @@ export function App() {
                   )}
                   bodies={availableExtrudeTargets}
                   disabled={geometryBusy}
-                  note={featureFormError}
+                  // As a new extrude's: the kernel's refusal is said after the
+                  // input changed when it arrived.
+                  valueRefusal={
+                    featureFormError &&
+                    ownExtrudeRefusal(featureFormError, extrudeEditFeature.name)
+                  }
+                  onRefusedValue={setExtrudeRefusedValue}
                   entryRefusal={
                     keypad?.kind === 'extrude' && regionExtrudeEntryError
                       ? `${keypad.label}: ${regionExtrudeEntryError}.`
@@ -38568,12 +40291,16 @@ export function App() {
                   name={extrudeEditFeature.name}
                   // The feature's name as it is now: a rename since the
                   // edit opened is never written back over.
-                  onPreview={(value) =>
-                    previewExtrudeForm(
+                  onPreview={(value) => {
+                    const refused = previewExtrudeForm(
                       extrudeEditFeature,
                       value && { ...value, name: extrudeEditFeature.name }
-                    )
-                  }
+                    );
+                    return (
+                      refused &&
+                      ownExtrudeRefusal(refused, extrudeEditFeature.name)
+                    );
+                  }}
                   onSubmit={(value) =>
                     applyExtrudeForm(extrudeEditFeature, {
                       ...value,
@@ -38586,6 +40313,16 @@ export function App() {
                 <ExtrudeCommand
                   previewPending={regionExtrudeChecking}
                   resolvedChoice={regionExtrudeResolution?.inference}
+                  // The kernel's refusal is said in the bar, after the input
+                  // that caused it; the last preview that built stays up.
+                  // Withdrawn while a newer value is checked, which it is
+                  // not about. A lost region is no value's fault.
+                  {...(interaction.error && !regionExtrudeChecking
+                    ? isStaleSelectionError(interaction.error)
+                      ? { note: interaction.error.message }
+                      : { valueRefusal: interaction.error.message }
+                    : {})}
+                  onRefusedValue={setExtrudeRefusedValue}
                   onShowFullModel={
                     extrudeHiddenBySection ? turnSectionViewOff : undefined
                   }
@@ -38716,9 +40453,10 @@ export function App() {
                             bodyId,
                             // Values are relative to the body's own centre, so
                             // carrying them to a different body would apply a
-                            // move nobody asked for.
+                            // move nobody asked for. So is a placed pivot.
                             translation: { x: 0, y: 0, z: 0 },
-                            rotationDeg: { x: 0, y: 0, z: 0 }
+                            rotationDeg: { x: 0, y: 0, z: 0 },
+                            pivot: undefined
                           }
                         : current
                     );
@@ -38735,7 +40473,10 @@ export function App() {
                         ? {
                             ...current,
                             translation: values.translation,
-                            rotationDeg: values.rotationDeg
+                            rotationDeg: values.rotationDeg,
+                            // M10: a typed value ends Move by two points,
+                            // whose picks read the model at rest.
+                            pointPick: undefined
                           }
                         : current
                     )
@@ -38751,6 +40492,77 @@ export function App() {
                     setMovePreview((current) =>
                       current ? { ...current, copy } : current
                     )
+                  }
+                  stamps={movePreview.stamps ?? 1}
+                  onStamps={(stamps) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, stamps } : current
+                    )
+                  }
+                  linked={movePreview.separateStamps !== true}
+                  onLinked={(linked) =>
+                    setMovePreview((current) =>
+                      current
+                        ? { ...current, separateStamps: !linked }
+                        : current
+                    )
+                  }
+                  pointPick={
+                    movePreview.pointPick
+                      ? {
+                          from: movePreview.pointPick.from
+                            ? pointPickLabel(movePreview.pointPick.fromKind)
+                            : null
+                        }
+                      : null
+                  }
+                  onPointPick={(on) =>
+                    setMovePreview((current) =>
+                      current
+                        ? on
+                          ? {
+                              ...current,
+                              // Picks read the model where it rests, so the
+                              // pending move starts again from nothing.
+                              translation: { x: 0, y: 0, z: 0 },
+                              rotationDeg: { x: 0, y: 0, z: 0 },
+                              // The gizmo steps aside, so it places no pivot.
+                              pivotMode: false,
+                              pointPick: { from: null }
+                            }
+                          : { ...current, pointPick: undefined }
+                        : current
+                    )
+                  }
+                  pivot={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : movePivotOf(movePreview)
+                  }
+                  pivotMode={movePreview.pivotMode === true}
+                  onPivotMode={(pivotMode) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, pivotMode } : current
+                    )
+                  }
+                  onPivot={(next) =>
+                    setMovePreview((current) => {
+                      const from = current && movePivotOf(current);
+                      return current && from
+                        ? {
+                            ...current,
+                            // The body stays put; only the turn's centre moves.
+                            translation: relocateMovePivot(
+                              from,
+                              current.translation,
+                              current.rotationDeg,
+                              next ??
+                                movePivotOf({ ...current, pivot: undefined })!
+                            ),
+                            pivot: next ?? undefined
+                          }
+                        : current;
+                    })
                   }
                   liveValuesRef={moveValuesSetterRef}
                   liveSnapRef={moveSnapSetterRef}
@@ -38830,6 +40642,7 @@ export function App() {
         <>
           {shareCopyChoice && (
             <SharedLinkCopyDialog
+              withoutHistory={sharedWithoutHistory}
               accountEncrypts={shareCopyChoice.accountEncrypts}
               error={shareCopyChoice.error}
               onRetry={requestShareCopy}
@@ -39114,6 +40927,16 @@ export function App() {
                   // gone, so go back to the projects that remain.
                   setSharingOpen(false);
                   void handleGoHome();
+                }}
+                onFreezeModel={async () => {
+                  // L08: a link without history shares the model as this
+                  // tab shows it now, saved or not.
+                  const current = managerRef.current?.document;
+                  if (!current)
+                    throw new Error('Open the project before sharing it.');
+                  const { freezeModelForSharing } =
+                    await import('./lib/frozenShareModel');
+                  return freezeModelForSharing(current, geometry);
                 }}
                 onClose={() => setSharingOpen(false)}
               />
@@ -39471,9 +41294,10 @@ export function App() {
     />
   );
   return (
-    <>
+    // I03: every length field reads the document's display unit from here.
+    <DisplayUnitsProvider units={doc ? documentDisplayUnits(doc) : null}>
       {workspace}
       {shareDestination}
-    </>
+    </DisplayUnitsProvider>
   );
 }

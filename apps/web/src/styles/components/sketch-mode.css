@@ -282,6 +282,75 @@
   border-color: var(--color-select);
 }
 
+.sketch-fillet-hud {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-viewer-overlay);
+  pointer-events: none;
+}
+
+.sketch-fillet-corner {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-stage-ink);
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  touch-action: manipulation;
+  cursor: pointer;
+}
+
+.sketch-fillet-corner::after {
+  content: '';
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: var(--color-viewport-bg);
+}
+
+.sketch-fillet-corner:hover,
+.sketch-fillet-corner:focus-visible {
+  color: var(--color-preselect);
+}
+
+.sketch-fillet-corner[aria-pressed='true'] {
+  color: var(--color-select);
+}
+
+.sketch-fillet-corner[aria-pressed='true']::after {
+  background: currentColor;
+  box-shadow: inset 0 0 0 2px var(--color-viewport-bg);
+}
+
+.sketch-fillet-corner[data-conflicted='true'] {
+  color: var(--color-error);
+}
+
+.sketch-fillet-corner[data-conflicted='true']::after {
+  border-style: dashed;
+}
+
+.sketch-fillet-corner:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+@media (any-pointer: coarse) {
+  .sketch-fillet-corner {
+    width: 44px;
+    height: 44px;
+  }
+}
+
 /* The per-kind glyph filter: one toggle per kind, drawn with its glyph. */
 .relation-glyph-filter {
   display: flex;

@@ -166,8 +166,12 @@ export function SketchTextCard({
           ) : (
             <p className="field-hint" aria-live="polite">
               {empty
-                ? 'Type the text to place.'
-                : 'Click the sketch plane to place it.'}
+                ? draft.anchor
+                  ? 'Type the text to place where you picked the face.'
+                  : 'Type the text to place.'
+                : draft.anchor
+                  ? 'Place puts it where you picked, or click the face to put it elsewhere.'
+                  : 'Click the sketch plane to place it.'}
             </p>
           )}
           <footer>
@@ -186,7 +190,7 @@ export function SketchTextCard({
               onClick={() =>
                 onPlace(
                   textObjectFromPoint(
-                    anchorRef?.current ?? { x: 0, y: 0 },
+                    draft.anchor ?? anchorRef?.current ?? { x: 0, y: 0 },
                     draft
                   )
                 )

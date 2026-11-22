@@ -102,8 +102,9 @@ describe('in-place Extrude handles', () => {
       false
     );
     expect(extrudeTakesDraft(blind)).toBe(true);
-    expect(extrudeTakesDraft({ ...blind, symmetric: true })).toBe(false);
-    expect(extrudeTakesDraft({ ...blind, backDistance: 2 })).toBe(false);
+    // F01 (v126): the rig drafts the front side of a two-sided extrusion.
+    expect(extrudeTakesDraft({ ...blind, symmetric: true })).toBe(true);
+    expect(extrudeTakesDraft({ ...blind, backDistance: 2 })).toBe(true);
     expect(extrudeTakesDraft({ ...blind, extent: 'through-all' })).toBe(false);
     // To face tapers whatever Symmetric and Back held for Distance.
     expect(

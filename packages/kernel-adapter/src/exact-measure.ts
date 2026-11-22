@@ -539,9 +539,11 @@ export function measureOwnedFaceGeometry(
   kernel: RemusKernel,
   solid: number,
   face: number,
-  onBlendRegion?: (region: BlendRegionMeasurement) => void
+  onBlendRegion?: (region: BlendRegionMeasurement) => void,
+  onMeasurement?: (geometry: FaceGeometry | undefined) => void
 ): FaceGeometry | undefined {
   const geometry = measureFaceGeometry(kernel, face);
+  onMeasurement?.(geometry);
   if (!geometry) {
     return undefined;
   }

@@ -132,6 +132,9 @@ function passBodyThrough(
     solids: [...input.solids],
     // A mesh reference has no solids: its mesh is the body.
     ...(input.referenceMesh ? { referenceMesh: input.referenceMesh } : {}),
+    ...(input.rectangularStock !== undefined
+      ? { rectangularStock: input.rectangularStock }
+      : {}),
     ...(input.sweepSource ? { sweepSource: input.sweepSource } : {}),
     ...(input.lineage
       ? {

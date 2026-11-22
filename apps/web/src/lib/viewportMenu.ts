@@ -45,9 +45,9 @@ export interface ViewportMenuState extends ContextMenuState {
 const MENU_LABELS: Partial<Record<SelectionCalloutVerb['id'], string>> = {
   'action:sketch-on-face': 'Sketch on face',
   'tool:sketch': 'Sketch on face',
+  'text-on-face': 'Text on face',
   'action:offset-face': 'Push/pull face',
   'action:resize-body': 'Resize body',
-  'action:resize-radial-face': 'Change radius',
   'tool:datum-plane': 'Plane from face…',
   'tool:datum-axis': 'Axis from face…'
 };
@@ -73,7 +73,12 @@ export function faceVerbMenuItems(
   return verbs.map((verb) => {
     const label =
       MENU_LABELS[verb.id] ??
-      (verb.id.startsWith('tool:') ? `${verb.label}…` : verb.label);
+      // The rail names the quantity (Diameter or Radius) the edit enters.
+      (verb.id === 'action:resize-radial-face'
+        ? `Change ${verb.label.toLowerCase()}`
+        : verb.id.startsWith('tool:')
+          ? `${verb.label}…`
+          : verb.label);
     return {
       id: `${FACE_VERB_PREFIX}${verb.id}`,
       label,

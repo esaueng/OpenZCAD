@@ -7,6 +7,7 @@ import {
   offsetChipText,
   offsetFaceCommitMessage,
   offsetLimitChipText,
+  offsetRefusalInTotal,
   offsetTotalReading,
   rearmedChipMode,
   regionChipState,
@@ -467,5 +468,59 @@ describe('a refused offset that names its limit', () => {
     expect(keptOffsetValue(-6.4, -9, -9)).toBe(-6.39);
     // Nothing refused yet: unchanged.
     expect(keptOffsetValue(undefined, 16.5, null)).toBe(16.5);
+  });
+});
+
+// U11: a Total typed into exact entry is refused in Totals, not in the
+// offset the kernel measured: "smaller offset" beside a Total of 5 asked for
+// the opposite of what builds.
+describe('a refused face offset read as a Total', () => {
+  const reading = { baseline: 24, sense: 1, units: 'mm' };
+  const collapse = {
+    message:
+      'A neighbouring face would shrink to nothing past 19. Try a smaller offset.',
+    limit: -19
+  };
+
+  it('states the limit, the remedy and Keep as Totals', () => {
+    const read = offsetRefusalInTotal(collapse, -18.99, reading);
+    expect(read.error.headline).toBe('Total can’t go below 5 mm here');
+    expect(read.error.message).toBe(
+      'A neighbouring face would shrink to nothing once the face moves 19 mm (a Total of 5 mm). Try a larger Total.'
+    );
+    expect(read.keepLabel).toBe('Keep Total 5.01 mm');
+    expect(read.error.limit).toBe(-19);
+  });
+
+  it('asks for a smaller Total when the face moves out, or the span shrinks as it grows', () => {
+    const out = offsetRefusalInTotal(
+      { ...collapse, message: collapse.message, limit: 6.4 },
+      6.39,
+      reading
+    );
+    expect(out.error.headline).toBe('Total can’t go past 30.4 mm here');
+    expect(out.error.message).toMatch(/Try a smaller Total\.$/);
+    // A face whose outward move shrinks the span (the bottom of a plate).
+    const under = offsetRefusalInTotal(collapse, null, {
+      ...reading,
+      sense: -1
+    });
+    expect(under.error.headline).toBe('Total can’t go past 43 mm here');
+    expect(under.keepLabel).toBeNull();
+  });
+
+  it('points a refusal with no named limit back toward the size before the edit', () => {
+    const read = offsetRefusalInTotal(
+      {
+        message:
+          'A neighbouring face would shrink to nothing at this distance. Try a smaller offset.'
+      },
+      null,
+      reading
+    );
+    expect(read.error.headline).toBeUndefined();
+    expect(read.error.message).toBe(
+      'A neighbouring face would shrink to nothing at this distance. Try a Total nearer 24 mm.'
+    );
   });
 });

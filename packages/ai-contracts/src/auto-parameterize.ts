@@ -1,4 +1,5 @@
 import {
+  transformStampBodyIds,
   ownEntry,
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
@@ -299,6 +300,7 @@ function featureScopeForBodies(
     const produced = [feature.bodyId];
     if (feature.data.featureKind === 'split')
       produced.push(feature.data.secondBodyId);
+    produced.push(...transformStampBodyIds(feature.data));
     for (const bodyId of produced) {
       if (bodyId !== undefined && !producerIndices.has(bodyId))
         producerIndices.set(bodyId, index);
@@ -330,7 +332,8 @@ function featureScopeForBodies(
       (feature.bodyId !== undefined && neededBodies.has(feature.bodyId)) ||
       ((isInPlaceTransform(data) || data.featureKind === 'direct-edit') &&
         neededBodies.has(data.targetBodyId)) ||
-      (data.featureKind === 'split' && neededBodies.has(data.secondBodyId));
+      (data.featureKind === 'split' && neededBodies.has(data.secondBodyId)) ||
+      transformStampBodyIds(data).some((bodyId) => neededBodies.has(bodyId));
     const includedBySketch =
       data.featureKind === 'sketch' && neededSketches.has(data.sketchId);
     if (!includedByBody && !includedBySketch) {
@@ -668,7 +671,10 @@ function nativeCandidates(
           add(featureCandidate(feature, 'radius', data.operation.radius));
         } else if (data.operation.kind === 'resize-blend') {
           add(featureCandidate(feature, 'newRadius', data.operation.newRadius));
-        } else if (data.operation.kind === 'offset-face') {
+        } else if (
+          data.operation.kind === 'offset-face' ||
+          data.operation.kind === 'offset-faces'
+        ) {
           add(featureCandidate(feature, 'offset', data.operation.offset));
         }
         break;

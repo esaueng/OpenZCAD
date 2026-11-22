@@ -5,6 +5,7 @@ import {
   composeCommands
 } from '@openzcad/command-system';
 import {
+  addSketchConstraint,
   createProjectDocument,
   findSketch,
   normalizeDocument
@@ -17,6 +18,7 @@ import {
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
+  type EntityId as EntityIdT,
   type ProjectDocument,
   type SketchConstraintData,
   type SketchObjectData
@@ -24,7 +26,8 @@ import {
 import {
   buildConstraint,
   disconnectConstraintIds,
-  lockConstraintIds
+  lockConstraintIds,
+  movedEntityLock
 } from '../apps/web/src/lib/sketch/constraints';
 
 /**
@@ -62,6 +65,20 @@ function sketchWith(objects: SketchObjectData[]) {
       commandFactories.addSketchConstraint({ sketchId, constraint })
     );
   return { manager, sketchId, ids, constrain };
+}
+
+function lockAt(
+  objectId: string,
+  point: 'start' | 'end' | 'center',
+  x: number,
+  y: number
+): SketchConstraintData {
+  return {
+    constraintKind: 'lock',
+    point: { objectId: objectId as never, point },
+    x,
+    y
+  };
 }
 
 function line(outcome: SketchSolveOutcome, index: number) {
@@ -306,6 +323,512 @@ describe('S07 constraint set on the pinned kernel', () => {
         (c) => c.data.constraintKind
       )
     ).toContain('coincident');
+  });
+});
+
+describe('S07 whole-entity symmetry on the pinned kernel', () => {
+  const resolve = (value: unknown) =>
+    typeof value === 'number' ? value : Number(value);
+
+  /**
+   * The y axis locked from (0,-10) to (0,10), the first entity held fully
+   * by `hold`, and the second mirrored onto it by the relations one
+   * Symmetric pick sequence over the two entities writes.
+   */
+  async function mirrored(
+    first: SketchObjectData,
+    second: SketchObjectData,
+    hold: (id: string) => SketchConstraintData[]
+  ) {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      first,
+      second
+    ]);
+    const [axis, a, b] = fixture.ids as unknown as [string, string, string];
+    fixture.constrain(lockAt(axis, 'start', 0, -10));
+    fixture.constrain(lockAt(axis, 'end', 0, 10));
+    for (const constraint of hold(a)) fixture.constrain(constraint);
+    const sketch = findSketch(fixture.manager.document, fixture.sketchId)!;
+    const built = buildConstraint(
+      fixture.manager.document,
+      sketch,
+      'symmetric',
+      [
+        { kind: 'object', objectId: a },
+        { kind: 'object', objectId: b },
+        { kind: 'object', objectId: axis }
+      ],
+      undefined,
+      resolve
+    );
+    if ('error' in built) throw new Error(built.error);
+    const written = [built.data, ...(built.also ?? [])];
+    for (const constraint of written) fixture.constrain(constraint);
+    const outcome = await adapter.solveSketch(
+      fixture.manager.document,
+      fixture.sketchId
+    );
+    expect(outcome.converged).toBe(true);
+    expect(outcome.rolledBack).toBe(false);
+    // Each set fixes the image exactly once: no redundant equation.
+    expect(outcome.dof.rank).toBe(outcome.dof.numEquations);
+    return { outcome, written };
+  }
+
+  it('mirrors a whole line, pairing the ends the way they already lie', async () => {
+    // The second line runs the other way, so its end is nearer the image of
+    // the first's start: the pairing crosses, and the line does not flip.
+    const { outcome, written } = await mirrored(
+      { objectKind: 'line', x1: 2, y1: 1, x2: 6, y2: 5 },
+      { objectKind: 'line', x1: -5, y1: 4, x2: -1, y2: 2 },
+      (id) => [lockAt(id, 'start', 2, 1), lockAt(id, 'end', 6, 5)]
+    );
+    expect(written.map((data) => data.constraintKind)).toEqual([
+      'symmetric',
+      'symmetric'
+    ]);
+    expect(outcome.classification).toBe('solved');
+    const image = line(outcome, 2);
+    expect(image.x1).toBeCloseTo(-6, 9);
+    expect(image.y1).toBeCloseTo(5, 9);
+    expect(image.x2).toBeCloseTo(-2, 9);
+    expect(image.y2).toBeCloseTo(1, 9);
+  });
+
+  it('mirrors a whole circle: centre and radius', async () => {
+    const { outcome, written } = await mirrored(
+      { objectKind: 'circle', centerX: 4, centerY: 3, radius: 2 },
+      { objectKind: 'circle', centerX: -3, centerY: 2, radius: 1 },
+      (id) => [
+        lockAt(id, 'center', 4, 3),
+        { constraintKind: 'radius', objectId: id as never, value: 2 }
+      ]
+    );
+    expect(written.map((data) => data.constraintKind)).toEqual([
+      'symmetric',
+      'equal'
+    ]);
+    expect(outcome.classification).toBe('solved');
+    const image = outcome.objects[2]!;
+    if (image.kind !== 'circle') throw new Error('expected a circle');
+    expect(image.centerX).toBeCloseTo(-4, 9);
+    expect(image.centerY).toBeCloseTo(3, 9);
+    expect(image.radius).toBeCloseTo(2, 9);
+  });
+
+  it('refuses a second arc nearer the complement than the mirror image', () => {
+    // Review case: about the y axis, the radius-2 arc at (5, 0) sweeping
+    // 0°–90° mirrors to one at (-5, 0) sweeping 90°–180°. The radius-2 arc
+    // at (-7, 2) sweeping 0°–270° already meets both end symmetries and the
+    // equal radius, so the relations alone would keep it.
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      {
+        objectKind: 'arc',
+        centerX: 5,
+        centerY: 0,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      {
+        objectKind: 'arc',
+        centerX: -7,
+        centerY: 2,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 270
+      }
+    ]);
+    const [axis, a, b] = fixture.ids as unknown as [string, string, string];
+    const built = buildConstraint(
+      fixture.manager.document,
+      findSketch(fixture.manager.document, fixture.sketchId)!,
+      'symmetric',
+      [
+        { kind: 'object', objectId: a },
+        { kind: 'object', objectId: b },
+        { kind: 'object', objectId: axis }
+      ],
+      undefined,
+      resolve
+    );
+    expect(built).toEqual({
+      error:
+        "The second arc sweeps 270°, nearer the other way round than the 90° of the first arc's mirror image. Pick an arc of matching sweep, or use Mirror to make the image."
+    });
+  });
+
+  it('mirrors a whole arc, reversing its direction', async () => {
+    // A quarter arc about (5,0) from 0° to 90°: its image about the y axis
+    // is centred on (-5,0) and, still counter-clockwise, runs 90° to 180°.
+    const { outcome, written } = await mirrored(
+      {
+        objectKind: 'arc',
+        centerX: 5,
+        centerY: 0,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      {
+        objectKind: 'arc',
+        centerX: -4.5,
+        centerY: 0.3,
+        radius: 1.8,
+        startAngleDeg: 95,
+        endAngleDeg: 175
+      },
+      (id) => [
+        lockAt(id, 'start', 7, 0),
+        lockAt(id, 'end', 5, 2),
+        { constraintKind: 'radius', objectId: id as never, value: 2 }
+      ]
+    );
+    expect(written.map((data) => data.constraintKind)).toEqual([
+      'symmetric',
+      'symmetric',
+      'equal'
+    ]);
+    const image = outcome.objects[2]!;
+    if (image.kind !== 'arc') throw new Error('expected an arc');
+    expect(image.centerX).toBeCloseTo(-5, 8);
+    expect(image.centerY).toBeCloseTo(0, 8);
+    expect(image.radius).toBeCloseTo(2, 8);
+    const start = ((image.startAngleDeg % 360) + 360) % 360;
+    const end = ((image.endAngleDeg % 360) + 360) % 360;
+    expect(start).toBeCloseTo(90, 6);
+    expect(end).toBeCloseTo(180, 6);
+  });
+});
+
+describe('S07 entity lock on the pinned kernel', () => {
+  const resolve = (value: unknown) =>
+    typeof value === 'number' ? value : Number(value);
+
+  function lockedWhole(object: SketchObjectData) {
+    const fixture = sketchWith([object]);
+    const sketch = findSketch(fixture.manager.document, fixture.sketchId)!;
+    const built = buildConstraint(
+      fixture.manager.document,
+      sketch,
+      'lock',
+      [{ kind: 'object', objectId: fixture.ids[0]! }],
+      undefined,
+      resolve
+    );
+    if ('error' in built) throw new Error(built.error);
+    fixture.constrain(built.data);
+    return { ...fixture, data: built.data };
+  }
+
+  const solve = (fixture: ReturnType<typeof sketchWith>) =>
+    adapter.solveSketch(fixture.manager.document, fixture.sketchId);
+
+  it('holds a whole line, circle and arc with exactly their freedoms', async () => {
+    const cases: [SketchObjectData, number[]][] = [
+      [{ objectKind: 'line', x1: 1, y1: 2, x2: 7, y2: 5 }, [1, 2, 7, 5]],
+      [
+        { objectKind: 'circle', centerX: 3, centerY: -1, radius: 2 },
+        [3, -1, 2]
+      ],
+      // Ends near the x axis (the end's y is fixed), near the y axis (its x
+      // is), and diagonal: every branch of the arc's one end coordinate.
+      ...[
+        [10, 80],
+        [30, 175],
+        [-40, 45]
+      ].map(
+        ([start, end]) =>
+          [
+            {
+              objectKind: 'arc',
+              centerX: 4,
+              centerY: 4,
+              radius: 3,
+              startAngleDeg: start!,
+              endAngleDeg: end!
+            },
+            [4, 4, 3, start!, end!]
+          ] as [SketchObjectData, number[]]
+      )
+    ];
+    for (const [object, at] of cases) {
+      const fixture = lockedWhole(object);
+      expect(fixture.data).toEqual({
+        constraintKind: 'lock-entity',
+        objectId: fixture.ids[0],
+        at
+      });
+      const outcome = await solve(fixture);
+      expect(outcome.converged).toBe(true);
+      expect(outcome.classification).toBe('solved');
+      expect(outcome.dof.dof).toBe(0);
+      // Never redundant with itself.
+      expect(outcome.dof.rank).toBe(outcome.dof.numEquations);
+      // One residual row for the one document constraint.
+      expect(outcome.constraintResiduals).toHaveLength(1);
+    }
+  });
+
+  it('refuses a driving dimension that would resize a locked circle', async () => {
+    const fixture = lockedWhole({
+      objectKind: 'circle',
+      centerX: 0,
+      centerY: 0,
+      radius: 2
+    });
+    fixture.constrain({
+      constraintKind: 'radius',
+      objectId: fixture.ids[0]!,
+      value: 3
+    });
+    const outcome = await solve(fixture);
+    expect(outcome.classification === 'solved' && outcome.converged).toBe(
+      false
+    );
+  });
+
+  it('keeps a locked arc where it is while joined geometry moves to it', async () => {
+    const fixture = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      { objectKind: 'line', x1: 7, y1: 1, x2: 12, y2: 3 }
+    ]);
+    const [arc, bar] = fixture.ids as unknown as [string, string];
+    const sketch = findSketch(fixture.manager.document, fixture.sketchId)!;
+    const built = buildConstraint(
+      fixture.manager.document,
+      sketch,
+      'lock',
+      [{ kind: 'object', objectId: arc }],
+      undefined,
+      resolve
+    );
+    if ('error' in built) throw new Error(built.error);
+    fixture.constrain(built.data);
+    fixture.constrain({
+      constraintKind: 'coincident',
+      a: { objectId: arc as never, point: 'start' },
+      b: { objectId: bar as never, point: 'start' }
+    });
+    const outcome = await solve(fixture);
+    expect(outcome.converged).toBe(true);
+    const held = outcome.objects[0]!;
+    if (held.kind !== 'arc') throw new Error('expected an arc');
+    expect(held.centerX).toBeCloseTo(0, 9);
+    expect(held.centerY).toBeCloseTo(0, 9);
+    expect(held.radius).toBeCloseTo(5, 9);
+    expect(held.startAngleDeg).toBeCloseTo(0, 7);
+    expect(held.endAngleDeg).toBeCloseTo(90, 7);
+    expect(line(outcome, 1).x1).toBeCloseTo(5, 9);
+    expect(line(outcome, 1).y1).toBeCloseTo(0, 9);
+  });
+
+  it('validates the entity, its recorded geometry and its point locks', () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 },
+      { objectKind: 'circle', centerX: 9, centerY: 0, radius: 1 }
+    ]);
+    const [line, circle] = fixture.ids as unknown as [EntityIdT, EntityIdT];
+    const lockLine: SketchConstraintData = {
+      constraintKind: 'lock-entity',
+      objectId: line,
+      at: [0, 0, 4, 0]
+    };
+    expect(() => fixture.constrain({ ...lockLine, at: [0, 0, 4] })).toThrow(
+      'A locked line needs its 4 recorded finite values.'
+    );
+    expect(() =>
+      fixture.constrain({
+        constraintKind: 'lock-entity',
+        objectId: circle,
+        at: [9, 0, 0]
+      })
+    ).toThrow('A locked circle needs a positive radius.');
+    fixture.constrain(lockAt(line, 'start', 0, 0));
+    // A whole lock beside a point lock would hold that point twice.
+    expect(() => fixture.constrain(lockLine)).toThrow(/has a locked point/);
+    const sketchId = fixture.sketchId;
+    const pointLock = findSketch(fixture.manager.document, sketchId)!
+      .constraints![0]!.constraintId;
+    fixture.manager.execute(
+      composeCommands('Lock entity', [
+        commandFactories.deleteSketchConstraint({
+          sketchId,
+          constraintId: pointLock
+        }),
+        commandFactories.addSketchConstraint({
+          sketchId,
+          constraint: lockLine
+        })
+      ])
+    );
+    expect(() => fixture.constrain(lockLine)).toThrow(
+      'That entity is already locked.'
+    );
+    expect(() => fixture.constrain(lockAt(line, 'end', 4, 0))).toThrow(
+      'That point belongs to a locked entity. Unlock the entity first.'
+    );
+  });
+
+  /** The document with one sketch object's data patched, unvalidated. */
+  function patched(
+    document: ProjectDocument,
+    objectId: string,
+    patch: Record<string, unknown>
+  ): ProjectDocument {
+    const next = structuredClone(document);
+    const node = next.nodes[objectId as never] as unknown as {
+      data: Record<string, unknown>;
+    };
+    Object.assign(node.data, patch);
+    return next;
+  }
+
+  it('refuses the mirror sweep of a tiny locked arc too', async () => {
+    const fixture = lockedWhole({
+      objectKind: 'arc',
+      centerX: 0,
+      centerY: 0,
+      radius: 4e-7,
+      startAngleDeg: 0,
+      endAngleDeg: 90
+    });
+    const flipped = await adapter.solveSketch(
+      patched(fixture.manager.document, fixture.ids[0]!, { endAngleDeg: 270 }),
+      fixture.sketchId
+    );
+    expect(flipped.converged).toBe(false);
+    expect(flipped.classification).toBe('unsatisfied');
+  });
+
+  it('refuses a locked arc whose end settles on the mirror sweep', async () => {
+    // 0°→90°: the lock fixes the end's x (0); 270° has the same x and
+    // radius, so only the read-back tells the two sweeps apart.
+    const fixture = lockedWhole({
+      objectKind: 'arc',
+      centerX: 0,
+      centerY: 0,
+      radius: 5,
+      startAngleDeg: 0,
+      endAngleDeg: 90
+    });
+    const held = await solve(fixture);
+    expect(held.converged).toBe(true);
+    const flipped = await adapter.solveSketch(
+      patched(fixture.manager.document, fixture.ids[0]!, { endAngleDeg: 270 }),
+      fixture.sketchId
+    );
+    expect(flipped.converged).toBe(false);
+    expect(flipped.classification).toBe('unsatisfied');
+    const lockId = findSketch(fixture.manager.document, fixture.sketchId)!
+      .constraints![0]!.constraintId;
+    expect(
+      flipped.constraintResiduals.find((row) => row.constraintId === lockId)!
+        .maxResidual
+    ).toBeGreaterThan(5);
+  });
+
+  it('refuses a stored lock whose recorded geometry does not fit its entity', async () => {
+    const fixture = lockedWhole({
+      objectKind: 'line',
+      x1: 0,
+      y1: 0,
+      x2: 4,
+      y2: 0
+    });
+    const document = structuredClone(fixture.manager.document);
+    const constraint = findSketch(document, fixture.sketchId)!.constraints![0]!;
+    (constraint.data as { at: number[] }).at = [0, 0, 4];
+    await expect(
+      adapter.solveSketch(document, fixture.sketchId)
+    ).rejects.toThrow(/does not record its line's 4 values/);
+  });
+
+  it('refuses to lock a linked projection, which follows its model edge', () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 }
+    ]);
+    const document = patched(fixture.manager.document, fixture.ids[0]!, {
+      projection: { mode: 'linked' }
+    });
+    expect(() =>
+      addSketchConstraint(document, {
+        sketchId: fixture.sketchId,
+        constraint: {
+          constraintKind: 'lock-entity',
+          objectId: fixture.ids[0]!,
+          at: [0, 0, 4, 0]
+        }
+      })
+    ).toThrow(
+      'A linked projection follows its model edge. Unlink it to lock it.'
+    );
+  });
+
+  it('names a locked entity a parameter change would move', () => {
+    const fixture = lockedWhole({
+      objectKind: 'circle',
+      centerX: 0,
+      centerY: 0,
+      radius: 5
+    });
+    // The circle's radius now reads a parameter: `r = 5` keeps the lock,
+    // `r = 8` would grow the circle without a solve.
+    const document = patched(fixture.manager.document, fixture.ids[0]!, {
+      radius: 'r'
+    });
+    const sketch = findSketch(document, fixture.sketchId)!;
+    const withR = (r: number) => (value: number | string) =>
+      value === 'r' ? r : typeof value === 'number' ? value : undefined;
+    expect(movedEntityLock(document, sketch, withR(5), withR(5))).toBeNull();
+    expect(movedEntityLock(document, sketch, withR(5), withR(8))).toBe(
+      fixture.ids[0]
+    );
+    // A small move far from the origin still counts.
+    expect(
+      movedEntityLock(document, sketch, withR(1e8), withR(1e8 + 0.05))
+    ).toBe(fixture.ids[0]);
+    // An unrelated parameter edit passes even after the entity moved away
+    // from its recorded lock (say with its sketch).
+    const moved = patched(document, fixture.ids[0]!, { centerX: 10 });
+    expect(
+      movedEntityLock(
+        moved,
+        findSketch(moved, fixture.sketchId)!,
+        withR(5),
+        withR(5)
+      )
+    ).toBeNull();
+  });
+
+  it('needs schema v144: an older stamp refuses a document that holds one', () => {
+    const fixture = lockedWhole({
+      objectKind: 'line',
+      x1: 0,
+      y1: 0,
+      x2: 4,
+      y2: 0
+    });
+    const saved = JSON.parse(
+      JSON.stringify(fixture.manager.document)
+    ) as ProjectDocument;
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(144);
+    expect(normalizeDocument(saved)).toEqual(fixture.manager.document);
+    expect(() =>
+      normalizeDocument({
+        ...saved,
+        schemaVersion: 143 as typeof saved.schemaVersion
+      })
+    ).toThrow(/Sketch entity locks/);
   });
 });
 

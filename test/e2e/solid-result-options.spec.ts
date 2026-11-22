@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import {
   addPrimitiveFeature,
   addSketchFeature,
@@ -49,70 +49,107 @@ async function openSeeded(page: Page, document: ProjectDocument) {
   await page.getByRole('button', { name: 'New project' }).click();
 }
 
-test('subtracts while keeping the base body, then reopens the choice', async ({
-  page
-}) => {
-  test.setTimeout(120_000);
-  let document = createProjectDocument('Kept base', toUserId('user_e2e'));
-  for (const name of ['Left', 'Right']) {
-    document = addPrimitiveFeature(document, {
-      name,
-      primitiveKind: 'box',
-      dimensions: { width: 10, height: 10, depth: 10 }
-    });
+async function chooseKeepOriginals(bar: Locator, label: 'Base body' | 'None') {
+  const menu = bar.getByRole('combobox', { name: 'Keep originals' });
+  const segment = barChoice(bar, 'Keep originals', label);
+  await expect(menu.or(segment)).toBeVisible();
+  if (await menu.isVisible()) {
+    await menu.selectOption({ label });
+  } else {
+    await segment.click();
   }
-  document = transformBody(document, {
-    name: 'Offset Right',
-    targetBodyId: document.bodyOrder[1]!,
-    translation: { x: 5, y: 5, z: 0 }
-  }).document;
-  await openSeeded(page, document);
-  const canvas = page.locator('.viewer-host canvas');
-  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
-    timeout: 30_000
-  });
+}
 
-  // U09: Subtract runs in place; keeping the base is a rare choice behind
-  // the bar's Options menu.
-  await pressTool(page, /^Subtract \(X\)/);
-  await pickObjectsBody(page, 'Left');
-  await pickObjectsBody(page, 'Right');
-  const subtractBar = page.getByRole('group', { name: 'Subtract command' });
-  await subtractBar.locator('summary').click();
-  await subtractBar.getByRole('radio', { name: 'First' }).click();
-  await finishInPlaceCommand(page, 'Subtract');
+for (const [operation, key, volume] of [
+  ['Subtract', 'X', '750'],
+  ['Union', 'U', '1750']
+] as const) {
+  test(`${operation} shows its ordered operands and reopens the kept base`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    page.setDefaultTimeout(15_000);
+    let document = createProjectDocument('Kept base', toUserId('user_e2e'));
+    for (const name of ['Left', 'Right']) {
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      });
+    }
+    document = transformBody(document, {
+      name: 'Offset Right',
+      targetBodyId: document.bodyOrder[1]!,
+      translation: { x: 5, y: 5, z: 0 }
+    }).document;
+    await openSeeded(page, document);
+    const canvas = page.locator('.viewer-host canvas');
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+      timeout: 30_000
+    });
 
-  // Left stays beside the 1000 − 250 result; Right is consumed.
-  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
-    timeout: 30_000
-  });
-  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
-  const subtract = page
-    .locator('.feature-row-main', { hasText: 'Subtract' })
-    .last();
-  // U09 phase 7: the row re-arms the Subtract in place, its choice in
-  // Options; the row's Measurements read out the result.
-  await expectFeatureMeasurement(
-    page,
-    page.locator('.feature-row', { has: subtract }),
-    '750'
-  );
-  await subtract.click();
-  const editBar = page.getByRole('group', { name: 'Edit Subtract command' });
-  await editBar.locator('summary').click();
-  await expect(editBar.getByRole('radio', { name: 'First' })).toHaveAttribute(
-    'aria-checked',
-    'true'
-  );
+    await pressTool(page, new RegExp(`^${operation} \\(${key}\\)`));
+    await pickObjectsBody(page, 'Left');
+    await pickObjectsBody(page, 'Right');
+    const bar = page.getByRole('group', { name: `${operation} command` });
+    await expect(bar.getByRole('status')).toContainText('Keep originals: None');
+    const options = bar.getByLabel(`${operation} options`);
+    await options.click();
+    const operands = bar.getByRole('list', { name: 'Boolean operands' });
+    await expect(operands.getByRole('listitem')).toHaveText([
+      /Base · Left/,
+      /Tool · Right/
+    ]);
+    await operands
+      .getByRole('button', { name: /Remove 2 Tool · Right/ })
+      .click();
+    await expect(operands.getByRole('listitem')).toHaveCount(1);
+    await expect(bar.getByRole('button', { name: 'Done' })).toBeDisabled();
+    await options.click();
+    await pickObjectsBody(page, 'Right');
+    await options.click();
+    await expect(operands.getByRole('listitem')).toHaveCount(2);
+    await chooseKeepOriginals(bar, 'Base body');
+    await expect(bar.getByRole('status')).toContainText(
+      'Keep originals: Base body'
+    );
+    await finishInPlaceCommand(page, operation);
 
-  // Back to consuming both: only the result is left on screen.
-  await editBar.getByRole('radio', { name: 'None' }).click();
-  await editBar.locator('summary').click();
-  await finishInPlaceCommand(page, 'Edit Subtract');
-  await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
-    timeout: 30_000
+    // Left stays beside the result; Right is consumed.
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '2', {
+      timeout: 30_000
+    });
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    const feature = page
+      .locator('.feature-row-main', { hasText: operation })
+      .last();
+    await expectFeatureMeasurement(
+      page,
+      page.locator('.feature-row', { has: feature }),
+      volume
+    );
+    await feature.click();
+    const editBar = page.getByRole('group', {
+      name: `Edit ${operation} command`
+    });
+    await expect(editBar.getByRole('status')).toContainText(
+      'Keep originals: Base body'
+    );
+    await editBar.locator('summary').click();
+    await expect(
+      editBar
+        .getByRole('list', { name: 'Boolean operands' })
+        .getByRole('listitem')
+    ).toHaveText([/Base · Left/, /Tool · Right/]);
+    // Back to consuming both: only the result is left on screen.
+    await chooseKeepOriginals(editBar, 'None');
+    await editBar.locator('summary').click();
+    await finishInPlaceCommand(page, `Edit ${operation}`);
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
+      timeout: 30_000
+    });
   });
-});
+}
 
 test('switches an extrude to Intersect with the block it crosses', async ({
   page

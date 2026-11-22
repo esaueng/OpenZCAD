@@ -11,7 +11,10 @@ import {
   type SketchConstraintData,
   type SketchObjectData
 } from '@openzcad/shared';
-import { sketchDimensionAnnotations } from './dimensionAnnotations';
+import {
+  referenceLengthText,
+  sketchDimensionAnnotations
+} from './dimensionAnnotations';
 
 function fixture(
   objects: SketchObjectData[],
@@ -174,6 +177,102 @@ describe('persistent sketch dimensions', () => {
     );
     expect(updated[1]).toMatchObject({ id: 'sref_radius', label: '(R 4 mm)' });
     expect(JSON.stringify(objects)).toBe(before);
+  });
+
+  it('shows reference lengths in the chosen display unit and leaves driving labels alone', () => {
+    const { entries, constraints } = fixture([line], (sketch) => ({
+      constraintKind: 'distance',
+      a: { objectId: sketch.objectIds[0]!, point: 'start' },
+      b: { objectId: sketch.objectIds[0]!, point: 'end' },
+      value: 50.8
+    }));
+    const lineId = entries[0]!.id;
+    const refs = [
+      {
+        annotationId: toSketchReferenceAnnotationId('sref_inches'),
+        data: {
+          dimensionKind: 'distance' as const,
+          distanceMode: 'horizontal' as const,
+          a: { objectId: lineId as never, point: 'start' as const },
+          b: { objectId: lineId as never, point: 'end' as const }
+        }
+      }
+    ];
+    const resolve = (value: number | string) =>
+      typeof value === 'number' ? value : undefined;
+    const shown = (unit: 'document' | 'mm' | 'cm' | 'm' | 'inch') =>
+      sketchDimensionAnnotations(
+        entries,
+        constraints,
+        resolve,
+        'mm',
+        undefined,
+        refs,
+        [],
+        unit
+      ).map((annotation) => annotation.label);
+    const driving = shown('document')[0]!;
+    expect(shown('document')[1]).toMatch(/^\(H [\d.]+ mm\)$/);
+    const millimetres = Number(/H ([\d.]+) mm/.exec(shown('document')[1]!)![1]);
+    expect(shown('inch')).toEqual([
+      driving,
+      `(H ${referenceLengthText(millimetres, 'mm', 'inch')})`
+    ]);
+    expect(shown('mm')).toEqual(shown('document'));
+    // Display only: 25.4 mm reads 1 in and 2.54 cm; the document is untouched.
+    expect(referenceLengthText(25.4, 'mm', 'inch')).toBe('1 in');
+    expect(referenceLengthText(25.4, 'mm', 'cm')).toBe('2.54 cm');
+    expect(referenceLengthText(1, 'inch', 'mm')).toBe('25.4 mm');
+    expect(referenceLengthText(1500, 'mm', 'm')).toBe('1.5 m');
+    expect(referenceLengthText(3, 'inch', 'document')).toBe('3 in');
+    // An unknown document unit is shown as it is, never converted.
+    expect(referenceLengthText(3, 'furlong', 'mm')).toBe('3 furlong');
+  });
+  it('labels driving and following reference lengths in the display unit (I03)', () => {
+    const { entries, constraints } = fixture([line], (sketch) => ({
+      constraintKind: 'distance',
+      a: { objectId: sketch.objectIds[0]!, point: 'start' },
+      b: { objectId: sketch.objectIds[0]!, point: 'end' },
+      value: 50.8
+    }));
+    const lineId = entries[0]!.id;
+    const refs = [
+      {
+        annotationId: toSketchReferenceAnnotationId('sref_display'),
+        data: {
+          dimensionKind: 'distance' as const,
+          a: { objectId: lineId as never, point: 'start' as const },
+          b: { objectId: lineId as never, point: 'end' as const }
+        }
+      }
+    ];
+    const labels = (
+      displayUnits: 'mm' | 'inch' | undefined,
+      reference: 'document' | 'cm' = 'document'
+    ) =>
+      sketchDimensionAnnotations(
+        entries,
+        constraints,
+        (value) => (typeof value === 'number' ? value : undefined),
+        'mm',
+        undefined,
+        refs,
+        [],
+        reference,
+        displayUnits
+      ).map((annotation) => annotation.label);
+    // The stored 50.8 mm reads 2 in; the 3-4-5 line measures 5 mm.
+    expect(labels('inch')).toEqual([
+      '2 in',
+      `(${referenceLengthText(5, 'mm', 'inch')})`
+    ]);
+    // A reference unit chosen in Settings still wins over the document's.
+    expect(labels('inch', 'cm')[1]).toBe(
+      `(${referenceLengthText(5, 'mm', 'cm')})`
+    );
+    // Shown in its own unit, or with none given, nothing changes.
+    expect(labels('mm')).toEqual(labels(undefined));
+    expect(labels(undefined)).toEqual(['50.8 mm', '(5 mm)']);
   });
   it('keeps a stored label offset as geometry and parameters change', () => {
     const { entries, constraints } = fixture([line], (sketch) => ({

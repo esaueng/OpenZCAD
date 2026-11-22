@@ -18,6 +18,8 @@ export interface ValidatedFeatureCommitOptions {
     document: ProjectDocument,
     signal: AbortSignal
   ): Promise<ProjectDocument['derived']>;
+  /** Release the cancellable run's prepared worker after commit or abandonment. */
+  releaseCancellable?(signal: AbortSignal): void;
   /**
    * `derived` is the exact rebuild validation already produced for this
    * candidate; committing it alongside the command lets the caller render
@@ -191,6 +193,8 @@ export interface ValidatedFeatureRunOptions extends ValidatedFeatureTarget {
 }
 
 export interface ValidatedFeatureTransactionRunOptions {
+  /** Exact candidate check for this transaction, run under the commit lock. */
+  derive?: ValidatedFeatureCommitOptions['derive'];
   label: string;
   targets: readonly ValidatedFeatureTarget[];
   /** Additional exact checks for edits whose result is a history state. */
@@ -286,6 +290,7 @@ export function useValidatedFeatureCommit(
   }
 
   async function validateAndCommit(input: {
+    derive?: ValidatedFeatureCommitOptions['derive'];
     targets: readonly ValidatedFeatureTarget[];
     validateDerived?(derived: ProjectDocument['derived']): void;
     successMessage: string | (() => string);
@@ -365,11 +370,11 @@ export function useValidatedFeatureCommit(
           input.prebuilt.version === current.version
             ? input.prebuilt.derived
             : null;
-        derived =
-          prebuilt ??
-          (input.signal && host.deriveCancellable
-            ? await host.deriveCancellable(preview, input.signal)
-            : await host.derive(preview));
+        if (prebuilt) derived = prebuilt;
+        else if (input.signal && host.deriveCancellable)
+          derived = await host.deriveCancellable(preview, input.signal);
+        else if (input.derive) derived = await input.derive(preview);
+        else derived = await host.derive(preview);
         documentMoved = documentMovedFrom(current);
         if (
           !documentMoved ||
@@ -501,6 +506,7 @@ export function useValidatedFeatureCommit(
       }
       return 'rejected';
     } finally {
+      if (input.signal) host.releaseCancellable?.(input.signal);
       lock.release();
       host.onBusy(false);
     }
@@ -556,6 +562,7 @@ export function useValidatedFeatureCommit(
       runOptions: ValidatedFeatureTransactionRunOptions
     ): Promise<ValidatedFeatureOutcome> {
       return validateAndCommit({
+        derive: runOptions.derive,
         targets: runOptions.targets,
         validateDerived: runOptions.validateDerived,
         onFailure: runOptions.onFailure,

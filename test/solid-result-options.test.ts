@@ -228,7 +228,7 @@ describe('Stage 4 solid options: document contract', () => {
         targetBodyId: blockId
       })
     ).toThrow(/Unknown extrude operation "common"/);
-    // Through all stays a cut-only extent.
+    // Through all spans a target to cut or add to; intersect has none.
     expect(() =>
       extrudeSketch(document, {
         name: 'Through intersect',
@@ -239,7 +239,7 @@ describe('Stage 4 solid options: document contract', () => {
         endCondition: 'through-all',
         throughAllSide: 'forward'
       })
-    ).toThrow(/cut extrusion only/);
+    ).toThrow(/cut or an add only/);
   });
 });
 

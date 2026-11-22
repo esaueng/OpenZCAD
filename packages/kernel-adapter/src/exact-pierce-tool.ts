@@ -35,7 +35,9 @@ import {
   type Vec3
 } from '@openzcad/geometry';
 import type { FeatureNode, UnitSystem } from '@openzcad/shared';
-import { buildSweep } from './exact-profile-builders';
+import { markPierceTravel, buildSweep } from './exact-profile-builders';
+import { resolveExtrudeStartOffset } from './extrude-options';
+import { shiftBasisAlongNormal } from './exact-math';
 import { classifySolidPoint } from './exact-measure';
 import { isBuildCancelled } from './exact-cancellation';
 import { readFacePlaneFrame } from './exact-face-plane-frame';
@@ -480,11 +482,7 @@ function pierceBandClear(
   for (const solid of partnerSolids) {
     for (const face of kernel.getSolidFaces(solid)) {
       if (excluded.has(face)) continue;
-      if (
-        kernel.getFaceEdges(face).some((edge) =>
-          boundingEdges.has(edge)
-        )
-      ) {
+      if (kernel.getFaceEdges(face).some((edge) => boundingEdges.has(edge))) {
         continue;
       }
       let bounds: Float64Array;
@@ -661,7 +659,12 @@ function piercedFeatureNode(
   ) {
     return null;
   }
-  return { ...feature, data: { ...data, backDistance: travel } };
+  // Marked so a drafted tool keeps its one-sided taper carried across the
+  // start plane, as it always has: the travel is not a back side to draft.
+  return markPierceTravel({
+    ...feature,
+    data: { ...data, backDistance: travel }
+  });
 }
 
 /**
@@ -679,8 +682,13 @@ export function piercedExtrudeTool(
   const { kernel, document, scope, result } = ctx;
   if (feature.data.featureKind !== 'extrude') return null;
   const data: FeatureDataOf<'extrude'> = feature.data;
-  const plane = result.sketchBases.get(data.sketchId);
-  if (!plane) return null;
+  const sketchPlane = result.sketchBases.get(data.sketchId);
+  if (!sketchPlane) return null;
+  // F01 (v121): the start cap lies on the start plane; the twin's travel
+  // runs back across it, as the sweep builder places it.
+  const start = resolveExtrudeStartOffset(data, scope, document);
+  const plane =
+    start === 0 ? sketchPlane : shiftBasisAlongNormal(sketchPlane, start);
   const distance = resolveParamValue(
     data.distance,
     scope,
