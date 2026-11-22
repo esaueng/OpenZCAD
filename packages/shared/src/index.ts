@@ -555,6 +555,11 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+// v144 adds S07 entity locks (`lock-entity` sketch constraints): a whole
+// line, circle or arc held at a recorded position. An older client cannot
+// solve the relation, so it must refuse the document. Builds on v141; v142
+// and v143 are claimed by M03 per-vertex radii (#1914) and I03 unit
+// switching (#1915).
 // v145 adds S05 sketch pattern relations (`pattern` sketch constraints): a
 // linear or circular pattern's instance positions held by one relation. An
 // older client cannot solve it, so it must refuse the document. Builds on
@@ -2052,6 +2057,15 @@ export type SketchConstraintData =
    * the lock along; removing the constraint unlocks the point.
    */
   | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
+  /**
+   * S07 (v144): a whole line, circle or arc held where it was when the lock
+   * was made. `at` is that geometry in sketch coordinates — a line's
+   * `[x1, y1, x2, y2]`, a circle's `[centerX, centerY, radius]`, an arc's
+   * `[centerX, centerY, radius, startAngleDeg, endAngleDeg]` — so an edit
+   * that would move or resize it conflicts instead. Removing the constraint
+   * unlocks the entity.
+   */
+  | { constraintKind: 'lock-entity'; objectId: EntityId; at: number[] }
   /**
    * S05 (v145): a sketch pattern held as one relation. Each instance is the
    * source moved `step` steps: along the direction line by `spacing` a step
@@ -6134,7 +6148,8 @@ export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [
   'symmetric',
   'point-on-object',
   'midpoint',
-  'lock'
+  'lock',
+  'lock-entity'
 ];
 
 /**

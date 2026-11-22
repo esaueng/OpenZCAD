@@ -82,12 +82,13 @@ test('point relations arm from the rail and act on snap-point picks', async ({
   await expect(status).toContainText('Point unlocked.');
 
   // UX-2: the hover marker offers a midpoint, which is no stored point, so
-  // Lock names it instead of repeating its hint. Checked before any relation
-  // moves the drawn segments.
-  await pointTool('Lock');
+  // a point-only tool names it instead of repeating its hint. (Lock there
+  // now locks the whole line, below.) Checked before any relation moves the
+  // drawn segments.
+  await pointTool('Disconnect');
   await page.mouse.click((p2.x + p3.x) / 2, (p2.y + p3.y) / 2);
   await expect(status).toContainText(
-    "Lock can't use a midpoint: it is not a stored sketch point."
+    "Disconnect can't use a midpoint: it is not a stored sketch point."
   );
   await page.keyboard.press('Escape');
 
@@ -292,4 +293,99 @@ test('Symmetric mirrors a whole line about an axis in one edit', async ({
   expect(Number(image!.y2)).toBeCloseTo(end.y, 6);
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(async () => liveLines(page)).toEqual(before);
+});
+
+/** The palette's constraint rows, in list order. */
+async function constraintRows(page: Page): Promise<string[]> {
+  const palette = page.getByRole('button', {
+    name: 'Sketch palette',
+    exact: true
+  });
+  if ((await palette.getAttribute('aria-expanded')) !== 'true')
+    await palette.click();
+  return page
+    .locator('.sketch-palette .sketch-constraint-list > li')
+    .evaluateAll((rows) => rows.map((row) => row.getAttribute('aria-label')!));
+}
+
+/**
+ * Entity lock: Lock picked on a line away from its points holds the whole
+ * line, taking over a point lock already on it in the same edit, and a
+ * second Lock there unlocks it. Solver oracles for every kind live in
+ * test/sketch-constraint-set.test.ts.
+ */
+test('Lock holds a whole line, replacing its point lock, and unlocks it', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Entity lock');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(
+    page.getByRole('toolbar', { name: 'Sketch tools' })
+  ).toBeVisible();
+  await page.waitForTimeout(800);
+
+  const bounds = (await page.locator('.viewer-host canvas').boundingBox())!;
+  const at = (fx: number, fy: number) => ({
+    x: bounds.x + bounds.width * fx,
+    y: bounds.y + bounds.height * fy
+  });
+  const start = at(0.3, 0.6);
+  const end = at(0.55, 0.45);
+  await page.mouse.click(start.x, start.y);
+  await page.mouse.click(end.x, end.y);
+  await page.keyboard.press('Escape');
+  await expect.poll(async () => (await liveLines(page)).length).toBe(1);
+  const [drawn] = await liveLines(page);
+
+  const relations = page.getByRole('toolbar', { name: 'Relations' });
+  const status = page.getByRole('contentinfo');
+  const lockTool = async () => {
+    await relations
+      .getByRole('button', { name: 'Point relations', exact: true })
+      .click();
+    await relations
+      .getByRole('group', { name: 'Point relations' })
+      .getByRole('button', { name: 'Lock', exact: true })
+      .click();
+  };
+  await lockTool();
+  await page.mouse.click(start.x, start.y);
+  await expect(status).toContainText('Lock constraint added');
+  await expect
+    .poll(() => constraintRows(page))
+    .toEqual([expect.stringMatching(/^Lock · .+ of /)]);
+
+  // Away from its points: the whole line, in place of the point lock.
+  const middle = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  await lockTool();
+  await page.mouse.click(middle.x, middle.y);
+  await expect(status).toContainText('Lock constraint added');
+  await expect
+    .poll(() => constraintRows(page))
+    .toEqual([
+      expect.stringMatching(/^Lock · Line( \d+)?( · fully defined)?$/)
+    ]);
+  expect((await liveLines(page))[0]).toEqual(drawn);
+
+  await lockTool();
+  await page.mouse.click(middle.x, middle.y);
+  await expect(status).toContainText('Entity unlocked.');
+  await expect.poll(() => constraintRows(page)).toEqual([]);
+
+  // Undo brings the whole lock back; undo again, the point lock.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect
+    .poll(() => constraintRows(page))
+    .toEqual([
+      expect.stringMatching(/^Lock · Line( \d+)?( · fully defined)?$/)
+    ]);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect
+    .poll(() => constraintRows(page))
+    .toEqual([expect.stringMatching(/^Lock · .+ of /)]);
 });

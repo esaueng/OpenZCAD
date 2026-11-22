@@ -145,6 +145,15 @@ export function assertWrapSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 111, 'Wraps');
 }
 
+/** S07 (schema v144): whole-entity locks, wherever a sketch or command holds one. */
+export function assertEntityLockSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 144, 'Sketch entity locks');
+}
+
+function isEntityLock(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'lock-entity';
+}
+
 /** S05 (schema v145): pattern relations, wherever a sketch or command holds one. */
 export function assertPatternRelationSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 145, 'Sketch pattern relations');
@@ -1236,6 +1245,11 @@ export function assertDocumentContentCommandSchema(
     }
     if (
       command.kind === 'sketch.constraint.add' &&
+      isEntityLock(command.payload.constraint)
+    )
+      assertEntityLockSchema(document.schemaVersion);
+    if (
+      command.kind === 'sketch.constraint.add' &&
       isPatternRelation(command.payload.constraint)
     )
       assertPatternRelationSchema(document.schemaVersion);
@@ -1571,14 +1585,18 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       Array.isArray(node.constraints) &&
       node.constraints.some(
         (constraint) =>
-          record(constraint) &&
-          isCurvedTangent(
-            constraint.data,
-            document.nodes
-          )
+          record(constraint) && isCurvedTangent(constraint.data, document.nodes)
       )
     )
       assertCurvedTangentSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isEntityLock(constraint.data)
+      )
+    )
+      assertEntityLockSchema(document.schemaVersion);
     if (
       node.kind === 'sketch' &&
       Array.isArray(node.constraints) &&

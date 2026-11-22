@@ -210,6 +210,75 @@ describe('sketch constraint picking', () => {
     ).toMatch(/^Symmetric can't use the sketch origin/);
   });
 
+  it('S07: Lock takes a snap point or a whole line, circle or arc', () => {
+    const { document, sketch, lineA, circle, arc, rectangle } = fixture();
+    expect(constraintPickKind('lock', [])).toBe('either');
+    expect(refusePick(document, sketch, 'lock', [], object(lineA))).toBeNull();
+    expect(refusePick(document, sketch, 'lock', [], object(arc))).toBeNull();
+    expect(refusePick(document, sketch, 'lock', [], object(rectangle))).toBe(
+      'Lock holds a whole line, circle or arc; lock any other entity by its points.'
+    );
+    const resolve = (value: unknown) =>
+      value === 'r' ? 1.5 : typeof value === 'number' ? value : undefined;
+    expect(
+      buildConstraint(
+        document,
+        sketch,
+        'lock',
+        [object(circle)],
+        undefined,
+        resolve
+      )
+    ).toEqual({
+      data: {
+        constraintKind: 'lock-entity',
+        objectId: circle,
+        at: [20, 0, 1.5]
+      }
+    });
+    expect(
+      buildConstraint(
+        document,
+        sketch,
+        'lock',
+        [object(arc)],
+        undefined,
+        resolve
+      )
+    ).toEqual({
+      data: {
+        constraintKind: 'lock-entity',
+        objectId: arc,
+        at: [28, 0, 2, 0, 90]
+      }
+    });
+    // A radius that does not resolve cannot be recorded.
+    expect(
+      buildConstraint(
+        document,
+        sketch,
+        'lock',
+        [object(circle)],
+        undefined,
+        () => undefined
+      )
+    ).toEqual({
+      error: 'Lock needs a line, circle or arc whose dimensions resolve.'
+    });
+    expect(
+      describeConstraint(
+        { constraintKind: 'lock-entity', objectId: lineA as EntityId, at: [] },
+        () => 'Line 1'
+      )
+    ).toBe('Lock · Line 1');
+    expect(
+      constraintReferencesObject(
+        { constraintKind: 'lock-entity', objectId: lineA as EntityId, at: [] },
+        lineA
+      )
+    ).toBe(true);
+  });
+
   it('S07: two mirrored lines pair the ends nearest their images', () => {
     const { document, sketchId } = addSketchFeature(
       createProjectDocument('Pairs', toUserId('user_sketch')),
