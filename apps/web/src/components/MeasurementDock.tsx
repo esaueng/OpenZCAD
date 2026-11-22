@@ -23,13 +23,22 @@ import type {
 const MODE_LABELS: Record<MeasurementMode, string> = {
   smart: 'Smart',
   distance: 'Distance',
-  angle: 'Angle'
+  angle: 'Angle',
+  maximum: 'Maximum',
+  central: 'Central',
+  parallel: 'Parallel'
 };
 
 const MODE_INSTRUCTIONS: Record<MeasurementMode, string> = {
   smart: 'Pick an edge, face, hole, or body to inspect it.',
   distance: 'Pick two targets. Circles and cylinders use their exact centers.',
-  angle: 'Pick two straight edges, circular axes or planar faces.'
+  angle: 'Pick two straight edges, circular axes or planar faces.',
+  maximum:
+    'Pick two points, straight edges or full circles: the farthest they are apart.',
+  central:
+    'Pick a circle, arc, cylinder or hole, then a target: the distance from its center or axis.',
+  parallel:
+    'Pick two parallel edges, faces or axes, or two concentric circles or cylinders.'
 };
 
 /** Decimal places the dock offers: everything a stored record may carry. */

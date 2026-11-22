@@ -62,6 +62,18 @@ function renderDock(
 }
 
 describe('MeasurementDock', () => {
+  it('offers maximum, central and parallel distances with their instructions (M13)', () => {
+    const { rerender, props } = renderDock();
+    const modes = screen.getByRole('group', { name: 'Measurement type' });
+    expect(
+      Array.from(modes.querySelectorAll('button')).map((b) => b.textContent)
+    ).toEqual(['Smart', 'Distance', 'Angle', 'Maximum', 'Central', 'Parallel']);
+    fireEvent.click(screen.getByRole('button', { name: 'Parallel' }));
+    expect(props.onMode).toHaveBeenLastCalledWith('parallel');
+    rerender(<MeasurementDock {...props} mode="central" />);
+    expect(screen.getByText(/distance from its center or axis/)).toBeVisible();
+  });
+
   it('marks saved rows updating and disables copies and CSV while analysis is pending', () => {
     vi.useFakeTimers();
     const { props, container } = renderDock({ geometryPending: true });

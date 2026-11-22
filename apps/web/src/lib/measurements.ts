@@ -12,6 +12,12 @@ import type {
 } from '@openzcad/shared';
 import { millimetresPerUnit } from '@openzcad/shared';
 import {
+  centralDistance,
+  maximumDistance,
+  parallelDistance,
+  type MeasureEntity
+} from './measureDistances';
+import {
   edgeLengthMeasurement,
   topologySelectionLabel
 } from './topologyLabels';
@@ -31,7 +37,43 @@ import {
   type AngleMeasurement
 } from './measurementGeometry';
 
-export type MeasurementMode = 'smart' | 'distance' | 'angle';
+export type MeasurementMode =
+  | 'smart'
+  | 'distance'
+  | 'angle'
+  /** M13: the farthest two picks are apart. */
+  | 'maximum'
+  /** M13: from a circle's centre or a cylinder's axis to the other pick. */
+  | 'central'
+  /** M13: between parallel edges, faces or axes, or concentric radii. */
+  | 'parallel';
+
+/** M13: the distance kinds each two-pick entity mode records. */
+export const ENTITY_DISTANCE_KINDS = {
+  maximum: 'max-distance',
+  central: 'central-distance',
+  parallel: 'parallel-distance'
+} as const;
+
+export type EntityDistanceMode = keyof typeof ENTITY_DISTANCE_KINDS;
+export type EntityDistanceKind =
+  (typeof ENTITY_DISTANCE_KINDS)[EntityDistanceMode];
+
+export function isEntityDistanceMode(
+  mode: MeasurementMode
+): mode is EntityDistanceMode {
+  return mode === 'maximum' || mode === 'central' || mode === 'parallel';
+}
+
+export function isEntityDistanceKind(
+  kind: MeasurementKind
+): kind is EntityDistanceKind {
+  return (
+    kind === 'max-distance' ||
+    kind === 'central-distance' ||
+    kind === 'parallel-distance'
+  );
+}
 
 export type MeasurementKind =
   | 'edge-length'
@@ -40,6 +82,10 @@ export type MeasurementKind =
   | 'face-area'
   | 'body'
   | 'distance'
+  /** M13: maximum, central and parallel distances; two targets each. */
+  | 'max-distance'
+  | 'central-distance'
+  | 'parallel-distance'
   | 'angle'
   /**
    * A 3-point angle with the vertex at the middle pick. Three targets, unlike
@@ -175,6 +221,9 @@ function annotationGraphic(
 ): MeasurementViewportAnnotation['graphic'] {
   switch (kind) {
     case 'distance':
+    case 'max-distance':
+    case 'central-distance':
+    case 'parallel-distance':
     case 'edge-length':
     case 'edge-total':
       return 'span';
@@ -1201,6 +1250,160 @@ export function createDistanceMeasurement(
 }
 
 /**
+ * M13: what a target is, geometrically, for maximum, central and parallel
+ * distances, read from the body's current topology by identity. A notable
+ * point (a vertex or midpoint pick) is that point; a straight edge is its
+ * segment, a circular one its circle; a planar face its plane, a cylinder
+ * its axis and radius. Null for a target with no such reading (a body).
+ */
+function measureEntityOf(
+  bodies: readonly BodyRepresentation[],
+  target: MeasurementTarget
+): MeasureEntity | null {
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body) return null;
+  if (
+    target.point &&
+    (target.semantic === 'vertex-start' ||
+      target.semantic === 'vertex-end' ||
+      target.semantic === 'edge-midpoint')
+  )
+    return { type: 'point', point: target.point };
+  const selection = selectionForTarget(target);
+  if (target.kind === 'edge') {
+    const edge = findEdge(body, selection);
+    if (!edge) return null;
+    const circle = edge.curve?.circle;
+    if (circle) {
+      const ends = edgeEndpoints(edge);
+      const axis = unitVector(circle.axis);
+      if (!axis) return null;
+      return {
+        type: 'circle',
+        center: circle.center,
+        axis,
+        radius: circle.radius,
+        closed: !!ends && distance(ends[0], ends[1]) <= 1e-9 * circle.radius
+      };
+    }
+    if (edge.curve?.type === 'LINE') {
+      const ends = edgeEndpoints(edge);
+      return ends ? { type: 'segment', start: ends[0], end: ends[1] } : null;
+    }
+    return null;
+  }
+  if (target.kind === 'face') {
+    const geometry = findFace(body, selection)?.geometry;
+    if (!geometry) return null;
+    if (geometry.surfaceType === 'plane' && geometry.normal) {
+      const normal = unitVector(geometry.normal);
+      const point = geometry.centroid ?? geometry.center;
+      return normal && point ? { type: 'plane', point, normal } : null;
+    }
+    if (
+      geometry.surfaceType === 'cylinder' &&
+      geometry.axisStart &&
+      geometry.axisEnd &&
+      geometry.radius !== undefined
+    ) {
+      const axis = unitVector({
+        x: geometry.axisEnd.x - geometry.axisStart.x,
+        y: geometry.axisEnd.y - geometry.axisStart.y,
+        z: geometry.axisEnd.z - geometry.axisStart.z
+      });
+      return axis
+        ? {
+            type: 'cylinder',
+            origin: geometry.axisStart,
+            axis,
+            radius: geometry.radius
+          }
+        : null;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unitVector(value: Vector3): Vector3 | null {
+  const size = Math.hypot(value.x, value.y, value.z);
+  return size > 0
+    ? vector(value.x / size, value.y / size, value.z / size)
+    : null;
+}
+
+const ENTITY_DISTANCE_LABELS: Record<EntityDistanceMode, string> = {
+  maximum: 'Maximum distance',
+  central: 'Central distance',
+  parallel: 'Parallel distance'
+};
+
+/**
+ * M13: a maximum, central or parallel distance between two picks, in
+ * closed form from the picks' exact geometry, or the reason there is none.
+ * Exact only when both picks are; the span drawn is the one measured.
+ */
+export function createEntityDistanceMeasurement(
+  mode: EntityDistanceMode,
+  bodies: readonly BodyRepresentation[],
+  first: MeasurementTarget,
+  second: MeasurementTarget,
+  sourceRevision: number,
+  sourceUnit: UnitSystem
+): Measurement | { refused: string } {
+  const a = measureEntityOf(bodies, first);
+  const b = measureEntityOf(bodies, second);
+  if (!a || !b)
+    return {
+      refused:
+        'Pick edges, faces, holes or points: a whole body has no single geometry to measure from.'
+    };
+  const size = Math.max(
+    ...bodies
+      .filter(
+        (body) => body.bodyId === first.bodyId || body.bodyId === second.bodyId
+      )
+      .map((body) => distance(body.bbox.min, body.bbox.max)),
+    1
+  );
+  let answer: ReturnType<typeof maximumDistance>;
+  if (mode === 'maximum') answer = maximumDistance(a, b);
+  else if (mode === 'parallel') answer = parallelDistance(a, b, size);
+  else {
+    if (!first.point || !second.point)
+      return { refused: 'Those picks have no point to measure to.' };
+    answer = centralDistance(a, first.point, b, second.point);
+  }
+  if ('refused' in answer) return answer;
+  const label = ENTITY_DISTANCE_LABELS[mode];
+  const kind = ENTITY_DISTANCE_KINDS[mode];
+  return {
+    id: `${kind}:${targetKey(first)}:${targetKey(second)}`,
+    kind,
+    label: `${first.label} ↔ ${second.label}`,
+    targets: [first, second],
+    result: {
+      value: answer.value,
+      dimension: 'length',
+      secondary: {
+        label: answer.note ? `${label}, ${answer.note}` : label,
+        value: answer.value,
+        dimension: 'length'
+      }
+    },
+    quality: worstQuality([first.quality, second.quality]),
+    status: 'current',
+    sourceRevision,
+    sourceUnit,
+    visible: true,
+    annotation: {
+      anchor: midpoint(answer.from, answer.to),
+      segments: [{ start: answer.from, end: answer.to }]
+    }
+  };
+}
+
+/**
  * Picks the angle convention the pair of picks actually supports.
  *
  * A face target carries an outward normal, which is directed; an edge target
@@ -1550,7 +1753,11 @@ function hasValidTargetArity(measurement: Measurement): boolean {
       return false;
     }
   }
-  if (measurement.kind === 'distance' || measurement.kind === 'angle') {
+  if (
+    measurement.kind === 'distance' ||
+    measurement.kind === 'angle' ||
+    isEntityDistanceKind(measurement.kind)
+  ) {
     return measurement.targets.length === 2;
   }
   if (measurement.kind === 'point-angle') {
@@ -1591,7 +1798,9 @@ export function refreshMeasurements(
       };
     }
     const purpose: MeasurementMode =
-      measurement.kind === 'distance' || measurement.kind === 'point-angle'
+      measurement.kind === 'distance' ||
+      measurement.kind === 'point-angle' ||
+      isEntityDistanceKind(measurement.kind)
         ? 'distance'
         : measurement.kind === 'angle'
           ? 'angle'
@@ -1626,7 +1835,20 @@ export function refreshMeasurements(
     }
     const resolved = targets as MeasurementTarget[];
     let refreshed: Measurement | null = null;
-    if (measurement.kind === 'distance') {
+    if (isEntityDistanceKind(measurement.kind)) {
+      const entityMode = (
+        Object.keys(ENTITY_DISTANCE_KINDS) as EntityDistanceMode[]
+      ).find((mode) => ENTITY_DISTANCE_KINDS[mode] === measurement.kind)!;
+      const made = createEntityDistanceMeasurement(
+        entityMode,
+        bodies,
+        resolved[0]!,
+        resolved[1]!,
+        sourceRevision,
+        measurement.sourceUnit
+      );
+      refreshed = 'refused' in made ? null : made;
+    } else if (measurement.kind === 'distance') {
       refreshed = createDistanceMeasurement(
         resolved[0]!,
         resolved[1]!,
@@ -1862,6 +2084,9 @@ export function formatMeasurement(
     // 30 degree wedge and the angle between its normals are both true, and
     // they differ by 120.
     detail = `Angle ${ANGLE_CONVENTION_LABELS[measurement.angleConvention]}`;
+  } else if (isEntityDistanceKind(measurement.kind) && result.secondary) {
+    // Named beside the figure: "3 mm" alone does not say it is a maximum.
+    detail = result.secondary.label;
   } else if (measurement.kind === 'distance' && result.components) {
     const component = (value: number) =>
       fixed(

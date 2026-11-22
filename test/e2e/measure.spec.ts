@@ -369,3 +369,47 @@ test('measurements stay with their own project across a switch', async ({
     page.getByLabel('Measurement workbench').getByRole('listitem')
   ).toHaveText(recorded!);
 });
+
+/**
+ * M13: Maximum, Central and Parallel distances are their own measure modes.
+ * Two straight box edges have a closed-form maximum (reached at their ends),
+ * recorded and named as one; Central refuses two picks with no centre or
+ * axis and keeps the first pick.
+ */
+test(
+  'Maximum records the farthest two edges are apart, and Central says what it needs',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await createBox(page, 'Measure Maximum');
+
+    await switchWorkspace(page, 'View');
+    await armMeasure(page);
+    const workbench = page.getByLabel('Measurement workbench');
+    await workbench.getByRole('button', { name: 'Maximum' }).click();
+    await expect(workbench).toContainText('the farthest they are apart');
+    await setSelectionFilter(page, 'Edge');
+    const status = page.getByRole('group', { name: 'Workspace status' });
+
+    const first = await locateEdge(page);
+    const second = await locateEdge(page, { exclude: [first.topologyId] });
+    await page.mouse.click(first.x, first.y);
+    await expect(
+      status.getByText(/ selected · pick the second target/)
+    ).toBeVisible();
+    await page.mouse.click(second.x, second.y);
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+    await expect(workbench.getByRole('listitem')).toContainText(
+      'Maximum distance'
+    );
+
+    // Central needs a circle, arc, cylinder or hole: two straight edges are
+    // refused by name and the first pick stays.
+    await workbench.getByRole('button', { name: 'Central' }).click();
+    await page.mouse.click(first.x, first.y);
+    await page.mouse.click(second.x, second.y);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Central distance needs a circle, arc, cylinder or hole to measure from.'
+    );
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+  }
+);
