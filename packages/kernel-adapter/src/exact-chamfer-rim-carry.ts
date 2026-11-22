@@ -34,7 +34,9 @@
  * prove refuses, typed, rather than fall through to the kernel move that
  * builds the wrong body.
  */
+import { findFeature, resolveParamValue } from '@openzcad/document-core';
 import type { Vec3 } from '@openzcad/geometry';
+import type { FeatureId, ProjectDocument } from '@openzcad/shared';
 import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
@@ -58,6 +60,9 @@ export const OFFSET_FACE_CHAMFER_RIM_NOT_CARRIED =
   'offset_face_chamfer_rim_not_carried';
 
 type Point = [number, number, number];
+
+/** A chamfer's two setbacks, in either order. */
+export type ChamferSetback = readonly [number, number];
 type Surface = Arena['faces'][number]['surface'] & {
   Torus?: { z_axis?: Point };
 };
@@ -181,7 +186,8 @@ function chamferBand(
   kernel: RemusKernel,
   solid: number,
   face: number,
-  normal: Vec3
+  normal: Vec3,
+  setbacks: readonly ChamferSetback[]
 ): number[] | null {
   const edgesOf = new Map<number, number[]>();
   const owners = new Map<number, number[]>();
@@ -219,7 +225,128 @@ function chamferBand(
       if (!inBand.has(other) && role(other) !== 'wall') return null;
     }
   }
+  // A drafted section standing on walls is the same shape as a chamfer
+  // band; only history tells them apart. Carry a band only when every face
+  // of it has the setbacks of a chamfer the document applied.
+  const capPoint = edgeEnds(kernel, edgesOf.get(face)![0]!)[0];
+  const inward = scale(normal, -1);
+  for (const f of band) {
+    const setback = bandSetback(
+      kernel,
+      f,
+      edgesOf.get(f)!,
+      normal,
+      capPoint,
+      inward
+    );
+    if (!setback || !setbacks.some((known) => sameSetback(known, setback)))
+      return null;
+  }
   return band;
+}
+
+function edgeEnds(kernel: RemusKernel, edge: number): [Vec3, Vec3] {
+  const v = kernel.getEdgeVertices(edge);
+  return [
+    { x: v[0]!, y: v[1]!, z: v[2]! },
+    { x: v[3]!, y: v[4]!, z: v[5]! }
+  ];
+}
+
+/**
+ * A chamfer face's [rise up the wall, inset across the cap], or null. The
+ * rise is its height above the cap; the inset follows from the plane's tilt,
+ * or from a cone's two rim radii.
+ */
+function bandSetback(
+  kernel: RemusKernel,
+  face: number,
+  edges: readonly number[],
+  normal: Vec3,
+  capPoint: Vec3,
+  inward: Vec3
+): ChamferSetback | null {
+  const points = edges.flatMap((edge) => edgeEnds(kernel, edge));
+  if (points.length === 0) return null;
+  const rise = Math.max(
+    ...points.map((p) => dot(subtract(p, capPoint), inward))
+  );
+  if (!(rise > GEOMETRY_EPSILON)) return null;
+  if (surfaceTypeOf(kernel, face) === 'plane') {
+    const m = finiteVec3(Array.from(kernel.getFaceNormal(face)));
+    if (!m) return null;
+    const tilt = dot(m, normal);
+    return [rise, (rise * tilt) / Math.sqrt(1 - tilt * tilt)];
+  }
+  try {
+    const params = JSON.parse(kernel.getAnalyticSurfaceParams(face)) as {
+      apex?: number[];
+      axis?: number[];
+    };
+    const apex = finiteVec3(params.apex);
+    const axis = unitOf(params.axis);
+    if (!apex || !axis) return null;
+    const radii = points.map((p) => across(subtract(p, apex), axis));
+    return [rise, Math.max(...radii) - Math.min(...radii)];
+  } catch {
+    return null;
+  }
+}
+
+function sameSetback(a: ChamferSetback, b: ChamferSetback): boolean {
+  const close = (x: number, y: number) =>
+    Math.abs(x - y) <= 1e-6 * Math.max(1, Math.abs(x), Math.abs(y));
+  return (
+    (close(a[0], b[0]) && close(a[1], b[1])) ||
+    (close(a[0], b[1]) && close(a[1], b[0]))
+  );
+}
+
+/**
+ * The [first, second] setbacks of every chamfer feature that precedes
+ * `featureId` in the document's history, resolved in `scope`. A chamfer
+ * whose sizes do not resolve contributes nothing.
+ */
+export function chamferSetbacksBefore(
+  document: ProjectDocument,
+  featureId: FeatureId,
+  scope: Record<string, number>
+): ChamferSetback[] {
+  const setbacks: ChamferSetback[] = [];
+  for (const id of document.featureOrder) {
+    if (id === featureId) break;
+    const data = findFeature(document, id)?.data;
+    if (data?.featureKind !== 'chamfer') continue;
+    try {
+      const first = resolveParamValue(
+        data.distance,
+        scope,
+        'distance',
+        document.units
+      );
+      const second =
+        data.distance2 !== undefined
+          ? resolveParamValue(data.distance2, scope, 'distance', document.units)
+          : data.angleDeg !== undefined
+            ? first *
+              Math.tan(
+                (resolveParamValue(
+                  data.angleDeg,
+                  scope,
+                  'angle',
+                  document.units
+                ) *
+                  Math.PI) /
+                  180
+              )
+            : first;
+      if (Number.isFinite(first) && Number.isFinite(second))
+        setbacks.push([first, second]);
+    } catch {
+      // An unresolvable chamfer failed its own build; it made no band.
+    }
+  }
+  return setbacks;
 }
 
 /**
@@ -411,8 +538,27 @@ function carryRim(
       .flatMap((edge) => owners.get(edge)!)
       .filter((f) => !moved.has(f))
   );
+  // A wall within the analytic match of square still tilts: sliding the
+  // rim along it by the offset would leave the rim that far off its wall.
+  const driftLimit =
+    0.1 *
+    Math.min(
+      ...[...movedVertices].map((v) => arena.vertices[v]!.tolerance),
+      1e-7
+    );
   for (const wall of walls) {
-    if (!slidesAlong(arena.faces[wall]!.surface, normal)) {
+    const surface = arena.faces[wall]!.surface;
+    const lean = surface.Plane
+      ? Math.abs(dot(unitOf(surface.Plane.normal) ?? normal, normal))
+      : surface.Cylinder
+        ? across(normal, unitOf(surface.Cylinder.axis) ?? { x: 0, y: 0, z: 0 })
+        : Infinity;
+    if (!(lean * Math.abs(offset) <= driftLimit)) {
+      throw new CarryDeclined(
+        'a wall leans too far off the face normal to slide the chamfer along it'
+      );
+    }
+    if (!slidesAlong(surface, normal)) {
       throw new CarryDeclined(
         'the chamfer meets a wall that is not straight along the face normal'
       );
@@ -530,9 +676,12 @@ export function tryCarryChamferRim(
   kernel: RemusKernel,
   solid: number,
   face: number,
-  offset: number
+  offset: number,
+  /** The setbacks of the chamfers in this edit's history. */
+  setbacks: readonly ChamferSetback[]
 ): { solid: number; relation: RemusMoveFacesRelation } | null {
   if (
+    setbacks.length === 0 ||
     !Number.isFinite(offset) ||
     Math.abs(offset) <= GEOMETRY_EPSILON ||
     surfaceTypeOf(kernel, face) !== 'plane'
@@ -541,7 +690,7 @@ export function tryCarryChamferRim(
   }
   const normal = finiteVec3(Array.from(kernel.getFaceNormal(face)));
   if (!normal) return null;
-  if (chamferBand(kernel, solid, face, normal) === null) return null;
+  if (chamferBand(kernel, solid, face, normal, setbacks) === null) return null;
   let carried: { solid: number; relation: RemusMoveFacesRelation } | null;
   try {
     carried = editNativeArena(kernel, solid, face, (probe, arena, cap) =>

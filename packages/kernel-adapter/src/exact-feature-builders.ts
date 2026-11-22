@@ -1,3 +1,4 @@
+import { chamferSetbacksBefore } from './exact-chamfer-rim-carry';
 import type { PatternOverlapWorkers } from './pattern-overlap-workers';
 import {
   faceReferenceRepairCandidate,
@@ -491,7 +492,10 @@ function buildDirectEditFeature(
     scope,
     feature.featureId,
     deferOutputLineage,
-    (message) => raiseFeatureWarning(result, feature, message, 'advisory')
+    (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
+    data.operation.kind === 'offset-face'
+      ? chamferSetbacksBefore(document, feature.featureId, scope)
+      : []
   );
   if (deferOutputLineage) {
     result.shapes.set(data.targetBodyId, edited);

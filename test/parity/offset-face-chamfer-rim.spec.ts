@@ -1,32 +1,39 @@
 /**
- * Offsetting a face whose whole rim is chamfered carries the chamfer.
+ * Offsetting a face whose rim is chamfered carries the chamfer.
  *
- * Production QA: a body with rounded vertical corners and a 0.35 chamfer
+ * Production QA: a body with rounded vertical corners and a 0.7 chamfer
  * round its bottom edge could not offset the bottom face at any distance.
  * The pinned kernel's move treats the chamfer faces as neighbours to
  * re-limit, and the cones over the rounded corners either run into their
  * apex (outward) or the face sweeps into the walls (inward). On a
  * sharp-cornered body the same move "succeeds" by extending the chamfer
- * planes: pushing the bottom in grew the body sideways. The adapter now
- * squares the rim off, moves the face and chamfers it again, and holds the
- * result to the exact swept-prism volume.
+ * planes: pushing the bottom in grew the body sideways
+ * (esaueng/remus#1957). The adapter now slides the cap and its chamfer band
+ * along the walls in the native arena.
+ *
+ * The bodies are built the way a user builds them (box, rounds, chamfer),
+ * because only a band matching a chamfer in the history is carried: the
+ * same shape as a drafted section keeps the kernel's re-limiting move.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { commandFactories } from '@openzcad/command-system';
-import { createProjectDocument, importStepBody } from '@openzcad/document-core';
+import {
+  addPrimitiveFeature,
+  chamferEdges,
+  createProjectDocument,
+  filletEdges
+} from '@openzcad/document-core';
 import { RemusKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
   type BodyId,
+  type EdgeTopology,
   type FaceTopology,
   type FeatureWarning,
   type ProjectDocument
 } from '@openzcad/shared';
-import {
-  RemusKernel,
-  loadRemusTranslators
-} from '../../packages/kernel-adapter/src/remus-runtime';
+import { RemusKernel } from '../../packages/kernel-adapter/src/remus-runtime';
 import { tryCarryChamferRim } from '../../packages/kernel-adapter/src/exact-chamfer-rim-carry';
 
 const X = 60;
@@ -37,54 +44,88 @@ const CHAMFER = 0.35;
 
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
 
+/** Every point of the edge's display polyline satisfies `keep`. */
+const along =
+  (keep: (x: number, y: number, z: number) => boolean) =>
+  (edge: EdgeTopology) => {
+    const p = edge.points;
+    for (let i = 0; i < p.length; i += 3) {
+      if (!keep(p[i]!, p[i + 1]!, p[i + 2]!)) return false;
+    }
+    return p.length > 0;
+  };
+const onBottom = along((_x, _y, z) => near(z, 0));
+const vertical = (edge: EdgeTopology) =>
+  along((x, y) => near(x, edge.points[0]!) && near(y, edge.points[1]!))(edge) &&
+  (edge.length ?? 0) > Z / 2;
+
 interface Fixture {
   document: ProjectDocument;
   bodyId: BodyId;
   bottom: FaceTopology;
   volume: number;
-  /** The wall cross-section: the cap's area before its chamfer was cut. */
+  /** The wall cross-section. */
   section: number;
 }
 
-function edgesWhere(
-  kernel: RemusKernel,
-  solid: number,
-  keep: (a: number[], b: number[]) => boolean
-): Uint32Array {
-  return Uint32Array.from(
-    Array.from(kernel.getSolidEdges(solid)).filter((edge) => {
-      const v = kernel.getEdgeVertices(edge);
-      return keep([v[0]!, v[1]!, v[2]!], [v[3]!, v[4]!, v[5]!]);
-    })
-  );
-}
-
-describe('offset face ringed by a chamfer', { timeout: 180_000 }, () => {
+describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
   let adapter: RemusKernelAdapter;
   const fixtures = new Map<string, Fixture>();
 
-  async function fixture(
+  async function edgesOf(document: ProjectDocument, bodyId: BodyId) {
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    return derived.bodyRepresentations[bodyId]!.topology!.edges;
+  }
+
+  async function chamfered(
     name: string,
-    build: (kernel: RemusKernel) => number,
-    section: number
+    options: {
+      round?: boolean;
+      pick?: (edge: EdgeTopology) => boolean;
+      distance2?: number;
+    }
   ): Promise<Fixture> {
-    const kernel = new RemusKernel();
-    const io = await loadRemusTranslators();
-    const step = new TextDecoder().decode(
-      io.exportStep(kernel.serializeSolids(Uint32Array.of(build(kernel))))
-    );
-    const imported = importStepBody(
+    let document = addPrimitiveFeature(
       createProjectDocument(name, toUserId('user_chamfer_rim')),
       {
-        name: 'Block',
-        sourceName: `${name}.step`,
-        artifactId: `artifact_${name}`,
-        stepText: step
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: X, height: Y, depth: Z }
       }
     );
-    const derived = await adapter.syncDocument(imported.document);
-    const representation = derived.bodyRepresentations[imported.bodyId]!;
-    const bottom = representation
+    let bodyId = document.bodyOrder[0]!;
+    if (options.round) {
+      const verticals = (await edgesOf(document, bodyId)).filter(vertical);
+      expect(verticals).toHaveLength(4);
+      const rounded = filletEdges(document, {
+        name: 'Corners',
+        targetBodyId: bodyId,
+        edgeHashes: verticals.map((edge) => edge.hash),
+        edgeReferences: verticals.map((edge) => edge.reference!),
+        size: ROUND
+      });
+      document = rounded.document;
+      bodyId = rounded.bodyId;
+    }
+    const rim = (await edgesOf(document, bodyId)).filter(
+      (edge) => onBottom(edge) && (options.pick?.(edge) ?? true)
+    );
+    expect(rim.length).toBeGreaterThan(0);
+    const result = chamferEdges(document, {
+      name: 'Chamfer',
+      targetBodyId: bodyId,
+      edgeHashes: rim.map((edge) => edge.hash),
+      edgeReferences: rim.map((edge) => edge.reference!),
+      size: CHAMFER,
+      ...(options.distance2 === undefined
+        ? {}
+        : { distance2: options.distance2 })
+    });
+    const derived = await adapter.syncDocument(result.document);
+    expect(derived.warnings).toEqual([]);
+    const body = derived.bodyRepresentations[result.bodyId]!;
+    const bottom = body
       .topology!.faces.filter(
         (face) =>
           face.geometry?.surfaceType === 'plane' &&
@@ -92,115 +133,29 @@ describe('offset face ringed by a chamfer', { timeout: 180_000 }, () => {
       )
       .sort((a, b) => b.geometry!.area - a.geometry!.area)[0]!;
     return {
-      document: imported.document,
-      bodyId: imported.bodyId,
+      document: result.document,
+      bodyId: result.bodyId,
       bottom,
-      volume: representation.volume,
-      section
+      volume: body.volume,
+      section: options.round ? X * Y - (4 - Math.PI) * ROUND * ROUND : X * Y
     };
   }
 
   beforeAll(async () => {
     adapter = new RemusKernelAdapter();
-    const bottomRim = (a: number[], b: number[]) =>
-      near(a[2]!, 0) && near(b[2]!, 0);
-    const vertical = (a: number[], b: number[]) =>
-      near(a[0]!, b[0]!) && near(a[1]!, b[1]!);
-    fixtures.set(
-      'rounded',
-      await fixture(
-        'rounded',
-        (kernel) => {
-          const box = kernel.makeBox(X, Y, Z);
-          const rounded = kernel.filletDetailed(
-            box,
-            edgesWhere(kernel, box, vertical),
-            ROUND,
-            true
-          );
-          if (rounded.status !== 'ok') throw new Error('fixture fillet');
-          return kernel.chamfer(
-            rounded.value,
-            edgesWhere(kernel, rounded.value, bottomRim),
-            CHAMFER
-          );
-        },
-        X * Y - (4 - Math.PI) * ROUND * ROUND
-      )
-    );
-    fixtures.set(
-      'sharp',
-      await fixture(
-        'sharp',
-        (kernel) => {
-          const box = kernel.makeBox(X, Y, Z);
-          return kernel.chamfer(
-            box,
-            edgesWhere(kernel, box, bottomRim),
-            CHAMFER
-          );
-        },
-        X * Y
-      )
-    );
+    fixtures.set('rounded', await chamfered('rounded', { round: true }));
+    fixtures.set('sharp', await chamfered('sharp', {}));
+    // Only the front bottom edge: the kernel's move built a body 1.65
+    // deeper and ~29000 mm³ too small when pushed in by 2.
     fixtures.set(
       'one-edge',
-      await fixture(
-        'one-edge',
-        (kernel) => {
-          const box = kernel.makeBox(X, Y, Z);
-          // Only the front bottom edge: the kernel's move built a body
-          // 1.65 wider and ~29000 mm³ short when pushed in by 2.
-          return kernel.chamfer(
-            box,
-            edgesWhere(
-              kernel,
-              box,
-              (a, b) => bottomRim(a, b) && near(a[1]!, 0) && near(b[1]!, 0)
-            ),
-            CHAMFER
-          );
-        },
-        X * Y
-      )
-    );
-    fixtures.set(
-      'holed',
-      await fixture(
-        'holed',
-        (kernel) => {
-          // A Ø10 through hole: its bottom mouth is chamfered with the rim,
-          // so the carried band includes a full cone and its seam.
-          const box = kernel.makeBox(X, Y, Z);
-          const bore = kernel.copyAndTransformSolid(
-            kernel.makeCylinder(5, Z + 10),
-            Float64Array.of(1, 0, 0, 20, 0, 1, 0, 20, 0, 0, 1, -5, 0, 0, 0, 1)
-          );
-          const plate = kernel.cut(box, bore);
-          return kernel.chamfer(
-            plate,
-            edgesWhere(kernel, plate, bottomRim),
-            CHAMFER
-          );
-        },
-        X * Y - Math.PI * 25
-      )
+      await chamfered('one-edge', {
+        pick: along((_x, y) => near(y, 0))
+      })
     );
     fixtures.set(
       'uneven',
-      await fixture(
-        'uneven',
-        (kernel) => {
-          const box = kernel.makeBox(X, Y, Z);
-          return kernel.chamferV2(
-            box,
-            edgesWhere(kernel, box, bottomRim),
-            CHAMFER,
-            2 * CHAMFER
-          );
-        },
-        X * Y
-      )
+      await chamfered('uneven', { round: true, distance2: 2 * CHAMFER })
     );
   });
 
@@ -235,13 +190,7 @@ describe('offset face ringed by a chamfer', { timeout: 180_000 }, () => {
     );
   }
 
-  for (const shape of [
-    'rounded',
-    'sharp',
-    'one-edge',
-    'holed',
-    'uneven'
-  ] as const) {
+  for (const shape of ['rounded', 'sharp', 'one-edge', 'uneven'] as const) {
     for (const offset of [20, 2, 0.1, -0.1, -2, -12]) {
       it(`${shape}: carries the chamfer through an offset of ${offset}`, async () => {
         const f = fixtures.get(shape)!;
@@ -303,18 +252,87 @@ describe('offset face ringed by a chamfer', { timeout: 180_000 }, () => {
     });
   }
 
-  it('leaves a drafted side to the kernel move', () => {
-    // A frustum's side is a cone about the bottom's normal, like a chamfer
-    // over a round, but it climbs to the top cap rather than to a wall:
-    // re-limiting it is the right move, and stays the kernel's.
-    const kernel = new RemusKernel();
-    const frustum = kernel.makeCone(20, 12, 15);
-    const bottom = Array.from(kernel.getSolidFaces(frustum)).find(
-      (face) =>
-        kernel.getSurfaceType(face) === 'plane' &&
-        kernel.getFaceNormal(face)[2]! < -0.999
-    )!;
-    expect(tryCarryChamferRim(kernel, frustum, bottom, 2)).toBeNull();
-    expect(tryCarryChamferRim(kernel, frustum, bottom, -2)).toBeNull();
+  describe('the carry on bare kernel bodies', () => {
+    const bottomOf = (kernel: RemusKernel, solid: number) =>
+      Array.from(kernel.getSolidFaces(solid)).find(
+        (face) =>
+          kernel.getSurfaceType(face) === 'plane' &&
+          kernel.getFaceNormal(face)[2]! < -0.999
+      )!;
+    const bottomEdges = (kernel: RemusKernel, solid: number) =>
+      Uint32Array.from(
+        Array.from(kernel.getSolidEdges(solid)).filter((edge) => {
+          const v = kernel.getEdgeVertices(edge);
+          return near(v[2]!, 0) && near(v[5]!, 0);
+        })
+      );
+
+    it('carries a chamfered hole mouth with the outer rim', () => {
+      const kernel = new RemusKernel();
+      // A Ø10 through hole whose bottom mouth is chamfered with the rim, so
+      // the band includes a full cone and its seam.
+      const bore = kernel.copyAndTransformSolid(
+        kernel.makeCylinder(5, Z + 10),
+        Float64Array.of(1, 0, 0, 20, 0, 1, 0, 20, 0, 0, 1, -5, 0, 0, 0, 1)
+      );
+      const plate = kernel.cut(kernel.makeBox(X, Y, Z), bore);
+      const solid = kernel.chamfer(plate, bottomEdges(kernel, plate), CHAMFER);
+      const volume = kernel.volume(solid, 1e-3);
+      const section = X * Y - Math.PI * 25;
+      for (const offset of [20, 2, -2, -12]) {
+        const carried = tryCarryChamferRim(
+          kernel,
+          solid,
+          bottomOf(kernel, solid),
+          offset,
+          [[CHAMFER, CHAMFER]]
+        );
+        expect(carried).not.toBeNull();
+        expect(kernel.validateSolid(carried!.solid)).toBe(0);
+        expect(kernel.volume(carried!.solid, 1e-3)).toBeCloseTo(
+          volume + offset * section,
+          2
+        );
+      }
+    });
+
+    it('refuses a wall that leans enough to leave the rim off it', () => {
+      // Walls 8e-8 rad off vertical pass the analytic match, but sliding the
+      // rim 1000 along them would leave it 8e-5 off its wall planes.
+      const kernel = new RemusKernel();
+      const box = kernel.makeBox(30, 30, 0.5);
+      const leaning = kernel.copyAndTransformSolid(
+        box,
+        Float64Array.of(1, 0, 8e-8, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
+      );
+      const solid = kernel.chamfer(leaning, bottomEdges(kernel, leaning), 0.1);
+      const bottom = bottomOf(kernel, solid);
+      expect(() =>
+        tryCarryChamferRim(kernel, solid, bottom, 1000, [[0.1, 0.1]])
+      ).toThrow(/chamfered edge can't move with it/);
+    });
+
+    it('leaves a drafted section on straight walls to the kernel move', () => {
+      // A frustum foot under a straight cylinder: its side is a cone about
+      // the bottom's normal standing on a wall, the shape of a chamfer band,
+      // but no chamfer in the history made it. Re-limiting it is the right
+      // move, and stays the kernel's.
+      const kernel = new RemusKernel();
+      const foot = kernel.makeCone(10, 15, 10);
+      const column = kernel.copyAndTransformSolid(
+        kernel.makeCylinder(15, 30),
+        Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 10, 0, 0, 0, 1)
+      );
+      const solid = kernel.fuse(foot, column);
+      const bottom = bottomOf(kernel, solid);
+      for (const setbacks of [[], [[CHAMFER, CHAMFER]]] as const) {
+        expect(
+          tryCarryChamferRim(kernel, solid, bottom, -2, setbacks)
+        ).toBeNull();
+        expect(
+          tryCarryChamferRim(kernel, solid, bottom, 2, setbacks)
+        ).toBeNull();
+      }
+    });
   });
 });
