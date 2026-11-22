@@ -1,4 +1,4 @@
-import { isTransformCopy } from '@openzcad/shared';
+import { isTransformCopy, transformStampBodyIds } from '@openzcad/shared';
 import type { BodyId, BodyRepresentation, FeatureNode } from '@openzcad/shared';
 
 /**
@@ -45,6 +45,7 @@ export function createdBodiesToFrame(
     if (!inputs.some((bodyId) => existing.has(bodyId))) continue;
     if (feature.bodyId) existing.add(feature.bodyId);
     if (data.featureKind === 'split') existing.add(data.secondBodyId);
+    for (const bodyId of transformStampBodyIds(data)) existing.add(bodyId);
   }
   return Object.values(after)
     .filter((body) => !body.consumed && !existing.has(body.bodyId))

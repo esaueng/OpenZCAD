@@ -391,7 +391,7 @@ describe('interactionReducer', () => {
       kind: 'offset'
     });
     state = interactionReducer(state, {
-      type: 'sketch-offset-options',
+      type: 'sketch-modify-options',
       options: { join: 'round', chain: false }
     });
     expect(state.mode === 'sketch' && state.session.pendingEdit).toEqual({
@@ -400,7 +400,7 @@ describe('interactionReducer', () => {
     });
     // A setting of the tool: it outlives this arming.
     state = interactionReducer(state, { type: 'sketch-edit-tool', kind: null });
-    expect(state.mode === 'sketch' && state.session.offsetOptions).toEqual({
+    expect(state.mode === 'sketch' && state.session.modifyOptions).toEqual({
       join: 'round',
       chain: false
     });

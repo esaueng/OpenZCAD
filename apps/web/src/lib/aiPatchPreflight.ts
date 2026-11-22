@@ -61,11 +61,20 @@ export function exactPatchTargets(
     const featureName =
       typeof payload.name === 'string' ? payload.name : command.label;
     // A split mints two result bodies; both halves must survive the build.
-    return [ids?.bodyId ?? payload.targetBodyId, ids?.secondBodyId].flatMap(
-      (bodyId) =>
-        typeof bodyId === 'string'
-          ? [{ featureName, resultBodyId: bodyId as BodyId }]
-          : []
+    // M10: so does each further stamp of a linked copy.
+    const stamps = Array.isArray(payload.stampIds)
+      ? (payload.stampIds as { bodyId?: unknown }[]).map(
+          (stamp) => stamp?.bodyId
+        )
+      : [];
+    return [
+      ids?.bodyId ?? payload.targetBodyId,
+      ids?.secondBodyId,
+      ...stamps
+    ].flatMap((bodyId) =>
+      typeof bodyId === 'string'
+        ? [{ featureName, resultBodyId: bodyId as BodyId }]
+        : []
     );
   });
 }

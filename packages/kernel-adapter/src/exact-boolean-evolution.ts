@@ -1,4 +1,5 @@
 import {
+  transformStampBodyIds,
   datumAxisPlaneSources,
   datumAxisPointSources,
   datumPlaneSources,
@@ -539,6 +540,7 @@ function producedBodyIds(feature: FeatureNode): BodyId[] {
   ) {
     bodies.push(feature.data.secondBodyId);
   }
+  bodies.push(...transformStampBodyIds(feature.data));
   return bodies;
 }
 

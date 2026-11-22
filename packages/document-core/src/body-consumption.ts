@@ -1,4 +1,5 @@
 import {
+  transformStampBodyIds,
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
   isInPlaceTransform,
@@ -266,6 +267,9 @@ function resultBodies(feature: FeatureNode): BodyId[] {
     !isFeatureManuallySuppressed(feature)
   )
     results.push(feature.data.secondBodyId);
+  // M10: a linked copy's further stamps are its results too.
+  if (!isFeatureManuallySuppressed(feature))
+    results.push(...transformStampBodyIds(feature.data));
   return results;
 }
 
