@@ -41,4 +41,3 @@ describe('measurement hover highlights (M13)', () => {
     ).toMatchObject({ reference });
   });
 });
-

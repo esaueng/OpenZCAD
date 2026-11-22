@@ -282,11 +282,7 @@ export function MeasurementDock({
                 onPointerLeave={() => onHover?.(null)}
                 onFocus={() => onHover?.(entry.id)}
                 onBlur={(event) => {
-                  if (
-                    !event.currentTarget.contains(
-                      event.relatedTarget as Node | null
-                    )
-                  )
+                  if (!event.currentTarget.contains(event.relatedTarget))
                     onHover?.(null);
                 }}
               >
