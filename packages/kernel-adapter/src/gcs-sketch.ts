@@ -224,6 +224,11 @@ export function solveSketchWithGcs(
     maxIterations?: number;
     tolerance?: number;
     anchor?: SketchSolveAnchor;
+    /**
+     * S05: state an offset chain's every corner, even where two sources
+     * start collinear; set on the retry when a skipped corner missed.
+     */
+    stateEveryCorner?: boolean;
   } = {}
 ): SketchSolveOutcome {
   const sketch = kernel.gcsNew();
@@ -632,6 +637,8 @@ export function solveSketchWithGcs(
     constraintId: string;
     expected: number;
     read: () => number | null;
+    /** Its equation was left out as a collinear corner's repeat. */
+    skipped?: boolean;
   }[] = [];
   const addOffsetRelation = (
     id: string,
@@ -654,9 +661,13 @@ export function solveSketchWithGcs(
           const key = joinKey({ objectId: copy, point: end });
           const earlier = heldFrom.get(key) ?? [];
           const point = pointHandle({ objectId: copy, point: end });
+          const skipped =
+            !options.stateEveryCorner &&
+            earlier.some((other) => collinear(other, source));
           offsetChecks.push({
             constraintId: id,
             expected: side * value,
+            skipped,
             read: () => {
               const line = solvedObjects.find(
                 (entry) => entry.objectId === source
@@ -671,7 +682,7 @@ export function solveSketchWithGcs(
                 : null;
             }
           });
-          if (earlier.some((other) => collinear(other, source))) continue;
+          if (skipped) continue;
           heldFrom.set(key, [...earlier, source]);
           add(id, {
             type: 'pointLineDistance',
@@ -1225,14 +1236,20 @@ export function solveSketchWithGcs(
 
   // S05 offsets: the equations leave each copy's side free; a copy on the
   // wrong side, or at the wrong reach, fails its relation.
+  let skippedCornerMissed = false;
   for (const check of offsetChecks) {
     const actual = check.read();
     if (actual === null) continue;
     const miss = Number.isNaN(actual)
       ? Infinity
       : Math.abs(actual - check.expected);
-    const tolerance = 1e-7 * Math.max(1, Math.abs(check.expected));
+    // Never as loose as half the offset, so a wrong side always misses.
+    const tolerance = Math.min(
+      1e-7 * Math.max(1, Math.abs(check.expected)),
+      Math.abs(check.expected) / 2
+    );
     if (miss > tolerance) {
+      if (check.skipped) skippedCornerMissed = true;
       patternMisses.set(
         check.constraintId,
         Math.max(
@@ -1241,6 +1258,14 @@ export function solveSketchWithGcs(
         )
       );
     }
+  }
+  // Sources that started collinear moved apart during the solve, so the
+  // corner left out is no longer a repeat: solve again stating it.
+  if (skippedCornerMissed && !options.stateEveryCorner) {
+    return solveSketchWithGcs(kernel, inputObjects, constraints, resolveValue, {
+      ...options,
+      stateEveryCorner: true
+    });
   }
   if (patternMisses.size > 0) classification = 'unsatisfied';
 

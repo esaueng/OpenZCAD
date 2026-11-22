@@ -973,6 +973,80 @@ describe('S05 Offset on the pinned kernel', () => {
     expectGood(await fixture.solve());
   });
 
+  it('re-states a collinear corner once its sources turn apart', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 5, y2: 0 },
+      { objectKind: 'line', x1: 5, y1: 0, x2: 10, y2: 0 }
+    ]);
+    const [a, b] = fixture.ids as [string, string];
+    fixture.constrain({
+      constraintKind: 'coincident',
+      a: { objectId: a as EntityId, point: 'end' },
+      b: { objectId: b as EntityId, point: 'start' }
+    });
+    await fixture.commit(
+      offsetPlan(fixture, a, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    fixture.constrain(lock(a, 'start', 0, 0));
+    fixture.constrain(lock(a, 'end', 5, 0));
+    // The second source turns up off the first one's carrier.
+    fixture.constrain(lock(b, 'end', 10, 5));
+    const outcome = await fixture.solve();
+    expect(outcome.converged).toBe(true);
+    expect(outcome.classification).not.toBe('unsatisfied');
+    const copies = fixture
+      .sketch()
+      .objectIds.map(String)
+      .filter((id) => !fixture.ids.includes(id))
+      .map((id) => solved(outcome, id))
+      .filter((object) => 'x1' in object);
+    // Each copy sits 1 to the left of its source at both ends.
+    const left = (
+      line: { x1: number; y1: number; x2: number; y2: number },
+      x: number,
+      y: number
+    ) =>
+      ((line.x2 - line.x1) * (y - line.y1) -
+        (line.y2 - line.y1) * (x - line.x1)) /
+      Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+    const sources = [
+      { x1: 0, y1: 0, x2: 5, y2: 0 },
+      { x1: 5, y1: 0, x2: 10, y2: 5 }
+    ];
+    for (const [index, copy] of copies.entries()) {
+      const line = copy as unknown as {
+        x1: number;
+        y1: number;
+        x2: number;
+        y2: number;
+      };
+      expect(left(sources[index]!, line.x1, line.y1)).toBeCloseTo(1, 7);
+      expect(left(sources[index]!, line.x2, line.y2)).toBeCloseTo(1, 7);
+    }
+  });
+
+  it('refuses a wrong-side round copy even for a tiny offset', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    const [circle] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, circle, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    const copy = fixture.sketch().objectIds.map(String).at(-1)!;
+    setOffset(fixture, 4e-8);
+    const inside = structuredClone(fixture.manager.document);
+    (
+      inside.nodes[copy as EntityId] as unknown as {
+        data: Record<string, number>;
+      }
+    ).data.radius = 5 - 4e-8;
+    const held = await adapter.solveSketch(inside, fixture.sketchId, {
+      anchor: { objectIds: [circle, copy] }
+    });
+    expect(held.converged).toBe(false);
+  });
+
   it('offsets a full-turn arc to a circle and records the pair', async () => {
     const fixture = sketchWith([
       {
