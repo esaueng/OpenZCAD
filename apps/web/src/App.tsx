@@ -861,7 +861,8 @@ import {
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
-  outlineChamferChain
+  outlineChamferChain,
+  tangentChainAdditions
 } from './lib/interaction/chamferChain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
@@ -28544,7 +28545,26 @@ export function App() {
           (inPlace.tool !== 'chamfer' || edge.isSmooth !== true)
       ) ?? [])
     : [];
+  // M03: the smooth run through the last picked edge, offered as one pick.
+  const inPlaceChainSeed = inPlace.slots.edges.at(-1);
+  const inPlaceChainAdditions =
+    inPlaceSpec?.edgeMode && inPlaceChainSeed
+      ? tangentChainAdditions(
+          representations[inPlaceChainSeed.bodyId],
+          inPlace.slots.edges,
+          inPlaceChainSeed.bodyId,
+          inPlace.tool === 'chamfer'
+        )
+      : [];
   const inPlaceActions = [
+    ...(inPlaceChainAdditions.length > 0
+      ? [
+          {
+            id: 'tangent-chain',
+            label: `Add the tangent chain (${inPlaceChainAdditions.length} more ${inPlaceChainAdditions.length === 1 ? 'edge' : 'edges'})`
+          }
+        ]
+      : []),
     ...(inPlaceBodyEdges.length > 0
       ? [
           inPlace.slots.edges.length === inPlaceBodyEdges.length
@@ -28588,6 +28608,18 @@ export function App() {
           return pick ? [pick] : [];
         })
       );
+    } else if (actionId === 'tangent-chain' && inPlaceChainSeed) {
+      command.setEdges([
+        ...command.slots.edges,
+        ...inPlaceChainAdditions.flatMap((selection) => {
+          const pick = inPlaceEdgePick(
+            inPlaceChainSeed.bodyId,
+            selection.topologyId,
+            selection.hash
+          );
+          return pick ? [pick] : [];
+        })
+      ]);
     } else if (actionId === 'clear-edges') {
       command.setEdges([]);
     } else if (actionId === 'swap-distances') {
