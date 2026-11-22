@@ -920,7 +920,7 @@ export function inPlaceEditSeed(
             seed.slots.edges.length === data.edgeHashes.length
               ? filletSelectionVertices(seed.slots.edges)
               : null;
-          // M03 (v150): the editor holds one interior station; a stored
+          // M03 (v151): the editor holds one interior station; a stored
           // list of more is said, not silently cut to one.
           if (data.radiusStations?.[0]) {
             seed.options.radiusAt = 'along';

@@ -17,6 +17,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './print-clearance';
+export * from './display-units';
 export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
@@ -554,23 +555,37 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
-// v150 adds M03 radius stations (`radiusStations` on a variable-radius
+// v151 adds M03 radius stations (`radiusStations` on a variable-radius
 // fillet): interior radii along each selected edge, at fractions from the
 // edge's witness end 0, the law running between neighbouring stations, with
 // `edgeRuns` recording the way each edge ran. An older client would round
 // each edge from `radius` to `endRadius` only, so it must refuse the
-// document. Builds on v149.
+// document. Builds on v149 (v150 is claimed by the M01 hole anchor, #1808).
 // v149 adds M03 per-vertex fillet radii (`vertexRadii` and `edgeRuns` on a
 // variable-radius fillet): the radius at each end of each selected edge,
 // named by the edge's lineage witness. An older client would round every
 // edge from `radius` to `endRadius`, so it must refuse the document. Builds
-// on v145 (#1917 on main); v150 to v148 are claimed by the S05 offset
-// dimension (#1919), the M01 hole anchor (#1808) and I03 unit switching
-// (#1915). v142, once claimed here, was skipped on main.
+// on v148 (#1915 on main); v146 and v150 are claimed by the S05 offset
+// dimension (#1919) and the M01 hole anchor (#1808). v142, once claimed
+// here, was skipped on main.
+// v144 adds S07 entity locks (`lock-entity` sketch constraints): a whole
+// line, circle or arc held at a recorded position. An older client cannot
+// solve the relation, so it must refuse the document. Builds on v141; v142
+// and v143 are claimed by M03 per-vertex radii (#1914) and I03 unit
+// switching (#1915).
 // v145 adds S05 sketch pattern relations (`pattern` sketch constraints): a
 // linear or circular pattern's instance positions held by one relation. An
-// older client cannot solve it, so it must refuse the document.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 150 as const;
+// older client cannot solve it, so it must refuse the document. Builds on
+// v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
+// switching (#1915) and the S07 entity lock (#1913).
+// v148 adds I03 display units (`displayUnits` and its `displayUnits.set`
+// command): the unit lengths are shown and typed in, which may differ from
+// the unit the document stores. An older client would replay the command
+// log without knowing the command and would show every length in the stored
+// unit while the user reads another, so it must refuse the document. Builds
+// on v145; v146 and v147 are claimed by the S05 offset dimension (#1919)
+// and the M01 hole anchor (#1808), v142 and v144 by #1914 and #1913.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 151 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -841,7 +856,7 @@ export interface FilletVertexRadius {
  */
 
 /**
- * M03 (schema v150): one interior radius station of a variable-radius
+ * M03 (schema v151): one interior radius station of a variable-radius
  * fillet, applied to every selected edge. `at` is the fraction of the edge
  * from its witness end 0 (`edgeReferences[…].witness.endpoints[0]`),
  * strictly inside (0, 1); the fillet's law (`radiusLaw`) runs between
@@ -2231,6 +2246,15 @@ export type SketchConstraintData =
    */
   | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
   /**
+   * S07 (v144): a whole line, circle or arc held where it was when the lock
+   * was made. `at` is that geometry in sketch coordinates — a line's
+   * `[x1, y1, x2, y2]`, a circle's `[centerX, centerY, radius]`, an arc's
+   * `[centerX, centerY, radius, startAngleDeg, endAngleDeg]` — so an edit
+   * that would move or resize it conflicts instead. Removing the constraint
+   * unlocks the entity.
+   */
+  | { constraintKind: 'lock-entity'; objectId: EntityId; at: number[] }
+  /**
    * S05 (v145): a sketch pattern held as one relation. Each instance is the
    * source moved `step` steps: along the direction line by `spacing` a step
    * (linear), or round the pivot by `stepDeg` a step (circular), turned with
@@ -3600,7 +3624,7 @@ export type FeatureData =
        */
       vertexRadii?: FilletVertexRadius[];
       /**
-       * M03 (schema v150): interior radii along every selected edge; see
+       * M03 (schema v151): interior radii along every selected edge; see
        * {@link FilletRadiusStation}. Only with `endRadius`.
        */
       radiusStations?: FilletRadiusStation[];
@@ -5257,6 +5281,13 @@ export interface ProjectDocument {
    * document-core.
    */
   shareLinkSheetIds?: string[];
+  /**
+   * I03 (schema v148): the unit lengths are shown and typed in. Absent means
+   * `units`. Every stored length stays in `units` — a rebuild, an export and
+   * every persisted reference read `units` and never this — so switching it
+   * changes no geometry. See `display-units.ts`.
+   */
+  displayUnits?: UnitSystem;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -6322,7 +6353,8 @@ export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [
   'symmetric',
   'point-on-object',
   'midpoint',
-  'lock'
+  'lock',
+  'lock-entity'
 ];
 
 /**

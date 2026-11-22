@@ -49,7 +49,7 @@ export interface VariableFilletSpec {
   readonly perEdge?: readonly {
     startRadius: number;
     endRadius: number;
-    /** M03 (v150): interior stations in the kernel edge's direction. */
+    /** M03 (v151): interior stations in the kernel edge's direction. */
     stations?: readonly { at: number; radius: number }[];
   }[];
 }
@@ -131,7 +131,7 @@ function runsAsPicked(
  * stations, in the kernel edge's own direction.
  *
  * Per-vertex radii (schema v142) name an end by the edge's stored witness
- * endpoints, and stations (v150) stand at fractions from witness end 0: both
+ * endpoints, and stations (v151) stand at fractions from witness end 0: both
  * are fixed by where the edge was picked, not by the direction the kernel
  * builds it in (see {@link runsAsPicked}). Ends without an entry keep
  * `startRadius` / `endRadius`.

@@ -1,5 +1,0 @@
----
-row: M10
----
-
-Translate by two picked points (no schema or kernel change). The Move bar gains Two points. It starts the pending move again from nothing and hides the gizmo, so picks read the model where it rests. Each click on the model takes the point its snap glyph names (an endpoint, midpoint or centre, as Measure snaps them) or else the surface point, and selects nothing. The first pick names the point to move from ("From Endpoint · pick the point to move it to"); the second sets the translation to the difference and ends the pick, and Done commits it as one Move (with its pivot, as every gizmo Move). The viewer's new `onPointPick` host callback carries the snapped point and its kind. Evidence: `DirectModelingOverlays.test.tsx`, `ModelViewer.lifecycle.test.tsx` and the Chromium smoke case "Move by two points carries the first pick onto the second" in `test/e2e/transform-pivot.spec.ts` (two located edge picks under Two points, no apply-first question, a non-zero move in Options, one Move in History with no warnings).

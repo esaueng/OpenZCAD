@@ -144,6 +144,9 @@
   .start-learn-toggle,
   .start-tile-menu [role='menuitem'],
   .topbar-menu-item,
+  /* I03: the File menu's Units chips sit side by side, so each is drawn
+     44 px tall rather than reaching past its neighbours. */
+  .topbar-units button,
   .palette-row,
   .assistant-suggestion,
   .assistant-verified-action,

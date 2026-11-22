@@ -148,6 +148,15 @@ export function assertWrapSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 111, 'Wraps');
 }
 
+/** S07 (schema v144): whole-entity locks, wherever a sketch or command holds one. */
+export function assertEntityLockSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 144, 'Sketch entity locks');
+}
+
+function isEntityLock(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'lock-entity';
+}
+
 /** S05 (schema v145): pattern relations, wherever a sketch or command holds one. */
 export function assertPatternRelationSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 145, 'Sketch pattern relations');
@@ -202,6 +211,15 @@ export function assertAssemblyCouplingSchema(version: unknown): void {
  */
 export function assertPrintClearanceSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 60, 'A print clearance');
+}
+
+/**
+ * I03 display units (schema v148): `displayUnits` and its command. An older
+ * reader would show every length in the stored unit while the user reads
+ * another, and cannot replay the command.
+ */
+export function assertDisplayUnitsSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 148, 'Display units');
 }
 
 /**
@@ -1012,6 +1030,8 @@ export function assertDocumentContentCommandSchema(
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
+    if (command.kind === 'displayUnits.set')
+      assertDisplayUnitsSchema(document.schemaVersion);
     if (typeof command.kind === 'string' && command.kind.startsWith('pmi.'))
       assertModelPmiSchema(document.schemaVersion);
     if (
@@ -1228,6 +1248,11 @@ export function assertDocumentContentCommandSchema(
     }
     if (
       command.kind === 'sketch.constraint.add' &&
+      isEntityLock(command.payload.constraint)
+    )
+      assertEntityLockSchema(document.schemaVersion);
+    if (
+      command.kind === 'sketch.constraint.add' &&
       isPatternRelation(command.payload.constraint)
     )
       assertPatternRelationSchema(document.schemaVersion);
@@ -1250,7 +1275,7 @@ export function assertDocumentContentCommandSchema(
       if (fillet && fillet.radiusStations !== undefined)
         assertMinimumProjectSchema(
           document.schemaVersion,
-          150,
+          151,
           'Fillet radius stations'
         );
     }
@@ -1307,7 +1332,7 @@ export function assertFilletContentSchema(
   version: unknown
 ): void {
   if (data.radiusStations !== undefined) {
-    assertMinimumProjectSchema(version, 150, 'Fillet radius stations');
+    assertMinimumProjectSchema(version, 151, 'Fillet radius stations');
     const problem = filletRadiusStationsProblem(data);
     if (problem) throw new Error(problem);
   }
@@ -1344,6 +1369,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertPrintClearanceSchema(document.schemaVersion);
+  if (document.displayUnits !== undefined)
+    assertDisplayUnitsSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'displayUnits' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertDisplayUnitsSchema(document.schemaVersion);
   if (document.configurations !== undefined)
     assertConfigurationSchema(document.schemaVersion);
   if (hasDrawingViewConfiguration(document.drawings))
@@ -1603,6 +1637,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertCurvedTangentSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isEntityLock(constraint.data)
+      )
+    )
+      assertEntityLockSchema(document.schemaVersion);
     if (
       node.kind === 'sketch' &&
       Array.isArray(node.constraints) &&

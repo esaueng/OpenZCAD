@@ -24,7 +24,7 @@ export interface EdgeModifierFormValue {
   radiusLaw?: VariableFilletLaw;
   /** Fillet only (M03, v149): per-vertex radii; absent means none. */
   vertexRadii?: FilletVertexRadius[];
-  /** Fillet only (M03, v150): interior radius stations; absent means none. */
+  /** Fillet only (M03, v151): interior radius stations; absent means none. */
   radiusStations?: FilletRadiusStation[];
   /** Fillet only, with `vertexRadii` or `radiusStations`: how each edge ran
    * when they were set. */

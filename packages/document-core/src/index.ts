@@ -98,6 +98,7 @@ export * from './assembly-interference-sweep';
 export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
+export * from './display-units';
 export * from './configurations';
 export * from './reference-images';
 export * from './model-pmi';
@@ -887,7 +888,7 @@ export interface EdgeModifierInput {
    */
   vertexRadii?: FilletVertexRadius[];
   /**
-   * Fillet only (M03, schema v150): interior radius stations along every
+   * Fillet only (M03, schema v151): interior radius stations along every
    * selected edge; see `FilletRadiusStation`. Needs `endRadius` and
    * `edgeReferences`.
    */
@@ -2196,6 +2197,8 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
       return [data.point.objectId, data.objectId];
     case 'lock':
       return [data.point.objectId];
+    case 'lock-entity':
+      return [data.objectId];
     case 'pattern':
       return [
         data.source,
@@ -2530,7 +2533,60 @@ export function validateSketchConstraint(
       ) {
         throw new Error('That point is already locked.');
       }
+      if (entityLocked(sketch, data.point.objectId)) {
+        throw new Error(
+          'That point belongs to a locked entity. Unlock the entity first.'
+        );
+      }
       break;
+    case 'lock-entity': {
+      const kind = requireConstrainableObject(document, sketch, data.objectId, [
+        'line',
+        'circle',
+        'arc'
+      ]);
+      const length = kind === 'line' ? 4 : kind === 'circle' ? 3 : 5;
+      if (
+        !Array.isArray(data.at) ||
+        data.at.length !== length ||
+        !data.at.every(Number.isFinite)
+      ) {
+        throw new Error(
+          `A locked ${kind} needs its ${length} recorded finite values.`
+        );
+      }
+      if (kind !== 'line' && !(data.at[2]! > 0)) {
+        throw new Error(`A locked ${kind} needs a positive radius.`);
+      }
+      if (entityLocked(sketch, data.objectId)) {
+        throw new Error('That entity is already locked.');
+      }
+      // A linked projection already follows its model edge; a lock at
+      // today's position would fight the edge the next time it moves.
+      const lockedNode = getNode(document, data.objectId);
+      if (
+        lockedNode?.kind === 'sketch-object' &&
+        lockedNode.data.projection?.mode === 'linked'
+      ) {
+        throw new Error(
+          'A linked projection follows its model edge. Unlink it to lock it.'
+        );
+      }
+      // A whole lock fixes every point; a point lock beside it would be a
+      // second, redundant hold on the same point.
+      if (
+        (sketch.constraints ?? []).some(
+          (existing) =>
+            existing.data.constraintKind === 'lock' &&
+            existing.data.point.objectId === data.objectId
+        )
+      ) {
+        throw new Error(
+          'That entity has a locked point. Remove the point lock in the same edit, or unlock it first.'
+        );
+      }
+      break;
+    }
     case 'pattern': {
       const kind = requireConstrainableObject(document, sketch, data.source, [
         'line',
@@ -2596,6 +2652,13 @@ export function validateSketchConstraint(
   }
 }
 
+function entityLocked(sketch: SketchNode, objectId: EntityId): boolean {
+  return (sketch.constraints ?? []).some(
+    (existing) =>
+      existing.data.constraintKind === 'lock-entity' &&
+      existing.data.objectId === objectId
+  );
+}
 /** The most instances one sketch pattern relation holds (the source aside). */
 export const MAX_SKETCH_PATTERN_INSTANCES = 99;
 

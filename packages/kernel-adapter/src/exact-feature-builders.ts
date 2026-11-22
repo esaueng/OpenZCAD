@@ -3532,7 +3532,7 @@ export function edgeModifierSettings(
   variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
   /** M03 (v149): resolved per-vertex radii, by selected edge and witness end. */
   vertexRadii: { edge: number; end: 0 | 1; radius: number }[] | undefined;
-  /** M03 (v150): resolved radius stations, from witness end 0. */
+  /** M03 (v151): resolved radius stations, from witness end 0. */
   radiusStations: { at: number; radius: number }[] | undefined;
   chamferSecondDistance: number | undefined;
 } {
@@ -3620,7 +3620,7 @@ export function edgeModifierSettings(
     }
   }
   if (data.featureKind === 'fillet' && data.radiusStations !== undefined) {
-    // M03 (v150): checked again here because a document is untrusted.
+    // M03 (v151): checked again here because a document is untrusted.
     if (variableRadius === undefined)
       throw new Error('Fillet radius stations need a variable-radius fillet.');
     const problem = filletRadiusStationsProblem(data);

@@ -673,7 +673,7 @@ export type InPlaceRequest =
       radiusLaw?: VariableFilletLaw;
       /** M03 (v149): per-vertex radii, by picked edge and witness end. */
       vertexRadii?: FilletVertexRadius[];
-      /** M03 (v150): interior radius stations along every picked edge. */
+      /** M03 (v151): interior radius stations along every picked edge. */
       radiusStations?: FilletRadiusStation[];
       /**
        * With `vertexRadii` or `radiusStations`: how each picked edge ran when
@@ -7358,7 +7358,7 @@ function alongEdge(options: Readonly<Record<string, string>>): boolean {
 }
 
 /**
- * M03 (v150): where the interior radius stands on the first picked edge, at
+ * M03 (v151): where the interior radius stands on the first picked edge, at
  * `fraction` from its witness end 0, and the way into the body there. Null
  * without an open lineage witness to measure along.
  */
@@ -7431,7 +7431,7 @@ const fillet: InPlaceToolSpec = {
       min: 0,
       exclusive: true
     },
-    // M03 (v150): one interior radius along every picked edge, and where it
+    // M03 (v151): one interior radius along every picked edge, and where it
     // stands, under Radius at: Along the edge.
     {
       id: 'midRadius',

@@ -2797,7 +2797,7 @@ describe('fillet and chamfer run in place', () => {
       ).not.toHaveProperty('vertexRadii');
     });
 
-    it('stores one station along every edge, with its arrow there (v150)', () => {
+    it('stores one station along every edge, with its arrow there (v151)', () => {
       const spec = IN_PLACE_TOOL_SPECS.fillet;
       const slots = { ...EMPTY, edges: [A] };
       const along = { law: 'scurve', radiusAt: 'along' };
