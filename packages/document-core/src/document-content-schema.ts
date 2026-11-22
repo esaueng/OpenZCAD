@@ -166,6 +166,15 @@ function isPatternRelation(value: unknown): boolean {
   return record(value) && value.constraintKind === 'pattern';
 }
 
+/** S05 (schema v146): driving offset dimensions. */
+export function assertOffsetDimensionSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 146, 'Sketch offset dimensions');
+}
+
+function isOffsetDimension(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'offset';
+}
+
 /** S05 (schema v141): a tangent between two curves (no line in it). */
 export function assertCurvedTangentSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 141, 'Curve-to-curve tangency');
@@ -1256,6 +1265,11 @@ export function assertDocumentContentCommandSchema(
       isPatternRelation(command.payload.constraint)
     )
       assertPatternRelationSchema(document.schemaVersion);
+    if (
+      command.kind === 'sketch.constraint.add' &&
+      isOffsetDimension(command.payload.constraint)
+    )
+      assertOffsetDimensionSchema(document.schemaVersion);
     // M03: per-vertex fillet radii, created or patched.
     {
       const fillet =
@@ -1653,6 +1667,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertPatternRelationSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isOffsetDimension(constraint.data)
+      )
+    )
+      assertOffsetDimensionSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

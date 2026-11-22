@@ -1198,6 +1198,11 @@ export function describeConstraint(
         ? `Linear pattern ${String(data.layout.spacing)} · ${nameOf(data.source)} ×${count} along ${nameOf(data.layout.direction)}`
         : `Circular pattern ${String(data.layout.stepDeg)}° · ${nameOf(data.source)} ×${count} about ${pointName(data.layout.pivot)}${data.layout.orientation === 'uniform' ? ', uniform' : ''}`;
     }
+    case 'offset': {
+      const first = data.pairs[0]!;
+      const more = data.pairs.length - 1;
+      return `Offset ${String(data.value)} · ${nameOf(first.copy)} from ${nameOf(first.source)}${more > 0 ? ` +${more}` : ''}`;
+    }
   }
 }
 
@@ -1315,6 +1320,10 @@ export function constraintReferencesObject(
       return refs(data.point) === objectId || data.objectId === objectId;
     case 'lock':
       return refs(data.point) === objectId;
+    case 'offset':
+      return data.pairs.some(
+        ({ source, copy }) => source === objectId || copy === objectId
+      );
     case 'lock-entity':
       return data.objectId === objectId;
     case 'pattern':

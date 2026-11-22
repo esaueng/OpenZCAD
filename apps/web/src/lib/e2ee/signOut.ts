@@ -7,6 +7,7 @@ import { confirmApprovalCancellation } from './approvalCancellation';
 import { shareWorkStore } from './shareWorkStore';
 import { projectAuthorityStore } from './projectAuthorityStore';
 import { forgetShelfNames } from '../projectShelfNames';
+import { forgetShareLinkNames } from './sealedShareLinkNames';
 import { forgetAccountShelf } from '../sealedShelfCore';
 import {
   beginKeySessionTeardown,
@@ -45,6 +46,7 @@ async function clearDeviceUnderLock(
   requireCurrentSession();
   lockAccount(userId);
   forgetShelfNames(userId);
+  forgetShareLinkNames(userId);
   // Unsynced shelf edits stay journaled for the account's return.
   forgetAccountShelf(userId, { erased: false });
   if (!keepDevice) {
@@ -111,6 +113,7 @@ export async function signOutAfterSaving(input: {
       await input.revokeSession();
       if (input.userId) {
         forgetShelfNames(input.userId);
+        forgetShareLinkNames(input.userId);
         forgetAccountShelf(input.userId, { erased: false });
       }
       finishKeySessionTeardown(teardown.operation, true);

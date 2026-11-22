@@ -4,15 +4,22 @@ import {
   commandFactories,
   composeCommands
 } from '@openzcad/command-system';
-import { createProjectDocument, findSketch } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  findSketch,
+  normalizeDocument,
+  rewriteNodeExpressions
+} from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter,
   type SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type EntityId,
+  type ProjectDocument,
   type ParamValue,
   type SketchConstraintData,
   type SketchObjectData
@@ -34,6 +41,7 @@ import {
   planSketchOffset,
   type SketchOffsetPick
 } from '../apps/web/src/lib/sketch/offset';
+import { sketchEntityEditCommands } from '../apps/web/src/lib/sketch/editing';
 
 /**
  * S05 Trim, Mirror and patterns on the pinned kernel's solver: the relations
@@ -750,6 +758,382 @@ describe('S05 Offset on the pinned kernel', () => {
       expect(Math.max(...xs)).toBeCloseTo(21, 9);
     });
   }
+
+  /** Re-drive the one offset dimension, as editing its value does. */
+  const setOffset = (
+    fixture: ReturnType<typeof sketchWith>,
+    value: number | string
+  ) => {
+    const existing = fixture
+      .sketch()
+      .constraints!.find(({ data }) => data.constraintKind === 'offset')!;
+    if (existing.data.constraintKind !== 'offset') throw new Error('no offset');
+    fixture.manager.execute(
+      composeCommands('Edit offset dimension', [
+        commandFactories.deleteSketchConstraint({
+          sketchId: fixture.sketchId,
+          constraintId: existing.constraintId
+        }),
+        commandFactories.addSketchConstraint({
+          sketchId: fixture.sketchId,
+          constraint: { ...existing.data, value },
+          ids: { constraintId: existing.constraintId }
+        })
+      ])
+    );
+    return existing.data;
+  };
+
+  for (const join of ['miter', 'round'] as const) {
+    it(`re-offsets a ${join} rectangle when its offset dimension changes`, async () => {
+      const fixture = sketchWith([]);
+      const shape = cornerRectangleShape({ x: 0, y: 0 }, { x: 20, y: 12 })!;
+      const drawn = compositeCommands(shape, {
+        kind: 'sketch',
+        sketchId: fixture.sketchId
+      });
+      fixture.manager.execute(composeCommands(drawn.label, drawn.commands));
+      await fixture.commit(
+        offsetPlan(fixture, String(drawn.edgeIds[0]!), 1, {
+          join,
+          chain: true,
+          side: 1
+        })
+      );
+      // Hold the source rectangle by two opposite corners (its four
+      // freedoms), then drive the offset from 1 to 2.5.
+      fixture.constrain(lock(String(drawn.edgeIds[0]!), 'start', 0, 0));
+      fixture.constrain(lock(String(drawn.edgeIds[2]!), 'start', 20, 12));
+      const data = setOffset(fixture, 2.5);
+      expect(data.pairs).toHaveLength(4);
+      const outcome = await fixture.solve();
+      expectGood(outcome);
+      const added = fixture
+        .sketch()
+        .objectIds.map(String)
+        .filter((id) => !drawn.edgeIds.map(String).includes(id))
+        .map((id) => solved(outcome, id));
+      const lines = added.filter((object) => 'x1' in object);
+      const xs = lines.flatMap((object) => [object.x1!, object.x2!]);
+      const ys = lines.flatMap((object) => [object.y1!, object.y2!]);
+      expect(Math.min(...xs)).toBeCloseTo(-2.5, 8);
+      expect(Math.max(...xs)).toBeCloseTo(22.5, 8);
+      expect(Math.min(...ys)).toBeCloseTo(-2.5, 8);
+      expect(Math.max(...ys)).toBeCloseTo(14.5, 8);
+      if (join === 'round') {
+        // The round joins follow: radius-2.5 arcs about the source corners.
+        const arcs = added.filter((object) => 'radius' in object);
+        expect(arcs).toHaveLength(4);
+        for (const arc of arcs) expect(arc.radius).toBeCloseTo(2.5, 8);
+      }
+    });
+  }
+
+  it('drives a circle and an arc offset, inward and outward, from their dimension', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
+      {
+        objectKind: 'arc',
+        centerX: 20,
+        centerY: 0,
+        radius: 4,
+        startAngleDeg: 10,
+        endAngleDeg: 150
+      }
+    ]);
+    const [circle, arc] = fixture.ids as [string, string];
+    await fixture.commit(
+      offsetPlan(fixture, circle, -1, { join: 'miter', chain: true, side: 1 })
+    );
+    const circleCopy = fixture.sketch().objectIds.map(String).at(-1)!;
+    fixture.constrain(lock(circle, 'center', 0, 0));
+    fixture.constrain({
+      constraintKind: 'radius',
+      objectId: circle as EntityId,
+      value: 5
+    });
+    expect(setOffset(fixture, 2).pairs).toEqual([
+      { source: circle, copy: circleCopy, side: -1 }
+    ]);
+    let outcome = await fixture.solve();
+    expectGood(outcome);
+    expect(solved(outcome, circleCopy).radius).toBeCloseTo(3, 8);
+    expect(solved(outcome, circleCopy).centerX).toBeCloseTo(0, 8);
+
+    const arcFixture = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 20,
+        centerY: 0,
+        radius: 4,
+        startAngleDeg: 10,
+        endAngleDeg: 150
+      }
+    ]);
+    const lone = arcFixture.ids[0]!;
+    await arcFixture.commit(
+      offsetPlan(arcFixture, lone, 1, { join: 'miter', chain: false, side: 1 })
+    );
+    const arcCopy = arcFixture.sketch().objectIds.map(String).at(-1)!;
+    arcFixture.constrain(lock(lone, 'center', 20, 0));
+    arcFixture.constrain({
+      constraintKind: 'radius',
+      objectId: lone as EntityId,
+      value: 4
+    });
+    setOffset(arcFixture, 1.5);
+    outcome = await arcFixture.solve();
+    expectGood(outcome);
+    // Offset outward of an arc picked on its outside: radius 4 + 1.5.
+    const copied = solved(outcome, arcCopy);
+    expect(Math.abs(copied.radius! - 4)).toBeCloseTo(1.5, 8);
+    expect(copied.centerX).toBeCloseTo(20, 8);
+    void arc;
+  });
+
+  it('needs schema v146: an older stamp refuses a document with an offset dimension', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    await fixture.commit(
+      offsetPlan(fixture, fixture.ids[0]!, 1, {
+        join: 'miter',
+        chain: true,
+        side: 1
+      })
+    );
+    expect(
+      fixture
+        .sketch()
+        .constraints!.some(({ data }) => data.constraintKind === 'offset')
+    ).toBe(true);
+    const saved = JSON.parse(
+      JSON.stringify(fixture.manager.document)
+    ) as ProjectDocument;
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(146);
+    expect(normalizeDocument(saved)).toEqual(fixture.manager.document);
+    expect(() =>
+      normalizeDocument({
+        ...saved,
+        schemaVersion: 145 as typeof saved.schemaVersion
+      })
+    ).toThrow(/Sketch offset dimensions/);
+  });
+
+  it('a dragged source circle carries its offset copies, and a new value moves only the copies', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    const [circle] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, circle, 3, { join: 'miter', chain: true, side: 1 })
+    );
+    const copy = fixture.sketch().objectIds.map(String).at(-1)!;
+    const data = (id: string) =>
+      (
+        fixture.manager.document.nodes[id as EntityId] as unknown as {
+          data: Record<string, number>;
+        }
+      ).data;
+    // Drag the source's centre to (10, 0).
+    const commands = await sketchEntityEditCommands(
+      fixture.manager.document,
+      fixture.sketchId,
+      circle as EntityId,
+      { objectKind: 'circle', centerX: 10, centerY: 0, radius: 5 },
+      (document, sketchId, anchor) =>
+        adapter.solveSketch(document, sketchId, anchor ? { anchor } : {})
+    );
+    fixture.manager.runTransaction('Move circle', commands);
+    expect(data(circle).centerX).toBe(10);
+    expect(data(circle).radius).toBe(5);
+    expect(data(copy).centerX).toBeCloseTo(10, 8);
+    expect(data(copy).radius).toBeCloseTo(8, 8);
+
+    // A new driving value moves the copy and leaves the free source alone.
+    setOffset(fixture, 6);
+    const outcome = await fixture.solve();
+    expectGood(outcome);
+    expect(solved(outcome, circle).radius).toBeCloseTo(5, 8);
+    expect(solved(outcome, circle).centerX).toBeCloseTo(10, 8);
+    expect(solved(outcome, copy).radius).toBeCloseTo(11, 8);
+  });
+
+  it('refuses a round copy on the wrong side of its source', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    const [circle] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, circle, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    const copy = fixture.sketch().objectIds.map(String).at(-1)!;
+    fixture.constrain(lock(circle, 'center', 0, 0));
+    fixture.constrain({
+      constraintKind: 'radius',
+      objectId: circle as EntityId,
+      value: 5
+    });
+    expectGood(await fixture.solve());
+    // The copy edited inside: radius 4 is 1 from the source too, on the
+    // side the relation does not record.
+    const inside = structuredClone(fixture.manager.document);
+    (
+      inside.nodes[copy as EntityId] as unknown as {
+        data: Record<string, number>;
+      }
+    ).data.radius = 4;
+    const held = await adapter.solveSketch(inside, fixture.sketchId, {
+      anchor: { objectIds: [copy] }
+    });
+    expect(held.converged).toBe(false);
+    expect(held.classification).toBe('unsatisfied');
+  });
+
+  it('states a collinear chain corner once, so the offset adds no redundancy', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 5, y2: 0 },
+      { objectKind: 'line', x1: 5, y1: 0, x2: 10, y2: 0 }
+    ]);
+    const [a, b] = fixture.ids as [string, string];
+    fixture.constrain({
+      constraintKind: 'coincident',
+      a: { objectId: a as EntityId, point: 'end' },
+      b: { objectId: b as EntityId, point: 'start' }
+    });
+    expectGood(await fixture.solve());
+    await fixture.commit(
+      offsetPlan(fixture, a, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    expect(
+      fixture
+        .sketch()
+        .constraints!.some(({ data }) => data.constraintKind === 'offset')
+    ).toBe(true);
+    expectGood(await fixture.solve());
+  });
+
+  it('re-states a collinear corner once its sources turn apart', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 5, y2: 0 },
+      { objectKind: 'line', x1: 5, y1: 0, x2: 10, y2: 0 }
+    ]);
+    const [a, b] = fixture.ids as [string, string];
+    fixture.constrain({
+      constraintKind: 'coincident',
+      a: { objectId: a as EntityId, point: 'end' },
+      b: { objectId: b as EntityId, point: 'start' }
+    });
+    await fixture.commit(
+      offsetPlan(fixture, a, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    fixture.constrain(lock(a, 'start', 0, 0));
+    fixture.constrain(lock(a, 'end', 5, 0));
+    // The second source turns up off the first one's carrier.
+    fixture.constrain(lock(b, 'end', 10, 5));
+    const outcome = await fixture.solve();
+    expect(outcome.converged).toBe(true);
+    expect(outcome.classification).not.toBe('unsatisfied');
+    const copies = fixture
+      .sketch()
+      .objectIds.map(String)
+      .filter((id) => !fixture.ids.includes(id))
+      .map((id) => solved(outcome, id))
+      .filter((object) => 'x1' in object);
+    // Each copy sits 1 to the left of its source at both ends.
+    const left = (
+      line: { x1: number; y1: number; x2: number; y2: number },
+      x: number,
+      y: number
+    ) =>
+      ((line.x2 - line.x1) * (y - line.y1) -
+        (line.y2 - line.y1) * (x - line.x1)) /
+      Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+    const sources = [
+      { x1: 0, y1: 0, x2: 5, y2: 0 },
+      { x1: 5, y1: 0, x2: 10, y2: 5 }
+    ];
+    for (const [index, copy] of copies.entries()) {
+      const line = copy as unknown as {
+        x1: number;
+        y1: number;
+        x2: number;
+        y2: number;
+      };
+      expect(left(sources[index]!, line.x1, line.y1)).toBeCloseTo(1, 7);
+      expect(left(sources[index]!, line.x2, line.y2)).toBeCloseTo(1, 7);
+    }
+  });
+
+  it('refuses a wrong-side round copy even for a tiny offset', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    const [circle] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, circle, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    const copy = fixture.sketch().objectIds.map(String).at(-1)!;
+    setOffset(fixture, 4e-8);
+    const inside = structuredClone(fixture.manager.document);
+    (
+      inside.nodes[copy as EntityId] as unknown as {
+        data: Record<string, number>;
+      }
+    ).data.radius = 5 - 4e-8;
+    const held = await adapter.solveSketch(inside, fixture.sketchId, {
+      anchor: { objectIds: [circle, copy] }
+    });
+    expect(held.converged).toBe(false);
+  });
+
+  it('offsets a full-turn arc to a circle and records the pair', async () => {
+    const fixture = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 360
+      }
+    ]);
+    const [arc] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, arc, 1, { join: 'miter', chain: false, side: 1 })
+    );
+    const offset = fixture
+      .sketch()
+      .constraints!.find(({ data }) => data.constraintKind === 'offset')!;
+    if (offset.data.constraintKind !== 'offset') throw new Error('no offset');
+    expect(offset.data.pairs).toHaveLength(1);
+    expect(offset.data.pairs[0]!.source).toBe(arc);
+    expectGood(await fixture.solve());
+  });
+
+  it('follows a renamed parameter and refuses an expression that is not positive', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
+    ]);
+    const [line] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, line, 1, { join: 'miter', chain: false, side: 1 })
+    );
+    setOffset(fixture, 'gap');
+    const sketch = structuredClone(fixture.sketch());
+    rewriteNodeExpressions(sketch, (expression) =>
+      expression === 'gap' ? 'clearance' : expression
+    );
+    const renamed = sketch.constraints!.find(
+      ({ data }) => data.constraintKind === 'offset'
+    )!.data as { value: unknown };
+    expect(renamed.value).toBe('clearance');
+
+    setOffset(fixture, '1 - 3');
+    await expect(fixture.solve()).rejects.toThrow(
+      /offset distance is positive/
+    );
+  });
 
   it('holds an offset circle concentric with its source through an edit', async () => {
     const fixture = sketchWith([

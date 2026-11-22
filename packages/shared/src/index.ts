@@ -578,6 +578,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client cannot solve it, so it must refuse the document. Builds on
 // v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
 // switching (#1915) and the S07 entity lock (#1913).
+// v146 adds the S05 driving offset dimension (`offset` sketch constraints):
+// the distance an Offset's copies keep from their sources. An older client
+// cannot solve it, so it must refuse the document. Builds on v145.
 // v148 adds I03 display units (`displayUnits` and its `displayUnits.set`
 // command): the unit lengths are shown and typed in, which may differ from
 // the unit the document stores. An older client would replay the command
@@ -2278,6 +2281,18 @@ export type SketchConstraintData =
       source: EntityId;
       instances: { objectId: EntityId; step: number }[];
       layout: SketchPatternLayout;
+    }
+  /**
+   * S05 (v146): the driving distance of one Offset. Each pair is a source
+   * curve and the copy offset from it; `side` says which way (a line's
+   * left, +1, or right, -1, of its start-to-end direction; a round's
+   * outside, +1, or inside, -1). Every copy stays `value` from its source,
+   * so editing the value re-offsets them all.
+   */
+  | {
+      constraintKind: 'offset';
+      pairs: { source: EntityId; copy: EntityId; side: 1 | -1 }[];
+      value: ParamValue;
     };
 
 /** How a {@link SketchConstraintData} `pattern` relation places its steps. */
@@ -6348,7 +6363,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle' | 'pattern'
+  'distance' | 'radius' | 'angle' | 'pattern' | 'offset'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [

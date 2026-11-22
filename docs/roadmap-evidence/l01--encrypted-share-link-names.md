@@ -1,0 +1,5 @@
+---
+row: L01
+---
+
+Encrypted link names: share links of end-to-end encrypted projects take owner-only names like plaintext links (a name field when creating one, and Name with Save on an open link card), sealed under the account key in one account record and synced between the owner's devices, so neither the server nor the project's members see them (ADR-024 amendment 2026-11-22; `SHARE_LINK_NAMES_RECORD`, `/api/share-link-names`, migration 0067). Each link's entry is last-writer-wins by stamp with tombstones, revoking a link drops its name, the Worker refuses a write that does not raise the sealed sequence, and a device keeps its own copy when the record cannot be opened. Evidence: `packages/crypto/src/sealed-records.test.ts` (fixed vector checked against Python `cryptography`, refusals), `test/share-link-names.test.ts` (migrated SQLite: compare-and-set, sequence, erasure fence, export, the route), `apps/web/src/lib/e2ee/sealedShareLinkNames.test.ts` (merge, rollback, account-key rotation, unreadable record kept), `EncryptedShareLinks.test.tsx` (naming, renaming and clearing).
