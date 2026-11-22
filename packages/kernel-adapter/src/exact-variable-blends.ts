@@ -80,6 +80,7 @@ export function perEdgeVertexRadii(
       currentHash: number;
       witness: { closed: boolean; endpoints?: unknown };
     }[];
+    edgeRuns?: readonly boolean[];
   },
   entries: readonly { edge: number; end: 0 | 1; radius: number }[],
   startRadius: number,
@@ -124,6 +125,18 @@ export function perEdgeVertexRadii(
       throw new AdapterRefusal(
         'fillet_vertex_radius_unmatched',
         'A per-vertex fillet radius names an end of an edge that now runs across the direction it was picked in, so its ends cannot be told apart.'
+      );
+    }
+    // The direction the edge ran when the radii were set must be the one
+    // it runs now relative to where it was picked. A body turned upstream
+    // (180° about an axis) or an edge rebuilt reversed swaps which physical
+    // corner sits at which picked end; that cannot be told apart from
+    // position alone, so it is refused rather than guessed (review).
+    const recorded = data.edgeRuns?.[entry.edge];
+    if (recorded === undefined || recorded !== dot > 0) {
+      throw new AdapterRefusal(
+        'fillet_vertex_radius_unmatched',
+        'A per-vertex fillet radius names an edge that now runs the other way from when its corners were set, so its corners cannot be told apart; set the corner radii again.'
       );
     }
     const kernelStart = dot > 0 ? entry.end === 0 : entry.end === 1;

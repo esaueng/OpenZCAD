@@ -2772,7 +2772,9 @@ describe('fillet and chamfer run in place', () => {
           { edge: 0, end: 1, radius: 'r' },
           { edge: 1, end: 1, radius: 'r' },
           { edge: 1, end: 0, radius: 3 }
-        ]
+        ],
+        // Both edges are drawn towards (20, 0, 4), witness end 1 of each.
+        edgeRuns: [true, true]
       });
       const handles = spec.handles(slots, {}, CTX, perCorner);
       expect(handles.map((handle) => handle.valueId)).toEqual([
@@ -2793,6 +2795,28 @@ describe('fillet and chamfer run in place', () => {
           CTX
         )
       ).not.toHaveProperty('vertexRadii');
+    });
+
+    it('keys each corner value by where its corner stands (review)', () => {
+      const keys = IN_PLACE_TOOL_SPECS.fillet.edgeValueKeys!;
+      expect(keys([A, B])).toEqual({
+        vertex1: '0,0,4',
+        vertex2: '20,0,4',
+        vertex3: '20,10,4'
+      });
+      // B alone: its corners take the first two slots, keyed as before, so
+      // the session moves an edited value with its corner, not its slot.
+      expect(keys([B])).toEqual({ vertex1: '20,10,4', vertex2: '20,0,4' });
+    });
+
+    it('is not ready without a drawn edge end to read its direction from', () => {
+      const { end: _end, ...endless } = A;
+      expect(
+        IN_PLACE_TOOL_SPECS.fillet.ready(
+          { ...EMPTY, edges: [endless] },
+          perCorner
+        )
+      ).toBe(false);
     });
 
     it('is not ready without named edges or past its corner count', () => {

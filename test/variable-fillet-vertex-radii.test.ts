@@ -5,6 +5,7 @@ import {
   createProjectDocument,
   filletEdges,
   listNodesByKind,
+  transformBody,
   updateFeature
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '../packages/kernel-adapter/src/exact';
@@ -47,6 +48,17 @@ function longEdge(body: BodyRepresentation): EdgeTopology {
   );
   if (!edge) throw new Error('Expected a referenced 60 mm edge.');
   return edge;
+}
+
+/** Whether the kernel draws `edge` from its witness end 0 to end 1. */
+function runOf(edge: EdgeTopology): boolean {
+  const points = edge.points;
+  const far = points.slice(-3);
+  const near = (end: 0 | 1) => {
+    const point = witnessEnd(edge, end);
+    return Math.hypot(far[0]! - point.x, far[1]! - point.y, far[2]! - point.z);
+  };
+  return near(1) < near(0);
 }
 
 /** The witness end `end` of `edge`, in document units. */
@@ -105,7 +117,8 @@ async function roundWith(radii: FilletVertexRadius[], edgeIndexOf?: number) {
       vertexRadii: radii.map((entry) => ({
         ...entry,
         edge: edgeIndexOf ?? entry.edge
-      }))
+      })),
+      edgeRuns: [runOf(edge)]
     });
     const derived = await adapter.syncDocument(rounded.document);
     return {
@@ -186,7 +199,8 @@ describe('per-vertex fillet radii (M03, v142)', { timeout: 120_000 }, () => {
       edgeReferences: [edge.reference!],
       size: 1,
       endRadius: 2,
-      radiusLaw: 'linear' as const
+      radiusLaw: 'linear' as const,
+      edgeRuns: [runOf(edge)]
     };
     for (const [vertexRadii, message] of [
       [[], /non-empty/],
@@ -222,6 +236,32 @@ describe('per-vertex fillet radii (M03, v142)', { timeout: 120_000 }, () => {
         vertexRadii: [{ edge: 0, end: 0, radius: 1 }]
       })
     ).toMatch(/variable-radius fillet/);
+    // A repeated hash (as an edit patch could store) or missing directions
+    // are refused wherever the list is checked (review).
+    expect(
+      filletVertexRadiiProblem({
+        edgeHashes: [edge.hash, edge.hash],
+        edgeReferences: [edge.reference!],
+        endRadius: 2,
+        edgeRuns: [true, true],
+        vertexRadii: [{ edge: 1, end: 0, radius: 3 }]
+      })
+    ).toMatch(/names each edge once/);
+    expect(
+      filletVertexRadiiProblem({
+        edgeHashes: [edge.hash],
+        edgeReferences: [edge.reference!],
+        endRadius: 2,
+        vertexRadii: [{ edge: 0, end: 0, radius: 3 }]
+      })
+    ).toMatch(/direction each selected edge ran/);
+    // An older document cannot take the field (review).
+    expect(() =>
+      filletEdges({ ...document, schemaVersion: 141 } as never, {
+        ...base,
+        vertexRadii: [{ edge: 0, end: 0, radius: 3 }]
+      })
+    ).toThrow(/Per-vertex fillet radii/);
 
     const stored = filletEdges(document, {
       ...base,
@@ -235,6 +275,73 @@ describe('per-vertex fillet radii (M03, v142)', { timeout: 120_000 }, () => {
         schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
       } as never)
     ).toThrow(/Per-vertex fillet radii/);
+  });
+
+  it('refuses by name when an upstream turn swaps which corner is which', async () => {
+    // The reviewer's case: R1 and R3 at the two corners of an X edge, then
+    // the box turned 180° about Z upstream. The edge keeps its lineage but its
+    // ends trade places; nothing in the geometry tells the swap from a plain
+    // move, so the fillet is refused rather than built with the radii swapped.
+    const adapter = await createExactKernelAdapter();
+    try {
+      let document = addPrimitiveFeature(createProjectDocument('Turn', user), {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: LENGTH, height: 40, depth: 20 }
+      });
+      const box = document.bodyOrder.at(-1) as BodyId;
+      const moved = transformBody(document, {
+        name: 'Turn',
+        targetBodyId: box,
+        translation: { x: 0, y: 0, z: 0 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      });
+      document = moved.document;
+      const bodyId = moved.bodyId;
+      const before = (await adapter.syncDocument(document)).bodyRepresentations[
+        bodyId
+      ]!;
+      const edge = longEdge(before);
+      const rounded = filletEdges(document, {
+        name: 'Round',
+        targetBodyId: bodyId,
+        edgeHashes: [edge.hash],
+        edgeReferences: [edge.reference!],
+        size: 1,
+        endRadius: 1,
+        radiusLaw: 'linear',
+        vertexRadii: [
+          { edge: 0, end: 0, radius: 1 },
+          { edge: 0, end: 1, radius: 3 }
+        ],
+        edgeRuns: [runOf(edge)]
+      });
+      const built = await adapter.syncDocument(rounded.document);
+      expect(
+        (built.featureWarnings ?? []).filter((w) => w.kind !== 'advisory')
+      ).toEqual([]);
+      const turn = listNodesByKind(rounded.document, 'feature').find(
+        (feature) => feature.name === 'Turn'
+      )!;
+      const turned = updateFeature(rounded.document, {
+        featureId: turn.featureId,
+        data: {
+          transform: {
+            translation: { x: 0, y: 0, z: 0 },
+            rotationDeg: { x: 0, y: 0, z: 180 }
+          }
+        }
+      });
+      const rebuilt = await adapter.syncDocument(turned);
+      const refusal = (rebuilt.featureWarnings ?? []).find(
+        (warning) => warning.kind !== 'advisory'
+      );
+      expect(refusal?.kernelRefusal?.code).toBe(
+        'fillet_vertex_radius_unmatched'
+      );
+    } finally {
+      adapter.dispose();
+    }
   });
 
   it('drops the per-vertex radii when an edit returns the fillet to constant', async () => {

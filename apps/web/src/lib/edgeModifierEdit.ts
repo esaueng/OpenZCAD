@@ -23,6 +23,8 @@ export interface EdgeModifierFormValue {
   radiusLaw?: VariableFilletLaw;
   /** Fillet only (M03, v142): per-vertex radii; absent means none. */
   vertexRadii?: FilletVertexRadius[];
+  /** Fillet only, with `vertexRadii`: how each edge ran when they were set. */
+  edgeRuns?: boolean[];
   /** Chamfer only: setback on the other face; absent means symmetric. */
   distance2?: ParamValue;
 }
@@ -50,9 +52,9 @@ export function edgeModifierCommand(
   const clearData =
     kind === 'fillet'
       ? value.endRadius === undefined
-        ? ['endRadius', 'radiusLaw', 'vertexRadii']
+        ? ['endRadius', 'radiusLaw', 'vertexRadii', 'edgeRuns']
         : value.vertexRadii === undefined
-          ? ['vertexRadii']
+          ? ['vertexRadii', 'edgeRuns']
           : []
       : [
           ...(value.angleDeg === undefined ? ['angleDeg'] : []),
@@ -76,7 +78,12 @@ export function edgeModifierCommand(
                     endRadius: value.endRadius,
                     radiusLaw: value.radiusLaw ?? 'linear',
                     ...(value.vertexRadii !== undefined
-                      ? { vertexRadii: value.vertexRadii }
+                      ? {
+                          vertexRadii: value.vertexRadii,
+                          ...(value.edgeRuns !== undefined
+                            ? { edgeRuns: value.edgeRuns }
+                            : {})
+                        }
                       : {})
                   }
                 : {})

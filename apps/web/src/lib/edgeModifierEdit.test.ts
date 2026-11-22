@@ -46,7 +46,7 @@ describe('edge modifier edit command', () => {
       size: 2
     });
     expect(command.payload).toMatchObject({
-      clearData: ['endRadius', 'radiusLaw', 'vertexRadii']
+      clearData: ['endRadius', 'radiusLaw', 'vertexRadii', 'edgeRuns']
     });
   });
 
@@ -62,7 +62,7 @@ describe('edge modifier edit command', () => {
     expect(command.payload).toMatchObject({
       data: { radius: 1, endRadius: 3, radiusLaw: 'scurve' },
       // M03 (v142): Start and end drops corners an earlier edit stored.
-      clearData: ['vertexRadii']
+      clearData: ['vertexRadii', 'edgeRuns']
     });
   });
 

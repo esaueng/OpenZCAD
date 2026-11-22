@@ -820,6 +820,15 @@ export interface FilletVertexRadius {
   radius: ParamValue;
 }
 
+/*
+ * A fillet that stores `vertexRadii` also stores `edgeRuns`: for each
+ * selected edge, whether the kernel ran it from witness end 0 to end 1 when
+ * the radii were set. A rebuild that finds the edge running the other way
+ * relative to where it was picked (a body turned upstream, or an edge rebuilt
+ * reversed) cannot tell which physical corner each radius belongs to, and is
+ * refused by name rather than guessed.
+ */
+
 /**
  * Why a fillet's `vertexRadii` cannot be stored, or null when it can: it
  * needs a variable law (`endRadius`), a lineage reference for every edge it
@@ -830,13 +839,29 @@ export function filletVertexRadiiProblem(data: {
   edgeReferences?: readonly { currentHash: number }[];
   endRadius?: ParamValue;
   vertexRadii?: unknown;
+  edgeRuns?: unknown;
 }): string | null {
   const entries = data.vertexRadii;
-  if (entries === undefined) return null;
+  if (entries === undefined) {
+    return data.edgeRuns === undefined
+      ? null
+      : 'Fillet edge directions go only with per-vertex radii.';
+  }
   if (!Array.isArray(entries) || entries.length === 0)
     return 'Per-vertex fillet radii must be a non-empty list.';
   if (data.endRadius === undefined)
     return 'Per-vertex fillet radii need a variable-radius fillet.';
+  // Entries name edges by position, so the selection must not repeat one
+  // (an edit patch can store a repeated hash that creation would refuse).
+  if (new Set(data.edgeHashes).size !== data.edgeHashes.length)
+    return 'Per-vertex fillet radii need a selection that names each edge once.';
+  const runs = data.edgeRuns;
+  if (
+    !Array.isArray(runs) ||
+    runs.length !== data.edgeHashes.length ||
+    runs.some((run) => typeof run !== 'boolean')
+  )
+    return 'Per-vertex fillet radii need the direction each selected edge ran when they were set.';
   const seen = new Set<string>();
   for (const entry of entries as unknown[]) {
     if (typeof entry !== 'object' || entry === null)
@@ -3456,6 +3481,12 @@ export type FeatureData =
        * {@link FilletVertexRadius}. Only with `endRadius`.
        */
       vertexRadii?: FilletVertexRadius[];
+      /**
+       * M03 (schema v142): for each selected edge, whether the kernel ran it
+       * from witness end 0 to end 1 when `vertexRadii` were set. Present
+       * exactly when `vertexRadii` is.
+       */
+      edgeRuns?: boolean[];
     }
   | {
       featureKind: 'chamfer';

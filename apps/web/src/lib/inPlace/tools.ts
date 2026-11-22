@@ -672,6 +672,8 @@ export type InPlaceRequest =
       radiusLaw?: VariableFilletLaw;
       /** M03 (v142): per-vertex radii, by picked edge and witness end. */
       vertexRadii?: FilletVertexRadius[];
+      /** With `vertexRadii`: how each picked edge ran when they were set. */
+      edgeRuns?: boolean[];
       angleDeg?: ParamValue;
       distance2?: ParamValue;
     }
@@ -1047,6 +1049,14 @@ export interface InPlaceToolSpec {
    * keeps its top there, so its corner follows its height), from the
    * values as they were. Values held as typed expressions are left alone.
    */
+  /**
+   * M03: a stable key for each value bound to a picked edge's geometry (a
+   * fillet's corner radii), for the current edge picks. When the picks
+   * change, a value follows its key to whichever value id now holds it, and
+   * a value whose key is gone returns to its default, so an edit never
+   * lands on a corner the user did not set.
+   */
+  edgeValueKeys?(edges: readonly EdgePick[]): Readonly<Record<string, string>>;
   carries?(
     valueId: string,
     value: number,
@@ -7331,6 +7341,28 @@ export function filletSelectionVertices(
   return vertices.map(({ key: _key, ...vertex }) => vertex);
 }
 
+/**
+ * M03: for each picked edge, whether it runs from its witness end 0 to end 1
+ * as the kernel built it (its drawn far end, `end`, at witness end 1). Null
+ * when an edge has no drawn end or no open witness.
+ */
+export function filletEdgeRuns(
+  edges: readonly Pick<EdgePick, 'reference' | 'end'>[]
+): boolean[] | null {
+  const runs: boolean[] = [];
+  for (const pick of edges) {
+    const witness = pick.reference?.witness;
+    const far = pick.end;
+    if (!witness || witness.closed || !far) return null;
+    const distance = (end: 0 | 1) => {
+      const [x, y, z] = witness.endpoints[end];
+      return Math.hypot(far.x - x * 1e-6, far.y - y * 1e-6, far.z - z * 1e-6);
+    };
+    runs.push(distance(1) < distance(0));
+  }
+  return runs;
+}
+
 /** A per-vertex fillet: the law is variable and its radius is set by corner. */
 function perVertex(options: Readonly<Record<string, string>>): boolean {
   return (
@@ -7434,7 +7466,11 @@ const fillet: InPlaceToolSpec = {
     if (slots.edges.length === 0) return false;
     if (!options || !perVertex(options)) return true;
     const vertices = filletSelectionVertices(slots.edges);
-    return vertices !== null && vertices.length <= FILLET_VERTEX_SLOTS;
+    return (
+      vertices !== null &&
+      vertices.length <= FILLET_VERTEX_SLOTS &&
+      filletEdgeRuns(slots.edges) !== null
+    );
   },
   request(slots, values, options) {
     const first = slots.edges[0];
@@ -7445,9 +7481,10 @@ const fillet: InPlaceToolSpec = {
     const vertices = perVertex(options)
       ? filletSelectionVertices(slots.edges)
       : null;
+    const runs = perVertex(options) ? filletEdgeRuns(slots.edges) : null;
     if (
       perVertex(options) &&
-      (!vertices || vertices.length > FILLET_VERTEX_SLOTS)
+      (!vertices || !runs || vertices.length > FILLET_VERTEX_SLOTS)
     )
       return null;
     const radius = values.radius ?? 2;
@@ -7470,12 +7507,25 @@ const fillet: InPlaceToolSpec = {
                       end,
                       radius: values[filletVertexValueId(index)] ?? radius
                     }))
-                  )
+                  ),
+                  ...(runs ? { edgeRuns: runs } : {})
                 }
               : {})
           }
         : {})
     };
+  },
+  // Each corner value is keyed by where its corner stands, so it follows
+  // the corner as edges are picked or dropped (review).
+  edgeValueKeys: (edges) => {
+    const keys: Record<string, string> = {};
+    (filletSelectionVertices(edges) ?? [])
+      .slice(0, FILLET_VERTEX_SLOTS)
+      .forEach((vertex, index) => {
+        keys[filletVertexValueId(index)] =
+          `${vertex.point.x},${vertex.point.y},${vertex.point.z}`;
+      });
+    return keys;
   },
   handles: (slots, _values, _ctx, options) => {
     if (perVertex(options)) {
