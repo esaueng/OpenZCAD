@@ -145,6 +145,7 @@ import {
 } from './exact-prepared-group-edit';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
+import { tryCarryChamferRim } from './exact-chamfer-rim-carry';
 import { resizeChamferedThroughHole } from './exact-chamfered-hole';
 import { assertWallResizeAccepted } from './result-acceptance';
 import {
@@ -2604,7 +2605,10 @@ export function applyDirectEdit(
     const exactCap =
       analytic === null
         ? (tryExactChamferedCylinderCapOffset(kernel, solid, face, offset) ??
-          tryExactLocalChamferCapOffset(kernel, solid, face, offset))
+          tryExactLocalChamferCapOffset(kernel, solid, face, offset) ??
+          // A cap ringed by a chamfer the kernel's move would extend or
+          // refuse instead of carrying (see exact-chamfer-rim-carry.ts).
+          tryCarryChamferRim(kernel, solid, face, offset))
         : { solid: analytic, relation: null };
     const moved = exactCap ?? moveFace();
     const output = moved.solid;

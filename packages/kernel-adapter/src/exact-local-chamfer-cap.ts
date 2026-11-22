@@ -32,7 +32,7 @@ interface Circle {
   u_axis: Point;
   v_axis: Point;
 }
-interface Arena {
+export interface Arena {
   version: number;
   vertices: { point: Point; tolerance: number }[];
   edges: {
@@ -108,7 +108,7 @@ function completeRim(kernel: RemusKernel, arena: Arena, rim: Rim, axis: Vec3) {
 }
 
 /** Conservative support bound, never a tessellated or sampled clearance test. */
-function faceExtent(
+export function faceExtent(
   arena: Arena,
   face: number,
   axis: Vec3,
@@ -431,6 +431,26 @@ export function tryExactLocalChamferCapOffset(
     )
   )
     return null;
+  return editNativeArena(kernel, solid, face, (probe, arena, cap) =>
+    moveEnd(probe, arena, cap, offset)
+  );
+}
+
+/**
+ * Rewrite the pinned native arena of `solid` in place of a kernel operation.
+ *
+ * `edit` receives a fresh kernel whose handles are the arena's indices, the
+ * parsed arena and the selected face's index in it; it edits the arena and
+ * returns true, or returns false to decline (it may also throw). The result
+ * must deserialize, validate and keep every face's witness unique, and the
+ * returned relation maps each source face to its rewritten self.
+ */
+export function editNativeArena(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  edit: (probe: RemusKernel, arena: Arena, cap: number) => boolean
+): { solid: number; relation: RemusMoveFacesRelation } | null {
   const source = uniqueFaces(kernel, solid);
   if (!source) return null;
   const bytes = kernel.serializeSolids(Uint32Array.of(solid));
@@ -465,7 +485,7 @@ export function tryExactLocalChamferCapOffset(
     )
       return null;
     const cap = local.get(faceFingerprint(kernel, face));
-    if (cap === undefined || !moveEnd(probe, arena, cap, offset)) return null;
+    if (cap === undefined || !edit(probe, arena, cap)) return null;
     // Copied source journals do not describe this deformation. The explicit
     // construction relation below supplies its verified direct-edit lineage.
     delete arena.journal;
