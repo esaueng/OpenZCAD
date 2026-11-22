@@ -1,6 +1,8 @@
 import {
   documentNodesWithHistory,
+  filletVertexRadiiProblem,
   patternSpacingModeProblem,
+  type FeatureData,
   type PatternKind,
   type ProjectDocument,
   type SketchObjectData
@@ -161,6 +163,15 @@ export function assertPatternRelationSchema(version: unknown): void {
 
 function isPatternRelation(value: unknown): boolean {
   return record(value) && value.constraintKind === 'pattern';
+}
+
+/** S05 (schema v146): driving offset dimensions. */
+export function assertOffsetDimensionSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 146, 'Sketch offset dimensions');
+}
+
+function isOffsetDimension(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'offset';
 }
 
 /** S05 (schema v141): a tangent between two curves (no line in it). */
@@ -403,8 +414,20 @@ export function assertCustomFeatureSchema(version: unknown): void {
   );
 }
 
+/**
+ * M01: a hole measured from its entry face's outer boundary loop needs v150,
+ * or an older reader would measure it from the vertex mean instead.
+ */
+export const HOLE_OUTER_CENTROID_SCHEMA_VERSION = 150;
+
 export function assertHoleContentSchema(data: unknown, version: unknown): void {
   if (!record(data)) return;
+  if (data.positionAnchor === 'outer-centroid')
+    assertMinimumProjectSchema(
+      version,
+      HOLE_OUTER_CENTROID_SCHEMA_VERSION,
+      'Holes measured from the outer boundary'
+    );
   if (data.points !== undefined)
     assertMinimumProjectSchema(version, 64, 'Holes on sketch points');
   if (data.standard !== undefined)
@@ -1253,6 +1276,28 @@ export function assertDocumentContentCommandSchema(
       isPatternRelation(command.payload.constraint)
     )
       assertPatternRelationSchema(document.schemaVersion);
+    if (
+      command.kind === 'sketch.constraint.add' &&
+      isOffsetDimension(command.payload.constraint)
+    )
+      assertOffsetDimensionSchema(document.schemaVersion);
+    // M03: per-vertex fillet radii, created or patched.
+    {
+      const fillet =
+        command.kind === 'feature.fillet'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'fillet')
+            ? command.payload.data
+            : null;
+      if (fillet && fillet.vertexRadii !== undefined)
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          151,
+          'Per-vertex fillet radii'
+        );
+    }
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1294,6 +1339,21 @@ function assertSweepContentSchema(
     assertMinimumProjectSchema(version, 135, 'Round sweep corners');
   if (sweep.profilePosition !== undefined)
     assertMinimumProjectSchema(version, 136, 'Sweep profile position');
+}
+
+/**
+ * M03 (schema v151): a stored fillet's per-vertex radii need the version and
+ * a well-formed list (a variable law, a reference for each named edge, one
+ * entry per edge end).
+ */
+export function assertFilletContentSchema(
+  data: Extract<FeatureData, { featureKind: 'fillet' }>,
+  version: unknown
+): void {
+  if (data.vertexRadii === undefined && data.edgeRuns === undefined) return;
+  assertMinimumProjectSchema(version, 151, 'Per-vertex fillet radii');
+  const problem = filletVertexRadiiProblem(data);
+  if (problem) throw new Error(problem);
 }
 
 export function assertDocumentContentSchema(document: ProjectDocument): void {
@@ -1547,6 +1607,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'sweep')
       assertSweepContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'fillet')
+      assertFilletContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
       assertImportedStepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')
@@ -1605,6 +1667,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertPatternRelationSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isOffsetDimension(constraint.data)
+      )
+    )
+      assertOffsetDimensionSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

@@ -5556,7 +5556,13 @@ export function ModelViewer({
       let anchored = false;
       const e2eHandles: Record<
         string,
-        { x: number; y: number; value: number }
+        {
+          x: number;
+          y: number;
+          value: number;
+          /** A linear arrow's way on screen, a unit step in page pixels. */
+          axis?: { x: number; y: number };
+        }
       > = {};
       // Reads before the writes below, as `updateOffsetChip` does: the chips
       // keep out from under the right lane (the docked panels, the viewer
@@ -5802,11 +5808,37 @@ export function ModelViewer({
             .clone()
             .project(context.activeCamera);
           const rect = stageRect;
+          const page = (point: { x: number; y: number }) => ({
+            x: rect.left + ((point.x + 1) / 2) * rect.width,
+            y: rect.top + ((1 - point.y) / 2) * rect.height
+          });
+          const at = page(grip);
+          let axis: { x: number; y: number } | undefined;
+          if (view.kind === 'linear' && entry.rig) {
+            const ahead = page(
+              entry.rig.group.position
+                .clone()
+                .add(
+                  new THREE.Vector3(
+                    view.params.direction.x,
+                    view.params.direction.y,
+                    view.params.direction.z
+                  )
+                )
+                .project(context.activeCamera)
+            );
+            const length = Math.hypot(ahead.x - at.x, ahead.y - at.y);
+            if (length > 1e-9)
+              axis = {
+                x: (ahead.x - at.x) / length,
+                y: (ahead.y - at.y) / length
+              };
+          }
           e2eHandles[valueId] = {
-            x: rect.left + ((grip.x + 1) / 2) * rect.width,
-            y: rect.top + ((1 - grip.y) / 2) * rect.height,
+            ...at,
             // Where the rig stands, which a refused value is not.
-            value: entry.rig ? entry.rig.value() : value
+            value: entry.rig ? entry.rig.value() : value,
+            ...(axis ? { axis } : {})
           };
         }
       }

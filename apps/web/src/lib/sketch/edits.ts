@@ -958,7 +958,9 @@ export function planSketchEdit(
       picks[0]!,
       amount,
       offset ?? { ...DEFAULT_SKETCH_OFFSET_OPTIONS, side: 1 },
-      resolve
+      resolve,
+      // An expression stays parametric in the offset it drives.
+      Number.isFinite(Number(raw)) ? amount : raw
     );
   }
   if (

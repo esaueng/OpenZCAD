@@ -140,8 +140,7 @@ export interface SelectionCalloutContent {
   /** When `detail` is a diameter, its value, so a drag can rewrite it live. */
   /** `scale` (I03): document to printed units, absent when they match. */
   detailDiameter?:
-    | { diameter: number; units: string; scale?: number }
-    | undefined;
+    { diameter: number; units: string; scale?: number } | undefined;
   verbs: readonly SelectionCalloutVerb[];
   /**
    * Where the chip hangs: over the selected body, or over the geometry a

@@ -16,6 +16,7 @@ import {
   couplingsRemovedWith,
   removeAssemblyComponent,
   removeAssemblyJoint,
+  toggleJointPlayback,
   type AssembleWorkspaceApp
 } from './assembleWorkspace';
 import {
@@ -78,7 +79,7 @@ describe('Assemble workspace sample autoplay', () => {
       useAssembleWorkspace(true, {
         document,
         initialJointId: 'joint_pin',
-        initialPlayback: 'ping-pong',
+        initialPlayback: { mode: 'ping-pong', cycles: 3 },
         execute,
         onStatus: vi.fn()
       })
@@ -88,7 +89,8 @@ describe('Assemble workspace sample autoplay', () => {
       kind: 'joint',
       jointId: 'joint_pin',
       mode: 'ping-pong',
-      sweepS: 0.75
+      sweepS: 0.75,
+      cycles: 3
     });
     expect(getAnimatePrefs()).toEqual({ mode: 'ping-pong', sweepS: 0.75 });
     expect(
@@ -103,13 +105,47 @@ describe('Assemble workspace sample autoplay', () => {
     expect(JSON.stringify(manager.document)).toBe(saved);
   });
 
+  it('ends the sample sweep after its cycles; a user Play stays unbounded', () => {
+    const { manager } = scissorsManager({ joint: true });
+    const document = manager.document;
+    const app: AssembleWorkspaceApp = {
+      document,
+      initialJointId: 'joint_pin',
+      initialPlayback: { mode: 'ping-pong', cycles: 3 },
+      execute: vi.fn(() => true),
+      onStatus: vi.fn()
+    };
+    setAnimatePrefs({ mode: 'once', sweepS: 1 });
+    vi.spyOn(performance, 'now').mockReturnValue(1000);
+    renderHook(() => useAssembleWorkspace(true, app));
+    const playback = getAssemblyRuntime().playback!;
+    expect(playback).toMatchObject({ mode: 'ping-pong', cycles: 3 });
+    expect(
+      playbackFrame(document.assembly!, playback, 1000 + 5_900)?.done
+    ).toBe(false);
+    expect(
+      playbackFrame(document.assembly!, playback, 1000 + 8_000)
+    ).toMatchObject({ done: true, settled: true });
+
+    act(() => {
+      assemblyRuntime.stop();
+      toggleJointPlayback(app, 'joint_pin');
+    });
+    const manual = getAssemblyRuntime().playback!;
+    expect(manual).toMatchObject({ kind: 'joint', mode: 'ping-pong' });
+    expect(manual).not.toHaveProperty('cycles');
+    expect(
+      playbackFrame(document.assembly!, manual, 1000 + 600_000)?.done
+    ).toBe(false);
+  });
+
   it('keeps Pause stopped through later saved edits', () => {
     const { manager } = scissorsManager({ joint: true });
     const { execute } = recordingExecute(manager);
     const app = (): AssembleWorkspaceApp => ({
       document: manager.document,
       initialJointId: 'joint_pin',
-      initialPlayback: 'ping-pong',
+      initialPlayback: { mode: 'ping-pong', cycles: 3 },
       execute,
       onStatus: vi.fn()
     });
@@ -135,7 +171,7 @@ describe('Assemble workspace sample autoplay', () => {
     const app: AssembleWorkspaceApp = {
       document: manager.document,
       initialJointId: 'joint_pin',
-      initialPlayback: 'ping-pong',
+      initialPlayback: { mode: 'ping-pong', cycles: 3 },
       execute: vi.fn(() => true),
       onStatus: vi.fn()
     };
@@ -155,7 +191,7 @@ describe('Assemble workspace sample autoplay', () => {
     const app: AssembleWorkspaceApp = {
       document: manager.document,
       initialJointId: 'joint_pin',
-      initialPlayback: 'ping-pong',
+      initialPlayback: { mode: 'ping-pong', cycles: 3 },
       execute: vi.fn(() => true),
       onStatus: vi.fn()
     };
@@ -180,7 +216,7 @@ describe('Assemble workspace sample autoplay', () => {
       useAssembleWorkspace(true, {
         document: manager.document,
         initialJointId: 'joint_pin',
-        initialPlayback: 'ping-pong',
+        initialPlayback: { mode: 'ping-pong', cycles: 3 },
         execute: vi.fn(() => true),
         onStatus: vi.fn()
       })
@@ -250,7 +286,7 @@ describe('Assemble workspace launch selection', () => {
       {
         initialProps: {
           ...app(first.manager.document, 'joint_pin'),
-          initialPlayback: 'ping-pong'
+          initialPlayback: { mode: 'ping-pong', cycles: 3 }
         }
       }
     );

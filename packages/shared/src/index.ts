@@ -555,6 +555,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+// v151 adds M03 per-vertex fillet radii (`vertexRadii` and `edgeRuns` on a
+// variable-radius fillet): the radius at each end of each selected edge,
+// named by the edge's lineage witness. An older client would round every
+// edge from `radius` to `endRadius`, so it must refuse the document. Builds
+// on v150, which the M01 hole anchor (#1808) claims; v142 and v149, once
+// claimed here, were skipped.
 // v144 adds S07 entity locks (`lock-entity` sketch constraints): a whole
 // line, circle or arc held at a recorded position. An older client cannot
 // solve the relation, so it must refuse the document. Builds on v141; v142
@@ -565,6 +571,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client cannot solve it, so it must refuse the document. Builds on
 // v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
 // switching (#1915) and the S07 entity lock (#1913).
+// v146 adds the S05 driving offset dimension (`offset` sketch constraints):
+// the distance an Offset's copies keep from their sources. An older client
+// cannot solve it, so it must refuse the document. Builds on v145.
 // v148 adds I03 display units (`displayUnits` and its `displayUnits.set`
 // command): the unit lengths are shown and typed in, which may differ from
 // the unit the document stores. An older client would replay the command
@@ -572,7 +581,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // unit while the user reads another, so it must refuse the document. Builds
 // on v145; v146 and v147 are claimed by the S05 offset dimension (#1919)
 // and the M01 hole anchor (#1808), v142 and v144 by #1914 and #1913.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 148 as const;
+// v150 adds the M01 outer-boundary hole anchor (`positionAnchor:
+// 'outer-centroid'` on a hole): a typed position is measured from the
+// centroid of the entry face's outer boundary loop alone, so drilling or
+// resizing another hole in that face never moves it. An older client would
+// fall back to the vertex mean and drill the hole elsewhere, so it must
+// refuse. Builds on v148 (#1808); v149 is claimed by #1914. First claimed
+// as v118, then v147, and renumbered when later bumps landed first.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 151 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -812,6 +828,99 @@ export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
     typeof law === 'string' &&
     (VARIABLE_FILLET_LAWS as readonly string[]).includes(law)
   );
+}
+
+/**
+ * M03 (schema v151): the radius a variable-radius fillet reaches at one end
+ * of one selected edge.
+ *
+ * `edge` indexes the feature's `edgeHashes`; `end` names one of that edge's
+ * two witness endpoints (`edgeReferences[…].witness.endpoints`), so the end
+ * is fixed by where the edge was picked, not by the direction the kernel
+ * happens to give it. An end with no entry keeps what `radius` (the edge's
+ * start) or `endRadius` (its end) gives it.
+ * Two selected edges that share a vertex each carry their own entry; the
+ * editor writes the same value to both, and the kernel refuses a corner whose
+ * stripes disagree there.
+ */
+export interface FilletVertexRadius {
+  edge: number;
+  end: 0 | 1;
+  radius: ParamValue;
+}
+
+/*
+ * A fillet that stores `vertexRadii` also stores `edgeRuns`: for each
+ * selected edge, whether the kernel ran it from witness end 0 to end 1 when
+ * the radii were set. A rebuild that finds the edge running the other way
+ * relative to where it was picked (a body turned upstream, or an edge rebuilt
+ * reversed) cannot tell which physical corner each radius belongs to, and is
+ * refused by name rather than guessed.
+ */
+
+/**
+ * Why a fillet's `vertexRadii` cannot be stored, or null when it can: it
+ * needs a variable law (`endRadius`), a lineage reference for every edge it
+ * names, and at most one entry per edge end.
+ */
+export function filletVertexRadiiProblem(data: {
+  edgeHashes: readonly number[];
+  edgeReferences?: readonly { currentHash: number }[];
+  endRadius?: ParamValue;
+  vertexRadii?: unknown;
+  edgeRuns?: unknown;
+}): string | null {
+  const entries = data.vertexRadii;
+  if (entries === undefined) {
+    return data.edgeRuns === undefined
+      ? null
+      : 'Fillet edge directions go only with per-vertex radii.';
+  }
+  if (!Array.isArray(entries) || entries.length === 0)
+    return 'Per-vertex fillet radii must be a non-empty list.';
+  if (data.endRadius === undefined)
+    return 'Per-vertex fillet radii need a variable-radius fillet.';
+  // Entries name edges by position, so the selection must not repeat one
+  // (an edit patch can store a repeated hash that creation would refuse).
+  if (new Set(data.edgeHashes).size !== data.edgeHashes.length)
+    return 'Per-vertex fillet radii need a selection that names each edge once.';
+  const runs = data.edgeRuns;
+  if (
+    !Array.isArray(runs) ||
+    runs.length !== data.edgeHashes.length ||
+    runs.some((run) => typeof run !== 'boolean')
+  )
+    return 'Per-vertex fillet radii need the direction each selected edge ran when they were set.';
+  const seen = new Set<string>();
+  for (const entry of entries as unknown[]) {
+    if (typeof entry !== 'object' || entry === null)
+      return 'Each per-vertex fillet radius must be an object.';
+    const { edge, end, radius } = entry as Record<string, unknown>;
+    if (
+      typeof edge !== 'number' ||
+      !Number.isInteger(edge) ||
+      edge < 0 ||
+      edge >= data.edgeHashes.length
+    )
+      return 'A per-vertex fillet radius names an edge the fillet does not select.';
+    if (end !== 0 && end !== 1)
+      return 'A per-vertex fillet radius must name end 0 or end 1 of its edge.';
+    if (
+      !(typeof radius === 'string' && radius.trim() !== '') &&
+      !(typeof radius === 'number' && Number.isFinite(radius))
+    )
+      return 'A per-vertex fillet radius must be a number or an expression.';
+    const key = `${edge}:${end}`;
+    if (seen.has(key))
+      return 'A per-vertex fillet radius names the same edge end twice.';
+    seen.add(key);
+    const hash = data.edgeHashes[edge];
+    if (
+      !data.edgeReferences?.some((reference) => reference.currentHash === hash)
+    )
+      return 'Per-vertex fillet radii need the lineage reference of each edge they name.';
+  }
+  return null;
 }
 
 /**
@@ -2080,6 +2189,18 @@ export type SketchConstraintData =
       source: EntityId;
       instances: { objectId: EntityId; step: number }[];
       layout: SketchPatternLayout;
+    }
+  /**
+   * S05 (v146): the driving distance of one Offset. Each pair is a source
+   * curve and the copy offset from it; `side` says which way (a line's
+   * left, +1, or right, -1, of its start-to-end direction; a round's
+   * outside, +1, or inside, -1). Every copy stays `value` from its source,
+   * so editing the value re-offsets them all.
+   */
+  | {
+      constraintKind: 'offset';
+      pairs: { source: EntityId; copy: EntityId; side: 1 | -1 }[];
+      value: ParamValue;
     };
 
 /** How a {@link SketchConstraintData} `pattern` relation places its steps. */
@@ -2976,8 +3097,16 @@ export type FeatureData =
        * hole deliberately stores no world position — see {@link position} —
        * because upstream features move the body underneath it, and a value
        * that is never read back would be exactly that stale world point.
+       *
+       * M01 (schema v150): `'outer-centroid'` measures from the area centroid
+       * of the face's OUTER boundary loop alone (see
+       * `FaceGeometry.outerCentroid`). The full area centroid moves whenever
+       * another hole is drilled into or resized on the face, so a hole typed
+       * at a 10 mm inset drifted by every hole drilled before it. New holes
+       * take this anchor; `'centroid'` and absent remain what they always
+       * were, so a saved hole never moves.
        */
-      positionAnchor?: 'centroid';
+      positionAnchor?: 'centroid' | 'outer-centroid';
       /**
        * M01 (schema v64): drill one bore, of this same size and depth, at
        * each of these point entities of an earlier sketch whose plane is
@@ -3429,6 +3558,18 @@ export type FeatureData =
        * `endRadius` is present; absent reads as `'linear'`.
        */
       radiusLaw?: VariableFilletLaw;
+      /**
+       * M03 (schema v151): the radius at named ends of the selected edges,
+       * overriding `radius` and `endRadius` there; see
+       * {@link FilletVertexRadius}. Only with `endRadius`.
+       */
+      vertexRadii?: FilletVertexRadius[];
+      /**
+       * M03 (schema v151): for each selected edge, whether the kernel ran it
+       * from witness end 0 to end 1 when `vertexRadii` were set. Present
+       * exactly when `vertexRadii` is.
+       */
+      edgeRuns?: boolean[];
     }
   | {
       featureKind: 'chamfer';
@@ -3921,6 +4062,18 @@ export interface FaceGeometry {
    * as "assume approximate" rather than as "exact".
    */
   centroidProvenance?: FaceAreaProvenance;
+  /**
+   * The area centroid of the planar face's OUTER boundary loop alone, as if
+   * every inner loop (hole) were filled: the anchor a new hole's typed
+   * position is measured from (M01, schema v150). Unlike {@link centroid} it
+   * does not move when a hole is drilled into, resized on or removed from
+   * the face. Equal to `centroid` on a face with one boundary loop. Read
+   * from the kernel's own outer wire, which is walked alone, so it is
+   * present whenever that wire can be walked — even on a face whose inner
+   * loops cannot be, where `centroid` is absent. Exact for a straight-edged
+   * outer boundary, sampled (as `centroid` is) for a curved one.
+   */
+  outerCentroid?: Vector3;
   /** Outward unit normal; present for exact planar surfaces. */
   normal?: Vector3;
   /**
@@ -6133,7 +6286,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle' | 'pattern'
+  'distance' | 'radius' | 'angle' | 'pattern' | 'offset'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [

@@ -3,6 +3,7 @@ import type {
   BodyId,
   EdgeTopologyReferenceV5,
   FeatureNode,
+  FilletVertexRadius,
   ParamValue,
   VariableFilletLaw
 } from '@openzcad/shared';
@@ -20,6 +21,10 @@ export interface EdgeModifierFormValue {
   endRadius?: ParamValue;
   /** Fillet only: read only with `endRadius`; absent means 'linear'. */
   radiusLaw?: VariableFilletLaw;
+  /** Fillet only (M03, v151): per-vertex radii; absent means none. */
+  vertexRadii?: FilletVertexRadius[];
+  /** Fillet only, with `vertexRadii`: how each edge ran when they were set. */
+  edgeRuns?: boolean[];
   /** Chamfer only: setback on the other face; absent means symmetric. */
   distance2?: ParamValue;
 }
@@ -47,8 +52,10 @@ export function edgeModifierCommand(
   const clearData =
     kind === 'fillet'
       ? value.endRadius === undefined
-        ? ['endRadius', 'radiusLaw']
-        : []
+        ? ['endRadius', 'radiusLaw', 'vertexRadii', 'edgeRuns']
+        : value.vertexRadii === undefined
+          ? ['vertexRadii', 'edgeRuns']
+          : []
       : [
           ...(value.angleDeg === undefined ? ['angleDeg'] : []),
           ...(value.distance2 === undefined ? ['distance2'] : [])
@@ -69,7 +76,15 @@ export function edgeModifierCommand(
               ...(value.endRadius !== undefined
                 ? {
                     endRadius: value.endRadius,
-                    radiusLaw: value.radiusLaw ?? 'linear'
+                    radiusLaw: value.radiusLaw ?? 'linear',
+                    ...(value.vertexRadii !== undefined
+                      ? {
+                          vertexRadii: value.vertexRadii,
+                          ...(value.edgeRuns !== undefined
+                            ? { edgeRuns: value.edgeRuns }
+                            : {})
+                        }
+                      : {})
                   }
                 : {})
             }

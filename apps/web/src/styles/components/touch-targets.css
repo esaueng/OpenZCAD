@@ -290,6 +290,24 @@
   }
 }
 
+/* The measurement workbench's head held its 44 px Clear all between 7 px
+   of padding, 59 px in all. Six measurement types take two rows of tabs
+   (M13), and on a short phone with the view tools open the result list kept
+   40 px, under one action's 44: Hide stood out of the list's top. There the
+   head is the 44 px target's own height, with or without Clear all. */
+@media (pointer: coarse) and (max-height: 700px) {
+  .measurement-dock-head {
+    min-height: 44px;
+    padding-block: 0;
+  }
+
+  /* With no padding above it, Clear all meets the dock's clipped top edge:
+     draw its focus ring inside the button so keyboard focus stays visible. */
+  .measurement-dock-clear:focus-visible {
+    outline-offset: -2px;
+  }
+}
+
 /* A touch-only device has no keys to press: the hints that name them are
    noise there (I23), and the File menu named Ctrl+S on a phone. A tablet
    with a keyboard and trackpad reports hover and keeps them. */

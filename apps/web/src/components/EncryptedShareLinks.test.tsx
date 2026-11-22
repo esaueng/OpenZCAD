@@ -33,7 +33,8 @@ function fakeClient(states: EncryptedShareLinksState[]) {
     fireRemoval(notice?: ShareRemovalNotice): void;
   } = {
     list: vi.fn(async () => states[Math.min(index++, states.length - 1)]!),
-    create: vi.fn(async () => ({ url: URL_A })),
+    create: vi.fn(async () => ({ url: URL_A, shareId: 'shr_new' })),
+    rename: vi.fn(async () => undefined),
     revoke: vi.fn(async () => undefined),
     allowComments: vi.fn(async () => undefined),
     confirm: vi.fn(async () => undefined),
@@ -537,6 +538,148 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
   });
 });
 
+describe('EncryptedShareLinks names (ADR-024 amendment 2026-11-22)', () => {
+  const empty: EncryptedShareLinksState = {
+    links: [],
+    needsConfirmation: false,
+    retired: []
+  };
+
+  it('names a new link once it is made, and shows the name on its card', async () => {
+    const named: EncryptedShareLinksState = {
+      ...active,
+      links: [{ ...active.links[0]!, shareId: 'shr_new', name: 'Client review' }]
+    };
+    const client = fakeClient([empty, named]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText('Only invited people');
+    await user.type(
+      screen.getByRole('textbox', { name: 'Link name' }),
+      '  Client   review '
+    );
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(client.rename).toHaveBeenCalledWith(
+        'proj_x',
+        'shr_new',
+        'Client review'
+      )
+    );
+    expect(client.create).toHaveBeenCalledWith('proj_x', 'view');
+    expect(await screen.findByText('Client review is ready')).toBeVisible();
+    expect(
+      await screen.findByRole('button', { name: 'Client review' })
+    ).toBeVisible();
+  });
+
+  it('leaves a link unnamed when no name was typed', async () => {
+    const client = fakeClient([empty, active]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText('Only invited people');
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    await screen.findByText('View only link is ready');
+    expect(client.rename).not.toHaveBeenCalled();
+  });
+
+  it('refuses a name with control characters before making the link', async () => {
+    const client = fakeClient([empty]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText('Only invited people');
+    const field = screen.getByRole('textbox', { name: 'Link name' });
+    await userEvent.click(field);
+    await userEvent.paste('Bad\u0007name');
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(
+      await screen.findByText('A link name cannot contain control characters.')
+    ).toBeVisible();
+    expect(client.create).not.toHaveBeenCalled();
+  });
+
+  it('says when the link was made but its name was not saved', async () => {
+    const client = fakeClient([empty, active]);
+    vi.mocked(client.rename!).mockRejectedValueOnce(new Error('offline'));
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText('Only invited people');
+    await userEvent.type(
+      screen.getByRole('textbox', { name: 'Link name' }),
+      'Supplier'
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    expect(
+      await screen.findByText(
+        'The link was created, but its name was not saved: offline'
+      )
+    ).toBeVisible();
+    expect(screen.getByLabelText('Share link')).toHaveValue(URL_A);
+  });
+
+  it('renames and clears a link from its card', async () => {
+    const named: EncryptedShareLinksState = {
+      ...active,
+      links: [{ ...active.links[0]!, name: 'Client review' }, active.links[1]!]
+    };
+    const client = fakeClient([named]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Client review' });
+    await openCard('Client review', user);
+    const form = screen.getByRole('form', { name: 'Rename Client review' });
+    const field = within(form).getByRole('textbox', { name: 'Link name' });
+    const save = within(form).getByRole('button', { name: 'Save' });
+    expect(field).toHaveValue('Client review');
+    expect(field).toHaveAttribute('placeholder', 'View only link');
+    expect(save).toBeDisabled();
+
+    await user.clear(field);
+    await user.type(field, 'Supplier');
+    // The refresh after a rename reads the name back.
+    let finishList: (state: EncryptedShareLinksState) => void = () => {};
+    vi.mocked(client.list).mockImplementationOnce(
+      () => new Promise((done) => (finishList = done))
+    );
+    await user.click(save);
+    await waitFor(() =>
+      expect(client.rename).toHaveBeenCalledWith('proj_x', 'shr_a', 'Supplier')
+    );
+    // Shown at once, before the list comes back.
+    expect(
+      await screen.findByRole('button', { name: 'Supplier' })
+    ).toBeVisible();
+    await act(async () =>
+      finishList({
+        ...named,
+        links: [{ ...named.links[0]!, name: 'Supplier' }, named.links[1]!]
+      })
+    );
+
+    // An empty name clears it: the card goes back to its mode.
+    vi.mocked(client.list).mockResolvedValue({
+      ...named,
+      links: [{ ...named.links[0]!, name: null }, named.links[1]!]
+    });
+    const renamed = screen.getByRole('form', { name: 'Rename Supplier' });
+    await user.clear(within(renamed).getByRole('textbox', { name: 'Link name' }));
+    await user.click(within(renamed).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(client.rename).toHaveBeenLastCalledWith('proj_x', 'shr_a', null)
+    );
+    expect(
+      await screen.findByRole('button', { name: 'View only link' })
+    ).toBeVisible();
+  });
+
+  it('cannot name links with a client that does not store names', async () => {
+    const client = fakeClient([empty]);
+    delete client.rename;
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText('Only invited people');
+    expect(
+      screen.queryByRole('textbox', { name: 'Link name' })
+    ).not.toBeInTheDocument();
+  });
+});
+
 describe('EncryptedShareLinks without history (L08)', () => {
   const frozenModel = { projectId: 'proj_x' } as unknown as ProjectDocument;
   const frozenRow: EncryptedShareLinksState = {
@@ -855,14 +998,15 @@ describe('EncryptedShareLinks speed', () => {
     // The second Create link starts; the first one's refresh fails while
     // it runs.
     vi.mocked(client.list).mockResolvedValue(active);
-    let made: (link: { url: string }) => void = () => undefined;
+    let made: (link: { url: string; shareId: string }) => void = () =>
+      undefined;
     vi.mocked(client.create).mockImplementationOnce(
       () => new Promise((done) => (made = done))
     );
     await user.click(create);
     fail(new Error('First refresh failed'));
     await new Promise((settle) => setTimeout(settle, 0));
-    made({ url: URL_A });
+    made({ url: URL_A, shareId: 'shr_new' });
     await waitFor(() => expect(client.list).toHaveBeenCalledTimes(3));
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'New link' })).toBeEnabled()
