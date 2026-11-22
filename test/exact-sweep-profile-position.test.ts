@@ -160,71 +160,50 @@ describe(
       );
     });
 
-    it('refuses a path that ends on the profile plane and crosses it elsewhere, typed, rather than anchoring at the end', async () => {
+    it('a path that ends on the profile plane and crosses it under the profile stands the profile at the crossing', async () => {
       // A radius-1 disc at x = -10. The arc runs from below the plane,
       // crosses it at (-10, 0, 0) under the disc, rises over the top and
-      // ends on the plane at (10, 0, 0): the crossing under the disc is
-      // where the profile stands, and anchoring at the far end would sweep
-      // it the wrong way.
-      const start = profileSketch(createProjectDocument('Ambiguous', user), {
+      // ends on the plane at (10, 0, 0). Remus 2026.1.157 (#1936) offers the
+      // end and the crossing alike and anchors at the one nearest the
+      // profile, so the whole 210° arc is swept both ways from the disc.
+      // The far end is on the plane exactly, then a hair off it, within the
+      // kernel tolerance.
+      const start = profileSketch(createProjectDocument('End and crossing', user), {
         objectKind: 'circle',
         radius: 1,
         centerX: -10,
         centerY: 0
       });
-      for (const profilePosition of ['auto', 'intersection'] as const) {
-        const { document, bodyId } = await built(
-          sweepWith(
-            start,
-            {
-              objectKind: 'arc',
-              centerX: 0,
-              centerY: 0,
-              radius: 10,
-              startAngleDeg: 150,
-              endAngleDeg: 360
-            },
-            { profilePosition }
-          )
-        );
-        expect(document.derived.bodyRepresentations[bodyId]).toBeUndefined();
-        const [warning] = document.derived.featureWarnings ?? [];
-        expect(warning!.kernelRefusal).toMatchObject({
-          category: 'unsupported',
-          code: 'sweep-position:ambiguous-crossing'
-        });
-        expect(plainRefusal(warning!.message).message).toContain(
-          'where the profile stands is ambiguous'
-        );
+      for (const endAngleDeg of [360, 359.9999971352]) {
+        for (const profilePosition of ['auto', 'intersection'] as const) {
+          const label = `${profilePosition}, ends at ${endAngleDeg}°`;
+          const { document, bodyId } = await built(
+            sweepWith(
+              start,
+              {
+                objectKind: 'arc',
+                centerX: 0,
+                centerY: 0,
+                radius: 10,
+                startAngleDeg: 150,
+                endAngleDeg
+              },
+              { profilePosition }
+            )
+          );
+          expect(document.derived.warnings, label).toEqual([]);
+          const body = document.derived.bodyRepresentations[bodyId]!;
+          // Pappus: π · 1² · 10 · the arc's angle.
+          const angle = ((endAngleDeg - 150) * Math.PI) / 180;
+          expect(rel(body.volume, Math.PI * 10 * angle), label).toBeLessThan(
+            1e-9
+          );
+          // The disc stands where it was drawn: the tube passes through
+          // x = −11 under it, and over the top to z = 11.
+          expect(body.bbox.min.x, label).toBeLessThan(-10.99);
+          expect(body.bbox.max.z, label).toBeGreaterThan(10.99);
+        }
       }
-    });
-
-    it('refuses the same path with its end a hair off the plane, within the kernel tolerance', async () => {
-      const start = profileSketch(createProjectDocument('Near miss', user), {
-        objectKind: 'circle',
-        radius: 1,
-        centerX: -10,
-        centerY: 0
-      });
-      const { document, bodyId } = await built(
-        sweepWith(
-          start,
-          {
-            objectKind: 'arc',
-            centerX: 0,
-            centerY: 0,
-            radius: 10,
-            startAngleDeg: 150,
-            endAngleDeg: 359.9999971352
-          },
-          { profilePosition: 'intersection' }
-        )
-      );
-      expect(document.derived.bodyRepresentations[bodyId]).toBeUndefined();
-      const [warning] = document.derived.featureWarnings ?? [];
-      expect(warning!.kernelRefusal).toMatchObject({
-        code: 'sweep-position:ambiguous-crossing'
-      });
     });
 
     it('sweeps a through-path split at the profile plane, its joint not taken for an end', async () => {
