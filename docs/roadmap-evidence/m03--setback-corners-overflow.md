@@ -30,3 +30,5 @@ Export/reimport agreement beyond the volume oracle:
 
 - `test/variable-fillet-step-roundtrip.test.ts`: a 1 → 3 round under each law, exported to STEP and reimported, keeps its face count and its closed-form volume within 1e-6;
 - an all-edge round's eight tangent-ball spheres survive the same round trip.
+
+Independent check: on a 60 × 40 × 20 box rounded at 3 on all twelve edges, OCCT measured the STEP exports of the variable fillet and the constant one (cylinders and spheres) at 47109.07945 mm³ each, within 6e-5 mm³ of the closed form 47109.07939. The kernel's own volume integral over the corner-trimmed faces differs by about 5e-7 relative in both, so the browser spec bounds the volume to 5e-6 relative.
