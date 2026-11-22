@@ -2408,6 +2408,64 @@ describe('room history index after eviction', () => {
     );
   }
 
+  it.each([false, true])(
+    'checks every published snapshot before rolling back a copy (woken: %s)',
+    async (wake) => {
+      const state = roomFixture();
+      const { service, db } = state;
+      const { document } = await finalized(service);
+      const initial = new CommandManager(document).execute(
+        commandFactories.addPrimitive({
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 1, height: 1, depth: 1 }
+        })
+      );
+      await service.saveDocument(owner, {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document: initial
+      });
+      // The room published an earlier, different snapshot before the head.
+      for (const [snapshot, base] of [
+        [document, null],
+        [initial, document.version]
+      ] as const) {
+        const response = await state.room.fetch(roomSubmission(snapshot, base));
+        expect(await response.json()).toMatchObject({ type: 'ack' });
+      }
+      const room = wake ? createTestRoom(state.context, state.env) : state.room;
+      const row = db
+        .prepare(
+          'SELECT document_json, document_object_id FROM projects WHERE id = ?'
+        )
+        .get(document.projectId) as {
+        document_json: string;
+        document_object_id: string | null;
+      };
+      const response = await room.fetch(
+        sourceCleanup(document.projectId, {
+          action: 'rollback-copy',
+          expectedVersion: initial.version,
+          expectedDocumentDigest: await projectCopyDocumentDigest(initial),
+          expectedDocumentJsonDigest: createHash('sha256')
+            .update(row.document_json)
+            .digest('hex'),
+          expectedDocumentObjectId: row.document_object_id
+        })
+      );
+      // Whether or not the instance hibernated, the earlier snapshot is
+      // compared, so the copy is kept rather than discarded.
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        code: 'REVISION_CONFLICT'
+      });
+      expect(
+        await service.loadProject(owner, document.projectId)
+      ).not.toBeNull();
+    }
+  );
+
   it('still discards an unreferenced payload once a woken room evicts an indexed version', async () => {
     const { room, objects, document, artifact } = await evictedAfterWake();
     const response = await room.fetch(
