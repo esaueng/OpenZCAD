@@ -351,6 +351,7 @@ import {
   buildConstraint,
   constraintReferencesObject,
   constraintToolsForObject,
+  constraintPickKind,
   constraintToolSpec,
   describeConstraint,
   disconnectConstraintIds,
@@ -25043,18 +25044,18 @@ export function App() {
       dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
       return true;
     }
-    const expectedPickKind = spec.pickKinds[pending.picks.length];
+    const expectedPickKind = constraintPickKind(pending.kind, pending.picks);
+    // An `either` step takes the snap point under the click when there is
+    // one, else the entity.
     const pick: ConstraintPick | null =
-      expectedPickKind === 'point'
-        ? snapPoint
-          ? { kind: 'point', ...snapPoint }
-          : null
-        : objectId
+      expectedPickKind !== 'object' && snapPoint
+        ? { kind: 'point', ...snapPoint }
+        : expectedPickKind !== 'point' && objectId
           ? { kind: 'object', objectId }
           : null;
     if (!pick) {
       setStatus(
-        (expectedPickKind === 'point' && unreferencedSnap
+        (expectedPickKind !== 'object' && unreferencedSnap
           ? unreferencedSnapRefusal(
               doc,
               editingSketchNode,
@@ -25144,7 +25145,7 @@ export function App() {
     if ('error' in built) {
       setStatus(built.error);
     } else {
-      void applySketchRelation(built.data, picks, spec.label);
+      void applySketchRelation(built.data, picks, spec.label, built.also);
     }
     dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
     return true;
@@ -25195,12 +25196,14 @@ export function App() {
    * so the others move to meet it (ZC-041). When the hold makes it
    * unsatisfiable (only the first pick can move), it applies free and says
    * so; when it cannot solve at all, nothing changes, as with a driving
-   * dimension.
+   * dimension. `also` are relations the same picks state alongside `data`
+   * (two entities mirrored about a line); they land in the same edit.
    */
   async function applySketchRelation(
     data: SketchConstraintData,
     picks: readonly ConstraintPick[],
-    label: string
+    label: string,
+    also: readonly SketchConstraintData[] = []
   ) {
     if (!doc || !editingSketchNode) return;
     if (
@@ -25217,14 +25220,15 @@ export function App() {
     const base = doc;
     const sketchId = editingSketchNode.sketchId;
     const verb = `Add ${label.toLowerCase()} constraint`;
-    const add = commandFactories.addSketchConstraint(
-      { sketchId, constraint: data },
-      verb
+    const adds = [data, ...also].map((constraint) =>
+      commandFactories.addSketchConstraint({ sketchId, constraint }, verb)
     );
-    let prospective: ProjectDocument;
+    let prospective: ProjectDocument = base;
     try {
-      add.validate(base);
-      prospective = add.apply(base);
+      for (const add of adds) {
+        add.validate(prospective);
+        prospective = add.apply(prospective);
+      }
     } catch (error) {
       setStatus(errorMessage(error, `${label} constraint is invalid.`));
       return;
@@ -25273,7 +25277,7 @@ export function App() {
         return;
       }
       const solved = solvedSketchCommands(prospective, sketchId, outcome);
-      if (await commitSketchEdit(base, sketchId, [add, ...solved], verb)) {
+      if (await commitSketchEdit(base, sketchId, [...adds, ...solved], verb)) {
         // A held solve counts the held points as fixed, so its DOF is not
         // the sketch's; only a free solve's status is shown.
         setSketchSolveStatus(

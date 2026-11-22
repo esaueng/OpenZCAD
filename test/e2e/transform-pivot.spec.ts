@@ -235,10 +235,14 @@ test(
     );
 
     // A double click under Two points picks, never selects a body: no
-    // apply-first question, and the Move stays open.
+    // apply-first question, and the Move stays open. How many of its clicks
+    // count as picks is the runner's timing: one leaves the second pick
+    // pending, two finish a zero move at one spot. Either is a pick.
     await twoPoints.click();
     await page.mouse.dblclick(first.x, first.y);
-    await expect(overlay).toContainText(/From |by two points/);
+    await expect(overlay).toContainText(
+      /From |by two points|· drag the arrows/
+    );
     await expect(
       page.getByRole('alertdialog', { name: 'Apply the Move first?' })
     ).toHaveCount(0);
