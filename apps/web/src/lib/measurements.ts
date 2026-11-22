@@ -1262,11 +1262,12 @@ function measureEntityOf(
 ): MeasureEntity | null {
   const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
   if (!body) return null;
+  // A vertex pick is that point. Any other edge pick is the edge itself:
+  // Distance records a straight edge as its midpoint, which here would
+  // shrink the edge to one point.
   if (
     target.point &&
-    (target.semantic === 'vertex-start' ||
-      target.semantic === 'vertex-end' ||
-      target.semantic === 'edge-midpoint')
+    (target.semantic === 'vertex-start' || target.semantic === 'vertex-end')
   )
     return { type: 'point', point: target.point };
   const selection = selectionForTarget(target);
@@ -1283,7 +1284,14 @@ function measureEntityOf(
         center: circle.center,
         axis,
         radius: circle.radius,
-        closed: !!ends && distance(ends[0], ends[1]) <= 1e-9 * circle.radius
+        // Closed only when the edge runs the whole circumference. A gap
+        // between sampled ends cannot tell a rim from a tiny arc of a huge
+        // circle; the edge's own length can.
+        closed:
+          edge.length !== undefined
+            ? Math.abs(edge.length - 2 * Math.PI * circle.radius) <=
+              1e-6 * 2 * Math.PI * circle.radius
+            : !!ends && distance(ends[0], ends[1]) <= 1e-9 * circle.radius
       };
     }
     if (edge.curve?.type === 'LINE') {
@@ -1712,6 +1720,37 @@ function resolvedTarget(
   return measurementTargetFromSelection(body, selection, anchor, purpose);
 }
 
+/**
+ * M13: an entity distance's pick, re-resolved by identity only. Its point
+ * (which Central measures to) is re-derived from the current topology: the
+ * vertex or derived centre it named, or, for a raw surface pick, the face's
+ * centre, never a stored coordinate the edit may have moved.
+ */
+function resolvedEntityTarget(
+  target: MeasurementTarget,
+  bodies: readonly BodyRepresentation[]
+): MeasurementTarget | null {
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body || target.kind === 'body') return null;
+  const selection = selectionForTarget(target);
+  const found =
+    target.kind === 'edge'
+      ? resolveEdge(body, selection)
+      : resolveFace(body, selection);
+  if (!found.ok) return null;
+  if (
+    target.semantic === 'vertex-start' ||
+    target.semantic === 'vertex-end'
+  )
+    return resolveNotableTarget(target, body);
+  return (
+    measurementTargetFromSelection(body, selection, undefined, 'distance') ?? {
+      ...target,
+      point: undefined
+    }
+  );
+}
+
 function retainRowState(
   previous: Measurement,
   refreshed: Measurement
@@ -1805,8 +1844,13 @@ export function refreshMeasurements(
         : measurement.kind === 'angle'
           ? 'angle'
           : 'smart';
+    // M13: an entity distance reads its geometry from the topology itself,
+    // so its picks need only resolve by identity: a raw surface point that
+    // a resize moved does not make the face it was on stale.
     const targets = measurement.targets.map((target) =>
-      resolvedTarget(target, bodies, purpose)
+      isEntityDistanceKind(measurement.kind)
+        ? resolvedEntityTarget(target, bodies)
+        : resolvedTarget(target, bodies, purpose)
     );
     if (targets.some((target) => target === null)) {
       // The topology may still be there and merely unusable for this kind of

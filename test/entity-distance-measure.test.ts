@@ -365,3 +365,122 @@ describe('entity distance measurements (M13)', () => {
     ).toMatch(/whole body/);
   });
 });
+
+/** M13 review fixes: edge picks, roundoff, tiny arcs, resize, rim spans. */
+describe('entity distances, review fixes', () => {
+  function plate(edges: EdgeTopology[], faces: NonNullable<BodyRepresentation['topology']>['faces'] = []): BodyRepresentation {
+    return {
+      ...ring(),
+      bbox: { min: p(0, 0, 0), max: p(10, 4, 10) },
+      topology: { edges, faces }
+    };
+  }
+  const lineEdge = (id: string, hash: number, a: number[], b: number[]) => ({
+    topologyId: id,
+    hash,
+    length: Math.hypot(b[0]! - a[0]!, b[1]! - a[1]!, b[2]! - a[2]!),
+    curve: { type: 'LINE' },
+    points: [...a, ...b]
+  });
+
+  it('measures a straight edge pick as the edge, not its midpoint', () => {
+    const body = plate([
+      lineEdge('edge:a', 1, [0, 0, 0], [10, 0, 0]),
+      lineEdge('edge:b', 2, [0, 4, 0], [10, 4, 0])
+    ]);
+    const pick = (id: string, hash: number) =>
+      measurementTargetFromSelection(
+        body,
+        select('edge', id, hash),
+        undefined,
+        'distance'
+      )!;
+    const a = pick('edge:a', 1);
+    const b = pick('edge:b', 2);
+    const most = createEntityDistanceMeasurement('maximum', [body], a, b, 1, 'mm') as Measurement;
+    expect(most.result.value).toBeCloseTo(Math.hypot(10, 4), 12);
+    const apart = createEntityDistanceMeasurement('parallel', [body], a, b, 1, 'mm') as Measurement;
+    expect(apart.result.value).toBeCloseTo(4, 12);
+  });
+
+  it('keeps a far on-axis point on the axis despite roundoff', () => {
+    const axis = p(Math.SQRT1_2, Math.SQRT1_2, 0);
+    const answer = maximumDistance(point(10, 10, 0), {
+      type: 'circle',
+      center: p(0, 0, 0),
+      axis,
+      radius: 5,
+      closed: true
+    });
+    expect(value(answer)).toBeCloseTo(15, 9);
+  });
+
+  it('refuses a tiny arc of a huge circle as an arc, not a full rim', () => {
+    const r = 1_000_000;
+    const sweep = 5e-10;
+    const arc: EdgeTopology = {
+      topologyId: 'edge:tiny',
+      hash: 9,
+      length: r * sweep,
+      curve: {
+        type: 'CIRCLE',
+        circle: { center: p(0, 0, 0), axis: Z, radius: r }
+      },
+      points: [r, 0, 0, r * Math.cos(sweep), r * Math.sin(sweep), 0]
+    };
+    const body = plate([arc, lineEdge('edge:far', 3, [2 * r, 0, 0], [2 * r, 1, 0])]);
+    const target = (id: string, hash: number) =>
+      measurementTargetFromSelection(body, select('edge', id, hash), undefined, 'distance')!;
+    const made = createEntityDistanceMeasurement(
+      'maximum',
+      [body],
+      target('edge:tiny', 9),
+      target('edge:far', 3),
+      1,
+      'mm'
+    );
+    expect(refusal(made)).toMatch(/arc needs the kernel/);
+  });
+
+  it('refreshes a parallel face pair after a resize moves one face', () => {
+    const face = (id: string, hash: number, z: number) => ({
+      topologyId: id,
+      hash,
+      triangleStart: 0,
+      triangleCount: 2,
+      geometry: {
+        surfaceType: 'plane',
+        area: 40,
+        center: p(5, 2, z),
+        centroid: p(5, 2, z),
+        centroidProvenance: 'exact' as const,
+        normal: z > 0 ? Z : p(0, 0, -1)
+      }
+    });
+    const before = plate([], [face('face:top', 21, 10), face('face:bottom', 22, 0)]);
+    const pick = (body: BodyRepresentation, id: string, hash: number, z: number) =>
+      measurementTargetFromSelection(body, select('face', id, hash), p(3, 1, z), 'distance')!;
+    const row = createEntityDistanceMeasurement(
+      'parallel',
+      [before],
+      pick(before, 'face:top', 21, 10),
+      pick(before, 'face:bottom', 22, 0),
+      1,
+      'mm'
+    ) as Measurement;
+    expect(row.result.value).toBeCloseTo(10, 12);
+    // The top face moved up: same identity, new place.
+    const after = plate([], [face('face:top', 21, 20), face('face:bottom', 22, 0)]);
+    const [refreshed] = refreshMeasurements([row], [after], 2);
+    expect(refreshed!.status).toBe('current');
+    expect(refreshed!.result.value).toBeCloseTo(20, 12);
+  });
+
+  it('ends a radial difference on each picked rim', () => {
+    const answer = parallelDistance(circle([0, 0, 0], 6), circle([0, 0, 10], 4), 20);
+    expect(value(answer)).toBeCloseTo(2, 12);
+    if ('refused' in answer) throw new Error(answer.refused);
+    expect(answer.from.z).toBe(0);
+    expect(answer.to.z).toBe(10);
+  });
+});

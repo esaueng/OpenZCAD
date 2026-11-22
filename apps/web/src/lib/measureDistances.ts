@@ -116,14 +116,18 @@ export function parallelDistance(
     const originB = b.type === 'circle' ? b.center : b.origin;
     const offAxis = distance(originB, footOnLine(originB, originA, a.axis));
     if (offAxis <= COINCIDENT * Math.max(1, size)) {
-      // Concentric: the radial difference, measured along one radius.
+      // Concentric: the radial difference, measured along one radius, each
+      // end on its own rim (a circle's plane, or level with the other pick
+      // on a cylinder).
       const radius = perpendicular(a.axis);
-      const at =
+      const atA =
         a.type === 'circle' ? a.center : footOnLine(originB, originA, a.axis);
+      const atB =
+        b.type === 'circle' ? b.center : footOnLine(atA, originB, b.axis);
       return {
         value: Math.abs(a.radius - b.radius),
-        from: add(at, scale(radius, a.radius)),
-        to: add(at, scale(radius, b.radius)),
+        from: add(atA, scale(radius, a.radius)),
+        to: add(atB, scale(radius, b.radius)),
         note: 'radial difference'
       };
     }
@@ -222,8 +226,12 @@ function farthestOnCircle(
 ): { at: Vector3; value: number } {
   const offset = sub(point, circle.center);
   const radial = sub(offset, scale(circle.axis, dot(offset, circle.axis)));
-  // On the axis every rim point is equally far: any radius will do.
-  const away = unit(radial) ?? perpendicular(circle.axis);
+  // On the axis every rim point is equally far: any radius will do. "On"
+  // is relative, so projection roundoff on a far point cannot pick a
+  // direction that leaves the circle's plane.
+  const onAxis =
+    length(radial) <= COINCIDENT * Math.max(1, length(offset), circle.radius);
+  const away = onAxis ? perpendicular(circle.axis) : unit(radial)!;
   const at = sub(circle.center, scale(away, circle.radius));
   return { at, value: distance(point, at) };
 }
