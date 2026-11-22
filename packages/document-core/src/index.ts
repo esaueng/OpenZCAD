@@ -82,7 +82,8 @@ import {
   assertTransformStampsSchema,
   assertHoleContentSchema,
   assertSketchObjectContentSchema,
-  assertThreadContentSchema
+  assertThreadContentSchema,
+  assertMinimumProjectSchema
 } from './document-content-schema';
 export * from './sketch-composites';
 export * from './sketch-projections';
@@ -120,6 +121,8 @@ import {
   ownEntry,
   patternMirrorProblem,
   patternSpacingModeProblem,
+  filletVertexRadiiProblem,
+  filletRadiusStationsProblem,
   patternPathProblem,
   patternPointsProblem,
   holePointsProblem,
@@ -251,6 +254,8 @@ import {
   type SketchPathReference,
   type UnitSystem,
   type UserId,
+  type FilletVertexRadius,
+  type FilletRadiusStation,
   type VariableFilletLaw
 } from '@openzcad/shared';
 
@@ -720,7 +725,7 @@ export interface HoleInput {
   countersinkAngleDeg?: ParamValue;
   position: { u: ParamValue; v: ParamValue };
   /** Anchor `position` is measured from; see the `hole` feature data. */
-  positionAnchor?: 'centroid';
+  positionAnchor?: 'centroid' | 'outer-centroid';
   /** M01 (schema v64): one bore at each of these sketch points. */
   points?: HolePoints;
   /** M01 (schema v65): the standard size whose table gives the diameter. */
@@ -877,6 +882,23 @@ export interface EdgeModifierInput {
   endRadius?: ParamValue;
   /** Fillet only: read only with `endRadius`; absent reads as 'linear'. */
   radiusLaw?: VariableFilletLaw;
+  /**
+   * Fillet only (M03, schema v151): the radius at named ends of the selected
+   * edges; see `FilletVertexRadius`. Needs `endRadius` and `edgeReferences`.
+   */
+  vertexRadii?: FilletVertexRadius[];
+  /**
+   * Fillet only (M03, schema v152): interior radius stations along every
+   * selected edge; see `FilletRadiusStation`. Needs `endRadius` and
+   * `edgeReferences`.
+   */
+  radiusStations?: FilletRadiusStation[];
+  /**
+   * Fillet only (M03, schema v151), with `vertexRadii` or `radiusStations`:
+   * whether each selected edge ran from its witness end 0 to end 1 when they
+   * were set.
+   */
+  edgeRuns?: boolean[];
   /**
    * Chamfer only: the setback on the second face each selected edge borders,
    * `size` landing on the first. Absent means the symmetric chamfer.
@@ -5460,6 +5482,34 @@ export function filletEdges(
   document: ProjectDocument,
   input: EdgeModifierInput
 ): { document: ProjectDocument; bodyId: BodyId } {
+  const edgeHashes = [...new Set(input.edgeHashes)];
+  if (input.radiusStations !== undefined) {
+    const problem = filletRadiusStationsProblem({ ...input, edgeHashes });
+    if (problem) throw new Error(problem);
+    assertMinimumProjectSchema(
+      document.schemaVersion,
+      152,
+      'Fillet radius stations'
+    );
+  }
+  // Edge runs alone mean nothing; refused rather than dropped (review).
+  if (input.vertexRadii === undefined && input.edgeRuns !== undefined) {
+    const problem = filletVertexRadiiProblem({ ...input, edgeHashes });
+    if (problem) throw new Error(problem);
+  }
+  if (input.vertexRadii !== undefined) {
+    if (edgeHashes.length !== input.edgeHashes.length)
+      throw new Error(
+        'Per-vertex fillet radii name edges by position; the selection must not repeat an edge.'
+      );
+    const problem = filletVertexRadiiProblem({ ...input, edgeHashes });
+    if (problem) throw new Error(problem);
+    assertMinimumProjectSchema(
+      document.schemaVersion,
+      151,
+      'Per-vertex fillet radii'
+    );
+  }
   return addBodyResultFeature(
     document,
     input.name,
@@ -5477,6 +5527,15 @@ export function filletEdges(
             endRadius: input.endRadius,
             ...(input.radiusLaw !== undefined
               ? { radiusLaw: input.radiusLaw }
+              : {}),
+            ...(input.vertexRadii !== undefined
+              ? { vertexRadii: deepClone(input.vertexRadii) }
+              : {}),
+            ...(input.edgeRuns !== undefined
+              ? { edgeRuns: [...input.edgeRuns] }
+              : {}),
+            ...(input.radiusStations !== undefined
+              ? { radiusStations: deepClone(input.radiusStations) }
               : {})
           }
         : {})
@@ -6752,7 +6811,10 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'edgeReferences',
     'radius',
     'endRadius',
-    'radiusLaw'
+    'radiusLaw',
+    'vertexRadii',
+    'radiusStations',
+    'edgeRuns'
   ],
   'custom-feature': ['targetBodyId', 'script', 'inputs'],
   chamfer: [
@@ -6883,7 +6945,13 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'cornerRadius',
     'profilePosition'
   ],
-  fillet: ['endRadius', 'radiusLaw'],
+  fillet: [
+    'endRadius',
+    'radiusLaw',
+    'vertexRadii',
+    'radiusStations',
+    'edgeRuns'
+  ],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.
   // U09: clearing a revolve's region returns it to the first-object profile.
@@ -7018,6 +7086,28 @@ export function updateFeature(
     if (feature.featureKind === 'hole') {
       assertHoleContentSchema(input.data, document.schemaVersion);
     }
+    // M03 (v152): nor radius stations.
+    if (
+      feature.featureKind === 'fillet' &&
+      (input.data as { radiusStations?: unknown }).radiusStations !== undefined
+    ) {
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        152,
+        'Fillet radius stations'
+      );
+    }
+    // M03 (v151): a patch may not add per-vertex radii to an older document.
+    if (
+      feature.featureKind === 'fillet' &&
+      (input.data as { vertexRadii?: unknown }).vertexRadii !== undefined
+    ) {
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        151,
+        'Per-vertex fillet radii'
+      );
+    }
     const patch = { ...input.data } as Record<string, unknown>;
     if (
       'featureKind' in patch &&
@@ -7083,6 +7173,22 @@ export function updateFeature(
   ) {
     validateKeepOriginals(feature.data);
     separateKeptResultName(next, feature);
+  } else if (feature.data.featureKind === 'fillet') {
+    // M03 (v151): per-vertex radii go with the variable law; a patch that
+    // returns the fillet to a constant radius drops them.
+    if (feature.data.endRadius === undefined) {
+      delete feature.data.vertexRadii;
+      delete feature.data.radiusStations;
+    }
+    if (
+      feature.data.vertexRadii === undefined &&
+      feature.data.radiusStations === undefined
+    )
+      delete feature.data.edgeRuns;
+    const problem =
+      filletVertexRadiiProblem(feature.data) ??
+      filletRadiusStationsProblem(feature.data);
+    if (problem) throw new Error(problem);
   }
   // R01: a datum may only read earlier datums, and Mirror/Split only an
   // existing earlier one, whichever path edited them.
@@ -7157,6 +7263,14 @@ export function updateFeature(
     input.data.edgeReferences === undefined
   ) {
     delete feature.data.edgeReferences;
+  }
+  // Per-vertex radii and stations name their edges by lineage reference,
+  // so they are checked again once the references are final (review).
+  if (feature.data.featureKind === 'fillet') {
+    const problem =
+      filletVertexRadiiProblem(feature.data) ??
+      filletRadiusStationsProblem(feature.data);
+    if (problem) throw new Error(problem);
   }
   next.version += 1;
   return next;

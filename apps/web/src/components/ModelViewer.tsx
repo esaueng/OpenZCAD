@@ -293,6 +293,7 @@ import {
   UNIT_TO_MM,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
+  convertLength,
   displayLengthName,
   ownEntry,
   type GeometryBodyRepresentation,
@@ -319,7 +320,8 @@ import {
 import { chipLeader, separateChips } from '../lib/commandChipLayout';
 import { faceLift } from '../lib/faceDepthBehind';
 import { faceTotalSpan } from '../lib/opposingPlaneSpan';
-import { setLiveDiameter } from '../lib/liveLabels';
+import { roundShownLength, setLiveDiameter } from '../lib/liveLabels';
+import { useDisplayUnits } from '../lib/displayUnits';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
   placeSelectionCallouts,
@@ -2979,6 +2981,14 @@ export function ModelViewer({
   // name, `in` is what the dock and the Inspector call it on screen.
   const unitLabelRef = useRef(displayLengthName(units as UnitSystem));
   unitLabelRef.current = displayLengthName(units as UnitSystem);
+  // I03: read-out chips print lengths in the display unit. `unitLabelRef`
+  // stays the stored unit for what is typed and read back in it.
+  const viewerShownUnits = useDisplayUnits(units as UnitSystem);
+  const shownScale = convertLength(1, units as UnitSystem, viewerShownUnits);
+  const shownScaleRef = useRef(shownScale);
+  shownScaleRef.current = shownScale;
+  const shownLabelRef = useRef(displayLengthName(viewerShownUnits));
+  shownLabelRef.current = displayLengthName(viewerShownUnits);
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
   const tangentEdgesRef = useRef(tangentEdges);
@@ -5578,7 +5588,13 @@ export function ModelViewer({
       let anchored = false;
       const e2eHandles: Record<
         string,
-        { x: number; y: number; value: number }
+        {
+          x: number;
+          y: number;
+          value: number;
+          /** A linear arrow's way on screen, a unit step in page pixels. */
+          axis?: { x: number; y: number };
+        }
       > = {};
       // Reads before the writes below, as `updateOffsetChip` does: the chips
       // keep out from under the right lane (the docked panels, the viewer
@@ -5824,11 +5840,37 @@ export function ModelViewer({
             .clone()
             .project(context.activeCamera);
           const rect = stageRect;
+          const page = (point: { x: number; y: number }) => ({
+            x: rect.left + ((point.x + 1) / 2) * rect.width,
+            y: rect.top + ((1 - point.y) / 2) * rect.height
+          });
+          const at = page(grip);
+          let axis: { x: number; y: number } | undefined;
+          if (view.kind === 'linear' && entry.rig) {
+            const ahead = page(
+              entry.rig.group.position
+                .clone()
+                .add(
+                  new THREE.Vector3(
+                    view.params.direction.x,
+                    view.params.direction.y,
+                    view.params.direction.z
+                  )
+                )
+                .project(context.activeCamera)
+            );
+            const length = Math.hypot(ahead.x - at.x, ahead.y - at.y);
+            if (length > 1e-9)
+              axis = {
+                x: (ahead.x - at.x) / length,
+                y: (ahead.y - at.y) / length
+              };
+          }
           e2eHandles[valueId] = {
-            x: rect.left + ((grip.x + 1) / 2) * rect.width,
-            y: rect.top + ((1 - grip.y) / 2) * rect.height,
+            ...at,
             // Where the rig stands, which a refused value is not.
-            value: entry.rig ? entry.rig.value() : value
+            value: entry.rig ? entry.rig.value() : value,
+            ...(axis ? { axis } : {})
           };
         }
       }
@@ -8841,33 +8883,46 @@ export function ModelViewer({
         if (rig.kind === 'cylinder-radius') {
           const mode = cylinderDimensionModeRef.current;
           const displayValue = mode === 'diameter' ? rawValue * 2 : rawValue;
-          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitLabelRef.current}`;
+          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue * shownScaleRef.current)} ${shownLabelRef.current}`;
         } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
           const label = edgeHandleRef.current?.label;
-          text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitLabelRef.current}`;
+          const shownValue =
+            shownScaleRef.current === 1
+              ? value
+              : roundShownLength(rawValue * shownScaleRef.current);
+          text = `${label ? `${label} · ` : ''}${prefix} ${shownValue} ${shownLabelRef.current}`;
         } else {
           // "Total" reads the whole span this face sets: a primitive's own
           // height when it has one, else the span to the flat face opposite it.
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
           const totalSense = offsetHandleRef.current?.totalSense ?? 1;
+          const spanShown = totalBaseline ?? offsetExtentRef.current;
           text = offsetChipText({
-            rawValue,
+            rawValue: rawValue * shownScaleRef.current,
             mode: offsetChipModeRef.current,
-            span: totalBaseline ?? offsetExtentRef.current,
+            span:
+              spanShown === null || spanShown === undefined
+                ? spanShown
+                : spanShown * shownScaleRef.current,
             sense: totalSense,
-            units: unitLabelRef.current
+            units: shownLabelRef.current,
+            precise: shownScaleRef.current !== 1
           });
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
             const limit = offsetPreviewLimitRef.current;
             if (limit !== null && limit !== undefined) {
               text = `${text} · ${offsetLimitChipText({
-                limit,
+                limit: limit * shownScaleRef.current,
                 mode: offsetChipModeRef.current,
-                span: totalBaseline ?? offsetExtentRef.current,
+                span:
+                  spanShown === null || spanShown === undefined
+                    ? spanShown
+                    : spanShown * shownScaleRef.current,
                 sense: totalSense,
-                units: unitLabelRef.current
+                units: shownLabelRef.current,
+                precise: shownScaleRef.current !== 1
               })}`;
             }
           }
@@ -9208,7 +9263,7 @@ export function ModelViewer({
             ? 'Switch to radius entry'
             : 'Switch to diameter entry'
         );
-        const valueText = ` ${formatNumber(displayValue)}\u00a0`;
+        const valueText = ` ${formatNumber(displayValue * shownScaleRef.current)}\u00a0`;
         const [shownValue, shownUnits] = offsetEntry.childNodes;
         if (
           offsetEntry.childNodes.length === 2 &&
@@ -9219,15 +9274,15 @@ export function ModelViewer({
           // workspace through its :has() rules (see setElementText).
           if ((shownValue as Text).data !== valueText)
             (shownValue as Text).data = valueText;
-          setElementText(shownUnits as Element, unitLabelRef.current);
+          setElementText(shownUnits as Element, shownLabelRef.current);
         } else {
           const units = document.createElement('small');
-          units.textContent = unitLabelRef.current;
+          units.textContent = shownLabelRef.current;
           offsetEntry.replaceChildren(valueText, units);
         }
         nameCommandChip(
           offsetEntry,
-          `${mode === 'diameter' ? 'Diameter' : 'Radius'} ${formatNumber(displayValue)} ${unitLabelRef.current}`
+          `${mode === 'diameter' ? 'Diameter' : 'Radius'} ${formatNumber(displayValue * shownScaleRef.current)} ${shownLabelRef.current}`
         );
         // Only when the layout changes: re-inserting a focused button on
         // every frame would drop its focus.
@@ -9455,9 +9510,14 @@ export function ModelViewer({
       axis: DirectEditAxis
     ) {
       const label = axisDimensionLabel(axis);
+      // I03: in the display unit, as the dimension callout reads.
       setElementText(
         dragHud,
-        `${label} ${Math.round(value * 100) / 100} ${unitLabelRef.current}`
+        `${label} ${
+          shownScaleRef.current === 1
+            ? Math.round(value * 100) / 100
+            : roundShownLength(value * shownScaleRef.current)
+        } ${shownLabelRef.current}`
       );
       hud.showAtPointer(dragHud, event, 14, -36);
     }
@@ -15290,8 +15350,18 @@ export function ModelViewer({
               valueButton.type = 'button';
               valueButton.className = 'callout-value';
               valueButton.title = `Click to type an exact ${dimension.toLowerCase()}`;
-              valueButton.textContent = `${dimension} ${rounded} ${displayLengthName(
-                units as UnitSystem
+              // I03: in the display unit; what is typed back reads in it.
+              const calloutScale = convertLength(
+                1,
+                units as UnitSystem,
+                viewerShownUnits
+              );
+              const shownRounded =
+                calloutScale === 1
+                  ? rounded
+                  : roundShownLength(value * calloutScale);
+              valueButton.textContent = `${dimension} ${shownRounded} ${displayLengthName(
+                viewerShownUnits
               )}`;
               pill.appendChild(valueButton);
               element.appendChild(pill);
@@ -15302,11 +15372,11 @@ export function ModelViewer({
                 // Same width as the value it replaces, so the pill does not
                 // jump the instant it is clicked.
                 input.style.width = `${Math.ceil(valueButton.getBoundingClientRect().width)}px`;
-                input.value = String(rounded);
+                input.value = String(shownRounded);
                 input.inputMode = 'decimal';
                 input.setAttribute(
                   'aria-label',
-                  `${dimension} in ${unitsRef.current}`
+                  `${dimension} in ${viewerShownUnits}`
                 );
                 pill.replaceChildren(input);
                 input.focus();
@@ -15318,12 +15388,14 @@ export function ModelViewer({
                   }
                   done = true;
                   pill.replaceChildren(valueButton);
-                  const next = Number.parseFloat(input.value);
+                  const typed = Number.parseFloat(input.value);
+                  // Back into the stored unit; an untouched value is no edit.
+                  const next = typed / calloutScale;
                   if (
                     commit &&
                     Number.isFinite(next) &&
                     next > 0 &&
-                    Math.abs(next - rounded) > 1e-9
+                    Math.abs(typed - shownRounded) > 1e-9
                   ) {
                     onResizePrimitiveFaceRef.current({
                       bodyId,
@@ -15732,6 +15804,7 @@ export function ModelViewer({
     focusGhostBodies,
     sketchMode,
     units,
+    viewerShownUnits,
     xrayFactor,
     pickLabel,
     assemblyDimmedKey,

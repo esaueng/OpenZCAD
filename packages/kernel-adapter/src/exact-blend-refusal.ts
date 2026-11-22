@@ -58,6 +58,8 @@ export interface BlendRefusalInit {
   category: BlendRefusalCategory;
   kernelCode: string;
   kernelMessage: string;
+  /** See {@link KernelRefusal.limit}: the largest radius the faces carry. */
+  limit?: number;
   cause?: unknown;
 }
 
@@ -79,6 +81,7 @@ export class BlendRefusal extends KernelRefusal {
       kernelMessage: init.kernelMessage,
       reason: init.kernelMessage,
       message: init.kernelMessage,
+      ...(init.limit === undefined ? {} : { limit: init.limit }),
       ...(init.cause === undefined ? {} : { cause: init.cause })
     });
     this.name = 'BlendRefusal';
@@ -203,6 +206,52 @@ export function blendOutcome(
       kernelMessage:
         kernelDetailString(details, 'message') ??
         'the exact modeling engine gave no further detail'
+    })
+  };
+}
+
+/**
+ * M03: run a variable-radius fillet through its typed twin with `exactOnly`
+ * set, and return the kernel's verdict as data.
+ *
+ * Exact-only is the exact route: the kernel builds a variable band only in
+ * its qualified family (a straight convex spine between two planes, its
+ * corners closed by the tangent ball) and reports it exact, and refuses
+ * anything else by code. A `cliff-encountered` refusal carries the radius
+ * the edge's faces can carry as `details.availableRadius`, measured exactly
+ * for that family; it travels as the refusal's `limit`.
+ */
+export function variableFilletOutcome(
+  kernel: RemusKernel,
+  solid: number,
+  request: string
+): BlendOutcome {
+  const detailed = kernel.filletVariableDetailed(solid, request, true);
+  if (detailed.status === 'ok') {
+    return {
+      status: 'ok',
+      solid: detailed.value,
+      quality: blendQualityOf(detailed.details)
+    };
+  }
+  const details = detailed.details ?? {};
+  const kernelCode = kernelDetailString(details, 'kernelCode') ?? detailed.code;
+  const available = details.availableRadius;
+  return {
+    status: 'refused',
+    refusal: new BlendRefusal({
+      operation: 'fillet',
+      category: detailed.category,
+      kernelCode,
+      kernelMessage:
+        kernelDetailString(details, 'message') ??
+        'the exact modeling engine gave no further detail',
+      ...(kernelCode === 'cliff-encountered' &&
+      typeof available === 'number' &&
+      Number.isFinite(available) &&
+      available > 0
+        ? { limit: available }
+        : {})
     })
   };
 }

@@ -242,7 +242,9 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
           'boreDiameter',
           'rimDiameter',
           'backDepth',
-          'wormLength'
+          'wormLength',
+          // A throated wheel's tip diameter: the kernel reads a length.
+          'outsideDiameter'
         ],
         rewrite,
         'length'
@@ -253,7 +255,6 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
           'teeth',
           'mateTeeth',
           'diameterFactor',
-          'outsideDiameter',
           'profileShift',
           'addendum',
           'dedendum',
@@ -293,6 +294,10 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
       return;
     case 'fillet':
       fields(data, ['radius', 'endRadius'], rewrite, 'length');
+      for (const vertex of data.vertexRadii ?? [])
+        fields(vertex, ['radius'], rewrite, 'length');
+      for (const station of data.radiusStations ?? [])
+        fields(station, ['radius'], rewrite, 'length');
       return;
     case 'chamfer':
       fields(data, ['distance', 'distance2'], rewrite, 'length');
