@@ -3,6 +3,7 @@ import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  gearBody,
   createProjectDocument,
   evaluateExpression,
   evaluateFieldExpression,
@@ -596,5 +597,44 @@ describe('stored quantities at load', () => {
     );
     (node as unknown as { quantity: string }).quantity = 'length';
     expect(() => normalizeDocument(document)).not.toThrow();
+  });
+});
+
+describe('a throated worm wheel outside diameter', () => {
+  // The registry tagged it a number though the kernel reads a length
+  // (exact-gear.ts): a length parameter there was refused and flagged.
+  const wheel = () =>
+    gearBody(setParameter(blank(), { name: 'od', expression: '66' }), {
+      name: 'Wheel',
+      gearType: 'worm-wheel',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 30,
+      mateTeeth: 2,
+      diameterFactor: 10,
+      faceWidth: 5,
+      throated: true,
+      outsideDiameter: 'od',
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 }
+    }).document;
+
+  it('is a length field', () => {
+    const seen: Record<string, unknown> = {};
+    const feature = Object.values(wheel().nodes).find(
+      (node) => node.kind === 'feature'
+    )!;
+    rewriteNodeExpressions(feature, (expression, dimension) => {
+      seen[expression] = dimension;
+      return expression;
+    });
+    expect(seen.od).toBe('length');
+  });
+
+  it('takes a length parameter and refuses an angle', () => {
+    const document = wheel();
+    expect(parameterQuantityRefusal(document, 'od', 'length')).toBeNull();
+    expect(parameterQuantityRefusal(document, 'od', 'angle')).toMatch(/length/);
+    expect(suggestParameterQuantity(document, 'od')).toBe('length');
   });
 });
