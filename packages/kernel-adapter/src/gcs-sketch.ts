@@ -363,6 +363,14 @@ export function solveSketchWithGcs(
   // One kernel constraint handle per document constraint, in order, so the
   // residual read-back below can be keyed by document constraint id.
   const kernelHandles: { constraintId: string; handle: number }[] = [];
+  const arcEndLocks: {
+    constraintId: string;
+    handle: number;
+    x: number;
+    y: number;
+    radius: number;
+  }[] = [];
+  const lockMisses = new Map<string, number>();
   const add = (constraintId: string, payload: Record<string, unknown>) => {
     kernelHandles.push({
       constraintId,
@@ -637,6 +645,26 @@ export function solveSketchWithGcs(
         // stay independent wherever the end lies.
         const target = objectHandles(data.objectId);
         const at = data.at;
+        const expected =
+          target.kind === 'line'
+            ? 4
+            : target.kind === 'circle'
+              ? 3
+              : target.kind === 'arc'
+                ? 5
+                : 0;
+        if (
+          expected > 0 &&
+          (!Array.isArray(at) ||
+            at.length !== expected ||
+            !at.every(
+              (value) => typeof value === 'number' && Number.isFinite(value)
+            ))
+        ) {
+          throw new Error(
+            `The lock on ${data.objectId} does not record its ${target.kind}'s ${expected} values. Unlock it and lock it again.`
+          );
+        }
         const fix = (ref: SketchPointRef, x: number, y: number) => {
           const point = pointHandle(ref);
           add(id, { type: 'fixX', point, value: x });
@@ -669,6 +697,16 @@ export function solveSketchWithGcs(
           fix(ref('center'), cx, cy);
           fix(ref('start'), cx + r * Math.cos(start), cy + r * Math.sin(start));
           const endPoint = pointHandle(ref('end'));
+          // One coordinate and the radius tie leave the end two places on
+          // the circle (its mirror across the fixed coordinate's axis, at
+          // least r·√2 away); the read-back below refuses the mirror.
+          arcEndLocks.push({
+            constraintId: id,
+            handle: endPoint,
+            x: cx + r * Math.cos(end),
+            y: cy + r * Math.sin(end),
+            radius: r
+          });
           if (Math.abs(Math.sin(end)) >= Math.abs(Math.cos(end))) {
             add(id, {
               type: 'fixX',
@@ -703,7 +741,8 @@ export function solveSketchWithGcs(
   const dofRecord = parseKernelJson(kernel.gcsDof(sketch), 'sketch DOF');
 
   const classificationRaw = diagnostics.classification;
-  const classification =
+  const kernelClassification:
+    'solved' | 'underConstrained' | 'redundant' | 'unsatisfied' =
     classificationRaw === 'solved' ||
     classificationRaw === 'underConstrained' ||
     classificationRaw === 'redundant' ||
@@ -730,6 +769,21 @@ export function solveSketchWithGcs(
     const position = kernel.gcsPointPosition(sketch, handle);
     return { x: position[0] ?? 0, y: position[1] ?? 0 };
   };
+
+  // A locked arc whose end settled on the mirror solution satisfies every
+  // equation yet has a different sweep: report the lock as unsatisfied.
+  let classification = kernelClassification;
+  for (const lock of arcEndLocks) {
+    const at = readPoint(lock.handle);
+    const miss = Math.hypot(at.x - lock.x, at.y - lock.y);
+    if (miss > 1e-6 * Math.max(1, lock.radius)) {
+      classification = 'unsatisfied';
+      lockMisses.set(
+        lock.constraintId,
+        Math.max(lockMisses.get(lock.constraintId) ?? 0, miss)
+      );
+    }
+  }
 
   const solvedObjects: SolvedSketchObject[] = objects.map((object) => {
     const entry = objectHandles(object.objectId);
@@ -828,9 +882,12 @@ export function solveSketchWithGcs(
 
   return {
     classification,
-    converged: diagnostics.converged === true,
+    converged: diagnostics.converged === true && lockMisses.size === 0,
     iterations: requireNumber(diagnostics, 'iterations'),
-    maxResidual: requireNumber(diagnostics, 'maxResidual'),
+    maxResidual: Math.max(
+      requireNumber(diagnostics, 'maxResidual'),
+      ...lockMisses.values()
+    ),
     rolledBack: diagnostics.rolledBack === true,
     dof: {
       dof: requireNumber(dofRecord, 'dof'),
@@ -841,7 +898,10 @@ export function solveSketchWithGcs(
     constraintResiduals: [
       ...kernelHandles
         .reduce((byConstraint, { constraintId, handle }) => {
-          const residual = residualByHandle.get(handle) ?? 0;
+          const residual = Math.max(
+            residualByHandle.get(handle) ?? 0,
+            lockMisses.get(constraintId) ?? 0
+          );
           byConstraint.set(
             constraintId,
             Math.max(byConstraint.get(constraintId) ?? 0, residual)

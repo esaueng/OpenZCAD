@@ -5,6 +5,7 @@ import {
   composeCommands
 } from '@openzcad/command-system';
 import {
+  addSketchConstraint,
   createProjectDocument,
   findSketch,
   normalizeDocument
@@ -25,7 +26,8 @@ import {
 import {
   buildConstraint,
   disconnectConstraintIds,
-  lockConstraintIds
+  lockConstraintIds,
+  movedEntityLock
 } from '../apps/web/src/lib/sketch/constraints';
 
 /**
@@ -675,6 +677,103 @@ describe('S07 entity lock on the pinned kernel', () => {
     expect(() => fixture.constrain(lockAt(line, 'end', 4, 0))).toThrow(
       'That point belongs to a locked entity. Unlock the entity first.'
     );
+  });
+
+  /** The document with one sketch object's data patched, unvalidated. */
+  function patched(
+    document: ProjectDocument,
+    objectId: string,
+    patch: Record<string, unknown>
+  ): ProjectDocument {
+    const next = structuredClone(document);
+    const node = next.nodes[objectId as never] as unknown as {
+      data: Record<string, unknown>;
+    };
+    Object.assign(node.data, patch);
+    return next;
+  }
+
+  it('refuses a locked arc whose end settles on the mirror sweep', async () => {
+    // 0°→90°: the lock fixes the end's x (0); 270° has the same x and
+    // radius, so only the read-back tells the two sweeps apart.
+    const fixture = lockedWhole({
+      objectKind: 'arc',
+      centerX: 0,
+      centerY: 0,
+      radius: 5,
+      startAngleDeg: 0,
+      endAngleDeg: 90
+    });
+    const held = await solve(fixture);
+    expect(held.converged).toBe(true);
+    const flipped = await adapter.solveSketch(
+      patched(fixture.manager.document, fixture.ids[0]!, { endAngleDeg: 270 }),
+      fixture.sketchId
+    );
+    expect(flipped.converged).toBe(false);
+    expect(flipped.classification).toBe('unsatisfied');
+    const lockId = findSketch(fixture.manager.document, fixture.sketchId)!
+      .constraints![0]!.constraintId;
+    expect(
+      flipped.constraintResiduals.find((row) => row.constraintId === lockId)!
+        .maxResidual
+    ).toBeGreaterThan(5);
+  });
+
+  it('refuses a stored lock whose recorded geometry does not fit its entity', async () => {
+    const fixture = lockedWhole({
+      objectKind: 'line',
+      x1: 0,
+      y1: 0,
+      x2: 4,
+      y2: 0
+    });
+    const document = structuredClone(fixture.manager.document);
+    const constraint = findSketch(document, fixture.sketchId)!.constraints![0]!;
+    (constraint.data as { at: number[] }).at = [0, 0, 4];
+    await expect(
+      adapter.solveSketch(document, fixture.sketchId)
+    ).rejects.toThrow(/does not record its line's 4 values/);
+  });
+
+  it('refuses to lock a linked projection, which follows its model edge', () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 }
+    ]);
+    const document = patched(fixture.manager.document, fixture.ids[0]!, {
+      projection: { mode: 'linked' }
+    });
+    expect(() =>
+      addSketchConstraint(document, {
+        sketchId: fixture.sketchId,
+        constraint: {
+          constraintKind: 'lock-entity',
+          objectId: fixture.ids[0]!,
+          at: [0, 0, 4, 0]
+        }
+      })
+    ).toThrow(
+      'A linked projection follows its model edge. Unlink it to lock it.'
+    );
+  });
+
+  it('names a locked entity a parameter change would move', () => {
+    const fixture = lockedWhole({
+      objectKind: 'circle',
+      centerX: 0,
+      centerY: 0,
+      radius: 5
+    });
+    // The circle's radius now reads a parameter: `r = 5` keeps the lock,
+    // `r = 8` would grow the circle without a solve.
+    const document = patched(fixture.manager.document, fixture.ids[0]!, {
+      radius: 'r'
+    });
+    const sketch = findSketch(document, fixture.sketchId)!;
+    const withR = (r: number) => (value: number | string) =>
+      value === 'r' ? r : typeof value === 'number' ? value : undefined;
+    expect(movedEntityLock(document, sketch, withR(5))).toBeNull();
+    expect(movedEntityLock(document, sketch, withR(8))).toBe(fixture.ids[0]);
   });
 
   it('needs schema v138: an older stamp refuses a document that holds one', () => {

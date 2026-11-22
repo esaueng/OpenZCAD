@@ -2451,6 +2451,17 @@ export function validateSketchConstraint(
       if (entityLocked(sketch, data.objectId)) {
         throw new Error('That entity is already locked.');
       }
+      // A linked projection already follows its model edge; a lock at
+      // today's position would fight the edge the next time it moves.
+      const lockedNode = getNode(document, data.objectId);
+      if (
+        lockedNode?.kind === 'sketch-object' &&
+        lockedNode.data.projection?.mode === 'linked'
+      ) {
+        throw new Error(
+          'A linked projection follows its model edge. Unlink it to lock it.'
+        );
+      }
       // A whole lock fixes every point; a point lock beside it would be a
       // second, redundant hold on the same point.
       if (

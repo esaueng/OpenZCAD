@@ -360,6 +360,7 @@ import {
   fullyDefinedIds,
   lockConstraintIds,
   measureDrivingDimension,
+  movedEntityLock,
   planConstraintFromSelection,
   refusePick,
   relationSolveAnchor,
@@ -26023,6 +26024,20 @@ export function App() {
             );
           }) ?? false
       );
+      for (const sketch of listNodesByKind(prospective, 'sketch')) {
+        const locked = movedEntityLock(
+          prospective,
+          sketch,
+          (value) =>
+            evalParamValue(value, afterScope, prospective.units) ?? undefined
+        );
+        if (locked) {
+          return {
+            kind: 'refused',
+            message: `${name} would move a locked entity in ${sketch.name}. Unlock it first.`
+          };
+        }
+      }
       const commands: AnyCommand[] = [parameterCommand];
       setStatus(`Checking ${name}…`);
       for (const sketch of constrainedSketches) {
