@@ -442,6 +442,12 @@ fieldset.field > legend {
   font-size: var(--fs-xs);
 }
 
+.expr-unit {
+  /* I03: the display unit a length field takes, beside its name. */
+  color: var(--color-text-subtle);
+  font-weight: normal;
+}
+
 .expr-input-row {
   display: grid;
   gap: 3px;

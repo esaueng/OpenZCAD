@@ -96,8 +96,8 @@ export function canonicalProjectContentKey(document: ProjectDocument): string {
 
 /**
  * The content a geometry rebuild reads: {@link canonicalProjectContentKey}
- * without D01 drawings, I05 reference images, U06 Objects folders or AS01
- * assemblies.
+ * without D01 drawings, I05 reference images, U06 Objects folders, AS01
+ * assemblies, D07 PMI or I03 display units.
  * Moving a view, retitling a sheet, sliding an image or filing a body keeps
  * ready geometry and cached builds. Saved-content comparisons still use
  * the full key, where each presentation edit is a real difference.
@@ -109,6 +109,7 @@ export function geometryContentKey(document: ProjectDocument): string {
     referenceImages: _referenceImages,
     assembly: _assembly,
     pmi: _pmi,
+    displayUnits: _displayUnits,
     ...model
   } = document;
   return canonicalProjectContentKey(model);

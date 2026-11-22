@@ -24,6 +24,8 @@ import {
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
+import { DisplayUnitsProvider } from './lib/displayUnits';
+import { roundShownLength } from './lib/liveLabels';
 import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
   noteProjectMigrating,
@@ -324,7 +326,10 @@ import {
   BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
+  convertLength,
   displayLengthName,
+  documentDisplayUnits,
+  UNIT_SYSTEM_WORDS,
   duplicateProjectName,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureManuallySuppressed,
@@ -3717,7 +3722,11 @@ export function App() {
   const [sketchPlaneOffsetText, setSketchPlaneOffsetText] = useState('0');
   const sketchPlaneOffset = (() => {
     const parsed = Number(sketchPlaneOffsetText);
-    return Number.isFinite(parsed) ? parsed : 0;
+    if (!Number.isFinite(parsed)) return 0;
+    // I03: typed in the display unit; the sketch stores document units.
+    return doc
+      ? convertLength(parsed, documentDisplayUnits(doc), doc.units)
+      : parsed;
   })();
   const [sketchEditError, setSketchEditError] = useState<string | null>(null);
   const [sketchDiagnosticPoints, setSketchDiagnosticPoints] = useState<
@@ -10334,14 +10343,21 @@ export function App() {
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
-    detailDiameter?: { diameter: number; units: string };
+    detailDiameter?: { diameter: number; units: string; scale?: number };
   } | null>(() => {
     if (!doc || tool === 'sketch' || currentGeometrySnapshot !== null) {
       return null;
     }
-    // `in`, not the `inch` enum, as the dock and the Inspector print it.
-    const units = displayLengthName(doc.units);
-    const round = (value: number) => Math.round(value * 100) / 100;
+    // I03: in the display unit. `in`, not the `inch` enum, as the dock and
+    // the Inspector print it.
+    const shownUnits = documentDisplayUnits(doc);
+    const units = displayLengthName(shownUnits);
+    const scale = convertLength(1, doc.units, shownUnits);
+    const round = (value: number) =>
+      scale === 1
+        ? Math.round(value * 100) / 100
+        : roundShownLength(value * scale);
+    const scaled = scale === 1 ? {} : { scale };
     if (selectedEdges.length > 1) {
       let sampled = false;
       const total = selectedEdges.reduce((sum, edge) => {
@@ -10445,7 +10461,7 @@ export function App() {
         return {
           label: textLabelSegments('Through hole'),
           detail: value,
-          detailDiameter: { diameter: geometry.diameter, units }
+          detailDiameter: { diameter: geometry.diameter, units, ...scaled }
         };
       }
       const label = topologySelectionLabelSegments(namingBody, namingTopology);
@@ -10462,13 +10478,15 @@ export function App() {
       return {
         label,
         ...(cylinderDiameter !== undefined
-          ? { detailDiameter: { diameter: cylinderDiameter, units } }
+          ? {
+              detailDiameter: { diameter: cylinderDiameter, units, ...scaled }
+            }
           : {}),
         detail:
           cylinderDiameter !== undefined
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
-              ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
+              ? `${formatMeasuredQuantity(geometry.area * scale * scale)} ${units}²`
               : fromSource
                 ? `— ${units}²`
                 : undefined
@@ -18095,7 +18113,16 @@ export function App() {
     const folderOnly = managerRef.current.undoIsObjectFolderOnly;
     const imageOnly = managerRef.current.undoIsGeometryFree;
     const assemblyOnly = managerRef.current.undoIsAssemblyOnly;
-    if (drawingOnly) {
+    // I03: switching units back is the project-level change it undoes,
+    // available wherever the switch itself was.
+    const unitsOnly = managerRef.current.undoIsDisplayUnitsOnly;
+    if (unitsOnly) {
+      const reason = projectRenameDisabledReasonRef.current;
+      if (reason) {
+        setStatus(cannotSentence('undo', reason));
+        return;
+      }
+    } else if (drawingOnly) {
       if (!ensureCanEditDrawings('undo')) return;
     } else if (assemblyOnly) {
       if (!ensureCanEditAssembly('undo')) return;
@@ -18177,7 +18204,16 @@ export function App() {
     const folderOnly = managerRef.current.redoIsObjectFolderOnly;
     const imageOnly = managerRef.current.redoIsGeometryFree;
     const assemblyOnly = managerRef.current.redoIsAssemblyOnly;
-    if (drawingOnly) {
+    // I03: switching units back is the project-level change it undoes,
+    // available wherever the switch itself was.
+    const unitsOnly = managerRef.current.redoIsDisplayUnitsOnly;
+    if (unitsOnly) {
+      const reason = projectRenameDisabledReasonRef.current;
+      if (reason) {
+        setStatus(cannotSentence('redo', reason));
+        return;
+      }
+    } else if (drawingOnly) {
       if (!ensureCanEditDrawings('redo')) return;
     } else if (assemblyOnly) {
       if (!ensureCanEditAssembly('redo')) return;
@@ -23085,7 +23121,8 @@ export function App() {
         sketch?.dimensionLabelPositions,
         sketch?.referenceDimensions,
         sketch?.composites,
-        appSettings.sketching.referenceDisplayUnit
+        appSettings.sketching.referenceDisplayUnit,
+        documentDisplayUnits(doc)
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -26003,6 +26040,36 @@ export function App() {
     }
   };
 
+  /**
+   * I03: shows and takes lengths in `units` (null: the document's own).
+   * Undoable, and nothing rebuilds: only how lengths read changes. A
+   * project-level setting, as its name is: whoever may rename the project
+   * may switch it, in any workspace mode.
+   */
+  function handleSetDisplayUnits(units: UnitSystem | null): boolean {
+    const manager = managerRef.current;
+    if (!manager) return false;
+    const target = units ?? manager.document.units;
+    if (documentDisplayUnits(manager.document) === target) return true;
+    const reason = projectRenameDisabledReasonRef.current;
+    if (reason) {
+      setStatus(cannotSentence('change the units', reason));
+      return false;
+    }
+    const changed = executeCommand(
+      commandFactories.setDisplayUnits({ units }),
+      undefined,
+      'rename'
+    );
+    if (changed)
+      setStatus(
+        target === manager.document.units
+          ? `Lengths are shown in ${displayLengthName(target)}, the project's own units.`
+          : `Lengths are shown in ${displayLengthName(target)}. The model is unchanged: it is still stored in ${displayLengthName(manager.document.units)}.`
+      );
+    return changed;
+  }
+
   /** L09: sets or clears the print clearance; answers with a refusal. */
   function handleSetPrintClearance(value: ParamValue | null): string | null {
     const manager = managerRef.current;
@@ -27556,6 +27623,11 @@ export function App() {
   >(null);
   const inPlaceSpec = inPlace.spec;
   const inPlaceUnits = doc?.units ?? 'mm';
+  // I03: in-place lengths read in the display unit; values stay stored.
+  const inPlaceShownUnits = doc ? documentDisplayUnits(doc) : inPlaceUnits;
+  const inPlaceShownName = displayLengthName(inPlaceShownUnits);
+  const inPlaceShown = (length: number) =>
+    convertLength(length, inPlaceUnits, inPlaceShownUnits);
   // M16: Bend. Started on a body rather than from History, it becomes the
   // edit of that body's sheet-metal feature, as its History row would arm.
   const bendBodyId =
@@ -28043,14 +28115,19 @@ export function App() {
           (value.unit === 'angle'
             ? '°'
             : value.unit === 'length'
-              ? inPlaceUnits
+              ? inPlaceShownName
               : undefined);
+        const displayed = displayedValue(value, number);
         return {
           id: value.id,
           label: labelOf(value),
           text:
             inPlace.raws[value.id] ??
-            formatNumber(displayedValue(value, number)),
+            formatNumber(
+              value.unit === 'length' && value.suffix === undefined
+                ? inPlaceShown(displayed)
+                : displayed
+            ),
           ...(suffix ? { suffix } : {}),
           value: number,
           step: inPlaceValueStep(value, number),
@@ -28085,7 +28162,8 @@ export function App() {
     inPlace.optionSpecs,
     inPlace.touched,
     inPlace.editing,
-    inPlaceUnits
+    inPlaceUnits,
+    inPlaceShownUnits
   ]);
   /**
    * A value typed in the Options panel: a number or an expression, as the
@@ -28098,8 +28176,9 @@ export function App() {
     if (!valueSpec) return false;
     const evaluation = evaluateKeypadInput(
       text,
+      // I03: a plain number is read in the display unit, as it was shown.
       valueSpec.unit === 'length'
-        ? inPlaceUnits
+        ? inPlaceShownUnits
         : valueSpec.unit === 'angle'
           ? 'deg'
           : 'count',
@@ -28182,6 +28261,9 @@ export function App() {
         // A value two places would show as a refused one is shown in full.
         const round = (value: number) => {
           const shown = displayedValue(valueSpec, value);
+          // I03: a length reads in the display unit.
+          if (valueSpec?.unit === 'length' && inPlaceShownUnits !== inPlaceUnits)
+            return String(roundShownLength(inPlaceShown(shown)));
           return shown === Math.round(value * 100) / 100
             ? formatNumber(shown)
             : String(shown);
@@ -28199,7 +28281,7 @@ export function App() {
                   ? (value: number) => `${label} ${round(value)}`
                   : (value: number) => `${round(value)} ${label.toLowerCase()}`
                 : (value: number) =>
-                    `${label} ${round(value)} ${inPlaceUnits}`.trim();
+                    `${label} ${round(value)} ${inPlaceShownName}`.trim();
         const value = inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0;
         // A refused value the kept preview did not build from: its arrow
         // stands on the value that built, at the model, under the refusal.
@@ -28214,7 +28296,12 @@ export function App() {
             : { max: handle.max ?? valueSpec!.max! }),
           format,
           describe: (value: number) =>
-            commandChipName(label, round(value), valueSpec?.unit, inPlaceUnits)
+            commandChipName(
+              label,
+              round(value),
+              valueSpec?.unit,
+              inPlaceShownName
+            )
         };
       }),
     // The viewer keys its rigs on `key`, so a value change here only moves
@@ -28224,7 +28311,8 @@ export function App() {
       inPlace.values,
       inPlace.keptValues,
       inPlaceSpec,
-      inPlaceUnits
+      inPlaceUnits,
+      inPlaceShownUnits
     ]
   );
   /**
@@ -28333,14 +28421,14 @@ export function App() {
               ...handle,
               value: state.distance,
               format: (value: number) =>
-                `${formatNumber(value)} ${inPlaceUnits}`
+                `${formatNumber(inPlaceShown(value))} ${inPlaceShownName}`
             }
           : {
               ...handle,
               value: state.backDistance,
               min: 0,
               format: (value: number) =>
-                `Back ${formatNumber(value)} ${inPlaceUnits}`
+                `Back ${formatNumber(inPlaceShown(value))} ${inPlaceShownName}`
             };
     });
   }, [
@@ -28352,7 +28440,8 @@ export function App() {
     inPlace.active,
     extrudeBarReady,
     availableSketchViews,
-    inPlaceUnits
+    inPlaceUnits,
+    inPlaceShownUnits
   ]);
   // A new fillet's or chamfer's picked edges are the selection, lit as the
   // card's list was. An edit leaves the selection alone: History already
@@ -30825,7 +30914,9 @@ export function App() {
         ? {
             ...current,
             initial: String(Math.round(size * 100) / 100),
-            selectInitial: false
+            selectInitial: false,
+            // A proved document-unit size, not typed keys (I03).
+            initialIsStored: true
           }
         : current
     );
@@ -36633,6 +36724,20 @@ export function App() {
             : null,
       run: () => setMeshExportOpen(true)
     },
+    // I03: one command per unit, found by its name and by "units".
+    ...(['mm', 'cm', 'm', 'inch'] as const).map((unit) => ({
+      id: `file-display-units-${unit}`,
+      label: `Show lengths in ${UNIT_SYSTEM_WORDS[unit]}`,
+      group: 'File',
+      keywords: ['units', 'unit', displayLengthName(unit), 'metric', 'imperial'],
+      icon: <Ruler size={16} aria-hidden="true" />,
+      disabledReason: !doc
+        ? 'Open a project first'
+        : documentDisplayUnits(doc) === unit
+          ? `Lengths are already shown in ${displayLengthName(unit)}`
+          : projectRenameDisabledReason,
+      run: () => void handleSetDisplayUnits(unit)
+    })),
     {
       id: 'file-export-image',
       label: 'Export image…',
@@ -37794,7 +37899,13 @@ export function App() {
             void handleDownloadProjectArtifact(artifact)
           }
           projectName={doc.name}
-          units={doc.units}
+          units={documentDisplayUnits(doc)}
+          displayUnits={{
+            shown: documentDisplayUnits(doc),
+            stored: doc.units,
+            onChange: (units) => void handleSetDisplayUnits(units),
+            disabledReason: projectRenameDisabledReason
+          }}
           canExport={
             exportBodyIds.length > 0 &&
             !parameterEditPending &&
@@ -41155,9 +41266,10 @@ export function App() {
     />
   );
   return (
-    <>
+    // I03: every length field reads the document's display unit from here.
+    <DisplayUnitsProvider units={doc ? documentDisplayUnits(doc) : null}>
       {workspace}
       {shareDestination}
-    </>
+    </DisplayUnitsProvider>
   );
 }

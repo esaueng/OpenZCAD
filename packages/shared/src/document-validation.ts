@@ -681,7 +681,10 @@ const FEATURE_UPDATE_NON_STRING_FIELDS = valuesOf<
 >({ axis: true, direction: true, operation: true, profile: true });
 
 /** The enums the document itself defines. */
-const DOCUMENT_ENUMS = enumsOf<ProjectDocument>({ units: UNIT_SYSTEMS });
+const DOCUMENT_ENUMS = enumsOf<ProjectDocument>({
+  units: UNIT_SYSTEMS,
+  displayUnits: UNIT_SYSTEMS
+});
 
 /** The enums a project node (`kind: 'project'`) defines. */
 const PROJECT_NODE_ENUMS = enumsOf<ProjectNode>({ units: UNIT_SYSTEMS });
@@ -703,6 +706,19 @@ const UNITS_CHANGE_ENUMS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * no migration has a document without.
  */
 const REQUIRED_UNITS: ReadonlySet<string> = new Set(['units']);
+
+/**
+ * I03: a history change restoring `displayUnits` holds a unit or nothing on
+ * each side; nothing is how a document that showed its own units is put
+ * back.
+ */
+const DISPLAY_UNITS_CHANGE_ENUMS: ReadonlyMap<
+  string,
+  ReadonlySet<string>
+> = new Map([
+  ['before', UNIT_SYSTEMS],
+  ['after', UNIT_SYSTEMS]
+]);
 const REQUIRED_CHANGE_SIDES: ReadonlySet<string> = new Set(['before', 'after']);
 
 /** The enums a body node (`kind: 'body'`) defines. */
@@ -1222,6 +1238,8 @@ function enumsOwnedBy(
   }
   if (entry.shape === 'change' && record.field === 'units')
     return owned(UNITS_CHANGE_ENUMS, REQUIRED_CHANGE_SIDES);
+  if (entry.shape === 'change' && record.field === 'displayUnits')
+    return owned(DISPLAY_UNITS_CHANGE_ENUMS);
   if (record.kind === 'project')
     return owned(PROJECT_NODE_ENUMS, REQUIRED_UNITS);
   if (record.kind === 'body') return owned(BODY_NODE_ENUMS);
