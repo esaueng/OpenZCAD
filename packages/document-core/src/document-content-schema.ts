@@ -1565,11 +1565,7 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       Array.isArray(node.constraints) &&
       node.constraints.some(
         (constraint) =>
-          record(constraint) &&
-          isCurvedTangent(
-            constraint.data,
-            document.nodes
-          )
+          record(constraint) && isCurvedTangent(constraint.data, document.nodes)
       )
     )
       assertCurvedTangentSchema(document.schemaVersion);
