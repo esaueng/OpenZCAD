@@ -1,0 +1,465 @@
+/**
+ * Frozen copy of document-core's hand-written `rewriteNodeExpressions` as it
+ * stood before I03 derived it from the quantity registry
+ * (`packages/shared/src/quantity-registry.ts`). Only the characterization
+ * test (`test/quantity-registry.test.ts`) uses it, to prove the derived
+ * visitor visits the same fields, in the same order, with the same tags.
+ * Do not update it to follow new fields: classify those in the registry.
+ */
+import type {
+  DirectEditOperation,
+  DocumentNode,
+  FeatureData,
+  ParametricVector3,
+  SketchObjectData
+} from '@openzcad/shared';
+import {
+  datumAxisPlaneSources,
+  datumAxisPointSources,
+  datumCsysPlaneSources,
+  datumCsysPointSources,
+  datumPointDefinitionPlaneSources,
+  datumPointDefinitionPointSources,
+  datumPlaneSources,
+  datumPointSources
+} from '@openzcad/shared';
+
+/**
+ * What a field holds (F05): a length, an angle in degrees, a unit-free
+ * number, or `null` when no quantity rule applies (direction components,
+ * a radians field, an on/off condition).
+ */
+type ExpressionFieldDimension = 'length' | 'angle' | 'number' | null;
+
+/** Where a visited expression is stored: its holding object and key. */
+interface ExpressionFieldSite {
+  container: object;
+  key: string;
+}
+
+type Rewrite = (
+  expression: string,
+  dimension: ExpressionFieldDimension,
+  site: ExpressionFieldSite
+) => string;
+
+function fields<T extends object>(
+  value: T,
+  keys: readonly (keyof T)[],
+  rewrite: Rewrite,
+  dimension: ExpressionFieldDimension
+): void {
+  for (const key of keys) {
+    if (typeof value[key] === 'string') {
+      const next = rewrite(value[key], dimension, {
+        container: value,
+        key: String(key)
+      });
+      if (next !== value[key]) value[key] = next as T[keyof T];
+    }
+  }
+}
+
+function vector(
+  value: ParametricVector3 | undefined,
+  rewrite: Rewrite,
+  dimension: ExpressionFieldDimension
+): void {
+  if (value) fields(value, ['x', 'y', 'z'], rewrite, dimension);
+}
+
+function directEdit(data: DirectEditOperation, rewrite: Rewrite): void {
+  switch (data.kind) {
+    case 'resize-through-hole':
+      fields(data, ['diameter'], rewrite, 'length');
+      return;
+    case 'resize-imported-blind-hole':
+      fields(data, ['diameter', 'depth'], rewrite, 'length');
+      return;
+    case 'resize-imported-counterbore':
+      fields(
+        data,
+        ['boreDiameter', 'counterboreDiameter', 'counterboreDepth'],
+        rewrite,
+        'length'
+      );
+      return;
+    case 'resize-imported-countersink':
+      fields(data, ['boreDiameter', 'sinkDiameter'], rewrite, 'length');
+      // Stored as raw radians: a typed angle (degrees) or length would be
+      // reinterpreted, so only a unitless value may drive it.
+      fields(data, ['angleRadians'], rewrite, 'number');
+      return;
+    case 'offset-face':
+    case 'offset-faces':
+      fields(data, ['offset'], rewrite, 'length');
+      return;
+    case 'set-face-distance':
+      fields(data, ['distance'], rewrite, 'length');
+      return;
+    case 'resize-cylindrical-face':
+      fields(data, ['radius'], rewrite, 'length');
+      return;
+    case 'resize-blend':
+      fields(data, ['newRadius'], rewrite, 'length');
+      return;
+    case 'remove-face-feature':
+    case 'remove-faces':
+    case 'remove-blends':
+      return;
+    default:
+      data satisfies never;
+  }
+}
+
+function feature(data: FeatureData, rewrite: Rewrite): void {
+  switch (data.featureKind) {
+    case 'primitive':
+      fields(data.dimensions, Object.keys(data.dimensions), rewrite, 'length');
+      return;
+    case 'extrude':
+      fields(
+        data,
+        ['distance', 'backDistance', 'toFaceOffset', 'startOffset'],
+        rewrite,
+        'length'
+      );
+      fields(data, ['draftAngleDeg', 'backDraftAngleDeg'], rewrite, 'angle');
+      return;
+    case 'revolve':
+      fields(data, ['angleDeg'], rewrite, 'angle');
+      return;
+    case 'loft':
+      vector(data.endPoint, rewrite, 'length');
+      return;
+    case 'helical-sweep':
+      fields(data, ['radius', 'pitch'], rewrite, 'length');
+      fields(data, ['turns'], rewrite, 'number');
+      vector(data.axisOrigin, rewrite, 'length');
+      vector(data.axisDirection, rewrite, null);
+      return;
+    case 'boolean':
+      fields(data, ['activeWhen'], rewrite, null);
+      return;
+    case 'transform':
+      fields(data.transform, ['scale'], rewrite, 'number');
+      vector(data.transform.translation, rewrite, 'length');
+      vector(data.transform.rotationDeg, rewrite, 'angle');
+      vector(data.transform.pivot, rewrite, 'length');
+      if (data.axisRotation)
+        fields(data.axisRotation, ['angleDeg'], rewrite, 'angle');
+      return;
+    case 'mirror':
+    case 'split':
+      // A datum reference carries no expressions of its own; the datum's
+      // feature is rewritten where it stands in history.
+      if ('origin' in data.plane) {
+        vector(data.plane.origin, rewrite, 'length');
+        vector(data.plane.normal, rewrite, null);
+      }
+      return;
+    case 'datum-plane': {
+      const definition = data.definition;
+      if (definition.kind === 'offset')
+        fields(definition, ['offset'], rewrite, 'length');
+      if (definition.kind === 'edge-angle')
+        fields(definition, ['angleDeg'], rewrite, 'angle');
+      if (definition.kind === 'normal-to-edge' && 'fraction' in definition.at)
+        fields(definition.at, ['fraction'], rewrite, null);
+      for (const source of datumPlaneSources(definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumPointSources(definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
+      return;
+    }
+    case 'hole':
+      fields(
+        data,
+        [
+          'diameter',
+          'depth',
+          'counterboreDiameter',
+          'counterboreDepth',
+          'countersinkDiameter'
+        ],
+        rewrite,
+        'length'
+      );
+      fields(data, ['countersinkAngleDeg'], rewrite, 'angle');
+      fields(data.position, ['u', 'v'], rewrite, 'length');
+      return;
+    case 'thread':
+      fields(
+        data,
+        [
+          'majorDiameter',
+          'pitch',
+          'depth',
+          'crestWidth',
+          'clearance',
+          'length',
+          'offset'
+        ],
+        rewrite,
+        'length'
+      );
+      fields(
+        data,
+        [
+          'upperFlankAngleDeg',
+          'lowerFlankAngleDeg',
+          'phaseDeg',
+          'chamferAngleDeg'
+        ],
+        rewrite,
+        'angle'
+      );
+      fields(data, ['starts'], rewrite, 'number');
+      return;
+    case 'sheet-metal': {
+      const relief = (value: typeof data.relief) => {
+        if (value) fields(value, ['width', 'extension'], rewrite, 'length');
+      };
+      fields(data, ['thickness', 'bendRadius'], rewrite, 'length');
+      fields(data, ['kFactor'], rewrite, 'number');
+      relief(data.relief);
+      for (const bend of data.bends) {
+        fields(bend, ['angleDeg'], rewrite, 'angle');
+        fields(bend, ['radius'], rewrite, 'length');
+        fields(bend, ['kFactor'], rewrite, 'number');
+        relief(bend.relief);
+      }
+      return;
+    }
+    case 'gear':
+      // A diametral pitch is teeth per inch of pitch diameter: a number in
+      // every unit system. A module or circular pitch is a length.
+      fields(
+        data,
+        ['pitch'],
+        rewrite,
+        data.sizing === 'diametral-pitch' ? 'number' : 'length'
+      );
+      fields(
+        data,
+        [
+          'faceWidth',
+          'offset',
+          'backlash',
+          'boreDiameter',
+          'rimDiameter',
+          'backDepth',
+          'wormLength',
+          // A throated wheel's tip diameter: the kernel reads a length.
+          'outsideDiameter'
+        ],
+        rewrite,
+        'length'
+      );
+      fields(
+        data,
+        [
+          'teeth',
+          'mateTeeth',
+          'diameterFactor',
+          'profileShift',
+          'addendum',
+          'dedendum',
+          'rootFillet'
+        ],
+        rewrite,
+        'number'
+      );
+      fields(
+        data,
+        ['pressureAngleDeg', 'phaseDeg', 'helixAngleDeg', 'shaftAngleDeg'],
+        rewrite,
+        'angle'
+      );
+      vector(data.origin, rewrite, 'length');
+      vector(data.axis, rewrite, null);
+      vector(data.xDirection, rewrite, null);
+      return;
+    case 'shell':
+    case 'thicken':
+      fields(data, ['thickness'], rewrite, 'length');
+      return;
+    case 'rib':
+      fields(data, ['thickness'], rewrite, 'length');
+      return;
+    case 'wrap':
+      fields(data, ['depth', 'axialOffset'], rewrite, 'length');
+      fields(data, ['rotationDeg'], rewrite, 'angle');
+      return;
+    case 'solid-offset':
+      fields(data, ['distance'], rewrite, 'length');
+      return;
+    case 'draft':
+      fields(data, ['angleDeg'], rewrite, 'angle');
+      vector(data.pullDirection, rewrite, null);
+      vector(data.neutralPoint, rewrite, 'length');
+      return;
+    case 'fillet':
+      fields(data, ['radius', 'endRadius'], rewrite, 'length');
+      for (const vertex of data.vertexRadii ?? [])
+        fields(vertex, ['radius'], rewrite, 'length');
+      for (const station of data.radiusStations ?? [])
+        fields(station, ['radius'], rewrite, 'length');
+      return;
+    case 'chamfer':
+      fields(data, ['distance', 'distance2'], rewrite, 'length');
+      fields(data, ['angleDeg'], rewrite, 'angle');
+      return;
+    case 'pattern':
+      fields(data, ['count', 'count2'], rewrite, 'number');
+      fields(data, ['spacing', 'spacing2'], rewrite, 'length');
+      fields(data, ['angleDeg'], rewrite, 'angle');
+      vector(data.direction, rewrite, null);
+      // M02 (schema v119): a mirror pattern's plane, as Mirror's.
+      if (data.mirrorPlane && 'origin' in data.mirrorPlane) {
+        vector(data.mirrorPlane.origin, rewrite, 'length');
+        vector(data.mirrorPlane.normal, rewrite, null);
+      }
+      return;
+    case 'direct-edit':
+      directEdit(data.operation, rewrite);
+      return;
+    case 'datum-axis':
+      for (const source of datumAxisPlaneSources(data.definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumAxisPointSources(data.definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
+      return;
+    case 'datum-point': {
+      const definition = data.definition;
+      if (definition.kind === 'offset')
+        vector(definition.offset, rewrite, 'length');
+      for (const source of datumPointDefinitionPlaneSources(definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumPointDefinitionPointSources(definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
+      return;
+    }
+    case 'datum-csys': {
+      const definition = data.definition;
+      if (definition.kind === 'placement')
+        vector(definition.rotationDeg, rewrite, 'angle');
+      for (const source of datumCsysPlaneSources(definition))
+        if (source.type === 'canonical')
+          fields(source, ['offset'], rewrite, 'length');
+      for (const point of datumCsysPointSources(definition))
+        if (point.type === 'point') vector(point.point, rewrite, 'length');
+      return;
+    }
+    case 'standard-part':
+      fields(data, ['length'], rewrite, 'length');
+      vector(data.origin, rewrite, 'length');
+      vector(data.axis, rewrite, null);
+      vector(data.xDirection, rewrite, null);
+      return;
+    case 'custom-feature':
+      // L15: each input is an expression; its quantity is the script's to
+      // declare, and the build checks it against that.
+      fields(data.inputs, Object.keys(data.inputs), rewrite, null);
+      return;
+    case 'sweep':
+      // M04 (v132): an exact sweep's twist is an angle, its end scale a
+      // unit-free ratio.
+      fields(data, ['twistDeg'], rewrite, 'angle');
+      fields(data, ['endScale'], rewrite, 'number');
+      // M04 (v135): a round corner's radius is a length.
+      fields(data, ['cornerRadius'], rewrite, 'length');
+      return;
+    case 'sketch':
+    case 'imported-mesh':
+    case 'imported-step':
+      return;
+    default:
+      data satisfies never;
+  }
+}
+
+function sketchObject(data: SketchObjectData, rewrite: Rewrite): void {
+  switch (data.objectKind) {
+    case 'rectangle':
+      fields(
+        data,
+        ['width', 'height', 'centerX', 'centerY'],
+        rewrite,
+        'length'
+      );
+      return;
+    case 'circle':
+      fields(data, ['radius', 'centerX', 'centerY'], rewrite, 'length');
+      return;
+    case 'polygon':
+      fields(data, ['sides'], rewrite, 'number');
+      fields(data, ['radius', 'centerX', 'centerY'], rewrite, 'length');
+      return;
+    case 'line':
+      fields(data, ['x1', 'y1', 'x2', 'y2'], rewrite, 'length');
+      return;
+    case 'arc':
+      fields(data, ['radius', 'centerX', 'centerY'], rewrite, 'length');
+      fields(data, ['startAngleDeg', 'endAngleDeg'], rewrite, 'angle');
+      return;
+    case 'ellipse':
+      fields(
+        data,
+        ['centerX', 'centerY', 'radiusX', 'radiusY'],
+        rewrite,
+        'length'
+      );
+      fields(
+        data,
+        ['rotationDeg', 'startParamDeg', 'endParamDeg'],
+        rewrite,
+        'angle'
+      );
+      return;
+    case 'spline':
+      for (const point of data.points) {
+        fields(point, ['x', 'y'], rewrite, 'length');
+      }
+      return;
+    case 'text':
+      fields(data, ['size', 'x', 'y'], rewrite, 'length');
+      fields(data, ['rotation'], rewrite, 'angle');
+      return;
+    case 'point':
+      fields(data, ['x', 'y'], rewrite, 'length');
+      return;
+    default:
+      data satisfies never;
+  }
+}
+
+/** Visits only authored expression fields; ids, enums, text and witnesses are literals. */
+export function legacyRewriteNodeExpressions(
+  node: DocumentNode,
+  rewrite: Rewrite
+): void {
+  if (node.kind === 'feature') feature(node.data, rewrite);
+  else if (node.kind === 'sketch-object') sketchObject(node.data, rewrite);
+  else if (node.kind === 'parameter')
+    fields(node, ['expression'], rewrite, node.quantity ?? null);
+  else if (node.kind === 'sketch') {
+    if (node.planeRef.type === 'canonical')
+      fields(node.planeRef, ['offset'], rewrite, 'length');
+    fields(node, ['offset'], rewrite, 'length');
+    for (const constraint of node.constraints ?? []) {
+      const data = constraint.data;
+      if (
+        data.constraintKind === 'distance' ||
+        data.constraintKind === 'radius' ||
+        data.constraintKind === 'offset'
+      )
+        fields(data, ['value'], rewrite, 'length');
+      else if (data.constraintKind === 'angle')
+        fields(data, ['valueDeg'], rewrite, 'angle');
+    }
+  }
+}

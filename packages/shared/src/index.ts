@@ -7678,3 +7678,4 @@ export * from './thread-span';
 export * from './feature-patterns';
 export * from './sheet-metal';
 export * from './project-comments';
+export * from './quantity-registry';
