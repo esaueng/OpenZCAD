@@ -36,6 +36,11 @@ export interface PlaybackFrame {
   /** The study playhead, for a study. */
   studyTimeS?: number;
   done: boolean;
+  /**
+   * A finite joint sweep came back to the saved pose: stop and show the
+   * saved values, as Pause does, so nothing is left overridden.
+   */
+  settled?: boolean;
 }
 
 export function playbackFrame(
@@ -54,12 +59,33 @@ export function playbackFrame(
       playback.dof
     );
     if (!range) return null;
-    const { value, done } = jointSweepValue(
+    let { value, done } = jointSweepValue(
       range,
       playback.mode,
       playback.sweepS,
       elapsedS
     );
+    const cycleS =
+      playback.mode === 'ping-pong' ? 2 * playback.sweepS : playback.sweepS;
+    if (
+      playback.cycles !== undefined &&
+      playback.mode !== 'once' &&
+      elapsedS >= playback.cycles * cycleS
+    ) {
+      // Every cycle ends at the range start; one last forward sweep runs
+      // until it reaches the saved value, so stopping there does not jump.
+      const rest = joint.values[playback.dof] ?? range.min;
+      const settle = jointSweepValue(
+        range,
+        'once',
+        playback.sweepS,
+        elapsedS - playback.cycles * cycleS
+      );
+      if (settle.done || settle.value >= rest)
+        return { overrides: new Map(), drivers: [], done: true, settled: true };
+      value = settle.value;
+      done = false;
+    }
     const values = [...joint.values];
     values[playback.dof] = value;
     return {
@@ -137,7 +163,7 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
         const runtime = getAssemblyRuntime();
         if (runtime.playback) {
           const next = playbackFrame(set, runtime.playback, now);
-          if (!next) {
+          if (!next || next.settled) {
             assemblyRuntime.stop();
             return;
           }
