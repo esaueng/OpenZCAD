@@ -5,7 +5,10 @@ import {
   listFeaturesInOrder,
   resolveParamValue
 } from '@openzcad/document-core';
-import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import type {
+  SketchSolveAnchor,
+  SketchSolveOutcome
+} from '@openzcad/kernel-adapter/exact';
 import { ownEntry } from '@openzcad/shared';
 import type {
   EntityId,
@@ -120,7 +123,8 @@ export async function sketchEntityEditCommands(
   data: SketchObjectData,
   solve: (
     document: ProjectDocument,
-    sketchId: SketchId
+    sketchId: SketchId,
+    anchor?: SketchSolveAnchor
   ) => Promise<SketchSolveOutcome>
 ): Promise<AnyCommand[]> {
   return sketchEntitiesEditCommands(
@@ -143,7 +147,8 @@ export async function sketchEntitiesEditCommands(
   updates: readonly { objectId: EntityId; data: SketchObjectData }[],
   solve: (
     document: ProjectDocument,
-    sketchId: SketchId
+    sketchId: SketchId,
+    anchor?: SketchSolveAnchor
   ) => Promise<SketchSolveOutcome>,
   label?: string,
   /** Relation changes that ride the same edit, applied before the solve. */
@@ -173,6 +178,33 @@ export async function sketchEntitiesEditCommands(
     );
   }
   const solved = solvedSketchCommands(prospective, sketchId, outcome);
+  if (keepsRequested(prospective, solved, updates, befores)) {
+    return [...commands, ...solved];
+  }
+  // A free solve settled by moving what the user changed, say a pattern's
+  // source back toward its instances. Hold the edited entities where they
+  // were put and let the rest follow; refuse only if that cannot settle.
+  const held = await solve(prospective, sketchId, {
+    objectIds: updates.map(({ objectId }) => objectId)
+  });
+  if (held.converged && !held.rolledBack) {
+    const followed = solvedSketchCommands(prospective, sketchId, held);
+    if (keepsRequested(prospective, followed, updates, befores)) {
+      return [...commands, ...followed];
+    }
+  }
+  throw new Error(
+    'A constraint controls a value you changed. Edit its dimension below or remove that constraint; no change was saved.'
+  );
+}
+
+/** Every value the edit asked for survives the solve's commands. */
+function keepsRequested(
+  prospective: ProjectDocument,
+  solved: AnyCommand[],
+  updates: readonly { objectId: EntityId; data: SketchObjectData }[],
+  befores: readonly { data: SketchObjectData }[]
+): boolean {
   const after = apply(prospective, solved);
   const scope = getParameterScope(prospective).scope;
   for (const [index, { objectId, data }] of updates.entries()) {
@@ -197,11 +229,9 @@ export async function sketchEntitiesEditCommands(
             resolveParamValue(actual, scope, undefined, prospective.units)
         ) > 1e-9
       ) {
-        throw new Error(
-          'A constraint controls a value you changed. Edit its dimension below or remove that constraint; no change was saved.'
-        );
+        return false;
       }
     }
   }
-  return [...commands, ...solved];
+  return true;
 }

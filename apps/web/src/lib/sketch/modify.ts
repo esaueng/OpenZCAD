@@ -38,6 +38,7 @@ import {
   type SketchId,
   type SketchNode,
   type SketchObjectData,
+  type SketchPatternLayout,
   type SketchPointRef
 } from '@openzcad/shared';
 
@@ -618,6 +619,23 @@ function remapConstraint(
       const point = mapRef(data.point);
       return point ? { ...data, point } : null;
     }
+    case 'pattern': {
+      // Reshaping the source or the direction (or the pivot's owner) breaks
+      // the pattern; a reshaped instance leaves it, and the others stay held.
+      if (
+        data.source === id ||
+        (data.layout.kind === 'linear'
+          ? data.layout.direction === id
+          : data.layout.pivot.objectId === id)
+      ) {
+        return null;
+      }
+      const instances = data.instances.filter(
+        (instance) => instance.objectId !== id
+      );
+      if (instances.length === data.instances.length) return data;
+      return instances.length > 0 ? { ...data, instances } : null;
+    }
     case 'point-on-object': {
       const point = mapRef(data.point);
       if (!point) {
@@ -727,6 +745,15 @@ function remapCommands(
     }
     if (!next) {
       dropped += 1;
+    }
+    // Deleting a replaced instance already narrows its pattern to the
+    // others; restating it would add the same relation a second time.
+    if (
+      next &&
+      plan.replacement &&
+      constraint.data.constraintKind === 'pattern'
+    ) {
+      continue;
     }
     if (!plan.replacement) {
       release.push(
@@ -2277,10 +2304,13 @@ const ZERO_LENGTH =
   'That line has no length, so there is nothing to copy. Give it a length first.';
 
 /**
- * Copies of one source, each tied back to it: equal length or radius always,
- * and parallel too for the lines of a linear pattern, so resizing the source
- * and solving resizes every instance. Positions are not linked yet — that is
- * the persistent pattern relation the roadmap keeps open.
+ * Copies of one source, held by one pattern relation (S05): each instance
+ * is the source moved its step along the layout, at the source's size and
+ * shape, so moving or resizing the source and solving carries every
+ * instance. Without a layout (a circular pivot that is no stored point)
+ * each copy is tied back by equal length or radius, and parallel too where
+ * `parallel` says it keeps its direction, as patterns were before the
+ * relation.
  */
 function patternCommands(
   sketchId: SketchId,
@@ -2288,11 +2318,31 @@ function patternCommands(
   data: SketchObjectData,
   copies: Curve2[],
   parallel: boolean,
-  label: string
+  label: string,
+  layout?: SketchPatternLayout
 ): AnyCommand[] {
   const ids = copies.map(() => newEntityId());
   const links: AnyCommand[] = [];
-  for (const copyId of ids) {
+  if (layout) {
+    links.push(
+      commandFactories.addSketchConstraint(
+        {
+          sketchId,
+          constraint: {
+            constraintKind: 'pattern',
+            source: sourceId,
+            instances: ids.map((objectId, index) => ({
+              objectId,
+              step: index + 1
+            })),
+            layout
+          }
+        },
+        `Hold the ${label.toLowerCase()}`
+      )
+    );
+  }
+  for (const copyId of layout ? [] : ids) {
     links.push(
       commandFactories.addSketchConstraint(
         {
@@ -2455,7 +2505,8 @@ export function planSketchLinearPattern(
       source.data,
       copies,
       source.curve.kind === 'line',
-      'Linear pattern'
+      'Linear pattern',
+      { kind: 'linear', direction: directionId as EntityId, spacing }
     )
   };
 }
@@ -2478,6 +2529,7 @@ export function planSketchCircularPattern(
   totalDeg: number,
   resolve: Resolve,
   orientation: 'rotate' | 'uniform' = 'rotate',
+  pivotRef?: SketchPointRef,
   earlier: readonly PlannedCurve[] = []
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
@@ -2595,7 +2647,15 @@ export function planSketchCircularPattern(
       copies,
       // Moved without turning, a line stays parallel to its source.
       uniform && source.curve.kind === 'line',
-      'Circular pattern'
+      'Circular pattern',
+      pivotRef
+        ? {
+            kind: 'circular',
+            pivot: pivotRef,
+            stepDeg: (stepRad * 180) / Math.PI,
+            orientation
+          }
+        : undefined
     )
   };
 }
@@ -2612,6 +2672,8 @@ export type SketchPatternSetSpec =
   | {
       kind: 'circular-pattern';
       pivot: Point2;
+      /** The stored point the pivot is, held by the pattern relation. */
+      pivotRef?: SketchPointRef;
       count: number;
       totalDeg: number;
       orientation: 'rotate' | 'uniform';
@@ -2683,6 +2745,7 @@ export function planSketchPatternSet(
             spec.totalDeg,
             resolve,
             spec.orientation,
+            spec.pivotRef,
             earlier
           );
     if (plan.status !== 'commands') {
@@ -2740,8 +2803,12 @@ export function resolvePatternPivot(
   sketch: SketchNode,
   pick: string,
   resolve: Resolve
-): { pivot: Point2 } | { error: string } {
+): { pivot: Point2; ref: SketchPointRef } | { error: string } {
   const [objectId, point] = pick.split('#') as [string, PointName | undefined];
+  const ref = (name: PointName): SketchPointRef => ({
+    objectId: objectId as EntityId,
+    point: name
+  });
   const data = sketchObject(document, sketch, objectId);
   if (!data) {
     return { error: 'That object is not part of this sketch.' };
@@ -2755,16 +2822,17 @@ export function resolvePatternPivot(
   }
   if (point === 'start' || point === 'end') {
     if (curve.kind === 'line') {
-      return { pivot: point === 'start' ? curve.a : curve.b };
+      return { pivot: point === 'start' ? curve.a : curve.b, ref: ref(point) };
     }
     if (curve.kind === 'arc') {
       return {
-        pivot: pointOnCurve(curve, point === 'start' ? 0 : curve.sweep)
+        pivot: pointOnCurve(curve, point === 'start' ? 0 : curve.sweep),
+        ref: ref(point)
       };
     }
   }
   if (curve.kind !== 'line') {
-    return { pivot: curve.c };
+    return { pivot: curve.c, ref: ref('center') };
   }
   return {
     error:
