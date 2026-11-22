@@ -38,7 +38,8 @@ export const SKETCH_RELATION_GLYPHS: Record<
   midpoint: { symbol: '△', label: 'Midpoint' },
   symmetric: { symbol: '↔', label: 'Symmetric' },
   'point-on-object': { symbol: '◇', label: 'Point on curve' },
-  lock: { symbol: '▲', label: 'Lock' }
+  lock: { symbol: '▲', label: 'Lock' },
+  'lock-entity': { symbol: '▲', label: 'Locked entity' }
 };
 
 export interface SketchRelationGlyph {
@@ -227,6 +228,9 @@ export function sketchRelationGlyphs(
         break;
       case 'lock':
         onPoint(data.point, glyph);
+        break;
+      case 'lock-entity':
+        onObject(data.objectId, glyph);
         break;
       case 'symmetric':
         onPoint(data.a, glyph);

@@ -1578,6 +1578,7 @@ const SKETCH_CONSTRAINT_FIELDS: Readonly<
   symmetric: { points: ['a', 'b'], objects: ['axis'] },
   'point-on-object': { points: ['point'], objects: ['objectId'] },
   lock: { points: ['point'] },
+  'lock-entity': { objects: ['objectId'] },
   pattern: { objects: ['source'] }
 };
 
@@ -1627,6 +1628,14 @@ export function sketchConstraintShapeError(data: unknown): string | null {
     (typeof data.x !== 'number' || typeof data.y !== 'number')
   )
     return 'Sketch lock constraint needs a numeric position.';
+  if (
+    kind === 'lock-entity' &&
+    (!Array.isArray(data.at) ||
+      data.at.length < 3 ||
+      data.at.length > 5 ||
+      !data.at.every((value) => typeof value === 'number'))
+  )
+    return 'Sketch entity lock needs its recorded geometry.';
   if (kind === 'pattern') return sketchPatternShapeError(data);
   return null;
 }
