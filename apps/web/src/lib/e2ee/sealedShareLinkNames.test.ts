@@ -503,6 +503,40 @@ describe('the sealed account record', () => {
     expect(shareLinkNamesFor(laptop.copy(), 'proj_x')).toEqual({});
   });
 
+  // PR 1938 review: a read merges the account's names into the device copy
+  // as it is when the fetch returns, so a rename typed meanwhile stays.
+  it('keeps a rename typed on this device while a read was fetching', async () => {
+    const api = memoryApi();
+    await changeShareLinkNames(memoryKeys(), api, (book, now) =>
+      setShareLinkName(book, 'proj_x', 'shr_a', 'Synced', now)
+    );
+    const keys = memoryKeys();
+    const load = api.load;
+    api.load = async () => {
+      const snapshot = await load();
+      // Typed here while the fetch was out; its own save failed.
+      keys.device.write(
+        setShareLinkName(
+          keys.device.read(),
+          'proj_x',
+          'shr_new',
+          'Typed',
+          2_000_000
+        )
+      );
+      return snapshot;
+    };
+    const book = await readShareLinkNames(keys, api);
+    expect(shareLinkNamesFor(book, 'proj_x')).toEqual({
+      shr_a: 'Synced',
+      shr_new: 'Typed'
+    });
+    expect(shareLinkNamesFor(keys.copy(), 'proj_x')).toEqual({
+      shr_a: 'Synced',
+      shr_new: 'Typed'
+    });
+  });
+
   it('keeps a derived change off the device copy until the account takes it', async () => {
     const api = memoryApi();
     await changeShareLinkNames(memoryKeys(), api, (book, now) =>

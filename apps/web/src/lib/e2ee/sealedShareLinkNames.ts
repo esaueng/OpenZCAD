@@ -532,7 +532,10 @@ export async function readShareLinkNames(
   if (opened.kind !== 'opened') return device;
   // A session that ended meanwhile must not put names back on the device.
   requireActive(keys);
-  const merged = mergeShareLinkNameBooks(device, opened.book);
+  // Merged into the device copy as it is now, not as it was before the
+  // fetch: a rename typed here meanwhile, whose save failed, stays
+  // (PR 1938 review).
+  const merged = mergeShareLinkNameBooks(keys.device.read(), opened.book);
   keys.device.write(merged);
   return merged;
 }
@@ -760,7 +763,18 @@ export async function nameReissuedPageShareLinks(
     );
   }
   const api = await pageApi();
-  const book = await readShareLinkNames(keys, api);
+  // Whether anything is left to name, without touching the device copy; a
+  // failed fetch fails the call rather than reading as nothing to do.
+  const snapshot = await api.load();
+  const opened =
+    snapshot.record === null
+      ? null
+      : await openShareLinkNames(keys, snapshot.record);
+  requireActive(keys);
+  const book =
+    opened?.kind === 'opened'
+      ? mergeShareLinkNameBooks(keys.device.read(), opened.book)
+      : keys.device.read();
   if (nameReissuedShareLinks(book, projectId, pending, 0) === book) return;
   await changeShareLinkNames(
     keys,

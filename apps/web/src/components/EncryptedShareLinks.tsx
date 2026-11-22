@@ -197,20 +197,22 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         .map((link) => link.shareId)
     );
     const userId = ctx.groups.account.userId;
-    const sealedNames = await import('../lib/e2ee/sealedShareLinkNames');
-    // A reissue that upkeep finished after it failed names its new links
-    // here. Best effort: the next list tries again.
-    await sealedNames
-      .nameReissuedPageShareLinks(
-        userId,
-        projectId,
-        work?.replacements ?? [],
-        live
-      )
-      .catch(() => {});
-    // The owner's sealed names; unnamed when they cannot be read here.
-    const names = await sealedNames
-      .pageShareLinkNames(userId, projectId, live)
+    // The owner's sealed names; unnamed when they cannot be read here (the
+    // module included: the links still list without it).
+    const names = await import('../lib/e2ee/sealedShareLinkNames')
+      .then(async (sealedNames) => {
+        // A reissue that upkeep finished after it failed names its new
+        // links here. Best effort: the next list tries again.
+        await sealedNames
+          .nameReissuedPageShareLinks(
+            userId,
+            projectId,
+            work?.replacements ?? [],
+            live
+          )
+          .catch(() => {});
+        return sealedNames.pageShareLinkNames(userId, projectId, live);
+      })
       .catch((): Record<string, string> => ({}));
     return {
       links: view.links.map((link) => ({
