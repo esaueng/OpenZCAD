@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest
@@ -395,5 +395,101 @@ describe('the analysis panel for thickness (M09)', () => {
     onChange.mockClear();
     fireEvent.change(minimum, { target: { value: '0' } });
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('the analysis panel beside the Display button (M09)', () => {
+  const restores: (() => void)[] = [];
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const restore of restores.splice(0)) restore();
+    document.body.innerHTML = '';
+  });
+
+  function stub(target: object, key: string, get: (this: never) => unknown) {
+    const original = Object.getOwnPropertyDescriptor(target, key);
+    Object.defineProperty(target, key, { configurable: true, get });
+    restores.push(() => {
+      if (original) Object.defineProperty(target, key, original);
+      else delete (target as Record<string, unknown>)[key];
+    });
+  }
+
+  function rect(left: number, top: number, width: number, height: number) {
+    return {
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      x: left,
+      y: top,
+      toJSON: () => ({})
+    } as DOMRect;
+  }
+
+  it('re-places once the rail it measured mid-slide finishes animating in', async () => {
+    const workspace = document.createElement('div');
+    workspace.className = 'workspace';
+    const stage = document.createElement('div');
+    const rail = document.createElement('div');
+    rail.className = 'viewer-rail';
+    const trigger = document.createElement('button');
+    trigger.setAttribute('data-display-mode-trigger', '');
+    rail.append(trigger);
+    workspace.append(stage, rail);
+    document.body.append(workspace);
+
+    // The rail slides in from 16px right of where it settles; the first
+    // placement measures it part-way through.
+    let railLeft = 1008;
+    const rects = new Map<Element, () => DOMRect>([
+      [stage, () => rect(0, 0, 1200, 800)],
+      [rail, () => rect(railLeft, 100, 40, 400)],
+      [trigger, () => rect(railLeft + 4, 120, 32, 32)]
+    ]);
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: Element) {
+        return rects.get(this)?.() ?? rect(0, 0, 0, 0);
+      }
+    );
+    vi.spyOn(Element.prototype, 'getClientRects').mockImplementation(function (
+      this: Element
+    ) {
+      const list = rects.has(this) ? [rects.get(this)!()] : [];
+      return Object.assign(list, {
+        item: (i: number) => list[i] ?? null
+      });
+    });
+    // happy-dom lays nothing out: the panel's offset parent is the stage,
+    // and it has a size.
+    stub(HTMLElement.prototype, 'offsetParent', function (this: HTMLElement) {
+      return this.classList.contains('analysis-panel') ? stage : null;
+    });
+    stub(HTMLElement.prototype, 'offsetWidth', () => 300);
+    stub(HTMLElement.prototype, 'offsetHeight', () => 200);
+
+    render(
+      <AnalysisPanel
+        request={request}
+        run={{ kind: 'done', report: boxReport() }}
+        nameOf={() => 'Housing'}
+        onChange={vi.fn()}
+        onOff={vi.fn()}
+      />,
+      { container: stage }
+    );
+    const panel = screen.getByRole('region', { name: 'Draft analysis' });
+    // 1200 − 1008 + 8: beside the rail where it stood mid-slide.
+    expect(panel.style.right).toBe('200px');
+
+    // The slide ends: nothing resizes or mutates, only the animation event.
+    railLeft = 992;
+    await act(async () => {
+      fireEvent.animationEnd(rail);
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(panel.style.right).toBe('216px');
   });
 });
