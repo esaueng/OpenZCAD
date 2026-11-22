@@ -389,8 +389,8 @@ describe('quantity registry', () => {
     });
 
     it('compares with the field as it stands after the callback', () => {
-      // As the hand-written visitor did: a callback that writes through its
-      // site and returns the original text keeps its own write.
+      // As the hand-written visitor did: when a callback writes through its
+      // site and returns the original text, the returned text wins.
       const node = {
         kind: 'feature',
         data: { featureKind: 'chamfer', distance: 'width', edgeHashes: [] }
