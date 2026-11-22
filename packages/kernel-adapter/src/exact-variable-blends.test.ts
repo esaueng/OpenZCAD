@@ -20,7 +20,6 @@ import { createExactKernelAdapter } from './exact';
 import { approximateBlendAdvisory } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
-  variableBlendOverflowLimit,
   variableBlendRefusal,
   variableBlendRefusalMessage,
   variableFilletRequest
@@ -622,40 +621,10 @@ describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
         kernelCode: code
       });
       expect(refusal.message, code).toContain(reported);
-      expect(refusal.limit, code).toBeUndefined();
     }
   });
 
-  it('turns an overflow into the measured width, as data and as advice', () => {
-    const reported =
-      'cliff-encountered: blend: blend cliff on face Id(2) at edge Id(0): requested radius 25, available radius 20';
-    expect(variableBlendOverflowLimit(reported)).toBe(20);
-    const refusal = variableBlendRefusal('fillet', 1, reported);
-    expect(refusal).toMatchObject({
-      family: 'blend',
-      category: 'invalid_input',
-      kernelCode: 'cliff-encountered',
-      limit: 20
-    });
-    expect(refusal.message).toContain(
-      'requested radius 25, available radius 20'
-    );
-    expect(refusal.message).toContain('keep every radius below 20');
-    expect(
-      variableBlendOverflowLimit(
-        'cliff-encountered: blend: blend cliff on face Id(2) at edge Id(0): requested radius 3, available radius 2.5000000001'
-      )
-    ).toBe(2.5000000001);
-    for (const other of [
-      null,
-      'radius-too-large: blend: radius too large for edge Id(0): max=3',
-      'cliff-encountered: blend: no width reported'
-    ]) {
-      expect(variableBlendOverflowLimit(other), String(other)).toBeNull();
-    }
-  });
-
-  it('carries an overflow through the document path as a typed refusal with its limit', async () => {
+  it('refuses an overflow by type and relays the width the kernel measured', async () => {
     const adapter = await createExactKernelAdapter();
     try {
       const document = addPrimitiveFeature(
@@ -690,9 +659,11 @@ describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
         code: 'cliff-encountered',
         category: 'invalid_input'
       });
-      // The narrower of the edge's two faces bounds the radius.
-      expect([20, 40]).toContain(refusal?.kernelRefusal?.limit);
-      expect(refusal?.message).toMatch(/keep every radius below (20|40)/);
+      // Relayed, not parsed: the kernel's own sentence names the radius
+      // asked for and the width the support face has there.
+      expect(refusal?.message).toMatch(
+        /requested radius [\d.]+, available radius (20|40)\b/
+      );
     } finally {
       adapter.dispose();
     }

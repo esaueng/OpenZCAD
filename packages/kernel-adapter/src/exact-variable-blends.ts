@@ -241,7 +241,6 @@ export function variableBlendRefusal(
     kernelReason === null
       ? 'blend-failed'
       : kernelReason.slice(0, kernelReason.indexOf(':'));
-  const overflow = variableBlendOverflowLimit(kernelReason);
   return new KernelRefusal({
     family: 'blend',
     category: BLEND_FAILURE_CATEGORIES[code] ?? 'unsupported',
@@ -249,10 +248,7 @@ export function variableBlendRefusal(
     kernelMessage:
       reported?.trim() || 'the exact modeling engine gave no further detail',
     message,
-    reason: message,
-    // An overflow carries the width the kernel measured, as data: the radius
-    // must stay below it, and a control can say so without reading copy.
-    ...(overflow === null ? {} : { limit: overflow })
+    reason: message
   });
 }
 
@@ -277,40 +273,11 @@ export function variableBlendFailureMessage(
   const prefix = `${label} could not be created on ${edgeCount} selected edge${edgeCount === 1 ? '' : 's'}.`;
   const kernelReason = variableBlendRefusalMessage(reported);
   if (kernelReason) {
-    const overflow = variableBlendOverflowLimit(kernelReason);
-    return overflow === null
-      ? `${prefix} ${kernelReason}`
-      : `${prefix} ${kernelReason}. The blend would run off the adjacent face, which is ${formatLimit(overflow)} wide there: keep every radius below ${formatLimit(overflow)}.`;
+    return `${prefix} ${kernelReason}`;
   }
   const remedy =
     featureKind === 'fillet'
       ? 'Try radii closer together, or a constant radius — the constant blend covers topology the variable one does not yet.'
       : 'Try setbacks closer together, or a symmetric chamfer — the symmetric blend covers topology the asymmetric one does not yet.';
   return `${prefix} ${remedy}`;
-}
-
-/**
- * The width the kernel measured when a blend overflowed its support face
- * (`cliff-encountered: … requested radius R, available radius W`), or `null`
- * for any other refusal.
- *
- * The overflow is refused rather than rolled over onto the next face: the
- * kernel has no exact band that leaves its support, so the useful answer is
- * the limit it measured, not a smaller result nobody asked for.
- */
-export function variableBlendOverflowLimit(
-  kernelReason: string | null
-): number | null {
-  if (!kernelReason?.startsWith('cliff-encountered:')) {
-    return null;
-  }
-  const match = /available radius (\d+(?:\.\d+)?(?:e[-+]?\d+)?)/i.exec(
-    kernelReason
-  );
-  const width = match ? Number(match[1]) : Number.NaN;
-  return Number.isFinite(width) && width > 0 ? width : null;
-}
-
-function formatLimit(value: number): string {
-  return String(Number(value.toPrecision(6)));
 }
