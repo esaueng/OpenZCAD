@@ -66,9 +66,17 @@ async function exportedDocument(page: Page): Promise<ProjectDocument> {
 
 /** Chooses `choice` in the bar, opening its Options when it lives there. */
 async function choose(bar: Locator, choice: string) {
-  const radio = bar.getByRole('radio', { name: choice, exact: true });
-  if (!(await radio.isVisible())) await bar.locator('summary').click();
-  await radio.click();
+  // Options opened deliberately, not toggled on a control that has not
+  // rendered yet: a toggle would close an open panel.
+  const options = bar.locator('details.in-place-command-options');
+  if ((await options.getAttribute('open')) === null)
+    await options.locator('summary').click();
+  // A choice of two or three reads as radios; more as a dropdown.
+  const select = bar.locator('select', {
+    has: bar.page().getByRole('option', { name: choice, exact: true })
+  });
+  if (await select.count()) await select.selectOption({ label: choice });
+  else await bar.getByRole('radio', { name: choice, exact: true }).click();
 }
 
 test(
