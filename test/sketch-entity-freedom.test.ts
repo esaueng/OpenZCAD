@@ -171,6 +171,22 @@ describe('S03 per-entity freedom on the pinned kernel', () => {
     expect(report.unmeasured).toEqual([]);
   });
 
+  it('takes even a solve move finer than the apply step', async () => {
+    // Review case: a point stored at x = 0 locked at x = 5e-10, beside a
+    // free point. Held where it is stored, it could not meet its lock.
+    const { ids, measure } = sketchWith(
+      [
+        { objectKind: 'point', x: 0, y: 0 },
+        { objectKind: 'point', x: 3, y: 3 }
+      ],
+      ([locked]) => [lock(locked!, 'center', 5e-10, 0)]
+    );
+    const report = (await measure())!;
+    expect(report.dof).toBe(2);
+    expect(ids.map((id) => report.freedom[id])).toEqual([0, 2]);
+    expect(report.unmeasured).toEqual([]);
+  });
+
   it('calls a zero-DOF sketch fixed without holding anything', async () => {
     const { ids, measure } = sketchWith(
       [{ objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 }],

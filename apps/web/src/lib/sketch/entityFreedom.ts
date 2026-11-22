@@ -18,7 +18,12 @@ import type {
   SketchSolveAnchor,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
-import type { ProjectDocument, SketchId } from '@openzcad/shared';
+import type {
+  EntityId,
+  ProjectDocument,
+  SketchId,
+  SketchObjectData
+} from '@openzcad/shared';
 import { solvedSketchCommands } from './applySolve';
 
 export interface SketchEntityFreedomReport {
@@ -76,10 +81,7 @@ export async function measureSketchEntityFreedom(
   if (first.objects.length > MAX_FREEDOM_ENTITIES) {
     return null;
   }
-  let solved = document;
-  for (const command of solvedSketchCommands(document, sketchId, first)) {
-    solved = command.apply(solved);
-  }
+  const solved = withSolvedGeometry(document, sketchId, first);
   const base = solved === document ? first : await solve(solved);
   if (!settled(base)) {
     return null;
@@ -112,6 +114,33 @@ export async function measureSketchEntityFreedom(
     freedom[objectId] = Math.max(0, base.dof.dof - held.dof.dof);
   }
   return { dof: base.dof.dof, freedom, unmeasured };
+}
+
+/**
+ * The document with the solve's geometry in place of the stored geometry,
+ * for solving only: every move is taken (no skip tolerance, since the
+ * solver's own is finer than the apply step's), and only the moved sketch
+ * nodes are copied, so a large model never is.
+ */
+function withSolvedGeometry(
+  document: ProjectDocument,
+  sketchId: SketchId,
+  outcome: SketchSolveOutcome
+): ProjectDocument {
+  const moved = solvedSketchCommands(document, sketchId, outcome, 0);
+  if (moved.length === 0) return document;
+  const nodes = { ...document.nodes };
+  for (const command of moved) {
+    const { objectId, data } = command.payload as {
+      objectId: EntityId;
+      data: SketchObjectData;
+    };
+    const node = nodes[objectId];
+    if (node?.kind === 'sketch-object') {
+      nodes[objectId] = { ...node, data };
+    }
+  }
+  return { ...document, nodes };
 }
 
 /** The measured entities nothing can move, for the fully-defined colour. */
