@@ -261,6 +261,46 @@ async function dispatchControlWheel(sessionId, init) {
   );
 }
 
+/**
+ * Q cycles the selection filter, which has no on-screen control; the viewer
+ * carries the kind in force as `data-selection-filter`. Press until it names
+ * the wanted kind, waiting for each step to land so a press is not skipped.
+ */
+async function setSelectionFilter(sessionId, kind) {
+  const readKind = () =>
+    execute(
+      sessionId,
+      `var viewer = document.querySelector('.viewer-shell');
+      return viewer ? viewer.getAttribute('data-selection-filter') : null;`
+    );
+  for (let press = 0; press < 8; press += 1) {
+    const current = await readKind();
+    if (current === kind) {
+      return;
+    }
+    // A focused field keeps its keys; the workspace takes them from the page.
+    await execute(
+      sessionId,
+      `if (document.activeElement && document.activeElement.blur) {
+        document.activeElement.blur();
+      }
+      var init = { key: 'q', code: 'KeyQ', bubbles: true, cancelable: true };
+      document.body.dispatchEvent(new KeyboardEvent('keydown', init));
+      document.body.dispatchEvent(new KeyboardEvent('keyup', init));
+      return true;`
+    );
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline && (await readKind()) === current) {
+      await delay(50);
+    }
+  }
+  assert.equal(
+    await readKind(),
+    kind,
+    `Q did not set the ${kind} selection filter.`
+  );
+}
+
 async function locatePickableEdge(sessionId) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -379,12 +419,15 @@ try {
   // tooltip: the sync label itself changes as autosave settles, but the
   // revision only moves when something edits the document, so comparing this
   // before and after input still catches a gesture that mutated the model.
+  // Only labelled readouts count: the unlabelled prompt span leading the
+  // group is the context hint, which follows the selection and readiness.
   const documentStatusScript = `var spans = Array.from(
       document.querySelectorAll('[aria-label="Workspace status"] > span')
     );
     var readouts = spans
       .filter(function (item) {
-        return item.querySelector('b')?.textContent !== 'sync';
+        var label = item.querySelector('b');
+        return Boolean(label) && label.textContent !== 'sync';
       })
       .map(function (item) { return item.textContent; })
       .join('');
@@ -668,24 +711,7 @@ try {
   );
 
   const edge = await locatePickableEdge(sessionId);
-  await execute(
-    sessionId,
-    `var group = document.querySelector('[role="group"][aria-label="Selection filter"]');
-    var button = Array.from(group.querySelectorAll('button')).find(
-      function (candidate) { return candidate.textContent.trim() === 'Body'; }
-    );
-    button.click();
-    return true;`
-  );
-  await waitForScript(
-    sessionId,
-    'The body selection filter',
-    `var group = document.querySelector('[role="group"][aria-label="Selection filter"]');
-    var button = Array.from(group.querySelectorAll('button')).find(
-      function (candidate) { return candidate.textContent.trim() === 'Body'; }
-    );
-    return button && button.getAttribute('aria-pressed') === 'true';`
-  );
+  await setSelectionFilter(sessionId, 'body');
   await dispatchPointer(sessionId, 'pointerdown', {
     pointerId: 401,
     button: 0,
@@ -703,8 +729,16 @@ try {
   await waitForScript(
     sessionId,
     'High-DPI click selection',
-    `var label = document.querySelector('.selection-chip-label');
-    return Boolean(label && /Mounting Bracket/i.test(label.textContent));`
+    // The pick's chip counts what it took; the readout names it after the
+    // feature that made the picked edge, not after the part. The chip's
+    // text runs its count into the kind label ("1 bodyBody"), so the count
+    // has no trailing word boundary.
+    `var chip = document.querySelector('.selection-callout-chip');
+    var name = document.querySelector('.selection-readout .selection-callout-name');
+    return Boolean(
+      chip && /\\b1 body/.test(chip.textContent) &&
+      name && name.textContent.trim()
+    );`
   );
   assert.ok(
     (
