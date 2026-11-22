@@ -3221,102 +3221,6 @@ function typedModelingCall(kernelCode: string, run: () => number): number {
   }
 }
 
-const AMBIGUOUS_CROSSING =
-  'The sweep path both ends on the profile\u2019s plane and crosses it elsewhere, so where the profile stands is ambiguous. Set the profile position to Closest point or Closest end, or shorten the path so it meets the profile\u2019s plane once.';
-
-/**
- * M04 (v136): Crossing and Auto anchor where the path meets the profile's
- * plane. The pinned kernel takes a path end lying on the plane (within its
- * own 1e-6 tolerance) before it looks for a crossing inside an arc, so a
- * path that ends on the plane and meets it anywhere else could be anchored
- * at that end, on the wrong side of the profile. Such a path is refused,
- * typed, before the kernel sees it.
- *
- * Only the chain's two free ends count as ends; joints between pieces do
- * not. Each piece is judged on its own control hull (a rational curve with
- * positive weights stays inside it): a piece away from the end may meet the
- * plane when its hull reaches it, and the piece holding the end may meet it
- * again only when its other control points reach the plane or straddle it.
- * The test is conservative: it never lets an ambiguous path through, and a
- * path that ends on the plane and meets it once only near that end passes.
- */
-function assertUnambiguousCrossing(
-  kernel: RemusKernel,
-  edges: readonly number[],
-  plane: PlaneBasis
-): void {
-  type Piece = { points: Point[]; d: number[] };
-  const pieces: Piece[] = edges.map((edge) => {
-    const curve = nurbsCurveOfEdge(kernel, edge, 'The sweep path');
-    const raw = curve.controlPoints;
-    const points: Point[] = [];
-    for (let i = 0; i < raw.length / 3; i += 1) {
-      points.push({ x: raw[3 * i]!, y: raw[3 * i + 1]!, z: raw[3 * i + 2]! });
-    }
-    return {
-      points,
-      d: points.map((p) => dot3(minus(p, plane.origin), plane.normal))
-    };
-  });
-  const magnitude = Math.max(
-    1,
-    ...pieces.flatMap((piece) =>
-      piece.points.map((p) =>
-        Math.max(Math.abs(p.x), Math.abs(p.y), Math.abs(p.z))
-      )
-    )
-  );
-  // The kernel's own linear tolerance, plus the rounding of coordinates.
-  const onPlane = 1e-6 + 16 * Number.EPSILON * magnitude;
-  const joinTolerance = 1e-6 + 16 * Number.EPSILON * magnitude;
-  const same = (a: Point, b: Point) => norm3(minus(a, b)) <= joinTolerance;
-  // Free ends: a piece end no other piece shares.
-  const ends: { piece: number; index: number }[] = [];
-  pieces.forEach((piece, at) => {
-    for (const index of [0, piece.points.length - 1]) {
-      const p = piece.points[index]!;
-      const shared = pieces.some(
-        (other, k) =>
-          k !== at &&
-          (same(other.points[0]!, p) ||
-            same(other.points[other.points.length - 1]!, p))
-      );
-      if (!shared) ends.push({ piece: at, index });
-    }
-  });
-  const endsOnPlane = ends.filter(
-    (end) => Math.abs(pieces[end.piece]!.d[end.index]!) <= onPlane
-  );
-  if (endsOnPlane.length === 0) return;
-  const meetsElsewhere =
-    endsOnPlane.length > 1 ||
-    pieces.some((piece, at) => {
-      const end = endsOnPlane.find((e) => e.piece === at);
-      const others = piece.d.filter((_, index) => index !== end?.index);
-      if (end === undefined) {
-        // A piece away from the end meets the plane if its hull reaches it.
-        return (
-          Math.min(...others) <= onPlane && Math.max(...others) >= -onPlane
-        );
-      }
-      // The piece holding the end meets it again only if another control
-      // point reaches the plane or the hull straddles it.
-      return (
-        others.some((d) => Math.abs(d) <= onPlane) ||
-        (others.some((d) => d > onPlane) && others.some((d) => d < -onPlane))
-      );
-    });
-  if (!meetsElsewhere) return;
-  throw new KernelRefusal({
-    family: 'modeling',
-    category: 'unsupported',
-    kernelCode: 'sweep-position:ambiguous-crossing',
-    kernelMessage: AMBIGUOUS_CROSSING,
-    reason: AMBIGUOUS_CROSSING,
-    message: AMBIGUOUS_CROSSING
-  });
-}
-
 function exactSweepSolid(
   kernel: RemusKernel,
   document: ProjectDocument,
@@ -3407,9 +3311,6 @@ function exactSweepSolid(
     false
   );
   if (options) {
-    if (options.position === 'auto' || options.position === 'intersection') {
-      assertUnambiguousCrossing(kernel, edges, profilePlane);
-    }
     return typedExactSweep(() =>
       kernel.sweepExactWithOptions(
         face,

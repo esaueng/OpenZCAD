@@ -52,6 +52,7 @@ import {
   collaborationClientId as clientId,
   collaborationDocument,
   reconcileCheckpointFlush,
+  leaseRenewIntervalMs,
   parseServerMessage,
   rejectionStatus
 } from './collaborationProtocol';
@@ -436,6 +437,32 @@ export function useCollaboration({
       }).then(() => acknowledgedDocument);
     };
     const id = clientId();
+    // Renews the held lease at the cadence its room advertised (see
+    // `leaseRenewIntervalMs`). Started by the first grant; restarted only
+    // when a grant names a different cadence, so ordinary renewals keep its
+    // phase: a renewal follows every grant within one interval.
+    let leaseRenewTimer: number | undefined;
+    let leaseRenewEveryMs = 0;
+    const renewLease = () => {
+      const socket = socketRef.current;
+      const leaseId = leaseIdRef.current;
+      if (isCurrentRoom() && socket?.readyState === WebSocket.OPEN && leaseId) {
+        socket.send(
+          JSON.stringify({
+            type: 'lease-renew',
+            clientId: id,
+            leaseId
+          })
+        );
+      }
+    };
+    const scheduleLeaseRenewal = (everyMs: number) => {
+      if (leaseRenewTimer !== undefined && everyMs === leaseRenewEveryMs)
+        return;
+      if (leaseRenewTimer !== undefined) window.clearInterval(leaseRenewTimer);
+      leaseRenewEveryMs = everyMs;
+      leaseRenewTimer = window.setInterval(renewLease, everyMs);
+    };
 
     const retainConflict = (
       roomDocument: ProjectDocument,
@@ -1038,6 +1065,7 @@ export function useCollaboration({
           leaseIdRef.current = message.lease.leaseId;
           leaseRef.current = message.lease;
           setLease(message.lease);
+          scheduleLeaseRenewal(leaseRenewIntervalMs(message));
           if (
             conflictRef.current ||
             readUnresolvedConflict(projectId, 'room')
@@ -1343,19 +1371,6 @@ export function useCollaboration({
     }
 
     connect();
-    const leaseRenewTimer = window.setInterval(() => {
-      const socket = socketRef.current;
-      const leaseId = leaseIdRef.current;
-      if (isCurrentRoom() && socket?.readyState === WebSocket.OPEN && leaseId) {
-        socket.send(
-          JSON.stringify({
-            type: 'lease-renew',
-            clientId: id,
-            leaseId
-          })
-        );
-      }
-    }, 10_000);
     return () => {
       disposed = true;
       roomEpochRef.current += 1;
@@ -1370,7 +1385,7 @@ export function useCollaboration({
       if (leaseRetryTimer !== undefined) {
         window.clearTimeout(leaseRetryTimer);
       }
-      window.clearInterval(leaseRenewTimer);
+      if (leaseRenewTimer !== undefined) window.clearInterval(leaseRenewTimer);
       if (
         cloudFunctionsAreEnabled() &&
         socketRef.current?.readyState === WebSocket.OPEN &&

@@ -6694,6 +6694,30 @@ export interface ProjectEditLease {
   expiresAt: number;
 }
 
+/**
+ * Server-time lifetime of a project edit lease, counted from its last grant
+ * or renewal. A holder that stops renewing (closed or crashed tab) frees the
+ * lease this long after its last acknowledged renewal, plus at most the
+ * room's persist gap if the room was evicted meanwhile.
+ */
+export const PROJECT_EDIT_LEASE_TTL_MS = 60_000;
+
+/**
+ * How often a holder renews its lease. The room advertises it on every
+ * `lease-granted` frame (`renewIntervalMs`), so the cadence follows the
+ * room's TTL across rolling deploys and rollbacks. Each renewal wakes the
+ * hibernating room, which is what the room is billed for, so the cadence is
+ * as slow as the margin allows: one late or lost renewal (2 × 25 s = 50 s)
+ * still lands 10 s before the 60 s TTL.
+ */
+export const PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS = 25_000;
+
+/**
+ * The cadence a browser keeps when a room does not advertise one: a room
+ * build from before the advertisement, whose TTL is 30 s.
+ */
+export const LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS = 10_000;
+
 /** The save revision reason a "Keep this device's version" choice records. */
 export const KEPT_LOCAL_VERSION_REASON = 'Kept this device’s version';
 
@@ -6751,7 +6775,15 @@ export type CollaborationServerMessage =
    * browser and resubmits against `document.version` (ADR-024 Phase 1).
    */
   | { type: 'conflict'; document: ProjectDocument; base?: ProjectDocument }
-  | { type: 'lease-granted'; lease: ProjectEditLease }
+  | {
+      type: 'lease-granted';
+      lease: ProjectEditLease;
+      /**
+       * How often to renew this lease. Absent from rooms that predate it;
+       * see {@link LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS}.
+       */
+      renewIntervalMs?: number;
+    }
   | {
       type: 'lease-denied';
       reason: 'held' | 'read-only';
