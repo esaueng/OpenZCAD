@@ -629,7 +629,7 @@ describe('S05 pattern relation on the pinned kernel', () => {
     expect(solved(outcome, third!).centerX).toBeCloseTo(12, 8);
   });
 
-  it('needs schema v139: an older stamp refuses a document that holds one', () => {
+  it('needs schema v145: an older stamp refuses a document that holds one', () => {
     const fixture = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
       { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 }
@@ -650,12 +650,12 @@ describe('S05 pattern relation on the pinned kernel', () => {
     const saved = JSON.parse(
       JSON.stringify(fixture.manager.document)
     ) as ProjectDocument;
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(139);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(145);
     expect(normalizeDocument(saved)).toEqual(fixture.manager.document);
     expect(() =>
       normalizeDocument({
         ...saved,
-        schemaVersion: 138 as typeof saved.schemaVersion
+        schemaVersion: 144 as typeof saved.schemaVersion
       })
     ).toThrow(/Sketch pattern relations/);
   });
