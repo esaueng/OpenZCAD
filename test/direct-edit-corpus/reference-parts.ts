@@ -228,7 +228,7 @@ export interface Target {
   name: string;
   inward: number | null;
   outward: number | null;
-  command: (delta: number) => EditCommand;
+  command: (delta: number) => AnyCommand;
   movedPlanes?: readonly FaceTopology[];
   /** Cross-section of a prismatic move with a rigid end group. */
   section?: number;
@@ -238,7 +238,7 @@ export interface Target {
     delta: number
   ) => Promise<ReferencePart>;
   assertShape?: (body: BodyRepresentation, delta: number) => void;
-  sourceCommand?: (delta: number) => EditCommand;
+  sourceCommand?: (delta: number) => AnyCommand;
 }
 
 export function targets(part: Part, base: ReferencePart): Target[] {
