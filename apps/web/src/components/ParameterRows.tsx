@@ -1,6 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
-import type { BodyId, ParameterKind, ParameterNode } from '@openzcad/shared';
+import type {
+  BodyId,
+  ParameterKind,
+  ParameterNode,
+  UnitSystem
+} from '@openzcad/shared';
+import { useLengthReadout } from '../lib/displayUnits';
 import { formatNumber } from '../lib/model';
 import { parameterDisplayName } from '../lib/parameterDisplayName';
 import {
@@ -33,6 +39,11 @@ interface ParameterRowProps extends ToggleBindingProps {
   /** Present only while a refused rebuild is held to save as a reproduction. */
   reproductionFor?(message: string): (() => void) | undefined;
   minimum?: number;
+  /**
+   * I03: the document's stored units. A length parameter's value then reads
+   * in the display unit, with its unit; its expression stays as stored.
+   */
+  units?: UnitSystem;
   onPreview?(name: string, expression: string | null): void;
   /** Absent hides the delete affordance: Tweak adjusts, it never removes. */
   onDelete?: (name: string) => void;
@@ -166,6 +177,7 @@ export function ParameterRow({
   reproductionFor,
   onPreview,
   minimum,
+  units,
   onDelete,
   onRename,
   onExpose,
@@ -337,7 +349,17 @@ export function ParameterRow({
   const typeHint = parameterTypeHint(parameter.quantity, suggestedQuantity);
   const saveReproduction = error ? reproductionFor?.(error.message) : undefined;
   const describable = onDescribe && parameter.exposed === true;
-  const formattedValue = value === undefined ? 'err' : formatNumber(value);
+  // I03: a length parameter shown in another unit reads converted, named.
+  const readout = useLengthReadout(units ?? 'mm');
+  const converted =
+    units !== undefined &&
+    parameter.quantity === 'length' &&
+    readout.shown !== units;
+  const formatQuantity = (number: number) =>
+    converted
+      ? `${formatNumber(readout.length(number))} ${readout.symbol}`
+      : formatNumber(number);
+  const formattedValue = value === undefined ? 'err' : formatQuantity(value);
   const showValue =
     value === undefined || formattedValue !== parameter.expression.trim();
   return (
@@ -649,7 +671,7 @@ export function ParameterRow({
           ) : pending ? (
             'Checking geometry…'
           ) : (
-            `Minimum ${formatNumber(minimum ?? Number.NaN)}`
+            `Minimum ${formatQuantity(minimum ?? Number.NaN)}`
           )}
         </p>
       )}

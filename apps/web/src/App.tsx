@@ -24,7 +24,11 @@ import {
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
-import { DisplayUnitsProvider } from './lib/displayUnits';
+import {
+  DisplayUnitsProvider,
+  displayEntryText,
+  formatDocumentLength
+} from './lib/displayUnits';
 import { roundShownLength } from './lib/liveLabels';
 import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
@@ -21187,7 +21191,7 @@ export function App() {
       // makes it untrue on the first press.
       offset === 0
         ? `Sketching on the ${plane} plane · Finish Sketch when done.`
-        : `Sketching on the ${plane} plane offset ${offset} ${doc?.units ?? ''} · Finish Sketch when done.`,
+        : `Sketching on the ${plane} plane offset ${formatDocumentLength(doc, offset)} · Finish Sketch when done.`,
       { sticky: true }
     );
   }
@@ -26023,6 +26027,23 @@ export function App() {
     }
   };
 
+  /** A face offset's commit message, in the document's display unit. */
+  function documentOffsetMessage(
+    document: ProjectDocument | null | undefined,
+    offset: number,
+    total?: number | null
+  ): string {
+    if (!document) return offsetFaceCommitMessage(offset, '', total);
+    const shownUnits = documentDisplayUnits(document);
+    const shown = (value: number) =>
+      convertLength(value, document.units, shownUnits);
+    return offsetFaceCommitMessage(
+      shown(offset),
+      displayLengthName(shownUnits),
+      total === null || total === undefined ? total : shown(total)
+    );
+  }
+
   /**
    * I03: shows and takes lengths in `units` (null: the document's own).
    * Undoable, and nothing rebuilds: only how lengths read changes. A
@@ -30310,7 +30331,7 @@ export function App() {
     void executeValidatedDirectEdit(
       reuse?.command ?? plan.command,
       target.bodyId as BodyId,
-      `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(cylinderDimensionMode === 'diameter' ? radius * 2 : radius)} ${doc?.units ?? ''}.`,
+      `Adjusted cylinder ${cylinderDimensionMode === 'diameter' ? 'diameter' : 'radius'} to ${cylinderDimensionMode === 'diameter' ? 'Ø' : 'R'} ${formatDocumentLength(doc, cylinderDimensionMode === 'diameter' ? radius * 2 : radius)}.`,
       radius,
       // The resized wall stays picked with its handle armed at the new size,
       // as a moved face does: falling back to the whole body swapped the
@@ -30851,7 +30872,7 @@ export function App() {
     void executeValidatedDirectEdit(
       command,
       resultBodyId,
-      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${committedEdgesPhrase(command.payload.edgeHashes, 'edgeReferences' in command.payload ? command.payload.edgeReferences : undefined)} at ${rounded} ${doc?.units ?? ''}.`,
+      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${committedEdgesPhrase(command.payload.edgeHashes, 'edgeReferences' in command.payload ? command.payload.edgeReferences : undefined)} at ${formatDocumentLength(doc, rounded)}.`,
       rounded,
       () => {
         clearEdgePreview();
@@ -31072,7 +31093,7 @@ export function App() {
           : current.target.nativeBlendDirectEdit
             ? 'Removed blend.'
             : 'Removed imported blend.'
-        : `Set ${feature?.name ?? (current.target.nativeBlendDirectEdit ? 'blend' : 'imported blend')} radius to R ${formatNumber(size)} ${base.units}.`,
+        : `Set ${feature?.name ?? (current.target.nativeBlendDirectEdit ? 'blend' : 'imported blend')} radius to R ${formatDocumentLength(base, size)}.`,
       size,
       removing
         ? () => clearEdgePreview()
@@ -31894,7 +31915,7 @@ export function App() {
             ? plan.primitive.data.primitiveKind
             : undefined,
           plan.dimension
-        ).toLowerCase()} set to ${formatNumber(plan.value)} ${base.units}.`,
+        ).toLowerCase()} set to ${formatDocumentLength(base, plan.value)}.`,
         validationTargets: affectedFeatureTargets(
           plan.command.commands ? plan.command.apply(base) : base,
           plan.primitive.featureId
@@ -31909,7 +31930,7 @@ export function App() {
         command: plan.command,
         bodyId,
         editedFeatureId: plan.feature.featureId,
-        successMessage: `${plan.feature.name} ${plan.kind === 'gear-width' ? 'face width' : 'distance'} set to ${formatNumber(plan.value)} ${base.units}.`,
+        successMessage: `${plan.feature.name} ${plan.kind === 'gear-width' ? 'face width' : 'distance'} set to ${formatDocumentLength(base, plan.value)}.`,
         validationTargets: affectedFeatureTargets(base, plan.feature.featureId),
         ...(plan.preflightRejection
           ? { preflightRejection: plan.preflightRejection }
@@ -31920,7 +31941,7 @@ export function App() {
       command: plan.command,
       bodyId,
       editedFeatureId: null,
-      successMessage: offsetFaceCommitMessage(offset, base.units),
+      successMessage: documentOffsetMessage(base, offset),
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
   }
@@ -32086,9 +32107,9 @@ export function App() {
       plan.editedFeatureId === null &&
       options?.total !== undefined &&
       !current.target.offsetFaceSet
-        ? offsetFaceCommitMessage(
+        ? documentOffsetMessage(
+            managerRef.current?.document,
             offset,
-            managerRef.current?.document.units ?? '',
             options.total
           )
         : reuse
@@ -32224,7 +32245,7 @@ export function App() {
         }
       }),
       selection.bodyId,
-      `Updated through-hole diameter to ${String(diameter)} ${doc?.units ?? ''}.`,
+      `Updated through-hole diameter to ${typeof diameter === 'number' ? formatDocumentLength(doc, diameter) : `${diameter} ${doc ? displayLengthName(doc.units) : ''}`.trim()}.`,
       typeof diameter === 'number' ? diameter : 0
     );
   }
@@ -32359,7 +32380,7 @@ export function App() {
       (interaction.mode === 'face' &&
         (interaction.op === 'offset-face' || interaction.op === 'edit-fillet')))
       ? {
-          label: `Keep ${formatNumber(keepValue)} ${doc?.units ?? ''}`.trim(),
+          label: `Keep ${formatDocumentLength(doc, keepValue)}`,
           keep: () => {
             if (interaction.mode === 'edges' || interaction.mode === 'face') {
               if (
@@ -37408,7 +37429,7 @@ export function App() {
           <SketchWorkflow
             plane={
               sketchOverviewPlane?.type === 'canonical'
-                ? `${sketchOverviewPlane.plane} plane${sketchOverviewOffset ? ` offset ${formatNumber(sketchOverviewOffset)} ${doc.units}` : ''}`
+                ? `${sketchOverviewPlane.plane} plane${sketchOverviewOffset ? ` offset ${formatDocumentLength(doc, sketchOverviewOffset)}` : ''}`
                 : sketchOverviewPlane?.type === 'face'
                   ? 'Attached face'
                   : 'Sketch plane'
@@ -40125,7 +40146,21 @@ export function App() {
                   refusalInput={inPlace.refusalInput}
                   unitLabel={displayLengthName(doc.units)}
                   onTrySize={(dimension, size) => {
-                    commitInPlacePanelValue(dimension, formatNumber(size));
+                    // The proved size is stored-unit; the panel reads a
+                    // plain number in the display unit (I03).
+                    const lengthValue =
+                      inPlaceSpec?.values.find(
+                        (candidate) => candidate.id === dimension
+                      )?.unit === 'length';
+                    commitInPlacePanelValue(
+                      dimension,
+                      displayEntryText(
+                        size,
+                        lengthValue,
+                        inPlaceUnits,
+                        inPlaceShownUnits
+                      )
+                    );
                   }}
                   canFinish={
                     inPlace.canFinish &&

@@ -1,6 +1,7 @@
 import type { MassPropertiesRead } from '@openzcad/kernel-adapter/exact';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { unitLabel } from '../lib/measurements';
+import { useLengthReadout, type LengthReadout } from '../lib/displayUnits';
 import { importedMeshUnitsReadout } from '../lib/importUnits';
 import {
   loadMassDensitySelection,
@@ -334,13 +335,15 @@ function TopologyMeasurements({
   selection: TopologySelection;
   units: UnitSystem;
 }) {
+  // I03: figures in the display unit.
+  const shown = useLengthReadout(units);
   const rows: [string, string][] = [];
   if (selection.kind === 'edge') {
     const length = edgeLength(body, selection.hash, selection.topologyId);
     if (length !== null) {
       rows.push([
         'length',
-        `${formatNumber(length)} ${unitLabel('length', units)}`
+        `${formatNumber(shown.length(length))} ${unitLabel('length', shown.shown)}`
       ]);
     }
   } else if (selection.kind === 'face') {
@@ -354,13 +357,13 @@ function TopologyMeasurements({
     if (geometry) {
       rows.push([
         'area',
-        `${formatMeasuredQuantity(geometry.area)} ${unitLabel('area', units)}`
+        `${formatMeasuredQuantity(shown.power(geometry.area, 2))} ${unitLabel('area', shown.shown)}`
       ]);
       rows.push(['surface', geometry.surfaceType]);
       if (geometry.diameter !== undefined) {
         rows.push([
           'diameter',
-          `${formatNumber(geometry.diameter)} ${unitLabel('length', units)}`
+          `${formatNumber(shown.length(geometry.diameter))} ${unitLabel('length', shown.shown)}`
         ]);
       }
       if (geometry.normal) {
@@ -399,6 +402,7 @@ export function BodyStats({
   lastApplied?: boolean;
 }) {
   const projectId = document?.projectId ?? null;
+  const shown = useLengthReadout(units);
   const fileUnits = importedMeshUnitsReadout(document, body.bodyId);
   const [massOpen, setMassOpen] = useState(false);
   const [query, setQuery] = useState<{
@@ -502,18 +506,22 @@ export function BodyStats({
     densityKgPerM3 === null || body.meshReference
       ? null
       : massKg(body.volume, units, densityKgPerM3);
+  // I03: mass and inertia units follow the display unit (lb with inches);
+  // the mass itself is physical and comes from the stored volume.
   const massUnit =
-    massKgValue === null ? null : displayMassUnit(massKgValue, units);
+    massKgValue === null ? null : displayMassUnit(massKgValue, shown.shown);
   const inertiaUnit =
-    massUnit === null ? null : displayInertiaUnit(massUnit, units);
+    massUnit === null ? null : displayInertiaUnit(massUnit, shown.shown);
   /** One kernel component in display units; only called with a material set. */
   function scaledInertia(value: number): number {
     return convertInertia(
       inertiaSiKgM2(value, units, densityKgPerM3!),
       massUnit!,
-      units
+      shown.shown
     );
   }
+  /** A unit-density moment, length to the fifth, in the display unit. */
+  const unitMoment = (value: number) => shown.power(value, 5);
   /** The symmetric tensor as three model-axis rows. */
   function inertiaRows(
     values: readonly [number, number, number, number, number, number]
@@ -593,15 +601,17 @@ export function BodyStats({
               'Unavailable for mesh reference'
             ) : (
               <>
-                {formatMeasuredQuantity(body.volume)}{' '}
-                {unitLabel('volume', units)}
+                {formatMeasuredQuantity(shown.power(body.volume, 3))}{' '}
+                {unitLabel('volume', shown.shown)}
               </>
             )}
           </span>
           <b>size</b>
           <span>
-            {formatNumber(size.x)} × {formatNumber(size.y)} ×{' '}
-            {formatNumber(size.z)} {unitLabel('length', units)}
+            {formatNumber(shown.length(size.x))} ×{' '}
+            {formatNumber(shown.length(size.y))} ×{' '}
+            {formatNumber(shown.length(size.z))}{' '}
+            {unitLabel('length', shown.shown)}
           </span>
           <b>faces</b>
           <span>{body.faceCount}</span>
@@ -684,18 +694,19 @@ export function BodyStats({
             )}
             <b>center of mass</b>
             <span>
-              {formatNumber(mass.centerOfMass.x)},{' '}
-              {formatNumber(mass.centerOfMass.y)},{' '}
-              {formatNumber(mass.centerOfMass.z)} {unitLabel('length', units)}
+              {formatNumber(shown.length(mass.centerOfMass.x))},{' '}
+              {formatNumber(shown.length(mass.centerOfMass.y))},{' '}
+              {formatNumber(shown.length(mass.centerOfMass.z))}{' '}
+              {unitLabel('length', shown.shown)}
             </span>
             <b>principal inertia</b>
             <span className="kv-multiline">
               {densityKgPerM3 === null || inertiaUnit === null ? (
                 <>
-                  {formatNumber(mass.principalMoments[0])} ·{' '}
-                  {formatNumber(mass.principalMoments[1])} ·{' '}
-                  {formatNumber(mass.principalMoments[2])}{' '}
-                  {unitLabel('length', units)}⁵
+                  {formatNumber(unitMoment(mass.principalMoments[0]))} ·{' '}
+                  {formatNumber(unitMoment(mass.principalMoments[1]))} ·{' '}
+                  {formatNumber(unitMoment(mass.principalMoments[2]))}{' '}
+                  {unitLabel('length', shown.shown)}⁵
                 </>
               ) : (
                 <>
@@ -715,21 +726,21 @@ export function BodyStats({
                 <span key={index} style={{ display: 'block' }}>
                   {formatNumber(
                     densityKgPerM3 === null || inertiaUnit === null
-                      ? row[0]
+                      ? unitMoment(row[0])
                       : scaledInertia(row[0])
                   )}{' '}
                   {formatNumber(
                     densityKgPerM3 === null || inertiaUnit === null
-                      ? row[1]
+                      ? unitMoment(row[1])
                       : scaledInertia(row[1])
                   )}{' '}
                   {formatNumber(
                     densityKgPerM3 === null || inertiaUnit === null
-                      ? row[2]
+                      ? unitMoment(row[2])
                       : scaledInertia(row[2])
                   )}
                   {index === rows.length - 1
-                    ? ` ${densityKgPerM3 === null || inertiaUnit === null ? `${unitLabel('length', units)}⁵` : inertiaUnit}`
+                    ? ` ${densityKgPerM3 === null || inertiaUnit === null ? `${unitLabel('length', shown.shown)}⁵` : inertiaUnit}`
                     : null}
                 </span>
               ))}
@@ -845,12 +856,12 @@ const RECOGNIZED_DIMENSION_LABELS: Record<string, string> = {
 function formatRecognitionDimension(
   key: string,
   value: number,
-  units: UnitSystem
+  shown: LengthReadout
 ): string {
   if (key === 'angleRadians') {
     return `${formatNumber((value * 180) / Math.PI)}°`;
   }
-  return `${formatNumber(value)} ${unitLabel('length', units)}`;
+  return `${formatNumber(shown.length(value))} ${unitLabel('length', shown.shown)}`;
 }
 
 /**
@@ -861,13 +872,14 @@ function formatRecognitionDimension(
 function formatStoredLength(
   value: ParamValue,
   scope: Record<string, number>,
-  units: UnitSystem
+  readout: LengthReadout
 ): string {
   const resolved = evalParamValue(value, scope);
+  // I03: in the display unit; the expression stays as it is stored.
   const shown =
     resolved === null
       ? '—'
-      : `${formatNumber(resolved)} ${unitLabel('length', units)}`;
+      : `${formatNumber(readout.length(resolved))} ${unitLabel('length', readout.shown)}`;
   return typeof value === 'string' && !Number.isFinite(Number(value))
     ? `${value} = ${shown}`
     : shown;
@@ -903,6 +915,7 @@ function ImportedFaceRecognition({
   error?: string | null;
   units: UnitSystem;
 }) {
+  const shown = useLengthReadout(units);
   if (pending) {
     return <p className="muted direct-edit-note">Recognizing feature…</p>;
   }
@@ -944,7 +957,7 @@ function ImportedFaceRecognition({
           {dimensions.map(([key, value]) => (
             <Fragment key={key}>
               <b>{RECOGNIZED_DIMENSION_LABELS[key] ?? key}</b>
-              <span>{formatRecognitionDimension(key, value, units)}</span>
+              <span>{formatRecognitionDimension(key, value, shown)}</span>
             </Fragment>
           ))}
         </div>
@@ -1021,6 +1034,7 @@ function FaceDirectEdit({
     (candidate) => candidate.hash === selection.hash
   );
   const geometry = face?.geometry;
+  const shown = useLengthReadout(units);
   const [diameter, setDiameter] = useState(() =>
     geometry?.diameter === undefined ? '' : formatNumber(geometry.diameter)
   );
@@ -1072,13 +1086,15 @@ function FaceDirectEdit({
         <span>{geometry.surfaceType}</span>
         <b>area</b>
         <span>
-          {formatMeasuredQuantity(geometry.area)} {unitLabel('area', units)}
+          {formatMeasuredQuantity(shown.power(geometry.area, 2))}{' '}
+          {unitLabel('area', shown.shown)}
         </span>
         {geometry.axialLength !== undefined && (
           <>
             <b>length</b>
             <span>
-              {formatNumber(geometry.axialLength)} {unitLabel('length', units)}
+              {formatNumber(shown.length(geometry.axialLength))}{' '}
+              {unitLabel('length', shown.shown)}
             </span>
           </>
         )}
@@ -1087,8 +1103,8 @@ function FaceDirectEdit({
             <>
               <b>fillet radius</b>
               <span>
-                R {formatNumber(geometry.blendRadius)}{' '}
-                {unitLabel('length', units)}
+                R {formatNumber(shown.length(geometry.blendRadius))}{' '}
+                {unitLabel('length', shown.shown)}
               </span>
             </>
           )}
@@ -1222,6 +1238,8 @@ export function Inspector(props: InspectorProps) {
    * focus to the section afterwards would take it straight back off again.
    */
   const panelRef = useRef<HTMLElement | null>(null);
+  // I03: read-only lengths in the display unit (before any early return).
+  const readout = useLengthReadout(units);
   const editPanelKey =
     tool === null
       ? (selectedFeature?.featureId ??
@@ -1485,7 +1503,7 @@ export function Inspector(props: InspectorProps) {
               </span>
               <b>distance</b>
               <span>
-                {formatStoredLength(data.operation.distance, scope, units)}
+                {formatStoredLength(data.operation.distance, scope, readout)}
               </span>
               <b>move mode</b>
               <span>{data.operation.moveMode.replaceAll('-', ' ')}</span>
@@ -1495,7 +1513,7 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>diameter</b>
               <span>
-                {formatStoredLength(data.operation.diameter, scope, units)}
+                {formatStoredLength(data.operation.diameter, scope, readout)}
               </span>
             </>
           )}
@@ -1503,11 +1521,11 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>diameter</b>
               <span>
-                {formatStoredLength(data.operation.diameter, scope, units)}
+                {formatStoredLength(data.operation.diameter, scope, readout)}
               </span>
               <b>depth</b>
               <span>
-                {formatStoredLength(data.operation.depth, scope, units)}
+                {formatStoredLength(data.operation.depth, scope, readout)}
               </span>
             </>
           )}
@@ -1515,14 +1533,18 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>bore diameter</b>
               <span>
-                {formatStoredLength(data.operation.boreDiameter, scope, units)}
+                {formatStoredLength(
+                  data.operation.boreDiameter,
+                  scope,
+                  readout
+                )}
               </span>
               <b>counterbore diameter</b>
               <span>
                 {formatStoredLength(
                   data.operation.counterboreDiameter,
                   scope,
-                  units
+                  readout
                 )}
               </span>
               <b>counterbore depth</b>
@@ -1530,7 +1552,7 @@ export function Inspector(props: InspectorProps) {
                 {formatStoredLength(
                   data.operation.counterboreDepth,
                   scope,
-                  units
+                  readout
                 )}
               </span>
             </>
@@ -1539,11 +1561,19 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>bore diameter</b>
               <span>
-                {formatStoredLength(data.operation.boreDiameter, scope, units)}
+                {formatStoredLength(
+                  data.operation.boreDiameter,
+                  scope,
+                  readout
+                )}
               </span>
               <b>sink diameter</b>
               <span>
-                {formatStoredLength(data.operation.sinkDiameter, scope, units)}
+                {formatStoredLength(
+                  data.operation.sinkDiameter,
+                  scope,
+                  readout
+                )}
               </span>
               <b>included angle</b>
               <span>
@@ -1555,7 +1585,7 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>radius</b>
               <span>
-                {formatStoredLength(data.operation.radius, scope, units)}
+                {formatStoredLength(data.operation.radius, scope, readout)}
               </span>
             </>
           )}
@@ -1563,7 +1593,7 @@ export function Inspector(props: InspectorProps) {
             <>
               <b>radius</b>
               <span>
-                {formatStoredLength(data.operation.newRadius, scope, units)}
+                {formatStoredLength(data.operation.newRadius, scope, readout)}
               </span>
             </>
           )}

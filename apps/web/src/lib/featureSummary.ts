@@ -11,6 +11,7 @@ import {
 } from '@openzcad/shared';
 import {
   holeStandardLabel,
+  convertLength,
   millimetresPerUnit,
   pipeThreadLabel,
   sheetMetalMaterialById,
@@ -113,6 +114,7 @@ function faceDirectionName(
  */
 function directEditSummary(
   operation: DirectEditOperation,
+  /** A length's number in the shown unit. */
   num: (value: ParamValue | undefined) => string | null,
   unit: string
 ): string | null {
@@ -183,9 +185,14 @@ export function featureValueSummary(
    * Boolean's operands). Without it, or for a body it cannot name, those
    * rows fall back to a count.
    */
-  bodyName?: (bodyId: string) => string | undefined
+  bodyName?: (bodyId: string) => string | undefined,
+  /** I03: the unit lengths are shown in; the stored unit when absent. */
+  shownUnits: UnitSystem = units
 ): string | null {
-  const unit = unitLabel('length', units);
+  const unit = unitLabel('length', shownUnits);
+  /** A stored-unit length in the shown unit. */
+  const shown = (value: number) => convertLength(value, units, shownUnits);
+  /** A plain number: an angle, a count, a ratio. Never converted. */
   const num = (value: ParamValue | undefined): string | null => {
     if (value === undefined) {
       return null;
@@ -193,19 +200,29 @@ export function featureValueSummary(
     const resolved = evalParamValue(value, scope);
     return resolved === null ? null : formatNumber(resolved);
   };
-  const length = (value: ParamValue | undefined): string | null => {
-    const text = num(value);
-    return text === null ? null : `${text} ${unit}`;
-  };
-  const lengthValue = (value: ParamValue | undefined): string | null => {
+  /** A length's number, in the shown unit. */
+  const len = (value: ParamValue | undefined): string | null => {
     if (value === undefined) {
       return null;
     }
-    const resolved = evalParamValue(value, scope, {
-      documentUnits: units,
-      dimension: 'length'
-    });
-    return resolved === null ? null : formatNumber(resolved);
+    const resolved = evalParamValue(value, scope);
+    return resolved === null ? null : formatNumber(shown(resolved));
+  };
+  const length = (value: ParamValue | undefined): string | null => {
+    const text = len(value);
+    return text === null ? null : `${text} ${unit}`;
+  };
+  /** A typed length (unit suffixes allowed), in the stored unit. */
+  const storedLength = (value: ParamValue | undefined): number | null =>
+    value === undefined
+      ? null
+      : evalParamValue(value, scope, {
+          documentUnits: units,
+          dimension: 'length'
+        });
+  const lengthValue = (value: ParamValue | undefined): string | null => {
+    const resolved = storedLength(value);
+    return resolved === null ? null : formatNumber(shown(resolved));
   };
   const data = feature.data;
   switch (data.featureKind) {
@@ -259,7 +276,7 @@ export function featureValueSummary(
       const started = (extent: string) =>
         start === null || start === 0
           ? extent
-          : `${extent} · starts ${formatNumber(start)} ${unit} off`;
+          : `${extent} · starts ${formatNumber(shown(start))} ${unit} off`;
       // F01 (v126): a symmetric or two-sided extrude's back draft follows.
       const backAngle =
         data.backDraftAngleDeg === undefined
@@ -289,7 +306,7 @@ export function featureValueSummary(
         return drafted(
           offset === null || offset === 0
             ? 'To face'
-            : `To face · ${formatNumber(Math.abs(offset))} ${unit} ${offset > 0 ? 'short' : 'past'}`
+            : `To face · ${formatNumber(shown(Math.abs(offset)))} ${unit} ${offset > 0 ? 'short' : 'past'}`
         );
       }
       const distance = lengthValue(data.distance);
@@ -375,8 +392,8 @@ export function featureValueSummary(
             ? 'ISO'
             : 'custom';
       const major =
-        data.majorDiameter === undefined ? null : num(data.majorDiameter);
-      const pitch = data.pitch === undefined ? null : num(data.pitch);
+        data.majorDiameter === undefined ? null : len(data.majorDiameter);
+      const pitch = data.pitch === undefined ? null : len(data.pitch);
       const size =
         major !== null && pitch !== null
           ? `⌀ ${major} × ${pitch} ${unit}`
@@ -390,19 +407,19 @@ export function featureValueSummary(
       // socket head cap screw", its length in its standard's units.
       if (standardPartProblem(data) !== null) return null;
       const lengthInUnits =
-        data.length === undefined ? undefined : lengthValue(data.length);
+        data.length === undefined ? undefined : storedLength(data.length);
       if (lengthInUnits === null) return null;
       return standardPartDesignation(
         data,
         lengthInUnits === undefined
           ? undefined
-          : Number(lengthInUnits) * millimetresPerUnit(units)
+          : lengthInUnits * millimetresPerUnit(units)
       );
     }
     case 'sheet-metal': {
       // "1.5 mm, 3 bends"; with a material preset, "1.5 mm mild steel, 3
       // bends" (the preset's name without its note, alloys as written).
-      const thickness = num(data.thickness);
+      const thickness = len(data.thickness);
       if (thickness === null) return null;
       const material =
         data.materialPresetId === undefined
@@ -419,7 +436,7 @@ export function featureValueSummary(
       }, ${count === 0 ? 'flat' : `${count} ${count === 1 ? 'bend' : 'bends'}`}`;
     }
     case 'hole': {
-      const diameter = num(data.diameter);
+      const diameter = len(data.diameter);
       if (diameter === null) {
         return null;
       }
@@ -440,7 +457,7 @@ export function featureValueSummary(
       if (data.depthMode === 'through') {
         return `${size} through${count}`;
       }
-      const depth = num(data.depth);
+      const depth = len(data.depth);
       if (depth === null) return null;
       return data.standard
         ? `${size} × ${depth} ${unit}${count}`
@@ -502,11 +519,11 @@ export function featureValueSummary(
       return angle === null ? null : `${angle}°`;
     }
     case 'fillet': {
-      const radius = num(data.radius);
+      const radius = len(data.radius);
       if (radius === null) {
         return null;
       }
-      const end = data.endRadius === undefined ? null : num(data.endRadius);
+      const end = data.endRadius === undefined ? null : len(data.endRadius);
       return withEdgeCount(
         data.edgeHashes,
         data.edgeReferences,
@@ -516,11 +533,11 @@ export function featureValueSummary(
       );
     }
     case 'chamfer': {
-      const distance = num(data.distance);
+      const distance = len(data.distance);
       if (distance === null) {
         return null;
       }
-      const second = data.distance2 === undefined ? null : num(data.distance2);
+      const second = data.distance2 === undefined ? null : len(data.distance2);
       if (second !== null) {
         return withEdgeCount(
           data.edgeHashes,
@@ -540,7 +557,7 @@ export function featureValueSummary(
     case 'boolean':
       return booleanOperands(data.operation, data.targetBodyIds, bodyName);
     case 'direct-edit':
-      return directEditSummary(data.operation, num, unit);
+      return directEditSummary(data.operation, len, unit);
     case 'pattern': {
       // M02 (schema v63): one instance per point, the original's included.
       const count =

@@ -1,3 +1,4 @@
+import { useDisplayUnits } from '../lib/displayUnits';
 import {
   memo,
   useCallback,
@@ -1225,12 +1226,15 @@ export function HistoryTimeline({
   // Related narrows to the selection's lineage; it reads as off whenever
   // nothing is selected, so clearing the selection never empties the list.
   const related = findOpen && relatedOnly ? relatedFeatureIds : null;
+  // I03: row values read in the display unit.
+  const shownUnits = useDisplayUnits(units);
   const summaries = features.map((feature) =>
     featureValueSummary(
       feature,
       parameterValues,
       units,
-      (bodyId) => representations[bodyId]?.name
+      (bodyId) => representations[bodyId]?.name,
+      shownUnits
     )
   );
   // Each row's one status, decided before any filter so the Problems
