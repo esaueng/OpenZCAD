@@ -82,7 +82,9 @@ import {
   FrameIntervalMeter,
   NAVIGATION_PIXEL_RATIO,
   navigationPixelRatio,
-  shadowMapSizeFor
+  shadowMapSizeFor,
+  viewportPixelRatio,
+  viewportSampling
 } from './viewer/renderBudget';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
@@ -3495,11 +3497,18 @@ export function ModelViewer({
     const touchFirst =
       window.matchMedia?.('(pointer: coarse)').matches === true;
     const shadowMapSize = shadowMapSizeFor(touchFirst);
+    // A high-DPI desktop renders without MSAA at a fixed 2× backing store
+    // (viewer/renderBudget.ts); exports and thumbnails sample on their own.
+    const sampling = viewportSampling(
+      profile.antialias,
+      window.devicePixelRatio,
+      touchFirst
+    );
     const renderer = timed(
       'viewer.renderer',
       () =>
         new THREE.WebGLRenderer({
-          antialias: profile.antialias,
+          antialias: sampling.antialias,
           // Ground decorations use the opaque bodies' stencil coverage.
           stencil: true,
           powerPreference: 'high-performance'
@@ -3516,7 +3525,9 @@ export function ModelViewer({
     const canvasHeight = () =>
       canvasCssHeight || renderer.domElement.clientHeight;
     const applyPixelRatio = () =>
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(
+        viewportPixelRatio(sampling, window.devicePixelRatio)
+      );
     applyPixelRatio();
     // Device pixel ratio is read once at construction, so dragging the window
     // to a display with a different ratio left the backing store at the old
@@ -13613,7 +13624,9 @@ export function ModelViewer({
     let navigationNeedsLowRes = false;
     let navigationResolutionLowered = false;
     function lowerNavigationResolution() {
-      const full = Math.min(window.devicePixelRatio, 2);
+      // Without MSAA, a ratio below 2 would navigate with no antialiasing.
+      if (sampling.supersampled) return;
+      const full = viewportPixelRatio(sampling, window.devicePixelRatio);
       const lowered = navigationPixelRatio(full, frameMeter.intervalMs);
       if (lowered !== null) navigationNeedsLowRes = true;
       if (!navigationNeedsLowRes || full <= NAVIGATION_PIXEL_RATIO) return;

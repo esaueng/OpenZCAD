@@ -28,7 +28,12 @@ const gl = vi.hoisted(() => {
     created: 0,
     disposed: 0,
     contextsLost: 0,
-    shadowLightsDisposed: 0
+    shadowLightsDisposed: 0,
+    /** The parameters and last pixel ratio of each renderer made. */
+    renderers: [] as {
+      parameters: Record<string, unknown> | undefined;
+      ratio: () => number;
+    }[]
   };
   class CountingRenderer {
     domElement: HTMLCanvasElement;
@@ -48,8 +53,9 @@ const gl = vi.hoisted(() => {
     toneMappingExposure = 1;
     contextLost = false;
     private ratio = 1;
-    constructor() {
+    constructor(parameters?: Record<string, unknown>) {
       state.created += 1;
+      state.renderers.push({ parameters, ratio: () => this.ratio });
       this.domElement = document.createElement('canvas');
     }
     setSize() {}
@@ -343,6 +349,7 @@ afterEach(() => {
   rigEvents.length = 0;
   gl.state.created = 0;
   gl.state.disposed = 0;
+  gl.state.renderers.length = 0;
   gl.state.contextsLost = 0;
   gl.state.shadowLightsDisposed = 0;
 });
@@ -648,6 +655,39 @@ describe('ModelViewer lifecycle', () => {
       expect(chipShown()).toBe(true);
     } finally {
       view.unmount();
+    }
+  });
+
+  it('renders a high-DPI desktop without MSAA at a 2x backing store', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'devicePixelRatio'
+    );
+    const mountAt = (ratio: number) => {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        get: () => ratio
+      });
+      const view = render(createElement(ModelViewer, idleProps()));
+      const renderer = gl.state.renderers.at(-1)!;
+      const result = {
+        antialias: renderer.parameters?.antialias,
+        ratio: renderer.ratio()
+      };
+      view.unmount();
+      return result;
+    };
+    try {
+      expect(mountAt(1)).toEqual({ antialias: true, ratio: 1 });
+      expect(mountAt(1.5)).toEqual({ antialias: true, ratio: 1.5 });
+      expect(mountAt(2)).toEqual({ antialias: false, ratio: 2 });
+      expect(mountAt(3)).toEqual({ antialias: false, ratio: 2 });
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(window, 'devicePixelRatio', descriptor);
+      } else {
+        delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+      }
     }
   });
 
