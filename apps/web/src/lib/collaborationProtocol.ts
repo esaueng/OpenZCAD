@@ -125,8 +125,9 @@ function isRoomDocument(
  * How often to renew the lease a `lease-granted` frame carries: the room's
  * advertised `renewIntervalMs`, or the legacy 10 s cadence when a room build
  * from before the advertisement (30 s TTL) sent none or a value outside
- * 1–60 s. Following the room keeps a rollback from leaving open tabs renewing
- * a 30 s lease every 25 s.
+ * 1–30 s. Following the room keeps a rollback from leaving open tabs renewing
+ * a 30 s lease every 25 s; the 30 s cap (half the 60 s TTL) keeps a bad
+ * value from spending the whole lease before its first renewal.
  */
 export function leaseRenewIntervalMs(
   message: Extract<CollaborationServerMessage, { type: 'lease-granted' }>
@@ -135,7 +136,7 @@ export function leaseRenewIntervalMs(
   return typeof advertised === 'number' &&
     Number.isFinite(advertised) &&
     advertised >= 1_000 &&
-    advertised <= 60_000
+    advertised <= 30_000
     ? advertised
     : LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS;
 }

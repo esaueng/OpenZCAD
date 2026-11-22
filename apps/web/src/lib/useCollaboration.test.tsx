@@ -1337,7 +1337,9 @@ describe('useCollaboration lease ordering', () => {
     {
       advertised: 3_600_000,
       every: LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS
-    }
+    },
+    { advertised: 60_000, every: LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS },
+    { advertised: 30_000, every: 30_000 }
   ])(
     'renews the lease every $every ms when the room advertises $advertised',
     ({ advertised, every }) => {
