@@ -196,50 +196,17 @@ export interface ShareLinkReplacement {
 }
 
 /**
- * Gives each reissued link the name of the link it replaces, with that
- * name's own stamp: the replacement inherits an edit made before it existed,
- * so any rename or clear of the replacement, made after the reissue on any
- * device, outranks it when copies merge (PR 1938 review). A replacement that
- * already has an entry keeps it, and a source whose name was cleared or
- * whose link was revoked from the dialog gives nothing.
- *
- * Callers apply this to the account's copy merged with this device's
- * (`changeShareLinkNames`), never to a device copy alone, so the source's
- * name is the latest one any device saved.
+ * Names each reissued link after the link it replaces and clears that
+ * link's name, as if the owner had typed the name into the new link: a
+ * fresh stamp, through the same change as any rename. A new link that
+ * already has an entry (a name, or a cleared one) keeps it, and a source
+ * with no name, or one already carried, gives nothing, so running it again
+ * changes nothing. A source not yet replaced is left alone, so a reissue
+ * that stops halfway carries the rest when it is retried.
  */
-export function carryReissuedShareLinkNames(
+export function nameReissuedShareLinks(
   book: ShareLinkNameBook,
   projectId: string,
-  replacements: readonly ShareLinkReplacement[]
-): ShareLinkNameBook {
-  const links = book.projects[projectId] ?? {};
-  let carried: Record<string, ShareLinkNameEntry> | null = null;
-  for (const { sourceId, shareId } of replacements) {
-    const source = links[sourceId];
-    if (!validId(shareId) || !source || 'deleted' in source) continue;
-    if (links[shareId] || carried?.[shareId]) continue;
-    (carried ??= {})[shareId] = { name: source.name, stamp: source.stamp };
-  }
-  if (!carried) return book;
-  return {
-    version: 1,
-    projects: { ...book.projects, [projectId]: { ...links, ...carried } }
-  };
-}
-
-/**
- * Clears the name of each reissued link's source once the replacement has
- * an entry in the same copy. Only a reissue's own sources are cleared, and
- * only by the device that holds the reissue's record of them: a link that
- * is merely revoked keeps its name in the record (it is never shown, since
- * only listed links show one). So a reissue that stops halfway, or links an
- * identity change turned off before the owner reissues them, lose no name
- * that a later replacement still needs (PR 1938 review).
- */
-export function clearReissuedSourceNames(
-  book: ShareLinkNameBook,
-  projectId: string,
-  revoked: ReadonlySet<string>,
   replacements: readonly ShareLinkReplacement[],
   now: number
 ): ShareLinkNameBook {
@@ -247,32 +214,12 @@ export function clearReissuedSourceNames(
   for (const { sourceId, shareId } of replacements) {
     const links = next.projects[projectId] ?? {};
     const source = links[sourceId];
-    if (!revoked.has(sourceId) || !source || 'deleted' in source) continue;
-    if (!links[shareId]) continue;
+    if (!validId(shareId) || !source || 'deleted' in source) continue;
+    if (!links[shareId])
+      next = setShareLinkName(next, projectId, shareId, source.name, now);
     next = setShareLinkName(next, projectId, sourceId, null, now);
   }
   return next;
-}
-
-/**
- * What a list does to the names: reissued links take their sources' names,
- * then those sources' names are cleared. In that order, in one change on the
- * merged copy, so a reissue never loses a name to its own clearing.
- */
-export function refreshShareLinkNames(
-  book: ShareLinkNameBook,
-  projectId: string,
-  revoked: ReadonlySet<string>,
-  replacements: readonly ShareLinkReplacement[],
-  now: number
-): ShareLinkNameBook {
-  return clearReissuedSourceNames(
-    carryReissuedShareLinkNames(book, projectId, replacements),
-    projectId,
-    revoked,
-    replacements,
-    now
-  );
 }
 
 /** Keys sorted at every level, so equal books seal equal bytes. */
@@ -747,43 +694,45 @@ async function pageKeys(userId: string): Promise<ShareLinkNameKeys | null> {
 }
 
 /**
- * The names of a project's listed links, for its share dialog. Reissued
- * links take the names of the links they replace, whose names are then
- * cleared (`refreshShareLinkNames`): shown at once, and saved to the
- * account record in the background, merged with it first.
+ * The names of a project's links, for its share dialog: only the `listed`
+ * ones (live links, not those whose revocation is pending), so a revoked
+ * link's name, which the record may keep, is never shown.
  */
 export async function pageShareLinkNames(
   userId: string,
   projectId: string,
-  listed: ReadonlySet<string>,
-  revoked: ReadonlySet<string>,
-  replacements: readonly ShareLinkReplacement[] = []
+  listed: ReadonlySet<string>
 ): Promise<Record<string, string>> {
-  const refresh = (book: ShareLinkNameBook, at: number) =>
-    refreshShareLinkNames(book, projectId, revoked, replacements, at);
+  const keys = await pageKeys(userId);
+  const book = keys
+    ? await readShareLinkNames(keys, await pageApi())
+    : localStorageShareLinkNameCopy(userId).read();
+  return Object.fromEntries(
+    Object.entries(shareLinkNamesFor(book, projectId)).filter(([shareId]) =>
+      listed.has(shareId)
+    )
+  );
+}
+
+/**
+ * Gives reissued links the names of the links they replace, once, from the
+ * reissue itself (`nameReissuedShareLinks`), saved like a rename.
+ */
+export async function nameReissuedPageShareLinks(
+  userId: string,
+  projectId: string,
+  replacements: readonly ShareLinkReplacement[]
+): Promise<void> {
+  if (replacements.length === 0) return;
   const keys = await pageKeys(userId);
   if (!keys) {
-    // Shown, not kept: this device cannot seal the change while locked.
-    const device = localStorageShareLinkNameCopy(userId).read();
-    return pickListed(
-      shareLinkNamesFor(refresh(device, Date.now()), projectId)
+    throw new Error(
+      'Unlock encryption on this device to keep the links’ names.'
     );
   }
-  const api = await pageApi();
-  const book = await readShareLinkNames(keys, api);
-  const shown = refresh(book, Date.now());
-  if (shown !== book) {
-    void changeShareLinkNames(keys, api, refresh).catch(() => {
-      // Done again on the next list.
-    });
-  }
-  return pickListed(shareLinkNamesFor(shown, projectId));
-
-  function pickListed(names: Record<string, string>) {
-    return Object.fromEntries(
-      Object.entries(names).filter(([shareId]) => listed.has(shareId))
-    );
-  }
+  await changeShareLinkNames(keys, await pageApi(), (book, now) =>
+    nameReissuedShareLinks(book, projectId, replacements, now)
+  );
 }
 
 /** Names a link (or clears its name, `name` null) in the account record. */

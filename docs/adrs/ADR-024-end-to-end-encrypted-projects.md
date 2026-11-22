@@ -1876,30 +1876,32 @@ settings, which an account whose library is not encrypted stores readable.
   then the name that sorts last, so every device converges. Clearing a name
   writes a tombstone, so an older copy on another device cannot bring it back.
 - **Revoked links.** Revoking a link from the sharing dialog tombstones its
-  name. A link revoked any other way (on another device, by a reissue, or
-  turned off by an identity change) keeps its name in the record, where it
-  is never shown, since only listed links show one; a reissue clears it once
-  the replacement has taken it (below). Clearing by "revoked in the signed
-  link set" alone was dropped (PR 1938 review): a device that does not know
-  of a pending or half-finished reissue would have cleared the name the
-  replacement still needed. Tombstones older than 90 days are dropped when
-  the record is sealed; nothing else is dropped to fit the cap, not even a
-  recent tombstone, which another device that missed the clear would
-  otherwise undo. Over the cap, the save is refused. A device offline for
-  longer than 90 days could bring back a cleared name of a link that still
-  exists.
+  name. A link revoked any other way (on another device, or turned off by an
+  identity change) keeps its name in the record until a reissue replaces it
+  (below); the dialog never shows it, since it shows names only for live
+  links, not for one whose revocation is pending. Names are not cleared just
+  because the signed link set revokes a link: a device that does not know of
+  a pending or half-finished reissue would clear a name the replacement
+  still needs (PR 1938 review). So names of links revoked and never reissued
+  stay, unseen, and count toward the cap. Tombstones older than 90 days are
+  dropped when the record is sealed; nothing else is dropped to fit the cap,
+  not even a recent tombstone, which another device that missed the clear
+  would otherwise undo. Over the cap, the save is refused. A device offline
+  for longer than 90 days could bring back a cleared name of a link that
+  still exists.
 - **Reissued links.** A reissue (after a removal or an identity change)
   revokes each link and makes a new one; the owner's device records which
-  new link replaces which (`ShareWork.replacements`). When that device lists
-  the links, it gives each new link the name of the link it replaces and
-  then clears the source's name, in one change applied to the account's copy
-  merged with its own, so the name carried is the latest any device saved,
-  and the change is saved like any other. The new link takes the source
-  name's stamp, not the clock: an edit made to the new link after the
-  reissue, on any device, outranks it. A new link that already has an entry
-  (a name, or a cleared one) keeps it, and a source whose name was cleared
-  gives nothing. A reissue that stops halfway carries the rest when it is
-  retried, since the unreplaced sources keep their names.
+  new link replaces which (`ShareWork.replacements`). Right after the
+  reissue, that device names each new link after the link it replaces and
+  clears that link's name, in one change saved like any rename: a fresh
+  stamp, applied to the account's copy merged with its own, so the name is
+  the latest any device saved. A new link that already has an entry keeps
+  it, and running the step again changes nothing. A reissue that stops
+  halfway leaves its unreplaced links' names for the retry. Where the names
+  cannot be saved, the dialog says so and the links can be named from their
+  cards. Nothing derives names at list time, so no two devices ever compute
+  them differently: an edit made on another device at the same moment
+  resolves by stamp, as any two renames do.
 - **Writes.** A browser reads the account record, merges it into its own
   copy, applies the change and seals at a sequence above both its pin and
   the stored record's (read from the header, which needs no key), against

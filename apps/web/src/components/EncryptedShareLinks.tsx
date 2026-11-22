@@ -196,10 +196,12 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         pageShareLinkNames(
           ctx.groups.account.userId,
           projectId,
-          new Set(view.links.map((link) => link.shareId)),
-          new Set(view.revokedIds),
-          // A reissued link takes the name of the one it replaces.
-          work?.replacements ?? []
+          // Live links only: a link whose revocation is pending shows no name.
+          new Set(
+            view.links
+              .filter((link) => link.status !== 'revocation-pending')
+              .map((link) => link.shareId)
+          )
         )
       )
       .catch((): Record<string, string> => ({}));
@@ -329,15 +331,29 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     await issueShareAuthorities(page.ctx, projectId);
   },
   async reissue(projectId, links) {
-    const [{ encryptedShareLinks }, { reissueShareLinks }] = await Promise.all([
+    const [{ encryptedShareLinks }, shareLinks] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    await reissueShareLinks(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      links
-    );
+    const { ctx } = await encryptedShareLinks();
+    await shareLinks.reissueShareLinks(ctx, projectId, links);
+    // Each new link is named after the one it replaces, once, as a rename.
+    const userId = ctx.groups.account.userId;
+    const sources = new Set(links.map((link) => link.shareId));
+    const replacements = (
+      await shareLinks.shareWorkFor(ctx).read(userId, projectId)
+    ).replacements.filter((item) => sources.has(item.sourceId));
+    try {
+      await import('../lib/e2ee/sealedShareLinkNames').then(
+        ({ nameReissuedPageShareLinks }) =>
+          nameReissuedPageShareLinks(userId, projectId, replacements)
+      );
+    } catch (caught) {
+      throw new Error(
+        `The links were reissued, but their names were not carried over: ${message(caught)} Name them from their cards.`,
+        { cause: caught }
+      );
+    }
   },
   async dismissRemoval(projectId, notice) {
     const [{ encryptedShareLinks }, { acknowledgeShareRemoval }] =
