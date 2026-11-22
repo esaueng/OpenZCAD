@@ -266,7 +266,15 @@ for (const colorScheme of ['light', 'dark'] as const) {
           exact: true
         });
         await expect(box).toBeVisible();
-        await expect(guide).toBeHidden();
+        // It stays up through the command (#1947), minimized as it was, and
+        // above the command's bar.
+        await expect(
+          guide.getByRole('button', { name: 'Expand modeling guide' })
+        ).toBeVisible();
+        const guideBox = (await guide.boundingBox())!;
+        expect(guideBox.y + guideBox.height).toBeLessThanOrEqual(
+          (await box.boundingBox())!.y + 0.5
+        );
         await expect(
           box.getByRole('button', { name: 'Done', exact: true })
         ).toBeEnabled();

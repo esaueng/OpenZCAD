@@ -20,9 +20,9 @@ describe('stageFootClaim', () => {
   });
 });
 
-function Card({ shown }: { shown: boolean }) {
+function Card({ shown, cause }: { shown: boolean; cause?: string }) {
   const ref = useRef<HTMLElement | null>(null);
-  useStageFootClaim(ref, '--workspace-tour-claim', shown);
+  useStageFootClaim(ref, '--workspace-tour-claim', shown, cause);
   return (
     <div className="viewer-area" data-testid="stage">
       {shown && <section ref={ref} data-testid="card" />}
@@ -57,6 +57,24 @@ describe('useStageFootClaim', () => {
     );
     rerender(<Card shown={false} />);
     expect(stage.style.getPropertyValue('--workspace-tour-claim')).toBe('');
+  });
+
+  it('measures again when the cause of a move without a resize changes', () => {
+    // The guide lifted over an in-place command's bar (#1947): moved by the
+    // stylesheet, no observer reports it.
+    const top = { value: 404 };
+    layOut(top);
+    const { getByTestId, rerender } = render(<Card shown cause="none" />);
+    const stage = getByTestId('stage');
+    top.value = 300;
+    rerender(<Card shown cause="none" />);
+    expect(stage.style.getPropertyValue('--workspace-tour-claim')).toBe(
+      '440px'
+    );
+    rerender(<Card shown cause="in-place:1" />);
+    expect(stage.style.getPropertyValue('--workspace-tour-claim')).toBe(
+      '544px'
+    );
   });
 
   it('measures again once the card’s entrance ends and on a resize', () => {

@@ -38046,9 +38046,15 @@ export function App() {
   const inspectorKey = inspectorActive
     ? (tool ?? modelingEditFeature?.id ?? 'inspector')
     : '';
+  // An in-place command (Box, Fillet) puts its bar at the stage's foot, the
+  // guide's corner on a phone. The guide stays up through it (#1947: it
+  // unmounted, so the guide that asked for a Box vanished with the Box),
+  // folded on a phone like any card, and each new command folds it again.
+  const inPlaceKey =
+    inPlace.sessionId === null ? '' : `in-place:${inPlace.sessionId}`;
   const guideYieldKey =
-    phoneStage && (commandCardKey || inspectorKey)
-      ? `${commandCardKey}|${inspectorKey}`
+    phoneStage && (commandCardKey || inspectorKey || inPlaceKey)
+      ? `${commandCardKey}|${inspectorKey}|${inPlaceKey}`
       : null;
   const workspace = (
     <WorkspaceAppShell
@@ -39536,7 +39542,6 @@ export function App() {
           {!modelingLocked &&
             !panelState.workspaceTourDismissed &&
             tourProjectId === doc.projectId &&
-            !inPlace.active &&
             interaction.mode !== 'sketch' && (
               <WorkspaceTour
                 minimized={panelState.workspaceTourMinimized}

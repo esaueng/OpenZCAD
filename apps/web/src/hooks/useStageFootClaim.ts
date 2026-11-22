@@ -24,12 +24,15 @@ export function stageFootClaim(
 /**
  * Publishes `property` on the enclosing `.viewer-area` while `active`, and
  * keeps it current as the surface or the stage changes size. The card
- * enters with a short rise, so it measures again when that ends.
+ * enters with a short rise, so it measures again when that ends. A surface
+ * the stylesheet moves without resizing it (the guide lifted over an
+ * in-place command's bar) names the cause in `remeasure`.
  */
 export function useStageFootClaim(
   ref: RefObject<HTMLElement | null>,
   property: StageFootClaim,
-  active: boolean
+  active: boolean,
+  remeasure?: unknown
 ) {
   useLayoutEffect(() => {
     const surface = ref.current;
@@ -61,5 +64,5 @@ export function useStageFootClaim(
       window.removeEventListener('resize', measure);
       stage.style.removeProperty(property);
     };
-  }, [ref, property, active]);
+  }, [ref, property, active, remeasure]);
 }
