@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -836,6 +836,37 @@ describe('SketchToolRail', () => {
     // The strip leaves with the tool.
     rerender(<SketchToolRail {...props} pendingEdit={null} />);
     expect(screen.queryByRole('group', { name: 'Offset options' })).toBeNull();
+  });
+
+  it('brings a folded pattern setting back without disarming the tool', async () => {
+    const user = userEvent.setup();
+    const onEditTool = vi.fn();
+    renderRail({
+      canConstrain: true,
+      pendingEdit: { kind: 'linear-pattern', picks: ['ent_source'] },
+      onEditTool
+    });
+    expect(
+      screen.getByRole('radiogroup', { name: 'Pattern spacing' })
+    ).toBeVisible();
+    // The source pick on the canvas folds the strip away.
+    const host = document.createElement('div');
+    host.className = 'viewer-host';
+    const canvas = document.createElement('canvas');
+    host.append(canvas);
+    document.body.append(host);
+    fireEvent.pointerDown(canvas);
+    expect(
+      screen.queryByRole('radiogroup', { name: 'Pattern spacing' })
+    ).toBeNull();
+    // Choosing the armed tool again re-opens it, and keeps the tool armed.
+    await user.click(screen.getByRole('button', { name: 'More modify tools' }));
+    await user.click(screen.getByRole('button', { name: 'Linear pattern' }));
+    expect(
+      screen.getByRole('radiogroup', { name: 'Pattern spacing' })
+    ).toBeVisible();
+    expect(onEditTool).not.toHaveBeenCalled();
+    host.remove();
   });
 
   it("rides each pattern's setting beside its slot while it is armed", async () => {

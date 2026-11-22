@@ -565,6 +565,13 @@ const OFFSET_JOINS = [
   }
 ] as const;
 
+/** The modify tools that ride a settings strip while armed. */
+const STRIP_EDIT_TOOLS = new Set<SketchEditToolKind>([
+  'offset',
+  'linear-pattern',
+  'circular-pattern'
+]);
+
 const PATTERN_SPACINGS: readonly {
   value: SketchPatternSpacing;
   label: string;
@@ -1249,6 +1256,10 @@ export function SketchToolRail({
             if (inFold) setModifyOpen(false);
             // Choosing a tool again brings back its folded options strip.
             setFoldedStripKey(null);
+            // An armed tool whose settings strip the canvas folded away
+            // brings the strip back rather than disarming, so a pattern's
+            // setting can still change after its first pick.
+            if (active && !stripOpen && STRIP_EDIT_TOOLS.has(kind)) return;
             if (active) onEditTool(null);
             else
               onEditTool(
