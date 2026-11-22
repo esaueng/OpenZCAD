@@ -147,6 +147,15 @@ export function assertWrapSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 111, 'Wraps');
 }
 
+/** S05 (schema v145): pattern relations, wherever a sketch or command holds one. */
+export function assertPatternRelationSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 145, 'Sketch pattern relations');
+}
+
+function isPatternRelation(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'pattern';
+}
+
 /** S05 (schema v141): a tangent between two curves (no line in it). */
 export function assertCurvedTangentSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 141, 'Curve-to-curve tangency');
@@ -1216,6 +1225,11 @@ export function assertDocumentContentCommandSchema(
             : null;
       if (sweep) assertSweepContentSchema(sweep, document.schemaVersion);
     }
+    if (
+      command.kind === 'sketch.constraint.add' &&
+      isPatternRelation(command.payload.constraint)
+    )
+      assertPatternRelationSchema(document.schemaVersion);
     // M03: per-vertex fillet radii, created or patched.
     {
       const fillet =
@@ -1229,7 +1243,7 @@ export function assertDocumentContentCommandSchema(
       if (fillet && fillet.vertexRadii !== undefined)
         assertMinimumProjectSchema(
           document.schemaVersion,
-          142,
+          149,
           'Per-vertex fillet radii'
         );
     }
@@ -1277,7 +1291,7 @@ function assertSweepContentSchema(
 }
 
 /**
- * M03 (schema v142): a stored fillet's per-vertex radii need the version and
+ * M03 (schema v149): a stored fillet's per-vertex radii need the version and
  * a well-formed list (a variable law, a reference for each named edge, one
  * entry per edge end).
  */
@@ -1286,7 +1300,7 @@ export function assertFilletContentSchema(
   version: unknown
 ): void {
   if (data.vertexRadii === undefined) return;
-  assertMinimumProjectSchema(version, 142, 'Per-vertex fillet radii');
+  assertMinimumProjectSchema(version, 149, 'Per-vertex fillet radii');
   const problem = filletVertexRadiiProblem(data);
   if (problem) throw new Error(problem);
 }
@@ -1573,14 +1587,18 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       Array.isArray(node.constraints) &&
       node.constraints.some(
         (constraint) =>
-          record(constraint) &&
-          isCurvedTangent(
-            constraint.data,
-            document.nodes
-          )
+          record(constraint) && isCurvedTangent(constraint.data, document.nodes)
       )
     )
       assertCurvedTangentSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isPatternRelation(constraint.data)
+      )
+    )
+      assertPatternRelationSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

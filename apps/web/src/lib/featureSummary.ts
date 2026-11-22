@@ -507,7 +507,7 @@ export function featureValueSummary(
         return null;
       }
       const end = data.endRadius === undefined ? null : num(data.endRadius);
-      // M03 (v142): a per-corner fillet's range is its corners' radii.
+      // M03 (v149): a per-corner fillet's range is its corners' radii.
       const corners = (data.vertexRadii ?? [])
         .map((entry) => evalParamValue(entry.radius, scope))
         .filter((value): value is number => value !== null);

@@ -554,12 +554,17 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
-// v142 adds M03 per-vertex fillet radii (`vertexRadii` on a variable-radius
-// fillet): the radius at each end of each selected edge, named by the
-// edge's lineage witness. An older client would round every edge from
-// `radius` to `endRadius`, so it must refuse the document. Builds on v141
-// (#1911 on main; v138–v140 stay claimed by the open S05/S07 sketch PRs).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 142 as const;
+// v149 adds M03 per-vertex fillet radii (`vertexRadii` and `edgeRuns` on a
+// variable-radius fillet): the radius at each end of each selected edge,
+// named by the edge's lineage witness. An older client would round every
+// edge from `radius` to `endRadius`, so it must refuse the document. Builds
+// on v145 (#1917 on main); v146 to v148 are claimed by the S05 offset
+// dimension (#1919), the M01 hole anchor (#1808) and I03 unit switching
+// (#1915). v149, once claimed here, was skipped on main.
+// v145 adds S05 sketch pattern relations (`pattern` sketch constraints): a
+// linear or circular pattern's instance positions held by one relation. An
+// older client cannot solve it, so it must refuse the document.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 149 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -802,7 +807,7 @@ export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
 }
 
 /**
- * M03 (schema v142): the radius a variable-radius fillet reaches at one end
+ * M03 (schema v149): the radius a variable-radius fillet reaches at one end
  * of one selected edge.
  *
  * `edge` indexes the feature's `edgeHashes`; `end` names one of that edge's
@@ -2136,7 +2141,32 @@ export type SketchConstraintData =
    * lock was made. An edit that would move it conflicts instead of dragging
    * the lock along; removing the constraint unlocks the point.
    */
-  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number };
+  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
+  /**
+   * S05 (v145): a sketch pattern held as one relation. Each instance is the
+   * source moved `step` steps: along the direction line by `spacing` a step
+   * (linear), or round the pivot by `stepDeg` a step (circular), turned with
+   * it or, `uniform`, kept in the source's orientation. Instances keep the
+   * source's size and shape too, so moving or resizing the source carries
+   * every instance, and moving an instance alone conflicts. An instance
+   * deleted leaves the others held at their own steps.
+   */
+  | {
+      constraintKind: 'pattern';
+      source: EntityId;
+      instances: { objectId: EntityId; step: number }[];
+      layout: SketchPatternLayout;
+    };
+
+/** How a {@link SketchConstraintData} `pattern` relation places its steps. */
+export type SketchPatternLayout =
+  | { kind: 'linear'; direction: EntityId; spacing: ParamValue }
+  | {
+      kind: 'circular';
+      pivot: SketchPointRef;
+      stepDeg: ParamValue;
+      orientation: 'rotate' | 'uniform';
+    };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
@@ -3476,13 +3506,13 @@ export type FeatureData =
        */
       radiusLaw?: VariableFilletLaw;
       /**
-       * M03 (schema v142): the radius at named ends of the selected edges,
+       * M03 (schema v149): the radius at named ends of the selected edges,
        * overriding `radius` and `endRadius` there; see
        * {@link FilletVertexRadius}. Only with `endRadius`.
        */
       vertexRadii?: FilletVertexRadius[];
       /**
-       * M03 (schema v142): for each selected edge, whether the kernel ran it
+       * M03 (schema v149): for each selected edge, whether the kernel ran it
        * from witness end 0 to end 1 when `vertexRadii` were set. Present
        * exactly when `vertexRadii` is.
        */
@@ -6184,7 +6214,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle'
+  'distance' | 'radius' | 'angle' | 'pattern'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [

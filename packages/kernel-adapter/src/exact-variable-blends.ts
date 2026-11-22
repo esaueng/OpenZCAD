@@ -59,7 +59,7 @@ function witnessPoint([x, y, z]: readonly [number, number, number]): {
 }
 
 /**
- * M03 (schema v142): every selected edge's start and end radius, in the
+ * M03 (schema v149): every selected edge's start and end radius, in the
  * kernel edge's own direction, from a fillet's per-vertex radii.
  *
  * An entry names an end by the edge's stored witness endpoints, which fix
@@ -251,17 +251,27 @@ export function applyVariableRadiusFillet(
  */
 const BLEND_FAILURE_CODES: readonly string[] = [
   'blend-failed',
+  'cancelled',
+  'chamfer-tangent-chain-required',
+  'cliff-encountered',
+  'corner-failure',
   'edges-not-blended',
   'fillet-failed',
   'invalid-input',
   'partial-result',
+  'postcondition-failed',
   'radius-too-large',
   'resize-blend-failed',
+  'resource-limit',
   'setback-mismatch',
+  'trimming-failure',
   'unsupported-face-face-blend',
+  'unsupported-seam-crossing',
   'unsupported-setback-corner',
   'unsupported-support-pair',
   'unsupported-surface',
+  'unsupported-variable-boundary',
+  'unsupported-variable-support',
   'unsupported-vertex-blend'
 ];
 
@@ -297,17 +307,27 @@ const BLEND_FAILURE_CATEGORIES: Readonly<
   Record<string, KernelRefusalCategory>
 > = {
   'blend-failed': 'unsupported',
+  cancelled: 'cancelled',
+  'chamfer-tangent-chain-required': 'unsupported',
+  'cliff-encountered': 'invalid_input',
+  'corner-failure': 'unsupported',
   'edges-not-blended': 'unsupported',
   'fillet-failed': 'unsupported',
   'invalid-input': 'invalid_input',
   'partial-result': 'unsupported',
+  'postcondition-failed': 'unsupported',
   'radius-too-large': 'invalid_input',
   'resize-blend-failed': 'unsupported',
+  'resource-limit': 'resource_limit',
   'setback-mismatch': 'invalid_input',
+  'trimming-failure': 'unsupported',
   'unsupported-face-face-blend': 'unsupported',
+  'unsupported-seam-crossing': 'unsupported',
   'unsupported-setback-corner': 'unsupported',
   'unsupported-support-pair': 'unsupported',
   'unsupported-surface': 'unsupported',
+  'unsupported-variable-boundary': 'unsupported',
+  'unsupported-variable-support': 'unsupported',
   'unsupported-vertex-blend': 'unsupported'
 };
 

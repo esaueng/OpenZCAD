@@ -880,12 +880,12 @@ export interface EdgeModifierInput {
   /** Fillet only: read only with `endRadius`; absent reads as 'linear'. */
   radiusLaw?: VariableFilletLaw;
   /**
-   * Fillet only (M03, schema v142): the radius at named ends of the selected
+   * Fillet only (M03, schema v149): the radius at named ends of the selected
    * edges; see `FilletVertexRadius`. Needs `endRadius` and `edgeReferences`.
    */
   vertexRadii?: FilletVertexRadius[];
   /**
-   * Fillet only (M03, schema v142), with `vertexRadii`: whether each selected
+   * Fillet only (M03, schema v149), with `vertexRadii`: whether each selected
    * edge ran from its witness end 0 to end 1 when the radii were set.
    */
   edgeRuns?: boolean[];
@@ -2140,11 +2140,16 @@ export function deleteSketchObject(
   sketch.objectIds = sketch.objectIds.filter((id) => id !== input.objectId);
   // Constraints referencing the deleted object go with it: a dangling
   // reference would fail every later solve rather than one delete.
+  // A pattern loses only the deleted instance.
   if (sketch.constraints && sketch.constraints.length > 0) {
-    sketch.constraints = sketch.constraints.filter(
-      (constraint) =>
-        !constraintObjectIds(constraint.data).includes(input.objectId)
-    );
+    sketch.constraints = sketch.constraints.flatMap((constraint) => {
+      if (!constraintObjectIds(constraint.data).includes(input.objectId)) {
+        return [constraint];
+      }
+      if (constraint.data.constraintKind !== 'pattern') return [];
+      const data = patternWithout(constraint.data, input.objectId);
+      return data ? [{ ...constraint, data }] : [];
+    });
   }
   // A composite missing a side or helper is no longer the shape it names, so
   // it dissolves; its other lines and relations stay as ordinary geometry.
@@ -2182,7 +2187,38 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
       return [data.point.objectId, data.objectId];
     case 'lock':
       return [data.point.objectId];
+    case 'pattern':
+      return [
+        data.source,
+        ...data.instances.map(({ objectId }) => objectId),
+        data.layout.kind === 'linear'
+          ? data.layout.direction
+          : data.layout.pivot.objectId
+      ];
   }
+}
+
+/**
+ * A pattern relation with one instance deleted: the others stay held at
+ * their own steps. Null when nothing would be left to hold, or when the
+ * deleted object is the source, the direction line or the pivot's owner.
+ */
+function patternWithout(
+  data: Extract<SketchConstraintData, { constraintKind: 'pattern' }>,
+  objectId: EntityId
+): SketchConstraintData | null {
+  if (
+    data.source === objectId ||
+    (data.layout.kind === 'linear'
+      ? data.layout.direction === objectId
+      : data.layout.pivot.objectId === objectId)
+  ) {
+    return null;
+  }
+  const instances = data.instances.filter(
+    (instance) => instance.objectId !== objectId
+  );
+  return instances.length > 0 ? { ...data, instances } : null;
 }
 
 type ConstrainableKind =
@@ -2486,8 +2522,73 @@ export function validateSketchConstraint(
         throw new Error('That point is already locked.');
       }
       break;
+    case 'pattern': {
+      const kind = requireConstrainableObject(document, sketch, data.source, [
+        'line',
+        'circle',
+        'arc'
+      ]);
+      if (
+        data.instances.length === 0 ||
+        data.instances.length > MAX_SKETCH_PATTERN_INSTANCES
+      ) {
+        throw new Error(
+          `A sketch pattern holds 1 to ${MAX_SKETCH_PATTERN_INSTANCES} instances besides its source.`
+        );
+      }
+      const seen = new Set<string>([data.source]);
+      const steps = new Set<number>();
+      for (const { objectId, step } of data.instances) {
+        if (seen.has(objectId)) {
+          throw new Error('A sketch pattern names each entity once.');
+        }
+        seen.add(objectId);
+        if (!Number.isSafeInteger(step) || step < 1 || steps.has(step)) {
+          throw new Error(
+            'Each pattern instance sits at its own whole step, 1 or more.'
+          );
+        }
+        steps.add(step);
+        if (
+          requireConstrainableObject(document, sketch, objectId, [
+            'line',
+            'circle',
+            'arc'
+          ]) !== kind
+        ) {
+          throw new Error(
+            `Every instance of a ${kind} pattern is a ${kind} too.`
+          );
+        }
+      }
+      if (data.layout.kind === 'linear') {
+        requireConstrainableObject(document, sketch, data.layout.direction, [
+          'line'
+        ]);
+      } else {
+        requireConstraintPoint(document, sketch, data.layout.pivot);
+        // The solver reads the pivot's place from a stored point; a
+        // spline's ends have none it can turn about.
+        requireConstrainableObject(
+          document,
+          sketch,
+          data.layout.pivot.objectId,
+          ['line', 'arc', 'circle', 'ellipse', 'point']
+        );
+        if (
+          data.layout.orientation !== 'rotate' &&
+          data.layout.orientation !== 'uniform'
+        ) {
+          throw new Error('A circular pattern rotates or keeps orientation.');
+        }
+      }
+      break;
+    }
   }
 }
+
+/** The most instances one sketch pattern relation holds (the source aside). */
+export const MAX_SKETCH_PATTERN_INSTANCES = 99;
 
 function samePointRef(a: SketchPointRef, b: SketchPointRef): boolean {
   return a.objectId === b.objectId && a.point === b.point;
@@ -5272,7 +5373,7 @@ export function filletEdges(
     if (problem) throw new Error(problem);
     assertMinimumProjectSchema(
       document.schemaVersion,
-      142,
+      149,
       'Per-vertex fillet radii'
     );
   }
@@ -6844,14 +6945,14 @@ export function updateFeature(
     if (feature.featureKind === 'hole') {
       assertHoleContentSchema(input.data, document.schemaVersion);
     }
-    // M03 (v142): a patch may not add per-vertex radii to an older document.
+    // M03 (v149): a patch may not add per-vertex radii to an older document.
     if (
       feature.featureKind === 'fillet' &&
       (input.data as { vertexRadii?: unknown }).vertexRadii !== undefined
     ) {
       assertMinimumProjectSchema(
         document.schemaVersion,
-        142,
+        149,
         'Per-vertex fillet radii'
       );
     }
@@ -6921,7 +7022,7 @@ export function updateFeature(
     validateKeepOriginals(feature.data);
     separateKeptResultName(next, feature);
   } else if (feature.data.featureKind === 'fillet') {
-    // M03 (v142): per-vertex radii go with the variable law; a patch that
+    // M03 (v149): per-vertex radii go with the variable law; a patch that
     // returns the fillet to a constant radius drops them.
     if (feature.data.endRadius === undefined) delete feature.data.vertexRadii;
     if (feature.data.vertexRadii === undefined) delete feature.data.edgeRuns;

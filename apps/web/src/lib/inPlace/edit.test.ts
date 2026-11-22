@@ -1897,7 +1897,7 @@ describe('an untouched edit writes the feature back as stored', () => {
     );
   });
 
-  it('fillet: per-vertex radii round-trip through the corner values (M03, v142)', () => {
+  it('fillet: per-vertex radii round-trip through the corner values (M03, v149)', () => {
     const named = (hash: number, from: number[], to: number[]) => ({
       kind: 'edge',
       currentHash: hash,

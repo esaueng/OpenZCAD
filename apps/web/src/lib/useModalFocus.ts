@@ -135,9 +135,11 @@ function sameTabStop(a: Element | null, b: HTMLElement): boolean {
  * radio as the first stop let Shift+Tab from the checked one leave the dialog.
  */
 function tabStops(dialog: HTMLElement): HTMLElement[] {
+  // A control under a `hidden` ancestor (an inactive tab's panel) is not
+  // a Tab stop: aiming the wrap at it left focus where it was.
   const candidates = Array.from(
     dialog.querySelectorAll<HTMLElement>(FOCUSABLE)
-  );
+  ).filter((element) => !element.closest('[hidden]'));
   return candidates.filter(
     (element) =>
       !isGroupedRadio(element) ||

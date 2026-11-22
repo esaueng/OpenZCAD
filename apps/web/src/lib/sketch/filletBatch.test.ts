@@ -68,6 +68,148 @@ function sketchOf(objects: SketchObjectData[]) {
 }
 
 describe('batch sketch fillet', () => {
+  it.each(['authored', 'resolved'] as const)(
+    'keeps %s high-degree joints bounded without hiding ordinary corners',
+    (geometry) => {
+      const dense = Array.from({ length: 128 }, (_, i) => line(0, 0, 1, i + 1));
+      const { document: original, sketch } = sketchOf([
+        ...(geometry === 'authored'
+          ? dense
+          : dense.map((_, i) => line(10 + i * 3, 0, 11 + i * 3, 1))),
+        line(1000, 0, 1020, 0),
+        line(1020, 0, 1020, 20),
+        line(1020, 20, 1000, 20),
+        line(1000, 20, 1000, 0)
+      ]);
+      const document =
+        geometry === 'authored'
+          ? original
+          : {
+              ...original,
+              derived: {
+                ...original.derived,
+                sketchGeometry: {
+                  projectId: original.projectId,
+                  documentVersion: original.version,
+                  objects: Object.fromEntries(
+                    dense.map((data, i) => [sketch.objectIds[i]!, data])
+                  )
+                }
+              }
+            };
+      // Stop the vulnerable implementation long before it can retain a
+      // large graph. The catalog must not need all neighbors of a branch.
+      const push = Array.prototype.push;
+      let retained = 0;
+      Array.prototype.push = function (...items: unknown[]) {
+        const item = items[0];
+        if (
+          items.length === 1 &&
+          item !== null &&
+          typeof item === 'object' &&
+          'ref' in item &&
+          'position' in item &&
+          ++retained > 2048
+        ) {
+          throw new Error('Finite endpoint-retention guard exceeded.');
+        }
+        return Reflect.apply<unknown[], unknown[], number>(push, this, items);
+      };
+      try {
+        const corners = listSketchFilletCorners(document, sketch, resolve);
+        expect(corners).toHaveLength(4);
+        expect(
+          planSketchFilletBatch(
+            document,
+            sketch,
+            corners.map(({ id }) => id),
+            2,
+            resolve
+          ).status
+        ).toBe('ready');
+      } finally {
+        Array.prototype.push = push;
+      }
+    }
+  );
+
+  it('refuses a circle catalog with too many corners to show', () => {
+    // 101 coincident circles each meet 50 free line ends twice: 10,100
+    // corners from little comparison work, each of which would be a marker.
+    const ends = Array.from({ length: 50 }, (_, i) => {
+      const angle = (i * 2 * Math.PI) / 50;
+      return line(
+        5 * Math.cos(angle),
+        5 * Math.sin(angle),
+        9 * Math.cos(angle),
+        9 * Math.sin(angle)
+      );
+    });
+    const circles = Array.from({ length: 101 }, (): SketchObjectData => ({
+      objectKind: 'circle',
+      centerX: 0,
+      centerY: 0,
+      radius: 5
+    }));
+    const { document, sketch } = sketchOf([...ends, ...circles]);
+    expect(() => listSketchFilletCorners(document, sketch, resolve)).toThrow(
+      'This sketch has too many fillet corners to show safely.'
+    );
+    const plan = planSketchFilletBatch(
+      document,
+      sketch,
+      ['not-a-corner'],
+      2,
+      resolve
+    );
+    expect(plan.status).toBe('refuse');
+    if (plan.status !== 'refuse') throw new Error('Expected catalog refusal.');
+    expect(plan.reason).toContain(
+      'This sketch has too many fillet corners to show safely.'
+    );
+    // One circle with the same ends stays an ordinary catalog.
+    const one = sketchOf([...ends, circles[0]!]);
+    expect(
+      listSketchFilletCorners(one.document, one.sketch, resolve)
+    ).toHaveLength(100);
+  });
+
+  it('refuses excessive candidate work even when no endpoints touch', () => {
+    const { document, sketch } = sketchOf(
+      Array.from({ length: 1500 }, (_, i) => line(0, i * 10, 0, i * 10 + 1))
+    );
+    const hypot = Math.hypot;
+    let calls = 0;
+    Math.hypot = (...values: number[]) => {
+      // Bounds a regression without relying on a timer or a browser hang.
+      if (++calls > 1_100_000) {
+        throw new Error('Finite endpoint-comparison guard exceeded.');
+      }
+      return hypot(...values);
+    };
+    try {
+      expect(() => listSketchFilletCorners(document, sketch, resolve)).toThrow(
+        'This sketch has too many nearby endpoints to check safely.'
+      );
+      calls = 0;
+      const plan = planSketchFilletBatch(
+        document,
+        sketch,
+        ['not-a-corner'],
+        2,
+        resolve
+      );
+      expect(plan.status).toBe('refuse');
+      if (plan.status !== 'refuse')
+        throw new Error('Expected catalog refusal.');
+      expect(plan.reason).toContain(
+        'This sketch has too many nearby endpoints to check safely.'
+      );
+    } finally {
+      Math.hypot = hypot;
+    }
+  });
+
   it('catalogs all four rectangle corners and plans identical tangent geometry in either pick order', () => {
     const { corners, rectangle, document, sketch, plan } = centeredRectangle();
     expect(corners).toHaveLength(4);

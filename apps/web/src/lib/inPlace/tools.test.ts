@@ -2705,7 +2705,7 @@ describe('fillet and chamfer run in place', () => {
     });
   });
 
-  describe('per-vertex radii (M03, v142)', () => {
+  describe('per-vertex radii (M03, v149)', () => {
     const witness = (
       from: [number, number, number],
       to: [number, number, number]
