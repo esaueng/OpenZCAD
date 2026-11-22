@@ -21,6 +21,10 @@ import {
 import type { RemusKernel } from './remus-runtime';
 import { KernelRefusal, type KernelRefusalCategory } from './kernel-refusal';
 import { AdapterRefusal } from './adapter-refusal';
+import {
+  variableFilletOutcome,
+  type BlendQuality
+} from './exact-blend-refusal';
 import { GEOMETRY_EPSILON } from './exact-math';
 
 /**
@@ -250,10 +254,13 @@ export function assertQualifiedVariableFillet(
  * the feature stores one law for the selection, so a per-edge payload here
  * would be a shape the document cannot round-trip.
  *
- * `startSetback`/`endSetback` are never written. They are the N-way vertex
- * blend, which the kernel refuses unless EVERY stripe meeting at a 3-or-more
- * way corner declares a positive setback — and which its own documentation
- * places outside the qualified set even then.
+ * `startSetback`/`endSetback` are never written. M03 setback corners come
+ * from `ballCorners` instead: at a corner where three or more selected edges
+ * meet and no setback is declared, the kernel sets each stripe back to the
+ * one ball tangent to their planar supports and closes the corner with that
+ * ball's exact spherical cap, or refuses the corner by code
+ * (`unsupported-setback-corner`). A declared setback could only be exact
+ * when it equals that ball's, which a caller cannot know, so none is sent.
  */
 export function variableFilletRequest(
   edges: readonly number[],
@@ -267,21 +274,25 @@ export function variableFilletRequest(
       end: spec.perEdge?.[index]?.endRadius ?? spec.endRadius,
       ...(spec.perEdge?.[index]?.stations?.length
         ? { stations: spec.perEdge[index].stations }
-        : {})
+        : {}),
+      ballCorners: true
     }))
   );
 }
 
 /**
- * Run a qualified variable-radius fillet. Throws the kernel's own refusal
- * when the blend fails; the caller applies the adapter's acceptance rules to
- * a result that comes back.
+ * Run a qualified variable-radius fillet on the exact route: the kernel's
+ * typed twin with `exactOnly` (see {@link variableFilletOutcome}). Throws
+ * the typed {@link BlendRefusal} when the kernel refuses; the caller applies
+ * the adapter's acceptance rules to a result that comes back.
  */
 export function applyVariableRadiusFillet(
   kernel: RemusKernel,
   solid: number,
   edges: readonly number[],
-  spec: VariableFilletSpec
+  spec: VariableFilletSpec,
+  /** Receives the kernel's disclosed quality of a result it returns. */
+  reportQuality?: (quality: BlendQuality) => void
 ): number {
   assertQualifiedVariableFillet(spec.law, spec.startRadius, spec.endRadius);
   for (const radii of spec.perEdge ?? []) {
@@ -290,7 +301,14 @@ export function applyVariableRadiusFillet(
       assertQualifiedVariableFillet(spec.law, station.radius, station.radius);
     }
   }
-  return kernel.filletVariable(solid, variableFilletRequest(edges, spec));
+  const outcome = variableFilletOutcome(
+    kernel,
+    solid,
+    variableFilletRequest(edges, spec)
+  );
+  if (outcome.status === 'refused') throw outcome.refusal;
+  reportQuality?.(outcome.quality);
+  return outcome.solid;
 }
 
 /**
@@ -386,6 +404,17 @@ const BLEND_FAILURE_CATEGORIES: Readonly<
 };
 
 /**
+ * `limit` to six significant digits, rounded down: a maximum shown rounded
+ * up (20.00006 as 20.0001) would overflow again when typed back in.
+ */
+export function displayedAtMost(limit: number): number {
+  const shown = Number(limit.toPrecision(6));
+  if (shown <= limit) return shown;
+  const step = 10 ** (Math.floor(Math.log10(Math.abs(limit))) - 5);
+  return Number((shown - step).toPrecision(6));
+}
+
+/**
  * The typed refusal for a variable-radius fillet or asymmetric chamfer the
  * kernel did not build, carrying {@link variableBlendFailureMessage} as its
  * sentence. The code is the kernel's `blend_failure_code` prefix; a report
@@ -395,22 +424,44 @@ const BLEND_FAILURE_CATEGORIES: Readonly<
 export function variableBlendRefusal(
   featureKind: 'fillet' | 'chamfer',
   edgeCount: number,
-  reported: string | null
+  reported: string | null,
+  /**
+   * M03: the kernel's typed refusal, when it gave one. Its code stands
+   * over the one read from `reported`, its category over `unsupported` for
+   * a code the table below does not list, and a
+   * `cliff-encountered` refusal's `limit` is the largest radius the edge's
+   * faces carry (see {@link KernelRefusal.limit}).
+   */
+  typed?: Pick<KernelRefusal, 'kernelCode' | 'category' | 'limit'> | null
 ): KernelRefusal {
-  const message = variableBlendFailureMessage(featureKind, edgeCount, reported);
   const kernelReason = variableBlendRefusalMessage(reported);
   const code =
-    kernelReason === null
+    typed?.kernelCode ??
+    (kernelReason === null
       ? 'blend-failed'
-      : kernelReason.slice(0, kernelReason.indexOf(':'));
+      : kernelReason.slice(0, kernelReason.indexOf(':')));
+  const overflow =
+    typed?.limit !== undefined && code === 'cliff-encountered'
+      ? typed.limit
+      : undefined;
+  // M03: the limit is the kernel's typed measurement, said from the data.
+  const message =
+    variableBlendFailureMessage(featureKind, edgeCount, reported) +
+    (overflow === undefined
+      ? ''
+      : ` The faces along the edge carry a radius of at most ${displayedAtMost(overflow)}.`);
   return new KernelRefusal({
     family: 'blend',
-    category: BLEND_FAILURE_CATEGORIES[code] ?? 'unsupported',
+    // The adapter's table files the codes it knows (an overflow is the
+    // caller's input); a code it does not list keeps the kernel's category.
+    category:
+      BLEND_FAILURE_CATEGORIES[code] ?? typed?.category ?? 'unsupported',
     kernelCode: code,
     kernelMessage:
       reported?.trim() || 'the exact modeling engine gave no further detail',
     message,
-    reason: message
+    reason: message,
+    ...(overflow === undefined ? {} : { limit: overflow })
   });
 }
 
