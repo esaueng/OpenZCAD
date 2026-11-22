@@ -1536,6 +1536,38 @@ describe('Patterns over a selection', () => {
   });
 });
 
+describe('Mirror of construction guides', () => {
+  it('still mirrors a guide onto an equal one, as before (review case)', () => {
+    const { manager, sketchId, ids, sketch } = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      {
+        objectKind: 'circle',
+        centerX: -4,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      },
+      {
+        objectKind: 'circle',
+        centerX: 4,
+        centerY: 0,
+        radius: 1,
+        construction: true
+      }
+    ]);
+    expect(
+      planSketchMirror(
+        manager.document,
+        sketch(),
+        sketchId,
+        ids[1]!,
+        ids[0]!,
+        resolve
+      )
+    ).toMatchObject({ status: 'commands' });
+  });
+});
+
 describe('Construction over a selection', () => {
   it('makes a mixed selection construction, then regular, one undo step each', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([

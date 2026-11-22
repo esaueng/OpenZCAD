@@ -23939,28 +23939,35 @@ export function App() {
       target && base && findSketch(base, target.sketchId as SketchId);
     if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
     if (!requireCurrentSketchGeometry(sketch.sketchId)) return;
+    // The edit is for exactly the selection the toggle was pressed on,
+    // captured before anything awaits: a click that changes it while the
+    // module loads or the downstream check runs drops the edit.
+    const selected = sketchSelectedObjectIds(
+      interactionRef.current.mode === 'sketch'
+        ? interactionRef.current.session
+        : { selectedObjectId: null }
+    );
+    const selectionKey = selected.join('|');
+    const selectionCurrent = () => {
+      const live = interactionRef.current;
+      return (
+        live.mode === 'sketch' &&
+        sketchSelectedObjectIds(live.session).join('|') === selectionKey
+      );
+    };
     setSketchSolving(true);
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
     try {
       const { planSketchConstructionSet, planSketchConstructionToggle } =
         await import('./lib/sketch/modify');
-      // A multi-selection toggles together; one entity keeps its own plan.
-      const selected = sketchSelectedObjectIds(
-        interactionRef.current.mode === 'sketch'
-          ? interactionRef.current.session
-          : { selectedObjectId: null }
-      );
-      // The edit is for exactly this selection: a click that changes it
-      // while the downstream check runs drops the edit.
-      const selectionKey = selected.join('|');
-      const selectionCurrent = () => {
-        const live = interactionRef.current;
-        return (
-          live.mode === 'sketch' &&
-          sketchSelectedObjectIds(live.session).join('|') === selectionKey
+      if (selected.length > 1 && !selectionCurrent()) {
+        setStatus(
+          'The selection changed before the construction change applied. Try again.'
         );
-      };
+        return;
+      }
+      // A multi-selection toggles together; one entity keeps its own plan.
       const plan =
         selected.length > 1
           ? planSketchConstructionSet(base, sketch, sketch.sketchId, selected)

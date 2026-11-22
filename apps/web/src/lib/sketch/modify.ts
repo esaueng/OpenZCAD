@@ -2098,15 +2098,23 @@ function landsOnExisting(
   curves: readonly Curve2[],
   resolve: Resolve,
   tol: number,
-  earlier: readonly PlannedCurve[] = []
+  earlier: readonly PlannedCurve[] = [],
+  /**
+   * Patterns: refuse a construction copy that exactly duplicates another
+   * guide. Mirror keeps such an image, which follows its own source.
+   */
+  refuseGuideDuplicates = false
 ): boolean {
   // Construction geometry never bounds a profile, so a construction copy
   // may overlap anything, profile geometry included (a guide over a real
-  // curve), and anything may overlap a construction guide; only an exact
-  // duplicate of another guide — which adds nothing — is refused for one.
+  // curve), and anything may overlap a construction guide; a pattern only
+  // refuses an exact duplicate of another guide, which adds nothing.
   const construction = Boolean(
     sketchObject(document, sketch, sourceId)?.construction
   );
+  if (construction && !refuseGuideDuplicates) {
+    return false;
+  }
   const clash = construction ? sameCurve : curvesOverlap;
   const existing = [
     ...sketch.objectIds.flatMap((objectId) => {
@@ -2412,7 +2420,16 @@ export function planSketchLinearPattern(
     };
   }
   if (
-    landsOnExisting(document, sketch, sourceId, copies, resolve, tol, earlier)
+    landsOnExisting(
+      document,
+      sketch,
+      sourceId,
+      copies,
+      resolve,
+      tol,
+      earlier,
+      true
+    )
   ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
@@ -2542,7 +2559,16 @@ export function planSketchCircularPattern(
     };
   }
   if (
-    landsOnExisting(document, sketch, sourceId, copies, resolve, tol, earlier)
+    landsOnExisting(
+      document,
+      sketch,
+      sourceId,
+      copies,
+      resolve,
+      tol,
+      earlier,
+      true
+    )
   ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
