@@ -835,6 +835,91 @@ test('a picked L path takes a round corner with a typed radius, exactly (M04, v1
   );
 });
 
+test('a picked line and arc take a round corner beside the arc, exactly (M04, v135)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  // Up 20, then a radius-10 arc leaving square to the line: the corner sits
+  // beside the arc, where a mitre has no exact construction.
+  const document = sweepDocument(
+    'Round by an arc',
+    { objectKind: 'circle', radius: 1, centerX: 30, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [
+          { objectKind: 'line', x1: 30, y1: 0, x2: 30, y2: -20 },
+          {
+            objectKind: 'arc',
+            centerX: 30,
+            centerY: -30,
+            radius: 10,
+            startAngleDeg: 0,
+            endAngleDeg: 90
+          }
+        ]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  // Round first, so the arc's pick is confirmed by the path count alone.
+  await chooseOption(bar, 'Round');
+  await pickCurve(page, canvas, bar, [30, 0, 10], 'Path of 1');
+  // The arc's midpoint: sketch (30 + 5√2, −30 + 5√2).
+  await pickCurve(
+    page,
+    canvas,
+    bar,
+    [30 + 5 * Math.SQRT2, 0, 30 - 5 * Math.SQRT2],
+    'Path of 2'
+  );
+  // A mitre beside the arc is refused by name; no click depends on it.
+  await chooseOption(bar, 'Mitre');
+  await expect(bar).toContainText(
+    'A mitre is cut only between straight lines',
+    {
+      timeout: 30_000
+    }
+  );
+  await chooseOption(bar, 'Round');
+  // A radius other than the default, so the typed value is what builds.
+  await bar.locator('summary[aria-label$=" options"]').click();
+  const radius = bar.getByRole('textbox', { name: /Corner radius/ });
+  await radius.fill('3');
+  await radius.press('Enter');
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data).toMatchObject({ construction: 'in-place', cornerRadius: 3 });
+  const derived = await rebuilt(saved);
+  expect(derived.featureWarnings ?? []).toEqual([]);
+  // The line offset by 3 meets the arc's circle offset to 13: the line
+  // keeps 30 − √160, the fillet and the arc each π/2 − θ, sin θ = 3/13.
+  const theta = Math.asin(3 / 13);
+  const centreLine =
+    30 -
+    Math.sqrt(160) +
+    3 * (Math.PI / 2 - theta) +
+    10 * (Math.PI / 2 - theta);
+  expect(derived.bodyRepresentations[sweep.bodyId!]!.volume).toBeCloseTo(
+    Math.PI * centreLine,
+    6
+  );
+});
+
 test('a path picked through the profile sweeps both ways from the crossing (M04, v136)', async ({
   page
 }) => {

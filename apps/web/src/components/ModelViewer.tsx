@@ -165,6 +165,7 @@ import {
   clearGroup,
   closestAxisT,
   composeMoveTransform,
+  pivotDragStep,
   boxFullyInView,
   computeFitPose,
   computeNormalToFacePose,
@@ -1775,7 +1776,9 @@ export interface ModelViewerProps {
   onMovePreviewChange(
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg'],
-    snap: MoveSnap
+    snap: MoveSnap,
+    /** M10: the pivot a pivot-handle drag placed; omitted otherwise. */
+    pivot?: MovePreview['translation']
   ): void;
   /**
    * Live sink for the values a move drag is producing, owned by the panel
@@ -2257,7 +2260,16 @@ interface MoveDragState {
   pendingValues: {
     translation: MovePreview['translation'];
     rotation: MovePreview['rotationDeg'];
+    /** M10: where a pivot-handle drag left the pivot. */
+    pivot?: MovePreview['translation'];
   } | null;
+  /**
+   * M10: this drag places the pivot, not the body. Set for an arrow or the
+   * centre handle while the Move's pivot mode is on; rings still turn.
+   */
+  pivotMode: boolean;
+  /** The pivot (rotation centre) at drag start. */
+  startPivot: THREE.Vector3;
 }
 
 // Selection colours live with hover's in the viewport's semantics table. They
@@ -4186,10 +4198,15 @@ export function ModelViewer({
       if (!values) {
         return;
       }
-      onMovePreviewChangeRef.current(values.translation, values.rotation, {
-        move: drag.snapMove,
-        rotate: drag.snapRotate
-      });
+      onMovePreviewChangeRef.current(
+        values.translation,
+        values.rotation,
+        {
+          move: drag.snapMove,
+          rotate: drag.snapRotate
+        },
+        values.pivot
+      );
     }
 
     /**
@@ -5130,6 +5147,42 @@ export function ModelViewer({
             ? snapsFromEdges(body.topology.edges, { label: body.name })
             : []
         );
+    }
+
+    /**
+     * M10: the moving body's own snap points, carried to where the Move
+     * preview shows the body, so a pivot lands on the corner on screen.
+     */
+    function collectPosedBodySnaps(
+      bodyId: string,
+      move: MovePreview
+    ): SnapCandidate[] {
+      const body = bodiesRef.current.find(
+        (candidate) => candidate.bodyId === bodyId && !candidate.consumed
+      );
+      if (!body?.topology) return [];
+      const final = composeMoveTransform(
+        moveCenterRef.current,
+        move.translation,
+        move.rotationDeg
+      );
+      const euler = moveEuler(move.rotationDeg);
+      const scratch = new THREE.Vector3();
+      return snapsFromEdges(body.topology.edges, { label: body.name }).map(
+        (snap) => {
+          scratch
+            .set(snap.point.x, snap.point.y, snap.point.z)
+            .applyEuler(euler);
+          return {
+            ...snap,
+            point: {
+              x: scratch.x + final.x,
+              y: scratch.y + final.y,
+              z: scratch.z + final.z
+            }
+          };
+        }
+      );
     }
 
     /**
@@ -11277,11 +11330,38 @@ export function ModelViewer({
             }
           }
         }
+        // M10: in pivot mode the gizmo carries the pivot, and the body
+        // stays where it is: the drag's move splits into the pivot's own
+        // move and the translation that keeps the body still.
+        let pivot: MovePreview['translation'] | undefined;
+        // What the handle itself moved along its axis: in pivot mode the
+        // HUD reads that, not the translation that keeps the body still.
+        const handleTravel = translation[drag.axis];
+        if (drag.pivotMode && drag.kind !== 'ring') {
+          const step = pivotDragStep(drag.startTranslation, rotation, {
+            x: translation.x - drag.startTranslation.x,
+            y: translation.y - drag.startTranslation.y,
+            z: translation.z - drag.startTranslation.z
+          });
+          pivot = {
+            x: drag.startPivot.x + step.pivotDelta.x,
+            y: drag.startPivot.y + step.pivotDelta.y,
+            z: drag.startPivot.z + step.pivotDelta.z
+          };
+          moveCenterRef.current.set(pivot.x, pivot.y, pivot.z);
+          translation.x = step.translation.x;
+          translation.y = step.translation.y;
+          translation.z = step.translation.z;
+        }
         context.applyMovePreview(translation, rotation);
         // Live values go straight to the panel that shows them. Routing them
         // through workspace state instead would re-render the editor on every
         // pointer event for numbers the scene has already drawn.
-        drag.pendingValues = { translation, rotation };
+        drag.pendingValues = {
+          translation,
+          rotation,
+          ...(pivot ? { pivot } : {})
+        };
         moveValuesSetterRef?.current?.(translation, rotation, {
           move: drag.snapMove,
           rotate: drag.snapRotate
@@ -11291,7 +11371,9 @@ export function ModelViewer({
           drag.kind === 'ring'
             ? rotation[drag.axis]
             : drag.kind === 'axis'
-              ? translation[drag.axis]
+              ? pivot
+                ? handleTravel - drag.startTranslation[drag.axis]
+                : translation[drag.axis]
               : undefined;
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true, value);
@@ -11865,9 +11947,18 @@ export function ModelViewer({
           activeMove.target === 'sketch' ? null : activeMove.bodyId;
         // Measured, not assumed: this walk is the pre-drag stall the feel
         // plan's row 2.2 exists for, so its cost is visible to the probe.
+        const placingPivot =
+          activeMove.pivotMode === true && data.kind !== 'ring';
         timed('move.snapCollect', () => {
           moveSnaps = collectMoveSnaps(movingBodyId);
           moveCenterTargets = collectCenterAlignTargets(movingBodyId);
+          // M10: a pivot goes on the moving body's own corners, midpoints
+          // and centres too, read where the preview shows the body now.
+          if (placingPivot && movingBodyId !== null)
+            moveSnaps = [
+              ...moveSnaps,
+              ...collectPosedBodySnaps(movingBodyId, activeMove)
+            ];
         });
         if (import.meta.env.OZ_PERF === '1') {
           const scope = window as typeof window & {
@@ -11908,7 +11999,9 @@ export function ModelViewer({
           restingCenter: moveCenterRef.current.clone(),
           snapMove: chooseMoveSnapStep(worldPerPixel),
           snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180),
-          pendingValues: null
+          pendingValues: null,
+          pivotMode: placingPivot,
+          startPivot: moveCenterRef.current.clone()
         };
         setRayFromEvent(event);
         if (data.kind === 'axis') {
@@ -15703,10 +15796,11 @@ export function ModelViewer({
           (candidate) => candidate.bodyId === moveCommitHold.bodyId
         );
         if (held) {
+          const heldPivot = moveCommitHold.pivot;
           moveCenterRef.current.set(
-            (held.bbox.min.x + held.bbox.max.x) / 2,
-            (held.bbox.min.y + held.bbox.max.y) / 2,
-            (held.bbox.min.z + held.bbox.max.z) / 2
+            heldPivot?.x ?? (held.bbox.min.x + held.bbox.max.x) / 2,
+            heldPivot?.y ?? (held.bbox.min.y + held.bbox.max.y) / 2,
+            heldPivot?.z ?? (held.bbox.min.z + held.bbox.max.z) / 2
           );
           context.applyMovePreview(
             moveCommitHold.translation,
@@ -15757,11 +15851,16 @@ export function ModelViewer({
       if (!body) {
         return;
       }
-      center = new THREE.Vector3(
-        (body.bbox.min.x + body.bbox.max.x) / 2,
-        (body.bbox.min.y + body.bbox.max.y) / 2,
-        (body.bbox.min.z + body.bbox.max.z) / 2
-      );
+      // M10: a placed pivot is the gizmo's centre and what it turns about;
+      // otherwise the body's centre, as every Move before stored.
+      const pivot = movePreview.pivot;
+      center = pivot
+        ? new THREE.Vector3(pivot.x, pivot.y, pivot.z)
+        : new THREE.Vector3(
+            (body.bbox.min.x + body.bbox.max.x) / 2,
+            (body.bbox.min.y + body.bbox.max.y) / 2,
+            (body.bbox.min.z + body.bbox.max.z) / 2
+          );
     }
     moveCenterRef.current.copy(center);
     const projectedUnitSizePx = projectedWorldSizePx(
