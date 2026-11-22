@@ -12873,7 +12873,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (this.latestDocument) {
       entries[ROOM_LATEST_KEY] = this.latestDocument;
     }
-    entries[ROOM_META_KEY] = {
+    const meta = {
       schema: ROOM_STORAGE_SCHEMA,
       projectId: this.projectId,
       ...(this.instanceId ? { instanceId: this.instanceId } : {}),
@@ -12883,7 +12883,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       ),
       ...(this.roomFormat === 2 ? { format: 2 as const } : {})
     } satisfies RoomMeta;
+    entries[ROOM_META_KEY] = meta;
     await this.roomContext.storage.put(entries);
+    // Keep the in-memory index in step with the one just stored. Left at its
+    // load-time value, an evicted version would stay listed, and source
+    // cleanup would report retained history unavailable from then on.
+    this.historyVersions = meta.historyVersions;
     for (const version of dirtyHistoryVersions) {
       if (this.documentHistory.has(version))
         this.persistedHistoryVersions.add(version);
