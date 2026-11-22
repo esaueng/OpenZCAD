@@ -4114,7 +4114,15 @@ const hole: InPlaceToolSpec = {
   },
   handles(slots, values, ctx, options) {
     const face = slots.faces[0];
-    const clicked = face ? faceAnchor(face) : null;
+    // With no click (a face chosen from the selection), a new hole stands
+    // at (0, 0) from the anchor it is measured from, not the face centroid.
+    const clicked = face
+      ? (face.point ??
+        (ctx.saved?.featureKind === 'hole'
+          ? null
+          : holeAnchorPoint(face, newHoleAnchor(face))) ??
+        faceAnchor(face))
+      : null;
     if (!face || !clicked || !face.normal) return [];
     const axes = holePositionAxes(face.normal);
     if (!axes) return [];

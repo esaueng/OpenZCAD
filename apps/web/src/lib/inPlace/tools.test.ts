@@ -2260,6 +2260,28 @@ describe('review: values the cards accepted stay expressible', () => {
     expect(spread).toBeCloseTo(8);
   });
 
+  it('an unclicked new hole stands its handles on the outer-boundary anchor', () => {
+    // A plate face whose full-area centroid an off-center bore has moved.
+    const face = {
+      ...TOP,
+      point: undefined,
+      centroid: { x: 20, y: 0, z: 4 },
+      outerCentroid: { x: 10, y: 0, z: 4 }
+    };
+    const [diameter] = IN_PLACE_TOOL_SPECS.hole.handles(
+      { ...EMPTY, faces: [face] },
+      { diameter: 4 },
+      CTX,
+      {}
+    );
+    const origin =
+      diameter && 'origin' in diameter.params ? diameter.params.origin : null;
+    // The rebuild drills (0, 0) from the outer centroid, so the handle is
+    // within a radius of it, not of the full-face centroid.
+    expect(origin).not.toBeNull();
+    expect(Math.hypot(origin!.x - 10, origin!.y)).toBeLessThanOrEqual(2 + 1e-9);
+  });
+
   it('a typed hole names the world axis each position chip runs along', () => {
     const handles = IN_PLACE_TOOL_SPECS.hole.handles(
       { ...EMPTY, faces: [TOP] },
