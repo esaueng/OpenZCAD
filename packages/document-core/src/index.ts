@@ -5439,6 +5439,11 @@ export function filletEdges(
   if (input.radiusStations !== undefined) {
     const problem = filletRadiusStationsProblem({ ...input, edgeHashes });
     if (problem) throw new Error(problem);
+    assertMinimumProjectSchema(
+      document.schemaVersion,
+      151,
+      'Fillet radius stations'
+    );
   }
   // Edge runs alone mean nothing; refused rather than dropped (review).
   if (input.vertexRadii === undefined && input.edgeRuns !== undefined) {
@@ -7033,6 +7038,17 @@ export function updateFeature(
     }
     if (feature.featureKind === 'hole') {
       assertHoleContentSchema(input.data, document.schemaVersion);
+    }
+    // M03 (v151): nor radius stations.
+    if (
+      feature.featureKind === 'fillet' &&
+      (input.data as { radiusStations?: unknown }).radiusStations !== undefined
+    ) {
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        151,
+        'Fillet radius stations'
+      );
     }
     // M03 (v149): a patch may not add per-vertex radii to an older document.
     if (

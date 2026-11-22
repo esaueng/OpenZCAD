@@ -920,14 +920,12 @@ export function inPlaceEditSeed(
             seed.slots.edges.length === data.edgeHashes.length
               ? filletSelectionVertices(seed.slots.edges)
               : null;
-          // M03 (v151): the editor holds one interior station; a stored
-          // list of more is said, not silently cut to one.
+          // M03 (v151): a fillet holds one interior station, the one the
+          // editor holds.
           if (data.radiusStations?.[0]) {
             seed.options.radiusAt = 'along';
             value('midRadius', data.radiusStations[0].radius);
             value('midAt', data.radiusStations[0].at * 100);
-            if (data.radiusStations.length > 1)
-              seed.notice = `This fillet has ${data.radiusStations.length} radius stations; Done keeps only the first.`;
           }
           // An edge that now runs the other way from when its corners or
           // stations were set keeps its stored run (review): Done then writes
@@ -935,12 +933,15 @@ export function inPlaceEditSeed(
           // than a run read off the turned edge that would swap its radii
           // end for end. Picking the edge again sets them afresh.
           if (data.vertexRadii || data.radiusStations) {
+            // Each edge by its own stored hash: an edge that no longer
+            // resolves leaves the list, and the rest must keep their own
+            // runs, not their neighbours' (review).
             const live = filletEdgeRuns(seed.slots.edges);
-            data.edgeRuns?.forEach((run, index) => {
-              const pick = seed.slots.edges[index];
-              const witness = pick?.reference?.witness;
-              if (!pick || !witness || witness.closed || live?.[index] === run)
-                return;
+            seed.slots.edges.forEach((pick, index) => {
+              const run = data.edgeRuns?.[data.edgeHashes.indexOf(pick.hash)];
+              const witness = pick.reference?.witness;
+              if (run === undefined || !witness || witness.closed) return;
+              if (live?.[index] === run) return;
               const [x, y, z] = witness.endpoints[run ? 1 : 0];
               pick.end = { x: x * 1e-6, y: y * 1e-6, z: z * 1e-6 };
             });

@@ -1981,6 +1981,46 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('fillet: a surviving edge keeps its own stored run when another is lost (review)', () => {
+    const named = (hash: number, from: number[], to: number[]) => ({
+      kind: 'edge',
+      currentHash: hash,
+      stored: true,
+      witness: {
+        curveType: 'LINE',
+        length: 1,
+        closed: false,
+        endpoints: [from.map((v) => v * 1e6), to.map((v) => v * 1e6)],
+        midpoint: [0, 0, 0]
+      }
+    });
+    // Edge 20 no longer resolves; edge 21 was stored running end 1 → end 0
+    // and now reads the other way (its drawn end is witness end 1).
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [20, 21],
+      edgeReferences: [
+        named(20, [0, 5, 0], [10, 5, 0]),
+        named(21, [0, 0, 0], [10, 0, 0])
+      ] as never[],
+      radius: 1,
+      endRadius: 2,
+      radiusLaw: 'linear',
+      radiusStations: [{ at: 0.25, radius: 3 }],
+      edgeRuns: [true, false]
+    };
+    const request = untouched(feature(data, 'body_f' as BodyId)) as {
+      edgeHashes?: number[];
+      edgeRuns?: boolean[];
+    };
+    // Its own stored run, not the lost edge's in slot zero: the build then
+    // refuses the reversal by name instead of placing the station at 25 %
+    // from the wrong end.
+    expect(request.edgeHashes).toEqual([21]);
+    expect(request.edgeRuns).toEqual([false]);
+  });
+
   it('fillet: an untouched sparse per-vertex fillet writes the same radii back (review)', () => {
     const named = (hash: number, from: number[], to: number[]) => ({
       kind: 'edge',

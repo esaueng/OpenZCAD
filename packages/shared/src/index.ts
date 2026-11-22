@@ -867,8 +867,13 @@ export interface FilletRadiusStation {
   radius: ParamValue;
 }
 
-/** The most interior stations one fillet stores. */
-export const MAX_FILLET_RADIUS_STATIONS = 8;
+/**
+ * The most interior stations one fillet stores: one, the one the editor
+ * holds, so a stored fillet always reopens and writes back as it was
+ * (review). The kernel's station law takes more; a later slice that edits
+ * more raises this.
+ */
+export const MAX_FILLET_RADIUS_STATIONS = 1;
 
 /**
  * Why a fillet's `radiusStations` cannot be stored, or null when it can: it
@@ -882,6 +887,7 @@ export function filletRadiusStationsProblem(data: {
   endRadius?: ParamValue;
   radiusStations?: unknown;
   edgeRuns?: unknown;
+  vertexRadii?: unknown;
 }): string | null {
   const stations = data.radiusStations;
   if (stations === undefined) return null;
@@ -890,7 +896,13 @@ export function filletRadiusStationsProblem(data: {
     stations.length === 0 ||
     stations.length > MAX_FILLET_RADIUS_STATIONS
   )
-    return `Fillet radius stations must be a list of 1 to ${MAX_FILLET_RADIUS_STATIONS}.`;
+    return MAX_FILLET_RADIUS_STATIONS === 1
+      ? 'A fillet holds one radius station.'
+      : `Fillet radius stations must be a list of 1 to ${MAX_FILLET_RADIUS_STATIONS}.`;
+  // One way to vary the radius at a time, so the editor, which offers one,
+  // reopens either exactly (review).
+  if (data.vertexRadii !== undefined)
+    return 'A fillet takes radius stations or per-vertex radii, not both.';
   if (data.endRadius === undefined)
     return 'Fillet radius stations need a variable-radius fillet.';
   let previous = 0;

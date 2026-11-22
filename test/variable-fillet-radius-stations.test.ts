@@ -3,7 +3,9 @@ import {
   addPrimitiveFeature,
   assertDocumentContentSchema,
   createProjectDocument,
-  filletEdges
+  filletEdges,
+  listNodesByKind,
+  updateFeature
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '../packages/kernel-adapter/src/exact';
 import {
@@ -177,6 +179,35 @@ describe('fillet radius stations (M03, v151)', { timeout: 120_000 }, () => {
           schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
         } as never)
       ).toThrow(/Fillet radius stations/);
+      // One station, and not beside per-vertex radii: the editor holds one
+      // way to vary the radius, so a stored fillet reopens exactly (review).
+      expect(() =>
+        filletEdges(document, {
+          ...base,
+          radiusStations: [
+            { at: 0.25, radius: 3 },
+            { at: 0.75, radius: 3 }
+          ]
+        })
+      ).toThrow(/one radius station/);
+      expect(() =>
+        filletEdges(document, {
+          ...base,
+          radiusStations: [{ at: 0.5, radius: 3 }],
+          vertexRadii: [{ edge: 0, end: 0, radius: 3 }]
+        })
+      ).toThrow(/stations or per-vertex radii, not both/);
+      // Nor on an older document, by the exported mutations (review).
+      const older = {
+        ...document,
+        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+      } as never;
+      expect(() =>
+        filletEdges(older, {
+          ...base,
+          radiusStations: [{ at: 0.5, radius: 3 }]
+        })
+      ).toThrow(/Fillet radius stations/);
       // Stations without the way each edge ran are refused (review).
       const { edgeRuns: _runs, ...runless } = base;
       expect(() =>
@@ -185,6 +216,24 @@ describe('fillet radius stations (M03, v151)', { timeout: 120_000 }, () => {
           radiusStations: [{ at: 0.5, radius: 3 }]
         })
       ).toThrow(/direction each selected edge ran/);
+      // A patch may not add stations to an older document either (review).
+      const plain = filletEdges(document, runless).document;
+      const fillet = listNodesByKind(plain, 'feature').at(-1)!;
+      expect(() =>
+        updateFeature(
+          {
+            ...plain,
+            schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+          } as never,
+          {
+            featureId: fillet.featureId,
+            data: {
+              radiusStations: [{ at: 0.5, radius: 3 }],
+              edgeRuns: base.edgeRuns
+            }
+          }
+        )
+      ).toThrow(/Fillet radius stations/);
     } finally {
       adapter.dispose();
     }
