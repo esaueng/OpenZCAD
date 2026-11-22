@@ -352,12 +352,7 @@ export function useMeasurementWorkbench({
         );
         return api.pointKindAgrees(body, target, point) ? target : null;
       }
-      return api.pointKindTarget(
-        body,
-        selection,
-        measurementPointKind,
-        point
-      );
+      return api.pointKindTarget(body, selection, measurementPointKind, point);
     }
     const snapped =
       measurementMode === 'distance' && snap?.source && point

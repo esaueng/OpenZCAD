@@ -52,7 +52,7 @@ export function measureSnapKindsFor(
  * asks for a kind never shows a glyph its click would refuse.
  */
 export function snapRecordsExactly(
-  kind: 'endpoint' | 'midpoint' | 'center' | string,
+  kind: string,
   edge: Pick<EdgeTopology, 'curve' | 'points'>
 ): boolean {
   const n = edge.points.length;
