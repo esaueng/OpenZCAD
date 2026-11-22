@@ -4,7 +4,7 @@ row: M03
 
 2026-11-22 further radius laws: interior radius stations (schema v151).
 
-A variable-radius fillet can store `radiusStations`: interior radii at fractions along every selected edge, measured from where the edge was picked (its witness end 0). The fillet's law, Linear or Eased, runs between neighbouring stations. The kernel builds this exactly with its station law (esaueng/remus#1939): each piece is a cubic Hermite row, so the band is one exact Bézier piece per segment. The adapter flips a fraction for an edge the kernel runs the other way. The pin before 2026.1.158 ignored the stations, so the field is exposed only on a pin that builds them.
+A variable-radius fillet can store `radiusStations`: interior radii at fractions along every selected edge, measured from where the edge was picked (its witness end 0). The fillet's law, Linear or Eased, runs between neighbouring stations. The kernel builds this exactly with its station law (esaueng/remus#1939): each piece is a cubic Hermite row, so the band is one exact Bézier piece per segment. Like per-vertex radii, stations record the way each edge ran when they were set (`edgeRuns`). An edge that runs the other way after an upstream change is refused by code (`fillet_vertex_radius_unmatched`), not built with its stations reversed. The pin before 2026.1.158 ignored the stations, so the field is exposed only on a pin that builds them.
 
 The in-place Fillet tool offers Radius at: Along the edge. A Mid R arrow stands partway along the first picked edge, its position set by Mid at (%). A stored list of more stations reopens with a notice rather than being cut silently.
 
