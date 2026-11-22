@@ -3,13 +3,13 @@
 **Single source of truth for priorities, dependencies and delivery status.**
 Consolidated 2026-09-12 against OpenZCAD `main` at `28d1551f` (PR #315) and
 reconciled 2026-09-17 against `main` at `3d7fdc33` (#316–#356).
-Facts refreshed 2026-11-20 against `main` at `9467000b` (#1783): canonical
-documents use schema v111 (`PROJECT_DOCUMENT_SCHEMA_VERSION` in
+Facts refreshed 2026-11-22 against `main` at `b36eebaf` (#1918): canonical
+documents use schema v148 (`PROJECT_DOCUMENT_SCHEMA_VERSION` in
 [packages/shared/src/index.ts](packages/shared/src/index.ts); per-version
 history lives in that file and the evidence of the row that added it), and
 the paired `remus-wasm` and `remus-wasm-io` packages are version
-`2026.1.150`, pinned to immutable Remus commit
-`88de02388774102a1aaa2d7a2978c04b0dfe7325` in
+`2026.1.158`, pinned to immutable Remus commit
+`a732c84d43efdffdb051eadfa003d3ca39f1af9a` in
 [the adapter manifest](packages/kernel-adapter/package.json) and
 [pnpm-lock.yaml](pnpm-lock.yaml). This source snapshot is not a fresh
 qualification of upstream Remus `main` or a production-site acceptance report.
@@ -54,6 +54,21 @@ remaining table-stakes gaps; an agent API ([L14](#l14)) and scripting
 tier with end-to-end encryption ([L11](#l11)) is a position no surveyed tool
 offers.
 
+Re-baselined 2026-11-22 against `main` at `b36eebaf`, after about 340 merges
+in the week since the 2026-11-15 pass. Of that pass's active lanes, sketch
+inference ([S08](#s08)), the assembly MVP ([AS03](#as03), [AS04](#as04)) and
+maker hand-off ([L09](#l09), [D06](#d06)) are Complete. Every item on its
+Next list except [M04](#m04) has also merged: L14, L15, F06, D02–D04, D07,
+M09, R01, M06, M12, I02, I04, I06, M17, L08 and L03. [K10](#k10)'s ledgers
+show no wrong cells and no untyped refusals. The
+[Delivery order](#delivery-order) keeps the owner's 2026-11-15 priorities
+(kernel correctness and edit speed, then encryption) and gives the finished
+lanes' slots to the remainders of rows already in milestones 1–2 and to
+assembly depth. A row-by-row status audit corrects F01 from Open to Partial,
+K06, K07, W05 and L07 from Revalidate to Partial, and AS06 and AS07 from
+Partial to Complete. Each correction is recorded as an evidence fragment
+that quotes its row.
+
 Start here to choose work. The documents in [Supporting plans](#supporting-plans)
 retain specifications, acceptance details and historical evidence; their old
 phase numbers, priorities and status tables no longer define independent queues.
@@ -71,8 +86,20 @@ supporting specification only when its contract changes.
 
 OpenZCAD has a working browser CAD foundation: exact solid modeling, editable
 feature history, expressions, direct manipulation, local persistence, optional
-cloud sync and collaboration. The largest remaining product gaps are complete
-sketch constraint workflows, reference geometry, drawings and assemblies.
+cloud sync and collaboration. As of 2026-11-22, reference geometry
+([R01](#r01)), configurations ([F06](#f06)), a dimensioned and toleranced
+drawing hand-off ([D02](#d02)–[D04](#d04), [D06](#d06), [D07](#d07)), the
+assembly MVP ([AS03](#as03), [AS04](#as04)), the agent API and scripting
+([L14](#l14), [L15](#l15)) and standard parts ([M17](#m17)) are Complete.
+The remaining product gaps are sketch tool and constraint depth
+([S05](#s05)–[S07](#s07)), part-modeling remainders ([M02](#m02),
+[M03](#m03), [F01](#f01), [M10](#m10), [M11](#m11)), assembly couplings and
+closed-loop solving ([AS08](#as08), [AS09](#as09)), native-CAD exchange
+([I10](#i10)–[I14](#i14)), kernel capability limits that refuse by type, and
+edit latency measured on target hardware ([W01](#w01)). The rest of this
+section records how the product got here (written before 2026-11-22): the
+largest gaps then were complete sketch constraint workflows, reference
+geometry, drawings and assemblies.
 Recent work improved existing modeling and the bounded imported-holder workflow,
 and the 14 September kernel-adoption wave (#330–#342) moved booleans, patterns,
 blends, mesh import, sketch modify tools and sections onto typed kernel entry
@@ -117,68 +144,88 @@ with referenced evidence; production acceptance is recorded separately.
 ## Delivery order
 
 Finish useful workflows before adding a second way to do the same action.
-Re-prioritized 2026-11-15 with the owner from the market review in the header:
-users name reliable fillets and booleans, an unbroken history and fast edits
-before any new category, so kernel correctness and edit speed become the first
-active lane instead of running alongside. The table-stakes modeling gaps
-(sketch inference, feature patterns, standard holes), maker hand-off and the
-assembly MVP join the active lanes; end-to-end encryption stays active. The
-workspace lane (U08/U09 complete) and further gear families yield their active
-slots: U10/U11 and M14 continue alongside where files are disjoint. Kernel
-work that does not serve the first lane (other K-, W- and O-rows) also runs
-alongside only where dependencies and touched files are disjoint. The
-2026-11-11 re-baseline this replaces had made workspace, encryption,
-assemblies, iPad/touch and printable features the active lanes. Each row is an
-outcome, not necessarily one PR. Split a large row into named, bounded slices
-under the same ID before coding; never treat a partial slice as the whole
-row's completion.
+Re-baselined 2026-11-22 against `main` at `b36eebaf`. The owner's 2026-11-15
+priority stands: users name reliable fillets and booleans, an unbroken
+history and fast edits before any new category, so kernel correctness and
+edit speed stay the first active lane and end-to-end encryption the second.
+The 2026-11-15 lanes for table-stakes inference, the assembly MVP and maker
+hand-off have closed (S08, AS03, AS04, L09 and D06 are Complete), and all of
+its Next list except M04 has merged. Their slots go to the remainders of
+rows already in milestones 1–2 (part modeling and sketching, where users
+meet the product every day) and to assembly depth. New categories
+(native-CAD exchange, simulation hand-off, surfacing) wait in Next and Later
+for the owner to select. Kernel work that does not serve the first lane
+(other K-, W- and O-rows) runs alongside only where dependencies and touched
+files are disjoint. This order keeps the 2026-11-15 Active 1, 2 and 6 and
+replaces its finished lanes; that table had replaced the 2026-11-11
+re-baseline. Each row is an outcome, not necessarily one PR. Split a large
+row into named, bounded slices under the same ID before coding; never treat
+a partial slice as the whole row's completion.
 
 | Order | Lane or milestone | Exit signal |
 | --- | --- | --- |
-| Active 1 | Kernel correctness and edit speed ([K10](#k10) with [K01](#k01), [K07](#k07), [K08](#k08), [M03](#m03); [H02](#h02), [W01](#w01)) | K10 reports no wrong cells and no untyped refusals on the current pin; the 2026-11-14 [production QA](docs/qa/2026-11-14/complex-cad-kernel-limits.md) P1s (draft with fillet in either order, split on shelled or filleted bodies, pattern then subtract, face offset next to blends) build correctly or refuse with a typed reason; H02's first edit after reload and W01's 100 ms interaction target are measured on integrated-GPU hardware, with large pattern previews inside a stated budget. W03 threading stays Deferred unless those budgets cannot be met without it. |
-| Active 2 | End-to-end encryption ([L11](#l11), with [L01](#l01) and [L10](#l10)) | Written outside-review clearance with no open P0/P1, then default-on, the plaintext freeze and the deletion PR, each under [ADR-024](docs/adrs/ADR-024-end-to-end-encrypted-projects.md) and its own authorization; L01 live cross-device acceptance; published free-tier terms. Until then, remaining acceptance and migration/legacy-reader qualification. |
-| Active 3 | Table-stakes modeling ([S08](#s08), [M02](#m02), [M01](#m01)) | S08 inference while drawing; M02 feature and sketch-point patterns with per-instance suppression, built on the K05 fused patterns; M01 multi-position holes with ISO/ANSI tap and clearance tables reusing M15 thread data. Slot and point entities and Extend land under S07/I01. |
-| Active 4 | Assembly MVP ([AS03](#as03), [AS04](#as04)) | AS01/AS02/AS06/AS07 keep their contracts (offline save/reopen, saved transforms and conflict behavior); AS03 deterministic BOM and stored exploded-view offsets; AS04 pairwise interference reusing M09. AS05/AS08/AS09 follow only when their dependencies qualify. |
-| Active 5 | Maker hand-off ([L09](#l09), [D06](#d06)) | L09 maker slices: per-body names and colours in 3MF, the document print-clearance parameter, then "Open in slicer" once a local-file hand-off is confirmed; D06 auto-dimensioning through its design slices. M15 is complete; further M14 gear work continues alongside. |
+| Active 1 | Kernel correctness and edit speed ([K10](#k10) with [K01](#k01), [K07](#k07), [K08](#k08), [M03](#m03); [H02](#h02), [W01](#w01)) | K10 keeps no wrong cells and no untyped refusals on every pin bump. On 2026.1.157 its 1,508 cells were 1,289 qualified and 219 typed refusals, and open PR #1925 re-records them on 2026.1.158. Each 2026-11-14 [production QA](docs/qa/2026-11-14/complex-cad-kernel-limits.md) P1 builds or refuses by type (K01/K08 evidence on 2026.1.138). What remains is adopting the upstream fixes as pins carry them: Remus #1772 (draft after rounds), #1778 (filleted drafted walls and pocket loops) and #1781 (face offset in a fillet loop) for K08, and #1742 for K01. Each regression then flips from typed refusal to build. M03 variable blends extend through per-vertex radii. W01's 100-feature isolated edit has to meet 100 ms on the RX 6600; it was 121 ms median on 2026-11-15. H02's first edit after reload and W01's budgets also have to be measured on integrated-GPU hardware, which is owner-pending with the commands ready. [K11](#k11) streaming drag stays paused. W03 threading stays Deferred unless those budgets cannot be met without it. |
+| Active 2 | End-to-end encryption ([L11](#l11), with [L01](#l01) and [L10](#l10)) | Written outside-review clearance with no open P0/P1, then default-on, the plaintext freeze and the deletion PR, each under [ADR-024](docs/adrs/ADR-024-end-to-end-encrypted-projects.md) and its own authorization. Also L01 live cross-device acceptance and published free-tier terms. Until then: the remaining acceptance, migration/legacy-reader qualification, and the owner's copy and default decisions (I75, I76, I80, I84). |
+| Active 3 | Part-modeling close-out ([M02](#m02), [M01](#m01), [F01](#f01), [M10](#m10), [M11](#m11)) | M02 repeats the remaining feature kinds and adds uniform or rotated circular orientation and a third linear axis. M01's named slices are on main (sketch-point positions, ISO/ANSI tables, tapped holes on M15 data, cosmetic threads, hole tables), so it closes with #1808 and a contract audit of hole handles under U01. F01 extends the inferred add/cut rule, with U01's override badge, to revolve, sweep and loft, adds start-from-plane, and takes to-face past cylinders. M10 adds rotate about a model edge or datum axis, Align, and non-uniform scale once Remus B74 affine lineage qualifies. M11 adds re-pick, target/tool badges, a switchable boolean type and multi-tool split. U11 brings its pick-and-drag interaction to each new tool. |
+| Active 4 | Sketch completeness ([S05](#s05), [S07](#s07), [S06](#s06), [I01](#i01)) | S05 gets the driving offset dimension (#1919) and multi-selection drag. S07 gets relations created by dragging onto geometry, arc tangency and the diameter dimension. S06 gets the entry/re-entry, Finish/Enter and body-pick behaviors and the prototypes it names. I01 gets silhouette and spline/ellipse edge projection and offsetting a body edge chain into a sketch, then trim, offset, mirror and pattern of splines and ellipses; spline constraints wait on Remus B75. |
+| Active 5 | Assembly depth ([AS08](#as08), [AS09](#as09); [AS01](#as01) and [AS02](#as02) close-out) | AS08 adds screw couplings and a user-set ratio between any two joints, then video/GIF export of a motion study. AS09 starts with a design note, then closed-loop solving; until it lands, a loop joint is flagged "not solved". AS01 adds explicit part switching and two instances of one source with independent placement and stale behavior. AS02 closes with a contract audit. AS05 and AS10 stay Deferred. |
 | Active 6 | iPad, touch and Apple Pencil ([L02](#l02)) | Evidence only: all eight slices have merged source; each closes with real-iPad evidence for its device-only behavior and measured rendering budgets. Do not add slices. Mouse and trackpad input stays unchanged. |
-| Alongside | Workspace polish ([U10](#u10), [U11](#u11)) and gears ([M14](#m14)) | U11 carries the pick-and-drag interaction to thread, gear, booleans and patterns one tool per PR, coordinated with Active 3 so M02 gets the shared interaction once; U10 lookdev slices against its fixed captures; M14 meshing-pair helper and partial-span teeth. |
-| Next | Platform and shop parity | [L14](#l14) agent API (its design note may start during the active lanes), [L15](#l15) scripting, [F06](#f06) configurations, drawings at shop-print grade ([D02](#d02)–[D04](#d04), then [D07](#d07)), [M09](#m09) analysis overlays, [M04](#m04)/[R01](#r01)/[M06](#m06)/[M12](#m12) exact sweeps and missing shape features, [I02](#i02)/[I04](#i04)/[I06](#i06) supplier interchange, [M17](#m17) standard parts, and [L08](#l08)/[L03](#l03) review and versions. Take these when an active lane is blocked or done. |
-| 0 | Close the shipped workflow gaps | H01 has an explicit acceptance matrix; H02 has measured cold/warm behavior (now Active 1); U01/U02 resolve reproduced command/value/feedback disagreements; L01 records outstanding live checks. |
-| 1 | Complete the modeling foundation | S01–S08, R01, F01–F05 and U05–U07 meet their row contracts: durable dimensions, understandable constraints, editable sketch geometry, useful reference/parameter surfaces, and the keyboard, history/items and viewing conventions of a mainstream tool. |
-| 2 | Deepen part modeling and inspection | Selected M01–M13, I01, I04–I08 slices work through creation, revision and export with their kernel prerequisites proved. |
-| 3 | Drawings MVP | D01 then a bounded D02 slice: aligned scaled views plus a useful dimension, explicit revision update/invalidation, offline reopen and PDF handoff. D03/D04 add sections and DXF; the milestone is a dimensioned shop handoff, not outlines alone. |
-| Later | Reach and new body types | Select L04–L07, L12, L16–L18, D05, K09, S09, M18, AS10 or I09–I20 from a measured use case; do not expand every lane at once. Surfacing (M18) waits for a clean K10. |
+| Alongside | Workspace, drawings and gears ([U05](#u05)–[U07](#u07), [U10](#u10), [U11](#u11), [D01](#d01), [M16](#m16), [M14](#m14), [I07](#i07)) | U05: the remaining hotkeys and the hotkey-vs-search setting. U06: uniform card actions. U07: navigation presets and hidden edges. U10: a real-iPad frame-timing check (every planned lookdev slice has merged). U11: one tool per PR, coordinated with Active 3. D01: all sheets in one PDF, per-view scale and custom view angles. M16: the drawing-sheet bend table. M14: split end-cap and shoulder edge naming. I07: SVG import. |
+| Next | Platform and exchange | [I10](#i10) native-CAD translator qualification, which gates I11–I14; licence and hosting are owner decisions. [L16](#l16) simulation hand-off. [M04](#m04) sweep and loft remainders as Remus qualifies their exact constructions. [M08](#m08) arbitrary, datum and face-aligned sections. [M05](#m05)/[M07](#m07) imported and direct-edit depth. [F03](#f03) AI vocabulary (Hole is behind `AI_PATCH_HOLE_ENABLED`). [F05](#f05) expression unit threading. [F02](#f02) persisted density. [I05](#i05) reference-image gizmo and tracing. [L13](#l13) SpaceMouse remapping. The L14 Phase 2 live bridge, an owner decision. Take these when an active lane is blocked or done. |
+| 0 | Close the shipped workflow gaps | H01 has an explicit acceptance matrix; its live walkthrough needs the owner's source. H02 is now Active 1. U01/U02 resolve reproduced command/value/feedback disagreements, such as region extrude opening at Distance 0 and a resized bore's status. L01 records outstanding live checks. |
+| 1 | Complete the modeling foundation | S01–S04, S08, R01 and F06 are Complete. S05–S07, F01–F05 and U05–U07 remain (Active 3–4 and Alongside): durable dimensions, understandable constraints, editable sketch geometry, useful reference/parameter surfaces, and the keyboard, history/items and viewing conventions of a mainstream tool. |
+| 2 | Deepen part modeling and inspection | M06, M09, M12, M15, M17, I02, I04 and I06 are Complete. Selected M01–M16, I01, I05, I07 and I08 remainders work through creation, revision and export with their kernel prerequisites proved (Active 3 and Next). |
+| 3 | Drawings MVP | Delivered: D02–D04, D06 and D07 are Complete, a dimensioned and toleranced shop hand-off with PDF and DXF. The D01 remainder runs alongside; D05 is Deferred. |
+| Later | Reach and new body types | Select L04–L07, L12, L17, L18, D05, K09, S09, M18, AS05, AS10, I09 or I15–I20 from a measured use case; do not expand every lane at once. Surfacing (M18) waited for a clean K10, and K10's ledgers are now clean; it still needs K09 sheet and wire bodies first. |
 
 Assemblies were milestone 4; they moved to the active lanes when AS01, AS02,
 AS06 and AS07 merged (#1182). L02 moved from Later when it was selected on
-2026-11-05.
+2026-11-05. Drawings (milestone 3) closed as a milestone when D02–D04, D06
+and D07 were Complete.
 
-**Next bounded picks (reviewed 2026-11-15):**
+**Next bounded picks (reviewed 2026-11-22):**
 
-1. [K10](#k10): reproduce and fix or type-refuse the 2026-11-14 QA P1s and
-   the remaining wrong cells on the current pin, each with a regression in
-   the qualification matrix.
-2. [H02](#h02)/[W01](#w01): measure the first edit after reload, the 100 ms
-   interaction target and a 10×10 pattern preview on integrated-GPU hardware;
-   set the budgets those measurements must meet.
-3. [S08](#s08) inference while drawing; it needs no kernel work.
-4. [M02](#m02) feature patterns, then [M01](#m01) hole standards and
-   sketch-point positions.
-5. [L09](#l09) per-body colour 3MF and the print-clearance parameter.
-6. [AS03](#as03) BOM and exploded views, then [AS04](#as04) interference.
-7. [L11](#l11) remaining acceptance and migration/legacy-reader qualification.
-   Outside-review clearance, default-on and deletion wait on the owner and
-   the reviewer, not on an agent.
-8. [L14](#l14): the agent API design note (authentication, scope, rate
-   limits, the local bridge for encrypted projects).
+1. [K10](#k10)/[K08](#k08)/[K01](#k01): on the current pin, check which of
+   Remus #1772, #1778, #1781 and #1742 have landed. Where one has, flip its
+   P1 regression in `test/qa-2026-11-14-p1.test.ts` from typed refusal to
+   build, and make that test assert the pin's actual outcome instead of
+   accepting either. Retire `fuseAllMergingFaceContacts` once #1742
+   qualifies.
+2. [W01](#w01): take the 100-feature isolated edit under 100 ms on the
+   RX 6600. The worker answers in 46 ms, and about 73 ms goes to main-thread
+   install plus the next frame, so about 21 ms has to come off the main
+   thread.
+3. [M03](#m03): land the open variable-radius PRs (#1914 per-vertex radii,
+   #1927 radius stations; #1927 conflicts), then the remaining laws within
+   what Remus qualifies.
+4. [M02](#m02): the remaining feature kinds, circular orientation and a
+   third linear axis. Then the [M01](#m01) close-out with #1808.
+5. [F01](#f01): the inferred add/cut rule with an override badge for revolve,
+   sweep and loft, then start-from-plane.
+6. [S05](#s05)/[S07](#s07): land #1919's driving offset dimension (schema
+   v146 sits below main's v148, so it needs renumbering), then drag-onto
+   relations, arc tangency and the diameter dimension.
+7. [AS08](#as08): screw and ratio couplings, then study video/GIF export.
+   Write the [AS09](#as09) design note.
+8. [L11](#l11): the remaining acceptance and migration/legacy-reader
+   qualification. Outside-review clearance, default-on, deletion and the
+   owner's copy decisions wait on the owner and the reviewer, not on an
+   agent.
+9. [I10](#i10): the translator qualification note (design only; licence
+   purchase and hosting are owner decisions).
+
+**Waiting on the owner (not agent work):** H02/W01 integrated-GPU runs;
+L02 real-iPad acceptance; L11 outside review; L13's SpaceMouse Pro device
+run; the H01 live walkthrough; L01, L10 and A01 deployed migrations and live
+checks (including esaueng/glimpse#32 and Glimpse migration 0005); and the L14
+Phase 2 bridge decision. Live acceptance that needs credentials, devices or
+source data stays pending without blocking independent work.
 
 When every active pick is blocked on owner or outside input, take Next items,
-then milestone 0–1 remainders: [H01](#h01) live acceptance from its matrix,
-[S02](#s02) and [S04](#s04) remaining targets, and [F01](#f01)/[F03](#f03).
-Refresh `main`, the kernel pin and open PRs before choosing; live acceptance
-needing credentials or source data stays pending without blocking independent
-work. This list replaces the 2026-11-11 picks and the conflicting next lists in
-older plans.
+then the milestone 0 remainders: [H01](#h01) from its matrix and the
+[U01](#u01)/[U02](#u02) findings. Refresh `main`, the kernel pin and open PRs
+before choosing. This list replaces the 2026-11-15 picks and the conflicting
+next lists in older plans.
 
 These milestones are not a global gate: independent foundation work can run
 while live acceptance is pending, and drawing design can start before every
@@ -257,14 +304,17 @@ audits of earlier interfaces.
 
 ## File interoperability
 
-This lane has its own bounded sequence within the delivery milestones above:
-complete [D04](#d04) DXF sketch exchange, [I07](#i07) SVG and [I06](#i06)
-IGES, alongside [I02](#i02) STEP fidelity. Qualify [I10](#i10) before selecting
+This lane has its own bounded sequence within the delivery milestones above.
+[D04](#d04) DXF sketch exchange, [I06](#i06) IGES and [I02](#i02) STEP
+fidelity are Complete, and [I07](#i07) is down to SVG import (its export
+half has merged). Qualify [I10](#i10) before selecting
 native-CAD implementations; the first package is [I11](#i11) Parasolid,
 [I12](#i12) ACIS, [I13](#i13) Rhino and [I14](#i14) SolidWorks part import.
 Inventor/JT follow demonstrated demand; Creo/NX/CATIA/Solid Edge are retained
-as later targets. [I08](#i08) PLY export is a small independent slice; PDF
-remains [D01](#d01), and [I09](#i09) USDZ is deferred visualization work.
+as later targets. [I08](#i08) PLY export has merged and needs only its
+browser download acceptance. PDF belongs to [D01](#d01), which exports one
+sheet as vector PDF and still has to export all sheets as one PDF.
+[I09](#i09) USDZ is deferred visualization work.
 
 Import means qualified geometry and supported metadata, not recovered source
 feature history. Per-format direction/version claims require fixtures; native
@@ -326,7 +376,8 @@ own ledger and the exact OpenZCAD pin: inherited P-Class numbers and old defect
 reports are not proof that the current upstream kernel is missing an operation.
 A kernel merge closes a consumer row only after pin adoption and product tests.
 Since 2026-11-15, K10 with K01, K07, K08 and M03, and the W01 budgets, are
-[Active 1](#delivery-order); the other rows here run alongside.
+[Active 1](#delivery-order). K11 is paused and K09 and W03 are Deferred; the
+other rows here run alongside.
 
 | ID | Status | Outcome and completion evidence | Depends on / legacy item |
 | --- | --- | --- | --- |
