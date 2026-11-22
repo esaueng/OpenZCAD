@@ -29,6 +29,11 @@ const gl = vi.hoisted(() => {
     disposed: 0,
     contextsLost: 0,
     shadowLightsDisposed: 0,
+    /** The parameters and last pixel ratio of each renderer made. */
+    renderers: [] as {
+      parameters: Record<string, unknown> | undefined;
+      ratio: () => number;
+    }[],
     /** Scene draws, so a test can tell a drawn frame from a skipped one. */
     draws: 0
   };
@@ -50,8 +55,9 @@ const gl = vi.hoisted(() => {
     toneMappingExposure = 1;
     contextLost = false;
     private ratio = 1;
-    constructor() {
+    constructor(parameters?: Record<string, unknown>) {
       state.created += 1;
+      state.renderers.push({ parameters, ratio: () => this.ratio });
       this.domElement = document.createElement('canvas');
     }
     setSize() {}
@@ -347,6 +353,7 @@ afterEach(() => {
   rigEvents.length = 0;
   gl.state.created = 0;
   gl.state.disposed = 0;
+  gl.state.renderers.length = 0;
   gl.state.contextsLost = 0;
   gl.state.shadowLightsDisposed = 0;
   gl.state.draws = 0;
@@ -762,6 +769,75 @@ describe('ModelViewer lifecycle', () => {
       expect(chipShown()).toBe(true);
     } finally {
       view.unmount();
+    }
+  });
+
+  it('renders a high-DPI desktop without MSAA at a 2x backing store', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'devicePixelRatio'
+    );
+    const mountAt = (ratio: number) => {
+      Object.defineProperty(window, 'devicePixelRatio', {
+        configurable: true,
+        get: () => ratio
+      });
+      const view = render(createElement(ModelViewer, idleProps()));
+      const renderer = gl.state.renderers.at(-1)!;
+      const result = {
+        antialias: renderer.parameters?.antialias,
+        ratio: renderer.ratio()
+      };
+      view.unmount();
+      return result;
+    };
+    try {
+      expect(mountAt(1)).toEqual({ antialias: true, ratio: 1 });
+      expect(mountAt(1.5)).toEqual({ antialias: true, ratio: 1.5 });
+      expect(mountAt(2)).toEqual({ antialias: false, ratio: 2 });
+      expect(mountAt(3)).toEqual({ antialias: false, ratio: 2 });
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(window, 'devicePixelRatio', descriptor);
+      } else {
+        delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+      }
+    }
+  });
+
+  it('keeps the default export size at the display ratio after a supersampled view moves to 1x', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'devicePixelRatio'
+    );
+    let ratio = 2;
+    Object.defineProperty(window, 'devicePixelRatio', {
+      configurable: true,
+      get: () => ratio
+    });
+    try {
+      const imageRef: {
+        current: { viewSize(): { width: number; height: number } } | null;
+      } = { current: null };
+      const view = render(
+        createElement(ModelViewer, {
+          ...idleProps(),
+          viewportImageRef: imageRef as ModelViewerProps['viewportImageRef']
+        })
+      );
+      const source = imageRef.current!;
+      expect(source.viewSize()).toEqual({ width: 1600, height: 1200 });
+      // Dragged to a 1x display: the canvas stays 2x, the export does not.
+      ratio = 1;
+      expect(gl.state.renderers.at(-1)!.ratio()).toBe(2);
+      expect(source.viewSize()).toEqual({ width: 800, height: 600 });
+      view.unmount();
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(window, 'devicePixelRatio', descriptor);
+      } else {
+        delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+      }
     }
   });
 
