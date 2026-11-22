@@ -166,7 +166,11 @@ describe('encrypted comments (L08)', () => {
       'SELECT signature FROM e2ee_project_comment_logs WHERE user_id = ?',
       OTHER
     )[0]!;
-    const flipped = `${viewerLog.signature.slice(0, -2)}${viewerLog.signature.endsWith('AA') ? 'AB' : 'AA'}`;
+    // The first character, not the last: a 64-byte signature's last
+    // base64url character carries 4 padding bits the decoder ignores, so
+    // turning a final "AA" into "AB" (1 run in 256) left the bytes, and the
+    // signature, unchanged. The first carries 6 bits of the first byte.
+    const flipped = `${viewerLog.signature.startsWith('A') ? 'B' : 'A'}${viewerLog.signature.slice(1)}`;
     srv.db
       .prepare(
         'UPDATE e2ee_project_comment_logs SET signature = ? WHERE user_id = ?'
