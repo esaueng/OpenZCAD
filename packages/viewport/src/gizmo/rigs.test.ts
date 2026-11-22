@@ -271,6 +271,24 @@ describe('the edge-radius rig', () => {
     rig.dispose();
   });
 
+  it('reports a label line from the blend out past the arrow head', () => {
+    const rig = buildEdgeRadiusHandle({
+      origin: { x: 4, y: 0, z: 0 },
+      direction: { x: 1, y: 0, z: 0 },
+      travel: -0.5
+    });
+    rig.group.userData.gizmoScale = 2;
+    rig.setValue(3);
+    const line = rig.chipLine!()!;
+    // Starts on the middle of the blend, eaten 1.5 into the corner.
+    expect(line.start.x).toBeCloseTo(2.5, 12);
+    // Ends past the arrow (at 7) by more than its half length at this scale,
+    // so a label laid on from there clears the outer head.
+    expect(line.end.x).toBeGreaterThan(7 + 0.5 * 2);
+    expect(line.end.y).toBe(0);
+    rig.dispose();
+  });
+
   it('moves by the change from an existing radius, at its reach', () => {
     const rig = buildEdgeRadiusHandle({
       origin: { x: 4, y: 0, z: 0 },

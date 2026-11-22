@@ -973,6 +973,19 @@ export function buildEdgeRadiusHandle(params: EdgeRadiusRigParams): DragRig {
     chipAnchor() {
       return group.position.clone();
     },
+    chipLine() {
+      // From the middle of the blend, along the leader, to just past the
+      // arrow's outer head: the viewer lays the value on from there, tilted
+      // to read along it, so it never covers the arrow it labels.
+      const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+      const change = current - baseValue;
+      return {
+        start: origin.clone().addScaledVector(direction, change * travel),
+        end: group.position
+          .clone()
+          .addScaledVector(direction, (ARROW_HALF_LENGTH + 0.2) * scale)
+      };
+    },
     dispose() {
       leader.dispose();
       disposeRigGroups(group, worldGroup);

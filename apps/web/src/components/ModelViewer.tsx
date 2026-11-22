@@ -2480,6 +2480,10 @@ const CHIP_LANE_CLEARANCE_PX = 72;
 const LINE_LABEL_MIN_PX = 150;
 /** Air between the mode tag and the value pill along the line. */
 const LINE_LABEL_GAP_PX = 6;
+/** Below this the edge arrow is too head-on to lay its label along. */
+const EDGE_LABEL_MIN_AXIS_PX = 8;
+/** Room an edge label leaves before the right lane's edge. */
+const CHIP_LANE_MARGIN_PX = 8;
 const E2E_CANVAS_HOOKS_ENABLED =
   (
     import.meta.env as unknown as {
@@ -8977,6 +8981,8 @@ export function ModelViewer({
       const owner = keypadAnchorOwnerRef.current;
       return owner === undefined || owner === 'offset';
     }
+    /** The edge value pill's last shown size; see `updateOffsetChip`. */
+    const edgeLabelSize = { width: 64, height: 20 };
     function updateOffsetChip() {
       const chip = offsetChipRef.current;
       if (!chip) {
@@ -9217,6 +9223,59 @@ export function ModelViewer({
           }
         }
       }
+      // While the hand is on the edge arrow its value rides the leader
+      // instead, tilted to read along it, with the Fillet/Chamfer tag out of
+      // the way. It sits just past the arrow's outer head, in line with the
+      // leader, so it neither covers the grab target nor swaps between
+      // places as the blend grows on screen. At rest there is no leader to
+      // read along, and the upright pair beside the arrow keeps the switch
+      // and the keypad (which opens in place of the value) where they were.
+      let edgeLabelLine: {
+        pinX: number;
+        pinY: number;
+        alongX: number;
+        alongY: number;
+        reach: number;
+      } | null = null;
+      if (rig?.kind === 'edge-radius' && edgeDragActiveRef.current) {
+        const edgeLine = rig.chipLine?.() ?? null;
+        const pin = projectToScreen(
+          rig.group.position,
+          context.activeCamera,
+          canvasWidth(),
+          canvasHeight()
+        );
+        const tip =
+          edgeLine &&
+          projectToScreen(
+            edgeLine.end,
+            context.activeCamera,
+            canvasWidth(),
+            canvasHeight()
+          );
+        if (pin && tip) {
+          const dx = tip.x - pin.x;
+          const dy = tip.y - pin.y;
+          const reach = Math.hypot(dx, dy);
+          // Seen head-on the arrow has no direction to read along; the
+          // label then hangs beside it as before.
+          if (reach >= EDGE_LABEL_MIN_AXIS_PX) {
+            edgeLabelLine = {
+              pinX: pin.x,
+              pinY: pin.y,
+              alongX: dx / reach,
+              alongY: dy / reach,
+              reach
+            };
+            lineAngle = Math.atan2(dy, dx);
+            if (lineAngle > Math.PI / 2) {
+              lineAngle -= Math.PI;
+            } else if (lineAngle < -Math.PI / 2) {
+              lineAngle += Math.PI;
+            }
+          }
+        }
+      }
       // Where the pin itself projects, when the label hangs beside it.
       let pinScreenAt: { x: number; y: number } | null = null;
       if (
@@ -9428,7 +9487,9 @@ export function ModelViewer({
             ? 'pin'
             : 'default';
       const pairedEdge =
-        rig?.kind === 'edge-radius' && !edgeHandleRef.current?.label;
+        rig?.kind === 'edge-radius' &&
+        !edgeHandleRef.current?.label &&
+        lineAngle === null;
       edgeChipPair.toggleAttribute('data-paired', pairedEdge);
       // A chip at its starting value, with no hand on it, is a tap target
       // for exact entry and nothing more: it recedes until something moves.
@@ -9492,11 +9553,97 @@ export function ModelViewer({
         const alongY = Math.sin(lineAngle);
         const half = LINE_LABEL_GAP_PX / 2;
         const valueReach = chipWidth / 2 + half;
-        place(
-          chip,
-          screen.x + alongX * valueReach,
-          screen.y + alongY * valueReach
-        );
+        if (edgeLabelLine) {
+          // Out past the arrow along the leader, or, where that has no room
+          // (under the right lane or the bottom lane, or off the stage),
+          // back along the leader on the arrow's other side. Either way the
+          // pill stays off the arrow: the panel dodge below would otherwise
+          // push a pill that reached under a lane back over the grab target.
+          const { pinX, pinY, alongX: outX, alongY: outY } = edgeLabelLine;
+          // The pill's size as last measured shown: a frame that just
+          // revealed it measures 0×0, and laid out at no length it reached
+          // back over the arrow.
+          if (chipWidth > 0) {
+            edgeLabelSize.width = chipWidth;
+            edgeLabelSize.height = chip.offsetHeight;
+          }
+          const out =
+            edgeLabelLine.reach + LINE_LABEL_GAP_PX + edgeLabelSize.width / 2;
+          // The tilted pill's half extents on screen.
+          const halfLength = edgeLabelSize.width / 2;
+          const halfThickness = edgeLabelSize.height / 2;
+          const extentX =
+            Math.abs(outX) * halfLength + Math.abs(outY) * halfThickness;
+          const extentY =
+            Math.abs(outY) * halfLength + Math.abs(outX) * halfThickness;
+          const right = (laneLeft ?? stageRect.width) - CHIP_LANE_MARGIN_PX;
+          const bottom = (footTop ?? stageRect.height) - COMMAND_CHIP_MARGIN_PX;
+          // Clear of the stage's edges, the lanes, every panel the dodge would
+          // move the pill out from under and the tool drawers (in canvas
+          // coordinates).
+          const drawers = [
+            ...(renderer.domElement
+              .closest('.viewer-area')
+              ?.querySelectorAll<HTMLElement>(
+                '.workspace-column, .command-flyout'
+              ) ?? [])
+          ]
+            .map((element) => element.getBoundingClientRect())
+            .filter((rect) => rect.width > 0 && rect.height > 0);
+          const fits = (x: number, y: number) =>
+            x - extentX >= CHIP_LANE_MARGIN_PX &&
+            x + extentX <= right &&
+            y - extentY >= CHIP_LANE_MARGIN_PX &&
+            y + extentY <= bottom &&
+            [...otherPanels, ...drawers].every(
+              (panel) =>
+                x + extentX <= panel.left - stageRect.left ||
+                x - extentX >= panel.right - stageRect.left ||
+                y + extentY <= panel.top - stageRect.top ||
+                y - extentY >= panel.bottom - stageRect.top
+            );
+          let x = pinX + outX * out;
+          let y = pinY + outY * out;
+          if (!fits(x, y) && fits(pinX - outX * out, pinY - outY * out)) {
+            x = pinX - outX * out;
+            y = pinY - outY * out;
+          }
+          place(chip, x, y);
+          // Exact entry opens where it always has, beside the arrow on its
+          // right, clear of the right lane: laid out from the tilted pill it
+          // could open under a tool drawer or the command bar.
+          let sideX = -outY;
+          let sideY = outX;
+          if (sideX < 0 || (sideX === 0 && sideY > 0)) {
+            sideX = -sideX;
+            sideY = -sideY;
+          }
+          screen = {
+            x: pinX + sideX * PIN_CHIP_GAP_PX,
+            y: pinY + sideY * PIN_CHIP_GAP_PX
+          };
+          if (
+            laneLeft !== null &&
+            screen.x > laneLeft - CHIP_LANE_CLEARANCE_PX
+          ) {
+            screen = {
+              x: pinX - sideX * PIN_CHIP_GAP_PX,
+              y: pinY - sideY * PIN_CHIP_GAP_PX
+            };
+          }
+          if (laneLeft !== null) {
+            screen = {
+              ...screen,
+              x: Math.min(screen.x, laneLeft - CHIP_LANE_CLEARANCE_PX)
+            };
+          }
+        } else {
+          place(
+            chip,
+            screen.x + alongX * valueReach,
+            screen.y + alongY * valueReach
+          );
+        }
         if (tagText !== null) {
           setElementText(radiusLabelChip, tagText);
           const tagReach = labelWidth / 2 + half;
