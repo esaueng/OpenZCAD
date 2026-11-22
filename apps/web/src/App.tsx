@@ -35224,7 +35224,7 @@ export function App() {
             if (measurementDraft) {
               clearMeasurementPicks();
               setStatus(
-                `${measurementMode === 'angle' ? 'Angle' : 'Distance'} measurement canceled · pick the first target.`
+                `${measurementMode === 'angle' ? 'Angle' : measurementMode === 'maximum' ? 'Maximum distance' : measurementMode === 'central' ? 'Central distance' : measurementMode === 'parallel' ? 'Parallel distance' : 'Distance'} measurement canceled · pick the first target.`
               );
             } else {
               toggleMeasure(false);
@@ -35980,7 +35980,13 @@ export function App() {
             ? 'Smart measure · pick an edge, face, hole, or body.'
             : mode === 'distance'
               ? 'Distance · pick the first target.'
-              : 'Angle · pick the first straight edge, circular axis or planar face.'
+              : mode === 'maximum'
+                ? 'Maximum distance · pick the first point, straight edge or full circle.'
+                : mode === 'central'
+                  ? 'Central distance · pick a circle, arc, cylinder or hole.'
+                  : mode === 'parallel'
+                    ? 'Parallel distance · pick the first edge, face, axis or circle.'
+                    : 'Angle · pick the first straight edge, circular axis or planar face.'
         );
       }}
       pointKind={measurementPointKind}
@@ -36895,7 +36901,13 @@ export function App() {
         ? `Smart measure · pick geometry · Shift+Click totals edges · ${(modelingLocked && measureKey) || 'Esc'} exits`
         : measurementMode === 'distance'
           ? 'Distance · pick the first target · centers resolve automatically'
-          : 'Angle · pick a straight edge, circular axis or planar face'
+          : measurementMode === 'maximum'
+            ? 'Maximum distance · pick a point, straight edge or full circle'
+            : measurementMode === 'central'
+              ? 'Central distance · pick a circle, arc, cylinder or hole'
+              : measurementMode === 'parallel'
+                ? 'Parallel distance · pick an edge, face, axis or circle'
+                : 'Angle · pick a straight edge, circular axis or planar face'
     : selectedTopology?.kind === 'face'
       ? faceSelectedHint
       : viewerBodies.length > 0
