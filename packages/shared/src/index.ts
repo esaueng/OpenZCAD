@@ -554,13 +554,18 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+// v145 adds S05 sketch pattern relations (`pattern` sketch constraints): a
+// linear or circular pattern's instance positions held by one relation. An
+// older client cannot solve it, so it must refuse the document. Builds on
+// v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
+// switching (#1915) and the S07 entity lock (#1913).
 // v147 adds the M01 outer-boundary hole anchor (`positionAnchor:
 // 'outer-centroid'` on a hole): a typed position is measured from the
 // centroid of the entry face's outer boundary loop alone, so drilling or
 // resizing another hole in that face never moves it. An older client would
 // fall back to the vertex mean and drill the hole elsewhere, so it must
-// refuse. Builds on v141 (#1808); v142 to v146 are claimed by #1914, #1915,
-// #1913, #1917 and #1919. First claimed as v118, renumbered when those
+// refuse. Builds on v145 (#1808); v142 to v144 and v146 are claimed by
+// #1914, #1915, #1913 and #1919. First claimed as v118, renumbered when those
 // landed first.
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 147 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
@@ -2046,7 +2051,32 @@ export type SketchConstraintData =
    * lock was made. An edit that would move it conflicts instead of dragging
    * the lock along; removing the constraint unlocks the point.
    */
-  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number };
+  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
+  /**
+   * S05 (v145): a sketch pattern held as one relation. Each instance is the
+   * source moved `step` steps: along the direction line by `spacing` a step
+   * (linear), or round the pivot by `stepDeg` a step (circular), turned with
+   * it or, `uniform`, kept in the source's orientation. Instances keep the
+   * source's size and shape too, so moving or resizing the source carries
+   * every instance, and moving an instance alone conflicts. An instance
+   * deleted leaves the others held at their own steps.
+   */
+  | {
+      constraintKind: 'pattern';
+      source: EntityId;
+      instances: { objectId: EntityId; step: number }[];
+      layout: SketchPatternLayout;
+    };
+
+/** How a {@link SketchConstraintData} `pattern` relation places its steps. */
+export type SketchPatternLayout =
+  | { kind: 'linear'; direction: EntityId; spacing: ParamValue }
+  | {
+      kind: 'circular';
+      pivot: SketchPointRef;
+      stepDeg: ParamValue;
+      orientation: 'rotate' | 'uniform';
+    };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
@@ -6102,7 +6132,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle'
+  'distance' | 'radius' | 'angle' | 'pattern'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [

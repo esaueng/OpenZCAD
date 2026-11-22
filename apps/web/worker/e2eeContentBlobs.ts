@@ -36,6 +36,7 @@
  * format-2 projects only: any member downloads, the owner and editors
  * upload (slice 5-2), against the owner's artifact storage.
  */
+import { readBoundedRequestText } from './requestBody';
 import {
   envelopeBodyLength,
   fromBase64Url,
@@ -124,10 +125,9 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   ) {
     refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
   }
-  const text = await request.text();
-  if (text.length > MAX_JSON_BODY_BYTES) {
-    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
-  }
+  const text = await readBoundedRequestText(request, MAX_JSON_BODY_BYTES, () =>
+    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.')
+  );
   try {
     return record(JSON.parse(text), 'Body');
   } catch (error) {

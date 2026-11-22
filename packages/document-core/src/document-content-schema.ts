@@ -145,6 +145,15 @@ export function assertWrapSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 111, 'Wraps');
 }
 
+/** S05 (schema v145): pattern relations, wherever a sketch or command holds one. */
+export function assertPatternRelationSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 145, 'Sketch pattern relations');
+}
+
+function isPatternRelation(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'pattern';
+}
+
 /** S05 (schema v141): a tangent between two curves (no line in it). */
 export function assertCurvedTangentSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 141, 'Curve-to-curve tangency');
@@ -1226,6 +1235,11 @@ export function assertDocumentContentCommandSchema(
             : null;
       if (sweep) assertSweepContentSchema(sweep, document.schemaVersion);
     }
+    if (
+      command.kind === 'sketch.constraint.add' &&
+      isPatternRelation(command.payload.constraint)
+    )
+      assertPatternRelationSchema(document.schemaVersion);
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1557,6 +1571,14 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertCurvedTangentSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isPatternRelation(constraint.data)
+      )
+    )
+      assertPatternRelationSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }
