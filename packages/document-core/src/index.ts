@@ -2315,6 +2315,9 @@ export function validateSketchConstraint(
           'A tangent constraint pairs one line with one circle or arc.'
         );
       }
+      if (data.a === data.b) {
+        throw new Error('A tangent constraint pairs two different entities.');
+      }
       if (a !== 'line' && b !== 'line') {
         // S05 (v141): curve to curve, at an end of an arc in the pair.
         if (a === 'circle' && b === 'circle') {
