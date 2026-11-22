@@ -12,7 +12,10 @@ import {
   formatMeasurement,
   measurementTargetFromSelection,
   measurementToViewportAnnotation,
+  measureSnapKindsFor,
   notablePointTarget,
+  pointKindFailure,
+  pointKindTarget,
   refreshMeasurements,
   type Measurement,
   type MeasurementDisplayOptions,
@@ -708,5 +711,85 @@ describe('refresh and persistence of notable rows', () => {
       parsed?.measurements[0]?.targets.map((target) => target.semantic)
     ).toEqual(['vertex-start', 'edge-midpoint']);
     expect(parsed?.measurements[1]?.targets).toHaveLength(3);
+  });
+});
+
+/**
+ * M13: a Distance pick that asks for a point kind records that kind of
+ * notable point of the picked edge or face, by identity, or refuses with a
+ * reason; it never falls back to another kind.
+ */
+describe('point-kind picks', () => {
+  const body = meshBody([lineEdge(), minorArcEdge()], [lFace(), holeFace()]);
+  const line = selection('edge', 'edge:line', 11);
+  const arc = selection('edge', 'edge:arc90', 12);
+  const lPlate = selection('face', 'face:l', 21);
+  const hole = selection('face', 'face:hole', 25);
+
+  it('takes the end the snap named, else the end nearer the pick', () => {
+    // The line runs (0,0,0) → (10,0,0).
+    expect(
+      pointKindTarget(body, line, 'endpoint', { x: 8, y: 0, z: 0 })
+    ).toMatchObject({ point: { x: 10, y: 0, z: 0 }, semantic: 'vertex-end' });
+    expect(
+      pointKindTarget(body, line, 'endpoint', { x: 2, y: 0, z: 0 })
+    ).toMatchObject({ point: { x: 0, y: 0, z: 0 }, semantic: 'vertex-start' });
+    // A glyph that named the start wins over a click nearer the end.
+    expect(
+      pointKindTarget(body, line, 'endpoint', { x: 8, y: 0, z: 0 }, 'start')
+    ).toMatchObject({ semantic: 'vertex-start' });
+  });
+
+  it('records midpoints on the edge, centres of arcs and holes, and area centroids', () => {
+    expect(pointKindTarget(body, line, 'midpoint')?.point).toEqual({
+      x: 5,
+      y: 0,
+      z: 0
+    });
+    const arcMid = pointKindTarget(body, arc, 'midpoint')!.point!;
+    expect(arcMid.x).toBeCloseTo(ARC_CENTER.x + 4 * COS_45, 9);
+    expect(arcMid.y).toBeCloseTo(ARC_CENTER.y + 4 * COS_45, 9);
+    expect(pointKindTarget(body, arc, 'center')).toMatchObject({
+      point: ARC_CENTER,
+      semantic: 'circle-center'
+    });
+    expect(pointKindTarget(body, hole, 'center')?.point).toEqual({
+      x: 3,
+      y: 4,
+      z: 15
+    });
+    const centroid = pointKindTarget(body, lPlate, 'centroid')!;
+    expect(centroid.point!.x).toBeCloseTo(25 / 6, 12);
+    expect(centroid.quality).toBe('exact-analytic');
+  });
+
+  it('refuses a kind the pick does not have, with the reason', () => {
+    expect(pointKindTarget(body, line, 'center')).toBeNull();
+    expect(pointKindFailure('center', 'edge')).toMatch(/not a circle or arc/);
+    expect(pointKindTarget(body, lPlate, 'endpoint')).toBeNull();
+    expect(pointKindFailure('endpoint', 'face')).toMatch(/picks an edge/);
+    expect(pointKindTarget(body, line, 'centroid')).toBeNull();
+    expect(pointKindFailure('centroid', 'edge')).toMatch(/picks a face/);
+    expect(pointKindTarget(body, lPlate, 'center')).toBeNull();
+    expect(pointKindFailure('center', 'face')).toMatch(/cylinder or hole/);
+  });
+
+  it('scopes the viewport snaps to the asked-for kind', () => {
+    expect(measureSnapKindsFor('auto')).toBeNull();
+    expect(measureSnapKindsFor('endpoint')).toEqual(['endpoint']);
+    expect(measureSnapKindsFor('midpoint')).toEqual(['midpoint']);
+    expect(measureSnapKindsFor('center')).toEqual(['center']);
+    expect(measureSnapKindsFor('centroid')).toEqual([]);
+  });
+
+  it('measures a midpoint-to-centre distance exactly', () => {
+    const measured = createDistanceMeasurement(
+      pointKindTarget(body, line, 'midpoint')!,
+      pointKindTarget(body, hole, 'center')!,
+      1,
+      'mm'
+    )!;
+    expect(measured.result.value).toBeCloseTo(Math.hypot(2, 4, 15), 12);
+    expect(measured.quality).toBe('exact-analytic');
   });
 });

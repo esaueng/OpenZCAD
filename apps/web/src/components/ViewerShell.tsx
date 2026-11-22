@@ -422,6 +422,8 @@ interface ViewerShellProps {
         snap?: PickSnap
       ) => string | null)
     | null;
+  /** M13: the snap kinds a measuring pick may lock onto (see `ModelViewer`). */
+  measureSnapKinds?: readonly PickSnap['kind'][] | null;
   regionHandle: RegionHandleTarget | null;
   modelPanelsHidden?: boolean;
   /** F01: a click picks only a body face (see `ModelViewer`). */
@@ -650,6 +652,7 @@ export function ViewerShell({
   datumOffsetDraft = null,
   onDatumOffsetEntry,
   onMeasurePreview,
+  measureSnapKinds,
   regionHandle,
   modelPanelsHidden,
   facePickOnly,
@@ -1191,6 +1194,7 @@ export function ViewerShell({
         {...(onCommentPinClick ? { onCommentPinClick } : {})}
         commentPlacing={commentPlacing}
         onMeasurePreview={onMeasurePreview}
+        measureSnapKinds={measureSnapKinds}
         regionHandle={regionHandle}
         modelPanelsHidden={modelPanelsHidden}
         {...(facePickOnly ? { facePickOnly } : {})}

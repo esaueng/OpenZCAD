@@ -842,6 +842,7 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
+import { measureSnapKindsFor } from './lib/measurePointKinds';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
@@ -10499,6 +10500,8 @@ export function App() {
     setMeasuring,
     measurementMode,
     setMeasurementMode,
+    measurementPointKind,
+    setMeasurementPointKind,
     measurementDraft,
     measurements,
     setMeasurements,
@@ -35640,6 +35643,15 @@ export function App() {
               : 'Angle · pick the first straight edge, circular axis or planar face.'
         );
       }}
+      pointKind={measurementPointKind}
+      onPointKind={(kind) => {
+        setMeasurementPointKind(kind);
+        setStatus(
+          kind === 'auto'
+            ? 'Distance picks the point each target names.'
+            : `Distance picks each target's ${kind}.`
+        );
+      }}
       onUnit={setMeasurementUnit}
       onPrecision={setMeasurementPrecision}
       onRadialDisplay={setRadialDisplay}
@@ -38184,6 +38196,11 @@ export function App() {
             }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
+            measureSnapKinds={
+              measuring && measurementMode === 'distance'
+                ? measureSnapKindsFor(measurementPointKind)
+                : null
+            }
             regionHandle={
               modelingLocked || !extrudeBarReady ? null : regionHandleTarget
             }

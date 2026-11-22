@@ -31,6 +31,13 @@ import {
   type AngleMeasurement
 } from './measurementGeometry';
 
+import type { MeasurePointKind } from './measurePointKinds';
+export {
+  MEASURE_POINT_KINDS,
+  measureSnapKindsFor,
+  type MeasurePointKind
+} from './measurePointKinds';
+
 export type MeasurementMode = 'smart' | 'distance' | 'angle';
 
 export type MeasurementKind =
@@ -823,6 +830,71 @@ export function measurementTargetFromSnap(
   return distance(target.point, point) <= SNAP_AGREEMENT * Math.max(1, size)
     ? target
     : null;
+}
+
+/**
+ * M13: the notable point of `kind` on a picked edge or face, or null when it
+ * has none. An endpoint is the end the snap glyph named, else the end nearer
+ * the pick; it is recorded by identity (start or end), so a rebuild reads the
+ * same vertex rather than the nearest one then.
+ */
+export function pointKindTarget(
+  body: BodyRepresentation,
+  selection: TopologySelection,
+  kind: Exclude<MeasurePointKind, 'auto'>,
+  point?: Vector3,
+  snapRole?: 'start' | 'end' | 'midpoint' | 'center'
+): MeasurementTarget | null {
+  if (kind === 'endpoint') {
+    if (selection.kind !== 'edge') return null;
+    let end: NotablePointKind = 'vertex-start';
+    if (snapRole === 'start' || snapRole === 'end') {
+      end = snapRole === 'start' ? 'vertex-start' : 'vertex-end';
+    } else if (point) {
+      const edge = findEdge(body, selection);
+      const ends = edge ? edgeEndpoints(edge) : null;
+      if (!ends) return null;
+      end =
+        distance(ends[1], point) < distance(ends[0], point)
+          ? 'vertex-end'
+          : 'vertex-start';
+    }
+    return notablePointTarget(body, selection, end);
+  }
+  if (kind === 'midpoint')
+    return selection.kind === 'edge'
+      ? notablePointTarget(body, selection, 'edge-midpoint')
+      : null;
+  if (kind === 'center')
+    return notablePointTarget(body, selection, 'circle-center');
+  return selection.kind === 'face'
+    ? notablePointTarget(body, selection, 'face-centroid')
+    : null;
+}
+
+/** M13: why a pick has no point of `kind`, as the status line says it. */
+export function pointKindFailure(
+  kind: Exclude<MeasurePointKind, 'auto'>,
+  selection: TopologySelection['kind']
+): string {
+  switch (kind) {
+    case 'endpoint':
+      return selection === 'edge'
+        ? 'That edge has no exact ends to pick.'
+        : 'Endpoint picks an edge: pick an edge near the end you mean.';
+    case 'midpoint':
+      return selection === 'edge'
+        ? 'That edge has no exact midpoint (only lines and arcs do).'
+        : 'Midpoint picks an edge.';
+    case 'center':
+      return selection === 'edge'
+        ? 'That edge is not a circle or arc, so it has no center.'
+        : 'That face is not a cylinder or hole, so it has no center.';
+    case 'centroid':
+      return selection === 'face'
+        ? 'That face has no exact centroid to pick.'
+        : 'Centroid picks a face.';
+  }
 }
 
 /**

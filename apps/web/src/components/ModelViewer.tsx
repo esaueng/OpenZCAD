@@ -1642,6 +1642,11 @@ export interface ModelViewerProps {
         snap?: PickSnap
       ) => string | null)
     | null;
+  /**
+   * M13: the snap kinds a measuring pick may lock onto (a Distance pick
+   * asked for midpoints offers only midpoints); null offers every kind.
+   */
+  measureSnapKinds?: readonly PickSnap['kind'][] | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
   /** Recheck Extrude clearance when an explicit request restores its panels. */
@@ -2715,6 +2720,7 @@ export function ModelViewer({
   onCommentPinClick,
   commentPlacing = false,
   onMeasurePreview,
+  measureSnapKinds,
   regionHandle,
   modelPanelsHidden = false,
   facePickOnly = false,
@@ -3102,6 +3108,8 @@ export function ModelViewer({
   onHoverRegionRef.current = onHoverRegion;
   const onMeasurePreviewRef = useRef(onMeasurePreview);
   onMeasurePreviewRef.current = onMeasurePreview;
+  const measureSnapKindsRef = useRef(measureSnapKinds);
+  measureSnapKindsRef.current = measureSnapKinds;
   const onPickPlaneRef = useRef(onPickPlane);
   onPickPlaneRef.current = onPickPlane;
   const onPickDatumRef = useRef(onPickDatum);
@@ -5100,8 +5108,12 @@ export function ModelViewer({
       if (!local) {
         return null;
       }
+      const kinds = measureSnapKindsRef.current;
+      const candidates = snapsFromEdges(scoped, { label: body?.name });
       return resolveSnap(
-        snapsFromEdges(scoped, { label: body?.name }),
+        kinds
+          ? candidates.filter((snap) => kinds.includes(snap.kind))
+          : candidates,
         local,
         (point) =>
           projectToScreen(
