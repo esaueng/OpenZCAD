@@ -675,7 +675,6 @@ import type { MemberCommentContext } from './lib/memberComments';
 import type { LinkCommentsAccess } from './lib/e2ee/shareComments';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
-  ActivityLogButton,
   ViewportDockExtras,
   WorkspaceReadout
 } from './components/WorkspaceReadout';
@@ -38511,7 +38510,6 @@ export function App() {
                       </Tooltip>
                     );
                   })}
-                  {/* The panels above; the layout and the log below. */}
                   <span className="rail-divider" aria-hidden="true" />
                   <ViewOptionsMenu
                     options={panelLayout.options}
@@ -38531,7 +38529,6 @@ export function App() {
                       )
                     }
                   />
-                  <ActivityLogButton onOpenLog={openActivityLog} />
                 </div>
                 {panelLayout.options.hidden && (
                   <PanelsHiddenPill

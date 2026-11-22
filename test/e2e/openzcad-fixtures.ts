@@ -1421,6 +1421,17 @@ export async function createProject(page: Page, name: string) {
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
 }
 
+export async function openActivityLogFromSettings(page: Page) {
+  await page
+    .getByRole('button', { name: 'Open settings', exact: true })
+    .click();
+  const settings = page.getByRole('dialog', { name: 'Settings', exact: true });
+  await settings
+    .getByRole('button', { name: 'Activity log', exact: true })
+    .click();
+  return settings.getByRole('region', { name: 'Activity log', exact: true });
+}
+
 /** The one text field on the stage: the prompt line at its foot. */
 export function promptField(page: Page) {
   return page.getByRole('combobox', { name: 'Search commands' });

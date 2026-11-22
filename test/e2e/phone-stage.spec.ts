@@ -378,8 +378,7 @@ test.describe('the workspace on an upright phone', () => {
           /^Fit view/,
           /^Toggle grid/,
           /^Section view/,
-          'Standard views',
-          'Open activity log'
+          'Standard views'
         ]) {
           await expect(
             page.locator('.instrument-rail').getByRole('button', { name })

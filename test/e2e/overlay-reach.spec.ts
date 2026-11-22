@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
+  openActivityLogFromSettings,
   revealModelPanel,
   stubApi,
   createPrimitiveInPlace,
@@ -144,12 +145,8 @@ test('UI-05: the activity log opens in Settings and Escape returns to the worksp
     { width: 390, height: 844 }
   ]) {
     await page.setViewportSize(size);
-    await page
-      .getByRole('button', { name: /^Open activity log/ })
-      .first()
-      .click();
+    const log = await openActivityLogFromSettings(page);
     const settings = page.getByRole('dialog', { name: 'Settings' });
-    const log = settings.getByRole('region', { name: 'Activity log' });
     await expect(log).toContainText('Added box.');
     const filter = log.getByLabel('Filter entries');
     await expectReachable(filter);

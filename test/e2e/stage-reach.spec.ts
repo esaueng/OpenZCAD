@@ -92,17 +92,17 @@ test('UI-08: every instrument rail control keeps its own click in a short window
 
   const viewerBar = page.getByRole('toolbar', { name: 'Viewer bar' });
   const panels = page.getByRole('toolbar', { name: 'Model panels' });
-  // Every control as drawn: Undo stands clear of Settings, and the panels'
-  // buttons — the activity log last — are inside the window.
+  // Undo stands clear of Settings, and the panels' buttons are inside the
+  // window.
   for (const button of [
     ...(await viewerBar.getByRole('button').all()),
     ...(await panels.getByRole('button').all())
   ]) {
     await expectReachable(button);
   }
-  await expectReachable(
-    panels.getByRole('button', { name: 'Open activity log' })
-  );
+  await expect(
+    panels.getByRole('button', { name: 'Open activity log', exact: true })
+  ).toHaveCount(0);
   // The bar's panels still open where they can be used.
   await clickCentre(
     page,
