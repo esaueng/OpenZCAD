@@ -340,6 +340,7 @@ import {
 } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import { snapRecordsExactly } from '../lib/measurePointKinds';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
@@ -1644,6 +1645,11 @@ export interface ModelViewerProps {
       ) => string | null)
     | null;
   /**
+   * M13: the snap kinds a measuring pick may lock onto (a Distance pick
+   * asked for midpoints offers only midpoints); null offers every kind.
+   */
+  measureSnapKinds?: readonly PickSnap['kind'][] | null;
+  /**
    * M10: a host picking model points (Move by two points). While set, a
    * click on the model reports the snapped point (an endpoint, midpoint or
    * centre the glyph names, else the surface point) and selects nothing;
@@ -2741,6 +2747,7 @@ export function ModelViewer({
   onCommentPinClick,
   commentPlacing = false,
   onMeasurePreview,
+  measureSnapKinds,
   onPointPick,
   regionHandle,
   modelPanelsHidden = false,
@@ -3129,6 +3136,8 @@ export function ModelViewer({
   onHoverRegionRef.current = onHoverRegion;
   const onMeasurePreviewRef = useRef(onMeasurePreview);
   onMeasurePreviewRef.current = onMeasurePreview;
+  const measureSnapKindsRef = useRef(measureSnapKinds);
+  measureSnapKindsRef.current = measureSnapKinds;
   const onPointPickRef = useRef(onPointPick);
   onPointPickRef.current = onPointPick;
   const onPickPlaneRef = useRef(onPickPlane);
@@ -5146,8 +5155,26 @@ export function ModelViewer({
       if (!local) {
         return null;
       }
+      const kinds = measureSnapKindsRef.current;
+      const candidates = snapsFromEdges(scoped, { label: body?.name });
+      // A pick that asks for a kind offers only the points it records
+      // exactly: never a spline's sampled midpoint its click would refuse.
+      const byId = kinds
+        ? new Map(scoped.map((edge) => [edge.topologyId, edge]))
+        : null;
       return resolveSnap(
-        snapsFromEdges(scoped, { label: body?.name }),
+        kinds
+          ? candidates.filter((snap) => {
+              const edge = snap.source
+                ? byId!.get(snap.source.edgeTopologyId)
+                : undefined;
+              return (
+                kinds.includes(snap.kind) &&
+                !!edge &&
+                snapRecordsExactly(snap.kind, edge)
+              );
+            })
+          : candidates,
         local,
         (point) =>
           projectToScreen(
