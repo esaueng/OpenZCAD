@@ -1,4 +1,4 @@
-import { Check, SlidersHorizontal, X } from 'lucide-react';
+import { Check, Spline, SlidersHorizontal, X } from 'lucide-react';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { moveHasFiniteValues } from '../lib/moveCard';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
@@ -49,6 +49,12 @@ interface MoveOverlayProps {
    */
   copy?: boolean;
   onCopy?(value: boolean): void;
+  /**
+   * M10: Move by two points. `picking` is null while off; otherwise what the
+   * first pick snapped to (`from`), or null before it.
+   */
+  pointPick?: { from: string | null } | null;
+  onPointPick?(on: boolean): void;
   /**
    * Where this panel publishes a sink for live drag values. The viewport
    * writes the numbers a gesture is producing straight into it, so dragging
@@ -161,6 +167,8 @@ export function MoveOverlay({
   onTargetBody,
   copy,
   onCopy,
+  pointPick,
+  onPointPick,
   liveValuesRef,
   liveSnapRef
 }: MoveOverlayProps) {
@@ -262,11 +270,38 @@ export function MoveOverlay({
       {/* The one place the step is said: it was also a toast, and the
           toast's guidance (rings, Shift) lives here now. */}
       <span className="in-place-command-hint" title={bodyName}>
-        {copy ? 'A copy of ' : ''}
-        <span className="move-target-name">{bodyName}</span> ·{' '}
-        {hideRotation ? 'drag the arrows' : 'drag the arrows or rings'} · Shift
-        moves freely
+        {pointPick ? (
+          pointPick.from === null ? (
+            <>
+              Move <span className="move-target-name">{bodyName}</span> by two
+              points · pick the point to move from
+            </>
+          ) : (
+            <>From {pointPick.from} · pick the point to move it to</>
+          )
+        ) : (
+          <>
+            {copy ? 'A copy of ' : ''}
+            <span className="move-target-name">{bodyName}</span> ·{' '}
+            {hideRotation ? 'drag the arrows' : 'drag the arrows or rings'} ·
+            Shift moves freely
+          </>
+        )}
       </span>
+      {/* M10: translate by two picked points, snapped to corners, midpoints
+          and centres; the second pick sets the move and ends the pick. */}
+      {onPointPick ? (
+        <button
+          type="button"
+          className="move-two-points"
+          aria-pressed={pointPick != null}
+          title="Move from one picked point to another"
+          onClick={() => onPointPick(pointPick == null)}
+        >
+          <Spline size={14} aria-hidden="true" />
+          Two points
+        </button>
+      ) : null}
       {/* The gizmo is the Move: its exact numbers, name, body and copy are
           rare enough to sit behind Options, as every in-place command's. */}
       <details className="in-place-command-options">

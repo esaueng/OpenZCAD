@@ -1642,6 +1642,18 @@ export interface ModelViewerProps {
         snap?: PickSnap
       ) => string | null)
     | null;
+  /**
+   * M10: a host picking model points (Move by two points). While set, a
+   * click on the model reports the snapped point (an endpoint, midpoint or
+   * centre the glyph names, else the surface point) and selects nothing;
+   * the hover shows the same snap glyph measuring does.
+   */
+  onPointPick?:
+    | ((pick: {
+        point: { x: number; y: number; z: number };
+        kind: PickSnap['kind'] | null;
+      }) => void)
+    | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
   /** Recheck Extrude clearance when an explicit request restores its panels. */
@@ -2715,6 +2727,7 @@ export function ModelViewer({
   onCommentPinClick,
   commentPlacing = false,
   onMeasurePreview,
+  onPointPick,
   regionHandle,
   modelPanelsHidden = false,
   facePickOnly = false,
@@ -3102,6 +3115,8 @@ export function ModelViewer({
   onHoverRegionRef.current = onHoverRegion;
   const onMeasurePreviewRef = useRef(onMeasurePreview);
   onMeasurePreviewRef.current = onMeasurePreview;
+  const onPointPickRef = useRef(onPointPick);
+  onPointPickRef.current = onPointPick;
   const onPickPlaneRef = useRef(onPickPlane);
   onPickPlaneRef.current = onPickPlane;
   const onPickDatumRef = useRef(onPickDatum);
@@ -7882,6 +7897,23 @@ export function ModelViewer({
         placeComment(stack);
         return;
       }
+      // M10: a point pick takes the snapped model point and selects nothing.
+      const pointPick = onPointPickRef.current;
+      if (pointPick) {
+        if (!result) return;
+        const snapped = resolveMeasureSnap(event, result)?.candidate ?? null;
+        pointPick({
+          point: snapped
+            ? { ...snapped.point }
+            : {
+                x: result.hit.point.x,
+                y: result.hit.point.y,
+                z: result.hit.point.z
+              },
+          kind: snapped?.kind ?? null
+        });
+        return;
+      }
       // A ghost plane starts the sketch instead, even through a face in
       // front of it: it is armed precisely to be clicked, and it sits where
       // a part at the origin usually is (see ghostPlaneTakesPick).
@@ -8062,7 +8094,9 @@ export function ModelViewer({
     }
 
     function pickMoveGizmo(event: PointerEvent) {
-      if (!movePreviewRef.current) {
+      // M10: while Move by two points picks, the gizmo is hidden and the
+      // model under it takes the click.
+      if (!movePreviewRef.current || movePreviewRef.current.pointPick) {
         return null;
       }
       setRayFromEvent(event);
@@ -8423,6 +8457,20 @@ export function ModelViewer({
      */
     function updateMeasurePreview(event: PointerEvent) {
       const preview = onMeasurePreviewRef.current;
+      if (!preview && onPointPickRef.current) {
+        // M10: a point pick shows the glyph its click will take, no chip.
+        hud.hide(measurePreviewChip);
+        const candidate = cycleDepthPick(
+          picker.pickAll(event),
+          depthCycle,
+          event.clientX,
+          event.clientY
+        ).candidate;
+        const snapped = candidate ? resolveMeasureSnap(event, candidate) : null;
+        if (snapped) showSnapGlyph(snapped);
+        else hud.hide(snapGlyph);
+        return;
+      }
       if (!preview) {
         hud.hide(measurePreviewChip);
         hud.hide(snapGlyph);
@@ -15694,6 +15742,8 @@ export function ModelViewer({
     }
 
     context.applyMovePreview(movePreview.translation, movePreview.rotationDeg);
+    // M10: hidden while Move by two points picks (pickMoveGizmo skips it).
+    context.moveGizmoGroup.visible = !movePreview.pointPick;
     applyMoveGizmoFocus(
       context.moveGizmoGroup,
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??

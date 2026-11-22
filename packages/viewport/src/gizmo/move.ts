@@ -29,6 +29,16 @@ export interface MovePreview {
   target?: 'body' | 'sketch';
   /** Preview a new body while leaving the source at its document pose. */
   copy?: boolean;
+  /**
+   * M10: Move by two points is picking. `from` is null until the first
+   * point is picked; the second sets the translation to `to − from` and
+   * ends the pick.
+   */
+  pointPick?: {
+    from: { x: number; y: number; z: number } | null;
+    /** What the first pick snapped to (an endpoint, a centre…), or null. */
+    fromKind?: string | null;
+  };
   translation: { x: number; y: number; z: number };
   rotationDeg: { x: number; y: number; z: number };
 }
