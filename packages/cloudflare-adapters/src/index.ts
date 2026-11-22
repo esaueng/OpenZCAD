@@ -9631,6 +9631,22 @@ const ROOM_SOURCE_ARCHIVES_KEY = 'room:source-archives';
 const LEGACY_ROOM_STATE_KEY = 'room-state';
 const ROOM_STORAGE_SCHEMA = 1;
 const MAX_ROOM_HISTORY = 20;
+/**
+ * A plaintext room idle this long keeps only its latest version: every older
+ * `room:history:<v>` value is dropped by the room's alarm. Idle means no
+ * commit and no open socket. History only serves as the merge base of a
+ * submission whose `baseVersion` names it; a client away this long that still
+ * submits from an older base gets a conflict without a base, exactly as one
+ * whose base aged out of {@link MAX_ROOM_HISTORY} does today.
+ */
+const ROOM_IDLE_HISTORY_TRIM_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * How far past {@link ROOM_IDLE_HISTORY_TRIM_MS} the alarm is set, so a room
+ * that keeps committing moves its alarm (one storage write) at most once per
+ * this interval instead of on every commit. The alarm therefore fires between
+ * 7 and 8 days after the last commit.
+ */
+const ROOM_IDLE_ALARM_SLACK_MS = 24 * 60 * 60 * 1000;
 const MAX_PENDING_SOCKET_TICKETS = 32;
 const SOCKET_TICKET_TTL_MS = 30_000;
 
@@ -9857,6 +9873,9 @@ interface RoomStorage {
     (keys: string[]): Promise<number>;
   };
   deleteAll(): Promise<void>;
+  getAlarm(): Promise<number | null>;
+  setAlarm(scheduledTime: number): Promise<void>;
+  deleteAlarm(): Promise<void>;
 }
 
 function historyKey(version: number): string {
@@ -9919,6 +9938,11 @@ export class ProjectCollaborationRoom extends DurableObject {
   private persistedHistoryVersions = new Set<number>();
   private historyLoaded = false;
   private historyLoad: Promise<void> | null = null;
+  /**
+   * The idle-trim alarm storage holds, cached so a commit does not read or
+   * write it each time: undefined until read, null when none is set.
+   */
+  private idleTrimAlarmAt: number | null | undefined;
   private projectId: string | null = null;
   private erasing = false;
   /**
@@ -9988,6 +10012,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.instanceId = meta.instanceId ?? null;
       this.roomFormat = meta.format === 2 ? 2 : null;
       this.historyVersions = meta.historyVersions ?? [];
+      // A room stored before the idle trim existed schedules it on its next
+      // wake. A wake only reads the alarm (none once the room holds a single
+      // version) and never moves one already set: only commits do that.
+      await this.scheduleIdleHistoryTrim(true).catch(() => {
+        this.idleTrimAlarmAt = undefined;
+      });
       this.latestDocument =
         (await this.roomContext.storage.get<ProjectDocument>(
           ROOM_LATEST_KEY
@@ -10354,6 +10384,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.instanceId = null;
     this.roomFormat = null;
     this.e2eeLedgerState = null;
+    await this.clearIdleHistoryTrim();
     await this.roomContext.storage.deleteAll();
   }
 
@@ -11735,6 +11766,12 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.documentHistory = previousHistory;
       throw error;
     }
+    // The commit is stored; a failure to schedule the trim must not report
+    // it as lost. The next commit or wake schedules it again.
+    await this.scheduleIdleHistoryTrim().catch(() => {
+      this.idleTrimAlarmAt = undefined;
+      console.error('Collaboration idle-trim alarm could not be scheduled.');
+    });
     return true;
   }
 
@@ -12578,6 +12615,7 @@ export class ProjectCollaborationRoom extends DurableObject {
         ROOM_SOCKET_TICKETS_KEY
       ]);
       await this.roomContext.storage.delete(ROOM_META_KEY);
+      await this.clearIdleHistoryTrim();
       return new Response(null, { status: 204 });
     });
   }
@@ -12617,6 +12655,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.historyLoaded = false;
     this.roomFormat = null;
     this.e2eeLedgerState = null;
+    await this.clearIdleHistoryTrim();
     await this.roomContext.storage.deleteAll();
     return new Response(null, { status: 204 });
   }
@@ -12661,17 +12700,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (this.latestDocument) {
       entries[ROOM_LATEST_KEY] = this.latestDocument;
     }
-    entries[ROOM_META_KEY] = {
-      schema: ROOM_STORAGE_SCHEMA,
-      projectId: this.projectId,
-      ...(this.instanceId ? { instanceId: this.instanceId } : {}),
-      latestVersion: this.latestDocument?.version ?? null,
-      historyVersions: Array.from(this.documentHistory.keys()).sort(
-        (left, right) => left - right
-      ),
-      ...(this.roomFormat === 2 ? { format: 2 as const } : {})
-    } satisfies RoomMeta;
+    const meta = this.roomMeta();
+    entries[ROOM_META_KEY] = meta;
     await this.roomContext.storage.put(entries);
+    this.historyVersions = meta.historyVersions;
     for (const version of dirtyHistoryVersions) {
       if (this.documentHistory.has(version))
         this.persistedHistoryVersions.add(version);
@@ -12683,6 +12715,104 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (evicted.length > 0) {
       await this.roomContext.storage.delete(evicted.map(historyKey));
     }
+  }
+
+  private roomMeta(): RoomMeta {
+    return {
+      schema: ROOM_STORAGE_SCHEMA,
+      projectId: this.projectId,
+      ...(this.instanceId ? { instanceId: this.instanceId } : {}),
+      latestVersion: this.latestDocument?.version ?? null,
+      historyVersions: Array.from(this.documentHistory.keys()).sort(
+        (left, right) => left - right
+      ),
+      ...(this.roomFormat === 2 ? { format: 2 as const } : {})
+    };
+  }
+
+  /**
+   * Ensures a plaintext room holding more than one version has an idle-trim
+   * alarm at least {@link ROOM_IDLE_HISTORY_TRIM_MS} out. An alarm already
+   * that far out is left alone, so a busy room writes one alarm per
+   * {@link ROOM_IDLE_ALARM_SLACK_MS}, not one per commit. With `onlyIfMissing`
+   * an existing alarm is never moved. Encrypted rooms keep their own bounded
+   * ledger and never schedule one.
+   */
+  private async scheduleIdleHistoryTrim(onlyIfMissing = false): Promise<void> {
+    const now = Date.now();
+    const retained = this.historyLoaded
+      ? this.documentHistory.size
+      : this.historyVersions.length;
+    if (this.erasing || this.roomFormat === 2 || retained <= 1) return;
+    if (this.idleTrimAlarmAt === undefined)
+      this.idleTrimAlarmAt = await this.roomContext.storage.getAlarm();
+    if (
+      this.idleTrimAlarmAt !== null &&
+      (onlyIfMissing || this.idleTrimAlarmAt >= now + ROOM_IDLE_HISTORY_TRIM_MS)
+    )
+      return;
+    const at = now + ROOM_IDLE_HISTORY_TRIM_MS + ROOM_IDLE_ALARM_SLACK_MS;
+    await this.roomContext.storage.setAlarm(at);
+    this.idleTrimAlarmAt = at;
+  }
+
+  /** Clears the idle-trim alarm of a room whose state is being removed. */
+  private async clearIdleHistoryTrim(): Promise<void> {
+    await this.roomContext.storage.deleteAlarm();
+    this.idleTrimAlarmAt = null;
+  }
+
+  /**
+   * The idle-trim alarm. Commits push it out (see
+   * {@link scheduleIdleHistoryTrim}), so when it fires the room has not
+   * committed for at least {@link ROOM_IDLE_HISTORY_TRIM_MS}. A room with an
+   * open socket is still in use and only reschedules.
+   */
+  async alarm(): Promise<void> {
+    await this.ready;
+    // Storage clears an alarm once it runs.
+    this.idleTrimAlarmAt = null;
+    await this.enqueueLeaseOperation(async () => {
+      if (this.erasing || this.roomFormat === 2) return;
+      if (this.roomContext.getWebSockets().length > 0) {
+        await this.scheduleIdleHistoryTrim();
+        return;
+      }
+      await this.trimIdleHistory();
+    });
+  }
+
+  /**
+   * Keeps only the latest version's history entry: `room:latest`, the index,
+   * source archives, leases and tickets are untouched. The latest's own entry
+   * stays because a client in step with the room submits with that version as
+   * its base, and the rolled-over lineage check compares against it. The
+   * index is written first, so a failed delete leaks keys rather than leaving
+   * the index naming a version whose key is gone.
+   */
+  private async trimIdleHistory(): Promise<void> {
+    const latest = this.latestDocument;
+    if (!latest) return;
+    await this.ensureDocumentHistory();
+    const evicted = new Set<number>([
+      ...this.historyVersions,
+      ...this.documentHistory.keys()
+    ]);
+    evicted.delete(latest.version);
+    if (evicted.size === 0) return;
+    const previousHistory = new Map(this.documentHistory);
+    for (const version of evicted) this.documentHistory.delete(version);
+    const meta = this.roomMeta();
+    try {
+      await this.roomContext.storage.put(ROOM_META_KEY, meta);
+    } catch (error) {
+      this.documentHistory = previousHistory;
+      throw error;
+    }
+    this.historyVersions = meta.historyVersions;
+    for (const version of evicted)
+      this.persistedHistoryVersions.delete(version);
+    await this.roomContext.storage.delete(Array.from(evicted, historyKey));
   }
 
   /** Drops the oldest history entries, returning the versions to unlink. */
