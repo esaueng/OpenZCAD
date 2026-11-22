@@ -1,6 +1,14 @@
 import { useId, useRef, useState } from 'react';
 import type { FieldQuantity } from '@openzcad/document-core';
+import { displayLengthName } from '@openzcad/shared';
 import { formatNumber, previewExpression } from '../lib/model';
+import {
+  formatShownLength,
+  isPlainLengthNumber,
+  shownLengthText,
+  storedLengthText,
+  useDisplayUnits
+} from '../lib/displayUnits';
 import { useFieldAutoFocus } from './forms/fieldAutoFocus';
 import { useParameterDefinition } from './forms/parameterDefinition';
 import { useDefineParameterPrompt } from './forms/defineParameterPrompt';
@@ -58,7 +66,32 @@ export function ExprInput({
   const definition = useParameterDefinition();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const preview = previewExpression(value, scope, quantity);
+  // I03: a length field in a document shown in other units shows and takes
+  // plain numbers in the display unit. `value` and `onChange` stay in the
+  // stored units; what is typed is kept as typed while the field has focus,
+  // so a converted value never rewrites the text under the caret.
+  const stored = quantity?.documentUnits;
+  const shown = useDisplayUnits(stored ?? 'mm');
+  const converting =
+    quantity?.dimension === 'length' &&
+    stored !== undefined &&
+    shown !== stored;
+  const [typed, setTyped] = useState<string | null>(null);
+  const text =
+    converting && stored !== undefined
+      ? (typed ?? shownLengthText(value, stored, shown))
+      : value;
+  const evaluated = previewExpression(value, scope, quantity);
+  const preview =
+    converting &&
+    stored !== undefined &&
+    evaluated.ok &&
+    evaluated.value !== undefined
+      ? {
+          ...evaluated,
+          text: `= ${formatShownLength(evaluated.value, stored, shown)}`
+        }
+      : evaluated;
   // The last value this field evaluated to, offered as the value of a name
   // typed over it: `width` over 80 offers `width = 80`.
   const [lastValue, setLastValue] = useState(
@@ -72,7 +105,9 @@ export function ExprInput({
   // preview said "required" under "End radius (blank = constant)".
   const blankOptional = Boolean(optional) && value.trim().length === 0;
   const showError = Boolean(error) || (!preview.ok && !blankOptional);
-  const isPlainNumber = /^\s*-?(?:\d+\.?\d*|\.\d+)\s*$/.test(value);
+  const isPlainNumber = converting
+    ? isPlainLengthNumber(text)
+    : /^\s*-?(?:\d+\.?\d*|\.\d+)\s*$/.test(value);
   const showPreview = showError || (!isPlainNumber && !blankOptional);
   // Only when the name is all that is wrong, and it is not a parameter whose
   // own expression is broken (absent from the scope, present in the table).
@@ -102,13 +137,16 @@ export function ExprInput({
     <div ref={rootRef} className="field expr-field">
       <label id={`${id}-label`} htmlFor={id}>
         {label}
+        {converting && (
+          <span className="expr-unit"> ({displayLengthName(shown)})</span>
+        )}
       </label>
       <div className="expr-input-row">
         <input
           ref={inputRef}
           id={id}
           className="mono"
-          value={value}
+          value={text}
           placeholder={placeholder}
           spellCheck={false}
           autoComplete="off"
@@ -123,7 +161,16 @@ export function ExprInput({
           aria-describedby={showPreview ? `${id}-preview` : undefined}
           aria-invalid={showError || undefined}
           onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => onChange(event.target.value)}
+          onBlur={() => setTyped(null)}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (converting && stored !== undefined) {
+              setTyped(next);
+              onChange(storedLengthText(next, stored, shown));
+            } else {
+              onChange(next);
+            }
+          }}
         />
         {showPreview &&
           (undefinedName && definition && DefineParameterPrompt ? (

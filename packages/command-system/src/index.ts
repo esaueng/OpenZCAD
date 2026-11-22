@@ -97,6 +97,7 @@ import {
   type SketchObjectData,
   type SketchProfileReference,
   type UnitSystem,
+  UNIT_SYSTEM_WORDS,
   isDatumPlaneRef,
   isFeatureRollbackSuppressed,
   ownEntry,
@@ -246,6 +247,8 @@ import {
   moveToObjectFolder,
   setPrintClearance,
   type PrintClearanceSetInput,
+  setDisplayUnits,
+  type DisplayUnitsSetInput,
   createConfigurations,
   deleteConfigurations,
   addConfigurationRow,
@@ -466,6 +469,7 @@ export type CommandKind =
   | 'objectFolder.delete'
   | 'objectFolder.move'
   | 'printClearance.set'
+  | 'displayUnits.set'
   | 'configuration.create'
   | 'configuration.delete'
   | 'configuration.row.add'
@@ -597,6 +601,7 @@ export type AnyCommand =
   | CommandDefinition<ObjectFolderDeleteInput>
   | CommandDefinition<ObjectFolderMoveInput>
   | CommandDefinition<PrintClearanceSetInput>
+  | CommandDefinition<DisplayUnitsSetInput>
   | CommandDefinition<ConfigurationCreateInput>
   | CommandDefinition<Record<string, never>>
   | CommandDefinition<ConfigurationRowAddInput>
@@ -3931,6 +3936,16 @@ export const commandFactories = {
       setPrintClearance(document, payload)
     );
   },
+  setDisplayUnits(
+    payload: DisplayUnitsSetInput,
+    label = payload.units === null
+      ? 'Show lengths in project units'
+      : `Show lengths in ${UNIT_SYSTEM_WORDS[payload.units]}`
+  ): CommandDefinition<DisplayUnitsSetInput> {
+    return makeCommand('displayUnits.set', label, payload, (document) =>
+      setDisplayUnits(document, payload)
+    );
+  },
   addDrawingAnnotation(
     payload: DrawingAnnotationAddInput
   ): CommandDefinition<DrawingAnnotationAddInput> {
@@ -6267,12 +6282,26 @@ function modelPmiOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isModelPmiCommandKind, 'pmi');
 }
 
+/** I03: a command that changes how lengths are shown, never a length. */
+export function isDisplayUnitsCommandKind(kind: string): boolean {
+  return kind === 'displayUnits.set';
+}
+
+function displayUnitsOnly(entry: DocumentHistoryEntry | undefined): boolean {
+  return sectionOnly(entry, isDisplayUnitsCommandKind, 'displayUnits');
+}
+
 /**
- * A command that edits reference images (I05) or the model's PMI (D07),
- * never the geometry: the workspace keeps its ready geometry for it.
+ * A command that edits reference images (I05), the model's PMI (D07) or the
+ * display units (I03), never the geometry: the workspace keeps its ready
+ * geometry for it.
  */
 export function isGeometryFreeCommandKind(kind: string): boolean {
-  return isReferenceImageCommandKind(kind) || isModelPmiCommandKind(kind);
+  return (
+    isReferenceImageCommandKind(kind) ||
+    isModelPmiCommandKind(kind) ||
+    isDisplayUnitsCommandKind(kind)
+  );
 }
 
 /** Whether a history entry edits reference images and nothing else. */
@@ -6283,7 +6312,7 @@ function referenceImageOnly(entry: DocumentHistoryEntry | undefined): boolean {
 function sectionOnly(
   entry: DocumentHistoryEntry | undefined,
   isSectionKind: (kind: string) => boolean,
-  field: 'drawings' | 'referenceImages' | 'assembly' | 'pmi'
+  field: 'drawings' | 'referenceImages' | 'assembly' | 'pmi' | 'displayUnits'
 ): boolean {
   if (!entry?.commandKinds?.length) return false;
   if (!entry.commandKinds.every(isSectionKind)) return false;
@@ -6479,14 +6508,22 @@ export class CommandManager {
     return referenceImageOnly(this.history?.entries[this.history.cursor]);
   }
   /**
-   * Whether undo would revert reference-image or PMI edits only, which
-   * leave the model's geometry alone.
+   * Whether undo would revert reference-image, PMI or display-unit edits
+   * only, which leave the model's geometry alone.
    */
   get undoIsGeometryFree(): boolean {
-    return this.undoIsReferenceImageOnly || this.undoIsModelPmiOnly;
+    return (
+      this.undoIsReferenceImageOnly ||
+      this.undoIsModelPmiOnly ||
+      displayUnitsOnly(this.history?.entries[(this.history?.cursor ?? 0) - 1])
+    );
   }
   get redoIsGeometryFree(): boolean {
-    return this.redoIsReferenceImageOnly || this.redoIsModelPmiOnly;
+    return (
+      this.redoIsReferenceImageOnly ||
+      this.redoIsModelPmiOnly ||
+      displayUnitsOnly(this.history?.entries[this.history.cursor])
+    );
   }
   /** D07: whether undo would revert PMI edits only, leaving the geometry. */
   get undoIsModelPmiOnly(): boolean {
@@ -7208,6 +7245,9 @@ export function replayCommands(
           next,
           command.payload as PrintClearanceSetInput
         );
+        break;
+      case 'displayUnits.set':
+        next = setDisplayUnits(next, command.payload as DisplayUnitsSetInput);
         break;
       case 'drawing.annotation.add':
         next = addDrawingAnnotation(

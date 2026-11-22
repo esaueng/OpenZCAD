@@ -24,6 +24,7 @@ import {
   repairLegacyBracketRecipe
 } from '@openzcad/document-core';
 import type { PrintClearanceState } from './components/PrintClearanceRow';
+import { DisplayUnitsProvider } from './lib/displayUnits';
 import type { ConfigurationActions } from './components/ConfigurationTable';
 import {
   noteProjectMigrating,
@@ -324,7 +325,10 @@ import {
   BODY_OPACITY_METADATA_KEY,
   compareProjectSummaries,
   DEFAULT_PROJECT_ORGANIZATION,
+  convertLength,
   displayLengthName,
+  documentDisplayUnits,
+  UNIT_SYSTEM_WORDS,
   duplicateProjectName,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureManuallySuppressed,
@@ -10330,14 +10334,18 @@ export function App() {
   const selectionSummary = useMemo<{
     label: readonly LabelSegment[];
     detail?: string;
-    detailDiameter?: { diameter: number; units: string };
+    detailDiameter?: { diameter: number; units: string; scale?: number };
   } | null>(() => {
     if (!doc || tool === 'sketch' || currentGeometrySnapshot !== null) {
       return null;
     }
-    // `in`, not the `inch` enum, as the dock and the Inspector print it.
-    const units = displayLengthName(doc.units);
-    const round = (value: number) => Math.round(value * 100) / 100;
+    // I03: in the display unit. `in`, not the `inch` enum, as the dock and
+    // the Inspector print it.
+    const shownUnits = documentDisplayUnits(doc);
+    const units = displayLengthName(shownUnits);
+    const scale = convertLength(1, doc.units, shownUnits);
+    const round = (value: number) => Math.round(value * scale * 100) / 100;
+    const scaled = scale === 1 ? {} : { scale };
     if (selectedEdges.length > 1) {
       let sampled = false;
       const total = selectedEdges.reduce((sum, edge) => {
@@ -10441,7 +10449,7 @@ export function App() {
         return {
           label: textLabelSegments('Through hole'),
           detail: value,
-          detailDiameter: { diameter: geometry.diameter, units }
+          detailDiameter: { diameter: geometry.diameter, units, ...scaled }
         };
       }
       const label = topologySelectionLabelSegments(namingBody, namingTopology);
@@ -10458,13 +10466,15 @@ export function App() {
       return {
         label,
         ...(cylinderDiameter !== undefined
-          ? { detailDiameter: { diameter: cylinderDiameter, units } }
+          ? {
+              detailDiameter: { diameter: cylinderDiameter, units, ...scaled }
+            }
           : {}),
         detail:
           cylinderDiameter !== undefined
             ? `Ø ${round(cylinderDiameter)} ${units}`
             : geometry?.area !== undefined
-              ? `${formatMeasuredQuantity(geometry.area)} ${units}²`
+              ? `${formatMeasuredQuantity(geometry.area * scale * scale)} ${units}²`
               : fromSource
                 ? `— ${units}²`
                 : undefined
@@ -23061,7 +23071,8 @@ export function App() {
         sketch?.dimensionLabelPositions,
         sketch?.referenceDimensions,
         sketch?.composites,
-        appSettings.sketching.referenceDisplayUnit
+        appSettings.sketching.referenceDisplayUnit,
+        documentDisplayUnits(doc)
       ),
       diagnosticPoints: sketchDiagnosticPoints
     };
@@ -25882,6 +25893,36 @@ export function App() {
       );
     }
   };
+
+  /**
+   * I03: shows and takes lengths in `units` (null: the document's own).
+   * Undoable, and nothing rebuilds: only how lengths read changes. A
+   * project-level setting, as its name is: whoever may rename the project
+   * may switch it, in any workspace mode.
+   */
+  function handleSetDisplayUnits(units: UnitSystem | null): boolean {
+    const manager = managerRef.current;
+    if (!manager) return false;
+    const target = units ?? manager.document.units;
+    if (documentDisplayUnits(manager.document) === target) return true;
+    const reason = projectRenameDisabledReasonRef.current;
+    if (reason) {
+      setStatus(cannotSentence('change the units', reason));
+      return false;
+    }
+    const changed = executeCommand(
+      commandFactories.setDisplayUnits({ units }),
+      undefined,
+      'rename'
+    );
+    if (changed)
+      setStatus(
+        target === manager.document.units
+          ? `Lengths are shown in ${displayLengthName(target)}, the project's own units.`
+          : `Lengths are shown in ${displayLengthName(target)}. The model is unchanged: it is still stored in ${displayLengthName(manager.document.units)}.`
+      );
+    return changed;
+  }
 
   /** L09: sets or clears the print clearance; answers with a refusal. */
   function handleSetPrintClearance(value: ParamValue | null): string | null {
@@ -36501,6 +36542,20 @@ export function App() {
             : null,
       run: () => setMeshExportOpen(true)
     },
+    // I03: one command per unit, found by its name and by "units".
+    ...(['mm', 'cm', 'm', 'inch'] as const).map((unit) => ({
+      id: `file-display-units-${unit}`,
+      label: `Show lengths in ${UNIT_SYSTEM_WORDS[unit]}`,
+      group: 'File',
+      keywords: ['units', 'unit', displayLengthName(unit), 'metric', 'imperial'],
+      icon: <Ruler size={16} aria-hidden="true" />,
+      disabledReason: !doc
+        ? 'Open a project first'
+        : documentDisplayUnits(doc) === unit
+          ? `Lengths are already shown in ${displayLengthName(unit)}`
+          : projectRenameDisabledReason,
+      run: () => void handleSetDisplayUnits(unit)
+    })),
     {
       id: 'file-export-image',
       label: 'Export image…',
@@ -37654,7 +37709,13 @@ export function App() {
             void handleDownloadProjectArtifact(artifact)
           }
           projectName={doc.name}
-          units={doc.units}
+          units={documentDisplayUnits(doc)}
+          displayUnits={{
+            shown: documentDisplayUnits(doc),
+            stored: doc.units,
+            onChange: (units) => void handleSetDisplayUnits(units),
+            disabledReason: projectRenameDisabledReason
+          }}
           canExport={
             exportBodyIds.length > 0 &&
             !parameterEditPending &&
@@ -41014,9 +41075,10 @@ export function App() {
     />
   );
   return (
-    <>
+    // I03: every length field reads the document's display unit from here.
+    <DisplayUnitsProvider units={doc ? documentDisplayUnits(doc) : null}>
       {workspace}
       {shareDestination}
-    </>
+    </DisplayUnitsProvider>
   );
 }

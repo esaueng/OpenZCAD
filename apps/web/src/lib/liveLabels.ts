@@ -21,7 +21,9 @@ export const LIVE_DIAMETER_ATTRIBUTE = 'data-live-diameter';
 
 /**
  * Marks a measurement line ("Ø 24 mm") whose diameter a drag rewrites. Its
- * value is the document diameter; `data-units` keeps the unit it printed.
+ * value is the document diameter; `data-units` keeps the unit it printed and
+ * `data-unit-scale` (I03) the factor from document to printed units, absent
+ * when they are the same.
  */
 export const LIVE_DIAMETER_DETAIL_ATTRIBUTE = 'data-live-diameter-detail';
 
@@ -33,10 +35,13 @@ export function formatDiameterDetail(diameter: number, units: string): string {
 /** Tags a measurement line so a drag can rewrite its diameter in place. */
 export function tagLiveDiameterDetail(
   element: HTMLElement,
-  value: { diameter: number; units: string }
+  value: { diameter: number; units: string; scale?: number }
 ): void {
   element.setAttribute(LIVE_DIAMETER_DETAIL_ATTRIBUTE, String(value.diameter));
   element.dataset.units = value.units;
+  if (value.scale !== undefined && value.scale !== 1)
+    element.dataset.unitScale = String(value.scale);
+  else delete element.dataset.unitScale;
 }
 
 /** Fills `element` with `segments`, tagging the live-diameter node. */
@@ -87,6 +92,10 @@ export function setLiveDiameter(
     if (!Number.isFinite(value)) {
       continue;
     }
-    node.textContent = formatDiameterDetail(value, node.dataset.units ?? '');
+    const scale = Number(node.dataset.unitScale ?? 1);
+    node.textContent = formatDiameterDetail(
+      value * (Number.isFinite(scale) && scale > 0 ? scale : 1),
+      node.dataset.units ?? ''
+    );
   }
 }

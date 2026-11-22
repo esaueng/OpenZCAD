@@ -32,7 +32,13 @@ import {
   UserPlus,
   Users
 } from 'lucide-react';
-import type { ArtifactRecord, AuthSession, UnitSystem } from '@openzcad/shared';
+import {
+  displayLengthName,
+  UNIT_SYSTEM_NAMES,
+  type ArtifactRecord,
+  type AuthSession,
+  type UnitSystem
+} from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { preloadableSlot } from './PreloadableSlot';
@@ -199,6 +205,17 @@ interface TopBarProps {
   /** Opens the image export dialog (view PNG / sketch SVG). */
   onOpenImageExport?(): void;
   /**
+   * I03: the unit lengths are shown and typed in, the unit the project
+   * stores, and the switch between them. Absent hides the Units row.
+   */
+  displayUnits?: {
+    shown: UnitSystem;
+    stored: UnitSystem;
+    onChange(units: UnitSystem): void;
+    /** Why the unit cannot change now; the row is read-only then. */
+    disabledReason?: string | null;
+  };
+  /**
    * M16: opens the sheet-metal flat-pattern view (layered DXF, SVG, bend
    * table). Absent when the project has no sheet-metal part.
    */
@@ -360,6 +377,7 @@ export function TopBar({
   onExportCncLayout,
   onOpenMeshExport,
   onOpenImageExport,
+  displayUnits,
   onOpenFlatPattern,
   onArchiveLocalSources,
   onRenameProject,
@@ -1175,6 +1193,9 @@ export function TopBar({
                   </small>
                 )}
               </button>
+              {displayUnits ? (
+                <DisplayUnitsRow {...displayUnits} />
+              ) : null}
               {onOpenComments ? (
                 <>
                   <div className="topbar-menu-sep" />
@@ -1464,5 +1485,60 @@ export function TopBar({
         </div>
       </div>
     </header>
+  );
+}
+
+const DISPLAY_UNIT_CHOICES: readonly UnitSystem[] = ['mm', 'cm', 'm', 'inch'];
+
+/**
+ * I03: the File menu's Units row. A radio group, so the menu stays open
+ * while the choice is read back: switching only changes how lengths read,
+ * and the note says the model itself is untouched.
+ */
+export function DisplayUnitsRow({
+  shown,
+  stored,
+  onChange,
+  disabledReason
+}: NonNullable<TopBarProps['displayUnits']>) {
+  const labelId = useId();
+  const noteId = useId();
+  const disabled = Boolean(disabledReason);
+  return (
+    <>
+      <div className="topbar-menu-sep" />
+      <strong className="topbar-menu-label" id={labelId}>
+        Units
+      </strong>
+      <div
+        className="topbar-units"
+        role="radiogroup"
+        aria-labelledby={labelId}
+        aria-describedby={noteId}
+      >
+        {DISPLAY_UNIT_CHOICES.map((unit) => (
+          <button
+            key={unit}
+            type="button"
+            role="radio"
+            aria-checked={shown === unit}
+            aria-label={UNIT_SYSTEM_NAMES[unit]}
+            className={shown === unit ? 'active' : undefined}
+            disabled={disabled}
+            title={disabledReason ?? UNIT_SYSTEM_NAMES[unit]}
+            onClick={() => {
+              if (unit !== shown) onChange(unit);
+            }}
+          >
+            {displayLengthName(unit)}
+          </button>
+        ))}
+      </div>
+      <small className="topbar-units-note" id={noteId}>
+        {shown === stored
+          ? `Lengths are shown and typed in ${displayLengthName(shown)}.`
+          : `Shown and typed in ${displayLengthName(shown)}. The model is stored in ${displayLengthName(stored)} and keeps its exact size.`}
+      </small>
+    </>
   );
 }
