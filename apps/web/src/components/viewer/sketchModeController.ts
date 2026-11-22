@@ -843,6 +843,29 @@ export function buildSketchModeRig(
               : style
           );
         }
+        // S05: an arc leg cut back to its tangency, drawn where it will end.
+        for (const trimmed of plan.trimmedArcs ?? []) {
+          filletLines.set(trimmed.objectId, 'trimmed');
+          const [run] = objectPolylines(
+            {
+              objectKind: 'arc',
+              centerX: trimmed.center.x,
+              centerY: trimmed.center.y,
+              radius: trimmed.radius,
+              startAngleDeg: trimmed.startAngleDeg,
+              endAngleDeg: trimmed.endAngleDeg
+            },
+            Number
+          );
+          if (!run) continue;
+          appendVisual(
+            filletGroup,
+            run.points.map((point) => liftPoint(basis, point)),
+            trimmed.objectId === firstLine
+              ? { ...style, linewidth: SKETCH_LINE_WIDTH + 1.2 }
+              : style
+          );
+        }
         for (const arc of plan.arcs) {
           const [run] = objectPolylines(
             {

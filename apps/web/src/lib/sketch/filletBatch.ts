@@ -16,6 +16,7 @@ import {
   type SketchPointRef
 } from '@openzcad/shared';
 import { solveStatusLabel, solvedSketchCommands } from './applySolve';
+import { filletCurvedCorner, type FilletLeg } from './curvedFillet';
 import {
   addFilletCornerCommands,
   deleteCornerCoincidenceCommands,
@@ -44,12 +45,27 @@ export interface SketchFilletBatchLine extends LineEnds {
 
 export interface SketchFilletBatchArc extends SketchFilletGeometry {
   corner: SketchFilletCorner;
+  /** S05: the circle the fillet touches at `b`, which stays whole. */
+  circleLeg?: EntityId;
+}
+
+/** S05: an arc leg cut back to its fillet tangency, as it will be stored. */
+export interface SketchFilletBatchArcTrim {
+  objectId: EntityId;
+  center: Sketch2dPoint;
+  radius: number;
+  startAngleDeg: number;
+  endAngleDeg: number;
+  startCornerId?: string;
+  endCornerId?: string;
 }
 
 export interface ReadySketchFilletBatchPlan {
   status: 'ready';
   lines: readonly SketchFilletBatchLine[];
   arcs: readonly SketchFilletBatchArc[];
+  /** Arc legs the fillets cut back; none for a sketch of lines. */
+  trimmedArcs: readonly SketchFilletBatchArcTrim[];
 }
 
 export type SketchFilletBatchPlan =
@@ -69,8 +85,107 @@ interface SourceLine extends LineEnds {
 interface Endpoint {
   ref: LineEndRef;
   position: Sketch2dPoint;
+  /**
+   * A point the leg runs towards from here: a line's far end, or one step
+   * along an arc's tangent, so a smooth line-to-arc joint reads as a
+   * straight continuation with nothing to round.
+   */
   far: Sketch2dPoint;
   linked: boolean;
+  leg: FilletLeg;
+}
+
+interface SourceCircle {
+  center: Sketch2dPoint;
+  radius: number;
+  linked: boolean;
+}
+
+/** S05: the circles a fillet may meet, resolved like the lines. */
+function sourceCircles(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  resolve: ResolveParam
+): Map<EntityId, SourceCircle> {
+  const nodes = resolvedSketchDocument(document).nodes;
+  const circles = new Map<EntityId, SourceCircle>();
+  for (const objectId of sketch.objectIds) {
+    const node = nodes[objectId];
+    if (node?.kind !== 'sketch-object' || node.data.construction) continue;
+    const data = node.data;
+    if (data.objectKind !== 'circle') continue;
+    const cx = resolve(data.centerX);
+    const cy = resolve(data.centerY);
+    const radius = resolve(data.radius);
+    if (
+      cx === undefined ||
+      cy === undefined ||
+      radius === undefined ||
+      ![cx, cy, radius].every(Number.isFinite) ||
+      !(radius > JOINT_TOLERANCE)
+    )
+      continue;
+    circles.set(objectId, {
+      center: { x: cx, y: cy },
+      radius,
+      linked: data.projection?.mode === 'linked'
+    });
+  }
+  return circles;
+}
+
+interface SourceArc {
+  center: Sketch2dPoint;
+  radius: number;
+  startRad: number;
+  sweepRad: number;
+  linked: boolean;
+}
+
+const TAU = Math.PI * 2;
+
+/** S05: the arcs a fillet may round, resolved like the lines. */
+function sourceArcs(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  resolve: ResolveParam
+): Map<EntityId, SourceArc> {
+  const nodes = resolvedSketchDocument(document).nodes;
+  const arcs = new Map<EntityId, SourceArc>();
+  for (const objectId of sketch.objectIds) {
+    const node = nodes[objectId];
+    if (node?.kind !== 'sketch-object' || node.data.construction) continue;
+    const data = node.data;
+    if (data.objectKind !== 'arc') continue;
+    const values = [
+      data.centerX,
+      data.centerY,
+      data.radius,
+      data.startAngleDeg,
+      data.endAngleDeg
+    ].map((value) => resolve(value));
+    if (!values.every((value) => value !== undefined && Number.isFinite(value)))
+      continue;
+    const [cx, cy, radius, startDeg, endDeg] = values as number[];
+    const sweepRad =
+      (((((endDeg! - startDeg!) * Math.PI) / 180) % TAU) + TAU) % TAU;
+    if (!(radius! > JOINT_TOLERANCE) || sweepRad <= 1e-9) continue;
+    arcs.set(objectId, {
+      center: { x: cx!, y: cy! },
+      radius: radius!,
+      startRad: (startDeg! * Math.PI) / 180,
+      sweepRad,
+      linked: data.projection?.mode === 'linked'
+    });
+  }
+  return arcs;
+}
+
+function arcPoint(arc: SourceArc, angle: number): Sketch2dPoint {
+  return {
+    x: arc.center.x + arc.radius * Math.cos(angle),
+    y: arc.center.y + arc.radius * Math.sin(angle)
+  };
 }
 
 function sourceLines(
@@ -127,13 +242,21 @@ function jointPoint(a: Endpoint, b: Endpoint): Sketch2dPoint | null {
   return { x: a.position.x + offset * u.x, y: a.position.y + offset * u.y };
 }
 
-function catalogCorners(lines: ReadonlyMap<EntityId, SourceLine>): Map<
-  string,
-  {
-    corner: SketchFilletCorner;
-    geometry: SketchCorner;
-  }
-> {
+interface CatalogCorner {
+  corner: SketchFilletCorner;
+  geometry: SketchCorner;
+  /** Both legs at the joint; an arc in either makes the corner curved. */
+  legs: [FilletLeg, FilletLeg];
+  curved: boolean;
+  /** A circle the corner's second leg runs round; it is never trimmed. */
+  circleLeg?: EntityId;
+}
+
+function catalogCorners(
+  lines: ReadonlyMap<EntityId, SourceLine>,
+  arcs: ReadonlyMap<EntityId, SourceArc> = new Map(),
+  circles: ReadonlyMap<EntityId, SourceCircle> = new Map()
+): Map<string, CatalogCorner> {
   const endpoints: Endpoint[] = [];
   for (const [objectId, line] of lines) {
     endpoints.push(
@@ -141,15 +264,45 @@ function catalogCorners(lines: ReadonlyMap<EntityId, SourceLine>): Map<
         ref: { objectId, point: 'start' },
         position: line.start,
         far: line.end,
-        linked: line.linked
+        linked: line.linked,
+        leg: { kind: 'line', at: line.start, far: line.end }
       },
       {
         ref: { objectId, point: 'end' },
         position: line.end,
         far: line.start,
-        linked: line.linked
+        linked: line.linked,
+        leg: { kind: 'line', at: line.end, far: line.start }
       }
     );
+  }
+  for (const [objectId, arc] of arcs) {
+    for (const end of ['start', 'end'] as const) {
+      const angle =
+        end === 'start' ? arc.startRad : arc.startRad + arc.sweepRad;
+      const at = arcPoint(arc, angle);
+      // Into the arc from this end: counter-clockwise from the start,
+      // clockwise from the end.
+      const sign = end === 'start' ? 1 : -1;
+      endpoints.push({
+        ref: { objectId, point: end },
+        position: at,
+        far: {
+          x: at.x - Math.sin(angle) * sign * arc.radius,
+          y: at.y + Math.cos(angle) * sign * arc.radius
+        },
+        linked: arc.linked,
+        leg: {
+          kind: 'arc',
+          at,
+          center: arc.center,
+          radius: arc.radius,
+          startRad: arc.startRad,
+          sweepRad: arc.sweepRad,
+          end
+        }
+      });
+    }
   }
   endpoints.sort((a, b) => a.position.x - b.position.x);
   const neighbors = new Map<Endpoint, Endpoint[]>(
@@ -169,37 +322,116 @@ function catalogCorners(lines: ReadonlyMap<EntityId, SourceLine>): Map<
     }
   }
 
-  const corners = new Map<
-    string,
-    { corner: SketchFilletCorner; geometry: SketchCorner }
-  >();
+  const corners = new Map<string, CatalogCorner>();
   for (const [a, adjacent] of neighbors) {
     if (a.linked || adjacent.length !== 1) continue;
     const b = adjacent[0]!;
     if (b.linked || neighbors.get(b)!.length !== 1) continue;
     if (endpointKey(a.ref) >= endpointKey(b.ref)) continue;
-    const point = jointPoint(a, b);
-    if (!point) continue;
+    const curved = a.leg.kind === 'arc' || b.leg.kind === 'arc';
+    // Two lines meet where their supporting lines cross, so a rounded or
+    // solved joint stays tangent on both; a curved joint is its endpoint.
+    const straightPoint = jointPoint(a, b);
+    if (!straightPoint) continue;
+    const point = curved ? a.position : straightPoint;
     const id = JSON.stringify([
       [a.ref.objectId, a.ref.point],
       [b.ref.objectId, b.ref.point]
     ]);
     corners.set(id, {
       corner: { id, point, a: a.ref, b: b.ref },
-      geometry: { corner: point, farA: a.far, farB: b.far }
+      geometry: { corner: point, farA: a.far, farB: b.far },
+      legs: [
+        { ...a.leg, at: point },
+        { ...b.leg, at: point }
+      ],
+      curved
     });
+  }
+  // S05 circle inputs: a free line or arc end lying on a circle meets it in
+  // two corners, one each way round. The circle is a leg that runs (almost)
+  // a whole turn from the joint, and is never trimmed.
+  for (const [circleId, circle] of circles) {
+    if (circle.linked) continue;
+    for (const [end, adjacent] of neighbors) {
+      if (end.linked || adjacent.length !== 0) continue;
+      const reach = Math.hypot(
+        end.position.x - circle.center.x,
+        end.position.y - circle.center.y
+      );
+      if (Math.abs(reach - circle.radius) > JOINT_TOLERANCE) continue;
+      const angle = Math.atan2(
+        end.position.y - circle.center.y,
+        end.position.x - circle.center.x
+      );
+      const sweep = TAU - 1e-6;
+      for (const way of ['ccw', 'cw'] as const) {
+        const leg: FilletLeg = {
+          kind: 'arc',
+          at: end.position,
+          center: circle.center,
+          radius: circle.radius,
+          startRad: way === 'ccw' ? angle : angle - sweep,
+          sweepRad: sweep,
+          end: way === 'ccw' ? 'start' : 'end'
+        };
+        // The two corners share their joint; each marker sits a little way
+        // into its own corner so either can be picked.
+        const along = way === 'ccw' ? 1 : -1;
+        const tangent = {
+          x: -Math.sin(angle) * along,
+          y: Math.cos(angle) * along
+        };
+        const toFar = subtract(end.far, end.position);
+        const farLength = Math.hypot(toFar.x, toFar.y) || 1;
+        const bisector = {
+          x: tangent.x + toFar.x / farLength,
+          y: tangent.y + toFar.y / farLength
+        };
+        const size = Math.hypot(bisector.x, bisector.y);
+        if (size <= 1e-9) continue;
+        const nudge = 0.15 * Math.min(circle.radius, farLength);
+        const point = {
+          x: end.position.x + (bisector.x / size) * nudge,
+          y: end.position.y + (bisector.y / size) * nudge
+        };
+        const ref = {
+          objectId: circleId,
+          point: way === 'ccw' ? 'start' : 'end'
+        } as LineEndRef;
+        const id = JSON.stringify([
+          [end.ref.objectId, end.ref.point],
+          [circleId, way]
+        ]);
+        corners.set(id, {
+          corner: { id, point, a: end.ref, b: ref },
+          geometry: { corner: end.position, farA: end.far, farB: point },
+          legs: [{ ...end.leg, at: end.position }, leg],
+          curved: true,
+          circleLeg: circleId
+        });
+      }
+    }
   }
   return corners;
 }
 
-/** Finds the selectable, unbranched line-to-line corners of the resolved sketch. */
+/**
+ * Finds the selectable, unbranched corners of the resolved sketch: where two
+ * lines, a line and an arc, or two arcs meet end to end (S05 arc inputs),
+ * leaving out smooth continuations.
+ */
 export function listSketchFilletCorners(
   document: ProjectDocument,
   sketch: SketchNode,
   resolve: ResolveParam
 ): SketchFilletCorner[] {
   return [
-    ...catalogCorners(sourceLines(document, sketch, resolve)).values()
+    ...catalogCorners(
+      sourceLines(document, sketch, resolve),
+      sourceArcs(document, sketch, resolve),
+      sourceCircles(document, sketch, resolve)
+    ).values()
   ].map(({ corner }) => corner);
 }
 
@@ -259,23 +491,78 @@ export function planSketchFilletBatch(
     };
   }
   const base = sourceLines(document, sketch, resolve);
-  const catalog = catalogCorners(base);
+  const baseArcs = sourceArcs(document, sketch, resolve);
+  const catalog = catalogCorners(
+    base,
+    baseArcs,
+    sourceCircles(document, sketch, resolve)
+  );
+  const circleCorners = new Map<string, EntityId>();
   const lines = new Map<EntityId, SketchFilletBatchLine>();
+  const trimmedArcs = new Map<
+    EntityId,
+    { start: number; end: number; startCornerId?: string; endCornerId?: string }
+  >();
+  const trimEnd = (ref: LineEndRef, point: Sketch2dPoint, cornerId: string) => {
+    if (base.has(ref.objectId)) {
+      trim(lines, base, ref, point, cornerId);
+      return;
+    }
+    const arc = baseArcs.get(ref.objectId)!;
+    const entry = trimmedArcs.get(ref.objectId) ?? {
+      start: arc.startRad,
+      end: arc.startRad + arc.sweepRad
+    };
+    const angle = Math.atan2(point.y - arc.center.y, point.x - arc.center.x);
+    // Keep each end in the arc's own turn.
+    const near =
+      ref.point === 'start' ? arc.startRad : arc.startRad + arc.sweepRad;
+    const unwrapped = angle + TAU * Math.round((near - angle) / TAU);
+    if (ref.point === 'start') {
+      entry.start = unwrapped;
+      entry.startCornerId = cornerId;
+    } else {
+      entry.end = unwrapped;
+      entry.endCornerId = cornerId;
+    }
+    trimmedArcs.set(ref.objectId, entry);
+  };
   const arcs: SketchFilletBatchArc[] = [];
+  // One fillet per curve end: a joint on a circle offers a corner each way
+  // round, and rounding both would cut the same end twice.
+  const usedEnds = new Map<string, string>();
   for (const id of cornerIds) {
     const entry = catalog.get(id);
+    for (const ref of entry ? [entry.corner.a, entry.corner.b] : []) {
+      if (entry?.circleLeg === ref.objectId) continue;
+      const key = endpointKey(ref);
+      const other = usedEnds.get(key);
+      if (other !== undefined) {
+        return {
+          status: 'refuse',
+          reason:
+            'Two selected corners round the same end. Pick one side of the joint.',
+          lineIds: [ref.objectId],
+          cornerIds: [other, id]
+        };
+      }
+      usedEnds.set(key, id);
+    }
     if (!entry) {
       return {
         status: 'refuse',
-        reason: 'A selected corner no longer joins two sketch lines.',
+        reason: 'A selected corner no longer joins two sketch curves.',
         lineIds: [],
         cornerIds: [id]
       };
     }
-    const { corner, geometry } = entry;
+    const { corner, geometry, legs, curved, circleLeg } = entry;
+    if (circleLeg) circleCorners.set(id, circleLeg);
     let fillet: SketchFilletGeometry;
     try {
-      fillet = filletSketchCorner(geometry, radius);
+      fillet = curved
+        ? filletCurvedCorner(legs[0], legs[1], radius)
+        : filletSketchCorner(geometry, radius);
       const sweep = fillet.endAngleDeg - fillet.startAngleDeg;
       if (!(sweep > 0 && sweep < 180)) {
         throw new Error('The arc is too small to resolve at this corner.');
@@ -289,9 +576,23 @@ export function planSketchFilletBatch(
         cornerIds: [id]
       };
     }
-    trim(lines, base, corner.a, fillet.a, id);
-    trim(lines, base, corner.b, fillet.b, id);
-    arcs.push({ corner, ...fillet });
+    trimEnd(corner.a, fillet.a, id);
+    // A circle is never cut: the fillet only comes to touch it.
+    if (!circleLeg) trimEnd(corner.b, fillet.b, id);
+    arcs.push({ corner, ...fillet, ...(circleLeg ? { circleLeg } : {}) });
+  }
+  // An arc cut back from both ends must keep some of its sweep.
+  for (const [objectId, trimmed] of trimmedArcs) {
+    if (trimmed.end - trimmed.start <= 1e-9) {
+      return {
+        status: 'refuse',
+        reason: `Radius ${lengthLabel(radius)} uses up a whole arc. Use a smaller radius.`,
+        lineIds: [objectId],
+        cornerIds: [trimmed.startCornerId, trimmed.endCornerId].filter(
+          (id): id is string => id !== undefined
+        )
+      };
+    }
   }
 
   const conflicts = [...lines.values()].flatMap((line) => {
@@ -364,7 +665,44 @@ export function planSketchFilletBatch(
       }
     }
   }
-  return { status: 'ready', lines: [...lines.values()], arcs };
+  for (const { data } of sketch.constraints ?? []) {
+    if (data.constraintKind !== 'lock') continue;
+    const trimmed = trimmedArcs.get(data.point.objectId);
+    const cornerId =
+      data.point.point === 'start'
+        ? trimmed?.startCornerId
+        : data.point.point === 'end'
+          ? trimmed?.endCornerId
+          : undefined;
+    if (cornerId) {
+      return {
+        status: 'refuse',
+        reason:
+          'A selected corner has a locked endpoint. Unlock it before applying the fillet.',
+        lineIds: [data.point.objectId],
+        cornerIds: [cornerId]
+      };
+    }
+  }
+  return {
+    status: 'ready',
+    lines: [...lines.values()],
+    arcs,
+    trimmedArcs: [...trimmedArcs].map(([objectId, trimmed]) => {
+      const arc = baseArcs.get(objectId)!;
+      return {
+        objectId,
+        center: arc.center,
+        radius: arc.radius,
+        startAngleDeg: (trimmed.start * 180) / Math.PI,
+        endAngleDeg: (trimmed.end * 180) / Math.PI,
+        ...(trimmed.startCornerId
+          ? { startCornerId: trimmed.startCornerId }
+          : {}),
+        ...(trimmed.endCornerId ? { endCornerId: trimmed.endCornerId } : {})
+      };
+    })
+  };
 }
 
 /** Preserve the planned sketch up to the same slack used to recognize joints. */
@@ -465,15 +803,53 @@ export function sketchFilletBatchCommands(
     ])
   );
   seedRectangleDiagonals(document, sketch, readyPlan, updates);
-  return [
-    ...readyPlan.arcs.flatMap(({ corner: { a, b } }) =>
-      deleteCornerCoincidenceCommands(
-        sketch,
+  const arcUpdates = readyPlan.trimmedArcs.map((trimmed) => {
+    const node = document.nodes[trimmed.objectId];
+    if (node?.kind !== 'sketch-object' || node.data.objectKind !== 'arc') {
+      throw new Error('A filleted object is no longer an arc in this sketch.');
+    }
+    return commandFactories.updateSketchObject(
+      {
         sketchId,
-        a,
-        b,
-        'Release the filleted corner'
-      )
+        objectId: trimmed.objectId,
+        data: {
+          ...node.data,
+          startAngleDeg: trimmed.startCornerId
+            ? trimmed.startAngleDeg
+            : node.data.startAngleDeg,
+          endAngleDeg: trimmed.endCornerId
+            ? trimmed.endAngleDeg
+            : node.data.endAngleDeg
+        }
+      },
+      'Trim arc to fillet'
+    );
+  });
+  return [
+    ...readyPlan.arcs.flatMap(({ corner: { a, b }, circleLeg }) =>
+      circleLeg
+        ? // The end leaves the circle for its tangency: what held it on
+          // the circle goes.
+          (sketch.constraints ?? []).flatMap(({ constraintId, data }) =>
+            data.constraintKind === 'point-on-object' &&
+            data.objectId === circleLeg &&
+            data.point.objectId === a.objectId &&
+            data.point.point === a.point
+              ? [
+                  commandFactories.deleteSketchConstraint(
+                    { sketchId, constraintId },
+                    'Release the filleted corner'
+                  )
+                ]
+              : []
+          )
+        : deleteCornerCoincidenceCommands(
+            sketch,
+            sketchId,
+            a,
+            b,
+            'Release the filleted corner'
+          )
     ),
     ...[...updates].map(([objectId, data]) =>
       commandFactories.updateSketchObject(
@@ -481,13 +857,15 @@ export function sketchFilletBatchCommands(
         data.construction ? 'Align rectangle diagonal' : 'Trim line to fillet'
       )
     ),
+    ...arcUpdates,
     ...readyPlan.arcs.flatMap((arc) =>
       addFilletCornerCommands(
         sketchId,
         arc.corner.a,
         arc.corner.b,
         arc,
-        storedRadius
+        storedRadius,
+        arc.circleLeg !== undefined
       )
     )
   ];

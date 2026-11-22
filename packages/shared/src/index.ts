@@ -545,7 +545,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // sweep): where on the path the profile stands, sweeping both ways from
 // inside it. An older client would sweep from a path end, so it must refuse
 // the document. Builds on v135.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 136 as const;
+// v141 adds S05 curved tangency (a `tangent` constraint between an arc and
+// another arc or a circle, at an arc end): what a fillet against an arc or
+// circle records. An older client refuses a tangent without a line, so it
+// must refuse the document. Builds on v136; v137 is claimed by #1900 (M10)
+// and v138 to v140 by the S07 entity lock and the S05 pattern relation and
+// offset dimension.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 141 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -1988,6 +1994,9 @@ export type SketchConstraintData =
    * `at` names that arc point; it is what a sketch fillet records about the
    * arc it inserted. A constraint written before the arc form existed has no
    * `at` and replays exactly as it did.
+   *
+   * S05 (v141): an arc may also touch another arc or a circle at `at`, an end
+   * of an arc in the pair — what a fillet records against a curved leg.
    */
   | {
       constraintKind: 'tangent';
