@@ -20,6 +20,8 @@ import {
   type SixDofPreferences,
   type SpaceMouseRawState
 } from '@openzcad/viewport/space-mouse';
+import { isDesktopApp } from './desktopBridge';
+import { nativeSpaceMouseHid } from './nativeSpaceMouse';
 
 /**
  * The browser's connection to a 3Dconnexion SpaceMouse over WebHID
@@ -65,10 +67,11 @@ interface HidInputReportLike extends Event {
 
 interface HidConnectionLike extends Event {
   readonly device: HidDeviceLike;
+  readonly error?: string;
 }
 
 export type SpaceMouseStatus =
-  /** This browser has no WebHID (Safari, Firefox, the desktop app). */
+  /** This host has neither WebHID nor the macOS reader. */
   | { state: 'unsupported' }
   /** WebHID exists but this page may not use it. */
   | { state: 'blocked' }
@@ -216,7 +219,8 @@ export class SpaceMouseHub {
   constructor(
     hid: HidLike | null,
     focus: FocusSource | null = null,
-    initiallyFocused = true
+    initiallyFocused = true,
+    readonly native = false
   ) {
     this.hid = hid;
     this.focus = focus;
@@ -509,10 +513,12 @@ export class SpaceMouseHub {
   };
 
   private handleDisconnect = (event: Event) => {
-    const { device } = event as HidConnectionLike;
+    const { device, error } = event as HidConnectionLike;
     if (device && device === this.device) {
       this.release();
-      this.setStatus({ state: 'disconnected' });
+      this.setStatus(
+        error ? { state: 'error', message: error } : { state: 'disconnected' }
+      );
     }
   };
 
@@ -558,9 +564,15 @@ function browserHid(): HidLike | null {
   return hid ?? null;
 }
 
+const useNativeSpaceMouse =
+  isDesktopApp() &&
+  typeof navigator !== 'undefined' &&
+  navigator.userAgent.includes('Macintosh');
+
 /** The page's one connection; every consumer subscribes to this. */
 export const spaceMouse = new SpaceMouseHub(
-  browserHid(),
+  useNativeSpaceMouse ? nativeSpaceMouseHid() : browserHid(),
   typeof window === 'undefined' ? null : window,
-  typeof document === 'undefined' ? true : document.hasFocus()
+  typeof document === 'undefined' ? true : document.hasFocus(),
+  useNativeSpaceMouse
 );

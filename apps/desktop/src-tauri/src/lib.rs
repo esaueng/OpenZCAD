@@ -10,6 +10,8 @@ mod desktop_auth;
 mod device_keys;
 mod external_links;
 mod slicer_handoff;
+#[cfg(target_os = "macos")]
+mod spacemouse;
 
 use desktop_auth::{
     cancel_desktop_sign_in, desktop_api_request, desktop_collaboration_url, poll_desktop_sign_in,
@@ -264,13 +266,54 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[tauri::command]
+async fn set_wired_space_mouse(
+    window: tauri::WebviewWindow,
+    enabled: bool,
+    page: u64,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        spacemouse::set_enabled(window, enabled, page).await
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window, enabled, page);
+        Err("Wired SpaceMouse input is only available on macOS.".into())
+    }
+}
+
+/// The main webview's page-load count, which tags this page's Connect.
+#[tauri::command]
+fn wired_space_mouse_page() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        spacemouse::page()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default().manage(DesktopAuthState::new());
     #[cfg(all(debug_assertions, feature = "webdriver"))]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
-    builder
+    let app = builder
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .on_page_load(|_webview, _payload| {
+            #[cfg(target_os = "macos")]
+            if _webview.label() == "main"
+                && _payload.event() == tauri::webview::PageLoadEvent::Started
+            {
+                spacemouse::page_started();
+                let app = _webview.app_handle().clone();
+                let owner = app.clone();
+                let _ = app.run_on_main_thread(move || spacemouse::close(&owner));
+            }
+        })
         .setup(|app| {
             install_menu(app)?;
             if let Some(window) = app.get_webview_window("main") {
@@ -308,6 +351,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_cad_file,
+            set_wired_space_mouse,
+            wired_space_mouse_page,
             save_cad_file,
             save_cad_binary_file,
             open_in_slicer,
@@ -326,8 +371,25 @@ pub fn run() {
             device_keys::derive_with_device_key,
             device_keys::delete_device_keys
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running OpenZCAD");
+        .build(tauri::generate_context!())
+        .expect("error while building OpenZCAD");
+    app.run(|_app, _event| {
+        #[cfg(target_os = "macos")]
+        match _event {
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Focused(focused),
+                ..
+            } if label == "main" => spacemouse::focus_changed(_app, focused),
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::Destroyed,
+                ..
+            } if label == "main" => spacemouse::close(_app),
+            tauri::RunEvent::Exit => spacemouse::close(_app),
+            _ => {}
+        }
+    });
 }
 
 #[cfg(test)]
