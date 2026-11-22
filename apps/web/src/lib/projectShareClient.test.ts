@@ -7,7 +7,10 @@ import {
   shareTokenHeaders
 } from './projectShareClient';
 import { ProjectSharingApiError } from './projectSharing';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  frozenShareDocument
+} from '@openzcad/document-core';
 import { sharedProjectSnapshotDocument } from '@openzcad/persistence';
 import { toUserId } from '@openzcad/shared';
 
@@ -208,5 +211,78 @@ describe('project share link client', () => {
       'x-openzcad-share-token': token
     });
     expect(() => shareTokenHeaders('  ')).toThrow('Share token is required.');
+  });
+});
+
+describe('share links without history (L08)', () => {
+  const frozen = frozenShareDocument(sharedDocument, [
+    { name: 'Plate', stepText: 'ISO-10303-21;', color: null, opacity: null }
+  ]);
+  const frozenLink = {
+    shareLinkId: 'share_1',
+    projectId: 'project_1',
+    mode: 'view',
+    createdAt: 1,
+    revokedAt: null,
+    label: null,
+    history: false,
+    frozenAt: 1
+  };
+
+  it('sends the frozen model with the link and no history flag otherwise', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ shareLink: frozenLink, token: 'secret' }, 201)
+      );
+    const client = createProjectShareLinkClient(fetcher);
+    await expect(
+      client.createProjectShareLink('project_1', 'view', null, false, frozen)
+    ).resolves.toMatchObject({ shareLink: { history: false } });
+    expect(fetcher.mock.calls[0]![1]!.body).toBe(
+      JSON.stringify({ mode: 'view', history: false, document: frozen })
+    );
+  });
+
+  it('revokes and refuses a link the server made with history', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            shareLink: { ...frozenLink, history: undefined },
+            token: 'secret'
+          },
+          201
+        )
+      )
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = createProjectShareLinkClient(fetcher);
+    await expect(
+      client.createProjectShareLink('project_1', 'view', null, false, frozen)
+    ).rejects.toThrow(/without history is not available/);
+    expect(fetcher.mock.calls[1]).toMatchObject([
+      '/api/projects/project_1/share-links/share_1',
+      { method: 'DELETE' }
+    ]);
+  });
+
+  it('updates the frozen model with PATCH on the same link', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ shareLink: { ...frozenLink, frozenAt: 9 } })
+      );
+    const client = createProjectShareLinkClient(fetcher);
+    await expect(
+      client.updateProjectShareLinkSnapshot('project_1', 'share/1', frozen)
+    ).resolves.toMatchObject({ history: false, frozenAt: 9 });
+    expect(fetcher.mock.calls[0]![0]).toBe(
+      '/api/projects/project_1/share-links/share%2F1'
+    );
+    expect(fetcher.mock.calls[0]![1]).toMatchObject({ method: 'PATCH' });
+    expect(fetcher.mock.calls[0]![1]!.body).toBe(
+      JSON.stringify({ document: frozen })
+    );
   });
 });

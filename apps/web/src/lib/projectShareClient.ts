@@ -1,6 +1,7 @@
 import type {
   CreateProjectShareLinkResponse,
   ListProjectShareLinksResponse,
+  ProjectDocument,
   ProjectShareLinkMode,
   ProjectShareLinkSummary,
   SharedProjectResponse
@@ -27,8 +28,19 @@ export interface ProjectShareLinkClient {
     mode: ProjectShareLinkMode,
     label?: string | null,
     /** L08: a commenter link, whose visitors may comment. */
-    comments?: boolean
+    comments?: boolean,
+    /**
+     * L08: shares the finished model without its history. The link serves
+     * this frozen model (`frozenShareDocument`) and never the project.
+     */
+    frozenDocument?: ProjectDocument
   ): Promise<CreateProjectShareLinkResponse>;
+  /** L08: replaces the frozen model of a link without history. */
+  updateProjectShareLinkSnapshot(
+    projectId: string,
+    shareLinkId: string,
+    frozenDocument: ProjectDocument
+  ): Promise<ProjectShareLinkSummary>;
   listProjectShareLinks(projectId: string): Promise<ProjectShareLinkSummary[]>;
   /** Names a link for its owner; null or blank clears the name. */
   renameProjectShareLink(
@@ -99,7 +111,13 @@ export function createProjectShareLinkClient(
   fetcher: typeof fetch = desktopFetch
 ): ProjectShareLinkClient {
   return {
-    async createProjectShareLink(projectId, mode, label = null, comments) {
+    async createProjectShareLink(
+      projectId,
+      mode,
+      label = null,
+      comments,
+      frozenDocument
+    ) {
       const response = await fetcher(
         `/api/projects/${routePart(projectId, 'Project ID')}/share-links`,
         {
@@ -109,14 +127,54 @@ export function createProjectShareLinkClient(
           body: JSON.stringify({
             mode,
             ...(label === null ? {} : { label }),
-            ...(comments ? { comments: true } : {})
+            ...(comments ? { comments: true } : {}),
+            ...(frozenDocument
+              ? { history: false, document: frozenDocument }
+              : {})
           })
         }
       );
       if (!response.ok) {
         throw await responseError(response);
       }
-      return (await response.json()) as CreateProjectShareLinkResponse;
+      const created = (await response.json()) as CreateProjectShareLinkResponse;
+      // A server that does not know the option would have minted a link to
+      // the live project. Never hand that link out as one without history.
+      if (frozenDocument && created.shareLink.history !== false) {
+        await this.revokeProjectShareLink(
+          projectId,
+          created.shareLink.shareLinkId
+        ).catch(() => undefined);
+        throw new Error(
+          'Sharing without history is not available yet. Try again in a few minutes.'
+        );
+      }
+      return created;
+    },
+    async updateProjectShareLinkSnapshot(
+      projectId,
+      shareLinkId,
+      frozenDocument
+    ) {
+      const response = await fetcher(
+        `/api/projects/${routePart(projectId, 'Project ID')}/share-links/${routePart(
+          shareLinkId,
+          'Share link ID'
+        )}`,
+        {
+          method: 'PATCH',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ document: frozenDocument })
+        }
+      );
+      if (!response.ok) {
+        throw await responseError(response);
+      }
+      const payload = (await response.json()) as {
+        shareLink: ProjectShareLinkSummary;
+      };
+      return payload.shareLink;
     },
     async listProjectShareLinks(projectId) {
       const response = await fetcher(

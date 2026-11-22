@@ -123,7 +123,7 @@ class SnapshotTests(unittest.TestCase):
             complete_snapshot(self.root, SOURCE)
 
     def test_unreviewed_later_migrations_are_refused(self):
-        for name in ['0051_future.sql', '0052_future.sql', '0062_future.sql', '0090_future.sql']:
+        for name in ['0051_future.sql', '0052_future.sql', '0067_future.sql', '0090_future.sql']:
             with self.subTest(name=name):
                 self.db.execute('INSERT INTO d1_migrations VALUES (?)', (name,))
                 self.sql()

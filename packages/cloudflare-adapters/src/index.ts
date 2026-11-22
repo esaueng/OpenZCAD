@@ -184,12 +184,23 @@ import {
   PROJECT_OBJECT_STORAGE_PREFIX,
   ProjectObjectStorageError,
   sha256Hex,
+  assertShareLinkTokenHashDomain,
+  EncryptedProjectSharingError,
+  frozenShareSnapshot,
+  isFrozenShareLinkTokenHash,
   type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
   type OwnedProjectInstance,
   type ProjectStorageAssetObject,
   type ProjectStorageAssetReference
 } from '@openzcad/persistence';
+
+import {
+  decodeFrozenShareDocument,
+  encodeFrozenShareDocument
+} from './frozen-share-storage';
+
+export { MAX_FROZEN_SHARE_STORED_CHARS } from './frozen-share-storage';
 
 export {
   decodeProjectStorageBody,
@@ -1290,6 +1301,30 @@ export const isShareLinkCommentsReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('project_share_links')
    WHERE name = 'allow_comments'`,
   (row) => row?.ready === 1
+);
+
+/**
+ * Whether migration 0065's `project_share_links.frozen_document` exists.
+ * Until it does, every link reads as sharing the live project and a link
+ * without history is refused rather than created with it.
+ */
+export const isShareLinkHistoryReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('project_share_links')
+   WHERE name = 'frozen_document'`,
+  (row) => row?.ready === 1,
+  // Never cache "missing": a stale answer would read another isolate's
+  // frozen link as an ordinary one and drop its owner-only guards.
+  0
+);
+
+/** Migration 0066's `e2ee_share_links.history`, for encrypted links. */
+export const isE2eeShareLinkHistoryReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_share_links')
+   WHERE name = 'history'`,
+  (row) => row?.ready === 1,
+  // Never cache "missing": a stale answer would read another isolate's
+  // frozen link as an ordinary one and drop its owner-only guards.
+  0
 );
 
 export const isShareLinkLabelReady = cachedSchemaProbe(
@@ -2416,36 +2451,53 @@ export class D1R2PersistenceService implements PersistenceService {
         'SHARE_LINK_COMMENTS_UNAVAILABLE',
         'Commenter links are not available on this server yet.'
       );
+    // L08: a link without history needs migration 0065, and is stored with
+    // its frozen model in the same insert: it never serves the live project.
+    const frozen = input.frozenDocument !== undefined;
+    if (frozen && !(await isShareLinkHistoryReady(this.env.DB)))
+      throw new ProjectSharingError(
+        'SHARE_LINK_HISTORY_UNAVAILABLE',
+        'Sharing without history is not available on this server yet.'
+      );
+    // Each kind of link in its own token-hash domain (migration 0065 holds
+    // the row to it as well): a lookup of a bare hash never finds a link
+    // without history, whatever the Worker that runs it knows.
+    assertShareLinkTokenHashDomain(input.tokenHash, frozen);
+    const mode = frozen ? 'view' : input.mode;
+    const columns: [string, string | number][] = [
+      ['id', input.shareLinkId],
+      ['project_id', projectId],
+      ['mode', mode],
+      ['token_hash', input.tokenHash],
+      ['created_by_user_id', ownerUserId],
+      ['created_at', input.createdAt]
+    ];
+    if (label !== null) columns.push(['label', label]);
+    if (frozen)
+      columns.push(
+        ['history', 0],
+        [
+          'frozen_document',
+          await encodeFrozenShareDocument(
+            frozenShareSnapshot(input.frozenDocument, projectId)
+          )
+        ],
+        ['frozen_at', input.createdAt]
+      );
+    // The project is still plaintext in the statement that stores the link.
+    // The check above ran before the model was compressed; a cutover that
+    // encrypted the project since then revoked the links it found, and a
+    // link stored after it would hold plaintext geometry no purge removes.
+    let stored;
     try {
-      await (
-        label === null
-          ? this.env.DB.prepare(
-              `INSERT INTO project_share_links
-             (id, project_id, mode, token_hash, created_by_user_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`
-            ).bind(
-              input.shareLinkId,
-              projectId,
-              input.mode,
-              input.tokenHash,
-              ownerUserId,
-              input.createdAt
-            )
-          : this.env.DB.prepare(
-              `INSERT INTO project_share_links
-             (id, project_id, mode, token_hash, created_by_user_id, created_at,
-              label)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-            ).bind(
-              input.shareLinkId,
-              projectId,
-              input.mode,
-              input.tokenHash,
-              ownerUserId,
-              input.createdAt,
-              label
-            )
-      ).run();
+      stored = await this.env.DB.prepare(
+        `INSERT INTO project_share_links
+           (${columns.map(([name]) => name).join(', ')})
+         SELECT ${columns.map(() => '?').join(', ')}
+         WHERE ${await this.shareableProjectFence()}`
+      )
+        .bind(...columns.map(([, value]) => value), projectId)
+        .run();
     } catch (error) {
       if (
         error instanceof Error &&
@@ -2457,6 +2509,13 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
       throw error;
+    }
+    if (!stored.meta?.changes) {
+      // Encrypted (or gone) since the check above: nothing was stored.
+      assertShareableProject(
+        await this.requireProjectOwner(ownerUserId, projectId)
+      );
+      throw new EncryptedProjectSharingError(projectId);
     }
     if (comments)
       await this.env.DB.prepare(
@@ -2475,18 +2534,100 @@ export class D1R2PersistenceService implements PersistenceService {
         ownerUserId,
         input.shareLinkId,
         input.createdAt,
-        JSON.stringify({ mode: input.mode, ...(comments ? { comments } : {}) })
+        JSON.stringify({
+          mode,
+          ...(comments ? { comments } : {}),
+          ...(frozen ? { history: false } : {})
+        })
       )
       .run();
     return {
       shareLinkId: input.shareLinkId,
       projectId,
-      mode: input.mode,
+      mode,
       createdAt: input.createdAt,
       revokedAt: null,
       label,
-      ...(comments ? { comments } : {})
+      ...(comments ? { comments } : {}),
+      ...(frozen ? { history: false as const, frozenAt: input.createdAt } : {})
     };
+  }
+
+  /**
+   * A predicate, with one bind (the project id), that holds while the
+   * project is still stored in plaintext. In the statement that writes a
+   * share link, it is what keeps a link (and a frozen model) from landing
+   * after the cutover that encrypts the project revoked its links.
+   */
+  private async shareableProjectFence(): Promise<string> {
+    return `EXISTS (SELECT 1 FROM projects fenced
+              WHERE fenced.id = ?${await this.plaintextOnly('fenced.')})`;
+  }
+
+  /** The summary columns of `project_share_links` this schema has. */
+  private async shareLinkColumns(): Promise<string> {
+    const label = (await isShareLinkLabelReady(this.env.DB))
+      ? 'label'
+      : 'NULL AS label';
+    const comments = (await isShareLinkCommentsReady(this.env.DB))
+      ? 'allow_comments'
+      : '0 AS allow_comments';
+    const history = (await isShareLinkHistoryReady(this.env.DB))
+      ? 'history, frozen_at'
+      : '1 AS history, NULL AS frozen_at';
+    return `id, project_id, mode, created_at, ${label}, ${comments}, ${history}`;
+  }
+
+  async updateProjectShareLinkSnapshot(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    document: ProjectDocument,
+    updatedAt: number
+  ): Promise<ProjectShareLinkSummary> {
+    assertPlaintextWritesAllowed(this.env);
+    if (!this.env.DB) {
+      return getInMemoryPersistence().updateProjectShareLinkSnapshot(
+        ownerUserId,
+        projectId,
+        shareLinkId,
+        document,
+        updatedAt
+      );
+    }
+    assertShareableProject(
+      await this.requireProjectOwner(ownerUserId, projectId)
+    );
+    if (!(await isShareLinkHistoryReady(this.env.DB)))
+      throw new ProjectSharingError(
+        'SHARE_LINK_HISTORY_UNAVAILABLE',
+        'Sharing without history is not available on this server yet.'
+      );
+    const stored = await encodeFrozenShareDocument(
+      frozenShareSnapshot(document, projectId)
+    );
+    // Only a link made without history takes a frozen model: the predicate
+    // keeps a link to the live project from being turned into one, or back.
+    const row = await this.env.DB.prepare(
+      `UPDATE project_share_links SET frozen_document = ?, frozen_at = ?
+       WHERE id = ? AND project_id = ? AND revoked_at IS NULL AND history = 0
+         AND ${await this.shareableProjectFence()}
+       RETURNING ${await this.shareLinkColumns()}`
+    )
+      .bind(stored, updatedAt, shareLinkId, projectId, projectId)
+      .first<ProjectShareLinkRow>();
+    if (!row) {
+      // Encrypted since the check above: its links are revoked, and no
+      // plaintext model is stored beside it.
+      assertShareableProject(
+        await this.requireProjectOwner(ownerUserId, projectId)
+      );
+      throw new ProjectSharingError(
+        'SHARE_LINK_NOT_FOUND',
+        'Project share link not found.'
+      );
+    }
+    return shareLinkFromRow(row);
   }
 
   async listProjectShareLinks(
@@ -2500,14 +2641,8 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     await this.requireProjectOwner(ownerUserId, projectId);
-    const label = (await isShareLinkLabelReady(this.env.DB))
-      ? 'label'
-      : 'NULL AS label';
-    const comments = (await isShareLinkCommentsReady(this.env.DB))
-      ? 'allow_comments'
-      : '0 AS allow_comments';
     const rows = await this.env.DB.prepare(
-      `SELECT id, project_id, mode, created_at, ${label}, ${comments}
+      `SELECT ${await this.shareLinkColumns()}
        FROM project_share_links
        WHERE project_id = ? AND revoked_at IS NULL
        ORDER BY created_at DESC`
@@ -2542,7 +2677,7 @@ export class D1R2PersistenceService implements PersistenceService {
     const row = await this.env.DB.prepare(
       `UPDATE project_share_links SET label = ?
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL
-       RETURNING id, project_id, mode, created_at, label`
+       RETURNING ${await this.shareLinkColumns()}`
     )
       .bind(label, shareLinkId, projectId)
       .first<ProjectShareLinkRow>();
@@ -2573,6 +2708,11 @@ export class D1R2PersistenceService implements PersistenceService {
     const result = await this.env.DB.prepare(
       `UPDATE project_share_links SET revoked_at = ?${
         (await isShareLinkLabelReady(this.env.DB)) ? ', label = NULL' : ''
+      }${
+        // The frozen model goes with the link; that it had no history stays.
+        (await isShareLinkHistoryReady(this.env.DB))
+          ? ', frozen_document = NULL'
+          : ''
       }
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL`
     )
@@ -2594,10 +2734,14 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   async loadSharedProjectByTokenHash(
-    tokenHash: string
+    tokenHash: string,
+    frozenTokenHash?: string
   ): Promise<SharedProjectSnapshot | null> {
     if (!this.env.DB) {
-      return getInMemoryPersistence().loadSharedProjectByTokenHash(tokenHash);
+      return getInMemoryPersistence().loadSharedProjectByTokenHash(
+        tokenHash,
+        frozenTokenHash
+      );
     }
     // The token hash is the entire authorization: no user access check runs
     // here on purpose, and unknown stays indistinguishable from revoked or expired.
@@ -2616,14 +2760,46 @@ export class D1R2PersistenceService implements PersistenceService {
     const comments = (await isShareLinkCommentsReady(this.env.DB))
       ? 'l.allow_comments'
       : '0 AS allow_comments';
+    // L08: a link without history reads its own frozen model and none of
+    // the live project's document columns.
+    const historyReady = await isShareLinkHistoryReady(this.env.DB);
+    const live = historyReady ? 'l.history = 1' : '1';
+    // Each kind of link resolves by its own token-hash domain only. The
+    // bare hash finds a link to the live project and never one without
+    // history, which stores a hash this lookup cannot equal; so a Worker
+    // that does not know such links (an older one, or this one while its
+    // schema probe still says 0065 is missing) answers 404 for their
+    // tokens. That does not rest on the probe: it is what is stored.
+    // Nor is a frozen-domain hash ever looked up as a bare one.
+    if (isFrozenShareLinkTokenHash(tokenHash)) return null;
+    const frozenHash =
+      historyReady &&
+      frozenTokenHash !== undefined &&
+      isFrozenShareLinkTokenHash(frozenTokenHash)
+        ? frozenTokenHash
+        : null;
+    const byToken = !historyReady
+      ? 'l.token_hash = ?'
+      : frozenHash === null
+        ? '(l.token_hash = ? AND l.history = 1)'
+        : `((l.token_hash = ? AND l.history = 1)
+            OR (l.token_hash = ? AND l.history = 0))`;
     const row = await this.env.DB.prepare(
-      `SELECT l.mode, ${comments}, p.id AS project_id, p.name, p.document_json,
-              p.document_object_id
+      `SELECT l.mode, ${comments},
+              ${
+                historyReady
+                  ? 'l.history, l.frozen_document'
+                  : '1 AS history, NULL AS frozen_document'
+              },
+              p.id AS project_id, p.name,
+              CASE WHEN ${live} THEN p.document_json END AS document_json,
+              CASE WHEN ${live} THEN p.document_object_id END
+                AS document_object_id
        FROM project_share_links l
        INNER JOIN projects p ON p.id = l.project_id
        LEFT JOIN user_settings owner_settings
          ON owner_settings.user_id = p.user_id
-       WHERE l.token_hash = ?
+       WHERE ${byToken}
          AND l.revoked_at IS NULL
          AND l.created_at > ?
          AND p.status != 'deleted'${await this.plaintextOnly('p.')}
@@ -2639,22 +2815,45 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       .bind(
         tokenHash,
+        ...(frozenHash === null ? [] : [frozenHash]),
         Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
       )
       .first<{
         mode: ProjectShareLinkMode;
         allow_comments: number;
+        history: number;
+        frozen_document: string | null;
         project_id: string;
         name: string;
-        document_json: string;
+        document_json: string | null;
         document_object_id: string | null;
       }>();
     if (!row) {
       return null;
     }
+    // Without the column every link shares the live project. With it, only
+    // a row that says 1 does: anything else is a link without history.
+    if (historyReady && row.history !== 1) {
+      // The frozen model is checked again on the way out; anything else in
+      // the column, or nothing, serves nothing.
+      if (row.history !== 0 || !row.frozen_document) return null;
+      return {
+        projectId: row.project_id,
+        name: row.name,
+        mode: 'view',
+        ...(row.allow_comments === 1 ? { comments: true } : {}),
+        history: false,
+        document: frozenShareSnapshot(
+          await decodeFrozenShareDocument(row.frozen_document),
+          row.project_id
+        )
+      };
+    }
     const document = row.document_object_id
       ? await this.loadProjectObject(row.project_id, row.document_object_id)
-      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(
+          JSON.parse(row.document_json ?? 'null') as ProjectDocument
+        );
     // A share serves only the shared projection, never a stored document it
     // could not read and project.
     if (isUnreadableStoredDocument(document))
@@ -2682,6 +2881,9 @@ export class D1R2PersistenceService implements PersistenceService {
         assetId
       );
     }
+    // L08: no asset through a link without history, by its hash domain
+    // here and by `history` in the join below.
+    if (isFrozenShareLinkTokenHash(tokenHash)) return null;
     // The join is the authorization: the asset is served only when it belongs
     // to the unrevoked, unexpired link's own project — and, as above, only while the
     // owner still has sharing on and has not trashed the project. Serving a
@@ -2696,7 +2898,12 @@ export class D1R2PersistenceService implements PersistenceService {
        LEFT JOIN user_settings owner_settings
          ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ?
-         AND l.revoked_at IS NULL
+         AND l.revoked_at IS NULL${
+           // L08: a link without history serves none of the project's assets.
+           (await isShareLinkHistoryReady(this.env.DB))
+             ? ' AND l.history = 1'
+             : ''
+         }
          AND l.created_at > ?
          AND a.id = ?
          AND p.status != 'deleted'${await this.plaintextOnly('p.')}
@@ -9550,6 +9757,8 @@ interface ProjectShareLinkRow {
   created_at: number;
   label: string | null;
   allow_comments?: number;
+  history?: number;
+  frozen_at?: number | null;
 }
 
 function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
@@ -9560,7 +9769,10 @@ function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
     createdAt: row.created_at,
     revokedAt: null,
     label: row.label ?? null,
-    ...(row.allow_comments === 1 ? { comments: true } : {})
+    ...(row.allow_comments === 1 ? { comments: true } : {}),
+    ...(row.history === 0
+      ? { history: false as const, frozenAt: row.frozen_at ?? row.created_at }
+      : {})
   };
 }
 

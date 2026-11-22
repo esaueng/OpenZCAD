@@ -12,6 +12,10 @@ export const SHARE_LINK_MODE_HINT: Record<ProjectShareLinkMode, string> = {
   tweak: 'Visitors can also change parameters. Their changes stay with them.'
 };
 
+/** What a link without history shares, in place of the mode's own line. */
+export const SHARE_LINK_NO_HISTORY_HINT =
+  'Visitors get the finished model only: no features, sketches or parameters. It stays as it is now until you update the link.';
+
 /**
  * The access a new share link grants, as two native radios drawn as one
  * segmented control: arrow keys move between them, as in any radio group.
@@ -19,11 +23,14 @@ export const SHARE_LINK_MODE_HINT: Record<ProjectShareLinkMode, string> = {
 export function ShareLinkModePicker({
   value,
   disabled = false,
+  viewOnly = false,
   describedBy,
   onChange
 }: {
   value: ProjectShareLinkMode;
   disabled?: boolean;
+  /** A link without history has nothing to tweak: only View can be chosen. */
+  viewOnly?: boolean;
   /** The line saying what the chosen access allows. */
   describedBy?: string;
   onChange(mode: ProjectShareLinkMode): void;
@@ -43,8 +50,8 @@ export function ShareLinkModePicker({
             type="radio"
             name={name}
             value={option.mode}
-            checked={value === option.mode}
-            disabled={disabled}
+            checked={(viewOnly ? 'view' : value) === option.mode}
+            disabled={disabled || (viewOnly && option.mode !== 'view')}
             onChange={() => onChange(option.mode)}
           />
           {option.label}

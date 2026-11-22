@@ -60,6 +60,7 @@ import {
 } from './decodeWorker';
 import { openSharedSnapshot } from './sharedSnapshot';
 import { linkTakesComments, type LinkCommentsAccess } from './shareComments';
+import { frozenShareDocumentProblem } from '@openzcad/document-core';
 import { desktopFetch } from '../desktopBridge';
 
 /** Why a visitor's link did not open. */
@@ -143,8 +144,12 @@ export interface EncryptedSharedProject {
   readonly projectId: string;
   readonly shareId: string;
   readonly name: string;
-  /** The verified statement's mode. */
-  readonly mode: ShareLinkMode;
+  /**
+   * What the verified statement lets the visitor do. A link without history
+   * (`frozen`, L08) is view only; its document says what it is
+   * (`isSharedWithoutHistory`).
+   */
+  readonly mode: Exclude<ShareLinkMode, 'frozen'>;
   readonly document: ProjectDocument;
   /**
    * L08 (plan decisions 2 and 3a): how this visitor writes comments, when
@@ -371,6 +376,18 @@ export async function loadEncryptedSharedProject(
     } catch (error) {
       throw snapshotRefusal(error);
     }
+    // L08: the owner signed this link as one without history. A snapshot
+    // that holds more than the frozen solids was published by mistake, and
+    // is not opened, so the history in it is never shown or copied.
+    if (
+      opened.verified.mode === 'frozen' &&
+      frozenShareDocumentProblem(opened.document) !== null
+    ) {
+      throw new SharedLinkRefusal(
+        'not-verified',
+        SHARED_LINK_MESSAGES['not-verified']
+      );
+    }
     if (!isCurrent()) return null;
     const store =
       deps.loadSourceBlob && deps.putSourceBlob
@@ -406,7 +423,7 @@ export async function loadEncryptedSharedProject(
       projectId: opened.verified.projectId,
       shareId: opened.verified.shareId,
       name: opened.document.name,
-      mode: opened.verified.mode,
+      mode: opened.verified.mode === 'tweak' ? 'tweak' : 'view',
       document: opened.document,
       comments: takesComments
         ? {

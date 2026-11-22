@@ -12,6 +12,7 @@ import { Globe, Lock, UserRound, X } from 'lucide-react';
 import type {
   CollaborationMember,
   ProjectAccessRole,
+  ProjectDocument,
   ProjectEditLease,
   ProjectMemberRole,
   ProjectShareLinkMode,
@@ -46,6 +47,7 @@ import {
 import { ShareLinkDrawings } from './ShareLinkDrawings';
 import {
   SHARE_LINK_MODE_HINT,
+  SHARE_LINK_NO_HISTORY_HINT,
   ShareLinkModePicker
 } from './ShareLinkModePicker';
 import type {
@@ -246,6 +248,12 @@ export interface ProjectSharingDialogProps {
   savingToAccount?: boolean;
   onSaveToAccount?(): void | Promise<void>;
   onBeforeCreateShareLink?(): void | Promise<void>;
+  /**
+   * L08: the current model frozen for a link without history, one imported
+   * solid per body and nothing of how it was built. Without it the option
+   * to leave history out is not offered.
+   */
+  onFreezeModel?(): Promise<ProjectDocument>;
   role: ProjectAccessRole | null;
   collaborationStatus: CollaborationStatus;
   collaborationFailure?: string | null;
@@ -326,6 +334,13 @@ const LINK_MODE_LABELS: Record<ProjectShareLinkMode, string> = {
   tweak: 'Tweak',
   view: 'View'
 };
+
+/** A link's access as its row says it: the mode, and what it leaves out. */
+function linkAccessLabel(shareLink: ProjectShareLinkSummary): string {
+  return shareLink.history === false
+    ? `${LINK_MODE_LABELS[shareLink.mode]} · No history, as of ${createdLabel(shareLink.frozenAt ?? shareLink.createdAt)}`
+    : LINK_MODE_LABELS[shareLink.mode];
+}
 
 const PRESENCE_LABELS: Record<CollaborationMember['status'], string> = {
   active: 'Active',
@@ -434,6 +449,7 @@ export function ProjectSharingDialog({
   savingToAccount = false,
   onSaveToAccount,
   onBeforeCreateShareLink,
+  onFreezeModel,
   role,
   collaborationStatus,
   collaborationFailure,
@@ -1436,27 +1452,57 @@ export function ProjectSharingDialog({
               urlRef={shareLinkUrlRef}
               configurations={configurations}
               onCopy={(url) => void copyShareLink(url)}
-              onCreate={(mode, comments) =>
+              {...(onFreezeModel ? { canExcludeHistory: true } : {})}
+              onUpdate={(shareLink) =>
+                void mutate(
+                  `share-link:update:${shareLink.shareLinkId}`,
+                  async () => {
+                    if (!onFreezeModel) return;
+                    await shareLinkClient.updateProjectShareLinkSnapshot(
+                      projectId,
+                      shareLink.shareLinkId,
+                      await onFreezeModel()
+                    );
+                    await refresh();
+                  }
+                )
+              }
+              onCreate={(mode, comments, history) =>
                 void mutate('share-link:create', async () => {
-                  await onBeforeCreateShareLink?.();
+                  // L08: a link without history is the model frozen in this
+                  // browser, so it waits on no save and needs no source file
+                  // in the account.
+                  const frozen =
+                    !history && onFreezeModel
+                      ? await onFreezeModel()
+                      : undefined;
+                  if (!frozen) await onBeforeCreateShareLink?.();
                   setCreatedShareLink(null);
                   setShareLinkCopied(false);
                   // L08: only a commenter link names comments.
-                  const created = comments
+                  const created = frozen
                     ? await shareLinkClient.createProjectShareLink(
                         projectId,
-                        mode,
+                        'view',
                         null,
-                        true
+                        comments,
+                        frozen
                       )
-                    : await shareLinkClient.createProjectShareLink(
-                        projectId,
-                        mode
-                      );
+                    : comments
+                      ? await shareLinkClient.createProjectShareLink(
+                          projectId,
+                          mode,
+                          null,
+                          true
+                        )
+                      : await shareLinkClient.createProjectShareLink(
+                          projectId,
+                          mode
+                        );
                   setCreatedShareLink({
                     url: buildShareLinkUrl(created.token),
                     shareLinkId: created.shareLink.shareLinkId,
-                    mode
+                    mode: frozen ? 'view' : mode
                   });
                   await refresh();
                 })
@@ -1510,6 +1556,7 @@ export function ProjectSharingDialog({
               {...(encryptedShareLinkClient
                 ? { client: encryptedShareLinkClient }
                 : {})}
+              {...(onFreezeModel ? { onFreezeModel } : {})}
             />
           ) : null}
 
@@ -1624,7 +1671,16 @@ interface PlaintextShareLinksProps {
    * `mode`: what visitors may do (Tweak includes View). `comments`: L08
    * commenter link, whose visitors may comment.
    */
-  onCreate(mode: ProjectShareLinkMode, comments: boolean): void;
+  onCreate(
+    mode: ProjectShareLinkMode,
+    comments: boolean,
+    /** L08: false shares the finished model without its history. */
+    history: boolean
+  ): void;
+  /** L08: whether a link may leave the project's history out. */
+  canExcludeHistory?: boolean;
+  /** L08: freezes the current model into a link without history. */
+  onUpdate(shareLink: ProjectShareLinkSummary): void;
   onRename(shareLink: ProjectShareLinkSummary, draft: string): Promise<void>;
   onRevoke(shareLink: ProjectShareLinkSummary): void;
 }
@@ -1644,9 +1700,14 @@ function PlaintextShareLinks({
   configurations,
   onCopy,
   onCreate,
+  canExcludeHistory = false,
+  onUpdate,
   onRename,
   onRevoke
 }: PlaintextShareLinksProps) {
+  // L08: whether the next link shares the project's history.
+  const [includeHistory, setIncludeHistory] = useState(true);
+  const withoutHistory = canExcludeHistory && !includeHistory;
   // F06: the row the new link opens on, or '' for the one it was saved with.
   const [opensOn, setOpensOn] = useState('');
   const opensOnRow = configurations.some((row) => row.id === opensOn)
@@ -1715,9 +1776,21 @@ function PlaintextShareLinks({
       <div className="sharing-link-create">
         <ShareLinkModePicker
           value={mode}
+          viewOnly={withoutHistory}
           describedBy={detailId}
           onChange={setMode}
         />
+        {canExcludeHistory && (
+          <label className="sharing-link-comments">
+            <input
+              type="checkbox"
+              checked={includeHistory}
+              aria-describedby={detailId}
+              onChange={(event) => setIncludeHistory(event.target.checked)}
+            />
+            Include history
+          </label>
+        )}
         <label className="sharing-link-comments">
           <input
             type="checkbox"
@@ -1730,20 +1803,30 @@ function PlaintextShareLinks({
         <button
           type="button"
           className={shareLinks.length > 0 ? 'secondary' : 'primary'}
-          disabled={disabled || localImportSourceNames.length > 0}
-          onClick={() => onCreate(mode, withComments)}
+          disabled={
+            disabled || (!withoutHistory && localImportSourceNames.length > 0)
+          }
+          onClick={() =>
+            onCreate(
+              withoutHistory ? 'view' : mode,
+              withComments,
+              !withoutHistory
+            )
+          }
         >
           Create link
         </button>
       </div>
       <p id={detailId} className="sharing-access-detail">
-        {SHARE_LINK_MODE_HINT[mode]}
+        {withoutHistory
+          ? SHARE_LINK_NO_HISTORY_HINT
+          : SHARE_LINK_MODE_HINT[mode]}
         {withComments
           ? ' They see every comment and sign theirs with a name.'
           : ''}{' '}
         Links expire after 30 days.
       </p>
-      {localImportSourceNames.length > 0 && (
+      {localImportSourceNames.length > 0 && !withoutHistory && (
         <p className="sharing-hint" role="alert">
           Save the source files for {localImportSourceNames.join(', ')} to your
           account with File → Save before creating a link.
@@ -1908,10 +1991,22 @@ function PlaintextShareLinks({
                   </button>
                   <span className="sharing-row-detail">
                     {shareLink.label === null
-                      ? `${LINK_MODE_LABELS[shareLink.mode]} · ${shareLinkExpiryLabel(shareLink.createdAt)}`
-                      : `${LINK_MODE_LABELS[shareLink.mode]} · created ${createdLabel(shareLink.createdAt)} · ${shareLinkExpiryLabel(shareLink.createdAt)}`}
+                      ? `${linkAccessLabel(shareLink)} · ${shareLinkExpiryLabel(shareLink.createdAt)}`
+                      : `${linkAccessLabel(shareLink)} · created ${createdLabel(shareLink.createdAt)} · ${shareLinkExpiryLabel(shareLink.createdAt)}`}
                   </span>
                 </span>
+                {shareLink.history === false && canExcludeHistory && (
+                  <button
+                    type="button"
+                    className="sharing-row-action"
+                    title="Share the model as it is now through this link"
+                    aria-label={`Update ${name} to the current model`}
+                    disabled={disabled}
+                    onClick={() => onUpdate(shareLink)}
+                  >
+                    Update
+                  </button>
+                )}
                 <button
                   type="button"
                   className="sharing-row-action"
