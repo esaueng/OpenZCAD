@@ -415,8 +415,20 @@ export function assertCustomFeatureSchema(version: unknown): void {
   );
 }
 
+/**
+ * M01: a hole measured from its entry face's outer boundary loop needs v150,
+ * or an older reader would measure it from the vertex mean instead.
+ */
+export const HOLE_OUTER_CENTROID_SCHEMA_VERSION = 150;
+
 export function assertHoleContentSchema(data: unknown, version: unknown): void {
   if (!record(data)) return;
+  if (data.positionAnchor === 'outer-centroid')
+    assertMinimumProjectSchema(
+      version,
+      HOLE_OUTER_CENTROID_SCHEMA_VERSION,
+      'Holes measured from the outer boundary'
+    );
   if (data.points !== undefined)
     assertMinimumProjectSchema(version, 64, 'Holes on sketch points');
   if (data.standard !== undefined)

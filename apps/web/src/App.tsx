@@ -733,6 +733,7 @@ import {
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
 import type { DemoDefinition } from './lib/demoDefinitions';
+import { reducesMotion } from './lib/reducedMotion';
 import { createProjectSharingClient } from './lib/projectSharing';
 import { collaborationSaveState } from './lib/collaborationSaveState';
 import {
@@ -7308,7 +7309,7 @@ export function App() {
       activeDemo?.initialWorkspace === 'assemble'
         ? doc?.assembly?.joints[0]?.id
         : undefined,
-    initialPlayback: appSettings.appearance.reducedMotion
+    initialPlayback: reducesMotion(appSettings.appearance.reducedMotion)
       ? undefined
       : activeDemo?.initialPlayback,
     execute: (command: AnyCommand) => executeCommand(command),
@@ -13093,6 +13094,9 @@ export function App() {
       ...(geometry?.surfaceType ? { surfaceType: geometry.surfaceType } : {}),
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
+      ...(geometry?.outerCentroid
+        ? { outerCentroid: geometry.outerCentroid }
+        : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
       ...(cylinder ? { cylinder } : {}),
       ...(geometry?.surfaceType.toLowerCase() === 'cone' &&
@@ -28312,7 +28316,10 @@ export function App() {
         const round = (value: number) => {
           const shown = displayedValue(valueSpec, value);
           // I03: a length reads in the display unit.
-          if (valueSpec?.unit === 'length' && inPlaceShownUnits !== inPlaceUnits)
+          if (
+            valueSpec?.unit === 'length' &&
+            inPlaceShownUnits !== inPlaceUnits
+          )
             return String(roundShownLength(inPlaceShown(shown)));
           return shown === Math.round(value * 100) / 100
             ? formatNumber(shown)
@@ -36810,7 +36817,13 @@ export function App() {
       id: `file-display-units-${unit}`,
       label: `Show lengths in ${UNIT_SYSTEM_WORDS[unit]}`,
       group: 'File',
-      keywords: ['units', 'unit', displayLengthName(unit), 'metric', 'imperial'],
+      keywords: [
+        'units',
+        'unit',
+        displayLengthName(unit),
+        'metric',
+        'imperial'
+      ],
       icon: <Ruler size={16} aria-hidden="true" />,
       disabledReason: !doc
         ? 'Open a project first'
