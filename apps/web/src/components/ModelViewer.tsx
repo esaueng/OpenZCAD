@@ -144,6 +144,7 @@ import {
   rectFromDrag,
   edgeRunSelections,
   edgeBlendFrame,
+  edgePullPlacement,
   offsetHandlePlacement,
   createFaceSetTicks,
   type FaceSetTickFace,
@@ -367,6 +368,10 @@ import {
   snapCylinderRadius,
   radiusFromRadialDelta
 } from '../lib/interaction/cylinderRadius';
+import {
+  blendDragStep,
+  snapBlendValue
+} from '../lib/interaction/blendDragStep';
 import {
   lineDirectionLock,
   tangentArcCenter,
@@ -1095,7 +1100,13 @@ export interface EdgeHandleTarget {
   placement?: {
     origin: { x: number; y: number; z: number };
     direction: { x: number; y: number; z: number };
+    /** The value the arrow stands on `origin` at (the picked radius). */
+    baseValue?: number;
   };
+  /**
+   * Names an edit of an existing blend. A labelled handle offers no
+   * Fillet/Chamfer switch; the chip itself reads only the value.
+   */
   label?: string;
   /** R0 means delete the producing Fillet feature. */
   allowRemoval?: boolean;
@@ -2393,13 +2404,14 @@ function sameCylinderHandleTarget(
 }
 
 /**
- * Where the live edge rig stands. `travel` is how far the blend's surface
- * moves along the arrow per unit value for the armed operation; absent, the
- * arrow stays put (a face-backed edit, or an edge whose faces could not be
- * read).
+ * Where the live edge rig stands and how it moves: `edgePullPlacement`'s
+ * signed blend `travel` and arrow `reach` for the armed operation. Absent,
+ * the leader starts where the arrow did (a face-backed edit, or an edge whose
+ * faces could not be read) and the arrow moves a unit per unit of value.
  */
 type EdgeRigPlacement = NonNullable<EdgeHandleTarget['placement']> & {
   travel?: number;
+  reach?: number;
 };
 
 /** Whether two edge handles round the same edge with the same tool. */
@@ -2423,7 +2435,9 @@ function sameEdgeRigPlacement(a: EdgeRigPlacement, b: EdgeRigPlacement) {
   return (
     near(a.origin, b.origin) &&
     near(a.direction, b.direction) &&
-    Math.abs((a.travel ?? 0) - (b.travel ?? 0)) < 1e-9
+    Math.abs((a.travel ?? 0) - (b.travel ?? 0)) < 1e-9 &&
+    Math.abs((a.reach ?? 1) - (b.reach ?? 1)) < 1e-9 &&
+    Math.abs((a.baseValue ?? 0) - (b.baseValue ?? 0)) < 1e-9
   );
 }
 
@@ -3484,6 +3498,8 @@ export function ModelViewer({
   );
   const resetBodyPickingRef = useRef<(() => void) | null>(null);
   const offsetGhostClearRef = useRef<(() => void) | null>(null);
+  /** Drops the fillet/chamfer drag's ghost; see `beginEdgeGhost`. */
+  const edgeGhostClearRef = useRef<(() => void) | null>(null);
   const offsetGhostClipRef = useRef<
     ((plane: THREE.Plane | null) => void) | null
   >(null);
@@ -4570,6 +4586,8 @@ export function ModelViewer({
       directionX: number;
       directionY: number;
       pixelsPerUnit: number;
+      /** The snap step, in shown units; see `blendDragStep`. */
+      step: number;
       initialValue: number;
     } | null = null;
     const hud = new HudLayer(host);
@@ -4691,7 +4709,38 @@ export function ModelViewer({
     offsetGhostClearRef.current = clearOffsetGhost;
     offsetGhostClipRef.current = (plane) => {
       offsetGhost?.setClippingPlane(plane);
+      edgeGhost?.setClippingPlane(plane);
     };
+    // A fillet or chamfer dragged on its arrow shows the part as it will be
+    // in its own shading, over a ghost of the part as it was: the sharp
+    // corner the blend cuts away stays in view as frosted material, the way
+    // a face offset shows what a push removes. Taken when the drag starts,
+    // before any preview replaces the body, and dropped with the drag or
+    // once the bodies that follow it land.
+    let edgeGhost: BodyGhost | null = null;
+    function beginEdgeGhost() {
+      if (edgeGhost) return;
+      const target = edgeHandleRef.current;
+      const object = target && context.objectsByBodyId.get(target.bodyId);
+      if (!target || !(object instanceof THREE.Mesh)) return;
+      edgeGhost = createBodyGhost(object as THREE.Mesh, {
+        resolution: context.fatLineResolution(),
+        clippingPlane: sectionViewRef.current
+          ? sectionClippingPlane(sectionViewRef.current)
+          : null
+      });
+      context.scene.add(edgeGhost.object);
+      if (E2E_CANVAS_HOOKS_ENABLED)
+        renderer.domElement.dataset.e2eEdgeGhost = '1';
+    }
+    function clearEdgeGhost() {
+      if (!edgeGhost) return;
+      edgeGhost.dispose();
+      edgeGhost = null;
+      delete renderer.domElement.dataset.e2eEdgeGhost;
+      requestRender();
+    }
+    edgeGhostClearRef.current = clearEdgeGhost;
     function discardOffsetBodyProxy() {
       offsetBodyProxy?.preview.restore();
       offsetBodyProxy = null;
@@ -4984,6 +5033,7 @@ export function ModelViewer({
         edgeDrag = null;
         edgeDragActiveRef.current = false;
         edgeRigRef.current?.setValue(initialValue);
+        clearEdgeGhost();
         onEdgeCancelRef.current();
         cancelled = true;
       }
@@ -8959,13 +9009,14 @@ export function ModelViewer({
           const displayValue = mode === 'diameter' ? rawValue * 2 : rawValue;
           text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue * shownScaleRef.current)} ${shownLabelRef.current}`;
         } else if (rig.kind === 'edge-radius') {
+          // The value alone: the arrow, its leader and the prompt already say
+          // what is being set, and a titled box covered the blend it named.
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
-          const label = edgeHandleRef.current?.label;
           const shownValue =
             shownScaleRef.current === 1
               ? value
               : roundShownLength(rawValue * shownScaleRef.current);
-          text = `${label ? `${label} · ` : ''}${prefix} ${shownValue} ${shownLabelRef.current}`;
+          text = `${prefix} ${shownValue} ${shownLabelRef.current}`;
         } else {
           // "Total" reads the whole span this face sets: a primitive's own
           // height when it has one, else the span to the flat face opposite it.
@@ -9317,10 +9368,8 @@ export function ModelViewer({
             dragDirection.directionY
           );
           renderer.domElement.dataset.e2eHandlePixelsPerUnit = String(
-            edgeRigBuiltRef.current?.placement.travel
-              ? dragDirection.pixelsPerUnit *
-                  edgeRigBuiltRef.current.placement.travel
-              : dragDirection.fallbackPixelsPerUnit
+            dragDirection.pixelsPerUnit *
+              (edgeRigBuiltRef.current?.placement.reach ?? 1)
           );
         }
       }
@@ -11649,10 +11698,10 @@ export function ModelViewer({
             0,
             edgeDrag.initialValue + projected / edgeDrag.pixelsPerUnit
           );
-          // Blends want finer steps than moves; tenths feel right.
+          // Round numbers as read at this zoom; free value skips the snap.
           const value = freeValue(event)
             ? Math.round(raw * 100) / 100
-            : Math.round(raw * 10) / 10;
+            : snapBlendValue(raw, edgeDrag.step, shownScaleRef.current);
           if (value !== rig.value()) {
             rig.setValue(value);
             // Every applied value goes to the previewer. It keeps one rebuild
@@ -12560,22 +12609,21 @@ export function ModelViewer({
             armedEdgeRig.group.position,
             armedEdgeRig.direction
           );
-          const travel = edgeRigBuiltRef.current?.placement.travel;
+          const placement = edgeRigBuiltRef.current?.placement;
+          const pixelsPerUnit = screen.pixelsPerUnit * (placement?.reach ?? 1);
           edgeDrag = {
             pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
             directionX: screen.directionX,
             directionY: screen.directionY,
-            // An arrow riding the blend's surface moves `travel` per unit of
-            // value, so the value scales by it and the arrow stays under the
-            // pointer. A fixed arrow only signs the drag; the head-on scale
-            // keeps its sensitivity predictable at every view angle.
-            pixelsPerUnit: travel
-              ? screen.pixelsPerUnit * travel
-              : screen.fallbackPixelsPerUnit,
+            // The arrow moves `reach` per unit of value along its own
+            // projected direction, so it stays under the pointer.
+            pixelsPerUnit,
+            step: blendDragStep(pixelsPerUnit, shownScaleRef.current),
             initialValue: armedEdgeRig.value()
           };
+          beginEdgeGhost();
           edgeDragActiveRef.current = true;
           onDirectManipulationChangeRef.current(true);
           gestures.capture(event);
@@ -13287,6 +13335,7 @@ export function ModelViewer({
         );
         if (moved < 4) {
           rig?.setValue(completed.initialValue);
+          clearEdgeGhost();
           onEdgeCancelRef.current();
           selectAtPointer(event);
           return;
@@ -13297,8 +13346,11 @@ export function ModelViewer({
           (finalValue > 1e-9 || edgeHandleRef.current?.allowRemoval) &&
           Math.abs(finalValue - completed.initialValue) > 1e-9
         ) {
+          // The ghost stays while the release is checked; the bodies the
+          // check lands drop it.
           onEdgeCommitRef.current(finalValue);
         } else {
+          clearEdgeGhost();
           onEdgeCancelRef.current();
         }
         return;
@@ -13530,6 +13582,7 @@ export function ModelViewer({
         onDirectManipulationChangeRef.current(false);
         gestures.release(event);
         edgeRigRef.current?.setValue(initialValue);
+        clearEdgeGhost();
         onEdgeCancelRef.current();
         requestRender();
       }
@@ -14772,6 +14825,8 @@ export function ModelViewer({
       retireOffsetDragRef.current = null;
       offsetGhostClearRef.current?.();
       offsetGhostClearRef.current = null;
+      edgeGhostClearRef.current?.();
+      edgeGhostClearRef.current = null;
       offsetGhostClipRef.current = null;
       moveGizmoHudRef.current = null;
       assemblyViewport.dispose();
@@ -15034,6 +15089,7 @@ export function ModelViewer({
         !offsetHandleRef.current?.locked
       )
         offsetGhostClearRef.current?.();
+      if (!edgeDragActiveRef.current) edgeGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
       // This also disposes the highlights still retiring, for the same
@@ -16573,10 +16629,12 @@ export function ModelViewer({
           viewer: { x: camera.x, y: camera.y, z: camera.z }
         });
         if (frame) {
+          const pull = edgePullPlacement(frame, edgeHandle.op);
           placement = {
-            origin: frame.origin,
-            direction: frame.direction,
-            ...(frame.travel ? { travel: frame.travel[edgeHandle.op] } : {})
+            origin: pull.origin,
+            direction: pull.direction,
+            reach: pull.reach,
+            ...(pull.travel !== undefined ? { travel: pull.travel } : {})
           };
         }
       }
@@ -16619,9 +16677,12 @@ export function ModelViewer({
       return;
     }
     const rig = buildEdgeRadiusHandle(placement);
-    // Placed at its value at once: a re-armed arrow stands on the blend it
+    // Placed at its value at once: a re-armed arrow stands off the blend it
     // already made rather than sliding in from the sharp edge.
     rig.setValue(edgeHandle.initialValue ?? 0);
+    // Fat-line materials need the viewport resolution for correct widths.
+    const { width, height } = context.fatLineResolution();
+    syncFatLineResolution(rig.worldGroup, width, height);
     rig.setWarning?.(offsetPreviewInvalidRef.current);
     if (sameTarget) rig.appear?.();
     if (E2E_CANVAS_HOOKS_ENABLED) {
@@ -16631,6 +16692,7 @@ export function ModelViewer({
       );
     }
     context.scene.add(rig.group);
+    context.scene.add(rig.worldGroup);
     edgeRigRef.current = rig;
     edgeRigBuiltRef.current = { handle: edgeHandle, placement };
     context.requestRender();

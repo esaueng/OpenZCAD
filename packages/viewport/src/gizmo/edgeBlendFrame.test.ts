@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   MAX_EDGE_TRAVEL,
   MIN_EDGE_TRAVEL,
-  edgeBlendFrame
+  edgeBlendFrame,
+  edgePullPlacement
 } from './edgeBlendFrame';
 
 /**
@@ -159,5 +160,51 @@ describe('edgeBlendFrame', () => {
         bodyCenter: { x: 0, y: 0, z: 0 }
       })
     ).toBeNull();
+  });
+});
+
+describe('edgePullPlacement', () => {
+  it('pulls out of an outside corner while the blend eats into it', () => {
+    const frame = edgeBlendFrame({
+      points: EDGE,
+      ...corner(),
+      bodyCenter: BOX_CENTRE
+    })!;
+    expect(frame.convex).toBe(true);
+    const fillet = edgePullPlacement(frame, 'fillet');
+    expect(fillet.direction.y).toBeCloseTo(Math.SQRT1_2, 9);
+    expect(fillet.direction.z).toBeCloseTo(Math.SQRT1_2, 9);
+    expect(fillet.travel).toBeCloseTo(-(Math.SQRT2 - 1), 9);
+    expect(fillet.reach).toBe(1);
+    expect(edgePullPlacement(frame, 'chamfer').travel).toBeCloseTo(
+      -Math.SQRT1_2,
+      9
+    );
+  });
+
+  it('pulls into an inside corner, ahead of the growing blend', () => {
+    const frame = edgeBlendFrame({
+      points: EDGE,
+      ...corner({ inside: true }),
+      bodyCenter: { x: 5, y: 1, z: -1 }
+    })!;
+    expect(frame.convex).toBe(false);
+    const fillet = edgePullPlacement(frame, 'fillet');
+    expect(fillet.direction).toEqual(frame.direction);
+    expect(fillet.travel).toBeCloseTo(frame.travel!.fillet, 9);
+    expect(fillet.reach).toBeGreaterThanOrEqual(fillet.travel!);
+    expect(fillet.reach).toBe(1);
+  });
+
+  it('keeps a frame without readable faces pointing away from the body', () => {
+    const placement = edgePullPlacement(
+      { origin: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 } },
+      'fillet'
+    );
+    expect(placement).toEqual({
+      origin: { x: 0, y: 0, z: 0 },
+      direction: { x: 0, y: 0, z: 1 },
+      reach: 1
+    });
   });
 });

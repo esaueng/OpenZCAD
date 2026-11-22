@@ -179,7 +179,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
     name: 'Edit Fillet operation'
   });
   await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 1 mm');
+  await expect(chip).toHaveText('R 1 mm');
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
 
   await chip.click();
@@ -196,7 +196,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(status).toContainText('Set Fillet radius to R 2 mm.');
   await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 2 mm');
+  await expect(chip).toHaveText('R 2 mm');
 
   // The second edit uses the still-armed, re-resolved blend face. No viewport
   // selection event is dispatched between the two commits.
@@ -211,7 +211,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(status).toContainText('Set Fillet radius to R 3 mm.');
   await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 3 mm');
+  await expect(chip).toHaveText('R 3 mm');
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   await chip.click();
@@ -289,7 +289,7 @@ test('Delete removes the fillet whose face is picked in the viewport', async ({
 
   // The pick alone names the fillet; Delete removes it, not the cylinder.
   expect(await readBlend(canvas, true)).not.toBeNull();
-  await expect(chip).toHaveText('Edit Fillet · R 1 mm');
+  await expect(chip).toHaveText('R 1 mm');
   await page.keyboard.press('Delete');
   const toast = page.locator('.toast');
   await expect(toast).toContainText('Deleted Fillet');
@@ -371,7 +371,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
     name: 'Edit Fillet operation'
   });
   await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 1 mm');
+  await expect(chip).toHaveText('R 1 mm');
   await chip.click();
   keypad = page.getByRole('dialog', { name: 'Radius value' });
   await keypad.getByRole('textbox').fill('2');
@@ -503,7 +503,7 @@ test(
     });
     await expect(editFillet).toBeVisible();
     const chip = page.getByTestId('direct-manipulation-value');
-    await expect(chip).toHaveText('Edit Fillet · R 3 mm');
+    await expect(chip).toHaveText('R 3 mm');
 
     await chip.click();
     let keypad = page.getByRole('dialog', { name: 'Radius value' });
@@ -516,7 +516,7 @@ test(
     await keypad.getByRole('button', { name: 'Apply radius' }).click();
     await expect(status).toContainText('Set imported blend radius to R 2 mm.');
     await expect(editFillet).toBeVisible();
-    await expect(chip).toHaveText('Edit Fillet · R 2 mm');
+    await expect(chip).toHaveText('R 2 mm');
 
     // The import's persistent warning must leave the rearmed value clickable.
     await expect
@@ -547,7 +547,7 @@ test(
       })
       .toBeCloseTo(1.5, 6);
     await expect(editFillet).toBeVisible();
-    await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
+    await expect(chip).toHaveText('R 1.5 mm');
     await expect(
       page.getByRole('heading', { name: 'History 3' })
     ).toBeVisible();
@@ -557,7 +557,7 @@ test(
     await expect(editFillet).not.toBeVisible();
     expect(await readBlend(canvas, true)).not.toBeNull();
     await expect(editFillet).toBeVisible();
-    await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
+    await expect(chip).toHaveText('R 1.5 mm');
     expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
       []
     );
@@ -751,6 +751,8 @@ test(
     await expect.poll(shownRadius, { timeout: 30_000 }).toBeGreaterThan(0);
     const first = await shownRadius();
     expect(first).toBeCloseTo(await chipRadius(), 2);
+    // The part keeps its own shading over a ghost of its sharp edge.
+    await expect(canvas).toHaveAttribute('data-e2e-edge-ghost', '1');
     // The slow first frame landed where the hand is: nothing to catch up on.
     await expect(chip).toHaveAttribute('data-state', 'ready');
 
@@ -786,5 +788,6 @@ test(
     await expect(chip).toHaveAttribute('data-state', 'ready');
     await page.keyboard.press('Escape');
     await page.mouse.up();
+    await expect(canvas).not.toHaveAttribute('data-e2e-edge-ghost', /.*/);
   }
 );

@@ -251,27 +251,43 @@ describe('the edge-radius rig', () => {
     rig.dispose();
   });
 
-  it('rides the blend surface by its travel, chip and all', () => {
+  it('follows the hand outward while the leader starts on the blend', () => {
+    // An outside edge: pulled along +x, the blend's middle sinks along -x.
     const rig = buildEdgeRadiusHandle({
       origin: { x: 4, y: 0, z: 0 },
-      direction: { x: -1, y: 0, z: 0 },
-      travel: 0.5
+      direction: { x: 1, y: 0, z: 0 },
+      travel: -0.5
     });
+    const leader = rig.worldGroup.getObjectByName('edge-radius-leader')!;
+    // At a sharp edge there is no blend yet and so no line.
+    expect(leader.visible).toBe(false);
     rig.setValue(3);
     expect(rig.value()).toBe(3);
-    expect(rig.group.position.x).toBeCloseTo(2.5, 12);
-    expect(rig.chipAnchor(2).x).toBeCloseTo(2.5, 12);
+    expect(rig.group.position.x).toBeCloseTo(7, 12);
+    expect(rig.chipAnchor(2).x).toBeCloseTo(7, 12);
+    expect(leader.visible).toBe(true);
     // The anchor and direction describe the gesture, not the current pose.
     expect(rig.origin.x).toBe(4);
+    rig.dispose();
   });
 
-  it('stays on the edge without a travel', () => {
+  it('moves by the change from an existing radius, at its reach', () => {
     const rig = buildEdgeRadiusHandle({
       origin: { x: 4, y: 0, z: 0 },
-      direction: { x: 1, y: 0, z: 0 }
+      direction: { x: 1, y: 0, z: 0 },
+      reach: 2,
+      baseValue: 5
     });
-    rig.setValue(3);
+    expect(rig.value()).toBe(5);
     expect(rig.group.position.x).toBe(4);
+    rig.setValue(6);
+    expect(rig.group.position.x).toBeCloseTo(6, 12);
+    rig.setValue(5);
+    expect(rig.group.position.x).toBeCloseTo(4, 12);
+    expect(rig.worldGroup.getObjectByName('edge-radius-leader')!.visible).toBe(
+      false
+    );
+    rig.dispose();
   });
 });
 
