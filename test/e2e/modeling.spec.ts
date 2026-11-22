@@ -4239,12 +4239,17 @@ test('dragging the move gizmo streams live values and commits what was dragged',
 
   // The committed feature has to carry the dragged distance, not the zero the
   // panel started from: a Move feature is created either way, so the body
-  // moving on screen is what separates a real commit from an empty one.
+  // moving on screen is what separates a real commit from an empty one. The
+  // sweep usually lands on the Z arrow, which moves the body up the screen;
+  // the camera stays where it was (opening History no longer refits), so
+  // the distance is measured in any direction, not only across.
   await expect
     .poll(
       async () => {
         const after = await locateEdge();
-        return after ? Math.abs(after.x - before!.x) : 0;
+        return after
+          ? Math.hypot(after.x - before!.x, after.y - before!.y)
+          : 0;
       },
       { message: 'the committed move should displace the body on screen' }
     )

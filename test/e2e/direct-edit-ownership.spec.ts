@@ -281,6 +281,10 @@ for (const refused of [true, false]) {
       await expect(chip).toHaveText('8 mm');
       await expect(status).not.toContainText('Try another value');
       await expect(status).toContainText('Drag the arrow to resize the body');
+      // Nor does the top bar post the gear's refusal beside the box's pick.
+      await expect(
+        page.getByRole('button', { name: 'Edit not applied' })
+      ).toHaveCount(0);
       expect(errors).toEqual([]);
     }
   );

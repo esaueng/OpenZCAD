@@ -482,7 +482,7 @@ test('a loft picked with a straight guide line connects the corners it joins (M0
   const on = await projected(canvas, [30, -1, 5]);
   await page.mouse.move(on.x, on.y);
   await page.mouse.click(on.x, on.y);
-  await expect(bar).toContainText('guided by a line');
+  await expect(bar).toContainText('guided by a curve');
   await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
     timeout: 30_000
   });
@@ -500,6 +500,89 @@ test('a loft picked with a straight guide line connects the corners it joins (M0
     (10 / 6) * (4 + 4 * 2 + 4),
     6
   );
+});
+
+test('a loft picked with a curved guide arc follows it exactly (M04)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  let document = addPrimitiveFeature(
+    createProjectDocument('Arc-guided loft', toUserId('user_e2e')),
+    {
+      name: 'Marker',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 2, depth: 2 }
+    }
+  );
+  for (const [name, offset] of [
+    ['Bottom', 0],
+    ['Top', 10]
+  ] as const) {
+    document = addSketchFeature(document, {
+      name,
+      plane: 'XY',
+      offset,
+      object: {
+        objectKind: 'rectangle',
+        width: 2,
+        height: 2,
+        centerX: 30,
+        centerY: 0
+      }
+    }).document;
+  }
+  // An arc from the bottom's corner (29, −1, 0) to the top's same corner
+  // (29, −1, 10), bulging out to x = 34 − √50, on the front plane at y = −1
+  // (sketch y runs along −Z).
+  document = addSketchFeature(document, {
+    name: 'Guide',
+    plane: 'XZ',
+    offset: -1,
+    object: {
+      objectKind: 'arc',
+      centerX: 34,
+      centerY: -5,
+      radius: Math.sqrt(50),
+      startAngleDeg: 135,
+      endAngleDeg: 225
+    }
+  }).document;
+  const { canvas, bar } = await startTool(page, document, /^Loft\b/);
+  for (const index of [0, 1]) {
+    await canvas.evaluate(
+      (element, detail) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-profile', { detail })
+        ),
+      { index, additive: index > 0 }
+    );
+  }
+  await expect(bar).toContainText('2 sections');
+  await page.getByRole('button', { name: 'Fit view (F)', exact: true }).click();
+  await waitForStillViewport(page);
+  const on = await projected(canvas, [34 - Math.sqrt(50), -1, 5]);
+  await page.mouse.move(on.x, on.y);
+  await page.mouse.click(on.x, on.y);
+  await expect(bar).toContainText('guided by a curve');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const saved = await exportedDocument(page);
+  const loft = listFeaturesInOrder(saved).find(
+    (feature) => feature.data.featureKind === 'loft'
+  )!;
+  if (loft.data.featureKind !== 'loft') throw new Error('Expected a loft.');
+  expect(loft.data.guides).toHaveLength(1);
+  const derived = await rebuilt(saved);
+  // Every slice is the 2 × 2 square carried along the arc: area × height.
+  const body = derived.bodyRepresentations[loft.bodyId!]!;
+  expect(body.volume).toBeCloseTo(40, 6);
+  // The mesh box sits just inside the arc's bulge, never beyond it.
+  expect(body.bbox.min.x).toBeGreaterThanOrEqual(34 - Math.sqrt(50) - 1e-9);
+  expect(body.bbox.min.x).toBeLessThan(34 - Math.sqrt(50) + 1e-3);
 });
 
 /** A document with a marker box, a profile sketch and the given path sketches. */

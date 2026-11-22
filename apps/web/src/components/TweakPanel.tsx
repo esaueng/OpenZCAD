@@ -11,7 +11,12 @@ import { parameterDisplayName } from '../lib/parameterDisplayName';
 const MESH_FORMATS = '3MF, STL, OBJ, glTF or PLY';
 
 interface TweakPanelProps {
-  onLayoutChange?(reason: 'mount' | 'change'): void;
+  /**
+   * A phone's sheet (the parameters or the parts list) has just come up
+   * over the stage, on its own or with a mode change. Nothing else here
+   * asks the camera to move: a wider stage keeps the view where it was.
+   */
+  onPhoneSheetShown?(): void;
   units?: UnitSystem;
   parameters: ParameterNode[];
   parameterValues: Record<string, number>;
@@ -75,7 +80,7 @@ interface TweakPanelProps {
  * never have to answer.
  */
 export function TweakPanel({
-  onLayoutChange,
+  onPhoneSheetShown,
   units,
   parameters,
   parameterValues,
@@ -120,18 +125,14 @@ export function TweakPanel({
   const showParameters =
     panelOpen && (!phone || selectedPhonePanel === 'parameters');
   const showParts = partsOpen && (!phone || selectedPhonePanel === 'parts');
-  const layoutChange = useRef(onLayoutChange);
-  const previousLayout = useRef({ phone, panel: selectedPhonePanel });
-  layoutChange.current = onLayoutChange;
+  const phoneSheetShown = phone && (showParameters || showParts);
+  const phoneSheetCallback = useRef(onPhoneSheetShown);
+  phoneSheetCallback.current = onPhoneSheetShown;
   useEffect(() => {
-    // This panel is lazy. A mode change can finish framing before its chunk
-    // mounts, so announce the actual sheet as well as later tab changes.
-    const changed =
-      previousLayout.current.phone !== phone ||
-      previousLayout.current.panel !== selectedPhonePanel;
-    layoutChange.current?.(changed ? 'change' : 'mount');
-    previousLayout.current = { phone, panel: selectedPhonePanel };
-  }, [phone, selectedPhonePanel]);
+    // This panel is lazy, so it can mount after its mode has rendered: the
+    // sheet's own effect says when it is up, not the mode switch.
+    if (phoneSheetShown) phoneSheetCallback.current?.();
+  }, [phoneSheetShown]);
   const exportTitle = (format: string) =>
     canExport
       ? `Export ${exportScope ?? 'all bodies'} as ${format}${exportWithheld ? `. ${exportWithheld}` : ''}`

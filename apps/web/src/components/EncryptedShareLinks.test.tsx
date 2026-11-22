@@ -344,9 +344,12 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     expect(
       screen.queryByRole('button', { name: 'Copy Tweak link' })
     ).not.toBeInTheDocument();
-    await user.click(
-      screen.getByRole('button', { name: 'Copy View only link' })
-    );
+    // The new link is copied from its box, not from its row as well.
+    expect(
+      screen.queryByRole('button', { name: 'Copy View only link' })
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Copy/ })).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
     expect(writeText).toHaveBeenCalledWith(URL_A);
 
     // Revoking asks first, with focus on the safe choice (design review I2).
@@ -604,5 +607,220 @@ describe('EncryptedShareLinks without history (L08)', () => {
     expect(
       screen.queryByRole('button', { name: /to the current model$/ })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('EncryptedShareLinks speed', () => {
+  it('says it is checking while links load, with only Create link waiting', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false }
+    ]);
+    let finish: (state: EncryptedShareLinksState) => void = () => undefined;
+    vi.mocked(client.list).mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve))
+    );
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    // Never "Anyone with a link" before the links are known.
+    expect(screen.getByText('Checking links…')).toBeInTheDocument();
+    expect(screen.queryByText(/Anyone with a link/)).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
+    expect(
+      screen.getByRole('checkbox', { name: /^Visitors can comment/ })
+    ).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+    await act(async () =>
+      finish({ links: [], retired: [], needsConfirmation: false })
+    );
+    expect(screen.getByText('Only invited people')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create link' })).toBeEnabled();
+  });
+
+  it('goes straight to the passkey from Create link, then makes the link', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: true },
+      { links: [], retired: [], needsConfirmation: false, passkey: true }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    expect(client.confirm).toHaveBeenCalledWith('proj_x', 'passkey');
+    await waitFor(() => expect(client.create).toHaveBeenCalledOnce());
+    expect(
+      screen.queryByRole('group', { name: 'Confirm sharing' })
+    ).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole('textbox', { name: 'Share link' })
+    ).toHaveValue(URL_A);
+  });
+
+  it('offers the recovery key when the passkey prompt is cancelled', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: true }
+    ]);
+    vi.mocked(client.confirm).mockRejectedValueOnce(
+      new Error('The passkey prompt was canceled or timed out.')
+    );
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    const group = await screen.findByRole('group', { name: 'Confirm sharing' });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'canceled or timed out'
+    );
+    expect(client.create).not.toHaveBeenCalled();
+    await userEvent.type(within(group).getByLabelText('Recovery key'), 'KEY');
+    await userEvent.click(
+      within(group).getByRole('button', { name: 'Confirm with recovery key' })
+    );
+    expect(client.confirm).toHaveBeenLastCalledWith('proj_x', {
+      recoveryKey: 'KEY'
+    });
+    await waitFor(() => expect(client.create).toHaveBeenCalledOnce());
+  });
+
+  it('frees Create link when a passkey confirmation landed but a later step failed', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: true },
+      { links: [], retired: [], needsConfirmation: false, passkey: true }
+    ]);
+    // The confirmation was stored; issuing statements afterwards failed.
+    vi.mocked(client.confirm).mockRejectedValueOnce(
+      new Error('Statements could not be issued.')
+    );
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    await userEvent.click(create);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'could not be issued'
+    );
+    // The refresh finds the confirmation: its form goes, and nothing waits on it.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('group', { name: 'Confirm sharing' })
+      ).not.toBeInTheDocument()
+    );
+    expect(create).toBeEnabled();
+    expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
+  });
+
+  it('frees Create link when another refresh saw the confirmation before the action failed', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: true },
+      { links: [], retired: [], needsConfirmation: false, passkey: true }
+    ]);
+    let fail: (error: Error) => void = () => undefined;
+    vi.mocked(client.confirm).mockImplementationOnce(
+      () => new Promise((_, reject) => (fail = reject))
+    );
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    await userEvent.click(create);
+    // A removal refresh lands first and finds the stored confirmation...
+    await act(async () => client.fireRemoval());
+    // ...then the action's later step fails.
+    await act(async () => fail(new Error('Statements could not be issued.')));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'could not be issued'
+    );
+    await waitFor(() => expect(create).toBeEnabled());
+    expect(screen.getByRole('radio', { name: 'Tweak' })).toBeEnabled();
+  });
+
+  it('asks for the recovery key without a passkey prompt when the account has none', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true, passkey: false }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    expect(
+      screen.getByRole('group', { name: 'Confirm sharing' })
+    ).toBeInTheDocument();
+    expect(client.confirm).not.toHaveBeenCalled();
+  });
+
+  it('shows the new link and frees the dialog before the list catches up', async () => {
+    const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: false }
+    ]);
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    // The refresh after creating never answers in this test.
+    vi.mocked(client.list).mockImplementation(() => new Promise(() => {}));
+    await userEvent.click(create);
+    expect(
+      await screen.findByRole('textbox', { name: 'Share link' })
+    ).toHaveValue(URL_A);
+    await waitFor(() => expect(create).toBeEnabled());
+    // The refresh skips the upkeep pass the action already did.
+    expect(client.list).toHaveBeenLastCalledWith('proj_x', { upkeep: false });
+  });
+
+  it('keeps a revoked link uncopyable until the list shows it revoked', async () => {
+    const client = fakeClient([active]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Copy View only link' });
+    let refreshed: (state: EncryptedShareLinksState) => void = () => undefined;
+    vi.mocked(client.list).mockImplementation(
+      () => new Promise((done) => (refreshed = done))
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
+    await waitFor(() => expect(client.list).toHaveBeenCalledTimes(2));
+    // Revoked on the server: not offered while the list catches up.
+    expect(
+      screen.queryByRole('button', { name: 'Copy View only link' })
+    ).not.toBeInTheDocument();
+    refreshed({ links: [], retired: [], needsConfirmation: false });
+    expect(await screen.findByText('Only invited people')).toBeVisible();
+  });
+
+  it('keeps a revoked link uncopyable when the refresh after revoking fails', async () => {
+    const client = fakeClient([active]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByRole('button', { name: 'Copy View only link' });
+    vi.mocked(client.list).mockRejectedValue(new Error('List unavailable'));
+    await user.click(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
+    expect(await screen.findByText('List unavailable')).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: 'Copy View only link' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('drops an earlier action’s refresh error once another action starts', async () => {
+    const client = fakeClient([active]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    let fail: (error: Error) => void = () => undefined;
+    vi.mocked(client.list).mockImplementationOnce(
+      () => new Promise((_, reject) => (fail = reject))
+    );
+    await user.click(create);
+    await waitFor(() => expect(create).toBeEnabled());
+    // The second Create link starts; the first one's refresh fails while
+    // it runs.
+    vi.mocked(client.list).mockResolvedValue(active);
+    let made: (link: { url: string }) => void = () => undefined;
+    vi.mocked(client.create).mockImplementationOnce(
+      () => new Promise((done) => (made = done))
+    );
+    await user.click(create);
+    fail(new Error('First refresh failed'));
+    await new Promise((settle) => setTimeout(settle, 0));
+    made({ url: URL_A });
+    await waitFor(() => expect(client.list).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(create).toBeEnabled());
+    expect(screen.queryByText('First refresh failed')).not.toBeInTheDocument();
   });
 });

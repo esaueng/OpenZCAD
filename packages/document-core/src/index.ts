@@ -3172,7 +3172,7 @@ export function revolveSketch(
 
 /**
  * M04 (v133): a loft's connections name one vertex per section, and its
- * guides are at most one, on a ruled loft; neither goes with an apex point,
+ * guides are at most one (a line, arc or spline); neither goes with an apex point,
  * and the two are not given together (a guide fixes the connections).
  */
 export function validateLoftOptions(data: {
@@ -3222,12 +3222,7 @@ export function validateLoftOptions(data: {
   if (guides !== undefined) {
     if (!Array.isArray(guides) || guides.length !== 1) {
       throw new Error(
-        'A loft takes one guide curve: one straight guide fixes its connections.'
-      );
-    }
-    if (data.mode !== 'ruled') {
-      throw new Error(
-        'A loft guide is built on a ruled loft only: a smooth loft through a guide has no exact construction yet. Switch the loft to Ruled, or clear the guide.'
+        'A loft takes one guide curve: a line, an arc or a spline through a corner of every section.'
       );
     }
   }

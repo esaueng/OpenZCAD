@@ -210,28 +210,154 @@ describe(
       });
     });
 
-    it('refuses a curved guide by name', async () => {
-      const start = stack('Curved');
+    // An arc on the front plane from the bottom's corner (−1, −1, 0) to the
+    // top's same corner (−1, −1, 10), bulging out to x = 4 − √50: sketch
+    // centre (4, −5), radius √50, from 135° to 225° (sketch y runs along −Z).
+    const arcGuide: SketchObjectData = {
+      objectKind: 'arc',
+      centerX: 4,
+      centerY: -5,
+      radius: Math.sqrt(50),
+      startAngleDeg: 135,
+      endAngleDeg: 225
+    };
+
+    it('follows a curved guide exactly, ruled and smooth (Cavalieri: area × height)', async () => {
+      for (const mode of ['ruled', 'smooth'] as const) {
+        const start = stack(`Arc ${mode}`);
+        const { document, bodyId } = await built(
+          withGuide(start, arcGuide, { mode })
+        );
+        expect(document.derived.warnings).toEqual([]);
+        // Every horizontal slice is the 2 × 2 square carried along the arc.
+        expect(
+          rel(document.derived.bodyRepresentations[bodyId]!.volume, 4 * 10)
+        ).toBeLessThan(1e-9);
+        // The solid reaches out to the arc's bulge, x = 4 − √50. The box is
+        // read from the tessellated mesh, whose points lie on the exact
+        // surface, so it sits just inside the bulge, never beyond it.
+        const minX = document.derived.bodyRepresentations[bodyId]!.bbox.min.x;
+        expect(minX).toBeGreaterThanOrEqual(4 - Math.sqrt(50) - 1e-9);
+        expect(minX).toBeLessThan(4 - Math.sqrt(50) + 1e-3);
+      }
+    });
+
+    it('a straight guide on a smooth loft sets the same connection exactly', async () => {
+      const start = stack('Smooth line');
       const { document, bodyId } = await built(
-        withGuide(start, {
-          objectKind: 'arc',
-          centerX: 9,
-          centerY: -5,
-          radius: 10,
-          startAngleDeg: 150,
-          endAngleDeg: 210
-        })
+        withGuide(
+          start,
+          { objectKind: 'line', x1: -1, y1: 0, x2: 1, y2: -10 },
+          { mode: 'smooth' }
+        )
       );
+      expect(document.derived.warnings).toEqual([]);
+      expect(
+        rel(document.derived.bodyRepresentations[bodyId]!.volume, TWISTED)
+      ).toBeLessThan(1e-9);
+    });
+
+    it('refuses a stored guide the picker would not offer, typed as a loft guide', async () => {
+      // Review regression: the picker offers lines, arcs and open splines
+      // that are not construction. A stored guide later turned into
+      // construction, or one naming a circle or a closed spline, must be
+      // refused under the loft's own code, never built and never reported
+      // as a sweep path.
+      const cases: Array<[string, SketchObjectData, 'ruled' | 'smooth']> = [
+        ['construction arc', { ...arcGuide, construction: true }, 'ruled'],
+        [
+          'construction line',
+          {
+            objectKind: 'line',
+            x1: -1,
+            y1: 0,
+            x2: 1,
+            y2: -10,
+            construction: true
+          },
+          'ruled'
+        ],
+        [
+          'circle',
+          { objectKind: 'circle', centerX: 0, centerY: -5, radius: 5 },
+          'smooth'
+        ],
+        [
+          'closed spline',
+          {
+            objectKind: 'spline',
+            closed: true,
+            points: [
+              { x: -1, y: 0 },
+              { x: 3, y: -5 },
+              { x: -1, y: -10 },
+              { x: -5, y: -5 }
+            ]
+          } as SketchObjectData,
+          'smooth'
+        ]
+      ];
+      for (const [name, guide, mode] of cases) {
+        const { document, bodyId } = await built(
+          withGuide(stack(name), guide, { mode })
+        );
+        expect(
+          document.derived.bodyRepresentations[bodyId],
+          name
+        ).toBeUndefined();
+        const [warning] = document.derived.featureWarnings ?? [];
+        expect(warning!.kernelRefusal, name).toMatchObject({
+          family: 'modeling',
+          code: 'loft-guide:not-one-curve'
+        });
+      }
+    });
+
+    it('refuses a curved guide between curved sections, typed', async () => {
+      const bottom = profileSketch(createProjectDocument('Discs', user), {
+        objectKind: 'circle',
+        radius: 1,
+        centerX: 0,
+        centerY: 0
+      });
+      const top = addSketchFeature(bottom.document, {
+        name: 'Top',
+        plane: 'XY',
+        offset: 10,
+        object: { objectKind: 'circle', radius: 1, centerX: 0, centerY: 0 }
+      });
+      const topSketch = findSketch(top.document, top.sketchId)!;
+      const [region] = computeSketchProfileAnalysis(
+        topSketch.objectIds.map((id) => {
+          const node = top.document.nodes[id];
+          if (node?.kind !== 'sketch-object')
+            throw new Error('Expected an object.');
+          return { id, data: node.data };
+        }),
+        (value) => resolveParamValue(value, {}, 'profile dimension')
+      ).profiles;
+      const start = {
+        document: top.document,
+        sections: [
+          bottom.section,
+          {
+            sketchId: top.sketchId,
+            profile: {
+              profileId: region!.profileId,
+              regionFingerprint: region!.regionFingerprint,
+              samplePoint: region!.samplePoint,
+              sourceArea: region!.area,
+              sourceEntityIds: region!.sourceEntityIds
+            }
+          }
+        ]
+      };
+      const { document, bodyId } = await built(withGuide(start, arcGuide));
       expect(document.derived.bodyRepresentations[bodyId]).toBeUndefined();
       const [warning] = document.derived.featureWarnings ?? [];
-      expect(warning!.message).toContain(
-        'A loft guide must be a straight line'
-      );
-      // Typed, so callers branch on it rather than on the sentence.
       expect(warning!.kernelRefusal).toMatchObject({
         family: 'modeling',
-        category: 'unsupported',
-        code: 'loft-guide:curved'
+        code: 'loft_guide_refused'
       });
     });
 
@@ -356,15 +482,8 @@ describe(
       ).toThrow(/133/);
     });
 
-    it('refuses a guide on a smooth loft and connections with an apex before building', () => {
+    it('refuses connections with an apex before building', () => {
       const start = stack('Refused');
-      expect(() =>
-        withGuide(
-          start,
-          { objectKind: 'line', x1: -1, y1: 0, x2: 1, y2: -10 },
-          { mode: 'smooth' }
-        )
-      ).toThrow('ruled loft only');
       expect(() =>
         loftSections(start.document, {
           name: 'Apexed',
