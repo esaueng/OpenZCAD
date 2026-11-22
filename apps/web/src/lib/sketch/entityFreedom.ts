@@ -18,6 +18,8 @@ import type {
   SketchSolveAnchor,
   SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
+import type { ProjectDocument, SketchId } from '@openzcad/shared';
+import { solvedSketchCommands } from './applySolve';
 
 export interface SketchEntityFreedomReport {
   /** The sketch-wide DOF every freedom below is measured against. */
@@ -32,14 +34,17 @@ export interface SketchEntityFreedomReport {
 }
 
 /**
- * The most solver entities a reading holds one at a time. Each hold is a
- * fresh solve of the whole sketch, so the reading grows with the square of
- * the sketch: 150 related lines took about 2.3 s on the pinned kernel, 60
- * stay near 0.4 s. A denser sketch keeps the sketch-wide status.
+ * The most solver entities (splines included) a reading covers. Each hold
+ * is a fresh solve of the whole sketch, so the reading grows with the
+ * square of the sketch: 150 related lines took about 2.3 s on the pinned
+ * kernel, 60 stay near 0.4 s. A denser sketch keeps the sketch-wide status.
  */
 export const MAX_FREEDOM_ENTITIES = 60;
 
-type SolveWith = (anchor?: SketchSolveAnchor) => Promise<SketchSolveOutcome>;
+type SolveWith = (
+  document: ProjectDocument,
+  anchor?: SketchSolveAnchor
+) => Promise<SketchSolveOutcome>;
 
 const settled = (outcome: SketchSolveOutcome) =>
   outcome.converged &&
@@ -49,13 +54,33 @@ const settled = (outcome: SketchSolveOutcome) =>
 /**
  * Measure each named entity's remaining freedom, or null when the sketch
  * itself does not settle (its rank is then no evidence of anything) or has
- * more than {@link MAX_FREEDOM_ENTITIES} entities to hold.
+ * more than {@link MAX_FREEDOM_ENTITIES} solver entities.
+ *
+ * Every entity is held where the solve puts it, not where it is stored: a
+ * stored sketch the solve still moves (a sloped line under a horizontal
+ * relation) could not be held at its stored place, and its rank there is
+ * not the sketch's.
  */
 export async function measureSketchEntityFreedom(
   solve: SolveWith,
+  document: ProjectDocument,
+  sketchId: SketchId,
   objectIds: readonly string[]
 ): Promise<SketchEntityFreedomReport | null> {
-  const base = await solve();
+  const first = await solve(document);
+  if (!settled(first)) {
+    return null;
+  }
+  // Each one solve, at the solved geometry: as many held solves as entities
+  // the kernel solves, splines included, each the size of the whole sketch.
+  if (first.objects.length > MAX_FREEDOM_ENTITIES) {
+    return null;
+  }
+  let solved = document;
+  for (const command of solvedSketchCommands(document, sketchId, first)) {
+    solved = command.apply(solved);
+  }
+  const base = solved === document ? first : await solve(solved);
   if (!settled(base)) {
     return null;
   }
@@ -69,9 +94,6 @@ export async function measureSketchEntityFreedom(
     const kind = kinds.get(objectId);
     return kind !== undefined && kind !== 'spline';
   };
-  if (asked.filter(holdable).length > MAX_FREEDOM_ENTITIES) {
-    return null;
-  }
   for (const objectId of asked) {
     if (!holdable(objectId)) {
       unmeasured.push(objectId);
@@ -82,7 +104,7 @@ export async function measureSketchEntityFreedom(
       freedom[objectId] = 0;
       continue;
     }
-    const held = await solve({ objectIds: [objectId] });
+    const held = await solve(solved, { objectIds: [objectId] });
     if (!settled(held)) {
       unmeasured.push(objectId);
       continue;

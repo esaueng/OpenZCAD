@@ -1536,12 +1536,14 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
       if (request.type === 'sketch-entity-freedom') {
         const freedom = await measureSketchEntityFreedom(
-          (anchor) =>
+          (solving, anchor) =>
             exact.solveSketch(
-              document,
+              solving,
               request.sketchId,
               anchor ? { anchor } : undefined
             ),
+          document,
+          request.sketchId,
           request.objectIds
         );
         post({

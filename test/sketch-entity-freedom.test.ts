@@ -58,12 +58,14 @@ function sketchWith(
   }
   const measure = () =>
     measureSketchEntityFreedom(
-      (anchor) =>
+      (document, anchor) =>
         adapter.solveSketch(
-          manager.document,
+          document,
           sketchId,
           anchor ? { anchor } : undefined
         ),
+      manager.document,
+      sketchId,
       ids.map(String)
     );
   return { ids: ids.map(String), measure };
@@ -156,6 +158,19 @@ describe('S03 per-entity freedom on the pinned kernel', () => {
     expect(ids.map((id) => report.freedom[id])).toEqual([2, 4]);
   });
 
+  it('holds each entity where the solve puts it, not where it is stored', async () => {
+    // Review case: a stored sloped line under a horizontal relation. The
+    // solve levels it; held at its stored slope it could not be solved.
+    const { ids, measure } = sketchWith(
+      [{ objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 1 }],
+      ([line]) => [{ constraintKind: 'horizontal', objectId: line! }]
+    );
+    const report = (await measure())!;
+    expect(report.dof).toBe(3);
+    expect(report.freedom[ids[0]!]).toBe(3);
+    expect(report.unmeasured).toEqual([]);
+  });
+
   it('calls a zero-DOF sketch fixed without holding anything', async () => {
     const { ids, measure } = sketchWith(
       [{ objectKind: 'line', x1: 0, y1: 0, x2: 4, y2: 0 }],
@@ -164,6 +179,27 @@ describe('S03 per-entity freedom on the pinned kernel', () => {
     const report = (await measure())!;
     expect(report.dof).toBe(0);
     expect(fixedEntityIds(report)).toEqual(ids);
+  });
+
+  it('counts splines towards the entity limit', async () => {
+    const objects: SketchObjectData[] = [
+      ...Array.from({ length: MAX_FREEDOM_ENTITIES }, (_, index) => ({
+        objectKind: 'point' as const,
+        x: index,
+        y: 0
+      })),
+      {
+        objectKind: 'spline',
+        method: 'fit',
+        points: [
+          { x: 0, y: 5 },
+          { x: 3, y: 7 },
+          { x: 6, y: 5 }
+        ]
+      }
+    ];
+    const { measure } = sketchWith(objects);
+    expect(await measure()).toBeNull();
   });
 
   it('declines a sketch past the entity limit, leaving the sketch-wide status', async () => {

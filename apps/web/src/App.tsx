@@ -22854,9 +22854,14 @@ export function App() {
       textOutlineBudgetError,
       // Measured per-entity freedom names the fixed entities on its own;
       // without it only a fully-defined sketch paints anything defined.
-      definedObjectIds: sketchEntityFreedom
-        ? fixedEntityIds(sketchEntityFreedom.report)
-        : sketchDefinedObjectIds,
+      // Only a reading of this very document: on the first render after an
+      // edit the old one must not paint a now-movable entity fixed.
+      definedObjectIds:
+        sketchEntityFreedom &&
+        sketchEntityFreedom.key ===
+          sketchSolveEvidenceKey(doc, session.sketchId ?? null)
+          ? fixedEntityIds(sketchEntityFreedom.report)
+          : sketchDefinedObjectIds,
       textDraft,
       textDraftBudgetError:
         textDraft && textDraft.text.length > 0
@@ -24430,8 +24435,10 @@ export function App() {
   // objects would start a fresh reading every render, and each reading's
   // own state change would render again. A newer edit or solve cancels the
   // reading; a reading for a key that is no longer current is dropped.
-  const sketchFreedomKeyRef = useRef<string | null>(null);
   const definedState = sketchSolveStatus?.definedState;
+  // The reading in hand, if it is for this key: a cleared reading (another
+  // edit, or the sketch left and reopened) is measured again.
+  const measuredFreedomKey = sketchEntityFreedom?.key ?? null;
   useEffect(() => {
     const key = currentSketchSolveKey;
     const sketchId = activeSolveSketchId as SketchId | null;
@@ -24440,7 +24447,7 @@ export function App() {
       !sketchId ||
       sketchSolving ||
       definedState !== 'under-defined' ||
-      sketchFreedomKeyRef.current === key
+      measuredFreedomKey === key
     ) {
       return;
     }
@@ -24458,7 +24465,6 @@ export function App() {
           report &&
           sketchSolveEvidenceKey(managerRef.current?.document, sketchId) === key
         ) {
-          sketchFreedomKeyRef.current = key;
           setSketchEntityFreedom({ key, report });
         }
       })
@@ -24468,7 +24474,13 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [currentSketchSolveKey, activeSolveSketchId, definedState, sketchSolving]);
+  }, [
+    currentSketchSolveKey,
+    activeSolveSketchId,
+    definedState,
+    sketchSolving,
+    measuredFreedomKey
+  ]);
   const sketchFreedom =
     sketchEntityFreedom?.key === currentSketchSolveKey
       ? sketchEntityFreedom.report
