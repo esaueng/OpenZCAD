@@ -171,6 +171,7 @@ const PLACEMENT_KEYS = new Set([
   'max',
   'point',
   'centroid',
+  'outerCentroid',
   'center',
   'normal',
   'origin',

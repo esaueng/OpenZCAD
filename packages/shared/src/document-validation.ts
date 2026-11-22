@@ -409,7 +409,7 @@ const FEATURE_ENUM_FIELDS = {
     }),
     positionAnchor: valuesOf<
       NonNullable<FeatureDataOf<'hole'>['positionAnchor']>
-    >({ centroid: true })
+    >({ centroid: true, 'outer-centroid': true })
   },
   gear: {
     gearType: GEAR_TYPES,
