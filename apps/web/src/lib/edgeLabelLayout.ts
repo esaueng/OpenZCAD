@@ -29,15 +29,16 @@ export interface EdgeLabelLayoutInput {
 /**
  * Where a fillet or chamfer drag's tilted value pill stands, in canvas
  * pixels. It goes out past the arrow along its leader; where that has no
- * room it lies back along the leader on the arrow's other side; where
- * neither side has room (a corner of the stage) it is held inside the
- * stage whole, above the bottom lane. Pure.
+ * room it lies back along the leader on the arrow's other side. Null where
+ * neither side has room (a corner of the stage, a panel across the arrow):
+ * the viewer then keeps the label upright beside the arrow, since a pill
+ * forced into the stage there would leave its leader. Pure.
  */
 export function edgeLabelPlacement(input: EdgeLabelLayoutInput): {
   x: number;
   y: number;
-  side: 'out' | 'back' | 'held';
-} {
+  side: 'out' | 'back';
+} | null {
   const { pin, along, size, margin, right, bottom } = input;
   const out = input.reach + input.gap + size.width / 2;
   // The rotated pill's half extents on screen.
@@ -63,11 +64,5 @@ export function edgeLabelPlacement(input: EdgeLabelLayoutInput): {
   if (fits(outward.x, outward.y)) return { ...outward, side: 'out' };
   const back = { x: pin.x - along.x * out, y: pin.y - along.y * out };
   if (fits(back.x, back.y)) return { ...back, side: 'back' };
-  const hold = (value: number, low: number, high: number) =>
-    Math.min(Math.max(value, low), Math.max(low, high));
-  return {
-    x: hold(outward.x, margin + extentX, right - extentX),
-    y: hold(outward.y, margin + extentY, bottom - extentY),
-    side: 'held'
-  };
+  return null;
 }

@@ -35,21 +35,27 @@ describe('edgeLabelPlacement', () => {
     const placed = layout({
       obstacles: [{ left: 450, top: 250, right: 600, bottom: 350 }]
     });
-    expect(placed.side).toBe('back');
-    expect(placed.x).toBe(322);
+    expect(placed!.side).toBe('back');
+    expect(placed!.x).toBe(322);
   });
 
-  it('holds a cornered pill wholly inside the stage, above the bottom lane', () => {
+  it('gives no tilted place in a corner where neither side has room', () => {
     // A 45° down-right arrow 32 px from the left edge and 30 px above the
-    // bottom lane: back runs off the left edge, out into the lane.
-    const placed = layout({
-      pin: { x: 32, y: 770 },
-      along: DIAGONAL,
-      bottom: 800
-    });
-    expect(placed.side).toBe('held');
-    const extent = (Math.SQRT1_2 * (64 + 20)) / 2;
-    expect(placed.y + extent).toBeLessThanOrEqual(800 + 1e-9);
-    expect(placed.x - extent).toBeGreaterThanOrEqual(8 - 1e-9);
+    // bottom lane: back runs off the left edge, out into the lane. The
+    // label then stays upright beside the arrow rather than leaving it.
+    expect(
+      layout({ pin: { x: 32, y: 770 }, along: DIAGONAL, bottom: 800 })
+    ).toBeNull();
+  });
+
+  it('gives no tilted place when a rail covers the only side with room', () => {
+    // Out runs into the bottom lane; back lies under a rail on the left.
+    expect(
+      layout({
+        pin: { x: 120, y: 760 },
+        along: { x: 0, y: 1 },
+        obstacles: [{ left: 0, top: 600, right: 140, bottom: 760 }]
+      })
+    ).toBeNull();
   });
 });
