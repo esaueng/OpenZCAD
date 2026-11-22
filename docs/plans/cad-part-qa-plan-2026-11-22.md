@@ -224,10 +224,9 @@ feature and sketch name with a neutral label, but its parameter names and the
 geometry itself stay.
 
 Before any capture — or any fixture derived from one — is committed, someone
-reads it for private names, values
-and geometry. A capture that contains any is not committed: the finding is
-rebuilt as an authored scenario with synthetic names and dimensions that
-reproduce the same refusal or result.
+reads it for private names, values and geometry. A capture that contains any
+is not committed: the finding is rebuilt as an authored scenario with
+synthetic names and dimensions that reproduce the same refusal or result.
 
 ## Phases
 
