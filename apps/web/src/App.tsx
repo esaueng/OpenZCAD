@@ -23082,6 +23082,20 @@ export function App() {
   /** Where the text card's live outline sits; the viewport writes it. */
   const sketchTextAnchorRef = useRef<{ x: number; y: number } | null>(null);
 
+  // S05: whether a multi-selection is construction — all, none or mixed —
+  // for the Construction toggle that acts on all of it.
+  const sketchSelectionConstruction = useMemo(():
+    boolean | 'mixed' | undefined => {
+    if (interaction.mode !== 'sketch' || !doc) return undefined;
+    const ids = sketchSelectedObjectIds(interaction.session);
+    if (ids.length < 2) return undefined;
+    const flags = ids.map((id) => {
+      const node = ownEntry(doc.nodes, id as EntityId);
+      return node?.kind === 'sketch-object' && node.data.construction === true;
+    });
+    return flags.every(Boolean) ? true : flags.some(Boolean) ? 'mixed' : false;
+  }, [interaction, doc]);
+
   const selectedSketchEntity = useMemo(() => {
     if (
       interaction.mode !== 'sketch' ||
@@ -24037,18 +24051,44 @@ export function App() {
       target && base && findSketch(base, target.sketchId as SketchId);
     if (!base || !target || !sketch || sketchSolving || geometryBusy) return;
     if (!requireCurrentSketchGeometry(sketch.sketchId)) return;
+    // The edit is for exactly the selection the toggle was pressed on,
+    // captured before anything awaits: a click that changes it while the
+    // module loads or the downstream check runs drops the edit.
+    const selected = sketchSelectedObjectIds(
+      interactionRef.current.mode === 'sketch'
+        ? interactionRef.current.session
+        : { selectedObjectId: null }
+    );
+    const selectionKey = selected.join('|');
+    const selectionCurrent = () => {
+      const live = interactionRef.current;
+      return (
+        live.mode === 'sketch' &&
+        sketchSelectedObjectIds(live.session).join('|') === selectionKey
+      );
+    };
     setSketchSolving(true);
     setSketchEditError(null);
     setSketchDiagnosticPoints([]);
     try {
-      const { planSketchConstructionToggle } =
+      const { planSketchConstructionSet, planSketchConstructionToggle } =
         await import('./lib/sketch/modify');
-      const plan = planSketchConstructionToggle(
-        base,
-        sketch,
-        sketch.sketchId,
-        target.objectId
-      );
+      if (selected.length > 1 && !selectionCurrent()) {
+        setStatus(
+          'The selection changed before the construction change applied. Try again.'
+        );
+        return;
+      }
+      // A multi-selection toggles together; one entity keeps its own plan.
+      const plan =
+        selected.length > 1
+          ? planSketchConstructionSet(base, sketch, sketch.sketchId, selected)
+          : planSketchConstructionToggle(
+              base,
+              sketch,
+              sketch.sketchId,
+              target.objectId
+            );
       if (plan.status === 'refuse') {
         setSketchEditError(plan.reason);
         setStatus(plan.reason);
@@ -24058,7 +24098,10 @@ export function App() {
           sketch.sketchId,
           plan.commands,
           plan.label,
-          target.raceObjectId
+          target.raceObjectId,
+          selected.length > 1
+            ? { isCurrent: selectionCurrent, checkCandidate: async () => {} }
+            : undefined
         )
       ) {
         setStatus(plan.message);
@@ -24358,6 +24401,7 @@ export function App() {
     raws?: string[];
     offset?: SketchOffsetPick;
     pattern?: SketchPatternOptions;
+    sources?: readonly string[];
     anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
@@ -37113,6 +37157,8 @@ export function App() {
           : undefined
       }
       onToggleConstruction={() => void handleToggleSketchConstruction()}
+      selectionCount={sketchSelectedObjectIds(interaction.session).length}
+      selectionConstruction={sketchSelectionConstruction}
       composite={selectedComposite}
       onResizeComposite={(size, expressions) => {
         void handleResizeSketchComposite(size, expressions);

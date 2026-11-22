@@ -2231,6 +2231,22 @@ describe('sketch entity multi-selection', () => {
     });
   });
 
+  it('arms either pattern over a selection with the entities as its sources', () => {
+    for (const kind of ['linear-pattern', 'circular-pattern'] as const) {
+      let state = interactionReducer(selectA(), {
+        type: 'sketch-select-object',
+        objectId: 'b',
+        toggle: true
+      });
+      state = interactionReducer(state, { type: 'sketch-edit-tool', kind });
+      expect(sketchSession(state).pendingEdit).toEqual({
+        kind,
+        picks: [],
+        sources: ['a', 'b']
+      });
+    }
+  });
+
   it('drops the set with the tool when a drawing tool is armed', () => {
     let state = interactionReducer(selectA(), {
       type: 'sketch-select-object',

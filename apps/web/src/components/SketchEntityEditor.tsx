@@ -95,6 +95,16 @@ interface SketchEntityEditorProps {
    * Absent, the editor has no construction toggle.
    */
   onToggleConstruction?(): void;
+  /**
+   * How many entities are selected. Above one, the construction toggle
+   * applies to all of them and says so.
+   */
+  selectionCount?: number;
+  /**
+   * Whether the selected entities are construction: all, none, or `mixed`.
+   * Absent reads the primary entity alone.
+   */
+  selectionConstruction?: boolean | 'mixed';
   onClose(): void;
   /**
    * The constraints section: what the entity is already held by. Adding one
@@ -537,6 +547,8 @@ export function SketchEntityEditor({
   onApply,
   onDelete,
   onToggleConstruction,
+  selectionCount = 1,
+  selectionConstruction,
   onClose,
   constraints,
   onEditConstraint,
@@ -682,17 +694,25 @@ export function SketchEntityEditor({
               <button
                 type="button"
                 className="secondary sketch-entity-construction"
-                aria-pressed={data.construction === true}
+                aria-pressed={
+                  selectionCount > 1 && selectionConstruction !== undefined
+                    ? selectionConstruction
+                    : data.construction === true
+                }
                 title={
-                  data.construction
-                    ? 'Make regular geometry: it bounds profiles again'
-                    : 'Make construction geometry: it solves but bounds no profile'
+                  selectionCount > 1
+                    ? `Toggle construction for the ${selectionCount} selected entities: all become construction unless every one already is`
+                    : data.construction
+                      ? 'Make regular geometry: it bounds profiles again'
+                      : 'Make construction geometry: it solves but bounds no profile'
                 }
                 disabled={disabled}
                 onClick={onToggleConstruction}
               >
                 <Construction size={13} aria-hidden="true" />
-                Construction
+                {selectionCount > 1
+                  ? `Construction (${selectionCount})`
+                  : 'Construction'}
               </button>
             )}
             <button
