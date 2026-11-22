@@ -4,15 +4,21 @@ import {
   commandFactories,
   composeCommands
 } from '@openzcad/command-system';
-import { createProjectDocument, findSketch } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  findSketch,
+  normalizeDocument
+} from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter,
   type SketchSolveOutcome
 } from '@openzcad/kernel-adapter/exact';
 import {
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toUserId,
   type EntityId,
+  type ProjectDocument,
   type ParamValue,
   type SketchConstraintData,
   type SketchObjectData
@@ -881,6 +887,35 @@ describe('S05 Offset on the pinned kernel', () => {
     expect(Math.abs(copied.radius! - 4)).toBeCloseTo(1.5, 8);
     expect(copied.centerX).toBeCloseTo(20, 8);
     void arc;
+  });
+
+  it('needs schema v146: an older stamp refuses a document with an offset dimension', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    await fixture.commit(
+      offsetPlan(fixture, fixture.ids[0]!, 1, {
+        join: 'miter',
+        chain: true,
+        side: 1
+      })
+    );
+    expect(
+      fixture
+        .sketch()
+        .constraints!.some(({ data }) => data.constraintKind === 'offset')
+    ).toBe(true);
+    const saved = JSON.parse(
+      JSON.stringify(fixture.manager.document)
+    ) as ProjectDocument;
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(146);
+    expect(normalizeDocument(saved)).toEqual(fixture.manager.document);
+    expect(() =>
+      normalizeDocument({
+        ...saved,
+        schemaVersion: 145 as typeof saved.schemaVersion
+      })
+    ).toThrow(/Sketch offset dimensions/);
   });
 
   it('holds an offset circle concentric with its source through an edit', async () => {
