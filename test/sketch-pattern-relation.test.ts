@@ -257,6 +257,81 @@ describe('S05 pattern relation on the pinned kernel', () => {
     }
   });
 
+  it('a copy edited to the source’s other side brings the free source along', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 }
+    ]);
+    const [circle, direction] = fixture.ids as [string, string];
+    fixture.commit(
+      planSketchLinearPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        circle,
+        direction,
+        4,
+        2,
+        resolve
+      )
+    );
+    const [copy] = fixture.sketch().objectIds.map(String).slice(2);
+    fixture.constrain(lock(direction, 'start', 0, -3));
+    fixture.constrain(lock(direction, 'end', 10, -3));
+    const commands = await sketchEntityEditCommands(
+      fixture.manager.document,
+      fixture.sketchId,
+      copy as EntityId,
+      { objectKind: 'circle', centerX: -4, centerY: 0, radius: 1 },
+      (document, sketchId, anchor) =>
+        adapter.solveSketch(document, sketchId, anchor ? { anchor } : {})
+    );
+    fixture.manager.runTransaction('Move circle', commands);
+    const x = (id: string) =>
+      (
+        fixture.manager.document.nodes[id as EntityId] as unknown as {
+          data: Record<string, number>;
+        }
+      ).data.centerX;
+    expect(x(copy!)).toBe(-4);
+    expect(x(circle)).toBeCloseTo(-8, 8);
+    expectSettled(await fixture.solve());
+  });
+
+  it('refuses a wrong-side copy far from the origin too', async () => {
+    const far = 1e8;
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: far, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: far, y1: -3, x2: far + 10, y2: -3 }
+    ]);
+    const [circle, direction] = fixture.ids as [string, string];
+    fixture.commit(
+      planSketchLinearPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        circle,
+        direction,
+        4,
+        2,
+        resolve
+      )
+    );
+    const [copy] = fixture.sketch().objectIds.map(String).slice(2);
+    expectSettled(await fixture.solve());
+    const mirrored = structuredClone(fixture.manager.document);
+    (
+      mirrored.nodes[copy as EntityId] as unknown as {
+        data: Record<string, number>;
+      }
+    ).data.centerX = far - 4;
+    const held = await adapter.solveSketch(mirrored, fixture.sketchId, {
+      anchor: { objectIds: [circle, copy!, direction] }
+    });
+    expect(held.converged).toBe(false);
+    expect(held.classification).toBe('unsatisfied');
+  });
+
   it('carries a uniform line round the pivot by its midpoint, as the tool placed it', async () => {
     const fixture = sketchWith([
       { objectKind: 'line', x1: 8, y1: 0, x2: 12, y2: 0 },

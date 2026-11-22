@@ -7,6 +7,7 @@ import type {
 import {
   patternInstanceAt,
   placementMiss,
+  placementTolerance,
   seedPatternInstances
 } from './gcs-pattern';
 
@@ -965,15 +966,12 @@ export function solveSketchWithGcs(
         resolveValue,
         objectId
       );
-      if (!actual || !expected) continue;
-      const scale = Math.max(
-        1,
-        ...Object.values(expected)
-          .filter((value): value is number => typeof value === 'number')
-          .map(Math.abs)
+      const source = solvedObjects.find(
+        (entry) => entry.objectId === data.source
       );
+      if (!actual || !expected || !source) continue;
       const miss = placementMiss(expected, actual);
-      if (miss > 1e-7 * scale) {
+      if (miss > placementTolerance(expected, source)) {
         patternMisses.set(
           constraintId,
           Math.max(patternMisses.get(constraintId) ?? 0, miss)

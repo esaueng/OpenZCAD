@@ -177,21 +177,76 @@ export function seedPatternInstances(
   isHeld: (objectId: string) => boolean
 ): ResolvedSketchObject[] {
   let seeded = [...objects];
+  const replace = (placed: ResolvedSketchObject | null) => {
+    if (!placed) return;
+    const index = seeded.findIndex(
+      (entry) => entry.objectId === placed.objectId
+    );
+    if (index < 0 || seeded[index]!.kind !== placed.kind) return;
+    seeded = seeded.map((entry, at) => (at === index ? placed : entry));
+  };
+  const attempt = (place: () => ResolvedSketchObject | null) => {
+    try {
+      return place();
+    } catch {
+      return null;
+    }
+  };
   for (const { data } of constraints) {
     if (data.constraintKind !== 'pattern') continue;
+    // A held instance with a free source (an instance dragged on its
+    // own): start the source one step back from it, so the source follows
+    // to the side the instance was put on.
+    const heldInstance = data.instances.find(({ objectId }) =>
+      isHeld(objectId)
+    );
+    if (heldInstance && !isHeld(data.source)) {
+      replace(
+        attempt(() =>
+          patternInstanceAt(
+            seeded,
+            { ...data, source: heldInstance.objectId },
+            -heldInstance.step,
+            resolveValue,
+            data.source
+          )
+        )
+      );
+    }
     for (const { objectId, step } of data.instances) {
       if (isHeld(objectId)) continue;
-      const index = seeded.findIndex((entry) => entry.objectId === objectId);
-      if (index < 0) continue;
-      let placed: ResolvedSketchObject | null = null;
-      try {
-        placed = patternInstanceAt(seeded, data, step, resolveValue, objectId);
-      } catch {
-        placed = null;
-      }
-      if (!placed || placed.kind !== seeded[index]!.kind) continue;
-      seeded = seeded.map((entry, at) => (at === index ? placed! : entry));
+      replace(
+        attempt(() =>
+          patternInstanceAt(seeded, data, step, resolveValue, objectId)
+        )
+      );
     }
   }
   return seeded;
+}
+
+/**
+ * The miss a solved instance may show: a millionth of its own size or
+ * offset (never of how far the sketch sits from the origin), with a
+ * floating-point floor for coordinates far out.
+ */
+export function placementTolerance(
+  expected: ResolvedSketchObject,
+  source: ResolvedSketchObject
+): number {
+  const want = keyPoints(expected);
+  const from = keyPoints(source);
+  const spread = Math.max(
+    0,
+    ...want.flatMap((p) => want.map((q) => Math.hypot(p.x - q.x, p.y - q.y))),
+    ...want.map((p, index) => {
+      const q = from[index];
+      return q ? Math.hypot(p.x - q.x, p.y - q.y) : 0;
+    })
+  );
+  const far = Math.max(
+    0,
+    ...want.flatMap((p) => [Math.abs(p.x), Math.abs(p.y)])
+  );
+  return Math.max(1e-7 * Math.max(1, spread), 1024 * Number.EPSILON * far);
 }
