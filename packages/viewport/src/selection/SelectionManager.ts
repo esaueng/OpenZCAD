@@ -679,6 +679,10 @@ export class SelectionManager {
           : base
       );
     });
+    // Like every other hover effect above: the viewer draws a hover frame
+    // only when one of them asks, so a lift nobody announced would wait for
+    // some unrelated frame to show.
+    this.options.requestRender();
   }
 
   /**
