@@ -783,6 +783,40 @@ describe('measurement annotations', () => {
     );
   });
 
+  it('starts over on the body when a double-click picks it after its face', async () => {
+    const doc = createProjectDocument('Measure N', toUserId('user_measure_n'));
+    const body = twoFaceBody();
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(
+        input({
+          doc,
+          modelingLocked: true,
+          representations: { 'body-1': body },
+          renderedRepresentations: { 'body-1': body },
+          viewerBodies: [body]
+        })
+      )
+    );
+    await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
+    act(() => result.current.setMeasuring(true));
+    act(() => {
+      result.current.handleMeasurementPick(faceSelection, false, {
+        point: { x: 2, y: 3, z: 5 }
+      });
+    });
+    act(() => {
+      result.current.handleMeasurementPick(
+        { bodyId: body.bodyId, kind: 'body' },
+        false,
+        { point: { x: 2, y: 3, z: 5 } }
+      );
+    });
+    const session = result.current.measurementSession;
+    expect(session.second).toBeNull();
+    expect(session.primary?.measurement.kind).toBe('body');
+    expect(session.primary?.title).toBe('Size');
+  });
+
   it('starts over on a third pick', async () => {
     const doc = createProjectDocument('Measure K', toUserId('user_measure_k'));
     const body = twoFaceBody();

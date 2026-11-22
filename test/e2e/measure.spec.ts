@@ -474,6 +474,44 @@ test(
 );
 
 /**
+ * On a short phone screen the card scrolls as one: Keep and the kept rows stay
+ * reachable under a two-pick reading, rather than the list collapsing to
+ * nothing and Keep sitting below the card's edge.
+ */
+test('a short screen scrolls the card to Keep and the kept rows', async ({
+  page
+}) => {
+  await createBox(page, 'Measure Short Screen');
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await setSelectionFilter(page, 'Edge');
+  const first = await locateEdge(page);
+  await page.mouse.click(first.x, first.y);
+  await keepMeasurement(page);
+  const workbench = page.getByLabel('Measurement workbench');
+  await expect(workbench.getByRole('listitem')).toHaveCount(1);
+
+  // Picked at full width, where the card covers none of the edges, then
+  // read on the short screen.
+  const a = await locateEdge(page, { exclude: [first.topologyId] });
+  const b = await locateEdge(page, {
+    exclude: [first.topologyId, a.topologyId]
+  });
+  await page.mouse.click(a.x, a.y);
+  await page.mouse.click(b.x, b.y);
+  await expect(
+    workbench.getByRole('group', { name: 'Other readings' })
+  ).toBeVisible();
+  await page.setViewportSize({ width: 360, height: 640 });
+
+  const row = workbench.getByRole('listitem').first();
+  await row.scrollIntoViewIfNeeded();
+  expect((await row.boundingBox())!.height).toBeGreaterThan(20);
+  await keepMeasurement(page);
+  await expect(workbench.getByRole('listitem')).toHaveCount(2);
+});
+
+/**
  * Enter keeps the reading shown, but never steals a focused control's key:
  * Enter on another reading chooses it, and only then does Enter keep it.
  */

@@ -592,9 +592,18 @@ export function useMeasurementWorkbench({
     }
 
     const { first, second } = measurementPicks;
+    // A whole body picked after one of its own faces or edges is the second
+    // click of a double-click, which selects the body: it starts over on the
+    // body rather than measuring a face against the body it bounds.
+    const bodyOfFirst =
+      first !== null &&
+      selection.kind === 'body' &&
+      first.selection.kind !== 'body' &&
+      first.selection.bodyId === selection.bodyId;
     if (
       first &&
       !second &&
+      !bodyOfFirst &&
       measurementEdgeRun.length < 2 &&
       !samePick(measurementApi, readingsInput, first, pick)
     ) {

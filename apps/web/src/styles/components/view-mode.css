@@ -916,9 +916,15 @@
   line-height: var(--lh-normal);
 }
 
-.measurement-dock-list {
+.measurement-dock-body {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.measurement-dock-list {
+  min-height: 0;
 }
 
 .measurement-row {
