@@ -14,6 +14,7 @@ import {
 import {
   buildConstraint,
   CONSTRAINT_TOOL_SPECS,
+  constraintPickKind,
   constraintReferencesObject,
   constraintToolsForObject,
   definedPointKey,
@@ -131,6 +132,118 @@ describe('sketch constraint picking', () => {
         axis: lineB
       }
     });
+  });
+
+  it('S07: symmetry also mirrors two whole entities of one kind', () => {
+    const { document, sketch, lineA, lineB, circle, circleB, arc, rectangle } =
+      fixture();
+    // Nothing decides the first pick's kind; the first pick decides the
+    // second's; the axis is always an object.
+    expect(constraintPickKind('symmetric', [])).toBe('either');
+    expect(constraintPickKind('symmetric', [object(circle)])).toBe('object');
+    expect(constraintPickKind('symmetric', [point(lineA, 'end')])).toBe(
+      'point'
+    );
+    expect(
+      constraintPickKind('symmetric', [object(circle), object(circleB)])
+    ).toBe('object');
+    expect(refusePick(document, sketch, 'symmetric', [], object(circle))).toBe(
+      null
+    );
+    expect(
+      refusePick(document, sketch, 'symmetric', [], object(rectangle))
+    ).toBe('Symmetric mirrors two lines, two circles or two arcs.');
+    expect(
+      refusePick(document, sketch, 'symmetric', [object(circle)], object(arc))
+    ).toBe('Symmetric needs another circle to mirror the first.');
+    // A point after an entity, or an entity after a point, is refused.
+    expect(
+      refusePick(
+        document,
+        sketch,
+        'symmetric',
+        [object(circle)],
+        point(circleB, 'center')
+      )
+    ).toMatch(/not a point/);
+    expect(
+      refusePick(
+        document,
+        sketch,
+        'symmetric',
+        [point(lineA, 'start')],
+        object(lineB)
+      )
+    ).toMatch(/not a whole object/);
+    expect(
+      refusePick(
+        document,
+        sketch,
+        'symmetric',
+        [object(lineA), object(lineB)],
+        object(lineA)
+      )
+    ).toBe('That pick is already part of this constraint.');
+    expect(
+      buildConstraint(document, sketch, 'symmetric', [
+        object(circle),
+        object(circleB),
+        object(lineA)
+      ])
+    ).toEqual({
+      data: {
+        constraintKind: 'symmetric',
+        a: { objectId: circle, point: 'center' },
+        b: { objectId: circleB, point: 'center' },
+        axis: lineA
+      },
+      also: [{ constraintKind: 'equal', a: circle, b: circleB }]
+    });
+  });
+
+  it('S07: an either step still names an unreferenced snap it cannot use', () => {
+    const { document, sketch } = fixture();
+    // The App shows this when an either step's click hits no entity.
+    expect(
+      unreferencedSnapRefusal(document, sketch, 'symmetric', { kind: 'origin' })
+    ).toMatch(/^Symmetric can't use the sketch origin/);
+  });
+
+  it('S07: two mirrored lines pair the ends nearest their images', () => {
+    const { document, sketchId } = addSketchFeature(
+      createProjectDocument('Pairs', toUserId('user_sketch')),
+      {
+        name: 'Pairs',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+          { objectKind: 'line', x1: 2, y1: 1, x2: 6, y2: 5 },
+          { objectKind: 'line', x1: -2, y1: 1, x2: -6, y2: 5 },
+          { objectKind: 'line', x1: -6, y1: 5, x2: -2, y2: 1 }
+        ]
+      }
+    );
+    const sketch = findSketch(document, sketchId)!;
+    const [axis, a, same, reversed] = sketch.objectIds as string[];
+    const resolve = (value: unknown) => Number(value);
+    const pairs = (b: string) => {
+      const built = buildConstraint(
+        document,
+        sketch,
+        'symmetric',
+        [object(a!), object(b), object(axis!)],
+        undefined,
+        resolve
+      );
+      if ('error' in built) throw new Error(built.error);
+      return [built.data, ...(built.also ?? [])].map((data) =>
+        data.constraintKind === 'symmetric'
+          ? `${data.a.point}-${data.b.point}`
+          : data.constraintKind
+      );
+    };
+    expect(pairs(same!)).toEqual(['start-start', 'end-end']);
+    expect(pairs(reversed!)).toEqual(['start-end', 'end-start']);
   });
 
   it('S07: a point goes on a line, circle or arc, never on its own object', () => {
