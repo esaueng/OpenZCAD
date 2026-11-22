@@ -38,7 +38,10 @@ Object migration.
 
 One editing account may hold multiple per-browser leases for the project.
 Each lease has its own token bound to project, user, client, and a server-time
-expiry. Its TTL is 30 seconds and the client renews every 10 seconds. Releasing
+expiry. Its TTL is 60 seconds and the client renews every 25 seconds, the
+cadence the room advertises on each grant (amended 2026-11-21 from 30 s and
+10 s: each renewal wakes the hibernating room, which dominated its billed
+time; a client keeps 10 s when a room advertises no cadence). Releasing
 or expiring one browser does not revoke another browser on that account.
 Other accounts wait until all active leases expire or are released. Revoking
 an editor invalidates all of that account’s leases. Each write still requires

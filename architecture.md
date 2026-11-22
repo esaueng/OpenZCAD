@@ -97,9 +97,10 @@ becomes an explicit conflict instead of an automatic winner.
 
 D1 remains the durable membership source of truth. Durable Object storage holds
 the latest document, bounded snapshot history, and one project-wide edit lease,
-not a second membership copy. The 30-second server-time lease survives an
-abrupt socket disconnect and is renewed by a 10-second client heartbeat; a
-clean project change releases it, while another editor can take over after TTL.
+not a second membership copy. The 60-second server-time lease survives an
+abrupt socket disconnect and is renewed by a 25-second client heartbeat whose
+cadence the room advertises on each grant; a clean project change releases
+it, while another editor can take over after TTL.
 
 The client strips derived meshes before transmission, debounces edits, and uses
 the authenticated HTTP snapshot path above 900 KB. An unresolved conflict
