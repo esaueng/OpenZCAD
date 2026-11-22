@@ -727,11 +727,13 @@ try {
     sessionId,
     'High-DPI click selection',
     // The pick's chip counts what it took; the readout names it after the
-    // feature that made the picked edge, not after the part.
+    // feature that made the picked edge, not after the part. The chip's
+    // text runs its count into the kind label ("1 bodyBody"), so the count
+    // has no trailing word boundary.
     `var chip = document.querySelector('.selection-callout-chip');
     var name = document.querySelector('.selection-readout .selection-callout-name');
     return Boolean(
-      chip && /\\b1 body\\b/.test(chip.textContent) &&
+      chip && /\\b1 body/.test(chip.textContent) &&
       name && name.textContent.trim()
     );`
   );
