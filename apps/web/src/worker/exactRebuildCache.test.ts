@@ -300,6 +300,22 @@ describe('newest broadcast publication', () => {
   });
 });
 
+describe('the geometry key and display units (I03)', () => {
+  it('keeps ready geometry when only the display unit changes', () => {
+    const document = createProjectDocument('Units', toUserId('user'));
+    const key = geometryContentKey(document);
+    expect(
+      geometryContentKey({
+        ...document,
+        version: document.version + 1,
+        displayUnits: 'inch'
+      })
+    ).toBe(key);
+    // The stored unit is geometry: a document in inches builds differently.
+    expect(geometryContentKey({ ...document, units: 'inch' })).not.toBe(key);
+  });
+});
+
 describe('content-proven cached sketch geometry', () => {
   it('requalifies a cached solve across bookkeeping versions without changing its stored proof', async () => {
     const document = createProjectDocument('Cached solve', toUserId('user'));

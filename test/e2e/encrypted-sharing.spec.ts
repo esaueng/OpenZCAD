@@ -226,6 +226,7 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
   const dialog = alice.getByRole('dialog', { name: 'Project sharing' });
   await expect(dialog).toBeVisible();
+  await dialog.getByRole('tab', { name: /^Links/ }).click();
   await expect(
     dialog.getByRole('region', { name: 'Encrypted share links' })
   ).toBeVisible();
@@ -243,6 +244,7 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   await expect(dialog.getByRole('button', { name: 'Create link' })).toHaveCount(
     1
   );
+  await dialog.getByRole('tab', { name: /^People/ }).click();
   await dialog.getByLabel('Email').fill(BOB_EMAIL);
   // Editor invitations need enforced edit leases (the plaintext rule the
   // encrypted route shares), which this static preview does not run.

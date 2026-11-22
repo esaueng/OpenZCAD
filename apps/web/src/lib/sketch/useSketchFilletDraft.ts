@@ -97,17 +97,30 @@ export function useSketchFilletDraft(
       if (filletKeypadOpen) setKeypad(null);
     }
   }, [filletDraft, filletKeypadOpen, setKeypad, sketchFilletKey]);
-  const filletCorners = useMemo(
-    () =>
-      sketchFilletKey && doc && editingSketchNode && filletTools
-        ? filletTools.listSketchFilletCorners(
-            doc,
-            editingSketchNode,
-            (value) => evalParamValue(value, scope, doc.units) ?? undefined
-          )
-        : [],
-    [doc, editingSketchNode, filletTools, scope, sketchFilletKey]
-  );
+  const filletCatalog = useMemo(() => {
+    if (!sketchFilletKey || !doc || !editingSketchNode || !filletTools) {
+      return { corners: [], error: null };
+    }
+    try {
+      return {
+        corners: filletTools.listSketchFilletCorners(
+          doc,
+          editingSketchNode,
+          (value) => evalParamValue(value, scope, doc.units) ?? undefined
+        ),
+        error: null
+      };
+    } catch (error) {
+      return {
+        corners: [],
+        error: errorMessage(
+          error,
+          'Sketch Fillet could not inspect this sketch.'
+        )
+      };
+    }
+  }, [doc, editingSketchNode, filletTools, scope, sketchFilletKey]);
+  const filletCorners = filletCatalog.corners;
   const filletCornerIds = fillet?.cornerIds;
   const filletPlan = useMemo(
     () =>
@@ -131,9 +144,10 @@ export function useSketchFilletDraft(
   );
   const filletRefusal = filletLoadError
     ? 'Sketch Fillet could not load. Reopen the tool to retry.'
-    : filletPlan?.status === 'refuse'
-      ? filletPlan.reason
-      : (fillet?.error ?? null);
+    : (filletCatalog.error ??
+      (filletPlan?.status === 'refuse'
+        ? filletPlan.reason
+        : (fillet?.error ?? null)));
   const filletCanFinish =
     filletPlan?.status === 'ready' &&
     !filletRefusal &&
@@ -192,8 +206,8 @@ export function useSketchFilletDraft(
       error:
         objectId && objectId !== firstLine && (firstLine || !onLine.length)
           ? firstLine
-            ? 'Those lines do not share an eligible corner.'
-            : 'Pick a straight line that meets another line at a corner.'
+            ? 'Those two do not share an eligible corner.'
+            : 'Pick a line or arc that meets another line or arc at a corner.'
           : undefined
     });
   }

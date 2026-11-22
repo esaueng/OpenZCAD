@@ -17,6 +17,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './print-clearance';
+export * from './display-units';
 export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
@@ -549,7 +550,24 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // one Move copy stamps repeated copies, each the same transform on from the
 // one before. An older client would build only the first, so it must refuse
 // the document. Builds on v136.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 137 as const;
+// v141 adds S05 curved tangency (a `tangent` constraint between an arc and
+// another arc or a circle, at an arc end): what a fillet against an arc or
+// circle records. An older client refuses a tangent without a line, so it
+// must refuse the document. Builds on v137; v138 to v140 are claimed by the
+// S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+// v145 adds S05 sketch pattern relations (`pattern` sketch constraints): a
+// linear or circular pattern's instance positions held by one relation. An
+// older client cannot solve it, so it must refuse the document. Builds on
+// v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
+// switching (#1915) and the S07 entity lock (#1913).
+// v148 adds I03 display units (`displayUnits` and its `displayUnits.set`
+// command): the unit lengths are shown and typed in, which may differ from
+// the unit the document stores. An older client would replay the command
+// log without knowing the command and would show every length in the stored
+// unit while the user reads another, so it must refuse the document. Builds
+// on v145; v146 and v147 are claimed by the S05 offset dimension (#1919)
+// and the M01 hole anchor (#1808), v142 and v144 by #1914 and #1913.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 148 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -1992,6 +2010,9 @@ export type SketchConstraintData =
    * `at` names that arc point; it is what a sketch fillet records about the
    * arc it inserted. A constraint written before the arc form existed has no
    * `at` and replays exactly as it did.
+   *
+   * S05 (v141): an arc may also touch another arc or a circle at `at`, an end
+   * of an arc in the pair — what a fillet records against a curved leg.
    */
   | {
       constraintKind: 'tangent';
@@ -2030,7 +2051,32 @@ export type SketchConstraintData =
    * lock was made. An edit that would move it conflicts instead of dragging
    * the lock along; removing the constraint unlocks the point.
    */
-  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number };
+  | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
+  /**
+   * S05 (v145): a sketch pattern held as one relation. Each instance is the
+   * source moved `step` steps: along the direction line by `spacing` a step
+   * (linear), or round the pivot by `stepDeg` a step (circular), turned with
+   * it or, `uniform`, kept in the source's orientation. Instances keep the
+   * source's size and shape too, so moving or resizing the source carries
+   * every instance, and moving an instance alone conflicts. An instance
+   * deleted leaves the others held at their own steps.
+   */
+  | {
+      constraintKind: 'pattern';
+      source: EntityId;
+      instances: { objectId: EntityId; step: number }[];
+      layout: SketchPatternLayout;
+    };
+
+/** How a {@link SketchConstraintData} `pattern` relation places its steps. */
+export type SketchPatternLayout =
+  | { kind: 'linear'; direction: EntityId; spacing: ParamValue }
+  | {
+      kind: 'circular';
+      pivot: SketchPointRef;
+      stepDeg: ParamValue;
+      orientation: 'rotate' | 'uniform';
+    };
 
 export type SketchConstraintKind = SketchConstraintData['constraintKind'];
 
@@ -5016,6 +5062,13 @@ export interface ProjectDocument {
    * document-core.
    */
   shareLinkSheetIds?: string[];
+  /**
+   * I03 (schema v148): the unit lengths are shown and typed in. Absent means
+   * `units`. Every stored length stays in `units` — a rebuild, an export and
+   * every persisted reference read `units` and never this — so switching it
+   * changes no geometry. See `display-units.ts`.
+   */
+  displayUnits?: UnitSystem;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
@@ -6066,7 +6119,7 @@ export type SketchRelationGlyphVisibility = 'always' | 'selected' | 'hidden';
 /** Relations drawn as glyphs; driving dimensions already have labels. */
 export type SketchRelationGlyphKind = Exclude<
   SketchConstraintKind,
-  'distance' | 'radius' | 'angle'
+  'distance' | 'radius' | 'angle' | 'pattern'
 >;
 /** Every glyph kind, in the order the per-kind filter lists them. */
 export const SKETCH_RELATION_GLYPH_KINDS: readonly SketchRelationGlyphKind[] = [

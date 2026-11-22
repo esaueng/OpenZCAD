@@ -48,6 +48,7 @@
  * migrations 0031, 0032 and 0040 (503 without them), format-2 projects
  * only. Creating a link also needs the sharing rollout.
  */
+import { readBoundedRequestText, readBoundedRequestBytes } from './requestBody';
 import {
   MAX_SHARE_AUTHORITY_BYTES,
   MAX_SHARE_DELEGATION_BYTES,
@@ -194,10 +195,9 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
   ) {
     refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
   }
-  const text = await request.text();
-  if (text.length > MAX_JSON_BODY_CHARS) {
-    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.');
-  }
+  const text = await readBoundedRequestText(request, MAX_JSON_BODY_CHARS, () =>
+    refuse(413, 'E2EE_REQUEST_TOO_LARGE', 'Request body is too large.')
+  );
   try {
     return record(JSON.parse(text), 'Body');
   } catch (error) {
@@ -215,8 +215,7 @@ async function readFrame(
       limitBytes: MAX_CLOUD_PROJECT_DOCUMENT_BYTES
     });
   if (Number(request.headers.get('content-length') ?? '0') > max) tooLarge();
-  const bytes = new Uint8Array(await request.arrayBuffer());
-  if (bytes.byteLength > max) tooLarge();
+  const bytes = await readBoundedRequestBytes(request, max, tooLarge);
   let frame: ReturnType<typeof decodeE2eeFrame>;
   try {
     frame = decodeE2eeFrame(bytes, MAX_FRAME_METADATA_BYTES);

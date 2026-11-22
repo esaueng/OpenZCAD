@@ -145,6 +145,36 @@ export function assertWrapSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 111, 'Wraps');
 }
 
+/** S05 (schema v145): pattern relations, wherever a sketch or command holds one. */
+export function assertPatternRelationSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 145, 'Sketch pattern relations');
+}
+
+function isPatternRelation(value: unknown): boolean {
+  return record(value) && value.constraintKind === 'pattern';
+}
+
+/** S05 (schema v141): a tangent between two curves (no line in it). */
+export function assertCurvedTangentSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 141, 'Curve-to-curve tangency');
+}
+
+/** True for a tangent whose two sides the document knows to be curves. */
+function isCurvedTangent(
+  value: unknown,
+  nodes: Record<string, unknown>
+): boolean {
+  if (!record(value) || value.constraintKind !== 'tangent') return false;
+  const kind = (id: unknown) => {
+    if (typeof id !== 'string' || !Object.hasOwn(nodes, id)) return undefined;
+    const node = nodes[id];
+    return record(node) && record(node.data) ? node.data.objectKind : undefined;
+  };
+  const a = kind(value.a);
+  const b = kind(value.b);
+  return (a === 'arc' || a === 'circle') && (b === 'arc' || b === 'circle');
+}
+
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
 export function assertSlotSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 59, 'Sketch slots');
@@ -169,6 +199,15 @@ export function assertAssemblyCouplingSchema(version: unknown): void {
  */
 export function assertPrintClearanceSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 60, 'A print clearance');
+}
+
+/**
+ * I03 display units (schema v148): `displayUnits` and its command. An older
+ * reader would show every length in the stored unit while the user reads
+ * another, and cannot replay the command.
+ */
+export function assertDisplayUnitsSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 148, 'Display units');
 }
 
 /**
@@ -979,6 +1018,8 @@ export function assertDocumentContentCommandSchema(
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
+    if (command.kind === 'displayUnits.set')
+      assertDisplayUnitsSchema(document.schemaVersion);
     if (typeof command.kind === 'string' && command.kind.startsWith('pmi.'))
       assertModelPmiSchema(document.schemaVersion);
     if (
@@ -1193,6 +1234,11 @@ export function assertDocumentContentCommandSchema(
             : null;
       if (sweep) assertSweepContentSchema(sweep, document.schemaVersion);
     }
+    if (
+      command.kind === 'sketch.constraint.add' &&
+      isPatternRelation(command.payload.constraint)
+    )
+      assertPatternRelationSchema(document.schemaVersion);
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1263,6 +1309,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertPrintClearanceSchema(document.schemaVersion);
+  if (document.displayUnits !== undefined)
+    assertDisplayUnitsSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'displayUnits' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertDisplayUnitsSchema(document.schemaVersion);
   if (document.configurations !== undefined)
     assertConfigurationSchema(document.schemaVersion);
   if (hasDrawingViewConfiguration(document.drawings))
@@ -1511,6 +1566,27 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertSlotSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) =>
+          record(constraint) &&
+          isCurvedTangent(
+            constraint.data,
+            document.nodes
+          )
+      )
+    )
+      assertCurvedTangentSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) => record(constraint) && isPatternRelation(constraint.data)
+      )
+    )
+      assertPatternRelationSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

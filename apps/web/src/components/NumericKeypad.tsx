@@ -35,6 +35,12 @@ import { unitLabel } from '../lib/measurements';
 import { MODEL_PANEL_OBSTACLES } from '../lib/selectionCalloutView';
 import { formatNumber } from '../lib/model';
 import {
+  isPlainLengthNumber,
+  shownLengthText,
+  useDisplayUnits
+} from '../lib/displayUnits';
+import { convertLength } from '@openzcad/shared';
+import {
   keypadReturnTarget,
   returnKeypadFocus
 } from '../lib/keypadReturnFocus';
@@ -69,6 +75,12 @@ export interface KeypadRequest {
   initial: string;
   /** Captured first keys continue at the caret; measured prefills select all. */
   selectInitial?: boolean;
+  /**
+   * I03: an unselected prefill that is a document-unit value rather than
+   * typed keys (a refusal's proved size), so it is shown converted into the
+   * display unit like a selected one.
+   */
+  initialIsStored?: boolean;
   /** A count is a plain whole number: no unit chips, no conversion. */
   unitKind: 'length' | 'angle' | 'count';
   /** Radial display/entry notation; committed values are always radii. */
@@ -236,8 +248,11 @@ export function resetKeypadPointerForTests(): void {
  * field beside them was prefilled in inches — so committing the prefilled
  * value without editing divided it by 25.4.
  */
-function lengthUnitsFor(units: UnitSystem): KeypadUnit[] {
-  return METRIC_UNITS.includes(units) ? METRIC_UNITS : [...METRIC_UNITS, units];
+function lengthUnitsFor(units: UnitSystem, shown: UnitSystem): KeypadUnit[] {
+  const chips = [...METRIC_UNITS];
+  for (const unit of [units, shown])
+    if (!chips.includes(unit)) chips.push(unit);
+  return chips;
 }
 
 /** Chips read as a drawing would label them, not as the enum spells them. */
@@ -430,17 +445,51 @@ export function NumericKeypad({
   onStep,
   onCancel
 }: NumericKeypadProps) {
-  const [value, setValue] = useState(request.initial);
-  const [dimensionMode, setDimensionMode] = useState(request.dimensionMode);
-  // The document's own unit, always: every prefill in App.tsx is a value in
-  // document units, so any other starting chip rescales it behind the user.
-  const [entryUnit, setEntryUnit] = useState<KeypadUnit>(
+  // I03: a length opens in the document's display unit. Every prefill in
+  // App.tsx is a value in document units, so a selected plain-number prefill
+  // is shown converted; one that is not plain (an expression, or Ø/R
+  // notation, whose number the chip would rescale) opens on the document's
+  // own unit, as every length did before display units. A prefill that is
+  // not selected is what was typed to open the pad, so it is already in
+  // the display unit, unless the host says it is a stored value.
+  const shown = useDisplayUnits(units);
+  const selectedPrefill =
+    request.selectInitial !== false || request.initialIsStored === true;
+  const convertsPrefill =
+    request.unitKind === 'length' &&
+    shown !== units &&
+    selectedPrefill &&
+    isPlainLengthNumber(request.initial);
+  const prefill = convertsPrefill
+    ? shownLengthText(request.initial, units, shown)
+    : request.initial;
+  const initialEntryUnit: KeypadUnit =
     request.unitKind === 'length'
-      ? units
+      ? shown !== units &&
+        selectedPrefill &&
+        request.initial.trim() !== '' &&
+        !convertsPrefill
+        ? units
+        : shown
       : request.unitKind === 'count'
         ? 'count'
-        : 'deg'
-  );
+        : 'deg';
+  const [value, setValue] = useState(prefill);
+  const [dimensionMode, setDimensionMode] = useState(request.dimensionMode);
+  const [entryUnit, setEntryUnit] = useState<KeypadUnit>(initialEntryUnit);
+  /**
+   * The entry as the document reads it. An untouched converted prefill is
+   * the stored value itself, not its rounded display: Enter on it commits
+   * exactly what was there.
+   */
+  const evaluateEntry = (
+    raw: string,
+    unit: KeypadUnit,
+    mode: typeof dimensionMode
+  ) =>
+    convertsPrefill && raw === prefill && unit === initialEntryUnit
+      ? evaluateKeypadInput(request.initial, units, units, scope, mode)
+      : evaluateKeypadInput(raw, unit, units, scope, mode);
   const label = dimensionMode
     ? dimensionMode === 'diameter'
       ? 'Diameter'
@@ -493,20 +542,14 @@ export function NumericKeypad({
   const selectInitial = useRef(request.selectInitial ?? true);
   const initialPreviewed = useRef(false);
   const untouchedPrefill = useRef(request.selectInitial !== false);
-  const evaluation = evaluateKeypadInput(
-    value,
-    entryUnit,
-    units,
-    scope,
-    dimensionMode
-  );
+  const evaluation = evaluateEntry(value, entryUnit, dimensionMode);
   const unchangedTotal = (raw: string, unit: KeypadUnit) =>
     request.kind === 'offset' &&
     request.totalBaseline !== undefined &&
     request.initialOffset !== undefined &&
     untouchedPrefill.current &&
-    raw === request.initial &&
-    unit === units;
+    raw === prefill &&
+    unit === initialEntryUnit;
   const normalize = (evaluated: number, raw: string, unit: KeypadUnit) =>
     unchangedTotal(raw, unit)
       ? request.initialOffset!
@@ -806,7 +849,7 @@ export function NumericKeypad({
       onDimensionModeChange?.(typedMode);
     }
     setValue(next);
-    const result = evaluateKeypadInput(next, entryUnit, units, scope, nextMode);
+    const result = evaluateEntry(next, entryUnit, nextMode);
     if (result.ok && result.value !== undefined) {
       const previewed = normalize(result.value, next, entryUnit);
       if (
@@ -881,8 +924,8 @@ export function NumericKeypad({
     };
     const untouched =
       untouchedPrefill.current &&
-      value === request.initial &&
-      (request.unitKind !== 'length' || entryUnit === units);
+      value === prefill &&
+      (request.unitKind !== 'length' || entryUnit === initialEntryUnit);
     if (untouched || value.trim() === '') {
       onStep(direction, null, at);
       return true;
@@ -930,19 +973,22 @@ export function NumericKeypad({
       ? '°'
       : request.unitKind === 'count'
         ? ''
-        : unitLabel('length', units);
-  // A converted or computed value is shown in the document's own units, so
-  // a value typed in some other unit is never committed unseen — a plain
-  // number under another unit's chip included.
+        : unitLabel('length', shown);
+  /** A document-unit length as the readout shows it, in the display unit. */
+  const inShown = (length: number) =>
+    request.unitKind === 'length' ? convertLength(length, units, shown) : length;
+  // A converted or computed value is shown in the display unit, so a value
+  // typed in some other unit is never committed unseen — a plain number
+  // under another unit's chip included.
   // The unit itself stands right after the readout, so the readout names
   // it only for assistive tech: it read "= 30 mm mm" on screen.
   const evaluated =
     (evaluation.isExpression ||
       evaluation.typedUnit ||
-      (request.unitKind === 'length' && entryUnit !== units)) &&
+      (request.unitKind === 'length' && entryUnit !== shown)) &&
     evaluation.ok &&
     evaluation.value !== undefined
-      ? `= ${formatNumber(evaluation.displayValue ?? evaluation.value)}`
+      ? `= ${formatNumber(inShown(evaluation.displayValue ?? evaluation.value))}`
       : '';
   // An empty field is waiting for a value, not wrong: Apply waits, but it
   // is not called an error until something unreadable is typed.
@@ -959,10 +1005,10 @@ export function NumericKeypad({
       : request.totalBaseline === undefined
         ? 'Offset: how far the face moves, + out, − in'
         : `Total: the size this face sets, ${formatNumber(
-            Math.round(request.totalBaseline * 100) / 100
+            Math.round(inShown(request.totalBaseline) * 100) / 100
           )} ${unitText} before this edit${
             evaluation.ok && normalizedValue !== undefined
-              ? ` · moves the face ${signedHundredths(normalizedValue)} ${unitText}`
+              ? ` · moves the face ${signedHundredths(inShown(normalizedValue))} ${unitText}`
               : ''
           }`;
   const describedBy =
@@ -1213,9 +1259,25 @@ export function NumericKeypad({
         <EditRefusal
           operation={explained.operation}
           variant="control"
-          unitLabel={unitText}
+          // The refusal's sizes are document-unit lengths, so they are
+          // named in that unit and typed back in the entry's own.
+          unitLabel={
+            request.unitKind === 'length'
+              ? unitLabel('length', units)
+              : unitText
+          }
           lineId={reasonId}
-          onTrySize={(size) => previewIfValid(formatNumber(size))}
+          onTrySize={(size) =>
+            previewIfValid(
+              formatNumber(
+                request.unitKind === 'length' &&
+                  entryUnit !== 'deg' &&
+                  entryUnit !== 'count'
+                  ? convertLength(size, units, entryUnit)
+                  : size
+              )
+            )
+          }
           onOpenChange={setExplaining}
           {...(explained.onPickAnother
             ? { onPickAnother: explained.onPickAnother }
@@ -1267,7 +1329,7 @@ export function NumericKeypad({
               </span>
               {(request.unitKind === 'angle'
                 ? (['deg'] as KeypadUnit[])
-                : lengthUnitsFor(units)
+                : lengthUnitsFor(units, shown)
               ).map((unit) => (
                 <button
                   key={unit}
@@ -1283,13 +1345,7 @@ export function NumericKeypad({
                       untouchedPrefill.current = false;
                     }
                     setEntryUnit(unit);
-                    const result = evaluateKeypadInput(
-                      value,
-                      unit,
-                      units,
-                      scope,
-                      dimensionMode
-                    );
+                    const result = evaluateEntry(value, unit, dimensionMode);
                     if (result.ok && result.value !== undefined) {
                       preview(normalize(result.value, value, unit));
                     }

@@ -97,6 +97,7 @@ export * from './assembly-interference-sweep';
 export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
+export * from './display-units';
 export * from './configurations';
 export * from './reference-images';
 export * from './model-pmi';
@@ -2127,11 +2128,16 @@ export function deleteSketchObject(
   sketch.objectIds = sketch.objectIds.filter((id) => id !== input.objectId);
   // Constraints referencing the deleted object go with it: a dangling
   // reference would fail every later solve rather than one delete.
+  // A pattern loses only the deleted instance.
   if (sketch.constraints && sketch.constraints.length > 0) {
-    sketch.constraints = sketch.constraints.filter(
-      (constraint) =>
-        !constraintObjectIds(constraint.data).includes(input.objectId)
-    );
+    sketch.constraints = sketch.constraints.flatMap((constraint) => {
+      if (!constraintObjectIds(constraint.data).includes(input.objectId)) {
+        return [constraint];
+      }
+      if (constraint.data.constraintKind !== 'pattern') return [];
+      const data = patternWithout(constraint.data, input.objectId);
+      return data ? [{ ...constraint, data }] : [];
+    });
   }
   // A composite missing a side or helper is no longer the shape it names, so
   // it dissolves; its other lines and relations stay as ordinary geometry.
@@ -2169,7 +2175,38 @@ function constraintObjectIds(data: SketchConstraintData): EntityId[] {
       return [data.point.objectId, data.objectId];
     case 'lock':
       return [data.point.objectId];
+    case 'pattern':
+      return [
+        data.source,
+        ...data.instances.map(({ objectId }) => objectId),
+        data.layout.kind === 'linear'
+          ? data.layout.direction
+          : data.layout.pivot.objectId
+      ];
   }
+}
+
+/**
+ * A pattern relation with one instance deleted: the others stay held at
+ * their own steps. Null when nothing would be left to hold, or when the
+ * deleted object is the source, the direction line or the pivot's owner.
+ */
+function patternWithout(
+  data: Extract<SketchConstraintData, { constraintKind: 'pattern' }>,
+  objectId: EntityId
+): SketchConstraintData | null {
+  if (
+    data.source === objectId ||
+    (data.layout.kind === 'linear'
+      ? data.layout.direction === objectId
+      : data.layout.pivot.objectId === objectId)
+  ) {
+    return null;
+  }
+  const instances = data.instances.filter(
+    (instance) => instance.objectId !== objectId
+  );
+  return instances.length > 0 ? { ...data, instances } : null;
 }
 
 type ConstrainableKind =
@@ -2310,10 +2347,61 @@ export function validateSketchConstraint(
         'arc',
         'circle'
       ]);
-      if ((a === 'line') === (b === 'line')) {
+      if (a === 'line' && b === 'line') {
         throw new Error(
           'A tangent constraint pairs one line with one circle or arc.'
         );
+      }
+      if (data.a === data.b) {
+        throw new Error('A tangent constraint pairs two different entities.');
+      }
+      if (a !== 'line' && b !== 'line') {
+        // S05 (v141): curve to curve, at an end of an arc in the pair.
+        if (a === 'circle' && b === 'circle') {
+          throw new Error('Two circles touch at no named point; use an arc.');
+        }
+        if (!data.at) {
+          throw new Error(
+            'A tangent between curves must name the arc point where they touch.'
+          );
+        }
+        const owners = [
+          a === 'arc' ? data.a : null,
+          b === 'arc' ? data.b : null
+        ];
+        if (!owners.includes(data.at.objectId)) {
+          throw new Error(
+            'A tangent contact point must belong to an arc it constrains.'
+          );
+        }
+        if (data.at.point !== 'start' && data.at.point !== 'end') {
+          throw new Error('A tangent contact point is an arc start or end.');
+        }
+        requireConstraintPoint(document, sketch, data.at);
+        if (a === 'arc' && b === 'arc') {
+          // Two arcs touch where they are joined end to end.
+          const other = data.at.objectId === data.a ? data.b : data.a;
+          const at = data.at;
+          const joined = (sketch.constraints ?? []).some(
+            ({ data: existing }) =>
+              existing.constraintKind === 'coincident' &&
+              [
+                [existing.a, existing.b],
+                [existing.b, existing.a]
+              ].some(
+                ([mine, theirs]) =>
+                  samePointRef(mine!, at) &&
+                  theirs!.objectId === other &&
+                  theirs!.point !== 'center'
+              )
+          );
+          if (!joined) {
+            throw new Error(
+              'Two arcs are tangent where they join: join the contact point to an end of the other arc first.'
+            );
+          }
+        }
+        break;
       }
       const arcSide = a === 'arc' ? data.a : b === 'arc' ? data.b : null;
       if (arcSide === null) {
@@ -2422,8 +2510,73 @@ export function validateSketchConstraint(
         throw new Error('That point is already locked.');
       }
       break;
+    case 'pattern': {
+      const kind = requireConstrainableObject(document, sketch, data.source, [
+        'line',
+        'circle',
+        'arc'
+      ]);
+      if (
+        data.instances.length === 0 ||
+        data.instances.length > MAX_SKETCH_PATTERN_INSTANCES
+      ) {
+        throw new Error(
+          `A sketch pattern holds 1 to ${MAX_SKETCH_PATTERN_INSTANCES} instances besides its source.`
+        );
+      }
+      const seen = new Set<string>([data.source]);
+      const steps = new Set<number>();
+      for (const { objectId, step } of data.instances) {
+        if (seen.has(objectId)) {
+          throw new Error('A sketch pattern names each entity once.');
+        }
+        seen.add(objectId);
+        if (!Number.isSafeInteger(step) || step < 1 || steps.has(step)) {
+          throw new Error(
+            'Each pattern instance sits at its own whole step, 1 or more.'
+          );
+        }
+        steps.add(step);
+        if (
+          requireConstrainableObject(document, sketch, objectId, [
+            'line',
+            'circle',
+            'arc'
+          ]) !== kind
+        ) {
+          throw new Error(
+            `Every instance of a ${kind} pattern is a ${kind} too.`
+          );
+        }
+      }
+      if (data.layout.kind === 'linear') {
+        requireConstrainableObject(document, sketch, data.layout.direction, [
+          'line'
+        ]);
+      } else {
+        requireConstraintPoint(document, sketch, data.layout.pivot);
+        // The solver reads the pivot's place from a stored point; a
+        // spline's ends have none it can turn about.
+        requireConstrainableObject(
+          document,
+          sketch,
+          data.layout.pivot.objectId,
+          ['line', 'arc', 'circle', 'ellipse', 'point']
+        );
+        if (
+          data.layout.orientation !== 'rotate' &&
+          data.layout.orientation !== 'uniform'
+        ) {
+          throw new Error('A circular pattern rotates or keeps orientation.');
+        }
+      }
+      break;
+    }
   }
 }
+
+/** The most instances one sketch pattern relation holds (the source aside). */
+export const MAX_SKETCH_PATTERN_INSTANCES = 99;
 
 function samePointRef(a: SketchPointRef, b: SketchPointRef): boolean {
   return a.objectId === b.objectId && a.point === b.point;
@@ -2449,6 +2602,45 @@ export function addSketchConstraint(
   sketch.constraints = [...(sketch.constraints ?? []), constraint];
   next.version += 1;
   return { document: next, constraintId };
+}
+
+/**
+ * S05: two arcs are tangent where they are joined, so a curve-to-curve
+ * tangent goes with the coincidence that joined its contact point to the
+ * other arc — unless another coincidence still joins them there.
+ */
+function withoutUnjoinedArcTangents(
+  document: ProjectDocument,
+  constraints: SketchConstraint[],
+  removed: SketchConstraintData
+): SketchConstraint[] {
+  if (removed.constraintKind !== 'coincident') return constraints;
+  const isArc = (id: EntityId) => {
+    const node = getNode(document, id);
+    return node?.kind === 'sketch-object' && node.objectKind === 'arc';
+  };
+  const joins = (at: SketchPointRef, other: EntityId) =>
+    constraints.some(
+      ({ data }) =>
+        data.constraintKind === 'coincident' &&
+        ((samePointRef(data.a, at) && data.b.objectId === other) ||
+          (samePointRef(data.b, at) && data.a.objectId === other))
+    );
+  return constraints.filter(({ data }) => {
+    if (
+      data.constraintKind !== 'tangent' ||
+      !data.at ||
+      !isArc(data.a) ||
+      !isArc(data.b)
+    ) {
+      return true;
+    }
+    const other = data.at.objectId === data.a ? data.b : data.a;
+    const unjoinedNow =
+      [removed.a, removed.b].some((ref) => samePointRef(ref, data.at!)) &&
+      [removed.a, removed.b].some((ref) => ref.objectId === other);
+    return !unjoinedNow || joins(data.at, other);
+  });
 }
 
 export function deleteSketchConstraint(
@@ -2478,7 +2670,14 @@ export function deleteSketchConstraint(
       `Sketch ${input.sketchId} has no constraint ${input.constraintId}.`
     );
   }
-  sketch.constraints = remaining;
+  const removed = (sketch.constraints ?? []).find(
+    (constraint) => constraint.constraintId === input.constraintId
+  )!;
+  sketch.constraints = withoutUnjoinedArcTangents(
+    next,
+    remaining,
+    removed.data
+  );
   // Keep an orphaned position in the additive map. Replacing a driving
   // constraint during value editing deletes and re-adds the same identity in
   // one transaction; retaining it preserves the user's label placement.

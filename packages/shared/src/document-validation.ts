@@ -681,7 +681,10 @@ const FEATURE_UPDATE_NON_STRING_FIELDS = valuesOf<
 >({ axis: true, direction: true, operation: true, profile: true });
 
 /** The enums the document itself defines. */
-const DOCUMENT_ENUMS = enumsOf<ProjectDocument>({ units: UNIT_SYSTEMS });
+const DOCUMENT_ENUMS = enumsOf<ProjectDocument>({
+  units: UNIT_SYSTEMS,
+  displayUnits: UNIT_SYSTEMS
+});
 
 /** The enums a project node (`kind: 'project'`) defines. */
 const PROJECT_NODE_ENUMS = enumsOf<ProjectNode>({ units: UNIT_SYSTEMS });
@@ -703,6 +706,19 @@ const UNITS_CHANGE_ENUMS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  * no migration has a document without.
  */
 const REQUIRED_UNITS: ReadonlySet<string> = new Set(['units']);
+
+/**
+ * I03: a history change restoring `displayUnits` holds a unit or nothing on
+ * each side; nothing is how a document that showed its own units is put
+ * back.
+ */
+const DISPLAY_UNITS_CHANGE_ENUMS: ReadonlyMap<
+  string,
+  ReadonlySet<string>
+> = new Map([
+  ['before', UNIT_SYSTEMS],
+  ['after', UNIT_SYSTEMS]
+]);
 const REQUIRED_CHANGE_SIDES: ReadonlySet<string> = new Set(['before', 'after']);
 
 /** The enums a body node (`kind: 'body'`) defines. */
@@ -1222,6 +1238,8 @@ function enumsOwnedBy(
   }
   if (entry.shape === 'change' && record.field === 'units')
     return owned(UNITS_CHANGE_ENUMS, REQUIRED_CHANGE_SIDES);
+  if (entry.shape === 'change' && record.field === 'displayUnits')
+    return owned(DISPLAY_UNITS_CHANGE_ENUMS);
   if (record.kind === 'project')
     return owned(PROJECT_NODE_ENUMS, REQUIRED_UNITS);
   if (record.kind === 'body') return owned(BODY_NODE_ENUMS);
@@ -1559,7 +1577,8 @@ const SKETCH_CONSTRAINT_FIELDS: Readonly<
   angle: { objects: ['a', 'b'], values: ['valueDeg'] },
   symmetric: { points: ['a', 'b'], objects: ['axis'] },
   'point-on-object': { points: ['point'], objects: ['objectId'] },
-  lock: { points: ['point'] }
+  lock: { points: ['point'] },
+  pattern: { objects: ['source'] }
 };
 
 function isSketchPointSelector(value: unknown): boolean {
@@ -1608,7 +1627,41 @@ export function sketchConstraintShapeError(data: unknown): string | null {
     (typeof data.x !== 'number' || typeof data.y !== 'number')
   )
     return 'Sketch lock constraint needs a numeric position.';
+  if (kind === 'pattern') return sketchPatternShapeError(data);
   return null;
+}
+
+function sketchPatternShapeError(data: Record<string, unknown>): string | null {
+  const instances = data.instances;
+  if (
+    !Array.isArray(instances) ||
+    instances.length === 0 ||
+    !instances.every(
+      (instance) =>
+        isDocumentRecord(instance) &&
+        typeof instance.objectId === 'string' &&
+        !RESERVED_RECORD_KEYS.has(instance.objectId) &&
+        Number.isSafeInteger(instance.step) &&
+        (instance.step as number) > 0
+    )
+  )
+    return 'Sketch pattern needs its instances and their steps.';
+  const layout = data.layout;
+  if (!isDocumentRecord(layout)) return 'Sketch pattern needs its layout.';
+  if (layout.kind === 'linear')
+    return typeof layout.direction === 'string' &&
+      !RESERVED_RECORD_KEYS.has(layout.direction) &&
+      (typeof layout.spacing === 'number' || typeof layout.spacing === 'string')
+      ? null
+      : 'Sketch linear pattern needs a direction line and a spacing.';
+  if (layout.kind === 'circular')
+    return isSketchPointSelector(layout.pivot) &&
+      (typeof layout.stepDeg === 'number' ||
+        typeof layout.stepDeg === 'string') &&
+      (layout.orientation === 'rotate' || layout.orientation === 'uniform')
+      ? null
+      : 'Sketch circular pattern needs a pivot, a step angle and an orientation.';
+  return 'Sketch pattern has an unknown layout.';
 }
 
 /** The envelope read by all persistence and collaboration entry points. */
