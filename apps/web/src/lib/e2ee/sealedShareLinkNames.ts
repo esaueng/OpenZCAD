@@ -212,6 +212,54 @@ export function pruneRevokedShareLinkNames(
   return next;
 }
 
+/** A reissued link and the revoked link it replaces (`ShareWork.replacements`). */
+export interface ShareLinkReplacement {
+  readonly sourceId: string;
+  readonly shareId: string;
+}
+
+/**
+ * Gives each reissued link the name of the link it replaces. A replacement
+ * that already has an entry keeps it, a name or a cleared one, so carrying
+ * again (every list does) never undoes a rename made after the reissue; a
+ * source whose name was cleared gives nothing.
+ */
+export function carryReissuedShareLinkNames(
+  book: ShareLinkNameBook,
+  projectId: string,
+  replacements: readonly ShareLinkReplacement[],
+  now: number
+): ShareLinkNameBook {
+  const links = book.projects[projectId] ?? {};
+  let next = book;
+  for (const { sourceId, shareId } of replacements) {
+    const source = links[sourceId];
+    if (!source || 'deleted' in source || links[shareId]) continue;
+    next = setShareLinkName(next, projectId, shareId, source.name, now);
+  }
+  return next;
+}
+
+/**
+ * What a list does to the names: reissued links take their sources' names
+ * first, then the revoked sources' names are pruned. In that order, in one
+ * change, so a reissue never loses a name to its own pruning.
+ */
+export function refreshShareLinkNames(
+  book: ShareLinkNameBook,
+  projectId: string,
+  revoked: ReadonlySet<string>,
+  replacements: readonly ShareLinkReplacement[],
+  now: number
+): ShareLinkNameBook {
+  return pruneRevokedShareLinkNames(
+    carryReissuedShareLinkNames(book, projectId, replacements, now),
+    projectId,
+    revoked,
+    now
+  );
+}
+
 /** Keys sorted at every level, so equal books seal equal bytes. */
 function canonicalJson(book: ShareLinkNameBook): string {
   const projects: Record<string, Record<string, ShareLinkNameEntry>> = {};
@@ -684,30 +732,49 @@ async function pageKeys(userId: string): Promise<ShareLinkNameKeys | null> {
 }
 
 /**
- * The names of a project's listed links, for its share dialog. Names of
- * the project's revoked links are pruned from the account record in the
- * background (`pruneRevokedShareLinkNames`).
+ * The names of a project's listed links, for its share dialog. Reissued
+ * links take the names of the links they replace, and the names of the
+ * project's revoked links are pruned (`refreshShareLinkNames`); the account
+ * record takes both in the background.
  */
 export async function pageShareLinkNames(
   userId: string,
   projectId: string,
   listed: ReadonlySet<string>,
-  revoked: ReadonlySet<string>
+  revoked: ReadonlySet<string>,
+  replacements: readonly ShareLinkReplacement[] = []
 ): Promise<Record<string, string>> {
+  const refresh = (book: ShareLinkNameBook, at: number) =>
+    refreshShareLinkNames(book, projectId, revoked, replacements, at);
   const keys = await pageKeys(userId);
-  const device = localStorageShareLinkNameCopy(userId);
-  if (!keys) return pickListed(shareLinkNamesFor(device.read(), projectId));
+  if (!keys) {
+    // Shown, not kept: this device cannot seal the change while locked.
+    const device = localStorageShareLinkNameCopy(userId).read();
+    return pickListed(
+      shareLinkNamesFor(refresh(device, Date.now()), projectId)
+    );
+  }
+  // Carried into this device's copy before the account's is merged: another
+  // device without the reissue's mapping may already have pruned the source
+  // name there, and the new link's entry, which it never wrote, survives
+  // the merge.
+  const device = keys.device.read();
+  const carried = carryReissuedShareLinkNames(
+    device,
+    projectId,
+    replacements,
+    Date.now()
+  );
+  if (carried !== device) keys.device.write(carried);
   const api = await pageApi();
   const book = await readShareLinkNames(keys, api);
-  const now = Date.now();
-  if (pruneRevokedShareLinkNames(book, projectId, revoked, now) !== book) {
-    void changeShareLinkNames(keys, api, (current, at) =>
-      pruneRevokedShareLinkNames(current, projectId, revoked, at)
-    ).catch(() => {
-      // Pruned again on the next list.
+  const shown = refresh(book, Date.now());
+  if (shown !== book) {
+    void changeShareLinkNames(keys, api, refresh).catch(() => {
+      // Done again on the next list.
     });
   }
-  return pickListed(shareLinkNamesFor(book, projectId));
+  return pickListed(shareLinkNamesFor(shown, projectId));
 
   function pickListed(names: Record<string, string>) {
     return Object.fromEntries(

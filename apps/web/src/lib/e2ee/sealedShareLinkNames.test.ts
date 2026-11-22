@@ -15,7 +15,9 @@ import {
   mergeShareLinkNameBooks,
   openShareLinkNames,
   parseShareLinkNameBook,
+  carryReissuedShareLinkNames,
   pruneRevokedShareLinkNames,
+  refreshShareLinkNames,
   readShareLinkNames,
   setShareLinkName,
   SHARE_LINK_NAME_TOMBSTONE_MS,
@@ -213,6 +215,95 @@ describe('share link name books', () => {
     expect(pruneRevokedShareLinkNames(book, 'proj_x', new Set(), 3 * DAY)).toBe(
       book
     );
+  });
+
+  it('gives a reissued link the name of the link it replaces, then prunes the source', () => {
+    const book = named('Client review', 5);
+    const refreshed = refreshShareLinkNames(
+      book,
+      'proj_x',
+      new Set(['shr_a']),
+      [{ sourceId: 'shr_a', shareId: 'shr_new' }],
+      10
+    );
+    expect(shareLinkNamesFor(refreshed, 'proj_x')).toEqual({
+      shr_new: 'Client review'
+    });
+    expect(refreshed.projects.proj_x!.shr_a).toMatchObject({ deleted: true });
+    // Every later list carries again: nothing changes.
+    expect(
+      refreshShareLinkNames(
+        refreshed,
+        'proj_x',
+        new Set(['shr_a']),
+        [{ sourceId: 'shr_a', shareId: 'shr_new' }],
+        20
+      )
+    ).toBe(refreshed);
+  });
+
+  it('keeps a carried name when another device pruned the source first', () => {
+    // This device still holds the source's name; another device, which has
+    // no record of the reissue, already pruned it in the account's copy.
+    const mine = named('Client review', 5);
+    const theirs = setShareLinkName(mine, 'proj_x', 'shr_a', null, 8);
+    const carried = carryReissuedShareLinkNames(
+      mine,
+      'proj_x',
+      [{ sourceId: 'shr_a', shareId: 'shr_new' }],
+      6
+    );
+    expect(
+      shareLinkNamesFor(mergeShareLinkNameBooks(carried, theirs), 'proj_x')
+    ).toEqual({ shr_new: 'Client review' });
+  });
+
+  it('never carries over a replacement’s own name, a cleared name or a missing one', () => {
+    // Renamed after the reissue, on this or another device.
+    const renamed = setShareLinkName(
+      named('Old', 1),
+      'proj_x',
+      'shr_new',
+      'Renamed',
+      2
+    );
+    expect(
+      carryReissuedShareLinkNames(
+        renamed,
+        'proj_x',
+        [{ sourceId: 'shr_a', shareId: 'shr_new' }],
+        3
+      )
+    ).toBe(renamed);
+    // Cleared after the reissue: the tombstone stays.
+    const cleared = setShareLinkName(renamed, 'proj_x', 'shr_new', null, 4);
+    expect(
+      carryReissuedShareLinkNames(
+        cleared,
+        'proj_x',
+        [{ sourceId: 'shr_a', shareId: 'shr_new' }],
+        5
+      )
+    ).toBe(cleared);
+    // A source whose name was cleared, or that never had one, gives nothing.
+    const sourceCleared = setShareLinkName(
+      named('Old', 1),
+      'proj_x',
+      'shr_a',
+      null,
+      2
+    );
+    expect(
+      carryReissuedShareLinkNames(
+        sourceCleared,
+        'proj_x',
+        [
+          { sourceId: 'shr_a', shareId: 'shr_new' },
+          { sourceId: 'shr_unnamed', shareId: 'shr_other' }
+        ],
+        3
+      )
+    ).toBe(sourceCleared);
   });
 
   it('seals old tombstones away and refuses, rather than drop a recent one, when over the cap', () => {

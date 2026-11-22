@@ -1887,6 +1887,17 @@ settings, which an account whose library is not encrypted stores readable.
   offline for longer than 90 days could bring back a cleared name of a link
   that still exists; a revoked link's name stays hidden because only listed
   links show one.
+- **Reissued links.** A reissue (after a removal or an identity change)
+  revokes each link and makes a new one; the owner's device records which
+  new link replaces which (`ShareWork.replacements`). Before pruning, a list
+  gives each new link the name of the link it replaces, in the same change,
+  unless the new link already has an entry (a name, or a cleared one), so a
+  rename after the reissue is never undone. The mapping is kept on the
+  reissuing device only, so another device does not carry names, and it may
+  prune the source's name first; the reissuing device therefore carries the
+  name into its own copy before merging the account's, where the new link's
+  entry, which no other device wrote, survives. Once saved, the carried name
+  syncs like any other.
 - **Writes.** A browser reads the account record, merges it into its own
   copy, applies the change and seals at a sequence above both its pin and
   the stored record's (read from the header, which needs no key), against

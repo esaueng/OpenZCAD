@@ -197,7 +197,9 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
           ctx.groups.account.userId,
           projectId,
           new Set(view.links.map((link) => link.shareId)),
-          new Set(view.revokedIds)
+          new Set(view.revokedIds),
+          // A reissued link takes the name of the one it replaces.
+          work?.replacements ?? []
         )
       )
       .catch((): Record<string, string> => ({}));
