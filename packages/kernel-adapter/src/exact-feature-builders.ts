@@ -99,6 +99,7 @@ import {
   isDatumPlaneRef,
   transformStampBodyIds,
   filletVertexRadiiProblem,
+  filletRadiusStationsProblem,
   type BodyId,
   type DatumPlaneSource,
   type DatumPointSource,
@@ -3545,6 +3546,8 @@ export function edgeModifierSettings(
   variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
   /** M03 (v151): resolved per-vertex radii, by selected edge and witness end. */
   vertexRadii: { edge: number; end: 0 | 1; radius: number }[] | undefined;
+  /** M03 (v152): resolved radius stations, from witness end 0. */
+  radiusStations: { at: number; radius: number }[] | undefined;
   chamferSecondDistance: number | undefined;
 } {
   const { document, scope } = ctx;
@@ -3582,6 +3585,7 @@ export function edgeModifierSettings(
   // constant/symmetric path it always ran.
   let variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
   let vertexRadii: { edge: number; end: 0 | 1; radius: number }[] | undefined;
+  let radiusStations: { at: number; radius: number }[] | undefined;
   if (data.featureKind === 'fillet' && data.endRadius !== undefined) {
     const endRadius = resolveParamValue(
       data.endRadius,
@@ -3629,11 +3633,28 @@ export function edgeModifierSettings(
       throw new Error('Chamfer second distance must be greater than zero.');
     }
   }
+  if (data.featureKind === 'fillet' && data.radiusStations !== undefined) {
+    // M03 (v152): checked again here because a document is untrusted.
+    if (variableRadius === undefined)
+      throw new Error('Fillet radius stations need a variable-radius fillet.');
+    const problem = filletRadiusStationsProblem(data);
+    if (problem) throw new Error(problem);
+    radiusStations = data.radiusStations.map((station) => ({
+      at: station.at,
+      radius: resolveParamValue(
+        station.radius,
+        scope,
+        'station radius',
+        document.units
+      )
+    }));
+  }
   return {
     size,
     chamferAngleRadians,
     variableRadius,
     vertexRadii,
+    radiusStations,
     chamferSecondDistance
   };
 }
@@ -3680,7 +3701,7 @@ function buildEdgeModifierFeature(
   const { size, chamferAngleRadians, chamferSecondDistance } = settings;
   const variableRadius =
     settings.variableRadius &&
-    settings.vertexRadii &&
+    (settings.vertexRadii || settings.radiusStations) &&
     data.featureKind === 'fillet'
       ? {
           ...settings.variableRadius,
@@ -3688,9 +3709,10 @@ function buildEdgeModifierFeature(
             kernel,
             selected,
             data,
-            settings.vertexRadii,
+            settings.vertexRadii ?? [],
             size,
-            settings.variableRadius.endRadius
+            settings.variableRadius.endRadius,
+            settings.radiusStations ?? []
           )
         }
       : settings.variableRadius;
@@ -4822,7 +4844,10 @@ function buildPatternFeature(
         }
         // M03 (v151): per-vertex radii name the original edges' ends; a
         // copy's edges are other edges.
-        if (settings.vertexRadii !== undefined) {
+        if (
+          settings.vertexRadii !== undefined ||
+          settings.radiusStations !== undefined
+        ) {
           throw new Error(
             "its radii are set per vertex on the original edges, which a copy's edges are not, so a pattern repeats only a fillet with one start and end radius; fillet the copies' edges directly."
           );

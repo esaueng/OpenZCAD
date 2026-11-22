@@ -2819,6 +2819,33 @@ describe('fillet and chamfer run in place', () => {
       ).not.toHaveProperty('vertexRadii');
     });
 
+    it('stores one station along every edge, with its arrow there (v152)', () => {
+      const spec = IN_PLACE_TOOL_SPECS.fillet;
+      const slots = { ...EMPTY, edges: [A] };
+      const along = { law: 'scurve', radiusAt: 'along' };
+      expect(
+        spec.request(
+          slots,
+          { radius: 1, endRadius: 2, midRadius: 'm', midAt: 25 },
+          along,
+          CTX,
+          { radius: 1, endRadius: 2, midRadius: 3, midAt: 25 }
+        )
+      ).toMatchObject({
+        radiusLaw: 'scurve',
+        radiusStations: [{ at: 0.25, radius: 'm' }]
+      });
+      const station = spec
+        .handles(slots, { midAt: 25 }, CTX, along)
+        .find((handle) => handle.valueId === 'midRadius');
+      expect(station).toMatchObject({
+        kind: 'linear',
+        params: { origin: { x: 5, y: 0, z: 4 } }
+      });
+      const { reference: _named, ...unnamed } = A;
+      expect(spec.ready({ ...EMPTY, edges: [unnamed] }, along)).toBe(false);
+    });
+
     it('keys each corner value by its body and where its corner stands (review)', () => {
       const keys = IN_PLACE_TOOL_SPECS.fillet.edgeValueKeys!;
       expect(keys([A, B])).toEqual({

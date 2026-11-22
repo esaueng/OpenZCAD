@@ -1,5 +1,6 @@
 import {
   documentNodesWithHistory,
+  filletRadiusStationsProblem,
   filletVertexRadiiProblem,
   patternSpacingModeProblem,
   type FeatureData,
@@ -1297,6 +1298,12 @@ export function assertDocumentContentCommandSchema(
           151,
           'Per-vertex fillet radii'
         );
+      if (fillet && fillet.radiusStations !== undefined)
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          152,
+          'Fillet radius stations'
+        );
     }
     switch (command.kind) {
       case 'sketch.add':
@@ -1350,6 +1357,11 @@ export function assertFilletContentSchema(
   data: Extract<FeatureData, { featureKind: 'fillet' }>,
   version: unknown
 ): void {
+  if (data.radiusStations !== undefined) {
+    assertMinimumProjectSchema(version, 152, 'Fillet radius stations');
+    const problem = filletRadiusStationsProblem(data);
+    if (problem) throw new Error(problem);
+  }
   if (data.vertexRadii === undefined && data.edgeRuns === undefined) return;
   assertMinimumProjectSchema(version, 151, 'Per-vertex fillet radii');
   const problem = filletVertexRadiiProblem(data);

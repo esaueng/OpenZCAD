@@ -3,6 +3,7 @@ import type {
   BodyId,
   EdgeTopologyReferenceV5,
   FeatureNode,
+  FilletRadiusStation,
   FilletVertexRadius,
   ParamValue,
   VariableFilletLaw
@@ -23,7 +24,10 @@ export interface EdgeModifierFormValue {
   radiusLaw?: VariableFilletLaw;
   /** Fillet only (M03, v151): per-vertex radii; absent means none. */
   vertexRadii?: FilletVertexRadius[];
-  /** Fillet only, with `vertexRadii`: how each edge ran when they were set. */
+  /** Fillet only (M03, v152): interior radius stations; absent means none. */
+  radiusStations?: FilletRadiusStation[];
+  /** Fillet only, with `vertexRadii` or `radiusStations`: how each edge ran
+   * when they were set. */
   edgeRuns?: boolean[];
   /** Chamfer only: setback on the other face; absent means symmetric. */
   distance2?: ParamValue;
@@ -52,10 +56,21 @@ export function edgeModifierCommand(
   const clearData =
     kind === 'fillet'
       ? value.endRadius === undefined
-        ? ['endRadius', 'radiusLaw', 'vertexRadii', 'edgeRuns']
-        : value.vertexRadii === undefined
-          ? ['vertexRadii', 'edgeRuns']
-          : []
+        ? [
+            'endRadius',
+            'radiusLaw',
+            'vertexRadii',
+            'radiusStations',
+            'edgeRuns'
+          ]
+        : [
+            ...(value.vertexRadii === undefined ? ['vertexRadii'] : []),
+            ...(value.radiusStations === undefined ? ['radiusStations'] : []),
+            ...(value.vertexRadii === undefined &&
+            value.radiusStations === undefined
+              ? ['edgeRuns']
+              : [])
+          ]
       : [
           ...(value.angleDeg === undefined ? ['angleDeg'] : []),
           ...(value.distance2 === undefined ? ['distance2'] : [])
@@ -78,12 +93,15 @@ export function edgeModifierCommand(
                     endRadius: value.endRadius,
                     radiusLaw: value.radiusLaw ?? 'linear',
                     ...(value.vertexRadii !== undefined
-                      ? {
-                          vertexRadii: value.vertexRadii,
-                          ...(value.edgeRuns !== undefined
-                            ? { edgeRuns: value.edgeRuns }
-                            : {})
-                        }
+                      ? { vertexRadii: value.vertexRadii }
+                      : {}),
+                    ...(value.edgeRuns !== undefined &&
+                    (value.vertexRadii !== undefined ||
+                      value.radiusStations !== undefined)
+                      ? { edgeRuns: value.edgeRuns }
+                      : {}),
+                    ...(value.radiusStations !== undefined
+                      ? { radiusStations: value.radiusStations }
                       : {})
                   }
                 : {})

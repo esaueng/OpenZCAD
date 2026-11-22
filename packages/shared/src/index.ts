@@ -555,6 +555,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // circle records. An older client refuses a tangent without a line, so it
 // must refuse the document. Builds on v137; v138 to v140 are claimed by the
 // S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+// v152 adds M03 radius stations (`radiusStations` on a variable-radius
+// fillet): interior radii along each selected edge, at fractions from the
+// edge's witness end 0, the law running between neighbouring stations, with
+// `edgeRuns` recording the way each edge ran. An older client would round
+// each edge from `radius` to `endRadius` only, so it must refuse the
+// document. Builds on v151.
 // v151 adds M03 per-vertex fillet radii (`vertexRadii` and `edgeRuns` on a
 // variable-radius fillet): the radius at each end of each selected edge,
 // named by the edge's lineage witness. An older client would round every
@@ -588,7 +594,7 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // fall back to the vertex mean and drill the hole elsewhere, so it must
 // refuse. Builds on v148 (#1808); v149 is claimed by #1914. First claimed
 // as v118, then v147, and renumbered when later bumps landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 151 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 152 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -859,6 +865,96 @@ export interface FilletVertexRadius {
  */
 
 /**
+ * M03 (schema v152): one interior radius station of a variable-radius
+ * fillet, applied to every selected edge. `at` is the fraction of the edge
+ * from its witness end 0 (`edgeReferences[…].witness.endpoints[0]`),
+ * strictly inside (0, 1); the fillet's law (`radiusLaw`) runs between
+ * neighbouring stations, the edge's two ends included.
+ */
+export interface FilletRadiusStation {
+  at: number;
+  radius: ParamValue;
+}
+
+/**
+ * The most interior stations one fillet stores: one, the one the editor
+ * holds, so a stored fillet always reopens and writes back as it was
+ * (review). The kernel's station law takes more; a later slice that edits
+ * more raises this.
+ */
+export const MAX_FILLET_RADIUS_STATIONS = 1;
+
+/**
+ * Why a fillet's `radiusStations` cannot be stored, or null when it can: it
+ * needs a variable law (`endRadius`) and a lineage reference for every
+ * selected edge (the fraction is measured from a witness end), and its
+ * fractions must lie strictly inside (0, 1), increasing.
+ */
+export function filletRadiusStationsProblem(data: {
+  edgeHashes: readonly number[];
+  edgeReferences?: readonly { currentHash: number }[];
+  endRadius?: ParamValue;
+  radiusStations?: unknown;
+  edgeRuns?: unknown;
+  vertexRadii?: unknown;
+}): string | null {
+  const stations = data.radiusStations;
+  if (stations === undefined) return null;
+  if (
+    !Array.isArray(stations) ||
+    stations.length === 0 ||
+    stations.length > MAX_FILLET_RADIUS_STATIONS
+  )
+    return 'A fillet holds one radius station.';
+  // One way to vary the radius at a time, so the editor, which offers one,
+  // reopens either exactly (review).
+  if (data.vertexRadii !== undefined)
+    return 'A fillet takes radius stations or per-vertex radii, not both.';
+  if (data.endRadius === undefined)
+    return 'Fillet radius stations need a variable-radius fillet.';
+  let previous = 0;
+  for (const station of stations as unknown[]) {
+    if (typeof station !== 'object' || station === null)
+      return 'Each fillet radius station must be an object.';
+    const { at, radius } = station as Record<string, unknown>;
+    if (
+      typeof at !== 'number' ||
+      !Number.isFinite(at) ||
+      at <= previous ||
+      at >= 1
+    )
+      return 'Fillet radius stations must stand strictly inside the edge, in increasing order.';
+    previous = at;
+    if (
+      !(typeof radius === 'string' && radius.trim() !== '') &&
+      !(typeof radius === 'number' && Number.isFinite(radius))
+    )
+      return 'A fillet radius station must be a number or an expression.';
+  }
+  if (
+    data.edgeHashes.some(
+      (hash) =>
+        !data.edgeReferences?.some(
+          (reference) => reference.currentHash === hash
+        )
+    )
+  )
+    return 'Fillet radius stations need the lineage reference of every selected edge.';
+  // Stations stand at fractions from witness end 0, so each edge's run is
+  // recorded as for per-vertex radii (review), once per edge.
+  if (new Set(data.edgeHashes).size !== data.edgeHashes.length)
+    return 'Fillet radius stations need a selection that names each edge once.';
+  const runs = data.edgeRuns;
+  if (
+    !Array.isArray(runs) ||
+    runs.length !== data.edgeHashes.length ||
+    runs.some((run) => typeof run !== 'boolean')
+  )
+    return 'Fillet radius stations need the direction each selected edge ran when they were set.';
+  return null;
+}
+
+/**
  * Why a fillet's `vertexRadii` cannot be stored, or null when it can: it
  * needs a variable law (`endRadius`), a lineage reference for every edge it
  * names, and at most one entry per edge end.
@@ -869,12 +965,14 @@ export function filletVertexRadiiProblem(data: {
   endRadius?: ParamValue;
   vertexRadii?: unknown;
   edgeRuns?: unknown;
+  radiusStations?: unknown;
 }): string | null {
   const entries = data.vertexRadii;
   if (entries === undefined) {
-    return data.edgeRuns === undefined
+    // With stations the runs are checked by `filletRadiusStationsProblem`.
+    return data.edgeRuns === undefined || data.radiusStations !== undefined
       ? null
-      : 'Fillet edge directions go only with per-vertex radii.';
+      : 'Fillet edge directions go only with per-vertex radii or radius stations.';
   }
   if (!Array.isArray(entries) || entries.length === 0)
     return 'Per-vertex fillet radii must be a non-empty list.';
@@ -3565,9 +3663,14 @@ export type FeatureData =
        */
       vertexRadii?: FilletVertexRadius[];
       /**
+       * M03 (schema v152): interior radii along every selected edge; see
+       * {@link FilletRadiusStation}. Only with `endRadius`.
+       */
+      radiusStations?: FilletRadiusStation[];
+      /**
        * M03 (schema v151): for each selected edge, whether the kernel ran it
-       * from witness end 0 to end 1 when `vertexRadii` were set. Present
-       * exactly when `vertexRadii` is.
+       * from witness end 0 to end 1 when `vertexRadii` or `radiusStations`
+       * were set. Present exactly when either is.
        */
       edgeRuns?: boolean[];
     }

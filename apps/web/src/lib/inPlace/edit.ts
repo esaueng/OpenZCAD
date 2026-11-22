@@ -929,22 +929,34 @@ export function inPlaceEditSeed(
             seed.slots.edges.length === data.edgeHashes.length
               ? filletSelectionVertices(seed.slots.edges)
               : null;
-          if (data.vertexRadii && vertices) {
-            seed.options.radiusAt = 'vertices';
-            // An edge that now runs the other way from when its corners were
-            // set keeps its stored run (review): Done then writes the same
-            // fillet back, which the build refuses by name, rather than a
-            // run read off the turned edge that would swap its corners'
-            // radii. Picking the edge again sets its corners afresh.
+          // M03 (v152): a fillet holds one interior station, the one the
+          // editor holds.
+          if (data.radiusStations?.[0]) {
+            seed.options.radiusAt = 'along';
+            value('midRadius', data.radiusStations[0].radius);
+            value('midAt', data.radiusStations[0].at * 100);
+          }
+          // An edge that now runs the other way from when its corners or
+          // stations were set keeps its stored run (review): Done then writes
+          // the same fillet back, which the build refuses by name, rather
+          // than a run read off the turned edge that would swap its radii
+          // end for end. Picking the edge again sets them afresh.
+          if (data.vertexRadii || data.radiusStations) {
+            // Each edge by its own stored hash: an edge that no longer
+            // resolves leaves the list, and the rest must keep their own
+            // runs, not their neighbours' (review).
             const live = filletEdgeRuns(seed.slots.edges);
-            data.edgeRuns?.forEach((run, index) => {
-              const pick = seed.slots.edges[index];
-              const witness = pick?.reference?.witness;
-              if (!pick || !witness || witness.closed || live?.[index] === run)
-                return;
+            seed.slots.edges.forEach((pick, index) => {
+              const run = data.edgeRuns?.[data.edgeHashes.indexOf(pick.hash)];
+              const witness = pick.reference?.witness;
+              if (run === undefined || !witness || witness.closed) return;
+              if (live?.[index] === run) return;
               const [x, y, z] = witness.endpoints[run ? 1 : 0];
               pick.end = { x: x * 1e-6, y: y * 1e-6, z: z * 1e-6 };
             });
+          }
+          if (data.vertexRadii && vertices) {
+            seed.options.radiusAt = 'vertices';
             vertices.forEach((vertex, index) => {
               if (index >= FILLET_VERTEX_SLOTS) return;
               const stored = data.vertexRadii!.find((entry) =>
