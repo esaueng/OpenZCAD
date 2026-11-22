@@ -50,7 +50,16 @@ for (const { width, hasTouch } of [
     expect(opened.document.featureOrder.length).toBeGreaterThan(0);
     expect(new TextDecoder().decode(frame.payload)).not.toContain(PROJECT_NAME);
 
+    // The new link is copied from its own box; its row offers Copy once
+    // the dialog is opened again, as an owner coming back finds it.
+    await expect(
+      links.getByRole('button', { name: 'Copy View only link' })
+    ).toHaveCount(0);
+    await alice.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await alice.getByRole('button', { name: /Open project sharing/ }).click();
     const copy = links.getByRole('button', { name: 'Copy View only link' });
+    await expect(copy).toBeVisible({ timeout: SYNC_BUDGET_MS });
     const revoke = links.getByRole('button', { name: 'Revoke View only link' });
     await alice.mouse.move(0, 0);
     // Copy stays discoverable for keyboard and pointer users alike.

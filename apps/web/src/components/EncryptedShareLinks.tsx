@@ -52,6 +52,11 @@ export interface EncryptedShareLinksState {
   readonly links: readonly EncryptedShareLinkRow[];
   /** The owner's confirmation (share delegation) needs the identity key. */
   readonly needsConfirmation: boolean;
+  /**
+   * The account has a passkey, so Create link confirms with it straight
+   * away; without one it asks for the recovery key.
+   */
+  readonly passkey?: boolean;
   /** Links turned off because the owner's identity changed. */
   readonly retired: readonly {
     shareId: string;
@@ -70,7 +75,16 @@ export interface EncryptedShareLinkClient {
    * statements that are due, then lists the head's active links and the
    * revoked ones still served.
    */
-  list(projectId: string): Promise<EncryptedShareLinksState>;
+  list(
+    projectId: string,
+    options?: {
+      /**
+       * Skip the upkeep pass (retries, renewals, pending work): a refresh
+       * right after an action that already did that work.
+       */
+      readonly upkeep?: false;
+    }
+  ): Promise<EncryptedShareLinksState>;
   create(
     projectId: string,
     mode: EncryptedShareLinkMode,
@@ -103,19 +117,22 @@ export interface EncryptedShareLinkClient {
 
 /** The page's client: crypto loads with the first encrypted dialog. */
 export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
-  async list(projectId) {
+  async list(projectId, options) {
     const [{ encryptedShareLinks }, links] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    const { ctx } = await encryptedShareLinks();
+    const { ctx, hasPasskey } = await encryptedShareLinks();
     let upkeepError: string | null = null;
-    const upkeep = await links
-      .maintainShareLinks(ctx, projectId)
-      .catch((error: unknown) => {
-        upkeepError = message(error);
-        return null;
-      });
+    const upkeep =
+      options?.upkeep === false
+        ? null
+        : await links
+            .maintainShareLinks(ctx, projectId)
+            .catch((error: unknown) => {
+              upkeepError = message(error);
+              return null;
+            });
     const work = await links
       .shareWorkFor(ctx)
       .read(ctx.groups.account.userId, projectId)
@@ -143,6 +160,7 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       })),
       needsConfirmation:
         view.isOwner && links.delegationNeedsRenewal(view.delegation),
+      passkey: hasPasskey(),
       retired: work?.retired ?? [],
       removalNotice: work?.notice ?? null,
       removalLinks: work?.removalLinks ?? [],
@@ -338,17 +356,43 @@ export function EncryptedShareLinks({
   } | null>(null);
   const loadRevision = useRef(0);
 
-  const load = useCallback(async () => {
-    const revision = ++loadRevision.current;
-    const next = await client.list(projectId);
-    if (revision !== loadRevision.current) return;
-    setState(next);
-    if (next.problem) setError(next.problem);
-  }, [client, projectId]);
+  // Whether the last full list reported a problem its upkeep may retry
+  // (or none has finished yet: an action can start before the first one).
+  const upkeepProblem = useRef(true);
+  const load = useCallback(
+    async (options?: { readonly upkeep?: false }) => {
+      const revision = ++loadRevision.current;
+      let next: EncryptedShareLinksState;
+      try {
+        next = await (options
+          ? client.list(projectId, options)
+          : client.list(projectId));
+      } catch (caught) {
+        // A newer load or action owns the error line now.
+        if (revision !== loadRevision.current) return;
+        throw caught;
+      }
+      if (revision !== loadRevision.current) return;
+      if (!options) upkeepProblem.current = !!next.problem;
+      setState(next);
+      if (next.problem) setError(next.problem);
+    },
+    [client, projectId]
+  );
 
   useEffect(() => {
     void load().catch((caught: unknown) => setError(message(caught)));
   }, [load]);
+
+  // Confirmed (here, or partly before a later step failed): the form and
+  // its Cancel go away, so nothing may stay waiting on them.
+  const needsConfirmation = state?.needsConfirmation;
+  useEffect(() => {
+    if (needsConfirmation !== false) return;
+    setConfirming(false);
+    setCreateAfterConfirm(false);
+    setRecoveryKey('');
+  }, [needsConfirmation]);
 
   useEffect(
     () =>
@@ -378,18 +422,35 @@ export function EncryptedShareLinks({
   );
 
   const run = async (key: string, action: () => Promise<void>) => {
+    // An earlier action's refresh no longer owns the list or error line.
+    loadRevision.current++;
     setBusy(key);
     setError(null);
+    // A new link or a confirmation shows its result itself, so the
+    // controls come back before the list does. Any other action's result
+    // is the list (a revoked link must not stay copyable meanwhile).
+    const early = key === 'create' || key === 'confirm';
+    let failed = false;
     try {
       await action();
-      await load();
     } catch (caught) {
+      failed = true;
       setError(message(caught));
-      // A revoke can fail after its tombstone was written: show the link
-      // as revocation pending rather than active.
-      await load().catch(() => undefined);
     } finally {
-      setBusy(null);
+      if (early) setBusy(null);
+    }
+    // Without the upkeep pass unless the last one reported a problem it
+    // retries (a revocation the server did not confirm). After a failure
+    // too, since a revoke can fail after its tombstone was written: the
+    // link then shows as revocation pending, not active.
+    try {
+      await (upkeepProblem.current ? load() : load({ upkeep: false })).catch(
+        (caught: unknown) => {
+          if (!failed) setError(message(caught));
+        }
+      );
+    } finally {
+      if (!early) setBusy(null);
     }
   };
 
@@ -448,6 +509,10 @@ export function EncryptedShareLinks({
     setTransientRemoval((current) => (current === transient ? null : current));
   };
   const disabled = busy !== null || state === null;
+  // The form shows only while sharing needs confirming, so only then may
+  // it hold the other controls: a refresh that finds the confirmation
+  // (in any order with the action that made it) frees them.
+  const awaitingConfirmation = confirming && !!state?.needsConfirmation;
 
   return (
     <section
@@ -459,7 +524,7 @@ export function EncryptedShareLinks({
         <Globe className="sharing-access-icon" size={14} aria-hidden="true" />
         <span className="sharing-access-title">
           {state === null
-            ? 'Anyone with a link'
+            ? 'Checking links…'
             : links.length > 0
               ? `Anyone with a link · ${links.length} ${
                   links.every((row) => row.status === 'active')
@@ -472,7 +537,7 @@ export function EncryptedShareLinks({
       <div className="sharing-link-create">
         <ShareLinkModePicker
           value={mode}
-          disabled={disabled || confirming}
+          disabled={busy !== null || awaitingConfirmation}
           describedBy={detailId}
           onChange={setMode}
         />
@@ -480,7 +545,7 @@ export function EncryptedShareLinks({
           <input
             type="checkbox"
             checked={withComments}
-            disabled={disabled || confirming}
+            disabled={busy !== null || awaitingConfirmation}
             aria-describedby={detailId}
             onChange={(event) => setWithComments(event.target.checked)}
           />
@@ -489,16 +554,31 @@ export function EncryptedShareLinks({
         <button
           type="button"
           className={links.length > 0 ? 'secondary' : 'primary'}
-          disabled={disabled || confirming}
+          disabled={disabled || awaitingConfirmation}
           onClick={() => {
             // One action (design review I79): Create link asks for the
             // confirmation sharing needs, then makes the link.
-            if (state?.needsConfirmation) {
-              setCreateAfterConfirm(true);
+            if (!state?.needsConfirmation) {
+              void run('create', createLink);
+              return;
+            }
+            setCreateAfterConfirm(true);
+            if (!state.passkey) {
               setConfirming(true);
               return;
             }
-            void run('create', createLink);
+            // Straight to the passkey prompt, in this click's activation.
+            // Cancelled or refused, the recovery key is the other way.
+            void run('confirm', async () => {
+              try {
+                await client.confirm(projectId, 'passkey');
+              } catch (caught) {
+                setConfirming(true);
+                throw caught;
+              }
+              setCreateAfterConfirm(false);
+              await createLink();
+            });
           }}
         >
           Create link
@@ -706,6 +786,18 @@ export function EncryptedShareLinks({
                     void run(`revoke:${row.shareId}`, async () => {
                       await client.revoke(projectId, row.shareId);
                       setCreated(null);
+                      // Revoked: gone from the list at once, so it is not
+                      // copyable while (or if) the refresh lags or fails.
+                      setState((current) =>
+                        current
+                          ? {
+                              ...current,
+                              links: current.links.filter(
+                                (link) => link.shareId !== row.shareId
+                              )
+                            }
+                          : current
+                      );
                     });
                   }}
                 />
@@ -738,7 +830,9 @@ export function EncryptedShareLinks({
                     Allow comments
                   </button>
                 ) : null}
-                {row.url ? (
+                {/* The link just created is copied from its box above:
+                    one place to copy it from, not two. */}
+                {row.url && row.url !== created ? (
                   <button
                     type="button"
                     className="sharing-row-copy"

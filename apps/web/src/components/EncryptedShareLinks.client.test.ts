@@ -8,7 +8,8 @@ const { createShareLink } = vi.hoisted(() => ({ createShareLink: vi.fn() }));
 
 vi.mock('../lib/e2ee/encryptedProjects', () => ({
   encryptedShareLinks: async () => ({
-    ctx: { groups: { account: { userId: 'owner' } } }
+    ctx: { groups: { account: { userId: 'owner' } } },
+    hasPasskey: () => false
   })
 }));
 vi.mock('../lib/e2ee/shareLinks', () => ({
