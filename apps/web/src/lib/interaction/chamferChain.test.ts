@@ -154,4 +154,31 @@ describe('tangent-chain additions (M03)', () => {
       tangentChainAdditions(smooth, [picked], bodyId, false).map((e) => e.hash)
     ).toEqual([1, 2]);
   });
+  it('stops at a sharp corner, such as a chamfered rim (review)', () => {
+    // Three edges turning 45° at each join, as a box rim does after its
+    // vertical edges are chamfered: one run for selection, no tangent chain.
+    const kinked: EdgeTopology[] = [
+      { ...edge(0), points: [0, 0, 0, 1, 0, 0] },
+      { ...edge(1), points: [1, 0, 0, 2, 1, 0] },
+      { ...edge(2), points: [2, 1, 0, 2, 2, 0], vertexIds: [2, 3] }
+    ];
+    const rim = { bodyId, topology: { edges: kinked, faces: [] } };
+    expect(
+      tangentChainAdditions(rim as never, [picked], bodyId, false)
+    ).toEqual([]);
+    // Turning by a couple of degrees, within a display polyline's chord
+    // error, the run still chains.
+    const gentle: EdgeTopology[] = [
+      { ...edge(0), points: [0, 0, 0, 1, 0, 0] },
+      { ...edge(1), points: [1, 0, 0, 2, 0.03, 0] }
+    ];
+    expect(
+      tangentChainAdditions(
+        { bodyId, topology: { edges: gentle, faces: [] } } as never,
+        [picked],
+        bodyId,
+        false
+      ).map((e) => e.hash)
+    ).toEqual([1]);
+  });
 });
