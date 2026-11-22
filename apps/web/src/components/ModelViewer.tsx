@@ -11327,6 +11327,9 @@ export function ModelViewer({
         // stays where it is: the drag's move splits into the pivot's own
         // move and the translation that keeps the body still.
         let pivot: MovePreview['translation'] | undefined;
+        // What the handle itself moved along its axis: in pivot mode the
+        // HUD reads that, not the translation that keeps the body still.
+        const handleTravel = translation[drag.axis];
         if (drag.pivotMode && drag.kind !== 'ring') {
           const step = pivotDragStep(drag.startTranslation, rotation, {
             x: translation.x - drag.startTranslation.x,
@@ -11361,7 +11364,9 @@ export function ModelViewer({
           drag.kind === 'ring'
             ? rotation[drag.axis]
             : drag.kind === 'axis'
-              ? translation[drag.axis]
+              ? pivot
+                ? handleTravel - drag.startTranslation[drag.axis]
+                : translation[drag.axis]
               : undefined;
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true, value);

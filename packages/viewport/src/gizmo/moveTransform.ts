@@ -123,3 +123,30 @@ export function pivotDragStep(
     }
   };
 }
+
+/**
+ * M10: the translation that keeps a Move's placement when its turn and
+ * pivot are replaced by stored (rounded) values. The preview places a point
+ * x at R·x + c, with c = t + p − R·p; under the stored R′ and p′ the same c
+ * needs t′ = c − p′ + R′·p′. Only the turn's own rounding is left, which
+ * moves a point by its distance from the stored pivot times that angle.
+ */
+export function translationForRoundedMove(
+  pivot: Vec3,
+  translation: Vec3,
+  rotationDeg: Vec3,
+  storedPivot: Vec3,
+  storedRotationDeg: Vec3
+): Vec3 {
+  const placed = composeMoveTransform(pivot, translation, rotationDeg);
+  const stored = composeMoveTransform(
+    storedPivot,
+    { x: 0, y: 0, z: 0 },
+    storedRotationDeg
+  );
+  return {
+    x: placed.x - stored.x,
+    y: placed.y - stored.y,
+    z: placed.z - stored.z
+  };
+}

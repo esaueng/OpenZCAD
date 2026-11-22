@@ -842,7 +842,10 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
-import { relocateMovePivot } from '@openzcad/viewport/move-transform';
+import {
+  relocateMovePivot,
+  translationForRoundedMove
+} from '@openzcad/viewport/move-transform';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
@@ -13824,22 +13827,36 @@ export function App() {
       z: (body.bbox.min.z + body.bbox.max.z) / 2
     };
     const round = (value: number) => Math.round(value * 1000) / 1000;
+    const rotationDeg = {
+      x: round(preview.rotationDeg.x),
+      y: round(preview.rotationDeg.y),
+      z: round(preview.rotationDeg.z)
+    };
+    const pivot = {
+      x: round(center.x),
+      y: round(center.y),
+      z: round(center.z)
+    };
+    // M10: the stored values are rounded, so the translation is re-derived
+    // from where the preview put the body under the rounded turn and pivot.
+    // Rounding all three independently undid the compensation a placed
+    // pivot carries: a far pivot turned the rounding of a tiny angle into
+    // a visible shift.
+    const translation = translationForRoundedMove(
+      center,
+      preview.translation,
+      preview.rotationDeg,
+      pivot,
+      rotationDeg
+    );
     const values = {
       translation: {
-        x: round(preview.translation.x),
-        y: round(preview.translation.y),
-        z: round(preview.translation.z)
+        x: round(translation.x),
+        y: round(translation.y),
+        z: round(translation.z)
       },
-      rotationDeg: {
-        x: round(preview.rotationDeg.x),
-        y: round(preview.rotationDeg.y),
-        z: round(preview.rotationDeg.z)
-      },
-      pivot: {
-        x: round(center.x),
-        y: round(center.y),
-        z: round(center.z)
-      }
+      rotationDeg,
+      pivot
     };
     // Finite inputs can still overflow during rounding.
     if (

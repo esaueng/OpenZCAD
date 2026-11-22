@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   composeMoveTransform,
   pivotDragStep,
-  relocateMovePivot
+  relocateMovePivot,
+  translationForRoundedMove
 } from './moveTransform';
 
 type Vec3 = { x: number; y: number; z: number };
@@ -98,5 +99,34 @@ describe('the Move pivot handle (M10)', () => {
     expect(
       round(pivotDragStep(translation, { x: 0, y: 0, z: 0 }, delta).pivotDelta)
     ).toEqual(delta);
+  });
+
+  it('keeps the placement when Done rounds the turn and a far pivot', () => {
+    // Review case: a 0.00049° pending turn about a pivot moved 100 m away.
+    const rotation = { x: 0, y: 0, z: 0.00049 };
+    const kept = relocateMovePivot(
+      { x: 20, y: 0, z: 0 },
+      { x: 0, y: 0, z: 0 },
+      rotation,
+      { x: 100020, y: 0, z: 0 }
+    );
+    expect(Math.abs(kept.y)).toBeGreaterThan(0.8);
+    const storedRotation = { x: 0, y: 0, z: 0 };
+    const storedPivot = { x: 100020, y: 0, z: 0 };
+    const stored = translationForRoundedMove(
+      { x: 100020, y: 0, z: 0 },
+      kept,
+      rotation,
+      storedPivot,
+      storedRotation
+    );
+    // A body corner lands within the turn's own rounding, not 0.855 mm off.
+    for (const corner of corners) {
+      const before = placed(corner, { x: 100020, y: 0, z: 0 }, kept, rotation);
+      const after = placed(corner, storedPivot, stored, storedRotation);
+      expect(
+        Math.hypot(before.x - after.x, before.y - after.y, before.z - after.z)
+      ).toBeLessThan(1e-3);
+    }
   });
 });
