@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  displayPixelRatio,
   FrameIntervalMeter,
   MAX_VIEWPORT_PIXEL_RATIO,
   NAVIGATION_PIXEL_RATIO,
@@ -9,7 +10,8 @@ import {
   SLOW_FRAME_MS,
   TOUCH_SHADOW_MAP_SIZE,
   viewportPixelRatio,
-  viewportSampling
+  viewportSampling,
+  withReportedPixelRatio
 } from './renderBudget';
 
 describe('render budget', () => {
@@ -70,6 +72,34 @@ describe('render budget', () => {
     expect(viewportPixelRatio(viewportSampling(false, 3, false), 3)).toBe(
       MAX_VIEWPORT_PIXEL_RATIO
     );
+  });
+
+  it('sizes and styles an export by the display ratio, capped at 2', () => {
+    expect(displayPixelRatio(1)).toBe(1);
+    expect(displayPixelRatio(1.5)).toBe(1.5);
+    expect(displayPixelRatio(3)).toBe(MAX_VIEWPORT_PIXEL_RATIO);
+  });
+
+  it('reports an overridden pixel ratio only while drawing', () => {
+    class Renderer {
+      private ratio = 2;
+      getPixelRatio() {
+        return this.ratio;
+      }
+    }
+    const renderer = new Renderer();
+    const own = renderer.getPixelRatio;
+    expect(
+      withReportedPixelRatio(renderer, 1, () => renderer.getPixelRatio())
+    ).toBe(1);
+    expect(renderer.getPixelRatio()).toBe(2);
+    expect(() =>
+      withReportedPixelRatio(renderer, 1, () => {
+        throw new Error('refused');
+      })
+    ).toThrow('refused');
+    expect(renderer.getPixelRatio()).toBe(2);
+    expect(renderer.getPixelRatio).toBe(own);
   });
 
   it('lowers the navigation pixel ratio only for a device dropping frames', () => {

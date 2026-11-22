@@ -71,6 +71,37 @@ export function viewportPixelRatio(
     : Math.min(devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO);
 }
 
+/**
+ * The ratio an image export sizes and styles itself by: the display's own,
+ * capped as the live view is. A supersampled viewport moved to a 1× display
+ * still draws at 2×, but its default export size and its screen-pixel
+ * styling (section hatch pitch) stay what that display gave before.
+ */
+export function displayPixelRatio(devicePixelRatio: number): number {
+  return Math.min(devicePixelRatio, MAX_VIEWPORT_PIXEL_RATIO);
+}
+
+/**
+ * Run `draw` with `renderer.getPixelRatio()` reporting `ratio`, then put the
+ * renderer's own reading back. three.js sizes its canvas from its private
+ * ratio, so only code that asks the renderer (shader uniforms set in
+ * `onBeforeRender`) sees the override; the canvas is never resized.
+ */
+export function withReportedPixelRatio<T>(
+  renderer: { getPixelRatio(): number },
+  ratio: number,
+  draw: () => T
+): T {
+  const own = renderer.getPixelRatio;
+  if (own.call(renderer) === ratio) return draw();
+  renderer.getPixelRatio = () => ratio;
+  try {
+    return draw();
+  } finally {
+    renderer.getPixelRatio = own;
+  }
+}
+
 /** Pixel ratio a struggling device navigates at; the full ratio returns at rest. */
 export const NAVIGATION_PIXEL_RATIO = 1.25;
 /** Below 45 frames a second, a moving view trades sharpness for motion. */

@@ -691,6 +691,42 @@ describe('ModelViewer lifecycle', () => {
     }
   });
 
+  it('keeps the default export size at the display ratio after a supersampled view moves to 1x', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      window,
+      'devicePixelRatio'
+    );
+    let ratio = 2;
+    Object.defineProperty(window, 'devicePixelRatio', {
+      configurable: true,
+      get: () => ratio
+    });
+    try {
+      const imageRef: {
+        current: { viewSize(): { width: number; height: number } } | null;
+      } = { current: null };
+      const view = render(
+        createElement(ModelViewer, {
+          ...idleProps(),
+          viewportImageRef: imageRef as ModelViewerProps['viewportImageRef']
+        })
+      );
+      const source = imageRef.current!;
+      expect(source.viewSize()).toEqual({ width: 1600, height: 1200 });
+      // Dragged to a 1x display: the canvas stays 2x, the export does not.
+      ratio = 1;
+      expect(gl.state.renderers.at(-1)!.ratio()).toBe(2);
+      expect(source.viewSize()).toEqual({ width: 800, height: 600 });
+      view.unmount();
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(window, 'devicePixelRatio', descriptor);
+      } else {
+        delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+      }
+    }
+  });
+
   it('leaves no key listener behind on the document for a retired viewer', () => {
     // OrbitControls removed its capture keydown listener from the canvas's
     // root node as that read at teardown — after React had detached the

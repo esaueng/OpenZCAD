@@ -82,9 +82,11 @@ import {
   FrameIntervalMeter,
   NAVIGATION_PIXEL_RATIO,
   navigationPixelRatio,
+  displayPixelRatio,
   shadowMapSizeFor,
   viewportPixelRatio,
-  viewportSampling
+  viewportSampling,
+  withReportedPixelRatio
 } from './viewer/renderBudget';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
@@ -4071,51 +4073,72 @@ export function ModelViewer({
     contextRef.current = context;
     const viewportImage: ViewportImageSource = {
       capture: (request) => {
-        const image = renderViewportImage(
-          {
-            renderer,
-            scene,
-            camera: cameraRig.activeCamera,
-            backdrop: gradientBackdrop,
-            grid: [grid, axes],
-            content: [
-              skyLight,
-              cameraKey,
-              keyLight,
-              keyLight.target,
-              shadowCatcher,
-              bodyGroup,
-              regionGroup,
-              sketchGroup
-            ],
-            sketches: [regionGroup, sketchGroup],
-            objectsByBodyId,
-            refreshShadowMap,
-            emphasizeBodyColors: () => {
-              const restores: Array<() => void> = [];
-              for (const body of context.renderedBodies ?? []) {
-                const object = objectsByBodyId.get(body.bodyId);
-                if (!object) continue;
-                forEachMesh(object, (mesh) => {
-                  const was = mesh.material.color.clone();
-                  contextBodyColor(body.color, true, mesh.material.color);
-                  restores.push(() => mesh.material.color.copy(was));
-                });
-              }
-              return () => {
-                for (const restore of restores) restore();
-              };
-            }
-          },
-          request
+        // A supersampled view draws at 2× on any display; the picture's
+        // screen-pixel styling follows the display, as it always has.
+        const image = withReportedPixelRatio(
+          renderer,
+          sampling.supersampled
+            ? displayPixelRatio(window.devicePixelRatio)
+            : renderer.getPixelRatio(),
+          () =>
+            renderViewportImage(
+              {
+                renderer,
+                scene,
+                camera: cameraRig.activeCamera,
+                backdrop: gradientBackdrop,
+                grid: [grid, axes],
+                content: [
+                  skyLight,
+                  cameraKey,
+                  keyLight,
+                  keyLight.target,
+                  shadowCatcher,
+                  bodyGroup,
+                  regionGroup,
+                  sketchGroup
+                ],
+                sketches: [regionGroup, sketchGroup],
+                objectsByBodyId,
+                refreshShadowMap,
+                emphasizeBodyColors: () => {
+                  const restores: Array<() => void> = [];
+                  for (const body of context.renderedBodies ?? []) {
+                    const object = objectsByBodyId.get(body.bodyId);
+                    if (!object) continue;
+                    forEachMesh(object, (mesh) => {
+                      const was = mesh.material.color.clone();
+                      contextBodyColor(body.color, true, mesh.material.color);
+                      restores.push(() => mesh.material.color.copy(was));
+                    });
+                  }
+                  return () => {
+                    for (const restore of restores) restore();
+                  };
+                }
+              },
+              request
+            )
         );
         requestRender();
         return image;
       },
-      viewSize: () => ({
-        width: renderer.domElement.width,
-        height: renderer.domElement.height
-      }),
+      // The default export size is the view at the display's ratio, not the
+      // supersampled backing store a 1× display would otherwise double.
+      viewSize: () =>
+        sampling.supersampled
+          ? {
+              width: Math.floor(
+                canvasWidth() * displayPixelRatio(window.devicePixelRatio)
+              ),
+              height: Math.floor(
+                canvasHeight() * displayPixelRatio(window.devicePixelRatio)
+              )
+            }
+          : {
+              width: renderer.domElement.width,
+              height: renderer.domElement.height
+            },
       // Read when asked, not at mount: the export is rare, and the renderer
       // need not be fully initialised for the viewer to start.
       get maxSide() {
@@ -7483,7 +7506,8 @@ export function ModelViewer({
       if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
         return;
       }
-      renderer.setPixelRatio(Math.min(value, 2));
+      // A supersampled context stays at 2×, as it would in production.
+      renderer.setPixelRatio(viewportPixelRatio(sampling, value));
       requestRender();
     };
     /**
