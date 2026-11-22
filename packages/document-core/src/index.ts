@@ -2452,6 +2452,45 @@ export function addSketchConstraint(
   return { document: next, constraintId };
 }
 
+/**
+ * S05: two arcs are tangent where they are joined, so a curve-to-curve
+ * tangent goes with the coincidence that joined its contact point to the
+ * other arc — unless another coincidence still joins them there.
+ */
+function withoutUnjoinedArcTangents(
+  document: ProjectDocument,
+  constraints: SketchConstraint[],
+  removed: SketchConstraintData
+): SketchConstraint[] {
+  if (removed.constraintKind !== 'coincident') return constraints;
+  const isArc = (id: EntityId) => {
+    const node = getNode(document, id);
+    return node?.kind === 'sketch-object' && node.objectKind === 'arc';
+  };
+  const joins = (at: SketchPointRef, other: EntityId) =>
+    constraints.some(
+      ({ data }) =>
+        data.constraintKind === 'coincident' &&
+        ((samePointRef(data.a, at) && data.b.objectId === other) ||
+          (samePointRef(data.b, at) && data.a.objectId === other))
+    );
+  return constraints.filter(({ data }) => {
+    if (
+      data.constraintKind !== 'tangent' ||
+      !data.at ||
+      !isArc(data.a) ||
+      !isArc(data.b)
+    ) {
+      return true;
+    }
+    const other = data.at.objectId === data.a ? data.b : data.a;
+    const unjoinedNow =
+      [removed.a, removed.b].some((ref) => samePointRef(ref, data.at!)) &&
+      [removed.a, removed.b].some((ref) => ref.objectId === other);
+    return !unjoinedNow || joins(data.at, other);
+  });
+}
+
 export function deleteSketchConstraint(
   document: ProjectDocument,
   input: SketchConstraintDeleteInput
@@ -2479,7 +2518,14 @@ export function deleteSketchConstraint(
       `Sketch ${input.sketchId} has no constraint ${input.constraintId}.`
     );
   }
-  sketch.constraints = remaining;
+  const removed = (sketch.constraints ?? []).find(
+    (constraint) => constraint.constraintId === input.constraintId
+  )!;
+  sketch.constraints = withoutUnjoinedArcTangents(
+    next,
+    remaining,
+    removed.data
+  );
   // Keep an orphaned position in the additive map. Replacing a driving
   // constraint during value editing deletes and re-adds the same identity in
   // one transaction; retaining it preserves the user's label placement.

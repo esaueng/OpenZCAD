@@ -390,7 +390,8 @@ function catalogCorners(
         };
         const size = Math.hypot(bisector.x, bisector.y);
         if (size <= 1e-9) continue;
-        const nudge = 0.15 * Math.min(circle.radius, farLength);
+        // Far enough apart that the two markers never cover each other.
+        const nudge = 0.45 * Math.min(circle.radius, farLength);
         const point = {
           x: end.position.x + (bisector.x / size) * nudge,
           y: end.position.y + (bisector.y / size) * nudge
@@ -514,15 +515,16 @@ export function planSketchFilletBatch(
       end: arc.startRad + arc.sweepRad
     };
     const angle = Math.atan2(point.y - arc.center.y, point.x - arc.center.x);
-    // Keep each end in the arc's own turn.
-    const near =
-      ref.point === 'start' ? arc.startRad : arc.startRad + arc.sweepRad;
-    const unwrapped = angle + TAU * Math.round((near - angle) / TAU);
+    // Measure each cut as how far it runs into the arc from its own end, so
+    // two cuts on a long arc are compared along the arc itself, never across
+    // an angle wrap: what is left is the sweep less both cuts.
     if (ref.point === 'start') {
-      entry.start = unwrapped;
+      entry.start =
+        arc.startRad + ((((angle - arc.startRad) % TAU) + TAU) % TAU);
       entry.startCornerId = cornerId;
     } else {
-      entry.end = unwrapped;
+      const end = arc.startRad + arc.sweepRad;
+      entry.end = end - ((((end - angle) % TAU) + TAU) % TAU);
       entry.endCornerId = cornerId;
     }
     trimmedArcs.set(ref.objectId, entry);

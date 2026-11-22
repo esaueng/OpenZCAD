@@ -238,6 +238,27 @@ describe('Chamfer at a corner with an arc (S05)', () => {
     }
   });
 
+  it('refuses to cut a corner a relation holds (review case)', () => {
+    const fixture = sketchOf(corner);
+    const [line, arc] = fixture.ids as [string, string];
+    fixture.manager.execute(
+      commandFactories.addSketchConstraint({
+        sketchId: fixture.sketchId,
+        constraint: {
+          constraintKind: 'lock',
+          point: { objectId: line as EntityId, point: 'end' },
+          x: 10,
+          y: 0
+        }
+      })
+    );
+    expect(fixture.chamfer(line, arc, 2)).toEqual({
+      status: 'refuse',
+      reason:
+        'A lock relation holds the corner, so cutting it back would break it. Remove the relation first.'
+    });
+  });
+
   it('refuses by name what does not fit, changing nothing', () => {
     const { chamfer, ids } = sketchOf(corner);
     const [line, arc] = ids as [string, string];

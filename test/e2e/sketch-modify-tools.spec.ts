@@ -646,12 +646,14 @@ test('Fillet and Chamfer meet a circle a line ends on, keeping the circle whole'
 }) => {
   test.setTimeout(120_000);
   const at = await startSketch(page, 'Curved corners');
-  const center = at(0.4, 0.5);
-  const radiusPx = 60;
+  // Sized from the canvas, so a phone-width run draws the same picture.
+  const center = at(0.35, 0.5);
+  const radiusPx = Math.round((at(0.5, 0.5).x - at(0.35, 0.5).x) * 0.6);
   await drawCircle(page, center, radiusPx);
   // The line ends on the circle's quadrant snap, so the joint is exact.
   const joint = { x: center.x + radiusPx, y: center.y };
-  await drawLine(page, { x: center.x + 220, y: center.y }, joint);
+  const lineStart = at(0.8, 0.5);
+  await drawLine(page, lineStart, joint);
   await page.keyboard.press('Escape');
   const status = page.getByRole('contentinfo');
   const drawn = await exportSketch(page);
@@ -685,6 +687,7 @@ test('Fillet and Chamfer meet a circle a line ends on, keeping the circle whole'
   const corners = page.getByTestId('sketch-fillet-corner');
   await expect(corners).toHaveCount(2, READ_TIMEOUT);
   // A marker is picked through the canvas at its point, as on screen.
+  await expect(corners.first()).toBeVisible();
   const marker = (await corners.first().boundingBox())!;
   await page.mouse.click(
     marker.x + marker.width / 2,
@@ -720,7 +723,7 @@ test('Fillet and Chamfer meet a circle a line ends on, keeping the circle whole'
     .getByRole('toolbar', { name: 'Sketch tools' })
     .getByRole('button', { name: /^Chamfer/ })
     .click();
-  await page.mouse.click(center.x + 150, center.y);
+  await page.mouse.click((lineStart.x + joint.x) / 2, joint.y);
   await expect(status).toContainText('Chamfer: pick 2 of 2.');
   // The circle's upper side.
   await page.mouse.click(center.x, center.y - radiusPx);

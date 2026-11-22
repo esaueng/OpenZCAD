@@ -216,6 +216,211 @@ describe('Fillet with arc and circle inputs (S05)', () => {
     expect(kinds.filter((kind) => kind === 'tangent')).toHaveLength(2);
   });
 
+  it('refuses cuts that overlap on a long arc (review case)', () => {
+    // A radius-5 arc 0°–330°, a line leaving each end radially; a radius-15
+    // fillet at both ends would cut past each other along the arc.
+    const fixture = sketchOf(
+      [
+        {
+          objectKind: 'arc',
+          centerX: 0,
+          centerY: 0,
+          radius: 5,
+          startAngleDeg: 0,
+          endAngleDeg: 330
+        },
+        {
+          objectKind: 'line',
+          x1: 5,
+          y1: 0,
+          x2: 5 + 10 * Math.cos(Math.PI / 6),
+          y2: 10 * Math.sin(Math.PI / 6)
+        },
+        {
+          objectKind: 'line',
+          x1: 5 * Math.cos((-30 * Math.PI) / 180),
+          y1: 5 * Math.sin((-30 * Math.PI) / 180),
+          x2: 25 * Math.cos((-30 * Math.PI) / 180),
+          y2: 25 * Math.sin((-30 * Math.PI) / 180)
+        }
+      ],
+      ([arc, a, b]) => [
+        join(arc!, 'start', a!, 'start'),
+        join(arc!, 'end', b!, 'start')
+      ]
+    );
+    const corners = listSketchFilletCorners(
+      fixture.manager.document,
+      fixture.sketch(),
+      resolve
+    );
+    const plan = planSketchFilletBatch(
+      fixture.manager.document,
+      fixture.sketch(),
+      corners.map(({ id }) => id),
+      15,
+      resolve
+    );
+    expect(plan.status).toBe('refuse');
+  });
+
+  it('never returns a fillet that doubles back on a leg (review case)', () => {
+    // A quarter arc about the origin from (5, 0), and a 5-long line leaving
+    // (5, 0) at 120°: a fillet must continue both legs smoothly.
+    const fixture = sketchOf(
+      [
+        {
+          objectKind: 'arc',
+          centerX: 0,
+          centerY: 0,
+          radius: 5,
+          startAngleDeg: 0,
+          endAngleDeg: 90
+        },
+        {
+          objectKind: 'line',
+          x1: 5,
+          y1: 0,
+          x2: 5 + 5 * Math.cos((120 * Math.PI) / 180),
+          y2: 5 * Math.sin((120 * Math.PI) / 180)
+        }
+      ],
+      ([arc, line]) => [join(arc!, 'start', line!, 'start')]
+    );
+    const corners = listSketchFilletCorners(
+      fixture.manager.document,
+      fixture.sketch(),
+      resolve
+    );
+    for (const corner of corners) {
+      const plan = planSketchFilletBatch(
+        fixture.manager.document,
+        fixture.sketch(),
+        [corner.id],
+        2,
+        resolve
+      );
+      if (plan.status !== 'ready') continue;
+      const [fillet] = plan.arcs;
+      // Leaving the fillet at each end, the direction is the leg's own:
+      // the fillet's end tangent is parallel to the leg there.
+      const along = (angleDeg: number) => ({
+        x: -Math.sin((angleDeg * Math.PI) / 180),
+        y: Math.cos((angleDeg * Math.PI) / 180)
+      });
+      const lineDir = {
+        x: Math.cos((120 * Math.PI) / 180),
+        y: Math.sin((120 * Math.PI) / 180)
+      };
+      const onLineEnd =
+        Math.abs(
+          (fillet!.a.y - 0) * lineDir.x - (fillet!.a.x - 5) * lineDir.y
+        ) < 1e-9
+          ? fillet!.startsAt === 'a'
+            ? fillet!.startAngleDeg
+            : fillet!.endAngleDeg
+          : fillet!.startsAt === 'b'
+            ? fillet!.startAngleDeg
+            : fillet!.endAngleDeg;
+      const tangent = along(onLineEnd);
+      expect(
+        Math.abs(tangent.x * lineDir.y - tangent.y * lineDir.x)
+      ).toBeLessThan(1e-9);
+      expect(fillet!.endAngleDeg - fillet!.startAngleDeg).toBeLessThan(180);
+    }
+  });
+
+  it('gives each side of a circle joint its own fillet (review case)', () => {
+    // A radius-5 circle and a 1-long line leaving (5, 0) at 30°.
+    const fixture = sketchOf([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 },
+      {
+        objectKind: 'line',
+        x1: 5,
+        y1: 0,
+        x2: 5 + Math.cos(Math.PI / 6),
+        y2: Math.sin(Math.PI / 6)
+      }
+    ]);
+    const corners = listSketchFilletCorners(
+      fixture.manager.document,
+      fixture.sketch(),
+      resolve
+    );
+    expect(corners).toHaveLength(2);
+    const contacts = corners.flatMap((corner) => {
+      const plan = planSketchFilletBatch(
+        fixture.manager.document,
+        fixture.sketch(),
+        [corner.id],
+        1,
+        resolve
+      );
+      return plan.status === 'ready' ? [plan.arcs[0]!.b] : [];
+    });
+    // Never the same contact from both markers.
+    if (contacts.length === 2) {
+      expect(dist(contacts[0]!, contacts[1]!)).toBeGreaterThan(1e-6);
+    }
+  });
+
+  it('drops an arc tangency with the join it depends on', async () => {
+    const fixture = sketchOf(
+      [
+        {
+          objectKind: 'arc',
+          centerX: 0,
+          centerY: 0,
+          radius: 5,
+          startAngleDeg: 0,
+          endAngleDeg: 90
+        },
+        {
+          objectKind: 'arc',
+          centerX: 5,
+          centerY: 5,
+          radius: 5,
+          startAngleDeg: 180,
+          endAngleDeg: 240
+        }
+      ],
+      ([a, b]) => [join(a!, 'end', b!, 'start')]
+    );
+    const corners = listSketchFilletCorners(
+      fixture.manager.document,
+      fixture.sketch(),
+      resolve
+    );
+    const plan = ready(
+      planSketchFilletBatch(
+        fixture.manager.document,
+        fixture.sketch(),
+        [corners[0]!.id],
+        0.5,
+        resolve
+      )
+    );
+    const { candidate } = await commitAndSolve(fixture, plan);
+    const manager = new CommandManager(candidate);
+    const constraints = () =>
+      findSketch(manager.document, fixture.sketchId)!.constraints!;
+    const tangents = () =>
+      constraints().filter(({ data }) => data.constraintKind === 'tangent');
+    expect(tangents()).toHaveLength(2);
+    const join1 = constraints().find(
+      ({ data }) => data.constraintKind === 'coincident'
+    )!;
+    manager.execute(
+      commandFactories.deleteSketchConstraint({
+        sketchId: fixture.sketchId,
+        constraintId: join1.constraintId
+      })
+    );
+    expect(tangents()).toHaveLength(1);
+    manager.undo();
+    expect(tangents()).toHaveLength(2);
+  });
+
   it('offers no corner where a line runs smoothly into an arc', () => {
     const fixture = sketchOf(
       [

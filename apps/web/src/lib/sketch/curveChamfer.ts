@@ -159,6 +159,10 @@ function cutPoint(leg: Leg, distance: number): Point | string {
   };
 }
 
+function samePoint(a: SketchPointRef, b: SketchPointRef): boolean {
+  return a.objectId === b.objectId && a.point === b.point;
+}
+
 function fmt(value: number): string {
   return String(Number(value.toPrecision(6)));
 }
@@ -382,6 +386,45 @@ export function planCurvedChamfer(
   if (typeof cutB === 'string') return { status: 'refuse', reason: cutB };
   const aRef: SketchPointRef = { objectId: a.objectId, point: a.end };
   const bRef: SketchPointRef = { objectId: b.objectId, point: b.end };
+  // A cut end moves: a relation that holds it there (a lock, a dimension, a
+  // tangency at it, a join to some other curve) would be broken, and this
+  // edit is committed without a solve, so it is refused by name instead.
+  const cutEnds = [a, b]
+    .filter((leg) => !(leg.kind === 'arc' && leg.circle === true))
+    .map((leg) => ({ objectId: leg.objectId, point: leg.end }));
+  const holding = (sketch.constraints ?? []).find(({ data }) => {
+    const refs = Object.values(data).filter(
+      (value): value is SketchPointRef =>
+        typeof value === 'object' &&
+        value !== null &&
+        'objectId' in value &&
+        'point' in value
+    );
+    if (!refs.some((ref) => cutEnds.some((end) => samePoint(ref, end)))) {
+      return false;
+    }
+    // The corner's own join is released by this edit, and so is what held
+    // an end on the circle it leaves.
+    const cornerJoin =
+      data.constraintKind === 'coincident' &&
+      ((samePoint(data.a, aRef) && samePoint(data.b, bRef)) ||
+        (samePoint(data.a, bRef) && samePoint(data.b, aRef)));
+    const circleHold =
+      data.constraintKind === 'point-on-object' &&
+      [a, b].some(
+        (leg) =>
+          leg.kind === 'arc' &&
+          leg.circle === true &&
+          leg.objectId === data.objectId
+      );
+    return !cornerJoin && !circleHold;
+  });
+  if (holding) {
+    return {
+      status: 'refuse',
+      reason: `A ${holding.data.constraintKind.replace(/-/g, ' ')} relation holds the corner, so cutting it back would break it. Remove the relation first.`
+    };
+  }
   const bevelId = toEntityId(createId('ent'));
   const isCircle = (leg: Leg) => leg.kind === 'arc' && leg.circle === true;
   const circle = [a, b].find(isCircle);
