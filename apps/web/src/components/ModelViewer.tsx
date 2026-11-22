@@ -165,6 +165,7 @@ import {
   clearGroup,
   closestAxisT,
   composeMoveTransform,
+  pivotDragStep,
   boxFullyInView,
   computeFitPose,
   computeNormalToFacePose,
@@ -339,6 +340,7 @@ import {
 } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import { snapRecordsExactly } from '../lib/measurePointKinds';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
@@ -1642,6 +1644,23 @@ export interface ModelViewerProps {
         snap?: PickSnap
       ) => string | null)
     | null;
+  /**
+   * M13: the snap kinds a measuring pick may lock onto (a Distance pick
+   * asked for midpoints offers only midpoints); null offers every kind.
+   */
+  measureSnapKinds?: readonly PickSnap['kind'][] | null;
+  /**
+   * M10: a host picking model points (Move by two points). While set, a
+   * click on the model reports the snapped point (an endpoint, midpoint or
+   * centre the glyph names, else the surface point) and selects nothing;
+   * the hover shows the same snap glyph measuring does.
+   */
+  onPointPick?:
+    | ((pick: {
+        point: { x: number; y: number; z: number };
+        kind: PickSnap['kind'] | null;
+      }) => void)
+    | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
   /** Recheck Extrude clearance when an explicit request restores its panels. */
@@ -1769,7 +1788,9 @@ export interface ModelViewerProps {
   onMovePreviewChange(
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg'],
-    snap: MoveSnap
+    snap: MoveSnap,
+    /** M10: the pivot a pivot-handle drag placed; omitted otherwise. */
+    pivot?: MovePreview['translation']
   ): void;
   /**
    * Live sink for the values a move drag is producing, owned by the panel
@@ -2251,7 +2272,16 @@ interface MoveDragState {
   pendingValues: {
     translation: MovePreview['translation'];
     rotation: MovePreview['rotationDeg'];
+    /** M10: where a pivot-handle drag left the pivot. */
+    pivot?: MovePreview['translation'];
   } | null;
+  /**
+   * M10: this drag places the pivot, not the body. Set for an arrow or the
+   * centre handle while the Move's pivot mode is on; rings still turn.
+   */
+  pivotMode: boolean;
+  /** The pivot (rotation centre) at drag start. */
+  startPivot: THREE.Vector3;
 }
 
 // Selection colours live with hover's in the viewport's semantics table. They
@@ -2264,6 +2294,8 @@ const SELECTED_FACE_HIDDEN_OPACITY =
   SELECTION_SEMANTICS.selected.hiddenFaceOpacity;
 /** Stable default, so an absent prop does not rerun the bodies pass. */
 const NO_FOCUS_FACES: readonly TopologySelection[] = [];
+/** M10: how long after a point pick a native double click still belongs to it. */
+const POINT_PICK_DOUBLE_CLICK_MS = 800;
 /**
  * Face opacity of a body Assemble shows only as context (not a component),
  * on top of its own opacity and X-ray.
@@ -2715,6 +2747,8 @@ export function ModelViewer({
   onCommentPinClick,
   commentPlacing = false,
   onMeasurePreview,
+  measureSnapKinds,
+  onPointPick,
   regionHandle,
   modelPanelsHidden = false,
   facePickOnly = false,
@@ -3102,6 +3136,10 @@ export function ModelViewer({
   onHoverRegionRef.current = onHoverRegion;
   const onMeasurePreviewRef = useRef(onMeasurePreview);
   onMeasurePreviewRef.current = onMeasurePreview;
+  const measureSnapKindsRef = useRef(measureSnapKinds);
+  measureSnapKindsRef.current = measureSnapKinds;
+  const onPointPickRef = useRef(onPointPick);
+  onPointPickRef.current = onPointPick;
   const onPickPlaneRef = useRef(onPickPlane);
   onPickPlaneRef.current = onPickPlane;
   const onPickDatumRef = useRef(onPickDatum);
@@ -3776,7 +3814,10 @@ export function ModelViewer({
       regionGroup,
       sketchGroup,
       bodyGroup,
-      filter: () => selectionFilterRef.current,
+      // M10: a point pick reads faces and edges whatever the filter, so its
+      // snaps can scope to the edge or face under the pointer.
+      filter: () =>
+        onPointPickRef.current ? 'any' : selectionFilterRef.current,
       selectThrough: () => xrayRef.current,
       clippingPlane: () =>
         sectionViewRef.current
@@ -3852,29 +3893,35 @@ export function ModelViewer({
           const body = context.renderedBodies?.find(
             (candidate) => candidate.bodyId === preview.bodyId
           );
+          const createCopy = () => {
+            const resolution = context.fatLineResolution();
+            const copy = new THREE.Group();
+            const mesh = createObjectForBody(body!, resolution);
+            const edges = createBodyEdgeOverlay(body!, resolution);
+            edges.setDisplayMode(displayModeRef.current);
+            edges.setTangentEdgeStyle(tangentEdgesRef.current);
+            mesh.add(edges);
+            copy.add(mesh);
+            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
+            return copy;
+          };
           const target = moveCopyPreview.target(
             object,
             !!preview.copy && !!body,
-            () => {
-              const resolution = context.fatLineResolution();
-              const copy = new THREE.Group();
-              const mesh = createObjectForBody(body!, resolution);
-              const edges = createBodyEdgeOverlay(body!, resolution);
-              edges.setDisplayMode(displayModeRef.current);
-              edges.setTangentEdgeStyle(tangentEdgesRef.current);
-              mesh.add(edges);
-              copy.add(mesh);
-              applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
-              return copy;
-            }
+            createCopy
+          );
+          const final = composeMoveTransform(center, translation, rotationDeg);
+          target.rotation.copy(moveEuler(rotationDeg));
+          target.position.set(final.x, final.y, final.z);
+          // M10: a repeated copy shows every stamp, each the same move on.
+          moveCopyPreview.poseStamps(
+            preview.copy && body ? Math.max(0, (preview.stamps ?? 1) - 1) : 0,
+            createCopy
           );
           moveCopyPreview.refreshAppearance(
             displayModeRef.current,
             xrayRef.current
           );
-          const final = composeMoveTransform(center, translation, rotationDeg);
-          target.rotation.copy(moveEuler(rotationDeg));
-          target.position.set(final.x, final.y, final.z);
           // The mesh rotates about its own origin and then translates, so the
           // callout's anchor has to take the same two steps to stay over the
           // body — adding the translation alone would drift it off under any
@@ -3898,6 +3945,9 @@ export function ModelViewer({
       if (E2E_CANVAS_HOOKS_ENABLED) {
         renderer.domElement.dataset.e2eMoveCopyPreview = String(
           moveCopyPreview.active
+        );
+        renderer.domElement.dataset.e2eMoveCopyStamps = String(
+          moveCopyPreview.active ? moveCopyPreview.stampCount + 1 : 0
         );
       }
     }
@@ -4179,10 +4229,15 @@ export function ModelViewer({
       if (!values) {
         return;
       }
-      onMovePreviewChangeRef.current(values.translation, values.rotation, {
-        move: drag.snapMove,
-        rotate: drag.snapRotate
-      });
+      onMovePreviewChangeRef.current(
+        values.translation,
+        values.rotation,
+        {
+          move: drag.snapMove,
+          rotate: drag.snapRotate
+        },
+        values.pivot
+      );
     }
 
     /**
@@ -5100,8 +5155,26 @@ export function ModelViewer({
       if (!local) {
         return null;
       }
+      const kinds = measureSnapKindsRef.current;
+      const candidates = snapsFromEdges(scoped, { label: body?.name });
+      // A pick that asks for a kind offers only the points it records
+      // exactly: never a spline's sampled midpoint its click would refuse.
+      const byId = kinds
+        ? new Map(scoped.map((edge) => [edge.topologyId, edge]))
+        : null;
       return resolveSnap(
-        snapsFromEdges(scoped, { label: body?.name }),
+        kinds
+          ? candidates.filter((snap) => {
+              const edge = snap.source
+                ? byId!.get(snap.source.edgeTopologyId)
+                : undefined;
+              return (
+                kinds.includes(snap.kind) &&
+                !!edge &&
+                snapRecordsExactly(snap.kind, edge)
+              );
+            })
+          : candidates,
         local,
         (point) =>
           projectToScreen(
@@ -5123,6 +5196,42 @@ export function ModelViewer({
             ? snapsFromEdges(body.topology.edges, { label: body.name })
             : []
         );
+    }
+
+    /**
+     * M10: the moving body's own snap points, carried to where the Move
+     * preview shows the body, so a pivot lands on the corner on screen.
+     */
+    function collectPosedBodySnaps(
+      bodyId: string,
+      move: MovePreview
+    ): SnapCandidate[] {
+      const body = bodiesRef.current.find(
+        (candidate) => candidate.bodyId === bodyId && !candidate.consumed
+      );
+      if (!body?.topology) return [];
+      const final = composeMoveTransform(
+        moveCenterRef.current,
+        move.translation,
+        move.rotationDeg
+      );
+      const euler = moveEuler(move.rotationDeg);
+      const scratch = new THREE.Vector3();
+      return snapsFromEdges(body.topology.edges, { label: body.name }).map(
+        (snap) => {
+          scratch
+            .set(snap.point.x, snap.point.y, snap.point.z)
+            .applyEuler(euler);
+          return {
+            ...snap,
+            point: {
+              x: scratch.x + final.x,
+              y: scratch.y + final.y,
+              z: scratch.z + final.z
+            }
+          };
+        }
+      );
     }
 
     /**
@@ -7856,6 +7965,9 @@ export function ModelViewer({
     }
     placeCommentRef.current = (event) => placeComment(picker.pickAll(event));
 
+    /** M10: when the last point pick landed, so its double click is ignored. */
+    let lastPointPickAt: number | null = null;
+
     function selectAtPointer(event: PointerEvent) {
       // The release that got here was a click, not the end of a gesture.
       gestureReleases[1] = false;
@@ -7880,6 +7992,31 @@ export function ModelViewer({
       // datum or placement plane may act on it.
       if (commentPlacingRef.current) {
         placeComment(stack);
+        return;
+      }
+      // M10: a point pick takes the snapped model point and selects nothing.
+      const pointPick = onPointPickRef.current;
+      if (pointPick) {
+        // Always the nearest thing under the pointer: a second click at the
+        // same spot is the next pick, not a request for the one behind.
+        depthCycle = null;
+        lastPointPickAt = event.timeStamp;
+        const top = stack[0] ?? null;
+        if (!top) return;
+        const snapped = resolveMeasureSnap(event, top)?.candidate ?? null;
+        // An edge hit reports where the ray passed near the edge; the point
+        // on the edge itself is what a pick means.
+        const onGeometry =
+          top.selection?.kind === 'edge'
+            ? ((top.hit as { pointOnLine?: THREE.Vector3 }).pointOnLine ??
+              top.hit.point)
+            : top.hit.point;
+        pointPick({
+          point: snapped
+            ? { ...snapped.point }
+            : { x: onGeometry.x, y: onGeometry.y, z: onGeometry.z },
+          kind: snapped?.kind ?? null
+        });
         return;
       }
       // A ghost plane starts the sketch instead, even through a face in
@@ -8062,7 +8199,9 @@ export function ModelViewer({
     }
 
     function pickMoveGizmo(event: PointerEvent) {
-      if (!movePreviewRef.current) {
+      // M10: while Move by two points picks, the gizmo is hidden and the
+      // model under it takes the click.
+      if (!movePreviewRef.current || movePreviewRef.current.pointPick) {
         return null;
       }
       setRayFromEvent(event);
@@ -8423,6 +8562,20 @@ export function ModelViewer({
      */
     function updateMeasurePreview(event: PointerEvent) {
       const preview = onMeasurePreviewRef.current;
+      if (!preview && onPointPickRef.current) {
+        // M10: a point pick shows the glyph its click will take, no chip.
+        hud.hide(measurePreviewChip);
+        const candidate = cycleDepthPick(
+          picker.pickAll(event),
+          depthCycle,
+          event.clientX,
+          event.clientY
+        ).candidate;
+        const snapped = candidate ? resolveMeasureSnap(event, candidate) : null;
+        if (snapped) showSnapGlyph(snapped);
+        else hud.hide(snapGlyph);
+        return;
+      }
       if (!preview) {
         hud.hide(measurePreviewChip);
         hud.hide(snapGlyph);
@@ -11270,11 +11423,38 @@ export function ModelViewer({
             }
           }
         }
+        // M10: in pivot mode the gizmo carries the pivot, and the body
+        // stays where it is: the drag's move splits into the pivot's own
+        // move and the translation that keeps the body still.
+        let pivot: MovePreview['translation'] | undefined;
+        // What the handle itself moved along its axis: in pivot mode the
+        // HUD reads that, not the translation that keeps the body still.
+        const handleTravel = translation[drag.axis];
+        if (drag.pivotMode && drag.kind !== 'ring') {
+          const step = pivotDragStep(drag.startTranslation, rotation, {
+            x: translation.x - drag.startTranslation.x,
+            y: translation.y - drag.startTranslation.y,
+            z: translation.z - drag.startTranslation.z
+          });
+          pivot = {
+            x: drag.startPivot.x + step.pivotDelta.x,
+            y: drag.startPivot.y + step.pivotDelta.y,
+            z: drag.startPivot.z + step.pivotDelta.z
+          };
+          moveCenterRef.current.set(pivot.x, pivot.y, pivot.z);
+          translation.x = step.translation.x;
+          translation.y = step.translation.y;
+          translation.z = step.translation.z;
+        }
         context.applyMovePreview(translation, rotation);
         // Live values go straight to the panel that shows them. Routing them
         // through workspace state instead would re-render the editor on every
         // pointer event for numbers the scene has already drawn.
-        drag.pendingValues = { translation, rotation };
+        drag.pendingValues = {
+          translation,
+          rotation,
+          ...(pivot ? { pivot } : {})
+        };
         moveValuesSetterRef?.current?.(translation, rotation, {
           move: drag.snapMove,
           rotate: drag.snapRotate
@@ -11284,7 +11464,9 @@ export function ModelViewer({
           drag.kind === 'ring'
             ? rotation[drag.axis]
             : drag.kind === 'axis'
-              ? translation[drag.axis]
+              ? pivot
+                ? handleTravel - drag.startTranslation[drag.axis]
+                : translation[drag.axis]
               : undefined;
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true, value);
@@ -11858,9 +12040,18 @@ export function ModelViewer({
           activeMove.target === 'sketch' ? null : activeMove.bodyId;
         // Measured, not assumed: this walk is the pre-drag stall the feel
         // plan's row 2.2 exists for, so its cost is visible to the probe.
+        const placingPivot =
+          activeMove.pivotMode === true && data.kind !== 'ring';
         timed('move.snapCollect', () => {
           moveSnaps = collectMoveSnaps(movingBodyId);
           moveCenterTargets = collectCenterAlignTargets(movingBodyId);
+          // M10: a pivot goes on the moving body's own corners, midpoints
+          // and centres too, read where the preview shows the body now.
+          if (placingPivot && movingBodyId !== null)
+            moveSnaps = [
+              ...moveSnaps,
+              ...collectPosedBodySnaps(movingBodyId, activeMove)
+            ];
         });
         if (import.meta.env.OZ_PERF === '1') {
           const scope = window as typeof window & {
@@ -11901,7 +12092,9 @@ export function ModelViewer({
           restingCenter: moveCenterRef.current.clone(),
           snapMove: chooseMoveSnapStep(worldPerPixel),
           snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180),
-          pendingValues: null
+          pendingValues: null,
+          pivotMode: placingPivot,
+          startPivot: moveCenterRef.current.clone()
         };
         setRayFromEvent(event);
         if (data.kind === 'axis') {
@@ -13237,6 +13430,14 @@ export function ModelViewer({
     document.addEventListener('pointerdown', handleDocumentPointerDown, true);
     const handleDoubleClick = (event: MouseEvent) => {
       if (gestureReleases[0] || gestureReleases[1]) return;
+      // M10: a point pick's clicks are picks; a double click selects nothing,
+      // including the one whose second click just finished the pick.
+      if (
+        onPointPickRef.current ||
+        (lastPointPickAt !== null &&
+          event.timeStamp - lastPointPickAt < POINT_PICK_DOUBLE_CLICK_MS)
+      )
+        return;
       depthCycle = null;
       // Double-clicking an edge takes the whole smooth run it belongs to.
       // Rounding a lip means selecting every edge around it, and a filleted
@@ -15609,10 +15810,11 @@ export function ModelViewer({
           (candidate) => candidate.bodyId === moveCommitHold.bodyId
         );
         if (held) {
+          const heldPivot = moveCommitHold.pivot;
           moveCenterRef.current.set(
-            (held.bbox.min.x + held.bbox.max.x) / 2,
-            (held.bbox.min.y + held.bbox.max.y) / 2,
-            (held.bbox.min.z + held.bbox.max.z) / 2
+            heldPivot?.x ?? (held.bbox.min.x + held.bbox.max.x) / 2,
+            heldPivot?.y ?? (held.bbox.min.y + held.bbox.max.y) / 2,
+            heldPivot?.z ?? (held.bbox.min.z + held.bbox.max.z) / 2
           );
           context.applyMovePreview(
             moveCommitHold.translation,
@@ -15663,11 +15865,16 @@ export function ModelViewer({
       if (!body) {
         return;
       }
-      center = new THREE.Vector3(
-        (body.bbox.min.x + body.bbox.max.x) / 2,
-        (body.bbox.min.y + body.bbox.max.y) / 2,
-        (body.bbox.min.z + body.bbox.max.z) / 2
-      );
+      // M10: a placed pivot is the gizmo's centre and what it turns about;
+      // otherwise the body's centre, as every Move before stored.
+      const pivot = movePreview.pivot;
+      center = pivot
+        ? new THREE.Vector3(pivot.x, pivot.y, pivot.z)
+        : new THREE.Vector3(
+            (body.bbox.min.x + body.bbox.max.x) / 2,
+            (body.bbox.min.y + body.bbox.max.y) / 2,
+            (body.bbox.min.z + body.bbox.max.z) / 2
+          );
     }
     moveCenterRef.current.copy(center);
     const projectedUnitSizePx = projectedWorldSizePx(
@@ -15694,6 +15901,8 @@ export function ModelViewer({
     }
 
     context.applyMovePreview(movePreview.translation, movePreview.rotationDeg);
+    // M10: hidden while Move by two points picks (pickMoveGizmo skips it).
+    context.moveGizmoGroup.visible = !movePreview.pointPick;
     applyMoveGizmoFocus(
       context.moveGizmoGroup,
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??

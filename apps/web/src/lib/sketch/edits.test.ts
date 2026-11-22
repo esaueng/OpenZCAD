@@ -689,7 +689,7 @@ describe('the pick sequence and plan the rail drives', () => {
     expect(
       advanceSketchEditPick(document, sketch, 'offset', [], legA, resolve, {
         at: { x: -0.1, y: 5 },
-        offset: { join: 'round', chain: false }
+        options: { join: 'round', chain: false }
       })
     ).toEqual({
       status: 'value',

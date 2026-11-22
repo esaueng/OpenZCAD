@@ -72,6 +72,7 @@ import type {
   GeometryWorkerState,
   GeometryWorkerResult
 } from '../worker/geometryWorker';
+import type { SketchEntityFreedomReport } from '../lib/sketch/entityFreedom';
 
 import { prepareStepWorker } from '../lib/preparedStepWorker';
 
@@ -411,6 +412,15 @@ export interface GeometryWorkerApi {
     options?: { anchor?: SketchSolveAnchor }
   ): Promise<SketchSolveOutcome>;
   /**
+   * S03: each named entity's remaining freedom, from held solves of the
+   * sketch in the worker; null when the sketch itself does not settle.
+   */
+  sketchEntityFreedom(
+    document: ProjectDocument,
+    sketchId: SketchId,
+    objectIds: string[]
+  ): Promise<SketchEntityFreedomReport | null>;
+  /**
    * AS04: exact pairwise interference between assembly components posed by
    * their matrices; the M09 clash query run on every unordered pair.
    */
@@ -533,6 +543,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const solveSketchRequests = useRef(
     new Map<string, PendingRequest<SketchSolveOutcome>>()
   );
+  const entityFreedomRequests = useRef(
+    new Map<string, PendingRequest<SketchEntityFreedomReport | null>>()
+  );
   const interferenceRequests = useRef(
     new Map<string, PendingRequest<AssemblyInterferenceReport>>()
   );
@@ -633,6 +646,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       exportBodiesRequests.current,
       sheetMetalFoldRequests.current,
       solveSketchRequests.current,
+      entityFreedomRequests.current,
       interferenceRequests.current,
       sweepRequests.current,
       surfaceAnalysisRequests.current,
@@ -1205,6 +1219,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           solveSketchRequests.current.delete(message.requestId);
           if (message.ok) {
             pending.resolve(message.outcome);
+          } else {
+            pending.reject(new Error(message.error));
+          }
+          return;
+        }
+        if (message.type === 'sketch-entity-freedom') {
+          const pending = entityFreedomRequests.current.get(message.requestId);
+          if (!pending) {
+            return;
+          }
+          entityFreedomRequests.current.delete(message.requestId);
+          if (message.ok) {
+            pending.resolve(message.freedom);
           } else {
             pending.reject(new Error(message.error));
           }
@@ -1819,6 +1846,17 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         document: documentForWorker(document),
         sketchId,
         ...(options?.anchor ? { anchor: options.anchor } : {})
+      });
+      return posted.ok
+        ? posted.promise
+        : Promise.reject(new Error('Geometry worker is unavailable.'));
+    },
+    sketchEntityFreedom(document, sketchId, objectIds) {
+      const posted = postRequest(entityFreedomRequests.current, {
+        type: 'sketch-entity-freedom',
+        document: documentForWorker(document),
+        sketchId,
+        objectIds
       });
       return posted.ok
         ? posted.promise

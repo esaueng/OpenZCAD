@@ -86,6 +86,10 @@ import {
   touchKernelSession
 } from '../lib/kernelSessionStore';
 import { KernelSessionPersistence } from './kernelSessionPersistence';
+import {
+  measureSketchEntityFreedom,
+  type SketchEntityFreedomReport
+} from '../lib/sketch/entityFreedom';
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
@@ -300,6 +304,18 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       sketchId: SketchId;
       anchor?: SketchSolveAnchor;
+    }
+  | {
+      /**
+       * S03: how many freedoms each named entity keeps, measured as the
+       * sketch's DOF less its DOF with that entity held. One document
+       * transfer, one solve per entity, all here.
+       */
+      type: 'sketch-entity-freedom';
+      requestId: string;
+      document: ProjectDocument;
+      sketchId: SketchId;
+      objectIds: string[];
     }
   | {
       /**
@@ -599,6 +615,21 @@ export type GeometrySolveSketchResult =
     }
   | { type: 'solve-sketch'; ok: false; requestId: string; error: string };
 
+export type GeometrySketchEntityFreedomResult =
+  | {
+      type: 'sketch-entity-freedom';
+      ok: true;
+      requestId: string;
+      /** Null when the sketch itself does not settle. */
+      freedom: SketchEntityFreedomReport | null;
+    }
+  | {
+      type: 'sketch-entity-freedom';
+      ok: false;
+      requestId: string;
+      error: string;
+    };
+
 export type GeometrySketch2dOpResult =
   | {
       type: 'sketch-2d-op';
@@ -723,6 +754,7 @@ export type GeometryWorkerResult =
   | GeometrySheetMetalFoldResult
   | GeometrySectionResult
   | GeometrySolveSketchResult
+  | GeometrySketchEntityFreedomResult
   | GeometryAssemblyInterferenceResult
   | GeometryAssemblySweepResult
   | GeometrySurfaceAnalysisResult
@@ -1394,6 +1426,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       request.type === 'drawing-tessellation' ||
       request.type === 'section' ||
       request.type === 'solve-sketch' ||
+      request.type === 'sketch-entity-freedom' ||
       request.type === 'assembly-interference' ||
       request.type === 'assembly-interference-sweep' ||
       request.type === 'surface-analysis' ||
@@ -1497,6 +1530,27 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ok: true,
           requestId: request.requestId,
           outcome
+        });
+        post(stateFor('ready', request, { stale: false }));
+        return;
+      }
+      if (request.type === 'sketch-entity-freedom') {
+        const freedom = await measureSketchEntityFreedom(
+          (solving, anchor) =>
+            exact.solveSketch(
+              solving,
+              request.sketchId,
+              anchor ? { anchor } : undefined
+            ),
+          document,
+          request.sketchId,
+          request.objectIds
+        );
+        post({
+          type: 'sketch-entity-freedom',
+          ok: true,
+          requestId: request.requestId,
+          freedom
         });
         post(stateFor('ready', request, { stale: false }));
         return;
@@ -2091,6 +2145,13 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     } else if (request.type === 'solve-sketch') {
       post({
         type: 'solve-sketch',
+        ok: false,
+        requestId: request.requestId,
+        error: message
+      });
+    } else if (request.type === 'sketch-entity-freedom') {
+      post({
+        type: 'sketch-entity-freedom',
         ok: false,
         requestId: request.requestId,
         error: message

@@ -253,6 +253,7 @@ import {
   normalizeDocument,
   reservedDocumentIdentifierError,
   numberedBodyName,
+  createBodyFeatureIds,
   numberedFeatureName,
   extrudeToFaceUnresolved,
   repairedDirectEditOperation,
@@ -842,6 +843,11 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
+import { measureSnapKindsFor } from './lib/measurePointKinds';
+import {
+  relocateMovePivot,
+  translationForRoundedMove
+} from '@openzcad/viewport/move-transform';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
@@ -962,10 +968,16 @@ import {
   type SketchEditToolKind
 } from './lib/interaction/machine';
 import type { SketchClipboard } from './lib/sketch/clipboard';
+import {
+  fixedEntityIds,
+  freeEntityRows,
+  type SketchEntityFreedomReport
+} from './lib/sketch/entityFreedom';
 import type {
   SketchEditHost,
   SketchEditPickContext,
-  SketchOffsetPick
+  SketchOffsetPick,
+  SketchPatternOptions
 } from './lib/sketch/edits';
 import type { SketchEditValidation } from './lib/sketch/editing';
 import { useSketchFilletDraft } from './lib/sketch/useSketchFilletDraft';
@@ -10499,6 +10511,8 @@ export function App() {
     setMeasuring,
     measurementMode,
     setMeasurementMode,
+    measurementPointKind,
+    setMeasurementPointKind,
     measurementDraft,
     measurements,
     setMeasurements,
@@ -13751,15 +13765,89 @@ export function App() {
     (
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg'],
-      snap: MoveSnap
+      snap: MoveSnap,
+      pivot?: MovePreview['translation']
     ) => {
       setMoveSnap(snap);
       setMovePreview((current) =>
-        current ? { ...current, translation, rotationDeg } : current
+        current
+          ? {
+              ...current,
+              translation,
+              rotationDeg,
+              ...(pivot ? { pivot } : {})
+            }
+          : current
       );
     },
     []
   );
+
+  /**
+   * M10: a Move-by-two-points pick. The first names the point to move from;
+   * the second sets the translation that carries it onto the second and
+   * ends the pick, leaving Done to commit it as any other Move.
+   */
+  function handleMovePointPick(pick: {
+    point: { x: number; y: number; z: number };
+    kind: string | null;
+  }) {
+    const current = movePreview;
+    if (!current?.pointPick) return;
+    const from = current.pointPick.from;
+    if (!from) {
+      setMovePreview({
+        ...current,
+        pointPick: { from: pick.point, fromKind: pick.kind }
+      });
+      return;
+    }
+    const translation = {
+      x: pick.point.x - from.x,
+      y: pick.point.y - from.y,
+      z: pick.point.z - from.z
+    };
+    setMovePreview({ ...current, translation, pointPick: undefined });
+    setStatus(
+      `Move by two points: ${pointPickLabel(current.pointPick.fromKind)} to ${pointPickLabel(pick.kind).toLowerCase()} · Done to apply.`
+    );
+  }
+
+  /** What a picked point snapped to, as the snap glyph names it. */
+  function pointPickLabel(kind: string | null | undefined): string {
+    switch (kind) {
+      case 'endpoint':
+        return 'Endpoint';
+      case 'midpoint':
+        return 'Midpoint';
+      case 'center':
+        return 'Center';
+      case 'intersection':
+        return 'Intersection';
+      case 'on-edge':
+        return 'Point on edge';
+      case 'on-face':
+      default:
+        return 'Point on face';
+    }
+  }
+
+  /**
+   * M10: where a body Move turns: its placed pivot, or the body's centre as
+   * every gizmo Move stores. Undefined for a body with no geometry yet.
+   */
+  function movePivotOf(
+    preview: MovePreview
+  ): { x: number; y: number; z: number } | undefined {
+    if (preview.pivot) return preview.pivot;
+    const body = representations[preview.bodyId as BodyId];
+    if (!body) return undefined;
+    return {
+      x: (body.bbox.min.x + body.bbox.max.x) / 2,
+      y: (body.bbox.min.y + body.bbox.max.y) / 2,
+      z: (body.bbox.min.z + body.bbox.max.z) / 2
+    };
+  }
 
   /** Commits the Move card; true when the move landed. */
   function confirmMove(): boolean {
@@ -13788,31 +13876,46 @@ export function App() {
     if (!body) {
       return false;
     }
-    const center = {
+    // M10: rotation turns about the gizmo centre, stored as the Move's pivot
+    // on every gizmo Move, so a rotation or scale added by a later edit still
+    // turns the body in place rather than about the world origin. A pivot
+    // placed with the pivot handle is that centre.
+    const center = preview.pivot ?? {
       x: (body.bbox.min.x + body.bbox.max.x) / 2,
       y: (body.bbox.min.y + body.bbox.max.y) / 2,
       z: (body.bbox.min.z + body.bbox.max.z) / 2
     };
-    // M10: rotation turns about the gizmo centre, stored as the Move's pivot
-    // on every gizmo Move, so a rotation or scale added by a later edit still
-    // turns the body in place rather than about the world origin.
     const round = (value: number) => Math.round(value * 1000) / 1000;
+    const rotationDeg = {
+      x: round(preview.rotationDeg.x),
+      y: round(preview.rotationDeg.y),
+      z: round(preview.rotationDeg.z)
+    };
+    const pivot = {
+      x: round(center.x),
+      y: round(center.y),
+      z: round(center.z)
+    };
+    // M10: the stored values are rounded, so the translation is re-derived
+    // from where the preview put the body under the rounded turn and pivot.
+    // Rounding all three independently undid the compensation a placed
+    // pivot carries: a far pivot turned the rounding of a tiny angle into
+    // a visible shift.
+    const translation = translationForRoundedMove(
+      center,
+      preview.translation,
+      preview.rotationDeg,
+      pivot,
+      rotationDeg
+    );
     const values = {
       translation: {
-        x: round(preview.translation.x),
-        y: round(preview.translation.y),
-        z: round(preview.translation.z)
+        x: round(translation.x),
+        y: round(translation.y),
+        z: round(translation.z)
       },
-      rotationDeg: {
-        x: round(preview.rotationDeg.x),
-        y: round(preview.rotationDeg.y),
-        z: round(preview.rotationDeg.z)
-      },
-      pivot: {
-        x: round(center.x),
-        y: round(center.y),
-        z: round(center.z)
-      }
+      rotationDeg,
+      pivot
     };
     // Finite inputs can still overflow during rounding.
     if (
@@ -13827,18 +13930,32 @@ export function App() {
       );
       return false;
     }
+    // Whatever the gizmo's Name field holds, falling back to the default
+    // rather than committing a feature with a blank name.
+    const moveFeatureName = moveName.trim() || (preview.copy ? 'Copy' : 'Move');
+    const stamps = preview.copy ? Math.max(1, preview.stamps ?? 1) : 1;
+    if (stamps > 1 && preview.separateStamps) {
+      setMovePreview(null);
+      return confirmSeparateCopyStamps(
+        preview,
+        values,
+        moveFeatureName,
+        stamps
+      );
+    }
     setMovePreview(null);
     const created = createFeature(
       commandFactories.transformBody({
-        // Whatever the gizmo's Name field holds, falling back to the default
-        // rather than committing a feature with a blank name.
-        name: newFeatureName(
-          moveName.trim() || (preview.copy ? 'Copy' : 'Move')
-        ),
+        name: newFeatureName(moveFeatureName),
         targetBodyId: preview.bodyId as BodyId,
         ...values,
         ...(preview.copy
-          ? { copy: true, bodyName: newCopyBodyName(preview.bodyId as BodyId) }
+          ? {
+              copy: true,
+              bodyName: newCopyBodyName(preview.bodyId as BodyId),
+              // M10: linked stamps are one History step owning every copy.
+              ...(stamps > 1 ? { stamps } : {})
+            }
           : {})
       })
     );
@@ -13849,6 +13966,78 @@ export function App() {
       setMoveCommitHold(preview);
     }
     return created;
+  }
+
+  /**
+   * M10: repeated copies as separate History steps. Each step copies the one
+   * before by the same move, so stamp k still lands where the move applied k
+   * times puts the source, and all of them are one transaction: one Undo
+   * removes every stamp.
+   */
+  function confirmSeparateCopyStamps(
+    preview: MovePreview,
+    values: {
+      translation: { x: number; y: number; z: number };
+      rotationDeg: { x: number; y: number; z: number };
+      pivot: { x: number; y: number; z: number };
+    },
+    featureName: string,
+    stamps: number
+  ): boolean {
+    const owner = managerRef.current;
+    if (!owner) return false;
+    const firstBodyName = newCopyBodyName(preview.bodyId as BodyId);
+    const stem = firstBodyName.replace(/\s[1-9]\d*$/, '');
+    const firstNumber = Number(/\s([1-9]\d*)$/.exec(firstBodyName)?.[1] ?? 1);
+    const firstFeatureName = newFeatureName(featureName);
+    const featureStem = firstFeatureName.replace(/\s[1-9]\d*$/, '');
+    const featureNumber = Number(
+      /\s([1-9]\d*)$/.exec(firstFeatureName)?.[1] ?? 1
+    );
+    let targetBodyId = preview.bodyId as BodyId;
+    const commands: AnyCommand[] = [];
+    const targets: {
+      featureName: string;
+      featureId: FeatureId;
+      resultBodyId: BodyId;
+    }[] = [];
+    for (let index = 0; index < stamps; index += 1) {
+      const ids = createBodyFeatureIds();
+      const name =
+        index === 0
+          ? firstFeatureName
+          : `${featureStem} ${featureNumber + index}`;
+      commands.push(
+        commandFactories.transformBody({
+          name,
+          targetBodyId,
+          ...values,
+          copy: true,
+          bodyName:
+            index === 0 ? firstBodyName : `${stem} ${firstNumber + index}`,
+          ids
+        })
+      );
+      targets.push({
+        featureName: name,
+        featureId: ids.featureId,
+        resultBodyId: ids.bodyId
+      });
+      targetBodyId = ids.bodyId;
+    }
+    // No pose hold: the validated transaction commits with its own derived
+    // state, so nothing would release a held pose if the check refused it.
+    void validatedFeature.runTransaction(commands, {
+      label: `${stamps} copies`,
+      targets,
+      validatingMessage: `Checking ${stamps} copies…`,
+      successMessage: `Added ${stamps} copies as separate steps.`,
+      onSuccess: () => {
+        if (managerRef.current !== owner) return;
+        finishFeatureCreation();
+      }
+    });
+    return true;
   }
 
   function clearSelection() {
@@ -22727,6 +22916,12 @@ export function App() {
   const [sketchDefinedObjectIds, setSketchDefinedObjectIds] = useState<
     string[]
   >([]);
+  // S03: each entity's remaining freedom, measured by held solves after an
+  // under-defined solve settles, for the solve evidence key it was read at.
+  const [sketchEntityFreedom, setSketchEntityFreedom] = useState<{
+    key: string;
+    report: SketchEntityFreedomReport;
+  } | null>(null);
   const sketchDocumentRef = useRef(doc);
   sketchDocumentRef.current = doc;
   const sketchSessionNameRef = useRef(sketchSessionName);
@@ -22841,7 +23036,16 @@ export function App() {
       units: doc.units,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       textOutlineBudgetError,
-      definedObjectIds: sketchDefinedObjectIds,
+      // Measured per-entity freedom names the fixed entities on its own;
+      // without it only a fully-defined sketch paints anything defined.
+      // Only a reading of this very document: on the first render after an
+      // edit the old one must not paint a now-movable entity fixed.
+      definedObjectIds:
+        sketchEntityFreedom &&
+        sketchEntityFreedom.key ===
+          sketchSolveEvidenceKey(doc, session.sketchId ?? null)
+          ? fixedEntityIds(sketchEntityFreedom.report)
+          : sketchDefinedObjectIds,
       textDraft,
       textDraftBudgetError:
         textDraft && textDraft.text.length > 0
@@ -22870,7 +23074,8 @@ export function App() {
     sketchDiagnosticPoints,
     sketchSolveDiagnosticObjectIds,
     textOutlineBudgetError,
-    sketchDefinedObjectIds
+    sketchDefinedObjectIds,
+    sketchEntityFreedom
   ]);
 
   /** Where the text card's live outline sits; the viewport writes it. */
@@ -24151,6 +24356,7 @@ export function App() {
     values?: number[];
     raws?: string[];
     offset?: SketchOffsetPick;
+    pattern?: SketchPatternOptions;
     anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
@@ -24399,12 +24605,85 @@ export function App() {
     // same batch as the document change. Clearing the colours here as well
     // dropped every committed classification, so a fully constrained sketch
     // stayed blue until a manual Solve (I38). Only a stale status is cleared.
+    setSketchEntityFreedom((current) =>
+      current?.key === currentSketchSolveKey ? current : null
+    );
     if (sketchSolveSnapshotRef.current?.key === currentSketchSolveKey) {
       return;
     }
     setSketchSolveDiagnosticObjectIds([]);
     setSketchDefinedObjectIds([]);
   }, [currentSketchSolveKey, editingSketchNode?.sketchId]);
+  // Once an under-defined solve settles, measure where its freedom lives,
+  // once per solve evidence key. The effect keys on that evidence alone and
+  // reads the live document and worker through refs: depending on render
+  // objects would start a fresh reading every render, and each reading's
+  // own state change would render again. A newer edit or solve cancels the
+  // reading; a reading for a key that is no longer current is dropped.
+  const definedState = sketchSolveStatus?.definedState;
+  // The reading in hand, if it is for this key: a cleared reading (another
+  // edit, or the sketch left and reopened) is measured again.
+  const measuredFreedomKey = sketchEntityFreedom?.key ?? null;
+  useEffect(() => {
+    const key = currentSketchSolveKey;
+    const sketchId = activeSolveSketchId as SketchId | null;
+    if (
+      !key ||
+      !sketchId ||
+      sketchSolving ||
+      definedState !== 'under-defined' ||
+      measuredFreedomKey === key
+    ) {
+      return;
+    }
+    const live = managerRef.current?.document;
+    const sketch = live ? findSketch(live, sketchId) : undefined;
+    if (!live || !sketch || sketchSolveEvidenceKey(live, sketchId) !== key) {
+      return;
+    }
+    let cancelled = false;
+    geometryRef.current
+      .sketchEntityFreedom(live, sketchId, sketch.objectIds.map(String))
+      .then((report) => {
+        if (
+          !cancelled &&
+          report &&
+          sketchSolveEvidenceKey(managerRef.current?.document, sketchId) === key
+        ) {
+          setSketchEntityFreedom({ key, report });
+        }
+      })
+      // Freedom is an annotation: a failed reading leaves the sketch-wide
+      // status, which already stands.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentSketchSolveKey,
+    activeSolveSketchId,
+    definedState,
+    sketchSolving,
+    measuredFreedomKey
+  ]);
+  const sketchFreedom =
+    sketchEntityFreedom?.key === currentSketchSolveKey
+      ? sketchEntityFreedom.report
+      : null;
+  const sketchRailSolveStatus = useMemo(
+    () =>
+      sketchSolveStatus && sketchFreedom && editingSketchNode
+        ? {
+            ...sketchSolveStatus,
+            freeEntities: freeEntityRows(
+              sketchFreedom,
+              editingSketchNode.objectIds.map(String),
+              (objectId) => sketchLabels.get(objectId) ?? 'entity'
+            )
+          }
+        : sketchSolveStatus,
+    [sketchSolveStatus, sketchFreedom, editingSketchNode, sketchLabels]
+  );
   useEffect(() => {
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
@@ -24420,28 +24699,38 @@ export function App() {
       sketchSolveStatus?.conflictingConstraintIds ?? []
     );
     const fullyDefined = sketchSolveStatus?.definedState === 'fully-defined';
+    // With measured freedom a relation reads defined when everything it
+    // references is fixed, the way the viewport colours that geometry.
+    const fixed = sketchFreedom ? new Set(fixedEntityIds(sketchFreedom)) : null;
     return (editingSketchNode.constraints ?? [])
       .filter(({ origin }) => origin !== 'promotion-structure')
-      .map(({ constraintId, data }) => ({
-        constraintId: String(constraintId),
-        label: describeConstraint(
-          data,
-          nameOf,
-          sketchPointNamer(editingSketchNode, sketchLabels)
-        ),
-        targets: constraintInspectionTargets(
+      .map(({ constraintId, data }) => {
+        const targets = constraintInspectionTargets(
           doc,
           editingSketchNode,
           String(constraintId)
-        ),
-        conflicted: conflicting.has(String(constraintId)),
-        defined: fullyDefined,
-        editable:
-          data.constraintKind === 'distance' ||
-          data.constraintKind === 'angle' ||
-          data.constraintKind === 'radius'
-      }));
-  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels]);
+        );
+        return {
+          constraintId: String(constraintId),
+          label: describeConstraint(
+            data,
+            nameOf,
+            sketchPointNamer(editingSketchNode, sketchLabels)
+          ),
+          targets,
+          conflicted: conflicting.has(String(constraintId)),
+          defined:
+            fullyDefined ||
+            (fixed !== null &&
+              targets.length > 0 &&
+              targets.every(({ objectId }) => fixed.has(objectId))),
+          editable:
+            data.constraintKind === 'distance' ||
+            data.constraintKind === 'angle' ||
+            data.constraintKind === 'radius'
+        };
+      });
+  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels, sketchFreedom]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -25119,11 +25408,11 @@ export function App() {
     if (doc && editingSketchNode) {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
-      const offset = session?.offsetOptions;
+      const options = session?.modifyOptions;
       void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
         advanceSketchEdit(host, doc, sketch, pending, objectId, {
           ...context,
-          offset
+          options
         })
       );
     }
@@ -25857,6 +26146,32 @@ export function App() {
     return executeCommand(command)
       ? null
       : 'The parameter could not be renamed.';
+  }
+
+  /** S03: select an entity the freedom reading says can still move. */
+  function handleSelectFreeEntity(objectId: string) {
+    const live = managerRef.current?.document;
+    const session = interactionRef.current;
+    if (
+      !live ||
+      session.mode !== 'sketch' ||
+      !session.session.sketchId ||
+      sketchSolving ||
+      geometryBusy
+    ) {
+      return;
+    }
+    const sketch = findSketch(live, session.session.sketchId as SketchId);
+    if (!sketch?.objectIds.includes(objectId as EntityId)) {
+      setStatus('That geometry is no longer in the sketch.');
+      return;
+    }
+    // Inspection only: the normal selection path, no command written.
+    dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+    dispatchInteraction({ type: 'sketch-select-object', objectId });
+    setStatus(
+      `Selected ${sketchLabels.get(objectId) ?? 'the geometry'}, which can still move.`
+    );
   }
 
   function handleSelectConstraintObject(
@@ -35646,6 +35961,15 @@ export function App() {
                     : 'Angle · pick the first straight edge, circular axis or planar face.'
         );
       }}
+      pointKind={measurementPointKind}
+      onPointKind={(kind) => {
+        setMeasurementPointKind(kind);
+        setStatus(
+          kind === 'auto'
+            ? 'Distance picks the point each target names.'
+            : `Distance picks each target's ${kind}.`
+        );
+      }}
       onUnit={setMeasurementUnit}
       onPrecision={setMeasurementPrecision}
       onRadialDisplay={setRadialDisplay}
@@ -36909,14 +37233,14 @@ export function App() {
         }
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingEdit={interaction.session.pendingEdit}
-        offsetOptions={interaction.session.offsetOptions}
-        onOffsetOptions={(options) =>
-          dispatchInteraction({ type: 'sketch-offset-options', options })
+        modifyOptions={interaction.session.modifyOptions}
+        onModifyOptions={(options) =>
+          dispatchInteraction({ type: 'sketch-modify-options', options })
         }
         constraints={sketchConstraintItems}
         selectedObjectId={interaction.session.selectedObjectId}
         selectedObjectCount={sketchModeState?.selectedObjectIds?.length ?? 0}
-        solveStatus={sketchSolveStatus}
+        solveStatus={sketchRailSolveStatus}
         solving={sketchSolving}
         onEditTool={(kind, hint) => {
           if (kind === 'fillet' || sketchFilletPending) sketchFillet.reset();
@@ -36929,6 +37253,7 @@ export function App() {
         }}
         onDeleteConstraint={handleDeleteSketchConstraint}
         onSelectConstraintObject={handleSelectConstraintObject}
+        onSelectFreeEntity={handleSelectFreeEntity}
         onEditConstraint={handleEditSketchDimension}
         onSolve={() => {
           void handleSolveSketch();
@@ -38196,6 +38521,12 @@ export function App() {
             }
             onDatumOffsetEntry={() => datumOffsetEntryRef.current?.() ?? false}
             onMeasurePreview={measuring ? previewMeasurement : null}
+            measureSnapKinds={
+              measuring && measurementMode === 'distance'
+                ? measureSnapKindsFor(measurementPointKind)
+                : null
+            }
+            onPointPick={movePreview?.pointPick ? handleMovePointPick : null}
             regionHandle={
               modelingLocked || !extrudeBarReady ? null : regionHandleTarget
             }
@@ -39850,9 +40181,10 @@ export function App() {
                             bodyId,
                             // Values are relative to the body's own centre, so
                             // carrying them to a different body would apply a
-                            // move nobody asked for.
+                            // move nobody asked for. So is a placed pivot.
                             translation: { x: 0, y: 0, z: 0 },
-                            rotationDeg: { x: 0, y: 0, z: 0 }
+                            rotationDeg: { x: 0, y: 0, z: 0 },
+                            pivot: undefined
                           }
                         : current
                     );
@@ -39869,7 +40201,10 @@ export function App() {
                         ? {
                             ...current,
                             translation: values.translation,
-                            rotationDeg: values.rotationDeg
+                            rotationDeg: values.rotationDeg,
+                            // M10: a typed value ends Move by two points,
+                            // whose picks read the model at rest.
+                            pointPick: undefined
                           }
                         : current
                     )
@@ -39885,6 +40220,77 @@ export function App() {
                     setMovePreview((current) =>
                       current ? { ...current, copy } : current
                     )
+                  }
+                  stamps={movePreview.stamps ?? 1}
+                  onStamps={(stamps) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, stamps } : current
+                    )
+                  }
+                  linked={movePreview.separateStamps !== true}
+                  onLinked={(linked) =>
+                    setMovePreview((current) =>
+                      current
+                        ? { ...current, separateStamps: !linked }
+                        : current
+                    )
+                  }
+                  pointPick={
+                    movePreview.pointPick
+                      ? {
+                          from: movePreview.pointPick.from
+                            ? pointPickLabel(movePreview.pointPick.fromKind)
+                            : null
+                        }
+                      : null
+                  }
+                  onPointPick={(on) =>
+                    setMovePreview((current) =>
+                      current
+                        ? on
+                          ? {
+                              ...current,
+                              // Picks read the model where it rests, so the
+                              // pending move starts again from nothing.
+                              translation: { x: 0, y: 0, z: 0 },
+                              rotationDeg: { x: 0, y: 0, z: 0 },
+                              // The gizmo steps aside, so it places no pivot.
+                              pivotMode: false,
+                              pointPick: { from: null }
+                            }
+                          : { ...current, pointPick: undefined }
+                        : current
+                    )
+                  }
+                  pivot={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : movePivotOf(movePreview)
+                  }
+                  pivotMode={movePreview.pivotMode === true}
+                  onPivotMode={(pivotMode) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, pivotMode } : current
+                    )
+                  }
+                  onPivot={(next) =>
+                    setMovePreview((current) => {
+                      const from = current && movePivotOf(current);
+                      return current && from
+                        ? {
+                            ...current,
+                            // The body stays put; only the turn's centre moves.
+                            translation: relocateMovePivot(
+                              from,
+                              current.translation,
+                              current.rotationDeg,
+                              next ??
+                                movePivotOf({ ...current, pivot: undefined })!
+                            ),
+                            pivot: next ?? undefined
+                          }
+                        : current;
+                    })
                   }
                   liveValuesRef={moveValuesSetterRef}
                   liveSnapRef={moveSnapSetterRef}

@@ -371,6 +371,56 @@ test('measurements stay with their own project across a switch', async ({
 });
 
 /**
+ * M13: a Distance pick can ask for a point kind. Asked for midpoints, each
+ * edge pick records that edge's midpoint whatever end the pointer was
+ * nearer, the glyph offers midpoints only, and the distance lands between
+ * the two midpoints.
+ */
+test(
+  'a Distance pick asked for midpoints records each edge midpoint',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await createBox(page, 'Measure Point Kind');
+
+    await switchWorkspace(page, 'View');
+    await armMeasure(page);
+    const workbench = page.getByLabel('Measurement workbench');
+    await workbench.getByRole('button', { name: 'Distance' }).click();
+    const kinds = workbench.getByRole('group', { name: 'Point to pick' });
+    await kinds.getByRole('button', { name: 'Midpoint' }).click();
+    await expect(
+      kinds.getByRole('button', { name: 'Midpoint' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(workbench).toContainText('Each records its midpoint.');
+    await setSelectionFilter(page, 'Edge');
+
+    const status = page.getByRole('group', { name: 'Workspace status' });
+    const first = await locateEdge(page);
+    await page.mouse.move(first.x - 60, first.y - 60);
+    await page.mouse.move(first.x, first.y);
+    // Whatever glyph shows is a midpoint: the others are not offered.
+    const glyph = page.locator('.snap-glyph');
+    if (await glyph.isVisible()) await expect(glyph).toHaveText('Midpoint');
+    await page.mouse.click(first.x, first.y);
+    await expect(
+      status.getByText(/ midpoint selected · pick the second target/)
+    ).toBeVisible();
+
+    const second = await locateEdge(page, { exclude: [first.topologyId] });
+    await page.mouse.move(second.x, second.y);
+    await page.mouse.click(second.x, second.y);
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+    await expect(workbench.getByRole('listitem')).toContainText('midpoint');
+
+    // Back on Auto, the dock says what Distance does by default.
+    await kinds.getByRole('button', { name: 'Auto' }).click();
+    await expect(workbench).toContainText(
+      'Pick two targets. Circles and cylinders use their exact centers.'
+    );
+  }
+);
+
+/**
  * M13: Maximum, Central and Parallel distances are their own measure modes.
  * Two straight box edges have a closed-form maximum (reached at their ends),
  * recorded and named as one; Central refuses two picks with no centre or

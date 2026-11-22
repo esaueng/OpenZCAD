@@ -37,6 +37,13 @@ import {
   type AngleMeasurement
 } from './measurementGeometry';
 
+import type { MeasurePointKind } from './measurePointKinds';
+export {
+  MEASURE_POINT_KINDS,
+  measureSnapKindsFor,
+  type MeasurePointKind
+} from './measurePointKinds';
+
 export type MeasurementMode =
   | 'smart'
   | 'distance'
@@ -751,6 +758,9 @@ export function notablePointTarget(
         reference: edge.reference,
         label: `${label} ${kind === 'vertex-start' ? 'start' : 'end'}`,
         point: kind === 'vertex-start' ? ends[0] : ends[1],
+        // M13: the edge's ends as picked, so a refresh can tell a reversed
+        // edge (its ends swapped) from a moved one (both shifted together).
+        endpoints: ends,
         semantic: kind,
         quality: 'exact-analytic'
       };
@@ -872,6 +882,119 @@ export function measurementTargetFromSnap(
   return distance(target.point, point) <= SNAP_AGREEMENT * Math.max(1, size)
     ? target
     : null;
+}
+
+/**
+ * M13: the notable point of `kind` on a picked edge or face, or null when it
+ * has none. An endpoint is the end the snap glyph named, else the end nearer
+ * the pick; it is recorded by identity (start or end), so a rebuild reads the
+ * same vertex rather than the nearest one then.
+ */
+export function pointKindTarget(
+  body: BodyRepresentation,
+  selection: TopologySelection,
+  kind: Exclude<MeasurePointKind, 'auto'>,
+  point?: Vector3,
+  snapRole?: 'start' | 'end' | 'midpoint' | 'center'
+): MeasurementTarget | null {
+  if (kind === 'endpoint') {
+    if (selection.kind !== 'edge') return null;
+    // A closed rim's polyline starts wherever its sampler began, not at a
+    // vertex anyone can name: it has no ends to pick.
+    const picked = findEdge(body, selection);
+    const pickedEnds = picked ? edgeEndpoints(picked) : null;
+    if (
+      !pickedEnds ||
+      distance(pickedEnds[0], pickedEnds[1]) <=
+        SNAP_AGREEMENT * Math.max(1, distance(body.bbox.min, body.bbox.max))
+    )
+      return null;
+    let end: NotablePointKind = 'vertex-start';
+    if (snapRole === 'start' || snapRole === 'end') {
+      end = snapRole === 'start' ? 'vertex-start' : 'vertex-end';
+    } else if (point) {
+      const edge = findEdge(body, selection);
+      const ends = edge ? edgeEndpoints(edge) : null;
+      if (!ends) return null;
+      end =
+        distance(ends[1], point) < distance(ends[0], point)
+          ? 'vertex-end'
+          : 'vertex-start';
+    }
+    return notablePointTarget(body, selection, end);
+  }
+  if (kind === 'midpoint')
+    return selection.kind === 'edge'
+      ? notablePointTarget(body, selection, 'edge-midpoint')
+      : null;
+  if (kind === 'center')
+    return notablePointTarget(body, selection, 'circle-center');
+  return selection.kind === 'face'
+    ? notablePointTarget(body, selection, 'face-centroid')
+    : null;
+}
+
+/**
+ * M13: the edge a snap glyph was read off, as a selection, so a pick
+ * records that edge's point rather than one of whatever the ray hit.
+ */
+export function snapSourceSelection(
+  body: BodyRepresentation,
+  source: {
+    edgeTopologyId: string;
+    edgeHash: number;
+    edgeReference?: EdgeTopologyReferenceV5;
+  }
+): TopologySelection {
+  return {
+    bodyId: body.bodyId,
+    kind: 'edge',
+    topologyId: source.edgeTopologyId,
+    hash: source.edgeHash,
+    ...(source.edgeReference ? { reference: source.edgeReference } : {})
+  };
+}
+
+/**
+ * M13: whether a pick of `kind` recorded `target` where its glyph stood.
+ * A glyph and the point it names are read through separate arithmetic, so
+ * they agree to rounding, not bit for bit.
+ */
+export function pointKindAgrees(
+  body: BodyRepresentation,
+  target: MeasurementTarget | null,
+  glyph: Vector3
+): boolean {
+  return (
+    !!target?.point &&
+    distance(target.point, glyph) <=
+      SNAP_AGREEMENT * Math.max(1, distance(body.bbox.min, body.bbox.max))
+  );
+}
+
+/** M13: why a pick has no point of `kind`, as the status line says it. */
+export function pointKindFailure(
+  kind: Exclude<MeasurePointKind, 'auto'>,
+  selection: TopologySelection['kind']
+): string {
+  switch (kind) {
+    case 'endpoint':
+      return selection === 'edge'
+        ? 'That edge has no ends to pick (a closed rim has none).'
+        : 'Endpoint picks an edge: pick an edge near the end you mean.';
+    case 'midpoint':
+      return selection === 'edge'
+        ? 'That edge has no exact midpoint (only lines and arcs do).'
+        : 'Midpoint picks an edge.';
+    case 'center':
+      return selection === 'edge'
+        ? 'That edge is not a circle or arc, so it has no center.'
+        : 'That face is not a cylinder or hole, so it has no center.';
+    case 'centroid':
+      return selection === 'face'
+        ? 'That face has no exact centroid to pick.'
+        : 'Centroid picks a face.';
+  }
 }
 
 /**
@@ -1638,6 +1761,26 @@ function resolveNotableTarget(
         notablePointTarget(body, selection, end)
       );
       const size = distance(body.bbox.min, body.bbox.max);
+      const tolerance = SNAP_AGREEMENT * Math.max(1, size);
+      // M13: a row that kept its edge's ends decides reversal from the pair.
+      // The ends swapped is the same edge reversed: take the other role.
+      // Anything else (the edge moved, or changed length) keeps the stored
+      // role, so a translation never rebinds to whichever end now sits
+      // where the old one was.
+      const was = target.endpoints;
+      const now = ends[0]?.point && ends[1]?.point;
+      if (was && now) {
+        const reversed =
+          distance(ends[0]!.point!, was[1]) <= tolerance &&
+          distance(ends[1]!.point!, was[0]) <= tolerance &&
+          distance(was[0], was[1]) > tolerance;
+        const role: NotablePointKind = reversed
+          ? kind === 'vertex-start'
+            ? 'vertex-end'
+            : 'vertex-start'
+          : kind;
+        return notablePointTarget(body, selection, role);
+      }
       const stored = target.point;
       const same = ends.find(
         (end) =>

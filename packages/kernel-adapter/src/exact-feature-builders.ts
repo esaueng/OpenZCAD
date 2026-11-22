@@ -97,6 +97,7 @@ import {
   ownEntry,
   millimetresPerUnit,
   isDatumPlaneRef,
+  transformStampBodyIds,
   type BodyId,
   type DatumPlaneSource,
   type DatumPointSource,
@@ -1594,8 +1595,25 @@ function buildTransformFeature(
     allowUniformScale
   );
   result.shapes.set(resultBodyId, transformed);
+  // M10 (schema v137): each further stamp is the same transform on from the
+  // copy before it, so stamp k lands where k + 1 applications would put the
+  // source, and its edges stay addressable through the same verified copy.
+  const stamps = transformStampBodyIds(data);
+  let previous = transformed;
+  for (const stampBodyId of stamps) {
+    previous = copyShapeWithVerifiedLineage(
+      kernel,
+      previous,
+      matrix,
+      allowUniformScale
+    );
+    result.shapes.set(stampBodyId, previous);
+    inheritMeshOrigin(result, data.targetBodyId, stampBodyId);
+  }
   try {
-    if (data.axisRotation || data.csysAlign) ctx.idleLineageView?.abandon();
+    // The alternate view follows one result body per transform.
+    if (data.axisRotation || data.csysAlign || stamps.length)
+      ctx.idleLineageView?.abandon();
     else
       ctx.idleLineageView?.transform(
         kernel,

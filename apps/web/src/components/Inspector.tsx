@@ -11,6 +11,7 @@ import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import {
   ownEntry,
+  transformStampBodyIds,
   MATERIAL_DENSITY_PRESETS,
   MAX_CUSTOM_DENSITY_KG_PER_M3,
   UNIT_MASS_DENSITY_SELECTION,
@@ -1426,6 +1427,9 @@ export function Inspector(props: InspectorProps) {
               ? { pivot: data.transform.pivot }
               : {}),
             ...(data.copy ? { copy: true } : {}),
+            ...(transformStampBodyIds(data).length
+              ? { stamps: transformStampBodyIds(data).length + 1 }
+              : {}),
             ...(data.axisRotation ? { axisRotation: data.axisRotation } : {})
           }}
           datumAxes={datumAxisChoices(
