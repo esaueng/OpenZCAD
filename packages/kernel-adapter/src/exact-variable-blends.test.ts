@@ -20,6 +20,7 @@ import { createExactKernelAdapter } from './exact';
 import { approximateBlendAdvisory } from './exact-edge-modifiers';
 import {
   assertQualifiedVariableFillet,
+  variableBlendOverflowLimit,
   variableBlendRefusal,
   variableBlendRefusalMessage,
   variableFilletRequest
@@ -596,6 +597,104 @@ describe('variable blend refusals are typed', { timeout: 120_000 }, () => {
         category: 'unsupported',
         kernelCode: 'blend-failed'
       });
+    }
+  });
+
+  it('keeps the kernel sentence for every current blend failure code', () => {
+    for (const [code, category] of [
+      ['postcondition-failed', 'unsupported'],
+      ['unsupported-variable-support', 'unsupported'],
+      ['unsupported-vertex-blend', 'unsupported'],
+      ['unsupported-variable-boundary', 'unsupported'],
+      ['unsupported-seam-crossing', 'unsupported'],
+      ['trimming-failure', 'unsupported'],
+      ['corner-failure', 'unsupported'],
+      ['chamfer-tangent-chain-required', 'unsupported'],
+      ['resource-limit', 'resource_limit'],
+      ['cancelled', 'cancelled'],
+      ['setback-mismatch', 'invalid_input']
+    ] as const) {
+      const reported = `${code}: blend: the kernel's own reason`;
+      const refusal = variableBlendRefusal('fillet', 1, reported);
+      expect(refusal, code).toMatchObject({
+        family: 'blend',
+        category,
+        kernelCode: code
+      });
+      expect(refusal.message, code).toContain(reported);
+      expect(refusal.limit, code).toBeUndefined();
+    }
+  });
+
+  it('turns an overflow into the measured width, as data and as advice', () => {
+    const reported =
+      'cliff-encountered: blend: blend cliff on face Id(2) at edge Id(0): requested radius 25, available radius 20';
+    expect(variableBlendOverflowLimit(reported)).toBe(20);
+    const refusal = variableBlendRefusal('fillet', 1, reported);
+    expect(refusal).toMatchObject({
+      family: 'blend',
+      category: 'invalid_input',
+      kernelCode: 'cliff-encountered',
+      limit: 20
+    });
+    expect(refusal.message).toContain(
+      'requested radius 25, available radius 20'
+    );
+    expect(refusal.message).toContain('keep every radius below 20');
+    expect(
+      variableBlendOverflowLimit(
+        'cliff-encountered: blend: blend cliff on face Id(2) at edge Id(0): requested radius 3, available radius 2.5000000001'
+      )
+    ).toBe(2.5000000001);
+    for (const other of [
+      null,
+      'radius-too-large: blend: radius too large for edge Id(0): max=3',
+      'cliff-encountered: blend: no width reported'
+    ]) {
+      expect(variableBlendOverflowLimit(other), String(other)).toBeNull();
+    }
+  });
+
+  it('carries an overflow through the document path as a typed refusal with its limit', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const document = addPrimitiveFeature(
+        createProjectDocument('Overflow', user),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 60, height: 40, depth: 20 }
+        }
+      );
+      const bodyId = document.bodyOrder[0] as BodyId;
+      const built = await adapter.syncDocument(document);
+      const edge = built.bodyRepresentations[bodyId]!.topology!.edges.find(
+        (candidate) =>
+          candidate.curve?.type === 'LINE' &&
+          Math.abs((candidate.length ?? 0) - 60) < 1e-6
+      )!;
+      const variable = filletEdges(document, {
+        name: 'Round',
+        targetBodyId: bodyId,
+        edgeHashes: [edge.hash],
+        ...(edge.reference ? { edgeReferences: [edge.reference] } : {}),
+        size: 1,
+        endRadius: 45,
+        radiusLaw: 'linear'
+      });
+      const derived = await adapter.syncDocument(variable.document);
+      const refusal = derived.featureWarnings?.find(
+        (warning) => warning.kernelRefusal?.family === 'blend'
+      );
+      expect(refusal?.kernelRefusal).toMatchObject({
+        code: 'cliff-encountered',
+        category: 'invalid_input'
+      });
+      // The narrower of the edge's two faces bounds the radius.
+      expect([20, 40]).toContain(refusal?.kernelRefusal?.limit);
+      expect(refusal?.message).toMatch(/keep every radius below (20|40)/);
+    } finally {
+      adapter.dispose();
     }
   });
 
