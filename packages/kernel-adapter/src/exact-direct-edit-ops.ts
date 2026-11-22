@@ -145,6 +145,10 @@ import {
 } from './exact-prepared-group-edit';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
+import {
+  tryCarryChamferRim,
+  type ChamferSetback
+} from './exact-chamfer-rim-carry';
 import { resizeChamferedThroughHole } from './exact-chamfered-hole';
 import { assertWallResizeAccepted } from './result-acceptance';
 import {
@@ -302,7 +306,8 @@ function offsetCompoundFace(
   target: ExactShape,
   operation: Extract<DirectEditOperation, { kind: 'offset-face' }>,
   scope: Record<string, number>,
-  onAdvisory?: (message: string) => void
+  onAdvisory: ((message: string) => void) | undefined,
+  chamferSetbacks: readonly ChamferSetback[]
 ): ExactShape {
   if (operation.faceReference && !target.lineage) {
     throw new Error(
@@ -334,7 +339,8 @@ function offsetCompoundFace(
     scope,
     undefined,
     false,
-    onAdvisory
+    onAdvisory,
+    chamferSetbacks
   );
   const solids = target.solids.flatMap((solid, index) =>
     index === ownerIndex ? edited.solids : [solid]
@@ -2257,11 +2263,20 @@ export function applyDirectEdit(
   scope: Record<string, number>,
   producingFeatureId?: FeatureId,
   deferOutputLineage = false,
-  onAdvisory?: (message: string) => void
+  onAdvisory?: (message: string) => void,
+  /** Setbacks of the chamfers before this edit; see exact-chamfer-rim-carry. */
+  chamferSetbacks: readonly ChamferSetback[] = []
 ): ExactShape {
   assertDirectEditOperation(operation);
   if (operation.kind === 'offset-face' && target.solids.length > 1) {
-    return offsetCompoundFace(kernel, target, operation, scope, onAdvisory);
+    return offsetCompoundFace(
+      kernel,
+      target,
+      operation,
+      scope,
+      onAdvisory,
+      chamferSetbacks
+    );
   }
   if (operation.kind === 'offset-faces' && target.solids.length > 1) {
     throw new Error(
@@ -2604,7 +2619,10 @@ export function applyDirectEdit(
     const exactCap =
       analytic === null
         ? (tryExactChamferedCylinderCapOffset(kernel, solid, face, offset) ??
-          tryExactLocalChamferCapOffset(kernel, solid, face, offset))
+          tryExactLocalChamferCapOffset(kernel, solid, face, offset) ??
+          // A cap ringed by a chamfer the kernel's move would extend or
+          // refuse instead of carrying (see exact-chamfer-rim-carry.ts).
+          tryCarryChamferRim(kernel, solid, face, offset, chamferSetbacks))
         : { solid: analytic, relation: null };
     const moved = exactCap ?? moveFace();
     const output = moved.solid;
