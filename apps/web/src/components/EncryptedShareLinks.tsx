@@ -190,16 +190,29 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     const commenting = await Promise.resolve()
       .then(() => links.commentingShareLinks(ctx, projectId))
       .catch(() => null);
-    // The owner's sealed names; unnamed when they cannot be read here.
+    // Live links only: a link whose revocation is pending shows no name.
+    const live = new Set(
+      view.links
+        .filter((link) => link.status !== 'revocation-pending')
+        .map((link) => link.shareId)
+    );
+    const userId = ctx.groups.account.userId;
+    // The owner's sealed names; unnamed when they cannot be read here (the
+    // module included: the links still list without it).
     const names = await import('../lib/e2ee/sealedShareLinkNames')
-      .then(({ pageShareLinkNames }) =>
-        pageShareLinkNames(
-          ctx.groups.account.userId,
-          projectId,
-          new Set(view.links.map((link) => link.shareId)),
-          new Set(view.revokedIds)
-        )
-      )
+      .then(async (sealedNames) => {
+        // A reissue that upkeep finished after it failed names its new
+        // links here. Best effort: the next list tries again.
+        await sealedNames
+          .nameReissuedPageShareLinks(
+            userId,
+            projectId,
+            work?.replacements ?? [],
+            live
+          )
+          .catch(() => {});
+        return sealedNames.pageShareLinkNames(userId, projectId, live);
+      })
       .catch((): Record<string, string> => ({}));
     return {
       links: view.links.map((link) => ({
@@ -291,7 +304,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     ]);
     const { ctx } = await encryptedShareLinks();
     await revokeShareLink(ctx, projectId, shareId);
-    // Its name goes with it. Best effort: a later list prunes it anyway.
+    // Its name goes with it. Best effort: left behind, it is never shown,
+    // since only listed links show a name.
     await import('../lib/e2ee/sealedShareLinkNames')
       .then(({ renamePageShareLink }) =>
         renamePageShareLink(ctx.groups.account.userId, projectId, shareId, null)
@@ -326,15 +340,35 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     await issueShareAuthorities(page.ctx, projectId);
   },
   async reissue(projectId, links) {
-    const [{ encryptedShareLinks }, { reissueShareLinks }] = await Promise.all([
+    const [{ encryptedShareLinks }, shareLinks] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/shareLinks')
     ]);
-    await reissueShareLinks(
-      (await encryptedShareLinks()).ctx,
-      projectId,
-      links
-    );
+    const { ctx } = await encryptedShareLinks();
+    const created = await shareLinks.reissueShareLinks(ctx, projectId, links);
+    // Each new link is named after the one it replaces. Only the links this
+    // reissue returned count: a replacement revoked since takes no name.
+    const userId = ctx.groups.account.userId;
+    const sources = new Set(links.map((link) => link.shareId));
+    try {
+      const replacements = (
+        await shareLinks.shareWorkFor(ctx).read(userId, projectId)
+      ).replacements.filter((item) => sources.has(item.sourceId));
+      await import('../lib/e2ee/sealedShareLinkNames').then(
+        ({ nameReissuedPageShareLinks }) =>
+          nameReissuedPageShareLinks(
+            userId,
+            projectId,
+            replacements,
+            new Set(created.map((link) => link.shareId))
+          )
+      );
+    } catch (caught) {
+      throw new Error(
+        `The links were reissued, but their names were not carried over: ${message(caught)} Name them from their cards.`,
+        { cause: caught }
+      );
+    }
   },
   async dismissRemoval(projectId, notice) {
     const [{ encryptedShareLinks }, { acknowledgeShareRemoval }] =
