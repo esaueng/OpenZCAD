@@ -62,7 +62,7 @@ export interface ConstraintToolSpec {
     | readonly ['object', 'object']
     | readonly ['point', 'point']
     | readonly ['point', 'object']
-    | readonly ['point', 'point', 'object'];
+    | readonly ['either', 'either', 'object'];
   /** A completed pick sequence waits for a canvas placement before entry. */
   placement?: true;
   /** Instruction shown while the tool is armed. */
@@ -160,8 +160,10 @@ export const CONSTRAINT_TOOL_SPECS: readonly ConstraintToolSpec[] = [
     kind: 'symmetric',
     label: 'Symmetric',
     picks: 3,
-    pickKinds: ['point', 'point', 'object'],
-    hint: 'Click two snap points, then the line they mirror about.'
+    // Two snap points, or two whole entities of one kind: the first pick
+    // decides which, and the second follows it.
+    pickKinds: ['either', 'either', 'object'],
+    hint: 'Click two snap points, or two lines, circles or arcs away from their points, then the line they mirror about.'
   },
   {
     kind: 'point-on-object',
@@ -215,8 +217,31 @@ function samePick(a: ConstraintPick, b: ConstraintPick): boolean {
   return a.kind === 'object' || a.point === (b as { point: string }).point;
 }
 
+/**
+ * A completed relation. `also` holds the relations added with `data` in the
+ * same edit when one pick sequence states several (two entities mirrored
+ * about a line).
+ */
 export type BuildConstraintResult =
-  { data: SketchConstraintData } | { error: string };
+  | { data: SketchConstraintData; also?: SketchConstraintData[] }
+  | { error: string };
+
+/**
+ * What the next pick of an armed tool must be. A tool that takes either a
+ * point or an object at one step lets its first such pick decide, and every
+ * later `either` step follows that pick's kind; `either` is returned only
+ * when nothing has decided yet. Undefined once every pick is in.
+ */
+export function constraintPickKind(
+  kind: PendingConstraintKind,
+  existing: readonly ConstraintPick[]
+): 'point' | 'object' | 'either' | undefined {
+  const expected = constraintToolSpec(kind).pickKinds[existing.length];
+  if (expected !== 'either') {
+    return expected;
+  }
+  return existing[0]?.kind ?? 'either';
+}
 
 /**
  * Validate one pick against the armed tool, before it is accepted into the
@@ -232,11 +257,11 @@ export function refusePick(
   pick: ConstraintPick
 ): string | null {
   const spec = constraintToolSpec(kind);
-  const expectedPickKind = spec.pickKinds[existing.length];
+  const expectedPickKind = constraintPickKind(kind, existing);
   if (!expectedPickKind) {
     return `${spec.label} already has all of its picks.`;
   }
-  if (pick.kind !== expectedPickKind) {
+  if (expectedPickKind !== 'either' && pick.kind !== expectedPickKind) {
     return expectedPickKind === 'point'
       ? 'Pick a snap point (endpoint or center), not a whole object.'
       : 'Pick an object, not a point.';
@@ -377,11 +402,29 @@ export function refusePick(
         if (data.objectKind !== 'line') {
           return 'The symmetry axis must be a line.';
         }
+        // A whole entity picked again is refused above as a repeat pick.
         return existing.some((entry) => entry.objectId === pick.objectId)
           ? 'The axis cannot be a line whose point it mirrors.'
           : null;
       }
-      return pointPickRefusal(data, pick, 'Symmetric');
+      if (pick.kind === 'point') {
+        return pointPickRefusal(data, pick, 'Symmetric');
+      }
+      if (
+        data.objectKind !== 'line' &&
+        data.objectKind !== 'circle' &&
+        data.objectKind !== 'arc'
+      ) {
+        return 'Symmetric mirrors two lines, two circles or two arcs.';
+      }
+      const first = existing[0];
+      if (first) {
+        const firstData = sketchObjectData(document, sketch, first.objectId);
+        if (firstData && firstData.objectKind !== data.objectKind) {
+          return `Symmetric needs another ${firstData.objectKind} to mirror the first.`;
+        }
+      }
+      return null;
     }
     case 'point-on-object': {
       if (existing.length === 0) {
@@ -627,6 +670,20 @@ export function buildConstraint(
     case 'symmetric': {
       const [a, b, axis] = picks;
       if (
+        a?.kind === 'object' &&
+        b?.kind === 'object' &&
+        axis?.kind === 'object'
+      ) {
+        return entitySymmetry(
+          document,
+          sketch,
+          a.objectId,
+          b.objectId,
+          axis.objectId,
+          resolve
+        );
+      }
+      if (
         a?.kind !== 'point' ||
         b?.kind !== 'point' ||
         axis?.kind !== 'object'
@@ -675,6 +732,105 @@ export function buildConstraint(
     case 'disconnect':
       return { error: 'Disconnect removes relations; it adds none.' };
   }
+}
+
+/**
+ * Two whole entities mirrored about a line, stated as the point symmetries
+ * (and equal radius) that fix the second exactly once on the solver, so the
+ * set adds no redundancy:
+ *
+ * - two lines: each end of the first mirrors the end of the second nearer
+ *   its image (4 equations, a line's 4 freedoms);
+ * - two circles: the centres mirror and the radii are equal (3 of 3);
+ * - two arcs: reflection reverses an arc's direction, so the first's start
+ *   mirrors the second's end and its end the second's start, and the radii
+ *   are equal (5 of an arc's 5; the centre follows from the ends and the
+ *   radius).
+ */
+function entitySymmetry(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  aId: string,
+  bId: string,
+  axisId: string,
+  resolve: ResolveParam | undefined
+): BuildConstraintResult {
+  const a = sketchObjectData(document, sketch, aId);
+  const b = sketchObjectData(document, sketch, bId);
+  if (!a || !b || a.objectKind !== b.objectKind) {
+    return { error: 'Symmetric mirrors two entities of the same kind.' };
+  }
+  const axis = axisId as EntityId;
+  const ref = (objectId: string, point: SketchPointRef['point']) => ({
+    objectId: objectId as EntityId,
+    point
+  });
+  const symmetric = (
+    p: SketchPointRef,
+    q: SketchPointRef
+  ): SketchConstraintData => ({
+    constraintKind: 'symmetric',
+    a: p,
+    b: q,
+    axis
+  });
+  const equal: SketchConstraintData = {
+    constraintKind: 'equal',
+    a: aId as EntityId,
+    b: bId as EntityId
+  };
+  if (a.objectKind === 'circle') {
+    return {
+      data: symmetric(ref(aId, 'center'), ref(bId, 'center')),
+      also: [equal]
+    };
+  }
+  if (a.objectKind === 'arc') {
+    return {
+      data: symmetric(ref(aId, 'start'), ref(bId, 'end')),
+      also: [symmetric(ref(aId, 'end'), ref(bId, 'start')), equal]
+    };
+  }
+  if (a.objectKind !== 'line') {
+    return { error: 'Symmetric mirrors two lines, two circles or two arcs.' };
+  }
+  // Pair the ends the way they already nearly lie, so the solve moves the
+  // second line as little as it can and never crosses it over.
+  const at = (objectId: string, point: 'start' | 'end') =>
+    resolve
+      ? pointPosition(
+          document,
+          sketch,
+          { kind: 'point', objectId, point },
+          resolve
+        )
+      : null;
+  const axisData = sketchObjectData(document, sketch, axisId);
+  const p = at(aId, 'start');
+  const q0 = at(bId, 'start');
+  const q1 = at(bId, 'end');
+  const axisA = at(axisId, 'start');
+  const axisB = at(axisId, 'end');
+  let crossed = false;
+  if (axisData?.objectKind === 'line' && p && q0 && q1 && axisA && axisB) {
+    const dx = axisB.x - axisA.x;
+    const dy = axisB.y - axisA.y;
+    const length2 = dx * dx + dy * dy;
+    if (length2 > 0) {
+      const t = ((p.x - axisA.x) * dx + (p.y - axisA.y) * dy) / length2;
+      const image = {
+        x: 2 * (axisA.x + t * dx) - p.x,
+        y: 2 * (axisA.y + t * dy) - p.y
+      };
+      crossed =
+        Math.hypot(q1.x - image.x, q1.y - image.y) <
+        Math.hypot(q0.x - image.x, q0.y - image.y);
+    }
+  }
+  return {
+    data: symmetric(ref(aId, 'start'), ref(bId, crossed ? 'end' : 'start')),
+    also: [symmetric(ref(aId, 'end'), ref(bId, crossed ? 'start' : 'end'))]
+  };
 }
 
 /** Ids of the lock constraints holding one point. */
