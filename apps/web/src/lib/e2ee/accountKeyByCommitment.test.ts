@@ -10,11 +10,14 @@ import { accountKeyByCommitment } from './sealedSettings';
 const keyOf = (generation: number, keySequence: number) =>
   Uint8Array.from({ length: 32 }, (_, i) => generation * 16 + keySequence + i);
 
-const mocks = vi.hoisted(() => ({
-  state: null as unknown,
-  history: [] as { generation: number; keySequence: number }[],
-  opened: [] as string[]
-}));
+const mocks = vi.hoisted(() => {
+  const value: {
+    state: unknown;
+    history: { generation: number; keySequence: number }[];
+    opened: string[];
+  } = { state: null, history: [], opened: [] };
+  return value;
+});
 
 vi.mock('./accountKeys', () => ({
   loadEncryption: vi.fn(async () => mocks.state),
@@ -23,7 +26,7 @@ vi.mock('./accountKeys', () => ({
       _ctx: unknown,
       _account: unknown,
       keySequence: number,
-      generation = 2
+      generation: number = 2
     ) => {
       mocks.opened.push(`${generation}:${keySequence}`);
       return keyOf(generation, keySequence);
