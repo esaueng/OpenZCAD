@@ -14,7 +14,16 @@ function subscribeOnline(changed: () => void) {
   };
 }
 
-type LoadingPresentation = 'panel' | 'view-tools' | 'tweak-rail';
+/**
+ * `menu-section` is an optional part of a menu, such as the File menu's
+ * mesh cleanup, which renders nothing while there is nothing to clean up.
+ * While it loads it draws nothing either: a panel-sized loading card in
+ * the menu (168px) pushed the File menu past a 900px window, so the menu
+ * opened with a scrollbar and its last section out of view.
+ */
+type LoadingPresentation =
+  'panel' | 'view-tools' | 'tweak-rail' | 'menu-section';
+type RailPresentation = Exclude<LoadingPresentation, 'panel' | 'menu-section'>;
 
 /**
  * The rail-shaped surfaces: their slot is a 40px rail (or the View bar), so
@@ -22,7 +31,7 @@ type LoadingPresentation = 'panel' | 'view-tools' | 'tweak-rail';
  * word per line. Their loading and failed states keep the rail's shape.
  */
 const RAILS: Record<
-  Exclude<LoadingPresentation, 'panel'>,
+  RailPresentation,
   { rail: string; loading: string; button?: string }
 > = {
   'view-tools': {
@@ -38,7 +47,7 @@ function LoadingPanel({
   presentation
 }: {
   label: string;
-  presentation: LoadingPresentation;
+  presentation: Exclude<LoadingPresentation, 'menu-section'>;
 }) {
   useWorkspacePending();
   const online = useSyncExternalStore(
@@ -78,7 +87,7 @@ function FailedRail({
   presentation
 }: {
   label: string;
-  presentation: Exclude<LoadingPresentation, 'panel'>;
+  presentation: RailPresentation;
 }) {
   const rail = RAILS[presentation];
   return (
@@ -116,14 +125,18 @@ export function createLazyPanel<Props extends object>(
     return (
       <ErrorBoundary
         label={label}
-        {...(presentation === 'panel'
+        {...(presentation === 'panel' || presentation === 'menu-section'
           ? {}
           : {
               fallback: <FailedRail label={label} presentation={presentation} />
             })}
       >
         <Suspense
-          fallback={<LoadingPanel label={label} presentation={presentation} />}
+          fallback={
+            presentation === 'menu-section' ? null : (
+              <LoadingPanel label={label} presentation={presentation} />
+            )
+          }
         >
           <Lazy {...props} />
         </Suspense>

@@ -82,7 +82,8 @@ export function preloadEncryptionIndicator(): Promise<void> {
 
 const UnusedMeshPayloads = createLazyPanel<UnusedMeshPayloadsProps>(
   'Mesh cleanup',
-  () => import('./UnusedMeshPayloads')
+  () => import('./UnusedMeshPayloads'),
+  'menu-section'
 );
 
 /**
@@ -1419,9 +1420,7 @@ export function TopBar({
               ) : null}
               {/* I03: after Export, so adding it moved none of the actions
                   above it under panels that float over the menu. */}
-              {displayUnits ? (
-                <DisplayUnitsRow {...displayUnits} />
-              ) : null}
+              {displayUnits ? <DisplayUnitsRow {...displayUnits} /> : null}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">
                 <Files size={12} aria-hidden="true" />

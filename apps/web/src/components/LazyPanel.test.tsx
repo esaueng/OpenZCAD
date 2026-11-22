@@ -188,4 +188,29 @@ describe('lazy panels', () => {
     expect(load).toHaveBeenCalledOnce();
     expect(screen.queryByText(/Connect to the internet/)).toBeNull();
   });
+
+  it('draws nothing in a menu while a menu section loads', async () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    let finish!: (module: { default: () => React.JSX.Element }) => void;
+    const Cleanup = createLazyPanel<object>(
+      'Mesh cleanup',
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      'menu-section'
+    );
+    const { container } = render(
+      <div data-testid="menu">
+        <Cleanup />
+      </div>
+    );
+    // A panel-sized loading card here pushed the File menu past a 900px
+    // window, so it opened with its last section out of view.
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(container.querySelector('.error-boundary')).toBeNull();
+    expect(screen.getByTestId('menu')).toBeEmptyDOMElement();
+    await act(async () => finish({ default: () => <p>Unused mesh data</p> }));
+    expect(screen.getByText('Unused mesh data')).toBeTruthy();
+  });
 });
