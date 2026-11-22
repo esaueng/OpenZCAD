@@ -190,20 +190,27 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
     const commenting = await Promise.resolve()
       .then(() => links.commentingShareLinks(ctx, projectId))
       .catch(() => null);
-    // The owner's sealed names; unnamed when they cannot be read here.
-    const names = await import('../lib/e2ee/sealedShareLinkNames')
-      .then(({ pageShareLinkNames }) =>
-        pageShareLinkNames(
-          ctx.groups.account.userId,
-          projectId,
-          // Live links only: a link whose revocation is pending shows no name.
-          new Set(
-            view.links
-              .filter((link) => link.status !== 'revocation-pending')
-              .map((link) => link.shareId)
-          )
-        )
+    // Live links only: a link whose revocation is pending shows no name.
+    const live = new Set(
+      view.links
+        .filter((link) => link.status !== 'revocation-pending')
+        .map((link) => link.shareId)
+    );
+    const userId = ctx.groups.account.userId;
+    const sealedNames = await import('../lib/e2ee/sealedShareLinkNames');
+    // A reissue that upkeep finished after it failed names its new links
+    // here. Best effort: the next list tries again.
+    await sealedNames
+      .nameReissuedPageShareLinks(
+        userId,
+        projectId,
+        work?.replacements ?? [],
+        live
       )
+      .catch(() => {});
+    // The owner's sealed names; unnamed when they cannot be read here.
+    const names = await sealedNames
+      .pageShareLinkNames(userId, projectId, live)
       .catch((): Record<string, string> => ({}));
     return {
       links: view.links.map((link) => ({
@@ -336,17 +343,23 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
       import('../lib/e2ee/shareLinks')
     ]);
     const { ctx } = await encryptedShareLinks();
-    await shareLinks.reissueShareLinks(ctx, projectId, links);
-    // Each new link is named after the one it replaces, once, as a rename.
+    const created = await shareLinks.reissueShareLinks(ctx, projectId, links);
+    // Each new link is named after the one it replaces. Only the links this
+    // reissue returned count: a replacement revoked since takes no name.
     const userId = ctx.groups.account.userId;
     const sources = new Set(links.map((link) => link.shareId));
-    const replacements = (
-      await shareLinks.shareWorkFor(ctx).read(userId, projectId)
-    ).replacements.filter((item) => sources.has(item.sourceId));
     try {
+      const replacements = (
+        await shareLinks.shareWorkFor(ctx).read(userId, projectId)
+      ).replacements.filter((item) => sources.has(item.sourceId));
       await import('../lib/e2ee/sealedShareLinkNames').then(
         ({ nameReissuedPageShareLinks }) =>
-          nameReissuedPageShareLinks(userId, projectId, replacements)
+          nameReissuedPageShareLinks(
+            userId,
+            projectId,
+            replacements,
+            new Set(created.map((link) => link.shareId))
+          )
       );
     } catch (caught) {
       throw new Error(

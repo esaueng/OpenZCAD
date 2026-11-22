@@ -1892,16 +1892,20 @@ settings, which an account whose library is not encrypted stores readable.
 - **Reissued links.** A reissue (after a removal or an identity change)
   revokes each link and makes a new one; the owner's device records which
   new link replaces which (`ShareWork.replacements`). Right after the
-  reissue, that device names each new link after the link it replaces and
-  clears that link's name, in one change saved like any rename: a fresh
-  stamp, applied to the account's copy merged with its own, so the name is
-  the latest any device saved. A new link that already has an entry keeps
-  it, and running the step again changes nothing. A reissue that stops
-  halfway leaves its unreplaced links' names for the retry. Where the names
-  cannot be saved, the dialog says so and the links can be named from their
-  cards. Nothing derives names at list time, so no two devices ever compute
-  them differently: an edit made on another device at the same moment
-  resolves by stamp, as any two renames do.
+  reissue, that device names each live new link after the link it replaces
+  and clears that link's name, in one change with a fresh stamp, applied to
+  the account's copy merged with its own, so the name is the latest any
+  device saved. Unlike a typed rename, the change reaches this device's copy
+  only once the account has taken it: a retry after a conflict derives it
+  again from the account's newer copy, and a failed save leaves no guess
+  behind. Each list of the links on that device does the same for any
+  replacement still unnamed, which finishes a reissue that upkeep completed
+  after the reissue itself failed; a list saves only when something is left
+  to name. A new link that already has an entry keeps it, a replacement
+  revoked since takes no name, and running the step again changes nothing.
+  Where the names cannot be saved after a reissue, the dialog says so and
+  the links can be named from their cards. An edit made on another device
+  at the same moment resolves by stamp, as any two renames do.
 - **Writes.** A browser reads the account record, merges it into its own
   copy, applies the change and seals at a sequence above both its pin and
   the stored record's (read from the header, which needs no key), against

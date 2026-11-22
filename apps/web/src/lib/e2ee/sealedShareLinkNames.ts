@@ -559,8 +559,19 @@ const SAVE_ATTEMPTS = 4;
 export async function changeShareLinkNames(
   keys: ShareLinkNameKeys,
   api: ShareLinkNamesApi,
-  change: (book: ShareLinkNameBook, now: number) => ShareLinkNameBook
+  change: (book: ShareLinkNameBook, now: number) => ShareLinkNameBook,
+  options: {
+    /**
+     * False for a change derived from other entries (a reissue's names): the
+     * device copy takes it only once the account has, so a retry after a
+     * conflict derives it again from the account's newer copy instead of
+     * from this attempt's guess (PR 1938 review). A user's own edit stays
+     * speculative, so it shows even when the save fails.
+     */
+    readonly speculative?: boolean;
+  } = {}
 ): Promise<ShareLinkNameBook> {
+  const speculative = options.speculative ?? true;
   const now = keys.now ?? Date.now;
   requireActive(keys);
   let snapshot = await api.load();
@@ -579,7 +590,7 @@ export async function changeShareLinkNames(
         : device;
     const at = now();
     const next = change(base, at);
-    keys.device.write(next);
+    if (speculative) keys.device.write(next);
     if (opened?.kind === 'unreadable') throw new ShareLinkNamesKeptOnDevice();
     const sequence = Math.max(keys.pins.read(), snapshot.sequence) + 1;
     // Sealed with a copy taken now, while the session is known to be live:
@@ -611,6 +622,10 @@ export async function changeShareLinkNames(
       throw error;
     }
     keys.pins.write(sequence);
+    if (!speculative) {
+      requireActive(keys);
+      keys.device.write(mergeShareLinkNameBooks(keys.device.read(), next));
+    }
     return next;
   }
 }
@@ -714,24 +729,44 @@ export async function pageShareLinkNames(
   );
 }
 
+/** The replacements whose new link is live: a revoked one takes no name. */
+export function liveReplacements(
+  replacements: readonly ShareLinkReplacement[],
+  live: ReadonlySet<string>
+): ShareLinkReplacement[] {
+  return replacements.filter(({ shareId }) => live.has(shareId));
+}
+
 /**
- * Gives reissued links the names of the links they replace, once, from the
- * reissue itself (`nameReissuedShareLinks`), saved like a rename.
+ * Gives reissued links the names of the links they replace
+ * (`nameReissuedShareLinks`), saved like a rename but never speculatively.
+ * The reissue calls it; so does every list, which finishes a reissue that
+ * upkeep completed after the reissue itself failed. Only replacements whose
+ * new link is `live` count, and it saves nothing when nothing is left to
+ * name, so a list rarely writes.
  */
 export async function nameReissuedPageShareLinks(
   userId: string,
   projectId: string,
-  replacements: readonly ShareLinkReplacement[]
+  replacements: readonly ShareLinkReplacement[],
+  live: ReadonlySet<string>
 ): Promise<void> {
-  if (replacements.length === 0) return;
+  const pending = liveReplacements(replacements, live);
+  if (pending.length === 0) return;
   const keys = await pageKeys(userId);
   if (!keys) {
     throw new Error(
       'Unlock encryption on this device to keep the links’ names.'
     );
   }
-  await changeShareLinkNames(keys, await pageApi(), (book, now) =>
-    nameReissuedShareLinks(book, projectId, replacements, now)
+  const api = await pageApi();
+  const book = await readShareLinkNames(keys, api);
+  if (nameReissuedShareLinks(book, projectId, pending, 0) === book) return;
+  await changeShareLinkNames(
+    keys,
+    api,
+    (current, now) => nameReissuedShareLinks(current, projectId, pending, now),
+    { speculative: false }
   );
 }
 
