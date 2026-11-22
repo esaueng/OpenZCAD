@@ -40,6 +40,7 @@ import {
   planSketchExtend,
   planSketchMirror,
   planSketchMirrorSet,
+  planSketchPatternSet,
   planSketchTrim,
   resolvePatternPivot,
   settleOptionalRelations,
@@ -47,6 +48,12 @@ import {
   type SketchModifyPlan,
   type SketchRankProbe
 } from './modify';
+import {
+  chamferHasCurvedLeg,
+  curvedCornerPrefill,
+  planCurvedChamfer,
+  resolveCurvedCorner
+} from './curveChamfer';
 import {
   DEFAULT_SKETCH_OFFSET_OPTIONS,
   offsetClickSide,
@@ -119,7 +126,7 @@ export const SKETCH_EDIT_TOOL_SPECS: readonly SketchEditToolSpec[] = [
     kind: 'chamfer',
     label: 'Chamfer',
     picks: 2,
-    hint: 'Click two lines that meet, then enter the setback.',
+    hint: 'Click two lines or arcs that meet, then enter the setback.',
     valueLabel: 'Chamfer distance'
   },
   {
@@ -272,6 +279,14 @@ export function refuseEditPick(
     return null;
   }
   if (data.objectKind === 'line') {
+    return null;
+  }
+  // S05: Chamfer cuts arcs and meets circles here. The Fillet tool rounds
+  // them from its corner markers; this kernel path takes lines only.
+  if (
+    kind === 'chamfer' &&
+    (data.objectKind === 'arc' || data.objectKind === 'circle')
+  ) {
     return null;
   }
   if (data.objectKind === 'arc') {
@@ -655,6 +670,29 @@ export function sketchEditValueSteps(
       ];
     }
     default: {
+      if (
+        kind === 'chamfer' &&
+        chamferHasCurvedLeg(document, sketch, picks[0]!, picks[1]!)
+      ) {
+        const curved = resolveCurvedCorner(
+          document,
+          sketch,
+          picks[0]!,
+          picks[1]!,
+          resolve
+        );
+        if ('error' in curved) {
+          return { error: curved.error };
+        }
+        return [
+          {
+            label: spec.valueLabel!,
+            unitKind: 'length',
+            initial: roundPrefill(curvedCornerPrefill(curved.legs)),
+            message: `${spec.label}: enter the value.`
+          }
+        ];
+      }
       const resolved = resolveSketchCorner(
         document,
         sketch,
@@ -727,7 +765,18 @@ export function advanceSketchEditPick(
   if (refusal) {
     return { status: 'refuse', reason: refusal };
   }
-  const picks = [...existing, pivotPick ? `${objectId}#${snapped}` : objectId];
+  // S05: a circle a Chamfer meets is kept whole, so which way round the
+  // bevel goes is the side of the joint that was clicked.
+  const circleSide =
+    kind === 'chamfer' &&
+    context.at &&
+    sketchObjectData(document, sketch, objectId)?.objectKind === 'circle'
+      ? `${objectId}@${context.at.x},${context.at.y}`
+      : null;
+  const picks = [
+    ...existing,
+    pivotPick ? `${objectId}#${snapped}` : (circleSide ?? objectId)
+  ];
   if (picks.length < spec.picks) {
     return {
       status: 'pick',
@@ -803,7 +852,8 @@ export function planSketchEdit(
   resolve: ResolveParam,
   at?: Point2,
   offset?: SketchOffsetPick,
-  pattern?: SketchPatternOptions
+  pattern?: SketchPatternOptions,
+  sources?: readonly string[]
 ): SketchEditPlan {
   const spec = sketchEditToolSpec(kind);
   const values = typeof value === 'number' ? [value] : value;
@@ -830,6 +880,40 @@ export function planSketchEdit(
       sketchId,
       picks[0]!,
       picks[1]!,
+      resolve
+    );
+  }
+  if (
+    (kind === 'linear-pattern' || kind === 'circular-pattern') &&
+    sources?.length
+  ) {
+    const pivot =
+      kind === 'circular-pattern'
+        ? resolvePatternPivot(document, sketch, picks[1]!, resolve)
+        : null;
+    if (pivot && 'error' in pivot) {
+      return { status: 'refuse', reason: pivot.error };
+    }
+    return planSketchPatternSet(
+      document,
+      sketch,
+      sketchId,
+      sources,
+      kind === 'linear-pattern'
+        ? {
+            kind,
+            directionId: picks[1]!,
+            distance: values[0]!,
+            count: values[1]!,
+            spacingMode: pattern?.spacing ?? 'spacing'
+          }
+        : {
+            kind,
+            pivot: pivot!.pivot,
+            count: values[0]!,
+            totalDeg: values[1]!,
+            orientation: pattern?.orientation ?? 'rotate'
+          },
       resolve
     );
   }
@@ -872,6 +956,20 @@ export function planSketchEdit(
       picks[0]!,
       amount,
       offset ?? { ...DEFAULT_SKETCH_OFFSET_OPTIONS, side: 1 },
+      resolve
+    );
+  }
+  if (
+    kind === 'chamfer' &&
+    chamferHasCurvedLeg(document, sketch, picks[0]!, picks[1]!)
+  ) {
+    return planCurvedChamfer(
+      document,
+      sketch,
+      sketchId,
+      picks[0]!,
+      picks[1]!,
+      amount,
       resolve
     );
   }
@@ -938,6 +1036,8 @@ export interface SketchEditAnswers {
   offset?: SketchOffsetPick;
   /** A pattern's settings when its picks completed, carried to its steps. */
   pattern?: SketchPatternOptions;
+  /** A pattern armed over a selection: every entity it repeats. */
+  sources?: readonly string[];
 }
 
 /**
@@ -1020,15 +1120,49 @@ export function advanceSketchEdit(
     );
     return;
   }
+  // A pattern armed over a selection takes only its direction or pivot: the
+  // first selected entity that is still there stands in as the source pick,
+  // and the whole selection rides along to the plan.
+  const patternSet =
+    (pending.kind === 'linear-pattern' ||
+      pending.kind === 'circular-pattern') &&
+    pending.sources?.length
+      ? pending.sources.filter((id) =>
+          sketch.objectIds.includes(id as EntityId)
+        )
+      : null;
+  if (patternSet && patternSet.length === 0) {
+    host.disarm();
+    host.setStatus(
+      'The selected entities are no longer in the sketch. Select what to repeat, then pick the tool again.'
+    );
+    return;
+  }
+  // The stand-in is a selected entity other than the one this click names
+  // (directly or by its snapped point), so a selected circle can still be
+  // the pivot the rest of the selection turns about.
+  const clicked = new Set([objectId, context.snapPoint?.objectId ?? null]);
+  const standIn = patternSet
+    ? (patternSet.find((id) => !clicked.has(id)) ?? patternSet[0]!)
+    : null;
   const outcome = advanceSketchEditPick(
     document,
     sketch,
     pending.kind,
-    pending.picks,
+    standIn ? [standIn] : pending.picks,
     objectId,
     host.resolve,
     context
   );
+  if (outcome.status === 'hint' && patternSet) {
+    host.setStatus(
+      sketchPatternSetHint(
+        pending.kind as 'linear-pattern' | 'circular-pattern',
+        patternSet.length
+      )
+    );
+    return;
+  }
   if (outcome.status === 'refuse') {
     host.setStatus(outcome.reason);
     return;
@@ -1071,7 +1205,8 @@ export function advanceSketchEdit(
       values: [],
       raws: [],
       ...(outcome.offset ? { offset: outcome.offset } : {}),
-      ...(outcome.pattern ? { pattern: outcome.pattern } : {})
+      ...(outcome.pattern ? { pattern: outcome.pattern } : {}),
+      ...(patternSet ? { sources: patternSet } : {})
     }
   );
   host.setStatus(outcome.message);
@@ -1095,6 +1230,7 @@ export async function runSketchEdit(
 ): Promise<void> {
   const offset = earlier?.offset;
   const pattern = earlier?.pattern;
+  const sources = earlier?.sources;
   const steps = sketchEditValueSteps(
     document,
     sketch,
@@ -1117,7 +1253,8 @@ export async function runSketchEdit(
       values,
       raws,
       ...(offset ? { offset } : {}),
-      ...(pattern ? { pattern } : {})
+      ...(pattern ? { pattern } : {}),
+      ...(sources ? { sources } : {})
     });
     host.setStatus(next.message);
     return;
@@ -1133,9 +1270,22 @@ export async function runSketchEdit(
     host.resolve,
     at,
     offset,
-    pattern
+    pattern,
+    sources
   );
   await commitSketchEditPlan(host, document, sketch, kind, plan);
+}
+
+/** What a pattern asks for once it is armed over `count` selected entities. */
+export function sketchPatternSetHint(
+  kind: 'linear-pattern' | 'circular-pattern',
+  count: number
+): string {
+  const what =
+    count === 1 ? 'the selected entity' : `${count} selected entities`;
+  return kind === 'linear-pattern'
+    ? `Linear pattern: click a line for the direction to repeat ${what} along. Then enter the spacing (or the extent) and the count.`
+    : `Circular pattern: click a circle or arc (or snap to a line end) for the pivot to repeat ${what} about. Then enter the count and the angle.`;
 }
 
 /** What Mirror asks for once it is armed over `count` selected entities. */

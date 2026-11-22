@@ -1232,7 +1232,7 @@ describe('cloneDocument derived sharing', () => {
           sketchId,
           constraint: { constraintKind: 'tangent', a: circle, b: circle }
         })
-      ).toThrow(/one line with one circle/);
+      ).toThrow('A tangent constraint pairs two different entities.');
       expect(() =>
         addSketchConstraint(document, {
           sketchId,

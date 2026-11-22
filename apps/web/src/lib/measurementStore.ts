@@ -49,6 +49,9 @@ const KINDS: readonly MeasurementKind[] = [
   'face-area',
   'body',
   'distance',
+  'max-distance',
+  'central-distance',
+  'parallel-distance',
   'angle',
   'point-angle'
 ];

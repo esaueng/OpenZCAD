@@ -33,13 +33,22 @@ const POINT_KIND_LABELS: Record<MeasurePointKind, string> = {
 const MODE_LABELS: Record<MeasurementMode, string> = {
   smart: 'Smart',
   distance: 'Distance',
-  angle: 'Angle'
+  angle: 'Angle',
+  maximum: 'Maximum',
+  central: 'Central',
+  parallel: 'Parallel'
 };
 
 const MODE_INSTRUCTIONS: Record<MeasurementMode, string> = {
   smart: 'Pick an edge, face, hole, or body to inspect it.',
   distance: 'Pick two targets. Circles and cylinders use their exact centers.',
-  angle: 'Pick two straight edges, circular axes or planar faces.'
+  angle: 'Pick two straight edges, circular axes or planar faces.',
+  maximum:
+    'Pick two points, straight edges or full circles: the farthest they are apart.',
+  central:
+    'Pick a circle, arc, cylinder or hole, then a target: the distance from its center or axis.',
+  parallel:
+    'Pick two parallel edges, faces or axes, or two concentric circles or cylinders.'
 };
 
 /** Decimal places the dock offers: everything a stored record may carry. */
@@ -71,6 +80,11 @@ interface MeasurementDockProps {
   onPrecision(precision: number): void;
   onRadialDisplay(display: RadialDisplay): void;
   onSelect(id: string): void;
+  /**
+   * M13: the row under the pointer or keyboard focus, whose measured edges
+   * and faces the viewport highlights; null when none is.
+   */
+  onHover?(id: string | null): void;
   onToggleVisibility(id: string): void;
   onRename(id: string, label: string, note: string): void;
   onDelete(id: string): void;
@@ -102,6 +116,7 @@ export function MeasurementDock({
   onPrecision,
   onRadialDisplay,
   onSelect,
+  onHover,
   onToggleVisibility,
   onRename,
   onDelete,
@@ -311,6 +326,16 @@ export function MeasurementDock({
                 }${updating || entry.status !== 'current' ? ' stale' : ''}`}
                 role="listitem"
                 key={entry.id}
+                // M13: the whole row, actions included, holds the highlight:
+                // moving onto its Copy button or tabbing to an action keeps
+                // the measured entity lit.
+                onPointerEnter={() => onHover?.(entry.id)}
+                onPointerLeave={() => onHover?.(null)}
+                onFocus={() => onHover?.(entry.id)}
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget))
+                    onHover?.(null);
+                }}
               >
                 {editing ? (
                   <form

@@ -4,7 +4,13 @@ import type {
   SketchConstraintData,
   SketchObjectData
 } from '@openzcad/shared';
-import { expect, stubApi, test, MODEL_ONLY } from './openzcad-fixtures';
+import {
+  expect,
+  finishInPlaceCommand,
+  stubApi,
+  test,
+  MODEL_ONLY
+} from './openzcad-fixtures';
 
 /**
  * S05 Trim, Mirror, the linear and circular patterns, Offset and the
@@ -556,6 +562,83 @@ test('Linear pattern spreads its instances over an extent chosen beside its slot
   }
 });
 
+test('a pattern and Construction act on a box selection in one step each', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Pattern selection');
+  const a = at(0.35, 0.4);
+  const b = at(0.35, 0.5);
+  await drawCircle(page, a, 14);
+  await drawCircle(page, b, 14);
+  await drawLine(page, at(0.3, 0.7), at(0.5, 0.7));
+  await page.keyboard.press('Escape');
+  const status = page.getByRole('contentinfo');
+
+  // A left-to-right box takes the two circles, not the line below them.
+  const from = at(0.3, 0.33);
+  const to = at(0.4, 0.57);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 10 });
+  await page.mouse.up();
+
+  await modifyTool(page, 'Linear pattern');
+  await expect(status).toContainText(
+    'Linear pattern: click a line for the direction to repeat 2 selected entities along.'
+  );
+  await page.mouse.click(at(0.4, 0.7).x, at(0.4, 0.7).y);
+  const spacing = page.getByRole('textbox', { name: 'Pattern spacing' });
+  await expect(spacing).toBeVisible();
+  await spacing.fill('40');
+  await spacing.press('Enter');
+  const count = page.getByRole('textbox', { name: 'Pattern count' });
+  await expect(count).toBeVisible();
+  await count.fill('2');
+  await count.press('Enter');
+  await expect(status).toContainText(
+    'Linear pattern added 2 linked entities from 2 selected.'
+  );
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length)
+    .toBe(5);
+
+  // Box the two new circles and mark them construction together.
+  const { objects } = await exportSketch(page);
+  expect(kindsOf(objects)).toEqual([
+    'circle',
+    'circle',
+    'line',
+    'circle',
+    'circle'
+  ]);
+  await page.keyboard.press('Escape');
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+  await page.keyboard.press(`${modifier}+a`);
+  const toggle = page.getByRole('button', { name: 'Construction (5)' });
+  await expect(toggle).toBeVisible();
+  await toggle.click();
+  await expect(status).toContainText(
+    '5 entities are construction geometry now; they no longer bound a profile.'
+  );
+  await expect
+    .poll(async () =>
+      (await exportSketch(page)).objects.every(
+        (object) => object.data.construction === true
+      )
+    )
+    .toBe(true);
+  // One undo step restores all five.
+  await undo(page);
+  await expect
+    .poll(async () =>
+      (await exportSketch(page)).objects.some(
+        (object) => object.data.construction === true
+      )
+    )
+    .toBe(false);
+});
+
 test('Circular pattern turns an entity about a picked circle’s centre', async ({
   page
 }) => {
@@ -634,6 +717,116 @@ async function offsetBy(page: Page, at: Point, distance: string) {
   await field.fill(distance);
   await field.press('Enter');
 }
+
+test('Fillet and Chamfer meet a circle a line ends on, keeping the circle whole', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const at = await startSketch(page, 'Curved corners');
+  // Sized from the canvas, so a phone-width run draws the same picture.
+  const center = at(0.35, 0.5);
+  const radiusPx = Math.round((at(0.5, 0.5).x - at(0.35, 0.5).x) * 0.6);
+  await drawCircle(page, center, radiusPx);
+  // The line ends on the circle's quadrant snap, so the joint is exact.
+  const joint = { x: center.x + radiusPx, y: center.y };
+  const lineStart = at(0.8, 0.5);
+  await drawLine(page, lineStart, joint);
+  await page.keyboard.press('Escape');
+  const status = page.getByRole('contentinfo');
+  const drawn = await exportSketch(page);
+  expect(kindsOf(drawn.objects)).toEqual(['circle', 'line']);
+  const circle = drawn.objects[0]!.data as Extract<
+    SketchObjectData,
+    { objectKind: 'circle' }
+  >;
+  const line = drawn.objects[1]!.data as Extract<
+    SketchObjectData,
+    { objectKind: 'line' }
+  >;
+  const r = Number(circle.radius);
+  expect(
+    Math.hypot(
+      Number(line.x2) - Number(circle.centerX),
+      Number(line.y2) - Number(circle.centerY)
+    )
+  ).toBeCloseTo(r, 6);
+
+  // Fillet: the joint offers a corner each way round; one is rounded.
+  await page
+    .getByRole('toolbar', { name: 'Sketch tools' })
+    .getByRole('button', { name: /^Fillet(?:$| —)/ })
+    .click();
+  const bar = page.getByRole('group', {
+    name: 'Sketch Fillet command',
+    exact: true
+  });
+  await expect(bar).toBeVisible(READ_TIMEOUT);
+  const corners = page.getByTestId('sketch-fillet-corner');
+  await expect(corners).toHaveCount(2, READ_TIMEOUT);
+  // A marker is picked through the canvas at its point, as on screen.
+  await expect(corners.first()).toBeVisible();
+  const marker = (await corners.first().boundingBox())!;
+  await page.mouse.click(
+    marker.x + marker.width / 2,
+    marker.y + marker.height / 2
+  );
+  await expect(
+    page
+      .getByTestId('sketch-fillet-corner')
+      .and(page.getByRole('button', { pressed: true }))
+  ).toHaveCount(1);
+  await bar.getByRole('button', { name: /^(?:Fillet )?Radius\b/i }).click();
+  const radius = page
+    .getByRole('dialog', { name: 'Fillet radius value' })
+    .getByRole('textbox', { name: 'Fillet radius' });
+  await radius.fill(String(Math.round(r * 30) / 100));
+  await radius.press('Enter');
+  await finishInPlaceCommand(page, 'Sketch Fillet');
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length, READ_TIMEOUT)
+    .toBe(3);
+  const filleted = await exportSketch(page);
+  expect(kindsOf(filleted.objects)).toEqual(['circle', 'line', 'arc']);
+  // The circle is untouched; the fillet is tangent to it by relation.
+  expect(filleted.objects[0]!.data).toEqual(circle);
+  expect(constraintKinds(filleted.constraints)).toContain('tangent');
+
+  // One undo restores the corner; Chamfer then cuts the clicked side.
+  await undo(page);
+  await expect
+    .poll(async () => (await exportSketch(page)).objects.length)
+    .toBe(2);
+  await page
+    .getByRole('toolbar', { name: 'Sketch tools' })
+    .getByRole('button', { name: /^Chamfer/ })
+    .click();
+  await page.mouse.click((lineStart.x + joint.x) / 2, joint.y);
+  await expect(status).toContainText('Chamfer: pick 2 of 2.');
+  // The circle's upper side.
+  await page.mouse.click(center.x, center.y - radiusPx);
+  const distance = page.getByRole('textbox', { name: 'Chamfer distance' });
+  await expect(distance).toBeVisible();
+  await distance.fill(String(Math.round(r * 40) / 100));
+  await distance.press('Enter');
+  await expect(status).toContainText('Chamfer cut both legs back');
+  const chamfered = await exportSketch(page);
+  expect(kindsOf(chamfered.objects)).toEqual(['circle', 'line', 'line']);
+  expect(chamfered.objects[0]!.data).toEqual(circle);
+  const bevel = chamfered.objects[2]!.data as Extract<
+    SketchObjectData,
+    { objectKind: 'line' }
+  >;
+  // Its far end is on the circle, on the side that was clicked (sketch y up
+  // is screen up).
+  expect(
+    Math.hypot(
+      Number(bevel.x2) - Number(circle.centerX),
+      Number(bevel.y2) - Number(circle.centerY)
+    )
+  ).toBeCloseTo(r, 6);
+  expect(Number(bevel.y2)).toBeGreaterThan(Number(circle.centerY));
+  expect(constraintKinds(chamfered.constraints)).toContain('point-on-object');
+});
 
 test('Offset follows a rectangle, mitered then round, one undo step each', async ({
   page

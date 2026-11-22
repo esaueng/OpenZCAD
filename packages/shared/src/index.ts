@@ -549,10 +549,17 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // one Move copy stamps repeated copies, each the same transform on from the
 // one before. An older client would build only the first, so it must refuse
 // the document. Builds on v136.
-// v138 adds S07 entity locks (`lock-entity` sketch constraints): a whole
+// v141 adds S05 curved tangency (a `tangent` constraint between an arc and
+// another arc or a circle, at an arc end): what a fillet against an arc or
+// circle records. An older client refuses a tangent without a line, so it
+// must refuse the document. Builds on v137; v138 to v140 are claimed by the
+// S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+// v144 adds S07 entity locks (`lock-entity` sketch constraints): a whole
 // line, circle or arc held at a recorded position. An older client cannot
-// solve the relation, so it must refuse the document. Builds on v137.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 138 as const;
+// solve the relation, so it must refuse the document. Builds on v141; v142
+// and v143 are claimed by M03 per-vertex radii (#1914) and I03 unit
+// switching (#1915).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 144 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -1995,6 +2002,9 @@ export type SketchConstraintData =
    * `at` names that arc point; it is what a sketch fillet records about the
    * arc it inserted. A constraint written before the arc form existed has no
    * `at` and replays exactly as it did.
+   *
+   * S05 (v141): an arc may also touch another arc or a circle at `at`, an end
+   * of an arc in the pair — what a fillet records against a curved leg.
    */
   | {
       constraintKind: 'tangent';
@@ -2035,7 +2045,7 @@ export type SketchConstraintData =
    */
   | { constraintKind: 'lock'; point: SketchPointRef; x: number; y: number }
   /**
-   * S07 (v138): a whole line, circle or arc held where it was when the lock
+   * S07 (v144): a whole line, circle or arc held where it was when the lock
    * was made. `at` is that geometry in sketch coordinates — a line's
    * `[x1, y1, x2, y2]`, a circle's `[centerX, centerY, radius]`, an arc's
    * `[centerX, centerY, radius, startAngleDeg, endAngleDeg]` — so an edit

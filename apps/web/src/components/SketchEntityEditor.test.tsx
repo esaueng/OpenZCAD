@@ -1132,6 +1132,52 @@ describe('SketchEntityEditor I01 curves', () => {
 });
 
 describe('the construction toggle (ZC-024)', () => {
+  it('names the selection it toggles when several entities are selected', () => {
+    render(
+      <SketchEntityEditor
+        data={{ objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleConstruction={vi.fn()}
+        selectionCount={3}
+        onClose={vi.fn()}
+      />
+    );
+    const toggle = screen.getByRole('button', { name: 'Construction (3)' });
+    // Without a selection-wide state it reads the primary entity.
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle).toHaveAttribute(
+      'title',
+      'Toggle construction for the 3 selected entities: all become construction unless every one already is'
+    );
+  });
+
+  it('announces a mixed selection as mixed, not as the primary entity', () => {
+    render(
+      <SketchEntityEditor
+        data={{
+          objectKind: 'line',
+          x1: 0,
+          y1: 0,
+          x2: 10,
+          y2: 0,
+          construction: true
+        }}
+        scope={{}}
+        onApply={vi.fn()}
+        onDelete={vi.fn()}
+        onToggleConstruction={vi.fn()}
+        selectionCount={2}
+        selectionConstruction="mixed"
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: 'Construction (2)' })
+    ).toHaveAttribute('aria-pressed', 'mixed');
+  });
+
   it('reads the flag as pressed and asks for the toggle, not an Apply', async () => {
     const user = userEvent.setup();
     const onToggleConstruction = vi.fn();
@@ -1206,7 +1252,9 @@ describe('the construction toggle (ZC-024)', () => {
       await user.click(
         within(section).getByRole('button', { name: /re-pick source/i })
       );
-      await user.click(within(section).getByRole('button', { name: /unlink/i }));
+      await user.click(
+        within(section).getByRole('button', { name: /unlink/i })
+      );
       expect(onRepickProjection).toHaveBeenCalledTimes(1);
       expect(onUnlinkProjection).toHaveBeenCalledTimes(1);
       expect(onApply).not.toHaveBeenCalled();
@@ -1245,9 +1293,9 @@ describe('the construction toggle (ZC-024)', () => {
         />
       );
       expect(screen.getByLabelText('End X')).toBeEnabled();
-      expect(screen.getByRole('region', { name: 'Projection' })).toHaveTextContent(
-        'Independent copy of an edge of Block'
-      );
+      expect(
+        screen.getByRole('region', { name: 'Projection' })
+      ).toHaveTextContent('Independent copy of an edge of Block');
       expect(
         screen.queryByRole('button', { name: /unlink/i })
       ).not.toBeInTheDocument();

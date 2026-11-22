@@ -145,13 +145,34 @@ export function assertWrapSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 111, 'Wraps');
 }
 
-/** S07 (schema v138): whole-entity locks, wherever a sketch or command holds one. */
+/** S07 (schema v144): whole-entity locks, wherever a sketch or command holds one. */
 export function assertEntityLockSchema(version: unknown): void {
-  assertMinimumProjectSchema(version, 138, 'Sketch entity locks');
+  assertMinimumProjectSchema(version, 144, 'Sketch entity locks');
 }
 
 function isEntityLock(value: unknown): boolean {
   return record(value) && value.constraintKind === 'lock-entity';
+}
+
+/** S05 (schema v141): a tangent between two curves (no line in it). */
+export function assertCurvedTangentSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 141, 'Curve-to-curve tangency');
+}
+
+/** True for a tangent whose two sides the document knows to be curves. */
+function isCurvedTangent(
+  value: unknown,
+  nodes: Record<string, unknown>
+): boolean {
+  if (!record(value) || value.constraintKind !== 'tangent') return false;
+  const kind = (id: unknown) => {
+    if (typeof id !== 'string' || !Object.hasOwn(nodes, id)) return undefined;
+    const node = nodes[id];
+    return record(node) && record(node.data) ? node.data.objectKind : undefined;
+  };
+  const a = kind(value.a);
+  const b = kind(value.b);
+  return (a === 'arc' || a === 'circle') && (b === 'arc' || b === 'circle');
 }
 
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
@@ -1525,6 +1546,19 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertSlotSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) =>
+          record(constraint) &&
+          isCurvedTangent(
+            constraint.data,
+            document.nodes
+          )
+      )
+    )
+      assertCurvedTangentSchema(document.schemaVersion);
     if (
       node.kind === 'sketch' &&
       Array.isArray(node.constraints) &&

@@ -2101,23 +2101,51 @@ function landsOnExisting(
   sourceId: string,
   curves: readonly Curve2[],
   resolve: Resolve,
-  tol: number
+  tol: number,
+  earlier: readonly PlannedCurve[] = [],
+  /**
+   * Patterns: refuse a construction copy that exactly duplicates another
+   * guide. Mirror keeps such an image, which follows its own source.
+   */
+  refuseGuideDuplicates = false
 ): boolean {
   // Construction geometry never bounds a profile, so a construction copy
-  // may sit on anything and anything may sit on a construction guide.
-  if (sketchObject(document, sketch, sourceId)?.construction) {
+  // may overlap anything, profile geometry included (a guide over a real
+  // curve), and anything may overlap a construction guide; a pattern only
+  // refuses an exact duplicate of another guide, which adds nothing.
+  const construction = Boolean(
+    sketchObject(document, sketch, sourceId)?.construction
+  );
+  if (construction && !refuseGuideDuplicates) {
     return false;
   }
-  const existing = sketch.objectIds.flatMap((objectId) => {
-    if (objectId === sourceId) {
-      return [];
-    }
-    const data = sketchObject(document, sketch, objectId);
-    return data && !data.construction ? cutterCurves(data, resolve) : [];
-  });
+  const clash = construction ? sameCurve : curvesOverlap;
+  const existing = [
+    ...sketch.objectIds.flatMap((objectId) => {
+      if (objectId === sourceId) {
+        return [];
+      }
+      const data = sketchObject(document, sketch, objectId);
+      return data && Boolean(data.construction) === construction
+        ? cutterCurves(data, resolve)
+        : [];
+    }),
+    ...earlier
+      .filter((planned) => Boolean(planned.data.construction) === construction)
+      .map((planned) => planned.curve)
+  ];
   return curves.some((curve) =>
-    existing.some((other) => curvesOverlap(other, curve, tol))
+    existing.some((other) => clash(other, curve, tol))
   );
+}
+
+/**
+ * An instance another entity of the same pattern already placed, for a
+ * selection planned one entity at a time.
+ */
+interface PlannedCurve {
+  curve: Curve2;
+  data: SketchObjectData;
 }
 
 /**
@@ -2318,7 +2346,8 @@ export function planSketchLinearPattern(
   distance: number,
   count: number,
   resolve: Resolve,
-  spacingMode: 'spacing' | 'extent' = 'spacing'
+  spacingMode: 'spacing' | 'extent' = 'spacing',
+  earlier: readonly PlannedCurve[] = []
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2394,13 +2423,27 @@ export function planSketchLinearPattern(
         : 'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
+  if (
+    landsOnExisting(
+      document,
+      sketch,
+      sourceId,
+      copies,
+      resolve,
+      tol,
+      earlier,
+      true
+    )
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   const clash = profileClash(
     document,
     sketch,
-    copies.map((copy) => curveObject(copy, source.data)),
+    [
+      ...earlier.map((planned) => planned.data),
+      ...copies.map((copy) => curveObject(copy, source.data))
+    ],
     resolve
   );
   if (clash) {
@@ -2438,7 +2481,8 @@ export function planSketchCircularPattern(
   count: number,
   totalDeg: number,
   resolve: Resolve,
-  orientation: 'rotate' | 'uniform' = 'rotate'
+  orientation: 'rotate' | 'uniform' = 'rotate',
+  earlier: readonly PlannedCurve[] = []
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2518,13 +2562,27 @@ export function planSketchCircularPattern(
         'Some instances would overlap others. Change the count or the angle, or move the pivot off the entity.'
     };
   }
-  if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
+  if (
+    landsOnExisting(
+      document,
+      sketch,
+      sourceId,
+      copies,
+      resolve,
+      tol,
+      earlier,
+      true
+    )
+  ) {
     return { status: 'refuse', reason: LANDS_ON_EXISTING };
   }
   const clash = profileClash(
     document,
     sketch,
-    copies.map((copy) => curveObject(copy, source.data)),
+    [
+      ...earlier.map((planned) => planned.data),
+      ...copies.map((copy) => curveObject(copy, source.data))
+    ],
     resolve
   );
   if (clash) {
@@ -2543,6 +2601,127 @@ export function planSketchCircularPattern(
       uniform && source.curve.kind === 'line',
       'Circular pattern'
     )
+  };
+}
+
+/** One pattern's definition, shared by every entity a selection repeats. */
+export type SketchPatternSetSpec =
+  | {
+      kind: 'linear-pattern';
+      directionId: string;
+      distance: number;
+      count: number;
+      spacingMode: 'spacing' | 'extent';
+    }
+  | {
+      kind: 'circular-pattern';
+      pivot: Point2;
+      count: number;
+      totalDeg: number;
+      orientation: 'rotate' | 'uniform';
+    };
+
+/**
+ * Repeat a selection with one pattern, in one transaction. Each entity is
+ * planned as the single-entity pattern would plan it, against the sketch
+ * with the instances already planned for the entities before it, so no
+ * entity's instances may land on another's. An entity the pattern cannot
+ * repeat (a point, text, a held shape, one whose instances would clash) is
+ * left out and counted; the direction line is skipped if it was selected.
+ * Only when nothing can be repeated is the set refused, with the first
+ * reason.
+ */
+export function planSketchPatternSet(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  sourceIds: readonly string[],
+  spec: SketchPatternSetSpec,
+  resolve: Resolve
+): SketchModifyPlan {
+  const label =
+    spec.kind === 'linear-pattern' ? 'Linear pattern' : 'Circular pattern';
+  const sources = [...new Set(sourceIds)].filter(
+    (id) =>
+      (spec.kind !== 'linear-pattern' || id !== spec.directionId) &&
+      sketchObject(document, sketch, id) !== null
+  );
+  if (sources.length === 0) {
+    return {
+      status: 'refuse',
+      reason:
+        'The direction line is the only thing selected. Select what to repeat, then pick the line.'
+    };
+  }
+  const commands: AnyCommand[] = [];
+  // Every entity is planned against the document as it is (so its own
+  // resolved geometry, linked projections included, is the live one), with
+  // the instances already planned for the entities before it passed in as
+  // geometry its own may not land on.
+  const earlier: PlannedCurve[] = [];
+  let repeated = 0;
+  let added = 0;
+  let firstRefusal: string | null = null;
+  for (const sourceId of sources) {
+    const plan =
+      spec.kind === 'linear-pattern'
+        ? planSketchLinearPattern(
+            document,
+            sketch,
+            sketchId,
+            sourceId,
+            spec.directionId,
+            spec.distance,
+            spec.count,
+            resolve,
+            spec.spacingMode,
+            earlier
+          )
+        : planSketchCircularPattern(
+            document,
+            sketch,
+            sketchId,
+            sourceId,
+            spec.pivot,
+            spec.count,
+            spec.totalDeg,
+            resolve,
+            spec.orientation,
+            earlier
+          );
+    if (plan.status !== 'commands') {
+      firstRefusal ??= plan.reason;
+      continue;
+    }
+    for (const command of plan.commands) {
+      if (command.kind !== 'sketch.object.add') continue;
+      const objects = (command.payload as { objects?: SketchObjectData[] })
+        .objects;
+      for (const data of objects ?? []) {
+        const curve = evaluateCurve(data, resolve);
+        if (curve) earlier.push({ curve, data });
+      }
+    }
+    commands.push(...plan.commands);
+    repeated += 1;
+    added += spec.count - 1;
+  }
+  if (repeated === 0) {
+    return {
+      status: 'refuse',
+      reason: firstRefusal ?? 'Nothing selected can be repeated.'
+    };
+  }
+  const skipped = sources.length - repeated;
+  return {
+    status: 'commands',
+    label,
+    message:
+      `${label} added ${added} linked ${added === 1 ? 'entity' : 'entities'} from ${repeated} selected.` +
+      (skipped > 0
+        ? ` ${skipped} could not be repeated and ${skipped === 1 ? 'was' : 'were'} left out.`
+        : ''),
+    commands
   };
 }
 
@@ -2599,6 +2778,61 @@ export function resolvePatternPivot(
 
 // ---------------------------------------------------------------------------
 // Construction
+
+/**
+ * Turn a selection into construction geometry, or back, in one undo step:
+ * when any selected entity is regular they all become construction, and
+ * when every one already is they all become regular again — the toggle a
+ * mixed selection expects. Each entity changes exactly as
+ * {@link planSketchConstructionToggle} changes it alone; one already in
+ * the target state is left as it is.
+ */
+export function planSketchConstructionSet(
+  document: ProjectDocument,
+  sketch: SketchNode,
+  sketchId: SketchId,
+  objectIds: readonly string[]
+): SketchModifyPlan {
+  const entries = [...new Set(objectIds)].flatMap((objectId) => {
+    const node = ownEntry(document.nodes, objectId as EntityId);
+    return sketch.objectIds.includes(objectId as EntityId) &&
+      node?.kind === 'sketch-object'
+      ? [{ objectId, data: node.data }]
+      : [];
+  });
+  if (entries.length === 0) {
+    return {
+      status: 'refuse',
+      reason: 'The selected entities are no longer in this sketch.'
+    };
+  }
+  const making = entries.some(({ data }) => data.construction !== true);
+  const label = making ? 'Make construction' : 'Make regular';
+  const commands = entries.flatMap(({ objectId, data }) => {
+    if ((data.construction === true) === making) {
+      return [];
+    }
+    const { construction: _was, ...rest } = data;
+    const next = (
+      making ? { ...rest, construction: true } : rest
+    ) as SketchObjectData;
+    return [
+      commandFactories.updateSketchObject(
+        { sketchId, objectId: objectId as EntityId, data: next },
+        label
+      )
+    ];
+  });
+  const changed = commands.length;
+  return {
+    status: 'commands',
+    label,
+    message: making
+      ? `${changed} ${changed === 1 ? 'entity is' : 'entities are'} construction geometry now; they no longer bound a profile.`
+      : `${changed} ${changed === 1 ? 'entity is' : 'entities are'} regular geometry again.`,
+    commands
+  };
+}
 
 /**
  * Turn one existing entity into construction geometry, or back into regular

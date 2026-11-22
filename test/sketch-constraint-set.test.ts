@@ -810,7 +810,7 @@ describe('S07 entity lock on the pinned kernel', () => {
     ).toBeNull();
   });
 
-  it('needs schema v138: an older stamp refuses a document that holds one', () => {
+  it('needs schema v144: an older stamp refuses a document that holds one', () => {
     const fixture = lockedWhole({
       objectKind: 'line',
       x1: 0,
@@ -821,12 +821,12 @@ describe('S07 entity lock on the pinned kernel', () => {
     const saved = JSON.parse(
       JSON.stringify(fixture.manager.document)
     ) as ProjectDocument;
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(138);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(144);
     expect(normalizeDocument(saved)).toEqual(fixture.manager.document);
     expect(() =>
       normalizeDocument({
         ...saved,
-        schemaVersion: 137 as typeof saved.schemaVersion
+        schemaVersion: 143 as typeof saved.schemaVersion
       })
     ).toThrow(/Sketch entity locks/);
   });
