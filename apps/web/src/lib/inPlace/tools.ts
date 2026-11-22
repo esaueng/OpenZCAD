@@ -671,9 +671,9 @@ export type InPlaceRequest =
       size: ParamValue;
       endRadius?: ParamValue;
       radiusLaw?: VariableFilletLaw;
-      /** M03 (v149): per-vertex radii, by picked edge and witness end. */
+      /** M03 (v151): per-vertex radii, by picked edge and witness end. */
       vertexRadii?: FilletVertexRadius[];
-      /** M03 (v151): interior radius stations along every picked edge. */
+      /** M03 (v152): interior radius stations along every picked edge. */
       radiusStations?: FilletRadiusStation[];
       /**
        * With `vertexRadii` or `radiusStations`: how each picked edge ran when
@@ -7272,7 +7272,7 @@ export function edgeRefusedInputs(
     if (lawChanged) inputs.push('Radius');
     field('size', 'R');
     if (!lawChanged) field('endRadius', 'End R');
-    // M03 (v149): the corners, as one input; the bar names each R1, R2, …
+    // M03 (v151): the corners, as one input; the bar names each R1, R2, …
     if (!lawChanged && !sameParam(built.vertexRadii, refused.vertexRadii))
       inputs.push('Corner radii');
     if (!lawChanged && !sameParam(built.radiusStations, refused.radiusStations))
@@ -7358,7 +7358,7 @@ function alongEdge(options: Readonly<Record<string, string>>): boolean {
 }
 
 /**
- * M03 (v151): where the interior radius stands on the first picked edge, at
+ * M03 (v152): where the interior radius stands on the first picked edge, at
  * `fraction` from its witness end 0, and the way into the body there. Null
  * without an open lineage witness to measure along.
  */
@@ -7431,7 +7431,7 @@ const fillet: InPlaceToolSpec = {
       min: 0,
       exclusive: true
     },
-    // M03 (v151): one interior radius along every picked edge, and where it
+    // M03 (v152): one interior radius along every picked edge, and where it
     // stands, under Radius at: Along the edge.
     {
       id: 'midRadius',
@@ -7455,7 +7455,7 @@ const fillet: InPlaceToolSpec = {
         (state.options.law === 'linear' || state.options.law === 'scurve') &&
         state.options.radiusAt === 'along'
     },
-    // M03 (v149): the radius at each picked-edge corner, shown with its
+    // M03 (v151): the radius at each picked-edge corner, shown with its
     // handle there under Radius at: Each corner.
     ...Array.from({ length: FILLET_VERTEX_SLOTS }, (_, index) => ({
       id: filletVertexValueId(index),
@@ -7483,7 +7483,7 @@ const fillet: InPlaceToolSpec = {
       initial: 'constant'
     },
     {
-      // M03 (v149): a variable radius set at each corner of the picked
+      // M03 (v151): a variable radius set at each corner of the picked
       // edges, instead of at each edge's start and end.
       id: 'radiusAt',
       label: 'Radius at',

@@ -1283,13 +1283,13 @@ export function assertDocumentContentCommandSchema(
       if (fillet && fillet.vertexRadii !== undefined)
         assertMinimumProjectSchema(
           document.schemaVersion,
-          149,
+          151,
           'Per-vertex fillet radii'
         );
       if (fillet && fillet.radiusStations !== undefined)
         assertMinimumProjectSchema(
           document.schemaVersion,
-          151,
+          152,
           'Fillet radius stations'
         );
     }
@@ -1337,7 +1337,7 @@ function assertSweepContentSchema(
 }
 
 /**
- * M03 (schema v149): a stored fillet's per-vertex radii need the version and
+ * M03 (schema v151): a stored fillet's per-vertex radii need the version and
  * a well-formed list (a variable law, a reference for each named edge, one
  * entry per edge end).
  */
@@ -1346,12 +1346,12 @@ export function assertFilletContentSchema(
   version: unknown
 ): void {
   if (data.radiusStations !== undefined) {
-    assertMinimumProjectSchema(version, 151, 'Fillet radius stations');
+    assertMinimumProjectSchema(version, 152, 'Fillet radius stations');
     const problem = filletRadiusStationsProblem(data);
     if (problem) throw new Error(problem);
   }
   if (data.vertexRadii === undefined && data.edgeRuns === undefined) return;
-  assertMinimumProjectSchema(version, 149, 'Per-vertex fillet radii');
+  assertMinimumProjectSchema(version, 151, 'Per-vertex fillet radii');
   const problem = filletVertexRadiiProblem(data);
   if (problem) throw new Error(problem);
 }

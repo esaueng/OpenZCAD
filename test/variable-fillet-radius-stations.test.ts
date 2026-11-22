@@ -17,7 +17,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * M03 radius stations (schema v151): a variable-radius fillet with interior
+ * M03 radius stations (schema v152): a variable-radius fillet with interior
  * radii along each edge, at fractions from the edge's witness end 0, the law
  * running between neighbouring stations. Built exactly by the kernel's
  * station law (esaueng/remus#1939): each piece of the law is a cubic, so the
@@ -71,7 +71,7 @@ function runOf(edge: EdgeTopology): boolean {
   return near(1) < near(0);
 }
 
-describe('fillet radius stations (M03, v151)', { timeout: 120_000 }, () => {
+describe('fillet radius stations (M03, v152)', { timeout: 120_000 }, () => {
   it('rounds the edge through its stations exactly, measured from where it was picked', async () => {
     const adapter = await createExactKernelAdapter();
     try {
@@ -130,7 +130,7 @@ describe('fillet radius stations (M03, v151)', { timeout: 120_000 }, () => {
         ).toBeCloseTo(expected, 3);
       }
 
-      // Malformed lists are refused at creation; a stored list needs v151.
+      // Malformed lists are refused at creation; a stored list needs v152.
       const base = {
         name: 'Round',
         targetBodyId: bodyId,

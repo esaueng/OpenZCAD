@@ -3530,9 +3530,9 @@ export function edgeModifierSettings(
   size: number;
   chamferAngleRadians: number | undefined;
   variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
-  /** M03 (v149): resolved per-vertex radii, by selected edge and witness end. */
+  /** M03 (v151): resolved per-vertex radii, by selected edge and witness end. */
   vertexRadii: { edge: number; end: 0 | 1; radius: number }[] | undefined;
-  /** M03 (v151): resolved radius stations, from witness end 0. */
+  /** M03 (v152): resolved radius stations, from witness end 0. */
   radiusStations: { at: number; radius: number }[] | undefined;
   chamferSecondDistance: number | undefined;
 } {
@@ -3587,7 +3587,7 @@ export function edgeModifierSettings(
     assertQualifiedVariableFillet(law, size, endRadius);
     variableRadius = { law, endRadius };
     if (data.vertexRadii !== undefined) {
-      // M03 (v149): checked again here because a document is untrusted.
+      // M03 (v151): checked again here because a document is untrusted.
       const problem = filletVertexRadiiProblem(data);
       if (problem) throw new Error(problem);
       vertexRadii = data.vertexRadii.map((entry) => ({
@@ -3620,7 +3620,7 @@ export function edgeModifierSettings(
     }
   }
   if (data.featureKind === 'fillet' && data.radiusStations !== undefined) {
-    // M03 (v151): checked again here because a document is untrusted.
+    // M03 (v152): checked again here because a document is untrusted.
     if (variableRadius === undefined)
       throw new Error('Fillet radius stations need a variable-radius fillet.');
     const problem = filletRadiusStationsProblem(data);
@@ -4828,7 +4828,7 @@ function buildPatternFeature(
             "its faces are set back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly."
           );
         }
-        // M03 (v149): per-vertex radii name the original edges' ends; a
+        // M03 (v151): per-vertex radii name the original edges' ends; a
         // copy's edges are other edges.
         if (
           settings.vertexRadii !== undefined ||

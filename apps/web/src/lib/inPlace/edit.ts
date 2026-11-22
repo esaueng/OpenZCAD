@@ -916,7 +916,7 @@ export function inPlaceEditSeed(
         if (data.endRadius !== undefined) {
           value('endRadius', data.endRadius);
           seed.options.law = data.radiusLaw ?? 'linear';
-          // M03 (v149): each corner's stored radius into its value, the
+          // M03 (v151): each corner's stored radius into its value, the
           // corners counted as the tool counts them from the same picks.
           // Only when every stored edge is still there in its place: the
           // entries index the stored edge list.
@@ -925,7 +925,7 @@ export function inPlaceEditSeed(
             seed.slots.edges.length === data.edgeHashes.length
               ? filletSelectionVertices(seed.slots.edges)
               : null;
-          // M03 (v151): a fillet holds one interior station, the one the
+          // M03 (v152): a fillet holds one interior station, the one the
           // editor holds.
           if (data.radiusStations?.[0]) {
             seed.options.radiusAt = 'along';
