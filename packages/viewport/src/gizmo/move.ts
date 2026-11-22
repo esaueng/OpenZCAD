@@ -30,6 +30,16 @@ export interface MovePreview {
   /** Preview a new body while leaving the source at its document pose. */
   copy?: boolean;
   /**
+   * M10: Move by two points is picking. `from` is null until the first
+   * point is picked; the second sets the translation to `to − from` and
+   * ends the pick.
+   */
+  pointPick?: {
+    from: { x: number; y: number; z: number } | null;
+    /** What the first pick snapped to (an endpoint, a centre…), or null. */
+    fromKind?: string | null;
+  };
+  /**
    * M10: the point the gizmo stands on and the rotation turns about, in
    * world units. Omitted is the moved thing's centre.
    */
