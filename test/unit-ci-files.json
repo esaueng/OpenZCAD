@@ -181,6 +181,7 @@
     "test/panel-state.test.ts",
     "test/parameter-delete-references.test.ts",
     "test/parameter-rename.test.ts",
+    "test/quantity-registry.test.ts",
     "test/parity/parity.test.ts",
     "test/partial-revolve.test.ts",
     "test/mirror-pattern.test.ts",
