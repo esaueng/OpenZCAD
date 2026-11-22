@@ -1,6 +1,6 @@
 # I03 stored-unit conversion plan
 
-Status: design only (2026-11-22). No code, schema or command lands with this
+Status: design only (2026-11-22); owner decisions recorded in §9. No code, schema or command lands with this
 document. Built on `main` at `6a93cc064` (schema v148).
 
 Roadmap: [I03](../../ROADMAP.md#i03), product note I-4 in
@@ -195,7 +195,7 @@ Imports:
     `offsets`. Rotations, quaternions and times stay as they are.
   - `AssemblyCoupling.ratio` changes only across mixed DOFs: L→ANG
     multiplies by k and ANG→L by 1/k. `offset` follows the driven DOF.
-  - **Open question Q3.**
+  - **Decided (§9 Q3):** document units are authoritative; scale them.
 - **Reference images** (`reference-images.ts:59-79`): plane `offset`,
   `center`, `width` L; the rest are ANG, R or CNT.
 - **Outside `ProjectDocument`:** `ProjectComment.anchor.point` (POS),
@@ -333,7 +333,7 @@ document, then:
 - **Custom-feature scripts** (`script.source`): literals inside a script
   cannot be rewritten. Inputs are rewritten by their declared
   `ScriptInputQuantity`. Refuse conversion when a script is present until
-  the scripting API exposes document units to scripts (Q5).
+  the scripting API exposes document units to scripts (decided, §9 Q5).
 
 ## 3. Persisted references
 
@@ -436,9 +436,10 @@ Risks by target:
 - **→ m** (k = 0.001 from mm): a 5 mm fillet becomes 0.005. `DIRECT_EDIT_TOLERANCE`
   1e-6 then means 1 µm and `GEOMETRY_EPSILON` 1e-9 means 1 nm. Small-feature
   parts (threads with 0.1 mm clearance, which becomes 1e-4) approach the
-  boolean and tangency bands. **Recommendation:** allow →m conversion only
-  when the converted rebuild passes §6 verification, and show a warning when
-  the smallest authored length falls below 1e-3 in the target unit.
+  boolean and tangency bands. **Decided (§9 Q1):** no conversion to or from
+  `m` in I03. When relative tolerances land, revisit with §6 verification
+  and a warning when the smallest authored length falls below 1e-3 in the
+  target unit.
 - **m → mm** (k = 1000): large models get large coordinates. That is fine
   for a double, but `MAX_REFERENCE_IMAGE_EXTENT` and the other caps "in
   document units" may refuse. Gather the caps into the registry and
@@ -500,7 +501,7 @@ After `units := B`:
 - otherwise keep it, so a document shown in cm keeps showing cm;
 - a document that showed lengths in A without the field now gets
   `displayUnits = A`? **No.** The I-4 intent is "the document is now in B".
-  Show B and let the owner switch display back. Ask the owner (Q2).
+  Show B and let the owner switch display back (decided, §9 Q2).
 
 `assertDisplayUnitsSchema` and the v148 guards stay as they are.
 
@@ -543,7 +544,7 @@ Tests:
 
 - **Unit tests** (`test/units-convert.test.ts`): every row of the registry,
   each §2.2 edge case, numeral canonicalization, wrapper unwrap and refusals.
-- **Round trip:** mm→in→mm and mm→m→mm restore the expression text and
+- **Round trip:** mm→in→mm and mm→cm→mm restore the expression text and
   numbers byte for byte. Witness hashes match the original after rebuild.
 - **Property test over `test/parity/scenarios.ts`:** every scenario,
   converted to each of cm, m and inch, passes oracles 1–3. Add this as a
@@ -563,7 +564,7 @@ Each phase is one small PR and independently useful.
 
 | # | PR | Schema | Notes |
 | --- | --- | --- | --- |
-| 0 | Fix gear `outsideDiameter` registry tag (`'number'` → `'length'`) + regression test | no | independent bug; affects display units and F05 today |
+| 0 | Fix gear `outsideDiameter` registry tag (`'number'` → `'length'`) + regression test | no | done in #1935 |
 | 1 | Quantity registry (§1.4): typed map, runtime coverage test, `rewriteNodeExpressions` derived from it | no | prerequisite; also lets display units cover the Inspector grids, drawings and the parameter table (open I03 read-out gaps) |
 | 2 | `convertDocumentUnits` pure function + expression rule D + numeral canonicalization + field oracle; tests only, not wired | no | the heart; reviewable in isolation |
 | 3 | `imported-mesh.payloadUnits` + kernel scale on load | **yes** (claim) | backward compatible; independent of 2 |
@@ -584,7 +585,7 @@ user-visible risk.
   splits differing in inches): the reference mapping refuses rather than
   guesses. Expect some real documents to be refused. Measure the refusal
   rate on the parity corpus in phase 4 before committing to the UI.
-- **m targets:** tolerance bands (§4); warning plus oracle.
+- **m targets:** out of scope (§9 Q1); revisit after relative tolerances.
 - **Wrapped expressions look odd** (`(w*2) / 25.4`). This is the honest
   form of "this used to mean millimetres". The review dialog lists them.
   A later "simplify" action may offer `w*2 * 1 mm` once all resolvers take
@@ -594,24 +595,31 @@ user-visible risk.
 - **Comments and camera:** server-side comment anchors need the same
   scaling. A missed anchor only floats a pin; it is not data loss.
 
-## 9. Open questions for the owner
+## 9. Owner decisions (2026-11-22)
 
-1. **Scope of targets:** allow conversion to `m` at all, or only
-   mm/cm/inch until the kernel tolerances are relative?
-2. **Display after conversion:** should a converted document show the new
-   stored unit (recommended), or keep showing the old one via
-   `displayUnits`?
-3. **Assembly units:** `assembly.ts` says millimetres, but the UI treats
-   them as document units. Which is authoritative? This decides whether
-   assembly values scale.
-4. **Typed-parameter reinterpretation** (`round(width)`): refuse (the
-   recommendation), or convert and list as a warning?
-5. **Custom features:** refuse conversion when a script is present, or
-   expose `documentUnits` to scripts first (L15 change)?
-6. **Default action:** convert in place with a checkpoint (recommended), or
-   always convert a copy?
+1. **Targets:** mm, cm and inch only. Conversion to or from `m` is out of
+   scope until the kernel tolerances are relative to the model (K-row
+   work, §4); display units already cover reading in metres.
+2. **Display after conversion:** show the new stored unit. A document whose
+   `displayUnits` names a third unit keeps it; one equal to the new stored
+   unit is cleared (§5.4).
+3. **Assembly units:** document units are authoritative, as the UI and the
+   kernel placement path already treat them. Assembly values scale with the
+   rest of the document, and the `assembly.ts` header and the `'mm'` DOF
+   name are corrected. Before phase 2, confirm that no older saved file
+   stored assembly values in millimetres independently of `units`; if one
+   did, stop and bring it back to the owner.
+4. **`round(width)` and similar:** refuse the conversion and name the
+   feature, so the owner edits the expression first (§2.2). No
+   convert-with-warning path.
+5. **Custom-feature scripts:** refuse conversion when a script is present.
+   Exposing document units to scripts is a separate L15 change, not part
+   of I03.
+6. **Default action:** convert in place after a safety checkpoint, as one
+   undoable step; "Convert a copy" stays as the second button.
 7. **Drawing tolerances without `format.units`:** pin the sheet to the old
-   unit (recommended: printed sheets stay identical), or scale the values?
+   unit so printed sheets stay identical; the review screen lists each
+   pinned sheet.
 
 ## Not verified in code
 
