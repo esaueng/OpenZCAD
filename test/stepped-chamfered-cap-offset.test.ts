@@ -368,7 +368,8 @@ describe('local chamfered end offsets on stepped imported bodies', () => {
           tryExactLocalChamferCapOffset(kernel, solid, face, offset)
         ).toThrow(
           expect.objectContaining({
-            message: expect.stringMatching(/no cylindrical wall/),
+            message:
+              'That distance would leave no cylindrical wall before the shoulder.',
             family: 'direct-edit',
             category: 'invalid_topology',
             kernelCode: 'offset_collapses_cylindrical_wall'
