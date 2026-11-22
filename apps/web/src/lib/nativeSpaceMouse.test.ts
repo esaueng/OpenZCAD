@@ -1,4 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const tauri = vi.hoisted(() => ({
+  invoke: vi.fn(async (command: string): Promise<unknown> =>
+    command === 'wired_space_mouse_page' ? 7 : undefined
+  ),
+  listen: vi.fn(async () => () => {})
+}));
+vi.mock('@tauri-apps/api/core', () => ({ invoke: tauri.invoke }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: tauri.listen }));
 import { nativeSpaceMouseHid } from './nativeSpaceMouse';
 import { SpaceMouseHub } from './spaceMouse';
 
@@ -106,5 +115,26 @@ describe('native SpaceMouse adapter', () => {
     expect(enable).toHaveBeenCalledTimes(2);
     expect(hub.getStatus()).toMatchObject({ state: 'connected' });
     await hub.disconnect();
+  });
+
+  it('tags each capture request with the page load that sent it', async () => {
+    const hub = new SpaceMouseHub(nativeSpaceMouseHid());
+    await hub.connect();
+    await hub.disconnect();
+    // The host refuses a Connect whose page load has since been replaced.
+    expect(
+      tauri.invoke.mock.calls.filter(
+        ([command]) => command === 'wired_space_mouse_page'
+      )
+    ).toHaveLength(1);
+    expect(tauri.invoke).toHaveBeenCalledWith('set_wired_space_mouse', {
+      enabled: true,
+      page: 7
+    });
+    expect(tauri.invoke).toHaveBeenLastCalledWith('set_wired_space_mouse', {
+      enabled: false,
+      page: 7
+    });
+    hub.dispose();
   });
 });

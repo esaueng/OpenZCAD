@@ -267,15 +267,32 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 #[tauri::command]
-async fn set_wired_space_mouse(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+async fn set_wired_space_mouse(
+    window: tauri::WebviewWindow,
+    enabled: bool,
+    page: u64,
+) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        spacemouse::set_enabled(window, enabled).await
+        spacemouse::set_enabled(window, enabled, page).await
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (window, enabled);
+        let _ = (window, enabled, page);
         Err("Wired SpaceMouse input is only available on macOS.".into())
+    }
+}
+
+/// The main webview's page-load count, which tags this page's Connect.
+#[tauri::command]
+fn wired_space_mouse_page() -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        spacemouse::page()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        0
     }
 }
 
@@ -291,6 +308,7 @@ pub fn run() {
             if _webview.label() == "main"
                 && _payload.event() == tauri::webview::PageLoadEvent::Started
             {
+                spacemouse::page_started();
                 let app = _webview.app_handle().clone();
                 let owner = app.clone();
                 let _ = app.run_on_main_thread(move || spacemouse::close(&owner));
@@ -334,6 +352,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_cad_file,
             set_wired_space_mouse,
+            wired_space_mouse_page,
             save_cad_file,
             save_cad_binary_file,
             open_in_slicer,

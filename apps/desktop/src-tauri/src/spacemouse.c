@@ -28,19 +28,31 @@ static void input_report(void *context, IOReturn result, void *sender,
     }
 }
 
+// Losing the captured device ends the capture. A device that comes back is
+// not seized silently: if the driver claimed it first, that exclusive open
+// would fail with no callback to report it, so the user reconnects instead.
 static void removed(void *context, IOReturn result, void *sender,
                     IOHIDDeviceRef device) {
     (void)result;
     (void)sender;
     SpaceMouse *reader = context;
-    if (reader->device == device) {
-        CFRelease(reader->device);
-        reader->device = NULL;
+    if (!reader->device || reader->device == device) {
+        if (reader->device) {
+            CFRelease(reader->device);
+            reader->device = NULL;
+        }
         reader->sink(reader->context, NULL, 0);
     }
 }
 
-SpaceMouse *openzcad_spacemouse_start(ReportSink sink, void *context) {
+enum {
+    OPENZCAD_SPACEMOUSE_OK = 0,
+    OPENZCAD_SPACEMOUSE_FAILED = 1,
+    OPENZCAD_SPACEMOUSE_ABSENT = 2,
+};
+
+SpaceMouse *openzcad_spacemouse_start(ReportSink sink, void *context, int *status) {
+    *status = OPENZCAD_SPACEMOUSE_FAILED;
     SpaceMouse *reader = calloc(1, sizeof(*reader));
     if (!reader) return NULL;
     reader->sink = sink;
@@ -77,7 +89,20 @@ SpaceMouse *openzcad_spacemouse_start(ReportSink sink, void *context) {
         free(reader);
         return NULL;
     }
+    // With no matching device present the open succeeds without seizing
+    // anything, and a later exclusive open on hot-plug could fail unseen.
+    CFSetRef devices = IOHIDManagerCopyDevices(reader->manager);
+    CFIndex count = devices ? CFSetGetCount(devices) : 0;
+    if (devices) CFRelease(devices);
+    if (count == 0) {
+        IOHIDManagerClose(reader->manager, kIOHIDOptionsTypeSeizeDevice);
+        CFRelease(reader->manager);
+        free(reader);
+        *status = OPENZCAD_SPACEMOUSE_ABSENT;
+        return NULL;
+    }
     IOHIDManagerScheduleWithRunLoop(reader->manager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
+    *status = OPENZCAD_SPACEMOUSE_OK;
     return reader;
 }
 

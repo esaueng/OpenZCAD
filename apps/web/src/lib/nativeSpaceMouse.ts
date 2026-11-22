@@ -15,8 +15,23 @@ interface NativeSpaceMouseBridge {
   enable(enabled: boolean): Promise<void>;
 }
 
+// The desktop host counts main-webview page loads. A Connect carries the count
+// this page read, so one still in flight when the page reloads is refused
+// instead of capturing the device for a page that shows it disconnected.
+let page: Promise<number> | undefined;
+
+async function pageLoad(): Promise<number> {
+  const { invoke } = await import('@tauri-apps/api/core');
+  page ??= invoke<number>('wired_space_mouse_page').catch((error: unknown) => {
+    page = undefined;
+    throw error;
+  });
+  return page;
+}
+
 const bridge: NativeSpaceMouseBridge = {
   async listen(receive) {
+    await pageLoad();
     const { listen } = await import('@tauri-apps/api/event');
     return listen<NativeReport>(
       'openzcad://spacemouse',
@@ -26,7 +41,7 @@ const bridge: NativeSpaceMouseBridge = {
   },
   async enable(enabled) {
     const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('set_wired_space_mouse', { enabled });
+    await invoke('set_wired_space_mouse', { enabled, page: await pageLoad() });
   }
 };
 

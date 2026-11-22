@@ -1,8 +1,9 @@
 use serde::Serialize;
 use std::{
     cell::RefCell,
-    ffi::c_void,
+    ffi::{c_int, c_void},
     ptr::NonNull,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, EventTarget, Manager};
@@ -52,9 +53,12 @@ extern "C" {
     fn openzcad_spacemouse_start(
         callback: extern "C" fn(*mut c_void, *const u8, usize),
         context: *mut c_void,
+        status: *mut c_int,
     ) -> *mut c_void;
     fn openzcad_spacemouse_stop(handle: *mut c_void);
 }
+
+const ABSENT: c_int = 2;
 
 struct SpaceMouse {
     handle: NonNull<c_void>,
@@ -62,7 +66,7 @@ struct SpaceMouse {
 }
 
 impl SpaceMouse {
-    fn start(app: AppHandle) -> Option<Self> {
+    fn start(app: AppHandle) -> Result<Self, String> {
         let context = Box::into_raw(Box::new(Reader {
             app,
             translation: Stream::default(),
@@ -70,12 +74,17 @@ impl SpaceMouse {
         }));
         // Tauri calls Ready and Exit on the main run loop, which owns the C
         // reader and serializes its callbacks with teardown.
-        let handle = unsafe { openzcad_spacemouse_start(receive, context.cast()) };
+        let mut status: c_int = 0;
+        let handle = unsafe { openzcad_spacemouse_start(receive, context.cast(), &mut status) };
         if let Some(handle) = NonNull::new(handle) {
-            Some(Self { handle, context })
+            Ok(Self { handle, context })
         } else {
             unsafe { drop(Box::from_raw(context)) };
-            None
+            Err(if status == ABSENT {
+                "Plug in the wired SpaceMouse Pro, then connect it again.".into()
+            } else {
+                "Could not capture the wired SpaceMouse Pro.".into()
+            })
         }
     }
 }
@@ -96,9 +105,23 @@ fn emit(app: &AppHandle, report: Report) {
 extern "C" fn receive(context: *mut c_void, bytes: *const u8, length: usize) {
     let reader = unsafe { &mut *context.cast::<Reader>() };
     if length == 0 {
+        // The captured device went away: stop held motion, tell Settings,
+        // and end the capture. This runs inside the IOHID callback on the
+        // main thread, where run_on_main_thread would run synchronously and
+        // free this reader under its own callback, so post the teardown from
+        // another thread to run on a later turn of the main loop.
         reader.translation = Stream::default();
         reader.rotation = Stream::default();
         emit(&reader.app, Report::Reset);
+        emit(
+            &reader.app,
+            Report::Error("The wired SpaceMouse Pro was disconnected.".into()),
+        );
+        let app = reader.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let owner = app.clone();
+            let _ = app.run_on_main_thread(move || close(&owner));
+        });
     } else if (2..=7).contains(&length) {
         // C validates the report ID and owns the buffer for this callback.
         // Short button bitmaps represent zero for the missing high bits.
@@ -128,10 +151,7 @@ impl Capture {
     fn update(&mut self, app: &AppHandle, focused: bool) -> Result<(), String> {
         if self.enabled && focused {
             if self.reader.is_none() {
-                self.reader = SpaceMouse::start(app.clone());
-                if self.reader.is_none() {
-                    return Err("Could not capture the wired SpaceMouse Pro.".into());
-                }
+                self.reader = Some(SpaceMouse::start(app.clone())?);
             }
         } else if let Some(reader) = self.reader.take() {
             drop(reader);
@@ -141,18 +161,45 @@ impl Capture {
     }
 }
 
+// Counts the main webview's page loads. It is bumped synchronously when a load
+// starts, so a Connect sent by the page being replaced cannot capture the
+// device after that page's teardown released it.
+static PAGE: AtomicU64 = AtomicU64::new(0);
+
+pub fn page_started() {
+    PAGE.fetch_add(1, Ordering::SeqCst);
+}
+
+pub fn page() -> u64 {
+    PAGE.load(Ordering::SeqCst)
+}
+
+fn stale_enable(enabled: bool, page: u64, current: u64) -> bool {
+    enabled && page != current
+}
+
 // IOHID and its callback state belong to the main run loop.
 thread_local! {
     static CAPTURE: RefCell<Capture> = RefCell::new(Capture::default());
 }
 
-pub async fn set_enabled(window: tauri::WebviewWindow, enabled: bool) -> Result<(), String> {
+pub async fn set_enabled(
+    window: tauri::WebviewWindow,
+    enabled: bool,
+    page: u64,
+) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Only the main window can capture the SpaceMouse.".into());
     }
     let app = window.app_handle().clone();
     let (send, done) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
+        if stale_enable(enabled, page, PAGE.load(Ordering::SeqCst)) {
+            let _ = send.send(Err(
+                "The page reloaded before the SpaceMouse connected.".into()
+            ));
+            return;
+        }
         let result = CAPTURE.with(|capture| {
             let mut capture = capture.borrow_mut();
             capture.enabled = enabled;
@@ -202,5 +249,12 @@ mod tests {
         assert!(stream.changed_or_held(held, now + HEARTBEAT));
         assert!(stream.changed_or_held(neutral, now + HEARTBEAT));
         assert!(!stream.changed_or_held(neutral, now + HEARTBEAT * 2));
+    }
+
+    #[test]
+    fn refuses_a_connect_from_a_replaced_page_but_always_allows_release() {
+        assert!(!stale_enable(true, 3, 3));
+        assert!(stale_enable(true, 2, 3));
+        assert!(!stale_enable(false, 2, 3));
     }
 }

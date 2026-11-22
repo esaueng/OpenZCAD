@@ -55,7 +55,10 @@ OpenZCAD captures the device through macOS IOHID while its main window
 is in front and releases it when you switch apps or choose Disconnect.
 This prevents the cap from moving the macOS cursor in OpenZCAD.
 If capture fails, quit 3DconnexionHelper or other apps using the device,
-then try Connect again. Connect is required again after an app restart.
+then try Connect again. Connect is required again after an app restart
+or a reload. Unplugging the device ends the capture and Settings shows it
+disconnected; plug it back in and choose Connect. Returning to OpenZCAD
+with the device unplugged shows the same error instead of waiting for it.
 
 The desktop reader uses the same navigation settings and buttons as
 browser SpaceMouse input. In a sketch, the cap still pans and zooms
