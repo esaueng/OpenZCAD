@@ -440,7 +440,9 @@ export function SelectionReadout({
   label: readonly LabelSegment[] | null;
   detail?: string | undefined;
   /** When `detail` is a diameter: a radius drag rewrites it in place. */
-  detailDiameter?: { diameter: number; units: string } | undefined;
+  detailDiameter?:
+    | { diameter: number; units: string; scale?: number }
+    | undefined;
 }) {
   const nameRef = useRef<HTMLSpanElement>(null);
   // The name ends in an ellipsis only when it and the measurement fill the
@@ -493,7 +495,11 @@ export function SelectionReadout({
                 [LIVE_DIAMETER_DETAIL_ATTRIBUTE]: String(
                   detailDiameter.diameter
                 ),
-                'data-units': detailDiameter.units
+                'data-units': detailDiameter.units,
+                ...(detailDiameter.scale !== undefined &&
+                detailDiameter.scale !== 1
+                  ? { 'data-unit-scale': String(detailDiameter.scale) }
+                  : {})
               }
             : {})}
         >

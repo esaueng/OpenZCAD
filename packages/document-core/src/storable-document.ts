@@ -15,6 +15,7 @@ import {
   isRevisionRecord,
   objectFolderSetError,
   printClearanceError,
+  displayUnitsError,
   configurationSetError,
   modelPmiSetError,
   assemblySetError,
@@ -291,6 +292,12 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
       record.printClearance === undefined
         ? null
         : printClearanceError(record.printClearance)
+    ],
+    [
+      'displayUnits',
+      record.displayUnits === undefined
+        ? null
+        : displayUnitsError(record.displayUnits)
     ],
     [
       'configurations',
