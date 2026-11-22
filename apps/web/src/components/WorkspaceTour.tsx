@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FocusEvent as ReactFocusEvent
@@ -93,6 +94,13 @@ export function WorkspaceTour({
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
   const cardRef = useRef<HTMLElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * The step's text scrolls in a card capped on a short phone (#1953). It
+   * then takes the keyboard too: Safari gives a scroller no stop of its
+   * own, and Tab went past text still out of view to Next (PR review).
+   */
+  const [textScrolls, setTextScrolls] = useState(false);
   /** Where the keyboard came from when it entered the card. */
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
@@ -198,6 +206,21 @@ export function WorkspaceTour({
   // the card rather than over its Next and Finish (UX-001).
   useStageFootClaim(cardRef, '--workspace-tour-claim', !finished && !!step);
 
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content || minimized) {
+      setTextScrolls(false);
+      return;
+    }
+    const measure = () =>
+      setTextScrolls(content.scrollHeight > content.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [minimized, index]);
+
   if (finished || !step) {
     return null;
   }
@@ -270,7 +293,14 @@ export function WorkspaceTour({
       )}
       {/* A step can change on its own (it advances when its action
           happens), so the new step is announced. */}
-      <div hidden={minimized} aria-live="polite" aria-atomic="true">
+      <div
+        ref={contentRef}
+        className="workspace-tour-content"
+        hidden={minimized}
+        tabIndex={textScrolls ? 0 : undefined}
+        aria-live="polite"
+        aria-atomic="true"
+      >
         <h2 className="workspace-tour-title">{step.title}</h2>
         <p className="workspace-tour-body">
           {tourStepBody(

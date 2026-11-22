@@ -304,7 +304,8 @@
     right: var(--lane-end);
     width: auto;
     max-width: none;
-    bottom: 190px;
+    --tour-bottom: 190px;
+    bottom: var(--tour-bottom);
     padding: var(--sp-2) var(--sp-3);
   }
 

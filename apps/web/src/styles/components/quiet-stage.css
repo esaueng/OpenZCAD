@@ -1374,7 +1374,9 @@
 
 @container viewer-area (max-width: 1239px) {
   .workspace.column-layout .workspace-tour {
-    bottom: 180px;
+    --tour-bottom: 180px;
+
+    bottom: var(--tour-bottom);
   }
 }
 
@@ -1397,9 +1399,11 @@
    now (#1947), so it stands above the bar, by the height the bar
    publishes (WorkspaceReadout). */
 .workspace.column-layout .viewer-area:has(.in-place-command) .workspace-tour {
-  bottom: calc(
+  --tour-bottom: calc(
     var(--lane-base) + var(--in-place-command-h, 38px) + var(--island-gap)
   );
+
+  bottom: var(--tour-bottom);
 }
 
 /* A command's Options open up from the bar's left edge, the corner the
@@ -3642,6 +3646,68 @@ button.command-rail.is-suggested {
       calc(var(--stage-corner-h) + var(--island-gap)),
       calc(var(--stage-foot-claim) + var(--island-gap))
     );
+  }
+
+  /* On a phone the expanded card reached up the whole stage over a tall
+     in-place bar: the right lane, which ends above it, kept no height, the
+     open Objects panel went to 2 px, and the card ran under the top islands
+     (#1953). It ends below the stage's top, and while the lane holds a
+     panel or a card it leaves that lane room to show one; its step text
+     scrolls between its header and Next. */
+  .workspace.column-layout .workspace-tour:not(.is-minimized) {
+    flex-direction: column;
+    max-height: calc(
+      100% - var(--stage-top) - var(--tour-bottom, 180px) - var(--island-gap)
+    );
+  }
+
+  .workspace.column-layout
+    .viewer-area:has(.stage-right > *)
+    .workspace-tour:not(.is-minimized) {
+    /* Never under its header and Next, though: over a bar taller still,
+       the lane gives up its reserve first, and the stage's top holds. */
+    max-height: min(
+      calc(
+        100% - var(--stage-top) - var(--tour-bottom, 180px) - var(--island-gap)
+      ),
+      max(
+        var(--tour-least-h),
+        calc(
+          100% - var(--stage-top) - var(--tour-bottom, 180px) -
+            var(--tour-lane-reserve)
+        )
+      )
+    );
+  }
+
+  .workspace.column-layout {
+    /* The lane's least: a panel's header and the row under it (Hide
+       panels), with the gap above the card. */
+    --tour-lane-reserve: 84px;
+    /* The card's least: its header and Next (126 px with their margins and
+       the padding on touch) and its title over two lines of the step. At
+       116 px the step had no line at all (PR review); the user opened the
+       card to read it, so the lane gives way first. */
+    --tour-least-h: 190px;
+  }
+
+  /* Not in a short window, where tour.css hides the card outright. */
+  @media (min-height: 481px) {
+    .workspace.column-layout .workspace-tour:not(.is-minimized) {
+      display: flex;
+    }
+  }
+
+  .workspace-tour-content {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .workspace-tour-head,
+  .workspace-tour-actions {
+    flex: 0 0 auto;
   }
 
   /* A card holds its height, so in the lane an expanded guide leaves (Expand
