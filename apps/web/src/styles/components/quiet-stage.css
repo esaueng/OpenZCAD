@@ -3681,10 +3681,14 @@ button.command-rail.is-suggested {
   }
 
   .workspace.column-layout {
-    /* The lane's least: a panel's header and two rows. */
-    --tour-lane-reserve: 128px;
-    /* The card's least: its header and Next, 44 px each on touch. */
-    --tour-least-h: 116px;
+    /* The lane's least: a panel's header and the row under it (Hide
+       panels), with the gap above the card. */
+    --tour-lane-reserve: 84px;
+    /* The card's least: its header and Next (126 px with their margins and
+       the padding on touch) and its title over two lines of the step. At
+       116 px the step had no line at all (PR review); the user opened the
+       card to read it, so the lane gives way first. */
+    --tour-least-h: 190px;
   }
 
   /* Not in a short window, where tour.css hides the card outright. */

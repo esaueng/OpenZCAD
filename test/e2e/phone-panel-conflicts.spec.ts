@@ -329,8 +329,8 @@ test('the expanded guide leaves an open panel room over an in-place bar (#1953)'
   const card = (await tour.boundingBox())!;
   const lane = (await panel.boundingBox())!;
   const top = (await page.locator('.topbar').boundingBox())!;
-  // The panel keeps its header and rows, above the card.
-  expect(lane.height).toBeGreaterThanOrEqual(100);
+  // The panel keeps its header and the row under it, above the card.
+  expect(lane.height).toBeGreaterThanOrEqual(70);
   expect(lane.y + lane.height).toBeLessThanOrEqual(card.y + 0.5);
   // The card stays on the stage, below the top islands.
   expect(card.y).toBeGreaterThanOrEqual(top.y + top.height);
@@ -341,15 +341,25 @@ test('the expanded guide leaves an open panel room over an in-place bar (#1953)'
   ]) {
     await expect.poll(() => reachable(control)).toBe(true);
   }
-  // The step's text scrolls inside the card rather than being cut.
+  // The step shows its title and two lines at least, Next whole under them,
+  // and what does not fit scrolls (PR review: at a 116 px floor the text
+  // had no height at all, and Next ran past the card).
   const content = tour.locator('.workspace-tour-content');
-  expect(
-    await content.evaluate(
-      (element) =>
-        getComputedStyle(element).overflowY === 'auto' &&
-        element.scrollHeight >= element.clientHeight
-    )
-  ).toBe(true);
+  const text = await content.evaluate((element) => ({
+    shown: element.clientHeight,
+    scroll: getComputedStyle(element).overflowY,
+    whole: element.scrollHeight
+  }));
+  expect(text.shown).toBeGreaterThanOrEqual(60);
+  expect(text.scroll).toBe('auto');
+  const next = (await tour
+    .getByRole('button', { name: 'Next' })
+    .boundingBox())!;
+  expect(next.y + next.height).toBeLessThanOrEqual(card.y + card.height + 0.5);
+  // Text that scrolls takes a keyboard stop, as Safari gives none.
+  if (text.whole > text.shown + 1) {
+    await expect(content).toHaveAttribute('tabindex', '0');
+  }
 });
 
 const PIVOT: AssemblyFrame = {
