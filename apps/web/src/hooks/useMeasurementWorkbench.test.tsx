@@ -668,10 +668,10 @@ describe('measurement annotations', () => {
         point: { x: 2, y: 3, z: 5 }
       });
     });
-    // Picking the same face again does not compare it with itself.
+    // Picking the same spot again does not compare it with itself.
     act(() => {
       result.current.handleMeasurementPick(faceSelection, false, {
-        point: { x: 4, y: 4, z: 5 }
+        point: { x: 2, y: 3, z: 5 }
       });
     });
     expect(result.current.measurementSession.second).toBeNull();
@@ -687,8 +687,9 @@ describe('measurement annotations', () => {
     // Two parallel faces read as the gap between them first.
     expect(session.primary?.kind).toBe('parallel');
     expect(session.primary?.measurement.result.value).toBeCloseTo(5);
-    expect(kinds).toContain('distance');
-    expect(kinds).toContain('angle');
+    // The centroids' distance equals the gap, so it is listed once, as the
+    // gap.
+    expect(kinds).toEqual(['parallel', 'angle']);
     expect(kinds).not.toContain('single');
     // Every figure is listed once.
     const values = session.readings.map(
@@ -711,6 +712,75 @@ describe('measurement annotations', () => {
     act(() => {
       expect(result.current.keepMeasurementReading()).toBe(false);
     });
+  });
+
+  it('compares two points of one face, but not one point with itself', async () => {
+    const doc = createProjectDocument('Measure L', toUserId('user_measure_l'));
+    const body = twoFaceBody();
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(
+        input({
+          doc,
+          modelingLocked: true,
+          representations: { 'body-1': body },
+          renderedRepresentations: { 'body-1': body },
+          viewerBodies: [body]
+        })
+      )
+    );
+    await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
+    act(() => result.current.setMeasuring(true));
+    const pickAt = (x: number) =>
+      act(() => {
+        result.current.handleMeasurementPick(faceSelection, false, {
+          point: { x, y: 3, z: 5 }
+        });
+      });
+    pickAt(2);
+    pickAt(2);
+    expect(result.current.measurementSession.second).toBeNull();
+    pickAt(8);
+    const session = result.current.measurementSession;
+    expect(session.second).not.toBeNull();
+    expect(session.primary?.kind).toBe('distance');
+    expect(session.primary?.measurement.result.value).toBeCloseTo(6);
+  });
+
+  it('reads named points as a distance first, even where it equals the gap (M13)', async () => {
+    const doc = createProjectDocument('Measure M', toUserId('user_measure_m'));
+    const body = twoFaceBody();
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(
+        input({
+          doc,
+          modelingLocked: true,
+          representations: { 'body-1': body },
+          renderedRepresentations: { 'body-1': body },
+          viewerBodies: [body]
+        })
+      )
+    );
+    await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
+    act(() => {
+      result.current.setMeasuring(true);
+      result.current.setMeasurementPointKind('centroid');
+    });
+    // Points straight above one another: their distance equals the gap.
+    for (const [selection, z] of [
+      [faceSelection, 5],
+      [bottomSelection, 0]
+    ] as const) {
+      act(() => {
+        result.current.handleMeasurementPick(selection, false, {
+          point: { x: 5, y: 10, z }
+        });
+      });
+    }
+    const session = result.current.measurementSession;
+    expect(session.primary?.kind).toBe('distance');
+    expect(session.readings.map((reading) => reading.kind)).not.toContain(
+      'parallel'
+    );
   });
 
   it('starts over on a third pick', async () => {
@@ -783,6 +853,7 @@ function twoFaceBody(): BodyRepresentation {
             surfaceType: 'plane',
             area: 200,
             center: { x: 5, y: 10, z: 5 },
+            centroid: { x: 5, y: 10, z: 5 },
             normal: { x: 0, y: 0, z: 1 }
           }
         },
@@ -795,6 +866,7 @@ function twoFaceBody(): BodyRepresentation {
             surfaceType: 'plane',
             area: 200,
             center: { x: 5, y: 10, z: 0 },
+            centroid: { x: 5, y: 10, z: 0 },
             normal: { x: 0, y: 0, z: -1 }
           }
         }

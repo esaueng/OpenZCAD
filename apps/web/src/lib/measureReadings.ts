@@ -107,13 +107,57 @@ const PAIR_TITLES: Record<(typeof PAIR_ORDER)[number], string> = {
 };
 
 /** Whether two picks name the same entity of the same body. */
-export function samePickEntity(first: MeasurePick, second: MeasurePick) {
+function samePickEntity(first: MeasurePick, second: MeasurePick) {
   const a = first.selection;
   const b = second.selection;
   return (
     a.bodyId === b.bodyId &&
     a.kind === b.kind &&
     (a.kind === 'body' || a.topologyId === b.topologyId)
+  );
+}
+
+/**
+ * Whether a second pick is the first one again. Two different points of one
+ * entity are two picks: an edge's two snapped ends, or two clicks on one
+ * face, which Distance measures between. Only the same entity at the same
+ * point (or with no point to tell them apart) is a repeat.
+ */
+export function samePick(
+  api: typeof MeasurementModule,
+  input: MeasureReadingsInput,
+  first: MeasurePick,
+  second: MeasurePick
+): boolean {
+  if (!samePickEntity(first, second)) return false;
+  const body = input.bodies[first.selection.bodyId];
+  if (!body) return true;
+  const a = distanceTarget(api, body, first, input.pointKind)?.point;
+  const b = distanceTarget(api, body, second, input.pointKind)?.point;
+  if (!a || !b) return true;
+  const size = Math.max(
+    body.bbox.max.x - body.bbox.min.x,
+    body.bbox.max.y - body.bbox.min.y,
+    body.bbox.max.z - body.bbox.min.z,
+    1
+  );
+  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) <= size * 1e-9;
+}
+
+/**
+ * Whether either pick names an explicit point: a snap glyph's point, or a
+ * chosen point kind. Distance between those points is then what was asked
+ * for, ahead of any relation between the entities they lie on.
+ */
+function explicitPoints(
+  input: MeasureReadingsInput,
+  first: MeasurePick,
+  second: MeasurePick
+): boolean {
+  return (
+    input.pointKind !== 'auto' ||
+    Boolean(first.snap?.source) ||
+    Boolean(second.snap?.source)
   );
 }
 
@@ -184,7 +228,8 @@ function singleTitle(measurement: Measurement): string {
     case 'face-area':
       return 'Area';
     case 'body':
-      return 'Volume';
+      // The figure is the body's extents; its volume is the detail line.
+      return 'Size';
     default:
       return 'Measurement';
   }
@@ -355,7 +400,19 @@ export function measureReadings(
   }
   const readings: MeasureReading[] = [];
   let distanceRefusal: string | null = null;
-  for (const kind of PAIR_ORDER) {
+  // Explicit points put Distance first, so a gap that happens to equal it
+  // never stands in for the distance between the points that were named.
+  // Two points of one entity relate only by the distance between them: a
+  // face is parallel to itself at a gap of nothing.
+  const order = samePickEntity(first, second)
+    ? (['distance'] as const)
+    : explicitPoints(input, first, second)
+      ? ([
+          'distance',
+          ...PAIR_ORDER.filter((kind) => kind !== 'distance')
+        ] as const)
+      : PAIR_ORDER;
+  for (const kind of order) {
     const reading = pairReading(api, input, kind, first, second);
     if (!reading) continue;
     if ('refused' in reading) {

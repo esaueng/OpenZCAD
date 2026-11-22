@@ -35551,8 +35551,21 @@ export function App() {
           return;
         case 'Enter':
           // Keeps the reading the Measure card shows. With nothing to keep
-          // the key is left to whoever else wants it.
-          if (measuring && !typing && keepMeasurementReading()) {
+          // the key is left to whoever else wants it, and so is a focused
+          // control: Enter on an alternative reading chooses it, on Copy
+          // copies. Only the reading already chosen passes Enter on to Keep,
+          // so choose-then-Enter keeps what was chosen.
+          if (
+            measuring &&
+            !typing &&
+            !(
+              target?.closest('button, a, select, [role="button"]') &&
+              !target.closest(
+                '.measurement-readings button[aria-pressed="true"]'
+              )
+            ) &&
+            keepMeasurementReading()
+          ) {
             event.preventDefault();
             return;
           }

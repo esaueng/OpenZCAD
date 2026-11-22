@@ -474,6 +474,44 @@ test(
 );
 
 /**
+ * Enter keeps the reading shown, but never steals a focused control's key:
+ * Enter on another reading chooses it, and only then does Enter keep it.
+ */
+test('Enter on a focused reading chooses it, and Enter again keeps it', async ({
+  page
+}) => {
+  await createBox(page, 'Measure Enter Focus');
+
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  const workbench = page.getByLabel('Measurement workbench');
+  await setSelectionFilter(page, 'Edge');
+  const first = await locateEdge(page);
+  const second = await locateEdge(page, { exclude: [first.topologyId] });
+  await page.mouse.click(first.x, first.y);
+  await page.mouse.click(second.x, second.y);
+
+  const other = workbench
+    .getByRole('group', { name: 'Other readings' })
+    .getByRole('button')
+    .nth(1);
+  // The first reading is the one shown; the second waits to be chosen.
+  await expect(other).toHaveAttribute('aria-pressed', 'false');
+  const title = (
+    await other.locator('.measurement-reading-title').textContent()
+  )?.trim();
+  expect(title).toBeTruthy();
+  await other.focus();
+  await page.keyboard.press('Enter');
+  await expect(other).toHaveAttribute('aria-pressed', 'true');
+  await expect(workbench.getByRole('listitem')).toHaveCount(0);
+
+  await page.keyboard.press('Enter');
+  await expect(workbench.getByRole('listitem')).toHaveCount(1);
+  await expect(workbench.getByRole('listitem')).toContainText(title!);
+});
+
+/**
  * M13: hovering a measurement lights the entity it measured. Pointing at a
  * recorded edge's row draws that edge in the hover's colours on the model,
  * keyboard focus does the same, and leaving the row clears it.

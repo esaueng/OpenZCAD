@@ -30,7 +30,7 @@ import {
   measureReadings,
   pickIsMeasurable,
   pickLabel,
-  samePickEntity,
+  samePick,
   type MeasurePick,
   type MeasureReadingKind,
   type MeasureReadingsInput,
@@ -381,6 +381,13 @@ export function useMeasurementWorkbench({
     );
     const formatted = readings.map((reading) => ({
       ...reading,
+      // A circle read as a radius is titled as one.
+      title:
+        reading.kind === 'single' &&
+        reading.measurement.kind === 'diameter' &&
+        measurementDisplay.radialDisplay === 'radius'
+          ? 'Radius'
+          : reading.title,
       formatted: measurementApi.formatMeasurement(
         reading.measurement,
         measurementDisplay
@@ -443,7 +450,7 @@ export function useMeasurementWorkbench({
       first !== null &&
       second === null &&
       measurementEdgeRun.length < 2 &&
-      !samePickEntity(first, hovered);
+      !samePick(measurementApi, readingsInput, first, hovered);
     const reading = measureReadings(measurementApi, readingsInput, {
       first: pairing ? first : hovered,
       second: pairing ? hovered : null,
@@ -589,7 +596,7 @@ export function useMeasurementWorkbench({
       first &&
       !second &&
       measurementEdgeRun.length < 2 &&
-      !samePickEntity(first, pick)
+      !samePick(measurementApi, readingsInput, first, pick)
     ) {
       setMeasurementPicks({ first, second: pick });
       const reading = measureReadings(measurementApi, readingsInput, {
