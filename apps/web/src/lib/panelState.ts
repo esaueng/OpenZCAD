@@ -93,7 +93,12 @@ export interface PanelState {
    * on their next fresh project.
    */
   workspaceTourDismissed: boolean;
-  workspaceTourMinimized: boolean;
+  /**
+   * The guide folded or opened by hand on this device; null until then, so
+   * the workspace may choose: a phone too short for the open card between
+   * its rails starts it folded (#1957).
+   */
+  workspaceTourMinimized: boolean | null;
   /**
    * The tour step reached on this device. Kept per project, it began again
    * at 1/4 in every new empty project until someone skipped it (13 November
@@ -181,7 +186,7 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   viewModeRailOpen: true,
   assistantCollapsed: true,
   workspaceTourDismissed: false,
-  workspaceTourMinimized: false,
+  workspaceTourMinimized: null,
   workspaceTourStep: 0,
   toolGroups: {
     create: true,

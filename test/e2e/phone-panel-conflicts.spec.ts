@@ -362,6 +362,80 @@ test('the expanded guide leaves an open panel room over an in-place bar (#1953)'
   }
 });
 
+// A phone 541–620 px tall keeps two-column rails, 138 px apart at 360 px,
+// and the 296 px guide kept the desktop corner there, 60 px off the screen
+// with Next cut (#1957). It spans from the tool rail to the edge over the
+// search bar, starts folded, and opened by hand stays open.
+for (const { width, height } of [
+  { width: 360, height: 560 },
+  { width: 320, height: 568 }
+]) {
+  test(`the modeling guide fits a ${width} × ${height} phone, folded at first (#1957)`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width, height });
+    await stubApi(page, {
+      workspaceTour: true,
+      panelLayout: null,
+      commandFoldClosed: true
+    });
+    await createProject(page, 'Short phone guide');
+    const tour = page.locator('.workspace-tour');
+    await expect(tour).toBeVisible();
+    const expand = tour.getByRole('button', { name: 'Expand modeling guide' });
+    await expect(expand).toHaveAttribute('aria-expanded', 'false');
+    await waitForSurfacesToSettle(page, ['.workspace-tour']);
+    await shot(page, `short-phone-guide-folded-${width}`);
+    const inside = async () => {
+      const box = (await tour.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.y + box.height).toBeLessThanOrEqual(
+        (await page.locator('.command-bar').boundingBox())!.y + 0.5
+      );
+      // Clear of the tool rail beside it.
+      const rail = (await page
+        .locator('.workspace-column-float')
+        .boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(rail.x + rail.width);
+    };
+    await inside();
+    const card = (await tour.boundingBox())!;
+    for (const control of [
+      expand,
+      tour.getByRole('button', { name: 'Skip the tour' })
+    ]) {
+      // Inside the card, not past its edge: the title gives way.
+      const box = (await control.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(card.x - 0.5);
+      expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 0.5);
+      await expect.poll(() => reachable(control)).toBe(true);
+    }
+
+    await expand.tap();
+    const minimize = tour.getByRole('button', {
+      name: 'Minimize modeling guide'
+    });
+    await expect(minimize).toHaveAttribute('aria-expanded', 'true');
+    await waitForSurfacesToSettle(page, ['.workspace-tour']);
+    await shot(page, `short-phone-guide-open-${width}`);
+    await inside();
+    await expect(tour).toContainText('Create your first feature');
+    const next = tour.getByRole('button', { name: 'Next' });
+    await expect.poll(() => reachable(next)).toBe(true);
+    await expectOnScreen(page, next);
+
+    // Opened by hand, it stays open on the next visit.
+    await page.reload();
+    await expect(
+      page
+        .locator('.workspace-tour')
+        .getByRole('button', { name: 'Minimize modeling guide' })
+    ).toBeVisible();
+  });
+}
+
 const PIVOT: AssemblyFrame = {
   origin: { x: 0, y: 0, z: 0 },
   zAxis: { x: 0, y: 0, z: 1 },

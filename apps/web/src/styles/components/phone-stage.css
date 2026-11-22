@@ -291,6 +291,54 @@
   }
 }
 
+/* The first-run tour on the 541–620px band (#1957). Between its two
+   two-column rails the stage is 138px wide at 360px, and with no rule of its
+   own the 296px card kept the desktop corner and ran 60px off the screen.
+   It spans from the tool rail to the screen's edge just over the search
+   bar, and starts folded there (App.tsx), so its header stands over the
+   empty project's suggestions rather than over the instrument rail; opened,
+   it rises over the rail's foot and the cube until folded again. The
+   notices that keep that row stand above it. */
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 541px) and (max-height: 620px) {
+  .workspace.column-layout .workspace-tour {
+    --tour-bottom: var(--lane-base);
+
+    left: calc(var(--column-w) + var(--island-gap) * 2);
+    right: var(--island-gap);
+    width: auto;
+    max-width: none;
+    bottom: var(--tour-bottom);
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  .workspace-tour-head {
+    gap: var(--sp-1);
+  }
+
+  /* 186px of card at 320px: the title gives way, never Skip, which ran
+     off the screen. */
+  .workspace-tour-head > span:not([class]) {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .workspace-tour-progress {
+    display: none;
+  }
+
+  .workspace.column-layout
+    .viewer-area:has(.workspace-tour)
+    :is(.workspace-toast, .activity-lane, .toast) {
+    translate: 0
+      calc(
+        var(--lane-base) - var(--workspace-tour-claim, 0px) - var(--island-gap)
+      );
+  }
+}
+
 /* The first-run tour on a phone held upright (I12, design review 13 Nov).
    Its 296px card, started from the lane's corner at 116px, ran 22px off a
    390px screen, cutting its text, Next and Skip, and stood over the lower

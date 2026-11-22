@@ -113,7 +113,12 @@ describe('workspace panel state', () => {
     expect(
       normalizePanelState({ workspaceTourMinimized: 'yes' })
         .workspaceTourMinimized
-    ).toBe(false);
+    ).toBeNull();
+    // Unset until folded or opened by hand, so a short phone may start it
+    // folded (#1957); a choice made, either way, is kept.
+    expect(defaultPanelState().workspaceTourMinimized).toBeNull();
+    savePanelState({ ...defaultPanelState(), workspaceTourMinimized: false });
+    expect(loadPanelState().workspaceTourMinimized).toBe(false);
   });
 
   it('exposes every tool by default while preserving a chosen filter', () => {
