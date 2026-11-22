@@ -97,6 +97,7 @@ export * from './assembly-interference-sweep';
 export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
+export * from './display-units';
 export * from './configurations';
 export * from './reference-images';
 export * from './model-pmi';

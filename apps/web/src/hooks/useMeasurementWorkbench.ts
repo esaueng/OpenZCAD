@@ -6,6 +6,7 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import type { PickDetail, PickSnap } from '@openzcad/viewport';
+import { documentDisplayUnits } from '@openzcad/shared';
 import { downloadText, exportFileStem } from '../lib/model';
 import type {
   Measurement,
@@ -141,7 +142,8 @@ export function useMeasurementWorkbench({
       return;
     }
     const projectId = doc.projectId;
-    setMeasurementUnit(doc.units);
+    // I03: a project measures in the unit it shows lengths in.
+    setMeasurementUnit(documentDisplayUnits(doc));
     setMeasurementPrecision(2);
     setRadialDisplay('diameter');
     let cancelled = false;
@@ -174,6 +176,26 @@ export function useMeasurementWorkbench({
       cancelled = true;
     };
   }, [applyStoredMeasurements, doc?.projectId]);
+
+  /**
+   * I03: switching the project's display unit switches the measurements
+   * with it. Only a switch while the project is open: opening one restores
+   * the unit its measurements were last read in.
+   */
+  const displayUnits = doc ? documentDisplayUnits(doc) : null;
+  const shownUnitsRef = useRef<{
+    projectId: string;
+    units: UnitSystem;
+  } | null>(null);
+  useEffect(() => {
+    if (!doc || displayUnits === null) return;
+    const last = shownUnitsRef.current;
+    shownUnitsRef.current = { projectId: doc.projectId, units: displayUnits };
+    if (last?.projectId === doc.projectId && last.units !== displayUnits)
+      setMeasurementUnit(displayUnits);
+    // Keyed on the project and its display unit, not every document edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId, displayUnits]);
 
   /**
    * Writes the measurement list back, debounced.
