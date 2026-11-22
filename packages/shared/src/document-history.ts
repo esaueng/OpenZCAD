@@ -2,6 +2,7 @@ import type { ProjectDocument, UserId } from './index';
 import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
 import { printClearanceError } from './print-clearance';
+import { displayUnitsError } from './display-units';
 import { assemblySetError } from './assembly';
 import { configurationSetError } from './configurations';
 import { modelPmiSetError } from './model-pmi';
@@ -42,7 +43,8 @@ export const HISTORY_FIELDS = [
   'assembly',
   'printClearance',
   'configurations',
-  'pmi'
+  'pmi',
+  'displayUnits'
 ] as const;
 export type HistoryField = (typeof HISTORY_FIELDS)[number];
 
@@ -229,6 +231,15 @@ export function isDocumentHistory(
           (change.key !== undefined ||
             [change.before, change.after].some(
               (side) => side !== undefined && printClearanceError(side) !== null
+            ))
+        )
+          return false;
+        // The same holds for the I03 display units: one unit, no key.
+        if (
+          change.field === 'displayUnits' &&
+          (change.key !== undefined ||
+            [change.before, change.after].some(
+              (side) => side !== undefined && displayUnitsError(side) !== null
             ))
         )
           return false;

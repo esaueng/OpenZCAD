@@ -211,6 +211,15 @@ export function assertPrintClearanceSchema(version: unknown): void {
 }
 
 /**
+ * I03 display units (schema v148): `displayUnits` and its command. An older
+ * reader would show every length in the stored unit while the user reads
+ * another, and cannot replay the command.
+ */
+export function assertDisplayUnitsSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 148, 'Display units');
+}
+
+/**
  * D07 model-based definition (schema v106): `pmi` and its commands. An
  * older reader would drop the section on save.
  */
@@ -1018,6 +1027,8 @@ export function assertDocumentContentCommandSchema(
       assertStandardPartSchema(document.schemaVersion, command.payload);
     if (command.kind === 'printClearance.set')
       assertPrintClearanceSchema(document.schemaVersion);
+    if (command.kind === 'displayUnits.set')
+      assertDisplayUnitsSchema(document.schemaVersion);
     if (typeof command.kind === 'string' && command.kind.startsWith('pmi.'))
       assertModelPmiSchema(document.schemaVersion);
     if (
@@ -1312,6 +1323,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertPrintClearanceSchema(document.schemaVersion);
+  if (document.displayUnits !== undefined)
+    assertDisplayUnitsSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'displayUnits' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertDisplayUnitsSchema(document.schemaVersion);
   if (document.configurations !== undefined)
     assertConfigurationSchema(document.schemaVersion);
   if (hasDrawingViewConfiguration(document.drawings))

@@ -17,6 +17,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './print-clearance';
+export * from './display-units';
 export * from './configurations';
 export * from './assembly';
 export * from './assembly-coupling';
@@ -564,7 +565,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client cannot solve it, so it must refuse the document. Builds on
 // v141; v142 to v144 are claimed by M03 per-vertex radii (#1914), I03 unit
 // switching (#1915) and the S07 entity lock (#1913).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 145 as const;
+// v148 adds I03 display units (`displayUnits` and its `displayUnits.set`
+// command): the unit lengths are shown and typed in, which may differ from
+// the unit the document stores. An older client would replay the command
+// log without knowing the command and would show every length in the stored
+// unit while the user reads another, so it must refuse the document. Builds
+// on v145; v146 and v147 are claimed by the S05 offset dimension (#1919)
+// and the M01 hole anchor (#1808), v142 and v144 by #1914 and #1913.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 148 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -5068,6 +5076,13 @@ export interface ProjectDocument {
    * document-core.
    */
   shareLinkSheetIds?: string[];
+  /**
+   * I03 (schema v148): the unit lengths are shown and typed in. Absent means
+   * `units`. Every stored length stays in `units` — a rebuild, an export and
+   * every persisted reference read `units` and never this — so switching it
+   * changes no geometry. See `display-units.ts`.
+   */
+  displayUnits?: UnitSystem;
 }
 
 export interface SerializedCommand<TPayload = unknown> {

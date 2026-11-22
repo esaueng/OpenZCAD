@@ -10,7 +10,9 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import {
+  convertLength,
   convertReferenceLengthForDisplay,
+  displayLengthName,
   referenceDisplayUnitLabel,
   resolveSketchReferenceDimension,
   toSketchConstraintId,
@@ -133,8 +135,21 @@ export function sketchDimensionAnnotations(
   references: readonly SketchReferenceDimension[] = [],
   composites: readonly SketchComposite[] = [],
   /** S02: reference labels only; driving labels keep `units`. */
-  referenceDisplayUnit: SketchReferenceDisplayUnit = 'document'
+  referenceDisplayUnit: SketchReferenceDisplayUnit = 'document',
+  /**
+   * I03: the document's display unit. Driving lengths are labelled in it,
+   * and so are reference lengths whose own setting follows the document.
+   */
+  displayUnits?: UnitSystem
 ): SketchDimensionAnnotation[] {
+  const shownUnits =
+    displayUnits !== undefined && LENGTH_UNITS.includes(units)
+      ? displayUnits
+      : undefined;
+  const referenceUnit: SketchReferenceDisplayUnit =
+    referenceDisplayUnit === 'document' && shownUnits !== undefined
+      ? shownUnits
+      : referenceDisplayUnit;
   const byId = new Map(objects.map((object) => [object.id, object.data]));
   const scalar = (value: number | string): number | undefined => {
     const result = resolve(value);
@@ -144,6 +159,15 @@ export function sketchDimensionAnnotations(
     sketchPointPosition(byId.get(ref.objectId), ref.point, scalar);
   const format = (raw: number | string, value: number, suffix: string) =>
     `${typeof raw === 'string' ? `${raw} = ` : ''}${formatNumber(value)}${suffix}`;
+  /** A driving length's label: its expression, if any, and its value. */
+  const lengthLabel = (raw: number | string, value: number) =>
+    shownUnits === undefined || shownUnits === units
+      ? format(raw, value, ` ${units}`)
+      : format(
+          raw,
+          convertLength(value, units as UnitSystem, shownUnits),
+          ` ${displayLengthName(shownUnits)}`
+        );
   const result: SketchDimensionAnnotation[] = [];
   const positioned = (
     annotation: Omit<
@@ -215,7 +239,7 @@ export function sketchDimensionAnnotations(
         positioned({
           id: constraint.constraintId,
           kind: 'radius',
-          label: `R ${format(data.value, target, ` ${units}`)}`,
+          label: `R ${lengthLabel(data.value, target)}`,
           anchor: {
             x: center.x + (end.x - center.x) * 0.6,
             y: center.y + (end.y - center.y) * 0.6
@@ -239,7 +263,7 @@ export function sketchDimensionAnnotations(
         positioned({
           id: constraint.constraintId,
           kind: 'distance',
-          label: format(data.value, target, ` ${units}`),
+          label: lengthLabel(data.value, target),
           anchor: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
           span: { start, end },
           lines: [
@@ -336,7 +360,7 @@ export function sketchDimensionAnnotations(
         positioned({
           ...base,
           ...(distanceMode ? { distanceMode } : {}),
-          label: `(${projected ? `${distanceMode === 'horizontal' ? 'H' : 'V'} ` : ''}${referenceLengthText(value, units, referenceDisplayUnit)})`,
+          label: `(${projected ? `${distanceMode === 'horizontal' ? 'H' : 'V'} ` : ''}${referenceLengthText(value, units, referenceUnit)})`,
           anchor: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
           ...(value > 1e-9 ? { span: { start, end } } : {}),
           lines:
@@ -373,7 +397,7 @@ export function sketchDimensionAnnotations(
       result.push(
         positioned({
           ...base,
-          label: `(R ${referenceLengthText(radius, units, referenceDisplayUnit)})`,
+          label: `(R ${referenceLengthText(radius, units, referenceUnit)})`,
           anchor: {
             x: center.x + (end.x - center.x) * 0.6,
             y: center.y + (end.y - center.y) * 0.6
