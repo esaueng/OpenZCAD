@@ -47,6 +47,7 @@ import {
   type SketchProfileReference,
   type SketchSectionReference,
   type UnitSystem,
+  type FilletVertexRadius,
   type VariableFilletLaw,
   UNIT_TO_MM,
   millimetresPerUnit,
@@ -669,6 +670,8 @@ export type InPlaceRequest =
       size: ParamValue;
       endRadius?: ParamValue;
       radiusLaw?: VariableFilletLaw;
+      /** M03 (v142): per-vertex radii, by picked edge and witness end. */
+      vertexRadii?: FilletVertexRadius[];
       angleDeg?: ParamValue;
       distance2?: ParamValue;
     }
@@ -7253,6 +7256,9 @@ export function edgeRefusedInputs(
     if (lawChanged) inputs.push('Radius');
     field('size', 'R');
     if (!lawChanged) field('endRadius', 'End R');
+    // M03 (v142): the corners, as one input; the bar names each R1, R2, …
+    if (!lawChanged && !sameParam(built.vertexRadii, refused.vertexRadii))
+      inputs.push('Corner radii');
     return inputs;
   }
   const shape = (request: typeof refused) =>
@@ -7272,6 +7278,66 @@ export function edgeRefusedInputs(
 }
 
 const VARIABLE_RADIUS_NOTE = 'Experimental · R at the start, End R at the end';
+
+/** M03: the most picked-edge corners the per-vertex radii cover. */
+export const FILLET_VERTEX_SLOTS = 8;
+
+/** The value holding the radius at picked-edge corner `index` (from 0). */
+export function filletVertexValueId(index: number): string {
+  return `vertex${index + 1}`;
+}
+
+/**
+ * M03: the distinct corners of the picked edges, in pick order, each with
+ * the edge ends that meet there (by pick index and witness end) and the way
+ * into the body from the first of those edges. Two picked edges that share a
+ * corner share its radius. Null when an edge carries no open lineage witness
+ * to name its ends by.
+ */
+export function filletSelectionVertices(
+  edges: readonly Pick<EdgePick, 'reference' | 'outward'>[]
+):
+  | {
+      point: Vector3;
+      inward?: Vector3;
+      ends: { edge: number; end: 0 | 1 }[];
+    }[]
+  | null {
+  const vertices: {
+    key: string;
+    point: Vector3;
+    inward?: Vector3;
+    ends: { edge: number; end: 0 | 1 }[];
+  }[] = [];
+  for (const [edge, pick] of edges.entries()) {
+    const witness = pick.reference?.witness;
+    if (!witness || witness.closed) return null;
+    for (const end of [0, 1] as const) {
+      const [x, y, z] = witness.endpoints[end];
+      const key = `${x},${y},${z}`;
+      let vertex = vertices.find((candidate) => candidate.key === key);
+      if (!vertex) {
+        vertex = {
+          key,
+          point: { x: x * 1e-6, y: y * 1e-6, z: z * 1e-6 },
+          ...(pick.outward ? { inward: scaled(unit(pick.outward), -1) } : {}),
+          ends: []
+        };
+        vertices.push(vertex);
+      }
+      vertex.ends.push({ edge, end });
+    }
+  }
+  return vertices.map(({ key: _key, ...vertex }) => vertex);
+}
+
+/** A per-vertex fillet: the law is variable and its radius is set by corner. */
+function perVertex(options: Readonly<Record<string, string>>): boolean {
+  return (
+    (options.law === 'linear' || options.law === 'scurve') &&
+    options.radiusAt === 'vertices'
+  );
+}
 
 const fillet: InPlaceToolSpec = {
   id: 'fillet',
@@ -7297,7 +7363,17 @@ const fillet: InPlaceToolSpec = {
       initial: 2,
       min: 0,
       exclusive: true
-    }
+    },
+    // M03 (v142): the radius at each picked-edge corner, shown with its
+    // handle there under Radius at: Each corner.
+    ...Array.from({ length: FILLET_VERTEX_SLOTS }, (_, index) => ({
+      id: filletVertexValueId(index),
+      label: `R${index + 1}`,
+      unit: 'length' as const,
+      initial: 2,
+      min: 0,
+      exclusive: true as const
+    }))
   ],
   options: [
     {
@@ -7314,39 +7390,117 @@ const fillet: InPlaceToolSpec = {
         }
       ],
       initial: 'constant'
+    },
+    {
+      // M03 (v142): a variable radius set at each corner of the picked
+      // edges, instead of at each edge's start and end.
+      id: 'radiusAt',
+      label: 'Radius at',
+      choices: [
+        { value: 'ends', label: 'Start and end' },
+        {
+          value: 'vertices',
+          label: 'Each corner',
+          tip: 'Experimental · drag or type the radius at each corner'
+        }
+      ],
+      initial: 'ends',
+      when: (state) =>
+        state.options.law === 'linear' || state.options.law === 'scurve'
     }
   ],
-  // A variable fillet starts with its end radius at the radius until set.
-  defaults: (_slots, _ctx, numbers) => ({ endRadius: numbers.radius ?? 2 }),
-  hint: (slots) => edgeHint(slots, 'fillet', 'radius'),
-  ready: (slots) => slots.edges.length > 0,
+  // A variable fillet starts with its end radius, and every corner, at the
+  // radius until set.
+  defaults: (_slots, _ctx, numbers) => ({
+    endRadius: numbers.radius ?? 2,
+    ...Object.fromEntries(
+      Array.from({ length: FILLET_VERTEX_SLOTS }, (_, index) => [
+        filletVertexValueId(index),
+        numbers.radius ?? 2
+      ])
+    )
+  }),
+  hint: (slots, options) => {
+    if (options && perVertex(options) && slots.edges.length > 0) {
+      const vertices = filletSelectionVertices(slots.edges);
+      if (!vertices)
+        return 'Each corner needs edges the body names; pick them again on the rebuilt body.';
+      if (vertices.length > FILLET_VERTEX_SLOTS)
+        return `Each corner covers up to ${FILLET_VERTEX_SLOTS} corners; pick fewer edges.`;
+    }
+    return edgeHint(slots, 'fillet', 'radius');
+  },
+  ready: (slots, options) => {
+    if (slots.edges.length === 0) return false;
+    if (!options || !perVertex(options)) return true;
+    const vertices = filletSelectionVertices(slots.edges);
+    return vertices !== null && vertices.length <= FILLET_VERTEX_SLOTS;
+  },
   request(slots, values, options) {
     const first = slots.edges[0];
     if (!first) return null;
     const law = options.law;
     const variable = law === 'linear' || law === 'scurve';
     const references = edgeReferences(slots.edges);
+    const vertices = perVertex(options)
+      ? filletSelectionVertices(slots.edges)
+      : null;
+    if (
+      perVertex(options) &&
+      (!vertices || vertices.length > FILLET_VERTEX_SLOTS)
+    )
+      return null;
+    const radius = values.radius ?? 2;
     return {
       tool: 'edge-modifier',
       kind: 'fillet',
       targetBodyId: first.bodyId,
       edgeHashes: slots.edges.map((edge) => edge.hash),
       ...(references ? { edgeReferences: references } : {}),
-      size: values.radius ?? 2,
+      size: radius,
       ...(variable
         ? {
-            endRadius: values.endRadius ?? values.radius ?? 2,
-            radiusLaw: law
+            endRadius: values.endRadius ?? radius,
+            radiusLaw: law,
+            ...(vertices
+              ? {
+                  vertexRadii: vertices.flatMap((vertex, index) =>
+                    vertex.ends.map(({ edge, end }) => ({
+                      edge,
+                      end,
+                      radius: values[filletVertexValueId(index)] ?? radius
+                    }))
+                  )
+                }
+              : {})
           }
         : {})
     };
   },
-  handles: (slots, _values, _ctx, options) => [
-    ...edgeSizeHandle('radius', slots),
-    ...(options.law === 'linear' || options.law === 'scurve'
-      ? edgeEndChip('endRadius', slots)
-      : [])
-  ]
+  handles: (slots, _values, _ctx, options) => {
+    if (perVertex(options)) {
+      const vertices = filletSelectionVertices(slots.edges) ?? [];
+      const first = slots.edges[0];
+      return vertices.slice(0, FILLET_VERTEX_SLOTS).flatMap((vertex, index) =>
+        first && vertex.inward
+          ? [
+              {
+                valueId: filletVertexValueId(index),
+                kind: 'linear' as const,
+                key: `${first.bodyId}:vertex:${index}`,
+                params: { origin: vertex.point, direction: vertex.inward }
+              }
+            ]
+          : []
+      );
+    }
+    return [
+      ...edgeSizeHandle('radius', slots),
+      ...(options.law === 'linear' || options.law === 'scurve'
+        ? edgeEndChip('endRadius', slots)
+        : [])
+    ];
+  }
 };
 
 const chamfer: InPlaceToolSpec = {

@@ -46,11 +46,11 @@ describe('edge modifier edit command', () => {
       size: 2
     });
     expect(command.payload).toMatchObject({
-      clearData: ['endRadius', 'radiusLaw']
+      clearData: ['endRadius', 'radiusLaw', 'vertexRadii']
     });
   });
 
-  it('carries the law with the end radius and clears nothing', () => {
+  it('carries the law with the end radius and clears only per-vertex radii', () => {
     const command = edgeModifierCommand(feature, 'fillet', {
       name: 'Fillet edges',
       targetBodyId: 'body_source' as BodyId,
@@ -60,8 +60,24 @@ describe('edge modifier edit command', () => {
       radiusLaw: 'scurve'
     });
     expect(command.payload).toMatchObject({
-      data: { radius: 1, endRadius: 3, radiusLaw: 'scurve' }
+      data: { radius: 1, endRadius: 3, radiusLaw: 'scurve' },
+      // M03 (v142): Start and end drops corners an earlier edit stored.
+      clearData: ['vertexRadii']
     });
+  });
+
+  it('carries per-vertex radii and clears nothing (M03, v142)', () => {
+    const vertexRadii = [{ edge: 0, end: 0 as const, radius: 2 }];
+    const command = edgeModifierCommand(feature, 'fillet', {
+      name: 'Fillet edges',
+      targetBodyId: 'body_source' as BodyId,
+      edgeHashes: [11, 12],
+      size: 1,
+      endRadius: 3,
+      radiusLaw: 'linear',
+      vertexRadii
+    });
+    expect(command.payload).toMatchObject({ data: { vertexRadii } });
     expect('clearData' in command.payload).toBe(false);
   });
 

@@ -16,6 +16,7 @@ import { TOOL_META } from '../tools';
 import { placementFrame } from './primitives';
 import {
   IN_PLACE_TOOL_SPECS,
+  filletSelectionVertices,
   axisCandidatesFor,
   clampValue,
   displayedValue,
@@ -2697,8 +2698,122 @@ describe('fillet and chamfer run in place', () => {
     expect(
       spec.handles(slots, {}, CTX, { law: 'linear' }).map((h) => h.valueId)
     ).toEqual(['radius', 'endRadius']);
-    expect(spec.defaults?.(slots, CTX, { radius: 5 })).toEqual({
-      endRadius: 5
+    expect(spec.defaults?.(slots, CTX, { radius: 5 })).toMatchObject({
+      endRadius: 5,
+      vertex1: 5,
+      vertex8: 5
+    });
+  });
+
+  describe('per-vertex radii (M03, v142)', () => {
+    const witness = (
+      from: [number, number, number],
+      to: [number, number, number]
+    ) =>
+      ({
+        kind: 'edge',
+        currentHash: 0,
+        witness: {
+          curveType: 'LINE',
+          length: 1,
+          closed: false,
+          endpoints: [from.map((v) => v * 1e6), to.map((v) => v * 1e6)],
+          midpoint: [0, 0, 0]
+        }
+      }) as never;
+    const A: EdgePick = {
+      ...EDGE,
+      hash: 31,
+      reference: witness([0, 0, 4], [20, 0, 4])
+    };
+    const B: EdgePick = {
+      ...EDGE,
+      hash: 32,
+      reference: witness([20, 10, 4], [20, 0, 4])
+    };
+    const perCorner = { law: 'linear', radiusAt: 'vertices' };
+
+    it('counts each shared corner once, in pick order', () => {
+      expect(filletSelectionVertices([A, B])).toEqual([
+        expect.objectContaining({
+          point: { x: 0, y: 0, z: 4 },
+          ends: [{ edge: 0, end: 0 }]
+        }),
+        expect.objectContaining({
+          point: { x: 20, y: 0, z: 4 },
+          ends: [
+            { edge: 0, end: 1 },
+            { edge: 1, end: 1 }
+          ]
+        }),
+        expect.objectContaining({
+          point: { x: 20, y: 10, z: 4 },
+          ends: [{ edge: 1, end: 0 }]
+        })
+      ]);
+    });
+
+    it('stores every edge end at its corner radius, one handle per corner', () => {
+      const spec = IN_PLACE_TOOL_SPECS.fillet;
+      const slots = { ...EMPTY, edges: [A, B] };
+      expect(spec.ready(slots, perCorner)).toBe(true);
+      expect(
+        spec.request(
+          slots,
+          { radius: 2, endRadius: 2, vertex1: 1, vertex2: 'r', vertex3: 3 },
+          perCorner,
+          CTX
+        )
+      ).toMatchObject({
+        size: 2,
+        radiusLaw: 'linear',
+        vertexRadii: [
+          { edge: 0, end: 0, radius: 1 },
+          { edge: 0, end: 1, radius: 'r' },
+          { edge: 1, end: 1, radius: 'r' },
+          { edge: 1, end: 0, radius: 3 }
+        ]
+      });
+      const handles = spec.handles(slots, {}, CTX, perCorner);
+      expect(handles.map((handle) => handle.valueId)).toEqual([
+        'vertex1',
+        'vertex2',
+        'vertex3'
+      ]);
+      expect(handles[1]).toMatchObject({
+        kind: 'linear',
+        params: { origin: { x: 20, y: 0, z: 4 } }
+      });
+      // Start and end keeps the two-radius request and its handles.
+      expect(
+        spec.request(
+          slots,
+          { radius: 2, endRadius: 3 },
+          { law: 'linear', radiusAt: 'ends' },
+          CTX
+        )
+      ).not.toHaveProperty('vertexRadii');
+    });
+
+    it('is not ready without named edges or past its corner count', () => {
+      const spec = IN_PLACE_TOOL_SPECS.fillet;
+      const { reference: _named, ...unnamed } = A;
+      expect(spec.ready({ ...EMPTY, edges: [unnamed] }, perCorner)).toBe(false);
+      expect(spec.hint({ ...EMPTY, edges: [unnamed] }, perCorner)).toMatch(
+        /needs edges the body names/
+      );
+      const many = Array.from({ length: 5 }, (_, index) => ({
+        ...A,
+        hash: 40 + index,
+        reference: witness([index * 30, 0, 0], [index * 30 + 20, 0, 0])
+      }));
+      expect(spec.ready({ ...EMPTY, edges: many }, perCorner)).toBe(false);
+      expect(spec.hint({ ...EMPTY, edges: many }, perCorner)).toMatch(
+        /up to 8 corners/
+      );
+      expect(
+        spec.request({ ...EMPTY, edges: many }, { radius: 1 }, perCorner, CTX)
+      ).toBeNull();
     });
   });
 

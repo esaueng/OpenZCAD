@@ -1895,6 +1895,47 @@ describe('an untouched edit writes the feature back as stored', () => {
     );
   });
 
+  it('fillet: per-vertex radii round-trip through the corner values (M03, v142)', () => {
+    const named = (hash: number, from: number[], to: number[]) => ({
+      kind: 'edge',
+      currentHash: hash,
+      stored: true,
+      witness: {
+        curveType: 'LINE',
+        length: 1,
+        closed: false,
+        endpoints: [from.map((v) => v * 1e6), to.map((v) => v * 1e6)],
+        midpoint: [0, 0, 0]
+      }
+    });
+    const references = [
+      named(21, [0, 0, 0], [10, 0, 0]),
+      named(22, [10, 5, 0], [10, 0, 0])
+    ] as never[];
+    const vertexRadii = [
+      { edge: 0, end: 0 as const, radius: 1 },
+      { edge: 0, end: 1 as const, radius: 'r' },
+      { edge: 1, end: 1 as const, radius: 'r' },
+      { edge: 1, end: 0 as const, radius: 3 }
+    ];
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21, 22],
+      edgeReferences: references,
+      radius: 2,
+      endRadius: 2,
+      radiusLaw: 'linear',
+      vertexRadii
+    };
+    expect(untouched(feature(data, 'body_f' as BodyId))).toMatchObject({
+      tool: 'edge-modifier',
+      kind: 'fillet',
+      radiusLaw: 'linear',
+      vertexRadii
+    });
+  });
+
   it('fillet: an edge that no longer resolves is left for a new pick', () => {
     const data: FeatureData = {
       featureKind: 'fillet',

@@ -98,6 +98,7 @@ import {
   millimetresPerUnit,
   isDatumPlaneRef,
   transformStampBodyIds,
+  filletVertexRadiiProblem,
   type BodyId,
   type DatumPlaneSource,
   type DatumPointSource,
@@ -142,6 +143,7 @@ import {
 import {
   assertQualifiedVariableFillet,
   variableBlendRefusal,
+  perEdgeVertexRadii,
   type VariableFilletSpec
 } from './exact-variable-blends';
 import {
@@ -3527,6 +3529,8 @@ export function edgeModifierSettings(
   size: number;
   chamferAngleRadians: number | undefined;
   variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
+  /** M03 (v142): resolved per-vertex radii, by selected edge and witness end. */
+  vertexRadii: { edge: number; end: 0 | 1; radius: number }[] | undefined;
   chamferSecondDistance: number | undefined;
 } {
   const { document, scope } = ctx;
@@ -3563,6 +3567,7 @@ export function edgeModifierSettings(
   // stored field being present, so a document that never carried one runs the
   // constant/symmetric path it always ran.
   let variableRadius: Omit<VariableFilletSpec, 'startRadius'> | undefined;
+  let vertexRadii: { edge: number; end: 0 | 1; radius: number }[] | undefined;
   if (data.featureKind === 'fillet' && data.endRadius !== undefined) {
     const endRadius = resolveParamValue(
       data.endRadius,
@@ -3577,6 +3582,21 @@ export function edgeModifierSettings(
     const law: string = data.radiusLaw ?? 'linear';
     assertQualifiedVariableFillet(law, size, endRadius);
     variableRadius = { law, endRadius };
+    if (data.vertexRadii !== undefined) {
+      // M03 (v142): checked again here because a document is untrusted.
+      const problem = filletVertexRadiiProblem(data);
+      if (problem) throw new Error(problem);
+      vertexRadii = data.vertexRadii.map((entry) => ({
+        edge: entry.edge,
+        end: entry.end,
+        radius: resolveParamValue(
+          entry.radius,
+          scope,
+          'vertex radius',
+          document.units
+        )
+      }));
+    }
   }
   let chamferSecondDistance: number | undefined;
   if (data.featureKind === 'chamfer' && data.distance2 !== undefined) {
@@ -3595,7 +3615,13 @@ export function edgeModifierSettings(
       throw new Error('Chamfer second distance must be greater than zero.');
     }
   }
-  return { size, chamferAngleRadians, variableRadius, chamferSecondDistance };
+  return {
+    size,
+    chamferAngleRadians,
+    variableRadius,
+    vertexRadii,
+    chamferSecondDistance
+  };
 }
 
 function buildEdgeModifierFeature(
@@ -3636,8 +3662,24 @@ function buildEdgeModifierFeature(
       : undefined,
     ctx.onUnresolvedEdgeHash
   );
-  const { size, chamferAngleRadians, variableRadius, chamferSecondDistance } =
-    edgeModifierSettings(ctx, data);
+  const settings = edgeModifierSettings(ctx, data);
+  const { size, chamferAngleRadians, chamferSecondDistance } = settings;
+  const variableRadius =
+    settings.variableRadius &&
+    settings.vertexRadii &&
+    data.featureKind === 'fillet'
+      ? {
+          ...settings.variableRadius,
+          perEdge: perEdgeVertexRadii(
+            kernel,
+            selected,
+            data,
+            settings.vertexRadii,
+            size,
+            settings.variableRadius.endRadius
+          )
+        }
+      : settings.variableRadius;
   // M02: where these edges stand now, measured before they are rounded, for
   // a feature pattern that repeats this one (review: an upstream edit moves
   // them away from the stored pick).
@@ -4762,6 +4804,13 @@ function buildPatternFeature(
         ) {
           throw new Error(
             "its faces are set back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly."
+          );
+        }
+        // M03 (v142): per-vertex radii name the original edges' ends; a
+        // copy's edges are other edges.
+        if (settings.vertexRadii !== undefined) {
+          throw new Error(
+            "its radii are set per vertex on the original edges, which a copy's edges are not, so a pattern repeats only a fillet with one start and end radius; fillet the copies' edges directly."
           );
         }
         let refusal: string | null = null;

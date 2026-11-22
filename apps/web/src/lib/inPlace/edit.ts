@@ -32,7 +32,10 @@ import { threadEditOptions } from './thread';
 import { standardPartEditSeed } from './standardPart';
 import { sheetMetalCleared, sheetMetalEditOptions } from './sheetMetal';
 import {
+  FILLET_VERTEX_SLOTS,
   IN_PLACE_TOOL_SPECS,
+  filletSelectionVertices,
+  filletVertexValueId,
   type BodyPick,
   type CurvePick,
   type EdgePick,
@@ -907,6 +910,27 @@ export function inPlaceEditSeed(
         if (data.endRadius !== undefined) {
           value('endRadius', data.endRadius);
           seed.options.law = data.radiusLaw ?? 'linear';
+          // M03 (v142): each corner's stored radius into its value, the
+          // corners counted as the tool counts them from the same picks.
+          // Only when every stored edge is still there in its place: the
+          // entries index the stored edge list.
+          const vertices =
+            data.vertexRadii &&
+            seed.slots.edges.length === data.edgeHashes.length
+              ? filletSelectionVertices(seed.slots.edges)
+              : null;
+          if (data.vertexRadii && vertices) {
+            seed.options.radiusAt = 'vertices';
+            vertices.forEach((vertex, index) => {
+              const stored = data.vertexRadii!.find((entry) =>
+                vertex.ends.some(
+                  (end) => end.edge === entry.edge && end.end === entry.end
+                )
+              );
+              if (stored && index < FILLET_VERTEX_SLOTS)
+                value(filletVertexValueId(index), stored.radius);
+            });
+          }
         } else {
           seed.options.law = 'constant';
         }

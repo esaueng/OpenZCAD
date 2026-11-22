@@ -549,7 +549,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // one Move copy stamps repeated copies, each the same transform on from the
 // one before. An older client would build only the first, so it must refuse
 // the document. Builds on v136.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 137 as const;
+// v142 adds M03 per-vertex fillet radii (`vertexRadii` on a variable-radius
+// fillet): the radius at each end of each selected edge, named by the
+// edge's lineage witness. An older client would round every edge from
+// `radius` to `endRadius`, so it must refuse the document. Builds on v141
+// (v138–v141 are claimed by the open S05/S07 sketch PRs; main is at v137).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 142 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -789,6 +794,74 @@ export function isVariableFilletLaw(law: unknown): law is VariableFilletLaw {
     typeof law === 'string' &&
     (VARIABLE_FILLET_LAWS as readonly string[]).includes(law)
   );
+}
+
+/**
+ * M03 (schema v142): the radius a variable-radius fillet reaches at one end
+ * of one selected edge.
+ *
+ * `edge` indexes the feature's `edgeHashes`; `end` names one of that edge's
+ * two witness endpoints (`edgeReferences[…].witness.endpoints`), so the end
+ * is fixed by where the edge was picked, not by the direction the kernel
+ * happens to give it. An end with no entry keeps what `radius` (the edge's
+ * start) or `endRadius` (its end) gives it.
+ * Two selected edges that share a vertex each carry their own entry; the
+ * editor writes the same value to both, and the kernel refuses a corner whose
+ * stripes disagree there.
+ */
+export interface FilletVertexRadius {
+  edge: number;
+  end: 0 | 1;
+  radius: ParamValue;
+}
+
+/**
+ * Why a fillet's `vertexRadii` cannot be stored, or null when it can: it
+ * needs a variable law (`endRadius`), a lineage reference for every edge it
+ * names, and at most one entry per edge end.
+ */
+export function filletVertexRadiiProblem(data: {
+  edgeHashes: readonly number[];
+  edgeReferences?: readonly { currentHash: number }[];
+  endRadius?: ParamValue;
+  vertexRadii?: unknown;
+}): string | null {
+  const entries = data.vertexRadii;
+  if (entries === undefined) return null;
+  if (!Array.isArray(entries) || entries.length === 0)
+    return 'Per-vertex fillet radii must be a non-empty list.';
+  if (data.endRadius === undefined)
+    return 'Per-vertex fillet radii need a variable-radius fillet.';
+  const seen = new Set<string>();
+  for (const entry of entries as unknown[]) {
+    if (typeof entry !== 'object' || entry === null)
+      return 'Each per-vertex fillet radius must be an object.';
+    const { edge, end, radius } = entry as Record<string, unknown>;
+    if (
+      typeof edge !== 'number' ||
+      !Number.isInteger(edge) ||
+      edge < 0 ||
+      edge >= data.edgeHashes.length
+    )
+      return 'A per-vertex fillet radius names an edge the fillet does not select.';
+    if (end !== 0 && end !== 1)
+      return 'A per-vertex fillet radius must name end 0 or end 1 of its edge.';
+    if (
+      !(typeof radius === 'string' && radius.trim() !== '') &&
+      !(typeof radius === 'number' && Number.isFinite(radius))
+    )
+      return 'A per-vertex fillet radius must be a number or an expression.';
+    const key = `${edge}:${end}`;
+    if (seen.has(key))
+      return 'A per-vertex fillet radius names the same edge end twice.';
+    seen.add(key);
+    const hash = data.edgeHashes[edge];
+    if (
+      !data.edgeReferences?.some((reference) => reference.currentHash === hash)
+    )
+      return 'Per-vertex fillet radii need the lineage reference of each edge they name.';
+  }
+  return null;
 }
 
 /**
@@ -3369,6 +3442,12 @@ export type FeatureData =
        * `endRadius` is present; absent reads as `'linear'`.
        */
       radiusLaw?: VariableFilletLaw;
+      /**
+       * M03 (schema v142): the radius at named ends of the selected edges,
+       * overriding `radius` and `endRadius` there; see
+       * {@link FilletVertexRadius}. Only with `endRadius`.
+       */
+      vertexRadii?: FilletVertexRadius[];
     }
   | {
       featureKind: 'chamfer';
