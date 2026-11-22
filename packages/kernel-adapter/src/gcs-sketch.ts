@@ -4,6 +4,11 @@ import type {
   SketchConstraintData,
   SketchPointRef
 } from '@openzcad/shared';
+import {
+  patternInstanceAt,
+  placementMiss,
+  seedPatternInstances
+} from './gcs-pattern';
 
 /**
  * Document sketch → kernel GCS mapping.
@@ -211,7 +216,7 @@ function solvedEntitySize(object: ResolvedSketchObject): number {
  */
 export function solveSketchWithGcs(
   kernel: GcsKernelSurface,
-  objects: ResolvedSketchObject[],
+  inputObjects: ResolvedSketchObject[],
   constraints: SketchConstraint[],
   resolveValue: (value: number | string, label: string) => number,
   options: {
@@ -228,6 +233,16 @@ export function solveSketchWithGcs(
   );
   const held = (objectId: string, point: 'start' | 'end' | 'center') =>
     anchoredObjects.has(objectId) || anchoredPoints.has(`${objectId}:${point}`);
+  const objects = seedPatternInstances(
+    inputObjects,
+    constraints,
+    resolveValue,
+    (objectId) =>
+      anchoredObjects.has(objectId) ||
+      (['start', 'end', 'center'] as const).some((point) =>
+        anchoredPoints.has(`${objectId}:${point}`)
+      )
+  );
 
   for (const object of objects) {
     if (handles.has(object.objectId)) {
@@ -455,13 +470,39 @@ export function solveSketchWithGcs(
         const there = resolvedPoint({ objectId: data.source, point });
         return Math.hypot(there.x - pivotAt.x, there.y - pivotAt.y) > 1e-9;
       }) ?? candidates[0]!;
-    const sourceAnchor = at(data.source, anchor);
+    // A uniform circular pattern carries a line round by its midpoint, as
+    // the tool placed it: a helper point held there (two parameters, two
+    // equations) stands in for the anchor.
+    const midAnchors =
+      source.kind === 'line' &&
+      layout.kind === 'circular' &&
+      layout.orientation === 'uniform';
+    const midpointOf = (objectId: EntityId): number => {
+      const line = objects.find((entry) => entry.objectId === objectId);
+      if (line?.kind !== 'line') {
+        throw new Error(`Pattern instance ${objectId} is not a line.`);
+      }
+      const point = kernel.gcsAddPoint(
+        sketch,
+        (line.x1 + line.x2) / 2,
+        (line.y1 + line.y2) / 2,
+        false
+      );
+      add(id, {
+        type: 'midpoint',
+        point,
+        line: objectHandles(objectId).entity
+      });
+      return point;
+    };
+    const anchorOf = (objectId: EntityId): number =>
+      midAnchors ? midpointOf(objectId) : at(objectId, anchor);
+    const sourceAnchor = anchorOf(data.source);
     const pivot = layout.kind === 'circular' ? pointHandle(layout.pivot) : -1;
     const radial0 = pivot >= 0 ? helperLine(pivot, sourceAnchor) : -1;
+    // Signed: a negative spacing runs against the direction line.
     const spacing =
-      layout.kind === 'linear'
-        ? Math.abs(resolveValue(layout.spacing, 'distance'))
-        : 0;
+      layout.kind === 'linear' ? resolveValue(layout.spacing, 'distance') : 0;
     const stepRad =
       layout.kind === 'circular'
         ? resolveValue(layout.stepDeg, 'angle') * RADIANS_PER_DEGREE
@@ -473,8 +514,10 @@ export function solveSketchWithGcs(
           `Pattern instance ${objectId} is not a ${source.kind} like its source.`
         );
       }
-      const instanceAnchor = at(objectId, anchor);
-      // Position: two equations.
+      const instanceAnchor = anchorOf(objectId);
+      // Position: two equations. They also admit the source's other side;
+      // the seed starts each free instance at its step and the read-back
+      // after the solve refuses the mirror.
       if (layout.kind === 'linear') {
         add(id, {
           type: 'parallel',
@@ -485,7 +528,7 @@ export function solveSketchWithGcs(
           type: 'distance',
           a: sourceAnchor,
           b: instanceAnchor,
-          value: spacing * step
+          value: Math.abs(spacing * step)
         });
       } else {
         const radial = helperLine(pivot, instanceAnchor);
@@ -784,7 +827,8 @@ export function solveSketchWithGcs(
   const dofRecord = parseKernelJson(kernel.gcsDof(sketch), 'sketch DOF');
 
   const classificationRaw = diagnostics.classification;
-  const classification =
+  let classification:
+    'solved' | 'underConstrained' | 'redundant' | 'unsatisfied' =
     classificationRaw === 'solved' ||
     classificationRaw === 'underConstrained' ||
     classificationRaw === 'redundant' ||
@@ -907,11 +951,46 @@ export function solveSketchWithGcs(
     }
   }
 
+  // S05: the pattern equations admit mirror branches; an instance that
+  // settled anywhere but the source carried to its step fails its relation.
+  const patternMisses = new Map<string, number>();
+  for (const { constraintId, data } of constraints) {
+    if (data.constraintKind !== 'pattern') continue;
+    for (const { objectId, step } of data.instances) {
+      const actual = solvedObjects.find((entry) => entry.objectId === objectId);
+      const expected = patternInstanceAt(
+        solvedObjects,
+        data,
+        step,
+        resolveValue,
+        objectId
+      );
+      if (!actual || !expected) continue;
+      const scale = Math.max(
+        1,
+        ...Object.values(expected)
+          .filter((value): value is number => typeof value === 'number')
+          .map(Math.abs)
+      );
+      const miss = placementMiss(expected, actual);
+      if (miss > 1e-7 * scale) {
+        patternMisses.set(
+          constraintId,
+          Math.max(patternMisses.get(constraintId) ?? 0, miss)
+        );
+      }
+    }
+  }
+  if (patternMisses.size > 0) classification = 'unsatisfied';
+
   return {
     classification,
-    converged: diagnostics.converged === true,
+    converged: diagnostics.converged === true && patternMisses.size === 0,
     iterations: requireNumber(diagnostics, 'iterations'),
-    maxResidual: requireNumber(diagnostics, 'maxResidual'),
+    maxResidual: Math.max(
+      requireNumber(diagnostics, 'maxResidual'),
+      ...patternMisses.values()
+    ),
     rolledBack: diagnostics.rolledBack === true,
     dof: {
       dof: requireNumber(dofRecord, 'dof'),
@@ -922,7 +1001,10 @@ export function solveSketchWithGcs(
     constraintResiduals: [
       ...kernelHandles
         .reduce((byConstraint, { constraintId, handle }) => {
-          const residual = residualByHandle.get(handle) ?? 0;
+          const residual = Math.max(
+            residualByHandle.get(handle) ?? 0,
+            patternMisses.get(constraintId) ?? 0
+          );
           byConstraint.set(
             constraintId,
             Math.max(byConstraint.get(constraintId) ?? 0, residual)

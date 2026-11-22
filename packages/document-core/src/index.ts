@@ -2503,6 +2503,14 @@ export function validateSketchConstraint(
         ]);
       } else {
         requireConstraintPoint(document, sketch, data.layout.pivot);
+        // The solver reads the pivot's place from a stored point; a
+        // spline's ends have none it can turn about.
+        requireConstrainableObject(
+          document,
+          sketch,
+          data.layout.pivot.objectId,
+          ['line', 'arc', 'circle', 'ellipse', 'point']
+        );
         if (
           data.layout.orientation !== 'rotate' &&
           data.layout.orientation !== 'uniform'

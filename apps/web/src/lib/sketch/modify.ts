@@ -746,6 +746,15 @@ function remapCommands(
     if (!next) {
       dropped += 1;
     }
+    // Deleting a replaced instance already narrows its pattern to the
+    // others; restating it would add the same relation a second time.
+    if (
+      next &&
+      plan.replacement &&
+      constraint.data.constraintKind === 'pattern'
+    ) {
+      continue;
+    }
     if (!plan.replacement) {
       release.push(
         commandFactories.deleteSketchConstraint(
