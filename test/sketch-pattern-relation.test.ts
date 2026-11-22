@@ -5,6 +5,7 @@ import {
   composeCommands
 } from '@openzcad/command-system';
 import {
+  addSketchConstraint,
   createProjectDocument,
   findSketch,
   normalizeDocument
@@ -26,6 +27,7 @@ import {
 import {
   planSketchCircularPattern,
   planSketchLinearPattern,
+  planSketchTrim,
   resolvePatternPivot,
   type SketchModifyPlan
 } from '../apps/web/src/lib/sketch/modify';
@@ -211,7 +213,242 @@ describe('S05 pattern relation on the pinned kernel', () => {
     expectSettled(await fixture.solve());
   });
 
-  it('turns rotated line instances with the source, and keeps uniform ones parallel', async () => {
+  it('keeps each instance on its own side of the source, either spacing sign', async () => {
+    for (const spacing of [4, -4]) {
+      const fixture = sketchWith([
+        { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+        { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 }
+      ]);
+      const [circle, direction] = fixture.ids as [string, string];
+      fixture.commit(
+        planSketchLinearPattern(
+          fixture.manager.document,
+          fixture.sketch(),
+          fixture.sketchId,
+          circle,
+          direction,
+          spacing,
+          2,
+          resolve
+        )
+      );
+      const [copy] = fixture.sketch().objectIds.map(String).slice(2);
+      fixture.constrain(lock(direction, 'start', 0, -3));
+      fixture.constrain(lock(direction, 'end', 10, -3));
+      // Dragged past its copy by twice the spacing: the copy still sits
+      // one spacing away, but on the source's wrong side.
+      fixture.constrain(lock(circle, 'center', 2 * spacing, 0));
+      const dragged = structuredClone(fixture.manager.document);
+      (
+        dragged.nodes[circle as EntityId] as unknown as {
+          data: Record<string, number>;
+        }
+      ).data.centerX = 2 * spacing;
+      const outcome = await adapter.solveSketch(dragged, fixture.sketchId);
+      expectSettled(outcome);
+      expect(outcome.classification).not.toBe('unsatisfied');
+      expect(solved(outcome, copy!).centerX).toBeCloseTo(3 * spacing, 8);
+      // Held on the wrong side, the copy fails its relation by name.
+      const held = await adapter.solveSketch(dragged, fixture.sketchId, {
+        anchor: { objectIds: [copy!] }
+      });
+      expect(held.converged).toBe(false);
+      expect(held.classification).toBe('unsatisfied');
+    }
+  });
+
+  it('a copy edited to the source’s other side brings the free source along', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 }
+    ]);
+    const [circle, direction] = fixture.ids as [string, string];
+    fixture.commit(
+      planSketchLinearPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        circle,
+        direction,
+        4,
+        2,
+        resolve
+      )
+    );
+    const [copy] = fixture.sketch().objectIds.map(String).slice(2);
+    fixture.constrain(lock(direction, 'start', 0, -3));
+    fixture.constrain(lock(direction, 'end', 10, -3));
+    const commands = await sketchEntityEditCommands(
+      fixture.manager.document,
+      fixture.sketchId,
+      copy as EntityId,
+      { objectKind: 'circle', centerX: -4, centerY: 0, radius: 1 },
+      (document, sketchId, anchor) =>
+        adapter.solveSketch(document, sketchId, anchor ? { anchor } : {})
+    );
+    fixture.manager.runTransaction('Move circle', commands);
+    const x = (id: string) =>
+      (
+        fixture.manager.document.nodes[id as EntityId] as unknown as {
+          data: Record<string, number>;
+        }
+      ).data.centerX;
+    expect(x(copy!)).toBe(-4);
+    expect(x(circle)).toBeCloseTo(-8, 8);
+    expectSettled(await fixture.solve());
+  });
+
+  it('refuses a wrong-side copy far from the origin too', async () => {
+    const far = 1e8;
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: far, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: far, y1: -3, x2: far + 10, y2: -3 }
+    ]);
+    const [circle, direction] = fixture.ids as [string, string];
+    fixture.commit(
+      planSketchLinearPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        circle,
+        direction,
+        4,
+        2,
+        resolve
+      )
+    );
+    const [copy] = fixture.sketch().objectIds.map(String).slice(2);
+    expectSettled(await fixture.solve());
+    const mirrored = structuredClone(fixture.manager.document);
+    (
+      mirrored.nodes[copy as EntityId] as unknown as {
+        data: Record<string, number>;
+      }
+    ).data.centerX = far - 4;
+    const held = await adapter.solveSketch(mirrored, fixture.sketchId, {
+      anchor: { objectIds: [circle, copy!, direction] }
+    });
+    expect(held.converged).toBe(false);
+    expect(held.classification).toBe('unsatisfied');
+  });
+
+  it('carries a uniform line round the pivot by its midpoint, as the tool placed it', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 8, y1: 0, x2: 12, y2: 0 },
+      { objectKind: 'point', x: 0, y: 0 }
+    ]);
+    const [bar, hub] = fixture.ids as [string, string];
+    fixture.commit(
+      planSketchCircularPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        bar,
+        { x: 0, y: 0 },
+        2,
+        90,
+        resolve,
+        'uniform',
+        { objectId: hub as EntityId, point: 'center' }
+      )
+    );
+    const [copy] = fixture.sketch().objectIds.map(String).slice(2);
+    const placed = (
+      fixture.manager.document.nodes[copy as EntityId] as unknown as {
+        data: Record<string, number>;
+      }
+    ).data;
+    expect(placed.x1).toBeCloseTo(-2, 9);
+    expect(placed.y1).toBeCloseTo(10, 9);
+    fixture.constrain(lock(hub, 'center', 0, 0));
+    fixture.constrain(lock(bar, 'start', 8, 0));
+    fixture.constrain(lock(bar, 'end', 12, 0));
+    const outcome = await fixture.solve();
+    expectSettled(outcome);
+    const at = solved(outcome, copy!);
+    expect(at.x1).toBeCloseTo(-2, 8);
+    expect(at.y1).toBeCloseTo(10, 8);
+    expect(at.x2).toBeCloseTo(2, 8);
+    expect(at.y2).toBeCloseTo(10, 8);
+  });
+
+  it('trimming an instance into an arc leaves one pattern relation, not two', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 },
+      { objectKind: 'line', x1: 4, y1: -2, x2: 4, y2: 2 }
+    ]);
+    const [circle, direction] = fixture.ids as [string, string];
+    fixture.commit(
+      planSketchLinearPattern(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        circle,
+        direction,
+        4,
+        3,
+        resolve
+      )
+    );
+    const [first, second] = fixture.sketch().objectIds.map(String).slice(3);
+    fixture.commit(
+      planSketchTrim(
+        fixture.manager.document,
+        fixture.sketch(),
+        fixture.sketchId,
+        first!,
+        { x: 5, y: 0 },
+        resolve
+      )
+    );
+    const patterns = (fixture.sketch().constraints ?? []).filter(
+      ({ data }) => data.constraintKind === 'pattern'
+    );
+    expect(patterns).toHaveLength(1);
+    const data = patterns[0]!.data as Extract<
+      SketchConstraintData,
+      { constraintKind: 'pattern' }
+    >;
+    expect(data.instances.map(({ objectId }) => objectId)).toEqual([second]);
+    expectSettled(await fixture.solve());
+  });
+
+  it('refuses a circular pattern pivoting on a spline end', () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 5, centerY: 0, radius: 1 },
+      { objectKind: 'circle', centerX: 0, centerY: 5, radius: 1 },
+      {
+        objectKind: 'spline',
+        method: 'fit',
+        points: [
+          { x: 0, y: 0 },
+          { x: 1, y: 2 },
+          { x: 2, y: 0 }
+        ],
+        closed: false
+      }
+    ]);
+    const [source, copy, curve] = fixture.ids as [string, string, string];
+    expect(() =>
+      addSketchConstraint(fixture.manager.document, {
+        sketchId: fixture.sketchId,
+        constraint: {
+          constraintKind: 'pattern',
+          source: source as EntityId,
+          instances: [{ objectId: copy as EntityId, step: 1 }],
+          layout: {
+            kind: 'circular',
+            pivot: { objectId: curve as EntityId, point: 'start' },
+            stepDeg: 90,
+            orientation: 'rotate'
+          }
+        }
+      })
+    ).toThrow(/spline/);
+  });
+
+  it('turns rotated line instances with the source, and carries uniform ones by their midpoint', async () => {
     for (const orientation of ['rotate', 'uniform'] as const) {
       const fixture = sketchWith([
         { objectKind: 'circle', centerX: 0, centerY: 0, radius: 2 },
@@ -250,16 +487,25 @@ describe('S05 pattern relation on the pinned kernel', () => {
       copies.forEach((copy, index) => {
         const turn = ((index + 1) * Math.PI) / 2;
         const line = solved(outcome, copy);
-        // The start always turns about the hub; the end turns with it, or
-        // keeps the source's +x direction.
-        expect(line.x1).toBeCloseTo(9 * Math.cos(turn), 7);
-        expect(line.y1).toBeCloseTo(9 * Math.sin(turn), 7);
-        const ex =
+        // Rotated, the whole bar turns about the hub. Kept in orientation,
+        // its midpoint (11, 0) turns and the bar keeps the source's +x
+        // direction, as the tool placed it.
+        const [sx, sy, ex, ey] =
           orientation === 'rotate'
-            ? 13 * Math.cos(turn)
-            : 9 * Math.cos(turn) + 4;
-        const ey =
-          orientation === 'rotate' ? 13 * Math.sin(turn) : 9 * Math.sin(turn);
+            ? [
+                9 * Math.cos(turn),
+                9 * Math.sin(turn),
+                13 * Math.cos(turn),
+                13 * Math.sin(turn)
+              ]
+            : [
+                11 * Math.cos(turn) - 2,
+                11 * Math.sin(turn),
+                11 * Math.cos(turn) + 2,
+                11 * Math.sin(turn)
+              ];
+        expect(line.x1).toBeCloseTo(sx, 7);
+        expect(line.y1).toBeCloseTo(sy, 7);
         expect(line.x2).toBeCloseTo(ex, 7);
         expect(line.y2).toBeCloseTo(ey, 7);
       });
@@ -383,7 +629,7 @@ describe('S05 pattern relation on the pinned kernel', () => {
     expect(solved(outcome, third!).centerX).toBeCloseTo(12, 8);
   });
 
-  it('needs schema v139: an older stamp refuses a document that holds one', () => {
+  it('needs schema v145: an older stamp refuses a document that holds one', () => {
     const fixture = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
       { objectKind: 'line', x1: 0, y1: -3, x2: 10, y2: -3 }
@@ -404,12 +650,12 @@ describe('S05 pattern relation on the pinned kernel', () => {
     const saved = JSON.parse(
       JSON.stringify(fixture.manager.document)
     ) as ProjectDocument;
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(139);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(145);
     expect(normalizeDocument(saved)).toEqual(fixture.manager.document);
     expect(() =>
       normalizeDocument({
         ...saved,
-        schemaVersion: 138 as typeof saved.schemaVersion
+        schemaVersion: 144 as typeof saved.schemaVersion
       })
     ).toThrow(/Sketch pattern relations/);
   });

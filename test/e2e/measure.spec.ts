@@ -463,3 +463,37 @@ test(
     await expect(workbench.getByRole('listitem')).toHaveCount(1);
   }
 );
+
+/**
+ * M13: hovering a measurement lights the entity it measured. Pointing at a
+ * recorded edge's row draws that edge in the hover's colours on the model,
+ * keyboard focus does the same, and leaving the row clears it.
+ */
+test(
+  'hovering a measurement row highlights the edge it measured',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await createBox(page, 'Measure Hover');
+
+    await switchWorkspace(page, 'View');
+    await armMeasure(page);
+    await setSelectionFilter(page, 'Edge');
+    const edge = await locateEdge(page);
+    await page.mouse.click(edge.x, edge.y);
+    const workbench = page.getByLabel('Measurement workbench');
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+
+    const canvas = page.locator('.viewer-host canvas');
+    const row = workbench.locator('.measurement-row-main').first();
+    await row.hover();
+    await expect(canvas).toHaveAttribute('data-e2e-measure-highlights', '1');
+    // Off the row, the highlight goes.
+    await page.mouse.move(edge.x + 200, edge.y + 200);
+    await expect(canvas).toHaveAttribute('data-e2e-measure-highlights', '0');
+    // Keyboard focus lights it too.
+    await row.focus();
+    await expect(canvas).toHaveAttribute('data-e2e-measure-highlights', '1');
+    await row.blur();
+    await expect(canvas).toHaveAttribute('data-e2e-measure-highlights', '0');
+  }
+);

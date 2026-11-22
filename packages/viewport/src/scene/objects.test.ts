@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { createFatLine } from '../render/scene';
 import { applyDisplayMode, applySectionPlane } from './objects';
 import { isViewerMesh } from '../pick/meshes';
 import {
@@ -144,4 +145,21 @@ describe('selected face section display', () => {
       expect(selectedFace.material.visible).toBe(true);
     }
   );
+});
+
+describe('a hovered measurement highlight (M13)', () => {
+  it('keeps its own colour and visibility through every display mode', () => {
+    const group = new THREE.Group();
+    const line = createFatLine(
+      [new THREE.Vector3(0, 0, 0), new THREE.Vector3(10, 0, 0)],
+      { color: 0xbfcfff, linewidth: 4 }
+    );
+    line.userData.measureHighlight = true;
+    group.add(line);
+    for (const mode of ['shaded', 'wireframe', 'shaded-edges'] as const) {
+      applyDisplayMode(group, mode);
+      expect(line.visible).toBe(true);
+      expect(line.material.color.getHex()).toBe(0xbfcfff);
+    }
+  });
 });
