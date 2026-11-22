@@ -1,4 +1,4 @@
-import { Check, SlidersHorizontal, X } from 'lucide-react';
+import { Check, LocateFixed, SlidersHorizontal, X } from 'lucide-react';
 import { displayLengthName, type UnitSystem } from '@openzcad/shared';
 import { moveHasFiniteValues } from '../lib/moveCard';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
@@ -49,6 +49,16 @@ interface MoveOverlayProps {
    */
   copy?: boolean;
   onCopy?(value: boolean): void;
+  /**
+   * M10: the point the Move turns about, in document units: a placed pivot
+   * or the body's centre. Omitted for a sketch move, which does not turn.
+   */
+  pivot?: { x: number; y: number; z: number };
+  /** M10: place the pivot at `next`, or back on the body's centre (null). */
+  onPivot?(next: { x: number; y: number; z: number } | null): void;
+  /** M10: whether the gizmo's arrows and centre handle place the pivot. */
+  pivotMode?: boolean;
+  onPivotMode?(value: boolean): void;
   /**
    * Where this panel publishes a sink for live drag values. The viewport
    * writes the numbers a gesture is producing straight into it, so dragging
@@ -161,6 +171,10 @@ export function MoveOverlay({
   onTargetBody,
   copy,
   onCopy,
+  pivot,
+  onPivot,
+  pivotMode,
+  onPivotMode,
   liveValuesRef,
   liveSnapRef
 }: MoveOverlayProps) {
@@ -262,11 +276,34 @@ export function MoveOverlay({
       {/* The one place the step is said: it was also a toast, and the
           toast's guidance (rings, Shift) lives here now. */}
       <span className="in-place-command-hint" title={bodyName}>
-        {copy ? 'A copy of ' : ''}
-        <span className="move-target-name">{bodyName}</span> ·{' '}
-        {hideRotation ? 'drag the arrows' : 'drag the arrows or rings'} · Shift
-        moves freely
+        {pivotMode ? (
+          <>
+            Pivot of <span className="move-target-name">{bodyName}</span> · drag
+            the handle onto a corner or centre · Shift moves freely
+          </>
+        ) : (
+          <>
+            {copy ? 'A copy of ' : ''}
+            <span className="move-target-name">{bodyName}</span> ·{' '}
+            {hideRotation ? 'drag the arrows' : 'drag the arrows or rings'} ·
+            Shift moves freely
+          </>
+        )}
       </span>
+      {/* M10: the pivot handle. While it is on, the arrows and the centre
+          ball carry the turn's centre and the body stays where it is. */}
+      {pivot && onPivotMode ? (
+        <button
+          type="button"
+          className="move-pivot-toggle"
+          aria-pressed={pivotMode === true}
+          title="Place the point the rings turn about"
+          onClick={() => onPivotMode(!pivotMode)}
+        >
+          <LocateFixed size={14} aria-hidden="true" />
+          Pivot
+        </button>
+      ) : null}
       {/* The gizmo is the Move: its exact numbers, name, body and copy are
           rare enough to sit behind Options, as every in-place command's. */}
       <details className="in-place-command-options">
@@ -340,6 +377,35 @@ export function MoveOverlay({
               ))}
             </div>
           )}
+          {pivot && onPivot ? (
+            <div className="move-grid" role="group" aria-label="Pivot">
+              {MOVE_AXES.map((axis) => (
+                <label key={`p-${axis}`}>
+                  <span className={`move-axis move-axis-${axis}`}>
+                    p{axis.toUpperCase()}
+                  </span>
+                  <span className="extrude-distance-input">
+                    <MoveNumberInput
+                      step={snap?.move ?? 1}
+                      value={fieldValue(pivot[axis])}
+                      label={`Pivot ${axis.toUpperCase()} in ${units}`}
+                      onValue={(next) => onPivot({ ...pivot, [axis]: next })}
+                    />
+                    <b>{unitText}</b>
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : null}
+          {pivot && onPivot ? (
+            <button
+              type="button"
+              className="move-pivot-reset"
+              onClick={() => onPivot(null)}
+            >
+              Pivot to body centre
+            </button>
+          ) : null}
           {copy !== undefined && onCopy ? (
             <label className="field transform-copy">
               <input

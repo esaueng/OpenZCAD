@@ -842,6 +842,7 @@ import {
   SELECTION_FILTERS,
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
+import { relocateMovePivot } from '@openzcad/viewport/move-transform';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
 import {
   faceBoundaryEdges,
@@ -13751,15 +13752,40 @@ export function App() {
     (
       translation: MovePreview['translation'],
       rotationDeg: MovePreview['rotationDeg'],
-      snap: MoveSnap
+      snap: MoveSnap,
+      pivot?: MovePreview['translation']
     ) => {
       setMoveSnap(snap);
       setMovePreview((current) =>
-        current ? { ...current, translation, rotationDeg } : current
+        current
+          ? {
+              ...current,
+              translation,
+              rotationDeg,
+              ...(pivot ? { pivot } : {})
+            }
+          : current
       );
     },
     []
   );
+
+  /**
+   * M10: where a body Move turns: its placed pivot, or the body's centre as
+   * every gizmo Move stores. Undefined for a body with no geometry yet.
+   */
+  function movePivotOf(
+    preview: MovePreview
+  ): { x: number; y: number; z: number } | undefined {
+    if (preview.pivot) return preview.pivot;
+    const body = representations[preview.bodyId as BodyId];
+    if (!body) return undefined;
+    return {
+      x: (body.bbox.min.x + body.bbox.max.x) / 2,
+      y: (body.bbox.min.y + body.bbox.max.y) / 2,
+      z: (body.bbox.min.z + body.bbox.max.z) / 2
+    };
+  }
 
   /** Commits the Move card; true when the move landed. */
   function confirmMove(): boolean {
@@ -13788,14 +13814,15 @@ export function App() {
     if (!body) {
       return false;
     }
-    const center = {
+    // M10: rotation turns about the gizmo centre, stored as the Move's pivot
+    // on every gizmo Move, so a rotation or scale added by a later edit still
+    // turns the body in place rather than about the world origin. A pivot
+    // placed with the pivot handle is that centre.
+    const center = preview.pivot ?? {
       x: (body.bbox.min.x + body.bbox.max.x) / 2,
       y: (body.bbox.min.y + body.bbox.max.y) / 2,
       z: (body.bbox.min.z + body.bbox.max.z) / 2
     };
-    // M10: rotation turns about the gizmo centre, stored as the Move's pivot
-    // on every gizmo Move, so a rotation or scale added by a later edit still
-    // turns the body in place rather than about the world origin.
     const round = (value: number) => Math.round(value * 1000) / 1000;
     const values = {
       translation: {
@@ -39838,9 +39865,10 @@ export function App() {
                             bodyId,
                             // Values are relative to the body's own centre, so
                             // carrying them to a different body would apply a
-                            // move nobody asked for.
+                            // move nobody asked for. So is a placed pivot.
                             translation: { x: 0, y: 0, z: 0 },
-                            rotationDeg: { x: 0, y: 0, z: 0 }
+                            rotationDeg: { x: 0, y: 0, z: 0 },
+                            pivot: undefined
                           }
                         : current
                     );
@@ -39873,6 +39901,36 @@ export function App() {
                     setMovePreview((current) =>
                       current ? { ...current, copy } : current
                     )
+                  }
+                  pivot={
+                    movePreview.target === 'sketch'
+                      ? undefined
+                      : movePivotOf(movePreview)
+                  }
+                  pivotMode={movePreview.pivotMode === true}
+                  onPivotMode={(pivotMode) =>
+                    setMovePreview((current) =>
+                      current ? { ...current, pivotMode } : current
+                    )
+                  }
+                  onPivot={(next) =>
+                    setMovePreview((current) => {
+                      const from = current && movePivotOf(current);
+                      return current && from
+                        ? {
+                            ...current,
+                            // The body stays put; only the turn's centre moves.
+                            translation: relocateMovePivot(
+                              from,
+                              current.translation,
+                              current.rotationDeg,
+                              next ??
+                                movePivotOf({ ...current, pivot: undefined })!
+                            ),
+                            pivot: next ?? undefined
+                          }
+                        : current;
+                    })
                   }
                   liveValuesRef={moveValuesSetterRef}
                   liveSnapRef={moveSnapSetterRef}
