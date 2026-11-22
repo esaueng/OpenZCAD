@@ -137,4 +137,20 @@ describe('native SpaceMouse adapter', () => {
     });
     hub.dispose();
   });
+
+  it('shows the host message when capture is refused', async () => {
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === 'wired_space_mouse_page') return 7;
+      // Tauri rejects a command error with the host's string.
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- matches Tauri's rejection
+      throw 'Plug in the wired SpaceMouse Pro, then connect it again.';
+    });
+    const hub = new SpaceMouseHub(nativeSpaceMouseHid());
+    await hub.connect();
+    expect(hub.getStatus()).toEqual({
+      state: 'error',
+      message: 'Plug in the wired SpaceMouse Pro, then connect it again.'
+    });
+    hub.dispose();
+  });
 });

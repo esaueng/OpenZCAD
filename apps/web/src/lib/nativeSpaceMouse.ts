@@ -41,7 +41,16 @@ const bridge: NativeSpaceMouseBridge = {
   },
   async enable(enabled) {
     const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('set_wired_space_mouse', { enabled, page: await pageLoad() });
+    try {
+      await invoke('set_wired_space_mouse', {
+        enabled,
+        page: await pageLoad()
+      });
+    } catch (error) {
+      // Tauri rejects with the host's message as a plain string; keep it so
+      // Settings shows it (for example, to plug the device in).
+      throw error instanceof Error ? error : new Error(String(error));
+    }
   }
 };
 

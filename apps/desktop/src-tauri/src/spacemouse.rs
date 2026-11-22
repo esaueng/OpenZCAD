@@ -45,9 +45,16 @@ impl Stream {
 
 struct Reader {
     app: AppHandle,
+    id: u64,
     translation: Stream,
     rotation: Stream,
+    /// The device was removed; this reader can no longer capture anything.
+    lost: bool,
 }
+
+// Names each reader, so deferred teardown after an unplug ends only the
+// reader that lost its device, never a later connection.
+static NEXT_READER: AtomicU64 = AtomicU64::new(0);
 
 extern "C" {
     fn openzcad_spacemouse_start(
@@ -63,21 +70,29 @@ const ABSENT: c_int = 2;
 struct SpaceMouse {
     handle: NonNull<c_void>,
     context: *mut Reader,
+    id: u64,
 }
 
 impl SpaceMouse {
     fn start(app: AppHandle) -> Result<Self, String> {
+        let id = NEXT_READER.fetch_add(1, Ordering::Relaxed);
         let context = Box::into_raw(Box::new(Reader {
             app,
+            id,
             translation: Stream::default(),
             rotation: Stream::default(),
+            lost: false,
         }));
         // Tauri calls Ready and Exit on the main run loop, which owns the C
         // reader and serializes its callbacks with teardown.
         let mut status: c_int = 0;
         let handle = unsafe { openzcad_spacemouse_start(receive, context.cast(), &mut status) };
         if let Some(handle) = NonNull::new(handle) {
-            Ok(Self { handle, context })
+            Ok(Self {
+                handle,
+                context,
+                id,
+            })
         } else {
             unsafe { drop(Box::from_raw(context)) };
             Err(if status == ABSENT {
@@ -86,6 +101,13 @@ impl SpaceMouse {
                 "Could not capture the wired SpaceMouse Pro.".into()
             })
         }
+    }
+}
+
+impl SpaceMouse {
+    fn lost(&self) -> bool {
+        // The C callbacks and this check both run on the main run loop.
+        unsafe { (*self.context).lost }
     }
 }
 
@@ -105,22 +127,30 @@ fn emit(app: &AppHandle, report: Report) {
 extern "C" fn receive(context: *mut c_void, bytes: *const u8, length: usize) {
     let reader = unsafe { &mut *context.cast::<Reader>() };
     if length == 0 {
-        // The captured device went away: stop held motion, tell Settings,
-        // and end the capture. This runs inside the IOHID callback on the
-        // main thread, where run_on_main_thread would run synchronously and
-        // free this reader under its own callback, so post the teardown from
-        // another thread to run on a later turn of the main loop.
+        // The captured device went away: stop held motion, end the capture
+        // and tell Settings. Disable now so a focus change cannot recapture
+        // for a page that shows the error. A later Connect replaces this
+        // reader (see Capture::update). Freeing it here would free it under
+        // its own IOHID callback, and run_on_main_thread runs synchronously
+        // on the main thread, so post its teardown from another thread to a
+        // later turn of the main loop. The teardown ends only this reader.
+        reader.lost = true;
         reader.translation = Stream::default();
         reader.rotation = Stream::default();
+        CAPTURE.with(|capture| {
+            if let Ok(mut capture) = capture.try_borrow_mut() {
+                capture.enabled = false;
+            }
+        });
         emit(&reader.app, Report::Reset);
         emit(
             &reader.app,
             Report::Error("The wired SpaceMouse Pro was disconnected.".into()),
         );
         let app = reader.app.clone();
+        let id = reader.id;
         tauri::async_runtime::spawn(async move {
-            let owner = app.clone();
-            let _ = app.run_on_main_thread(move || close(&owner));
+            let _ = app.run_on_main_thread(move || release_lost(id));
         });
     } else if (2..=7).contains(&length) {
         // C validates the report ID and owns the buffer for this callback.
@@ -150,6 +180,11 @@ struct Capture {
 impl Capture {
     fn update(&mut self, app: &AppHandle, focused: bool) -> Result<(), String> {
         if self.enabled && focused {
+            if self.reader.as_ref().is_some_and(SpaceMouse::lost) {
+                // Replace a reader whose device was unplugged; reusing it
+                // would report success with nothing captured.
+                self.reader = None;
+            }
             if self.reader.is_none() {
                 self.reader = Some(SpaceMouse::start(app.clone())?);
             }
@@ -221,6 +256,19 @@ pub fn focus_changed(app: &AppHandle, focused: bool) {
         if let Err(message) = capture.update(app, focused) {
             capture.enabled = false;
             emit(app, Report::Error(message));
+        }
+    });
+}
+
+fn release_lost(id: u64) {
+    CAPTURE.with(|capture| {
+        let mut capture = capture.borrow_mut();
+        if capture
+            .reader
+            .as_ref()
+            .is_some_and(|reader| reader.id == id)
+        {
+            capture.reader = None;
         }
     });
 }
