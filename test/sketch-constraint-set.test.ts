@@ -693,6 +693,23 @@ describe('S07 entity lock on the pinned kernel', () => {
     return next;
   }
 
+  it('refuses the mirror sweep of a tiny locked arc too', async () => {
+    const fixture = lockedWhole({
+      objectKind: 'arc',
+      centerX: 0,
+      centerY: 0,
+      radius: 4e-7,
+      startAngleDeg: 0,
+      endAngleDeg: 90
+    });
+    const flipped = await adapter.solveSketch(
+      patched(fixture.manager.document, fixture.ids[0]!, { endAngleDeg: 270 }),
+      fixture.sketchId
+    );
+    expect(flipped.converged).toBe(false);
+    expect(flipped.classification).toBe('unsatisfied');
+  });
+
   it('refuses a locked arc whose end settles on the mirror sweep', async () => {
     // 0°→90°: the lock fixes the end's x (0); 270° has the same x and
     // radius, so only the read-back tells the two sweeps apart.
@@ -772,8 +789,25 @@ describe('S07 entity lock on the pinned kernel', () => {
     const sketch = findSketch(document, fixture.sketchId)!;
     const withR = (r: number) => (value: number | string) =>
       value === 'r' ? r : typeof value === 'number' ? value : undefined;
-    expect(movedEntityLock(document, sketch, withR(5))).toBeNull();
-    expect(movedEntityLock(document, sketch, withR(8))).toBe(fixture.ids[0]);
+    expect(movedEntityLock(document, sketch, withR(5), withR(5))).toBeNull();
+    expect(movedEntityLock(document, sketch, withR(5), withR(8))).toBe(
+      fixture.ids[0]
+    );
+    // A small move far from the origin still counts.
+    expect(
+      movedEntityLock(document, sketch, withR(1e8), withR(1e8 + 0.05))
+    ).toBe(fixture.ids[0]);
+    // An unrelated parameter edit passes even after the entity moved away
+    // from its recorded lock (say with its sketch).
+    const moved = patched(document, fixture.ids[0]!, { centerX: 10 });
+    expect(
+      movedEntityLock(
+        moved,
+        findSketch(moved, fixture.sketchId)!,
+        withR(5),
+        withR(5)
+      )
+    ).toBeNull();
   });
 
   it('needs schema v138: an older stamp refuses a document that holds one', () => {

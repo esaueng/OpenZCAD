@@ -919,26 +919,29 @@ function entityLockGeometry(
 }
 
 /**
- * The first whole-locked entity whose own dimensions, resolved with
- * `resolve` (say after a parameter edit), no longer match the geometry its
- * lock recorded; null when every lock still holds. A parameter feeding a
- * locked entity's field would otherwise move it without a solve.
+ * The first whole-locked entity whose own dimensions resolve differently
+ * under `after` than under `before` (say across a parameter edit); null when
+ * the edit leaves every locked entity where it is. A parameter feeding a
+ * locked entity's field would otherwise move it without a solve. Equal to
+ * floating-point precision: any real change, however small, counts.
  */
 export function movedEntityLock(
   document: ProjectDocument,
   sketch: SketchNode,
-  resolve: ResolveParam
+  before: ResolveParam,
+  after: ResolveParam
 ): string | null {
   for (const { data } of sketch.constraints ?? []) {
     if (data.constraintKind !== 'lock-entity') continue;
-    const now = entityLockGeometry(document, sketch, data.objectId, resolve);
+    const was = entityLockGeometry(document, sketch, data.objectId, before);
+    const now = entityLockGeometry(document, sketch, data.objectId, after);
     const moved =
+      !was ||
       !now ||
-      now.length !== data.at.length ||
       now.some(
         (value, index) =>
-          Math.abs(value - data.at[index]!) >
-          1e-9 * Math.max(1, Math.abs(value))
+          Math.abs(value - was[index]!) >
+          16 * Number.EPSILON * Math.max(1, Math.abs(value))
       );
     if (moved) return data.objectId;
   }

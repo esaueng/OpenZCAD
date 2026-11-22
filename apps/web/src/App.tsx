@@ -26029,6 +26029,8 @@ export function App() {
           prospective,
           sketch,
           (value) =>
+            evalParamValue(value, beforeScope, base.units) ?? undefined,
+          (value) =>
             evalParamValue(value, afterScope, prospective.units) ?? undefined
         );
         if (locked) {

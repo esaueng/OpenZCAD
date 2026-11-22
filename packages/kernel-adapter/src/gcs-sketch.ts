@@ -776,7 +776,9 @@ export function solveSketchWithGcs(
   for (const lock of arcEndLocks) {
     const at = readPoint(lock.handle);
     const miss = Math.hypot(at.x - lock.x, at.y - lock.y);
-    if (miss > 1e-6 * Math.max(1, lock.radius)) {
+    // The mirror lies at least r·√2 away; the solve's own error is far
+    // below a millionth of the radius.
+    if (miss > 1e-6 * lock.radius) {
       classification = 'unsatisfied';
       lockMisses.set(
         lock.constraintId,
