@@ -293,6 +293,100 @@ describe('collaboration room idle history trim', () => {
     expect(storage.alarm.sets).toHaveLength(1);
   });
 
+  it('does not trim when a commit queued ahead of the alarm rescheduled it', async () => {
+    const { storage, room, third } = await threeVersionRoom('Queued commit');
+    setNow(clock + 8 * DAY);
+    // Hold the next commit inside the room queue at its storage write.
+    const target = storage.context.storage;
+    const put = target.put.bind(target);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let reached!: () => void;
+    const atPut = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    target.put = async (keyOrEntries: unknown, value?: unknown) => {
+      target.put = put;
+      reached();
+      await gate;
+      return put(keyOrEntries, value);
+    };
+    const next = new CommandManager(third).execute(
+      commandFactories.addPrimitive({
+        name: 'Racing',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
+    );
+    const committing = commit(room, next, third.version);
+    await atPut;
+    const alarm = fireAlarm(storage, room);
+    release();
+    await Promise.all([committing, alarm]);
+
+    expect(historyKeys(storage)).toHaveLength(4);
+    expect(storage.alarm.at).toBe(clock + 8 * DAY);
+  });
+
+  it('reschedules when the last socket closed moments before the alarm', async () => {
+    const { storage, room, first } = await threeVersionRoom('Just closed');
+    setNow(clock + 8 * DAY - 60_000);
+    const accepted = await room.fetch(
+      new Request(`https://room.test/?projectId=${first.projectId}`, {
+        headers: {
+          upgrade: 'websocket',
+          'x-openzcad-user-id': OWNER,
+          'x-openzcad-display-name': 'Room user',
+          'x-openzcad-project-role': 'owner'
+        }
+      })
+    );
+    expect(accepted.status).toBe(101);
+    const socket = globals.serverSockets.at(-1)!;
+    socket.close(1000, 'done');
+    room.webSocketClose(socket as unknown as WebSocket);
+
+    setNow(clock + 60_000);
+    await fireAlarm(storage, room);
+
+    expect(historyKeys(storage)).toHaveLength(3);
+    expect(storage.alarm.at).toBe(clock + 8 * DAY);
+  });
+
+  it('schedules and trims a migrated room whose latest has no history entry', async () => {
+    setNow(Date.UTC(2026, 10, 1));
+    const a = session('Legacy layout');
+    const older = a.box('One');
+    const latest = a.box('Two');
+    const storage = createRoomContext(
+      new Map<string, unknown>([
+        [
+          'room-state',
+          {
+            projectId: older.projectId,
+            latestDocument: latest,
+            history: [older]
+          }
+        ]
+      ])
+    );
+    const room = createTestRoom(storage.context, {});
+    await settleRoom(room);
+    expect(historyKeys(storage)).toEqual([`room:history:${older.version}`]);
+    expect(storage.alarm.sets).toEqual([clock + 8 * DAY]);
+
+    setNow(clock + 8 * DAY);
+    await fireAlarm(storage, room);
+    expect(historyKeys(storage)).toEqual([]);
+    expect(storage.values.get('room:latest')).toEqual(latest);
+    expect(storage.values.get('room:meta')).toMatchObject({
+      latestVersion: latest.version,
+      historyVersions: []
+    });
+  });
+
   it('clears the alarm when the room is erased', async () => {
     const { storage, room, first } = await threeVersionRoom('Erased room');
     expect(storage.alarm.at).not.toBeNull();

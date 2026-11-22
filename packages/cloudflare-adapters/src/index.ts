@@ -9943,6 +9943,12 @@ export class ProjectCollaborationRoom extends DurableObject {
    * write it each time: undefined until read, null when none is set.
    */
   private idleTrimAlarmAt: number | null | undefined;
+  /**
+   * When this instance last accepted or lost a socket. In memory only (no
+   * write per connection): it keeps an alarm that fires just after the last
+   * socket closed from trimming a room that was in use moments ago.
+   */
+  private lastSocketActivityAt: number | null = null;
   private projectId: string | null = null;
   private erasing = false;
   /**
@@ -10012,16 +10018,17 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.instanceId = meta.instanceId ?? null;
       this.roomFormat = meta.format === 2 ? 2 : null;
       this.historyVersions = meta.historyVersions ?? [];
-      // A room stored before the idle trim existed schedules it on its next
-      // wake. A wake only reads the alarm (none once the room holds a single
-      // version) and never moves one already set: only commits do that.
-      await this.scheduleIdleHistoryTrim(true).catch(() => {
-        this.idleTrimAlarmAt = undefined;
-      });
       this.latestDocument =
         (await this.roomContext.storage.get<ProjectDocument>(
           ROOM_LATEST_KEY
         )) ?? null;
+      // A room stored before the idle trim existed schedules it on its next
+      // wake. A wake only reads the alarm (none once the room holds nothing
+      // older than its latest) and never moves one already set: only commits
+      // do that.
+      await this.scheduleIdleHistoryTrim(true).catch(() => {
+        this.idleTrimAlarmAt = undefined;
+      });
       if (this.latestDocument)
         this.latestDocument = reconcileCopiedImportSources(
           this.latestDocument,
@@ -10266,6 +10273,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       const client = pair[0];
       const server = pair[1];
       this.roomContext.acceptWebSocket(server);
+      this.lastSocketActivityAt = Date.now();
       roomWebSocket(server).serializeAttachment({
         schema: 1,
         userId,
@@ -10316,10 +10324,12 @@ export class ProjectCollaborationRoom extends DurableObject {
   }
 
   webSocketClose(socket: WebSocket): void {
+    this.lastSocketActivityAt = Date.now();
     this.removeSocket(socket);
   }
 
   webSocketError(socket: WebSocket): void {
+    this.lastSocketActivityAt = Date.now();
     this.removeSocket(socket);
   }
 
@@ -12741,9 +12751,15 @@ export class ProjectCollaborationRoom extends DurableObject {
   private async scheduleIdleHistoryTrim(onlyIfMissing = false): Promise<void> {
     const now = Date.now();
     const retained = this.historyLoaded
-      ? this.documentHistory.size
-      : this.historyVersions.length;
-    if (this.erasing || this.roomFormat === 2 || retained <= 1) return;
+      ? [...this.documentHistory.keys()]
+      : this.historyVersions;
+    if (
+      this.erasing ||
+      this.roomFormat === 2 ||
+      !this.latestDocument ||
+      !retained.some((version) => version !== this.latestDocument?.version)
+    )
+      return;
     if (this.idleTrimAlarmAt === undefined)
       this.idleTrimAlarmAt = await this.roomContext.storage.getAlarm();
     if (
@@ -12766,7 +12782,8 @@ export class ProjectCollaborationRoom extends DurableObject {
    * The idle-trim alarm. Commits push it out (see
    * {@link scheduleIdleHistoryTrim}), so when it fires the room has not
    * committed for at least {@link ROOM_IDLE_HISTORY_TRIM_MS}. A room with an
-   * open socket is still in use and only reschedules.
+   * open socket, or one that held a socket within that window, is still in
+   * use and only reschedules.
    */
   async alarm(): Promise<void> {
     await this.ready;
@@ -12774,7 +12791,14 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.idleTrimAlarmAt = null;
     await this.enqueueLeaseOperation(async () => {
       if (this.erasing || this.roomFormat === 2) return;
-      if (this.roomContext.getWebSockets().length > 0) {
+      // A commit queued ahead of this handler already scheduled the next
+      // alarm: the room is not idle.
+      if (this.idleTrimAlarmAt !== null) return;
+      if (
+        this.roomContext.getWebSockets().length > 0 ||
+        (this.lastSocketActivityAt !== null &&
+          Date.now() - this.lastSocketActivityAt < ROOM_IDLE_HISTORY_TRIM_MS)
+      ) {
         await this.scheduleIdleHistoryTrim();
         return;
       }
@@ -12787,8 +12811,10 @@ export class ProjectCollaborationRoom extends DurableObject {
    * source archives, leases and tickets are untouched. The latest's own entry
    * stays because a client in step with the room submits with that version as
    * its base, and the rolled-over lineage check compares against it. The
-   * index is written first, so a failed delete leaks keys rather than leaving
-   * the index naming a version whose key is gone.
+   * index write and the deletes are issued with no await between them, so
+   * the runtime commits them as one atomic batch: a failure leaves neither a
+   * dangling index entry nor unindexed snapshots, and the alarm's retry
+   * finds the old index intact.
    */
   private async trimIdleHistory(): Promise<void> {
     const latest = this.latestDocument;
@@ -12804,7 +12830,10 @@ export class ProjectCollaborationRoom extends DurableObject {
     for (const version of evicted) this.documentHistory.delete(version);
     const meta = this.roomMeta();
     try {
-      await this.roomContext.storage.put(ROOM_META_KEY, meta);
+      await Promise.all([
+        this.roomContext.storage.put(ROOM_META_KEY, meta),
+        this.roomContext.storage.delete(Array.from(evicted, historyKey))
+      ]);
     } catch (error) {
       this.documentHistory = previousHistory;
       throw error;
@@ -12812,7 +12841,6 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.historyVersions = meta.historyVersions;
     for (const version of evicted)
       this.persistedHistoryVersions.delete(version);
-    await this.roomContext.storage.delete(Array.from(evicted, historyKey));
   }
 
   /** Drops the oldest history entries, returning the versions to unlink. */
