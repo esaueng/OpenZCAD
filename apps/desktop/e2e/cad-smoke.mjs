@@ -289,6 +289,46 @@ async function locatePickableEdge(sessionId) {
   throw new Error('The exact model did not expose a pickable edge.');
 }
 
+/**
+ * The viewport applies zoom and other eased motion one rendered frame at a
+ * time. macOS marks the window hidden while the screen is locked, the
+ * display sleeps or the app is occluded, and WKWebView then runs no
+ * animation frames, so those checks would fail as camera assertions far
+ * from the cause. Stop here instead with a message that names it.
+ */
+async function assertPageRendering(sessionId) {
+  const deadline = Date.now() + 10_000;
+  let state;
+  while (Date.now() < deadline) {
+    state = await executeAsync(
+      sessionId,
+      `var done = arguments[arguments.length - 1];
+      var frames = 0;
+      var report = function () {
+        done({ visibility: document.visibilityState, frames: frames });
+      };
+      var tick = function () {
+        frames += 1;
+        if (frames < 3) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      setTimeout(report, 500);`
+    );
+    if (state?.visibility === 'visible' && state.frames > 0) {
+      return;
+    }
+    await delay(250);
+  }
+  throw new Error(
+    'The OpenZCAD window is not rendering ' +
+      `(visibilityState ${state?.visibility ?? 'unknown'}, ` +
+      `${state?.frames ?? 0} animation frames in 500 ms). ` +
+      'Unlock the screen, wake the display and keep the window unobscured: ' +
+      'WKWebView runs no animation frames for a hidden window, and the ' +
+      'viewport checks below depend on them.'
+  );
+}
+
 let sessionId;
 try {
   await waitForDriver();
@@ -299,6 +339,7 @@ try {
     'The application body',
     'return Boolean(document.body && document.body.textContent);'
   );
+  await assertPageRendering(sessionId);
   await waitForScript(
     sessionId,
     'The Mounting Bracket demo',

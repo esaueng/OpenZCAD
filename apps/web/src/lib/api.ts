@@ -8,6 +8,7 @@ import type {
   LibraryFolderSnapshot,
   SaveLibraryFolderRequest
 } from './libraryFolderCloudSync';
+import type { ShareLinkNamesSnapshot } from './e2ee/sealedShareLinkNames';
 import type {
   AccountStorageUsage,
   AccountDeletionPreview,
@@ -1754,6 +1755,14 @@ export const api = {
     requestJson<LibraryFolderSnapshot>('/api/library-folders'),
   saveLibraryFolders: (payload: SaveLibraryFolderRequest) =>
     requestJson<LibraryFolderSnapshot>('/api/library-folders', {
+      method: 'PUT',
+      body: JSON.stringify(payload)
+    }),
+  /** The account's sealed share link names (ADR-024 amendment 2026-11-22). */
+  getShareLinkNames: () =>
+    requestJson<ShareLinkNamesSnapshot>('/api/share-link-names'),
+  saveShareLinkNames: (payload: { expectedRevision: number; record: string }) =>
+    requestJson<ShareLinkNamesSnapshot>('/api/share-link-names', {
       method: 'PUT',
       body: JSON.stringify(payload)
     }),
