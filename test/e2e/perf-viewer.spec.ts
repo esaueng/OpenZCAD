@@ -296,6 +296,16 @@ test('profiles idle, hover, orbit, zoom and diagnostics on the real viewer', asy
         box.y + box.height * (0.4 + 0.2 * Math.sin(index * 0.12))
       );
   });
+  // The same sweep over empty space above the model. Nothing under the
+  // pointer changes, so its frames should not draw: `oz:viewer.frame` marks
+  // drawn frames only, and this phase's count is the one to watch.
+  await record('hover-empty', async () => {
+    for (let index = 0; index < 180; index++)
+      await page.mouse.move(
+        box.x + box.width * (0.3 + (0.4 * (index % 60)) / 60),
+        box.y + box.height * 0.08
+      );
+  });
   await record('orbit', orbit);
   await record('zoom', async () => {
     await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5);

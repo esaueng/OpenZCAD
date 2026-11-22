@@ -1,4 +1,5 @@
 import { toProjectId, type ProjectId } from '@openzcad/shared';
+import type { InitialPlayback } from './assembly/assembleWorkspace';
 
 /**
  * What the launcher needs to *offer* a demo, separated from what building one
@@ -24,7 +25,7 @@ export interface DemoDefinition {
   /** Open an assembly example with its first joint ready to try. */
   initialWorkspace?: 'assemble';
   /** A transient demonstration when this assembly example opens. */
-  initialPlayback?: 'ping-pong';
+  initialPlayback?: InitialPlayback;
 }
 
 export const DEMO_DEFINITIONS: DemoDefinition[] = [
@@ -64,7 +65,8 @@ export const DEMO_DEFINITIONS: DemoDefinition[] = [
     summary: 'Assembly, revolute pivot',
     revisions: [],
     initialWorkspace: 'assemble',
-    initialPlayback: 'ping-pong'
+    // Three open-and-close cycles (about 9 s), then paused on the saved pose.
+    initialPlayback: { mode: 'ping-pong', cycles: 3 }
   }
 ];
 

@@ -20,7 +20,8 @@ export interface CurvePickerRig {
   group: THREE.Group;
   /** The candidate under `ray`, within `thresholdWorld` of it, or null. */
   pick(ray: THREE.Ray, thresholdWorld: number): string | null;
-  setHover(id: string | null): void;
+  /** Returns whether that changed anything, so a hover frame can skip a draw. */
+  setHover(id: string | null): boolean;
   setSelected(ids: readonly string[]): void;
   dispose(): void;
 }
@@ -81,9 +82,10 @@ export function buildCurvePickerRig(
       return (hit?.object.userData.pickCurve as string | undefined) ?? null;
     },
     setHover(id) {
-      if (id === hovered) return;
+      if (id === hovered) return false;
       hovered = id;
       paint();
+      return true;
     },
     setSelected(ids) {
       selected = new Set(ids);

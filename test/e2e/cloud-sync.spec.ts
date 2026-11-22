@@ -16,6 +16,7 @@ import {
 } from '@openzcad/shared';
 import type { StoredMeasurementRecord } from '../../apps/web/src/lib/measurementRecord';
 import {
+  keepMeasurement,
   createPrimitiveInPlace,
   createProject,
   expectBodyCount,
@@ -1276,6 +1277,7 @@ test('syncs View measurements to a second device without changing the CAD docume
     await setSelectionFilter(pageA, 'Edge');
     const edge = await locateEdge(pageA);
     await pageA.mouse.click(edge.x, edge.y);
+    await keepMeasurement(pageA);
     const measured = await pageA
       .getByLabel('Measurement workbench')
       .getByRole('listitem')

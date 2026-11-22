@@ -1823,8 +1823,6 @@ export interface ShareLinksView {
   readonly isOwner: boolean;
   readonly links: readonly ShareLinkView[];
   readonly delegation: ShareDelegationState;
-  /** Links the head's set tombstones: revoked for good. */
-  readonly revokedIds: readonly string[];
 }
 
 /** The head's active links with what visitors see of each. */
@@ -1905,12 +1903,7 @@ export async function listShareLinks(
       snapshotVersion: record.snapshot?.documentVersion ?? null
     });
   }
-  return {
-    isOwner,
-    links,
-    delegation,
-    revokedIds: [...(head.shareLinks?.tombstonedIds ?? [])]
-  };
+  return { isOwner, links, delegation };
 }
 
 function decodeOr(statement: string): ShareDelegation | null {

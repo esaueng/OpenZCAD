@@ -26,13 +26,21 @@ import {
   type Vector3
 } from '@openzcad/shared';
 import { featureHistory, featureResultBodyIds } from '../featureHistory';
-import { holePositionAxes } from '../holePositionAxes';
+import {
+  holeAnchorPoint,
+  holePositionAxes,
+  savedHoleAnchor
+} from '../holePositionAxes';
 import type { RevolveAxisCandidate } from './revolve';
 import { threadEditOptions } from './thread';
 import { standardPartEditSeed } from './standardPart';
 import { sheetMetalCleared, sheetMetalEditOptions } from './sheetMetal';
 import {
+  FILLET_VERTEX_SLOTS,
   IN_PLACE_TOOL_SPECS,
+  filletEdgeRuns,
+  filletSelectionVertices,
+  filletVertexValueId,
   type BodyPick,
   type CurvePick,
   type EdgePick,
@@ -884,7 +892,12 @@ export function inPlaceEditSeed(
       // stored with (or none): an untouched edit writes the same set back.
       const named = data.edgeReferences?.length === data.edgeHashes.length;
       data.edgeHashes.forEach((hash, index) => {
-        const stored = named ? data.edgeReferences![index]! : undefined;
+        // By hash, as the build and validation pair them, then by place
+        // (review): a list stored in another order keeps each edge's name.
+        const stored =
+          data.edgeReferences?.find(
+            (reference) => reference.currentHash === hash
+          ) ?? (named ? data.edgeReferences![index]! : undefined);
         const edge = ctx.edge(data.targetBodyId, hash, stored);
         // An edge that no longer resolves is left out, as a face or a path
         // curve is: a click then picks its replacement rather than adding
@@ -907,6 +920,68 @@ export function inPlaceEditSeed(
         if (data.endRadius !== undefined) {
           value('endRadius', data.endRadius);
           seed.options.law = data.radiusLaw ?? 'linear';
+          // M03 (v151): each corner's stored radius into its value, the
+          // corners counted as the tool counts them from the same picks.
+          // Only when every stored edge is still there in its place: the
+          // entries index the stored edge list.
+          const vertices =
+            data.vertexRadii &&
+            seed.slots.edges.length === data.edgeHashes.length
+              ? filletSelectionVertices(seed.slots.edges)
+              : null;
+          // M03 (v152): a fillet holds one interior station, the one the
+          // editor holds.
+          if (data.radiusStations?.[0]) {
+            seed.options.radiusAt = 'along';
+            value('midRadius', data.radiusStations[0].radius);
+            value('midAt', data.radiusStations[0].at * 100);
+          }
+          // An edge that now runs the other way from when its corners or
+          // stations were set keeps its stored run (review): Done then writes
+          // the same fillet back, which the build refuses by name, rather
+          // than a run read off the turned edge that would swap its radii
+          // end for end. Picking the edge again sets them afresh.
+          if (data.vertexRadii || data.radiusStations) {
+            // Each edge by its own stored hash: an edge that no longer
+            // resolves leaves the list, and the rest must keep their own
+            // runs, not their neighbours' (review).
+            const live = filletEdgeRuns(seed.slots.edges);
+            seed.slots.edges.forEach((pick, index) => {
+              const run = data.edgeRuns?.[data.edgeHashes.indexOf(pick.hash)];
+              const witness = pick.reference?.witness;
+              if (run === undefined || !witness || witness.closed) return;
+              if (live?.[index] === run) return;
+              const [x, y, z] = witness.endpoints[run ? 1 : 0];
+              pick.end = { x: x * 1e-6, y: y * 1e-6, z: z * 1e-6 };
+            });
+          }
+          if (data.vertexRadii && vertices) {
+            seed.options.radiusAt = 'vertices';
+            vertices.forEach((vertex, index) => {
+              if (index >= FILLET_VERTEX_SLOTS) return;
+              const stored = data.vertexRadii!.find((entry) =>
+                vertex.ends.some(
+                  (end) => end.edge === entry.edge && end.end === entry.end
+                )
+              );
+              if (stored) {
+                value(filletVertexValueId(index), stored.radius);
+                return;
+              }
+              // A corner with no entry kept what the start and end radii
+              // gave it, which depends on the way its edge ran (review):
+              // seed that, so an untouched Done writes the same fillet back.
+              const [first] = vertex.ends;
+              const run = first ? data.edgeRuns?.[first.edge] : undefined;
+              if (first && run !== undefined) {
+                const atStart = run ? first.end === 0 : first.end === 1;
+                value(
+                  filletVertexValueId(index),
+                  atStart ? data.radius : data.endRadius!
+                );
+              }
+            });
+          }
         } else {
           seed.options.law = 'constant';
         }
@@ -1073,10 +1148,7 @@ export function holeWorldPosition(
   data: Extract<FeatureData, { featureKind: 'hole' }>,
   ctx: Pick<InPlaceEditContext, 'evaluate'>
 ): Vector3 | null {
-  const anchor =
-    data.positionAnchor === 'centroid'
-      ? (face.centroid ?? face.center)
-      : (face.center ?? face.centroid);
+  const anchor = holeAnchorPoint(face, savedHoleAnchor(data.positionAnchor));
   const axes = face.normal ? holePositionAxes(face.normal) : null;
   const u = ctx.evaluate(data.position.u);
   const v = ctx.evaluate(data.position.v);

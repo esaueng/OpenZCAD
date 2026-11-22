@@ -82,7 +82,11 @@ import {
   FrameIntervalMeter,
   NAVIGATION_PIXEL_RATIO,
   navigationPixelRatio,
-  shadowMapSizeFor
+  displayPixelRatio,
+  shadowMapSizeFor,
+  viewportPixelRatio,
+  viewportSampling,
+  withReportedPixelRatio
 } from './viewer/renderBudget';
 import type { SketchRelationGlyphChip } from '../lib/sketch/relationGlyphs';
 import type { SketchDimensionAnnotation } from '../lib/sketch/dimensionAnnotations';
@@ -293,6 +297,7 @@ import {
   UNIT_TO_MM,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
+  convertLength,
   displayLengthName,
   ownEntry,
   type GeometryBodyRepresentation,
@@ -319,7 +324,8 @@ import {
 import { chipLeader, separateChips } from '../lib/commandChipLayout';
 import { faceLift } from '../lib/faceDepthBehind';
 import { faceTotalSpan } from '../lib/opposingPlaneSpan';
-import { setLiveDiameter } from '../lib/liveLabels';
+import { roundShownLength, setLiveDiameter } from '../lib/liveLabels';
+import { useDisplayUnits } from '../lib/displayUnits';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
   placeSelectionCallouts,
@@ -542,6 +548,18 @@ import {
   topologySelectionLabelSegments,
   type LabelSegment
 } from '../lib/topologyLabels';
+
+/**
+ * Gives a HUD chip, tag or pin back to the layer that made it, or just drops
+ * it from the DOM once the viewer (and its layer) is gone.
+ */
+function releaseHudElement(
+  release: MutableRefObject<((element: HTMLElement) => void) | null>,
+  element: HTMLElement
+) {
+  if (release.current) release.current(element);
+  else element.remove();
+}
 
 /**
  * What makes two hover picks "the same target" for the dwell: the topology
@@ -2967,6 +2985,14 @@ export function ModelViewer({
   // name, `in` is what the dock and the Inspector call it on screen.
   const unitLabelRef = useRef(displayLengthName(units as UnitSystem));
   unitLabelRef.current = displayLengthName(units as UnitSystem);
+  // I03: read-out chips print lengths in the display unit. `unitLabelRef`
+  // stays the stored unit for what is typed and read back in it.
+  const viewerShownUnits = useDisplayUnits(units as UnitSystem);
+  const shownScale = convertLength(1, units as UnitSystem, viewerShownUnits);
+  const shownScaleRef = useRef(shownScale);
+  shownScaleRef.current = shownScale;
+  const shownLabelRef = useRef(displayLengthName(viewerShownUnits));
+  shownLabelRef.current = displayLengthName(viewerShownUnits);
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
   const tangentEdgesRef = useRef(tangentEdges);
@@ -3212,6 +3238,15 @@ export function ModelViewer({
   commandHandlesRef.current = commandHandles;
   /** Lets the handle effect create chips on the viewer's HUD layer. */
   const commandChipFactoryRef = useRef<(() => HTMLDivElement) | null>(null);
+  /**
+   * Gives a factory-made chip, tag or pin back to the HUD layer; set when the
+   * viewer mounts. Removing one from the DOM alone left the layer holding
+   * it, its listeners and the render scopes they close over, so every
+   * command opened while a project stayed open kept a stale document alive.
+   */
+  const releaseHudElementRef = useRef<((element: HTMLElement) => void) | null>(
+    null
+  );
   const curvePickerRigRef = useRef<ReturnType<
     typeof buildCurvePickerRig
   > | null>(null);
@@ -3495,11 +3530,18 @@ export function ModelViewer({
     const touchFirst =
       window.matchMedia?.('(pointer: coarse)').matches === true;
     const shadowMapSize = shadowMapSizeFor(touchFirst);
+    // A high-DPI desktop renders without MSAA at a fixed 2× backing store
+    // (viewer/renderBudget.ts); exports and thumbnails sample on their own.
+    const sampling = viewportSampling(
+      profile.antialias,
+      window.devicePixelRatio,
+      touchFirst
+    );
     const renderer = timed(
       'viewer.renderer',
       () =>
         new THREE.WebGLRenderer({
-          antialias: profile.antialias,
+          antialias: sampling.antialias,
           // Ground decorations use the opaque bodies' stencil coverage.
           stencil: true,
           powerPreference: 'high-performance'
@@ -3516,7 +3558,9 @@ export function ModelViewer({
     const canvasHeight = () =>
       canvasCssHeight || renderer.domElement.clientHeight;
     const applyPixelRatio = () =>
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(
+        viewportPixelRatio(sampling, window.devicePixelRatio)
+      );
     applyPixelRatio();
     // Device pixel ratio is read once at construction, so dragging the window
     // to a display with a different ratio left the backing store at the old
@@ -3978,10 +4022,47 @@ export function ModelViewer({
      */
     let dragAppliedThisFrame = false;
     let resizePending = false;
+    /**
+     * Whether the next frame has to draw. Every `requestRender` sets it, so
+     * anything that changes what is on screen and asks for a frame gets one
+     * drawn, as it always has. Only a frame scheduled by `requestHoverFrame`
+     * leaves it alone: that frame picks under the pointer and draws only if
+     * the pick changed something and asked for a render while doing so.
+     * Starts set, for the first frame.
+     */
+    let drawPending = true;
 
     function requestRender() {
+      drawPending = true;
+      requestHoverFrame();
+    }
+
+    /**
+     * Schedules a frame to apply `pendingHoverEvent` without promising a
+     * draw. Sweeping the pointer over empty space, or along one face, changes
+     * nothing on screen, yet drawing each of those frames cost as much as an
+     * orbit. A hover that does change something — preselection, a plane or
+     * handle lighting up — goes through `requestRender` where it changes it,
+     * so it is drawn in the same frame, with no added latency.
+     */
+    function requestHoverFrame() {
       if (animationFrame === null) {
         animationFrame = window.requestAnimationFrame(animate);
+      }
+    }
+
+    /**
+     * Lights or dims a handle under the pointer, asking for a draw only when
+     * that changes it. `setHot` is idempotent in every rig, so the last value
+     * sent is the rig's state; a rig not seen yet counts as changed.
+     */
+    const rigHotness = new WeakMap<DragRig, boolean>();
+    function setRigHot(rig: DragRig, hot: boolean) {
+      if (!rig.setHot) return;
+      rig.setHot(hot);
+      if (rigHotness.get(rig) !== hot) {
+        rigHotness.set(rig, hot);
+        requestRender();
       }
     }
 
@@ -4060,51 +4141,72 @@ export function ModelViewer({
     contextRef.current = context;
     const viewportImage: ViewportImageSource = {
       capture: (request) => {
-        const image = renderViewportImage(
-          {
-            renderer,
-            scene,
-            camera: cameraRig.activeCamera,
-            backdrop: gradientBackdrop,
-            grid: [grid, axes],
-            content: [
-              skyLight,
-              cameraKey,
-              keyLight,
-              keyLight.target,
-              shadowCatcher,
-              bodyGroup,
-              regionGroup,
-              sketchGroup
-            ],
-            sketches: [regionGroup, sketchGroup],
-            objectsByBodyId,
-            refreshShadowMap,
-            emphasizeBodyColors: () => {
-              const restores: Array<() => void> = [];
-              for (const body of context.renderedBodies ?? []) {
-                const object = objectsByBodyId.get(body.bodyId);
-                if (!object) continue;
-                forEachMesh(object, (mesh) => {
-                  const was = mesh.material.color.clone();
-                  contextBodyColor(body.color, true, mesh.material.color);
-                  restores.push(() => mesh.material.color.copy(was));
-                });
-              }
-              return () => {
-                for (const restore of restores) restore();
-              };
-            }
-          },
-          request
+        // A supersampled view draws at 2× on any display; the picture's
+        // screen-pixel styling follows the display, as it always has.
+        const image = withReportedPixelRatio(
+          renderer,
+          sampling.supersampled
+            ? displayPixelRatio(window.devicePixelRatio)
+            : renderer.getPixelRatio(),
+          () =>
+            renderViewportImage(
+              {
+                renderer,
+                scene,
+                camera: cameraRig.activeCamera,
+                backdrop: gradientBackdrop,
+                grid: [grid, axes],
+                content: [
+                  skyLight,
+                  cameraKey,
+                  keyLight,
+                  keyLight.target,
+                  shadowCatcher,
+                  bodyGroup,
+                  regionGroup,
+                  sketchGroup
+                ],
+                sketches: [regionGroup, sketchGroup],
+                objectsByBodyId,
+                refreshShadowMap,
+                emphasizeBodyColors: () => {
+                  const restores: Array<() => void> = [];
+                  for (const body of context.renderedBodies ?? []) {
+                    const object = objectsByBodyId.get(body.bodyId);
+                    if (!object) continue;
+                    forEachMesh(object, (mesh) => {
+                      const was = mesh.material.color.clone();
+                      contextBodyColor(body.color, true, mesh.material.color);
+                      restores.push(() => mesh.material.color.copy(was));
+                    });
+                  }
+                  return () => {
+                    for (const restore of restores) restore();
+                  };
+                }
+              },
+              request
+            )
         );
         requestRender();
         return image;
       },
-      viewSize: () => ({
-        width: renderer.domElement.width,
-        height: renderer.domElement.height
-      }),
+      // The default export size is the view at the display's ratio, not the
+      // supersampled backing store a 1× display would otherwise double.
+      viewSize: () =>
+        sampling.supersampled
+          ? {
+              width: Math.floor(
+                canvasWidth() * displayPixelRatio(window.devicePixelRatio)
+              ),
+              height: Math.floor(
+                canvasHeight() * displayPixelRatio(window.devicePixelRatio)
+              )
+            }
+          : {
+              width: renderer.domElement.width,
+              height: renderer.domElement.height
+            },
       // Read when asked, not at mount: the export is rare, and the renderer
       // need not be fully initialised for the viewer to start.
       get maxSide() {
@@ -5449,6 +5551,7 @@ export function ModelViewer({
     };
     axisLabelFactoryRef.current = () => hud.create('axis-pick-label');
     commentPinFactoryRef.current = () => hud.create('comment-pin');
+    releaseHudElementRef.current = (element) => hud.release(element);
     /** Sets each comment pin on its point; hides one behind the camera. */
     function updateCommentPins() {
       const pins = commentPinsRef.current;
@@ -5556,7 +5659,13 @@ export function ModelViewer({
       let anchored = false;
       const e2eHandles: Record<
         string,
-        { x: number; y: number; value: number }
+        {
+          x: number;
+          y: number;
+          value: number;
+          /** A linear arrow's way on screen, a unit step in page pixels. */
+          axis?: { x: number; y: number };
+        }
       > = {};
       // Reads before the writes below, as `updateOffsetChip` does: the chips
       // keep out from under the right lane (the docked panels, the viewer
@@ -5802,11 +5911,37 @@ export function ModelViewer({
             .clone()
             .project(context.activeCamera);
           const rect = stageRect;
+          const page = (point: { x: number; y: number }) => ({
+            x: rect.left + ((point.x + 1) / 2) * rect.width,
+            y: rect.top + ((1 - point.y) / 2) * rect.height
+          });
+          const at = page(grip);
+          let axis: { x: number; y: number } | undefined;
+          if (view.kind === 'linear' && entry.rig) {
+            const ahead = page(
+              entry.rig.group.position
+                .clone()
+                .add(
+                  new THREE.Vector3(
+                    view.params.direction.x,
+                    view.params.direction.y,
+                    view.params.direction.z
+                  )
+                )
+                .project(context.activeCamera)
+            );
+            const length = Math.hypot(ahead.x - at.x, ahead.y - at.y);
+            if (length > 1e-9)
+              axis = {
+                x: (ahead.x - at.x) / length,
+                y: (ahead.y - at.y) / length
+              };
+          }
           e2eHandles[valueId] = {
-            x: rect.left + ((grip.x + 1) / 2) * rect.width,
-            y: rect.top + ((1 - grip.y) / 2) * rect.height,
+            ...at,
             // Where the rig stands, which a refused value is not.
-            value: entry.rig ? entry.rig.value() : value
+            value: entry.rig ? entry.rig.value() : value,
+            ...(axis ? { axis } : {})
           };
         }
       }
@@ -7472,7 +7607,8 @@ export function ModelViewer({
       if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
         return;
       }
-      renderer.setPixelRatio(Math.min(value, 2));
+      // A supersampled context stays at 2×, as it would in production.
+      renderer.setPixelRatio(viewportPixelRatio(sampling, value));
       requestRender();
     };
     /**
@@ -8032,7 +8168,7 @@ export function ModelViewer({
       // a part at the origin usually is (see ghostPlaneTakesPick).
       const ghost = facesOnly ? null : pickGhostPlane(event);
       if (ghost && ghostPlaneTakesPick(ghost.distance, result)) {
-        planePickerRigRef.current?.setHover(null);
+        if (planePickerRigRef.current?.setHover(null)) requestRender();
         onPickPlaneRef.current(ghost.plane, ghost.point);
         return;
       }
@@ -8241,6 +8377,7 @@ export function ModelViewer({
         (moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ?? null;
       if (!isSameMoveGizmoFocus(previous, focus)) {
         applyMoveGizmoFocus(moveGizmoGroup, focus);
+        requestRender();
       }
     }
 
@@ -8473,10 +8610,10 @@ export function ModelViewer({
       const hot = context.raycaster
         .intersectObjects(rig.group.children, true)
         .some((hit) => hit.object.userData.directHandle === true);
-      rig.setHot(hot);
+      setRigHot(rig, hot);
       const follower = hot ? null : regionFollowerUnderRay();
       for (const candidate of regionFollowerRigsRef.current) {
-        candidate.setHot?.(candidate === follower);
+        setRigHot(candidate, candidate === follower);
       }
       return hot || follower !== null;
     }
@@ -8535,24 +8672,25 @@ export function ModelViewer({
           ? (shiftPickStack(event)[0] ?? null)
           : (acceptedFacesUnder(event)?.[0] ?? pick(event));
       if (ghost && ghostPlaneTakesPick(ghost.distance, solid)) {
-        planePickerRigRef.current?.setHover(ghost.plane);
+        if (planePickerRigRef.current?.setHover(ghost.plane)) requestRender();
         applyHover(null);
         renderer.domElement.style.cursor = 'pointer';
         updateMeasurePreview(event);
-        requestRender();
         return;
       }
-      planePickerRigRef.current?.setHover(null);
+      if (planePickerRigRef.current?.setHover(null)) requestRender();
       // `applyHover` owns the cursor here, including clearing it over empty
       // space, now that it no longer skips a write on a stale cache. A change
       // of target waits out the dwell first; while it waits, the same event
-      // is re-queued so a pointer that has stopped moving still settles.
+      // is re-queued so a pointer that has stopped moving still settles. The
+      // frames it waits through show nothing new, so they ask for no draw;
+      // the commit that ends the wait asks for its own through the selection.
       const verdict = hoverDwellRef.current.propose(solid, performance.now());
       if (verdict.commit) {
         applyHover(verdict.candidate);
       } else if (verdict.pending) {
         pendingHoverEvent = event;
-        requestRender();
+        requestHoverFrame();
       }
       updateMeasurePreview(event);
     }
@@ -8819,33 +8957,46 @@ export function ModelViewer({
         if (rig.kind === 'cylinder-radius') {
           const mode = cylinderDimensionModeRef.current;
           const displayValue = mode === 'diameter' ? rawValue * 2 : rawValue;
-          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue)} ${unitLabelRef.current}`;
+          text = `${mode === 'diameter' ? 'Ø' : 'R'} ${formatNumber(displayValue * shownScaleRef.current)} ${shownLabelRef.current}`;
         } else if (rig.kind === 'edge-radius') {
           const prefix = edgeHandleOpRef.current === 'fillet' ? 'R' : 'C';
           const label = edgeHandleRef.current?.label;
-          text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitLabelRef.current}`;
+          const shownValue =
+            shownScaleRef.current === 1
+              ? value
+              : roundShownLength(rawValue * shownScaleRef.current);
+          text = `${label ? `${label} · ` : ''}${prefix} ${shownValue} ${shownLabelRef.current}`;
         } else {
           // "Total" reads the whole span this face sets: a primitive's own
           // height when it has one, else the span to the flat face opposite it.
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
           const totalSense = offsetHandleRef.current?.totalSense ?? 1;
+          const spanShown = totalBaseline ?? offsetExtentRef.current;
           text = offsetChipText({
-            rawValue,
+            rawValue: rawValue * shownScaleRef.current,
             mode: offsetChipModeRef.current,
-            span: totalBaseline ?? offsetExtentRef.current,
+            span:
+              spanShown === null || spanShown === undefined
+                ? spanShown
+                : spanShown * shownScaleRef.current,
             sense: totalSense,
-            units: unitLabelRef.current
+            units: shownLabelRef.current,
+            precise: shownScaleRef.current !== 1
           });
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
             const limit = offsetPreviewLimitRef.current;
             if (limit !== null && limit !== undefined) {
               text = `${text} · ${offsetLimitChipText({
-                limit,
+                limit: limit * shownScaleRef.current,
                 mode: offsetChipModeRef.current,
-                span: totalBaseline ?? offsetExtentRef.current,
+                span:
+                  spanShown === null || spanShown === undefined
+                    ? spanShown
+                    : spanShown * shownScaleRef.current,
                 sense: totalSense,
-                units: unitLabelRef.current
+                units: shownLabelRef.current,
+                precise: shownScaleRef.current !== 1
               })}`;
             }
           }
@@ -9186,7 +9337,7 @@ export function ModelViewer({
             ? 'Switch to radius entry'
             : 'Switch to diameter entry'
         );
-        const valueText = ` ${formatNumber(displayValue)}\u00a0`;
+        const valueText = ` ${formatNumber(displayValue * shownScaleRef.current)}\u00a0`;
         const [shownValue, shownUnits] = offsetEntry.childNodes;
         if (
           offsetEntry.childNodes.length === 2 &&
@@ -9197,15 +9348,15 @@ export function ModelViewer({
           // workspace through its :has() rules (see setElementText).
           if ((shownValue as Text).data !== valueText)
             (shownValue as Text).data = valueText;
-          setElementText(shownUnits as Element, unitLabelRef.current);
+          setElementText(shownUnits as Element, shownLabelRef.current);
         } else {
           const units = document.createElement('small');
-          units.textContent = unitLabelRef.current;
+          units.textContent = shownLabelRef.current;
           offsetEntry.replaceChildren(valueText, units);
         }
         nameCommandChip(
           offsetEntry,
-          `${mode === 'diameter' ? 'Diameter' : 'Radius'} ${formatNumber(displayValue)} ${unitLabelRef.current}`
+          `${mode === 'diameter' ? 'Diameter' : 'Radius'} ${formatNumber(displayValue * shownScaleRef.current)} ${shownLabelRef.current}`
         );
         // Only when the layout changes: re-inserting a focused button on
         // every frame would drop its focus.
@@ -9433,9 +9584,14 @@ export function ModelViewer({
       axis: DirectEditAxis
     ) {
       const label = axisDimensionLabel(axis);
+      // I03: in the display unit, as the dimension callout reads.
       setElementText(
         dragHud,
-        `${label} ${Math.round(value * 100) / 100} ${unitLabelRef.current}`
+        `${label} ${
+          shownScaleRef.current === 1
+            ? Math.round(value * 100) / 100
+            : roundShownLength(value * shownScaleRef.current)
+        } ${shownLabelRef.current}`
       );
       hud.showAtPointer(dragHud, event, 14, -36);
     }
@@ -11629,7 +11785,14 @@ export function ModelViewer({
         return;
       }
       pendingHoverEvent = event;
-      requestRender();
+      // In a sketch the same move has already posed the sketch rig's guides
+      // (`updateSketchInProgress` above), which change what is drawn without
+      // asking for a render; those frames keep drawing as they always have.
+      if (sketchModeRef.current) {
+        requestRender();
+      } else {
+        requestHoverFrame();
+      }
     };
 
     /**
@@ -11705,6 +11868,9 @@ export function ModelViewer({
         return;
       }
       if (event.buttons === 0) {
+        // Each picker asks for a draw only when its highlight changes: moving
+        // along one candidate repaints nothing but the cursor, which is not
+        // drawn by the canvas.
         const axisPickerRig = axisPickerRigRef.current;
         if (axisPickerRig) {
           axisPickerRig.group.updateMatrixWorld(true);
@@ -11715,10 +11881,9 @@ export function ModelViewer({
           )[0];
           const axisId =
             (axisHit?.object.userData.pickAxis as string | undefined) ?? null;
-          axisPickerRig.setHover(axisId);
+          if (axisPickerRig.setHover(axisId)) requestRender();
           if (axisId) {
             renderer.domElement.style.cursor = 'pointer';
-            requestRender();
             return;
           }
         }
@@ -11729,10 +11894,9 @@ export function ModelViewer({
             context.raycaster.ray,
             curvePickThreshold(event)
           );
-          curvePickerRig.setHover(curveId);
+          if (curvePickerRig.setHover(curveId)) requestRender();
           if (curveId) {
             renderer.domElement.style.cursor = 'pointer';
-            requestRender();
             return;
           }
         }
@@ -11746,12 +11910,11 @@ export function ModelViewer({
             context.raycaster
               .intersectObjects(commandRig.group.children, true)
               .some((hit) => hit.object.userData.directHandle === true);
-          commandRig.setHot?.(over);
+          setRigHot(commandRig, over);
           overHandle ||= over;
         }
         if (overHandle) {
           renderer.domElement.style.cursor = 'grab';
-          requestRender();
           return;
         }
       }
@@ -13613,7 +13776,9 @@ export function ModelViewer({
     let navigationNeedsLowRes = false;
     let navigationResolutionLowered = false;
     function lowerNavigationResolution() {
-      const full = Math.min(window.devicePixelRatio, 2);
+      // Without MSAA, a ratio below 2 would navigate with no antialiasing.
+      if (sampling.supersampled) return;
+      const full = viewportPixelRatio(sampling, window.devicePixelRatio);
       const lowered = navigationPixelRatio(full, frameMeter.intervalMs);
       if (lowered !== null) navigationNeedsLowRes = true;
       if (!navigationNeedsLowRes || full <= NAVIGATION_PIXEL_RATIO) return;
@@ -13792,6 +13957,11 @@ export function ModelViewer({
     document.addEventListener('visibilitychange', resetAnimationContinuity);
     function animate(now: number) {
       animationFrame = null;
+      // Read and cleared before anything this frame can ask again: a request
+      // made while the frame runs is drawn by it and by the next one too,
+      // exactly as when every frame drew.
+      const drawRequested = drawPending;
+      drawPending = false;
       const frameStarted = performance.now();
       const continuous =
         loopWasAnimating &&
@@ -13823,10 +13993,6 @@ export function ModelViewer({
       } else {
         cubeBox = null;
       }
-      if (e2eCanvasHooksEnabled) {
-        framesDrawn += 1;
-        renderer.domElement.dataset.e2eFrames = String(framesDrawn);
-      }
       if (resizePending) {
         resizePending = false;
         const width = viewerHost.clientWidth;
@@ -13857,6 +14023,32 @@ export function ModelViewer({
       pendingHoverEvent = null;
       if (hoverEvent) {
         applyHoverAt(hoverEvent);
+      }
+      // A frame that only applied a hover, and whose hover changed nothing
+      // drawn, ends here: the pointer swept empty space or stayed on what it
+      // was already over. Whatever that pick did change on screen called
+      // `requestRender` as it changed it, and so lands in `drawPending`. Every
+      // other reason to draw — a camera step, a drag, a resize, an easing the
+      // last frame left running (it asked for this frame through
+      // `requestRender`), the loupe, a fresh cube link — still draws. The
+      // hover itself is not deferred: this frame applied it at once, and a
+      // later change still draws in the frame it lands in.
+      if (
+        !drawRequested &&
+        !drawPending &&
+        !dragEvent &&
+        !tweening &&
+        !zooming &&
+        !sixDofMoving &&
+        !controlsChanged &&
+        !cubeLinkFresh &&
+        !touchLoupe.visible
+      ) {
+        return;
+      }
+      if (e2eCanvasHooksEnabled) {
+        framesDrawn += 1;
+        renderer.domElement.dataset.e2eFrames = String(framesDrawn);
       }
       // The perspective camera stays the pose master; mirror it while the
       // ortho camera drives so switches and fits never jump.
@@ -14555,6 +14747,7 @@ export function ModelViewer({
       radiusLabelChip.removeEventListener('click', handleChipClick);
       resetSlotPlacement();
       hud.dispose();
+      releaseHudElementRef.current = null;
       resetSketchSlotRef.current = null;
       topologyPickListRef.current = null;
       // Dimension graphics own their own geometries and materials; clearing
@@ -15267,8 +15460,18 @@ export function ModelViewer({
               valueButton.type = 'button';
               valueButton.className = 'callout-value';
               valueButton.title = `Click to type an exact ${dimension.toLowerCase()}`;
-              valueButton.textContent = `${dimension} ${rounded} ${displayLengthName(
-                units as UnitSystem
+              // I03: in the display unit; what is typed back reads in it.
+              const calloutScale = convertLength(
+                1,
+                units as UnitSystem,
+                viewerShownUnits
+              );
+              const shownRounded =
+                calloutScale === 1
+                  ? rounded
+                  : roundShownLength(value * calloutScale);
+              valueButton.textContent = `${dimension} ${shownRounded} ${displayLengthName(
+                viewerShownUnits
               )}`;
               pill.appendChild(valueButton);
               element.appendChild(pill);
@@ -15279,11 +15482,11 @@ export function ModelViewer({
                 // Same width as the value it replaces, so the pill does not
                 // jump the instant it is clicked.
                 input.style.width = `${Math.ceil(valueButton.getBoundingClientRect().width)}px`;
-                input.value = String(rounded);
+                input.value = String(shownRounded);
                 input.inputMode = 'decimal';
                 input.setAttribute(
                   'aria-label',
-                  `${dimension} in ${unitsRef.current}`
+                  `${dimension} in ${viewerShownUnits}`
                 );
                 pill.replaceChildren(input);
                 input.focus();
@@ -15295,12 +15498,14 @@ export function ModelViewer({
                   }
                   done = true;
                   pill.replaceChildren(valueButton);
-                  const next = Number.parseFloat(input.value);
+                  const typed = Number.parseFloat(input.value);
+                  // Back into the stored unit; an untouched value is no edit.
+                  const next = typed / calloutScale;
                   if (
                     commit &&
                     Number.isFinite(next) &&
                     next > 0 &&
-                    Math.abs(next - rounded) > 1e-9
+                    Math.abs(typed - shownRounded) > 1e-9
                   ) {
                     onResizePrimitiveFaceRef.current({
                       bodyId,
@@ -15709,6 +15914,7 @@ export function ModelViewer({
     focusGhostBodies,
     sketchMode,
     units,
+    viewerShownUnits,
     xrayFactor,
     pickLabel,
     assemblyDimmedKey,
@@ -17073,7 +17279,8 @@ export function ModelViewer({
     return () => {
       context.scene.remove(rig.group);
       rig.dispose();
-      for (const label of labels) label.element.remove();
+      for (const label of labels)
+        releaseHudElement(releaseHudElementRef, label.element);
       if (axisLabelsRef.current === labels) axisLabelsRef.current = [];
       if (axisPickerRigRef.current === rig) {
         axisPickerRigRef.current = null;
@@ -17138,7 +17345,8 @@ export function ModelViewer({
     commentPinsRef.current = pins;
     context.requestRender();
     return () => {
-      for (const pin of pins) pin.element.remove();
+      for (const pin of pins)
+        releaseHudElement(releaseHudElementRef, pin.element);
       if (commentPinsRef.current === pins) commentPinsRef.current = [];
       context.requestRender();
     };
@@ -17161,7 +17369,7 @@ export function ModelViewer({
         continue;
       }
       entry.rig?.dispose();
-      entry.chip.remove();
+      releaseHudElement(releaseHudElementRef, entry.chip);
       rigs.delete(valueId);
     }
     for (const handle of wanted) {
@@ -17281,7 +17489,7 @@ export function ModelViewer({
     () => () => {
       for (const entry of commandRigsRef.current.values()) {
         entry.rig?.dispose();
-        entry.chip.remove();
+        releaseHudElement(releaseHudElementRef, entry.chip);
       }
       commandRigsRef.current.clear();
     },

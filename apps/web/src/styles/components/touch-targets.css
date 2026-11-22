@@ -119,7 +119,6 @@
   .tweak-rail button,
   .workspace-tour .icon-button,
   .workspace-tour-next,
-  .measurement-mode-tabs button,
   .measurement-dock button,
   .measurement-radial-toggle button,
   .keymap-actions button,
@@ -201,10 +200,9 @@
     margin-right: 5px;
   }
 
-  /* Units and Precision share the row with Ø and R, whose fourth column
-     ran off the dock's edge at 44 px: the fields give way. */
+  /* The settings fields share two columns; Ø and R keep 44 px each. */
   .measurement-display-controls {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .measurement-radial-toggle {

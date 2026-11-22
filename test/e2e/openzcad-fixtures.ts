@@ -1474,6 +1474,30 @@ export async function askAssistant(page: Page, text: string) {
 }
 
 /**
+ * Keeps the reading the Measure card shows, as its Keep button (or Enter)
+ * does. A pick only reads; keeping it is what lists and saves it.
+ */
+export async function keepMeasurement(page: Page) {
+  await page
+    .getByLabel('Measurement workbench')
+    .getByRole('button', { name: /^Keep/ })
+    .click();
+}
+
+/**
+ * Picks one of the Measure card's other readings by its title, when the
+ * picks offer more than one, so Keep records that one.
+ */
+export async function chooseMeasurementReading(page: Page, title: RegExp) {
+  const other = page
+    .getByLabel('Measurement workbench')
+    .getByRole('group', { name: 'Other readings' })
+    .getByRole('button', { name: title });
+  await other.click();
+  await expect(other).toHaveAttribute('aria-pressed', 'true');
+}
+
+/**
  * Selects the planar face with `normal` on the first body, the way a click on
  * it would (the e2e canvas hook), and resolves once the viewer answered.
  */

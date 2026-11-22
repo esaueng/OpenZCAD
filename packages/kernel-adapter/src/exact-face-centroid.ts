@@ -213,11 +213,8 @@ export function planarFaceCentroid(
   }
 }
 
-function measurePlanarFaceCentroid(
-  kernel: RemusKernel,
-  face: number,
-  normal: Vec3
-): PlanarFaceCentroid | null {
+/** In-plane axes for projecting a planar face's boundary; null if degenerate. */
+function planeAxes(normal: Vec3): { uAxis: Vec3; vAxis: Vec3 } | null {
   const zAxis = normalized(normal);
   if (!zAxis) {
     return null;
@@ -238,7 +235,98 @@ function measurePlanarFaceCentroid(
   if (!uAxis) {
     return null;
   }
-  const vAxis = cross(zAxis, uAxis);
+  return { uAxis, vAxis: cross(zAxis, uAxis) };
+}
+
+/**
+ * Green's-theorem sums of one closed loop projected onto (uAxis, vAxis)
+ * from `origin`: twice its signed area and its first moments.
+ */
+function loopSums(
+  loop: readonly Vec3[],
+  origin: Vec3,
+  uAxis: Vec3,
+  vAxis: Vec3
+): { doubleArea: number; momentU: number; momentV: number } {
+  const flat = loop.map((point) => {
+    const offset = subtract(point, origin);
+    return {
+      u: offset.x * uAxis.x + offset.y * uAxis.y + offset.z * uAxis.z,
+      v: offset.x * vAxis.x + offset.y * vAxis.y + offset.z * vAxis.z
+    };
+  });
+  let doubleArea = 0;
+  let momentU = 0;
+  let momentV = 0;
+  for (let index = 0; index < flat.length; index += 1) {
+    const current = flat[index]!;
+    const next = flat[(index + 1) % flat.length]!;
+    const term = current.u * next.v - next.u * current.v;
+    doubleArea += term;
+    momentU += (current.u + next.u) * term;
+    momentV += (current.v + next.v) * term;
+  }
+  return { doubleArea, momentU, momentV };
+}
+
+/**
+ * The area centroid of the face's OUTER boundary wire alone, as if every
+ * inner loop were filled, or null when that wire cannot be walked.
+ *
+ * This is what a new hole's typed position is measured from (M01, schema
+ * v150): drilling, resizing or removing another hole in the face changes its
+ * inner loops but not this point, whereas the full {@link planarFaceCentroid}
+ * moves with every one. The outer wire is the kernel's own
+ * (`getFaceOuterWire`), not the largest loop by sampled area, and the inner
+ * wires are never walked, so a malformed or near-tangent inner loop can
+ * neither blank nor replace it. On a face with one loop it is the same
+ * integral as the area centroid.
+ *
+ * Total by contract, as {@link planarFaceCentroid} is.
+ */
+export function planarFaceOuterCentroid(
+  kernel: RemusKernel,
+  face: number,
+  normal: Vec3
+): Vec3 | null {
+  try {
+    const axes = planeAxes(normal);
+    if (!axes) {
+      return null;
+    }
+    const walked = chainWireLoop(kernel, kernel.getFaceOuterWire(face));
+    if (!walked) {
+      return null;
+    }
+    const origin = walked.loop[0]!;
+    const sum = loopSums(walked.loop, origin, axes.uAxis, axes.vAxis);
+    // The winding's sign cancels between the moments and the area.
+    if (!Number.isFinite(sum.doubleArea) || sum.doubleArea === 0) {
+      return null;
+    }
+    const u = sum.momentU / (3 * sum.doubleArea);
+    const v = sum.momentV / (3 * sum.doubleArea);
+    const point = {
+      x: origin.x + axes.uAxis.x * u + axes.vAxis.x * v,
+      y: origin.y + axes.uAxis.y * u + axes.vAxis.y * v,
+      z: origin.z + axes.uAxis.z * u + axes.vAxis.z * v
+    };
+    return Number.isFinite(point.x + point.y + point.z) ? point : null;
+  } catch {
+    return null;
+  }
+}
+
+function measurePlanarFaceCentroid(
+  kernel: RemusKernel,
+  face: number,
+  normal: Vec3
+): PlanarFaceCentroid | null {
+  const axes = planeAxes(normal);
+  if (!axes) {
+    return null;
+  }
+  const { uAxis, vAxis } = axes;
 
   const wires = Array.from(kernel.getFaceWires(face));
   if (wires.length === 0) {
@@ -260,25 +348,7 @@ function measurePlanarFaceCentroid(
   let curved = false;
   const wireSums = loops.map(({ loop, curved: loopCurved }) => {
     curved ||= loopCurved;
-    const flat = loop.map((point) => {
-      const offset = subtract(point, origin);
-      return {
-        u: offset.x * uAxis.x + offset.y * uAxis.y + offset.z * uAxis.z,
-        v: offset.x * vAxis.x + offset.y * vAxis.y + offset.z * vAxis.z
-      };
-    });
-    let doubleArea = 0;
-    let momentU = 0;
-    let momentV = 0;
-    for (let index = 0; index < flat.length; index += 1) {
-      const current = flat[index]!;
-      const next = flat[(index + 1) % flat.length]!;
-      const term = current.u * next.v - next.u * current.v;
-      doubleArea += term;
-      momentU += (current.u + next.u) * term;
-      momentV += (current.v + next.v) * term;
-    }
-    return { doubleArea, momentU, momentV };
+    return loopSums(loop, origin, uAxis, vAxis);
   });
 
   // A hole must subtract, and its stored winding cannot say so: the kernel

@@ -80,24 +80,24 @@ const EXPECTED: Record<string, { outcome: Outcome; exportFailure?: RegExp }> = {
     }
   },
   // The kernel reports this cut as built and returns an open body with no
-  // tool faces; the result-acceptance gate refuses it. The swept target
-  // itself cannot be re-exported: its cap circles import with a
-  // zero-length (π, π) NURBS pcurve.
+  // tool faces; the result-acceptance gate refuses it. Up to Remus
+  // 2026.1.158 the swept target could not be re-exported (its cap circles
+  // imported with a zero-length (π, π) NURBS pcurve); from 2026.1.159 both
+  // bodies export and re-import at their reference volumes.
   'sweep-sweep': {
     outcome: {
       kind: 'refused',
       family: 'validation',
       code: 'cut_kept_tool_material'
-    },
-    exportFailure: /pcurve has invalid parameter range/
+    }
   },
   'sweep-loft': {
     outcome: {
       kind: 'refused',
       family: 'boolean',
       code: 'exact_only_unattainable'
-    },
-    exportFailure: /pcurve has invalid parameter range/
+    }
+    // Re-exported since Remus 2026.1.159, like sweep-sweep.
   }
 };
 

@@ -15,6 +15,7 @@ import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { GEOMETRY_EPSILON, errorText } from './exact-math';
 import {
   blendOutcome,
+  blendRefusalOf,
   blendReportIsVertexBlend,
   reportBlendRefusal,
   type BlendOperation,
@@ -222,10 +223,13 @@ export function applyEdgeModifier(
         // No evolution entry point exists for the variable blend, so a
         // variable fillet derives its lineage the same way an engine that
         // reports no history does.
-        modified = applyVariableRadiusFillet(kernel, target, selected, {
-          ...variableRadius,
-          startRadius: size
-        });
+        modified = applyVariableRadiusFillet(
+          kernel,
+          target,
+          selected,
+          { ...variableRadius, startRadius: size },
+          recordQuality
+        );
       } else if (reportEvolution) {
         try {
           evolution = kernel.filletWithEvolution(target, handles, size);
@@ -260,8 +264,11 @@ export function applyEdgeModifier(
       // Keep what the kernel said. It names the edges it could not blend, the
       // vertex the blend engines gave up on, and how many of the selection
       // would round on their own — none of which can be recovered by
-      // inspecting the inputs afterwards.
-      reportRefusal?.(errorText(error));
+      // inspecting the inputs afterwards. A variable fillet's refusal comes
+      // back typed (M03), and rides along with its code and limit.
+      const typed = blendRefusalOf(error);
+      if (typed) reportRefusal?.(reportBlendRefusal(typed), typed);
+      else reportRefusal?.(errorText(error));
       modified = target;
     }
   } else {

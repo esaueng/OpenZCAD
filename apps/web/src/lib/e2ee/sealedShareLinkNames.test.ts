@@ -15,7 +15,8 @@ import {
   mergeShareLinkNameBooks,
   openShareLinkNames,
   parseShareLinkNameBook,
-  pruneRevokedShareLinkNames,
+  liveReplacements,
+  nameReissuedShareLinks,
   readShareLinkNames,
   setShareLinkName,
   SHARE_LINK_NAME_TOMBSTONE_MS,
@@ -32,7 +33,6 @@ import {
 const KEY = Uint8Array.from({ length: 32 }, (_, i) => i);
 const ROTATED = Uint8Array.from({ length: 32 }, (_, i) => 0x80 + i);
 const USER = 'user_alice';
-const DAY = 24 * 60 * 60 * 1000;
 
 function memoryKeys(
   accountKey = KEY,
@@ -103,6 +103,22 @@ const named = (name: string, stamp: number, shareId = 'shr_a') =>
   setShareLinkName(EMPTY_SHARE_LINK_NAME_BOOK, 'proj_x', shareId, name, stamp);
 
 const padded = (i: number) => `shr_${String(i).padStart(40, '0')}`;
+
+/** A book of `count` entries in proj_x, keyed by `padded`. */
+const bookOf = (
+  count: number,
+  entry: (i: number) => ShareLinkNameBook['projects'][string][string]
+): ShareLinkNameBook => ({
+  version: 1,
+  projects: {
+    proj_x: Object.fromEntries(
+      Array.from({ length: count }, (_, i) => [padded(i), entry(i)])
+    )
+  }
+});
+
+/** Link shr_a reissued as shr_new. */
+const reissue = [{ sourceId: 'shr_a', shareId: 'shr_new' }];
 
 describe('share link name books', () => {
   it('merges entry by entry, the later stamp winning', () => {
@@ -190,29 +206,107 @@ describe('share link name books', () => {
     expect(parseShareLinkNameBook([])).toBeNull();
   });
 
-  it('prunes only the names of revoked links, whatever their stamps', () => {
-    // A link another device made and named with a clock two days behind:
-    // old by its stamp, and not in a list read before it existed.
+  it('names a reissued link after its source, once, and clears the source', () => {
+    const book = named('Client review', 5);
+    const named2 = nameReissuedShareLinks(book, 'proj_x', reissue, 10);
+    expect(shareLinkNamesFor(named2, 'proj_x')).toEqual({
+      shr_new: 'Client review'
+    });
+    // A rename's fresh stamp, not the source's.
+    expect(named2.projects.proj_x!.shr_new).toEqual({
+      name: 'Client review',
+      stamp: 10
+    });
+    expect(named2.projects.proj_x!.shr_a).toMatchObject({ deleted: true });
+    // Again: nothing changes.
+    expect(nameReissuedShareLinks(named2, 'proj_x', reissue, 20)).toBe(named2);
+  });
+
+  it('lets a later edit of the new link, on any device, win over the carried name', () => {
+    const carried = nameReissuedShareLinks(
+      named('Old', 5),
+      'proj_x',
+      reissue,
+      10
+    );
+    // Another device edits the new link after it appeared.
+    for (const later of [
+      setShareLinkName(carried, 'proj_x', 'shr_new', null, 12),
+      setShareLinkName(carried, 'proj_x', 'shr_new', 'New', 12)
+    ]) {
+      const want = shareLinkNamesFor(later, 'proj_x').shr_new;
+      expect(
+        shareLinkNamesFor(mergeShareLinkNameBooks(carried, later), 'proj_x')
+          .shr_new
+      ).toBe(want);
+      expect(
+        shareLinkNamesFor(mergeShareLinkNameBooks(later, carried), 'proj_x')
+          .shr_new
+      ).toBe(want);
+    }
+  });
+
+  it('carries the rest of a reissue that stopped halfway when it is retried', () => {
     const book = setShareLinkName(
-      named('Gone', 0),
+      named('First', 1),
+      'proj_x',
+      'shr_b',
+      'Second',
+      2
+    );
+    const partial = nameReissuedShareLinks(book, 'proj_x', reissue, 10);
+    // The unreplaced source keeps its name for the retry.
+    expect(shareLinkNamesFor(partial, 'proj_x')).toEqual({
+      shr_b: 'Second',
+      shr_new: 'First'
+    });
+    const retried = nameReissuedShareLinks(
+      partial,
+      'proj_x',
+      [...reissue, { sourceId: 'shr_b', shareId: 'shr_new_b' }],
+      20
+    );
+    expect(shareLinkNamesFor(retried, 'proj_x')).toEqual({
+      shr_new: 'First',
+      shr_new_b: 'Second'
+    });
+  });
+
+  // PR 1938 review, finding 3: a replacement revoked since takes no name.
+  it('names only replacements whose new link is live', () => {
+    expect(
+      liveReplacements(
+        [...reissue, { sourceId: 'shr_b', shareId: 'shr_revoked' }],
+        new Set(['shr_new'])
+      )
+    ).toEqual(reissue);
+  });
+
+  it('keeps a new link’s own entry, and carries nothing from a source without a name', () => {
+    const renamed = setShareLinkName(
+      named('Old', 1),
       'proj_x',
       'shr_new',
-      'New',
-      1 * DAY
+      'Mine',
+      2
     );
-    const pruned = pruneRevokedShareLinkNames(
-      book,
+    const kept = nameReissuedShareLinks(renamed, 'proj_x', reissue, 3);
+    expect(shareLinkNamesFor(kept, 'proj_x')).toEqual({ shr_new: 'Mine' });
+    const sourceCleared = setShareLinkName(
+      named('Old', 1),
       'proj_x',
-      new Set(['shr_a']),
-      3 * DAY
+      'shr_a',
+      null,
+      2
     );
-    // PR 1921 review: the live link keeps its name.
-    expect(shareLinkNamesFor(pruned, 'proj_x')).toEqual({ shr_new: 'New' });
-    expect(pruned.projects.proj_x!.shr_a).toMatchObject({ deleted: true });
-    // Nothing revoked: the same book back.
-    expect(pruneRevokedShareLinkNames(book, 'proj_x', new Set(), 3 * DAY)).toBe(
-      book
-    );
+    expect(
+      nameReissuedShareLinks(
+        sourceCleared,
+        'proj_x',
+        [...reissue, { sourceId: 'shr_unnamed', shareId: 'shr_other' }],
+        3
+      )
+    ).toBe(sourceCleared);
   });
 
   it('seals old tombstones away and refuses, rather than drop a recent one, when over the cap', () => {
@@ -236,9 +330,9 @@ describe('share link name books', () => {
     // PR 1921 review: over the cap with recent tombstones, the save is
     // refused; dropping one would let a device that missed the clear bring
     // the name back.
-    let big: ShareLinkNameBook = EMPTY_SHARE_LINK_NAME_BOOK;
-    for (let i = 0; i < 4000; i++)
-      big = setShareLinkName(big, 'proj_x', padded(i), null, 100 + i);
+    // Built in one pass: setShareLinkName copies the book per entry, which
+    // is quadratic over thousands and timed out under a loaded full run.
+    const big = bookOf(4000, (i) => ({ deleted: true, stamp: 100 + i }));
     expect(() => encodeShareLinkNameBook(big, 5000)).toThrow(
       /Too many link names/
     );
@@ -248,9 +342,7 @@ describe('share link name books', () => {
         ?.projects
     ).toEqual({});
 
-    let full: ShareLinkNameBook = EMPTY_SHARE_LINK_NAME_BOOK;
-    for (let i = 0; i < 2000; i++)
-      full = setShareLinkName(full, 'proj_x', padded(i), 'x'.repeat(60), 1);
+    const full = bookOf(2000, () => ({ name: 'x'.repeat(60), stamp: 1 }));
     expect(() => encodeShareLinkNameBook(full, 1)).toThrow(
       /Too many link names/
     );
@@ -364,6 +456,106 @@ describe('the sealed account record', () => {
         'proj_x'
       )
     ).toEqual({ shr_a: 'Before rotation' });
+  });
+
+  it('names reissued links from the account’s latest source name, and saves it', async () => {
+    const api = memoryApi();
+    const phone = memoryKeys();
+    await changeShareLinkNames(phone, api, (book, now) =>
+      setShareLinkName(book, 'proj_x', 'shr_a', 'Client review', now)
+    );
+    // The laptop's own copy is behind: it still says "Old".
+    const laptop = memoryKeys();
+    laptop.device.write(named('Old', 1));
+    await changeShareLinkNames(laptop, api, (book, now) =>
+      nameReissuedShareLinks(book, 'proj_x', reissue, now + 5)
+    );
+    const synced = await readShareLinkNames(memoryKeys(), api);
+    expect(shareLinkNamesFor(synced, 'proj_x')).toEqual({
+      shr_new: 'Client review'
+    });
+  });
+
+  // PR 1938 review, finding 1: a reissue's names, retried after a conflict,
+  // come from the account's newer copy, not from the first attempt's guess.
+  it('derives a reissue’s names again after a conflict, from the account’s newer copy', async () => {
+    const api = memoryApi();
+    const phone = memoryKeys();
+    await changeShareLinkNames(phone, api, (book, now) =>
+      setShareLinkName(book, 'proj_x', 'shr_a', 'Old', now)
+    );
+    const stale = { ...api.stored };
+    // The phone clears the old link's name while the laptop is mid-reissue.
+    await changeShareLinkNames(phone, api, (book, now) =>
+      setShareLinkName(book, 'proj_x', 'shr_a', null, now)
+    );
+    const laptop = memoryKeys();
+    const load = vi.spyOn(api, 'load').mockResolvedValueOnce(stale);
+    await changeShareLinkNames(
+      laptop,
+      api,
+      (book, now) => nameReissuedShareLinks(book, 'proj_x', reissue, now),
+      { speculative: false }
+    );
+    load.mockRestore();
+    const synced = await readShareLinkNames(memoryKeys(), api);
+    expect(shareLinkNamesFor(synced, 'proj_x')).toEqual({});
+    expect(shareLinkNamesFor(laptop.copy(), 'proj_x')).toEqual({});
+  });
+
+  // PR 1938 review: a read merges the account's names into the device copy
+  // as it is when the fetch returns, so a rename typed meanwhile stays.
+  it('keeps a rename typed on this device while a read was fetching', async () => {
+    const api = memoryApi();
+    await changeShareLinkNames(memoryKeys(), api, (book, now) =>
+      setShareLinkName(book, 'proj_x', 'shr_a', 'Synced', now)
+    );
+    const keys = memoryKeys();
+    const load = api.load;
+    api.load = async () => {
+      const snapshot = await load();
+      // Typed here while the fetch was out; its own save failed.
+      keys.device.write(
+        setShareLinkName(
+          keys.device.read(),
+          'proj_x',
+          'shr_new',
+          'Typed',
+          2_000_000
+        )
+      );
+      return snapshot;
+    };
+    const book = await readShareLinkNames(keys, api);
+    expect(shareLinkNamesFor(book, 'proj_x')).toEqual({
+      shr_a: 'Synced',
+      shr_new: 'Typed'
+    });
+    expect(shareLinkNamesFor(keys.copy(), 'proj_x')).toEqual({
+      shr_a: 'Synced',
+      shr_new: 'Typed'
+    });
+  });
+
+  it('keeps a derived change off the device copy until the account takes it', async () => {
+    const api = memoryApi();
+    await changeShareLinkNames(memoryKeys(), api, (book, now) =>
+      setShareLinkName(book, 'proj_x', 'shr_a', 'Old', now)
+    );
+    const laptop = memoryKeys();
+    api.save = async () => {
+      throw new Error('offline');
+    };
+    await expect(
+      changeShareLinkNames(
+        laptop,
+        api,
+        (book, now) => nameReissuedShareLinks(book, 'proj_x', reissue, now),
+        { speculative: false }
+      )
+    ).rejects.toThrow('offline');
+    // Nothing guessed stays behind: the next list derives it afresh.
+    expect(laptop.copy()).toEqual(EMPTY_SHARE_LINK_NAME_BOOK);
   });
 
   it('neither saves nor keeps a change whose session ended while it waited', async () => {

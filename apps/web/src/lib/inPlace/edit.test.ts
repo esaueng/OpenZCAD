@@ -79,7 +79,9 @@ const EDIT_CTX: InPlaceEditContext = {
           // The live body's own name, which an edit must not swap in.
           reference: { kind: 'edge', currentHash: hash } as never,
           middle: { x: 5, y: 0, z: 4 },
-          outward: { x: 0, y: -1, z: 1 }
+          outward: { x: 0, y: -1, z: 1 },
+          // Where the live edge's drawn polyline ends.
+          end: { x: 10, y: 0, z: 0 }
         }
       : null,
   curve: (_sketchId, entityId) => entityId !== 'gone',
@@ -1893,6 +1895,171 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(untouched(feature(hashOnly, 'body_f' as BodyId))).not.toHaveProperty(
       'edgeReferences'
     );
+  });
+
+  it('fillet: per-vertex radii round-trip through the corner values (M03, v151)', () => {
+    const named = (hash: number, from: number[], to: number[]) => ({
+      kind: 'edge',
+      currentHash: hash,
+      stored: true,
+      witness: {
+        curveType: 'LINE',
+        length: 1,
+        closed: false,
+        endpoints: [from.map((v) => v * 1e6), to.map((v) => v * 1e6)],
+        midpoint: [0, 0, 0]
+      }
+    });
+    const references = [
+      named(21, [0, 0, 0], [10, 0, 0]),
+      named(22, [10, 5, 0], [10, 0, 0])
+    ] as never[];
+    const vertexRadii = [
+      { edge: 0, end: 0 as const, radius: 1 },
+      { edge: 0, end: 1 as const, radius: 'r' },
+      { edge: 1, end: 1 as const, radius: 'r' },
+      { edge: 1, end: 0 as const, radius: 3 }
+    ];
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21, 22],
+      edgeReferences: references,
+      radius: 2,
+      endRadius: 2,
+      radiusLaw: 'linear',
+      vertexRadii,
+      edgeRuns: [true, true]
+    };
+    expect(untouched(feature(data, 'body_f' as BodyId))).toMatchObject({
+      tool: 'edge-modifier',
+      kind: 'fillet',
+      radiusLaw: 'linear',
+      vertexRadii,
+      edgeRuns: [true, true]
+    });
+  });
+
+  it('fillet: an edge turned since its corners were set keeps its stored run (review)', () => {
+    // Stored running end 1 → end 0; the live edge now ends at (10, 0, 0),
+    // witness end 1, so it reads as running the other way.
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21],
+      edgeReferences: [
+        {
+          kind: 'edge',
+          currentHash: 21,
+          stored: true,
+          witness: {
+            curveType: 'LINE',
+            length: 1,
+            closed: false,
+            endpoints: [
+              [0, 0, 0],
+              [10e6, 0, 0]
+            ],
+            midpoint: [0, 0, 0]
+          }
+        }
+      ] as never[],
+      radius: 1,
+      endRadius: 3,
+      radiusLaw: 'linear',
+      vertexRadii: [
+        { edge: 0, end: 0, radius: 1 },
+        { edge: 0, end: 1, radius: 3 }
+      ],
+      edgeRuns: [false]
+    };
+    // Done writes the stored run back, so the build refuses the turn by
+    // name instead of taking a run that swaps the two corners' radii.
+    expect(untouched(feature(data, 'body_f' as BodyId))).toMatchObject({
+      vertexRadii: data.vertexRadii,
+      edgeRuns: [false]
+    });
+  });
+
+  it('fillet: a surviving edge keeps its own stored run when another is lost (review)', () => {
+    const named = (hash: number, from: number[], to: number[]) => ({
+      kind: 'edge',
+      currentHash: hash,
+      stored: true,
+      witness: {
+        curveType: 'LINE',
+        length: 1,
+        closed: false,
+        endpoints: [from.map((v) => v * 1e6), to.map((v) => v * 1e6)],
+        midpoint: [0, 0, 0]
+      }
+    });
+    // Edge 20 no longer resolves; edge 21 was stored running end 1 → end 0
+    // and now reads the other way (its drawn end is witness end 1).
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [20, 21],
+      // Stored in the other order: each edge keeps its own name (review).
+      edgeReferences: [
+        named(21, [0, 0, 0], [10, 0, 0]),
+        named(20, [0, 5, 0], [10, 5, 0])
+      ] as never[],
+      radius: 1,
+      endRadius: 2,
+      radiusLaw: 'linear',
+      radiusStations: [{ at: 0.25, radius: 3 }],
+      edgeRuns: [true, false]
+    };
+    const request = untouched(feature(data, 'body_f' as BodyId)) as {
+      edgeHashes?: number[];
+      edgeRuns?: boolean[];
+    };
+    // Its own stored run, not the lost edge's in slot zero: the build then
+    // refuses the reversal by name instead of placing the station at 25 %
+    // from the wrong end.
+    expect(request.edgeHashes).toEqual([21]);
+    expect(request.edgeRuns).toEqual([false]);
+    expect(
+      (
+        request as { edgeReferences?: { currentHash: number }[] }
+      ).edgeReferences?.map((reference) => reference.currentHash)
+    ).toEqual([21]);
+  });
+
+  it('fillet: an untouched sparse per-vertex fillet writes the same radii back (review)', () => {
+    const named = (hash: number, from: number[], to: number[]) => ({
+      kind: 'edge',
+      currentHash: hash,
+      stored: true,
+      witness: {
+        curveType: 'LINE',
+        length: 1,
+        closed: false,
+        endpoints: [from.map((v) => v * 1e6), to.map((v) => v * 1e6)],
+        midpoint: [0, 0, 0]
+      }
+    });
+    const data: FeatureData = {
+      featureKind: 'fillet',
+      targetBodyId: BODY,
+      edgeHashes: [21],
+      edgeReferences: [named(21, [0, 0, 0], [10, 0, 0])] as never[],
+      radius: 1,
+      endRadius: 4,
+      radiusLaw: 'linear',
+      // Only the kernel start (witness end 0, the edge runs 0 → 1) is set.
+      vertexRadii: [{ edge: 0, end: 0, radius: 3 }],
+      edgeRuns: [true]
+    };
+    const request = untouched(feature(data, 'body_f' as BodyId)) as {
+      vertexRadii?: unknown[];
+    };
+    // The other corner keeps End R, 4, not R, 1: still R3 → R4.
+    expect(request.vertexRadii).toEqual([
+      { edge: 0, end: 0, radius: 3 },
+      { edge: 0, end: 1, radius: 4 }
+    ]);
   });
 
   it('fillet: an edge that no longer resolves is left for a new pick', () => {

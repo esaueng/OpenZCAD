@@ -7,6 +7,7 @@ import {
 import { toUserId } from '@openzcad/shared';
 import type { Page } from '@playwright/test';
 import {
+  keepMeasurement,
   createPrimitiveInPlace,
   test,
   expect,
@@ -260,6 +261,7 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
     .click();
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
+  await keepMeasurement(page);
   const workbench = page.getByLabel('Measurement workbench');
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
   const previousValue = await workbench

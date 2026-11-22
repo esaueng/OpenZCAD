@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  displayPixelRatio,
   FrameIntervalMeter,
+  MAX_VIEWPORT_PIXEL_RATIO,
   NAVIGATION_PIXEL_RATIO,
   navigationPixelRatio,
   SHADOW_MAP_SIZE,
   shadowMapSizeFor,
   SLOW_FRAME_MS,
-  TOUCH_SHADOW_MAP_SIZE
+  TOUCH_SHADOW_MAP_SIZE,
+  viewportPixelRatio,
+  viewportSampling,
+  withReportedPixelRatio
 } from './renderBudget';
 
 describe('render budget', () => {
@@ -14,6 +19,87 @@ describe('render budget', () => {
     expect(shadowMapSizeFor(true)).toBe(TOUCH_SHADOW_MAP_SIZE);
     expect(shadowMapSizeFor(false)).toBe(SHADOW_MAP_SIZE);
     expect(TOUCH_SHADOW_MAP_SIZE).toBeLessThan(SHADOW_MAP_SIZE);
+  });
+
+  it('drops MSAA for a desktop whose pixel ratio is already 2 or more', () => {
+    for (const ratio of [2, 2.5, 3]) {
+      expect(viewportSampling(true, ratio, false)).toEqual({
+        antialias: false,
+        supersampled: true
+      });
+    }
+    for (const ratio of [1, 1.25, 1.5, 1.99]) {
+      expect(viewportSampling(true, ratio, false)).toEqual({
+        antialias: true,
+        supersampled: false
+      });
+    }
+  });
+
+  it('keeps MSAA on a touch-first device at any pixel ratio', () => {
+    for (const ratio of [1, 2, 3]) {
+      expect(viewportSampling(true, ratio, true)).toEqual({
+        antialias: true,
+        supersampled: false
+      });
+    }
+  });
+
+  it('leaves a profile without antialiasing exactly as it is', () => {
+    for (const coarse of [false, true]) {
+      for (const ratio of [1, 2, 3]) {
+        expect(viewportSampling(false, ratio, coarse)).toEqual({
+          antialias: false,
+          supersampled: false
+        });
+      }
+    }
+  });
+
+  it('holds a supersampled context at 2x whatever the display reports later', () => {
+    const supersampled = viewportSampling(true, 2, false);
+    // Moved to a 1x display, or zoomed out or in, the backing store stays 2x.
+    for (const ratio of [1, 1.25, 1.8, 2, 3]) {
+      expect(viewportPixelRatio(supersampled, ratio)).toBe(
+        MAX_VIEWPORT_PIXEL_RATIO
+      );
+    }
+    // A multisampled context follows the display, capped at 2.
+    const multisampled = viewportSampling(true, 1, false);
+    expect(viewportPixelRatio(multisampled, 1)).toBe(1);
+    expect(viewportPixelRatio(multisampled, 1.5)).toBe(1.5);
+    expect(viewportPixelRatio(multisampled, 3)).toBe(MAX_VIEWPORT_PIXEL_RATIO);
+    expect(viewportPixelRatio(viewportSampling(false, 3, false), 3)).toBe(
+      MAX_VIEWPORT_PIXEL_RATIO
+    );
+  });
+
+  it('sizes and styles an export by the display ratio, capped at 2', () => {
+    expect(displayPixelRatio(1)).toBe(1);
+    expect(displayPixelRatio(1.5)).toBe(1.5);
+    expect(displayPixelRatio(3)).toBe(MAX_VIEWPORT_PIXEL_RATIO);
+  });
+
+  it('reports an overridden pixel ratio only while drawing', () => {
+    class Renderer {
+      private ratio = 2;
+      getPixelRatio() {
+        return this.ratio;
+      }
+    }
+    const renderer = new Renderer();
+    const own = renderer.getPixelRatio;
+    expect(
+      withReportedPixelRatio(renderer, 1, () => renderer.getPixelRatio())
+    ).toBe(1);
+    expect(renderer.getPixelRatio()).toBe(2);
+    expect(() =>
+      withReportedPixelRatio(renderer, 1, () => {
+        throw new Error('refused');
+      })
+    ).toThrow('refused');
+    expect(renderer.getPixelRatio()).toBe(2);
+    expect(renderer.getPixelRatio).toBe(own);
   });
 
   it('lowers the navigation pixel ratio only for a device dropping frames', () => {

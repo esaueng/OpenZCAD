@@ -189,25 +189,35 @@ export function shareLinkNamesFor(
   return names;
 }
 
+/** A reissued link and the revoked link it replaces (`ShareWork.replacements`). */
+export interface ShareLinkReplacement {
+  readonly sourceId: string;
+  readonly shareId: string;
+}
+
 /**
- * Prunes the names of a project's revoked links (revoked on another device,
- * or replaced by a reissue): a tombstone replaces each. Only links the
- * project's signed link set tombstones count, and a tombstone is never
- * lifted, so a link is never pruned for being missing from a list that has
- * not caught up with it yet (PR 1921 review).
+ * Names each reissued link after the link it replaces and clears that
+ * link's name, as if the owner had typed the name into the new link: a
+ * fresh stamp, through the same change as any rename. A new link that
+ * already has an entry (a name, or a cleared one) keeps it, and a source
+ * with no name, or one already carried, gives nothing, so running it again
+ * changes nothing. A source not yet replaced is left alone, so a reissue
+ * that stops halfway carries the rest when it is retried.
  */
-export function pruneRevokedShareLinkNames(
+export function nameReissuedShareLinks(
   book: ShareLinkNameBook,
   projectId: string,
-  revoked: ReadonlySet<string>,
+  replacements: readonly ShareLinkReplacement[],
   now: number
 ): ShareLinkNameBook {
   let next = book;
-  for (const [shareId, entry] of Object.entries(
-    book.projects[projectId] ?? {}
-  )) {
-    if ('deleted' in entry || !revoked.has(shareId)) continue;
-    next = setShareLinkName(next, projectId, shareId, null, now);
+  for (const { sourceId, shareId } of replacements) {
+    const links = next.projects[projectId] ?? {};
+    const source = links[sourceId];
+    if (!validId(shareId) || !source || 'deleted' in source) continue;
+    if (!links[shareId])
+      next = setShareLinkName(next, projectId, shareId, source.name, now);
+    next = setShareLinkName(next, projectId, sourceId, null, now);
   }
   return next;
 }
@@ -522,7 +532,10 @@ export async function readShareLinkNames(
   if (opened.kind !== 'opened') return device;
   // A session that ended meanwhile must not put names back on the device.
   requireActive(keys);
-  const merged = mergeShareLinkNameBooks(device, opened.book);
+  // Merged into the device copy as it is now, not as it was before the
+  // fetch: a rename typed here meanwhile, whose save failed, stays
+  // (PR 1938 review).
+  const merged = mergeShareLinkNameBooks(keys.device.read(), opened.book);
   keys.device.write(merged);
   return merged;
 }
@@ -549,8 +562,19 @@ const SAVE_ATTEMPTS = 4;
 export async function changeShareLinkNames(
   keys: ShareLinkNameKeys,
   api: ShareLinkNamesApi,
-  change: (book: ShareLinkNameBook, now: number) => ShareLinkNameBook
+  change: (book: ShareLinkNameBook, now: number) => ShareLinkNameBook,
+  options: {
+    /**
+     * False for a change derived from other entries (a reissue's names): the
+     * device copy takes it only once the account has, so a retry after a
+     * conflict derives it again from the account's newer copy instead of
+     * from this attempt's guess (PR 1938 review). A user's own edit stays
+     * speculative, so it shows even when the save fails.
+     */
+    readonly speculative?: boolean;
+  } = {}
 ): Promise<ShareLinkNameBook> {
+  const speculative = options.speculative ?? true;
   const now = keys.now ?? Date.now;
   requireActive(keys);
   let snapshot = await api.load();
@@ -569,7 +593,7 @@ export async function changeShareLinkNames(
         : device;
     const at = now();
     const next = change(base, at);
-    keys.device.write(next);
+    if (speculative) keys.device.write(next);
     if (opened?.kind === 'unreadable') throw new ShareLinkNamesKeptOnDevice();
     const sequence = Math.max(keys.pins.read(), snapshot.sequence) + 1;
     // Sealed with a copy taken now, while the session is known to be live:
@@ -601,6 +625,10 @@ export async function changeShareLinkNames(
       throw error;
     }
     keys.pins.write(sequence);
+    if (!speculative) {
+      requireActive(keys);
+      keys.device.write(mergeShareLinkNameBooks(keys.device.read(), next));
+    }
     return next;
   }
 }
@@ -684,36 +712,76 @@ async function pageKeys(userId: string): Promise<ShareLinkNameKeys | null> {
 }
 
 /**
- * The names of a project's listed links, for its share dialog. Names of
- * the project's revoked links are pruned from the account record in the
- * background (`pruneRevokedShareLinkNames`).
+ * The names of a project's links, for its share dialog: only the `listed`
+ * ones (live links, not those whose revocation is pending), so a revoked
+ * link's name, which the record may keep, is never shown.
  */
 export async function pageShareLinkNames(
   userId: string,
   projectId: string,
-  listed: ReadonlySet<string>,
-  revoked: ReadonlySet<string>
+  listed: ReadonlySet<string>
 ): Promise<Record<string, string>> {
   const keys = await pageKeys(userId);
-  const device = localStorageShareLinkNameCopy(userId);
-  if (!keys) return pickListed(shareLinkNamesFor(device.read(), projectId));
-  const api = await pageApi();
-  const book = await readShareLinkNames(keys, api);
-  const now = Date.now();
-  if (pruneRevokedShareLinkNames(book, projectId, revoked, now) !== book) {
-    void changeShareLinkNames(keys, api, (current, at) =>
-      pruneRevokedShareLinkNames(current, projectId, revoked, at)
-    ).catch(() => {
-      // Pruned again on the next list.
-    });
-  }
-  return pickListed(shareLinkNamesFor(book, projectId));
+  const book = keys
+    ? await readShareLinkNames(keys, await pageApi())
+    : localStorageShareLinkNameCopy(userId).read();
+  return Object.fromEntries(
+    Object.entries(shareLinkNamesFor(book, projectId)).filter(([shareId]) =>
+      listed.has(shareId)
+    )
+  );
+}
 
-  function pickListed(names: Record<string, string>) {
-    return Object.fromEntries(
-      Object.entries(names).filter(([shareId]) => listed.has(shareId))
+/** The replacements whose new link is live: a revoked one takes no name. */
+export function liveReplacements(
+  replacements: readonly ShareLinkReplacement[],
+  live: ReadonlySet<string>
+): ShareLinkReplacement[] {
+  return replacements.filter(({ shareId }) => live.has(shareId));
+}
+
+/**
+ * Gives reissued links the names of the links they replace
+ * (`nameReissuedShareLinks`), saved like a rename but never speculatively.
+ * The reissue calls it; so does every list, which finishes a reissue that
+ * upkeep completed after the reissue itself failed. Only replacements whose
+ * new link is `live` count, and it saves nothing when nothing is left to
+ * name, so a list rarely writes.
+ */
+export async function nameReissuedPageShareLinks(
+  userId: string,
+  projectId: string,
+  replacements: readonly ShareLinkReplacement[],
+  live: ReadonlySet<string>
+): Promise<void> {
+  const pending = liveReplacements(replacements, live);
+  if (pending.length === 0) return;
+  const keys = await pageKeys(userId);
+  if (!keys) {
+    throw new Error(
+      'Unlock encryption on this device to keep the links’ names.'
     );
   }
+  const api = await pageApi();
+  // Whether anything is left to name, without touching the device copy; a
+  // failed fetch fails the call rather than reading as nothing to do.
+  const snapshot = await api.load();
+  const opened =
+    snapshot.record === null
+      ? null
+      : await openShareLinkNames(keys, snapshot.record);
+  requireActive(keys);
+  const book =
+    opened?.kind === 'opened'
+      ? mergeShareLinkNameBooks(keys.device.read(), opened.book)
+      : keys.device.read();
+  if (nameReissuedShareLinks(book, projectId, pending, 0) === book) return;
+  await changeShareLinkNames(
+    keys,
+    api,
+    (current, now) => nameReissuedShareLinks(current, projectId, pending, now),
+    { speculative: false }
+  );
 }
 
 /** Names a link (or clears its name, `name` null) in the account record. */
