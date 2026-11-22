@@ -285,6 +285,73 @@ test('the modeling guide folds for the measurement workbench on a short phone (#
   await expect(minimize).toHaveAttribute('aria-expanded', 'true');
 });
 
+// A 360 × 640 phone during Box with Objects open (#1953). Expanded over the
+// command's 180 px bar, the guide reached up the whole stage: Objects kept
+// 0 px of the lane, and over a taller bar the card ran under the top
+// islands. It caps its height now, leaving the lane room, its step text
+// scrolling between its header and Next.
+test('the expanded guide leaves an open panel room over an in-place bar (#1953)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubApi(page, {
+    workspaceTour: true,
+    panelLayout: null,
+    commandFoldClosed: true
+  });
+  await createProject(page, 'Phone guide panel');
+  await createPrimitiveInPlace(page, 'box');
+  await page.setViewportSize({ width: 360, height: 640 });
+  const tour = page.locator('.workspace-tour');
+  await expect(tour).toContainText('Select to edit');
+  const objects = page
+    .getByRole('toolbar', { name: 'Model panels' })
+    .getByRole('button', { name: 'Objects panel' });
+  if ((await objects.getAttribute('aria-pressed')) !== 'true') {
+    await objects.tap();
+  }
+  const panel = page.locator('.panel-lane-float .model-panel');
+  await expect(panel).toBeVisible();
+  await page.keyboard.press('b');
+  await expect(page.getByRole('group', { name: 'Box command' })).toBeVisible();
+  await tour.getByRole('button', { name: 'Expand modeling guide' }).tap();
+  const minimize = tour.getByRole('button', {
+    name: 'Minimize modeling guide'
+  });
+  await expect(minimize).toHaveAttribute('aria-expanded', 'true');
+  await waitForSurfacesToSettle(page, [
+    '.workspace-tour',
+    '.panel-lane-float .model-panel'
+  ]);
+  await shot(page, 'guide-expanded-over-box-with-objects-360');
+
+  const card = (await tour.boundingBox())!;
+  const lane = (await panel.boundingBox())!;
+  const top = (await page.locator('.topbar').boundingBox())!;
+  // The panel keeps its header and rows, above the card.
+  expect(lane.height).toBeGreaterThanOrEqual(100);
+  expect(lane.y + lane.height).toBeLessThanOrEqual(card.y + 0.5);
+  // The card stays on the stage, below the top islands.
+  expect(card.y).toBeGreaterThanOrEqual(top.y + top.height);
+  for (const control of [
+    minimize,
+    tour.getByRole('button', { name: 'Next' }),
+    panel.getByRole('button', { name: 'Hide panels' })
+  ]) {
+    await expect.poll(() => reachable(control)).toBe(true);
+  }
+  // The step's text scrolls inside the card rather than being cut.
+  const content = tour.locator('.workspace-tour-content');
+  expect(
+    await content.evaluate(
+      (element) =>
+        getComputedStyle(element).overflowY === 'auto' &&
+        element.scrollHeight >= element.clientHeight
+    )
+  ).toBe(true);
+});
+
 const PIVOT: AssemblyFrame = {
   origin: { x: 0, y: 0, z: 0 },
   zAxis: { x: 0, y: 0, z: 1 },

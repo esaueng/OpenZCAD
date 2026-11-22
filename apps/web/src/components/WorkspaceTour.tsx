@@ -270,7 +270,12 @@ export function WorkspaceTour({
       )}
       {/* A step can change on its own (it advances when its action
           happens), so the new step is announced. */}
-      <div hidden={minimized} aria-live="polite" aria-atomic="true">
+      <div
+        className="workspace-tour-content"
+        hidden={minimized}
+        aria-live="polite"
+        aria-atomic="true"
+      >
         <h2 className="workspace-tour-title">{step.title}</h2>
         <p className="workspace-tour-body">
           {tourStepBody(
