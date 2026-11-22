@@ -11,3 +11,4 @@ Evidence:
   - an end within tolerance of the plane does not hide that crossing;
   - two close crossings of a near-tangent arc both stay candidates.
 - `test/exact-sweep-profile-position.test.ts`: a 210° arc that crosses the plane under a radius-1 disc and ends on the plane, exactly or a hair off it within the kernel tolerance. Auto and Path intersection each sweep the whole arc both ways from the disc, at volume π · 10 · angle.
+- `test/e2e/exact-sweeps.spec.ts` "a picked arc that ends on the profile plane stands the profile at its crossing": the arc is picked on the canvas and Profile at → Crossing is chosen. It rebuilds with no warning at the 210° Pappus volume, passing under the disc and over the top.

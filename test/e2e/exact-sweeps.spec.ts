@@ -880,3 +880,62 @@ test('a path picked through the profile sweeps both ways from the crossing (M04,
   expect(body.bbox.min.z).toBeCloseTo(-8, 4);
   expect(body.bbox.max.z).toBeCloseTo(12, 4);
 });
+
+test('a picked arc that ends on the profile plane stands the profile at its crossing (M04)', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  // The arc about (30, 0) crosses the profile's plane under the disc at
+  // x = 20, rises over the top and ends on the plane at x = 40.
+  const document = sweepDocument(
+    'End and crossing',
+    { objectKind: 'circle', radius: 1, centerX: 20, centerY: 0 },
+    [
+      {
+        name: 'Path',
+        plane: 'XZ',
+        offset: 0,
+        objects: [
+          {
+            objectKind: 'arc',
+            centerX: 30,
+            centerY: 0,
+            radius: 10,
+            startAngleDeg: 150,
+            endAngleDeg: 360
+          }
+        ]
+      }
+    ]
+  );
+  const { canvas, bar } = await startTool(page, document, /^Sweep\b/);
+  await expect
+    .poll(async () => {
+      await pickProfile(canvas, 0);
+      return bar.textContent();
+    })
+    .toContain('Pick the path');
+  // The top of the arc: sketch (30, −10) is world (30, 0, 10).
+  await pickCurve(page, canvas, bar, [30, 0, 10], 'Path of 1');
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await bar.getByRole('combobox', { name: 'Profile at' }).selectOption({
+    label: 'Crossing'
+  });
+  await bar.locator('summary[aria-label$=" options"]').click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0);
+  const { saved, sweep, data } = await savedSweep(page);
+  expect(data).toMatchObject({ profilePosition: 'intersection' });
+  const derived = await rebuilt(saved);
+  expect(derived.featureWarnings ?? []).toEqual([]);
+  const body = derived.bodyRepresentations[sweep.bodyId!]!;
+  // Pappus over the whole 210° arc, swept both ways from the disc.
+  expect(body.volume).toBeCloseTo(Math.PI * 10 * ((7 * Math.PI) / 6), 6);
+  // The tube passes under the disc (x = 19) and over the top (z = 11).
+  expect(body.bbox.min.x).toBeLessThan(19.01);
+  expect(body.bbox.max.z).toBeGreaterThan(10.99);
+});
