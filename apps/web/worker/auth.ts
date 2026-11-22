@@ -50,6 +50,10 @@ const LOGIN_KNOWN_DEVICE_ALLOWANCE = 3;
 // How long a known-device cookie lasts after the sign-in that set it.
 const KNOWN_DEVICE_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
 const DEFAULT_SESSION_DAYS = 30;
+// A browser session that keeps being used slides forward by one lifetime
+// once it is past half-life, but never beyond this many days after the
+// sign-in that created it. It is never shorter than the lifetime itself.
+const SESSION_ABSOLUTE_CAP_DAYS = 90;
 const TURNSTILE_ACTION = 'email-code';
 const DESKTOP_CLIENT_ID = 'openzcad-macos';
 const DESKTOP_AUTH_ATTEMPT_TTL_SECONDS = 10 * 60;
@@ -96,6 +100,10 @@ interface SessionRow {
   user_id: string;
   email: string | null;
   expires_at: number;
+}
+
+interface BrowserSessionRow extends SessionRow {
+  created_at: number;
 }
 
 interface DesktopAuthAttemptRow {
@@ -271,6 +279,126 @@ export function createSessionCookie(
   maxAgeSeconds: number
 ): string {
   return `${SESSION_COOKIE_NAME}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
+/**
+ * Browser sessions due a renewal on this request. Keyed by the request object
+ * so the response wrapper decides, once the response is known, whether the
+ * session slides at all; entries go with the request.
+ */
+interface RenewedBrowserSession {
+  db: D1Database;
+  tokenHash: string;
+  threshold: number;
+  expiresAt: number;
+  cookie: string;
+}
+
+const renewedSessions = new WeakMap<Request, RenewedBrowserSession>();
+
+/**
+ * Slides the request's session, once, after its response is known to carry
+ * the re-issued cookie, and returns that cookie. The stored expiry and the
+ * browser cookie therefore move together: a response that cannot carry the
+ * cookie (a 403, an upgrade) never advances the stored expiry alone. The
+ * UPDATE matches only a row that still exists under the threshold, so a
+ * session deleted while the request ran (sign-out in another tab, account
+ * erasure) is not written back, and concurrent requests write it once. A
+ * failed write never fails the response.
+ */
+export async function takeRenewedSessionCookie(
+  request: Request
+): Promise<string | null> {
+  const renewed = renewedSessions.get(request);
+  renewedSessions.delete(request);
+  if (!renewed) {
+    return null;
+  }
+  try {
+    const result = await renewed.db
+      .prepare(
+        `UPDATE auth_sessions SET expires_at = ?
+       WHERE token_hash = ? AND token_hash NOT GLOB 'e2ee-write:*'
+         AND expires_at < ? AND expires_at < ?`
+      )
+      .bind(
+        renewed.expiresAt,
+        renewed.tokenHash,
+        renewed.threshold,
+        renewed.expiresAt
+      )
+      .run();
+    return (result.meta?.changes ?? 0) > 0 ? renewed.cookie : null;
+  } catch (error) {
+    console.error('Browser session renewal failed.', error);
+    return null;
+  }
+}
+
+/** Discard a pending renewal without touching the database. */
+export function dropRenewedSessionCookie(request: Request): void {
+  renewedSessions.delete(request);
+}
+
+/**
+ * Renewal is limited to same-origin requests, decided as the worker's
+ * same-origin check does: `Sec-Fetch-Site` when the browser sends it,
+ * otherwise an `Origin` that, when present, matches the app. A cross-site
+ * navigation (a link to `/api/session` or a share fallback) never renews.
+ */
+function isSameOriginRenewalRequest(request: Request): boolean {
+  const site = request.headers.get('sec-fetch-site');
+  if (site !== null) {
+    return site === 'same-origin';
+  }
+  const origin = request.headers.get('origin');
+  return !origin || origin === new URL(request.url).origin;
+}
+
+/**
+ * Marks a browser session past half-life for sliding forward by one lifetime,
+ * capped at {@link SESSION_ABSOLUTE_CAP_DAYS} after it was created. The write
+ * happens in {@link takeRenewedSessionCookie}, once the response is known.
+ */
+function renewBrowserSession(
+  request: Request,
+  db: D1Database,
+  lifetimeSeconds: number,
+  token: string,
+  tokenHash: string,
+  session: BrowserSessionRow,
+  timestamp: number
+): void {
+  const threshold = timestamp + Math.floor(lifetimeSeconds / 2);
+  if (session.expires_at >= threshold) {
+    return;
+  }
+  // A WebSocket upgrade response cannot carry a re-issued cookie, so its
+  // renewal waits for the next ordinary request.
+  if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+    return;
+  }
+  if (!isSameOriginRenewalRequest(request)) {
+    return;
+  }
+  const capSeconds = Math.max(
+    SESSION_ABSOLUTE_CAP_DAYS * 24 * 60 * 60,
+    lifetimeSeconds
+  );
+  const renewedExpiresAt = Math.min(
+    timestamp + lifetimeSeconds,
+    Number(session.created_at) + capSeconds
+  );
+  if (renewedExpiresAt <= session.expires_at) {
+    return;
+  }
+  renewedSessions.set(request, {
+    db,
+    tokenHash,
+    threshold,
+    expiresAt: renewedExpiresAt,
+    cookie: createSessionCookie(token, renewedExpiresAt - timestamp)
+  });
 }
 
 export function clearSessionCookie(): string {
@@ -1670,6 +1798,45 @@ export async function destroyDesktopAuthorization(
   await revokeDesktopSession(db, row.session_id, nowSeconds());
 }
 
+async function deleteExpiredBrowserSession(
+  db: D1Database,
+  tokenHash: string,
+  timestamp: number
+): Promise<void> {
+  await db
+    .prepare(
+      `DELETE FROM auth_sessions WHERE token_hash = ? AND expires_at < ?`
+    )
+    .bind(tokenHash, timestamp)
+    .run();
+}
+
+/**
+ * The clearing cookie for a request whose session was rejected, or null when
+ * the submitted session is live after all. Unlike sign-out it deletes the row
+ * only while it is expired, so a session a concurrent request has just
+ * renewed survives, and its cookie is not cleared by this late 401.
+ */
+export async function clearRejectedEmailSession(
+  request: Request,
+  env: CloudflareEnv
+): Promise<string | null> {
+  const token = readCookie(request, SESSION_COOKIE_NAME);
+  if (token && env.DB) {
+    const tokenHash = await sha256(token);
+    const timestamp = nowSeconds();
+    await deleteExpiredBrowserSession(env.DB, tokenHash, timestamp);
+    const live = await env.DB.prepare(
+      `SELECT 1 AS live FROM auth_sessions s INNER JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = ? AND s.expires_at >= ? AND u.email IS NOT NULL`
+    )
+      .bind(tokenHash, timestamp)
+      .first<{ live: number }>();
+    if (live) return null;
+  }
+  return clearSessionCookie();
+}
+
 export async function destroyEmailSession(
   request: Request,
   env: CloudflareEnv
@@ -1745,25 +1912,38 @@ export async function authenticateBrowserSession(
   }
   const tokenHash = await sha256(token);
   const session = await env.DB.prepare(
-    `SELECT s.user_id, s.expires_at, u.email
+    `SELECT s.user_id, s.created_at, s.expires_at, u.email
      FROM auth_sessions s
      INNER JOIN users u ON u.id = s.user_id
      WHERE s.token_hash = ?`
   )
     .bind(tokenHash)
-    .first<SessionRow>();
+    .first<BrowserSessionRow>();
   const timestamp = nowSeconds();
   if (!session || session.expires_at < timestamp || !session.email) {
-    if (session) {
+    if (session && !session.email) {
       await env.DB.prepare(`DELETE FROM auth_sessions WHERE token_hash = ?`)
         .bind(tokenHash)
         .run();
+    } else if (session) {
+      // Only a row that is still expired: a concurrent request may just have
+      // renewed it.
+      await deleteExpiredBrowserSession(env.DB, tokenHash, timestamp);
     }
     throw new AuthenticationError(
       'Your session expired. Sign in again.',
       'invalid'
     );
   }
+  renewBrowserSession(
+    request,
+    env.DB,
+    configuredSessionDays(env) * 24 * 60 * 60,
+    token,
+    tokenHash,
+    session,
+    timestamp
+  );
   return {
     userId: toUserId(session.user_id),
     displayName: session.email.split('@')[0] || session.email,

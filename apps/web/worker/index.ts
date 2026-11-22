@@ -162,6 +162,9 @@ import {
   assistantProviderIdentity,
   authenticateBrowserSession,
   authenticateRequest,
+  clearRejectedEmailSession,
+  dropRenewedSessionCookie,
+  takeRenewedSessionCookie,
   approveDesktopAuthorization,
   AuthFlowError,
   AuthenticationError,
@@ -256,6 +259,7 @@ import {
   parseSaveLibraryFolderSetRequest,
   saveLibraryFolderSet
 } from './libraryFolderSets';
+import { SESSION_COOKIE_NAME } from './sessionCredentials';
 import {
   CONSENTED_ASSISTANT_PROPOSAL_PATH,
   assistantConsentVersion,
@@ -3227,7 +3231,32 @@ async function handleAppRequest(request: Request, env: Env): Promise<Response> {
 
   assertSafeRuntimeConfiguration(env);
   const response = await dispatchApiRequest(request, env);
-  return withApiSecurityHeaders(response);
+  let renewedSessionCookie: string | null = null;
+  if (mayCarryRenewedSessionCookie(response)) {
+    renewedSessionCookie = await takeRenewedSessionCookie(request);
+  } else {
+    dropRenewedSessionCookie(request);
+  }
+  return withApiSecurityHeaders(response, renewedSessionCookie);
+}
+
+/**
+ * A renewed session cookie rides only on a response that authenticated and
+ * left the session cookie alone: never on a WebSocket upgrade, a 401/403, or
+ * a response that sets or clears the cookie itself (sign-in, sign-out,
+ * account erasure, a rejected session).
+ */
+function mayCarryRenewedSessionCookie(response: Response): boolean {
+  if (
+    response.webSocket ||
+    response.status === 401 ||
+    response.status === 403
+  ) {
+    return false;
+  }
+  return !response.headers
+    .getSetCookie()
+    .some((line) => line.startsWith(`${SESSION_COOKIE_NAME}=`));
 }
 
 export default {
@@ -3306,7 +3335,10 @@ export default {
  * the socket, and it serves no document to sniff or frame, so it passes
  * through untouched.
  */
-function withApiSecurityHeaders(response: Response): Response {
+function withApiSecurityHeaders(
+  response: Response,
+  renewedSessionCookie: string | null = null
+): Response {
   if (response.webSocket) {
     return response;
   }
@@ -3315,6 +3347,19 @@ function withApiSecurityHeaders(response: Response): Response {
     statusText: response.statusText,
     headers: response.headers
   });
+  // A session the request slid forward re-issues its cookie with the new
+  // lifetime. The response then carries the session token, so no shared
+  // cache may store it: anything short of `no-store` becomes `no-store`.
+  if (renewedSessionCookie) {
+    wrapped.headers.append('set-cookie', renewedSessionCookie);
+    if (
+      !/(?:^|,)\s*no-store\s*(?:,|$)/i.test(
+        wrapped.headers.get('cache-control') ?? ''
+      )
+    ) {
+      wrapped.headers.set('cache-control', 'no-store');
+    }
+  }
   wrapped.headers.set('x-content-type-options', 'nosniff');
   wrapped.headers.set('referrer-policy', 'no-referrer');
   wrapped.headers.set('cross-origin-resource-policy', 'same-origin');
@@ -3354,12 +3399,14 @@ async function dispatchApiRequest(
       return json({ error: error.message, code: error.code }, error.status);
     }
     if (error instanceof AuthenticationError) {
+      const clearing =
+        error.failure === 'invalid'
+          ? await clearRejectedEmailSession(request, env)
+          : null;
       return json(
         { error: error.message, code: 'AUTH_REQUIRED' },
         401,
-        error.failure === 'invalid'
-          ? { 'set-cookie': await destroyEmailSession(request, env) }
-          : undefined
+        clearing ? { 'set-cookie': clearing } : undefined
       );
     }
     if (error instanceof AccountDeletionError) {
