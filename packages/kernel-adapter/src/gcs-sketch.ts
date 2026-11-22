@@ -380,6 +380,14 @@ export function solveSketchWithGcs(
   // One kernel constraint handle per document constraint, in order, so the
   // residual read-back below can be keyed by document constraint id.
   const kernelHandles: { constraintId: string; handle: number }[] = [];
+  const arcEndLocks: {
+    constraintId: string;
+    handle: number;
+    x: number;
+    y: number;
+    radius: number;
+  }[] = [];
+  const lockMisses = new Map<string, number>();
   const add = (constraintId: string, payload: Record<string, unknown>) => {
     kernelHandles.push({
       constraintId,
@@ -860,6 +868,98 @@ export function solveSketchWithGcs(
         add(id, { type: 'fixY', point, value: data.y });
         break;
       }
+      case 'lock-entity': {
+        // S07: the whole entity at its recorded geometry, as exactly as many
+        // kernel equations as it has freedoms, so a lock is never redundant
+        // with itself: a line's two ends (4), a circle's centre and radius
+        // (3), an arc's centre and start (4) plus one coordinate of its end
+        // (1; the arc's own centre–end tie fixes the other). That end
+        // coordinate is the one the tie does not already pin, so the five
+        // stay independent wherever the end lies.
+        const target = objectHandles(data.objectId);
+        const at = data.at;
+        const expected =
+          target.kind === 'line'
+            ? 4
+            : target.kind === 'circle'
+              ? 3
+              : target.kind === 'arc'
+                ? 5
+                : 0;
+        if (
+          expected > 0 &&
+          (!Array.isArray(at) ||
+            at.length !== expected ||
+            !at.every(
+              (value) => typeof value === 'number' && Number.isFinite(value)
+            ))
+        ) {
+          throw new Error(
+            `The lock on ${data.objectId} does not record its ${target.kind}'s ${expected} values. Unlock it and lock it again.`
+          );
+        }
+        const fix = (ref: SketchPointRef, x: number, y: number) => {
+          const point = pointHandle(ref);
+          add(id, { type: 'fixX', point, value: x });
+          add(id, { type: 'fixY', point, value: y });
+        };
+        const ref = (point: SketchPointRef['point']) => ({
+          objectId: data.objectId,
+          point
+        });
+        if (target.kind === 'line') {
+          fix(ref('start'), at[0]!, at[1]!);
+          fix(ref('end'), at[2]!, at[3]!);
+        } else if (target.kind === 'circle') {
+          fix(ref('center'), at[0]!, at[1]!);
+          add(id, {
+            type: 'circleRadius',
+            circle: target.entity,
+            value: at[2]!
+          });
+        } else if (target.kind === 'arc') {
+          const [cx, cy, r, startDeg, endDeg] = at as [
+            number,
+            number,
+            number,
+            number,
+            number
+          ];
+          const start = startDeg * RADIANS_PER_DEGREE;
+          const end = endDeg * RADIANS_PER_DEGREE;
+          fix(ref('center'), cx, cy);
+          fix(ref('start'), cx + r * Math.cos(start), cy + r * Math.sin(start));
+          const endPoint = pointHandle(ref('end'));
+          // One coordinate and the radius tie leave the end two places on
+          // the circle (its mirror across the fixed coordinate's axis, at
+          // least r·√2 away); the read-back below refuses the mirror.
+          arcEndLocks.push({
+            constraintId: id,
+            handle: endPoint,
+            x: cx + r * Math.cos(end),
+            y: cy + r * Math.sin(end),
+            radius: r
+          });
+          if (Math.abs(Math.sin(end)) >= Math.abs(Math.cos(end))) {
+            add(id, {
+              type: 'fixX',
+              point: endPoint,
+              value: cx + r * Math.cos(end)
+            });
+          } else {
+            add(id, {
+              type: 'fixY',
+              point: endPoint,
+              value: cy + r * Math.sin(end)
+            });
+          }
+        } else {
+          throw new Error(
+            `Object ${data.objectId} is not a line, circle or arc to lock.`
+          );
+        }
+        break;
+      }
       case 'pattern':
         addPatternRelation(id, data);
         break;
@@ -905,6 +1005,22 @@ export function solveSketchWithGcs(
     const position = kernel.gcsPointPosition(sketch, handle);
     return { x: position[0] ?? 0, y: position[1] ?? 0 };
   };
+
+  // A locked arc whose end settled on the mirror solution satisfies every
+  // equation yet has a different sweep: report the lock as unsatisfied.
+  for (const lock of arcEndLocks) {
+    const at = readPoint(lock.handle);
+    const miss = Math.hypot(at.x - lock.x, at.y - lock.y);
+    // The mirror lies at least r·√2 away; the solve's own error is far
+    // below a millionth of the radius.
+    if (miss > 1e-6 * lock.radius) {
+      classification = 'unsatisfied';
+      lockMisses.set(
+        lock.constraintId,
+        Math.max(lockMisses.get(lock.constraintId) ?? 0, miss)
+      );
+    }
+  }
 
   const solvedObjects: SolvedSketchObject[] = objects.map((object) => {
     const entry = objectHandles(object.objectId);
@@ -1032,10 +1148,14 @@ export function solveSketchWithGcs(
 
   return {
     classification,
-    converged: diagnostics.converged === true && patternMisses.size === 0,
+    converged:
+      diagnostics.converged === true &&
+      lockMisses.size === 0 &&
+      patternMisses.size === 0,
     iterations: requireNumber(diagnostics, 'iterations'),
     maxResidual: Math.max(
       requireNumber(diagnostics, 'maxResidual'),
+      ...lockMisses.values(),
       ...patternMisses.values()
     ),
     rolledBack: diagnostics.rolledBack === true,
@@ -1050,6 +1170,7 @@ export function solveSketchWithGcs(
         .reduce((byConstraint, { constraintId, handle }) => {
           const residual = Math.max(
             residualByHandle.get(handle) ?? 0,
+            lockMisses.get(constraintId) ?? 0,
             patternMisses.get(constraintId) ?? 0
           );
           byConstraint.set(
