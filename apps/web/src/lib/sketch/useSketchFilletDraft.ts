@@ -192,8 +192,8 @@ export function useSketchFilletDraft(
       error:
         objectId && objectId !== firstLine && (firstLine || !onLine.length)
           ? firstLine
-            ? 'Those lines do not share an eligible corner.'
-            : 'Pick a straight line that meets another line at a corner.'
+            ? 'Those two do not share an eligible corner.'
+            : 'Pick a line or arc that meets another line or arc at a corner.'
           : undefined
     });
   }

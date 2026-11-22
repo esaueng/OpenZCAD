@@ -549,7 +549,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // one Move copy stamps repeated copies, each the same transform on from the
 // one before. An older client would build only the first, so it must refuse
 // the document. Builds on v136.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 137 as const;
+// v141 adds S05 curved tangency (a `tangent` constraint between an arc and
+// another arc or a circle, at an arc end): what a fillet against an arc or
+// circle records. An older client refuses a tangent without a line, so it
+// must refuse the document. Builds on v137; v138 to v140 are claimed by the
+// S07 entity lock (#1913) and the S05 pattern relation and offset dimension.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 141 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -1992,6 +1997,9 @@ export type SketchConstraintData =
    * `at` names that arc point; it is what a sketch fillet records about the
    * arc it inserted. A constraint written before the arc form existed has no
    * `at` and replays exactly as it did.
+   *
+   * S05 (v141): an arc may also touch another arc or a circle at `at`, an end
+   * of an arc in the pair — what a fillet records against a curved leg.
    */
   | {
       constraintKind: 'tangent';

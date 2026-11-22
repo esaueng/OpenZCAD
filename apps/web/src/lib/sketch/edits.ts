@@ -49,6 +49,12 @@ import {
   type SketchRankProbe
 } from './modify';
 import {
+  chamferHasCurvedLeg,
+  curvedCornerPrefill,
+  planCurvedChamfer,
+  resolveCurvedCorner
+} from './curveChamfer';
+import {
   DEFAULT_SKETCH_OFFSET_OPTIONS,
   offsetClickSide,
   offsetFollowsClick,
@@ -120,7 +126,7 @@ export const SKETCH_EDIT_TOOL_SPECS: readonly SketchEditToolSpec[] = [
     kind: 'chamfer',
     label: 'Chamfer',
     picks: 2,
-    hint: 'Click two lines that meet, then enter the setback.',
+    hint: 'Click two lines or arcs that meet, then enter the setback.',
     valueLabel: 'Chamfer distance'
   },
   {
@@ -273,6 +279,14 @@ export function refuseEditPick(
     return null;
   }
   if (data.objectKind === 'line') {
+    return null;
+  }
+  // S05: Chamfer cuts arcs and meets circles here. The Fillet tool rounds
+  // them from its corner markers; this kernel path takes lines only.
+  if (
+    kind === 'chamfer' &&
+    (data.objectKind === 'arc' || data.objectKind === 'circle')
+  ) {
     return null;
   }
   if (data.objectKind === 'arc') {
@@ -656,6 +670,29 @@ export function sketchEditValueSteps(
       ];
     }
     default: {
+      if (
+        kind === 'chamfer' &&
+        chamferHasCurvedLeg(document, sketch, picks[0]!, picks[1]!)
+      ) {
+        const curved = resolveCurvedCorner(
+          document,
+          sketch,
+          picks[0]!,
+          picks[1]!,
+          resolve
+        );
+        if ('error' in curved) {
+          return { error: curved.error };
+        }
+        return [
+          {
+            label: spec.valueLabel!,
+            unitKind: 'length',
+            initial: roundPrefill(curvedCornerPrefill(curved.legs)),
+            message: `${spec.label}: enter the value.`
+          }
+        ];
+      }
       const resolved = resolveSketchCorner(
         document,
         sketch,
@@ -728,7 +765,18 @@ export function advanceSketchEditPick(
   if (refusal) {
     return { status: 'refuse', reason: refusal };
   }
-  const picks = [...existing, pivotPick ? `${objectId}#${snapped}` : objectId];
+  // S05: a circle a Chamfer meets is kept whole, so which way round the
+  // bevel goes is the side of the joint that was clicked.
+  const circleSide =
+    kind === 'chamfer' &&
+    context.at &&
+    sketchObjectData(document, sketch, objectId)?.objectKind === 'circle'
+      ? `${objectId}@${context.at.x},${context.at.y}`
+      : null;
+  const picks = [
+    ...existing,
+    pivotPick ? `${objectId}#${snapped}` : (circleSide ?? objectId)
+  ];
   if (picks.length < spec.picks) {
     return {
       status: 'pick',
@@ -908,6 +956,20 @@ export function planSketchEdit(
       picks[0]!,
       amount,
       offset ?? { ...DEFAULT_SKETCH_OFFSET_OPTIONS, side: 1 },
+      resolve
+    );
+  }
+  if (
+    kind === 'chamfer' &&
+    chamferHasCurvedLeg(document, sketch, picks[0]!, picks[1]!)
+  ) {
+    return planCurvedChamfer(
+      document,
+      sketch,
+      sketchId,
+      picks[0]!,
+      picks[1]!,
+      amount,
       resolve
     );
   }
