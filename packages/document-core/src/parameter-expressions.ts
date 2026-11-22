@@ -38,15 +38,23 @@ function visit(
   map: QuantityMapShape | SwitchQuantity<never>,
   rewrite: Rewrite
 ): void {
-  walkQuantities(value, map, (leaf: QuantityLeaf) => {
-    if (leaf.role !== 'expression' || typeof leaf.value !== 'string') return;
-    const next = rewrite(
-      leaf.value,
-      quantityExpressionDimension(leaf.quantity),
-      { container: leaf.holder, key: String(leaf.key) }
-    );
-    if (next !== leaf.value) leaf.holder[leaf.key] = next;
-  });
+  walkQuantities(
+    value,
+    map,
+    (leaf: QuantityLeaf) => {
+      if (leaf.role !== 'expression' || typeof leaf.value !== 'string') return;
+      const next = rewrite(
+        leaf.value,
+        quantityExpressionDimension(leaf.quantity),
+        { container: leaf.holder, key: String(leaf.key) }
+      );
+      // Compared with what the field holds now, as before the registry: a
+      // callback may itself have written through `site`.
+      if (next !== leaf.holder[leaf.key]) leaf.holder[leaf.key] = next;
+    },
+    [],
+    true
+  );
 }
 
 /**

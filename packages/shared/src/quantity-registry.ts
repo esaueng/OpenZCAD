@@ -230,6 +230,30 @@ type NumericKeys<T> = {
     : K;
 }[AllKeys<T>];
 
+/**
+ * The keys a homogeneous value may have: the components of a coordinate or
+ * vector and the corners of a box. One class may cover every leaf beneath
+ * such a value. A named field beside them (`rotationDeg` next to `x`, `y`,
+ * `z`) can measure something else, so it needs a map with its own entry.
+ */
+type HomogeneousKey = 'x' | 'y' | 'z' | 'u' | 'v' | 'min' | 'max';
+type ObjectKeysBeneath<T, D extends number = 12> = [D] extends [never]
+  ? never
+  : Objects<T> extends infer O
+    ? O extends unknown
+      ? // A record keyed by arbitrary names (primitive dimensions) is a
+        // homogeneous collection, like an array: only its values count.
+        | (string extends keyof O ? never : keyof O & string)
+        | { [K in keyof O]-?: ObjectKeysBeneath<O[K], Depth[D]> }[keyof O]
+      : never
+    : never;
+/** Whether one class may stand for every leaf beneath `T`. */
+type Homogeneous<T> = [Exclude<ObjectKeysBeneath<T>, HomogeneousKey>] extends [
+  never
+]
+  ? true
+  : false;
+
 type ObjectEntry<T> = [Objects<T>] extends [never]
   ? never
   : QuantityMap<Objects<T>> | SwitchQuantity<Objects<T>>;
@@ -239,11 +263,17 @@ type ObjectEntry<T> = [Objects<T>] extends [never]
  * dynamic class, an unvisited class, or a map. Every leaf a stored number: a
  * literal or a map. Both, or other leaves too: a map.
  */
-type Entry<T> = [Exclude<QuantityLeaves<T>, 'expr'>] extends [never]
-  ? QuantityClass | DynamicQuantity<never> | UnvisitedQuantity | ObjectEntry<T>
-  : [Exclude<QuantityLeaves<T>, 'literal'>] extends [never]
-    ? LiteralQuantity<never> | ObjectEntry<T>
-    : ObjectEntry<T>;
+type Entry<T> =
+  Homogeneous<T> extends false
+    ? ObjectEntry<T>
+    : [Exclude<QuantityLeaves<T>, 'expr'>] extends [never]
+      ? | QuantityClass
+        | DynamicQuantity<never>
+        | UnvisitedQuantity
+        | ObjectEntry<T>
+      : [Exclude<QuantityLeaves<T>, 'literal'>] extends [never]
+        ? LiteralQuantity<never> | ObjectEntry<T>
+        : ObjectEntry<T>;
 
 /**
  * One required entry per key of `T` that holds a number. A union's members
@@ -956,7 +986,10 @@ export const SKETCH_NODE_QUANTITIES: QuantityMap<Omit<SketchNode, 'metadata'>> =
 const PARAMETER_QUANTITY = dynamic<ParameterNode>(
   (parameter) => parameter.quantity ?? 'untyped'
 );
-export const PARAMETER_QUANTITIES: {
+export const PARAMETER_QUANTITIES: QuantityMap<
+  Omit<ParameterNode, 'metadata'>
+> & {
+  // A plain `string`, so the mapped type cannot see it: declared by hand.
   readonly expression: DynamicQuantity<ParameterNode>;
   readonly value: LiteralQuantity<ParameterNode>;
 } = {
@@ -1052,9 +1085,17 @@ function applyEntry(
   key: string,
   path: (string | number)[],
   entry: QuantityEntry,
-  visit: (leaf: QuantityLeaf) => void
+  visit: (leaf: QuantityLeaf) => void,
+  expressionsOnly: boolean
 ): void {
   if (value === undefined || value === null) return;
+  // A stored-number subtree (an embedded mesh's vertices and indices) holds
+  // no expression: an expression walk never descends into it.
+  if (
+    expressionsOnly &&
+    (entry instanceof LiteralQuantity || entry instanceof UnvisitedQuantity)
+  )
+    return;
   let rule: LeafRule | undefined;
   if (typeof entry === 'string' || entry instanceof DynamicQuantity)
     rule = { owner: holder, classify: entry, role: 'expression', visit };
@@ -1073,7 +1114,8 @@ function applyEntry(
       value,
       entry as QuantityMapShape | SwitchQuantity<never>,
       visit,
-      path
+      path,
+      expressionsOnly
     );
 }
 
@@ -1082,16 +1124,19 @@ function applyEntry(
  * expression-capable path), in registry order: for a map, its keys in the
  * order they are declared; beneath a class, the value's own key order.
  * Unclassified leaves are skipped; the coverage test is what finds them.
+ * With `expressionsOnly`, literal and unvisited entries are skipped without
+ * descending into them, so only `'expression'` leaves are reported.
  */
 export function walkQuantities(
   value: unknown,
   map: QuantityMapShape | SwitchQuantity<never>,
   visit: (leaf: QuantityLeaf) => void,
-  path: (string | number)[] = []
+  path: (string | number)[] = [],
+  expressionsOnly = false
 ): void {
   if (Array.isArray(value)) {
     value.forEach((item, index) =>
-      walkQuantities(item, map, visit, [...path, index])
+      walkQuantities(item, map, visit, [...path, index], expressionsOnly)
     );
     return;
   }
@@ -1104,7 +1149,15 @@ export function walkQuantities(
   if (!fields) return;
   for (const key of Object.keys(fields)) {
     if (!(key in value)) continue;
-    applyEntry(value[key], value, key, [...path, key], fields[key]!, visit);
+    applyEntry(
+      value[key],
+      value,
+      key,
+      [...path, key],
+      fields[key]!,
+      visit,
+      expressionsOnly
+    );
   }
 }
 

@@ -29,6 +29,7 @@ import {
   walkQuantities,
   type DocumentNode,
   type FeatureData,
+  type ParameterNode,
   type ParametricVector3,
   type ParamValue,
   type ProjectDocument,
@@ -123,6 +124,29 @@ export const widerFeatureCases: {
     Extract<WiderFeatureData, { featureKind: K }>
   >;
 } = FEATURE_QUANTITY_CASES;
+
+// One class may cover a coordinate or a box, never a named field beside
+// them: `rotationDeg` next to `min`/`max` would be scaled as a length
+// (review #1955).
+interface Box {
+  min: { x: number; y: number };
+  max: { x: number; y: number };
+}
+export const blanketOverBox: QuantityMap<{ bounds: Box }> = {
+  bounds: new LiteralQuantity('position')
+};
+export const blanketOverNamedField: QuantityMap<{
+  bounds: Box & { rotationDeg?: number };
+}> = {
+  // @ts-expect-error -- `rotationDeg` needs its own entry, not `position`.
+  bounds: new LiteralQuantity('position')
+};
+
+// A new numeric field on a parameter is refused (review #1955).
+type ParameterWithStep = Omit<ParameterNode, 'metadata'> & { step?: number };
+// @ts-expect-error -- `step` is not classified.
+export const parameterWithStep: QuantityMap<ParameterWithStep> =
+  PARAMETER_QUANTITIES;
 
 // ---------------------------------------------------------------------------
 // Corpus
@@ -221,9 +245,7 @@ function label(node: DocumentNode): string {
 }
 
 /** The registry's map for the part of a node it classifies. */
-function scope(
-  node: DocumentNode
-):
+function scope(node: DocumentNode):
   | {
       value: object;
       map: QuantityMapShape | SwitchQuantity<never>;
@@ -340,6 +362,49 @@ describe('quantity registry', () => {
     });
   });
 
+  describe('rewriteNodeExpressions (review #1955)', () => {
+    it('never walks a stored mesh', () => {
+      // A 200k-triangle mesh made every rename walk ~900k numbers: the
+      // expression walk must not descend into stored-number entries.
+      const untouchable = new Proxy([] as number[], {
+        get() {
+          throw new Error('walked a stored mesh');
+        }
+      });
+      const mesh = SAMPLE_FEATURES.find(
+        (data) => data.featureKind === 'imported-mesh'
+      )!;
+      const node = {
+        kind: 'feature',
+        data: { ...mesh, vertices: untouchable, indices: untouchable }
+      } as unknown as DocumentNode;
+      const seen: string[] = [];
+      expect(() =>
+        rewriteNodeExpressions(node, (expression) => {
+          seen.push(expression);
+          return expression;
+        })
+      ).not.toThrow();
+      expect(seen).toEqual([]);
+    });
+
+    it('compares with the field as it stands after the callback', () => {
+      // As the hand-written visitor did: a callback that writes through its
+      // site and returns the original text keeps its own write.
+      const node = {
+        kind: 'feature',
+        data: { featureKind: 'chamfer', distance: 'width', edgeHashes: [] }
+      } as unknown as DocumentNode;
+      rewriteNodeExpressions(node, (expression, _dimension, site) => {
+        (site.container as Record<string, unknown>)[site.key] = 'changed';
+        return expression;
+      });
+      expect((node as { data: { distance: string } }).data.distance).toBe(
+        'width'
+      );
+    });
+  });
+
   describe('runtime coverage', () => {
     it('classifies every numeric leaf', () => {
       const unclassified = new Set<string>();
@@ -377,6 +442,21 @@ describe('quantity registry', () => {
         ].join('\n')
       );
       expect([...unclassified]).toEqual([]);
+    });
+
+    it('keeps every sample leaf in its class', () => {
+      // The coverage check above proves a path is classified, not how. A
+      // stored number's class decides how a conversion treats it (a source
+      // area scales by k², a hash not at all) and no other test pins it,
+      // so a changed class must show up here and be reviewed (review #1955).
+      const classes = new Set<string>();
+      for (const { source, node } of corpus)
+        if (source === 'sample')
+          for (const leaf of classifiedLeaves(node))
+            classes.add(
+              `${label(node)} ${leafPath(node, leaf)} ${leaf.quantity} ${leaf.role}`
+            );
+      expect([...classes].sort()).toMatchSnapshot();
     });
 
     it('resolves per-instance classes', () => {
