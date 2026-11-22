@@ -223,7 +223,7 @@ for (const width of [1440, 390]) {
     `scissors opens with back-and-forth pivot motion at ${width}px`,
     { tag: '@ci-smoke' },
     async ({ page }) => {
-      test.setTimeout(120_000);
+      test.setTimeout(180_000);
       await page.setViewportSize({ width, height: 900 });
       await stubApi(page);
       await page.route('**/api/session', (route) =>
@@ -265,11 +265,13 @@ for (const width of [1440, 390]) {
             return shown.size;
           })
           .toBeGreaterThan(2);
-        await pause.click();
-        await expect(angle).toHaveValue(value);
+        // The demonstration is finite (three cycles, about 9 s): it pauses
+        // itself on the saved pose instead of redrawing forever.
         await expect(
           panel(page).getByRole('button', { name: 'Play', exact: true })
-        ).toBeInViewport();
+        ).toBeInViewport({ timeout: 20_000 });
+        await expect(pause).toHaveCount(0);
+        await expect(angle).toHaveValue(value);
         await expectBodyCount(page, 3);
       };
 
@@ -315,49 +317,53 @@ for (const width of [1440, 390]) {
   );
 }
 
-test(
-  'Reduce motion leaves the scissors paused with manual Play available',
-  { tag: '@ci-smoke' },
-  async ({ page }) => {
-    test.setTimeout(120_000);
-    await stubApi(page);
-    await page.route('**/api/session', (route) =>
-      route.fulfill({ status: 401, json: { error: 'Not signed in' } })
-    );
-    await page.addInitScript(
-      ({ key, defaults }) => {
-        localStorage.setItem(
-          key,
-          JSON.stringify({
-            settings: {
-              ...defaults,
-              appearance: { ...defaults.appearance, reducedMotion: true }
-            },
-            syncedRevision: null
-          })
+for (const source of ['setting', 'OS'] as const) {
+  test(
+    `Reduce motion (${source}) leaves the scissors paused with manual Play available`,
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      test.setTimeout(120_000);
+      if (source === 'OS') await page.emulateMedia({ reducedMotion: 'reduce' });
+      await stubApi(page);
+      await page.route('**/api/session', (route) =>
+        route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+      );
+      if (source === 'setting')
+        await page.addInitScript(
+          ({ key, defaults }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                settings: {
+                  ...defaults,
+                  appearance: { ...defaults.appearance, reducedMotion: true }
+                },
+                syncedRevision: null
+              })
+            );
+          },
+          { key: APP_SETTINGS_STORAGE_KEY, defaults: DEFAULT_APP_SETTINGS }
         );
-      },
-      { key: APP_SETTINGS_STORAGE_KEY, defaults: DEFAULT_APP_SETTINGS }
-    );
-    await page.goto('/');
-    await page.getByRole('button', { name: /^Open demo: Scissors/ }).click();
-    await expect(
-      page.getByRole('group', { name: 'Workspace mode' })
-    ).toBeVisible({ timeout: 30_000 });
-    const angle = panel(page).getByRole('textbox', {
-      name: 'Angle',
-      exact: true
-    });
-    await expect(angle).toHaveValue('30');
-    await panel(page)
-      .getByRole('button', { name: 'Play', exact: true })
-      .click();
-    await panel(page)
-      .getByRole('button', { name: 'Pause', exact: true })
-      .click();
-    await expect(angle).toHaveValue('30');
-  }
-);
+      await page.goto('/');
+      await page.getByRole('button', { name: /^Open demo: Scissors/ }).click();
+      await expect(
+        page.getByRole('group', { name: 'Workspace mode' })
+      ).toBeVisible({ timeout: 30_000 });
+      const angle = panel(page).getByRole('textbox', {
+        name: 'Angle',
+        exact: true
+      });
+      await expect(angle).toHaveValue('30');
+      await panel(page)
+        .getByRole('button', { name: 'Play', exact: true })
+        .click();
+      await panel(page)
+        .getByRole('button', { name: 'Pause', exact: true })
+        .click();
+      await expect(angle).toHaveValue('30');
+    }
+  );
+}
 
 test(
   'turns bodies into parts from the first run in the sidebar (AS01)',
