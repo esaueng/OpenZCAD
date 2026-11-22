@@ -1391,6 +1391,17 @@
   z-index: calc(var(--z-inspector-float) + 2);
 }
 
+/* An in-place command's bar (Box, Fillet) stands at the stage's foot, over
+   the corner the card keeps: it covered the card's Next on a desktop and
+   the whole folded card on a phone. The card stays up through the command
+   now (#1947), so it stands above the bar, by the height the bar
+   publishes (WorkspaceReadout). */
+.workspace.column-layout .viewer-area:has(.in-place-command) .workspace-tour {
+  bottom: calc(
+    var(--lane-base) + var(--in-place-command-h, 38px) + var(--island-gap)
+  );
+}
+
 /* A command's Options open up from the bar's left edge, the corner the
    tour card stands over: Box's Corner X/Y/Z covered the card's text and the
    card the options' edge (first-run, 1050px). The card stands aside while

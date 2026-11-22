@@ -24,7 +24,10 @@ export function stageFootClaim(
 /**
  * Publishes `property` on the enclosing `.viewer-area` while `active`, and
  * keeps it current as the surface or the stage changes size. The card
- * enters with a short rise, so it measures again when that ends.
+ * enters with a short rise, so it measures again when that ends. It also
+ * measures again when the stage's own style changes: the stylesheet moves
+ * the guide above an in-place command's bar by the height the bar publishes
+ * there, which moves it without resizing it (#1947).
  */
 export function useStageFootClaim(
   ref: RefObject<HTMLElement | null>,
@@ -36,13 +39,14 @@ export function useStageFootClaim(
     const stage = surface?.closest<HTMLElement>('.viewer-area');
     if (!active || !surface || !stage) return;
     const measure = () => {
-      stage.style.setProperty(
-        property,
-        `${stageFootClaim(
-          stage.getBoundingClientRect(),
-          surface.getBoundingClientRect()
-        )}px`
-      );
+      const claim = `${stageFootClaim(
+        stage.getBoundingClientRect(),
+        surface.getBoundingClientRect()
+      )}px`;
+      // Unchanged, left alone: the write would wake the style observer below.
+      if (stage.style.getPropertyValue(property) !== claim) {
+        stage.style.setProperty(property, claim);
+      }
     };
     measure();
     const observer =
@@ -51,11 +55,17 @@ export function useStageFootClaim(
         : new ResizeObserver(measure);
     observer?.observe(surface);
     observer?.observe(stage);
+    const restyled =
+      typeof MutationObserver === 'undefined'
+        ? null
+        : new MutationObserver(measure);
+    restyled?.observe(stage, { attributes: true, attributeFilter: ['style'] });
     surface.addEventListener('animationend', measure);
     surface.addEventListener('transitionend', measure);
     window.addEventListener('resize', measure);
     return () => {
       observer?.disconnect();
+      restyled?.disconnect();
       surface.removeEventListener('animationend', measure);
       surface.removeEventListener('transitionend', measure);
       window.removeEventListener('resize', measure);

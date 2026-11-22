@@ -1,3 +1,4 @@
+import type { Locator } from '@playwright/test';
 import {
   createPrimitiveInPlace,
   test,
@@ -5,7 +6,8 @@ import {
   createProject,
   MODEL_ONLY,
   modelPanel,
-  stubApi
+  stubApi,
+  waitForSurfacesToSettle
 } from './openzcad-fixtures';
 
 test(
@@ -201,3 +203,90 @@ test('a project that opens with history never shows the tour', async ({
   await expect(page.locator('.feature-row')).toHaveCount(1);
   await expect(page.locator('.workspace-tour')).toHaveCount(0);
 });
+
+/** Whether a press at the control's centre reaches the control itself. */
+function reachable(control: Locator) {
+  return control.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      box.x + box.width / 2,
+      box.y + box.height / 2
+    );
+    return hit !== null && element.contains(hit);
+  });
+}
+
+// The guide unmounted for every in-place command, so the card that asked for
+// a Box vanished as the Box began, its step and Skip with it (#1947). It stays
+// up now, above the command's bar: whole on a desktop, folded to its header
+// on a phone, and back as it was when the command ends.
+for (const view of [
+  { width: 1440, height: 900, touch: false },
+  { width: 360, height: 640, touch: true }
+]) {
+  test.describe(`at ${view.width}px`, () => {
+    test.use({ hasTouch: view.touch, isMobile: view.touch });
+
+    test(`the guide stays up above an in-place command's bar at ${view.width}px (#1947)`, async ({
+      page
+    }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width: view.width, height: view.height });
+      await stubApi(page, {
+        workspaceTour: true,
+        panelLayout: null,
+        commandFoldClosed: true
+      });
+      await createProject(page, 'Tour In Place');
+      const tour = page.locator('.workspace-tour');
+      await expect(tour).toContainText('Create your first feature');
+      const toggle = tour.getByRole('button', { name: /modeling guide$/ });
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+      await page.keyboard.press('b');
+      const bar = page.getByRole('group', { name: 'Box command' });
+      await expect(bar).toBeVisible();
+      await expect(tour).toBeVisible();
+      await expect(toggle).toHaveAttribute(
+        'aria-expanded',
+        view.touch ? 'false' : 'true'
+      );
+      await waitForSurfacesToSettle(page, ['.workspace-tour']);
+      await test.info().attach(`guide-over-box-bar-${view.width}`, {
+        body: await page.screenshot(),
+        contentType: 'image/png'
+      });
+      // Clear of the bar, each taking its own presses.
+      const card = (await tour.boundingBox())!;
+      const barBox = (await bar.boundingBox())!;
+      expect(card.y + card.height).toBeLessThanOrEqual(barBox.y + 0.5);
+      for (const control of [
+        toggle,
+        tour.getByRole('button', { name: 'Skip the tour' }),
+        bar.getByRole('button', { name: /^Done/ }),
+        bar.getByRole('button', { name: /^Cancel/ })
+      ]) {
+        await expect.poll(() => reachable(control)).toBe(true);
+      }
+
+      // Done makes the Box, and the guide moves on, whole again.
+      await bar.getByRole('button', { name: /^Done/ }).click();
+      await expect(bar).toBeHidden();
+      await expect(tour).toContainText('Select to edit');
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+      // Enter on the guide's own buttons is theirs, not the command's Done:
+      // on Skip it made a second Box and left the guide open (PR review).
+      if (!view.touch) {
+        await page.keyboard.press('b');
+        await expect(bar).toBeVisible();
+        await expect(bar.getByRole('button', { name: /^Done/ })).toBeEnabled();
+        await tour.getByRole('button', { name: 'Skip the tour' }).focus();
+        await page.keyboard.press('Enter');
+        await expect(tour).toHaveCount(0);
+        await expect(bar).toBeVisible();
+        await expect(page.locator('.feature-row')).toHaveCount(1);
+      }
+    });
+  });
+}
