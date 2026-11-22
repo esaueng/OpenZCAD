@@ -932,6 +932,74 @@ describe('SketchToolRail', () => {
     expect(row).not.toHaveAttribute('data-defined');
     expect(row).toHaveAttribute('aria-label', 'Horizontal · Line 1');
   });
+
+  it('lists the geometry that can still move, and selects it (S03)', async () => {
+    const user = userEvent.setup();
+    const onSelectFreeEntity = vi.fn();
+    const { props, rerender } = renderRail({
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 2',
+          editable: false,
+          defined: true
+        }
+      ],
+      solveStatus: {
+        label: '3 DOF remaining',
+        tone: 'info',
+        definedState: 'under-defined',
+        freeEntities: [
+          { objectId: 'line_1', label: 'Line 1', freedom: 2 },
+          { objectId: 'circle_1', label: 'Circle 1', freedom: 1 }
+        ]
+      },
+      onSelectFreeEntity
+    });
+    await user.click(screen.getByRole('button', { name: /Sketch palette/ }));
+    expect(
+      screen.getByText(
+        '2 entities can still move; green geometry is fully constrained.'
+      )
+    ).toBeVisible();
+    const free = screen.getByRole('group', {
+      name: 'Geometry that can still move'
+    });
+    expect(
+      within(free)
+        .getAllByRole('button')
+        .map((button) => button.textContent)
+    ).toEqual(['Line 1 · 2 DOF', 'Circle 1 · 1 DOF']);
+    await user.click(
+      within(free).getByRole('button', {
+        name: 'Select free geometry: Circle 1, 1 freedom'
+      })
+    );
+    expect(onSelectFreeEntity).toHaveBeenCalledWith('circle_1');
+    // A relation over fixed geometry reads defined, as the viewport paints it.
+    expect(
+      screen.getByText('Horizontal · Line 2').closest('li')
+    ).toHaveAttribute('data-defined', 'true');
+    // Without a reading the explanation stays sketch-wide.
+    rerender(
+      <SketchToolRail
+        {...props}
+        solveStatus={{
+          label: '3 DOF remaining',
+          tone: 'info',
+          definedState: 'under-defined'
+        }}
+      />
+    );
+    expect(
+      screen.getByText(
+        'Remaining freedom is reported for the whole sketch, not individual entities.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('group', { name: 'Geometry that can still move' })
+    ).toBeNull();
+  });
 });
 
 describe('SketchRelationsRail', () => {

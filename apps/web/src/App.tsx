@@ -962,6 +962,11 @@ import {
   type SketchEditToolKind
 } from './lib/interaction/machine';
 import type { SketchClipboard } from './lib/sketch/clipboard';
+import {
+  fixedEntityIds,
+  freeEntityRows,
+  type SketchEntityFreedomReport
+} from './lib/sketch/entityFreedom';
 import type {
   SketchEditHost,
   SketchEditPickContext,
@@ -22727,6 +22732,12 @@ export function App() {
   const [sketchDefinedObjectIds, setSketchDefinedObjectIds] = useState<
     string[]
   >([]);
+  // S03: each entity's remaining freedom, measured by held solves after an
+  // under-defined solve settles, for the solve evidence key it was read at.
+  const [sketchEntityFreedom, setSketchEntityFreedom] = useState<{
+    key: string;
+    report: SketchEntityFreedomReport;
+  } | null>(null);
   const sketchDocumentRef = useRef(doc);
   sketchDocumentRef.current = doc;
   const sketchSessionNameRef = useRef(sketchSessionName);
@@ -22841,7 +22852,11 @@ export function App() {
       units: doc.units,
       constraintDiagnosticObjectIds: sketchSolveDiagnosticObjectIds,
       textOutlineBudgetError,
-      definedObjectIds: sketchDefinedObjectIds,
+      // Measured per-entity freedom names the fixed entities on its own;
+      // without it only a fully-defined sketch paints anything defined.
+      definedObjectIds: sketchEntityFreedom
+        ? fixedEntityIds(sketchEntityFreedom.report)
+        : sketchDefinedObjectIds,
       textDraft,
       textDraftBudgetError:
         textDraft && textDraft.text.length > 0
@@ -22870,7 +22885,8 @@ export function App() {
     sketchDiagnosticPoints,
     sketchSolveDiagnosticObjectIds,
     textOutlineBudgetError,
-    sketchDefinedObjectIds
+    sketchDefinedObjectIds,
+    sketchEntityFreedom
   ]);
 
   /** Where the text card's live outline sits; the viewport writes it. */
@@ -24399,12 +24415,78 @@ export function App() {
     // same batch as the document change. Clearing the colours here as well
     // dropped every committed classification, so a fully constrained sketch
     // stayed blue until a manual Solve (I38). Only a stale status is cleared.
+    setSketchEntityFreedom((current) =>
+      current?.key === currentSketchSolveKey ? current : null
+    );
     if (sketchSolveSnapshotRef.current?.key === currentSketchSolveKey) {
       return;
     }
     setSketchSolveDiagnosticObjectIds([]);
     setSketchDefinedObjectIds([]);
   }, [currentSketchSolveKey, editingSketchNode?.sketchId]);
+  // Once an under-defined solve settles, measure where its freedom lives.
+  // A newer edit or solve cancels the reading; a reading for a key that is
+  // no longer current is dropped.
+  useEffect(() => {
+    const key = currentSketchSolveKey;
+    if (
+      !doc ||
+      !editingSketchNode ||
+      !key ||
+      sketchSolving ||
+      sketchSolveStatus?.definedState !== 'under-defined'
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const sketchId = editingSketchNode.sketchId;
+    geometry
+      .sketchEntityFreedom(
+        doc,
+        sketchId,
+        editingSketchNode.objectIds.map(String)
+      )
+      .then((report) => {
+        if (
+          !cancelled &&
+          report &&
+          sketchSolveEvidenceKey(managerRef.current?.document, sketchId) === key
+        ) {
+          setSketchEntityFreedom({ key, report });
+        }
+      })
+      // Freedom is an annotation: a failed reading leaves the sketch-wide
+      // status, which already stands.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentSketchSolveKey,
+    sketchSolveStatus?.definedState,
+    sketchSolving,
+    doc,
+    editingSketchNode,
+    geometry
+  ]);
+  const sketchFreedom =
+    sketchEntityFreedom?.key === currentSketchSolveKey
+      ? sketchEntityFreedom.report
+      : null;
+  const sketchRailSolveStatus = useMemo(
+    () =>
+      sketchSolveStatus && sketchFreedom && editingSketchNode
+        ? {
+            ...sketchSolveStatus,
+            freeEntities: freeEntityRows(
+              sketchFreedom,
+              editingSketchNode.objectIds.map(String),
+              (objectId) => sketchLabels.get(objectId) ?? 'entity'
+            )
+          }
+        : sketchSolveStatus,
+    [sketchSolveStatus, sketchFreedom, editingSketchNode, sketchLabels]
+  );
   useEffect(() => {
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
@@ -24420,28 +24502,38 @@ export function App() {
       sketchSolveStatus?.conflictingConstraintIds ?? []
     );
     const fullyDefined = sketchSolveStatus?.definedState === 'fully-defined';
+    // With measured freedom a relation reads defined when everything it
+    // references is fixed, the way the viewport colours that geometry.
+    const fixed = sketchFreedom ? new Set(fixedEntityIds(sketchFreedom)) : null;
     return (editingSketchNode.constraints ?? [])
       .filter(({ origin }) => origin !== 'promotion-structure')
-      .map(({ constraintId, data }) => ({
-        constraintId: String(constraintId),
-        label: describeConstraint(
-          data,
-          nameOf,
-          sketchPointNamer(editingSketchNode, sketchLabels)
-        ),
-        targets: constraintInspectionTargets(
+      .map(({ constraintId, data }) => {
+        const targets = constraintInspectionTargets(
           doc,
           editingSketchNode,
           String(constraintId)
-        ),
-        conflicted: conflicting.has(String(constraintId)),
-        defined: fullyDefined,
-        editable:
-          data.constraintKind === 'distance' ||
-          data.constraintKind === 'angle' ||
-          data.constraintKind === 'radius'
-      }));
-  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels]);
+        );
+        return {
+          constraintId: String(constraintId),
+          label: describeConstraint(
+            data,
+            nameOf,
+            sketchPointNamer(editingSketchNode, sketchLabels)
+          ),
+          targets,
+          conflicted: conflicting.has(String(constraintId)),
+          defined:
+            fullyDefined ||
+            (fixed !== null &&
+              targets.length > 0 &&
+              targets.every(({ objectId }) => fixed.has(objectId))),
+          editable:
+            data.constraintKind === 'distance' ||
+            data.constraintKind === 'angle' ||
+            data.constraintKind === 'radius'
+        };
+      });
+  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels, sketchFreedom]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -25857,6 +25949,32 @@ export function App() {
     return executeCommand(command)
       ? null
       : 'The parameter could not be renamed.';
+  }
+
+  /** S03: select an entity the freedom reading says can still move. */
+  function handleSelectFreeEntity(objectId: string) {
+    const live = managerRef.current?.document;
+    const session = interactionRef.current;
+    if (
+      !live ||
+      session.mode !== 'sketch' ||
+      !session.session.sketchId ||
+      sketchSolving ||
+      geometryBusy
+    ) {
+      return;
+    }
+    const sketch = findSketch(live, session.session.sketchId as SketchId);
+    if (!sketch?.objectIds.includes(objectId as EntityId)) {
+      setStatus('That geometry is no longer in the sketch.');
+      return;
+    }
+    // Inspection only: the normal selection path, no command written.
+    dispatchInteraction({ type: 'sketch-tool', tool: 'select' });
+    dispatchInteraction({ type: 'sketch-select-object', objectId });
+    setStatus(
+      `Selected ${sketchLabels.get(objectId) ?? 'the geometry'}, which can still move.`
+    );
   }
 
   function handleSelectConstraintObject(
@@ -36904,7 +37022,7 @@ export function App() {
         constraints={sketchConstraintItems}
         selectedObjectId={interaction.session.selectedObjectId}
         selectedObjectCount={sketchModeState?.selectedObjectIds?.length ?? 0}
-        solveStatus={sketchSolveStatus}
+        solveStatus={sketchRailSolveStatus}
         solving={sketchSolving}
         onEditTool={(kind, hint) => {
           if (kind === 'fillet' || sketchFilletPending) sketchFillet.reset();
@@ -36917,6 +37035,7 @@ export function App() {
         }}
         onDeleteConstraint={handleDeleteSketchConstraint}
         onSelectConstraintObject={handleSelectConstraintObject}
+        onSelectFreeEntity={handleSelectFreeEntity}
         onEditConstraint={handleEditSketchDimension}
         onSolve={() => {
           void handleSolveSketch();
