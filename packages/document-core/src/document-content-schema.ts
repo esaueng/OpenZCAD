@@ -1,5 +1,7 @@
 import {
   documentNodesWithHistory,
+  patternSpacingModeProblem,
+  type PatternKind,
   type ProjectDocument,
   type SketchObjectData
 } from '@openzcad/shared';
@@ -58,6 +60,24 @@ export function hasDatumPointCsysContent(value: unknown): boolean {
     pending.push(...Object.values(entry));
   }
   return false;
+}
+
+/**
+ * M10 linked copy stamps (schema v137): a transform copy, or the command
+ * that makes one, stamping more than one copy. An older reader would build
+ * only the first copy and lose the rest.
+ */
+export function assertTransformStampsSchema(
+  data: unknown,
+  version: unknown
+): void {
+  if (!record(data)) return;
+  if (
+    (Array.isArray(data.stampBodyIds) && data.stampBodyIds.length > 0) ||
+    (typeof data.stamps === 'number' && data.stamps > 1) ||
+    (Array.isArray(data.stampIds) && data.stampIds.length > 0)
+  )
+    assertMinimumProjectSchema(version, 137, 'Repeated copy stamps');
 }
 
 /** M06 ribs (schema v106). */
@@ -123,6 +143,27 @@ export function hasDatumReferenceConstructorKind(value: unknown): boolean {
 /** M12 wraps (schema v111). */
 export function assertWrapSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 111, 'Wraps');
+}
+
+/** S05 (schema v141): a tangent between two curves (no line in it). */
+export function assertCurvedTangentSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 141, 'Curve-to-curve tangency');
+}
+
+/** True for a tangent whose two sides the document knows to be curves. */
+function isCurvedTangent(
+  value: unknown,
+  nodes: Record<string, unknown>
+): boolean {
+  if (!record(value) || value.constraintKind !== 'tangent') return false;
+  const kind = (id: unknown) => {
+    if (typeof id !== 'string' || !Object.hasOwn(nodes, id)) return undefined;
+    const node = nodes[id];
+    return record(node) && record(node.data) ? node.data.objectKind : undefined;
+  };
+  const a = kind(value.a);
+  const b = kind(value.b);
+  return (a === 'arc' || a === 'circle') && (b === 'arc' || b === 'circle');
 }
 
 /** I01 (schema v59): slot composites, wherever a document or command holds one. */
@@ -289,6 +330,18 @@ export function assertPatternContentSchema(
     assertMinimumProjectSchema(version, 63, 'Patterns on sketch points');
   if (data.patternKind === 'path' || data.path !== undefined)
     assertMinimumProjectSchema(version, 112, 'Patterns along a sketch path');
+  if (data.patternKind === 'mirror' || data.mirrorPlane !== undefined)
+    assertMinimumProjectSchema(version, 119, 'Mirror patterns');
+  if (data.spacingMode !== undefined) {
+    assertMinimumProjectSchema(version, 120, 'Total-length patterns');
+    // Stored only on a linear pattern, as creating and editing one keep it
+    // (review): another kind would build without it and read as with it.
+    const problem = patternSpacingModeProblem({
+      patternKind: data.patternKind as PatternKind,
+      spacingMode: data.spacingMode
+    });
+    if (problem) throw new Error(problem);
+  }
 }
 
 /**
@@ -324,10 +377,10 @@ export function assertCustomFeatureSchema(version: unknown): void {
 }
 
 /**
- * M01: a hole measured from its entry face's outer boundary loop needs v118,
+ * M01: a hole measured from its entry face's outer boundary loop needs v147,
  * or an older reader would measure it from the vertex mean instead.
  */
-export const HOLE_OUTER_CENTROID_SCHEMA_VERSION = 118;
+export const HOLE_OUTER_CENTROID_SCHEMA_VERSION = 147;
 
 export function assertHoleContentSchema(data: unknown, version: unknown): void {
   if (!record(data)) return;
@@ -561,6 +614,31 @@ export function hasDrawingBom(value: unknown): boolean {
       typeof entry.annotationId === 'string' &&
       (entry.kind === 'bom-table' || entry.kind === 'balloon')
     )
+      return true;
+    pending.push(...Object.values(entry));
+  }
+  return false;
+}
+
+/** M01 hole tables on drawing sheets (schema v117). */
+export function assertDrawingHoleTableSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 117, 'Hole tables');
+}
+
+/** Whether `value` holds an M01 hole table. */
+export function hasDrawingHoleTable(value: unknown): boolean {
+  const pending: unknown[] = [value];
+  const seen = new Set<object>();
+  while (pending.length) {
+    const next = pending.pop();
+    if (typeof next !== 'object' || next === null || seen.has(next)) continue;
+    seen.add(next);
+    if (Array.isArray(next)) {
+      pending.push(...(next as unknown[]));
+      continue;
+    }
+    const entry = next as Record<string, unknown>;
+    if (typeof entry.annotationId === 'string' && entry.kind === 'hole-table')
       return true;
     pending.push(...Object.values(entry));
   }
@@ -1029,6 +1107,12 @@ export function assertDocumentContentCommandSchema(
     if (
       typeof command.kind === 'string' &&
       command.kind.startsWith('drawing.') &&
+      hasDrawingHoleTable(command.payload)
+    )
+      assertDrawingHoleTableSchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('drawing.') &&
       hasDrawingTolerance(command.payload)
     )
       assertDrawingToleranceSchema(document.schemaVersion);
@@ -1059,6 +1143,8 @@ export function assertDocumentContentCommandSchema(
       assertCustomFeatureSchema(document.schemaVersion);
     if (command.kind === 'feature.pattern')
       assertPatternContentSchema(command.payload, document.schemaVersion);
+    if (command.kind === 'feature.transform')
+      assertTransformStampsSchema(command.payload, document.schemaVersion);
     if (command.kind === 'feature.hole')
       assertHoleContentSchema(command.payload, document.schemaVersion);
     // A hole patch names its kind (the History edit sends the whole data).
@@ -1109,6 +1195,37 @@ export function assertDocumentContentCommandSchema(
         83,
         'Simplified threads'
       );
+    // M04 (schema v133): a loft's connections and guide, created or patched
+    // (a patch need not name its kind; the fields are a loft's).
+    {
+      const loft =
+        command.kind === 'feature.loft'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'loft')
+            ? command.payload.data
+            : null;
+      if (loft && (loft.connections !== undefined || loft.guides !== undefined))
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          133,
+          'Loft connections and guides'
+        );
+    }
+    // M04: an exact sweep's options, created or patched (a patch need not
+    // name its kind; the fields are a sweep's).
+    {
+      const sweep =
+        command.kind === 'feature.sweep'
+          ? command.payload
+          : record(command.payload.data) &&
+              (command.payload.data.featureKind === undefined ||
+                command.payload.data.featureKind === 'sweep')
+            ? command.payload.data
+            : null;
+      if (sweep) assertSweepContentSchema(sweep, document.schemaVersion);
+    }
     switch (command.kind) {
       case 'sketch.add':
       case 'sketch.object.add':
@@ -1127,6 +1244,31 @@ export function assertDocumentContentCommandSchema(
 }
 
 /** Call after validating or dropping unreadable history at the entry boundary. */
+/**
+ * M04: the schema each exact-sweep option needs, for a stored sweep node and
+ * for a replayed command alike. A default (no twist, unit scale) needs none.
+ */
+function assertSweepContentSchema(
+  sweep: Record<string, unknown>,
+  version: unknown
+): void {
+  if (
+    (sweep.twistDeg !== undefined &&
+      sweep.twistDeg !== 0 &&
+      sweep.twistDeg !== '0') ||
+    (sweep.endScale !== undefined &&
+      sweep.endScale !== 1 &&
+      sweep.endScale !== '1')
+  )
+    assertMinimumProjectSchema(version, 132, 'Sweep twist and end scale');
+  if (sweep.orientation !== undefined)
+    assertMinimumProjectSchema(version, 134, 'Sweep orientation');
+  if (sweep.cornerRadius !== undefined)
+    assertMinimumProjectSchema(version, 135, 'Round sweep corners');
+  if (sweep.profilePosition !== undefined)
+    assertMinimumProjectSchema(version, 136, 'Sweep profile position');
+}
+
 export function assertDocumentContentSchema(document: ProjectDocument): void {
   if (document.objectFolders !== undefined)
     assertObjectFolderSchema(document.schemaVersion);
@@ -1266,6 +1408,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
     assertDrawingDetailSchema(document.schemaVersion);
   if (hasDrawingBom(document.drawings))
     assertDrawingBomSchema(document.schemaVersion);
+  if (hasDrawingHoleTable(document.drawings))
+    assertDrawingHoleTableSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'drawings' &&
+        (hasDrawingHoleTable(change.before) ||
+          hasDrawingHoleTable(change.after))
+      )
+        assertDrawingHoleTableSchema(document.schemaVersion);
   if (hasDrawingTolerance(document.drawings))
     assertDrawingToleranceSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
@@ -1347,12 +1499,26 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       );
     if (node.kind === 'feature' && node.data.featureKind === 'thread')
       assertThreadContentSchema(node.data, document.schemaVersion);
+    if (
+      node.kind === 'feature' &&
+      node.data.featureKind === 'loft' &&
+      (node.data.connections !== undefined || node.data.guides !== undefined)
+    )
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        133,
+        'Loft connections and guides'
+      );
+    if (node.kind === 'feature' && node.data.featureKind === 'sweep')
+      assertSweepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
       assertImportedStepContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')
       assertCustomFeatureSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'pattern')
       assertPatternContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'transform')
+      assertTransformStampsSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'hole')
       assertHoleContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'sheet-metal')
@@ -1378,6 +1544,19 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       )
     )
       assertSlotSchema(document.schemaVersion);
+    if (
+      node.kind === 'sketch' &&
+      Array.isArray(node.constraints) &&
+      node.constraints.some(
+        (constraint) =>
+          record(constraint) &&
+          isCurvedTangent(
+            constraint.data,
+            document.nodes
+          )
+      )
+    )
+      assertCurvedTangentSchema(document.schemaVersion);
   }
   assertDocumentContentCommandSchema(document);
 }

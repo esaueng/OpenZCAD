@@ -211,6 +211,7 @@ export function describeOperation(operation: CadPatchOperation): string {
       return `${operation.name} — split ${describeBodyRef(operation.targetBodyId)} in two at ${describeBodyRef(operation.datum)}`;
     case 'add_drawing_annotations':
     case 'remove_drawing_annotations':
+    case 'auto_dimension_drawing':
       return describeCadPatchOperation(operation);
     default: {
       // Every kind the contract allows has a line above; a new kind fails the

@@ -87,11 +87,14 @@ import {
   type CadDrawingOperation
 } from './drawing-annotations';
 export {
+  AUTO_DIMENSION_KINDS,
   DRAWING_OPERATION_KINDS,
   MAX_PROPOSED_DRAWING_ANNOTATIONS,
   drawingSpecEdgeRefs,
   isDrawingOperation,
   type CadAddDrawingAnnotationsOperation,
+  type CadAutoDimensionDrawingOperation,
+  type CadAutoDimensionKind,
   type CadDigestDrawing,
   type CadDigestDrawingAnnotation,
   type CadDigestDrawingAudit,
@@ -534,7 +537,7 @@ export type CadPatchOperation =
        * F03: one simple hole drilled into a planar face of an existing body,
        * built by the manual Hole command (`feature.hole`), which consumes the
        * body. `position` is measured from the area centroid of the face's
-       * outer boundary (holes in the face ignored, M01 schema v118) along
+       * outer boundary (holes in the face ignored, M01 schema v147) along
        * the Hole tool's U and V (`frameFromFace`: u = normalize(r × n),
        * v = n × u, r = world Z, or world X when |n.z| ≥ 0.9). That is not
        * the digest's `attachmentFrame`, whose axes differ. `depth` is the
@@ -768,7 +771,7 @@ export interface CadDigestBodyTopology {
     center?: Vector3;
     /**
      * Where `add_hole`'s position {u: 0, v: 0} stands on a planar face: the
-     * area centroid of its outer boundary (M01, schema v118), which holes
+     * area centroid of its outer boundary (M01, schema v147), which holes
      * already in the face do not move. Not the snapshot's `centroid`.
      */
     holeOrigin?: Vector3;
@@ -4754,6 +4757,7 @@ export function parseCadPatchProposal(
         break;
       case 'add_drawing_annotations':
       case 'remove_drawing_annotations':
+      case 'auto_dimension_drawing':
         parseDrawingOperation(operation);
         break;
       case 'rename_feature':
@@ -5638,6 +5642,13 @@ export function parseCadPatchProposal(
     );
   if (new Set(drawingOperations.map((op) => op.sheetId)).size > 1)
     throw new Error('A drawing proposal edits one sheet.');
+  if (
+    drawingOperations.some((op) => op.kind === 'auto_dimension_drawing') &&
+    drawingOperations.length > 1
+  )
+    throw new Error(
+      'An auto_dimension_drawing request is proposed alone: the app plans every dimension it adds.'
+    );
   return digest
     ? validateCadPatchProposalAgainstDigest(proposal, digest)
     : proposal;
@@ -6791,6 +6802,7 @@ export function describeCadPatchOperation(
       return `Create ${operation.patternKind} pattern of ${operation.targetBodyId}`;
     case 'add_drawing_annotations':
     case 'remove_drawing_annotations':
+    case 'auto_dimension_drawing':
       return describeDrawingOperation(operation);
   }
 }

@@ -3,6 +3,8 @@ import * as THREE from 'three';
 import {
   createStepStretchPreview,
   stepPreviewKey,
+  stepPreviewMatcher,
+  stepPreviewNeighbourKeys,
   type StepPreviewProfile
 } from './stepStretchPreview';
 
@@ -101,5 +103,40 @@ describe('step stretch preview', () => {
     expect(preview.apply(-2)).toBe(false);
     expect(preview.apply(4)).toBe(false);
     expect(preview.apply(3.9)).toBe(true);
+  });
+
+  it('matches a fresh neighbour search across repeated cells and grid boundaries', () => {
+    const origin = { x: 7.25, y: -33, z: 51 };
+    const quantum = 0.125;
+    const key = (x: number, y: number, z: number) =>
+      stepPreviewKey(x, y, z, origin, quantum);
+    const movingKeys = new Set([
+      key(origin.x - 4 * quantum, origin.y, origin.z),
+      key(origin.x, origin.y, origin.z),
+      key(origin.x + 18000 * quantum, origin.y + 2 * quantum, origin.z)
+    ]);
+    const moves = stepPreviewMatcher({
+      ...profile,
+      origin,
+      quantum,
+      movingKeys
+    });
+    // Walk more distinct cells than fit in the cache. Revisit direct and
+    // neighbouring matches, misses, and a plane outside the welding reach.
+    for (const dz of [0, 1, 2, 1, 0]) {
+      const z = origin.z + dz * quantum;
+      const expected = [];
+      const observed = [];
+      for (let i = -5; i <= 18002; i++) {
+        const x = origin.x + i * quantum;
+        expected.push(
+          stepPreviewNeighbourKeys(key(x, origin.y, z)).some((cell) =>
+            movingKeys.has(cell)
+          )
+        );
+        observed.push(moves(x, origin.y, z));
+      }
+      expect(observed).toEqual(expected);
+    }
   });
 });

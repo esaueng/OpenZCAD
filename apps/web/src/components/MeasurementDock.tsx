@@ -17,19 +17,38 @@ import type {
   Measurement,
   MeasurementDisplayOptions,
   MeasurementMode,
+  MeasurePointKind,
   RadialDisplay
 } from '../lib/measurements';
+
+/** M13: the point kinds a Distance pick can ask for, in the order offered. */
+const POINT_KIND_LABELS: Record<MeasurePointKind, string> = {
+  auto: 'Auto',
+  endpoint: 'Endpoint',
+  midpoint: 'Midpoint',
+  center: 'Center',
+  centroid: 'Centroid'
+};
 
 const MODE_LABELS: Record<MeasurementMode, string> = {
   smart: 'Smart',
   distance: 'Distance',
-  angle: 'Angle'
+  angle: 'Angle',
+  maximum: 'Maximum',
+  central: 'Central',
+  parallel: 'Parallel'
 };
 
 const MODE_INSTRUCTIONS: Record<MeasurementMode, string> = {
   smart: 'Pick an edge, face, hole, or body to inspect it.',
   distance: 'Pick two targets. Circles and cylinders use their exact centers.',
-  angle: 'Pick two straight edges, circular axes or planar faces.'
+  angle: 'Pick two straight edges, circular axes or planar faces.',
+  maximum:
+    'Pick two points, straight edges or full circles: the farthest they are apart.',
+  central:
+    'Pick a circle, arc, cylinder or hole, then a target: the distance from its center or axis.',
+  parallel:
+    'Pick two parallel edges, faces or axes, or two concentric circles or cylinders.'
 };
 
 /** Decimal places the dock offers: everything a stored record may carry. */
@@ -51,10 +70,21 @@ interface MeasurementDockProps {
   draftTargetLabel: string | null;
   display: MeasurementDisplayOptions;
   onMode(mode: MeasurementMode): void;
+  /**
+   * M13: which point a Distance pick records. Offered only in Distance;
+   * omitted, the dock offers no choice.
+   */
+  pointKind?: MeasurePointKind;
+  onPointKind?(kind: MeasurePointKind): void;
   onUnit(unit: UnitSystem): void;
   onPrecision(precision: number): void;
   onRadialDisplay(display: RadialDisplay): void;
   onSelect(id: string): void;
+  /**
+   * M13: the row under the pointer or keyboard focus, whose measured edges
+   * and faces the viewport highlights; null when none is.
+   */
+  onHover?(id: string | null): void;
   onToggleVisibility(id: string): void;
   onRename(id: string, label: string, note: string): void;
   onDelete(id: string): void;
@@ -80,10 +110,13 @@ export function MeasurementDock({
   draftTargetLabel,
   display,
   onMode,
+  pointKind = 'auto',
+  onPointKind,
   onUnit,
   onPrecision,
   onRadialDisplay,
   onSelect,
+  onHover,
   onToggleVisibility,
   onRename,
   onDelete,
@@ -144,7 +177,9 @@ export function MeasurementDock({
       ? 'Measure is off. Choose a mode to resume.'
       : draftTargetLabel
         ? `${draftTargetLabel} selected. Pick the second target.`
-        : MODE_INSTRUCTIONS[mode];
+        : mode === 'distance' && pointKind !== 'auto'
+          ? `Pick two targets. Each records its ${POINT_KIND_LABELS[pointKind].toLowerCase()}.`
+          : MODE_INSTRUCTIONS[mode];
 
   return (
     <aside
@@ -185,6 +220,28 @@ export function MeasurementDock({
           </button>
         ))}
       </div>
+
+      {mode === 'distance' && onPointKind ? (
+        <div
+          className="measurement-mode-tabs measurement-point-kinds"
+          role="group"
+          aria-label="Point to pick"
+        >
+          {(Object.keys(POINT_KIND_LABELS) as MeasurePointKind[]).map(
+            (candidate) => (
+              <button
+                type="button"
+                key={candidate}
+                className={candidate === pointKind ? 'active' : undefined}
+                aria-pressed={candidate === pointKind}
+                onClick={() => onPointKind(candidate)}
+              >
+                {POINT_KIND_LABELS[candidate]}
+              </button>
+            )
+          )}
+        </div>
+      ) : null}
 
       <p className="measurement-dock-instruction" aria-live="polite">
         {instruction}
@@ -269,6 +326,16 @@ export function MeasurementDock({
                 }${updating || entry.status !== 'current' ? ' stale' : ''}`}
                 role="listitem"
                 key={entry.id}
+                // M13: the whole row, actions included, holds the highlight:
+                // moving onto its Copy button or tabbing to an action keeps
+                // the measured entity lit.
+                onPointerEnter={() => onHover?.(entry.id)}
+                onPointerLeave={() => onHover?.(null)}
+                onFocus={() => onHover?.(entry.id)}
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget))
+                    onHover?.(null);
+                }}
               >
                 {editing ? (
                   <form

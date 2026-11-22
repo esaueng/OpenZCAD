@@ -2,7 +2,7 @@ import {
   booleanConsumedBodyIds,
   listFeaturesInOrder
 } from '@openzcad/document-core';
-import { ownEntry } from '@openzcad/shared';
+import { ownEntry, transformStampBodyIds } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureId,
@@ -121,6 +121,7 @@ export function failedHistoryExportBodies(
       ...(feature.data.featureKind === 'split'
         ? [feature.data.secondBodyId]
         : []),
+      ...transformStampBodyIds(feature.data),
       ...affectedFeatureTargets(document, feature.featureId).map(
         (target) => target.resultBodyId
       )

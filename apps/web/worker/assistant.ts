@@ -212,7 +212,9 @@ Return only the strict structured output required by the response schema.`;
  */
 export const DRAWING_SHEET_INSTRUCTIONS = `# Dimensioning the Draw sheet
 
-The user is on the Draw sheet in \`digest.drawing\`. Its model is locked: answer with \`add_drawing_annotations\` or \`remove_drawing_annotations\` on that sheetId, and no model operation in the same proposal. If they ask for a model change, say in a message that it is made in Build.
+The user is on the Draw sheet in \`digest.drawing\`. Its model is locked: answer with \`auto_dimension_drawing\`, \`add_drawing_annotations\` or \`remove_drawing_annotations\` on that sheetId, and no model operation in the same proposal. If they ask for a model change, say in a message that it is made in Build.
+
+- To dimension the sheet, or part of it ("dimension this", "only the front view", "skip the radii"), propose \`auto_dimension_drawing\` alone: the app's generator then adds every missing dimension, each once and in a view that sees it true size. You choose only the scope: \`viewIds\` (null for every view; never the isometric view) and \`dimensionKinds\` (null for every kind). The app reports what the scope leaves out. Use \`add_drawing_annotations\` for a specific dimension or note the user describes.
 
 - Every edge comes from \`digest.drawing.views[].edges\` of the view the annotation belongs to, by its \`ref\`. Never invent a ref, and never use a ref from another view.
 - Coordinates are paper millimetres, y up, from the view's centre: \`ends\` are an open edge's ends in page order (\`first\` is the left one, or the lower when level), \`center\` a circle's centre. A linear dimension measures between two points (an end of an open edge, or the centre of a circle the view sees true shape); \`horizontal\` measures along the page, \`vertical\` up it, and both points must differ along that direction. An edge whose two ends coincide on the page runs into the view: it marks a point, not a length.

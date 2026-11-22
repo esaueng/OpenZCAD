@@ -1630,8 +1630,16 @@
   backdrop-filter: none;
 }
 
+/* A phone has no width to spare for lining up with the chip: the popover
+   takes the screen's width less the usual gutters, as other sheets do. */
+@media (max-width: 620px) {
+  .sharing-backdrop {
+    padding-right: var(--sp-3);
+  }
+}
+
 .sharing-popover {
-  width: min(400px, 100%);
+  width: min(420px, 100%);
   max-height: calc(100dvh - var(--topbar-h) - var(--sp-5));
   display: flex;
   flex-direction: column;
@@ -1672,22 +1680,30 @@
   font-size: var(--fs-sm);
 }
 
+/* A quiet readout that opens the state code: the lock carries the colour,
+   the word stays muted, and a surface appears only on hover. */
 .sharing-encrypted-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-height: 22px;
-  padding: 0 8px;
-  border: 1px solid color-mix(in srgb, var(--color-success) 40%, transparent);
-  border-radius: 999px;
+  min-height: 24px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.sharing-encrypted-chip > svg {
   color: var(--color-success);
-  font-size: var(--fs-mini);
 }
 
 .sharing-encrypted-chip:hover,
 .sharing-encrypted-chip[aria-expanded='true'] {
-  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 
 .sharing-body {
@@ -1696,6 +1712,9 @@
 
 .sharing-section {
   display: grid;
+  /* A row never sizes the column: the invite field's intrinsic width
+     pushed Invite past the popover's edge on a phone. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-2);
   padding: var(--sp-3);
 }
@@ -1711,16 +1730,6 @@
   font-weight: var(--fw-medium);
   letter-spacing: 0.06em;
   text-transform: uppercase;
-}
-
-/* L08: the next link's commenter option, under General access. */
-.sharing-link-comments {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-2);
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-  line-height: 1.4;
 }
 
 /* L08: the drawing sheets share links show. */
@@ -1860,14 +1869,8 @@
 }
 
 .sharing-invite .primary,
-.sharing-access .primary,
-.sharing-access .secondary,
-.sharing-rename .primary,
-.sharing-rename .secondary,
 .sharing-confirm-actions .secondary,
-.sharing-verify,
-.sharing-row-copy,
-.sharing-share-copy {
+.sharing-verify {
   min-height: 26px;
   padding: 2px 10px;
   font-size: var(--fs-xs);
@@ -2085,51 +2088,122 @@
   gap: 6px;
 }
 
-/* General access: one summary line, then the links under it. */
-.sharing-access {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: var(--sp-2);
+/* View | Tweak: two radios as one segmented control, drawn as the top
+   bar's mode switch is. */
+.sharing-link-mode {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
   border: var(--border-thin);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   background: var(--color-surface-2);
 }
 
-.sharing-access-icon {
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  display: inline-grid;
-  place-items: center;
-  border: 1px solid var(--color-accent-border);
-  border-radius: 50%;
-  background: var(--color-accent-dim);
-  color: var(--color-accent-hi);
+.sharing-link-mode-option {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
 }
 
-.sharing-access-text {
-  flex: 1;
-  min-width: 0;
-  display: grid;
-  gap: 1px;
+.sharing-link-mode-option:hover {
+  color: var(--color-text);
 }
 
-.sharing-access-title {
+.sharing-link-mode-option:has(input:checked) {
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+}
+
+.sharing-link-mode-option:has(input:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Contrast themes flatten the fill and text colour that mark the choice,
+   and the radios themselves are hidden: the system highlight marks it. */
+@media (forced-colors: active) {
+  .sharing-link-mode-option:has(input:checked) {
+    forced-color-adjust: none;
+    color: HighlightText;
+    background: Highlight;
+  }
+}
+
+.sharing-link-mode-option:has(input:disabled) {
+  cursor: default;
+  opacity: var(--opacity-disabled);
+}
+
+/* A tab's panel; the inactive one stays mounted (its links keep their
+   upkeep running) but out of sight. */
+.sharing-panel[hidden] {
+  display: none;
+}
+
+/* Owner's tabs: People (members, invitations) and Links. Drawn as an
+   underlined strip under the header; the active tab carries the accent. */
+.sharing-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--sp-2);
+  border-bottom: var(--border-thin);
+}
+
+.sharing-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  margin-bottom: -1px;
+  padding: 0 var(--sp-2);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--color-text-muted);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
 }
 
-.sharing-access-detail {
-  color: var(--color-text-muted);
-  font-size: var(--fs-xs);
-  line-height: 1.4;
+.sharing-tab:hover {
+  color: var(--color-text);
 }
 
-/* A just-created link: optional name, the URL shown once, and Copy. */
+.sharing-tab[aria-selected='true'] {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+.sharing-tab-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border: var(--border-thin);
+  border-radius: 999px;
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  text-align: center;
+}
+
+.sharing-tab-attention {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-warning);
+}
+
+/* A link the owner made: the URL (shown once for plaintext links), Copy,
+   and a line on what it is. */
 .sharing-share-output {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
   padding: var(--sp-2);
@@ -2137,15 +2211,32 @@
   border-radius: var(--radius-lg);
 }
 
-.sharing-share-name {
+.share-link-created-title,
+.sharing-share-mode,
+.sharing-share-once {
   grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--fs-xs);
 }
 
-.sharing-share-name,
+.share-link-created-title {
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
+}
+
+.sharing-share-mode {
+  color: var(--color-text-muted);
+}
+
+.sharing-share-once {
+  color: var(--color-warning);
+}
+
 .sharing-share-url,
-.sharing-rename input {
+.share-link-name-input {
   min-width: 0;
-  height: 28px;
+  height: 30px;
   padding: 0 var(--sp-2);
   border: var(--border-strong);
   border-radius: var(--radius-md);
@@ -2157,70 +2248,410 @@
   font-family: var(--font-mono);
 }
 
-/* F06: which configuration the new link opens on; it rewrites the URL. */
-.sharing-share-configuration {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: var(--sp-2);
-  align-items: center;
-  font-size: var(--fs-xs);
-}
-
-.sharing-share-configuration select {
-  flex: 1;
-  min-width: 0;
-  height: 28px;
-  font-size: var(--fs-xs);
-}
-
-.sharing-share-once {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--color-warning);
-  font-size: var(--fs-xs);
-}
-
-/* The link's name is its rename control: clicking it opens the field. */
-.sharing-link-name {
-  min-width: 0;
-  max-width: 100%;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--color-text);
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.share-link-name-input {
+  width: 100%;
   font-size: var(--fs-sm);
-  cursor: text;
 }
 
-.sharing-link-name[data-unnamed] {
-  color: var(--color-text-muted);
+/* Copy, with a menu beside it for the configuration the copied link opens
+   on (F06). The two halves read as one split button. */
+.share-link-copy {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
 }
 
-.sharing-link-name:hover:not(:disabled) {
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
-}
-
-.sharing-rename {
-  display: flex;
-  flex: 1;
+.share-link-copy-main,
+.share-link-copy-caret {
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.sharing-rename input {
-  flex: 1;
-}
-
-.sharing-row-copy {
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 9px;
   border: var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--color-surface-2);
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+}
+
+.share-link-copy-main.primary,
+.share-link-copy-caret.primary {
+  min-height: 30px;
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.share-link-copy-caret.primary {
+  border-left: 1px solid
+    color-mix(in srgb, var(--color-on-accent) 25%, transparent);
+}
+
+.share-link-copy-main:hover:not(:disabled),
+.share-link-copy-caret:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+}
+
+.share-link-copy-main.primary:hover:not(:disabled),
+.share-link-copy-caret.primary:hover:not(:disabled) {
+  background: var(--color-accent-hi);
+}
+
+.share-link-copy[data-split] > .share-link-copy-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.share-link-copy-caret {
+  padding: 0 6px;
+  border-left-width: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.share-link-copy-menu {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 200px;
+  padding: 4px;
+  border: var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised, var(--color-surface));
+  box-shadow: var(--shadow-2);
+}
+
+.share-link-copy-menu-label {
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--color-text-dim);
+  font-size: var(--fs-mini);
+}
+
+.share-link-copy-menu > button {
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text);
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+
+.share-link-copy-menu > button:hover,
+.share-link-copy-menu > button:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+/* Who can open the project through links, above what a link does. */
+.share-links-access {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+/* The card that makes a new link: name, access, options, Create link. */
+/* A secondary button, drawn as ghost in a dialog like the others. */
+.share-links-new {
+  justify-self: start;
+}
+
+.share-link-composer {
+  display: grid;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-lg);
+}
+
+.share-link-composer-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.share-link-composer-mode {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+
+.share-link-options {
+  display: grid;
+}
+
+/* An option: its label and switch on one line, what it means below. */
+.share-link-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px var(--sp-2);
+  align-items: center;
+  padding: 7px 0;
+  border-top: var(--border-thin);
+}
+
+.share-link-option:first-child {
+  border-top: none;
+}
+
+.share-link-option-label {
+  font-size: var(--fs-sm);
+}
+
+.share-link-option > .sharing-hint {
+  grid-column: 1 / -1;
+}
+
+.share-link-switch {
+  appearance: none;
+  position: relative;
+  width: 30px;
+  height: 18px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.share-link-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  transition: transform 0.15s;
+}
+
+.share-link-switch:checked {
+  background: var(--color-accent);
+}
+
+.share-link-switch:checked::after {
+  transform: translateX(12px);
+}
+
+.share-link-switch:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.share-link-switch:disabled {
+  cursor: default;
+  opacity: var(--opacity-disabled);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-link-switch,
+  .share-link-switch::after {
+    transition: none;
+  }
+}
+
+/* Contrast themes drop the fill: keep the native checkbox there. */
+@media (forced-colors: active) {
+  .share-link-switch {
+    appearance: auto;
+    width: auto;
+    height: auto;
+  }
+
+  .share-link-switch::after {
+    content: none;
+  }
+}
+
+.share-link-composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+.share-link-composer-actions > .sharing-hint {
+  flex: 1 1 140px;
+}
+
+/* One card per link: its name and summary open its settings and actions. */
+.share-link-cards {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-link-card {
+  border: var(--border-thin);
+  border-radius: var(--radius-lg);
+}
+
+.share-link-card[data-expanded] {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-2);
+}
+
+.share-link-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: var(--sp-2);
+}
+
+.share-link-card-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-2);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: none;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.share-link-card-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+}
+
+.share-link-card-icon[data-mode='tweak'] {
+  background: var(--color-selected-fill);
+  color: var(--color-selected-text);
+}
+
+.share-link-card-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.share-link-card-name,
+.share-link-card-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-link-card-name {
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+}
+
+.share-link-card-name[data-unnamed] {
+  color: var(--color-text-muted);
+  font-weight: normal;
+}
+
+.share-link-card-summary {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.share-link-card-summary[data-attention] {
+  color: var(--color-warning);
+}
+
+.share-link-card-chevron {
+  flex: 0 0 auto;
+  color: var(--color-text-dim);
+  transition: transform 0.15s;
+}
+
+.share-link-card-toggle[aria-expanded='true'] .share-link-card-chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .share-link-card-chevron {
+    transition: none;
+  }
+}
+
+.share-link-card-body {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+
+.share-link-rename {
+  display: grid;
+  gap: 4px;
+}
+
+.share-link-field-label {
+  color: var(--color-text-dim);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.share-link-rename-row {
+  display: flex;
+  gap: 6px;
+}
+
+.share-link-rename-row > .secondary {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+}
+
+.share-link-facts {
+  display: grid;
+  margin: 0;
+  font-size: var(--fs-xs);
+}
+
+.share-link-fact {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: var(--sp-2);
+  padding: 4px 0;
+  border-top: var(--border-thin);
+}
+
+.share-link-fact:first-child {
+  border-top: none;
+}
+
+.share-link-fact > dt {
+  color: var(--color-text-muted);
+}
+
+.share-link-fact > dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.share-link-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.share-link-card-actions > .secondary {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
 }
 
 /* Encrypted share links (slice 5-10): the owner's confirmation and the

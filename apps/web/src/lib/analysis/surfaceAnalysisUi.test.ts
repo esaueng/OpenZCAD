@@ -19,9 +19,8 @@ import {
   summarizeCurvature,
   DRAFT_COLORS,
   analysisColors,
-  analysisLimits,
   analysisOverlayFor,
-  analysisProvenance,
+  analysisNotes,
   describeDraftSummary,
   describeUnsupported,
   draftBandOf,
@@ -139,11 +138,13 @@ describe('draft summary (M09)', () => {
   });
 
   it('says where the numbers come from and what they do not cover', () => {
-    expect(analysisProvenance('draft')).toMatch(
-      /^Exact draft from the kernel at sample points/
-    );
-    expect(analysisProvenance('draft')).toMatch(/a plane’s draft is exact/);
-    expect(analysisLimits('draft')).toMatch(/not a parting-line check/);
+    const notes = analysisNotes('draft');
+    expect(notes[0]).toMatch(/^Exact at sample points/);
+    expect(notes.join(' ')).toMatch(/not a parting-line check/);
+    // Short lines only: the panel keeps its text minimal.
+    for (const kind of ['draft', 'curvature', 'zebra', 'thickness'] as const)
+      for (const note of analysisNotes(kind))
+        expect(note.length).toBeLessThanOrEqual(64);
   });
 
   it('names every refused face and body', () => {
@@ -311,8 +312,8 @@ describe('zebra overlay (M09)', () => {
       CURVATURE_COLORS.unevaluated
     );
     expect(describeZebraSummary(report)).toBe('1 exact normal on 1 face.');
-    expect(analysisLimits('zebra')).toMatch(
-      /^Not covered: a certified continuity check/
+    expect(analysisNotes('zebra').join(' ')).toMatch(
+      /read by eye, not certified/
     );
   });
 });
@@ -396,8 +397,8 @@ describe('thickness colours and summary (M09)', () => {
         () => 'Bracket'
       )
     ).toMatch(/Every face at least 0.5 mm\.$/);
-    expect(analysisProvenance('thickness')).toMatch(/^Approximate: /);
-    expect(analysisLimits('thickness')).toMatch(
+    expect(analysisNotes('thickness')[0]).toMatch(/^Approximate: /);
+    expect(analysisNotes('thickness').join(' ')).toMatch(
       /not a slicer’s or a simulation’s check/
     );
   });

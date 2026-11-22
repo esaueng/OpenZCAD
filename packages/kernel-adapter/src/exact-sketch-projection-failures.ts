@@ -32,6 +32,8 @@ export function assertFeatureSketchProjectionsValid(
     case 'loft':
       for (const section of data.sections)
         assertSketchProjectionsValid(result, section.sketchId);
+      for (const guide of data.guides ?? [])
+        assertSketchProjectionsValid(result, guide.sketchId);
       break;
     case 'sweep':
       assertSketchProjectionsValid(result, data.profile.sketchId);

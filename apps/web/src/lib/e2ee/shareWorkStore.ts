@@ -57,7 +57,7 @@ const link = (value: unknown): value is ShareWorkLink => {
   return (
     !!entry &&
     text(entry.shareId) &&
-    (entry.mode === 'view' || entry.mode === 'tweak')
+    (entry.mode === 'view' || entry.mode === 'tweak' || entry.mode === 'frozen')
   );
 };
 function pendingCreation(value: unknown): value is PendingShareCreation {
@@ -128,7 +128,8 @@ export function memoryShareWorkStore(): ShareWorkStore {
     },
     deleteAccount: async (userId) => {
       for (const key of records.keys()) {
-        if ((JSON.parse(key) as [string, string])[0] === userId) records.delete(key);
+        if ((JSON.parse(key) as [string, string])[0] === userId)
+          records.delete(key);
       }
     }
   };
@@ -196,9 +197,9 @@ export function indexedDbShareWorkStore(): ShareWorkStore {
       const db = await database();
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction('work', 'readwrite');
-        const request = tx.objectStore('work').openKeyCursor(
-          IDBKeyRange.bound([userId], [userId, []])
-        );
+        const request = tx
+          .objectStore('work')
+          .openKeyCursor(IDBKeyRange.bound([userId], [userId, []]));
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) return;
@@ -206,7 +207,8 @@ export function indexedDbShareWorkStore(): ShareWorkStore {
           cursor.continue();
         };
         tx.oncomplete = () => resolve();
-        tx.onabort = tx.onerror = () => reject(tx.error ?? new Error('Share-link work could not be erased.'));
+        tx.onabort = tx.onerror = () =>
+          reject(tx.error ?? new Error('Share-link work could not be erased.'));
       });
     }
   };

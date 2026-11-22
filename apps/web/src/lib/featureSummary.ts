@@ -1,5 +1,6 @@
 import {
   ownEntry,
+  transformStampBodyIds,
   type BooleanOperation,
   type DirectEditOperation,
   type EdgeTopologyReferenceV5,
@@ -247,10 +248,35 @@ export function featureValueSummary(
       // F01 (v29): a draft rides after the extent, in degrees.
       const angle =
         data.draftAngleDeg === undefined ? null : num(data.draftAngleDeg);
-      const drafted = (extent: string) =>
-        angle !== null && angle !== '0'
-          ? `${extent} · ${angle}° draft`
-          : extent;
+      // F01 (v121): a start offset reads after the extent, before a draft.
+      const start =
+        data.startOffset === undefined
+          ? null
+          : evalParamValue(data.startOffset, scope, {
+              documentUnits: units,
+              dimension: 'length'
+            });
+      const started = (extent: string) =>
+        start === null || start === 0
+          ? extent
+          : `${extent} · starts ${formatNumber(start)} ${unit} off`;
+      // F01 (v126): a symmetric or two-sided extrude's back draft follows.
+      const backAngle =
+        data.backDraftAngleDeg === undefined
+          ? null
+          : num(data.backDraftAngleDeg);
+      const drafted = (extent: string) => {
+        const front =
+          angle !== null && angle !== '0'
+            ? `${started(extent)} · ${angle}° draft`
+            : started(extent);
+        return backAngle !== null && backAngle !== '0'
+          ? `${front} · ${backAngle}° back draft`
+          : front;
+      };
+      if (data.endCondition === 'to-next') {
+        return drafted('Up to next');
+      }
       if (data.endCondition === 'to-face') {
         // F01 (v113): an offset reads as how far short of (or past) the face.
         const offset =
@@ -271,7 +297,7 @@ export function featureValueSummary(
         return null;
       }
       if (data.symmetric) {
-        return `${distance} ${unit} symmetric`;
+        return drafted(`${distance} ${unit} symmetric`);
       }
       const back =
         data.backDistance === undefined ? '0' : lengthValue(data.backDistance);
@@ -279,7 +305,7 @@ export function featureValueSummary(
         return null;
       }
       return back !== '0'
-        ? `${distance} + ${back} ${unit}`
+        ? drafted(`${distance} + ${back} ${unit}`)
         : drafted(`${distance} ${unit}`);
     }
     case 'revolve': {
@@ -527,12 +553,27 @@ export function featureValueSummary(
       // M02: copies left out are counted, so "× 5" never hides a gap.
       const skipped = data.skippedInstances?.length ?? 0;
       const gap = skipped > 0 ? ` · ${skipped} skipped` : '';
+      // M02 (schema v119): the one reflected copy.
+      if (data.patternKind === 'mirror') return `Mirrored${gap}`;
       if (data.patternKind === 'grid') {
         // Absent count2 reads as count (see FeatureData).
         const count2 = data.count2 === undefined ? count : num(data.count2);
         return count2 === null ? null : `${count} × ${count2}${gap}`;
       }
-      return `× ${count}${gap}`;
+      // M02 (schema v120): a row spaced over its total length says so.
+      // A length in the document's units, as the kernel builds it (review:
+      // a suffixed total read as no number at all).
+      const total =
+        data.spacingMode === 'total' ? lengthValue(data.spacing) : null;
+      return total !== null
+        ? `× ${count} over ${total} ${unit}${gap}`
+        : `× ${count}${gap}`;
+    }
+    case 'transform': {
+      // M10 (schema v137): a linked copy counts its stamps; any other
+      // transform has no single driving value.
+      const stamps = transformStampBodyIds(data).length;
+      return stamps > 0 ? `× ${stamps + 1} copies` : null;
     }
     default:
       return null;

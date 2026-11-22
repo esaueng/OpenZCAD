@@ -2,6 +2,7 @@ import type {
   BodyRepresentation,
   BoundingBox,
   EdgeTopology,
+  EdgeTopologyReferenceV5,
   FaceAreaProvenance,
   FaceTopology,
   TopologyReferenceV5,
@@ -10,6 +11,12 @@ import type {
   Vector3
 } from '@openzcad/shared';
 import { millimetresPerUnit } from '@openzcad/shared';
+import {
+  centralDistance,
+  maximumDistance,
+  parallelDistance,
+  type MeasureEntity
+} from './measureDistances';
 import {
   edgeLengthMeasurement,
   topologySelectionLabel
@@ -30,7 +37,50 @@ import {
   type AngleMeasurement
 } from './measurementGeometry';
 
-export type MeasurementMode = 'smart' | 'distance' | 'angle';
+import type { MeasurePointKind } from './measurePointKinds';
+export {
+  MEASURE_POINT_KINDS,
+  measureSnapKindsFor,
+  type MeasurePointKind
+} from './measurePointKinds';
+
+export type MeasurementMode =
+  | 'smart'
+  | 'distance'
+  | 'angle'
+  /** M13: the farthest two picks are apart. */
+  | 'maximum'
+  /** M13: from a circle's centre or a cylinder's axis to the other pick. */
+  | 'central'
+  /** M13: between parallel edges, faces or axes, or concentric radii. */
+  | 'parallel';
+
+/** M13: the distance kinds each two-pick entity mode records. */
+export const ENTITY_DISTANCE_KINDS = {
+  maximum: 'max-distance',
+  central: 'central-distance',
+  parallel: 'parallel-distance'
+} as const;
+
+export type EntityDistanceMode = keyof typeof ENTITY_DISTANCE_KINDS;
+export type EntityDistanceKind =
+  (typeof ENTITY_DISTANCE_KINDS)[EntityDistanceMode];
+
+export function isEntityDistanceMode(
+  mode: MeasurementMode
+): mode is EntityDistanceMode {
+  return mode === 'maximum' || mode === 'central' || mode === 'parallel';
+}
+
+export function isEntityDistanceKind(
+  kind: MeasurementKind
+): kind is EntityDistanceKind {
+  return (
+    kind === 'max-distance' ||
+    kind === 'central-distance' ||
+    kind === 'parallel-distance'
+  );
+}
 
 export type MeasurementKind =
   | 'edge-length'
@@ -39,6 +89,10 @@ export type MeasurementKind =
   | 'face-area'
   | 'body'
   | 'distance'
+  /** M13: maximum, central and parallel distances; two targets each. */
+  | 'max-distance'
+  | 'central-distance'
+  | 'parallel-distance'
   | 'angle'
   /**
    * A 3-point angle with the vertex at the middle pick. Three targets, unlike
@@ -174,6 +228,9 @@ function annotationGraphic(
 ): MeasurementViewportAnnotation['graphic'] {
   switch (kind) {
     case 'distance':
+    case 'max-distance':
+    case 'central-distance':
+    case 'parallel-distance':
     case 'edge-length':
     case 'edge-total':
       return 'span';
@@ -701,6 +758,9 @@ export function notablePointTarget(
         reference: edge.reference,
         label: `${label} ${kind === 'vertex-start' ? 'start' : 'end'}`,
         point: kind === 'vertex-start' ? ends[0] : ends[1],
+        // M13: the edge's ends as picked, so a refresh can tell a reversed
+        // edge (its ends swapped) from a moved one (both shifted together).
+        endpoints: ends,
         semantic: kind,
         quality: 'exact-analytic'
       };
@@ -767,6 +827,182 @@ export function notablePointTarget(
   }
   return null;
 }
+
+/**
+ * The edge point a measure snap names, as a target, or null when the snap
+ * carries no source or its edge no longer yields that same point.
+ *
+ * The click under a snap glyph used to hand only the snapped POSITION to
+ * {@link measurementTargetFromSelection}, which derives an edge's target from
+ * the edge alone: a straight edge's midpoint, a circle's centre. A pick under
+ * "Endpoint" therefore recorded the edge's midpoint (QA15-2E-01, 57.31 mm
+ * measured for 56). The snap's source names the edge and which of its points
+ * the glyph stood for, so the pick records that notable point — by identity,
+ * so a rebuild re-derives the same vertex rather than carrying a stale
+ * coordinate.
+ *
+ * `point` is where the snap drew its glyph. The derived target must land on
+ * it; one that does not (a curve without an exact derivation, or an identity
+ * that now resolves to another edge) is refused rather than recorded somewhere
+ * the glyph did not mark.
+ */
+export function measurementTargetFromSnap(
+  body: BodyRepresentation,
+  snap: {
+    edgeTopologyId: string;
+    edgeHash: number;
+    edgeReference?: EdgeTopologyReferenceV5;
+    role: 'start' | 'end' | 'midpoint' | 'center';
+  },
+  point: Vector3
+): MeasurementTarget | null {
+  const kind: NotablePointKind =
+    snap.role === 'start'
+      ? 'vertex-start'
+      : snap.role === 'end'
+        ? 'vertex-end'
+        : snap.role === 'midpoint'
+          ? 'edge-midpoint'
+          : 'circle-center';
+  const target = notablePointTarget(
+    body,
+    {
+      bodyId: body.bodyId,
+      kind: 'edge',
+      topologyId: snap.edgeTopologyId,
+      hash: snap.edgeHash,
+      ...(snap.edgeReference ? { reference: snap.edgeReference } : {})
+    },
+    kind
+  );
+  if (!target?.point) {
+    return null;
+  }
+  const size = distance(body.bbox.min, body.bbox.max);
+  return distance(target.point, point) <= SNAP_AGREEMENT * Math.max(1, size)
+    ? target
+    : null;
+}
+
+/**
+ * M13: the notable point of `kind` on a picked edge or face, or null when it
+ * has none. An endpoint is the end the snap glyph named, else the end nearer
+ * the pick; it is recorded by identity (start or end), so a rebuild reads the
+ * same vertex rather than the nearest one then.
+ */
+export function pointKindTarget(
+  body: BodyRepresentation,
+  selection: TopologySelection,
+  kind: Exclude<MeasurePointKind, 'auto'>,
+  point?: Vector3,
+  snapRole?: 'start' | 'end' | 'midpoint' | 'center'
+): MeasurementTarget | null {
+  if (kind === 'endpoint') {
+    if (selection.kind !== 'edge') return null;
+    // A closed rim's polyline starts wherever its sampler began, not at a
+    // vertex anyone can name: it has no ends to pick.
+    const picked = findEdge(body, selection);
+    const pickedEnds = picked ? edgeEndpoints(picked) : null;
+    if (
+      !pickedEnds ||
+      distance(pickedEnds[0], pickedEnds[1]) <=
+        SNAP_AGREEMENT * Math.max(1, distance(body.bbox.min, body.bbox.max))
+    )
+      return null;
+    let end: NotablePointKind = 'vertex-start';
+    if (snapRole === 'start' || snapRole === 'end') {
+      end = snapRole === 'start' ? 'vertex-start' : 'vertex-end';
+    } else if (point) {
+      const edge = findEdge(body, selection);
+      const ends = edge ? edgeEndpoints(edge) : null;
+      if (!ends) return null;
+      end =
+        distance(ends[1], point) < distance(ends[0], point)
+          ? 'vertex-end'
+          : 'vertex-start';
+    }
+    return notablePointTarget(body, selection, end);
+  }
+  if (kind === 'midpoint')
+    return selection.kind === 'edge'
+      ? notablePointTarget(body, selection, 'edge-midpoint')
+      : null;
+  if (kind === 'center')
+    return notablePointTarget(body, selection, 'circle-center');
+  return selection.kind === 'face'
+    ? notablePointTarget(body, selection, 'face-centroid')
+    : null;
+}
+
+/**
+ * M13: the edge a snap glyph was read off, as a selection, so a pick
+ * records that edge's point rather than one of whatever the ray hit.
+ */
+export function snapSourceSelection(
+  body: BodyRepresentation,
+  source: {
+    edgeTopologyId: string;
+    edgeHash: number;
+    edgeReference?: EdgeTopologyReferenceV5;
+  }
+): TopologySelection {
+  return {
+    bodyId: body.bodyId,
+    kind: 'edge',
+    topologyId: source.edgeTopologyId,
+    hash: source.edgeHash,
+    ...(source.edgeReference ? { reference: source.edgeReference } : {})
+  };
+}
+
+/**
+ * M13: whether a pick of `kind` recorded `target` where its glyph stood.
+ * A glyph and the point it names are read through separate arithmetic, so
+ * they agree to rounding, not bit for bit.
+ */
+export function pointKindAgrees(
+  body: BodyRepresentation,
+  target: MeasurementTarget | null,
+  glyph: Vector3
+): boolean {
+  return (
+    !!target?.point &&
+    distance(target.point, glyph) <=
+      SNAP_AGREEMENT * Math.max(1, distance(body.bbox.min, body.bbox.max))
+  );
+}
+
+/** M13: why a pick has no point of `kind`, as the status line says it. */
+export function pointKindFailure(
+  kind: Exclude<MeasurePointKind, 'auto'>,
+  selection: TopologySelection['kind']
+): string {
+  switch (kind) {
+    case 'endpoint':
+      return selection === 'edge'
+        ? 'That edge has no ends to pick (a closed rim has none).'
+        : 'Endpoint picks an edge: pick an edge near the end you mean.';
+    case 'midpoint':
+      return selection === 'edge'
+        ? 'That edge has no exact midpoint (only lines and arcs do).'
+        : 'Midpoint picks an edge.';
+    case 'center':
+      return selection === 'edge'
+        ? 'That edge is not a circle or arc, so it has no center.'
+        : 'That face is not a cylinder or hole, so it has no center.';
+    case 'centroid':
+      return selection === 'face'
+        ? 'That face has no exact centroid to pick.'
+        : 'Centroid picks a face.';
+  }
+}
+
+/**
+ * How far, relative to the body's size, a snap's drawn point and the target
+ * derived from its source may differ. The two read the same exact record
+ * through separate arithmetic, so they agree to rounding, not bit for bit.
+ */
+const SNAP_AGREEMENT = 1e-7;
 
 export function measurementTargetFromSelection(
   body: BodyRepresentation,
@@ -1137,6 +1373,168 @@ export function createDistanceMeasurement(
 }
 
 /**
+ * M13: what a target is, geometrically, for maximum, central and parallel
+ * distances, read from the body's current topology by identity. A notable
+ * point (a vertex or midpoint pick) is that point; a straight edge is its
+ * segment, a circular one its circle; a planar face its plane, a cylinder
+ * its axis and radius. Null for a target with no such reading (a body).
+ */
+function measureEntityOf(
+  bodies: readonly BodyRepresentation[],
+  target: MeasurementTarget
+): MeasureEntity | null {
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body) return null;
+  // A vertex pick is that point. Any other edge pick is the edge itself:
+  // Distance records a straight edge as its midpoint, which here would
+  // shrink the edge to one point.
+  if (
+    target.point &&
+    (target.semantic === 'vertex-start' || target.semantic === 'vertex-end')
+  )
+    return { type: 'point', point: target.point };
+  const selection = selectionForTarget(target);
+  if (target.kind === 'edge') {
+    const edge = findEdge(body, selection);
+    if (!edge) return null;
+    const circle = edge.curve?.circle;
+    if (circle) {
+      const ends = edgeEndpoints(edge);
+      const axis = unitVector(circle.axis);
+      if (!axis) return null;
+      return {
+        type: 'circle',
+        center: circle.center,
+        axis,
+        radius: circle.radius,
+        // Closed only when the edge runs the whole circumference. A gap
+        // between sampled ends cannot tell a rim from a tiny arc of a huge
+        // circle; the edge's own length can.
+        closed:
+          edge.length !== undefined
+            ? Math.abs(edge.length - 2 * Math.PI * circle.radius) <=
+              1e-6 * 2 * Math.PI * circle.radius
+            : !!ends && distance(ends[0], ends[1]) <= 1e-9 * circle.radius
+      };
+    }
+    if (edge.curve?.type === 'LINE') {
+      const ends = edgeEndpoints(edge);
+      return ends ? { type: 'segment', start: ends[0], end: ends[1] } : null;
+    }
+    return null;
+  }
+  if (target.kind === 'face') {
+    const geometry = findFace(body, selection)?.geometry;
+    if (!geometry) return null;
+    if (geometry.surfaceType === 'plane' && geometry.normal) {
+      const normal = unitVector(geometry.normal);
+      const point = geometry.centroid ?? geometry.center;
+      return normal && point ? { type: 'plane', point, normal } : null;
+    }
+    if (
+      geometry.surfaceType === 'cylinder' &&
+      geometry.axisStart &&
+      geometry.axisEnd &&
+      geometry.radius !== undefined
+    ) {
+      const axis = unitVector({
+        x: geometry.axisEnd.x - geometry.axisStart.x,
+        y: geometry.axisEnd.y - geometry.axisStart.y,
+        z: geometry.axisEnd.z - geometry.axisStart.z
+      });
+      return axis
+        ? {
+            type: 'cylinder',
+            origin: geometry.axisStart,
+            axis,
+            radius: geometry.radius
+          }
+        : null;
+    }
+    return null;
+  }
+  return null;
+}
+
+function unitVector(value: Vector3): Vector3 | null {
+  const size = Math.hypot(value.x, value.y, value.z);
+  return size > 0
+    ? vector(value.x / size, value.y / size, value.z / size)
+    : null;
+}
+
+const ENTITY_DISTANCE_LABELS: Record<EntityDistanceMode, string> = {
+  maximum: 'Maximum distance',
+  central: 'Central distance',
+  parallel: 'Parallel distance'
+};
+
+/**
+ * M13: a maximum, central or parallel distance between two picks, in
+ * closed form from the picks' exact geometry, or the reason there is none.
+ * Exact only when both picks are; the span drawn is the one measured.
+ */
+export function createEntityDistanceMeasurement(
+  mode: EntityDistanceMode,
+  bodies: readonly BodyRepresentation[],
+  first: MeasurementTarget,
+  second: MeasurementTarget,
+  sourceRevision: number,
+  sourceUnit: UnitSystem
+): Measurement | { refused: string } {
+  const a = measureEntityOf(bodies, first);
+  const b = measureEntityOf(bodies, second);
+  if (!a || !b)
+    return {
+      refused:
+        'Pick edges, faces, holes or points: a whole body has no single geometry to measure from.'
+    };
+  const size = Math.max(
+    ...bodies
+      .filter(
+        (body) => body.bodyId === first.bodyId || body.bodyId === second.bodyId
+      )
+      .map((body) => distance(body.bbox.min, body.bbox.max)),
+    1
+  );
+  let answer: ReturnType<typeof maximumDistance>;
+  if (mode === 'maximum') answer = maximumDistance(a, b);
+  else if (mode === 'parallel') answer = parallelDistance(a, b, size);
+  else {
+    if (!first.point || !second.point)
+      return { refused: 'Those picks have no point to measure to.' };
+    answer = centralDistance(a, first.point, b, second.point);
+  }
+  if ('refused' in answer) return answer;
+  const label = ENTITY_DISTANCE_LABELS[mode];
+  const kind = ENTITY_DISTANCE_KINDS[mode];
+  return {
+    id: `${kind}:${targetKey(first)}:${targetKey(second)}`,
+    kind,
+    label: `${first.label} ↔ ${second.label}`,
+    targets: [first, second],
+    result: {
+      value: answer.value,
+      dimension: 'length',
+      secondary: {
+        label: answer.note ? `${label}, ${answer.note}` : label,
+        value: answer.value,
+        dimension: 'length'
+      }
+    },
+    quality: worstQuality([first.quality, second.quality]),
+    status: 'current',
+    sourceRevision,
+    sourceUnit,
+    visible: true,
+    annotation: {
+      anchor: midpoint(answer.from, answer.to),
+      segments: [{ start: answer.from, end: answer.to }]
+    }
+  };
+}
+
+/**
  * Picks the angle convention the pair of picks actually supports.
  *
  * A face target carries an outward normal, which is directed; an edge target
@@ -1353,6 +1751,46 @@ function resolveNotableTarget(
       return null;
     }
     const kind: NotablePointKind = target.semantic;
+    if (kind !== 'edge-midpoint' && target.point) {
+      // An edge's fingerprint does not depend on its direction, so the same
+      // edge can resolve with its samples reversed and "start" would then
+      // name the other vertex. A vertex the hash still finds lies exactly on
+      // one end: keep the end the stored point sits on, and fall back to the
+      // stored role only when it sits on neither (the edge itself moved).
+      const ends = (['vertex-start', 'vertex-end'] as const).map((end) =>
+        notablePointTarget(body, selection, end)
+      );
+      const size = distance(body.bbox.min, body.bbox.max);
+      const tolerance = SNAP_AGREEMENT * Math.max(1, size);
+      // M13: a row that kept its edge's ends decides reversal from the pair.
+      // The ends swapped is the same edge reversed: take the other role.
+      // Anything else (the edge moved, or changed length) keeps the stored
+      // role, so a translation never rebinds to whichever end now sits
+      // where the old one was.
+      const was = target.endpoints;
+      const now = ends[0]?.point && ends[1]?.point;
+      if (was && now) {
+        const reversed =
+          distance(ends[0]!.point!, was[1]) <= tolerance &&
+          distance(ends[1]!.point!, was[0]) <= tolerance &&
+          distance(was[0], was[1]) > tolerance;
+        const role: NotablePointKind = reversed
+          ? kind === 'vertex-start'
+            ? 'vertex-end'
+            : 'vertex-start'
+          : kind;
+        return notablePointTarget(body, selection, role);
+      }
+      const stored = target.point;
+      const same = ends.find(
+        (end) =>
+          end?.point &&
+          distance(end.point, stored) <= SNAP_AGREEMENT * Math.max(1, size)
+      );
+      if (same) {
+        return same;
+      }
+    }
     return notablePointTarget(body, selection, kind);
   }
   if (target.kind === 'face' && target.semantic === 'face-center') {
@@ -1425,6 +1863,34 @@ function resolvedTarget(
   return measurementTargetFromSelection(body, selection, anchor, purpose);
 }
 
+/**
+ * M13: an entity distance's pick, re-resolved by identity only. Its point
+ * (which Central measures to) is re-derived from the current topology: the
+ * vertex or derived centre it named, or, for a raw surface pick, the face's
+ * centre, never a stored coordinate the edit may have moved.
+ */
+function resolvedEntityTarget(
+  target: MeasurementTarget,
+  bodies: readonly BodyRepresentation[]
+): MeasurementTarget | null {
+  const body = bodies.find((candidate) => candidate.bodyId === target.bodyId);
+  if (!body || target.kind === 'body') return null;
+  const selection = selectionForTarget(target);
+  const found =
+    target.kind === 'edge'
+      ? resolveEdge(body, selection)
+      : resolveFace(body, selection);
+  if (!found.ok) return null;
+  if (target.semantic === 'vertex-start' || target.semantic === 'vertex-end')
+    return resolveNotableTarget(target, body);
+  return (
+    measurementTargetFromSelection(body, selection, undefined, 'distance') ?? {
+      ...target,
+      point: undefined
+    }
+  );
+}
+
 function retainRowState(
   previous: Measurement,
   refreshed: Measurement
@@ -1466,7 +1932,11 @@ function hasValidTargetArity(measurement: Measurement): boolean {
       return false;
     }
   }
-  if (measurement.kind === 'distance' || measurement.kind === 'angle') {
+  if (
+    measurement.kind === 'distance' ||
+    measurement.kind === 'angle' ||
+    isEntityDistanceKind(measurement.kind)
+  ) {
     return measurement.targets.length === 2;
   }
   if (measurement.kind === 'point-angle') {
@@ -1507,13 +1977,20 @@ export function refreshMeasurements(
       };
     }
     const purpose: MeasurementMode =
-      measurement.kind === 'distance' || measurement.kind === 'point-angle'
+      measurement.kind === 'distance' ||
+      measurement.kind === 'point-angle' ||
+      isEntityDistanceKind(measurement.kind)
         ? 'distance'
         : measurement.kind === 'angle'
           ? 'angle'
           : 'smart';
+    // M13: an entity distance reads its geometry from the topology itself,
+    // so its picks need only resolve by identity: a raw surface point that
+    // a resize moved does not make the face it was on stale.
     const targets = measurement.targets.map((target) =>
-      resolvedTarget(target, bodies, purpose)
+      isEntityDistanceKind(measurement.kind)
+        ? resolvedEntityTarget(target, bodies)
+        : resolvedTarget(target, bodies, purpose)
     );
     if (targets.some((target) => target === null)) {
       // The topology may still be there and merely unusable for this kind of
@@ -1542,7 +2019,20 @@ export function refreshMeasurements(
     }
     const resolved = targets as MeasurementTarget[];
     let refreshed: Measurement | null = null;
-    if (measurement.kind === 'distance') {
+    if (isEntityDistanceKind(measurement.kind)) {
+      const entityMode = (
+        Object.keys(ENTITY_DISTANCE_KINDS) as EntityDistanceMode[]
+      ).find((mode) => ENTITY_DISTANCE_KINDS[mode] === measurement.kind)!;
+      const made = createEntityDistanceMeasurement(
+        entityMode,
+        bodies,
+        resolved[0]!,
+        resolved[1]!,
+        sourceRevision,
+        measurement.sourceUnit
+      );
+      refreshed = 'refused' in made ? null : made;
+    } else if (measurement.kind === 'distance') {
       refreshed = createDistanceMeasurement(
         resolved[0]!,
         resolved[1]!,
@@ -1778,6 +2268,9 @@ export function formatMeasurement(
     // 30 degree wedge and the angle between its normals are both true, and
     // they differ by 120.
     detail = `Angle ${ANGLE_CONVENTION_LABELS[measurement.angleConvention]}`;
+  } else if (isEntityDistanceKind(measurement.kind) && result.secondary) {
+    // Named beside the figure: "3 mm" alone does not say it is a maximum.
+    detail = result.secondary.label;
   } else if (measurement.kind === 'distance' && result.components) {
     const component = (value: number) =>
       fixed(

@@ -330,12 +330,56 @@ const TRANSLATIONS: readonly Translation[] = [
     pattern:
       /sweep path turns a corner of ([\d.]+)° at joint \d+, next to an arc/i,
     sentence: (match) =>
-      `The sweep path has a ${Math.round(Number(match[1]) * 10) / 10}° corner next to an arc. An exact sweep mitres corners only between straight lines: join the arc tangentially.`
+      `The sweep path has a ${Math.round(Number(match[1]) * 10) / 10}° corner next to an arc. A mitre is cut only between straight lines: set Corners to Round, or join the arc tangentially.`
+  },
+  // M04 (v136) profile position.
+  {
+    pattern: /has no path intersection to start from/i,
+    sentence:
+      'The sweep path does not cross the profile’s plane. Set the profile position to Closest point or Closest end.'
+  },
+  {
+    pattern: /sweep profile stands on the path's corner/i,
+    sentence:
+      'The profile stands on a mitred corner of the path, which would cut it. Move the profile off the corner, or round the corners.'
+  },
+  {
+    pattern:
+      /a profile position applies to (?:a sweep that turns|an open sweep path)/i,
+    sentence:
+      'A profile position applies to an open path on a sweep that turns with it, with no twist, scale, guide rail or parallel orientation.'
+  },
+  // M04 (v135) round corners.
+  {
+    pattern: /no round corner of radius ([\d.e+-]+) fits at joint/i,
+    sentence: (match) =>
+      `A round corner of radius ${Number(match[1])} does not fit the curves beside it. Use a smaller corner radius.`
+  },
+  {
+    pattern: /too short for its round corners of radius ([\d.e+-]+)/i,
+    sentence: (match) =>
+      `A piece of the sweep path is too short for round corners of radius ${Number(match[1])}. Use a smaller corner radius, or lengthen it.`
+  },
+  {
+    pattern: /out of the plane of the arc beside it/i,
+    sentence:
+      'A round corner next to an arc must lie in the arc’s plane, and this corner turns out of it.'
+  },
+  {
+    pattern:
+      /round corner of radius [\d.e+-]+ at joint \d+ is (?:too small to resolve|larger than the arc)/i,
+    sentence:
+      'That corner radius does not fit here: it is too small to resolve, or larger than the arc beside the corner.'
+  },
+  {
+    pattern: /a round corner applies to a sweep that turns with its path/i,
+    sentence:
+      'Round corners apply to a sweep that turns with its path, with no twist, scale, guide rail or parallel orientation.'
   },
   {
     pattern: /sweep path turns back on itself/i,
     sentence:
-      'The sweep path turns back on itself; a corner that sharp has no mitre.'
+      'The sweep path turns back on itself: neither a mitre nor a round corner can follow a corner that sharp.'
   },
   {
     pattern: /too short for its mitred corners/i,
@@ -344,7 +388,26 @@ const TRANSLATIONS: readonly Translation[] = [
   },
   {
     pattern: /exact sweep paths are lines and circular arcs/i,
-    sentence: 'An exact sweep path can only be made of lines and arcs.'
+    sentence:
+      'A sweep that turns with its path follows only lines and arcs exactly. To sweep along a spline, set Orientation to Parallel, which keeps the profile parallel to itself.'
+  },
+  // M04 (v134) parallel orientation: the path must run steadily away from
+  // the profile's plane, or the swept body could meet itself.
+  {
+    pattern:
+      /cannot be shown to run steadily through the profile's plane|turns back through the profile's plane: a sweep that keeps/i,
+    sentence:
+      'A sweep that keeps the profile parallel needs a path that keeps moving away from the profile: this one turns back or runs along the profile’s plane. Change the path, or set Orientation to Normal to path.'
+  },
+  {
+    pattern: /closed sweep path cannot keep the profile's orientation/i,
+    sentence:
+      'A sweep that keeps the profile parallel cannot follow a closed path: the profile would come back through itself.'
+  },
+  {
+    pattern: /spline that does not end on its control points/i,
+    sentence:
+      'This spline in the sweep path cannot be swept exactly; redraw it, or split it into pieces.'
   },
   {
     pattern:
@@ -371,6 +434,77 @@ const TRANSLATIONS: readonly Translation[] = [
     pattern: /closed sweep path does not bring the profile back/i,
     sentence:
       'The closed sweep path does not bring the profile back to where it started.'
+  },
+  // M04 (v133) loft connections and guides.
+  {
+    pattern: /loft connection point .* is not a vertex of section (\d+)/i,
+    sentence: (match) =>
+      `The loft guide or connection does not meet section ${Number(match[1]) + 1} at a corner. A connection must be a vertex of every section.`
+  },
+  {
+    pattern: /loft connections cannot be combined with an apex point/i,
+    sentence: 'A loft with an apex point takes no connections or guide.'
+  },
+  // M04 (v132) exact sweep twist and scale (`sweepExactWithOptions`): built
+  // along a straight path with the profile square to it, refused by name
+  // otherwise and never sampled.
+  {
+    pattern:
+      /can (?:twist|scale|twist and scale) the profile only along a straight path; path segment \d+ is an arc/i,
+    sentence:
+      'Twist and end scale need a straight sweep path, and this one has an arc. Sweep along a straight line, or set the twist to 0 and the end scale to 1.'
+  },
+  {
+    pattern:
+      /can (?:twist|scale|twist and scale) the profile only along a straight path; the path turns a corner/i,
+    sentence:
+      'Twist and end scale need a straight sweep path, and this one turns a corner. Sweep along a straight line, or set the twist to 0 and the end scale to 1.'
+  },
+  {
+    pattern:
+      /can (?:twist|scale|twist and scale) the profile only along an open straight path/i,
+    sentence:
+      'Twist and end scale need an open, straight sweep path, and this one closes on itself.'
+  },
+  {
+    pattern:
+      /can (?:twist|scale|twist and scale) the profile only when the profile is square to the path; this one is tilted ([\d.]+)°/i,
+    sentence: (match) =>
+      `Twist and end scale need the profile square to the path, and it is tilted ${Math.round(Number(match[1]) * 10) / 10}°. Draw the profile square to the path.`
+  },
+  {
+    pattern:
+      /(?:scaled|twisted) extrusion cannot sweep (?:a closed edge off the axis|a top edge unlike its profile edge)/i,
+    sentence:
+      'Twist and end scale can carry a full circle only when it is centred on the path. Centre it on the path, or draw it as two arcs.'
+  },
+  {
+    pattern: /end scale must be between ([\d.e+-]+) and ([\d.e+-]+)/i,
+    sentence: (match) =>
+      `The end scale must be between ${Number(match[1])} and ${Number(match[2])}.`
+  },
+  {
+    pattern:
+      /can (?:twist|scale|twist and scale) the profile only when each closed curve in it is a circle/i,
+    sentence:
+      'Twist and end scale can carry a closed curve in the profile only when it is a circle. Split the curve into pieces, or use a circle.'
+  },
+  {
+    pattern: /(?:scaled|twisted) extrusion cannot sweep a trimmed spline edge/i,
+    sentence:
+      'Twist and end scale cannot carry a trimmed spline in the profile yet.'
+  },
+  {
+    pattern:
+      /(?:scaled|twisted) extrusion cannot sweep an ellipse or open conic edge/i,
+    sentence:
+      'Twist and end scale cannot carry an ellipse or conic in the profile yet.'
+  },
+  {
+    pattern:
+      /(?:scaled|twisted) extrusion does not support nested inner wires/i,
+    sentence:
+      'Twist and end scale cannot carry a profile with an island inside a hole yet.'
   },
   {
     pattern: /self-intersect/i,

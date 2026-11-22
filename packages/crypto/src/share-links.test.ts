@@ -433,8 +433,11 @@ describe('share-authority statements', () => {
     const mode = new Uint8Array(bytes);
     const modeAt = 3 + 1 + 1 + 'proj_1'.length + 1 + 'share_1'.length + 32;
     expect(mode[modeAt]).toBe(2);
-    mode[modeAt] = 3;
+    // 3 is `frozen` (L08); the next code is unknown.
+    mode[modeAt] = 4;
     throwsCode(() => decodeShareAuthority(mode), 'malformed');
+    mode[modeAt] = 3;
+    expect(decodeShareAuthority(mode).mode).toBe('frozen');
     throwsCode(
       () => decodeShareAuthority(concatBytes(bytes, Uint8Array.of(0))),
       'malformed'
@@ -606,6 +609,57 @@ describe('a link visitor checks a snapshot', () => {
       }),
       'snapshot-signature'
     );
+  });
+
+  it('takes a frozen link’s snapshot only from a device the owner delegated', async () => {
+    const w = await world();
+    // The same statement, for a link without history: it names the editor
+    // as an author, as every statement does.
+    const frozen = await signShareAuthority(w.ownerDevice.pair.privateKey, {
+      ...w.authority,
+      mode: 'frozen'
+    });
+    // An editor's snapshot is refused, though the statement names them...
+    await refusedWith(
+      verifySharedSnapshot(
+        await input(w, { authority: frozen }, w.editorDevice)
+      ),
+      'author-not-owner'
+    );
+    // ...and either of the owner's delegated devices is accepted, the one
+    // that signed the statement or another.
+    const named = await signShareAuthority(w.ownerDevice.pair.privateKey, {
+      ...w.authority,
+      mode: 'frozen',
+      authorKeyHashes: [
+        w.editorDevice.hash,
+        w.ownerDevice.hash,
+        w.otherOwnerDevice.hash
+      ]
+    });
+    for (const device of [w.ownerDevice, w.otherOwnerDevice]) {
+      const verified = await verifySharedSnapshot(
+        await input(w, { authority: named }, device)
+      );
+      expect(verified.mode).toBe('frozen');
+    }
+    // An owner device the delegation no longer names is not one of them.
+    const narrower = await signShareDelegation(w.identity.pair.privateKey, {
+      ...w.delegation,
+      deviceKeys: [w.ownerDevice.raw]
+    });
+    await refusedWith(
+      verifySharedSnapshot(
+        await input(
+          w,
+          { authority: named, delegation: narrower },
+          w.otherOwnerDevice
+        )
+      ),
+      'author-not-owner'
+    );
+    // A link that shares the project still takes an editor's snapshot.
+    expect((await verifySharedSnapshot(await input(w))).mode).toBe('tweak');
   });
 
   it('refuses a snapshot of another project or another kind', async () => {

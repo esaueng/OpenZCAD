@@ -64,6 +64,20 @@ function sketchWith(objects: SketchObjectData[]) {
   return { manager, sketchId, ids, constrain };
 }
 
+function lockAt(
+  objectId: string,
+  point: 'start' | 'end' | 'center',
+  x: number,
+  y: number
+): SketchConstraintData {
+  return {
+    constraintKind: 'lock',
+    point: { objectId: objectId as never, point },
+    x,
+    y
+  };
+}
+
 function line(outcome: SketchSolveOutcome, index: number) {
   const object = outcome.objects[index]!;
   if (object.kind !== 'line') throw new Error('expected a line');
@@ -306,6 +320,183 @@ describe('S07 constraint set on the pinned kernel', () => {
         (c) => c.data.constraintKind
       )
     ).toContain('coincident');
+  });
+});
+
+describe('S07 whole-entity symmetry on the pinned kernel', () => {
+  const resolve = (value: unknown) =>
+    typeof value === 'number' ? value : Number(value);
+
+  /**
+   * The y axis locked from (0,-10) to (0,10), the first entity held fully
+   * by `hold`, and the second mirrored onto it by the relations one
+   * Symmetric pick sequence over the two entities writes.
+   */
+  async function mirrored(
+    first: SketchObjectData,
+    second: SketchObjectData,
+    hold: (id: string) => SketchConstraintData[]
+  ) {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      first,
+      second
+    ]);
+    const [axis, a, b] = fixture.ids as unknown as [string, string, string];
+    fixture.constrain(lockAt(axis, 'start', 0, -10));
+    fixture.constrain(lockAt(axis, 'end', 0, 10));
+    for (const constraint of hold(a)) fixture.constrain(constraint);
+    const sketch = findSketch(fixture.manager.document, fixture.sketchId)!;
+    const built = buildConstraint(
+      fixture.manager.document,
+      sketch,
+      'symmetric',
+      [
+        { kind: 'object', objectId: a },
+        { kind: 'object', objectId: b },
+        { kind: 'object', objectId: axis }
+      ],
+      undefined,
+      resolve
+    );
+    if ('error' in built) throw new Error(built.error);
+    const written = [built.data, ...(built.also ?? [])];
+    for (const constraint of written) fixture.constrain(constraint);
+    const outcome = await adapter.solveSketch(
+      fixture.manager.document,
+      fixture.sketchId
+    );
+    expect(outcome.converged).toBe(true);
+    expect(outcome.rolledBack).toBe(false);
+    // Each set fixes the image exactly once: no redundant equation.
+    expect(outcome.dof.rank).toBe(outcome.dof.numEquations);
+    return { outcome, written };
+  }
+
+  it('mirrors a whole line, pairing the ends the way they already lie', async () => {
+    // The second line runs the other way, so its end is nearer the image of
+    // the first's start: the pairing crosses, and the line does not flip.
+    const { outcome, written } = await mirrored(
+      { objectKind: 'line', x1: 2, y1: 1, x2: 6, y2: 5 },
+      { objectKind: 'line', x1: -5, y1: 4, x2: -1, y2: 2 },
+      (id) => [lockAt(id, 'start', 2, 1), lockAt(id, 'end', 6, 5)]
+    );
+    expect(written.map((data) => data.constraintKind)).toEqual([
+      'symmetric',
+      'symmetric'
+    ]);
+    expect(outcome.classification).toBe('solved');
+    const image = line(outcome, 2);
+    expect(image.x1).toBeCloseTo(-6, 9);
+    expect(image.y1).toBeCloseTo(5, 9);
+    expect(image.x2).toBeCloseTo(-2, 9);
+    expect(image.y2).toBeCloseTo(1, 9);
+  });
+
+  it('mirrors a whole circle: centre and radius', async () => {
+    const { outcome, written } = await mirrored(
+      { objectKind: 'circle', centerX: 4, centerY: 3, radius: 2 },
+      { objectKind: 'circle', centerX: -3, centerY: 2, radius: 1 },
+      (id) => [
+        lockAt(id, 'center', 4, 3),
+        { constraintKind: 'radius', objectId: id as never, value: 2 }
+      ]
+    );
+    expect(written.map((data) => data.constraintKind)).toEqual([
+      'symmetric',
+      'equal'
+    ]);
+    expect(outcome.classification).toBe('solved');
+    const image = outcome.objects[2]!;
+    if (image.kind !== 'circle') throw new Error('expected a circle');
+    expect(image.centerX).toBeCloseTo(-4, 9);
+    expect(image.centerY).toBeCloseTo(3, 9);
+    expect(image.radius).toBeCloseTo(2, 9);
+  });
+
+  it('refuses a second arc nearer the complement than the mirror image', () => {
+    // Review case: about the y axis, the radius-2 arc at (5, 0) sweeping
+    // 0°–90° mirrors to one at (-5, 0) sweeping 90°–180°. The radius-2 arc
+    // at (-7, 2) sweeping 0°–270° already meets both end symmetries and the
+    // equal radius, so the relations alone would keep it.
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: -10, x2: 0, y2: 10 },
+      {
+        objectKind: 'arc',
+        centerX: 5,
+        centerY: 0,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      {
+        objectKind: 'arc',
+        centerX: -7,
+        centerY: 2,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 270
+      }
+    ]);
+    const [axis, a, b] = fixture.ids as unknown as [string, string, string];
+    const built = buildConstraint(
+      fixture.manager.document,
+      findSketch(fixture.manager.document, fixture.sketchId)!,
+      'symmetric',
+      [
+        { kind: 'object', objectId: a },
+        { kind: 'object', objectId: b },
+        { kind: 'object', objectId: axis }
+      ],
+      undefined,
+      resolve
+    );
+    expect(built).toEqual({
+      error:
+        "The second arc sweeps 270°, nearer the other way round than the 90° of the first arc's mirror image. Pick an arc of matching sweep, or use Mirror to make the image."
+    });
+  });
+
+  it('mirrors a whole arc, reversing its direction', async () => {
+    // A quarter arc about (5,0) from 0° to 90°: its image about the y axis
+    // is centred on (-5,0) and, still counter-clockwise, runs 90° to 180°.
+    const { outcome, written } = await mirrored(
+      {
+        objectKind: 'arc',
+        centerX: 5,
+        centerY: 0,
+        radius: 2,
+        startAngleDeg: 0,
+        endAngleDeg: 90
+      },
+      {
+        objectKind: 'arc',
+        centerX: -4.5,
+        centerY: 0.3,
+        radius: 1.8,
+        startAngleDeg: 95,
+        endAngleDeg: 175
+      },
+      (id) => [
+        lockAt(id, 'start', 7, 0),
+        lockAt(id, 'end', 5, 2),
+        { constraintKind: 'radius', objectId: id as never, value: 2 }
+      ]
+    );
+    expect(written.map((data) => data.constraintKind)).toEqual([
+      'symmetric',
+      'symmetric',
+      'equal'
+    ]);
+    const image = outcome.objects[2]!;
+    if (image.kind !== 'arc') throw new Error('expected an arc');
+    expect(image.centerX).toBeCloseTo(-5, 8);
+    expect(image.centerY).toBeCloseTo(0, 8);
+    expect(image.radius).toBeCloseTo(2, 8);
+    const start = ((image.startAngleDeg % 360) + 360) % 360;
+    const end = ((image.endAngleDeg % 360) + 360) % 360;
+    expect(start).toBeCloseTo(90, 6);
+    expect(end).toBeCloseTo(180, 6);
   });
 });
 

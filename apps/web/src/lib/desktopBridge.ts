@@ -630,12 +630,21 @@ export async function openDesktopCadFile(): Promise<File | null> {
   return selected ? nativeCadFile(selected) : null;
 }
 
-function downloadBlobFile(
+/**
+ * The browser's save: a download, or the share sheet on a touch screen.
+ * False when the person dismissed the sheet, so the caller reports a
+ * cancelled export as it would a cancelled desktop save dialog.
+ */
+async function downloadBlobFile(
   fileName: string,
   contents: BlobPart,
   contentType: string
-): void {
-  void saveFile(fileName, new Blob([contents], { type: contentType }));
+): Promise<boolean> {
+  const outcome = await saveFile(
+    fileName,
+    new Blob([contents], { type: contentType })
+  );
+  return outcome !== 'cancelled';
 }
 
 export async function saveCadTextFile(
@@ -644,7 +653,7 @@ export async function saveCadTextFile(
   contents: string
 ): Promise<boolean> {
   if (!isDesktopApp()) {
-    downloadBlobFile(
+    return downloadBlobFile(
       suggestedName,
       contents,
       format === 'step'
@@ -657,7 +666,6 @@ export async function saveCadTextFile(
               ? 'image/svg+xml'
               : 'model/stl'
     );
-    return true;
   }
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<boolean>('save_cad_file', {
@@ -692,12 +700,11 @@ export async function saveCadBinaryFile(
   contents: Uint8Array<ArrayBuffer>
 ): Promise<boolean> {
   if (!isDesktopApp()) {
-    downloadBlobFile(
+    return downloadBlobFile(
       suggestedName,
       contents,
       BINARY_EXPORT_CONTENT_TYPES[format]
     );
-    return true;
   }
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<boolean>('save_cad_binary_file', {

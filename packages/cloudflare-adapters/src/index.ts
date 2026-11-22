@@ -132,6 +132,8 @@ import {
   type ProjectBranchPoint,
   type ProjectAccessRole as SharedProjectAccessRole,
   type ProjectEditLease,
+  PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS,
+  PROJECT_EDIT_LEASE_TTL_MS,
   type ProjectInvitationSummary,
   type ProjectSharingResponse,
   type ProjectShareLinkMode,
@@ -184,12 +186,23 @@ import {
   PROJECT_OBJECT_STORAGE_PREFIX,
   ProjectObjectStorageError,
   sha256Hex,
+  assertShareLinkTokenHashDomain,
+  EncryptedProjectSharingError,
+  frozenShareSnapshot,
+  isFrozenShareLinkTokenHash,
   type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
   type OwnedProjectInstance,
   type ProjectStorageAssetObject,
   type ProjectStorageAssetReference
 } from '@openzcad/persistence';
+
+import {
+  decodeFrozenShareDocument,
+  encodeFrozenShareDocument
+} from './frozen-share-storage';
+
+export { MAX_FROZEN_SHARE_STORED_CHARS } from './frozen-share-storage';
 
 export {
   decodeProjectStorageBody,
@@ -1290,6 +1303,30 @@ export const isShareLinkCommentsReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('project_share_links')
    WHERE name = 'allow_comments'`,
   (row) => row?.ready === 1
+);
+
+/**
+ * Whether migration 0065's `project_share_links.frozen_document` exists.
+ * Until it does, every link reads as sharing the live project and a link
+ * without history is refused rather than created with it.
+ */
+export const isShareLinkHistoryReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('project_share_links')
+   WHERE name = 'frozen_document'`,
+  (row) => row?.ready === 1,
+  // Never cache "missing": a stale answer would read another isolate's
+  // frozen link as an ordinary one and drop its owner-only guards.
+  0
+);
+
+/** Migration 0066's `e2ee_share_links.history`, for encrypted links. */
+export const isE2eeShareLinkHistoryReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_share_links')
+   WHERE name = 'history'`,
+  (row) => row?.ready === 1,
+  // Never cache "missing": a stale answer would read another isolate's
+  // frozen link as an ordinary one and drop its owner-only guards.
+  0
 );
 
 export const isShareLinkLabelReady = cachedSchemaProbe(
@@ -2416,36 +2453,53 @@ export class D1R2PersistenceService implements PersistenceService {
         'SHARE_LINK_COMMENTS_UNAVAILABLE',
         'Commenter links are not available on this server yet.'
       );
+    // L08: a link without history needs migration 0065, and is stored with
+    // its frozen model in the same insert: it never serves the live project.
+    const frozen = input.frozenDocument !== undefined;
+    if (frozen && !(await isShareLinkHistoryReady(this.env.DB)))
+      throw new ProjectSharingError(
+        'SHARE_LINK_HISTORY_UNAVAILABLE',
+        'Sharing without history is not available on this server yet.'
+      );
+    // Each kind of link in its own token-hash domain (migration 0065 holds
+    // the row to it as well): a lookup of a bare hash never finds a link
+    // without history, whatever the Worker that runs it knows.
+    assertShareLinkTokenHashDomain(input.tokenHash, frozen);
+    const mode = frozen ? 'view' : input.mode;
+    const columns: [string, string | number][] = [
+      ['id', input.shareLinkId],
+      ['project_id', projectId],
+      ['mode', mode],
+      ['token_hash', input.tokenHash],
+      ['created_by_user_id', ownerUserId],
+      ['created_at', input.createdAt]
+    ];
+    if (label !== null) columns.push(['label', label]);
+    if (frozen)
+      columns.push(
+        ['history', 0],
+        [
+          'frozen_document',
+          await encodeFrozenShareDocument(
+            frozenShareSnapshot(input.frozenDocument, projectId)
+          )
+        ],
+        ['frozen_at', input.createdAt]
+      );
+    // The project is still plaintext in the statement that stores the link.
+    // The check above ran before the model was compressed; a cutover that
+    // encrypted the project since then revoked the links it found, and a
+    // link stored after it would hold plaintext geometry no purge removes.
+    let stored;
     try {
-      await (
-        label === null
-          ? this.env.DB.prepare(
-              `INSERT INTO project_share_links
-             (id, project_id, mode, token_hash, created_by_user_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`
-            ).bind(
-              input.shareLinkId,
-              projectId,
-              input.mode,
-              input.tokenHash,
-              ownerUserId,
-              input.createdAt
-            )
-          : this.env.DB.prepare(
-              `INSERT INTO project_share_links
-             (id, project_id, mode, token_hash, created_by_user_id, created_at,
-              label)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-            ).bind(
-              input.shareLinkId,
-              projectId,
-              input.mode,
-              input.tokenHash,
-              ownerUserId,
-              input.createdAt,
-              label
-            )
-      ).run();
+      stored = await this.env.DB.prepare(
+        `INSERT INTO project_share_links
+           (${columns.map(([name]) => name).join(', ')})
+         SELECT ${columns.map(() => '?').join(', ')}
+         WHERE ${await this.shareableProjectFence()}`
+      )
+        .bind(...columns.map(([, value]) => value), projectId)
+        .run();
     } catch (error) {
       if (
         error instanceof Error &&
@@ -2457,6 +2511,13 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
       throw error;
+    }
+    if (!stored.meta?.changes) {
+      // Encrypted (or gone) since the check above: nothing was stored.
+      assertShareableProject(
+        await this.requireProjectOwner(ownerUserId, projectId)
+      );
+      throw new EncryptedProjectSharingError(projectId);
     }
     if (comments)
       await this.env.DB.prepare(
@@ -2475,18 +2536,100 @@ export class D1R2PersistenceService implements PersistenceService {
         ownerUserId,
         input.shareLinkId,
         input.createdAt,
-        JSON.stringify({ mode: input.mode, ...(comments ? { comments } : {}) })
+        JSON.stringify({
+          mode,
+          ...(comments ? { comments } : {}),
+          ...(frozen ? { history: false } : {})
+        })
       )
       .run();
     return {
       shareLinkId: input.shareLinkId,
       projectId,
-      mode: input.mode,
+      mode,
       createdAt: input.createdAt,
       revokedAt: null,
       label,
-      ...(comments ? { comments } : {})
+      ...(comments ? { comments } : {}),
+      ...(frozen ? { history: false as const, frozenAt: input.createdAt } : {})
     };
+  }
+
+  /**
+   * A predicate, with one bind (the project id), that holds while the
+   * project is still stored in plaintext. In the statement that writes a
+   * share link, it is what keeps a link (and a frozen model) from landing
+   * after the cutover that encrypts the project revoked its links.
+   */
+  private async shareableProjectFence(): Promise<string> {
+    return `EXISTS (SELECT 1 FROM projects fenced
+              WHERE fenced.id = ?${await this.plaintextOnly('fenced.')})`;
+  }
+
+  /** The summary columns of `project_share_links` this schema has. */
+  private async shareLinkColumns(): Promise<string> {
+    const label = (await isShareLinkLabelReady(this.env.DB))
+      ? 'label'
+      : 'NULL AS label';
+    const comments = (await isShareLinkCommentsReady(this.env.DB))
+      ? 'allow_comments'
+      : '0 AS allow_comments';
+    const history = (await isShareLinkHistoryReady(this.env.DB))
+      ? 'history, frozen_at'
+      : '1 AS history, NULL AS frozen_at';
+    return `id, project_id, mode, created_at, ${label}, ${comments}, ${history}`;
+  }
+
+  async updateProjectShareLinkSnapshot(
+    ownerUserId: UserId,
+    projectId: string,
+    shareLinkId: string,
+    document: ProjectDocument,
+    updatedAt: number
+  ): Promise<ProjectShareLinkSummary> {
+    assertPlaintextWritesAllowed(this.env);
+    if (!this.env.DB) {
+      return getInMemoryPersistence().updateProjectShareLinkSnapshot(
+        ownerUserId,
+        projectId,
+        shareLinkId,
+        document,
+        updatedAt
+      );
+    }
+    assertShareableProject(
+      await this.requireProjectOwner(ownerUserId, projectId)
+    );
+    if (!(await isShareLinkHistoryReady(this.env.DB)))
+      throw new ProjectSharingError(
+        'SHARE_LINK_HISTORY_UNAVAILABLE',
+        'Sharing without history is not available on this server yet.'
+      );
+    const stored = await encodeFrozenShareDocument(
+      frozenShareSnapshot(document, projectId)
+    );
+    // Only a link made without history takes a frozen model: the predicate
+    // keeps a link to the live project from being turned into one, or back.
+    const row = await this.env.DB.prepare(
+      `UPDATE project_share_links SET frozen_document = ?, frozen_at = ?
+       WHERE id = ? AND project_id = ? AND revoked_at IS NULL AND history = 0
+         AND ${await this.shareableProjectFence()}
+       RETURNING ${await this.shareLinkColumns()}`
+    )
+      .bind(stored, updatedAt, shareLinkId, projectId, projectId)
+      .first<ProjectShareLinkRow>();
+    if (!row) {
+      // Encrypted since the check above: its links are revoked, and no
+      // plaintext model is stored beside it.
+      assertShareableProject(
+        await this.requireProjectOwner(ownerUserId, projectId)
+      );
+      throw new ProjectSharingError(
+        'SHARE_LINK_NOT_FOUND',
+        'Project share link not found.'
+      );
+    }
+    return shareLinkFromRow(row);
   }
 
   async listProjectShareLinks(
@@ -2500,14 +2643,8 @@ export class D1R2PersistenceService implements PersistenceService {
       );
     }
     await this.requireProjectOwner(ownerUserId, projectId);
-    const label = (await isShareLinkLabelReady(this.env.DB))
-      ? 'label'
-      : 'NULL AS label';
-    const comments = (await isShareLinkCommentsReady(this.env.DB))
-      ? 'allow_comments'
-      : '0 AS allow_comments';
     const rows = await this.env.DB.prepare(
-      `SELECT id, project_id, mode, created_at, ${label}, ${comments}
+      `SELECT ${await this.shareLinkColumns()}
        FROM project_share_links
        WHERE project_id = ? AND revoked_at IS NULL
        ORDER BY created_at DESC`
@@ -2542,7 +2679,7 @@ export class D1R2PersistenceService implements PersistenceService {
     const row = await this.env.DB.prepare(
       `UPDATE project_share_links SET label = ?
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL
-       RETURNING id, project_id, mode, created_at, label`
+       RETURNING ${await this.shareLinkColumns()}`
     )
       .bind(label, shareLinkId, projectId)
       .first<ProjectShareLinkRow>();
@@ -2573,6 +2710,11 @@ export class D1R2PersistenceService implements PersistenceService {
     const result = await this.env.DB.prepare(
       `UPDATE project_share_links SET revoked_at = ?${
         (await isShareLinkLabelReady(this.env.DB)) ? ', label = NULL' : ''
+      }${
+        // The frozen model goes with the link; that it had no history stays.
+        (await isShareLinkHistoryReady(this.env.DB))
+          ? ', frozen_document = NULL'
+          : ''
       }
        WHERE id = ? AND project_id = ? AND revoked_at IS NULL`
     )
@@ -2594,10 +2736,14 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   async loadSharedProjectByTokenHash(
-    tokenHash: string
+    tokenHash: string,
+    frozenTokenHash?: string
   ): Promise<SharedProjectSnapshot | null> {
     if (!this.env.DB) {
-      return getInMemoryPersistence().loadSharedProjectByTokenHash(tokenHash);
+      return getInMemoryPersistence().loadSharedProjectByTokenHash(
+        tokenHash,
+        frozenTokenHash
+      );
     }
     // The token hash is the entire authorization: no user access check runs
     // here on purpose, and unknown stays indistinguishable from revoked or expired.
@@ -2616,14 +2762,46 @@ export class D1R2PersistenceService implements PersistenceService {
     const comments = (await isShareLinkCommentsReady(this.env.DB))
       ? 'l.allow_comments'
       : '0 AS allow_comments';
+    // L08: a link without history reads its own frozen model and none of
+    // the live project's document columns.
+    const historyReady = await isShareLinkHistoryReady(this.env.DB);
+    const live = historyReady ? 'l.history = 1' : '1';
+    // Each kind of link resolves by its own token-hash domain only. The
+    // bare hash finds a link to the live project and never one without
+    // history, which stores a hash this lookup cannot equal; so a Worker
+    // that does not know such links (an older one, or this one while its
+    // schema probe still says 0065 is missing) answers 404 for their
+    // tokens. That does not rest on the probe: it is what is stored.
+    // Nor is a frozen-domain hash ever looked up as a bare one.
+    if (isFrozenShareLinkTokenHash(tokenHash)) return null;
+    const frozenHash =
+      historyReady &&
+      frozenTokenHash !== undefined &&
+      isFrozenShareLinkTokenHash(frozenTokenHash)
+        ? frozenTokenHash
+        : null;
+    const byToken = !historyReady
+      ? 'l.token_hash = ?'
+      : frozenHash === null
+        ? '(l.token_hash = ? AND l.history = 1)'
+        : `((l.token_hash = ? AND l.history = 1)
+            OR (l.token_hash = ? AND l.history = 0))`;
     const row = await this.env.DB.prepare(
-      `SELECT l.mode, ${comments}, p.id AS project_id, p.name, p.document_json,
-              p.document_object_id
+      `SELECT l.mode, ${comments},
+              ${
+                historyReady
+                  ? 'l.history, l.frozen_document'
+                  : '1 AS history, NULL AS frozen_document'
+              },
+              p.id AS project_id, p.name,
+              CASE WHEN ${live} THEN p.document_json END AS document_json,
+              CASE WHEN ${live} THEN p.document_object_id END
+                AS document_object_id
        FROM project_share_links l
        INNER JOIN projects p ON p.id = l.project_id
        LEFT JOIN user_settings owner_settings
          ON owner_settings.user_id = p.user_id
-       WHERE l.token_hash = ?
+       WHERE ${byToken}
          AND l.revoked_at IS NULL
          AND l.created_at > ?
          AND p.status != 'deleted'${await this.plaintextOnly('p.')}
@@ -2639,22 +2817,45 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       .bind(
         tokenHash,
+        ...(frozenHash === null ? [] : [frozenHash]),
         Math.floor(Date.now() / 1000) - PROJECT_SHARE_LINK_TTL_SECONDS
       )
       .first<{
         mode: ProjectShareLinkMode;
         allow_comments: number;
+        history: number;
+        frozen_document: string | null;
         project_id: string;
         name: string;
-        document_json: string;
+        document_json: string | null;
         document_object_id: string | null;
       }>();
     if (!row) {
       return null;
     }
+    // Without the column every link shares the live project. With it, only
+    // a row that says 1 does: anything else is a link without history.
+    if (historyReady && row.history !== 1) {
+      // The frozen model is checked again on the way out; anything else in
+      // the column, or nothing, serves nothing.
+      if (row.history !== 0 || !row.frozen_document) return null;
+      return {
+        projectId: row.project_id,
+        name: row.name,
+        mode: 'view',
+        ...(row.allow_comments === 1 ? { comments: true } : {}),
+        history: false,
+        document: frozenShareSnapshot(
+          await decodeFrozenShareDocument(row.frozen_document),
+          row.project_id
+        )
+      };
+    }
     const document = row.document_object_id
       ? await this.loadProjectObject(row.project_id, row.document_object_id)
-      : normalizedForLoad(JSON.parse(row.document_json) as ProjectDocument);
+      : normalizedForLoad(
+          JSON.parse(row.document_json ?? 'null') as ProjectDocument
+        );
     // A share serves only the shared projection, never a stored document it
     // could not read and project.
     if (isUnreadableStoredDocument(document))
@@ -2682,6 +2883,9 @@ export class D1R2PersistenceService implements PersistenceService {
         assetId
       );
     }
+    // L08: no asset through a link without history, by its hash domain
+    // here and by `history` in the join below.
+    if (isFrozenShareLinkTokenHash(tokenHash)) return null;
     // The join is the authorization: the asset is served only when it belongs
     // to the unrevoked, unexpired link's own project — and, as above, only while the
     // owner still has sharing on and has not trashed the project. Serving a
@@ -2696,7 +2900,12 @@ export class D1R2PersistenceService implements PersistenceService {
        LEFT JOIN user_settings owner_settings
          ON owner_settings.user_id = p.user_id
        WHERE l.token_hash = ?
-         AND l.revoked_at IS NULL
+         AND l.revoked_at IS NULL${
+           // L08: a link without history serves none of the project's assets.
+           (await isShareLinkHistoryReady(this.env.DB))
+             ? ' AND l.history = 1'
+             : ''
+         }
          AND l.created_at > ?
          AND a.id = ?
          AND p.status != 'deleted'${await this.plaintextOnly('p.')}
@@ -9550,6 +9759,8 @@ interface ProjectShareLinkRow {
   created_at: number;
   label: string | null;
   allow_comments?: number;
+  history?: number;
+  frozen_at?: number | null;
 }
 
 function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
@@ -9560,7 +9771,10 @@ function shareLinkFromRow(row: ProjectShareLinkRow): ProjectShareLinkSummary {
     createdAt: row.created_at,
     revokedAt: null,
     label: row.label ?? null,
-    ...(row.allow_comments === 1 ? { comments: true } : {})
+    ...(row.allow_comments === 1 ? { comments: true } : {}),
+    ...(row.history === 0
+      ? { history: false as const, frozenAt: row.frozen_at ?? row.created_at }
+      : {})
   };
 }
 
@@ -9648,10 +9862,40 @@ const SOCKET_TICKET_TTL_MS = 30_000;
 
 /** Largest HTTP snapshot body accepted, sized to fit one storable document. */
 const MAX_SNAPSHOT_PAYLOAD_BYTES = 1_600_000;
-const PROJECT_EDIT_LEASE_TTL_MS = 30_000;
+/**
+ * How long a renewal may go without reaching storage. Clients renew every
+ * {@link PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS} (25 s); the room writes a
+ * renewal only when its last stored renewal is at least this old (or the
+ * lease set changed). With 25 s renewals the one 25 s after a write is
+ * skipped and the one 50 s after it is written, so a held lease costs about
+ * one storage write per 50 s. A renewal that arrives 5 s or more late is
+ * written early, which costs a write and never shortens the lease. A gap of
+ * 25 s or less would write every renewal (one per 25 s, twice the writes);
+ * a longer one keeps one write per 50 s up to a 50 s gap but lengthens the
+ * time a departed holder's lease can outlive its acknowledged expiry after
+ * eviction (see `restoreEditLease`), so 30 s stays. The in-memory lease,
+ * and every `lease-granted` frame, keeps the
+ * {@link PROJECT_EDIT_LEASE_TTL_MS} TTL.
+ */
+const PROJECT_EDIT_LEASE_PERSIST_GAP_MS = 30_000;
 
-interface StoredProjectEditLeases extends ProjectEditLease {
-  additionalLeases?: ProjectEditLease[];
+/**
+ * One persisted lease. `renewedAt` is the last renewal written to storage,
+ * and `expiresAt` is written as `renewedAt + TTL + GAP`: every renewal the
+ * room acknowledged without writing it happened less than GAP after
+ * `renewedAt`, so its acknowledged expiry is never later than the stored
+ * one. A Worker version that predates coalesced renewal (rolling deploy,
+ * rollback) reads only `expiresAt` and so never ends a lease early either.
+ * `storedUntil` is read-and-ignored: an unreleased build of this change
+ * wrote it.
+ */
+interface StoredProjectEditLease extends ProjectEditLease {
+  renewedAt?: number;
+  storedUntil?: number;
+}
+
+interface StoredProjectEditLeases extends StoredProjectEditLease {
+  additionalLeases?: StoredProjectEditLease[];
 }
 
 interface CollaborationSocketTicket {
@@ -9870,6 +10114,13 @@ export class ProjectCollaborationRoom extends DurableObject {
   private presence = new Map<string, string>();
   private sockets = new Map<WebSocket, CollaborationSocketConnection>();
   private editLeases: ProjectEditLease[] = [];
+  /** Last acknowledged renewal (or grant) of each lease, by leaseId. */
+  private leaseRenewedAt = new Map<string, number>();
+  /**
+   * The `renewedAt` storage holds for each lease, by leaseId. A lease
+   * without one (a record from an older writer) persists its next renewal.
+   */
+  private persistedRenewedAt = new Map<string, number>();
   private leaseQueue: Promise<void> = Promise.resolve();
   private socketFrameTimes = new WeakMap<
     WebSocket,
@@ -9880,6 +10131,13 @@ export class ProjectCollaborationRoom extends DurableObject {
   private sourceArchives: CopiedImportArchive[] = [];
   private sourceCopyPublicationStarted = false;
   private historyVersions: number[] = [];
+  /**
+   * Versions whose `room:history:<v>` key storage is known to hold: found by
+   * {@link ensureDocumentHistory} or written by {@link persistRoomState}. A
+   * committed version is stored together with `room:latest`, so the previous
+   * latest needs no rewrite when it is in here.
+   */
+  private persistedHistoryVersions = new Set<number>();
   private historyLoaded = false;
   private historyLoad: Promise<void> | null = null;
   private projectId: string | null = null;
@@ -9976,13 +10234,16 @@ export class ProjectCollaborationRoom extends DurableObject {
         );
       if (storedLease) {
         const { additionalLeases = [], ...first } = storedLease;
-        const active = [first, ...additionalLeases].filter(
-          (lease) =>
-            lease.projectId === this.projectId &&
-            // An encrypted room's authors each hold a lease (slice 5-6).
-            (this.roomFormat === 2 || lease.userId === first.userId) &&
-            lease.expiresAt > Date.now()
-        );
+        const now = Date.now();
+        const active = [first, ...additionalLeases]
+          .map((stored) => this.restoreEditLease(stored))
+          .filter(
+            (lease) =>
+              lease.projectId === this.projectId &&
+              // An encrypted room's authors each hold a lease (slice 5-6).
+              (this.roomFormat === 2 || lease.userId === first.userId) &&
+              lease.expiresAt > now
+          );
         // A hibernating room wakes for each heartbeat. Avoid rewriting an
         // unchanged lease on every wake; only persist expired/invalid cleanup.
         if (active.length === 1 + additionalLeases.length) {
@@ -10003,11 +10264,13 @@ export class ProjectCollaborationRoom extends DurableObject {
         )
       );
       for (const document of history) {
-        if (document)
+        if (document) {
           this.documentHistory.set(
             document.version,
             reconcileCopiedImportSources(document, this.sourceArchives)
           );
+          this.persistedHistoryVersions.add(document.version);
+        }
       }
       this.historyLoaded = true;
     })().finally(() => {
@@ -10304,6 +10567,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.editLeases = [];
     this.latestDocument = null;
     this.documentHistory.clear();
+    this.persistedHistoryVersions.clear();
     this.sourceArchives = [];
     this.sourceCopyPublicationStarted = false;
     this.historyVersions = [];
@@ -11208,8 +11472,77 @@ export class ProjectCollaborationRoom extends DurableObject {
     return result;
   }
 
-  private async persistEditLeases(leases: ProjectEditLease[]): Promise<void> {
-    const [first, ...additionalLeases] = leases;
+  /**
+   * Rebuilds one in-memory lease from storage after a wake. A record with a
+   * numeric `renewedAt` ends at `max(expiresAt, renewedAt + TTL + GAP)`:
+   * never before the expiry of any renewal the room acknowledged, since an
+   * unwritten one came less than GAP after `renewedAt`, and an older Worker
+   * that renewed and wrote a later `expiresAt` (keeping a stale `renewedAt`)
+   * still wins through the max. A record without one restores `expiresAt`
+   * as written, as before. Restore does not look at which sockets are open.
+   * Accepted trade-off: after the room wakes from eviction, a lease whose
+   * holder has gone can outlive its acknowledged expiry by at most GAP
+   * (30 s); it never ends earlier.
+   */
+  private restoreEditLease(stored: StoredProjectEditLease): ProjectEditLease {
+    const { renewedAt } = stored;
+    const restored: ProjectEditLease = {
+      leaseId: stored.leaseId,
+      projectId: stored.projectId,
+      clientId: stored.clientId,
+      userId: stored.userId,
+      expiresAt: stored.expiresAt
+    };
+    if (typeof renewedAt === 'number' && Number.isFinite(renewedAt)) {
+      restored.expiresAt = Math.max(
+        stored.expiresAt,
+        renewedAt +
+          PROJECT_EDIT_LEASE_TTL_MS +
+          PROJECT_EDIT_LEASE_PERSIST_GAP_MS
+      );
+      this.leaseRenewedAt.set(stored.leaseId, renewedAt);
+      this.persistedRenewedAt.set(stored.leaseId, renewedAt);
+    } else {
+      this.leaseRenewedAt.set(
+        stored.leaseId,
+        stored.expiresAt - PROJECT_EDIT_LEASE_TTL_MS
+      );
+      this.persistedRenewedAt.delete(stored.leaseId);
+    }
+    return restored;
+  }
+
+  /**
+   * Writes the lease set. `renewal` is an acknowledgement this write carries
+   * (a grant or renewal); like the rest of the lease state, it is recorded
+   * in memory only once the write succeeds, so a rejected write leaves the
+   * room as it was.
+   */
+  private async persistEditLeases(
+    leases: ProjectEditLease[],
+    renewal?: { leaseId: string; renewedAt: number }
+  ): Promise<void> {
+    const renewedAt = new Map(
+      leases.map((lease) => [
+        lease.leaseId,
+        renewal?.leaseId === lease.leaseId
+          ? renewal.renewedAt
+          : (this.leaseRenewedAt.get(lease.leaseId) ??
+            lease.expiresAt - PROJECT_EDIT_LEASE_TTL_MS)
+      ])
+    );
+    const stored = leases.map((lease): StoredProjectEditLease => {
+      const at = renewedAt.get(lease.leaseId)!;
+      return {
+        ...lease,
+        renewedAt: at,
+        expiresAt: Math.max(
+          lease.expiresAt,
+          at + PROJECT_EDIT_LEASE_TTL_MS + PROJECT_EDIT_LEASE_PERSIST_GAP_MS
+        )
+      };
+    });
+    const [first, ...additionalLeases] = stored;
     if (first) {
       // Keep the original single-lease shape readable during rolling updates.
       await this.roomContext.storage.put(ROOM_EDIT_LEASE_KEY, {
@@ -11220,6 +11553,8 @@ export class ProjectCollaborationRoom extends DurableObject {
       await this.roomContext.storage.delete(ROOM_EDIT_LEASE_KEY);
     }
     this.editLeases = leases;
+    this.leaseRenewedAt = renewedAt;
+    this.persistedRenewedAt = new Map(renewedAt);
   }
 
   private async revokeEditLeases(
@@ -11286,11 +11621,18 @@ export class ProjectCollaborationRoom extends DurableObject {
       userId: connection.userId,
       expiresAt: Date.now() + PROJECT_EDIT_LEASE_TTL_MS
     };
-    await this.persistEditLeases([
-      ...this.editLeases.filter((candidate) => candidate !== current),
-      lease
-    ]);
-    this.send(socket, { type: 'lease-granted', lease });
+    await this.persistEditLeases(
+      [...this.editLeases.filter((candidate) => candidate !== current), lease],
+      {
+        leaseId: lease.leaseId,
+        renewedAt: lease.expiresAt - PROJECT_EDIT_LEASE_TTL_MS
+      }
+    );
+    this.send(socket, {
+      type: 'lease-granted',
+      lease,
+      renewIntervalMs: PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS
+    });
   }
 
   private async renewEditLease(
@@ -11312,6 +11654,11 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.send(socket, { type: 'lease-lost', reason: 'role-changed' });
       return;
     }
+    // The membership read above can outlast the socket. A renewal the holder
+    // can no longer receive is not acknowledged, so it must not extend the
+    // lease either: storing it would let a departed holder's lease outlive
+    // its last acknowledged expiry by more than the GAP bound after eviction.
+    if (socket.readyState !== WebSocket.OPEN) return;
     const current = this.activeLease(
       connection.userId,
       connection.clientId,
@@ -11321,16 +11668,35 @@ export class ProjectCollaborationRoom extends DurableObject {
       this.send(socket, { type: 'lease-lost', reason: 'invalid' });
       return;
     }
+    const now = Date.now();
     const lease = {
       ...current,
-      expiresAt: Date.now() + PROJECT_EDIT_LEASE_TTL_MS
+      expiresAt: now + PROJECT_EDIT_LEASE_TTL_MS
     };
-    await this.persistEditLeases(
-      this.editLeases.map((candidate) =>
-        candidate === current ? lease : candidate
-      )
+    const leases = this.editLeases.map((candidate) =>
+      candidate === current ? lease : candidate
     );
-    this.send(socket, { type: 'lease-granted', lease });
+    // The lease set is unchanged, so storage needs the renewal only once its
+    // stored one is GAP old: until then the stored expiry already covers
+    // this acknowledgement (see StoredProjectEditLease).
+    const persisted = this.persistedRenewedAt.get(lease.leaseId);
+    if (
+      persisted === undefined ||
+      now - persisted >= PROJECT_EDIT_LEASE_PERSIST_GAP_MS
+    ) {
+      await this.persistEditLeases(leases, {
+        leaseId: lease.leaseId,
+        renewedAt: now
+      });
+    } else {
+      this.editLeases = leases;
+      this.leaseRenewedAt.set(lease.leaseId, now);
+    }
+    this.send(socket, {
+      type: 'lease-granted',
+      lease,
+      renewIntervalMs: PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS
+    });
   }
 
   private async releaseEditLease(
@@ -11569,12 +11935,22 @@ export class ProjectCollaborationRoom extends DurableObject {
         .first<{ allowed: number }>();
       if (allowed?.allowed !== 1) return false;
     }
+    // Load the stored index first so the previous latest is only rewritten
+    // when its history key is actually missing.
+    if (this.historyVersions.length && !this.historyLoaded) {
+      await this.ensureDocumentHistory();
+    }
     const dirty = new Set<number>(dirtyHistoryVersions);
     const previousLatest = this.latestDocument;
     const previousHistory = new Map(this.documentHistory);
     if (previousLatest && previousLatest.version !== document.version) {
       this.documentHistory.set(previousLatest.version, previousLatest);
-      dirty.add(previousLatest.version);
+      // Its commit stored this version under its history key in the same
+      // batch as `room:latest`; rewriting the unchanged value costs a row and
+      // a full-document write per commit. Write it only when that key is not
+      // known to exist (legacy state, a missing key, an unpersisted latest).
+      if (!this.persistedHistoryVersions.has(previousLatest.version))
+        dirty.add(previousLatest.version);
     }
     this.latestDocument = document;
     this.documentHistory.set(document.version, document);
@@ -12416,6 +12792,7 @@ export class ProjectCollaborationRoom extends DurableObject {
       ]);
       this.latestDocument = null;
       this.documentHistory.clear();
+      this.persistedHistoryVersions.clear();
       this.historyVersions = [];
       this.historyLoaded = false;
       this.sourceArchives = [];
@@ -12464,6 +12841,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     // connection starts the room afresh.
     this.latestDocument = null;
     this.documentHistory.clear();
+    this.persistedHistoryVersions.clear();
     this.historyVersions = [];
     this.historyLoaded = false;
     this.roomFormat = null;
@@ -12512,7 +12890,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     if (this.latestDocument) {
       entries[ROOM_LATEST_KEY] = this.latestDocument;
     }
-    entries[ROOM_META_KEY] = {
+    const meta = {
       schema: ROOM_STORAGE_SCHEMA,
       projectId: this.projectId,
       ...(this.instanceId ? { instanceId: this.instanceId } : {}),
@@ -12522,7 +12900,18 @@ export class ProjectCollaborationRoom extends DurableObject {
       ),
       ...(this.roomFormat === 2 ? { format: 2 as const } : {})
     } satisfies RoomMeta;
+    entries[ROOM_META_KEY] = meta;
     await this.roomContext.storage.put(entries);
+    // Keep the in-memory index in step with the one just stored. Left at its
+    // load-time value, an evicted version would stay listed, and source
+    // cleanup would report retained history unavailable from then on.
+    this.historyVersions = meta.historyVersions;
+    for (const version of dirtyHistoryVersions) {
+      if (this.documentHistory.has(version))
+        this.persistedHistoryVersions.add(version);
+    }
+    for (const version of evicted)
+      this.persistedHistoryVersions.delete(version);
     // Deleting after the index no longer references these keys keeps a failed
     // delete a storage leak rather than a dangling history version.
     if (evicted.length > 0) {

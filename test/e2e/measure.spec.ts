@@ -253,6 +253,45 @@ test('a hover on an edge snaps to a named point', async ({ page }) => {
   await expect(glyph).toHaveText(/Endpoint|Midpoint|Center/);
 });
 
+test('a Distance pick records the point its snap glyph names', async ({
+  page
+}) => {
+  // QA15-2E-01: the glyph read "Endpoint" while the pick was recorded as the
+  // edge's midpoint, so a corner-to-corner distance came out 57.31 for 56.
+  // Whatever kind the glyph names, the first pick's label must name the same.
+  // Where the located point lands decides which kind that is; the
+  // deterministic Endpoint regression is `test/measure-snap-pick.test.ts`.
+  await createBox(page, 'Measure Snap Pick');
+
+  await switchWorkspace(page, 'View');
+  await armMeasure(page);
+  await page
+    .getByLabel('Measurement workbench')
+    .getByRole('button', { name: 'Distance' })
+    .click();
+  await setSelectionFilter(page, 'Edge');
+
+  const edge = await locateEdge(page);
+  await page.mouse.move(edge.x - 60, edge.y - 60);
+  await page.mouse.move(edge.x, edge.y);
+  const glyph = page.locator('.snap-glyph');
+  await expect(glyph).toBeVisible();
+  const kind = (await glyph.textContent())?.trim();
+  const named: Record<string, RegExp> = {
+    Endpoint: / (start|end) selected · pick the second target/,
+    Midpoint: / midpoint selected · pick the second target/,
+    Center: / center selected · pick the second target/
+  };
+  expect(Object.keys(named)).toContain(kind);
+
+  await page.mouse.click(edge.x, edge.y);
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace status' })
+      .getByText(named[kind!]!)
+  ).toBeVisible();
+});
+
 test(
   'a measurement survives a reload',
   { tag: '@ci-smoke' },
@@ -330,3 +369,131 @@ test('measurements stay with their own project across a switch', async ({
     page.getByLabel('Measurement workbench').getByRole('listitem')
   ).toHaveText(recorded!);
 });
+
+/**
+ * M13: a Distance pick can ask for a point kind. Asked for midpoints, each
+ * edge pick records that edge's midpoint whatever end the pointer was
+ * nearer, the glyph offers midpoints only, and the distance lands between
+ * the two midpoints.
+ */
+test(
+  'a Distance pick asked for midpoints records each edge midpoint',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await createBox(page, 'Measure Point Kind');
+
+    await switchWorkspace(page, 'View');
+    await armMeasure(page);
+    const workbench = page.getByLabel('Measurement workbench');
+    await workbench.getByRole('button', { name: 'Distance' }).click();
+    const kinds = workbench.getByRole('group', { name: 'Point to pick' });
+    await kinds.getByRole('button', { name: 'Midpoint' }).click();
+    await expect(
+      kinds.getByRole('button', { name: 'Midpoint' })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await expect(workbench).toContainText('Each records its midpoint.');
+    await setSelectionFilter(page, 'Edge');
+
+    const status = page.getByRole('group', { name: 'Workspace status' });
+    const first = await locateEdge(page);
+    await page.mouse.move(first.x - 60, first.y - 60);
+    await page.mouse.move(first.x, first.y);
+    // Whatever glyph shows is a midpoint: the others are not offered.
+    const glyph = page.locator('.snap-glyph');
+    if (await glyph.isVisible()) await expect(glyph).toHaveText('Midpoint');
+    await page.mouse.click(first.x, first.y);
+    await expect(
+      status.getByText(/ midpoint selected · pick the second target/)
+    ).toBeVisible();
+
+    const second = await locateEdge(page, { exclude: [first.topologyId] });
+    await page.mouse.move(second.x, second.y);
+    await page.mouse.click(second.x, second.y);
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+    await expect(workbench.getByRole('listitem')).toContainText('midpoint');
+
+    // Back on Auto, the dock says what Distance does by default.
+    await kinds.getByRole('button', { name: 'Auto' }).click();
+    await expect(workbench).toContainText(
+      'Pick two targets. Circles and cylinders use their exact centers.'
+    );
+  }
+);
+
+/**
+ * M13: Maximum, Central and Parallel distances are their own measure modes.
+ * Two straight box edges have a closed-form maximum (reached at their ends),
+ * recorded and named as one; Central refuses two picks with no centre or
+ * axis and keeps the first pick.
+ */
+test(
+  'Maximum records the farthest two edges are apart, and Central says what it needs',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await createBox(page, 'Measure Maximum');
+
+    await switchWorkspace(page, 'View');
+    await armMeasure(page);
+    const workbench = page.getByLabel('Measurement workbench');
+    await workbench.getByRole('button', { name: 'Maximum' }).click();
+    await expect(workbench).toContainText('the farthest they are apart');
+    await setSelectionFilter(page, 'Edge');
+    const status = page.getByRole('group', { name: 'Workspace status' });
+
+    const first = await locateEdge(page);
+    const second = await locateEdge(page, { exclude: [first.topologyId] });
+    await page.mouse.click(first.x, first.y);
+    await expect(
+      status.getByText(/ selected · pick the second target/)
+    ).toBeVisible();
+    await page.mouse.click(second.x, second.y);
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+    await expect(workbench.getByRole('listitem')).toContainText(
+      'Maximum distance'
+    );
+
+    // Central needs a circle, arc, cylinder or hole: two straight edges are
+    // refused by name and the first pick stays.
+    await workbench.getByRole('button', { name: 'Central' }).click();
+    await page.mouse.click(first.x, first.y);
+    await page.mouse.click(second.x, second.y);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Central distance needs a circle, arc, cylinder or hole to measure from.'
+    );
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+  }
+);
+
+/**
+ * M13: hovering a measurement lights the entity it measured. Pointing at a
+ * recorded edge's row draws that edge in the hover's colours on the model,
+ * keyboard focus does the same, and leaving the row clears it.
+ */
+test(
+  'hovering a measurement row highlights the edge it measured',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await createBox(page, 'Measure Hover');
+
+    await switchWorkspace(page, 'View');
+    await armMeasure(page);
+    await setSelectionFilter(page, 'Edge');
+    const edge = await locateEdge(page);
+    await page.mouse.click(edge.x, edge.y);
+    const workbench = page.getByLabel('Measurement workbench');
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+
+    const canvas = page.locator('.viewer-host canvas');
+    const row = workbench.locator('.measurement-row-main').first();
+    await row.hover();
+    await expect(canvas).toHaveAttribute('data-e2e-measure-highlights', '1');
+    // Off the row, the highlight goes.
+    await page.mouse.move(edge.x + 200, edge.y + 200);
+    await expect(canvas).toHaveAttribute('data-e2e-measure-highlights', '0');
+    // Keyboard focus lights it too.
+    await row.focus();
+    await expect(canvas).toHaveAttribute('data-e2e-measure-highlights', '1');
+    await row.blur();
+    await expect(canvas).toHaveAttribute('data-e2e-measure-highlights', '0');
+  }
+);

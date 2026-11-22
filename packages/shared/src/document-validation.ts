@@ -262,7 +262,8 @@ const PATTERN_KINDS = valuesOf<PatternKind>({
   circular: true,
   grid: true,
   points: true,
-  path: true
+  path: true,
+  mirror: true
 });
 const GEAR_TYPES = valuesOf<GearType>({
   external: true,
@@ -282,7 +283,8 @@ const GEAR_SIZINGS = valuesOf<GearSizing>({
 const END_CONDITIONS = valuesOf<ExtrudeEndCondition>({
   blind: true,
   'through-all': true,
-  'to-face': true
+  'to-face': true,
+  'to-next': true
 });
 const THROUGH_ALL_SIDES = valuesOf<ThroughAllSide>({
   forward: true,
@@ -321,7 +323,13 @@ type FeatureDataOf<K extends FeatureKind> = Extract<
  */
 const FEATURE_ENUM_FIELDS = {
   primitive: { primitiveKind: PRIMITIVE_KINDS },
-  pattern: { patternKind: PATTERN_KINDS, axis: AXIS_IDS, axis2: AXIS_IDS },
+  pattern: {
+    patternKind: PATTERN_KINDS,
+    axis: AXIS_IDS,
+    axis2: AXIS_IDS,
+    // M02 (schema v120).
+    spacingMode: valuesOf<'total'>({ total: true })
+  },
   boolean: {
     operation: valuesOf<BooleanOperation>({
       union: true,
@@ -357,7 +365,18 @@ const FEATURE_ENUM_FIELDS = {
     }),
     construction: valuesOf<NonNullable<FeatureDataOf<'sweep'>['construction']>>(
       { 'in-place': true }
-    )
+    ),
+    orientation: valuesOf<NonNullable<FeatureDataOf<'sweep'>['orientation']>>({
+      parallel: true
+    }),
+    profilePosition: valuesOf<
+      NonNullable<FeatureDataOf<'sweep'>['profilePosition']>
+    >({
+      auto: true,
+      intersection: true,
+      'closest-point': true,
+      'closest-endpoint': true
+    })
   },
   rib: {
     thicknessSide: valuesOf<FeatureDataOf<'rib'>['thicknessSide']>({

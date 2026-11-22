@@ -55,11 +55,11 @@ export function validateUnitFiles(project, files) {
 export function unitTestInclude(project, env = process.env) {
   if (project !== 'root' && project !== 'web')
     throw new Error(`Unknown unit project "${project}".`);
-  if (resolveUnitSuite(env) === 'full')
-    return project === 'root' ? [...ROOT_FULL_INCLUDE] : undefined;
   if (env.OPENZCAD_UNIT_FILES) {
     const selection = JSON.parse(env.OPENZCAD_UNIT_FILES);
     return validateUnitFiles(project, selection[project]);
   }
+  if (resolveUnitSuite(env) === 'full')
+    return project === 'root' ? [...ROOT_FULL_INCLUDE] : undefined;
   return validateUnitFiles(project, manifest[project]);
 }

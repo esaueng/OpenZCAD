@@ -237,8 +237,9 @@ describe('the union gate on unifyFacesChecked', () => {
     expect(spies.detailed).not.toHaveBeenCalled();
   });
 
-  it('routes every union through the same checked gate', () => {
+  it('uses the checked gate for both shape-only union helpers on older kernels', () => {
     const kernel = new RemusKernel();
+    Object.assign(kernel, { unifyFacesIfStrict: undefined });
     const spies = spyOnValidation();
     const plain = unifyUnionFaces(kernel, overlappingBoxes(kernel));
     const left = kernel.makeBox(10, 10, 10);

@@ -12,6 +12,7 @@ import {
 } from '../../../../../packages/viewport/src/render/scene';
 import { denseBodyNeedsPreparation } from './bodyPreparationPolicy';
 import { prepareBody } from './prepareBody';
+import { RestoredMeshPreparation } from './restoredMeshPreparation';
 
 // A lost worker must not hold revision readiness (or a stale frame) indefinitely.
 export const BODY_PREPARATION_TIMEOUT_MS = 5_000;
@@ -30,34 +31,49 @@ function sameBodySet(a: Bodies, b: Bodies) {
   return a.length === b.length && b.every((body) => ids.has(body.bodyId));
 }
 
+function createPreparationWorker(): Worker {
+  return observeWorker(
+    new Worker(new URL('./bodyPreparationWorker.ts', import.meta.url), {
+      type: 'module'
+    })
+  );
+}
+
 /** Dense replacements prepare off-thread; displayed geometry and its props travel together. */
 export function usePreparedBodies<T = undefined>(
   source: Bodies,
-  presentation?: T
+  presentation?: T,
+  editingSketch = false
 ) {
   const [ready, setReady] = useState<Snapshot<T | undefined>>({
     id: 0,
     source,
     presentation
   });
+  const [restored] = useState(() => new RestoredMeshPreparation());
+  const latestSource = useRef(source);
   const displayed = useRef({ source, presentation });
   const workerRef = useRef<Worker | null>(null);
+  const warmWorker = useRef<Worker | null>(null);
   const active = useRef<Request<T | undefined> | null>(null);
   const serial = useRef(0);
   const [unavailable, setUnavailable] = useState(false);
 
   // First open and structural changes cannot borrow an entire old body set.
   // Prepare synchronously once, before the renderer sees it, rather than blanking
-  // the scene. Weak keys retain unchanged bodies across ticks without growing a
-  // separate strong index of abandoned projections or undo history.
+  // the scene. Reuse an unchanged display or an exactly matching recent mesh.
   useMemo(() => {
     const previousById = new Map(
       displayed.current.source.map((body) => [body.bodyId, body])
     );
     for (const body of source) {
-      if (!denseBodyNeedsPreparation(body) || preparedBodies.has(body))
-        continue;
       const previous = previousById.get(body.bodyId);
+      if (
+        !denseBodyNeedsPreparation(body) ||
+        previous === body ||
+        preparedBodies.get(body)?.geometry
+      )
+        continue;
       const prepared = previous && preparedBodies.get(previous);
       if (
         previous &&
@@ -66,6 +82,10 @@ export function usePreparedBodies<T = undefined>(
         sameBodyPickingTopology(previous, body)
       )
         preparedBodies.set(body, prepared);
+      else {
+        const cached = restored.restore(body);
+        if (cached) preparedBodies.set(body, cached);
+      }
     }
     if (
       unavailable ||
@@ -73,14 +93,40 @@ export function usePreparedBodies<T = undefined>(
     )
       return;
     for (const body of source)
-      if (denseBodyNeedsPreparation(body) && !preparedBodies.has(body))
-        preparedBodies.set(body, prepareBody(body));
-  }, [source, ready.source, unavailable]);
+      if (denseBodyNeedsPreparation(body) && !preparedBodies.has(body)) {
+        const prepared = prepareBody(body);
+        restored.remember(body, prepared);
+        preparedBodies.set(body, prepared);
+      }
+  }, [source, ready.source, unavailable, restored]);
   const preparing =
     !unavailable &&
     source.some(
       (body) => denseBodyNeedsPreparation(body) && !preparedBodies.has(body)
     );
+
+  // Start the display worker while the user is editing the sketch. Its first
+  // replacement mesh can then use the worker as soon as the kernel replies.
+  const warmForSketch =
+    editingSketch && !unavailable && source.some(denseBodyNeedsPreparation);
+  useEffect(() => {
+    if (!warmForSketch || workerRef.current) return;
+    let worker: Worker;
+    try {
+      worker = createPreparationWorker();
+    } catch {
+      return;
+    }
+    warmWorker.current = worker;
+    const discard = () => {
+      if (warmWorker.current !== worker) return;
+      warmWorker.current = null;
+      worker.terminate();
+    };
+    worker.onerror = discard;
+    worker.onmessageerror = discard;
+    return discard;
+  }, [warmForSketch]);
 
   useEffect(
     () => () => {
@@ -119,11 +165,8 @@ export function usePreparedBodies<T = undefined>(
     let worker = workerRef.current;
     if (!worker) {
       try {
-        worker = observeWorker(
-          new Worker(new URL('./bodyPreparationWorker.ts', import.meta.url), {
-            type: 'module'
-          })
-        );
+        worker = warmWorker.current ?? createPreparationWorker();
+        warmWorker.current = null;
         worker.onerror = () => fail('error');
         worker.onmessageerror = () => fail('messageerror');
         worker.onmessage = (
@@ -150,9 +193,12 @@ export function usePreparedBodies<T = undefined>(
           clearTimeout(request.timeout);
           active.current = null;
           // Cache completed work even if a later source is already waiting.
-          request.bodies.forEach((body, index) =>
-            preparedBodies.set(body, event.data.prepared![index]!)
-          );
+          request.bodies.forEach((body, index) => {
+            const prepared = event.data.prepared![index]!;
+            if (latestSource.current === request.source)
+              restored.remember(body, prepared);
+            preparedBodies.set(body, prepared);
+          });
           performance.mark?.('oz:viewer.prepared', {
             detail: {
               workerMs: event.data.preparationMs ?? null,
@@ -196,7 +242,7 @@ export function usePreparedBodies<T = undefined>(
     } catch {
       fail('post-failure');
     }
-  }, [source, preparing, ready, presentation]);
+  }, [source, preparing, ready, presentation, restored]);
 
   const bodies = preparing ? ready.source : source;
   const shownPresentation = preparing
@@ -205,7 +251,8 @@ export function usePreparedBodies<T = undefined>(
       : ready.presentation
     : presentation;
   useLayoutEffect(() => {
+    latestSource.current = source;
     displayed.current = { source: bodies, presentation: shownPresentation };
-  }, [bodies, shownPresentation]);
+  }, [bodies, shownPresentation, source]);
   return { bodies, presentation: shownPresentation, preparing };
 }

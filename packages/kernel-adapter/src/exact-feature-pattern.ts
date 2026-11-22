@@ -1,3 +1,4 @@
+import { startMesh, warmMesh } from './point-pattern-mesh';
 /**
  * M02 feature patterns (schema v62): a pattern that repeats holes and
  * add/cut extrudes on its target body rather than copying the whole body.
@@ -17,6 +18,7 @@ import {
   isFeatureSuppressed,
   patternSourceProblem,
   type BodyId,
+  type EdgeWitnessV1,
   type FaceWitnessV1,
   type FeatureData,
   type FeatureId,
@@ -25,19 +27,30 @@ import {
   type QuantizedTopologyPoint
 } from '@openzcad/shared';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  extrudeParamResolver,
+  getParameterHiddenBodyIds,
+  listFeaturesInOrder,
+  validateExtrudeExtent
+} from '@openzcad/document-core';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import type { ExactShape } from './exact-types';
 import { AdapterRefusal } from './adapter-refusal';
 import {
   collapseShape,
+  faceComponentsOf,
   fuseUniformSolidChecked,
   unifyBooleanFaces,
   verdictRefusesUnion
 } from './exact-boolean-helpers';
-import { exactCutWithCancellation } from './exact-cancellation';
+import { patternCutPrefix } from './exact-pattern-cut-prefix';
+import {
+  exactCutWithCancellation,
+  throwIfBuildCancelled
+} from './exact-cancellation';
 import {
   holeToolSolids,
+  measureCylinderFaces,
   missingHoleBore,
   type HoleToolSpec
 } from './exact-cylinder-ops';
@@ -55,6 +68,8 @@ import {
   type RemusLineageState
 } from './remus-lineage';
 import { buildSweep } from './exact-profile-builders';
+import { buildWrapSolids } from './exact-wrap';
+import { buildRibSolid } from './exact-rib';
 import { raiseFeatureWarning } from './exact-feature-warnings';
 import { bodyName, inheritMeshOrigin } from './exact-shape-utils';
 import { requireValidSolid } from './kernel-validation';
@@ -62,6 +77,22 @@ import type { RemusLineageDiagnostic } from './remus-lineage';
 import { throughAllSpan, unionBounds } from './through-all';
 
 type Vec3 = { x: number; y: number; z: number };
+
+/** Whether a copy's placement is a reflection (a negative determinant). */
+export function copyReflects(matrix: Float64Array): boolean {
+  const det =
+    matrix[0]! * (matrix[5]! * matrix[10]! - matrix[6]! * matrix[9]!) -
+    matrix[1]! * (matrix[4]! * matrix[10]! - matrix[6]! * matrix[8]!) +
+    matrix[2]! * (matrix[4]! * matrix[9]! - matrix[5]! * matrix[8]!);
+  return det < 0;
+}
+
+/** The hand a thread's mirror image winds: right becomes left. */
+export function mirroredHand(
+  hand: 'right' | 'left' | undefined
+): 'right' | 'left' {
+  return hand === 'left' ? 'right' : 'left';
+}
 
 /** One copy the pattern keeps, beside the original. */
 export interface FeaturePatternCopy {
@@ -305,6 +336,25 @@ interface RepeatedHole {
   tapped: boolean;
 }
 
+function requirePatternBores(
+  kernel: FeatureBuildContext['kernel'],
+  solid: number,
+  holes: readonly RepeatedHole[]
+): void {
+  if (holes.length === 0) return;
+  // The solid stays fixed throughout this check. A later cut or thread
+  // operation gets a fresh set of face measurements.
+  const cylinders = measureCylinderFaces(kernel, solid);
+  for (const { label, spec } of holes) {
+    const missing = missingHoleBore(cylinders, spec);
+    if (missing !== null) {
+      throw new Error(
+        `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
+      );
+    }
+  }
+}
+
 /**
  * Builds a feature pattern's body: the target with every kept copy of each
  * repeated feature cut into it or fused onto it, in history order.
@@ -327,6 +377,15 @@ export function buildFeaturePattern(
     data: FeatureDataOf<'hole'>,
     solid: number,
     bores: readonly { spec: HoleToolSpec; pointId: string | null }[]
+  ) => number,
+  /**
+   * M02: rounds or bevels `edges` of `solid` as a repeated fillet or
+   * chamfer does its own, and returns the result; throws its refusal.
+   */
+  blendEdges?: (
+    data: FeatureDataOf<'fillet' | 'chamfer'>,
+    solid: number,
+    edges: number[]
   ) => number
 ): void {
   const { kernel, document, result } = ctx;
@@ -341,11 +400,50 @@ export function buildFeaturePattern(
   const shapedSources: FeatureId[] = [];
   let declined: RemusLineageDiagnostic | null = null;
   let solid = original;
+  let prefix: ReturnType<typeof patternCutPrefix>;
   for (const source of sources) {
     const sourceData = source.data;
     let seed: number[];
     let operation: 'add' | 'cut';
     let bores: { spec: HoleToolSpec; pointId: string | null }[] = [];
+    // M02: a fillet or chamfer is applied again where each copy holds the
+    // edges it rounded, found by its stored edges moved with the copy.
+    if (
+      sourceData.featureKind === 'fillet' ||
+      sourceData.featureKind === 'chamfer'
+    ) {
+      if (!blendEdges) {
+        throw new Error(
+          `${source.name} rounds edges, and this pattern cannot repeat it.`
+        );
+      }
+      // Where its build found its edges, so an upstream edit that moved
+      // them moves the copies too (review). A source that did not build
+      // recorded none, and its copies are not rounded either (re-check).
+      const witnesses = result.blendEdgeWitnesses?.get(source.featureId);
+      if (!witnesses || witnesses.length === 0) {
+        throw new Error(
+          `${source.name} did not build, so a pattern cannot find its edges on a copy; fix ${source.name} first.`
+        );
+      }
+      for (const copy of copies) {
+        const edges = copiedEdges(kernel, solid, witnesses, copy.matrix);
+        if (typeof edges === 'number') {
+          throw new Error(
+            `Copy ${copy.label} of ${source.name} finds no edge where ${source.name}'s edge ${edges + 1} would be; skip it, or repeat the feature it rounds first.`
+          );
+        }
+        try {
+          solid = blendEdges(sourceData, solid, edges);
+        } catch (error) {
+          throw new Error(
+            `Copy ${copy.label} of ${source.name}: ${error instanceof Error ? error.message : String(error)}`,
+            { cause: error }
+          );
+        }
+      }
+      continue;
+    }
     if (sourceData.featureKind === 'hole') {
       // A through hole drills clear of the body from its own entry point; a
       // copy needs the same from where it lands, so the one tool all copies
@@ -377,6 +475,13 @@ export function buildFeaturePattern(
       seed = bores.flatMap(({ spec }) => holeToolSolids(kernel, spec));
       operation = 'cut';
     } else if (sourceData.featureKind === 'extrude') {
+      // The source's own stored extent, checked as its rebuild checks it: a
+      // copy never builds an extent the source refuses (a start offset a
+      // parameter moved off zero beside through all, say).
+      validateExtrudeExtent(
+        sourceData,
+        extrudeParamResolver(document, ctx.scope)
+      );
       operation = sourceData.operation === 'add' ? 'add' : 'cut';
       shapedSources.push(source.featureId);
       const sweepFeature =
@@ -391,11 +496,82 @@ export function buildFeaturePattern(
         result.sketchBases,
         (message) => raiseFeatureWarning(result, feature, message, 'advisory')
       ).solids;
+    } else if (sourceData.featureKind === 'wrap') {
+      // M02: the wrap's material made again from the cylinder or cone its
+      // build resolved, and repeated as a boss (emboss) or a cut (engrave).
+      operation = sourceData.mode === 'emboss' ? 'add' : 'cut';
+      shapedSources.push(source.featureId);
+      const frame = result.wrapFrames?.get(source.featureId);
+      const basis = result.sketchBases.get(sourceData.sketchId);
+      if (!frame || !basis) {
+        throw new Error(
+          `${source.name} did not build, so a pattern cannot repeat it; fix ${source.name} first.`
+        );
+      }
+      seed = buildWrapSolids(
+        kernel,
+        document,
+        sourceData,
+        frame,
+        basis,
+        ctx.scope,
+        (message) => raiseFeatureWarning(result, feature, message, 'advisory'),
+        source.name
+      );
+    } else if (sourceData.featureKind === 'rib') {
+      // M02: the rib's material made again against the body it was made on,
+      // as its build makes it, and repeated as a boss.
+      operation = 'add';
+      shapedSources.push(source.featureId);
+      const before = result.shapes.get(sourceData.targetBodyId);
+      const basis = result.sketchBases.get(sourceData.profile.sketchId);
+      if (
+        !result.builtRibs?.has(source.featureId) ||
+        before?.solids.length !== 1 ||
+        !basis
+      ) {
+        throw new Error(
+          `${source.name} did not build, so a pattern cannot repeat it; fix ${source.name} first.`
+        );
+      }
+      seed = [
+        buildRibSolid(
+          kernel,
+          document,
+          sourceData,
+          before.solids[0]!,
+          basis,
+          ctx.scope,
+          (message) => raiseFeatureWarning(result, feature, message, 'advisory')
+        )
+      ];
     } else {
       throw new Error(
-        `${source.name} is not a hole, boss or cut, so a feature pattern cannot repeat it.`
+        `${source.name} is not a hole, boss, cut, fillet, chamfer, wrap or rib, so a feature pattern cannot repeat it.`
       );
     }
+    // The exact mesh of the finished plate can run alongside bore and lineage checks.
+    const stock =
+      sourceData.featureKind === 'hole'
+        ? result.shapes.get(sourceData.targetBodyId)
+        : undefined;
+    const prepareMesh =
+      sources.length === 1 &&
+      data.patternKind === 'points' &&
+      (data.points?.pointIds.length ?? 0) >= 24 &&
+      copies.length >= 20 &&
+      bores.length === 1 &&
+      sourceData.featureKind === 'hole' &&
+      !sourceData.tapped &&
+      sourceData.style === 'simple' &&
+      sourceData.depthMode === 'through' &&
+      data.targetBodyId === source.bodyId &&
+      stock?.rectangularStock !== undefined &&
+      stock.rectangularStock === stock.solids[0] &&
+      stock.solids.length === 1 &&
+      document.featureOrder.at(-1) === feature.featureId &&
+      !getParameterHiddenBodyIds(document).has(feature.bodyId);
+    if (prepareMesh) warmMesh(kernel);
     const repeated = repeat(seed);
     declined ??= repeated.declined;
     const currentBounds = Array.from<number>(kernel.boundingBox(solid));
@@ -411,24 +587,46 @@ export function buildFeaturePattern(
       }
     });
     if (operation === 'cut') {
+      if (
+        data.patternKind === 'points' &&
+        sources.length === 1 &&
+        sourceData.featureKind === 'hole' &&
+        sourceData.style === 'simple' &&
+        !sourceData.tapped &&
+        bores.length === 1
+      ) {
+        prefix = patternCutPrefix(
+          kernel,
+          document.projectId,
+          original,
+          targetVolume,
+          repeated.solids
+        );
+        if (prefix) solid = prefix.solid;
+      }
       copies.forEach((copy, index) => {
-        const before = kernel.volume(solid, MEASUREMENT_DEFLECTION);
-        // One tool at a time, as a single hole is cut: the kernel's compound
-        // pass declines tool pairs that each cut exactly on their own.
-        for (const tool of repeated.solids[index] ?? []) {
-          solid = exactCutWithCancellation(
-            kernel,
-            solid,
-            tool,
-            ctx.cancellation,
-            [targetName, `${source.name} copy ${copy.label}`]
-          );
-        }
-        const after = kernel.volume(solid, MEASUREMENT_DEFLECTION);
-        if (!(after < before - targetVolume * REMOVED_VOLUME_FRACTION)) {
-          throw new Error(
-            `Copy ${copy.label} of ${source.name} removes nothing from ${targetName}; skip it or change the pattern.`
-          );
+        if (index < (prefix?.count ?? 0)) {
+          throwIfBuildCancelled(ctx.cancellation?.signal);
+        } else {
+          const before = kernel.volume(solid, MEASUREMENT_DEFLECTION);
+          // One tool at a time, as a single hole is cut: the kernel's compound
+          // pass declines tool pairs that each cut exactly on their own.
+          for (const tool of repeated.solids[index] ?? []) {
+            solid = exactCutWithCancellation(
+              kernel,
+              solid,
+              tool,
+              ctx.cancellation,
+              [targetName, `${source.name} copy ${copy.label}`]
+            );
+          }
+          const after = kernel.volume(solid, MEASUREMENT_DEFLECTION);
+          if (!(after < before - targetVolume * REMOVED_VOLUME_FRACTION)) {
+            throw new Error(
+              `Copy ${copy.label} of ${source.name} removes nothing from ${targetName}; skip it or change the pattern.`
+            );
+          }
+          prefix?.capture(index + 1, solid);
         }
         for (const { spec, pointId } of bores) {
           holes.push({
@@ -445,6 +643,14 @@ export function buildFeaturePattern(
         }
       });
       solid = unifyBooleanFaces(kernel, solid);
+      if (prepareMesh)
+        startMesh(
+          kernel,
+          solid,
+          ctx.heldDisplayDeflection?.(feature.bodyId),
+          ctx.cancellation?.signal
+        );
+
       // M01 (schema v66): the copies of a tapped hole are tapped as it is,
       // each bore checked to be one plain cylinder before it is threaded.
       // A cosmetic thread (schema v67) is described, not cut.
@@ -460,39 +666,82 @@ export function buildFeaturePattern(
         }
         const copied = holes.filter((hole) => hole.source === source.featureId);
         // Proven plain first, as an untapped copy is below.
-        for (const { label, spec } of copied) {
-          const missing = missingHoleBore(kernel, solid, spec);
-          if (missing !== null) {
-            throw new Error(
-              `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
-            );
-          }
-        }
-        solid = tapHole(sourceData, solid, copied);
+        requirePatternBores(kernel, solid, copied);
+        // M02 (schema v119): a reflected copy's thread winds the other way,
+        // as a mirror image of the original's would (review).
+        const reflected = copies.some((copy) => copyReflects(copy.matrix));
+        solid = tapHole(
+          reflected
+            ? {
+                ...sourceData,
+                tapped: {
+                  ...sourceData.tapped,
+                  hand: mirroredHand(sourceData.tapped.hand)
+                }
+              }
+            : sourceData,
+          solid,
+          copied
+        );
         for (const hole of copied) hole.tapped = true;
       }
     } else {
-      const tools = repeated.solids.flat();
-      const union = fuseUniformSolidChecked(
-        kernel,
-        [solid, ...tools],
-        [
-          targetName,
-          ...copies.flatMap((copy, index) =>
-            (repeated.solids[index] ?? []).map(
-              () => `${source.name} copy ${copy.label}`
-            )
-          )
-        ]
-      );
-      if (verdictRefusesUnion(union.verdict)) {
-        throw new AdapterRefusal(
-          'union_not_solid',
-          'Union produced an open, non-manifold, or inconsistently ' +
-            'oriented result. Adjust the overlap or placement and try again.'
+      // A wrap's or a rib's copies are fused one at a time, as a wrap's own
+      // build fuses its pieces: the kernel declines several wrapped copies
+      // in one pass, though each fuses exactly on its own.
+      const batches =
+        sourceData.featureKind === 'wrap' || sourceData.featureKind === 'rib'
+          ? copies.map((copy, index) => ({
+              copy: copy.label,
+              tools: repeated.solids[index] ?? [],
+              labels: (repeated.solids[index] ?? []).map(
+                () => `${source.name} copy ${copy.label}`
+              )
+            }))
+          : [
+              {
+                copy: null as string | null,
+                tools: repeated.solids.flat(),
+                labels: copies.flatMap((copy, index) =>
+                  (repeated.solids[index] ?? []).map(
+                    () => `${source.name} copy ${copy.label}`
+                  )
+                )
+              }
+            ];
+      for (const { copy, tools, labels } of batches) {
+        if (tools.length === 0) continue;
+        // A copy fused on its own must join the body: one that lands clear
+        // of it near enough for its box to touch would fuse as a separate
+        // piece (review), which the union's own checks accept.
+        const piecesBefore =
+          copy === null ? null : faceComponentsOf(kernel, solid)?.length;
+        const union = fuseUniformSolidChecked(
+          kernel,
+          [solid, ...tools],
+          [targetName, ...labels]
         );
+        if (verdictRefusesUnion(union.verdict)) {
+          throw new AdapterRefusal(
+            'union_not_solid',
+            'Union produced an open, non-manifold, or inconsistently ' +
+              'oriented result. Adjust the overlap or placement and try again.'
+          );
+        }
+        if (copy !== null) {
+          const piecesAfter = faceComponentsOf(kernel, union.solid)?.length;
+          if (
+            piecesBefore === undefined ||
+            piecesAfter === undefined ||
+            piecesAfter > piecesBefore!
+          ) {
+            throw new Error(
+              `Copy ${copy} of ${source.name} does not join ${targetName}; skip it or change the pattern.`
+            );
+          }
+        }
+        solid = union.solid;
       }
-      solid = union.solid;
     }
   }
   requireValidSolid(
@@ -503,14 +752,11 @@ export function buildFeaturePattern(
   if (!(kernel.volume(solid, MEASUREMENT_DEFLECTION) > 0)) {
     throw new Error(`The feature pattern removed all of ${targetName}.`);
   }
-  for (const { label, spec } of holes.filter((hole) => !hole.tapped)) {
-    const missing = missingHoleBore(kernel, solid, spec);
-    if (missing !== null) {
-      throw new Error(
-        `Copy ${label}'s ${missing * 2} bore did not come back as an analytic cylinder.`
-      );
-    }
-  }
+  requirePatternBores(
+    kernel,
+    solid,
+    holes.filter((hole) => !hole.tapped)
+  );
   // Faces the copies left alone keep their names; each copy's bore is named
   // by its own axis, the way a hole names its one.
   const lineage = carryAnalyticFaces(kernel, original, solid, target.lineage);
@@ -560,6 +806,7 @@ export function buildFeaturePattern(
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, { solids: [solid], lineage });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+  prefix?.commit();
 }
 
 /**
@@ -754,4 +1001,75 @@ function nameCopiedFaces(
   for (const [handle, reference] of proven.faceReferences) {
     lineage.faceReferences.set(handle, reference);
   }
+}
+
+/**
+ * M02: the edges of `solid` where `references`' edges stand moved by
+ * `matrix`, one each: the same kind of curve and length, with the moved
+ * ends and middle (an open edge, either way round) or the moved centre and
+ * axis (a closed one). The index of the first that finds no one edge, when
+ * one does not. A copy is an exact transform, so it matches within a few
+ * quanta (1e-6 mm each, the linear tolerance), not the slack face naming
+ * allows: an edge a few hundredths of a micron from where a copy's would
+ * stand is another edge (review).
+ */
+/** Quanta a copied blend edge may stand from where the copy puts it. */
+const BLEND_SLACK = 4;
+
+function copiedEdges(
+  kernel: Parameters<typeof topologyCandidatesForSolid>[0],
+  solid: number,
+  witnesses: readonly EdgeWitnessV1[],
+  matrix: Float64Array
+): number[] | number {
+  const candidates = topologyCandidatesForSolid(kernel, solid).filter(
+    (candidate) => candidate.kind === 'edge'
+  );
+  const moved = (point: QuantizedTopologyPoint) =>
+    quantized(applyPoint(matrix, dequantized(point)));
+  const edges: number[] = [];
+  const near = (left: number, right: number) =>
+    closeQuanta(left, right, BLEND_SLACK);
+  const nearPoints = (
+    left: QuantizedTopologyPoint,
+    right: QuantizedTopologyPoint
+  ) => left.every((value, index) => near(value, right[index]!));
+  for (const [index, witness] of witnesses.entries()) {
+    const matches = candidates.filter((candidate) => {
+      const other = candidate.witness as EdgeWitnessV1;
+      if (
+        other.curveType !== witness.curveType ||
+        other.closed !== witness.closed ||
+        !near(other.length, witness.length)
+      )
+        return false;
+      if (!witness.closed && !other.closed) {
+        const [a, b] = witness.endpoints.map(moved) as [
+          QuantizedTopologyPoint,
+          QuantizedTopologyPoint
+        ];
+        const [c, d] = other.endpoints;
+        return (
+          nearPoints(other.midpoint, moved(witness.midpoint)) &&
+          ((nearPoints(a, c) && nearPoints(b, d)) ||
+            (nearPoints(a, d) && nearPoints(b, c)))
+        );
+      }
+      if (witness.closed && other.closed) {
+        if (!nearPoints(other.center, moved(witness.center))) return false;
+        if (!witness.axis || !other.axis) return !witness.axis && !other.axis;
+        const axis = applyDirection(matrix, dequantized(witness.axis, 1000));
+        const theirs = dequantized(other.axis, 1000);
+        const cos =
+          Math.abs(dot(axis, theirs)) /
+          (Math.hypot(axis.x, axis.y, axis.z) *
+            Math.hypot(theirs.x, theirs.y, theirs.z));
+        return Math.abs(cos - 1) <= 1e-9;
+      }
+      return false;
+    });
+    if (matches.length !== 1) return index;
+    edges.push(matches[0]!.handle);
+  }
+  return edges;
 }

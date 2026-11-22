@@ -102,6 +102,7 @@ import {
   ownEntry,
   reservedIdentifierError,
   COMMAND_FEATURE_KINDS,
+  transformStampBodyIds,
   type FeatureKind
 } from '@openzcad/shared';
 import {
@@ -147,6 +148,8 @@ import {
   type BooleanInput,
   chamferEdges,
   createBodyFeatureIds,
+  createTransformStampIds,
+  transformStampsProblem,
   createFeatureOnlyIds,
   createParameterIds,
   createSketchFeatureIds,
@@ -1070,10 +1073,11 @@ function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
  */
 function validateToFaceBody(
   document: ProjectDocument,
-  input: Pick<ExtrudeInput, 'toFace'>,
+  input: Pick<ExtrudeInput, 'toFace' | 'toSurface'>,
   ownBodyId: BodyId | undefined
 ): void {
-  const bodyId = input.toFace?.bodyId;
+  // F01 (v131): a curved target names its body the same way.
+  const bodyId = input.toFace?.bodyId ?? input.toSurface?.bodyId;
   if (bodyId === undefined) return;
   if (bodyId === ownBodyId) {
     throw new Error(
@@ -2460,8 +2464,11 @@ function validateModelingFeatureUpdate(
       }
       if (
         feature.data.copy &&
-        feature.bodyId !== undefined &&
-        feature.data.targetBodyId === feature.bodyId
+        ((feature.bodyId !== undefined &&
+          feature.data.targetBodyId === feature.bodyId) ||
+          transformStampBodyIds(feature.data).includes(
+            feature.data.targetBodyId
+          ))
       ) {
         throw new Error('A copy cannot target its own body.');
       }
@@ -3080,7 +3087,16 @@ export const commandFactories = {
         payload.copy && payload.ids && !('bodyId' in payload.ids)
           ? { ...createBodyFeatureIds(), ...payload.ids }
           : (payload.ids ??
-            (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds()))
+            (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds())),
+      // M10: each further stamp's body is named here too, so replay keeps it.
+      // Only for a count the document will accept, so an absurd one is
+      // refused by validation rather than allocated first.
+      ...(payload.copy &&
+      !payload.stampIds &&
+      transformStampsProblem(payload.stamps, payload.copy) === null &&
+      (payload.stamps ?? 1) > 1
+        ? { stampIds: createTransformStampIds(payload.stamps!) }
+        : {})
     };
     return makeCommand(
       'feature.transform',
@@ -3409,7 +3425,9 @@ export const commandFactories = {
               ? 'Point'
               : payload.patternKind === 'path'
                 ? 'Path'
-                : 'Circular'
+                : payload.patternKind === 'mirror'
+                  ? 'Mirror'
+                  : 'Circular'
       } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,
@@ -5832,7 +5850,7 @@ export function commandsForCadPatch(
         const targetBodyId = resolveBody(operation.targetBodyId);
         // The manual Hole command, with the payload the Hole tool builds:
         // a face that reports its outer boundary's centroid is drilled from
-        // it (M01, schema v118), one that reports only an area centroid from
+        // it (M01, schema v147), one that reports only an area centroid from
         // that, and any other from its vertex mean.
         const entry = ownEntry(
           projectedDocument.derived.bodyRepresentations,
@@ -6054,6 +6072,7 @@ export function commandsForCadPatch(
       }
       case 'add_drawing_annotations':
       case 'remove_drawing_annotations':
+      case 'auto_dimension_drawing':
         // Compiled above, before any model operation is looked at.
         throw new Error(
           'A proposal changes either the model or a drawing sheet, not both.'
@@ -7322,6 +7341,10 @@ export function duplicateFeatureCommands(
         targetBodyId: data.targetBodyId,
         ...data.transform,
         ...(data.copy === true ? { copy: true } : {}),
+        // M10: a duplicated linked copy stamps as many copies, as new bodies.
+        ...(transformStampBodyIds(data).length
+          ? { stamps: transformStampBodyIds(data).length + 1 }
+          : {}),
         ids
       });
       break;

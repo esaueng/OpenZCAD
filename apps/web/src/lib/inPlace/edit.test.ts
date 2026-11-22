@@ -1397,6 +1397,105 @@ describe('an untouched edit writes the feature back as stored', () => {
     expect(update).not.toHaveProperty('clearData');
   });
 
+  it('M02 mirror pattern: its plane reopens typed and writes back unchanged', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'mirror',
+      count: 2,
+      axis: 'x',
+      spacing: 10,
+      angleDeg: 360,
+      mirrorPlane: {
+        // An expression, and a number written otherwise than a number
+        // prints: both come back as written (review).
+        origin: { x: 'half', y: '50.0', z: 0 },
+        normal: { x: 1, y: 0, z: 0 }
+      }
+    };
+    const node = feature(data, 'body_m' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('mirror-pattern');
+    expect(armed.seed.options.planeMode).toBe('typed');
+    expect(armed.seed.values).toMatchObject({ planeNX: 1 });
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const values = { ...armed.seed.values, planeOX: 'half', planeOY: '50.0' };
+    const request = spec.request(
+      { ...armed.seed.slots, axis: null, refs: [], image: null },
+      values,
+      armed.seed.options,
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => 'Axis',
+        saved: data
+      },
+      { ...armed.seed.values, planeOX: 50, planeOY: 50 }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({
+      patternKind: 'mirror',
+      mirrorPlane: data.mirrorPlane
+    });
+    expect(update).not.toHaveProperty('clearData');
+  });
+
+  it('M02 total-length pattern: reopens as Total and writes back unchanged, or clears', () => {
+    const data: FeatureData = {
+      featureKind: 'pattern',
+      targetBodyId: BODY,
+      patternKind: 'linear',
+      count: 4,
+      axis: 'x',
+      spacing: 60,
+      angleDeg: 360,
+      spacingMode: 'total'
+    };
+    const node = feature(data, 'body_t' as BodyId);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.tool).toBe('linear-pattern');
+    expect(armed.seed.options.extent).toBe('total');
+    expect(armed.seed.values).toMatchObject({ total: 60, count: 4 });
+    const spec = IN_PLACE_TOOL_SPECS[armed.tool];
+    const ctx = {
+      sketchViews: [],
+      datumAxes: undefined,
+      datumLabel: () => 'Axis',
+      saved: data
+    };
+    const slots = { ...armed.seed.slots, axis: null, refs: [], image: null };
+    const request = spec.request(
+      slots,
+      armed.seed.values,
+      armed.seed.options,
+      ctx,
+      armed.seed.values
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data },
+      request
+    );
+    expect(update?.data).toMatchObject({ spacing: 60, spacingMode: 'total' });
+    expect(update).not.toHaveProperty('clearData');
+    // Switched to Between copies, the mode is cleared.
+    const between = spec.request(
+      slots,
+      { ...armed.seed.values, spacing: 20 },
+      { ...armed.seed.options, extent: 'spacing' },
+      ctx,
+      { ...armed.seed.values, spacing: 20 }
+    ) as Extract<ResolvedInPlaceRequest, { tool: 'pattern' }>;
+    expect(
+      inPlaceFeatureUpdate(
+        { featureId: node.featureId, name: node.name, data },
+        between
+      )
+    ).toMatchObject({ data: { spacing: 20 }, clearData: ['spacingMode'] });
+  });
+
   it('loft: a stored apex opens as a point, each coordinate editable', () => {
     const data: FeatureData = {
       featureKind: 'loft',
@@ -1853,6 +1952,350 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
     expect(exact?.clearData).toEqual(['guide']);
     expect(exact?.data).toHaveProperty('construction', 'in-place');
+  });
+
+  it('loft: a picked guide line goes out as the loft guide, and an edit clears a removed one (M04, v133)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.loft;
+    const pick = (fingerprint: number) => ({
+      sketchId: SKETCH,
+      reference: { all: true, sourceEntityIds: [`s${fingerprint}`] },
+      regionFingerprint: fingerprint
+    });
+    const slots = {
+      profiles: [pick(1), pick(2)],
+      path: [{ sketchId: SKETCH, entityId: 'g1' }],
+      guide: []
+    } as unknown as InPlaceSlots;
+    const request = spec.request(slots, {}, { shape: 'ruled' }, {} as never);
+    expect(request).toMatchObject({
+      tool: 'loft',
+      mode: 'ruled',
+      guides: [{ sketchId: SKETCH, entityIds: ['g1'] }]
+    });
+    const sections = [
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s1'] }
+      },
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s2'] }
+      }
+    ];
+    const saved = feature({
+      featureKind: 'loft',
+      sections,
+      mode: 'ruled',
+      guides: [{ sketchId: SKETCH, entityIds: ['g1'] as never[] }]
+    });
+    const cleared = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections,
+      mode: 'ruled'
+    });
+    expect(cleared?.clearData).toEqual(['endPoint', 'guides']);
+  });
+
+  it('loft: stored connections stay with unchanged sections and clear when the sections are reordered (M04, v133)', () => {
+    const sections = [
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s1'] }
+      },
+      {
+        sketchId: SKETCH,
+        profile: { all: true as const, sourceEntityIds: ['s2'] }
+      }
+    ];
+    const saved = feature({
+      featureKind: 'loft',
+      sections,
+      mode: 'ruled',
+      connections: [
+        { kind: 'line-end', entityId: 's1', end: 'start' },
+        { kind: 'line-end', entityId: 's2', end: 'start' }
+      ] as never
+    });
+    const kept = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections,
+      mode: 'ruled'
+    });
+    expect(kept?.clearData).toEqual(['endPoint']);
+    const reordered = inPlaceFeatureUpdate(saved, {
+      tool: 'loft',
+      sections: [sections[1]!, sections[0]!],
+      mode: 'ruled'
+    });
+    expect(reordered?.clearData).toEqual(['endPoint', 'connections']);
+  });
+
+  it('sweep: an exact edit reopens its twist and end scale, and clears them when set back to none (M04, v132)', () => {
+    const profile = {
+      sketchId: SKETCH,
+      profile: { all: true as const, sourceEntityIds: ['a'] }
+    };
+    const path = { sketchId: SKETCH, entityIds: ['p1'] as never[] };
+    const twisted = feature({
+      featureKind: 'sweep',
+      profile,
+      path,
+      mode: 'standard',
+      construction: 'in-place',
+      twistDeg: 'tw',
+      endScale: 0.5
+    });
+    const opened = inPlaceEditSeed(twisted, EDIT_CTX)!;
+    expect(opened.seed.raws.twist).toBe('tw');
+    expect(opened.seed.values.endScale).toBe(0.5);
+    expect(opened.seed.touched).toEqual(
+      expect.arrayContaining(['twist', 'endScale'])
+    );
+    const request = {
+      tool: 'sweep',
+      profile,
+      path,
+      mode: 'standard',
+      construction: 'in-place'
+    } as const;
+    const kept = inPlaceFeatureUpdate(twisted, {
+      ...request,
+      twistDeg: 'tw',
+      endScale: 0.5
+    });
+    expect(kept?.data).toMatchObject({ twistDeg: 'tw', endScale: 0.5 });
+    expect(kept?.clearData).toEqual(['guide']);
+    const cleared = inPlaceFeatureUpdate(twisted, request);
+    expect(cleared?.clearData).toEqual(['guide', 'twistDeg', 'endScale']);
+  });
+
+  it('sweep: the card writes a twist and end scale only when they are not none, on Exact only', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const slots = {
+      profiles: [
+        {
+          sketchId: SKETCH,
+          reference: { all: true, sourceEntityIds: ['a'] },
+          regionFingerprint: 7
+        }
+      ],
+      path: [{ sketchId: SKETCH, entityId: 'p1' }],
+      guide: []
+    } as unknown as InPlaceSlots;
+    const ctx = {} as never;
+    const exact = { build: 'exact' };
+    expect(
+      spec.request(slots, { twist: 0, endScale: 1 }, exact, ctx)
+    ).not.toHaveProperty('twistDeg');
+    expect(
+      spec.request(slots, { twist: 0, endScale: 1 }, exact, ctx)
+    ).not.toHaveProperty('endScale');
+    expect(
+      spec.request(slots, { twist: 'tw', endScale: 2 }, exact, ctx)
+    ).toMatchObject({ twistDeg: 'tw', endScale: 2, construction: 'in-place' });
+    const sampled = spec.request(
+      slots,
+      { twist: 30, endScale: 2 },
+      { build: 'sampled', mode: 'standard' },
+      ctx
+    );
+    expect(sampled).not.toHaveProperty('twistDeg');
+    expect(sampled).not.toHaveProperty('endScale');
+  });
+
+  it('sweep: an exact sweep with a rail writes the rail, and a typed twist or scale beside it goes out to be refused (M04)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const slots = {
+      profiles: [
+        {
+          sketchId: SKETCH,
+          reference: { all: true, sourceEntityIds: ['a'] },
+          regionFingerprint: 7
+        }
+      ],
+      path: [{ sketchId: SKETCH, entityId: 'p1' }],
+      guide: [{ sketchId: SKETCH, entityId: 'rail1' }]
+    } as unknown as InPlaceSlots;
+    const request = spec.request(
+      slots,
+      { twist: 30, endScale: 2 },
+      { build: 'exact' },
+      {} as never
+    );
+    // The card never drops what was typed: validation refuses the pair.
+    expect(request).toMatchObject({
+      construction: 'in-place',
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] },
+      twistDeg: 30,
+      endScale: 2
+    });
+    const plain = spec.request(
+      slots,
+      { twist: 0, endScale: 1 },
+      { build: 'exact' },
+      {} as never
+    );
+    expect(plain).toMatchObject({
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] }
+    });
+    expect(plain).not.toHaveProperty('twistDeg');
+    expect(plain).not.toHaveProperty('endScale');
+    // Parallel beside a rail also goes out, so it is refused, not dropped.
+    const parallel = spec.request(
+      slots,
+      { twist: 0, endScale: 1 },
+      { build: 'exact', orientation: 'parallel' },
+      {} as never
+    );
+    expect(parallel).toMatchObject({
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] },
+      orientation: 'parallel'
+    });
+  });
+
+  it('sweep: a round corner goes out beside a rail, to be refused rather than dropped, and Parallel hides it (M04, v135)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const profile = {
+      sketchId: SKETCH,
+      reference: { all: true, sourceEntityIds: ['a'] },
+      regionFingerprint: 7
+    };
+    const path = [{ sketchId: SKETCH, entityId: 'p1' }];
+    const plain = { profiles: [profile], path, guide: [] };
+    const railed = {
+      ...plain,
+      guide: [{ sketchId: SKETCH, entityId: 'rail1' }]
+    };
+    const round = (slots: unknown, orientation?: string) =>
+      spec.request(
+        slots as InPlaceSlots,
+        { twist: 0, endScale: 1, cornerRadius: 3 },
+        {
+          build: 'exact',
+          corner: 'round',
+          ...(orientation ? { orientation } : {})
+        },
+        {} as never
+      );
+    expect(round(plain)).toMatchObject({ cornerRadius: 3 });
+    // Parallel hides the Corners row, so its stale choice is not sent.
+    const parallel = round(plain, 'parallel');
+    expect(parallel).toMatchObject({ orientation: 'parallel' });
+    expect(parallel).not.toHaveProperty('cornerRadius');
+    expect(round(railed)).toMatchObject({
+      guide: { sketchId: SKETCH, entityIds: ['rail1'] },
+      cornerRadius: 3
+    });
+    // Beside a rail, Parallel still hides the Corners row: the stale round
+    // choice is not sent, so validation names the rail, not the corner.
+    const railParallel = round(railed, 'parallel');
+    expect(railParallel).toMatchObject({ orientation: 'parallel' });
+    expect(railParallel).not.toHaveProperty('cornerRadius');
+    // Parallel hides the corner radius field too, so an unused value there
+    // cannot hold Done back.
+    const radius = spec.values.find((value) => value.id === 'cornerRadius')!;
+    const state = (options: Record<string, string>) => ({
+      options: { build: 'exact', corner: 'round', ...options },
+      numbers: {}
+    });
+    expect(radius.when!(state({}))).toBe(true);
+    expect(radius.when!(state({ orientation: 'parallel' }))).toBe(false);
+    // A position chosen beside a rail goes out too, to be refused by name.
+    expect(
+      spec.request(
+        railed as unknown as InPlaceSlots,
+        { twist: 0, endScale: 1 },
+        { build: 'exact', position: 'intersection' },
+        {} as never
+      )
+    ).toMatchObject({ profilePosition: 'intersection' });
+    // Parallel hides the Profile at row too, so its stale choice stays home.
+    expect(
+      spec.request(
+        railed as unknown as InPlaceSlots,
+        { twist: 0, endScale: 1 },
+        { build: 'exact', orientation: 'parallel', position: 'intersection' },
+        {} as never
+      )
+    ).not.toHaveProperty('profilePosition');
+  });
+
+  it('sweep: the card writes orientation, round corners and profile position on Exact, and an edit reopens and clears them (M04)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.sweep;
+    const slots = {
+      profiles: [
+        {
+          sketchId: SKETCH,
+          reference: { all: true, sourceEntityIds: ['a'] },
+          regionFingerprint: 7
+        }
+      ],
+      path: [{ sketchId: SKETCH, entityId: 'p1' }],
+      guide: []
+    } as unknown as InPlaceSlots;
+    const ctx = {} as never;
+    expect(
+      spec.request(slots, {}, { build: 'exact', orientation: 'parallel' }, ctx)
+    ).toMatchObject({ orientation: 'parallel' });
+    const rounded = spec.request(
+      slots,
+      { cornerRadius: 3 },
+      { build: 'exact', corner: 'round', position: 'closest-point' },
+      ctx
+    );
+    expect(rounded).toMatchObject({
+      cornerRadius: 3,
+      profilePosition: 'closest-point'
+    });
+    expect(rounded).not.toHaveProperty('orientation');
+    // Parallel takes neither a round corner nor a position.
+    const parallel = spec.request(
+      slots,
+      { cornerRadius: 3 },
+      {
+        build: 'exact',
+        orientation: 'parallel',
+        corner: 'round',
+        position: 'auto'
+      },
+      ctx
+    );
+    expect(parallel).not.toHaveProperty('cornerRadius');
+    expect(parallel).not.toHaveProperty('profilePosition');
+
+    const profile = {
+      sketchId: SKETCH,
+      profile: { all: true as const, sourceEntityIds: ['a'] }
+    };
+    const path = { sketchId: SKETCH, entityIds: ['p1'] as never[] };
+    const saved = feature({
+      featureKind: 'sweep',
+      profile,
+      path,
+      mode: 'standard',
+      construction: 'in-place',
+      cornerRadius: 'r',
+      profilePosition: 'auto'
+    });
+    const opened = inPlaceEditSeed(saved, EDIT_CTX)!;
+    expect(opened.seed.options).toMatchObject({
+      corner: 'round',
+      position: 'auto',
+      orientation: 'normal'
+    });
+    expect(opened.seed.raws.cornerRadius).toBe('r');
+    const cleared = inPlaceFeatureUpdate(saved, {
+      tool: 'sweep',
+      profile,
+      path,
+      mode: 'standard',
+      construction: 'in-place'
+    });
+    expect(cleared?.clearData).toEqual([
+      'guide',
+      'cornerRadius',
+      'profilePosition'
+    ]);
   });
 
   it('sweep: a path curve the sketch no longer has is left out, and said', () => {

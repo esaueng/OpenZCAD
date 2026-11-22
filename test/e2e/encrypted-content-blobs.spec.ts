@@ -486,3 +486,100 @@ test('decrypts shelf names and thumbnails of an encrypted project in a fresh bro
   expect(plaintextFiles).toEqual([]);
   expect(errors).toEqual([]);
 });
+
+/**
+ * An export of an end-to-end encrypted project is a download only (#1843):
+ * no `export` content blob is uploaded and no project info lists one. The
+ * encrypted project archived exports through its own path (an `export`
+ * blob plus a project-info update), which the plaintext `/api/uploads`
+ * watch in modeling.spec.ts never sees. Thumbnail blobs, which the app may
+ * publish on its own, are told apart by kind.
+ */
+test(
+  'a STEP export of an encrypted project is a download only and stores no copy',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const server = createE2eeServer({ projectsEnabled: true });
+    await serveAccount(page, server);
+
+    await page.goto('/');
+    await seedE2eeDevice(page, server);
+    const settings = await openEncryptionSettings(page);
+    const toggle = settings.getByRole('checkbox', {
+      name: 'Encrypt new projects'
+    });
+    await expect(toggle).toBeEnabled();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
+
+    await page.getByLabel('Project name').fill('Secret export part');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+
+    // Every upload other than a thumbnail, from here on: encrypted blobs,
+    // and plaintext upload sessions, which the stub refuses before anything
+    // reaches the database, so only the request itself shows one.
+    const blobUploads: string[] = [];
+    page.on('request', (request) => {
+      if (request.method() !== 'POST') return;
+      const path = new URL(request.url()).pathname;
+      if (path.endsWith('/blobs/uploads') || path === '/api/uploads') {
+        const { kind } = request.postDataJSON() as { kind: string };
+        if (kind !== 'thumbnail') blobUploads.push(`${path} ${kind}`);
+      }
+    });
+
+    const fileMenu = page.locator('details.file-menu');
+    await fileMenu.locator('summary').click();
+    const downloadPromise = page.waitForEvent('download');
+    await fileMenu.getByRole('button', { name: /STEP/ }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('Secret-export-part.step');
+    // The status is set only once the old archive step had finished.
+    const status = await page
+      .getByRole('contentinfo')
+      .getByText(/^Exported .* to Secret-export-part\.step/)
+      .textContent({ timeout: SYNC_BUDGET_MS });
+
+    expect(blobUploads).toEqual([]);
+    expect(
+      count(
+        server,
+        "SELECT COUNT(*) AS n FROM e2ee_content_blobs WHERE kind != 'thumbnail'"
+      )
+    ).toBe(0);
+    expect(count(server, 'SELECT COUNT(*) AS n FROM artifacts')).toBe(0);
+    // No project info names anything but a thumbnail: an archived export is
+    // listed there by its blob id.
+    const thumbnails = new Set(
+      (
+        server.db
+          .prepare(
+            "SELECT blob_id FROM e2ee_content_blobs WHERE kind = 'thumbnail'"
+          )
+          .all() as { blob_id: string }[]
+      ).map((row) => row.blob_id)
+    );
+    const infos = server.db
+      .prepare(
+        "SELECT envelope FROM e2ee_project_envelopes WHERE kind = 'project-info'"
+      )
+      .all() as { envelope: string }[];
+    const named = infos.flatMap(({ envelope }) => {
+      const header = parseEnvelope(fromBase64Url(envelope)).header;
+      return header.class === 'project' ? header.blobIds : [];
+    });
+    expect(named.filter((blobId) => !thumbnails.has(blobId))).toEqual([]);
+    expect(status).not.toContain('archived');
+    expect(errors).toEqual([]);
+  }
+);

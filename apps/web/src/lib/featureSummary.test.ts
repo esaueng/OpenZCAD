@@ -287,6 +287,67 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('3 × 2 · 2 skipped');
+    // M02 (schema v120): a row spaced over its total length says so.
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'pattern',
+          patternKind: 'linear',
+          count: 4,
+          spacing: 60,
+          spacingMode: 'total'
+        }),
+        {},
+        'mm'
+      )
+    ).toBe('× 4 over 60 mm');
+    // A total typed in inches reads as the length it builds (review).
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'pattern',
+          patternKind: 'linear',
+          count: 4,
+          spacing: '2 in',
+          spacingMode: 'total'
+        }),
+        {},
+        'mm'
+      )
+    ).toBe('× 4 over 50.8 mm');
+    // M02 (schema v115): a mirror pattern's one reflected copy.
+    expect(
+      featureValueSummary(
+        feature({ featureKind: 'pattern', patternKind: 'mirror', count: 2 }),
+        {},
+        'mm'
+      )
+    ).toBe('Mirrored');
+  });
+
+  it("counts a linked copy's stamps and leaves other transforms bare (M10)", () => {
+    const transform = (data: Partial<FeatureData>) =>
+      feature({
+        featureKind: 'transform',
+        targetBodyId: 'body_source',
+        transform: {
+          translation: { x: 30, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        },
+        ...data
+      } as FeatureData);
+    expect(
+      featureValueSummary(
+        transform({
+          copy: true,
+          stampBodyIds: ['body_2', 'body_3'] as never
+        }),
+        {},
+        'mm'
+      )
+    ).toBe('× 3 copies');
+    expect(featureValueSummary(transform({ copy: true }), {}, 'mm')).toBeNull();
+    expect(featureValueSummary(transform({}), {}, 'mm')).toBeNull();
   });
 
   it('summarises a worm by its starts and a worm wheel by its worm', () => {

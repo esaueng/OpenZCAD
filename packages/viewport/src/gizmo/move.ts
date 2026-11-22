@@ -29,6 +29,36 @@ export interface MovePreview {
   target?: 'body' | 'sketch';
   /** Preview a new body while leaving the source at its document pose. */
   copy?: boolean;
+  /**
+   * M10: how many copies a copy stamps, each the same move on from the one
+   * before; omitted is one. Only read with `copy`.
+   */
+  stamps?: number;
+  /**
+   * M10: stamp them as separate History steps rather than one linked step.
+   * Only read with `copy` and more than one stamp.
+   */
+  separateStamps?: boolean;
+  /**
+   * M10: Move by two points is picking. `from` is null until the first
+   * point is picked; the second sets the translation to `to − from` and
+   * ends the pick.
+   */
+  pointPick?: {
+    from: { x: number; y: number; z: number } | null;
+    /** What the first pick snapped to (an endpoint, a centre…), or null. */
+    fromKind?: string | null;
+  };
+  /**
+   * M10: the point the gizmo stands on and the rotation turns about, in
+   * world units. Omitted is the moved thing's centre.
+   */
+  pivot?: { x: number; y: number; z: number };
+  /**
+   * M10: the arrows and centre handle place the pivot instead of moving the
+   * body; the rings still turn it.
+   */
+  pivotMode?: boolean;
   translation: { x: number; y: number; z: number };
   rotationDeg: { x: number; y: number; z: number };
 }

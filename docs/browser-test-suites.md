@@ -78,6 +78,18 @@ card on the ×50 bar) and the Node probe `test/perf/pattern-preview.bench.ts`.
 machine's GPU, and each sample records its WebGL renderer and the host's load
 and memory. See the [baseline record](performance/2026-11-15-active1-baselines.md).
 
+For overlapping linear patterns, set `OZ_PERF_LINEAR_COPIES=13` or
+`OZ_PERF_LINEAR_COPIES=25` when running `perf-pattern-preview`. The probe times
+count and spacing edits from keypad input through the matching exact preview.
+See the [workload and measurements](performance/2026-11-20-parallel-linear-intersections.md).
+
+Measure a History sketch edit upstream of a Boolean cut with
+`OZ_PERF=1 OZ_PERF_ANGLE=gl pnpm exec playwright test upstream-sketch-edit --grep "measures Apply" --repeat-each 3 --workers=1`.
+The probe times the Apply click through committed geometry on a plate with
+30 independent boxes. It checks the cut volume after each of three width edits
+and records whether the worker reused the validated result. Each run attaches
+`sketch-history-performance.json`. Set `OZ_SKETCH_HISTORY_OUT` to append JSONL.
+
 ## Sharding and timing
 
 Both suites use the existing six shards and required E2E completion gate.
@@ -113,6 +125,20 @@ including browser failure contexts. Daily qualification keeps every full-suite
 case, coverage, its single attempt and seven-day artifact retention. Privacy
 receipts and CodeQL caches have their own retention policies.
 
+## STEP download timing
+
+Use the public Remus fixture `crates/io/tests/data/shapr3d_hammer_holder.step`.
+The probe opens an empty project, imports the SHA-256-pinned part and downloads
+four STEP files. It times each File menu click through dispatch of the download
+and checks the full STEP DATA section against the baseline digest. The first
+export includes any outstanding geometry worker work. Report its timing
+separately from the three repeat exports.
+
+```bash
+OZ_PERF=1 OZ_PERF_ANGLE=gl STEP_PERF_FILE=/path/to/shapr3d_hammer_holder.step \
+  pnpm exec playwright test perf-step-export.spec.ts --repeat-each=3 --workers=1
+```
+
 ## Face-preview main-thread timing
 
 `test/e2e/perf-face-drag-trace.spec.ts` (`OZ_PERF=1`, never a CI timing gate)
@@ -136,3 +162,16 @@ Use one worker and serial, repeated runs. `OZ_FACE_DRAG_PROFILE` and
 `OZ_FACE_DRAG_TIMELINE` save optional CPU profiles and Chrome timelines outside
 the repo. The JSON includes raw frames/long tasks and separates motion from
 settle/release; interval p99 and >25 ms counts exclude intentional idle frames.
+
+## STEP import through the first modeled frame
+
+Use the Remus fixture `crates/io/tests/data/shapr3d_hammer_holder.step`.
+The probe checks the file digest, imports into an empty project, and requires
+one body, zero warnings and the reference model's 329,644-triangle frame.
+It records discovery-worker time and elapsed time from file selection through
+that frame. Run the same fixture and renderer on both revisions.
+
+```bash
+OZ_PERF=1 OZ_PERF_ANGLE=gl STEP_PERF_FILE=/path/to/shapr3d_hammer_holder.step \
+  pnpm exec playwright test perf-step-import.spec.ts --repeat-each=3 --workers=1
+```

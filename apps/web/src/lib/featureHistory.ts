@@ -1,5 +1,6 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  transformStampBodyIds,
   datumAxisPlaneSources,
   datumAxisPointSources,
   datumPlaneSources,
@@ -35,7 +36,8 @@ export function featureResultBodyIds(feature: FeatureNode): BodyId[] {
   return [
     ...new Set([
       ...(primary ? [primary] : []),
-      ...(data.featureKind === 'split' ? [data.secondBodyId] : [])
+      ...(data.featureKind === 'split' ? [data.secondBodyId] : []),
+      ...transformStampBodyIds(data)
     ])
   ];
 }
@@ -132,6 +134,8 @@ export function featureHistory(document: ProjectDocument) {
         body(data.targetBodyId);
         // F01: a to-face extent reads its face's body.
         if (data.toFace) planeSource(data.toFace);
+        // F01 (v131): so does a curved one.
+        if (data.toSurface) body(data.toSurface.bodyId);
         break;
       case 'revolve':
         sketch(data.sketchId);
@@ -189,6 +193,14 @@ export function featureHistory(document: ProjectDocument) {
         if (data.featureKind === 'pattern' && data.path) {
           sketch(data.path.sketchId);
         }
+        // M02 (schema v115): a mirror pattern's datum plane.
+        if (
+          data.featureKind === 'pattern' &&
+          data.mirrorPlane &&
+          isDatumPlaneRef(data.mirrorPlane)
+        ) {
+          datum(data.mirrorPlane.datumFeatureId);
+        }
         break;
       case 'gear':
         if (data.targetBodyId !== undefined) body(data.targetBodyId);
@@ -223,6 +235,8 @@ export function featureHistory(document: ProjectDocument) {
       bodyOwners.set(data.targetBodyId, feature.featureId);
     if (data.featureKind === 'split')
       bodyOwners.set(data.secondBodyId, feature.featureId);
+    for (const bodyId of transformStampBodyIds(data))
+      bodyOwners.set(bodyId, feature.featureId);
   }
   const downstream = (id: FeatureId): FeatureNode[] => {
     const affected = new Set([id]);

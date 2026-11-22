@@ -9,6 +9,7 @@ import {
   stats,
   writeRunSummary
 } from '../../scripts/frame-timing-report.mjs';
+import { perfBrowserArgs } from '../../scripts/perf-host.mjs';
 import {
   enableFullRender,
   expect,
@@ -82,11 +83,15 @@ test.use({
   // says nothing about a GPU. These put it on the machine's GPU through
   // ANGLE's D3D11 backend (Windows; elsewhere ANGLE ignores the D3D choice)
   // and expose GPU timer queries. OZ_PERF_SOFTWARE_GL=1 keeps SwiftShader.
+  // OZ_PERF_ANGLE (vulkan, gl, ...) picks the backend explicitly, as the
+  // other Active 1 probes do (`scripts/measure-active1-baselines.mjs`).
   launchOptions: {
     args:
       process.env.OZ_PERF_SOFTWARE_GL === '1'
         ? []
-        : ['--use-angle=d3d11', '--ignore-gpu-blocklist', '--enable-gpu']
+        : process.env.OZ_PERF_ANGLE
+          ? perfBrowserArgs(process.env.OZ_PERF_ANGLE)
+          : ['--use-angle=d3d11', '--ignore-gpu-blocklist', '--enable-gpu']
   }
 });
 test.setTimeout(300_000);

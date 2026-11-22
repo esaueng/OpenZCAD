@@ -271,7 +271,7 @@ function measureFaceGeometryOnce(
         geometry.centroidProvenance = measured.provenance;
       }
       // Measured on its own: an inner loop that cannot be walked blanks the
-      // area centroid but must not cost a hole its anchor (M01, v118).
+      // area centroid but must not cost a hole its anchor (M01, v147).
       const outerCentroid = planarFaceOuterCentroid(
         kernel,
         face,
@@ -552,9 +552,11 @@ export function measureOwnedFaceGeometry(
   kernel: RemusKernel,
   solid: number,
   face: number,
-  onBlendRegion?: (region: BlendRegionMeasurement) => void
+  onBlendRegion?: (region: BlendRegionMeasurement) => void,
+  onMeasurement?: (geometry: FaceGeometry | undefined) => void
 ): FaceGeometry | undefined {
   const geometry = measureFaceGeometry(kernel, face);
+  onMeasurement?.(geometry);
   if (!geometry) {
     return undefined;
   }

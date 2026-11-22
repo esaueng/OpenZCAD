@@ -1,12 +1,16 @@
 import type {
   CreateProjectInvitationResponse,
   CreateProjectShareLinkResponse,
+  ProjectDocument,
   ProjectMemberRole,
   ProjectShareLinkMode,
   UserId
 } from '@openzcad/shared';
 import { normalizeShareLinkLabel } from '@openzcad/shared';
-import type { PersistenceService } from '@openzcad/persistence';
+import {
+  FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX,
+  type PersistenceService
+} from '@openzcad/persistence';
 import { normalizeEmail } from './auth';
 
 export const PROJECT_INVITATION_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -56,6 +60,24 @@ export async function hashProjectInvitationToken(
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, '0')
   ).join('');
+}
+
+/**
+ * L08: the token hash of a link without history, in a domain of its own
+ * (`FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX`). The digest is taken over a
+ * labelled input and stored behind a prefix, so it can never equal the
+ * bare hash above: the lookups that serve a live project, in this Worker
+ * and in every earlier one, cannot resolve such a link's token.
+ */
+export async function hashFrozenShareLinkToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    encoder.encode(`openzcad/share-link/frozen/v1:${token}`)
+  );
+  return `${FROZEN_SHARE_LINK_TOKEN_HASH_PREFIX}${Array.from(
+    new Uint8Array(digest),
+    (byte) => byte.toString(16).padStart(2, '0')
+  ).join('')}`;
 }
 
 function escapeHtml(value: string): string {
@@ -319,6 +341,8 @@ export function parseCreateShareLink(value: unknown): {
   mode: ProjectShareLinkMode;
   label: string | null;
   comments: boolean;
+  /** L08: the frozen model of a link without history, as received. */
+  frozenDocument?: unknown;
 } {
   const record = asRecord(value);
   if (record.comments !== undefined && typeof record.comments !== 'boolean')
@@ -327,11 +351,50 @@ export function parseCreateShareLink(value: unknown): {
       'SHARE_LINK_COMMENTS_INVALID',
       'comments must be true or false.'
     );
+  if (record.history !== undefined && typeof record.history !== 'boolean')
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_HISTORY_INVALID',
+      'history must be true or false.'
+    );
+  const mode = parseProjectShareLinkMode(record.mode);
+  const withoutHistory = record.history === false;
+  // A link without history has no parameters to tweak, and serves the
+  // frozen model sent with it instead of the project. A document sent with
+  // any other link is refused rather than ignored, so a client can never
+  // believe it shared a frozen model while the link serves the live one.
+  if (withoutHistory && mode !== 'view')
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_MODE_INVALID',
+      'A link without history is view only.'
+    );
+  if (withoutHistory !== (record.document !== undefined))
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_SNAPSHOT_INVALID',
+      withoutHistory
+        ? 'A link without history needs the model to share.'
+        : 'Only a link without history takes a model.'
+    );
   return {
-    mode: parseProjectShareLinkMode(record.mode),
+    mode,
     label: parseShareLinkLabel(record.label),
-    comments: record.comments === true
+    comments: record.comments === true,
+    ...(withoutHistory ? { frozenDocument: record.document } : {})
   };
+}
+
+/** L08: the body of an owner's Update of a link without history. */
+export function parseShareLinkSnapshot(value: unknown): unknown {
+  const record = asRecord(value);
+  if (record.document === undefined)
+    throw new SharingRequestError(
+      400,
+      'SHARE_LINK_SNAPSHOT_INVALID',
+      'An update needs the model to share.'
+    );
+  return record.document;
 }
 
 export function parseRenameShareLink(value: unknown): { label: string | null } {
@@ -374,10 +437,20 @@ export async function createShareLink(
     {
       shareLinkId: `share_${crypto.randomUUID()}`,
       mode: request.mode,
-      tokenHash: await hashProjectInvitationToken(token),
+      // A link without history is stored where no lookup of a bare token
+      // hash finds it.
+      tokenHash:
+        request.frozenDocument !== undefined
+          ? await hashFrozenShareLinkToken(token)
+          : await hashProjectInvitationToken(token),
       createdAt: now,
       label: request.label,
-      ...(request.comments ? { comments: true } : {})
+      ...(request.comments ? { comments: true } : {}),
+      // Persistence stores it only if it is a frozen model of this project
+      // (`frozenShareSnapshot`); anything else refuses the whole link.
+      ...(request.frozenDocument !== undefined
+        ? { frozenDocument: request.frozenDocument as ProjectDocument }
+        : {})
     }
   );
   return { shareLink, token };

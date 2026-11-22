@@ -232,6 +232,17 @@ export const pathPatternGlyph = glyph(
   </>
 );
 
+/** M02: a copy reflected across a dashed plane. */
+export const mirrorPatternGlyph = glyph(
+  <>
+    <path d="M12 2v20" strokeDasharray="1 2.5" />
+    <rect x="3" y="7" width="6" height="6" rx="1" />
+    <rect x="15" y="7" width="6" height="6" rx="1" />
+    <circle cx="5.5" cy="9.5" r="0.6" />
+    <circle cx="18.5" cy="9.5" r="0.6" />
+  </>
+);
+
 export const gridPatternGlyph = glyph(
   <>
     <rect x="3" y="3" width="6" height="6" rx="1" />

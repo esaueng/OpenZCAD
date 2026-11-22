@@ -66,6 +66,71 @@ const topologyBoundaryOutlines = new WeakMap<
   Float32Array
 >();
 
+type FaceRange = Pick<
+  BodyTopology['faces'][number],
+  'triangleStart' | 'triangleCount'
+>;
+let stagedPlate: {
+  vertices: Float32Array;
+  indices: Uint32Array;
+  faces: FaceRange[];
+  geometry: THREE.BufferGeometry;
+} | null = null;
+let stagedTimer: ReturnType<typeof setTimeout> | undefined;
+function discardStagedPlate() {
+  clearTimeout(stagedTimer);
+  stagedPlate?.geometry.dispose();
+  stagedPlate = null;
+}
+export function preparePatternDisplay({
+  vertices,
+  indices,
+  offsets
+}: {
+  vertices: Float32Array;
+  indices: Uint32Array;
+  offsets: Uint32Array;
+}) {
+  const faces = Array.from(offsets.slice(1), (end, i) => ({
+    triangleStart: offsets[i]! / 3,
+    triangleCount: (end - offsets[i]!) / 3
+  }));
+  discardStagedPlate();
+  const geometry = geometryFromMesh(
+    { kind: 'mesh', vertices, indices },
+    { faces }
+  );
+  stagedPlate = {
+    vertices,
+    indices,
+    faces,
+    geometry
+  };
+  stagedTimer = setTimeout(discardStagedPlate, 1500);
+}
+function takeStagedPlate(mesh: MeshGeometry, topology?: BodyTopology) {
+  const x = stagedPlate;
+  if (
+    !x ||
+    x.indices.length !== mesh.indices.length ||
+    x.vertices.length !== mesh.vertices.length ||
+    x.faces.length !== topology?.faces?.length ||
+    !x.faces.every(
+      (f, i) =>
+        topology.faces[i]!.triangleStart === f.triangleStart &&
+        topology.faces[i]!.triangleCount === f.triangleCount
+    )
+  )
+    return null;
+  if (
+    !sameMeshBuffer(x.indices, mesh.indices) ||
+    !sameMeshBuffer(x.vertices, mesh.vertices)
+  )
+    return null;
+  clearTimeout(stagedTimer);
+  stagedPlate = null;
+  return x.geometry;
+}
 /**
  * Builds angle-weighted smoothing groups from triangle adjacency. Adjacent
  * triangles share a render vertex only when their dihedral angle is below the
@@ -79,7 +144,8 @@ const topologyBoundaryOutlines = new WeakMap<
  */
 function geometryFromMesh(
   mesh: MeshGeometry,
-  topology?: BodyTopology
+  topology?: { faces: FaceRange[] },
+  onTangentPairs?: (pairs: ReturnType<typeof tangentFacePairs>) => void
 ): THREE.BufferGeometry {
   const sourcePositions = mesh.vertices;
   const sourceIndices = mesh.indices;
@@ -120,11 +186,10 @@ function geometryFromMesh(
   const bucketFill = new Uint32Array(vertexCount);
   const bucketHigh = new Uint32Array(cornerCount);
   const bucketSlot = new Uint32Array(cornerCount);
-  const edgeStart = new Uint32Array(cornerCount);
-  const edgeEnd = new Uint32Array(cornerCount);
-  const edgeFirstFace = new Int32Array(cornerCount);
-  const edgeSecondFace = new Int32Array(cornerCount);
-  const edgeFaceCount = new Uint32Array(cornerCount);
+  // Store corner indices so smoothing can join both incident triangles directly.
+  // An unmatched or non-manifold edge has no usable second corner.
+  const edgeFirstCorner = new Uint32Array(cornerCount);
+  const edgeSecondCorner = new Int32Array(cornerCount);
   let edgeCount = 0;
 
   for (let faceIndex = 0; faceIndex < triangleCount; faceIndex += 1) {
@@ -192,13 +257,12 @@ function geometryFromMesh(
         bucketHigh[filled] = high;
         bucketSlot[filled] = slot;
         bucketFill[low] = bucketFill[low]! + 1;
-        edgeStart[slot] = low;
-        edgeEnd[slot] = high;
-        edgeFirstFace[slot] = faceIndex;
-      } else if (edgeFaceCount[slot] === 1) {
-        edgeSecondFace[slot] = faceIndex;
+        edgeFirstCorner[slot] = offset + side;
+        edgeSecondCorner[slot] = -1;
+      } else {
+        edgeSecondCorner[slot] =
+          edgeSecondCorner[slot] === -1 ? offset + side : -2;
       }
-      edgeFaceCount[slot] = edgeFaceCount[slot]! + 1;
     }
   }
 
@@ -260,15 +324,18 @@ function geometryFromMesh(
     topology && topology.faces.length > 1
       ? tangentFacePairs(mesh, topology.faces)
       : null;
+  if (isTangentPair) onTangentPairs?.(isTangentPair);
   for (let slot = 0; slot < edgeCount; slot += 1) {
     // Non-manifold edges stay creased; smoothing across more than two incident
     // faces can blend unrelated shells that merely share indexed vertices.
-    if (edgeFaceCount[slot] !== 2) {
+    const secondSide = edgeSecondCorner[slot]!;
+    if (secondSide < 0) {
       boundarySlots.push(slot);
       continue;
     }
-    const first = edgeFirstFace[slot]!;
-    const second = edgeSecondFace[slot]!;
+    const firstSide = edgeFirstCorner[slot]!;
+    const first = Math.floor(firstSide / 3);
+    const second = Math.floor(secondSide / 3);
     const firstTopologyFace = topologyFaceByTriangle[first]!;
     const secondTopologyFace = topologyFaceByTriangle[second]!;
     const hasTopologyFace = firstTopologyFace >= 0 || secondTopologyFace >= 0;
@@ -287,12 +354,21 @@ function geometryFromMesh(
     // tangent ones included, as the committed body's edges would.
     if (crossesFaces || !shouldSmooth) boundarySlots.push(slot);
     if (!shouldSmooth) continue;
-    for (const vertexIndex of [edgeStart[slot]!, edgeEnd[slot]!]) {
-      const firstCorner = cornerForVertex(first, vertexIndex);
-      const secondCorner = cornerForVertex(second, vertexIndex);
-      if (firstCorner >= 0 && secondCorner >= 0) {
-        union(firstCorner, secondCorner);
-      }
+    // A repeated-index triangle contributes both sides of its nonzero edge.
+    // If those are its only two incidents, the original corners already coincide.
+    if (first === second) continue;
+    const firstNext = first * 3 + ((firstSide + 1) % 3);
+    const secondNext = second * 3 + ((secondSide + 1) % 3);
+    const from = sourceIndices[firstSide]!;
+    if (from === sourceIndices[firstNext]) {
+      // A zero-length indexed edge joins the first occurrence on either face.
+      union(cornerForVertex(first, from), cornerForVertex(second, from));
+    } else if (from === sourceIndices[secondSide]) {
+      union(firstSide, secondSide);
+      union(firstNext, secondNext);
+    } else {
+      union(firstSide, secondNext);
+      union(firstNext, secondSide);
     }
   }
 
@@ -354,8 +430,11 @@ function geometryFromMesh(
   if (completeTopology) {
     const outline = new Float32Array(boundarySlots.length * 6);
     for (let i = 0; i < boundarySlots.length; i += 1) {
-      const start = edgeStart[boundarySlots[i]!]! * 3;
-      const end = edgeEnd[boundarySlots[i]!]! * 3;
+      const side = edgeFirstCorner[boundarySlots[i]!]!;
+      const first = sourceIndices[side]!;
+      const second = sourceIndices[side - (side % 3) + ((side + 1) % 3)]!;
+      const start = Math.min(first, second) * 3;
+      const end = Math.max(first, second) * 3;
       outline[i * 6] = sourcePositions[start]!;
       outline[i * 6 + 1] = sourcePositions[start + 1]!;
       outline[i * 6 + 2] = sourcePositions[start + 2]!;
@@ -387,9 +466,10 @@ function geometryFromMesh(
 
 /** CPU-only preparation, safe to run in a dedicated viewport worker. */
 export function prepareBodyGeometry(
-  body: GeometryBodyRepresentation
+  body: GeometryBodyRepresentation,
+  onTangentPairs?: (pairs: ReturnType<typeof tangentFacePairs>) => void
 ): PreparedBodyGeometry {
-  const geometry = geometryFromMesh(body.mesh, body.topology);
+  const geometry = geometryFromMesh(body.mesh, body.topology, onTangentPairs);
   const layout = exactSmoothingLayouts.get(geometry);
   const result: PreparedBodyGeometry = {
     positions: geometry.getAttribute('position').array as Float32Array,
@@ -818,7 +898,8 @@ export function createObjectForBody(
         .setIndex(new THREE.BufferAttribute(body.mesh.indices, 1))
     : prepared
       ? preparedGeometry(prepared)
-      : geometryFromMesh(body.mesh, body.topology);
+      : (takeStagedPlate(body.mesh, body.topology) ??
+        geometryFromMesh(body.mesh, body.topology));
   // Positions/normals and coplanar depth are mutable per installed object.
   // Keep their copies isolated, but release the immutable staging arrays.
   releasePreparedBodyGeometry(body);

@@ -4,7 +4,12 @@
  * diagnostics. Types only — no runtime code — so any module may import them
  * without creating a cycle.
  */
-import type { DatumAxis, DatumCsys, PlaneBasis, Vec3 } from '@openzcad/geometry';
+import type {
+  DatumAxis,
+  DatumCsys,
+  PlaneBasis,
+  Vec3
+} from '@openzcad/geometry';
 import type {
   BoundingBox,
   BodyId,
@@ -12,6 +17,7 @@ import type {
   BodyTopology,
   EdgeReferenceRepair,
   EdgeHashRepair,
+  EdgeWitnessV1,
   FaceReferenceRepair,
   FeatureId,
   FeatureWarning,
@@ -22,11 +28,14 @@ import type {
 } from '@openzcad/shared';
 import type { TriangleMeshClosure } from './boolean-result-validation';
 import type { RemusLineageState } from './remus-lineage';
+import type { WrapFrame } from './exact-wrap';
 import type { RemusNativeVertexState } from './remus-native-vertices';
 
 export interface ExactShape {
   /** A body can contain several independent solids, as with a pattern. */
   solids: number[];
+  /** Handle of axis-aligned rectangular stock built from a box or an overlapping linear row of boxes. */
+  rectangularStock?: number;
   /** Source facets when a readable mesh cannot be represented as a B-rep. */
   referenceMesh?: { vertices: Float64Array; indices: Uint32Array };
   /** Exact, handle-bound schema-v5 references plus fail-closed diagnostics. */
@@ -142,6 +151,26 @@ export interface ExactBuildResult {
    * Build-local only, copied with retained history checkpoints.
    */
   sketchProjectionFailures?: Map<SketchId, string>;
+  /**
+   * M02: the edges each fillet or chamfer rounded, measured on its target as
+   * its build found them (after any upstream edit moved them), keyed by
+   * feature id. A feature pattern repeating it moves these onto each copy.
+   * Build-local only, copied with retained history checkpoints.
+   */
+  blendEdgeWitnesses?: Map<FeatureId, EdgeWitnessV1[]>;
+  /**
+   * M02: the cylinder or cone each wrap resolved at its history position,
+   * keyed by feature id, from which a feature pattern repeating it builds
+   * its material again. Build-local only, copied with retained history
+   * checkpoints.
+   */
+  wrapFrames?: Map<FeatureId, WrapFrame>;
+  /**
+   * M02: the ribs that built, whose material a feature pattern repeating
+   * one makes again against the body the rib was made on. Build-local only,
+   * copied with retained history checkpoints.
+   */
+  builtRibs?: Set<FeatureId>;
 }
 
 /** Same-kernel measurement handles and the verdicts established for them. */

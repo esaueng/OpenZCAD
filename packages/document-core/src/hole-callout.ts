@@ -62,7 +62,15 @@ export function holeCallout(
       depth,
       style: data.style,
       ...(data.standard ? { standard: { ...data.standard } } : {}),
-      ...(tapped ? { thread: tapped } : {})
+      ...(tapped ? { thread: tapped } : {}),
+      ...(data.faceReference
+        ? {
+            entryFace: {
+              producingFeatureId: data.faceReference.producingFeatureId,
+              lineageName: data.faceReference.lineageName
+            }
+          }
+        : {})
     };
   } catch {
     return null;

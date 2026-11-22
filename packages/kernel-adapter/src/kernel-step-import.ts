@@ -323,3 +323,29 @@ export function importStepStructureWithOwnBudget(
     structure
   };
 }
+
+/** Discovery and full inspection must agree on both reader and solid order. */
+export function readStepForInspection(
+  kernel: DeserializingKernel,
+  bytes: Uint8Array,
+  structure: boolean
+): Pick<StepImportOutcome, 'solids' | 'report'> & {
+  structure?: StepStructure;
+  structureRefusal?: string;
+} {
+  let structureRefusal: string | undefined;
+  if (structure) {
+    try {
+      const result = importStepStructureWithOwnBudget(kernel, bytes);
+      return {
+        solids: result.solids,
+        report: result.report,
+        structure: result.structure
+      };
+    } catch (error) {
+      structureRefusal = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const { solids, report } = importStepWithOwnBudget(kernel, bytes);
+  return { solids, report, structureRefusal };
+}

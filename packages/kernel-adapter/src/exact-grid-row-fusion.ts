@@ -1,0 +1,85 @@
+import { GEOMETRY_EPSILON } from './exact-math';
+import { RemusKernel } from './remus-runtime';
+
+// One row per live kernel. Count or spacing changes on the second axis
+// often leave the exact first-row operands byte-for-byte unchanged.
+const MAX_ROW_CACHE_BYTES = 4 * 1024 * 1024;
+const cachedRows = new WeakMap<
+  RemusKernel,
+  { operands: Uint8Array; row: Uint8Array }
+>();
+
+function sameOperands(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let i = 0; i < left.length; i++) if (left[i] !== right[i]) return false;
+  return true;
+}
+
+/**
+ * In a complete orthogonal grid of rectangular stock, every row is the same
+ * union translated along the second axis. A gap between rows lets fuseAll
+ * assemble them in their original order. Keep the raw row's face partitions:
+ * the union's normal checked unification belongs to the assembled solid.
+ */
+export function fuseSeparatedGridRows(
+  kernel: RemusKernel,
+  solids: readonly number[],
+  rows: number,
+  rowAxis: 'x' | 'y' | 'z',
+  matrix: (ordinal: number) => Float64Array
+): number | undefined {
+  let scratch: RemusKernel | undefined;
+  try {
+    const bounds = kernel.boundingBox(solids[0]!);
+    const axis = { x: 0, y: 1, z: 2 }[rowAxis];
+    const step = matrix(1)[4 * axis + 3]!;
+    const extent = bounds[axis + 3]! - bounds[axis]!;
+    // The open gap must clear the kernel contact band. A very distant row
+    // can classify differently from the original because world-coordinate
+    // rounding consumes the modeling tolerance, even with a wide gap.
+    const last = matrix(solids.length - 1);
+    const worldExtent =
+      Math.max(...Array.from(bounds, Math.abs)) +
+      Math.max(Math.abs(last[3]!), Math.abs(last[7]!), Math.abs(last[11]!));
+    if (!(
+      Math.abs(step) - extent > 1e-6 &&
+      32 * Number.EPSILON * worldExtent < GEOMETRY_EPSILON
+    ))
+      return undefined;
+
+    const firstRow = solids.filter((_, ordinal) => ordinal % rows === 0);
+    // Retiring row handles one by one scans the live arena for references.
+    // A private kernel can release the whole intermediate build at once.
+    scratch = new RemusKernel();
+    const operands = kernel.serializeSolids(Uint32Array.from(firstRow));
+    const cached = cachedRows.get(kernel);
+    const reuse = cached && sameOperands(operands, cached.operands);
+    const row = reuse
+      ? scratch.deserializeSolids(cached.row)[0]!
+      : scratch.fuseAll(scratch.deserializeSolids(operands));
+    // Capture before assembly adds more solids to the private kernel.
+    const rowBytes =
+      !reuse && operands.byteLength < MAX_ROW_CACHE_BYTES
+        ? scratch.serializeSolids(Uint32Array.of(row))
+        : undefined;
+    if (
+      rowBytes &&
+      operands.byteLength + rowBytes.byteLength <= MAX_ROW_CACHE_BYTES
+    )
+      cachedRows.set(kernel, { operands, row: rowBytes });
+    const placed = [row];
+    for (let index = 1; index < rows; index++) {
+      placed.push(scratch.copyAndTransformSolid(row, matrix(index)));
+    }
+    const assembled = scratch.fuseAll(Uint32Array.from(placed));
+    return kernel.deserializeSolids(
+      scratch.serializeSolids(Uint32Array.of(assembled))
+    )[0];
+  } catch {
+    // Retry with all original instances so a refusal identifies the same
+    // operand and follows the same diagnostic path as an ordinary pattern.
+    return undefined;
+  } finally {
+    scratch?.free();
+  }
+}

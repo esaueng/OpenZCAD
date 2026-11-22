@@ -33,9 +33,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await expect(overlay).toBeVisible();
   await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('40');
-  await overlay
-    .getByRole('checkbox', { name: 'Keep original' })
-    .check();
+  await overlay.getByRole('checkbox', { name: 'Keep original' }).check();
   await expect(page.locator('.viewer-host canvas')).toBeVisible();
   await expect(page.getByText('3D viewer could not be rendered.')).toHaveCount(
     0
@@ -77,9 +75,7 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await page.locator('.body-row-main').first().click();
   await page.keyboard.press('m');
   await openMoveOptions(overlay);
-  await overlay
-    .getByRole('checkbox', { name: 'Keep original' })
-    .check();
+  await overlay.getByRole('checkbox', { name: 'Keep original' }).check();
   await overlay.getByRole('button', { name: 'Done' }).click();
   await expectBodyCount(page, 3);
   await expect(rows.filter({ hasText: /copy 1$/ })).toHaveCount(1);
@@ -105,6 +101,81 @@ test('the Move card copies a body and keeps the source', async ({ page }) => {
   await page.locator('.toast-action', { hasText: 'Undo' }).click();
   await expectBodyCount(page, 3);
 });
+
+/**
+ * M10 (schema v137): Copies stamps repeated copies, each the same move on
+ * from the one before. Linked, they are one History row owning every copy;
+ * as separate steps, one row each. Either way one Undo takes them all away.
+ */
+test(
+  'the Move card stamps linked copies or separate steps',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Stamps');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box', {
+      sizes: { width: '20', depth: '10', height: '10' }
+    });
+    await expectBodyCount(page, 1);
+    const canvas = page.locator('.viewer-host canvas');
+    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1');
+
+    await page.keyboard.press('m');
+    const overlay = page.getByRole('form', { name: 'Move controls' });
+    await expect(overlay).toBeVisible();
+    await openMoveOptions(overlay);
+    await overlay.getByLabel('Move X in mm').fill('30');
+    await overlay.getByRole('checkbox', { name: 'Keep original' }).check();
+    await overlay.getByLabel('Copies').fill('3');
+    await expect(overlay).toContainText('3 copies of');
+    // Every stamp is previewed before Done.
+    await expect(canvas).toHaveAttribute('data-e2e-move-copy-stamps', '3');
+    await expect(
+      overlay.getByRole('checkbox', { name: 'Link copies (one History step)' })
+    ).toBeChecked();
+    await overlay.getByRole('button', { name: 'Done' }).click();
+    await expect(overlay).toBeHidden();
+    await expectBodyCount(page, 4);
+    await expectConsumedBodyCount(page, 0);
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    const rows = page.locator('.body-row');
+    for (const n of [1, 2, 3])
+      await expect(
+        rows.filter({ hasText: new RegExp(`copy ${n}$`) })
+      ).toHaveCount(1);
+    // One linked History step, counted.
+    const copyRows = page.locator('.feature-row', {
+      has: page.locator('.feature-name', { hasText: /^Move/ })
+    });
+    await expect(copyRows).toHaveCount(1);
+    await expect(copyRows).toContainText('× 3 copies');
+
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expectBodyCount(page, 1);
+
+    // The same three stamps as separate steps: three rows, one Undo.
+    await page.locator('.body-row-main').first().click();
+    await page.keyboard.press('m');
+    await expect(overlay).toBeVisible();
+    await openMoveOptions(overlay);
+    await overlay.getByLabel('Move X in mm').fill('30');
+    await overlay.getByRole('checkbox', { name: 'Keep original' }).check();
+    await overlay.getByLabel('Copies').fill('3');
+    await overlay
+      .getByRole('checkbox', { name: 'Link copies (one History step)' })
+      .uncheck();
+    await overlay.getByRole('button', { name: 'Done' }).click();
+    await expect(overlay).toBeHidden();
+    await expectBodyCount(page, 4);
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expect(copyRows).toHaveCount(3);
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expectBodyCount(page, 1);
+    await expect(copyRows).toHaveCount(0);
+  }
+);
 
 test('a coincident copy asks before a tool, history, measure or selection transition', async ({
   page
@@ -205,9 +276,7 @@ test('keeps the applied copy visible until the exact worker publishes it', async
   const overlay = page.getByRole('form', { name: 'Move controls' });
   await openMoveOptions(overlay);
   await overlay.getByLabel('Move X in mm').fill('40');
-  await overlay
-    .getByRole('checkbox', { name: 'Keep original' })
-    .check();
+  await overlay.getByRole('checkbox', { name: 'Keep original' }).check();
   await expect(canvas).toHaveAttribute('data-e2e-move-copy-preview', 'true');
   await page.evaluate(() => {
     (

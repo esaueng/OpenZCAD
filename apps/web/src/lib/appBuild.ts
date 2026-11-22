@@ -2,10 +2,11 @@ import { shortCommit } from './kernelBuild';
 
 /**
  * The identity of the OpenZCAD app this bundle was built from: the
- * `YYYY.RELEASE.PATCH` version in the root `package.json` (see
- * `scripts/app-version.mjs`) and the source commit. Vite defines both as
- * `OZ_APP_VERSION` and `OZ_BUILD_COMMIT`. The version names the release line;
- * the commit names the exact build, since main deploys between version cuts.
+ * `YYYY.RELEASE.PATCH` version (the root `package.json` base plus one patch
+ * per user-facing merge since it was set, see `scripts/app-version.mjs`) and
+ * the source commit. Vite defines both as `OZ_APP_VERSION` and
+ * `OZ_BUILD_COMMIT`. Merges that do not count share a version, so the commit
+ * names the exact build.
  */
 
 /** Shown when the constants are absent, which is any non-Vite runtime. */
@@ -15,7 +16,7 @@ const APP_LABEL = 'OpenZCAD';
 const APP_REPOSITORY = 'esaueng/OpenZCAD';
 
 export interface AppBuild {
-  /** `YYYY.RELEASE.PATCH` from the root package.json. */
+  /** `YYYY.RELEASE.PATCH`: the package.json base plus user-facing merges. */
   version: string;
   /** OpenZCAD commit the bundle was built from. */
   sourceCommit: string;

@@ -223,7 +223,7 @@ describe('exact in-place sweeps (M04)', { timeout: 120_000 }, () => {
     expect(warning).toMatchObject({ featureName: 'Bend' });
     expect(warning!.message).toContain('turns a corner of 90');
     expect(plainRefusal(warning!.message).message).toBe(
-      'The sweep path has a 90° corner next to an arc. An exact sweep mitres corners only between straight lines: join the arc tangentially.'
+      'The sweep path has a 90° corner next to an arc. A mitre is cut only between straight lines: set Corners to Round, or join the arc tangentially.'
     );
   });
 
@@ -242,7 +242,7 @@ describe('exact in-place sweeps (M04)', { timeout: 120_000 }, () => {
     );
   });
 
-  it('refuses a guide rail on an exact sweep rather than faceting it', async () => {
+  it('refuses a guide rail along a curved path rather than faceting it', async () => {
     const start = profileSketch(
       createProjectDocument('Railed', user),
       roundProfile(2)
@@ -256,7 +256,7 @@ describe('exact in-place sweeps (M04)', { timeout: 120_000 }, () => {
     feature.data.guide = feature.data.path;
     const { document } = await built(swept);
     expect(document.derived.warnings.join('\n')).toContain(
-      'A guide rail has no exact sweep construction'
+      'An exact sweep follows a guide rail only along a straight path'
     );
   });
 });

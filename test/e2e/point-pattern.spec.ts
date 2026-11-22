@@ -235,10 +235,16 @@ test(
       page.locator('.handle-instance-chip', { hasText: /ent_/ })
     ).toHaveCount(0);
     const chip = page.getByTestId(`command-handle-instance:${second}`);
+    await chip.focus();
+    await page.keyboard.press('Enter');
+    await expect(chip).toHaveAttribute('aria-pressed', 'false');
+    await expect(chip).toBeFocused();
+    await expect(chip).toHaveAccessibleName(/bring it back/);
+    await page.keyboard.press('Space');
+    await expect(chip).toHaveAttribute('aria-pressed', 'true');
+    await expect(chip).toBeFocused();
     await chip.click();
-    await expect(
-      page.getByTestId(`command-handle-instance:${second}`)
-    ).toHaveAttribute('aria-pressed', 'false');
+    await expect(chip).toHaveAttribute('aria-pressed', 'false');
     await expect(done).toBeEnabled({ timeout: 60_000 });
     await finishInPlaceCommand(page, 'Point pattern');
     await expectBodyCount(page, 1);

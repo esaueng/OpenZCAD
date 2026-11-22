@@ -9,7 +9,9 @@ import {
 } from '@openzcad/document-core';
 import {
   KEPT_LOCAL_VERSION_REASON,
+  LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS,
   toUserId,
   type AuthSession,
   type CollaborationServerMessage,
@@ -1323,6 +1325,134 @@ describe('useCollaboration lease ordering', () => {
     } finally {
       setMigrationElsewhere(document.projectId, false);
     }
+  });
+
+  it.each([
+    { advertised: PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS, every: 25_000 },
+    {
+      advertised: undefined,
+      every: LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS
+    },
+    { advertised: 0, every: LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS },
+    {
+      advertised: 3_600_000,
+      every: LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS
+    },
+    { advertised: 60_000, every: LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS },
+    { advertised: 30_000, every: 30_000 }
+  ])(
+    'renews the lease every $every ms when the room advertises $advertised',
+    ({ advertised, every }) => {
+      vi.useFakeTimers();
+      vi.stubGlobal('WebSocket', FakeWebSocket);
+      const owner = toUserId('user_renewal_owner');
+      const document = createProjectDocument('Renewal cadence', owner);
+      const { unmount } = renderHook(() =>
+        useCollaboration({
+          enabled: true,
+          document,
+          session: session(owner),
+          onRemoteDocument: vi.fn(),
+          onConflict: vi.fn()
+        })
+      );
+      const socket = FakeWebSocket.instances[0]!;
+      const renewals = () =>
+        socket.frames().filter((frame) => frame.type === 'lease-renew');
+      act(() => {
+        socket.open();
+        socket.receive({
+          type: 'state',
+          members: [],
+          document,
+          role: 'owner',
+          lease: null
+        });
+      });
+      const grant = (expiresAt: number) =>
+        socket.receive({
+          type: 'lease-granted',
+          lease: {
+            leaseId: 'lease_cadence',
+            projectId: document.projectId,
+            clientId: socket.frames()[0]!.clientId as string,
+            userId: owner,
+            expiresAt
+          },
+          ...(advertised === undefined ? {} : { renewIntervalMs: advertised })
+        });
+      act(() => grant(Date.now() + 60_000));
+      act(() => {
+        vi.advanceTimersByTime(every - 1);
+      });
+      expect(renewals()).toHaveLength(0);
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(renewals()).toEqual([
+        expect.objectContaining({ leaseId: 'lease_cadence' })
+      ]);
+      // A renewal's grant keeps the timer's phase instead of restarting it.
+      act(() => {
+        vi.advanceTimersByTime(every / 2);
+        grant(Date.now() + 60_000);
+        vi.advanceTimersByTime(every / 2);
+      });
+      expect(renewals()).toHaveLength(2);
+      unmount();
+    }
+  );
+
+  it('falls back to the legacy cadence when a rolled-back room stops advertising one', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const owner = toUserId('user_rollback_owner');
+    const document = createProjectDocument('Rolled back room', owner);
+    const { unmount } = renderHook(() =>
+      useCollaboration({
+        enabled: true,
+        document,
+        session: session(owner),
+        onRemoteDocument: vi.fn(),
+        onConflict: vi.fn()
+      })
+    );
+    const socket = FakeWebSocket.instances[0]!;
+    const renewals = () =>
+      socket.frames().filter((frame) => frame.type === 'lease-renew').length;
+    const lease = (): ProjectEditLease => ({
+      leaseId: 'lease_rollback',
+      projectId: document.projectId,
+      clientId: socket.frames()[0]!.clientId as string,
+      userId: owner,
+      expiresAt: Date.now() + 30_000
+    });
+    act(() => {
+      socket.open();
+      socket.receive({
+        type: 'state',
+        members: [],
+        document,
+        role: 'owner',
+        lease: null
+      });
+      socket.receive({
+        type: 'lease-granted',
+        lease: lease(),
+        renewIntervalMs: PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS
+      });
+    });
+    // The room is rolled back; its next grant names no cadence.
+    act(() => {
+      socket.receive({ type: 'lease-granted', lease: lease() });
+      vi.advanceTimersByTime(LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS);
+    });
+    expect(renewals()).toBe(1);
+    act(() => {
+      vi.advanceTimersByTime(2 * LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS);
+    });
+    expect(renewals()).toBe(3);
+    unmount();
   });
 
   it('does not open a room while cloud functions are disabled', () => {

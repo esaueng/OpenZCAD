@@ -246,8 +246,9 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       ],
       [{ draftAngleDeg: 90 }, /between -89 and 89/],
       [{ draftAngleDeg: Number.NaN }, /between -89 and 89/],
-      [{ draftAngleDeg: 4, symmetric: true }, /one-sided extrusion/],
-      [{ draftAngleDeg: 4, backDistance: 3 }, /one-sided extrusion/],
+      // F01 (v126): a symmetric or two-sided extrusion takes a draft now;
+      // only a back draft with no back side is refused.
+      [{ backDraftAngleDeg: 4 }, /Back draft tapers the side behind/],
       [
         {
           draftAngleDeg: 4,
@@ -256,7 +257,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
           endCondition: 'through-all',
           throughAllSide: 'forward'
         },
-        /through-all cut has no draft/
+        /through-all extrude has no draft/
       ]
     ])('refuses %o at entry', async (patch, message) => {
       const lifted = ceiling(project('Refusals'), 25);
@@ -699,7 +700,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         backDistance: 0,
         choice: { operation: 'cut', targetBodyId: block.bodyId },
         endCondition: 'to-face',
-        toFace: target
+        toFace: target as ExtrudeToFaceTarget
       }).apply(pocket.document);
       const derived = await derive(through);
       expect(derived.warnings).toEqual([]);
@@ -832,7 +833,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       // The repaired target validates and rebuilds at the extrude's position.
       const repaired = commandFactories.updateFeature({
         featureId: feature.featureId,
-        data: { toFace: target }
+        data: { toFace: target as ExtrudeToFaceTarget }
       });
       repaired.validate(built);
       const derived = await derive(repaired.apply(built));
@@ -841,24 +842,26 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       ).toEqual([]);
     });
 
-    it('refuses as unresolved when the face is no longer parallel', async () => {
+    it('refuses as unresolved when the face turns nearly perpendicular to the sketch', async () => {
       const result = await post(25);
       const lift = listFeaturesInOrder(result.document).find(
         (feature) => feature.name === 'Lift'
       )!;
+      // A slanted face is reached from the slanted to-face slice on; one
+      // turned 88° faces across the extrusion, not toward it.
       const tilted = updateFeature(result.document, {
         featureId: lift.featureId,
         data: {
           transform: {
             translation: { x: 0, y: 0, z: 25 },
-            rotationDeg: { x: 10, y: 0, z: 0 }
+            rotationDeg: { x: 88, y: 0, z: 0 }
           }
         }
       });
       const derived = await derive(tilted);
       expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
       expect(derived.warnings.join('\n')).toMatch(
-        /Feature "Post": Target face is unresolved: the face is no longer parallel/
+        /Feature "Post": Target face is unresolved: the face is nearly perpendicular to the sketch plane/
       );
       // Tilting it back resolves the same stored face again.
       const level = updateFeature(tilted, {
@@ -1043,15 +1046,19 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
           parametric.bodyId
         ]!.volume
       ).toBeCloseTo(2400, 6);
-      // ...and refused by name once the parameter leaves 0.
+      // ...and, once the parameter leaves 0, tapers the side the distance
+      // runs to (F01, v126) while the back half stays straight.
       const tapered = setParameter(parametric.document, {
         name: 'taper',
         expression: '3'
       });
-      const refused = await derive(tapered);
-      expect(refused.bodyRepresentations[parametric.bodyId]).toBeUndefined();
-      expect(refused.warnings.join('\n')).toMatch(
-        /Feature "Taper": Draft applies to a one-sided extrusion/
+      const drafted = await derive(tapered);
+      expect(drafted.warnings).toEqual([]);
+      expect(
+        drafted.bodyRepresentations[parametric.bodyId]!.volume
+      ).toBeCloseTo(
+        draftedBox(20, 12, 5, Math.tan((3 * Math.PI) / 180)) + 20 * 12 * 5,
+        6
       );
     });
 
@@ -1088,7 +1095,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
       const refused = await derive(tapered);
       expectPassedThrough(refused, cut.bodyId, block.bodyId);
       expect(refused.warnings.join('\n')).toMatch(
-        /through-all cut has no draft/
+        /through-all extrude has no draft/
       );
     });
 

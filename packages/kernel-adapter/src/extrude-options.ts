@@ -1,11 +1,10 @@
 import {
   EXTRUDE_TO_FACE_UNRESOLVED,
   MAX_EXTRUDE_DRAFT_DEG,
-  TO_FACE_PARALLEL_SINE_LIMIT,
   listFeaturesInOrder,
-  toFaceOffsetEnd,
-  toFaceOffsetReachesSketchMessage,
-  toFaceSignedDistance,
+  toFaceExtent,
+  toFaceExtentRefusal,
+  toFaceParallelHeight,
   resolveParamValue
 } from '@openzcad/document-core';
 import type { PlaneBasis, Vec3 } from '@openzcad/geometry';
@@ -55,6 +54,29 @@ export function toFaceDistance(
   data: ExtrudeData,
   result: Pick<ExactBuildResult, 'shapes' | 'consumed' | 'sketchBases'>
 ): number {
+  const target = resolveToFaceTarget(kernel, document, feature, data, result);
+  if (target.kind === 'parallel') return target.distance;
+  throw unresolved(
+    'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
+  );
+}
+
+/**
+ * The stored target face as it resolves at this history position: parallel
+ * to the sketch (with its signed distance, exactly as {@link toFaceDistance}
+ * always derived it) or, from the slanted to-face slice, leaning off it
+ * (with its plane; the slanted plan decides whether it can be reached).
+ * Every way the face itself fails refuses as unresolved, as before.
+ */
+export function resolveToFaceTarget(
+  kernel: RemusKernel,
+  document: ProjectDocument,
+  feature: FeatureNode,
+  data: ExtrudeData,
+  result: Pick<ExactBuildResult, 'shapes' | 'consumed' | 'sketchBases'>
+):
+  | { kind: 'parallel'; distance: number }
+  | { kind: 'slanted'; frame: { origin: Vec3; zAxis: Vec3 } } {
   const target = data.toFace;
   if (!target) {
     throw unresolved('this extrude to a face names no face.');
@@ -97,18 +119,17 @@ export function toFaceDistance(
     throw unresolved(error instanceof Error ? error.message : String(error));
   }
   // The same test the extrude card applies before it offers Create/Apply.
-  const distance = toFaceSignedDistance(basis, {
+  // A face on the sketch plane resolves as zero: a start offset can still
+  // reach it, and `toFaceSweepFeature` refuses it when there is none.
+  const distance = toFaceParallelHeight(basis, {
     point: frame.origin,
     normal: frame.zAxis
   });
-  if (distance !== null) return distance;
-  const alignment = dot(frame.zAxis, basis.normal);
-  throw unresolved(
-    Math.sqrt(Math.max(0, 1 - alignment * alignment)) >
-      TO_FACE_PARALLEL_SINE_LIMIT
-      ? 'the face is no longer parallel to the sketch plane; pick a face parallel to the sketch.'
-      : 'the face lies on the sketch plane, so there is nothing to extrude.'
-  );
+  if (distance !== null) return { kind: 'parallel', distance };
+  return {
+    kind: 'slanted',
+    frame: { origin: frame.origin, zAxis: frame.zAxis }
+  };
 }
 
 /**
@@ -134,11 +155,34 @@ export function resolveToFaceOffset(
 }
 
 /**
+ * F01 (v121): where the extrusion starts, resolved, as a signed length along
+ * the sketch normal from the sketch plane; zero when it starts on the plane.
+ */
+export function resolveExtrudeStartOffset(
+  data: Pick<ExtrudeData, 'startOffset'>,
+  scope: Record<string, number>,
+  document: Pick<ProjectDocument, 'units'>
+): number {
+  if (data.startOffset === undefined) return 0;
+  const offset = resolveParamValue(
+    data.startOffset,
+    scope,
+    'start offset',
+    document.units
+  );
+  if (!Number.isFinite(offset)) {
+    throw new Error('Start offset must be a finite length.');
+  }
+  return offset;
+}
+
+/**
  * The blind extrude a to-face extrude stands for at this history position:
- * the derived distance (to the face, less any offset from it) replaces the
- * dormant one, and the extent fields are dropped so the sweep, overlap
- * check and boolean treat it as the blind extrude it now is. The stored
- * feature is never rewritten.
+ * the derived distance (to the face, less any offset from it, measured from
+ * where the extrusion starts) replaces the dormant one, and the extent
+ * fields are dropped so the sweep, overlap check and boolean treat it as the
+ * blind extrude it now is. A start offset stays, so the sweep starts where
+ * it says. The stored feature is never rewritten.
  */
 export function toFaceSweepFeature(
   kernel: RemusKernel,
@@ -146,16 +190,26 @@ export function toFaceSweepFeature(
   feature: FeatureNode,
   data: ExtrudeData,
   result: Pick<ExactBuildResult, 'shapes' | 'consumed' | 'sketchBases'>,
-  scope: Record<string, number>
+  scope: Record<string, number>,
+  /** The face's distance when the caller has already resolved it. */
+  resolvedDistance?: number
 ): FeatureNode {
-  const faceDistance = toFaceDistance(kernel, document, feature, data, result);
+  const faceDistance =
+    resolvedDistance ?? toFaceDistance(kernel, document, feature, data, result);
   const offset = resolveToFaceOffset(data, scope, document);
-  const distance =
-    offset === 0 ? faceDistance : toFaceOffsetEnd(faceDistance, offset);
-  if (distance === null) {
+  const start = resolveExtrudeStartOffset(data, scope, document);
+  if (faceDistance === 0 && start === 0) {
+    throw unresolved(
+      'the face lies on the sketch plane, so there is nothing to extrude.'
+    );
+  }
+  // F01 (v121): measured from the start plane, toward the face whichever
+  // side of the start it lies on.
+  const span = toFaceExtent(faceDistance, start, offset);
+  if (span === null) {
     // Not an unresolved face: the face resolved, and a re-pick would not
-    // help. The offset (or the face's new position) is what must change.
-    throw new Error(toFaceOffsetReachesSketchMessage(faceDistance, offset));
+    // help. The offset, the start (or the face's position) must change.
+    throw new Error(toFaceExtentRefusal(faceDistance, start, offset));
   }
   const {
     endCondition: _endCondition,
@@ -163,28 +217,32 @@ export function toFaceSweepFeature(
     toFaceOffset: _toFaceOffset,
     ...rest
   } = data;
-  return { ...feature, data: { ...rest, distance } };
+  return { ...feature, data: { ...rest, distance: span } };
 }
 
 /**
  * The draft angle a feature carries, resolved; zero for straight walls. An
- * expression resolves here, so its range is checked here too.
+ * expression resolves here, so its range is checked here too. `side` picks
+ * the back side's own draft (F01, v126) instead of the front's.
  */
 export function resolveExtrudeDraftDeg(
   data: ExtrudeData,
   scope: Record<string, number>,
-  document: ProjectDocument
+  document: ProjectDocument,
+  side: 'front' | 'back' = 'front'
 ): number {
-  if (data.draftAngleDeg === undefined) return 0;
+  const stored = side === 'back' ? data.backDraftAngleDeg : data.draftAngleDeg;
+  const label = side === 'back' ? 'Back draft angle' : 'Draft angle';
+  if (stored === undefined) return 0;
   const angle = resolveParamValue(
-    data.draftAngleDeg,
+    stored,
     scope,
-    'draft angle',
+    label.toLowerCase(),
     document.units
   );
   if (!Number.isFinite(angle) || Math.abs(angle) >= MAX_EXTRUDE_DRAFT_DEG) {
     throw new Error(
-      `Draft angle must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
+      `${label} must be between -${MAX_EXTRUDE_DRAFT_DEG} and ${MAX_EXTRUDE_DRAFT_DEG} degrees.`
     );
   }
   return angle;
@@ -294,6 +352,45 @@ function draftCircularWall(
     Uint32Array.from(faces),
     JSON.stringify({ ruled: true })
   );
+}
+
+/**
+ * F01 (v126): a straight-swept solid whose one wall is round, rebuilt as the
+ * exact ruled loft between its cap circles (a cylinder): the form a drafted
+ * round half takes, so the two halves of a per-side draft fuse face to face
+ * alike. The kernel's fuse of a swept cylinder onto a lofted cone along
+ * their shared circle loses material. Any other solid is returned as it is.
+ */
+export function straightRoundWallAsLoft(
+  kernel: RemusKernel,
+  solid: number,
+  neutral: PlaneBasis,
+  pull: Vec3,
+  label: string
+): number {
+  const faces = classifyFaces(kernel, solid, pull, label);
+  const walls = faces.filter((face) => face.role === 'wall');
+  if (
+    walls.length !== 1 ||
+    walls[0]!.surfaceType === 'plane' ||
+    faces.length !== 3
+  ) {
+    return solid;
+  }
+  const lofted = draftCircularWall(
+    kernel,
+    walls[0]!.handle,
+    neutral,
+    pull,
+    0,
+    label
+  );
+  requireValidSolid(
+    kernel,
+    lofted,
+    `${label} could not be rebuilt as an exact round wall.`
+  );
+  return lofted;
 }
 
 /**

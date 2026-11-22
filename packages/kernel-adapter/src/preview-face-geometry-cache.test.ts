@@ -204,6 +204,51 @@ describe('preview face geometry cache', () => {
     expect(cache.digestHits).toBe(2);
   });
 
+  it('keeps the measured face independent of later solid-specific decoration', () => {
+    const kernel = kernelWith({
+      1: { normal: [0, 0, 1], curve: ellipse(10, 10) }
+    });
+    const { cache, measured } = recordingCache(kernel);
+    const geometry = {
+      surfaceType: 'plane',
+      area: 200,
+      center: { x: 0, y: 0, z: 0 }
+    };
+    cache.rememberSource('a', witness, geometry);
+    geometry.area = -1;
+    const unexpectedRead = () => {
+      throw new Error('A measured face was read again');
+    };
+    const restored = cache.describe(
+      kernel as RemusKernel,
+      2,
+      'a',
+      unexpectedRead
+    );
+    expect(restored.geometry?.area).toBe(200);
+    expect(measured).toEqual([]);
+    const spline = { ...witness, surfaceType: 'bspline' };
+    cache.rememberSource('s', spline, geometry);
+    expect(
+      cache.describe(kernel as RemusKernel, 3, 's', unexpectedRead).geometry
+    ).toBeUndefined();
+  });
+
+  it('declines source measurements before they can evict a warm drag entry', () => {
+    const kernel = kernelWith({
+      1: { normal: [0, 0, 1], curve: ellipse(10, 10) }
+    }) as RemusKernel;
+    const cache = new PreviewFaceGeometryCache(1, () => undefined);
+    cache.describe(kernel, 1, 'drag', () => witness);
+    expect(cache.sourceDigests(kernel, [1])).toBeNull();
+    cache.rememberSource('source', witness, undefined);
+    expect(
+      cache.describe(kernel, 1, 'drag', () => {
+        throw new Error('Evicted drag');
+      }).witness
+    ).toEqual(witness);
+  });
+
   it('never measures a B-spline face, with or without a digest', () => {
     const kernel = kernelWith({
       1: { normal: [0, 0, 1], curve: ellipse(10, 10) }

@@ -255,31 +255,34 @@ export function summarizeDraft(
   return { faces, exactFaces, totalFaces };
 }
 
-/** Where the numbers come from, for the panel's provenance note. */
-export function analysisProvenance(kind: SurfaceAnalysisKind): string {
+/**
+ * Where the colours come from and what they do not prove, a few short
+ * lines each: shown on request beside the legend, never by default.
+ */
+export function analysisNotes(kind: SurfaceAnalysisKind): string[] {
   switch (kind) {
     case 'draft':
-      return 'Exact draft from the kernel at sample points on each face’s own surface, against the pull direction. Colours between samples are interpolated: a plane’s draft is exact, a curved face’s range is its sampled range.';
+      return [
+        'Exact at sample points; colours between are blended.',
+        'Undercut is against this pull only, not a parting-line check.'
+      ];
     case 'curvature':
-      return 'Exact principal curvatures from the kernel at sample points on each face’s own surface. Colours between samples are interpolated: planes, cylinders and spheres are exact (constant), cones, tori and freeform faces are sampled. The smallest radius is the kernel’s over the whole face: closed-form on analytic faces, approximate on freeform ones.';
+      return [
+        'Exact at sample points; colours between are blended.',
+        'One scale for all faces: one tight face mutes the rest.',
+        'Edges, apexes and poles are left grey.'
+      ];
     case 'zebra':
-      return 'Stripes reflected from the kernel’s exact outward normals at sample points on each face’s own surface; between samples the normals, and so the stripes, are interpolated by the display.';
+      return [
+        'Exact normals at sample points.',
+        'Smooth stripes suggest G1/G2, read by eye, not certified.'
+      ];
     case 'thickness':
-      return 'Approximate: the distance through the material along the inward normal from the centre of each sample triangle, to the first wall the ray meets. Planes, cylinders and spheres are crossed in closed form and other surfaces traced on the kernel’s exact distances, to the stated resolution. A flat wall facing a parallel flat wall at every sample reads exact, as their separation.';
-  }
-}
-
-/** What the analysis does not answer, said before anyone relies on it. */
-export function analysisLimits(kind: SurfaceAnalysisKind): string {
-  switch (kind) {
-    case 'draft':
-      return 'Not covered: whether the part can be moulded (a negative face is an undercut against this pull only, not a parting-line check), and faces the kernel cannot evaluate, shown grey and listed below.';
-    case 'curvature':
-      return 'Not covered: curvature along edges and at points where it is undefined (a cone’s apex, a freeform pole), which are left grey; the colour scale spans the largest value found, so one tight face mutes the rest.';
-    case 'zebra':
-      return 'Not covered: a certified continuity check. Stripes that run on smoothly across an edge suggest tangency (G1) and matching bends suggest curvature continuity (G2), read by eye at the sample density; faces the kernel cannot evaluate are grey.';
-    case 'thickness':
-      return 'Not covered: a thin spot between samples, thickness measured any way but along the normal (the ray method reads a sharp inside corner thick), and samples the ray cannot start or finish (a knife edge), shown grey and listed below. A guide for printing and moulding, not a slicer’s or a simulation’s check.';
+      return [
+        'Approximate: measured along the inward normal.',
+        'Can miss a thin spot between samples.',
+        'A guide, not a slicer’s or a simulation’s check.'
+      ];
   }
 }
 

@@ -11,7 +11,7 @@ import {
 } from './desktopBridge';
 import { saveFile } from './saveFile';
 
-import type { ArtifactKind, BodyId, ProjectDocument } from '@openzcad/shared';
+import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { MeshExportDialogFormat } from '../components/ExportDialog';
 import type { GeometryWorkerApi } from '../hooks/useGeometryWorker';
 import type { GeometryWorkerState } from '../worker/geometryWorker';
@@ -104,14 +104,11 @@ export async function packageMeshExport<Id>(input: {
 export interface MeshExportJob {
   fileName: string;
   label: string;
-  kind: ArtifactKind;
-  contentType: string;
-  metadata: Record<string, string | number>;
   completed?(bodies: string): string;
   produce(options: {
     signal: AbortSignal;
     onState(state: GeometryWorkerState): void;
-  }): Promise<{ body: Blob; save(): Promise<boolean>; warnings: number }>;
+  }): Promise<{ save(): Promise<boolean>; warnings: number }>;
 }
 
 /** What the workspace hands over for one mesh export. */
@@ -125,17 +122,12 @@ export interface MeshExportRequest {
     allShownBodies: boolean;
     rowName: string | null;
   };
-  /** How files of this format are saved, labelled and archived. */
+  /** How files of this format are named, labelled and saved. */
   info: {
     extension: string;
-    contentType: string;
     label: string;
-    kind: ArtifactKind;
     binaryFormat: CadBinaryExportFormat;
   };
-  /** The open document's version and unit, for the archive record. */
-  version: number;
-  documentUnits: string;
   /** The unit to write. */
   units: ProjectDocument['units'];
   stemOf(name: string | null): string;
@@ -162,16 +154,6 @@ export function exportMesh(input: MeshExportRequest): void {
   void input.runExportJob({
     fileName,
     label: rowName ? `${info.label} of ${rowName}` : info.label,
-    kind: info.kind,
-    contentType: info.contentType,
-    metadata: {
-      bodyIds: target.bodyIds.join(','),
-      documentVersion: input.version,
-      units: input.documentUnits,
-      format,
-      deflectionMm: deflection,
-      ...(rowName ? { configuration: rowName } : {})
-    },
     ...(rowName
       ? {
           completed: () => `Exported configuration ${rowName} to ${fileName}.`
@@ -192,13 +174,11 @@ export function exportMesh(input: MeshExportRequest): void {
       );
       return 'data' in result
         ? {
-            body: new Blob([result.data], { type: info.contentType }),
             save: () =>
               saveCadBinaryFile(fileName, info.binaryFormat, result.data),
             warnings: result.warnings.length
           }
         : {
-            body: new Blob([result.text], { type: info.contentType }),
             save: () => saveCadTextFile(fileName, 'stl', result.text),
             warnings: result.warnings.length
           };
@@ -227,14 +207,6 @@ function exportMeshPackage(input: MeshExportRequest): void {
   void input.runExportJob({
     fileName: `${stem}.zip`,
     label: 'Mesh package',
-    kind: input.info.kind,
-    contentType: 'application/zip',
-    metadata: {
-      bodyIds: target.bodyIds.join(','),
-      format: [input.format, ...(extraFormats ?? [])].join(','),
-      perBody: perBody ? 'yes' : 'no',
-      deflectionMm: input.deflection
-    },
     produce: async (jobOptions) => {
       const files = await packageMeshExport({
         formats: [input.format, ...(extraFormats ?? [])],
@@ -257,7 +229,6 @@ function exportMeshPackage(input: MeshExportRequest): void {
       });
       const body = new Blob([files.zip.slice()], { type: 'application/zip' });
       return {
-        body,
         save: async () => (await saveFile(`${stem}.zip`, body)) !== 'cancelled',
         warnings: files.warnings
       };

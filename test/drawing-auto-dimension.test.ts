@@ -18,6 +18,7 @@ import {
 } from '../apps/web/src/lib/drawing/sheetPage';
 import {
   boxOperations,
+  bracketOperations,
   buildPart,
   countersunkPlate,
   flangeOperations,
@@ -134,6 +135,20 @@ describe('D06 Auto-dimension: the corpus', () => {
     expect(plan.skipped).toEqual([]);
     expect(audit).toMatchObject({ missing: [], redundant: [], unchecked: [] });
     expect(audit.stated).toBe(audit.required);
+    expectClearLayout(after, views, bodies);
+  });
+
+  it('dimensions the bracket with fillets and a slot completely', async () => {
+    const { bodies, bodyId } = await buildPart(adapter, bracketOperations());
+    const { plan, audit, after, views } = autoDimension(
+      sheetOf(bodyId),
+      bodies
+    );
+    // Two equal corner rounds and two equal slot ends: counted radii.
+    expect(kinds(plan.annotations)).toContain('radius');
+    expect(audit).toMatchObject({ missing: [], redundant: [] });
+    expect(audit.stated).toBe(audit.required);
+    expect(plan.skipped).toEqual([]);
     expectClearLayout(after, views, bodies);
   });
 

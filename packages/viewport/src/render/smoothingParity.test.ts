@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import {
   toBodyId,
@@ -6,7 +6,7 @@ import {
   type BodyTopology,
   type MeshGeometry
 } from '@openzcad/shared';
-import { createObjectForBody } from './scene';
+import { createObjectForBody, preparePatternDisplay } from './scene';
 
 /*
  * The smoothing pass before it moved to typed arrays, kept verbatim as the
@@ -343,6 +343,82 @@ function randomMesh(seed: number, vertexCount: number, triangles: number) {
 }
 
 describe('typed-array smoothing parity', () => {
+  it('uses early shading only for exactly matching coordinates, indices and face groups', () => {
+    const shape = new THREE.BoxGeometry(2, 3, 4);
+    const mesh = welded(shape);
+    const topology = groupsAsFaces(shape);
+    const offsets = Uint32Array.from([
+      0,
+      ...topology.faces.map((f) => (f.triangleStart + f.triangleCount) * 3)
+    ]);
+    const stage = () =>
+      preparePatternDisplay({
+        vertices: mesh.vertices.slice(),
+        indices: mesh.indices.slice(),
+        offsets
+      });
+    const build = (candidate: MeshGeometry, faces: BodyTopology) =>
+      (createObjectForBody(body(candidate, faces)) as THREE.Mesh).geometry;
+    const attributes = vi.spyOn(THREE.BufferGeometry.prototype, 'setAttribute');
+    try {
+      stage();
+      const stagedGeometry = attributes.mock.instances[0];
+      expect(stagedGeometry).toBeInstanceOf(THREE.BufferGeometry);
+      const moved = { ...mesh, vertices: mesh.vertices.slice() };
+      moved.vertices[0] = moved.vertices[0]! + 1;
+      expect(build(moved, topology)).not.toBe(stagedGeometry);
+      const reordered = { ...mesh, indices: mesh.indices.slice() };
+      [reordered.indices[0], reordered.indices[1]] = [
+        mesh.indices[1]!,
+        mesh.indices[0]!
+      ];
+      expect(build(reordered, topology)).not.toBe(stagedGeometry);
+      const changedFaces = { ...topology, faces: topology.faces.slice(1) };
+      expect(build(mesh, changedFaces)).not.toBe(stagedGeometry);
+      const accepted = build(mesh, topology);
+      expect(accepted).toBe(stagedGeometry);
+      const fresh = build(mesh, topology);
+      expect(fresh).not.toBe(accepted);
+      expectSameValues(
+        accepted.getAttribute('normal').array,
+        fresh.getAttribute('normal').array
+      );
+    } finally {
+      attributes.mockRestore();
+      shape.dispose();
+    }
+  });
+
+  it('preserves first-corner smoothing on repeated indices and mixed edge winding', () => {
+    const mesh: MeshGeometry = {
+      kind: 'mesh',
+      vertices: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 2, 0, 0),
+      indices: Uint32Array.of(
+        0,
+        1,
+        0,
+        2,
+        0,
+        0, // two triangles share the zero-length edge at 0
+        1,
+        2,
+        3,
+        1,
+        2,
+        4, // shared side in the same direction
+        4,
+        2,
+        3 // opposite winding on the shared side with the preceding triangle
+      )
+    };
+    expectIdentical(mesh, {
+      faces: [
+        { topologyId: 'face:one', hash: 1, triangleStart: 0, triangleCount: 5 }
+      ],
+      edges: []
+    });
+  });
+
   it('matches the reference on welded analytic shapes, with and without faces', () => {
     const shapes = [
       new THREE.BoxGeometry(2, 3, 4, 2, 2, 2),

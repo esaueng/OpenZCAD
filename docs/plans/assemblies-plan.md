@@ -296,6 +296,27 @@ and the toolbox (or, where it is put away, the "Section view on" chip) names
 them and says the highlight is display evidence from the meshes on screen,
 not an exact clash check.
 
+### STEP hierarchy round-trip (AS04, no schema change)
+
+STEP export writes the assembly as it is assembled. Each body an assembly
+part shows becomes a STEP part whose geometry stays in its own (modelled)
+frame. Its occurrence under the project's product carries the part's
+solved pose: the stored joint values, never an exploded offset, a drag or
+playback. The pose is written as an `ITEM_DEFINED_TRANSFORMATION` from the
+inverse-pose frame in the part to the parent's identity frame, its
+translation in the file's length unit.
+
+- **Structure.** Objects folders still become sub-assemblies (I02). Bodies
+  in no part keep the identity, and a document with neither folders nor
+  parts is still one flat product. The written solids are unchanged, so a
+  reader that ignores product structure reads the modelled geometry, while
+  a structure reader places every part where the assembly put it.
+- **Back in.** I02's structure import reads the file back with each part
+  as its own body where its occurrence places it, named after the part and
+  filed under a folder named after the project. Assemble's first run then
+  makes those bodies parts in one step, at the same places. Joints,
+  couplings and studies are not STEP content and are not written.
+
 ## Interaction
 
 - **First run:** a card lists the document's bodies; "Use N bodies as
@@ -346,8 +367,8 @@ not an exact clash check.
   after a body is reshaped is a follow-up (today the stored frame is kept).
 - Loops (AS09), couplings beyond gear pairs (a general ratio between any two
   joints with its own editor, screw couplings on one cylindrical joint) and
-  video export (AS08), and the STEP hierarchy round-trip AS04 also names.
-  Interference through motion is sampled (above); an exact swept-volume
+  video export (AS08). Interference through motion is sampled (above); joints
+  do not travel through STEP (above); an exact swept-volume
   check is not built. The BOM, stored exploded offsets and exploded drawing
   views are AS03 (above).
 - A coupling's ratio is fixed when the pair is placed: editing a gear's
