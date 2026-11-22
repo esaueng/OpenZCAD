@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import { createPrimitiveInPlace, stubApi } from './openzcad-fixtures';
+import {
+  keepMeasurement,
+  createPrimitiveInPlace,
+  stubApi
+} from './openzcad-fixtures';
 
 interface CylinderWallGeometry {
   diameter?: number;
@@ -104,6 +108,7 @@ test('an exact radius preview never rewrites a persisted measurement', async ({
     .getByRole('button', { name: 'Measure' })
     .click();
   await readCylinderWall(page, true);
+  await keepMeasurement(page);
   await expect(
     page.getByLabel('Measurement workbench').getByRole('listitem')
   ).toContainText('28.00 mm');

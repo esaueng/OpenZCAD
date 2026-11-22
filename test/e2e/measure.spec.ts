@@ -1,6 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import {
+  chooseMeasurementReading,
   createPrimitiveInPlace,
+  keepMeasurement,
   locateEdge,
   setSelectionFilter,
   stubApi
@@ -56,6 +58,7 @@ test('mobile measurement actions stay clear of the viewport ruler', async ({
   await armMeasure(page);
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
+  await keepMeasurement(page);
   const workbench = page.getByLabel('Measurement workbench');
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
   for (const width of [390, 320]) {
@@ -105,6 +108,7 @@ test('measuring in View leaves the Build selection untouched', async ({
   await armMeasure(page);
   const viewEdge = await locateEdge(page);
   await page.mouse.click(viewEdge.x, viewEdge.y);
+  await keepMeasurement(page);
 
   const workbench = page.getByLabel('Measurement workbench');
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
@@ -136,8 +140,11 @@ test('a measured pick arms no sketch and no drag handle', async ({ page }) => {
   await canvas.click({
     position: { x: bounds.width * 0.5, y: bounds.height * 0.4 }
   });
-
+  // A pick reads live; nothing is listed until it is kept.
   const workbench = page.getByLabel('Measurement workbench');
+  await expect(workbench.getByRole('status')).toBeVisible();
+  await expect(workbench.getByRole('listitem')).toHaveCount(0);
+  await keepMeasurement(page);
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
   // None of the surfaces a fall-through would have opened.
   await expect(
@@ -162,6 +169,7 @@ test('measuring an edge records it without selecting it', async ({ page }) => {
 
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
+  await keepMeasurement(page);
 
   const workbench = page.getByLabel('Measurement workbench');
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
@@ -213,6 +221,9 @@ test('the preview names exactly what the click then measures', async ({
   await expect(workbench.getByRole('listitem')).toHaveCount(0);
 
   await page.mouse.click(spot.x, spot.y);
+  // The card reads the same figure the preview named, before anything is kept.
+  await expect(workbench.getByRole('status')).toHaveText(previewed!);
+  await keepMeasurement(page);
   await expect(workbench.getByRole('listitem')).toHaveCount(1);
   await expect(workbench.getByRole('listitem')).toContainText(previewed!);
 
@@ -265,10 +276,6 @@ test('a Distance pick records the point its snap glyph names', async ({
 
   await switchWorkspace(page, 'View');
   await armMeasure(page);
-  await page
-    .getByLabel('Measurement workbench')
-    .getByRole('button', { name: 'Distance' })
-    .click();
   await setSelectionFilter(page, 'Edge');
 
   const edge = await locateEdge(page);
@@ -312,6 +319,7 @@ test(
 
     const edge = await locateEdge(page);
     await page.mouse.click(edge.x, edge.y);
+    await keepMeasurement(page);
 
     const workbench = page.getByLabel('Measurement workbench');
     await expect(workbench.getByRole('listitem')).toHaveCount(1);
@@ -344,6 +352,7 @@ test('measurements stay with their own project across a switch', async ({
   await setSelectionFilter(page, 'Edge');
   const edge = await locateEdge(page);
   await page.mouse.click(edge.x, edge.y);
+  await keepMeasurement(page);
 
   const firstWorkbench = page.getByLabel('Measurement workbench');
   const recorded = await firstWorkbench.getByRole('listitem').textContent();
@@ -385,13 +394,13 @@ test(
     await switchWorkspace(page, 'View');
     await armMeasure(page);
     const workbench = page.getByLabel('Measurement workbench');
-    await workbench.getByRole('button', { name: 'Distance' }).click();
-    const kinds = workbench.getByRole('group', { name: 'Point to pick' });
-    await kinds.getByRole('button', { name: 'Midpoint' }).click();
-    await expect(
-      kinds.getByRole('button', { name: 'Midpoint' })
-    ).toHaveAttribute('aria-pressed', 'true');
-    await expect(workbench).toContainText('Each records its midpoint.');
+    // The point kind lives in the settings menu, with units and precision.
+    await workbench
+      .getByRole('button', { name: 'Measurement settings' })
+      .click();
+    const kinds = workbench.getByLabel('Distance points');
+    await kinds.selectOption('midpoint');
+    await expect(kinds).toHaveValue('midpoint');
     await setSelectionFilter(page, 'Edge');
 
     const status = page.getByRole('group', { name: 'Workspace status' });
@@ -409,25 +418,28 @@ test(
     const second = await locateEdge(page, { exclude: [first.topologyId] });
     await page.mouse.move(second.x, second.y);
     await page.mouse.click(second.x, second.y);
+    // Two box edges may also read as parallel; the distance is the one
+    // measured between the midpoints.
+    if (
+      await workbench.getByRole('group', { name: 'Other readings' }).count()
+    ) {
+      await chooseMeasurementReading(page, /^Distance/);
+    }
+    await keepMeasurement(page);
     await expect(workbench.getByRole('listitem')).toHaveCount(1);
     await expect(workbench.getByRole('listitem')).toContainText('midpoint');
-
-    // Back on Auto, the dock says what Distance does by default.
-    await kinds.getByRole('button', { name: 'Auto' }).click();
-    await expect(workbench).toContainText(
-      'Pick two targets. Circles and cylinders use their exact centers.'
-    );
   }
 );
 
 /**
- * M13: Maximum, Central and Parallel distances are their own measure modes.
- * Two straight box edges have a closed-form maximum (reached at their ends),
- * recorded and named as one; Central refuses two picks with no centre or
- * axis and keeps the first pick.
+ * M13: Maximum, Central and Parallel distances are readings of two picks,
+ * offered beside the plain distance rather than chosen up front. Two straight
+ * box edges have a closed-form maximum (reached at their ends), kept and
+ * named as one; Central, which needs a circle, arc, cylinder or hole, is not
+ * offered for them at all.
  */
 test(
-  'Maximum records the farthest two edges are apart, and Central says what it needs',
+  'two edges offer their maximum distance, and no central one',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     await createBox(page, 'Measure Maximum');
@@ -435,8 +447,6 @@ test(
     await switchWorkspace(page, 'View');
     await armMeasure(page);
     const workbench = page.getByLabel('Measurement workbench');
-    await workbench.getByRole('button', { name: 'Maximum' }).click();
-    await expect(workbench).toContainText('the farthest they are apart');
     await setSelectionFilter(page, 'Edge');
     const status = page.getByRole('group', { name: 'Workspace status' });
 
@@ -447,20 +457,19 @@ test(
       status.getByText(/ selected · pick the second target/)
     ).toBeVisible();
     await page.mouse.click(second.x, second.y);
+    const readings = workbench.getByRole('group', { name: 'Other readings' });
+    await expect(
+      readings.getByRole('button', { name: /^Maximum distance/ })
+    ).toBeVisible();
+    await expect(
+      readings.getByRole('button', { name: /^Central distance/ })
+    ).toHaveCount(0);
+    await chooseMeasurementReading(page, /^Maximum distance/);
+    await page.keyboard.press('Enter');
     await expect(workbench.getByRole('listitem')).toHaveCount(1);
     await expect(workbench.getByRole('listitem')).toContainText(
       'Maximum distance'
     );
-
-    // Central needs a circle, arc, cylinder or hole: two straight edges are
-    // refused by name and the first pick stays.
-    await workbench.getByRole('button', { name: 'Central' }).click();
-    await page.mouse.click(first.x, first.y);
-    await page.mouse.click(second.x, second.y);
-    await expect(page.getByRole('contentinfo')).toContainText(
-      'Central distance needs a circle, arc, cylinder or hole to measure from.'
-    );
-    await expect(workbench.getByRole('listitem')).toHaveCount(1);
   }
 );
 
@@ -480,6 +489,7 @@ test(
     await setSelectionFilter(page, 'Edge');
     const edge = await locateEdge(page);
     await page.mouse.click(edge.x, edge.y);
+    await keepMeasurement(page);
     const workbench = page.getByLabel('Measurement workbench');
     await expect(workbench.getByRole('listitem')).toHaveCount(1);
 

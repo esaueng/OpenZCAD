@@ -268,8 +268,6 @@ test('UI-11: Parts and Measure are usable together on a phone', async ({
     .click();
   const workbench = page.getByLabel('Measurement workbench');
   await expect(workbench).toBeVisible();
-  const smart = workbench.getByRole('button', { name: 'Smart' });
-  const smartPressed = await smart.getAttribute('aria-pressed');
 
   for (const size of [
     { width: 360, height: 640 },
@@ -282,13 +280,10 @@ test('UI-11: Parts and Measure are usable together on a phone', async ({
     await expectReachable(page.locator('.view-rail button').first());
   }
   // A part row clicked where it is drawn selects the part and leaves the
-  // measurement type alone.
+  // measure picks alone.
   const row = partsList.getByRole('button', { name: /^Box 1/ }).first();
   await clickCentre(page, row);
-  await expect(smart).toHaveAttribute('aria-pressed', smartPressed ?? 'true');
-  await expect(
-    workbench.getByRole('button', { name: 'Distance' })
-  ).not.toHaveAttribute('aria-pressed', 'true');
+  await expect(workbench.getByText('Pick A empty')).toBeAttached();
 });
 
 test('UI-12: Tweak body actions fit a 320px window', async ({ page }) => {

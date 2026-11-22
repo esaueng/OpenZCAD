@@ -310,7 +310,7 @@ describe('measurement picks', () => {
       expect(result.current.handleMeasurementPick(selection, false)).toBe(true);
     });
     expect(result.current.measurements).toEqual([]);
-    expect(result.current.measurementDraft).toBeNull();
+    expect(result.current.measurementSession.first).toBeNull();
     expect(setStatus).toHaveBeenCalledWith(
       'Measurements are unavailable while the model finishes updating.'
     );
@@ -332,6 +332,13 @@ describe('measurement picks', () => {
     act(() => {
       result.current.handleMeasurementPick(selection, false);
     });
+    // A pick reads live; only Keep records it.
+    expect(result.current.measurements).toEqual([]);
+    expect(result.current.measurementSession.primary?.kind).toBe('single');
+    act(() => {
+      expect(result.current.keepMeasurementReading()).toBe(true);
+    });
+    expect(result.current.measurementSession.first).toBeNull();
     expect(result.current.measurements).toHaveLength(1);
     expect(result.current.measurements[0]!.result).toEqual({
       value: 24,
@@ -504,7 +511,7 @@ describe('measurement annotations', () => {
 
     await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
     expect(result.current.measurements).toEqual([]);
-    expect(result.current.measurementDraft).toBeNull();
+    expect(result.current.measurementSession.first).toBeNull();
     expect(result.current.measurementAnnotations).toEqual([]);
   });
 
@@ -601,42 +608,11 @@ describe('measurement annotations', () => {
     });
   });
 
-  it('names the first of two picks the way the dock does', async () => {
+  it('names a face pick the way the dock does and draws its live reading', async () => {
     // A planar face picked for Distance carries the internal semantic "pick";
-    // the canvas read "A · pick" while the dock named the face.
+    // the canvas once read "A · pick" while the dock named the face.
     const doc = createProjectDocument('Measure I', toUserId('user_measure_i'));
-    const body: BodyRepresentation = {
-      bodyId: toBodyId('body-1'),
-      name: 'Box',
-      source: 'primitive',
-      mesh: {
-        kind: 'mesh',
-        vertices: Float32Array.from([0, 0, 5, 10, 0, 5, 10, 20, 5]),
-        indices: Uint32Array.from([0, 1, 2])
-      },
-      faceCount: 1,
-      color: '#fff',
-      exportableStep: true,
-      consumed: false,
-      volume: 1,
-      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 20, z: 5 } },
-      topology: {
-        edges: [],
-        faces: [
-          {
-            topologyId: 'face-1',
-            hash: 1,
-            triangleStart: 0,
-            triangleCount: 1,
-            geometry: {
-              surfaceType: 'plane',
-              area: 200,
-              center: { x: 5, y: 10, z: 5 }
-            }
-          }
-        ]
-      }
-    };
+    const body = twoFaceBody();
     const { result } = renderHook(() =>
       useMeasurementWorkbench(
         input({
@@ -649,22 +625,180 @@ describe('measurement annotations', () => {
       )
     );
     await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
-    act(() => {
-      result.current.setMeasuring(true);
-      result.current.setMeasurementMode('distance');
-    });
+    act(() => result.current.setMeasuring(true));
     act(() => {
       result.current.handleMeasurementPick(faceSelection, false, {
         point: { x: 2, y: 3, z: 5 }
       });
     });
 
-    const draft = result.current.measurementDraft;
-    expect(draft?.semantic).toBe('pick');
-    const pill = result.current.measurementAnnotations.find(
+    const session = result.current.measurementSession;
+    expect(session.first?.label).toBeTruthy();
+    expect(session.first?.label).not.toContain('pick');
+    expect(session.second).toBeNull();
+    expect(session.primary?.kind).toBe('single');
+    expect(session.primary?.measurement.kind).toBe('face-area');
+    const live = result.current.measurementAnnotations.find(
       (annotation) => annotation.id === 'measurement-draft'
     );
-    expect(pill?.label).toBe(`A · ${draft!.label}`);
-    expect(pill?.label).not.toContain('pick');
+    expect(live?.selected).toBe(true);
+    expect(live?.label).toBe(session.primary?.formatted.value);
+  });
+
+  it('reads two picks every way they relate, and keeps the chosen reading', async () => {
+    const doc = createProjectDocument('Measure J', toUserId('user_measure_j'));
+    const body = twoFaceBody();
+    const setStatus = vi.fn();
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(
+        input({
+          doc,
+          modelingLocked: true,
+          representations: { 'body-1': body },
+          renderedRepresentations: { 'body-1': body },
+          viewerBodies: [body],
+          setStatus
+        })
+      )
+    );
+    await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
+    act(() => result.current.setMeasuring(true));
+    act(() => {
+      result.current.handleMeasurementPick(faceSelection, false, {
+        point: { x: 2, y: 3, z: 5 }
+      });
+    });
+    // Picking the same face again does not compare it with itself.
+    act(() => {
+      result.current.handleMeasurementPick(faceSelection, false, {
+        point: { x: 4, y: 4, z: 5 }
+      });
+    });
+    expect(result.current.measurementSession.second).toBeNull();
+
+    act(() => {
+      result.current.handleMeasurementPick(bottomSelection, false, {
+        point: { x: 2, y: 3, z: 0 }
+      });
+    });
+    const session = result.current.measurementSession;
+    expect(session.second).not.toBeNull();
+    const kinds = session.readings.map((reading) => reading.kind);
+    // Two parallel faces read as the gap between them first.
+    expect(session.primary?.kind).toBe('parallel');
+    expect(session.primary?.measurement.result.value).toBeCloseTo(5);
+    expect(kinds).toContain('distance');
+    expect(kinds).toContain('angle');
+    expect(kinds).not.toContain('single');
+    // Every figure is listed once.
+    const values = session.readings.map(
+      (reading) =>
+        `${reading.measurement.result.dimension}:${reading.measurement.result.value}`
+    );
+    expect(new Set(values).size).toBe(values.length);
+    // Nothing is recorded until it is kept.
+    expect(result.current.measurements).toEqual([]);
+
+    act(() => result.current.chooseMeasurementReading('angle'));
+    expect(result.current.measurementSession.primary?.kind).toBe('angle');
+    act(() => {
+      expect(result.current.keepMeasurementReading()).toBe(true);
+    });
+    expect(result.current.measurements).toHaveLength(1);
+    expect(result.current.measurements[0]!.kind).toBe('angle');
+    expect(result.current.measurementSession.first).toBeNull();
+    // With nothing picked, Enter is left to whoever else wants it.
+    act(() => {
+      expect(result.current.keepMeasurementReading()).toBe(false);
+    });
+  });
+
+  it('starts over on a third pick', async () => {
+    const doc = createProjectDocument('Measure K', toUserId('user_measure_k'));
+    const body = twoFaceBody();
+    const { result } = renderHook(() =>
+      useMeasurementWorkbench(
+        input({
+          doc,
+          modelingLocked: true,
+          representations: { 'body-1': body },
+          renderedRepresentations: { 'body-1': body },
+          viewerBodies: [body]
+        })
+      )
+    );
+    await waitFor(() => expect(result.current.measurementApi).not.toBeNull());
+    act(() => result.current.setMeasuring(true));
+    for (const [selection, z] of [
+      [faceSelection, 5],
+      [bottomSelection, 0],
+      [bottomSelection, 0]
+    ] as const) {
+      act(() => {
+        result.current.handleMeasurementPick(selection, false, {
+          point: { x: 1, y: 1, z }
+        });
+      });
+    }
+    expect(result.current.measurementSession.first).not.toBeNull();
+    expect(result.current.measurementSession.second).toBeNull();
+    expect(result.current.measurementSession.primary?.kind).toBe('single');
   });
 });
+
+const bottomSelection: TopologySelection = {
+  bodyId: toBodyId('body-1'),
+  kind: 'face',
+  topologyId: 'face-2'
+};
+
+/** A slab's top and bottom faces: planar, parallel, 5 apart. */
+function twoFaceBody(): BodyRepresentation {
+  return {
+    bodyId: toBodyId('body-1'),
+    name: 'Box',
+    source: 'primitive',
+    mesh: {
+      kind: 'mesh',
+      vertices: Float32Array.from([
+        0, 0, 5, 10, 0, 5, 10, 20, 5, 0, 0, 0, 10, 20, 0, 10, 0, 0
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 3, 4, 5])
+    },
+    faceCount: 2,
+    color: '#fff',
+    exportableStep: true,
+    consumed: false,
+    volume: 1,
+    bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 10, y: 20, z: 5 } },
+    topology: {
+      edges: [],
+      faces: [
+        {
+          topologyId: 'face-1',
+          hash: 1,
+          triangleStart: 0,
+          triangleCount: 1,
+          geometry: {
+            surfaceType: 'plane',
+            area: 200,
+            center: { x: 5, y: 10, z: 5 },
+            normal: { x: 0, y: 0, z: 1 }
+          }
+        },
+        {
+          topologyId: 'face-2',
+          hash: 2,
+          triangleStart: 1,
+          triangleCount: 1,
+          geometry: {
+            surfaceType: 'plane',
+            area: 200,
+            center: { x: 5, y: 10, z: 0 },
+            normal: { x: 0, y: 0, z: -1 }
+          }
+        }
+      ]
+    }
+  };
+}

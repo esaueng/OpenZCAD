@@ -225,13 +225,12 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 }
 
 /*
- * Secondary buttons that still rested filled: the Measure dock's mode tabs,
+ * Secondary buttons that still rested filled: the Measure dock's
  * radial toggle, row-editor and footer actions, the inspector's and the
  * assembly panel's tool buttons, and the pattern progress Cancel. They rest
  * bare and become a whole button under the pointer or keyboard focus; a
  * chosen tab keeps its accent fill.
  */
-.measurement-mode-tabs button:not(.active):not(:hover):not(:focus-visible),
 .measurement-radial-toggle button:not(.active):not(:hover):not(:focus-visible),
 .measurement-row-editor-actions button:not(:hover):not(:focus-visible),
 .measurement-dock-foot button:not(:hover):not(:focus-visible),

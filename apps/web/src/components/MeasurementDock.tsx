@@ -2,11 +2,13 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { useSettledFlag } from '../hooks/useSettledFlag';
 import {
   Check,
+  ChevronDown,
   ClipboardCopy,
   Download,
   Eye,
   EyeOff,
   Pencil,
+  Plus,
   Ruler,
   Trash2,
   X
@@ -16,12 +18,15 @@ import type {
   FormattedMeasurement,
   Measurement,
   MeasurementDisplayOptions,
-  MeasurementMode,
   MeasurePointKind,
   RadialDisplay
 } from '../lib/measurements';
+import type {
+  MeasureReadingKind,
+  MeasureSessionView
+} from '../lib/measureReadings';
 
-/** M13: the point kinds a Distance pick can ask for, in the order offered. */
+/** M13: the point kinds a Distance reading can record, in the order offered. */
 const POINT_KIND_LABELS: Record<MeasurePointKind, string> = {
   auto: 'Auto',
   endpoint: 'Endpoint',
@@ -30,25 +35,11 @@ const POINT_KIND_LABELS: Record<MeasurePointKind, string> = {
   centroid: 'Centroid'
 };
 
-const MODE_LABELS: Record<MeasurementMode, string> = {
-  smart: 'Smart',
-  distance: 'Distance',
-  angle: 'Angle',
-  maximum: 'Maximum',
-  central: 'Central',
-  parallel: 'Parallel'
-};
-
-const MODE_INSTRUCTIONS: Record<MeasurementMode, string> = {
-  smart: 'Pick an edge, face, hole, or body to inspect it.',
-  distance: 'Pick two targets. Circles and cylinders use their exact centers.',
-  angle: 'Pick two straight edges, circular axes or planar faces.',
-  maximum:
-    'Pick two points, straight edges or full circles: the farthest they are apart.',
-  central:
-    'Pick a circle, arc, cylinder or hole, then a target: the distance from its center or axis.',
-  parallel:
-    'Pick two parallel edges, faces or axes, or two concentric circles or cylinders.'
+const UNIT_LABELS: Record<UnitSystem, string> = {
+  mm: 'mm',
+  cm: 'cm',
+  m: 'm',
+  inch: 'in'
 };
 
 /** Decimal places the dock offers: everything a stored record may carry. */
@@ -60,22 +51,35 @@ const PRECISIONS = [0, 1, 2, 3, 4, 5, 6] as const;
  */
 const MEASURE_TOGGLE = 'button[aria-label="Measure"][aria-pressed]';
 
+const NO_SESSION: MeasureSessionView = {
+  first: null,
+  second: null,
+  readings: [],
+  primary: null,
+  distanceRefusal: null
+};
+
 interface MeasurementDockProps {
   measurements: Measurement[];
   formattedMeasurements: Record<string, FormattedMeasurement>;
   enabled: boolean;
   geometryPending?: boolean;
   activeMeasurementId: string | null;
-  mode: MeasurementMode;
-  draftTargetLabel: string | null;
+  /** The live picks and every reading they support. */
+  session?: MeasureSessionView;
   display: MeasurementDisplayOptions;
-  onMode(mode: MeasurementMode): void;
   /**
-   * M13: which point a Distance pick records. Offered only in Distance;
-   * omitted, the dock offers no choice.
+   * M13: which point a Distance reading records. Offered in the settings
+   * menu; omitted, the dock offers no choice.
    */
   pointKind?: MeasurePointKind;
   onPointKind?(kind: MeasurePointKind): void;
+  /** Shows another of the session's readings large; Keep records it. */
+  onChooseReading?(kind: MeasureReadingKind): void;
+  /** Records the reading shown large. */
+  onKeep?(): void;
+  /** Drops both picks without recording anything. */
+  onClearPicks?(): void;
   onUnit(unit: UnitSystem): void;
   onPrecision(precision: number): void;
   onRadialDisplay(display: RadialDisplay): void;
@@ -93,25 +97,27 @@ interface MeasurementDockProps {
   onExport(): void;
 }
 
-/**
- * The measurement workbench. Results are saved with the project, never with
- * the model: nothing here changes geometry.
- */
 /** How long an update must run before the dock marks its rows as updating. */
 export const MEASUREMENT_UPDATING_MS = 400;
 
+/**
+ * The measurement workbench: pick one or two things, read every figure they
+ * support, keep the ones worth keeping. Results are saved with the project,
+ * never with the model: nothing here changes geometry.
+ */
 export function MeasurementDock({
   measurements,
   formattedMeasurements,
   enabled,
   geometryPending = false,
   activeMeasurementId,
-  mode,
-  draftTargetLabel,
+  session = NO_SESSION,
   display,
-  onMode,
   pointKind = 'auto',
   onPointKind,
+  onChooseReading,
+  onKeep,
+  onClearPicks,
   onUnit,
   onPrecision,
   onRadialDisplay,
@@ -171,15 +177,19 @@ export function MeasurementDock({
     closeEditor(id);
   }
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { first, second, readings, primary, distanceRefusal } = session;
+
   const instruction = updating
     ? 'Measurements will refresh when the model finishes updating.'
     : !enabled
-      ? 'Measure is off. Choose a mode to resume.'
-      : draftTargetLabel
-        ? `${draftTargetLabel} selected. Pick the second target.`
-        : mode === 'distance' && pointKind !== 'auto'
-          ? `Pick two targets. Each records its ${POINT_KIND_LABELS[pointKind].toLowerCase()}.`
-          : MODE_INSTRUCTIONS[mode];
+      ? 'Measure is off.'
+      : second && !primary
+        ? (distanceRefusal ??
+          'Those two picks share no distance or angle that can be trusted. Pick again to start over.')
+        : !first
+          ? 'Pick an edge, face, hole or body to measure it. Pick a second target to compare the two.'
+          : null;
 
   return (
     <aside
@@ -191,7 +201,199 @@ export function MeasurementDock({
       <header className="measurement-dock-head">
         <Ruler size={14} aria-hidden="true" />
         <h2>Measure</h2>
-        {measurements.length > 0 ? (
+        <button
+          type="button"
+          className="measurement-settings-toggle"
+          aria-expanded={settingsOpen}
+          aria-controls="measurement-settings"
+          aria-label="Measurement settings"
+          title="Units, precision and points"
+          onClick={() => setSettingsOpen((open) => !open)}
+        >
+          {UNIT_LABELS[display.unit]}
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
+      </header>
+
+      {settingsOpen ? (
+        <div id="measurement-settings" className="measurement-display-controls">
+          <label>
+            <span>Units</span>
+            <select
+              aria-label="Measurement units"
+              value={display.unit}
+              onChange={(event) => onUnit(event.target.value as UnitSystem)}
+            >
+              {(Object.keys(UNIT_LABELS) as UnitSystem[]).map((unit) => (
+                <option key={unit} value={unit}>
+                  {UNIT_LABELS[unit]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>Precision</span>
+            <select
+              aria-label="Measurement precision"
+              value={display.precision}
+              onChange={(event) => onPrecision(Number(event.target.value))}
+            >
+              {PRECISIONS.map((precision) => (
+                <option key={precision} value={precision}>
+                  {precision}
+                </option>
+              ))}
+            </select>
+          </label>
+          {onPointKind ? (
+            <label>
+              <span>Distance points</span>
+              <select
+                aria-label="Distance points"
+                value={pointKind}
+                onChange={(event) =>
+                  onPointKind(event.target.value as MeasurePointKind)
+                }
+              >
+                {(Object.keys(POINT_KIND_LABELS) as MeasurePointKind[]).map(
+                  (kind) => (
+                    <option key={kind} value={kind}>
+                      {POINT_KIND_LABELS[kind]}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+          ) : null}
+          <div
+            className="measurement-radial-toggle"
+            role="group"
+            aria-label="Radial display"
+          >
+            <button
+              type="button"
+              className={
+                display.radialDisplay === 'diameter' ? 'active' : undefined
+              }
+              aria-pressed={display.radialDisplay === 'diameter'}
+              onClick={() => onRadialDisplay('diameter')}
+              aria-label="Diameter"
+              title="Show diameters"
+            >
+              Ø
+            </button>
+            <button
+              type="button"
+              className={
+                display.radialDisplay === 'radius' ? 'active' : undefined
+              }
+              aria-pressed={display.radialDisplay === 'radius'}
+              onClick={() => onRadialDisplay('radius')}
+              aria-label="Radius"
+              title="Show radii"
+            >
+              R
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="measurement-picks" role="group" aria-label="Picks">
+        <PickSlot letter="A" label={first?.label ?? null} empty="Pick" />
+        <PickSlot
+          letter="B"
+          label={second?.label ?? null}
+          empty={first ? 'Compare…' : 'Optional'}
+        />
+        {first ? (
+          <button
+            type="button"
+            className="measurement-picks-clear"
+            aria-label="Clear picks"
+            title="Clear picks (Esc)"
+            onClick={onClearPicks}
+          >
+            <X size={13} aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+
+      <section className="measurement-live" aria-label="Reading">
+        {instruction ? (
+          <p className="measurement-dock-instruction" aria-live="polite">
+            {instruction}
+          </p>
+        ) : primary ? (
+          <>
+            <div className="measurement-live-title">{primary.title}</div>
+            <output className="measurement-live-value" aria-live="polite">
+              {primary.formatted.value}
+            </output>
+            {primary.formatted.detail ? (
+              <small className="measurement-live-detail">
+                {primary.formatted.detail}
+              </small>
+            ) : null}
+            {readings.length > 1 ? (
+              <div
+                className="measurement-readings"
+                role="group"
+                aria-label="Other readings"
+              >
+                {readings.map((reading) => (
+                  <button
+                    type="button"
+                    key={reading.kind}
+                    aria-pressed={reading.kind === primary.kind}
+                    className={
+                      reading.kind === primary.kind ? 'active' : undefined
+                    }
+                    onClick={() => onChooseReading?.(reading.kind)}
+                  >
+                    <span className="measurement-reading-title">
+                      {reading.title}
+                    </span>
+                    <span className="measurement-reading-value">
+                      {reading.formatted.value}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="measurement-live-actions">
+              <button
+                type="button"
+                title="Copy this reading"
+                disabled={geometryPending}
+                onClick={() => onCopy(primary.measurement)}
+              >
+                <ClipboardCopy size={12} aria-hidden="true" />
+                Copy
+              </button>
+              <button
+                type="button"
+                className="measurement-keep"
+                title="Keep this reading with the project (Enter)"
+                disabled={geometryPending}
+                onClick={onKeep}
+              >
+                <Plus size={13} aria-hidden="true" />
+                Keep
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="measurement-dock-instruction" aria-live="polite">
+            {first
+              ? `${first.label} has no figure of its own. Pick a second target.`
+              : null}
+          </p>
+        )}
+      </section>
+
+      {measurements.length > 0 ? (
+        <header className="measurement-kept-head">
+          <span>Kept · {measurements.length}</span>
           <button
             type="button"
             className="measurement-dock-clear"
@@ -200,116 +402,12 @@ export function MeasurementDock({
           >
             Clear all
           </button>
-        ) : null}
-      </header>
-
-      <div
-        className="measurement-mode-tabs"
-        role="group"
-        aria-label="Measurement type"
-      >
-        {(Object.keys(MODE_LABELS) as MeasurementMode[]).map((candidate) => (
-          <button
-            type="button"
-            key={candidate}
-            className={candidate === mode ? 'active' : undefined}
-            aria-pressed={candidate === mode}
-            onClick={() => onMode(candidate)}
-          >
-            {MODE_LABELS[candidate]}
-          </button>
-        ))}
-      </div>
-
-      {mode === 'distance' && onPointKind ? (
-        <div
-          className="measurement-mode-tabs measurement-point-kinds"
-          role="group"
-          aria-label="Point to pick"
-        >
-          {(Object.keys(POINT_KIND_LABELS) as MeasurePointKind[]).map(
-            (candidate) => (
-              <button
-                type="button"
-                key={candidate}
-                className={candidate === pointKind ? 'active' : undefined}
-                aria-pressed={candidate === pointKind}
-                onClick={() => onPointKind(candidate)}
-              >
-                {POINT_KIND_LABELS[candidate]}
-              </button>
-            )
-          )}
-        </div>
+        </header>
       ) : null}
-
-      <p className="measurement-dock-instruction" aria-live="polite">
-        {instruction}
-      </p>
-
-      <div className="measurement-display-controls">
-        <label>
-          <span>Units</span>
-          <select
-            aria-label="Measurement units"
-            value={display.unit}
-            onChange={(event) => onUnit(event.target.value as UnitSystem)}
-          >
-            <option value="mm">mm</option>
-            <option value="cm">cm</option>
-            <option value="m">m</option>
-            <option value="inch">in</option>
-          </select>
-        </label>
-        <label>
-          <span>Precision</span>
-          <select
-            aria-label="Measurement precision"
-            value={display.precision}
-            onChange={(event) => onPrecision(Number(event.target.value))}
-          >
-            {PRECISIONS.map((precision) => (
-              <option key={precision} value={precision}>
-                {precision}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div
-          className="measurement-radial-toggle"
-          role="group"
-          aria-label="Radial display"
-        >
-          <button
-            type="button"
-            className={
-              display.radialDisplay === 'diameter' ? 'active' : undefined
-            }
-            aria-pressed={display.radialDisplay === 'diameter'}
-            onClick={() => onRadialDisplay('diameter')}
-            aria-label="Diameter"
-            title="Show diameters"
-          >
-            Ø
-          </button>
-          <button
-            type="button"
-            className={
-              display.radialDisplay === 'radius' ? 'active' : undefined
-            }
-            aria-pressed={display.radialDisplay === 'radius'}
-            onClick={() => onRadialDisplay('radius')}
-            aria-label="Radius"
-            title="Show radii"
-          >
-            R
-          </button>
-        </div>
-      </div>
 
       {measurements.length === 0 ? (
         <p className="measurement-dock-empty">
-          Results are saved with this project and never change the model.
+          Kept readings are saved with this project and never change the model.
         </p>
       ) : (
         <div className="measurement-dock-list" role="list">
@@ -512,5 +610,37 @@ export function MeasurementDock({
         </footer>
       ) : null}
     </aside>
+  );
+}
+
+/** One pick slot, lettered as the viewport labels the pick. */
+function PickSlot({
+  letter,
+  label,
+  empty
+}: {
+  letter: 'A' | 'B';
+  label: string | null;
+  empty: string;
+}) {
+  return (
+    <span
+      className={`measurement-pick${label ? '' : ' empty'}`}
+      data-slot={letter}
+    >
+      <span className="measurement-pick-letter" aria-hidden="true">
+        {letter}
+      </span>
+      <span
+        className="measurement-pick-label"
+        title={label ?? undefined}
+        aria-hidden="true"
+      >
+        {label ?? empty}
+      </span>
+      <span className="visually-hidden">
+        {label ? `Pick ${letter}: ${label}` : `Pick ${letter} empty`}
+      </span>
+    </span>
   );
 }
