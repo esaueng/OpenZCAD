@@ -2300,8 +2300,10 @@ function patternCommands(
 }
 
 /**
- * `count` instances of the source (the source is the first), `spacing`
- * apart along the picked direction line, measured from its start to its end.
+ * `count` instances of the source (the source is the first) along the picked
+ * direction line, measured from its start to its end: `distance` apart, or,
+ * when `spacingMode` is `extent`, spread so the last instance lies `distance`
+ * from the source.
  */
 export function planSketchLinearPattern(
   document: ProjectDocument,
@@ -2309,9 +2311,10 @@ export function planSketchLinearPattern(
   sketchId: SketchId,
   sourceId: string,
   directionId: string,
-  spacing: number,
+  distance: number,
   count: number,
-  resolve: Resolve
+  resolve: Resolve,
+  spacingMode: 'spacing' | 'extent' = 'spacing'
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2332,10 +2335,21 @@ export function planSketchLinearPattern(
   if (countRefusal) {
     return { status: 'refuse', reason: countRefusal };
   }
-  if (!Number.isFinite(spacing) || Math.abs(spacing) <= ON_CURVE) {
+  const extent = spacingMode === 'extent';
+  if (!Number.isFinite(distance) || Math.abs(distance) <= ON_CURVE) {
     return {
       status: 'refuse',
-      reason: 'Pattern spacing must be a non-zero distance.'
+      reason: extent
+        ? 'A pattern extent must be a non-zero distance.'
+        : 'Pattern spacing must be a non-zero distance.'
+    };
+  }
+  const spacing = extent ? distance / (count - 1) : distance;
+  if (Math.abs(spacing) <= ON_CURVE) {
+    return {
+      status: 'refuse',
+      reason:
+        'That extent is too short for so many instances. Use a longer extent or fewer instances.'
     };
   }
   const d = sub(direction.b, direction.a);
@@ -2371,8 +2385,9 @@ export function planSketchLinearPattern(
   ) {
     return {
       status: 'refuse',
-      reason:
-        'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
+      reason: extent
+        ? 'Some instances would overlap others. Use a longer extent or fewer instances, so each step is at least as long as the entity along the direction.'
+        : 'Some instances would overlap others. Use a spacing at least as long as the entity along the direction.'
     };
   }
   if (landsOnExisting(document, sketch, sourceId, copies, resolve, tol)) {
@@ -2403,9 +2418,12 @@ export function planSketchLinearPattern(
 }
 
 /**
- * `count` instances of the source rotated about `pivot`. A full 360° turn
+ * `count` instances of the source carried round `pivot`. A full 360° turn
  * spaces them evenly with no instance on top of the source; a partial turn
- * puts the last instance at the end of the angle.
+ * puts the last instance at the end of the angle. Each instance turns with
+ * the pattern, or with `orientation` `uniform` keeps the source's
+ * orientation: it is only moved, so its anchor (a line's midpoint, a circle's
+ * or arc's centre) lands where the turn takes the source's anchor.
  */
 export function planSketchCircularPattern(
   document: ProjectDocument,
@@ -2415,7 +2433,8 @@ export function planSketchCircularPattern(
   pivot: Point2,
   count: number,
   totalDeg: number,
-  resolve: Resolve
+  resolve: Resolve,
+  orientation: 'rotate' | 'uniform' = 'rotate'
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2434,17 +2453,22 @@ export function planSketchCircularPattern(
   const full = Math.abs(totalDeg - 360) < 1e-9;
   const stepRad =
     ((full ? 360 / count : totalDeg / (count - 1)) * Math.PI) / 180;
+  const uniform = orientation === 'uniform';
+  const anchor = patternAnchor(source.curve);
   if (
     // A partial arc about its own centre still sweeps new quadrants; only
-    // a full round turns onto itself.
-    (source.curve.kind === 'circle' ||
+    // a full round turns onto itself. Moved without turning, anything
+    // anchored on the pivot stays where it is.
+    (uniform ||
+      source.curve.kind === 'circle' ||
       (source.curve.kind === 'arc' && source.curve.sweep >= TAU - 1e-9)) &&
-    distance(source.curve.c, pivot) <= ON_CURVE
+    distance(anchor, pivot) <= ON_CURVE
   ) {
     return {
       status: 'refuse',
-      reason:
-        'That entity is centred on the pivot, so every instance would land on it.'
+      reason: uniform
+        ? 'That entity is centred on the pivot, so kept in its orientation every instance would land on it.'
+        : 'That entity is centred on the pivot, so every instance would land on it.'
     };
   }
   const copies: Curve2[] = [];
@@ -2452,16 +2476,20 @@ export function planSketchCircularPattern(
     const angle = stepRad * index;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
-    copies.push(
-      transformCurve(
-        source.curve,
-        (p) => ({
-          x: pivot.x + (p.x - pivot.x) * cos - (p.y - pivot.y) * sin,
-          y: pivot.y + (p.x - pivot.x) * sin + (p.y - pivot.y) * cos
-        }),
-        angle
-      )
-    );
+    const turn = (p: Point2): Point2 => ({
+      x: pivot.x + (p.x - pivot.x) * cos - (p.y - pivot.y) * sin,
+      y: pivot.y + (p.x - pivot.x) * sin + (p.y - pivot.y) * cos
+    });
+    if (uniform) {
+      const moved = turn(anchor);
+      const dx = moved.x - anchor.x;
+      const dy = moved.y - anchor.y;
+      copies.push(
+        transformCurve(source.curve, (p) => ({ x: p.x + dx, y: p.y + dy }), 0)
+      );
+    } else {
+      copies.push(transformCurve(source.curve, turn, angle));
+    }
   }
   // A line through the pivot lands back on itself after half a turn, so
   // an even count would stack duplicates that break profiles.
@@ -2507,10 +2535,21 @@ export function planSketchCircularPattern(
       sourceId as EntityId,
       source.data,
       copies,
-      false,
+      // Moved without turning, a line stays parallel to its source.
+      uniform && source.curve.kind === 'line',
       'Circular pattern'
     )
   };
+}
+
+/**
+ * The point a uniform circular pattern carries round the pivot: a line's
+ * midpoint, a circle's or arc's centre.
+ */
+function patternAnchor(curve: Curve2): Point2 {
+  return curve.kind === 'line'
+    ? { x: (curve.a.x + curve.b.x) / 2, y: (curve.a.y + curve.b.y) / 2 }
+    : curve.c;
 }
 
 /**

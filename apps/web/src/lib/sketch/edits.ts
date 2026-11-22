@@ -29,7 +29,10 @@ import type {
 } from '@openzcad/kernel-adapter/exact';
 import type {
   SketchEditToolKind,
-  SketchOffsetOptions
+  SketchModifyOptions,
+  SketchOffsetOptions,
+  SketchPatternOrientation,
+  SketchPatternSpacing
 } from '../interaction/machine';
 import {
   planSketchCircularPattern,
@@ -64,7 +67,31 @@ import {
   type SketchPointRef
 } from '@openzcad/shared';
 
-export type { SketchEditToolKind, SketchOffsetOptions, SketchOffsetPick };
+export type {
+  SketchEditToolKind,
+  SketchModifyOptions,
+  SketchOffsetOptions,
+  SketchOffsetPick
+};
+
+/**
+ * The pattern settings in force when a pattern's picks completed, carried to
+ * its value steps and its plan so a change mid-entry cannot reinterpret the
+ * values already typed.
+ */
+export interface SketchPatternOptions {
+  spacing: SketchPatternSpacing;
+  orientation: SketchPatternOrientation;
+}
+
+function patternOptions(
+  options: SketchModifyOptions | undefined
+): SketchPatternOptions {
+  return {
+    spacing: options?.patternSpacing ?? 'spacing',
+    orientation: options?.patternOrientation ?? 'rotate'
+  };
+}
 
 /** What a keypad step measures; a count is a plain whole number. */
 export type SketchEditValueUnit = 'length' | 'angle' | 'count';
@@ -124,7 +151,7 @@ export const SKETCH_EDIT_TOOL_SPECS: readonly SketchEditToolSpec[] = [
     kind: 'linear-pattern',
     label: 'Linear pattern',
     picks: 2,
-    hint: 'Click the entity to repeat, then a line for the direction. Then enter the spacing and the count.'
+    hint: 'Click the entity to repeat, then a line for the direction. Then enter the spacing (or the extent) and the count.'
   },
   {
     kind: 'circular-pattern',
@@ -486,8 +513,8 @@ export interface SketchEditPickContext {
   at?: Point2 | null;
   /** The named point the click snapped to, when it had one. */
   snapPoint?: { objectId: string; point: 'start' | 'end' | 'center' } | null;
-  /** The Offset tool's settings when the click landed; absent is the default. */
-  offset?: SketchOffsetOptions;
+  /** The modify tools' settings when the click landed; absent is the default. */
+  options?: SketchModifyOptions;
 }
 
 /**
@@ -508,6 +535,8 @@ export type SketchEditPickOutcome =
       picks: string[];
       /** What an Offset pick carries to its value step. */
       offset?: SketchOffsetPick;
+      /** What a pattern's picks carry to its value steps. */
+      pattern?: SketchPatternOptions;
     } & SketchEditValueStep)
   /** The picks are complete and the tool needs no value: run it now. */
   | { status: 'run'; picks: string[] };
@@ -541,7 +570,8 @@ export function sketchEditValueSteps(
   kind: SketchEditToolKind,
   picks: readonly string[],
   resolve: ResolveParam,
-  offset?: SketchOffsetPick
+  offset?: SketchOffsetPick,
+  pattern?: SketchPatternOptions
 ): SketchEditValueStep[] | { error: string } {
   const spec = sketchEditToolSpec(kind);
   switch (kind) {
@@ -556,13 +586,22 @@ export function sketchEditValueSteps(
           error: 'The direction line has a dimension that does not evaluate.'
         };
       }
+      // An extent prefilled with the line's length spreads the instances
+      // along it; a spacing prefilled with it steps them a line apart.
       return [
-        {
-          label: 'Pattern spacing',
-          unitKind: 'length',
-          initial: roundPrefill(length),
-          message: `${spec.label}: enter the spacing along the line, start to end.`
-        },
+        pattern?.spacing === 'extent'
+          ? {
+              label: 'Pattern extent',
+              unitKind: 'length',
+              initial: roundPrefill(length),
+              message: `${spec.label}: enter the distance from the source to the last instance, along the line start to end.`
+            }
+          : {
+              label: 'Pattern spacing',
+              unitKind: 'length',
+              initial: roundPrefill(length),
+              message: `${spec.label}: enter the spacing along the line, start to end.`
+            },
         {
           label: 'Pattern count',
           unitKind: 'count',
@@ -695,12 +734,19 @@ export function advanceSketchEditPick(
       message: `${spec.label}: pick ${picks.length + 1} of ${spec.picks}.`
     };
   }
+  const join = context.options?.join ?? DEFAULT_SKETCH_OFFSET_OPTIONS.join;
+  const chain = context.options?.chain ?? DEFAULT_SKETCH_OFFSET_OPTIONS.chain;
   const offset: SketchOffsetPick | undefined =
     kind === 'offset'
       ? {
-          ...(context.offset ?? DEFAULT_SKETCH_OFFSET_OPTIONS),
+          join,
+          chain,
           side: offsetClickSide(document, sketch, objectId, context.at, resolve)
         }
+      : undefined;
+  const pattern =
+    kind === 'linear-pattern' || kind === 'circular-pattern'
+      ? patternOptions(context.options)
       : undefined;
   const steps = sketchEditValueSteps(
     document,
@@ -708,14 +754,21 @@ export function advanceSketchEditPick(
     kind,
     picks,
     resolve,
-    offset
+    offset,
+    pattern
   );
   if ('error' in steps) {
     return { status: 'refuse', reason: steps.error };
   }
   const first = steps[0];
   return first
-    ? { status: 'value', picks, ...first, ...(offset ? { offset } : {}) }
+    ? {
+        status: 'value',
+        picks,
+        ...first,
+        ...(offset ? { offset } : {}),
+        ...(pattern ? { pattern } : {})
+      }
     : { status: 'run', picks };
 }
 
@@ -749,7 +802,8 @@ export function planSketchEdit(
   raw: string,
   resolve: ResolveParam,
   at?: Point2,
-  offset?: SketchOffsetPick
+  offset?: SketchOffsetPick,
+  pattern?: SketchPatternOptions
 ): SketchEditPlan {
   const spec = sketchEditToolSpec(kind);
   const values = typeof value === 'number' ? [value] : value;
@@ -788,7 +842,8 @@ export function planSketchEdit(
       picks[1]!,
       values[0]!,
       values[1]!,
-      resolve
+      resolve,
+      pattern?.spacing
     );
   }
   if (kind === 'circular-pattern') {
@@ -804,7 +859,8 @@ export function planSketchEdit(
       pivot.pivot,
       values[0]!,
       values[1]!,
-      resolve
+      resolve,
+      pattern?.orientation
     );
   }
   const amount = values[0]!;
@@ -880,6 +936,8 @@ export interface SketchEditAnswers {
   raws: string[];
   /** The Offset pick's settings and side, carried to its value step. */
   offset?: SketchOffsetPick;
+  /** A pattern's settings when its picks completed, carried to its steps. */
+  pattern?: SketchPatternOptions;
 }
 
 /**
@@ -1012,7 +1070,8 @@ export function advanceSketchEdit(
       unitKind: outcome.unitKind,
       values: [],
       raws: [],
-      ...(outcome.offset ? { offset: outcome.offset } : {})
+      ...(outcome.offset ? { offset: outcome.offset } : {}),
+      ...(outcome.pattern ? { pattern: outcome.pattern } : {})
     }
   );
   host.setStatus(outcome.message);
@@ -1035,13 +1094,15 @@ export async function runSketchEdit(
   at?: Point2
 ): Promise<void> {
   const offset = earlier?.offset;
+  const pattern = earlier?.pattern;
   const steps = sketchEditValueSteps(
     document,
     sketch,
     kind,
     picks,
     host.resolve,
-    offset
+    offset,
+    pattern
   );
   if ('error' in steps) {
     host.setStatus(steps.error);
@@ -1055,7 +1116,8 @@ export async function runSketchEdit(
       unitKind: next.unitKind,
       values,
       raws,
-      ...(offset ? { offset } : {})
+      ...(offset ? { offset } : {}),
+      ...(pattern ? { pattern } : {})
     });
     host.setStatus(next.message);
     return;
@@ -1070,7 +1132,8 @@ export async function runSketchEdit(
     raws[0] ?? raw,
     host.resolve,
     at,
-    offset
+    offset,
+    pattern
   );
   await commitSketchEditPlan(host, document, sketch, kind, plan);
 }

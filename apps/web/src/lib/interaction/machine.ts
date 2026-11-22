@@ -278,6 +278,28 @@ export interface SketchOffsetOptions {
 }
 
 /**
+ * What a linear pattern's typed distance means: the step between neighbouring
+ * instances, or the extent from the source to the last instance.
+ */
+export type SketchPatternSpacing = 'spacing' | 'extent';
+
+/**
+ * How a circular pattern places each instance: turned with the pattern, or
+ * kept in the source's orientation and only carried round the pivot.
+ */
+export type SketchPatternOrientation = 'rotate' | 'uniform';
+
+/**
+ * The modify tools' settings that outlive one arming: Offset's corner join
+ * and chain, and the patterns' spacing and orientation. Absent pattern
+ * settings are a step spacing and rotated instances, as before they existed.
+ */
+export interface SketchModifyOptions extends SketchOffsetOptions {
+  patternSpacing?: SketchPatternSpacing;
+  patternOrientation?: SketchPatternOrientation;
+}
+
+/**
  * How a selected sketch object is being dragged: `translate` by its grab
  * point (circle, rectangle and polygon centre, text baseline origin, or any
  * point on a line or arc), `rotate` by the ring around a text origin.
@@ -369,8 +391,8 @@ export interface SketchSessionState {
   pendingConstraint: PendingSketchConstraint | null;
   /** Armed modify tool, if any; picking routes here instead of select. */
   pendingEdit: PendingSketchEdit | null;
-  /** The Offset tool's settings; absent is a mitered chain. */
-  offsetOptions?: SketchOffsetOptions;
+  /** The modify tools' settings; absent is a mitered chain and step-spaced, rotated patterns. */
+  modifyOptions?: SketchModifyOptions;
   /**
    * I01: whether the Project tool keeps what it projects linked to its edge
    * or copies it once; absent is linked.
@@ -585,7 +607,7 @@ export type InteractionEvent =
     }
   | { type: 'sketch-constraint-pick'; pick: SketchConstraintPick }
   | { type: 'sketch-edit-tool'; kind: SketchEditToolKind | null }
-  | { type: 'sketch-offset-options'; options: SketchOffsetOptions }
+  | { type: 'sketch-modify-options'; options: SketchModifyOptions }
   | { type: 'sketch-project-mode'; mode: SketchProjectionMode }
   | { type: 'sketch-edit-pick'; objectId: string }
   | {
@@ -1274,13 +1296,13 @@ function reduceInteraction(
             }
           }
         : state;
-    case 'sketch-offset-options':
+    case 'sketch-modify-options':
       // A setting of the tool, like the polygon's side count: it never
       // disarms the tool or drops a pick.
       return state.mode === 'sketch'
         ? {
             ...state,
-            session: { ...state.session, offsetOptions: event.options }
+            session: { ...state.session, modifyOptions: event.options }
           }
         : state;
     case 'sketch-edit-pick':
