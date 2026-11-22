@@ -11,11 +11,14 @@ export type SharedLinkCopyDestination = 'account' | 'device';
  * only. `accountEncrypts` is null while the account is being asked.
  */
 export function SharedLinkCopyDialog({
+  withoutHistory = false,
   accountEncrypts,
   error,
   onRetry,
   onChoose
 }: {
+  /** L08: the link shares the finished model only, so the copy holds that. */
+  withoutHistory?: boolean;
   accountEncrypts: boolean | null;
   error?: string | null;
   onRetry?(): void;
@@ -42,9 +45,10 @@ export function SharedLinkCopyDialog({
       >
         <h2 id="shared-link-copy-title">Make a copy</h2>
         <p>
-          The copy is yours: it keeps the model, its parameters and history, and
-          opens in Build mode. Later changes the owner makes don&apos;t reach
-          it.
+          {withoutHistory
+            ? 'The copy is yours: it holds the finished model as imported solids, without the owner’s features, sketches or parameters, and opens in Build mode.'
+            : 'The copy is yours: it keeps the model, its parameters and history, and opens in Build mode.'}{' '}
+          Later changes the owner makes don&apos;t reach it.
         </p>
         <p id="shared-link-copy-account" role={error ? 'alert' : undefined}>
           {error

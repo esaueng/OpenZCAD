@@ -80,8 +80,8 @@ test(
     // The radius 1 fillet is still what the model shows, not the cylinder.
     expect(await shownFaces(page)).toEqual([cylinder! + 2]);
 
-    // Options edits the same radius the chip does (the chip itself now
-    // stands at the 1000 mm the arrow was given, far off the model).
+    // Options edits the same radius the chip does (the chip, still at the
+    // edge, is covered by in-place-refused-value-chip.spec.ts).
     await setBarValues(page, bar, { Radius: '1.5' });
     await expect(done).toBeEnabled({ timeout: 30_000 });
     await expect(status).not.toContainText('R:');

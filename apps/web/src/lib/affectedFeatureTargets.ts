@@ -1,5 +1,6 @@
 import { findSketch, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  transformStampBodyIds,
   ownEntry,
   datumAxisPlaneSources,
   datumAxisPointSources,
@@ -146,6 +147,10 @@ export function affectedFeatureTargets(
   }
 
   const affectedBodies = new Set<BodyId>(sourceBodyId ? [sourceBodyId] : []);
+  // M10: an edit to a linked copy moves every stamp, so each stamp's
+  // downstream features are affected as the first copy's are.
+  const sourceStamps = transformStampBodyIds(source.data);
+  sourceStamps.forEach((bodyId) => affectedBodies.add(bodyId));
   // M11: editing a Boolean or Split can change which of its inputs it keeps,
   // and a later feature on an input that stops being kept loses its body.
   // So an edit walks the inputs' own downstream branches too; the inputs are
@@ -168,8 +173,8 @@ export function affectedFeatureTargets(
   // R01 (schema v99): whatever a feature reads by datum-point or
   // coordinate-system reference moves when that datum does.
   const datumRefsAffected = (data: FeatureData) =>
-    [...featureDatumPointRefs(data), ...featureDatumCsysRefs(data)].some(
-      (id) => affectedDatums.has(id)
+    [...featureDatumPointRefs(data), ...featureDatumCsysRefs(data)].some((id) =>
+      affectedDatums.has(id)
     );
   const pointAffected = (point: DatumPointSource) =>
     (point.type === 'edge-vertex' && affectedBodies.has(point.bodyId)) ||
@@ -180,7 +185,12 @@ export function affectedFeatureTargets(
           featureName: source.name,
           featureId: source.featureId,
           resultBodyId: sourceBodyId
-        }
+        },
+        ...sourceStamps.map((resultBodyId) => ({
+          featureName: source.name,
+          featureId: source.featureId,
+          resultBodyId
+        }))
       ]
     : [];
 
@@ -262,7 +272,10 @@ export function affectedFeatureTargets(
           (data.targetBodyId !== undefined &&
             affectedBodies.has(data.targetBodyId)) ||
           // F01 (v29): a to-face extent reads its face's body here.
-          (data.toFace !== undefined && planeAffected(data.toFace));
+          (data.toFace !== undefined && planeAffected(data.toFace)) ||
+          // F01 (v131): so does a curved face.
+          (data.toSurface !== undefined &&
+            affectedBodies.has(data.toSurface.bodyId));
         break;
       case 'revolve':
         affected =
@@ -327,7 +340,16 @@ export function affectedFeatureTargets(
           // does an M01 hole drilled at them.
           ((data.featureKind === 'pattern' || data.featureKind === 'hole') &&
             data.points !== undefined &&
-            affectedSketches.has(data.points.sketchId));
+            affectedSketches.has(data.points.sketchId)) ||
+          // M02: a pattern along a path moves with its sketch's curves.
+          (data.featureKind === 'pattern' &&
+            data.path !== undefined &&
+            affectedSketches.has(data.path.sketchId)) ||
+          // M02 (schema v115): a mirror pattern moves with its datum plane.
+          (data.featureKind === 'pattern' &&
+            data.mirrorPlane !== undefined &&
+            isDatumPlaneRef(data.mirrorPlane) &&
+            affectedDatums.has(data.mirrorPlane.datumFeatureId));
         break;
       case 'gear':
         affected =
@@ -383,6 +405,16 @@ export function affectedFeatureTargets(
         featureName: feature.name,
         featureId: feature.featureId,
         resultBodyId: data.secondBodyId,
+        dependent: true
+      });
+    }
+    // M10: so are a linked copy's further stamps.
+    for (const stampBodyId of transformStampBodyIds(data)) {
+      affectedBodies.add(stampBodyId);
+      targets.push({
+        featureName: feature.name,
+        featureId: feature.featureId,
+        resultBodyId: stampBodyId,
         dependent: true
       });
     }

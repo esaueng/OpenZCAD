@@ -47,8 +47,10 @@ warnings, repairs or other build-state changes disqualify it. There is one
 latest value per feature, at most 64 entries, with invalidation on restore,
 project changes, disposal and ordinary arena recycling. Changed operands replay
 normally. Unions retain their existing acceptance path. No post-interval
-checkpoint is restored to resurrect a cached branch, so the separately
-proposed H02 private Text-branch cache remains blocked as documented.
+checkpoint is restored to resurrect a cached branch. A fixed Text import
+after the edited suffix is kept in the live arena instead, as an independent
+result
+([detached Text reuse](plans/h02-private-holder-cache-design.md#detached-text-reuse-in-the-live-arena-2026-11-20)).
 
 The existing 32-checkpoint, 128 MiB estimated admission and 512 executed-builder
 budgets are unchanged. Admission estimates and allocated WASM pages are not a

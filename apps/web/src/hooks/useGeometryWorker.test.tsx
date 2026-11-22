@@ -3,9 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createProjectDocument,
   addPrimitiveFeature,
+  importStepBody,
   booleanBodies
 } from '@openzcad/document-core';
-import { toBodyId, toUserId } from '@openzcad/shared';
+import { toArtifactId, toBodyId, toUserId } from '@openzcad/shared';
 import { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
@@ -43,6 +44,129 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it.each([
+    'commit',
+    'archive',
+    'abort',
+    'abandon',
+    'busy',
+    'transient',
+    'crash'
+  ] as const)(
+    'keeps the first STEP validation isolated through %s',
+    async (outcome) => {
+      installWorker();
+      const base = createProjectDocument('Import', toUserId('user'));
+      const manager = { document: base } as CommandManager;
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => manager,
+          onDerived: vi.fn(),
+          onError: vi.fn()
+        })
+      );
+      const original = FakeWorker.instances[0]!;
+      act(() => {
+        result.current.sync(base);
+        original.emit({
+          type: 'sync',
+          ok: true,
+          projectId: base.projectId,
+          version: base.version,
+          derived: base.derived
+        });
+        original.emit({
+          type: 'state',
+          phase: 'ready',
+          projectId: base.projectId,
+          version: base.version,
+          stale: false
+        });
+      });
+      const next = importStepBody(base, {
+        name: 'Part',
+        artifactId: 'local',
+        sourceName: 'part.step',
+        stepText: 'fixture'
+      }).document;
+      const committed = structuredClone(next);
+      if (outcome === 'archive') {
+        for (const node of Object.values(committed.nodes)) {
+          if (
+            node.kind === 'feature' &&
+            node.data.featureKind === 'imported-step'
+          )
+            node.data.artifactId = toArtifactId('archived');
+        }
+      }
+      const promote = outcome === 'commit' || outcome === 'archive';
+      const controller = new AbortController();
+      const validation = result.current.prepareFirstStepImport(
+        next,
+        controller.signal
+      )!;
+      const candidate = FakeWorker.instances[1]!;
+      if (outcome === 'abort') {
+        controller.abort();
+        await expect(validation).rejects.toMatchObject({ name: 'AbortError' });
+      } else {
+        const request = candidate.postMessage.mock.calls[0]![0] as {
+          requestId: string;
+        };
+        candidate.emit({
+          type: 'sync',
+          ok: true,
+          requestId: request.requestId,
+          projectId: next.projectId,
+          version: next.version,
+          transient: outcome === 'transient',
+          derived: next.derived
+        });
+        const derived = await validation;
+        // The diagnosis awaits a microtask even when no deployment check is needed.
+        // A commit in this same turn must not swap in a worker that just crashed.
+        if (outcome === 'crash') candidate.onerror?.(new ErrorEvent('error'));
+        if (outcome !== 'abandon') {
+          // A caller on the existing worker must remain able to finish.
+          const inFlight =
+            outcome === 'busy' ? result.current.syncOnce(base) : undefined;
+          act(() => {
+            manager.document = committed;
+            expect(
+              result.current.adoptValidatedResult(committed, derived)
+            ).toBe(false);
+            result.current.sync(committed, [], { persistSession: true });
+          });
+          const live = promote ? candidate : original;
+          expect(live.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+            type: 'sync',
+            persistSession: true,
+            document: { version: committed.version, nodes: committed.nodes }
+          });
+          if (inFlight) {
+            const tagged = original.postMessage.mock.calls
+              .map((call) => call[0] as { requestId?: string })
+              .find((req) => req.requestId)!;
+            act(() =>
+              original.emit({
+                type: 'sync',
+                ok: true,
+                requestId: tagged.requestId,
+                projectId: base.projectId,
+                version: base.version,
+                derived: base.derived
+              })
+            );
+            await inFlight;
+          }
+        }
+      }
+      result.current.releasePreparedImport(controller.signal);
+      expect(original.terminate).toHaveBeenCalledTimes(promote ? 1 : 0);
+      expect(candidate.terminate).toHaveBeenCalledTimes(promote ? 0 : 1);
+    }
+  );
+
   it('asks each worker to prepare the kernel once, and never when saving data', () => {
     installWorker();
     const { result } = renderHook(() =>
@@ -453,6 +577,62 @@ describe('useGeometryWorker', () => {
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(worker.postMessage).toHaveBeenCalledTimes(posts);
   });
+  it('only prepares pattern meshes for the current document or a pending preview', async () => {
+    installWorker();
+    const viewport = await import('@openzcad/viewport');
+    const prepare = vi
+      .spyOn(viewport, 'preparePatternDisplay')
+      .mockImplementation(() => {});
+    const document = createProjectDocument('Plate', toUserId('user'));
+    const manager = { document } as CommandManager;
+    const { result, unmount } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => manager,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    const message = {
+      type: 'prepare-pattern-display' as const,
+      projectId: document.projectId,
+      version: document.version,
+      vertices: new Float32Array(),
+      indices: new Uint32Array(),
+      offsets: new Uint32Array()
+    };
+    try {
+      const controller = new AbortController();
+      const pending = result.current.syncOnce(document, undefined, undefined, {
+        signal: controller.signal
+      });
+      const { requestId } = worker.postMessage.mock.calls.at(-1)![0] as {
+        requestId: string;
+      };
+      worker.emit({ ...message, version: document.version - 1 });
+      worker.emit({
+        ...message,
+        projectId: createProjectDocument('Other', toUserId('user')).projectId,
+        requestId
+      });
+      worker.emit(message);
+      worker.emit({ ...message, requestId });
+      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+      expect(prepare.mock.calls.map(([m]) => m)).toEqual([
+        message,
+        { ...message, requestId }
+      ]);
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+      worker.emit({ ...message, requestId });
+      unmount();
+      worker.emit(message);
+      await vi.dynamicImportSettled();
+      expect(prepare).toHaveBeenCalledTimes(2);
+    } finally {
+      prepare.mockRestore();
+    }
+  });
   it('cancels an abandoned one-off rebuild in the worker and discards its late reply', async () => {
     // QA 2026-11-14 #16: a large pattern's in-place preview kept the worker
     // building for its whole minute after Cancel closed the card.
@@ -526,13 +706,26 @@ describe('useGeometryWorker', () => {
     expect(host.onDerived).not.toHaveBeenCalled();
   });
 
-  it.each(['v1', 'v2', 'invalid-json', 'invalid-marker', 'marker-only'])(
+  it.each([
+    'v1',
+    'v2',
+    'utf8',
+    'invalid-json',
+    'invalid-marker',
+    'marker-only'
+  ])(
     'decodes topology before settling a one-off reply: %s',
     async (encoding) => {
       const malformed =
         encoding.startsWith('invalid') || encoding === 'marker-only';
       installWorker();
       const document = createProjectDocument('Transport', toUserId('user'));
+      if (encoding === 'v2' || encoding === 'utf8') {
+        document.bodyOrder = Array.from(
+          { length: encoding === 'utf8' ? 256 : 255 },
+          (_, i) => toBodyId(`body_${i}`)
+        );
+      }
       const host = {
         manager: () => null,
         onDerived: vi.fn(),
@@ -544,7 +737,9 @@ describe('useGeometryWorker', () => {
       const request = worker.postMessage.mock.calls.at(-1)![0] as {
         requestId: string;
       };
-      expect(request).toMatchObject({ topologyEncoding: 'json-v2' });
+      expect(request).toMatchObject({
+        topologyEncoding: encoding === 'utf8' ? 'utf8-v1' : 'json-v2'
+      });
       const settled = malformed
         ? expect(pending).rejects.toThrow('invalid topology encoding')
         : expect(pending).resolves.toMatchObject({
@@ -589,7 +784,11 @@ describe('useGeometryWorker', () => {
                   [bodyId]:
                     encoding === 'invalid-json'
                       ? '{'
-                      : '{"faces":[],"edges":[],"reference":null}'
+                      : encoding === 'utf8'
+                        ? new TextEncoder().encode(
+                            '{"faces":[],"edges":[],"reference":null}'
+                          )
+                        : '{"faces":[],"edges":[],"reference":null}'
                 }
               }),
           ...(encoding === 'v1'
@@ -2034,6 +2233,7 @@ describe('adopting a validated edit result as the live result', () => {
     expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 1);
     expect(edit.worker.postMessage).toHaveBeenLastCalledWith({
       type: 'live-content',
+      requestId: expect.any(String) as string,
       projectId: edit.committed.projectId,
       contentKey: geometryContentKey(edit.committed)
     });

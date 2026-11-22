@@ -1,14 +1,18 @@
 import { deleteFeature, listFeaturesInOrder } from '@openzcad/document-core';
 import type {
+  DirectEditOperation,
   DocumentNode,
   FeatureNode,
   FeatureWarning,
+  OffsetFaceSnapshot,
   ProjectDocument
 } from '@openzcad/shared';
 import {
   DIRECT_EDIT_FIXTURE_FORMAT,
   DIRECT_EDIT_FIXTURE_FORMAT_VERSION,
-  type DirectEditFixture
+  type DirectEditFixture,
+  type DirectEditFixtureEdit,
+  type DirectEditFixtureFace
 } from './directEditFixture';
 import { splitRefusal } from './featureValidation';
 import { createProjectDiagnosticBundle } from './projectDiagnostics';
@@ -180,8 +184,62 @@ function timestampSlug(capturedAt: string): string {
   return digits.length > 0 ? digits : String(Date.now());
 }
 
+type OffsetFacesOperation = Extract<
+  DirectEditOperation,
+  { kind: 'offset-faces' }
+>;
+
+function offsetFacesOperation(
+  feature: FeatureNode
+): OffsetFacesOperation | null {
+  const data = feature.data;
+  return data.featureKind === 'direct-edit' &&
+    data.operation.kind === 'offset-faces'
+    ? data.operation
+    : null;
+}
+
+/** A face snapshot of the edit, in the corpus's face-pick form. */
+function fixtureFaceOf(snapshot: OffsetFaceSnapshot): DirectEditFixtureFace {
+  return {
+    surfaceType: snapshot.sourceSurfaceType,
+    center: { ...snapshot.sourceCenter },
+    normal: { ...snapshot.sourceNormal },
+    area: snapshot.sourceArea,
+    hash: snapshot.faceHash,
+    hasReference: snapshot.faceReference !== undefined
+  };
+}
+
+/**
+ * A face set's offset (M07) records every face it names and its distance,
+ * so the file says which set refused, not only that some edit did. The
+ * document still holds the feature itself, which is what replays.
+ */
+function offsetFacesEdit(
+  operation: OffsetFacesOperation
+): Pick<DirectEditFixtureEdit, 'face' | 'additionalFaces' | 'value'> {
+  return {
+    face: fixtureFaceOf(operation),
+    additionalFaces: operation.additionalFaces.map((face) =>
+      fixtureFaceOf(face)
+    ),
+    // A typed expression is resolved by the rebuild the document replays;
+    // only a plain distance can be restated here.
+    value: typeof operation.offset === 'number' ? operation.offset : 0
+  };
+}
+
 function lineageOf(feature: FeatureNode): 'semantic' | 'hash-only' {
   const data = feature.data;
+  const set = offsetFacesOperation(feature);
+  if (set) {
+    return [set, ...set.additionalFaces].every(
+      (face) => face.faceReference !== undefined
+    )
+      ? 'semantic'
+      : 'hash-only';
+  }
   if (data.featureKind === 'direct-edit') {
     const operation = data.operation as {
       faceHash?: unknown;
@@ -244,6 +302,7 @@ export function buildRefusalReproduction(
       ? data.targetBodyId
       : (feature.bodyId ?? '');
   const featureKind = data.featureKind;
+  const offsetFaces = offsetFacesOperation(feature);
   return {
     format: DIRECT_EDIT_FIXTURE_FORMAT,
     formatVersion: DIRECT_EDIT_FIXTURE_FORMAT_VERSION,
@@ -258,6 +317,7 @@ export function buildRefusalReproduction(
       op: 'feature-build',
       targetBodyId,
       value: 0,
+      ...(offsetFaces ? offsetFacesEdit(offsetFaces) : {}),
       featureId: warning.featureId,
       featureKind,
       ...(data.featureKind === 'direct-edit'

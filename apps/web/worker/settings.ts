@@ -21,6 +21,7 @@ import {
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
   UNITLESS_IMPORT_UNITS,
+  SKETCH_REFERENCE_DISPLAY_UNITS,
   type AppSettings,
   type PanelWidthLimits,
   type AppSettingsResponse,
@@ -454,6 +455,14 @@ export function parseUpdateAppSettingsRequest(
           'relationGlyphs',
           RELATION_GLYPHS,
           DEFAULT_APP_SETTINGS.sketching.relationGlyphs
+        ),
+        // S02: optional and lenient; an unknown unit from a newer client
+        // falls back to the document's units rather than failing the save.
+        referenceDisplayUnit: optionalMember(
+          sketching,
+          'referenceDisplayUnit',
+          SKETCH_REFERENCE_DISPLAY_UNITS,
+          DEFAULT_APP_SETTINGS.sketching.referenceDisplayUnit
         ),
         // Optional and lenient, like relationGlyphs: an unknown kind from a
         // newer client drops out rather than failing the save.
@@ -1139,6 +1148,13 @@ export function settingsRequestOmitsRelationGlyphs(body: unknown): boolean {
   return settingsRequestOmitsSketching(body, 'relationGlyphs');
 }
 
+/** True when a client from before reference display units saved. */
+export function settingsRequestOmitsReferenceDisplayUnit(
+  body: unknown
+): boolean {
+  return settingsRequestOmitsSketching(body, 'referenceDisplayUnit');
+}
+
 /** True when a client from before the per-kind glyph filter saved. */
 export function settingsRequestOmitsHiddenRelationGlyphs(
   body: unknown
@@ -1155,6 +1171,7 @@ export async function updateAppSettings(
     keepStoredKeymap?: boolean;
     keepStoredRelationGlyphs?: boolean;
     keepStoredHiddenRelationGlyphs?: boolean;
+    keepStoredReferenceDisplayUnit?: boolean;
     keepStoredViewportFields?: readonly CarriedViewportField[];
     /**
      * The account's library is encrypted (ADR-024 amendment 2026-11-14):
@@ -1208,6 +1225,15 @@ export async function updateAppSettings(
       sketching: {
         ...settings.sketching,
         relationGlyphs: current.settings.sketching.relationGlyphs
+      }
+    };
+  }
+  if (options.keepStoredReferenceDisplayUnit) {
+    settings = {
+      ...settings,
+      sketching: {
+        ...settings.sketching,
+        referenceDisplayUnit: current.settings.sketching.referenceDisplayUnit
       }
     };
   }

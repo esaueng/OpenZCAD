@@ -37,9 +37,9 @@ export function useBuildToolNavigation({
     ) {
       setPending(null);
     } else if (mode === 'build') {
-      // First render and frame the destination; then let the tool take over.
-      // Launching in this effect skipped responsive framing under the new
-      // tool's camera guard, leaving the model behind Build's panels.
+      // First render the destination (and run any preparation the caller
+      // asked for); then let the tool take over a frame later. Changing mode
+      // never moves the camera.
       let launchFrame = 0;
       const prepareFrame = requestAnimationFrame(() => {
         callbacks.current.onPrepare?.();

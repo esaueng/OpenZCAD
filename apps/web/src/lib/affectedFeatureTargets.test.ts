@@ -33,6 +33,44 @@ import {
 } from './affectedFeatureTargets';
 
 describe('affected feature targets', () => {
+  it('reaches features on every stamp of an edited linked copy (M10)', () => {
+    const block = addPrimitiveFeature(
+      createProjectDocument('Stamped', toUserId('user_affected')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 10, depth: 10 }
+      }
+    );
+    const copied = transformBody(block, {
+      name: 'Copy',
+      targetBodyId: block.bodyOrder[0]!,
+      translation: { x: 30, y: 0, z: 0 },
+      copy: true,
+      stamps: 3
+    });
+    const [, first, second, third] = copied.document.bodyOrder;
+    const rounded = filletEdges(copied.document, {
+      name: 'Round stamp 2',
+      targetBodyId: second!,
+      edgeHashes: [101],
+      size: 1
+    });
+    const copy = listFeaturesInOrder(rounded.document)[1]!;
+    const targets = affectedFeatureTargets(rounded.document, copy.featureId);
+    expect(
+      targets.map(({ featureName, resultBodyId }) => [
+        featureName,
+        resultBodyId
+      ])
+    ).toEqual([
+      ['Copy', first],
+      ['Copy', second],
+      ['Copy', third],
+      ['Round stamp 2', rounded.bodyId]
+    ]);
+  });
+
   it('walks only the downstream body ancestry of the edited primitive', () => {
     const cylinder = addPrimitiveFeature(
       createProjectDocument('Affected branch', toUserId('user_affected')),
@@ -234,6 +272,45 @@ describe('affected feature targets', () => {
       affectedFeatureTargets(patterned.document, sketchFeature.featureId)
     ).toMatchObject([
       { featureName: 'On points', resultBodyId: patterned.bodyId }
+    ]);
+  });
+
+  it('counts a pattern along a path as affected by an edit to its sketch (M02)', () => {
+    const block = addPrimitiveFeature(
+      createProjectDocument('Path', toUserId('user_path')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    const path = addSketchFeature(block, {
+      name: 'Path',
+      plane: 'XY',
+      offset: 0,
+      objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 80, y2: 0 }]
+    });
+    const patterned = patternBody(path.document, {
+      name: 'Along path',
+      targetBodyId: block.bodyOrder[0]!,
+      patternKind: 'path',
+      count: 2,
+      spacing: 30,
+      axis: 'x',
+      path: {
+        sketchId: path.sketchId,
+        entityIds: findSketch(path.document, path.sketchId)!.objectIds.map(
+          String
+        )
+      }
+    });
+    const sketchFeature = listFeaturesInOrder(patterned.document).find(
+      (feature) => feature.name === 'Path'
+    )!;
+    expect(
+      affectedFeatureTargets(patterned.document, sketchFeature.featureId)
+    ).toMatchObject([
+      { featureName: 'Along path', resultBodyId: patterned.bodyId }
     ]);
   });
 

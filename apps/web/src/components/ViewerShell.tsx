@@ -48,6 +48,7 @@ import {
   type SketchModeState,
   type SketchViewData,
   type OffsetHandleTarget,
+  type ViewerBodyPickRole,
   type ViewerPmiLabel
 } from './ModelViewer';
 import type {
@@ -56,6 +57,7 @@ import type {
   MovePreview,
   MoveSnap,
   PickDetail,
+  PickSnap,
   ProjectionMode,
   SectionOverlapPair,
   SectionPlaneId,
@@ -172,6 +174,8 @@ interface ViewerShellProps {
   measurementCloudSync?: MeasurementCloudSyncState;
   projectThumbnailSync?: ProjectThumbnailSyncState;
   selectedBodyIds: string[];
+  /** U11: each picked body's role in the running command (Base, Tool). */
+  bodyPickRoles?: Readonly<Record<string, ViewerBodyPickRole>> | null;
   selectedTopology: TopologySelection | null;
   previewFaceHighlights: TopologySelection[];
   selectedEdges: TopologySelection[];
@@ -235,6 +239,8 @@ interface ViewerShellProps {
   focusGhostBodies?: readonly BodyRepresentation[];
   /** The surviving faces a History row brings into focus, lit as selected. */
   focusFaces?: readonly TopologySelection[];
+  /** M13: a hovered measurement's edges and faces (see `ModelViewer`). */
+  measureHighlights?: readonly TopologySelection[];
   canUndo: boolean;
   /** Undo is spent because older steps were dropped, not because none exist. */
   undoFloorTrimmed?: boolean;
@@ -280,6 +286,8 @@ interface ViewerShellProps {
   /** See `ModelViewerProps.topologyPicksHeld`. */
   topologyPicksHeld?: boolean;
   offsetHandle: OffsetHandleTarget | null;
+  /** See `ModelViewerProps.offsetSetTicks`. */
+  offsetSetTicks?: ModelViewerProps['offsetSetTicks'];
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   onOffsetCommit: ModelViewerProps['onOffsetCommit'];
@@ -412,8 +420,18 @@ interface ViewerShellProps {
   onMeasurePreview?:
     | ((
         selection: TopologySelection,
-        point: { x: number; y: number; z: number }
+        point: { x: number; y: number; z: number },
+        snap?: PickSnap
       ) => string | null)
+    | null;
+  /** M13: the snap kinds a measuring pick may lock onto (see `ModelViewer`). */
+  measureSnapKinds?: readonly PickSnap['kind'][] | null;
+  /** M10: a host picking model points (see `ModelViewer`). */
+  onPointPick?:
+    | ((pick: {
+        point: { x: number; y: number; z: number };
+        kind: PickSnap['kind'] | null;
+      }) => void)
     | null;
   regionHandle: RegionHandleTarget | null;
   modelPanelsHidden?: boolean;
@@ -505,6 +523,7 @@ export function ViewerShell({
   measurementCloudSync,
   projectThumbnailSync,
   selectedBodyIds,
+  bodyPickRoles = null,
   selectedTopology,
   previewFaceHighlights,
   selectedEdges,
@@ -535,6 +554,7 @@ export function ViewerShell({
   pickLabel,
   focusGhostBodies,
   focusFaces,
+  measureHighlights,
   canUndo,
   undoFloorTrimmed = false,
   canRedo,
@@ -558,6 +578,7 @@ export function ViewerShell({
   onBoxSelect,
   onBoxSelectTopology,
   offsetHandle,
+  offsetSetTicks,
   offsetDragTarget,
   onOffsetPreview,
   onOffsetCommit,
@@ -641,6 +662,8 @@ export function ViewerShell({
   datumOffsetDraft = null,
   onDatumOffsetEntry,
   onMeasurePreview,
+  measureSnapKinds,
+  onPointPick,
   regionHandle,
   modelPanelsHidden,
   facePickOnly,
@@ -972,12 +995,14 @@ export function ViewerShell({
         measurementAnnotations={placedMeasurements}
         pmiLabels={pmiLabels}
         selectedBodyIds={selectedBodyIds}
+        bodyPickRoles={bodyPickRoles}
         selectedTopology={selectedTopology}
         previewFaceHighlights={previewFaceHighlights}
         selectionCallout={selectionCallout}
         pickLabel={pickLabel}
         {...(focusGhostBodies ? { focusGhostBodies } : {})}
         {...(focusFaces ? { focusFaces } : {})}
+        {...(measureHighlights ? { measureHighlights } : {})}
         selectedEdges={selectedEdges}
         pickListEnabled={pickListEnabled}
         settings={settings}
@@ -1041,6 +1066,8 @@ export function ViewerShell({
         {...(xrayOpacity !== undefined ? { xrayOpacity } : {})}
         {...(tangentEdges !== undefined ? { tangentEdges } : {})}
         offsetHandle={offsetHandle ?? datumOffsetTarget}
+        // A datum's offset handle is never a face set's.
+        offsetSetTicks={offsetHandle ? offsetSetTicks : null}
         offsetDragTarget={offsetDragTarget ?? datumOffsetTarget}
         onOffsetPreview={
           datumOffsetTarget && datumHandle
@@ -1179,6 +1206,8 @@ export function ViewerShell({
         {...(onCommentPinClick ? { onCommentPinClick } : {})}
         commentPlacing={commentPlacing}
         onMeasurePreview={onMeasurePreview}
+        measureSnapKinds={measureSnapKinds}
+        onPointPick={onPointPick}
         regionHandle={regionHandle}
         modelPanelsHidden={modelPanelsHidden}
         {...(facePickOnly ? { facePickOnly } : {})}

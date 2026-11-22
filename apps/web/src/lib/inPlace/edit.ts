@@ -3,6 +3,7 @@ import {
   type FeatureUpdateInput
 } from '@openzcad/document-core';
 import {
+  transformStampBodyIds,
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isDatumPlaneRef,
@@ -15,6 +16,7 @@ import {
   type FeatureData,
   type FeatureId,
   type FeatureNode,
+  type ModelingPlaneReference,
   type ParamValue,
   type ParametricVector3,
   type SketchId,
@@ -266,7 +268,8 @@ export function inPlaceEditSeed(
       ('targetBodyId' in data ? data.targetBodyId : undefined),
     ownBodyIds: [
       ...(feature.bodyId ? [feature.bodyId] : []),
-      ...(data.featureKind === 'split' ? [data.secondBodyId] : [])
+      ...(data.featureKind === 'split' ? [data.secondBodyId] : []),
+      ...transformStampBodyIds(data)
     ],
     slots: {
       profiles: [],
@@ -342,6 +345,27 @@ export function inPlaceEditSeed(
     });
   };
 
+  // A Mirror's, a Split's or a mirror pattern's plane (M02, schema v119).
+  const seedPlane = (plane: ModelingPlaneReference) => {
+    if (isDatumPlaneRef(plane)) {
+      // A datum plane gone, or now after the feature, is not restored:
+      // the slot asks for another, as a clicked one would be refused.
+      if (ctx.datumPlaneUsable?.(plane.datumFeatureId) === false) {
+        missing.push('plane');
+      } else {
+        seed.slots.plane = { kind: 'datum', featureId: plane.datumFeatureId };
+      }
+    } else {
+      // A plane stored by its numbers opens typed, each on its own chip,
+      // expressions and all: the way it was given is the way it is edited.
+      seed.options.planeMode = 'typed';
+      for (const axis of ['x', 'y', 'z'] as const) {
+        value(`planeO${axis.toUpperCase()}`, plane.origin[axis]);
+        value(`planeN${axis.toUpperCase()}`, plane.normal[axis]);
+      }
+    }
+    value('offset', 0);
+  };
   switch (data.featureKind) {
     case 'revolve': {
       if (data.profile) {
@@ -373,6 +397,15 @@ export function inPlaceEditSeed(
         )
       );
       seed.options.shape = data.mode;
+      // M04 (v133): its guide line, as the path slot.
+      const guide = data.guides?.[0];
+      if (guide) {
+        seed.slots.path = guide.entityIds.flatMap((entityId) =>
+          ctx.curve(guide.sketchId, entityId)
+            ? [{ sketchId: guide.sketchId, entityId }]
+            : (missing.push('path'), [])
+        );
+      }
       if (data.endPoint) {
         // Its apex as stored, each coordinate on its own chip.
         seed.options.end = 'point';
@@ -407,6 +440,13 @@ export function inPlaceEditSeed(
       const build = data.construction === 'in-place' ? 'exact' : 'sampled';
       seed.options.saved = build;
       seed.options.build = build;
+      // M04 (v132): the twist and end scale as stored, expressions and all.
+      value('twist', data.twistDeg);
+      value('endScale', data.endScale);
+      seed.options.orientation = data.orientation ?? 'normal';
+      seed.options.corner = data.cornerRadius === undefined ? 'mitre' : 'round';
+      value('cornerRadius', data.cornerRadius);
+      seed.options.position = data.profilePosition ?? 'end';
       break;
     }
     case 'rib': {
@@ -429,7 +469,11 @@ export function inPlaceEditSeed(
     case 'wrap': {
       for (const reference of data.profiles)
         profile({ sketchId: data.sketchId, profile: reference });
-      const face = ctx.face(data.targetBodyId, data.faceReference.currentHash, data.faceReference);
+      const face = ctx.face(
+        data.targetBodyId,
+        data.faceReference.currentHash,
+        data.faceReference
+      );
       if (face) seed.slots.faces.push(face);
       else missing.push('face');
       value('depth', data.depth);
@@ -749,27 +793,7 @@ export function inPlaceEditSeed(
     case 'mirror':
     case 'split': {
       body(data.targetBodyId);
-      if (isDatumPlaneRef(data.plane)) {
-        // A datum plane gone, or now after the feature, is not restored:
-        // the slot asks for another, as a clicked one would be refused.
-        if (ctx.datumPlaneUsable?.(data.plane.datumFeatureId) === false) {
-          missing.push('plane');
-        } else {
-          seed.slots.plane = {
-            kind: 'datum',
-            featureId: data.plane.datumFeatureId
-          };
-        }
-      } else {
-        // A plane stored by its numbers opens typed, each on its own chip,
-        // expressions and all: the way it was given is the way it is edited.
-        seed.options.planeMode = 'typed';
-        for (const axis of ['x', 'y', 'z'] as const) {
-          value(`planeO${axis.toUpperCase()}`, data.plane.origin[axis]);
-          value(`planeN${axis.toUpperCase()}`, data.plane.normal[axis]);
-        }
-      }
-      value('offset', 0);
+      seedPlane(data.plane);
       if (data.featureKind === 'split') {
         seed.options.keepOriginal = data.keepOriginal ? 'yes' : 'no';
       }
@@ -933,9 +957,30 @@ export function inPlaceEditSeed(
         }
         break;
       }
+      if (data.patternKind === 'mirror') {
+        if (data.mirrorPlane) seedPlane(data.mirrorPlane);
+        break;
+      }
       value('count', data.count);
-      if (data.patternKind === 'linear') {
+      if (data.patternKind === 'path') {
+        // M02 (schema v112): the path's curves as picks; its stored start
+        // is the one the tool keeps while they stay the same curves.
         value('spacing', data.spacing);
+        for (const entityId of data.path?.entityIds ?? []) {
+          seed.slots.path.push({ sketchId: data.path!.sketchId, entityId });
+        }
+        if (data.path?.orientation === 'tangent')
+          seed.options.orient = 'tangent';
+        break;
+      }
+      if (data.patternKind === 'linear') {
+        // M02 (schema v120): a total length reopens as Total.
+        if (data.spacingMode === 'total') {
+          seed.options.extent = 'total';
+          value('total', data.spacing);
+        } else {
+          value('spacing', data.spacing);
+        }
         if (data.direction) {
           // Its repeat vector as stored, each part on its own chip.
           seed.options.axis = 'custom';
@@ -1172,9 +1217,37 @@ export function inPlaceFeatureUpdate(
           featureKind: 'loft',
           sections: request.sections,
           mode: request.mode,
-          ...(request.endPoint ? { endPoint: request.endPoint } : {})
+          ...(request.endPoint ? { endPoint: request.endPoint } : {}),
+          ...(request.guides ? { guides: request.guides as never } : {})
         },
-        ...(request.endPoint ? {} : { clearData: ['endPoint'] })
+        // M04 (v133): the card shows no connections; stored ones are kept
+        // only while the sections are the same, in the same order, and no
+        // guide replaces them. A connection names a vertex of the section at
+        // its index, so a reorder or a swapped section would move it.
+        ...((): { clearData?: string[] } => {
+          const stored = saved.featureKind === 'loft' ? saved : null;
+          const sameSections =
+            stored !== null &&
+            stored.sections.length === request.sections.length &&
+            stored.sections.every(
+              (section, index) =>
+                JSON.stringify(section) ===
+                JSON.stringify(request.sections[index])
+            );
+          const clear = [
+            ...(request.endPoint ? [] : ['endPoint']),
+            ...(request.guides || stored?.guides === undefined
+              ? []
+              : ['guides']),
+            ...(stored?.connections !== undefined &&
+            (request.guides !== undefined ||
+              request.endPoint !== undefined ||
+              !sameSections)
+              ? ['connections']
+              : [])
+          ];
+          return clear.length > 0 ? { clearData: clear } : {};
+        })()
       };
     case 'sweep':
       return {
@@ -1198,11 +1271,51 @@ export function inPlaceFeatureUpdate(
             : {}),
           ...(request.construction
             ? { construction: request.construction }
-            : {})
+            : {}),
+          ...(request.twistDeg === undefined
+            ? {}
+            : { twistDeg: request.twistDeg }),
+          ...(request.endScale === undefined
+            ? {}
+            : { endScale: request.endScale }),
+          ...(request.orientation === undefined
+            ? {}
+            : { orientation: request.orientation }),
+          ...(request.cornerRadius === undefined
+            ? {}
+            : { cornerRadius: request.cornerRadius }),
+          ...(request.profilePosition === undefined
+            ? {}
+            : { profilePosition: request.profilePosition })
         },
         // An absent construction keeps a sampled sweep sampled. Exact
-        // construction is written explicitly and cannot be cleared.
-        ...(request.guide ? {} : { clearData: ['guide'] })
+        // construction is written explicitly and cannot be cleared; an
+        // absent rail, twist or scale clears what was stored (M04, v132).
+        ...((): { clearData?: string[] } => {
+          const stored = saved.featureKind === 'sweep' ? saved : null;
+          const clear = [
+            ...(request.guide ? [] : ['guide']),
+            ...(request.twistDeg === undefined && stored?.twistDeg !== undefined
+              ? ['twistDeg']
+              : []),
+            ...(request.endScale === undefined && stored?.endScale !== undefined
+              ? ['endScale']
+              : []),
+            ...(request.orientation === undefined &&
+            stored?.orientation !== undefined
+              ? ['orientation']
+              : []),
+            ...(request.cornerRadius === undefined &&
+            stored?.cornerRadius !== undefined
+              ? ['cornerRadius']
+              : []),
+            ...(request.profilePosition === undefined &&
+            stored?.profilePosition !== undefined
+              ? ['profilePosition']
+              : [])
+          ];
+          return clear.length ? { clearData: clear } : {};
+        })()
       };
     case 'datum-point':
     case 'datum-csys':
@@ -1460,7 +1573,10 @@ export function inPlaceFeatureUpdate(
           ...(request.skippedInstances
             ? { skippedInstances: request.skippedInstances }
             : {}),
-          ...(request.points ? { points: request.points } : {})
+          ...(request.points ? { points: request.points } : {}),
+          ...(request.path ? { path: request.path } : {}),
+          ...(request.mirrorPlane ? { mirrorPlane: request.mirrorPlane } : {}),
+          ...(request.spacingMode ? { spacingMode: request.spacingMode } : {})
         },
         // R01: the world axis is the absent datum axis. M02: a pattern turned
         // back to its body, or with every copy back, stores neither list.
@@ -1474,6 +1590,10 @@ export function inPlaceFeatureUpdate(
               : []),
             ...(saved.skippedInstances && !request.skippedInstances
               ? ['skippedInstances']
+              : []),
+            // M02 (schema v120): back to the spacing between copies.
+            ...(saved.spacingMode && !request.spacingMode
+              ? ['spacingMode']
               : [])
           ];
           return cleared.length > 0 ? { clearData: cleared } : {};
@@ -1523,6 +1643,9 @@ export function inPlaceEditSourceSketchIds(data: FeatureData): SketchId[] {
     // M02: a pattern on sketch points shows the sketch its points are on,
     // and so does an M01 hole drilled at them.
     case 'pattern':
+      // M02: a pattern along a path shows the sketch its curves are on.
+      if (data.path) return [data.path.sketchId];
+      return data.points ? [data.points.sketchId] : [];
     case 'hole':
       return data.points ? [data.points.sketchId] : [];
     default:

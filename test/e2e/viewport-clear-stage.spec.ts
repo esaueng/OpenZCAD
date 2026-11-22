@@ -94,13 +94,17 @@ async function expectOpensClear(page: Page, width: number, height: number) {
   expect(model.right).toBeLessThanOrEqual(column.left + 1);
   expect(model.left).toBeGreaterThanOrEqual(0);
 
-  // The section controls open over the stage, and the cut they control
-  // is moved clear of them rather than left under them.
+  // The section controls open over the stage like any other panel: the
+  // camera stays where it was, so the cut is drawn where the model stood.
   await page.getByRole('button', { name: /^Section view — now:/ }).click();
-  const controls = await box(page, '.rail-section-panel');
+  await expect(page.locator('.rail-section-panel').first()).toBeVisible();
   const cut = await restingModel(page);
-  expect(overlaps(cut, controls)).toBe(false);
-  expect(cut.right).toBeLessThanOrEqual(rail.left + 1);
+  for (const side of ['left', 'top', 'right', 'bottom'] as const) {
+    // The cut can only shrink inside the model's own box.
+    if (side === 'left' || side === 'top')
+      expect(cut[side]).toBeGreaterThanOrEqual(model[side] - 1);
+    else expect(cut[side]).toBeLessThanOrEqual(model[side] + 1);
+  }
 }
 
 test(

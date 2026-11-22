@@ -236,6 +236,9 @@ describe('privacy policy page', () => {
     );
     expect(official.vars.AUTH_SESSION_DAYS).toBe('30');
     expect(sectionText('account')).toContain('A session lasts 30 days');
+    expect(sectionText('account')).toContain(
+      'never beyond 90 days after you signed in'
+    );
     // The provider is named as today's, because the deployment can change it.
     expect(official.vars.AI_PROVIDER).toBe('openrouter');
     expect(sectionText('assistant')).toContain('Today that is OpenRouter');

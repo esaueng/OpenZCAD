@@ -16,11 +16,13 @@ import type {
 export const DIRECT_EDIT_FIXTURE_FORMAT =
   'openzcad-direct-edit-fixture' as const;
 /**
- * Version 2 adds the `feature-build` op. A version 1 file is still read:
- * every field it carries kept its meaning.
+ * Version 2 adds the `feature-build` op. Version 3 adds the `offset-faces`
+ * op and `edit.additionalFaces`, so a face set's offset is recorded as the
+ * set it was, not as its first face. Version 1 and 2 files are still read:
+ * every field they carry kept its meaning.
  */
-export const DIRECT_EDIT_FIXTURE_FORMAT_VERSION = 2 as const;
-export const DIRECT_EDIT_FIXTURE_READABLE_VERSIONS = [1, 2] as const;
+export const DIRECT_EDIT_FIXTURE_FORMAT_VERSION = 3 as const;
+export const DIRECT_EDIT_FIXTURE_READABLE_VERSIONS = [1, 2, 3] as const;
 
 /**
  * Interaction operations the corpus knows how to replay.
@@ -33,6 +35,8 @@ export const DIRECT_EDIT_FIXTURE_READABLE_VERSIONS = [1, 2] as const;
  */
 export type DirectEditFixtureOp =
   | 'offset-face'
+  /** A face set moved together (M07): `face` first, then `additionalFaces`. */
+  | 'offset-faces'
   | 'resize-cylinder-radius'
   | 'edit-fillet'
   | 'remove-face-feature'
@@ -71,8 +75,17 @@ export interface DirectEditFixtureEdit {
   op: DirectEditFixtureOp;
   targetBodyId: string;
   face?: DirectEditFixtureFace;
+  /**
+   * `offset-faces` only, and a `feature-build` of one: the other faces of the
+   * set, in the order the edit names them. `face` is the edit's first face.
+   */
+  additionalFaces?: DirectEditFixtureFace[];
   edges?: DirectEditFixtureEdge[];
-  /** Offset distance, radius, or modifier size — whatever the op takes. */
+  /**
+   * Offset distance, radius, or modifier size — whatever the op takes. A
+   * `feature-build` records 0, except a face set's offset, which records its
+   * distance when that is a plain number.
+   */
   value: number;
   /** `feature-build` only: the refused feature, present in `document`. */
   featureId?: string;

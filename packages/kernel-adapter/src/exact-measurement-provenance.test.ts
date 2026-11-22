@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { toFeatureId, type FaceTopologyReferenceV5 } from '@openzcad/shared';
-import { measurementProvenanceKey } from './exact-history-cache';
+import {
+  measurementProvenanceKey,
+  sameMeasurementProvenance
+} from './exact-history-cache';
 import type { ExactShape } from './exact-types';
 
 function fixture() {
@@ -40,6 +43,7 @@ describe('measurement provenance encoding', () => {
   it('ignores insertion order without retaining a stale mutable witness', () => {
     const { face, shape } = fixture();
     const original = measurementProvenanceKey(shape, undefined);
+    const snapshot = measurementProvenanceKey(shape, undefined, 'snapshot');
     const reordered: ExactShape = {
       ...shape,
       lineage: {
@@ -62,8 +66,18 @@ describe('measurement provenance encoding', () => {
       }
     };
     expect(measurementProvenanceKey(reordered, undefined)).toBe(original);
+    const reorderedSnapshot = measurementProvenanceKey(
+      reordered,
+      undefined,
+      'snapshot'
+    );
+    expect(reorderedSnapshot).not.toBe(snapshot);
+    expect(sameMeasurementProvenance(snapshot, reorderedSnapshot)).toBe(true);
     face.witness.centroid![0] = 1;
     expect(measurementProvenanceKey(shape, undefined)).not.toBe(original);
+    const changed = measurementProvenanceKey(shape, undefined, 'snapshot');
+    expect(changed.length).toBe(snapshot.length);
+    expect(sameMeasurementProvenance(reorderedSnapshot, changed)).toBe(false);
   });
 
   it('keeps native JSON number, escaping and custom serialization behavior', () => {

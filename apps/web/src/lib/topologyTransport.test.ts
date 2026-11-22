@@ -272,6 +272,74 @@ describe('explicit reply topology transport', () => {
     ).toBe(false);
   });
 
+  it('keeps a large ASCII publication inside the same cache budget with UTF-8', () => {
+    const source = projection({ faces: [], edges: [], note: 'a'.repeat(160) });
+    const body = source.bodyRepresentations[id]!;
+    for (let i = 0; i < 16; i += 1) {
+      const bodyId = toBodyId(`body_${i}`);
+      source.bodyRepresentations[bodyId] = {
+        ...body,
+        bodyId,
+        topology: structuredClone(body.topology!)
+      };
+    }
+    const transport = new TopologyTransport(6500);
+    expect(transport.pack(source, 'json-v2').topologyJson).toBeUndefined();
+    const packet = structuredClone(transport.pack(source, 'utf8-v1'));
+    expect(Object.keys(packet.topologyJson!)).toHaveLength(17);
+    expect(ArrayBuffer.isView(packet.topologyJson![id])).toBe(true);
+    unpackReplyTopologies(packet.derived, packet.topologyJson);
+    expect(packet.derived).toStrictEqual(source);
+    expect(transport.pack(source, 'json-v2').topologyJson).toBeUndefined();
+  });
+
+  it('round-trips UTF-8, unpaired surrogates and optional properties across encodings', () => {
+    const source = projection({ ...tree(), missing: undefined });
+    const transport = new TopologyTransport();
+    for (const encoding of ['utf8-v1', 'json-v2', 'utf8-v1'] as const) {
+      const packet = structuredClone(transport.pack(source, encoding));
+      expect(typeof packet.topologyJson![id]).toBe(
+        encoding === 'json-v2' ? 'string' : 'object'
+      );
+      unpackReplyTopologies(
+        packet.derived,
+        packet.topologyJson,
+        packet.topologyUndefined
+      );
+      expect(packet.derived).toStrictEqual(source);
+      if (encoding === 'utf8-v1') {
+        const payload = packet.topologyJson![id] as Uint8Array;
+        payload.fill(0);
+        const again = structuredClone(transport.pack(source, encoding));
+        unpackReplyTopologies(
+          again.derived,
+          again.topologyJson,
+          again.topologyUndefined
+        );
+        expect(again.derived).toStrictEqual(source);
+      }
+    }
+  });
+
+  it('rejects invalid UTF-8 before installing any body topology', () => {
+    const source = projection(tree());
+    const other = toBodyId('body_other');
+    source.bodyRepresentations[other] = {
+      ...source.bodyRepresentations[id]!,
+      bodyId: other,
+      topology: structuredClone(source.bodyRepresentations[id]!.topology!)
+    };
+    const packet = structuredClone(
+      new TopologyTransport().pack(source, 'utf8-v1')
+    );
+    packet.topologyJson![other] = new Uint8Array([0xc0, 0x80]);
+    expect(() =>
+      unpackReplyTopologies(packet.derived, packet.topologyJson)
+    ).toThrow();
+    expect(packet.derived.bodyRepresentations[id]!.topology).toBeUndefined();
+    expect(packet.derived.bodyRepresentations[other]!.topology).toBeUndefined();
+  });
+
   it('bounds the aggregate encoded publication as well as individual cache entries', () => {
     const source = projection({ faces: [], edges: [] });
     const body = source.bodyRepresentations[id]!;
@@ -456,5 +524,79 @@ describe('explicit reply topology transport', () => {
     expect(() =>
       unpackReplyTopologies(source, { [id]: '{"faces":[],"edges":[]}' })
     ).toThrow();
+  });
+
+  it('preserves aliases across a previous large publication and a re-encoded root', () => {
+    const transport = new TopologyTransport(128 * 1024);
+    const source = projection(tree());
+    const sample = source.bodyRepresentations[id]!;
+    const fresh = () => Array.from({ length: 256 }, () => tree());
+    const bodies = fresh();
+    function pack(roots: ReturnType<typeof fresh>, metadata?: object) {
+      return transport.pack(
+        {
+          ...source,
+          bodyRepresentations: Object.fromEntries(
+            roots.map((topology, n) => {
+              const bodyId = toBodyId('history-' + n);
+              return [
+                bodyId,
+                {
+                  ...sample,
+                  bodyId,
+                  topology,
+                  ...(n === 0 && metadata ? { metadata } : {})
+                }
+              ];
+            })
+          )
+        },
+        'utf8-v1'
+      );
+    }
+    expect(Object.keys(pack(bodies).topologyJson!)).toHaveLength(256);
+    const changed = [tree(), ...bodies.slice(1)].reverse();
+    expect(Object.keys(pack(changed).topologyJson!)).toHaveLength(256);
+    expect(pack(changed, bodies[1]!.edges).topologyJson).toBeUndefined();
+    // The removed root is outside this publication.
+    expect(pack(changed, bodies[0]!.edges).topologyJson).toBeDefined();
+    const [first, second] = changed;
+    expect(
+      pack([first!, first!, ...changed.slice(2)]).topologyJson
+    ).toBeUndefined();
+    expect(
+      pack([{ ...first!, edges: second!.edges }, ...changed.slice(1)])
+        .topologyJson
+    ).toBeUndefined();
+    const edgeList: never[] = [];
+    expect(
+      pack([
+        { ...first!, edges: edgeList },
+        { ...second!, edges: edgeList },
+        ...changed.slice(2)
+      ]).topologyJson
+    ).toBeUndefined();
+    // The first body is reused. A fresh encoding between its two appearances
+    // eventually rolls the cache over, so the last body now has a different
+    // encoding entry for the very same root. It must still fall back.
+    const original = pack(bodies).topologyJson!['history-0'];
+    expect(original).toBeInstanceOf(Uint8Array);
+    let rolled = false;
+    for (let i = 0; i < 128 && !rolled; i++) {
+      const inserted = tree();
+      inserted.extra.text = 'x'.repeat(2048);
+      const duplicate = [
+        bodies[0]!,
+        inserted,
+        ...bodies.slice(2, -1),
+        bodies[0]!
+      ];
+      expect(pack(duplicate).topologyJson).toBeUndefined();
+      const current = transport.pack(projection(bodies[0]), 'utf8-v1')
+        .topologyJson?.[id];
+      expect(current).toBeInstanceOf(Uint8Array);
+      rolled = current !== original;
+    }
+    expect(rolled).toBe(true);
   });
 });

@@ -21,6 +21,7 @@
 import type { DerivedState } from '@openzcad/shared';
 import type { ExactBuildResult } from './exact-types';
 import type { EdgeSelectionMemoryState } from './exact-edge-selection-transport';
+import type { PrimitiveReuseState } from './exact-primitive-cache';
 import { RemusKernel } from './remus-runtime';
 
 /** Bumped whenever the JS half of a persisted session changes shape. */
@@ -55,6 +56,189 @@ export interface PersistedHistorySession {
    * retired, so a restore carries the count on instead of starting at zero.
    */
   replayWork: number;
+  /**
+   * The captured kernel's independent-reuse tables (primitive results and
+   * prepared transforms/intersections), whose handles the snapshot keeps.
+   * Restored with it, the first edit after a reopen reuses them as the
+   * capturing session would have, instead of replaying them because the
+   * restored kernel had none. Absent in records written before it existed.
+   */
+  reuse?: PrimitiveReuseState;
+  /**
+   * {@link reuseStateDigest} of `reuse`, checked before any entry is adopted,
+   * as `kernelDigest` is for the kernel bytes: a damaged table is dropped
+   * (the edit replays) rather than trusted. Present exactly when `reuse` is.
+   */
+  reuseDigest?: string;
+}
+
+/**
+ * A type-tagged, injective encoding of a structured-clonable value: a map,
+ * a set, an array, a typed array, a plain object and a primitive each get
+ * their own tag, so no value of one type encodes like another (a plain
+ * object shaped like an encoded map included). Maps keep their order.
+ */
+function canonicalJson(value: unknown): string {
+  const encode = (item: unknown): unknown => {
+    if (item instanceof Map)
+      return [
+        'M',
+        [...item].map(([key, entry]) => [encode(key), encode(entry)])
+      ];
+    if (item instanceof Set) return ['S', [...item].map(encode)];
+    if (Array.isArray(item)) return ['A', item.map(encode)];
+    if (ArrayBuffer.isView(item))
+      return [
+        'B',
+        item.constructor.name,
+        Array.from(item as unknown as ArrayLike<number>)
+      ];
+    if (item !== null && typeof item === 'object')
+      return [
+        'O',
+        Object.keys(item).map((key) => [
+          key,
+          encode((item as Record<string, unknown>)[key])
+        ])
+      ];
+    return ['P', item === undefined ? null : item, typeof item];
+  };
+  return JSON.stringify(encode(value));
+}
+
+/**
+ * The digest a session stores beside its reuse tables: two independent
+ * 53-bit string hashes of their canonical JSON. It detects storage damage,
+ * as `kernelDigest` does for the kernel bytes; like those bytes, the tables
+ * live only in this device's own local store.
+ */
+export function reuseStateDigest(state: PrimitiveReuseState): string | null {
+  let text: string;
+  try {
+    text = canonicalJson(state);
+  } catch {
+    return null;
+  }
+  const hash = (seed: number) => {
+    let h1 = 0xdeadbeef ^ seed;
+    let h2 = 0x41c6ce57 ^ seed;
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      h1 = Math.imul(h1 ^ code, 2654435761);
+      h2 = Math.imul(h2 ^ code, 1597334677);
+    }
+    h1 =
+      Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^
+      Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 =
+      Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^
+      Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+  };
+  return `${text.length.toString(36)}-${hash(0)}-${hash(0x9e3779b9)}`;
+}
+
+/** A dense array (no holes) whose every item passes `check`. */
+function denseEvery(value: unknown, check: (item: unknown) => boolean) {
+  if (!Array.isArray(value)) return false;
+  for (let index = 0; index < value.length; index += 1)
+    if (!(index in value) || !check(value[index])) return false;
+  return true;
+}
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object';
+const isHandleList = (value: unknown): value is number[] =>
+  denseEvery(value, (item) => Number.isSafeInteger(item));
+const isStringList = (value: unknown) =>
+  denseEvery(value, (item) => typeof item === 'string');
+/**
+ * A shape as a build stores it: handle list, and (when present) lineage
+ * whose reference tables are maps and whose diagnostics are a list, as the
+ * reuse copy reads them.
+ */
+const isShape = (value: unknown) =>
+  isObject(value) &&
+  isHandleList(value.solids) &&
+  (value.rectangularStock === undefined ||
+    (value.solids.length === 1 &&
+      value.rectangularStock === value.solids[0])) &&
+  (value.lineage === undefined ||
+    (isObject(value.lineage) &&
+      value.lineage.faceReferences instanceof Map &&
+      value.lineage.edgeReferences instanceof Map &&
+      Array.isArray(value.lineage.diagnostics))) &&
+  (value.nativeVertices === undefined ||
+    (isObject(value.nativeVertices) &&
+      value.nativeVertices.bySolid instanceof Map &&
+      value.nativeVertices.withheldBySolid instanceof Map)) &&
+  (value.referenceMesh === undefined ||
+    (isObject(value.referenceMesh) &&
+      value.referenceMesh.vertices instanceof Float64Array &&
+      value.referenceMesh.indices instanceof Uint32Array));
+
+/**
+ * Shape checks on stored reuse tables; any doubt refuses the session. Each
+ * prepared entry may only mark consumed, mesh or partial-revolve the bodies
+ * it names as operands or results, as a recorded build does.
+ */
+function isReuseState(value: unknown): value is PrimitiveReuseState {
+  if (!isObject(value)) return false;
+  const keyed = (
+    entries: unknown,
+    check: (entry: Record<string, unknown>) => boolean
+  ) =>
+    denseEvery(
+      entries,
+      (item) =>
+        Array.isArray(item) &&
+        item.length === 2 &&
+        typeof item[0] === 'string' &&
+        isObject(item[1]) &&
+        Number.isSafeInteger(item[1].index) &&
+        (item[1].index as number) >= 0 &&
+        typeof item[1].digest === 'string' &&
+        check(item[1])
+    );
+  return (
+    keyed(value.primitives, (entry) => isShape(entry.shape)) &&
+    keyed(value.prepared, (entry) => {
+      const { inputs, shapes, consumed, mesh, partialRevolve } = entry;
+      if (
+        !denseEvery(
+          inputs,
+          (input) =>
+            isObject(input) &&
+            typeof input.bodyId === 'string' &&
+            isShape(input.shape) &&
+            typeof input.consumed === 'boolean' &&
+            typeof input.mesh === 'boolean' &&
+            typeof input.partialRevolve === 'boolean'
+        ) ||
+        !(shapes instanceof Map) ||
+        ![...shapes].every(
+          ([bodyId, shape]) => typeof bodyId === 'string' && isShape(shape)
+        ) ||
+        !isStringList(consumed) ||
+        !isStringList(mesh) ||
+        !isStringList(partialRevolve)
+      )
+        return false;
+      const operands = new Set(
+        (inputs as { bodyId: string }[]).map((input) => input.bodyId)
+      );
+      const named = new Set([
+        ...operands,
+        ...(shapes as Map<string, unknown>).keys()
+      ]);
+      return (
+        (consumed as string[]).every((id) => operands.has(id)) &&
+        [...(mesh as string[]), ...(partialRevolve as string[])].every((id) =>
+          named.has(id)
+        )
+      );
+    })
+  );
 }
 
 interface SnapshotKernelStatics {
@@ -149,7 +333,10 @@ export function isPersistedHistorySession(
     build.partialRevolveBodies instanceof Set &&
     Array.isArray(build.warnings) &&
     Array.isArray(build.featureWarnings) &&
-    Array.isArray(build.referenceRepairs)
+    Array.isArray(build.referenceRepairs) &&
+    (session.reuse === undefined
+      ? session.reuseDigest === undefined
+      : typeof session.reuseDigest === 'string' && isReuseState(session.reuse))
   );
 }
 

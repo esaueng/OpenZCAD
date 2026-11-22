@@ -18,6 +18,7 @@
   "bounded-history-cache.spec.ts": 18,
   "build-reach.spec.ts": 31,
   "cloud-sync.spec.ts": 106,
+  "cnc-layout.spec.ts": 18,
   "collaboration-save-refusal.spec.ts": 8,
   "collaboration.spec.ts": 91,
   "command-contract.spec.ts": 73,
@@ -116,6 +117,8 @@
   "perf-pattern-preview.spec.ts": 0,
   "perf-probe.spec.ts": 0,
   "perf-profile.spec.ts": 0,
+  "perf-step-export.spec.ts": 0,
+  "perf-step-import.spec.ts": 0,
   "phone-stage.spec.ts": 45,
   "primitive-ghost-hole-pick.spec.ts": 5,
   "primitive-position.spec.ts": 6,
@@ -197,5 +200,7 @@
   "workspace-chrome.spec.ts": 5,
   "workspace-loading.spec.ts": 4,
   "workspace-polish.spec.ts": 95,
-  "workspace-tour.spec.ts": 14
+  "workspace-tour.spec.ts": 14,
+  "offset-face-set.spec.ts": 205,
+  "selected-face-hole.spec.ts": 15
 }

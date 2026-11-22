@@ -29,6 +29,90 @@ export const ACTIVE1_BUDGETS = Object.freeze({
   }),
   /** The W01 screen-feedback target the interaction budgets are judged by. */
   interactionTargetMs: 100,
+  /**
+   * H02 face drags (`face-drag` probe), per `perf-face-drag-trace` case
+   * label. The pointer is followed by disposable proxy frames; the exact
+   * preview is built once the hand rests. Regression ceilings from two runs
+   * on the RX 6600 (Vulkan) in
+   * docs/performance/2026-11-20-drag-orbit-sustained-baselines.md: medians
+   * proxy lag 14–15 / 15–16 ms (p50 / p95), frame interval over the whole
+   * pointer motion 16.6 / 17.2–18.2 ms (p50 / p95, 119–122 frames in 2 s), exact preview round trip
+   * 63–404 ms, release → accepted 74–170 ms, and first exact geometry
+   * (from the first move; built only at rest) 2.3–2.7 s, which misses the
+   * H02 100 ms target. That budget is a regression ceiling only.
+   */
+  faceDrag: Object.freeze({
+    'filleted union width 30 to 22.5 mm': Object.freeze({
+      firstGeometryMs: 3_200,
+      lagP50Ms: 25,
+      lagP95Ms: 30,
+      exactPreviewMs: 600,
+      frameIntervalP50Ms: 20,
+      frameIntervalP95Ms: 25,
+      releaseToFrameMs: 160
+    }),
+    'public filleted union history': Object.freeze({
+      firstGeometryMs: 3_000,
+      lagP50Ms: 25,
+      lagP95Ms: 30,
+      exactPreviewMs: 280,
+      frameIntervalP50Ms: 20,
+      frameIntervalP95Ms: 25,
+      releaseToFrameMs: 250
+    }),
+    'rounded box top face (primitive proxy)': Object.freeze({
+      lagP50Ms: 25,
+      lagP95Ms: 30,
+      frameIntervalP50Ms: 20,
+      frameIntervalP95Ms: 25,
+      releaseToFrameMs: 260
+    }),
+    'native holder +Z face (plate, cut, two arms)': Object.freeze({
+      firstGeometryMs: 2_800,
+      lagP50Ms: 25,
+      lagP95Ms: 30,
+      exactPreviewMs: 120,
+      frameIntervalP50Ms: 20,
+      frameIntervalP95Ms: 25,
+      releaseToFrameMs: 130
+    })
+  }),
+  /**
+   * H02's drag targets: 60 fps, first geometry ≤ 100 ms, p95 ≤ 50 ms, for
+   * what follows the pointer (proxy frames, or streamed exact frames when a
+   * drag has no proxy). Owner decision 2026-11-21: proxy-led dragging meets
+   * them; first exact geometry stays a measured, budgeted row
+   * (`faceDrag[...].firstGeometryMs`), and an exact preview fast enough to
+   * stream is ROADMAP K11.
+   */
+  faceDragTargets: Object.freeze({
+    frameIntervalMs: 1000 / 60,
+    firstGeometryMs: 100,
+    lagP95Ms: 50
+  }),
+  /**
+   * H02 orbit tails (`orbit` probe), per `<scene> x<cpu slow-down>`, or
+   * `* x<rate>` for every scene: the viewer's own frame interval p95/p99
+   * (`oz:viewer.frame`) and its frames per second, a floor. Every scene
+   * measured 58.5–60 fps with no viewer frame over 16.8 ms at both rates on
+   * the RX 6600.
+   */
+  orbit: Object.freeze({
+    '* x1': Object.freeze({ p95Ms: 20, p99Ms: 25, minViewerFps: 55 }),
+    '* x4': Object.freeze({ p95Ms: 25, p99Ms: 34, minViewerFps: 50 })
+  }),
+  /**
+   * H02 sustained-session retention (`sustained` probe, 300 edits of the
+   * public filleted union with idle compaction). From
+   * docs/performance/2026-11-20-sustained-session.md: peak WASM memory
+   * 102 MB (97 MiB), peak retired slots 66,194, heap and edit time flat.
+   */
+  sustained: Object.freeze({
+    peakLinearMemoryMiB: 128,
+    peakRetiredSlots: 2 * 65_536,
+    heapGrowthMiB: 4,
+    editDriftRatio: 1.15
+  }),
   /** The M02 gate: a 10 × 10 grid of the ×50 bar, input → accepted frame. */
   patternPreview10x10: Object.freeze({
     nodeMedianMs: 10_000,

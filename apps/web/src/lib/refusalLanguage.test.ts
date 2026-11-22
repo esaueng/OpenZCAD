@@ -596,6 +596,17 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     }
   });
 
+  it("keeps a face set offset's later-step refusal, which names its face by place", () => {
+    const sentence =
+      "Offsetting face 2 after the others would change the body's topology. Offset fewer faces, or a smaller distance.";
+    expect(plainRefusal(sentence)).toEqual({ message: sentence });
+    expect(plainRefusal(sentence, 'topology').message).toBe(sentence);
+    // The kernel's own entity numbers still read as kernel text.
+    expect(plainRefusal('offsetting face 2 hit edge 7').message).not.toBe(
+      'offsetting face 2 hit edge 7'
+    );
+  });
+
   it('leaves product sentences with user names and face labels alone', () => {
     for (const sentence of [
       'Subtract refused: "left_bracket" and "Box 2" could not be cut exactly, and an approximate result was declined.',
@@ -606,5 +617,14 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     ]) {
       expect(plainRefusal(sentence)).toEqual({ message: sentence });
     }
+  });
+});
+
+describe('exact sweep path refusals (M04)', () => {
+  it('names neither corner mode as the fix when the path turns back on itself', () => {
+    const { message } = plainRefusal(
+      'exact sweep path turns back on itself at joint 1'
+    );
+    expect(message).toContain('neither a mitre nor a round corner');
   });
 });

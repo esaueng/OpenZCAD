@@ -68,7 +68,8 @@ export interface StepExportMetadata {
   protocol?: StepProtocol;
   /**
    * I02: the Objects folders to write as an assembly. Absent, or with no
-   * folder, the file is one product holding every solid, as before.
+   * folder and no placed part, the file is one product holding every
+   * solid, as before. AS04: a placed assembly part makes it an assembly.
    */
   assembly?: StepExportAssembly;
   /**
@@ -91,7 +92,52 @@ export interface StepExportAssembly {
     name: string;
     solidCount: number;
     folder: number | null;
+    /**
+     * AS04: where the body's part sits in its parent, a rigid column-major
+     * 4×4 in the file's length unit (an assembly part's solved pose). The
+     * part's geometry stays in its own frame. Absent: the identity.
+     */
+    placement?: readonly number[];
   }[];
+}
+
+/** A STEP real: always a decimal point, never `-0`, exponent as `E`. */
+function stepReal(value: number): string {
+  // A quarter turn's cosine is 6e-17, not 0: below 1e-12 is written as 0.
+  const near = Math.abs(value) < 1e-12 ? 0 : Number(value.toPrecision(15));
+  // Rounding the largest finite values up would overflow to Infinity.
+  const rounded = Number.isFinite(near) ? near : value;
+  const text = String(Object.is(rounded, -0) ? 0 : rounded).toUpperCase();
+  if (text.includes('.')) return text;
+  const at = text.indexOf('E');
+  return at < 0 ? `${text}.` : `${text.slice(0, at)}.${text.slice(at)}`;
+}
+
+/**
+ * The frame, in a part, that a rigid placement carries onto its parent's
+ * frame: the inverse of the placement, `[Rᵀ | −Rᵀt]`, as its origin, axis
+ * (local z) and reference direction (local x). ISO 10303-42: an
+ * `ITEM_DEFINED_TRANSFORMATION` from this frame to the parent's identity
+ * frame places the part by `placement`.
+ */
+function inversePlacementFrame(m: readonly number[]): {
+  origin: number[];
+  z: number[];
+  x: number[];
+} {
+  // Column-major: column c is m[4c .. 4c + 2].
+  const column = (c: number) => [m[4 * c]!, m[4 * c + 1]!, m[4 * c + 2]!];
+  const r = [column(0), column(1), column(2)];
+  const t = column(3);
+  // Rᵀ's columns are R's rows.
+  const row = (i: number) => [r[0]![i]!, r[1]![i]!, r[2]![i]!];
+  const dot = (a: number[], b: number[]) =>
+    a[0]! * b[0]! + a[1]! * b[1]! + a[2]! * b[2]!;
+  return {
+    origin: [0, 1, 2].map((i) => -dot(r[i]!, t)),
+    z: row(2),
+    x: row(0)
+  };
 }
 
 /**
@@ -179,11 +225,14 @@ export function formatStepReal(value: number): string {
     throw new Error(`STEP export produced a non-finite number (${value}).`);
   }
   if (value === 0) return '0.';
-  const [mantissa, exponent] = String(value).split('e');
-  const withPoint = mantissa!.includes('.') ? mantissa! : `${mantissa}.`;
-  return exponent === undefined
-    ? withPoint
-    : `${withPoint}E${exponent.replace('+', '')}`;
+  const text = String(value);
+  const exponent = text.indexOf('e');
+  if (exponent < 0) return text.includes('.') ? text : text + '.';
+  const mantissa = text.slice(0, exponent);
+  const power = text.slice(
+    text[exponent + 1] === '+' ? exponent + 2 : exponent + 1
+  );
+  return (mantissa.includes('.') ? mantissa : mantissa + '.') + 'E' + power;
 }
 
 /**
@@ -194,8 +243,9 @@ export function formatStepReal(value: number): string {
  */
 export const STEP_ZERO_RESIDUE = 1e-12;
 
-const STRING_LITERAL = /'(?:[^']|'')*'/g;
-const REAL = /(?<![\w#.$])[+-]?\d+\.\d*(?:[eE][+-]?\d+)?(?![\w.])/g;
+// Match whole STEP strings first so digits inside names are never rewritten.
+const STRING_OR_REAL =
+  /'(?:[^']|'')*'|(?<![\w#.$])[+-]?\d+\.\d*(?:[eE][+-]?\d+)?(?![\w.])/g;
 const ENTITY_LINE = /^#(\d+)\s*=\s*([A-Z][A-Z0-9_]*)\(/;
 const ENTITY_ID = /^#(\d+)\s*=/;
 /** A written entity line: its id and everything after `= `. */
@@ -206,21 +256,15 @@ const SNAPPED_ENTITIES = new Set(['CARTESIAN_POINT', 'DIRECTION']);
 
 /** Rewrites every real outside string literals in one entity line. */
 function normalizeRealsInLine(line: string): string {
+  if (!line.includes('.')) return line;
   const snap = SNAPPED_ENTITIES.has(ENTITY_LINE.exec(line)?.[2] ?? '');
-  const rewrite = (segment: string) =>
-    segment.replace(REAL, (literal) => {
-      const value = Number(literal);
-      return formatStepReal(
-        snap && Math.abs(value) < STEP_ZERO_RESIDUE ? 0 : value
-      );
-    });
-  let out = '';
-  let last = 0;
-  for (const match of line.matchAll(STRING_LITERAL)) {
-    out += rewrite(line.slice(last, match.index)) + match[0];
-    last = match.index + match[0].length;
-  }
-  return out + rewrite(line.slice(last));
+  return line.replace(STRING_OR_REAL, (literal) => {
+    if (literal[0] === "'") return literal;
+    const value = Number(literal);
+    return formatStepReal(
+      snap && Math.abs(value) < STEP_ZERO_RESIDUE ? 0 : value
+    );
+  });
 }
 
 /** Replaces the one line `pattern` matches, or refuses the export. */
@@ -337,7 +381,9 @@ function writeAssembly(
   const product = (
     name: string,
     category: 'part' | 'assembly',
-    items: readonly string[]
+    items: readonly string[],
+    /** AS04: the part's placement in its parent; absent, the identity. */
+    placement?: readonly number[]
   ): StepProductRef => {
     const literal = stepStringLiteral(name);
     const id = entity(
@@ -349,20 +395,26 @@ function writeAssembly(
       `PRODUCT_DEFINITION('design', '', ${formation}, #${definition[2]})`
     );
     const shape = entity(`PRODUCT_DEFINITION_SHAPE('', '', ${definitionId})`);
-    const placement = frame();
+    const own = placement ? inversePlacementFrame(placement) : null;
+    const point = (v: number[]) => `(${v.map(stepReal).join(', ')})`;
+    const partFrame = own
+      ? entity(
+          `AXIS2_PLACEMENT_3D('', ${entity(`CARTESIAN_POINT('', ${point(own.origin)})`)}, ${entity(`DIRECTION('', ${point(own.z)})`)}, ${entity(`DIRECTION('', ${point(own.x)})`)})`
+        )
+      : frame();
     const kind =
       category === 'part'
         ? 'ADVANCED_BREP_SHAPE_REPRESENTATION'
         : 'SHAPE_REPRESENTATION';
     const context = entity(contextText);
     const shapeRepresentation = entity(
-      `${kind}(${literal}, (${[...items, placement].join(', ')}), ${context})`
+      `${kind}(${literal}, (${[...items, partFrame].join(', ')}), ${context})`
     );
     entity(`SHAPE_DEFINITION_REPRESENTATION(${shape}, ${shapeRepresentation})`);
     return {
       definition: definitionId,
       representation: shapeRepresentation,
-      frame: placement,
+      frame: partFrame,
       shape
     };
   };
@@ -401,7 +453,7 @@ function writeAssembly(
   for (const body of assembly.bodies) {
     const solids = breps.slice(next, next + body.solidCount);
     next += body.solidCount;
-    const made = product(body.name, 'part', solids);
+    const made = product(body.name, 'part', solids, body.placement);
     place(made, body.folder === null ? root : folders[body.folder]!, body.name);
     for (let solid = 0; solid < body.solidCount; solid += 1)
       parts.push({
@@ -544,8 +596,11 @@ export function finishStepExport(
   entity(
     `MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('', (${styled.join(', ')}), #${representation[4]})`
   );
+  // AS04: placed assembly parts are written as structure too.
   const assembled = Boolean(
-    metadata.assembly && metadata.assembly.folders.length > 0
+    metadata.assembly &&
+    (metadata.assembly.folders.length > 0 ||
+      metadata.assembly.bodies.some((body) => body.placement))
   );
   // D07: semantic PMI on the shape of the product each solid belongs to:
   // the one product, or (with Objects folders) each body's own part.

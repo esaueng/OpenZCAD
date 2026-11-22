@@ -378,16 +378,30 @@ export function stepPreviewMatcher(
 ): (x: number, y: number, z: number) => boolean {
   const { origin, quantum, movingKeys } = profile;
   const bounds = movingBounds(profile);
-  return (x, y, z) =>
-    x >= bounds.min.x &&
-    y >= bounds.min.y &&
-    z >= bounds.min.z &&
-    x <= bounds.max.x &&
-    y <= bounds.max.y &&
-    z <= bounds.max.z &&
-    stepPreviewNeighbourKeys(stepPreviewKey(x, y, z, origin, quantum)).some(
-      (cell) => movingKeys.has(cell)
+  // Positions repeat across triangles, edge lines and silhouette candidates.
+  // The profile is fixed while these buffers are classified for one gesture.
+  const neighbours = new Map<number, boolean>();
+  return (x, y, z) => {
+    if (!(
+      x >= bounds.min.x &&
+      x <= bounds.max.x &&
+      y >= bounds.min.y &&
+      y <= bounds.max.y &&
+      z >= bounds.min.z &&
+      z <= bounds.max.z
+    ))
+      return false;
+    const key = stepPreviewKey(x, y, z, origin, quantum);
+    if (key < 0) return false;
+    if (movingKeys.has(key)) return true;
+    const known = neighbours.get(key);
+    if (known !== undefined) return known;
+    const matches = stepPreviewNeighbourKeys(key).some((cell) =>
+      movingKeys.has(cell)
     );
+    if (neighbours.size < 16_384) neighbours.set(key, matches);
+    return matches;
+  };
 }
 
 /** The moving cells' extent, padded by the welding reach. */

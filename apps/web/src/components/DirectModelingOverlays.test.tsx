@@ -28,6 +28,129 @@ function moveTitle(): string | null {
 }
 
 describe('Move overlay', () => {
+  it('offers Copies and the link choice only for a copy (M10)', () => {
+    const onStamps = vi.fn();
+    const onLinked = vi.fn();
+    const props: ComponentProps<typeof MoveOverlay> = {
+      bodyName: 'Box',
+      targetBodyId: 'box',
+      values: { translation: { x: 30, y: 0, z: 0 }, rotationDeg: zero },
+      units: 'mm',
+      snap: null,
+      onChange: vi.fn(),
+      onConfirm: vi.fn(),
+      onCancel: vi.fn(),
+      copy: false,
+      onCopy: vi.fn(),
+      stamps: 1,
+      onStamps,
+      linked: true,
+      onLinked
+    };
+    const { rerender } = render(<MoveOverlay {...props} />);
+    expect(screen.queryByLabelText('Copies')).toBeNull();
+    rerender(<MoveOverlay {...props} copy />);
+    const copies = screen.getByLabelText('Copies');
+    expect(copies).toHaveValue(1);
+    // One copy has nothing to link.
+    expect(screen.queryByLabelText(/Link copies/)).toBeNull();
+    // A half-typed or out-of-range count is held, not sent.
+    fireEvent.change(copies, { target: { value: '' } });
+    fireEvent.change(copies, { target: { value: '51' } });
+    fireEvent.change(copies, { target: { value: '2.5' } });
+    expect(onStamps).not.toHaveBeenCalled();
+    fireEvent.change(copies, { target: { value: '4' } });
+    expect(onStamps).toHaveBeenLastCalledWith(4);
+    rerender(<MoveOverlay {...props} copy stamps={4} />);
+    expect(
+      screen
+        .getByRole('form', { name: 'Move controls' })
+        .querySelector('.in-place-command-hint')?.textContent
+    ).toContain('4 copies of Box');
+    const link = screen.getByLabelText('Link copies (one History step)');
+    expect(link).toBeChecked();
+    fireEvent.click(link);
+    expect(onLinked).toHaveBeenLastCalledWith(false);
+  });
+
+  it('walks Move by two points through its picks (M10)', () => {
+    const onPointPick = vi.fn();
+    const props: ComponentProps<typeof MoveOverlay> = {
+      bodyName: 'Box',
+      targetBodyId: 'box',
+      values: { translation: zero, rotationDeg: zero },
+      units: 'mm',
+      snap: null,
+      onChange: vi.fn(),
+      onConfirm: vi.fn(),
+      onCancel: vi.fn(),
+      pointPick: null,
+      onPointPick
+    };
+    const hint = () =>
+      screen
+        .getByRole('form', { name: 'Move controls' })
+        .querySelector('.in-place-command-hint')?.textContent;
+    const { rerender } = render(<MoveOverlay {...props} />);
+    const button = screen.getByRole('button', { name: 'Two points' });
+    expect(button).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(button);
+    expect(onPointPick).toHaveBeenLastCalledWith(true);
+    rerender(<MoveOverlay {...props} pointPick={{ from: null }} />);
+    expect(hint()).toContain('pick the point to move from');
+    rerender(<MoveOverlay {...props} pointPick={{ from: 'Endpoint' }} />);
+    expect(hint()).toContain('From Endpoint · pick the point to move it to');
+    fireEvent.click(screen.getByRole('button', { name: 'Two points' }));
+    expect(onPointPick).toHaveBeenLastCalledWith(false);
+  });
+
+  it('toggles the pivot handle and edits the pivot (M10)', () => {
+    const onPivot = vi.fn();
+    const onPivotMode = vi.fn();
+    const props: ComponentProps<typeof MoveOverlay> = {
+      bodyName: 'Box',
+      targetBodyId: 'box',
+      values: { translation: zero, rotationDeg: zero },
+      units: 'mm',
+      snap: null,
+      onChange: vi.fn(),
+      onConfirm: vi.fn(),
+      onCancel: vi.fn(),
+      pivot: { x: 20, y: 10, z: 5 },
+      onPivot,
+      pivotMode: false,
+      onPivotMode
+    };
+    const { rerender } = render(<MoveOverlay {...props} />);
+    const toggle = screen.getByRole('button', { name: 'Pivot' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(toggle);
+    expect(onPivotMode).toHaveBeenLastCalledWith(true);
+    rerender(<MoveOverlay {...props} pivotMode />);
+    expect(screen.getByRole('button', { name: 'Pivot' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(
+      screen
+        .getByRole('form', { name: 'Move controls' })
+        .querySelector('.in-place-command-hint')?.textContent
+    ).toContain('Pivot of Box');
+    expect(screen.getByLabelText('Pivot X in mm')).toHaveValue(20);
+    fireEvent.change(screen.getByLabelText('Pivot Y in mm'), {
+      target: { value: '-4' }
+    });
+    expect(onPivot).toHaveBeenLastCalledWith({ x: 20, y: -4, z: 5 });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Pivot to body centre' })
+    );
+    expect(onPivot).toHaveBeenLastCalledWith(null);
+    // A sketch move has no pivot to place.
+    rerender(<MoveOverlay {...props} pivot={undefined} onPivot={undefined} />);
+    expect(screen.queryByRole('button', { name: 'Pivot' })).toBeNull();
+    expect(screen.queryByLabelText('Pivot X in mm')).toBeNull();
+  });
+
   it('keeps streamed values when a parent recreates unchanged committed props', () => {
     const liveValuesRef: LiveValues = { current: null };
     const props: ComponentProps<typeof MoveOverlay> = {

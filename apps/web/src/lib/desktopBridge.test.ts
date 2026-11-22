@@ -1,7 +1,7 @@
 import { DOWNLOAD_URL_LIFETIME_MS } from './saveFile';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
@@ -15,7 +15,8 @@ import {
   DESKTOP_SLICERS,
   openInDesktopSlicer,
   protectDesktopClose,
-  saveCadBinaryFile
+  saveCadBinaryFile,
+  saveCadTextFile
 } from './desktopBridge';
 import {
   CLOUD_FUNCTIONS_STORAGE_KEY,
@@ -331,6 +332,79 @@ describe('desktop bridge', () => {
     const blob = createObjectURL.mock.calls[0]![0];
     expect(blob.type).toBe('application/octet-stream');
     expect(blob.size).toBe(4);
+    expect(click).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A touch browser that can share files (an iPad), whose share sheet
+   * settles as `share` does. Returns the `share` spy.
+   */
+  function withShareSheet(share: (data: ShareData) => Promise<void>) {
+    const spy = vi.fn(share);
+    vi.spyOn(window, 'matchMedia').mockImplementation(
+      (query: string) =>
+        ({ matches: query === '(pointer: coarse)' }) as MediaQueryList
+    );
+    Object.defineProperty(window.navigator, 'share', {
+      configurable: true,
+      value: spy
+    });
+    Object.defineProperty(window.navigator, 'canShare', {
+      configurable: true,
+      value: () => true
+    });
+    onTestFinished(() => {
+      delete (window.navigator as { share?: unknown }).share;
+      delete (window.navigator as { canShare?: unknown }).canShare;
+    });
+    return spy;
+  }
+
+  it('reports a dismissed share sheet as a cancelled browser export', async () => {
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+    const share = withShareSheet(() =>
+      Promise.reject(new DOMException('dismissed', 'AbortError'))
+    );
+
+    await expect(
+      saveCadTextFile('bracket.step', 'step', 'ISO-10303-21;')
+    ).resolves.toBe(false);
+    await expect(
+      saveCadBinaryFile('bracket.3mf', '3mf', new Uint8Array([1, 2]))
+    ).resolves.toBe(false);
+
+    expect(share).toHaveBeenCalledTimes(2);
+    // Nothing falls back to a download once the person said no.
+    expect(click).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('reports a shared or downloaded browser export as saved', async () => {
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => undefined);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:export');
+    const share = withShareSheet(() => Promise.resolve());
+
+    await expect(
+      saveCadTextFile('bracket.step', 'step', 'ISO-10303-21;')
+    ).resolves.toBe(true);
+    await expect(
+      saveCadBinaryFile('bracket.png', 'png', new Uint8Array([1, 2]))
+    ).resolves.toBe(true);
+    expect(share).toHaveBeenCalledTimes(2);
+    expect(click).not.toHaveBeenCalled();
+
+    // A refused sheet (not a dismissal) falls back to a download.
+    share.mockImplementation(() =>
+      Promise.reject(new DOMException('no gesture', 'NotAllowedError'))
+    );
+    await expect(
+      saveCadTextFile('bracket.dxf', 'dxf', '0\nEOF\n')
+    ).resolves.toBe(true);
     expect(click).toHaveBeenCalledOnce();
     expect(invoke).not.toHaveBeenCalled();
   });

@@ -3,7 +3,13 @@
  * build and the in-place pattern tools, so none of them accepts a copy label
  * or a repeated feature the others would refuse.
  */
-import type { FeatureData, PatternKind, PatternPoints } from './index';
+import type {
+  FeatureData,
+  PatternKind,
+  ModelingPlaneReference,
+  PatternPath,
+  PatternPoints
+} from './index';
 
 /** Most copies a pattern, the original included, may make. */
 export const MAX_PATTERN_INSTANCES = 100;
@@ -30,7 +36,7 @@ export function patternOriginalLabel(kind: PatternKind): string {
   return kind === 'grid' ? '0-0' : '0';
 }
 
-/** A point entity id as a `points` pattern stores one. */
+/** A sketch entity id as a `points` or `path` pattern stores one. */
 const POINT_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 const LINEAR_LABEL = /^(0|[1-9]\d{0,2})$/;
@@ -127,11 +133,117 @@ export function patternPointsProblem(data: {
 }
 
 /**
- * Whether a feature is one a feature pattern repeats: a hole, or an extrude
- * that adds to or cuts its target body.
+ * Why a `path` pattern's path cannot be stored, else null: it is present
+ * exactly on a `path` pattern and names its sketch and at least one curve,
+ * each once. Whether the curves are lines and arcs that join is the
+ * sketch's to say, at the pattern's history position.
+ */
+export function patternPathProblem(data: {
+  patternKind: PatternKind;
+  path?: PatternPath | undefined;
+}): string | null {
+  const path = data.path;
+  if (data.patternKind !== 'path') {
+    return path === undefined
+      ? null
+      : 'Only a pattern along a path names a sketch path.';
+  }
+  if (!path || typeof path !== 'object') {
+    return 'A pattern along a path needs its sketch and curves.';
+  }
+  if (typeof path.sketchId !== 'string' || path.sketchId === '') {
+    return 'A pattern along a path needs its sketch.';
+  }
+  const ids = path.entityIds;
+  if (
+    !Array.isArray(ids) ||
+    ids.length === 0 ||
+    !ids.every((id) => POINT_ID.test(String(id)))
+  ) {
+    return 'A pattern along a path lists its curves by id.';
+  }
+  if (new Set(ids).size !== ids.length) {
+    return 'A pattern along a path names each curve once.';
+  }
+  if (path.reversed !== undefined && path.reversed !== true) {
+    return 'A path is reversed or not; store true or leave it out.';
+  }
+  if (path.orientation !== undefined && path.orientation !== 'tangent') {
+    return `"${String(path.orientation)}" is not a path pattern orientation.`;
+  }
+  return null;
+}
+
+/**
+ * Why a `mirror` pattern's plane cannot be stored, else null: present
+ * exactly on a `mirror` pattern, a datum plane or an origin and normal.
+ * Whether the normal resolves to a non-zero vector is the build's to say.
+ */
+export function patternMirrorProblem(data: {
+  patternKind: PatternKind;
+  mirrorPlane?: ModelingPlaneReference | undefined;
+}): string | null {
+  const plane = data.mirrorPlane as
+    | Partial<Record<'type' | 'datumFeatureId' | 'origin' | 'normal', unknown>>
+    | undefined;
+  if (data.patternKind !== 'mirror') {
+    return plane === undefined
+      ? null
+      : 'Only a mirror pattern names a mirror plane.';
+  }
+  if (!plane || typeof plane !== 'object') {
+    return 'A mirror pattern needs the plane it mirrors in.';
+  }
+  if (plane.type === 'datum') {
+    return typeof plane.datumFeatureId === 'string' && plane.datumFeatureId
+      ? null
+      : 'A mirror pattern names its datum plane.';
+  }
+  const vector = (value: unknown) =>
+    typeof value === 'object' &&
+    value !== null &&
+    ['x', 'y', 'z'].every((axis) => {
+      const part = (value as Record<string, unknown>)[axis];
+      return typeof part === 'number' || typeof part === 'string';
+    });
+  return vector(plane.origin) && vector(plane.normal)
+    ? null
+    : "A mirror pattern's plane is a datum plane or an origin and normal.";
+}
+
+/**
+ * Why a pattern's spacing mode cannot be stored, else null: `'total'`, on
+ * a linear pattern only.
+ */
+export function patternSpacingModeProblem(data: {
+  patternKind: PatternKind;
+  spacingMode?: unknown;
+}): string | null {
+  if (data.spacingMode === undefined) return null;
+  if (data.spacingMode !== 'total') {
+    return `${JSON.stringify(data.spacingMode)} is not a pattern spacing mode.`;
+  }
+  return data.patternKind === 'linear'
+    ? null
+    : 'Only a linear pattern spaces its copies over a total length.';
+}
+
+/**
+ * Whether a feature is one a feature pattern repeats: a hole, an extrude
+ * that adds to or cuts its target body, (M02) a fillet or chamfer, which
+ * each copy takes where it holds the edges the original rounded, a wrap,
+ * whose material each copy embosses or engraves where it lands, or a rib,
+ * whose material each copy adds where it lands.
  */
 export function isPatternableFeature(data: FeatureData): boolean {
-  if (data.featureKind === 'hole') return true;
+  if (
+    data.featureKind === 'hole' ||
+    data.featureKind === 'fillet' ||
+    data.featureKind === 'chamfer' ||
+    data.featureKind === 'wrap' ||
+    data.featureKind === 'rib'
+  )
+    return true;
   return (
     data.featureKind === 'extrude' &&
     (data.operation === 'add' || data.operation === 'cut') &&
@@ -144,9 +256,32 @@ export function patternSourceProblem(
   data: FeatureData,
   name: string
 ): string | null {
+  if (
+    data.featureKind === 'extrude' &&
+    data.endCondition === 'through-all' &&
+    data.operation === 'add'
+  ) {
+    return `${name} adds through all of its target, which a pattern cannot repeat yet (each copy needs its own exact reach); give it a distance.`;
+  }
   if (data.featureKind === 'extrude' && data.endCondition === 'to-face') {
-    return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance or Through all.`;
+    return `${name} extrudes to a face, which a pattern cannot repeat yet; give it a distance, or Through all for a cut.`;
+  }
+  if (data.featureKind === 'extrude' && data.endCondition === 'to-next') {
+    return `${name} extrudes up to the next face, which a pattern cannot repeat yet; give it a distance, or Through all for a cut.`;
+  }
+  // A copy's edge may run the other way, or meet its faces the other way
+  // round, so a blend that differs end to end or face to face could land
+  // reversed on it (review): only the even ones repeat.
+  // Two distances are checked once resolved, where equal ones repeat.
+  if (data.featureKind === 'chamfer' && data.angleDeg !== undefined) {
+    return `${name} sets its faces back unevenly, and a copy's faces can meet its edge the other way round, so a pattern repeats only an equal-distance chamfer; chamfer the copies' edges directly.`;
+  }
+  if (
+    data.featureKind === 'fillet' &&
+    (data.endRadius !== undefined || data.radiusLaw !== undefined)
+  ) {
+    return `${name} changes its radius along the edge, and a copy's edge can run the other way, so a pattern repeats only a constant-radius fillet; fillet the copies' edges directly.`;
   }
   if (isPatternableFeature(data)) return null;
-  return `${name} is not a hole, boss or cut, so a feature pattern cannot repeat it.`;
+  return `${name} is not a hole, boss, cut, fillet, chamfer, wrap or rib, so a feature pattern cannot repeat it.`;
 }

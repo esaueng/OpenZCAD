@@ -141,6 +141,9 @@ import {
   edgeRunSelections,
   edgeBlendFrame,
   offsetHandlePlacement,
+  createFaceSetTicks,
+  type FaceSetTickFace,
+  type FaceSetTicks,
   screenDragAxis,
   screenDragValue,
   type ScreenDragAxis,
@@ -162,6 +165,7 @@ import {
   clearGroup,
   closestAxisT,
   composeMoveTransform,
+  pivotDragStep,
   boxFullyInView,
   computeFitPose,
   computeNormalToFacePose,
@@ -249,6 +253,7 @@ import {
   type ViewportScale,
   type PickCandidate,
   type PickDetail,
+  type PickSnap,
   type ProfilePickTarget,
   type SelectionFilter,
   type SnapCandidate,
@@ -335,6 +340,8 @@ import {
 } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import { resolveEdge, resolveFace } from '../lib/topologyResolution';
+import { snapRecordsExactly } from '../lib/measurePointKinds';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
@@ -866,6 +873,18 @@ export interface FootprintGesture {
 }
 
 /** U09: one value's handle, as the in-place command hands it over. */
+/**
+ * A picked body's role in the running command, with the name and box it
+ * was picked with: a preview that consumes the body (a subtract's tool)
+ * takes it off screen, and its callout still stands where it was.
+ */
+export interface ViewerBodyPickRole {
+  role: string;
+  name: string;
+  min: HandleVec3;
+  max: HandleVec3;
+}
+
 export type CommandHandleView = (
   | {
       kind: 'angle';
@@ -873,7 +892,7 @@ export type CommandHandleView = (
     }
   | {
       kind: 'linear';
-      params: { origin: HandleVec3; direction: HandleVec3 };
+      params: { origin: HandleVec3; direction: HandleVec3; scale?: number };
     }
   | {
       kind: 'coil';
@@ -895,8 +914,20 @@ export type CommandHandleView = (
   valueId: string;
   key: string;
   value: number;
+  /**
+   * Where the rig stands when that is not {@link value}: a refused value's
+   * arrow stays on the last value that built (the preview still on screen),
+   * at the model, while its chip and keypad read the refused value.
+   */
+  drawnValue?: number;
   min?: number;
   max?: number;
+  /**
+   * The step a drag lands on, in place of a length's tenths: 1 for a whole
+   * count (a gear's teeth), so the arrow rests where the value does. Shift
+   * does not lift it.
+   */
+  step?: number;
   /** What the chip shows for a value: "R 12 mm", "270°", "3 turns". */
   format(value: number): string;
   /** The command names this value in a refusal: its chip says so. */
@@ -947,6 +978,20 @@ interface CommandRigEntry {
   chip: HTMLDivElement;
 }
 
+/**
+ * The value a command chip reads: its rig's, which a drag moves, unless the
+ * rig is drawn elsewhere (see {@link CommandHandleView.drawnValue}) and is
+ * not in the hand.
+ */
+function commandChipValue(
+  entry: CommandRigEntry | undefined,
+  view: CommandHandleView | undefined,
+  dragging: boolean
+): number | undefined {
+  if (view && view.drawnValue !== undefined && !dragging) return view.value;
+  return entry?.rig ? entry.rig.value() : view?.value;
+}
+
 export interface SketchViewData {
   sketchId: string;
   basis: PlaneBasis;
@@ -980,12 +1025,35 @@ export interface SketchViewData {
 }
 
 /** An armed region-extrude handle (drag a detected region into a solid). */
+/** The sketch basis moved to an extrusion's start plane (F01, v121). */
+function regionStartBasis<
+  B extends {
+    origin: { x: number; y: number; z: number };
+    normal: { x: number; y: number; z: number };
+  }
+>(basis: B, startOffset: number | undefined): B {
+  if (!startOffset) return basis;
+  return {
+    ...basis,
+    origin: {
+      x: basis.origin.x + basis.normal.x * startOffset,
+      y: basis.origin.y + basis.normal.y * startOffset,
+      z: basis.origin.z + basis.normal.z * startOffset
+    }
+  };
+}
+
 export interface RegionHandleTarget {
   sketchId: string;
   regionFingerprint: number;
   samplePoint: { x: number; y: number };
   area: number;
   initialValue?: number;
+  /**
+   * F01 (v121): how far along the sketch normal the extrusion starts; the
+   * arrow and its ghost stand there. Absent is the sketch plane.
+   */
+  startOffset?: number;
   /**
    * The other selected regions of the same sketch. Each draws its own arrow
    * that follows this one's value, and dragging any of them drives them all.
@@ -1142,6 +1210,13 @@ export interface ModelViewerProps {
   pmiLabels?: readonly ViewerPmiLabel[];
   /** Bodies highlighted in the viewport, in pick order. */
   selectedBodyIds: string[];
+  /**
+   * U11: what each picked body is to the running command, by body id (a
+   * boolean's "Base" and "Tool"). Where given, a picked body's callout reads
+   * its role in place of its pick number, from the first pick on, as the
+   * command's Options list names it.
+   */
+  bodyPickRoles?: Readonly<Record<string, ViewerBodyPickRole>> | null;
   selectedTopology: TopologySelection | null;
   /** Exact blend faces created only in the currently published preview. */
   previewFaceHighlights: TopologySelection[];
@@ -1151,6 +1226,12 @@ export interface ModelViewerProps {
    * blend preview above keeps the accent fill of geometry not yet made.
    */
   focusFaces?: readonly TopologySelection[];
+  /**
+   * M13: the edges and faces a hovered measurement measured, drawn as the
+   * pointer's hover draws one (the hover face film and edge), without
+   * changing selection.
+   */
+  measureHighlights?: readonly TopologySelection[];
   /**
    * What the selection chip anchored to the pick carries besides its name:
    * measurement, verbs, clear. Null leaves the name-only label.
@@ -1325,6 +1406,12 @@ export interface ModelViewerProps {
   onSelectEdgeChain(selections: TopologySelection[]): void;
   /** Armed face-offset handle (selection-first direct manipulation). */
   offsetHandle: OffsetHandleTarget | null;
+  /**
+   * M07: an armed face set offset's faces, each drawn with a small tick on
+   * its own normal that rides the handle's value, so the user sees which
+   * way every face moves. Drawn only while `offsetHandle` is.
+   */
+  offsetSetTicks?: readonly FaceSetTickFace[] | null;
   /** Semantic selection remains available while geometry temporarily withdraws the handle. */
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   /** Streamed signed offset; App coalesces exact rebuilds. */
@@ -1560,8 +1647,26 @@ export interface ModelViewerProps {
   onMeasurePreview?:
     | ((
         selection: TopologySelection,
-        point: { x: number; y: number; z: number }
+        point: { x: number; y: number; z: number },
+        snap?: PickSnap
       ) => string | null)
+    | null;
+  /**
+   * M13: the snap kinds a measuring pick may lock onto (a Distance pick
+   * asked for midpoints offers only midpoints); null offers every kind.
+   */
+  measureSnapKinds?: readonly PickSnap['kind'][] | null;
+  /**
+   * M10: a host picking model points (Move by two points). While set, a
+   * click on the model reports the snapped point (an endpoint, midpoint or
+   * centre the glyph names, else the surface point) and selects nothing;
+   * the hover shows the same snap glyph measuring does.
+   */
+  onPointPick?:
+    | ((pick: {
+        point: { x: number; y: number; z: number };
+        kind: PickSnap['kind'] | null;
+      }) => void)
     | null;
   /** Armed region-extrude handle; shares the arrow-rig drag machinery. */
   regionHandle: RegionHandleTarget | null;
@@ -1690,7 +1795,9 @@ export interface ModelViewerProps {
   onMovePreviewChange(
     translation: MovePreview['translation'],
     rotationDeg: MovePreview['rotationDeg'],
-    snap: MoveSnap
+    snap: MoveSnap,
+    /** M10: the pivot a pivot-handle drag placed; omitted otherwise. */
+    pivot?: MovePreview['translation']
   ): void;
   /**
    * Live sink for the values a move drag is producing, owned by the panel
@@ -2172,7 +2279,16 @@ interface MoveDragState {
   pendingValues: {
     translation: MovePreview['translation'];
     rotation: MovePreview['rotationDeg'];
+    /** M10: where a pivot-handle drag left the pivot. */
+    pivot?: MovePreview['translation'];
   } | null;
+  /**
+   * M10: this drag places the pivot, not the body. Set for an arrow or the
+   * centre handle while the Move's pivot mode is on; rings still turn.
+   */
+  pivotMode: boolean;
+  /** The pivot (rotation centre) at drag start. */
+  startPivot: THREE.Vector3;
 }
 
 // Selection colours live with hover's in the viewport's semantics table. They
@@ -2185,6 +2301,8 @@ const SELECTED_FACE_HIDDEN_OPACITY =
   SELECTION_SEMANTICS.selected.hiddenFaceOpacity;
 /** Stable default, so an absent prop does not rerun the bodies pass. */
 const NO_FOCUS_FACES: readonly TopologySelection[] = [];
+/** M10: how long after a point pick a native double click still belongs to it. */
+const POINT_PICK_DOUBLE_CLICK_MS = 800;
 /**
  * Face opacity of a body Assemble shows only as context (not a component),
  * on top of its own opacity and X-ray.
@@ -2523,9 +2641,11 @@ export function ModelViewer({
   measurementAnnotations,
   pmiLabels = NO_PMI_LABELS,
   selectedBodyIds: incomingSelectedBodyIds,
+  bodyPickRoles = null,
   selectedTopology: incomingSelectedTopology,
   previewFaceHighlights: incomingPreviewFaceHighlights,
   focusFaces: incomingFocusFaces = NO_FOCUS_FACES,
+  measureHighlights = NO_FOCUS_FACES,
   selectionCallout: incomingSelectionCallout = null,
   pickLabel: incomingPickLabel = true,
   focusGhostBodies: incomingFocusGhostBodies,
@@ -2572,6 +2692,7 @@ export function ModelViewer({
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
   tangentEdges = DEFAULT_TANGENT_EDGE_STYLE,
   offsetHandle: incomingOffsetHandle,
+  offsetSetTicks = null,
   offsetDragTarget,
   onOffsetPreview,
   onOffsetCommit,
@@ -2634,6 +2755,8 @@ export function ModelViewer({
   onCommentPinClick,
   commentPlacing = false,
   onMeasurePreview,
+  measureSnapKinds,
+  onPointPick,
   regionHandle,
   modelPanelsHidden = false,
   facePickOnly = false,
@@ -2675,19 +2798,23 @@ export function ModelViewer({
     drawingBodiesRef.current = result;
     return result;
   }, [suppliedBodies]);
-  const { bodies, preparing, presentation } = usePreparedBodies(renderBodies, {
-    selectedBodyIds: incomingSelectedBodyIds,
-    selectedTopology: incomingSelectedTopology,
-    previewFaceHighlights: incomingPreviewFaceHighlights,
-    focusFaces: incomingFocusFaces,
-    selectionCallout: incomingSelectionCallout,
-    pickLabel: incomingPickLabel,
-    focusGhostBodies: incomingFocusGhostBodies,
-    selectedEdges: incomingSelectedEdges,
-    offsetHandle: incomingOffsetHandle,
-    cylinderRadiusHandle: incomingCylinderRadiusHandle,
-    edgeHandle: incomingEdgeHandle
-  });
+  const { bodies, preparing, presentation } = usePreparedBodies(
+    renderBodies,
+    {
+      selectedBodyIds: incomingSelectedBodyIds,
+      selectedTopology: incomingSelectedTopology,
+      previewFaceHighlights: incomingPreviewFaceHighlights,
+      focusFaces: incomingFocusFaces,
+      selectionCallout: incomingSelectionCallout,
+      pickLabel: incomingPickLabel,
+      focusGhostBodies: incomingFocusGhostBodies,
+      selectedEdges: incomingSelectedEdges,
+      offsetHandle: incomingOffsetHandle,
+      cylinderRadiusHandle: incomingCylinderRadiusHandle,
+      edgeHandle: incomingEdgeHandle
+    },
+    sketchMode !== null
+  );
   // Selection and rigs describe the same projection as the bodies on screen,
   // including intermediate worker replies during rapid previews. Whether the
   // pick wears its chip rides with the chip's content: taken live while the
@@ -3017,6 +3144,10 @@ export function ModelViewer({
   onHoverRegionRef.current = onHoverRegion;
   const onMeasurePreviewRef = useRef(onMeasurePreview);
   onMeasurePreviewRef.current = onMeasurePreview;
+  const measureSnapKindsRef = useRef(measureSnapKinds);
+  measureSnapKindsRef.current = measureSnapKinds;
+  const onPointPickRef = useRef(onPointPick);
+  onPointPickRef.current = onPointPick;
   const onPickPlaneRef = useRef(onPickPlane);
   onPickPlaneRef.current = onPickPlane;
   const onPickDatumRef = useRef(onPickDatum);
@@ -3296,6 +3427,8 @@ export function ModelViewer({
   } | null>(null);
   /** Live offset-handle rig; owned by the offsetHandle effect below. */
   const offsetRigRef = useRef<DragRig | null>(null);
+  /** M07: the armed face set's direction ticks; see `offsetSetTicks`. */
+  const offsetSetTicksRef = useRef<FaceSetTicks | null>(null);
   /** The handle the live offset rig was built from. */
   const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(null);
   const offsetDragActiveRef = useRef(false);
@@ -3689,7 +3822,10 @@ export function ModelViewer({
       regionGroup,
       sketchGroup,
       bodyGroup,
-      filter: () => selectionFilterRef.current,
+      // M10: a point pick reads faces and edges whatever the filter, so its
+      // snaps can scope to the edge or face under the pointer.
+      filter: () =>
+        onPointPickRef.current ? 'any' : selectionFilterRef.current,
       selectThrough: () => xrayRef.current,
       clippingPlane: () =>
         sectionViewRef.current
@@ -3765,29 +3901,35 @@ export function ModelViewer({
           const body = context.renderedBodies?.find(
             (candidate) => candidate.bodyId === preview.bodyId
           );
+          const createCopy = () => {
+            const resolution = context.fatLineResolution();
+            const copy = new THREE.Group();
+            const mesh = createObjectForBody(body!, resolution);
+            const edges = createBodyEdgeOverlay(body!, resolution);
+            edges.setDisplayMode(displayModeRef.current);
+            edges.setTangentEdgeStyle(tangentEdgesRef.current);
+            mesh.add(edges);
+            copy.add(mesh);
+            applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
+            return copy;
+          };
           const target = moveCopyPreview.target(
             object,
             !!preview.copy && !!body,
-            () => {
-              const resolution = context.fatLineResolution();
-              const copy = new THREE.Group();
-              const mesh = createObjectForBody(body!, resolution);
-              const edges = createBodyEdgeOverlay(body!, resolution);
-              edges.setDisplayMode(displayModeRef.current);
-              edges.setTangentEdgeStyle(tangentEdgesRef.current);
-              mesh.add(edges);
-              copy.add(mesh);
-              applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
-              return copy;
-            }
+            createCopy
+          );
+          const final = composeMoveTransform(center, translation, rotationDeg);
+          target.rotation.copy(moveEuler(rotationDeg));
+          target.position.set(final.x, final.y, final.z);
+          // M10: a repeated copy shows every stamp, each the same move on.
+          moveCopyPreview.poseStamps(
+            preview.copy && body ? Math.max(0, (preview.stamps ?? 1) - 1) : 0,
+            createCopy
           );
           moveCopyPreview.refreshAppearance(
             displayModeRef.current,
             xrayRef.current
           );
-          const final = composeMoveTransform(center, translation, rotationDeg);
-          target.rotation.copy(moveEuler(rotationDeg));
-          target.position.set(final.x, final.y, final.z);
           // The mesh rotates about its own origin and then translates, so the
           // callout's anchor has to take the same two steps to stay over the
           // body — adding the translation alone would drift it off under any
@@ -3811,6 +3953,9 @@ export function ModelViewer({
       if (E2E_CANVAS_HOOKS_ENABLED) {
         renderer.domElement.dataset.e2eMoveCopyPreview = String(
           moveCopyPreview.active
+        );
+        renderer.domElement.dataset.e2eMoveCopyStamps = String(
+          moveCopyPreview.active ? moveCopyPreview.stampCount + 1 : 0
         );
       }
     }
@@ -4092,10 +4237,15 @@ export function ModelViewer({
       if (!values) {
         return;
       }
-      onMovePreviewChangeRef.current(values.translation, values.rotation, {
-        move: drag.snapMove,
-        rotate: drag.snapRotate
-      });
+      onMovePreviewChangeRef.current(
+        values.translation,
+        values.rotation,
+        {
+          move: drag.snapMove,
+          rotate: drag.snapRotate
+        },
+        values.pivot
+      );
     }
 
     /**
@@ -5013,8 +5163,26 @@ export function ModelViewer({
       if (!local) {
         return null;
       }
+      const kinds = measureSnapKindsRef.current;
+      const candidates = snapsFromEdges(scoped, { label: body?.name });
+      // A pick that asks for a kind offers only the points it records
+      // exactly: never a spline's sampled midpoint its click would refuse.
+      const byId = kinds
+        ? new Map(scoped.map((edge) => [edge.topologyId, edge]))
+        : null;
       return resolveSnap(
-        snapsFromEdges(scoped, { label: body?.name }),
+        kinds
+          ? candidates.filter((snap) => {
+              const edge = snap.source
+                ? byId!.get(snap.source.edgeTopologyId)
+                : undefined;
+              return (
+                kinds.includes(snap.kind) &&
+                !!edge &&
+                snapRecordsExactly(snap.kind, edge)
+              );
+            })
+          : candidates,
         local,
         (point) =>
           projectToScreen(
@@ -5036,6 +5204,42 @@ export function ModelViewer({
             ? snapsFromEdges(body.topology.edges, { label: body.name })
             : []
         );
+    }
+
+    /**
+     * M10: the moving body's own snap points, carried to where the Move
+     * preview shows the body, so a pivot lands on the corner on screen.
+     */
+    function collectPosedBodySnaps(
+      bodyId: string,
+      move: MovePreview
+    ): SnapCandidate[] {
+      const body = bodiesRef.current.find(
+        (candidate) => candidate.bodyId === bodyId && !candidate.consumed
+      );
+      if (!body?.topology) return [];
+      const final = composeMoveTransform(
+        moveCenterRef.current,
+        move.translation,
+        move.rotationDeg
+      );
+      const euler = moveEuler(move.rotationDeg);
+      const scratch = new THREE.Vector3();
+      return snapsFromEdges(body.topology.edges, { label: body.name }).map(
+        (snap) => {
+          scratch
+            .set(snap.point.x, snap.point.y, snap.point.z)
+            .applyEuler(euler);
+          return {
+            ...snap,
+            point: {
+              x: scratch.x + final.x,
+              y: scratch.y + final.y,
+              z: scratch.z + final.z
+            }
+          };
+        }
+      );
     }
 
     /**
@@ -5406,7 +5610,11 @@ export function ModelViewer({
           (handle) => handle.valueId === valueId
         );
         if (!view) continue;
-        const shownValue = entry.rig ? entry.rig.value() : view.value;
+        const shownValue = commandChipValue(
+          entry,
+          view,
+          commandDragRef.current?.valueId === valueId
+        )!;
         const text = `${view.warning ? '⚠ ' : ''}${view.format(shownValue)}`;
         setElementText(entry.chip, text);
         nameCommandChip(entry.chip, view.describe?.(shownValue));
@@ -5430,7 +5638,11 @@ export function ModelViewer({
           (handle) => handle.valueId === valueId
         );
         if (!view) continue;
-        const value = entry.rig ? entry.rig.value() : view.value;
+        const value = commandChipValue(
+          entry,
+          view,
+          commandDragRef.current?.valueId === valueId
+        )!;
         const scale =
           (entry.rig?.group.userData.gizmoScale as number | undefined) ?? 1;
         // A chip-only value's anchor is read live: it may follow another
@@ -5593,7 +5805,8 @@ export function ModelViewer({
           e2eHandles[valueId] = {
             x: rect.left + ((grip.x + 1) / 2) * rect.width,
             y: rect.top + ((1 - grip.y) / 2) * rect.height,
-            value
+            // Where the rig stands, which a refused value is not.
+            value: entry.rig ? entry.rig.value() : value
           };
         }
       }
@@ -5931,8 +6144,16 @@ export function ModelViewer({
           select?: boolean;
           /** Where on the face the click lands; the face's centroid if absent. */
           point?: { x: number; y: number; z: number };
+          /** Of the matching faces, the one whose centre is nearest this. */
+          near?: { x: number; y: number; z: number };
+          /** A Shift pick: adds the face to a held face set. */
+          additive?: boolean;
           resolve?: (
-            face: { hasReference: boolean; lineageName?: string } | null
+            face: {
+              hasReference: boolean;
+              lineageName?: string;
+              center: { x: number; y: number; z: number };
+            } | null
           ) => void;
         }>
       ).detail;
@@ -5949,18 +6170,32 @@ export function ModelViewer({
           !candidate.consumed &&
           (!detail?.bodyId || candidate.bodyId === detail.bodyId)
       );
-      const face = body?.topology?.faces.find((candidate) => {
-        const normal = candidate.geometry?.normal;
-        return (
-          candidate.geometry?.surfaceType === 'plane' &&
-          normal !== undefined &&
-          (detail.lineageName === undefined ||
-            candidate.reference?.lineageName === detail.lineageName) &&
-          new THREE.Vector3(normal.x, normal.y, normal.z)
-            .normalize()
-            .distanceTo(wanted) < 1e-6
-        );
-      });
+      const matches =
+        body?.topology?.faces.filter((candidate) => {
+          const normal = candidate.geometry?.normal;
+          return (
+            candidate.geometry?.surfaceType === 'plane' &&
+            normal !== undefined &&
+            (detail.lineageName === undefined ||
+              candidate.reference?.lineageName === detail.lineageName) &&
+            new THREE.Vector3(normal.x, normal.y, normal.z)
+              .normalize()
+              .distanceTo(wanted) < 1e-6
+          );
+        }) ?? [];
+      const near = detail.near;
+      const face = near
+        ? matches
+            .map((candidate) => ({
+              candidate,
+              distance: Math.hypot(
+                candidate.geometry!.center.x - near.x,
+                candidate.geometry!.center.y - near.y,
+                candidate.geometry!.center.z - near.z
+              )
+            }))
+            .sort((a, b) => a.distance - b.distance)[0]?.candidate
+        : matches[0];
       if (!body || !face?.geometry?.normal) {
         detail?.resolve?.(null);
         return;
@@ -5978,7 +6213,7 @@ export function ModelViewer({
             topologyId: face.topologyId,
             hash: face.hash
           },
-          false,
+          detail?.additive === true,
           {
             point: { x: anchor.x, y: anchor.y, z: anchor.z },
             normal: {
@@ -5993,7 +6228,9 @@ export function ModelViewer({
         detail?.resolve?.(null);
         return;
       }
+      const { center } = face.geometry;
       detail?.resolve?.({
+        center: { x: center.x, y: center.y, z: center.z },
         hasReference:
           face.reference !== undefined &&
           face.reference.currentHash === face.hash,
@@ -6961,8 +7198,15 @@ export function ModelViewer({
       const detail = (
         event as CustomEvent<{
           includeBodies?: boolean;
+          /** Also report `upHeights`. */
+          includeUpHeights?: boolean;
           resolve?: (value: {
             bodies?: readonly GeometryBodyRepresentation[];
+            /**
+             * The distinct heights (4 decimals) of the drawn +z-facing
+             * triangles: which flat tops a preview frame shows where.
+             */
+            upHeights?: number[];
             offsetWorldObjects: string[];
             offsetVeilVisible: boolean;
             sectionCaps: {
@@ -7026,8 +7270,35 @@ export function ModelViewer({
         polygonOffsetUnits: number;
         renderOrder: number;
       }[] = [];
+      const upHeights = new Set<number>();
+      const corner = [0, 1, 2].map(() => new THREE.Vector3());
+      const facing = new THREE.Vector3();
       forEachMesh(bodyGroup, (mesh) => {
         mesh.updateWorldMatrix(true, false);
+        const position = mesh.geometry.getAttribute('position');
+        const index = mesh.geometry.index;
+        const count = index?.count ?? position?.count ?? 0;
+        for (
+          let start = 0;
+          detail.includeUpHeights && position && start + 2 < count;
+          start += 3
+        ) {
+          corner.forEach((point, k) =>
+            point
+              .fromBufferAttribute(
+                position,
+                index ? index.getX(start + k) : start + k
+              )
+              .applyMatrix4(mesh.matrixWorld)
+          );
+          facing
+            .subVectors(corner[1]!, corner[0]!)
+            .cross(new THREE.Vector3().subVectors(corner[2]!, corner[0]!))
+            .normalize();
+          if (facing.z > 0.999) {
+            upHeights.add(Math.round(corner[0]!.z * 1e4) / 1e4);
+          }
+        }
         const worldBounds = mesh.geometry.boundingBox
           ?.clone()
           .applyMatrix4(mesh.matrixWorld);
@@ -7145,6 +7416,9 @@ export function ModelViewer({
         }
       });
       detail.resolve({
+        ...(detail.includeUpHeights
+          ? { upHeights: [...upHeights].sort((a, b) => a - b) }
+          : {}),
         offsetWorldObjects,
         offsetVeilVisible: Boolean(
           offsetGhost?.object.getObjectByName('offset-body-ghost-veil-fill')
@@ -7699,6 +7973,9 @@ export function ModelViewer({
     }
     placeCommentRef.current = (event) => placeComment(picker.pickAll(event));
 
+    /** M10: when the last point pick landed, so its double click is ignored. */
+    let lastPointPickAt: number | null = null;
+
     function selectAtPointer(event: PointerEvent) {
       // The release that got here was a click, not the end of a gesture.
       gestureReleases[1] = false;
@@ -7723,6 +8000,31 @@ export function ModelViewer({
       // datum or placement plane may act on it.
       if (commentPlacingRef.current) {
         placeComment(stack);
+        return;
+      }
+      // M10: a point pick takes the snapped model point and selects nothing.
+      const pointPick = onPointPickRef.current;
+      if (pointPick) {
+        // Always the nearest thing under the pointer: a second click at the
+        // same spot is the next pick, not a request for the one behind.
+        depthCycle = null;
+        lastPointPickAt = event.timeStamp;
+        const top = stack[0] ?? null;
+        if (!top) return;
+        const snapped = resolveMeasureSnap(event, top)?.candidate ?? null;
+        // An edge hit reports where the ray passed near the edge; the point
+        // on the edge itself is what a pick means.
+        const onGeometry =
+          top.selection?.kind === 'edge'
+            ? ((top.hit as { pointOnLine?: THREE.Vector3 }).pointOnLine ??
+              top.hit.point)
+            : top.hit.point;
+        pointPick({
+          point: snapped
+            ? { ...snapped.point }
+            : { x: onGeometry.x, y: onGeometry.y, z: onGeometry.z },
+          kind: snapped?.kind ?? null
+        });
         return;
       }
       // A ghost plane starts the sketch instead, even through a face in
@@ -7799,11 +8101,11 @@ export function ModelViewer({
       // pointer was actually on.
       const snapped =
         result && onMeasurePreviewRef.current
-          ? (resolveMeasureSnap(event, result)?.candidate.point ?? null)
+          ? (resolveMeasureSnap(event, result)?.candidate ?? null)
           : null;
       const detail: PickDetail | undefined = result
         ? {
-            point: snapped ?? {
+            point: snapped?.point ?? {
               x: result.hit.point.x,
               y: result.hit.point.y,
               z: result.hit.point.z
@@ -7814,7 +8116,17 @@ export function ModelViewer({
                   y: result.faceNormal.y,
                   z: result.faceNormal.z
                 }
-              : undefined
+              : undefined,
+            // The point the glyph named, by identity, so the measure pick
+            // records that point rather than one derived from the selection.
+            ...(snapped
+              ? {
+                  snap: {
+                    kind: snapped.kind,
+                    ...(snapped.source ? { source: snapped.source } : {})
+                  }
+                }
+              : {})
           }
         : undefined;
       // Orbiting should turn about whatever was just clicked, not the model
@@ -7895,7 +8207,9 @@ export function ModelViewer({
     }
 
     function pickMoveGizmo(event: PointerEvent) {
-      if (!movePreviewRef.current) {
+      // M10: while Move by two points picks, the gizmo is hidden and the
+      // model under it takes the click.
+      if (!movePreviewRef.current || movePreviewRef.current.pointPick) {
         return null;
       }
       setRayFromEvent(event);
@@ -8256,6 +8570,20 @@ export function ModelViewer({
      */
     function updateMeasurePreview(event: PointerEvent) {
       const preview = onMeasurePreviewRef.current;
+      if (!preview && onPointPickRef.current) {
+        // M10: a point pick shows the glyph its click will take, no chip.
+        hud.hide(measurePreviewChip);
+        const candidate = cycleDepthPick(
+          picker.pickAll(event),
+          depthCycle,
+          event.clientX,
+          event.clientY
+        ).candidate;
+        const snapped = candidate ? resolveMeasureSnap(event, candidate) : null;
+        if (snapped) showSnapGlyph(snapped);
+        else hud.hide(snapGlyph);
+        return;
+      }
       if (!preview) {
         hud.hide(measurePreviewChip);
         hud.hide(snapGlyph);
@@ -8289,7 +8617,15 @@ export function ModelViewer({
           x: wouldPick.hit.point.x,
           y: wouldPick.hit.point.y,
           z: wouldPick.hit.point.z
-        }
+        },
+        snapped
+          ? {
+              kind: snapped.candidate.kind,
+              ...(snapped.candidate.source
+                ? { source: snapped.candidate.source }
+                : {})
+            }
+          : undefined
       );
       if (!label) {
         hud.hide(measurePreviewChip);
@@ -11095,11 +11431,38 @@ export function ModelViewer({
             }
           }
         }
+        // M10: in pivot mode the gizmo carries the pivot, and the body
+        // stays where it is: the drag's move splits into the pivot's own
+        // move and the translation that keeps the body still.
+        let pivot: MovePreview['translation'] | undefined;
+        // What the handle itself moved along its axis: in pivot mode the
+        // HUD reads that, not the translation that keeps the body still.
+        const handleTravel = translation[drag.axis];
+        if (drag.pivotMode && drag.kind !== 'ring') {
+          const step = pivotDragStep(drag.startTranslation, rotation, {
+            x: translation.x - drag.startTranslation.x,
+            y: translation.y - drag.startTranslation.y,
+            z: translation.z - drag.startTranslation.z
+          });
+          pivot = {
+            x: drag.startPivot.x + step.pivotDelta.x,
+            y: drag.startPivot.y + step.pivotDelta.y,
+            z: drag.startPivot.z + step.pivotDelta.z
+          };
+          moveCenterRef.current.set(pivot.x, pivot.y, pivot.z);
+          translation.x = step.translation.x;
+          translation.y = step.translation.y;
+          translation.z = step.translation.z;
+        }
         context.applyMovePreview(translation, rotation);
         // Live values go straight to the panel that shows them. Routing them
         // through workspace state instead would re-render the editor on every
         // pointer event for numbers the scene has already drawn.
-        drag.pendingValues = { translation, rotation };
+        drag.pendingValues = {
+          translation,
+          rotation,
+          ...(pivot ? { pivot } : {})
+        };
         moveValuesSetterRef?.current?.(translation, rotation, {
           move: drag.snapMove,
           rotate: drag.snapRotate
@@ -11109,7 +11472,9 @@ export function ModelViewer({
           drag.kind === 'ring'
             ? rotation[drag.axis]
             : drag.kind === 'axis'
-              ? translation[drag.axis]
+              ? pivot
+                ? handleTravel - drag.startTranslation[drag.axis]
+                : translation[drag.axis]
               : undefined;
         updateMoveGizmoFocus(focus);
         positionMoveGizmoHud(event, focus, true, value);
@@ -11307,8 +11672,18 @@ export function ModelViewer({
         // Angles in whole degrees and lengths in tenths, unless Shift asks
         // for the free value. A length rig snaps before it clamps, so a drag
         // past an end that is no tenth (a thread's 12.04 face) reaches it.
-        const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-        const free = freeValue(event);
+        const ownStep = commandHandlesRef.current.find(
+          (handle) => handle.valueId === commandDrag.valueId
+        )?.step;
+        const step =
+          ownStep !== undefined && ownStep > 0
+            ? ownStep
+            : draggedRig.kind === ANGLE_RIG_KIND
+              ? 1
+              : 0.1;
+        // A whole count has no free value between its steps: Shift does not
+        // lift its step, or the arrow would rest between teeth.
+        const free = ownStep === undefined && freeValue(event);
         const snapsItself = draggedRig.kind === LINEAR_RIG_KIND;
         const next = draggedRig.valueFromRay?.(
           context.raycaster.ray,
@@ -11673,9 +12048,18 @@ export function ModelViewer({
           activeMove.target === 'sketch' ? null : activeMove.bodyId;
         // Measured, not assumed: this walk is the pre-drag stall the feel
         // plan's row 2.2 exists for, so its cost is visible to the probe.
+        const placingPivot =
+          activeMove.pivotMode === true && data.kind !== 'ring';
         timed('move.snapCollect', () => {
           moveSnaps = collectMoveSnaps(movingBodyId);
           moveCenterTargets = collectCenterAlignTargets(movingBodyId);
+          // M10: a pivot goes on the moving body's own corners, midpoints
+          // and centres too, read where the preview shows the body now.
+          if (placingPivot && movingBodyId !== null)
+            moveSnaps = [
+              ...moveSnaps,
+              ...collectPosedBodySnaps(movingBodyId, activeMove)
+            ];
         });
         if (import.meta.env.OZ_PERF === '1') {
           const scope = window as typeof window & {
@@ -11716,7 +12100,9 @@ export function ModelViewer({
           restingCenter: moveCenterRef.current.clone(),
           snapMove: chooseMoveSnapStep(worldPerPixel),
           snapRotate: chooseRotateSnapStep((ringRadiusPx * Math.PI) / 180),
-          pendingValues: null
+          pendingValues: null,
+          pivotMode: placingPivot,
+          startPivot: moveCenterRef.current.clone()
         };
         setRayFromEvent(event);
         if (data.kind === 'axis') {
@@ -13052,6 +13438,14 @@ export function ModelViewer({
     document.addEventListener('pointerdown', handleDocumentPointerDown, true);
     const handleDoubleClick = (event: MouseEvent) => {
       if (gestureReleases[0] || gestureReleases[1]) return;
+      // M10: a point pick's clicks are picks; a double click selects nothing,
+      // including the one whose second click just finished the pick.
+      if (
+        onPointPickRef.current ||
+        (lastPointPickAt !== null &&
+          event.timeStamp - lastPointPickAt < POINT_PICK_DOUBLE_CLICK_MS)
+      )
+        return;
       depthCycle = null;
       // Double-clicking an edge takes the whole smooth run it belongs to.
       // Rounding a lip means selecting every edge around it, and a filleted
@@ -13618,6 +14012,11 @@ export function ModelViewer({
       if (stepRegionFollowers(dt * 1000)) {
         rigsAnimating = true;
       }
+      // A face set's ticks ride the handle's value at a screen-constant size.
+      offsetSetTicksRef.current?.update(
+        offsetRigRef.current?.value() ?? 0,
+        worldPerPixelAt
+      );
       const cylinderRig = cylinderRadiusRigRef.current;
       if (cylinderRig) {
         const rigScale =
@@ -15156,32 +15555,69 @@ export function ModelViewer({
     // Faces lit together (a History row's, a box sweep's) are the pick even
     // when their bodies are selected, so their chip hangs over the faces.
     const focusCallout = callout?.anchor === 'focus' && !focusBox.isEmpty();
-    if (selectedBodyIds.length > 1 && !focusCallout) {
+    // A command that names its picks' roles names them from the first pick.
+    const roleOf = (bodyId: string): ViewerBodyPickRole | undefined =>
+      bodyPickRoles?.[bodyId];
+    const roled = selectedBodyIds.some((bodyId) => roleOf(bodyId));
+    if ((selectedBodyIds.length > 1 || roled) && !focusCallout) {
       const pickBox = new THREE.Box3();
+      // Labels already placed, by where they stand: a pick whose label would
+      // land on one (a tool the preview consumed inside its base, labelled at
+      // its picked box) joins that label, so both read from any view.
+      const placed: {
+        at: THREE.Vector3;
+        reach: number;
+        element: HTMLElement;
+      }[] = [];
       selectedBodyIds.forEach((bodyId, index) => {
         const target = context.objectsByBodyId.get(bodyId);
         const body = bodies.find((candidate) => candidate.bodyId === bodyId);
-        if (!target || !body) {
-          return;
-        }
-        const box = new THREE.Box3().setFromObject(target);
-        if (box.isEmpty()) {
+        const role = roleOf(bodyId);
+        const shown =
+          target && body ? new THREE.Box3().setFromObject(target) : null;
+        // Off screen under a preview that consumed it, a body with a role
+        // is still named where it was picked.
+        const box =
+          shown && !shown.isEmpty()
+            ? shown
+            : role
+              ? new THREE.Box3(
+                  new THREE.Vector3(role.min.x, role.min.y, role.min.z),
+                  new THREE.Vector3(role.max.x, role.max.y, role.max.z)
+                )
+              : null;
+        const name = body?.name ?? role?.name;
+        if (!box || box.isEmpty() || name === undefined) {
           return;
         }
         pickBox.union(box);
         const top = box.getCenter(new THREE.Vector3());
-        top.z = box.max.z + calloutLift(box, unitsRef.current);
-        const label = makeLabel('selection-callout body-order-callout', '');
+        const lift = calloutLift(box, unitsRef.current);
+        top.z = box.max.z + lift;
         const order = document.createElement('span');
         order.className = 'callout-order';
-        order.textContent = String(index + 1);
-        label.element.append(order, document.createTextNode(body.name));
+        order.textContent = role?.role ?? String(index + 1);
+        if (role) order.dataset.role = role.role;
+        const shared = placed.find(
+          (entry) => entry.at.distanceTo(top) < Math.min(entry.reach, lift)
+        );
+        if (shared) {
+          shared.element.append(
+            document.createTextNode(' · '),
+            order,
+            document.createTextNode(name)
+          );
+          return;
+        }
+        const label = makeLabel('selection-callout body-order-callout', '');
+        label.element.append(order, document.createTextNode(name));
+        placed.push({ at: top.clone(), reach: lift, element: label.element });
         label.position.copy(top);
         label.userData.calloutBodyId = bodyId;
         label.userData.calloutRestingPosition = top.clone();
         context.overlayGroup.add(label);
       });
-      if (callout && !pickBox.isEmpty()) {
+      if (callout && selectedBodyIds.length > 1 && !pickBox.isEmpty()) {
         addSelectionCallout(
           pickBox,
           textLabelSegments(`${selectedBodyIds.length} bodies`),
@@ -15191,7 +15627,7 @@ export function ModelViewer({
       }
     }
     const primaryId =
-      selectedBodyIds.length === 1 && !focusCallout
+      selectedBodyIds.length === 1 && !focusCallout && !roled
         ? selectedBodyIds[0]
         : undefined;
     if (primaryId) {
@@ -15265,6 +15701,7 @@ export function ModelViewer({
     bodies,
     editableBodyIds,
     selectedBodyIds,
+    bodyPickRoles,
     selectedEdges,
     selectedTopology,
     previewFaceHighlights,
@@ -15353,6 +15790,97 @@ export function ModelViewer({
   }, [parameterVisualPreview, bodies, initialView]);
   useEffect(() => () => parameterPreviewController.current?.dispose(), []);
 
+  // M13: a hovered measurement lights the edges and faces it measured, in
+  // the pointer hover's own colours, on each body's object so a Move preview
+  // carries them along. Nothing here touches selection.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) return;
+    const overlays: THREE.Object3D[] = [];
+    const hover = SELECTION_SEMANTICS.hover;
+    const clip = settings.sectionView
+      ? sectionClippingPlane(settings.sectionView)
+      : null;
+    for (const target of measureHighlights) {
+      const body = bodies.find(
+        (candidate) => candidate.bodyId === target.bodyId && !candidate.consumed
+      );
+      const object = context.objectsByBodyId.get(target.bodyId);
+      if (!body?.topology || !object) continue;
+      let overlay: THREE.Object3D | null = null;
+      if (target.kind === 'face') {
+        // Resolved as Measure resolves it: an identity two faces now share
+        // lights neither, as the row reads unresolved.
+        const found = resolveFace(body, target);
+        const face = found.ok ? found.entry : undefined;
+        const geometry = face && createFaceHighlightGeometry(object, face);
+        if (geometry) {
+          const mesh = new THREE.Mesh(
+            geometry,
+            new THREE.MeshBasicMaterial({
+              color: hover.face,
+              transparent: true,
+              opacity: hover.faceOpacity,
+              side: THREE.DoubleSide,
+              depthWrite: false,
+              polygonOffset: true,
+              polygonOffsetFactor: -3,
+              toneMapped: false
+            })
+          );
+          mesh.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+          overlay = mesh;
+        }
+      } else if (target.kind === 'edge') {
+        const found = resolveEdge(body, target);
+        const edge = found.ok ? found.entry : undefined;
+        if (edge && edge.points.length >= 6) {
+          const points: THREE.Vector3[] = [];
+          for (let index = 0; index + 2 < edge.points.length; index += 3)
+            points.push(
+              new THREE.Vector3(
+                edge.points[index],
+                edge.points[index + 1],
+                edge.points[index + 2]
+              )
+            );
+          const line = createFatLine(points, {
+            color: hover.edge,
+            linewidth: hover.edgeWidth,
+            resolution: context.fatLineResolution()
+          });
+          line.renderOrder = VIEWPORT_RENDER_ORDER.SELECTED_GEOMETRY;
+          overlay = line;
+        }
+      }
+      if (!overlay) continue;
+      overlay.name = 'measure-hover-highlight';
+      overlay.userData.selectionOverlay = true;
+      // The display-mode pass leaves it as drawn; an active section cut
+      // clips it as it clips the body.
+      overlay.userData.measureHighlight = true;
+      const material = (overlay as THREE.Mesh).material as THREE.Material;
+      material.clippingPlanes = clip ? [clip] : null;
+      overlay.raycast = () => undefined;
+      object.add(overlay);
+      overlays.push(overlay);
+    }
+    if (E2E_CANVAS_HOOKS_ENABLED)
+      context.renderer.domElement.dataset.e2eMeasureHighlights = String(
+        overlays.length
+      );
+    context.requestRender();
+    return () => {
+      for (const overlay of overlays) {
+        overlay.removeFromParent();
+        disposeObject(overlay);
+      }
+      if (E2E_CANVAS_HOOKS_ENABLED)
+        context.renderer.domElement.dataset.e2eMeasureHighlights = '0';
+      context.requestRender();
+    };
+  }, [measureHighlights, bodies, settings.sectionView]);
+
   // Move/Rotate gizmo: translation arrows, rotation rings, and a free-move
   // center handle at the target body's center. The active drag owns the
   // gizmo imperatively, so prop-driven rebuilds pause until release.
@@ -15381,10 +15909,11 @@ export function ModelViewer({
           (candidate) => candidate.bodyId === moveCommitHold.bodyId
         );
         if (held) {
+          const heldPivot = moveCommitHold.pivot;
           moveCenterRef.current.set(
-            (held.bbox.min.x + held.bbox.max.x) / 2,
-            (held.bbox.min.y + held.bbox.max.y) / 2,
-            (held.bbox.min.z + held.bbox.max.z) / 2
+            heldPivot?.x ?? (held.bbox.min.x + held.bbox.max.x) / 2,
+            heldPivot?.y ?? (held.bbox.min.y + held.bbox.max.y) / 2,
+            heldPivot?.z ?? (held.bbox.min.z + held.bbox.max.z) / 2
           );
           context.applyMovePreview(
             moveCommitHold.translation,
@@ -15435,11 +15964,16 @@ export function ModelViewer({
       if (!body) {
         return;
       }
-      center = new THREE.Vector3(
-        (body.bbox.min.x + body.bbox.max.x) / 2,
-        (body.bbox.min.y + body.bbox.max.y) / 2,
-        (body.bbox.min.z + body.bbox.max.z) / 2
-      );
+      // M10: a placed pivot is the gizmo's centre and what it turns about;
+      // otherwise the body's centre, as every Move before stored.
+      const pivot = movePreview.pivot;
+      center = pivot
+        ? new THREE.Vector3(pivot.x, pivot.y, pivot.z)
+        : new THREE.Vector3(
+            (body.bbox.min.x + body.bbox.max.x) / 2,
+            (body.bbox.min.y + body.bbox.max.y) / 2,
+            (body.bbox.min.z + body.bbox.max.z) / 2
+          );
     }
     moveCenterRef.current.copy(center);
     const projectedUnitSizePx = projectedWorldSizePx(
@@ -15466,6 +16000,8 @@ export function ModelViewer({
     }
 
     context.applyMovePreview(movePreview.translation, movePreview.rotationDeg);
+    // M10: hidden while Move by two points picks (pickMoveGizmo skips it).
+    context.moveGizmoGroup.visible = !movePreview.pointPick;
     applyMoveGizmoFocus(
       context.moveGizmoGroup,
       (context.moveGizmoGroup.userData.focus as MoveGizmoFocus | undefined) ??
@@ -16141,7 +16677,7 @@ export function ModelViewer({
     if (!view || !region) {
       return;
     }
-    const basis = view.basis;
+    const basis = regionStartBasis(view.basis, regionHandle.startOffset);
     const mesh = group.children.find(
       (child) =>
         (child.userData.region as RegionPickData | undefined)
@@ -16239,7 +16775,11 @@ export function ModelViewer({
       if (!region) {
         return [];
       }
-      const rig = buildRegionFollowerRig(view.basis, region, follower);
+      const rig = buildRegionFollowerRig(
+        regionStartBasis(view.basis, regionHandle.startOffset),
+        region,
+        follower
+      );
       rig.setValue(regionHandle.initialValue ?? 0);
       context.scene.add(rig.group);
       context.scene.add(rig.worldGroup);
@@ -16265,6 +16805,34 @@ export function ModelViewer({
       context.requestRender();
     };
   }, [regionHandle, sketchViews]);
+
+  // M07: one direction tick per face of an armed face set offset.
+  const ticksShown = offsetHandle !== null && (offsetSetTicks?.length ?? 0) > 0;
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !ticksShown || !offsetSetTicks) {
+      return;
+    }
+    const ticks = createFaceSetTicks(offsetSetTicks);
+    context.scene.add(ticks.object);
+    offsetSetTicksRef.current = ticks;
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      context.renderer.domElement.dataset.e2eOffsetSetTicks = String(
+        ticks.count
+      );
+    }
+    context.requestRender();
+    return () => {
+      ticks.dispose();
+      if (offsetSetTicksRef.current === ticks) {
+        offsetSetTicksRef.current = null;
+      }
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        delete context.renderer.domElement.dataset.e2eOffsetSetTicks;
+      }
+      context.requestRender();
+    };
+  }, [offsetSetTicks, ticksShown]);
 
   // The picked regions' Extrude card opens at the head of the right lane,
   // over the stage's right third, and a profile there — where Finish Sketch
@@ -16598,11 +17166,12 @@ export function ModelViewer({
     }
     for (const handle of wanted) {
       if (rigs.has(handle.valueId)) continue;
+      const drawn = handle.drawnValue ?? handle.value;
       const rig =
         handle.kind === 'angle'
           ? buildAngleHandle({
               ...handle.params,
-              angleDeg: handle.value,
+              angleDeg: drawn,
               // The rig shares the value's domain, so a sub-degree revolve
               // is drawn and labelled as the angle that is stored.
               ...(handle.min === undefined ? {} : { minDeg: handle.min }),
@@ -16611,14 +17180,14 @@ export function ModelViewer({
           : handle.kind === 'linear'
             ? buildLinearHandle({
                 ...handle.params,
-                value: handle.value,
+                value: drawn,
                 ...(handle.min === undefined ? {} : { min: handle.min }),
                 ...(handle.max === undefined ? {} : { max: handle.max })
               })
             : handle.kind === 'coil'
               ? buildCoilHandle({
                   ...handle.params,
-                  turns: handle.value,
+                  turns: drawn,
                   // A count above zero: the rig keeps a sliver of a turn.
                   ...(handle.min === undefined || handle.min <= 0
                     ? {}
@@ -16638,16 +17207,18 @@ export function ModelViewer({
         const view = commandHandlesRef.current.find(
           (candidate) => candidate.valueId === valueId
         );
-        const value = entry?.rig ? entry.rig.value() : view?.value;
+        const value = commandChipValue(
+          entry,
+          view,
+          commandDragRef.current?.valueId === valueId
+        );
         if (value !== undefined)
           onOpenCommandKeypadRef.current?.(valueId, value);
       };
       if (handle.kind === 'instance') {
         // A copy's chip is a toggle: it skips the copy or brings it back.
-        const { label, skipped } = handle.params;
+        const { label } = handle.params;
         chip.classList.add('handle-instance-chip');
-        chip.classList.toggle('is-skipped', skipped);
-        chip.setAttribute('aria-pressed', skipped ? 'false' : 'true');
         prepareCommandChip(chip, () =>
           onToggleCommandInstanceRef.current?.(label)
         );
@@ -16682,14 +17253,26 @@ export function ModelViewer({
     }
     context.requestRender();
   }, [commandHandlesKey, commandSetterRef]);
+  // A copy toggle keeps its button and focus as its pressed state changes.
   // A value that changes from outside the rig (a default the picks suggest,
   // an undo) moves its rig too: the rigs are rebuilt only for a new key, and
   // a stale one would draw one value and drag from it while another builds.
   useEffect(() => {
     for (const handle of commandHandles) {
       if (commandDragRef.current?.valueId === handle.valueId) continue;
-      const rig = commandRigsRef.current.get(handle.valueId)?.rig;
-      if (rig && rig.value() !== handle.value) rig.setValue(handle.value);
+      const entry = commandRigsRef.current.get(handle.valueId);
+      if (!entry) continue;
+      if (handle.kind === 'instance') {
+        const { chip } = entry;
+        const pressed = handle.params.skipped ? 'false' : 'true';
+        if (chip.getAttribute('aria-pressed') !== pressed) {
+          chip.classList.toggle('is-skipped', handle.params.skipped);
+          chip.setAttribute('aria-pressed', pressed);
+        }
+      } else {
+        const drawn = handle.drawnValue ?? handle.value;
+        if (entry.rig && entry.rig.value() !== drawn) entry.rig.setValue(drawn);
+      }
     }
     contextRef.current?.requestRender();
   }, [commandHandles]);

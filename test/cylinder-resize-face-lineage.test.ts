@@ -31,7 +31,6 @@ import type {
 } from '@openzcad/shared';
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import type * as LineageBuilders from '../packages/kernel-adapter/src/exact-lineage-builders';
-import { plainRefusal } from '../apps/web/src/lib/refusalLanguage';
 import {
   JUNCTION_FILLET_DISCLOSURE,
   filletedUnion
@@ -257,9 +256,10 @@ describe('boss cylinder resize face lineage', { timeout: 180_000 }, () => {
     }
   );
 
-  it('explains a push into the cylinder’s rounded rim as a real limit', async () => {
-    // The top would rise into the rim band, a face it does not border: a
-    // real limit, refused as one rather than as an internal failure.
+  it('builds a push into the cylinder’s rounded rim and discloses its approximate corners', async () => {
+    // The top rises into the rim band, a face it does not border. Remus
+    // 2026.1.156 (#1928) joins the shoulder and rim rounds from this side,
+    // so the push builds; the cap join is approximate and the card says so.
     const top = boxTop(after);
     const plan = planFaceOffset({
       document: resized,
@@ -271,17 +271,13 @@ describe('boss cylinder resize face lineage', { timeout: 180_000 }, () => {
     const pushed = await adapter.syncDocument(
       new CommandManager(resized).runTransaction('Offset Face', [plan!.command])
     );
-    // Not a stale name: the kernel's own topology guard, which the card
-    // explains in plain words.
-    expect(pushed.warnings).toHaveLength(2);
-    const refusal = pushed.warnings[1]!;
-    expect(refusal).toMatch(/swept face reaches nonadjacent face/);
-    expect(refusal).not.toMatch(/stale/);
+    expect(pushed.warnings).toEqual([
+      JUNCTION_FILLET_DISCLOSURE,
+      'Feature "Offset face": The upper rim was rebuilt with approximate corner surfaces.'
+    ]);
     expect(
-      plainRefusal(refusal.replace(/^Feature "[^"]+":\s*/, '')).message
-    ).toBe(
-      'The face would run into another part of the body before it got that far.'
-    );
+      boxTop(pushed.bodyRepresentations[bodyId]!).geometry!.center.z
+    ).toBeCloseTo(top.geometry!.center.z + 8, 6);
   });
 });
 

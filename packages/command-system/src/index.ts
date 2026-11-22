@@ -102,6 +102,7 @@ import {
   ownEntry,
   reservedIdentifierError,
   COMMAND_FEATURE_KINDS,
+  transformStampBodyIds,
   type FeatureKind
 } from '@openzcad/shared';
 import {
@@ -147,6 +148,8 @@ import {
   type BooleanInput,
   chamferEdges,
   createBodyFeatureIds,
+  createTransformStampIds,
+  transformStampsProblem,
   createFeatureOnlyIds,
   createParameterIds,
   createSketchFeatureIds,
@@ -1070,10 +1073,11 @@ function validateBodyTarget(document: ProjectDocument, bodyId: BodyId): void {
  */
 function validateToFaceBody(
   document: ProjectDocument,
-  input: Pick<ExtrudeInput, 'toFace'>,
+  input: Pick<ExtrudeInput, 'toFace' | 'toSurface'>,
   ownBodyId: BodyId | undefined
 ): void {
-  const bodyId = input.toFace?.bodyId;
+  // F01 (v131): a curved target names its body the same way.
+  const bodyId = input.toFace?.bodyId ?? input.toSurface?.bodyId;
   if (bodyId === undefined) return;
   if (bodyId === ownBodyId) {
     throw new Error(
@@ -2460,8 +2464,11 @@ function validateModelingFeatureUpdate(
       }
       if (
         feature.data.copy &&
-        feature.bodyId !== undefined &&
-        feature.data.targetBodyId === feature.bodyId
+        ((feature.bodyId !== undefined &&
+          feature.data.targetBodyId === feature.bodyId) ||
+          transformStampBodyIds(feature.data).includes(
+            feature.data.targetBodyId
+          ))
       ) {
         throw new Error('A copy cannot target its own body.');
       }
@@ -3080,7 +3087,16 @@ export const commandFactories = {
         payload.copy && payload.ids && !('bodyId' in payload.ids)
           ? { ...createBodyFeatureIds(), ...payload.ids }
           : (payload.ids ??
-            (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds()))
+            (payload.copy ? createBodyFeatureIds() : createFeatureOnlyIds())),
+      // M10: each further stamp's body is named here too, so replay keeps it.
+      // Only for a count the document will accept, so an absurd one is
+      // refused by validation rather than allocated first.
+      ...(payload.copy &&
+      !payload.stampIds &&
+      transformStampsProblem(payload.stamps, payload.copy) === null &&
+      (payload.stamps ?? 1) > 1
+        ? { stampIds: createTransformStampIds(payload.stamps!) }
+        : {})
     };
     return makeCommand(
       'feature.transform',
@@ -3273,7 +3289,9 @@ export const commandFactories = {
     const withIds = { ...payload, ids: payload.ids ?? createBodyFeatureIds() };
     return makeCommand(
       'feature.wrap',
-      payload.mode === 'emboss' ? 'Emboss onto cylinder' : 'Engrave into cylinder',
+      payload.mode === 'emboss'
+        ? 'Emboss onto cylinder'
+        : 'Engrave into cylinder',
       withIds,
       (document) => wrapBody(document, withIds).document,
       (document) => validateWrapInput(document, withIds)
@@ -3405,7 +3423,11 @@ export const commandFactories = {
             ? 'Grid'
             : payload.patternKind === 'points'
               ? 'Point'
-              : 'Circular'
+              : payload.patternKind === 'path'
+                ? 'Path'
+                : payload.patternKind === 'mirror'
+                  ? 'Mirror'
+                  : 'Circular'
       } pattern`,
       withIds,
       (document) => patternBody(document, withIds).document,
@@ -4487,6 +4509,33 @@ function assertOperationExpressions(
         scope,
         `${operation.name} thickness`,
         operation.thickness,
+        documentUnits
+      );
+      break;
+    case 'add_hole':
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} diameter`,
+        operation.diameter,
+        documentUnits
+      );
+      if (operation.depthMode === 'blind' && operation.depth != null)
+        assertEvaluableExpression(
+          scope,
+          `${operation.name} depth`,
+          operation.depth,
+          documentUnits
+        );
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} position u`,
+        operation.position.u,
+        documentUnits
+      );
+      assertEvaluableExpression(
+        scope,
+        `${operation.name} position v`,
+        operation.position.v,
         documentUnits
       );
       break;
@@ -5794,6 +5843,39 @@ export function commandsForCadPatch(
           ids
         });
       }
+      case 'add_hole': {
+        if (isLocalBodyRef(operation.targetBodyId)) {
+          throw new Error('add_hole cannot target same-proposal topology.');
+        }
+        const targetBodyId = resolveBody(operation.targetBodyId);
+        // The manual Hole command, with the payload the Hole tool builds:
+        // a face that reports an area centroid is drilled from it (the
+        // `positionAnchor` marker), any other from its vertex mean.
+        const entry = ownEntry(
+          projectedDocument.derived.bodyRepresentations,
+          targetBodyId
+        )?.topology?.faces.find((face) => face.hash === operation.faceHash);
+        const ids = createBodyFeatureIds();
+        scope.declare(operation.localId, ids.bodyId);
+        scope.consume([targetBodyId], 'hole');
+        return commandFactories.holeBody({
+          name: operation.name,
+          targetBodyId,
+          faceHash: operation.faceHash,
+          faceReference: deepClone(operation.faceReference),
+          style: 'simple',
+          diameter: operation.diameter,
+          depthMode: operation.depthMode,
+          ...(operation.depthMode === 'blind' && operation.depth != null
+            ? { depth: operation.depth }
+            : {}),
+          position: { u: operation.position.u, v: operation.position.v },
+          ...(entry?.geometry?.centroid !== undefined
+            ? { positionAnchor: 'centroid' as const }
+            : {}),
+          ids
+        });
+      }
       case 'add_custom_feature': {
         const ids = createBodyFeatureIds();
         const targetBodyId = resolveBody(operation.targetBodyId);
@@ -5987,6 +6069,7 @@ export function commandsForCadPatch(
       }
       case 'add_drawing_annotations':
       case 'remove_drawing_annotations':
+      case 'auto_dimension_drawing':
         // Compiled above, before any model operation is looked at.
         throw new Error(
           'A proposal changes either the model or a drawing sheet, not both.'
@@ -7255,6 +7338,10 @@ export function duplicateFeatureCommands(
         targetBodyId: data.targetBodyId,
         ...data.transform,
         ...(data.copy === true ? { copy: true } : {}),
+        // M10: a duplicated linked copy stamps as many copies, as new bodies.
+        ...(transformStampBodyIds(data).length
+          ? { stamps: transformStampBodyIds(data).length + 1 }
+          : {}),
         ids
       });
       break;

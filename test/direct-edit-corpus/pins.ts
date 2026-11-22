@@ -21,7 +21,7 @@
  * refused authored scenario is DATA, and the pin is where it is written down.
  *
  * ---------------------------------------------------------------------------
- * This list is EMPTY as of the first recording, and that is a measurement
+ * This list was EMPTY as of the first recording, and that was a measurement
  * ---------------------------------------------------------------------------
  *
  * All seven authored scenarios COMMIT against the pinned Remus build,
@@ -45,7 +45,33 @@ export interface RefusalPin {
   owner: string;
 }
 
-export const REFUSAL_PINS: RefusalPin[] = [];
+/**
+ * The `plate-opposed-caps-offset-faces-*` pins are a designed refusal,
+ * not a defect: a plate's top and bottom face opposite ways, and one signed
+ * offset cannot move both. They are pinned so a face set's capture is proven
+ * to replay as the whole set (M07). Replayed as its first face alone, the
+ * same capture would commit and fail its pin.
+ */
+const OPPOSED_CAPS_REFUSAL =
+  'The selected faces face opposite ways, so one offset would thicken one and thin the other.';
+
+export const REFUSAL_PINS: RefusalPin[] = [
+  {
+    fixture: 'plate-opposed-caps-offset-faces-refused',
+    message: OPPOSED_CAPS_REFUSAL,
+    owner: 'M07 (designed refusal)'
+  },
+  {
+    fixture: 'plate-opposed-caps-offset-faces-reproduction',
+    message: OPPOSED_CAPS_REFUSAL,
+    owner: 'M07 (designed refusal)'
+  },
+  {
+    fixture: 'plate-opposed-caps-offset-faces-expression-reproduction',
+    message: OPPOSED_CAPS_REFUSAL,
+    owner: 'M07 (designed refusal)'
+  }
+];
 
 /**
  * The shape list: every fixture the product COMMITS while producing the wrong

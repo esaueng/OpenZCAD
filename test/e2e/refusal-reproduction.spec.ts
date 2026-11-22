@@ -5,6 +5,7 @@ import {
   setParameter
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
+import type { GeometryWorkerRequest } from '../../apps/web/src/worker/geometryWorker';
 import type { DirectEditFixture } from '../../apps/web/src/lib/directEditFixture';
 import { test, expect, stubApi } from './openzcad-fixtures';
 
@@ -112,12 +113,60 @@ test(
     await page.screenshot({
       path: testInfo.outputPath('owned-refusal-reproduction.png')
     });
+    // Observe the real parameter preflight after the refusal has settled.
+    await page.evaluate(() => {
+      performance.clearMeasures('oz:edit.analysis-ready');
+      const post = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message: unknown, options?) {
+        const request = message as GeometryWorkerRequest | null;
+        if (request?.type === 'sync' && request.requestId) {
+          if (Array.isArray(request.lineageDemand))
+            performance.mark('test:parameter-live-lineage', {
+              detail: {
+                projectId: request.document.projectId,
+                version: request.document.version
+              }
+            });
+          Worker.prototype.postMessage = post;
+        }
+        post.call(this, message, options as StructuredSerializeOptions);
+      };
+    });
     await width.fill('12');
     await width.press('Enter');
     await expect(
       page.getByRole('button', { name: 'Save reproduction' })
     ).toHaveCount(0);
     await expect(width).toHaveValue('12');
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const check = (
+            performance.getEntriesByName('test:parameter-live-lineage')[0] as
+              PerformanceMark | undefined
+          )?.detail as { projectId: string; version: number } | undefined;
+          if (!check) return 'missing live lineage demand';
+          const commits = performance
+            .getEntriesByName('oz:edit.analysis-ready', 'measure')
+            .map(
+              (entry) =>
+                (entry as PerformanceMeasure).detail as {
+                  projectId: string;
+                  version: number;
+                  adopted?: number;
+                }
+            )
+            .filter(
+              (detail) =>
+                detail.projectId === check.projectId &&
+                detail.version > check.version
+            );
+          return commits.map((detail) =>
+            detail.adopted === 1 ? 'adopted' : 'rebuilt'
+          );
+        })
+      )
+      .toEqual(['adopted']);
     expect(errors).toEqual([]);
   }
 );

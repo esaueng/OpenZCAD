@@ -1,5 +1,9 @@
-import { Check, SlidersHorizontal, X } from 'lucide-react';
-import { displayLengthName, type UnitSystem } from '@openzcad/shared';
+import { Check, LocateFixed, Spline, SlidersHorizontal, X } from 'lucide-react';
+import {
+  displayLengthName,
+  MAX_TRANSFORM_COPY_STAMPS,
+  type UnitSystem
+} from '@openzcad/shared';
 import { moveHasFiniteValues } from '../lib/moveCard';
 import { useEffect, useRef, useState, type MutableRefObject } from 'react';
 
@@ -49,6 +53,34 @@ interface MoveOverlayProps {
    */
   copy?: boolean;
   onCopy?(value: boolean): void;
+  /**
+   * M10: how many copies Done stamps, each the same move on from the one
+   * before. Offered only while `copy` is on.
+   */
+  stamps?: number;
+  onStamps?(value: number): void;
+  /**
+   * M10: whether repeated stamps land as one linked History step (true) or
+   * one step each (false).
+   */
+  linked?: boolean;
+  onLinked?(value: boolean): void;
+  /**
+   * M10: Move by two points. `picking` is null while off; otherwise what the
+   * first pick snapped to (`from`), or null before it.
+   */
+  pointPick?: { from: string | null } | null;
+  onPointPick?(on: boolean): void;
+  /**
+   * M10: the point the Move turns about, in document units: a placed pivot
+   * or the body's centre. Omitted for a sketch move, which does not turn.
+   */
+  pivot?: { x: number; y: number; z: number };
+  /** M10: place the pivot at `next`, or back on the body's centre (null). */
+  onPivot?(next: { x: number; y: number; z: number } | null): void;
+  /** M10: whether the gizmo's arrows and centre handle place the pivot. */
+  pivotMode?: boolean;
+  onPivotMode?(value: boolean): void;
   /**
    * Where this panel publishes a sink for live drag values. The viewport
    * writes the numbers a gesture is producing straight into it, so dragging
@@ -145,6 +177,44 @@ function MoveNumberInput({
   );
 }
 
+/**
+ * The Copies count: a whole number from 1 to the most one copy stamps. Like
+ * the move fields, it holds a half-typed entry until it is a valid count.
+ */
+function StampCountInput({
+  value,
+  onValue
+}: {
+  value: number;
+  onValue(next: number): void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <input
+      type="number"
+      min={1}
+      max={MAX_TRANSFORM_COPY_STAMPS}
+      step={1}
+      value={draft ?? value}
+      aria-label="Copies"
+      onChange={(event) => {
+        const raw = event.target.value;
+        setDraft(raw);
+        const next = Number(raw);
+        if (
+          raw.trim() !== '' &&
+          Number.isInteger(next) &&
+          next >= 1 &&
+          next <= MAX_TRANSFORM_COPY_STAMPS
+        ) {
+          onValue(next);
+        }
+      }}
+      onBlur={() => setDraft(null)}
+    />
+  );
+}
+
 export function MoveOverlay({
   bodyName,
   values: committedValues,
@@ -161,6 +231,16 @@ export function MoveOverlay({
   onTargetBody,
   copy,
   onCopy,
+  stamps,
+  onStamps,
+  linked,
+  onLinked,
+  pointPick,
+  onPointPick,
+  pivot,
+  onPivot,
+  pivotMode,
+  onPivotMode,
   liveValuesRef,
   liveSnapRef
 }: MoveOverlayProps) {
@@ -262,11 +342,61 @@ export function MoveOverlay({
       {/* The one place the step is said: it was also a toast, and the
           toast's guidance (rings, Shift) lives here now. */}
       <span className="in-place-command-hint" title={bodyName}>
-        {copy ? 'A copy of ' : ''}
-        <span className="move-target-name">{bodyName}</span> ·{' '}
-        {hideRotation ? 'drag the arrows' : 'drag the arrows or rings'} · Shift
-        moves freely
+        {pointPick ? (
+          pointPick.from === null ? (
+            <>
+              Move <span className="move-target-name">{bodyName}</span> by two
+              points · pick the point to move from
+            </>
+          ) : (
+            <>From {pointPick.from} · pick the point to move it to</>
+          )
+        ) : pivotMode ? (
+          <>
+            Pivot of <span className="move-target-name">{bodyName}</span> · drag
+            the handle onto a corner or centre · Shift moves freely
+          </>
+        ) : (
+          <>
+            {copy
+              ? (stamps ?? 1) > 1
+                ? `${stamps} copies of `
+                : 'A copy of '
+              : ''}
+            <span className="move-target-name">{bodyName}</span> ·{' '}
+            {hideRotation ? 'drag the arrows' : 'drag the arrows or rings'} ·
+            Shift moves freely
+          </>
+        )}
       </span>
+      {/* M10: translate by two picked points, snapped to corners, midpoints
+          and centres; the second pick sets the move and ends the pick. */}
+      {onPointPick ? (
+        <button
+          type="button"
+          className="move-two-points"
+          aria-pressed={pointPick != null}
+          title="Move from one picked point to another"
+          onClick={() => onPointPick(pointPick == null)}
+        >
+          <Spline size={14} aria-hidden="true" />
+          Two points
+        </button>
+      ) : null}
+      {/* M10: the pivot handle. While it is on, the arrows and the centre
+          ball carry the turn's centre and the body stays where it is. */}
+      {pivot && onPivotMode ? (
+        <button
+          type="button"
+          className="move-pivot-toggle"
+          aria-pressed={pivotMode === true}
+          title="Place the point the rings turn about"
+          onClick={() => onPivotMode(!pivotMode)}
+        >
+          <LocateFixed size={14} aria-hidden="true" />
+          Pivot
+        </button>
+      ) : null}
       {/* The gizmo is the Move: its exact numbers, name, body and copy are
           rare enough to sit behind Options, as every in-place command's. */}
       <details className="in-place-command-options">
@@ -340,6 +470,35 @@ export function MoveOverlay({
               ))}
             </div>
           )}
+          {pivot && onPivot ? (
+            <div className="move-grid" role="group" aria-label="Pivot">
+              {MOVE_AXES.map((axis) => (
+                <label key={`p-${axis}`}>
+                  <span className={`move-axis move-axis-${axis}`}>
+                    p{axis.toUpperCase()}
+                  </span>
+                  <span className="extrude-distance-input">
+                    <MoveNumberInput
+                      step={snap?.move ?? 1}
+                      value={fieldValue(pivot[axis])}
+                      label={`Pivot ${axis.toUpperCase()} in ${units}`}
+                      onValue={(next) => onPivot({ ...pivot, [axis]: next })}
+                    />
+                    <b>{unitText}</b>
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : null}
+          {pivot && onPivot ? (
+            <button
+              type="button"
+              className="move-pivot-reset"
+              onClick={() => onPivot(null)}
+            >
+              Pivot to body centre
+            </button>
+          ) : null}
           {copy !== undefined && onCopy ? (
             <label className="field transform-copy">
               <input
@@ -348,6 +507,22 @@ export function MoveOverlay({
                 onChange={(event) => onCopy(event.target.checked)}
               />
               <span>Keep original</span>
+            </label>
+          ) : null}
+          {copy && onStamps ? (
+            <label className="field transform-stamps">
+              <span>Copies</span>
+              <StampCountInput value={stamps ?? 1} onValue={onStamps} />
+            </label>
+          ) : null}
+          {copy && (stamps ?? 1) > 1 && onLinked ? (
+            <label className="field transform-copy transform-stamps-linked">
+              <input
+                type="checkbox"
+                checked={linked !== false}
+                onChange={(event) => onLinked(event.target.checked)}
+              />
+              <span>Link copies (one History step)</span>
             </label>
           ) : null}
         </div>

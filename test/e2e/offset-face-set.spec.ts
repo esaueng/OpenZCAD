@@ -1,0 +1,830 @@
+/**
+ * M07: a face set's Offset in the workspace. Two coplanar faces picked with
+ * Shift take the set's Offset verb, the one shared handle and its keypad move
+ * both together as one `offset-faces` step, its History row reads "Offset 2
+ * faces · +2 mm", and reopening that row changes the distance again.
+ *
+ * Faces on several planes, parallel at different heights (a slot's floor
+ * and the top beside it) or facing different directions (a pocket's floor
+ * and its wall), arm the same handle as a chained move: each face moves
+ * along its own normal by the one distance. Only faces that face opposite
+ * ways are refused.
+ *
+ * The body is the parity corpus's slotted block: a 40 × 20 × 10 block with a
+ * 10 wide, 5 deep slot cut across its top, imported from STEP, so its top is
+ * two coplanar 15 × 20 faces and the slot's floor is parallel 5 below them.
+ * The pocketed block has a 10 × 10 × 5 pocket in its top instead.
+ */
+import { createProjectDocument, importStepBody } from '@openzcad/document-core';
+import type { Locator, Page } from '@playwright/test';
+import { toUserId } from '@openzcad/shared';
+import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  RemusKernel,
+  loadRemusTranslators
+} from '../../packages/kernel-adapter/src/remus-runtime';
+
+const X = 40;
+const Y = 20;
+const Z = 10;
+const SLOT_WIDTH = 10;
+const SLOT_DEPTH = 5;
+
+const translation = (x: number, y: number, z: number) =>
+  Float64Array.of(1, 0, 0, x, 0, 1, 0, y, 0, 0, 1, z, 0, 0, 0, 1);
+
+/** The slot's (or the pocket's) left wall, facing +x into it. */
+const WALL_X = (X - SLOT_WIDTH) / 2;
+/** The pocket's extent along y: 10, centred. */
+const POCKET_Y = 10;
+
+async function slottedBlockStep(pocket = false): Promise<string> {
+  const kernel = new RemusKernel();
+  const io = await loadRemusTranslators();
+  try {
+    const block = kernel.makeBox(X, Y, Z);
+    const slot = pocket
+      ? kernel.makeBox(SLOT_WIDTH, POCKET_Y, SLOT_DEPTH + 2)
+      : kernel.makeBox(SLOT_WIDTH, Y + 4, SLOT_DEPTH + 2);
+    kernel.transformSolid(
+      slot,
+      translation(WALL_X, pocket ? (Y - POCKET_Y) / 2 : -2, Z - SLOT_DEPTH)
+    );
+    return new TextDecoder().decode(
+      io.exportStep(
+        kernel.serializeSolids(Uint32Array.of(kernel.cut(block, slot)))
+      )
+    );
+  } finally {
+    kernel.free();
+  }
+}
+
+test(
+  'offsets two coplanar faces together and reopens the step from History',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const canvas = await openSlottedBlock(page, 'Offset face set');
+    // The highest point of the drawn body: the top faces' height.
+    const topZ = () =>
+      canvas.evaluate(
+        (element) =>
+          new Promise<number | null>((resolve) => {
+            let answered = false;
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-render-policy', {
+                detail: {
+                  resolve: (state: {
+                    bodyFaces: { worldBounds?: { max: number[] } }[];
+                  }) => {
+                    answered = true;
+                    const tops = state.bodyFaces.flatMap((face) =>
+                      face.worldBounds ? [face.worldBounds.max[2]!] : []
+                    );
+                    resolve(tops.length ? Math.max(...tops) : null);
+                  }
+                }
+              })
+            );
+            // Before the hook is registered nothing answers: retry.
+            if (!answered) setTimeout(() => resolve(null), 50);
+          })
+      );
+    await expect.poll(topZ, { timeout: 30_000 }).toBeCloseTo(Z, 4);
+
+    // One top face, then the other with Shift: a two-face set.
+    const pickTop = (x: number, additive: boolean) =>
+      canvas.evaluate(
+        (element, input) =>
+          new Promise<boolean>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-planar-face', {
+                detail: {
+                  normal: { x: 0, y: 0, z: 1 },
+                  near: { x: input.x, y: input.y, z: input.z },
+                  additive: input.additive,
+                  resolve: (face: unknown) => resolve(face !== null)
+                }
+              })
+            );
+          }),
+        { x, y: Y / 2, z: Z, additive }
+      );
+    await expect.poll(() => pickTop((X - SLOT_WIDTH) / 4, false)).toBe(true);
+    await pickTop(X - (X - SLOT_WIDTH) / 4, true);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      '2 faces selected'
+    );
+    // Each side of the slot on its own: the highest point alone would pass
+    // with only one of the two faces moved.
+    const sideZ = (x: number) =>
+      canvas.evaluate(
+        (element, input) =>
+          new Promise<number | null>((resolve) => {
+            let answered = false;
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-planar-face', {
+                detail: {
+                  normal: { x: 0, y: 0, z: 1 },
+                  near: { x: input.x, y: input.y, z: input.z },
+                  select: false,
+                  resolve: (face: { center: { z: number } } | null) => {
+                    answered = true;
+                    resolve(face?.center.z ?? null);
+                  }
+                }
+              })
+            );
+            if (!answered) setTimeout(() => resolve(null), 50);
+          }),
+        // At the faces' old height: a face that stayed is the nearest.
+        { x, y: Y / 2, z: Z }
+      );
+    const leftX = (X - SLOT_WIDTH) / 4;
+    const rightX = X - leftX;
+    const bothSidesAt = async (z: number) => {
+      await expect
+        .poll(() => sideZ(leftX), { timeout: 30_000 })
+        .toBeCloseTo(z, 4);
+      await expect
+        .poll(() => sideZ(rightX), { timeout: 30_000 })
+        .toBeCloseTo(z, 4);
+    };
+
+    await page
+      .getByRole('button', { name: 'Selection: Offset', exact: true })
+      .click();
+    await expect(
+      page.getByRole('region', { name: 'Offset Faces operation' })
+    ).toBeVisible();
+    await page.getByTestId('direct-manipulation-value').click();
+    const keypad = page.getByRole('dialog', { name: 'Offset value' });
+    await keypad.getByRole('textbox').fill('2');
+    await expect(
+      keypad.getByRole('button', { name: 'Apply offset' })
+    ).toBeEnabled({ timeout: 30_000 });
+    await keypad.getByRole('button', { name: 'Apply offset' }).click();
+
+    const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toContainText('+2 mm');
+    await expect.poll(topZ, { timeout: 30_000 }).toBeCloseTo(Z + 2, 4);
+    await bothSidesAt(Z + 2);
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+
+    // Reopened from History, the step's distance is changed and rebuilt.
+    await row.locator('.feature-row-main').click();
+    const form = page.getByRole('form', { name: 'Offset faces' });
+    await expect(form).toBeVisible();
+    const field = form.getByRole('textbox');
+    await expect(field).toHaveValue('2');
+    await field.fill('3');
+    await form.getByRole('button', { name: 'Apply offset' }).click();
+    await expect(row).toContainText('+3 mm', { timeout: 30_000 });
+    await expect.poll(topZ, { timeout: 30_000 }).toBeCloseTo(Z + 3, 4);
+    await bothSidesAt(Z + 3);
+    await expect(page.locator('.feature-row')).toHaveCount(2);
+    expect(errors).toEqual([]);
+  }
+);
+
+/** Opens the slotted (or the pocketed) block in a new project. */
+async function openSlottedBlock(page: Page, name: string, pocket = false) {
+  const document = importStepBody(
+    createProjectDocument('Slotted block', toUserId('user_offset_faces')),
+    {
+      name: 'Block',
+      sourceName: 'block.step',
+      artifactId: 'artifact_slotted_block',
+      stepText: await slottedBlockStep(pocket)
+    }
+  ).document;
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(name);
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
+  await page.getByLabel('Import project backup').setInputFiles({
+    name: 'slotted.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: []
+      })
+    )
+  });
+  // A cold kernel builds the STEP body: allow it more than the default.
+  await expectBodyCount(page, 1, 30_000);
+  return page.locator('.viewer-host canvas');
+}
+
+type Vec = { x: number; y: number; z: number };
+const UP: Vec = { x: 0, y: 0, z: 1 };
+
+/**
+ * Picks (or, with `select: false`, only reads) the planar face facing
+ * `normal` whose centre is nearest `near`; resolves its centre, or null.
+ */
+function planarFace(
+  canvas: Locator,
+  input: { normal: Vec; near: Vec; additive?: boolean; select?: boolean }
+) {
+  return canvas.evaluate(
+    (element, detail) =>
+      new Promise<Vec | null>((resolve) => {
+        let answered = false;
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-planar-face', {
+            detail: {
+              ...detail,
+              resolve: (face: { center: Vec } | null) => {
+                answered = true;
+                resolve(face?.center ?? null);
+              }
+            }
+          })
+        );
+        // Before the hook is registered nothing answers: retry.
+        if (!answered) setTimeout(() => resolve(null), 50);
+      }),
+    input
+  );
+}
+
+test(
+  'offsets parallel faces at different heights together, each along its own normal',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const canvas = await openSlottedBlock(page, 'Offset chained face set');
+    const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+    const leftTopAt = { x: (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z };
+    const rightTopAt = { x: X - (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z };
+    // The slot's floor, then the top beside it with Shift: the handle arms
+    // on the top, 5 above the floor.
+    await expect
+      .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+        timeout: 30_000
+      })
+      .not.toBeNull();
+    await planarFace(canvas, { normal: UP, near: leftTopAt, additive: true });
+    await expect(page.getByRole('contentinfo')).toContainText(
+      '2 faces selected'
+    );
+    // Read at each face's old place: a face that stayed is the nearest.
+    const zNear = (at: Vec) => async () =>
+      (await planarFace(canvas, { normal: UP, near: at, select: false }))?.z ??
+      null;
+    const expectHeights = async (offset: number) => {
+      await expect
+        .poll(zNear(floorAt), { timeout: 30_000 })
+        .toBeCloseTo(Z - SLOT_DEPTH + offset, 4);
+      await expect
+        .poll(zNear(leftTopAt), { timeout: 30_000 })
+        .toBeCloseTo(Z + offset, 4);
+      // The other top was never picked: it stays.
+      await expect
+        .poll(zNear(rightTopAt), { timeout: 30_000 })
+        .toBeCloseTo(Z, 4);
+    };
+
+    await page
+      .getByRole('button', { name: 'Selection: Offset', exact: true })
+      .click();
+    await expect(
+      page.getByRole('region', { name: 'Offset Faces operation' })
+    ).toBeVisible();
+    // One direction tick per face of the set.
+    await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+    await page.getByTestId('direct-manipulation-value').click();
+    const keypad = page.getByRole('dialog', { name: 'Offset value' });
+    await keypad.getByRole('textbox').fill('2');
+    await expect(
+      keypad.getByRole('button', { name: 'Apply offset' })
+    ).toBeEnabled({ timeout: 30_000 });
+    await keypad.getByRole('button', { name: 'Apply offset' }).click();
+
+    const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toContainText('+2 mm');
+    await expectHeights(2);
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    // The commit ends with nothing armed: no ticks are left behind.
+    await expect(canvas).not.toHaveAttribute('data-e2e-offset-set-ticks', /.*/);
+
+    // Reopened from History, the chained step's distance changes and both
+    // faces rebuild along their own normals.
+    await row.locator('.feature-row-main').click();
+    const form = page.getByRole('form', { name: 'Offset faces' });
+    await expect(form).toBeVisible();
+    const field = form.getByRole('textbox');
+    await expect(field).toHaveValue('2');
+    await field.fill('3');
+    await form.getByRole('button', { name: 'Apply offset' }).click();
+    await expect(row).toContainText('+3 mm', { timeout: 30_000 });
+    await expectHeights(3);
+    await expect(page.locator('.feature-row')).toHaveCount(2);
+    expect(errors).toEqual([]);
+  }
+);
+
+test('refuses a face set whose faces face opposite ways, by name', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const canvas = await openSlottedBlock(page, 'Offset face set refusal');
+  // The slot's two walls face each other across it: one offset would
+  // thicken one side and thin the other.
+  await expect
+    .poll(
+      () =>
+        planarFace(canvas, {
+          normal: { x: 1, y: 0, z: 0 },
+          near: { x: WALL_X, y: Y / 2, z: Z - SLOT_DEPTH / 2 }
+        }),
+      { timeout: 30_000 }
+    )
+    .not.toBeNull();
+  await planarFace(canvas, {
+    normal: { x: -1, y: 0, z: 0 },
+    near: { x: WALL_X + SLOT_WIDTH, y: Y / 2, z: Z - SLOT_DEPTH / 2 },
+    additive: true
+  });
+  await expect(page.getByRole('contentinfo')).toContainText('2 faces selected');
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'The selected faces face opposite ways'
+  );
+  await expect(
+    page.getByRole('region', { name: 'Offset Faces operation' })
+  ).toHaveCount(0);
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+});
+
+const PLUS_X: Vec = { x: 1, y: 0, z: 0 };
+
+test(
+  'offsets a pocket’s floor and wall together, each along its own normal',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const canvas = await openSlottedBlock(page, 'Offset pocket faces', true);
+    const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+    const wallAt = { x: WALL_X, y: Y / 2, z: Z - SLOT_DEPTH / 2 };
+    const oppositeAt = {
+      x: WALL_X + SLOT_WIDTH,
+      y: Y / 2,
+      z: Z - SLOT_DEPTH / 2
+    };
+    // The pocket's floor, then its +x wall with Shift: the handle arms on
+    // the wall, pointing across the pocket.
+    await expect
+      .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+        timeout: 30_000
+      })
+      .not.toBeNull();
+    await planarFace(canvas, { normal: PLUS_X, near: wallAt, additive: true });
+    await expect(page.getByRole('contentinfo')).toContainText(
+      '2 faces selected'
+    );
+    // Read at each face's old place: a face that stayed is the nearest.
+    const near = (normal: Vec, at: Vec) => () =>
+      planarFace(canvas, { normal, near: at, select: false });
+    const expectMoved = async (offset: number) => {
+      // The floor rises along +z, the wall moves along +x: each along its
+      // own normal by the one distance.
+      await expect
+        .poll(async () => (await near(UP, floorAt)())?.z ?? null, {
+          timeout: 30_000
+        })
+        .toBeCloseTo(Z - SLOT_DEPTH + offset, 4);
+      await expect
+        .poll(async () => (await near(PLUS_X, wallAt)())?.x ?? null, {
+          timeout: 30_000
+        })
+        .toBeCloseTo(WALL_X + offset, 4);
+      // The opposite wall was never picked: it stays.
+      await expect
+        .poll(
+          async () =>
+            (await near({ x: -1, y: 0, z: 0 }, oppositeAt)())?.x ?? null,
+          { timeout: 30_000 }
+        )
+        .toBeCloseTo(WALL_X + SLOT_WIDTH, 4);
+    };
+
+    await page
+      .getByRole('button', { name: 'Selection: Offset', exact: true })
+      .click();
+    await expect(
+      page.getByRole('region', { name: 'Offset Faces operation' })
+    ).toBeVisible();
+    // The shared handle points along the wall's normal, the last pick.
+    const handle = await canvas.evaluate((element) => ({
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy)
+    }));
+    expect(Math.hypot(handle.dx, handle.dy)).toBeGreaterThan(0);
+    await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+    await page.getByTestId('direct-manipulation-value').click();
+    const keypad = page.getByRole('dialog', { name: 'Offset value' });
+    await keypad.getByRole('textbox').fill('1');
+    await expect(
+      keypad.getByRole('button', { name: 'Apply offset' })
+    ).toBeEnabled({ timeout: 30_000 });
+    await keypad.getByRole('button', { name: 'Apply offset' }).click();
+
+    const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+    await expect(row).toBeVisible({ timeout: 30_000 });
+    await expect(row).toContainText('+1 mm');
+    await expectMoved(1);
+    await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+    await expect(canvas).not.toHaveAttribute('data-e2e-offset-set-ticks', /.*/);
+
+    // Reopened from History, the distance changes and both faces rebuild
+    // along their own normals.
+    await row.locator('.feature-row-main').click();
+    const form = page.getByRole('form', { name: 'Offset faces' });
+    await expect(form).toBeVisible();
+    const field = form.getByRole('textbox');
+    await expect(field).toHaveValue('1');
+    await field.fill('2');
+    await form.getByRole('button', { name: 'Apply offset' }).click();
+    await expect(row).toContainText('+2 mm', { timeout: 30_000 });
+    await expectMoved(2);
+    await expect(page.locator('.feature-row')).toHaveCount(2);
+    expect(errors).toEqual([]);
+  }
+);
+
+test('names a later step of a different-direction set that refuses, on its card', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const canvas = await openSlottedBlock(page, 'Refused pocket faces', true);
+  // The pocket's +x wall, then the block's top with Shift: the top holds
+  // the handle (face 1) and leads the chain; the wall is face 2.
+  await expect
+    .poll(
+      () =>
+        planarFace(canvas, {
+          normal: PLUS_X,
+          near: { x: WALL_X, y: Y / 2, z: Z - SLOT_DEPTH / 2 }
+        }),
+      { timeout: 30_000 }
+    )
+    .not.toBeNull();
+  await planarFace(canvas, {
+    normal: UP,
+    // Over the pocket at the top's height: the top (around the pocket) is
+    // nearer than the floor 5 below.
+    near: { x: X / 2, y: Y / 2, z: Z },
+    additive: true
+  });
+  await expect(page.getByRole('contentinfo')).toContainText('2 faces selected');
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Offset value' });
+  // The top rises 11 alone; the wall, pushed 11 across the 10-wide pocket,
+  // is the later step that refuses.
+  await keypad.getByRole('textbox').fill('11');
+  await expect(keypad.getByRole('alert')).toContainText(
+    "Offsetting face 2 after the others would change the body's topology.",
+    { timeout: 30_000 }
+  );
+  await expect(
+    keypad.getByRole('button', { name: 'Apply offset' })
+  ).toBeDisabled();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+});
+
+test('a drag on a chained set releases into the whole set at the dragged distance', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const canvas = await openSlottedBlock(page, 'Drag chained face set');
+  const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+  const leftTopAt = { x: (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z };
+  await expect
+    .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+      timeout: 30_000
+    })
+    .not.toBeNull();
+  await planarFace(canvas, { normal: UP, near: leftTopAt, additive: true });
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const readChip = async () =>
+    Number(
+      (await page.getByTestId('direct-manipulation-value').innerText()).match(
+        /([+-]?[\d.]+) mm/
+      )?.[1]
+    );
+  const resting = await readChip();
+  // Several moves, faster than the whole chain rebuilds: the leading plane
+  // follows each, the chain catches up at its coarse rate.
+  await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
+  await page.mouse.down();
+  for (const units of [0.5, 1, 1.5, 2, 2.5, 3]) {
+    await page.mouse.move(
+      bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * units,
+      bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * units
+    );
+  }
+  const dragged = (await readChip()) - resting;
+  expect(dragged).toBeGreaterThan(0);
+  await page.mouse.up();
+
+  // The release replays the whole set: both faces at the dragged distance.
+  const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await expect(row).toContainText(`+${dragged} mm`);
+  const zNear = (at: Vec) => async () =>
+    (await planarFace(canvas, { normal: UP, near: at, select: false }))?.z ??
+    null;
+  await expect
+    .poll(zNear(floorAt), { timeout: 30_000 })
+    .toBeCloseTo(Z - SLOT_DEPTH + dragged, 4);
+  await expect
+    .poll(zNear(leftTopAt), { timeout: 30_000 })
+    .toBeCloseTo(Z + dragged, 4);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(errors).toEqual([]);
+});
+
+test('a drag on a different-direction set releases into the whole set', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const canvas = await openSlottedBlock(page, 'Drag pocket faces', true);
+  const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+  const wallAt = { x: WALL_X, y: Y / 2, z: Z - SLOT_DEPTH / 2 };
+  await expect
+    .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+      timeout: 30_000
+    })
+    .not.toBeNull();
+  await planarFace(canvas, { normal: PLUS_X, near: wallAt, additive: true });
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const readChip = async () =>
+    Number(
+      (await page.getByTestId('direct-manipulation-value').innerText()).match(
+        /([+-]?[\d.]+) mm/
+      )?.[1]
+    );
+  const resting = await readChip();
+  // Along the wall's normal, faster than the whole chain rebuilds: the
+  // floor (the chain's first step) follows each move, the chain catches up.
+  await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
+  await page.mouse.down();
+  for (const units of [0.25, 0.5, 0.75, 1, 1.25, 1.5]) {
+    await page.mouse.move(
+      bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * units,
+      bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * units
+    );
+  }
+  const dragged = (await readChip()) - resting;
+  expect(dragged).toBeGreaterThan(0);
+  await page.mouse.up();
+
+  const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await expect(row).toContainText(`+${dragged} mm`);
+  await expect
+    .poll(
+      async () =>
+        (await planarFace(canvas, { normal: UP, near: floorAt, select: false }))
+          ?.z ?? null,
+      { timeout: 30_000 }
+    )
+    .toBeCloseTo(Z - SLOT_DEPTH + dragged, 4);
+  await expect
+    .poll(
+      async () =>
+        (
+          await planarFace(canvas, {
+            normal: PLUS_X,
+            near: wallAt,
+            select: false
+          })
+        )?.x ?? null,
+      { timeout: 30_000 }
+    )
+    .toBeCloseTo(WALL_X + dragged, 4);
+  await expect(page.getByRole('contentinfo')).toContainText('warnings0');
+  expect(errors).toEqual([]);
+});
+
+test('names a chained set’s kernel refusal on its card', async ({ page }) => {
+  test.setTimeout(120_000);
+  const canvas = await openSlottedBlock(page, 'Refused chained face set');
+  const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+  await expect
+    .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+      timeout: 30_000
+    })
+    .not.toBeNull();
+  await planarFace(canvas, {
+    normal: UP,
+    near: { x: (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z },
+    additive: true
+  });
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.getByRole('dialog', { name: 'Offset value' });
+  // Pulled in 6, the floor (the chain's first move) would pass through the
+  // block's bottom 5 below it.
+  await keypad.getByRole('textbox').fill('-6');
+  // The whole chain's preview names the kernel's refusal, as a single
+  // face's does; the lead plane's display-only lane never speaks for it.
+  await expect(keypad.getByRole('alert')).toHaveText(
+    'The face would run into another part of the body before it got that far.',
+    { timeout: 30_000 }
+  );
+  await expect(
+    keypad.getByRole('button', { name: 'Apply offset' })
+  ).toBeDisabled();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+});
+
+test('a release away from an older refusal of a chained set is validated, not refused', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  // Holds every preview rebuild once set, so no preview can answer for the
+  // value the hand lets go at; the release's own validation still runs.
+  await page.addInitScript(() => {
+    const scope = window as typeof window & { holdPreviews?: boolean };
+    const send = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message, transfer) {
+      if (
+        scope.holdPreviews &&
+        (message as { type?: string } | null)?.type === 'preview-geometry'
+      ) {
+        return;
+      }
+      return send.call(this, message, transfer as StructuredSerializeOptions);
+    };
+  });
+  const canvas = await openSlottedBlock(page, 'Release past a refusal');
+  const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+  const leftTopAt = { x: (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z };
+  await expect
+    .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+      timeout: 30_000
+    })
+    .not.toBeNull();
+  await planarFace(canvas, { normal: UP, near: leftTopAt, additive: true });
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const at = (units: number) => ({
+    x: bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * units,
+    y: bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * units
+  });
+  const chip = page.getByTestId('direct-manipulation-value');
+  await page.mouse.move(at(0).x, at(0).y);
+  await page.mouse.down();
+  // Pulled in 6 the floor would pass through the block's bottom: held
+  // until the whole chain refuses it.
+  await page.mouse.move(at(-6).x, at(-6).y, { steps: 3 });
+  await expect(chip).toHaveAttribute('data-state', 'warning', {
+    timeout: 30_000
+  });
+  // Back to a value that builds, let go before any preview answers for it:
+  // the older refusal must not stand for it.
+  await page.evaluate(() => {
+    (window as typeof window & { holdPreviews?: boolean }).holdPreviews = true;
+  });
+  await page.mouse.move(at(-2).x, at(-2).y);
+  const released = Number(
+    (await chip.innerText()).match(/[+\-−]?([\d.]+) mm/)?.[1]
+  );
+  expect(released).toBeGreaterThan(0);
+  await page.mouse.up();
+  const row = page.locator('.feature-row', { hasText: 'Offset 2 faces' });
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await expect(row).toContainText(`−${released} mm`);
+});
+
+test('a refusal never leaves a chained set’s leading plane moved alone', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const canvas = await openSlottedBlock(page, 'Refusal after a lead frame');
+  const floorAt = { x: X / 2, y: Y / 2, z: Z - SLOT_DEPTH };
+  const leftTopAt = { x: (X - SLOT_WIDTH) / 4, y: Y / 2, z: Z };
+  await expect
+    .poll(() => planarFace(canvas, { normal: UP, near: floorAt }), {
+      timeout: 30_000
+    })
+    .not.toBeNull();
+  await planarFace(canvas, { normal: UP, near: leftTopAt, additive: true });
+  await page
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  await expect(canvas).toHaveAttribute('data-e2e-offset-set-ticks', '2');
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const at = (units: number) => ({
+    x: bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * units,
+    y: bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * units
+  });
+  // The heights of the flat tops on screen, preview frames included.
+  const upHeights = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<number[]>((resolve) => {
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-render-policy', {
+              detail: {
+                includeUpHeights: true,
+                resolve: (state: { upHeights?: number[] }) =>
+                  resolve(state.upHeights ?? [])
+              }
+            })
+          );
+        })
+    );
+  await page.mouse.move(at(0).x, at(0).y);
+  await page.mouse.down();
+  // Pulled in, the floor leads the chain: its lead frame moves it alone
+  // until the whole chain catches up. Then on past what builds.
+  await page.mouse.move(at(-1).x, at(-1).y, { steps: 4 });
+  await expect
+    .poll(upHeights, { timeout: 30_000 })
+    .not.toContain(Z - SLOT_DEPTH);
+  await page.mouse.move(at(-2).x, at(-2).y);
+  await page.mouse.move(at(-6).x, at(-6).y, { steps: 2 });
+  const chip = page.getByTestId('direct-manipulation-value');
+  await expect(chip).toHaveAttribute('data-state', 'warning', {
+    timeout: 30_000
+  });
+  // Whatever stands beside the refusal moves both faces alike: the floor
+  // is back at its height, or the left top went down with it. A floor moved
+  // under an unmoved left top (beside the unpicked right top at the same
+  // height) is the leading plane's display-only frame.
+  const heights = await upHeights();
+  const floorStayed = heights.includes(Z - SLOT_DEPTH);
+  const leftTopMoved = heights.some((z) => z < Z - 1e-4 && z > Z - SLOT_DEPTH);
+  expect(floorStayed || leftTopMoved).toBe(true);
+  await page.mouse.up();
+  await expect(page.locator('.feature-row')).toHaveCount(1);
+});

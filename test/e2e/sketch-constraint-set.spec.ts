@@ -207,3 +207,89 @@ test('a relation applies on add and holds its first pick', async ({ page }) => {
   expect(held).toEqual(shortLine);
   expect(lineLength(moved!)).toBeCloseTo(shortLength, 6);
 });
+
+/**
+ * Whole-entity symmetry: picked away from their points, two lines and the
+ * axis mirror the second line onto the first's image in one undoable edit,
+ * the first held where it is.
+ */
+test('Symmetric mirrors a whole line about an axis in one edit', async ({
+  page
+}) => {
+  test.setTimeout(60_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Entity symmetry');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(
+    page.getByRole('toolbar', { name: 'Sketch tools' })
+  ).toBeVisible();
+  await page.waitForTimeout(800);
+
+  const bounds = (await page.locator('.viewer-host canvas').boundingBox())!;
+  const at = (fx: number, fy: number) => ({
+    x: bounds.x + bounds.width * fx,
+    y: bounds.y + bounds.height * fy
+  });
+  const axis = [at(0.45, 0.3), at(0.45, 0.75)] as const;
+  const first = [at(0.52, 0.4), at(0.62, 0.6)] as const;
+  // Roughly where the image belongs, drawn the other way round.
+  const second = [at(0.36, 0.63), at(0.4, 0.42)] as const;
+  for (const [a, b] of [axis, first, second]) {
+    await page.mouse.click(a.x, a.y);
+    await page.mouse.click(b.x, b.y);
+    await page.keyboard.press('Escape');
+  }
+  await expect.poll(async () => (await liveLines(page)).length).toBe(3);
+  const before = await liveLines(page);
+  const [, firstLine] = before;
+
+  const relations = page.getByRole('toolbar', { name: 'Relations' });
+  const status = page.getByRole('contentinfo');
+  const group = relations.getByRole('button', {
+    name: 'Point relations',
+    exact: true
+  });
+  await group.click();
+  await relations
+    .getByRole('group', { name: 'Point relations' })
+    .getByRole('button', { name: 'Symmetric', exact: true })
+    .click();
+  const mid = ([a, b]: readonly { x: number; y: number }[]) => ({
+    x: (a!.x + b!.x) / 2,
+    y: (a!.y + b!.y) / 2
+  });
+  await page.mouse.click(mid(first).x, mid(first).y);
+  await expect(status).toContainText('Symmetric: pick 2 of 3.');
+  await page.mouse.click(mid(second).x, mid(second).y);
+  await expect(status).toContainText('Symmetric: pick 3 of 3.');
+  await page.mouse.click(mid(axis).x, mid(axis).y);
+  await expect(status).toContainText('Symmetric constraint added and applied', {
+    timeout: 30_000
+  });
+
+  const [solvedAxis, held, image] = await liveLines(page);
+  expect(held).toEqual(firstLine);
+  // The image is the first line reflected in the solved axis (which the
+  // relation may move: only the first pick is held). The drawn direction is
+  // kept, so the image's start mirrors the first's end.
+  const a = { x: Number(solvedAxis!.x1), y: Number(solvedAxis!.y1) };
+  const d = {
+    x: Number(solvedAxis!.x2) - a.x,
+    y: Number(solvedAxis!.y2) - a.y
+  };
+  const reflect = (x: number, y: number) => {
+    const t = ((x - a.x) * d.x + (y - a.y) * d.y) / (d.x * d.x + d.y * d.y);
+    return { x: 2 * (a.x + t * d.x) - x, y: 2 * (a.y + t * d.y) - y };
+  };
+  const start = reflect(Number(held!.x2), Number(held!.y2));
+  const end = reflect(Number(held!.x1), Number(held!.y1));
+  expect(Number(image!.x1)).toBeCloseTo(start.x, 6);
+  expect(Number(image!.y1)).toBeCloseTo(start.y, 6);
+  expect(Number(image!.x2)).toBeCloseTo(end.x, 6);
+  expect(Number(image!.y2)).toBeCloseTo(end.y, 6);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(async () => liveLines(page)).toEqual(before);
+});

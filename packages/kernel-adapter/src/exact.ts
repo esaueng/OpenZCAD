@@ -1,4 +1,15 @@
 import {
+  beginPatternMeshBuild,
+  type PatternMeshSink,
+  pendingMesh,
+  takePatternMesh,
+  resetPatternMesh,
+  releasePatternMesh
+} from './point-pattern-mesh';
+import { clearPatternCutPrefix } from './exact-pattern-cut-prefix';
+import { PatternOverlapWorkers } from './pattern-overlap-workers';
+import { clearCheckedHoleCuts } from './exact-point-hole-cuts';
+import {
   AxialExtentTracker,
   MIN_AXIAL_HISTORY_FEATURES,
   axialRootKey,
@@ -15,6 +26,11 @@ import {
   type IdleLineageView
 } from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
+import {
+  solveAssembly,
+  transformStampBodyIds,
+  transformToMatrix4
+} from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
 import {
   beginDirectEditProfile,
@@ -74,7 +90,9 @@ export type {
   SketchPlanarResult
 } from './sketch-2d-ops';
 import {
+  assemblyComponentBodies,
   findSketch,
+  isLiveAssemblyBody,
   getParameterScope,
   resolveParamValue,
   getParameterHiddenBodyIds,
@@ -91,11 +109,31 @@ import {
   type StlExportMesh
 } from '@openzcad/io-stl';
 import { faceDxfEntities } from './exact-dxf';
-import { pairwiseBodyClash, rowMajorMatrix } from './exact-body-clash';
+import {
+  cncLayout,
+  cncRefusalText,
+  type CncLayoutExport,
+  type CncLayoutPart,
+  type CncLayoutRefusal
+} from './exact-cnc-layout';
+export type {
+  CncLayoutExport,
+  CncLayoutPlacement,
+  CncLayoutRefusal,
+  CncLayoutRefusalReason
+} from './exact-cnc-layout';
+import {
+  exactBodyClash,
+  pairwiseBodyClash,
+  rowMajorMatrix
+} from './exact-body-clash';
 import { analyzeBodySurfaces } from './exact-surface-analysis';
 import type {
   AssemblyInterferenceOperand,
   AssemblyInterferenceReport,
+  AssemblySweepComponent,
+  AssemblySweepPosition,
+  AssemblySweepWorkerReport,
   SurfaceAnalysisBody,
   SurfaceAnalysisReport,
   SurfaceAnalysisRequest,
@@ -182,7 +220,10 @@ import type {
   PreparedShapeMeasurement
 } from './exact-types';
 export type { DxfFaceSelector } from './exact-types';
-import { diagnoseImportedSolid } from './exact-lineage-builders';
+import {
+  diagnoseImportedSolid,
+  importedSolidBoundary
+} from './exact-lineage-builders';
 import { releasePreparedFaceMove } from './exact-prepared-face-move';
 import {
   hasPreparedGroupEdit,
@@ -219,6 +260,7 @@ import {
   UnionVerdictsWithMeshBudget
 } from './exact-boolean-helpers';
 import {
+  bodyName,
   bodyOpacityFromMetadata,
   decodeText,
   projectRemusLineageDiagnostic
@@ -226,10 +268,8 @@ import {
 import {
   EXACT_IMPORT_BUDGETS,
   importedStepCacheKey,
-  importStepStructureWithOwnBudget,
-  importStepWithOwnBudget,
+  readStepForInspection,
   stepImportEmptyReason,
-  type StepImportReport,
   type StepStructure
 } from './kernel-step-import';
 import {
@@ -308,6 +348,7 @@ import {
   type StepExportMetadata,
   type StepExportOptions
 } from './step-export-metadata';
+import { repeatStepExport } from './repeat-step-export';
 import type { StepPmiEntry } from './step-pmi';
 export {
   type StepBodiesExport,
@@ -348,6 +389,7 @@ import {
   MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES,
   MAX_HISTORY_REPLAY_WORK,
   cloneBuildState,
+  historyArenaWear,
   featureAwaitsEnvironment,
   historyCheckpointIndices,
   historyFeatureDigest,
@@ -355,8 +397,10 @@ import {
   measuredShapeBytes,
   measurementWitness,
   measurementProvenanceKey,
+  sameMeasurementProvenance,
   tailCheckpointIndices,
   withTerminalResultCheckpoint,
+  type HistoryArenaRetentionLimits,
   type HistoryCheckpointEntry,
   type MeasuredBodyCacheEntry,
   type PreviewDisplay,
@@ -369,6 +413,7 @@ import {
   projectionMatches,
   projectionSignature,
   restoreKernelSnapshot,
+  reuseStateDigest,
   snapshotKernel,
   PERSISTED_HISTORY_SESSION_FORMAT,
   type PersistedHistorySession
@@ -385,6 +430,15 @@ import {
   ownedMeshFaceOffsets
 } from './owned-mesh-output';
 import { PrimitiveBuildCache } from './exact-primitive-cache';
+
+/** A session's reuse tables with their digest, or nothing to store. */
+function reuseTables(
+  cache: PrimitiveBuildCache
+): Pick<PersistedHistorySession, 'reuse' | 'reuseDigest'> {
+  const reuse = cache.exportState();
+  const reuseDigest = reuseStateDigest(reuse);
+  return reuseDigest === null ? {} : { reuse, reuseDigest };
+}
 import {
   booleanEvolutionProbeNeeded,
   isBooleanEvolutionProbeEligible
@@ -417,6 +471,7 @@ export type {
 } from './gcs-sketch';
 import {
   classifyImportedSolid,
+  importedSolidRejection,
   importedStepDroppedSolidWarning,
   importedStepNoSolidError,
   importedStepRejectedSolidSummary,
@@ -760,6 +815,7 @@ export interface ExactKernelAdapter {
       cancellation?: BuildCancellationSignal;
       lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
       onGeometryReady?: (geometry: GeometryReadyState) => void;
+      onPatternMesh?: PatternMeshSink;
       /** Deliver incoming worker messages between indivisible kernel operations. */
       yieldControl?: () => Promise<void> | void;
       /**
@@ -794,11 +850,15 @@ export interface ExactKernelAdapter {
   captureHistorySession?(
     document: ProjectDocument
   ): Promise<PersistedHistorySession | null>;
-  /** Whether a restored session still awaits {@link warmHistory}. */
+  /**
+   * Whether the history kernel awaits {@link warmHistory}: a restored
+   * session's sparse checkpoint table, or an arena worn by retired slots.
+   */
   needsHistoryWarmup?(projectId: ProjectDocument['projectId']): boolean;
   /**
-   * Idle: rebuilds a restored session's checkpoint table in a second kernel
-   * and swaps it in once complete; cancellation keeps the restored kernel.
+   * Idle: rebuilds a restored session's checkpoint table, or a worn arena,
+   * in a second kernel and swaps it in once complete; cancellation keeps the
+   * current kernel.
    */
   warmHistory?(
     document: ProjectDocument,
@@ -887,6 +947,19 @@ export interface ExactKernelAdapter {
     face: DxfFaceSelector,
     options?: ExportUnitOptions
   ): Promise<string>;
+  /**
+   * L09: the CNC-cut layout of `bodyIds` (every shown body when empty) as
+   * DXF R12 in millimetres (or `options.units`): each solid laid flat on
+   * its largest planar face, its upward planar faces projected exactly,
+   * one `Z<height>` layer per face height, parts arranged in rows and
+   * labelled on `LABELS`. Solids that cannot be laid flat are returned as
+   * refusals; with none left the export refuses by name.
+   */
+  exportCncLayoutDxf(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options?: ExportUnitOptions & { gapMm?: number }
+  ): Promise<CncLayoutExport>;
   /**
    * M16: the flat pattern of a sheet-metal feature — the flat sheet's
    * outline loops and its bend centre lines in the blank's sketch
@@ -985,6 +1058,17 @@ export interface ExactKernelAdapter {
     document: ProjectDocument,
     operands: AssemblyInterferenceOperand[]
   ): Promise<AssemblyInterferenceReport>;
+  /**
+   * AS04 interference through motion: the same clash query at each position
+   * of a sweep, on one build. Each position poses the components it names by
+   * their matrices and checks only its own pairs. A component with no exact
+   * geometry is listed in `missing`, and a pair naming one is left out.
+   */
+  assemblyInterferenceSweep(
+    document: ProjectDocument,
+    components: AssemblySweepComponent[],
+    positions: AssemblySweepPosition[]
+  ): Promise<AssemblySweepWorkerReport>;
   /**
    * M09 analysis overlays: the exact kernel's per-face analysis of each
    * named body (`exact-surface-analysis.ts`), sampled for the viewport to
@@ -1178,6 +1262,11 @@ export interface ExactKernelAdapterOptions {
   /** Admission budget for accounted checkpoint topology bytes, not total RSS. */
   historyCheckpointEstimatedBytes?: number;
   /**
+   * Overrides the retired-slot thresholds of {@link historyArenaWear}. Tests
+   * wear an arena out in a few edits; nothing in the app sets it.
+   */
+  historyArenaRetention?: HistoryArenaRetentionLimits;
+  /**
    * Overrides {@link MAX_MEASURED_SHAPE_CACHE_BYTES}. Tests pin the byte
    * budget without building a document large enough to exceed the real one;
    * nothing in the app sets it.
@@ -1235,6 +1324,8 @@ function importedExactBodyIds(document: ProjectDocument): Set<BodyId> {
     if (targetIsImported && data.featureKind === 'split') {
       imported.add(data.secondBodyId);
     }
+    if (targetIsImported)
+      for (const bodyId of transformStampBodyIds(data)) imported.add(bodyId);
   }
   return imported;
 }
@@ -1327,13 +1418,64 @@ function exportSolidLabels(
 }
 
 /**
+ * AS04: where the assembly places each written body that one of its parts
+ * shows: the part's solved pose (the stored joint values; never an exploded
+ * offset), column-major, its translation in the file's length unit.
+ */
+function exportAssemblyPlacements(
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId }[],
+  scale: number,
+  /**
+   * Whether the model shows a body (built, not consumed, not hidden by a
+   * parameter): what a part resolves against, as Assemble resolves it,
+   * whichever bodies this export happens to write.
+   */
+  isLive: (bodyId: BodyId) => boolean
+): Map<BodyId, number[]> {
+  const placements = new Map<BodyId, number[]>();
+  const set = document.assembly;
+  if (!set || set.components.length === 0) return placements;
+  const written = new Set(bodies.map(({ bodyId }) => bodyId));
+  const shown = assemblyComponentBodies(document, isLive);
+  const solution = solveAssembly(set);
+  // Display order, a later part winning a body two parts resolve to: the
+  // pose the Assemble viewport draws that body at.
+  for (const component of set.components) {
+    const bodyId = shown.get(component.id);
+    const pose = solution.poses.get(component.id);
+    if (!bodyId || !pose || !written.has(bodyId)) continue;
+    const matrix = transformToMatrix4(pose);
+    for (const index of [12, 13, 14]) matrix[index] = matrix[index]! * scale;
+    placements.set(bodyId, matrix);
+  }
+  return placements;
+}
+
+/**
  * I02: the Objects folders holding the written bodies, as the STEP product
- * tree; null when no written body sits in a folder.
+ * tree; null when no written body sits in a folder and no assembly part
+ * shows one. AS04: a body an assembly part shows is placed at that part's
+ * solved pose, its geometry staying in its own frame.
  */
 function exportAssembly(
   document: ProjectDocument,
-  bodies: readonly { bodyId: BodyId; solids: number[] }[]
+  bodies: readonly { bodyId: BodyId; solids: number[] }[],
+  scale = 1,
+  build?: ExactBuildResult
 ): StepExportAssembly | null {
+  const hidden = getParameterHiddenBodyIds(document);
+  const placements = exportAssemblyPlacements(
+    document,
+    bodies,
+    scale,
+    build
+      ? (bodyId) =>
+          (build.shapes.get(bodyId)?.solids.length ?? 0) > 0 &&
+          !build.consumed.has(bodyId) &&
+          !hidden.has(bodyId)
+      : (bodyId) => isLiveAssemblyBody(document, bodyId)
+  );
   const all = new Map(
     listObjectFolders(document).map((folder) => [folder.id, folder])
   );
@@ -1353,13 +1495,17 @@ function exportAssembly(
   );
   const placed = bodies.map(({ bodyId, solids }) => {
     const folderId = objectFolderOfBody(document, bodyId);
+    const placement = placements.get(bodyId);
     return {
       name: names.get(bodyId) ?? '',
       solidCount: solids.length,
-      folder: folderId !== null && all.has(folderId) ? add(folderId) : null
+      folder: folderId !== null && all.has(folderId) ? add(folderId) : null,
+      ...(placement ? { placement } : {})
     };
   });
-  return folders.length > 0 ? { folders, bodies: placed } : null;
+  return folders.length > 0 || placements.size > 0
+    ? { folders, bodies: placed }
+    : null;
 }
 
 /**
@@ -1452,26 +1598,38 @@ function writeStepBodies(
     solids: exportSolidLabels(document, bodies),
     ...(options.protocol ? { protocol: options.protocol } : {})
   };
-  const assembly = exportAssembly(document, bodies);
+  const assembly = exportAssembly(
+    document,
+    bodies,
+    exportLengthScale(document.units, options.units ?? 'mm'),
+    build
+  );
   if (assembly) metadata.assembly = assembly;
   if (pmi.length > 0) metadata.pmi = pmi;
   // Never fuse: a boolean union changes the geometry (overlaps merge,
   // coincident faces weld). Every root of the arena document becomes its
   // own MANIFOLD_SOLID_BREP inside one shape representation, so the
   // bodies stay distinct through a round trip.
-  return finishStepExport(
-    declareStepLengthUnit(
-      decodeText(
-        io.exportStepWithOptions(
-          kernel.serializeSolids(
-            new Uint32Array(bodies.flatMap(({ solids }) => solids))
+  const units = options.units ?? 'mm';
+  const solids = kernel.serializeSolids(
+    new Uint32Array(bodies.flatMap((body) => body.solids))
+  );
+  return repeatStepExport(
+    kernel,
+    document.projectId,
+    units,
+    solids,
+    metadata,
+    () =>
+      finishStepExport(
+        declareStepLengthUnit(
+          decodeText(
+            io.exportStepWithOptions(solids, stepWriterOptions(metadata))
           ),
-          stepWriterOptions(metadata)
-        )
-      ),
-      options.units ?? 'mm'
-    ),
-    metadata
+          units
+        ),
+        metadata
+      )
   );
 }
 
@@ -1482,6 +1640,8 @@ export type {
 } from './kernel-step-import';
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
+  private patternMeshSink?: PatternMeshSink;
+  private readonly patternWorkers = new PatternOverlapWorkers();
   readonly kind = 'remus' as const;
   constructor(private readonly options: ExactKernelAdapterOptions = {}) {
     this.importedSteps = new ImportedStepCache(
@@ -1549,7 +1709,28 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private historyScopeKey: string | null = null;
   private historyProjectId: ProjectDocument['projectId'] | null = null;
   private historyReplayWork = 0;
-  private readonly primitiveBuildCache = new PrimitiveBuildCache();
+  /**
+   * How worn the history kernel's arena was at its last checkpoint
+   * admission ({@link historyArenaWear}); read from the stats that admission
+   * already takes, so tracking it costs no kernel call.
+   */
+  private historyArenaWear: ReturnType<typeof historyArenaWear> = 'fresh';
+  private readonly primitiveBuildCache = new PrimitiveBuildCache({
+    // Embedded text, or a parsed source this device still holds: exactly
+    // when the import builder would succeed without fetching anything.
+    importRebuildable: (feature) => {
+      const data = feature.data;
+      if (data.featureKind !== 'imported-step') return false;
+      if (data.stepText !== undefined) return true;
+      const ref = data.stepSourceRef;
+      return (
+        !!ref &&
+        this.importedSteps.lookup(
+          importedStepCacheKey(ref.checksumSha256, data)
+        ) !== undefined
+      );
+    }
+  });
 
   /**
    * A persisted session (`exact-session-snapshot.ts`) offered to the build
@@ -1847,6 +2028,23 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
   }
 
+  /**
+   * Re-reads the history kernel's arena wear. Checkpoint admission keeps it
+   * current while features replay; a restore that replays nothing (an undo
+   * of a large terminal feature, an export's own copies, temporary
+   * measurement checkpoints) retires slots without admitting a checkpoint,
+   * so those paths call this instead.
+   */
+  private refreshArenaWear(kernel: RemusKernel | null = this.historyKernel) {
+    if (!kernel || kernel !== this.historyKernel) return;
+    const memory = checkpointMemoryStats(kernel);
+    if (memory)
+      this.historyArenaWear = historyArenaWear(
+        memory,
+        this.options.historyArenaRetention
+      );
+  }
+
   private invalidateHistoryCache(): void {
     this.sparseRestoredHistory = false;
     this.unvalidatedSeed = false;
@@ -1860,6 +2058,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.historyScopeKey = null;
     this.historyProjectId = null;
     this.historyReplayWork = 0;
+    this.historyArenaWear = 'fresh';
     this.primitiveBuildCache.clear();
     this.measuredShapeCache.clear();
     this.measuredShapeCacheBytes = 0;
@@ -1867,6 +2066,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     this.previewDisplayCacheBytes = 0;
     this.topologyWitnessStore.clear();
     if (this.historyKernel) {
+      releasePatternMesh(this.historyKernel);
       this.historyKernel.free();
       this.historyKernel = null;
     }
@@ -1893,7 +2093,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     allowCoarse: boolean
   ): PreviewDisplay | null {
     const solidKey = shape.solids.join(',');
-    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const provenanceKey = measurementProvenanceKey(shape, imported, 'snapshot');
     const keyed = (entry: {
       strict: boolean;
       solidKey: string;
@@ -1901,7 +2101,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }) =>
       entry.strict === strict &&
       entry.solidKey === solidKey &&
-      entry.provenanceKey === provenanceKey;
+      sameMeasurementProvenance(entry.provenanceKey, provenanceKey);
     const complete = this.measuredShapeCache.get(bodyId);
     const completeKeyed =
       complete !== undefined &&
@@ -1978,7 +2178,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       return;
     }
     const solidKey = shape.solids.join(',');
-    const provenanceKey = measurementProvenanceKey(shape, imported);
+    const provenanceKey = measurementProvenanceKey(shape, imported, 'snapshot');
     const bytes =
       display.vertices.byteLength +
       display.indices.byteLength +
@@ -2092,13 +2292,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     replayed: number;
     restored: number;
     reusedPrimitives: number;
+    reusedImports: number;
     reusedPreparedFeatures: number;
     reusedAxialFeatures: number;
     /** Strict verdicts the union gate established, keyed by kernel handle. */
     strictVerdicts: StrictUnionVerdicts;
     /** The replay's kernel reads, for the measurement pass of this sync. */
     readMemo: SyncReadMemo;
-    recycleReason?: 'replay-budget';
+    recycleReason?: RebuildCacheEvent['recycleReason'];
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
     /** A feature this sync rebuilt waited on a font or source; see below. */
     transient: boolean;
@@ -2160,9 +2361,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           hasText
         )
     );
-    const recycled =
-      this.historyKernel !== null &&
-      this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK;
+    const recycled: RebuildCacheEvent['recycleReason'] =
+      this.historyKernel === null
+        ? undefined
+        : this.historyReplayWork >= MAX_HISTORY_REPLAY_WORK
+          ? 'replay-budget'
+          : this.historyArenaWear === 'exhausted'
+            ? 'arena-retention'
+            : undefined;
     if (recycled) this.invalidateHistoryCache();
     // An offset's checked source must survive Apply too. Replacing its sparse
     // checkpoint with the result makes the next preview replay unchanged
@@ -2260,15 +2466,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : undefined
         )
       : [];
-    const idleBases =
-      normalizedDemand?.size === 0
-        ? demandBases
-        : cachingEnabled
-          ? features.map((feature, index) =>
-              historyFeatureDigest(document, feature, index, scope, [])
-            )
-          : [];
-    const idleDigests = salted(idleBases, proposeCarry);
+    // Only eligible booleans read lineage demand. Other features have the
+    // same digest in both modes, even when they consume a boolean's result.
+    const hasBooleanProbe =
+      cachingEnabled && features.some(isBooleanEvolutionProbeEligible);
+    const separateIdleDigests = hasBooleanProbe && normalizedDemand?.size !== 0;
+    const idleBases = separateIdleDigests
+      ? features.map((feature, index) =>
+          isBooleanEvolutionProbeEligible(feature)
+            ? historyFeatureDigest(document, feature, index, scope, [])
+            : demandBases[index]!
+        )
+      : demandBases;
+    const idleDigests = separateIdleDigests
+      ? salted(idleBases, proposeCarry)
+      : digests;
     const plainIdleDigests = proposeCarry
       ? salted(idleBases, false)
       : idleDigests;
@@ -2310,6 +2522,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     let initialLineageIsIdle = false;
     let reusePrimitiveTail = false;
     let reusedPrimitives = 0;
+    let reusedImports = 0;
     let reusedPreparedFeatures = 0;
     let reusedAxialFeatures = 0;
     let cacheResetReason:
@@ -2394,6 +2607,24 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // The restored arena still holds what the captured kernel's replays
         // retired: its budget continues where that kernel's stopped.
         this.historyReplayWork = offered.replayWork;
+        // The capturing kernel's reuse tables name handles the snapshot
+        // kept; an entry no longer at its position and digest is dropped.
+        // Damaged tables (a digest mismatch, anything the import cannot
+        // read) are dropped whole: the edit then replays, the restore stands.
+        if (
+          offered.reuse &&
+          offered.reuseDigest === reuseStateDigest(offered.reuse)
+        ) {
+          try {
+            this.primitiveBuildCache.importState(
+              offered.reuse,
+              features,
+              offered.digests
+            );
+          } catch {
+            this.primitiveBuildCache.clear();
+          }
+        }
         kernel = restored;
         restored = null;
         seeded = offered;
@@ -2487,6 +2718,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? idleLineageViewBytes(updated.idle, viewDigests)
             : 0;
           const memory = checkpointMemoryStats(kernel);
+          if (memory)
+            this.historyArenaWear = historyArenaWear(
+              memory,
+              this.options.historyArenaRetention
+            );
           const budget =
             this.options.historyCheckpointEstimatedBytes ??
             MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES;
@@ -2871,6 +3107,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // A checkpoint is cheap to create but makes the next mutation copy the
       // arena. Admit against that projected cost, including retired slots.
       let memory = checkpointMemoryStats(activeKernel);
+      if (memory)
+        this.historyArenaWear = historyArenaWear(
+          memory,
+          this.options.historyArenaRetention
+        );
       let retainedLineageBytes = this.historyLineageMetadataBytes;
       const probeKey = probeKeys[index]!;
       const axialCertificate = axialExtent.snapshot();
@@ -3000,10 +3241,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // Another project's bodies are a different set: start their held display
     // deflections fresh before the build (the union gate reads them).
     if (this.heldDisplayProjectId !== document.projectId) {
+      releasePatternMesh(activeKernel);
+      this.patternWorkers.dispose();
       this.heldDisplayDeflections.clear();
       this.previewFaceGeometry.clear();
+      clearCheckedHoleCuts(activeKernel);
+      clearPatternCutPrefix(activeKernel);
       this.heldDisplayProjectId = document.projectId;
     }
+    beginPatternMeshBuild(activeKernel, this.patternMeshSink);
     // Kernel reads the replay shares with the measurement pass of the same
     // sync: surface classes, edge-to-face maps and topology witnesses.
     const readMemo = new SyncReadMemo(activeKernel, this.topologyWitnessStore);
@@ -3018,6 +3264,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     try {
       build = await buildDocumentHistoryCooperatively(
         {
+          patternWorkers: this.patternWorkers,
           run: (work) =>
             withDisplayOnlyBlends(
               activeKernel,
@@ -3057,7 +3304,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 if (reused) {
                   if (feature.data.featureKind === 'primitive')
                     reusedPrimitives += 1;
-                  else reusedPreparedFeatures += 1;
+                  else if (feature.data.featureKind === 'imported-step') {
+                    // Self-contained like a primitive: counted with them.
+                    reusedPrimitives += 1;
+                    reusedImports += 1;
+                  } else reusedPreparedFeatures += 1;
                 }
                 return reused;
               },
@@ -3074,7 +3325,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         normalizedDemand,
         (bodyId) => this.heldDisplayDeflections.get(bodyId)?.[0],
         deferredDirectEditFeatureId,
-        cachingEnabled &&
+        hasBooleanProbe &&
           (this.options.historyCheckpointEstimatedBytes ??
             MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0,
         this.edgeSelections,
@@ -3141,10 +3392,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         reusedPreparedFeatures,
       restored: startIndex,
       reusedPrimitives,
+      reusedImports,
       reusedPreparedFeatures,
       reusedAxialFeatures,
       ...(cacheResetReason ? { cacheResetReason } : {}),
-      ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
+      ...(recycled ? { recycleReason: recycled } : {}),
       strictVerdicts,
       readMemo,
       transient: transientFrom >= startIndex
@@ -3321,6 +3573,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ? previewDisplayTessellation(displayTessellation)
         : displayTessellation;
       const faceHandles = Array.from(kernel.getSolidFaces(solid));
+      // The rigid import is already measuring every face for the full model.
+      // Keep those base measurements for its first exact edit preview.
+      const digests = measureOpening
+        ? this.previewFaceGeometry.sourceDigests(kernel, faceHandles)
+        : null;
       const edgeToFaces = edgeToFaceMapOf(kernel, solid);
       // The edit that produced this solid usually measured its witnesses
       // already; inside the sync memo they are shared rather than measured
@@ -3405,6 +3662,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           meshTessellation.linearDeflection,
           meshTessellation.angularDeflection
         ) ??
+        takePatternMesh(kernel, solid, meshTessellation) ??
         kernel.tessellateSolidGroupedBinary(
           solid,
           meshTessellation.linearDeflection,
@@ -3465,6 +3723,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             hash,
             ...(verifiedReference ? { reference: verifiedReference } : {})
           });
+          const digest = digests?.[index];
           const publishedFace: FaceTopology = {
             topologyId: `face:${hash}`,
             hash,
@@ -3475,7 +3734,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               kernel,
               solid,
               handle,
-              (region) => blendRegionMembersByHandle.set(handle, region.faces)
+              (region) => blendRegionMembersByHandle.set(handle, region.faces),
+              digest === undefined
+                ? undefined
+                : (geometry) =>
+                    this.previewFaceGeometry.rememberSource(
+                      digest,
+                      witness,
+                      geometry
+                    )
             )
           };
           faceTopologyByHandle.set(handle, publishedFace);
@@ -3815,6 +4082,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       cancellation?: BuildCancellationSignal;
       lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
       onGeometryReady?: (geometry: GeometryReadyState) => void;
+      onPatternMesh?: PatternMeshSink;
       yieldControl?: () => Promise<void> | void;
       proposeCarry?: boolean;
       displayRefinement?: boolean;
@@ -3822,6 +4090,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     }
   ): Promise<DerivedState> {
     return this.runHistoryJob(async () => {
+      this.patternMeshSink = options?.onPatternMesh;
       this.offeredSession = options?.persistedSession ?? null;
       // A complete sync ends a drag's draft and coarse-frame state. An idle
       // refinement that slipped into a paused drag hands it back unless the
@@ -3863,6 +4132,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : null;
         return result;
       } finally {
+        this.patternMeshSink = undefined;
+        if (this.historyKernel) resetPatternMesh(this.historyKernel);
         this.offeredSession = null;
         if (drag && kernel && this.historyKernel === kernel) {
           this.draftDisplaySource = drag.draftDisplaySource;
@@ -3889,6 +4160,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const live = this.liveSessionFor(document);
       const kernel = this.historyKernel;
       const support = kernelSnapshotSupport();
+      // Idle: read the arena as it is now, whatever retired slots since the
+      // last checkpoint admission.
+      this.refreshArenaWear(kernel);
       // A kernel past half its replay budget is not persisted: a restore
       // would carry that arena into every later session and recycle (a full
       // replay) a few edits after reopening. Its reopen replays into a fresh
@@ -3897,7 +4171,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         !live ||
         !kernel ||
         !support ||
-        this.historyReplayWork * 2 >= MAX_HISTORY_REPLAY_WORK
+        this.historyReplayWork * 2 >= MAX_HISTORY_REPLAY_WORK ||
+        this.historyArenaWear !== 'fresh'
       )
         return null;
       try {
@@ -3915,7 +4190,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           kernelBytes,
           kernelDigest: support.snapshotDigest(kernelBytes),
           projectionSignature: projectionSignature(live.derived),
-          replayWork: this.historyReplayWork
+          replayWork: this.historyReplayWork,
+          ...reuseTables(this.primitiveBuildCache)
         };
       } catch {
         // A refusal (`snapshot:poisoned`, `transient_state`, a limit) only
@@ -3960,14 +4236,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   needsHistoryWarmup(projectId: ProjectDocument['projectId']): boolean {
-    return this.sparseRestoredHistory && this.historyProjectId === projectId;
+    return (
+      (this.sparseRestoredHistory || this.historyArenaWear !== 'fresh') &&
+      this.historyProjectId === projectId
+    );
   }
 
   /**
    * Idle work after a persisted session was restored: replays `document` in
    * a second kernel with the ordinary checkpoint schedule, and swaps it in
    * only once complete, so a later edit of any feature restores a nearby
-   * checkpoint instead of replaying the whole history. Cancellation (any new
+   * checkpoint instead of replaying the whole history. The same rebuild
+   * compacts a worn arena ({@link historyArenaWear}): the fresh kernel holds
+   * no retired slots, and the worn one is freed. Cancellation (any new
    * work) keeps the restored kernel and its checkpoint as they were; only
    * the per-body measurements, which a later sync takes again, are dropped.
    * Resolves whether the checkpoint table was rebuilt.
@@ -3994,7 +4275,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         owners: new Map(this.historyCheckpointOwners),
         scopeKey: this.historyScopeKey,
         projectId: this.historyProjectId,
-        replayWork: this.historyReplayWork
+        replayWork: this.historyReplayWork,
+        arenaWear: this.historyArenaWear
       };
       // Detached, so the warm build starts in a fresh kernel and nothing it
       // invalidates on the way frees the restored one.
@@ -4020,6 +4302,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           cancellation,
           options?.yieldControl
         );
+        releasePatternMesh(restored.kernel);
         restored.kernel.free();
         // The same state the live session published, in the new kernel.
         const record = this.lastBuildRecord;
@@ -4043,6 +4326,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         this.historyScopeKey = restored.scopeKey;
         this.historyProjectId = restored.projectId;
         this.historyReplayWork = restored.replayWork;
+        this.historyArenaWear = restored.arenaWear;
         // Still exactly what the last sync published: a retry may warm it,
         // and a capture may persist it.
         this.liveSession = live;
@@ -4156,6 +4440,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         replayed,
         restored,
         reusedPrimitives,
+        reusedImports,
         reusedPreparedFeatures,
         reusedAxialFeatures,
         strictVerdicts,
@@ -4681,7 +4966,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         const cached = this.measuredShapeCache.get(bodyId);
         const provenanceKey = measurementProvenanceKey(
           shape,
-          build.importedStepDiagnostics.get(bodyId)
+          build.importedStepDiagnostics.get(bodyId),
+          'snapshot'
         );
         let measured: Omit<MeasuredShape, 'volume'>;
         let completeMeasurement: () => Promise<MeasuredShape>;
@@ -4692,11 +4978,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         if (
           cached &&
           cached.analysisKey === analysisKey &&
-          cached.provenanceKey === provenanceKey &&
           cached.solidKey === solidKey &&
           cached.strict === requiresStrictUnionValidation &&
           cached.recognizedImportedFeatures === recognizeImportedFeatures &&
-          cached.measuredOpening === measureOpening
+          cached.measuredOpening === measureOpening &&
+          sameMeasurementProvenance(cached.provenanceKey, provenanceKey)
         ) {
           // A matching key is only a candidate. A stale handle, changed face/
           // edge/vertex set or validation verdict abandons the entire arena.
@@ -4794,6 +5080,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             withSyncReadMemo(readMemo, () =>
               withFaceGeometryMemo(kernel, faces, work, faceGeometry)
             );
+          {
+            const ready = pendingMesh(kernel, shape.solids);
+            if (ready) await raceBuildCancellation(() => ready, cancellation);
+            throwIfBuildCancelled(cancellation);
+          }
           const prepared = inMeasurementScope(() =>
             this.prepareShapeMeasurement(
               kernel,
@@ -5090,6 +5381,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       const sessionRestore = this.sessionRestoreOutcome;
       this.sessionRestoreOutcome = null;
+      // Nothing replayed, so no checkpoint admission re-read the arena,
+      // though the restore (and any temporary measurement checkpoint) may
+      // have retired slots: read it here.
+      if (replayed === 0) this.refreshArenaWear(kernel);
       this.options.onRebuildCacheEvent?.({
         ...(sessionRestore ? { sessionRestore } : {}),
         kind:
@@ -5099,6 +5394,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               ? 'prefix-restore'
               : 'full-rebuild',
         ...(reusedPrimitives > 0 ? { reusedPrimitives } : {}),
+        ...(reusedImports > 0 ? { reusedImports } : {}),
         ...(reusedPreparedFeatures > 0 ? { reusedPreparedFeatures } : {}),
         ...(reusedAxialFeatures > 0 ? { reusedAxialFeatures } : {}),
         ...(recycleReason ? { recycleReason } : {}),
@@ -5253,6 +5549,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.primitiveBuildCache.restoredThrough(
             this.historyCheckpoints[last]!.featureIndex
           );
+          // The operation's own copies (unit-scaled export solids) are
+          // retired by this restore, which replays nothing.
+          this.refreshArenaWear(kernel);
         } catch {
           this.invalidateHistoryCache();
         }
@@ -5581,6 +5880,64 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         millimetresPerUnit(document.units)
       );
       return writeDxf(entities, { units });
+    });
+  }
+
+  async exportCncLayoutDxf(
+    document: ProjectDocument,
+    bodyIds: BodyId[],
+    options: ExportUnitOptions & { gapMm?: number } = {}
+  ): Promise<CncLayoutExport> {
+    const units = options.units ?? 'mm';
+    const requested =
+      bodyIds.length > 0 ? bodyIds : await this.documentExportBodyIds(document);
+    return this.withExportBuild(document, (kernel, build) => {
+      const hidden = getParameterHiddenBodyIds(document);
+      const parts: CncLayoutPart[] = [];
+      const refused: CncLayoutRefusal[] = [];
+      for (const bodyId of requested) {
+        if (hidden.has(bodyId) || build.consumed.has(bodyId)) continue;
+        const shape = build.shapes.get(bodyId);
+        if (!shape) continue;
+        const name = bodyName(document, bodyId);
+        if (shape.referenceMesh) {
+          refused.push({ bodyId, name, reason: 'mesh-reference' });
+          continue;
+        }
+        shape.solids.forEach((solid, index) =>
+          parts.push({
+            bodyId,
+            name:
+              shape.solids.length > 1
+                ? `${name} (${index + 1} of ${shape.solids.length})`
+                : name,
+            solid
+          })
+        );
+      }
+      if (parts.length === 0 && refused.length === 0) {
+        throw new Error('Select at least one body to export.');
+      }
+      // The solids are read where the build left them; uniform unit scaling
+      // commutes with projection, so the 2D output is scaled instead.
+      const { layout, refused: unflat } = cncLayout(kernel, parts, {
+        scale: exportLengthScale(document.units, units),
+        modelUnitMm: millimetresPerUnit(document.units),
+        outputUnitMm: millimetresPerUnit(units),
+        ...(options.gapMm !== undefined ? { gapMm: options.gapMm } : {})
+      });
+      refused.push(...unflat);
+      if (!layout) {
+        throw new Error(
+          `Nothing to lay out: ${refused.map(cncRefusalText).join('; ')}.`
+        );
+      }
+      return {
+        text: writeDxf(layout.entities, { units, layers: layout.layers }),
+        placements: layout.placements,
+        refused,
+        warnings: refused.map(cncRefusalText)
+      };
     });
   }
 
@@ -6228,6 +6585,84 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
   }
 
+  assemblyInterferenceSweep(
+    document: ProjectDocument,
+    components: AssemblySweepComponent[],
+    positions: AssemblySweepPosition[]
+  ): Promise<AssemblySweepWorkerReport> {
+    // Checked before the build: a malformed pose refuses the whole sweep.
+    const posesAt = positions.map((position) =>
+      Object.fromEntries(
+        Object.entries(position.matrices).map(([id, matrix]) => [
+          id,
+          rowMajorMatrix(matrix)
+        ])
+      )
+    );
+    return this.withExportBuild(
+      document,
+      (kernel, build) => {
+        const hidden = getParameterHiddenBodyIds(document);
+        const missing: string[] = [];
+        const solidsOf = new Map<string, readonly number[]>();
+        for (const component of components) {
+          const bodyId = component.bodyId as BodyId;
+          const shape = build.shapes.get(bodyId);
+          if (
+            !shape ||
+            shape.solids.length === 0 ||
+            hidden.has(bodyId) ||
+            build.consumed.has(bodyId)
+          )
+            missing.push(component.componentId);
+          else solidsOf.set(component.componentId, shape.solids);
+        }
+        const results = positions.map((position, index) => {
+          const copies: number[] = [];
+          try {
+            const posed = new Map<string, number[]>();
+            const poseOf = (id: string): number[] | null => {
+              const existing = posed.get(id);
+              if (existing) return existing;
+              const solids = solidsOf.get(id);
+              const matrix = posesAt[index]![id];
+              if (!solids || !matrix) return null;
+              const placed = solids.map((solid) => {
+                const copy = kernel.copyAndTransformSolid(solid, matrix);
+                copies.push(copy);
+                return copy;
+              });
+              posed.set(id, placed);
+              return placed;
+            };
+            const pairs: AssemblyInterferenceReport['pairs'] = [];
+            for (const [a, b] of position.pairs) {
+              const solidsA = poseOf(a);
+              const solidsB = poseOf(b);
+              if (!solidsA || !solidsB) continue;
+              pairs.push({
+                a,
+                b,
+                verdict: exactBodyClash(kernel, solidsA, solidsB)
+              });
+            }
+            return { at: position.at, pairs };
+          } finally {
+            for (const copy of copies) {
+              try {
+                kernel.deleteSolid(copy);
+              } catch {
+                // The checkpoint restore after this job releases it anyway.
+              }
+            }
+          }
+        });
+        return { positions: results, missing };
+      },
+      []
+    );
+  }
+
   drawingSection(
     document: ProjectDocument,
     bodyIds: BodyId[],
@@ -6462,32 +6897,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         typeof data === 'string'
           ? new TextEncoder().encode(data)
           : new Uint8Array(data);
-      let declared: number[] = [];
-      let report: StepImportReport = {
-        solidCount: 0,
-        sheetCount: 0,
-        diagnostics: [],
-        diagnosticCount: 0
-      };
-      let structure: StepStructure | undefined;
-      let structureRefusal: string | undefined;
-      if (options.structure) {
-        try {
-          const imported = importStepStructureWithOwnBudget(kernel, bytes);
-          structure = imported.structure;
-          declared = Array.from(imported.solids);
-          report = imported.report;
-        } catch (error) {
-          structureRefusal =
-            error instanceof Error ? error.message : String(error);
-        }
-      }
+      let imported: ReturnType<typeof readStepForInspection>;
       try {
-        if (structure === undefined) {
-          const imported = importStepWithOwnBudget(kernel, bytes);
-          declared = Array.from(imported.solids);
-          report = imported.report;
-        }
+        imported = readStepForInspection(
+          kernel,
+          bytes,
+          options.structure === true
+        );
       } catch (error) {
         return {
           solid: false,
@@ -6497,6 +6913,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           reason: error instanceof Error ? error.message : String(error)
         };
       }
+      const { report, structure, structureRefusal } = imported;
+      const declared = Array.from(imported.solids);
       const verdicts = declared.map((solid, index) =>
         classifyImportedSolid(diagnoseImportedSolid(kernel, solid, index + 1))
       );
@@ -6559,6 +6977,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   dispose(): void {
+    if (this.historyKernel) releasePatternMesh(this.historyKernel);
+    this.patternWorkers.dispose();
     this.historyGeneration += 1;
     this.clearCurrentMassSnapshot();
     // An active generator still owns its kernel and cancellation token.
@@ -6680,6 +7100,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           this.primitiveBuildCache.restoredThrough(
             this.historyCheckpoints[last]!.featureIndex
           );
+          // The operation's own copies (unit-scaled export solids) are
+          // retired by this restore, which replays nothing.
+          this.refreshArenaWear(kernel);
         } catch {
           this.invalidateHistoryCache();
         }
@@ -6698,6 +7121,45 @@ function documentNeedsTranslators(document: ProjectDocument): boolean {
       (feature.data.featureKind === 'imported-mesh' &&
         feature.data.triangleCount <= MAX_MESH_SOLID_CONVERSION_TRIANGLES)
   );
+}
+
+/** Plan the import's body layout. The candidate rebuild diagnoses and
+ * measures every committed body before the import is accepted. */
+export async function discoverStepLayout(
+  data: ArrayBuffer,
+  structure: boolean
+): Promise<{
+  solidIndices: number[];
+  structure?: StepStructure;
+  structureRefusal?: string;
+}> {
+  await loadRemusTranslators();
+  const kernel = new RemusKernel();
+  try {
+    let imported: ReturnType<typeof readStepForInspection>;
+    try {
+      imported = readStepForInspection(kernel, new Uint8Array(data), structure);
+    } catch {
+      // Empty discovery lets the commit validator present the reader's refusal.
+      return { solidIndices: [] };
+    }
+    const solidIndices = Array.from(imported.solids).flatMap((solid, index) =>
+      importedSolidRejection(
+        importedSolidBoundary(kernel, solid, index + 1)
+      ) === undefined
+        ? [index]
+        : []
+    );
+    return {
+      solidIndices,
+      ...(imported.structure ? { structure: imported.structure } : {}),
+      ...(imported.structureRefusal !== undefined
+        ? { structureRefusal: imported.structureRefusal }
+        : {})
+    };
+  } finally {
+    kernel.free();
+  }
 }
 
 export async function createExactKernelAdapter(

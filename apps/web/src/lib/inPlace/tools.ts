@@ -3,6 +3,13 @@ import {
   newCanonicalPlaneRef,
   planeIntersectionDatumAxis,
   requireRevolveAxisInPlane,
+  chainPathCurves,
+  pathPatternFitProblem,
+  pathStationAt,
+  pathTurnDeg,
+  type PathChain,
+  type PathCurve2,
+  type PathStation,
   type PlaneBasis
 } from '@openzcad/geometry';
 import {
@@ -25,8 +32,10 @@ import {
   type FeatureData,
   type DatumPlaneDefinition,
   type FeatureId,
+  type ModelingPlaneReference,
   type ParamValue,
   type ParametricVector3,
+  type PatternPath,
   type PatternPoints,
   type HolePoints,
   type HoleTapped,
@@ -74,7 +83,14 @@ import {
   type RefKind,
   type RefPick
 } from './datums';
-import { faceSpan, threadSpec, type ThreadRequest } from './thread';
+import {
+  faceSpan,
+  lengthIsExplicit,
+  threadFace,
+  threadReach,
+  threadSpec,
+  type ThreadRequest
+} from './thread';
 import { referenceImage, type ImageSlot } from './image';
 import { bendSpec, sheetMetalSpec, type SheetMetalRequest } from './sheetMetal';
 import { standardPartSpec, type StandardPartRequest } from './standardPart';
@@ -124,6 +140,8 @@ export type InPlaceToolId =
   | 'circular-pattern'
   | 'grid-pattern'
   | 'point-pattern'
+  | 'path-pattern'
+  | 'mirror-pattern'
   | 'fillet'
   | 'chamfer'
   | PrimitiveKind
@@ -162,6 +180,8 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
   'circular-pattern',
   'grid-pattern',
   'point-pattern',
+  'path-pattern',
+  'mirror-pattern',
   'fillet',
   'chamfer',
   'box',
@@ -186,7 +206,9 @@ export function isInPlacePatternTool(tool: InPlaceToolId | null): boolean {
     tool === 'linear-pattern' ||
     tool === 'circular-pattern' ||
     tool === 'grid-pattern' ||
-    tool === 'point-pattern'
+    tool === 'point-pattern' ||
+    tool === 'path-pattern' ||
+    tool === 'mirror-pattern'
   );
 }
 
@@ -469,6 +491,14 @@ export interface InPlaceContext {
    * a pattern on sketch points; empty when the sketch has none.
    */
   sketchPoints?(sketchId: SketchId): readonly SketchPointSpot[];
+  /**
+   * M02 (schema v112): a path pattern's lines and arcs on their sketch
+   * plane, or why they cannot be read; null while the sketch is unknown.
+   */
+  sketchPath?(
+    sketchId: SketchId,
+    entityIds: readonly string[]
+  ): { curves: PathCurve2[]; basis: PlaneBasis } | string | null;
   /** M06: a sketch curve's middle in the world and its plane's normal. */
   curveMiddle?(
     sketchId: SketchId,
@@ -546,6 +576,8 @@ export type InPlaceRequest =
       mode: 'ruled' | 'smooth';
       /** Closes the last section to this point (a pointed loft). */
       endPoint?: ParametricVector3;
+      /** M04 (v133): one straight guide line fixing the correspondence. */
+      guides?: { sketchId: SketchId; entityIds: string[] }[];
     }
   | {
       tool: 'sweep';
@@ -555,6 +587,17 @@ export type InPlaceRequest =
       guide?: { sketchId: SketchId; entityIds: string[] };
       /** See the sweep `FeatureData`; absent is the legacy sampled sweep. */
       construction?: 'in-place';
+      /** M04 (v132): see the sweep `FeatureData`; absent turns nothing. */
+      twistDeg?: ParamValue;
+      /** M04 (v132): see the sweep `FeatureData`; absent scales nothing. */
+      endScale?: ParamValue;
+      /** M04 (v134): see the sweep `FeatureData`; absent turns with the path. */
+      orientation?: 'parallel';
+      /** M04 (v135): see the sweep `FeatureData`; absent mitres the corners. */
+      cornerRadius?: ParamValue;
+      /** M04 (v136): see the sweep `FeatureData`; absent starts from an end. */
+      profilePosition?:
+        'auto' | 'intersection' | 'closest-point' | 'closest-endpoint';
     }
   | {
       /** M06 (schema v101): a rib from an open profile, joined to a body. */
@@ -632,7 +675,8 @@ export type InPlaceRequest =
   | {
       tool: 'pattern';
       targetBodyId: BodyId;
-      patternKind: 'linear' | 'circular' | 'grid' | 'points';
+      patternKind:
+        'linear' | 'circular' | 'grid' | 'points' | 'path' | 'mirror';
       count: ParamValue;
       axis: 'x' | 'y' | 'z';
       spacing?: ParamValue;
@@ -649,6 +693,12 @@ export type InPlaceRequest =
       skippedInstances?: string[];
       /** M02 (schema v63): the sketch points a points pattern stands on. */
       points?: PatternPoints;
+      /** M02 (schema v112): the sketch path a path pattern runs along. */
+      path?: PatternPath;
+      /** M02 (schema v119): the plane a mirror pattern reflects in. */
+      mirrorPlane?: ModelingPlaneReference;
+      /** M02 (schema v120): a linear pattern's spacing is its total. */
+      spacingMode?: 'total';
     }
   | {
       /** An M14 gear, as the feature stores it. */
@@ -834,6 +884,11 @@ export type HandleSpec = (
    * up to the face's end), in place of the value's own `max`.
    */
   max?: number;
+  /**
+   * The step a drag lands on (1 for a whole count), in place of tenths;
+   * Shift does not lift it.
+   */
+  step?: number;
 };
 
 export interface InPlaceToolSpec {
@@ -1376,7 +1431,9 @@ const loft: InPlaceToolSpec = {
   title: 'Loft',
   profileMode: 'many',
   wantsAxis: false,
-  wantsPath: false,
+  // M04 (v133): a sketch line picked as a guide fixes which vertices the
+  // sections connect at (ruled lofts).
+  wantsPath: true,
   values: [
     // How far the apex stands off the last section, along its normal.
     { id: 'apex', label: 'Apex', unit: 'length', initial: 10 },
@@ -1410,7 +1467,10 @@ const loft: InPlaceToolSpec = {
   hint(slots) {
     if (slots.profiles.length === 0) return 'Pick the first section';
     if (slots.profiles.length === 1) return 'Pick the next section';
-    return `${slots.profiles.length} sections · pick more`;
+    if (slots.path.length > 0) {
+      return `${slots.profiles.length} sections · guided by a curve`;
+    }
+    return `${slots.profiles.length} sections · pick more, or a guide curve`;
   },
   // A point apex not yet set starts where the apex off the last section
   // stands.
@@ -1438,6 +1498,16 @@ const loft: InPlaceToolSpec = {
       tool: 'loft',
       sections: slots.profiles.map(section),
       mode: options.shape === 'smooth' ? 'smooth' : 'ruled',
+      ...(slots.path[0]
+        ? {
+            guides: [
+              {
+                sketchId: slots.path[0].sketchId,
+                entityIds: slots.path.map((curve) => curve.entityId)
+              }
+            ]
+          }
+        : {}),
       ...(point
         ? { endPoint: point }
         : apex
@@ -1573,15 +1643,131 @@ const SWEEP_BUILD_OPTIONS: OptionSpec[] = [
 const sampledSweep = (state: InPlacePanelState) =>
   state.options.build === 'sampled';
 
+/** A stored value that is exactly this literal (the absent default). */
+const isLiteral = (value: ParamValue | undefined, literal: number) =>
+  value === undefined || value === literal || value === String(literal);
+
 const sweep: InPlaceToolSpec = {
   id: 'sweep',
   title: 'Sweep',
   profileMode: 'one',
   wantsAxis: false,
   wantsPath: true,
-  values: [],
+  // M04 (v132): the exact sweep's twist and end scale, along a straight
+  // path with the profile square to it; the kernel refuses anything else by
+  // name. The sampled sweep has neither.
+  values: [
+    {
+      id: 'twist',
+      label: 'Twist',
+      unit: 'angle',
+      initial: 0,
+      note: 'How far the profile turns about the path by its end',
+      when: (state) => !sampledSweep(state)
+    },
+    {
+      id: 'endScale',
+      label: 'End scale',
+      unit: 'count',
+      initial: 1,
+      min: 0,
+      exclusive: 'min',
+      step: 0.1,
+      suffix: '×',
+      note: 'The profile’s size at the end of the path, against its start',
+      when: (state) => !sampledSweep(state)
+    },
+    {
+      id: 'cornerRadius',
+      label: 'Corner radius',
+      unit: 'length',
+      initial: 2,
+      min: 0,
+      exclusive: true,
+      note: 'The radius of the arc that rounds each corner of the path',
+      // No handle of its own: typed in the bar's Options.
+      inOptions: true,
+      when: (state) =>
+        !sampledSweep(state) &&
+        state.options.corner === 'round' &&
+        state.options.orientation !== 'parallel'
+    }
+  ],
   options: [
     ...SWEEP_BUILD_OPTIONS,
+    {
+      // M04 (v134): turn with the path, or keep the profile parallel to
+      // itself (exact along splines and through corners).
+      id: 'orientation',
+      when: (state) => !sampledSweep(state),
+      label: 'Orientation',
+      choices: [
+        {
+          value: 'normal',
+          label: 'Normal to path',
+          tip: 'The profile turns with the path'
+        },
+        {
+          value: 'parallel',
+          label: 'Parallel',
+          tip: 'The profile keeps its orientation: along splines and through corners'
+        }
+      ],
+      initial: 'normal'
+    },
+    {
+      // M04 (v135): mitre a corner between straight runs, or round every
+      // corner (next to an arc too) with a tangent arc.
+      id: 'corner',
+      when: (state) =>
+        !sampledSweep(state) && state.options.orientation !== 'parallel',
+      label: 'Corners',
+      choices: [
+        { value: 'mitre', label: 'Mitre', tip: 'Cut on the bisector plane' },
+        {
+          value: 'round',
+          label: 'Round',
+          tip: 'Rounded by an arc of the corner radius, next to arcs too'
+        }
+      ],
+      initial: 'mitre'
+    },
+    {
+      // M04 (v136): where on the path the profile stands; from inside the
+      // path the sweep runs both ways.
+      id: 'position',
+      when: (state) =>
+        !sampledSweep(state) && state.options.orientation !== 'parallel',
+      label: 'Profile at',
+      choices: [
+        {
+          value: 'end',
+          label: 'Path end',
+          tip: 'From the path end nearer the profile'
+        },
+        {
+          value: 'auto',
+          label: 'Auto',
+          tip: 'Where the path crosses the profile, else its nearest end'
+        },
+        {
+          value: 'intersection',
+          label: 'Crossing',
+          tip: 'Where the path crosses the profile’s plane: both ways from there'
+        },
+        {
+          value: 'closest-point',
+          label: 'Closest point',
+          tip: 'The path point nearest the profile: both ways from there'
+        },
+        {
+          value: 'closest-endpoint',
+          label: 'Closest end',
+          tip: 'The path end nearest the profile'
+        }
+      ],
+      initial: 'end'
+    },
     {
       id: 'mode',
       when: sampledSweep,
@@ -1599,7 +1785,7 @@ const sweep: InPlaceToolSpec = {
     },
     {
       id: 'curves',
-      when: sampledSweep,
+      // Exact sweeps follow a straight rail beside a straight path (M04).
       label: 'Picking',
       // A guide rail is the profile's up-vector track: curve clicks add to
       // it instead of the path while this is chosen.
@@ -1608,7 +1794,7 @@ const sweep: InPlaceToolSpec = {
         {
           value: 'guide',
           label: 'Rail',
-          tip: 'The profile turns to face the rail'
+          tip: 'Sampled: the profile turns to face the rail. Exact: a straight rail beside a straight path scales the profile to follow it'
         }
       ],
       initial: 'path'
@@ -1616,7 +1802,7 @@ const sweep: InPlaceToolSpec = {
   ],
   hint(slots, options) {
     if (slots.profiles.length === 0) return 'Pick a profile';
-    if (options?.build === 'sampled' && options.curves === 'guide') {
+    if (options?.curves === 'guide') {
       return slots.guide.length === 0
         ? 'Pick the rail curves'
         : `Rail of ${slots.guide.length}${
@@ -1627,12 +1813,54 @@ const sweep: InPlaceToolSpec = {
     return `Path of ${slots.path.length} · pick more`;
   },
   ready: (slots) => slots.profiles.length > 0 && slots.path.length > 0,
-  request(slots, _values, options) {
+  request(slots, values, options) {
     const pick = slots.profiles[0];
     const first = slots.path[0];
     if (!pick || !first) return null;
     if (options.build !== 'sampled') {
-      // Exact: no rail and no sampling mode, both of which only sample.
+      // Exact: no rail and no sampling mode, both of which only sample. A
+      // zero twist and a unit scale are none, and are not written.
+      const twist = values.twist;
+      const endScale = values.endScale;
+      const exactRail = slots.guide[0];
+      if (exactRail) {
+        // A rail sets the end scale itself (M04). A twist or end scale typed
+        // beside it still goes out, so validation refuses the pair by name
+        // rather than the card dropping the typed values unseen.
+        return {
+          tool: 'sweep',
+          profile: section(pick),
+          path: {
+            sketchId: first.sketchId,
+            entityIds: slots.path.map((curve) => curve.entityId)
+          },
+          mode: 'standard',
+          construction: 'in-place',
+          guide: {
+            sketchId: exactRail.sketchId,
+            entityIds: slots.guide.map((curve) => curve.entityId)
+          },
+          ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
+          ...(isLiteral(endScale, 1) ? {} : { endScale }),
+          // Parallel or a round corner beside a rail goes out too, to be
+          // refused by name.
+          ...(options.orientation === 'parallel'
+            ? { orientation: 'parallel' as const }
+            : {}),
+          // Parallel hides the Corners row, so only a visible choice goes.
+          ...(options.corner === 'round' && options.orientation !== 'parallel'
+            ? { cornerRadius: values.cornerRadius ?? 2 }
+            : {}),
+          ...(options.position &&
+          options.position !== 'end' &&
+          options.orientation !== 'parallel'
+            ? {
+                profilePosition: options.position as
+                  'auto' | 'intersection' | 'closest-point' | 'closest-endpoint'
+              }
+            : {})
+        };
+      }
       return {
         tool: 'sweep',
         profile: section(pick),
@@ -1641,7 +1869,27 @@ const sweep: InPlaceToolSpec = {
           entityIds: slots.path.map((curve) => curve.entityId)
         },
         mode: 'standard',
-        construction: 'in-place'
+        construction: 'in-place',
+        ...(isLiteral(twist, 0) ? {} : { twistDeg: twist }),
+        ...(isLiteral(endScale, 1) ? {} : { endScale }),
+        // Parallel hides the Corners row, so a corner choice left from
+        // before does not apply; a visible choice always goes out.
+        ...(options.orientation === 'parallel'
+          ? { orientation: 'parallel' as const }
+          : {
+              ...(options.corner === 'round'
+                ? { cornerRadius: values.cornerRadius ?? 2 }
+                : {}),
+              ...(options.position && options.position !== 'end'
+                ? {
+                    profilePosition: options.position as
+                      | 'auto'
+                      | 'intersection'
+                      | 'closest-point'
+                      | 'closest-endpoint'
+                  }
+                : {})
+            })
       };
     }
     const rail = slots.guide[0];
@@ -1664,7 +1912,21 @@ const sweep: InPlaceToolSpec = {
         : {})
     };
   },
-  handles: () => []
+  handles(slots, _values, ctx, options) {
+    // The exact sweep's twist and end scale sit on chips beside the
+    // profile; the sampled sweep has neither.
+    const pick = slots.profiles[0];
+    if (!pick || options.build === 'sampled') return [];
+    const outline = profileOutline(ctx, pick);
+    const anchor = outline[0];
+    if (!anchor) return [];
+    const key = keyOf(pick.sketchId, pick.regionFingerprint);
+    const beside = outline[Math.floor(outline.length / 2)] ?? anchor;
+    return [
+      { valueId: 'twist', kind: 'chip', key, params: { anchor } },
+      { valueId: 'endScale', kind: 'chip', key, params: { anchor: beside } }
+    ];
+  }
 };
 
 /** Choose between a picked axis and one typed by its origin and direction. */
@@ -2466,6 +2728,25 @@ function gearIsWorm(state: InPlacePanelState): boolean {
   );
 }
 
+/**
+ * A gear type whose teeth stand round a pitch circle of `module × teeth`
+ * across, so its teeth drag on that circle: spur, helical and ring gears,
+ * a bevel at its heel, and a worm's wheel. A worm counts starts and a rack
+ * runs straight.
+ */
+export function gearTeethOnPitchCircle(
+  options: Readonly<Record<string, string>>
+): boolean {
+  const type = options.gearType ?? 'external';
+  return (
+    type === 'external' ||
+    type === 'internal' ||
+    type === 'bevel' ||
+    type === 'worm-wheel' ||
+    type === 'enveloping-wheel'
+  );
+}
+
 /** The value a gear's chosen sizing reads its pitch from. */
 export function gearPitchValueId(
   options: Readonly<Record<string, string>>
@@ -2560,6 +2841,44 @@ function gearSummary(
     // A helical gear's diameters depend on how the kernel reads its module.
     parts.push(`Pitch Ø ${gearLength(module * teeth, units)}`);
   }
+  return parts.join(' · ');
+}
+
+/**
+ * U11: what Gear teeth's picked face decides, read out in Options as a
+ * thread's is: the diameter it keeps (or the module it is set to), then how
+ * much of the face the teeth run. Before a pick, what the sizing comes to.
+ */
+export function gearTeethSummary(
+  state: InPlacePanelState,
+  units: UnitSystem = 'mm',
+  slots?: Pick<InPlaceSlots, 'faces'>,
+  context?: InPlaceValueContext
+): string | null {
+  const geometry = threadFace(slots?.faces[0]);
+  if (!geometry) return gearSummary(state, units);
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  const parts = [
+    state.options.fit === 'module'
+      ? (gearSummary(state, units) ?? '')
+      : `Sized from the Ø${round(2 * geometry.radius)} ${units} face`
+  ].filter((part) => part !== '');
+  const offset = state.numbers.offset ?? 0;
+  const length =
+    state.numbers.faceWidth ?? Math.max(geometry.length - offset, 0);
+  const held = lengthIsExplicit(
+    geometry,
+    { ...state.numbers, ...(context?.raws ?? {}) },
+    state.numbers,
+    context ?? { touched: ['faceWidth'] },
+    'faceWidth'
+  );
+  const reached = threadReach({ held, offset, length, face: geometry });
+  parts.push(
+    reached.near && reached.far
+      ? `Teeth run the full ${round(geometry.length)} ${units}`
+      : `Teeth run ${round(length)} of ${round(geometry.length)} ${units}`
+  );
   return parts.join(' · ');
 }
 
@@ -3045,15 +3364,17 @@ const gear: InPlaceToolSpec = {
     const teeth = numbers.teeth ?? 20;
     return { rimDiameter: module * (teeth + 10.5) };
   },
-  hint(slots) {
-    // Module and teeth are chips on the placed gear: the summary names them
+  hint(slots, options) {
+    // Module and teeth are on the placed gear: the summary names them
     // before there is a field to change them, so the hint says where it is.
     if (!slots.plane)
       return 'Pick a plane or flat face · then set module and teeth on the gear';
     if (slots.plane.kind === 'datum') {
       return 'Pick a ghost plane or flat face instead';
     }
-    return 'Drag the face width · tap a chip to type';
+    return gearTeethOnPitchCircle(options ?? {})
+      ? 'Drag the teeth arrow to add teeth, or the face width · tap a chip to type'
+      : 'Drag the face width · tap a chip to type';
   },
   ready: (slots) => gearFrame(slots.plane) !== null,
   request(slots, values, options, ctx, numbers) {
@@ -3202,6 +3523,21 @@ const gear: InPlaceToolSpec = {
       y: origin.y + radial.y * by,
       z: origin.z + radial.z * by
     });
+    const module = gearModuleOf(options, values, ctx.units);
+    // U11: the teeth drag on the gear itself. An arrow from the axis whose
+    // head stands on the pitch circle (half a module out per tooth), so
+    // dragging it out adds teeth at the same module and the gear grows, as a
+    // coil's end winds turns at the same spacing. A worm's count is its
+    // starts and a rack has no circle: those stay chips.
+    const teethOnCircle = gearTeethOnPitchCircle(options) && module > 0;
+    // A helical gear's module is its normal module: the kernel stands its
+    // teeth on the transverse pitch circle, module / cos β per tooth across.
+    const helix =
+      gearTwists({ options, numbers: values }) &&
+      (values.helixAngleDeg ?? 0) > 0
+        ? ((values.helixAngleDeg ?? 0) * Math.PI) / 180
+        : 0;
+    const perTooth = module / (2 * Math.cos(helix));
     return [
       {
         valueId: 'faceWidth',
@@ -3209,12 +3545,22 @@ const gear: InPlaceToolSpec = {
         key: `${base}:faceWidth`,
         params: { origin, direction: normal }
       },
-      {
-        valueId: count,
-        kind: 'chip',
-        key: `${base}:${count}`,
-        params: { anchor: at(reach * 1.15) }
-      },
+      teethOnCircle
+        ? {
+            valueId: 'teeth',
+            kind: 'linear',
+            // Rebuilt when the module or helix changes: the arrow's scale
+            // is the pitch radius per tooth.
+            key: keyOf(base, 'teeth', radial.x, radial.y, radial.z, perTooth),
+            params: { origin, direction: radial, scale: perTooth },
+            step: 1
+          }
+        : {
+            valueId: count,
+            kind: 'chip',
+            key: `${base}:${count}`,
+            params: { anchor: at(reach * 1.15) }
+          },
       {
         // The pitch the sizing reads, so the chip edits what is built.
         valueId: pitch,
@@ -3318,7 +3664,7 @@ const gearTeeth: InPlaceToolSpec = {
     },
     ...GEAR_FORM_SECTIONS
   ],
-  summary: gearSummary,
+  summary: gearTeethSummary,
   optionCarries: gearSizingCarries,
   ...gearTeethSpan.behaviour,
   hint(slots, options) {
@@ -5374,6 +5720,41 @@ export function booleanOperationSwitch(
     : null;
 }
 
+/**
+ * A boolean operand's role by its pick order: the first body picked is the
+ * Base (what a subtract cuts from), every later one a Tool.
+ */
+export function booleanOperandRole(index: number): 'Base' | 'Tool' {
+  return index === 0 ? 'Base' : 'Tool';
+}
+
+/**
+ * U11: each picked body's role, by body id, with its name and the box it
+ * was picked with, for the viewport to name the picks as Options lists
+ * them, even where a preview has consumed one.
+ */
+export function booleanOperandRoles(
+  bodies: readonly BodyPick[],
+  name: (bodyId: BodyId) => string | undefined
+): Record<
+  string,
+  { role: 'Base' | 'Tool'; name: string; min: Vector3; max: Vector3 }
+> {
+  const roles: Record<
+    string,
+    { role: 'Base' | 'Tool'; name: string; min: Vector3; max: Vector3 }
+  > = {};
+  bodies.forEach((body, index) => {
+    roles[body.bodyId] = {
+      role: booleanOperandRole(index),
+      name: name(body.bodyId) ?? 'Body',
+      min: body.min,
+      max: body.max
+    };
+  });
+  return roles;
+}
+
 const BOOLEAN_ORIGINAL_CHOICES = [
   { value: 'none', label: 'None' },
   { value: 'target', label: 'Base body' },
@@ -5813,9 +6194,8 @@ function instanceHandles(
     return {
       valueId: `instance:${label}`,
       kind: 'instance' as const,
-      // The chip is drawn anew when it is skipped or brought back, or when
-      // its name moves (an earlier point picked again).
-      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}:${off ? 'skipped' : 'kept'}`,
+      // Toggling the copy keeps its button. A new pick-order name replaces it.
+      key: `${bodyKey(seed)}:instance:${label}:${display ?? ''}`,
       params: {
         anchor: point,
         label,
@@ -5836,6 +6216,25 @@ function linearCopies(
   const origin = centre(seed);
   return rowCopies(count, (index) => offset(origin, vector, spacing * index));
 }
+
+/** M02 (schema v120): how a linear pattern's length is given. */
+const LINEAR_EXTENT_OPTION: OptionSpec = {
+  id: 'extent',
+  label: 'Spacing',
+  choices: [
+    {
+      value: 'spacing',
+      label: 'Between copies',
+      tip: 'Each copy stands this far from the last'
+    },
+    {
+      value: 'total',
+      label: 'Total length',
+      tip: 'The copies share this length out, original to last'
+    }
+  ],
+  initial: 'spacing'
+};
 
 const linearPattern: InPlaceToolSpec = {
   id: 'linear-pattern',
@@ -5873,7 +6272,21 @@ const linearPattern: InPlaceToolSpec = {
   values: [
     // Signed: a negative spacing repeats the other way, as the card allowed.
     // Zero is the kernel's to refuse, in the bar.
-    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20 },
+    {
+      id: 'spacing',
+      label: 'Spacing',
+      unit: 'length',
+      initial: 20,
+      when: (state) => state.options.extent !== 'total'
+    },
+    // M02 (schema v120): the row's whole length, original to last copy.
+    {
+      id: 'total',
+      label: 'Total',
+      unit: 'length',
+      initial: 40,
+      when: (state) => state.options.extent === 'total'
+    },
     {
       id: 'count',
       label: 'Count',
@@ -5896,10 +6309,14 @@ const linearPattern: InPlaceToolSpec = {
         ...AXIS_OPTION('x').choices,
         { value: 'custom', label: 'Custom' }
       ]
-    }
+    },
+    LINEAR_EXTENT_OPTION
   ],
   hint: (slots, options) =>
-    patternHint(slots, options) ?? 'Drag the spacing · tap a copy to skip it',
+    patternHint(slots, options) ??
+    (options?.extent === 'total'
+      ? 'Drag the last copy · tap a copy to skip it'
+      : 'Drag the spacing · tap a copy to skip it'),
   ready: (slots, options, ctx) => patternSource(slots, options, ctx) !== null,
   request(slots, values, options, ctx, numbers) {
     const source = patternSource(slots, options, ctx);
@@ -5924,7 +6341,9 @@ const linearPattern: InPlaceToolSpec = {
         direction && ctx.saved?.featureKind === 'pattern'
           ? ctx.saved.axis
           : axisOf(options.axis),
-      spacing: values.spacing ?? 20,
+      ...(options.extent === 'total'
+        ? { spacing: values.total ?? 40, spacingMode: 'total' as const }
+        : { spacing: values.spacing ?? 20 }),
       ...(direction ? { direction } : {}),
       ...skipRequest(
         options,
@@ -5949,11 +6368,17 @@ const linearPattern: InPlaceToolSpec = {
         : AXIS_VECTORS[axisOf(options.axis)]!;
     const origin = centre(body);
     const width = Math.max(body.max.x - body.min.x, 1e-3);
+    // M02 (schema v120): over a total length the arrow is the last copy.
+    const total = options.extent === 'total';
+    const count = wholeCount(values.count, 3);
+    const step = total
+      ? (values.total ?? 40) / Math.max(count - 1, 1)
+      : (values.spacing ?? 20);
     return [
       {
-        valueId: 'spacing',
+        valueId: total ? 'total' : 'spacing',
         kind: 'linear',
-        key: `${bodyKey(body)}:spacing:${custom ? 'custom' : axisOf(options.axis)}`,
+        key: `${bodyKey(body)}:${total ? 'total' : 'spacing'}:${custom ? 'custom' : axisOf(options.axis)}`,
         params: { origin, direction: vector }
       },
       {
@@ -5977,16 +6402,7 @@ const linearPattern: InPlaceToolSpec = {
             }
           }))
         : []),
-      ...instanceHandles(
-        body,
-        linearCopies(
-          body,
-          vector,
-          values.spacing ?? 20,
-          wholeCount(values.count, 3)
-        ),
-        options
-      )
+      ...instanceHandles(body, linearCopies(body, vector, step, count), options)
     ];
   }
 };
@@ -6249,6 +6665,337 @@ export function stepTotal(step: ParamValue, count: ParamValue): ParamValue {
   // turn's would when the step closes the ring, so it needs no case.
   return `(${String(step)}) * ((${String(count)}) - 1)`;
 }
+
+/**
+ * M02 (schema v112): a pattern along a sketch path. Picks are the body, or
+ * features under Repeat Features, then the path's lines and arcs. The path
+ * starts at the end nearer the original (an edit keeps the stored start);
+ * Options' Start can take the other end, and Orientation turns the copies
+ * with the path. One arrow drags the spacing along the path's first
+ * direction; each copy wears a chip that skips it.
+ */
+interface PathPatternPlan {
+  seed: BodyPick;
+  path: PatternPath;
+  chain: PathChain;
+  basis: PlaneBasis;
+  /** Why the copies do not fit the path, else null. */
+  problem: string | null;
+  copies: PatternCopySpot[];
+  /** The path's first direction, in the world. */
+  heading: Vector3;
+}
+
+const PATH_START_OPTION: OptionSpec = {
+  id: 'start',
+  label: 'Start',
+  choices: [
+    {
+      value: 'near',
+      label: 'Near end',
+      tip: 'Runs from the end of the path nearer the original'
+    },
+    { value: 'far', label: 'Other end', tip: 'Runs from the other end' }
+  ],
+  initial: 'near'
+};
+
+const PATH_ORIENT_OPTION: OptionSpec = {
+  id: 'orient',
+  label: 'Orientation',
+  choices: [
+    {
+      value: 'moved',
+      label: 'Moved',
+      tip: 'Every copy stays square to the original'
+    },
+    {
+      value: 'tangent',
+      label: 'Follow path',
+      tip: 'Each copy turns as the path turns'
+    }
+  ],
+  initial: 'moved'
+};
+
+function samePathCurves(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+function pathPatternPlan(
+  slots: InPlaceSlots,
+  values: Readonly<Record<string, number>>,
+  options: Readonly<Record<string, string>>,
+  ctx: InPlaceContext | undefined
+): PathPatternPlan | string | null {
+  const seed = patternSeed(slots, options, ctx);
+  const sketchId = slots.path[0]?.sketchId;
+  if (!seed || !sketchId) return null;
+  const entityIds = slots.path
+    .filter((pick) => pick.sketchId === sketchId)
+    .map((pick) => pick.entityId);
+  const read = ctx?.sketchPath?.(sketchId, entityIds);
+  if (read === null || read === undefined) return null;
+  if (typeof read === 'string') return read;
+  const forward = chainPathCurves(read.curves, false);
+  if (typeof forward === 'string') return forward;
+  const { basis } = read;
+  const world = (point: { x: number; y: number }): Vector3 => ({
+    x: basis.origin.x + basis.u.x * point.x + basis.v.x * point.y,
+    y: basis.origin.y + basis.u.y * point.x + basis.v.y * point.y,
+    z: basis.origin.z + basis.u.z * point.x + basis.v.z * point.y
+  });
+  const middle = centre(seed);
+  const reach = (point: Vector3) =>
+    Math.hypot(point.x - middle.x, point.y - middle.y, point.z - middle.z);
+  const saved =
+    ctx?.saved?.featureKind === 'pattern' &&
+    ctx.saved.path?.sketchId === sketchId &&
+    samePathCurves(ctx.saved.path.entityIds, entityIds)
+      ? ctx.saved.path
+      : undefined;
+  // The nearer end, or the start an edit stored; Other end flips it.
+  const near = saved
+    ? saved.reversed === true
+    : reach(world(pathStationAt(forward, forward.length)!.point)) <
+      reach(world(pathStationAt(forward, 0)!.point));
+  const reversed = options.start === 'far' ? !near : near;
+  const chain = reversed ? chainPathCurves(read.curves, true) : forward;
+  if (typeof chain === 'string') return chain;
+  const turning = options.orient === 'tangent';
+  const count = wholeCount(values.count, 3);
+  const spacing = values.spacing ?? 20;
+  const problem = pathPatternFitProblem(chain, count, spacing);
+  const start = pathStationAt(chain, 0)!;
+  const from = world(start.point);
+  const normal = unit({
+    x: basis.u.y * basis.v.z - basis.u.z * basis.v.y,
+    y: basis.u.z * basis.v.x - basis.u.x * basis.v.z,
+    z: basis.u.x * basis.v.y - basis.u.y * basis.v.x
+  });
+  const copyAt = (station: PathStation): Vector3 => {
+    const to = world(station.point);
+    const turned = turning
+      ? turnedAbout(middle, from, normal, pathTurnDeg(start, station))
+      : middle;
+    return offset(
+      turned,
+      { x: to.x - from.x, y: to.y - from.y, z: to.z - from.z },
+      1
+    );
+  };
+  const copies = problem
+    ? []
+    : rowCopies(count, (index) =>
+        copyAt(pathStationAt(chain, spacing * index) ?? start)
+      );
+  const heading = unit({
+    x:
+      basis.u.x * Math.cos(start.tangent) + basis.v.x * Math.sin(start.tangent),
+    y:
+      basis.u.y * Math.cos(start.tangent) + basis.v.y * Math.sin(start.tangent),
+    z: basis.u.z * Math.cos(start.tangent) + basis.v.z * Math.sin(start.tangent)
+  });
+  return {
+    seed,
+    path: {
+      sketchId,
+      entityIds,
+      ...(reversed ? { reversed: true } : {}),
+      ...(turning ? { orientation: 'tangent' as const } : {})
+    },
+    chain,
+    basis,
+    problem,
+    copies,
+    heading
+  };
+}
+
+const pathPattern: InPlaceToolSpec = {
+  id: 'path-pattern',
+  title: 'Path pattern',
+  profileMode: 'none',
+  bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
+  wantsAxis: false,
+  // Its path is the sketch lines and arcs it repeats along.
+  wantsPath: true,
+  values: [
+    // Measured along the path. Fewer copies than fit is fine; more is the
+    // bar's to refuse, with the path's length.
+    { id: 'spacing', label: 'Spacing', unit: 'length', initial: 20 },
+    {
+      id: 'count',
+      label: 'Count',
+      unit: 'count',
+      initial: 3,
+      min: 2,
+      max: 100,
+      integer: true
+    }
+  ],
+  options: [REPEAT_OPTION, PATH_ORIENT_OPTION, PATH_START_OPTION],
+  hint(slots, options, ctx, request) {
+    const pick = patternHint(slots, options ?? {});
+    if (pick) return pick;
+    if (slots.path.length === 0) {
+      return 'Click the sketch lines and arcs to repeat along';
+    }
+    // The values reach the hint through the request, as numbers once they
+    // resolve; an expression's fit is the build's to check.
+    const numeric = (value: ParamValue | undefined) =>
+      typeof value === 'number' ? value : undefined;
+    const counted =
+      request?.tool === 'pattern'
+        ? {
+            ...(numeric(request.count) !== undefined
+              ? { count: numeric(request.count)! }
+              : {}),
+            ...(numeric(request.spacing) !== undefined
+              ? { spacing: numeric(request.spacing)! }
+              : {})
+          }
+        : {};
+    const plan = pathPatternPlan(slots, counted, options ?? {}, ctx);
+    if (typeof plan === 'string') return plan;
+    if (plan?.problem) return plan.problem;
+    return 'Drag the spacing · tap a copy to skip it';
+  },
+  ready(slots, options, ctx) {
+    if (patternSource(slots, options, ctx) === null) return false;
+    const plan = pathPatternPlan(slots, {}, options ?? {}, ctx);
+    return plan !== null && typeof plan !== 'string';
+  },
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
+    const plan = pathPatternPlan(slots, numbers ?? {}, options, ctx);
+    if (!source || !plan || typeof plan === 'string') return null;
+    const count = numbers?.count;
+    return {
+      tool: 'pattern',
+      ...source,
+      patternKind: 'path',
+      count: values.count ?? 3,
+      axis: ctx.saved?.featureKind === 'pattern' ? ctx.saved.axis : 'x',
+      spacing: values.spacing ?? 20,
+      path: plan.path,
+      ...skipRequest(
+        options,
+        count === undefined
+          ? null
+          : rowCopies(wholeCount(count, 3), () => ORIGIN)
+      )
+    };
+  },
+  handles(slots, values, ctx, options) {
+    const plan = pathPatternPlan(slots, values, options, ctx);
+    if (!plan || typeof plan === 'string') return [];
+    const { seed } = plan;
+    const origin = centre(seed);
+    return [
+      {
+        valueId: 'spacing',
+        kind: 'linear',
+        key: `${bodyKey(seed)}:path-spacing:${plan.path.entityIds.join(',')}:${plan.path.reversed ? 'r' : 'f'}`,
+        params: { origin, direction: plan.heading }
+      },
+      {
+        valueId: 'count',
+        kind: 'chip',
+        key: `${bodyKey(seed)}:count`,
+        params: { anchor: { x: origin.x, y: origin.y, z: seed.max.z } }
+      },
+      ...instanceHandles(seed, plan.copies, options)
+    ];
+  }
+};
+
+/**
+ * M02 (schema v119): a mirror pattern. Picks are the body, or features
+ * under Repeat Features, then the plane: a principal or datum plane, or a
+ * flat face (with features, one no repeated feature made), slid by the
+ * same offset arrow as Mirror's, or typed in Options. The one copy is the
+ * reflection; it cannot be skipped, so it wears no chip.
+ */
+function mirrorPatternPlane(
+  slots: InPlaceSlots,
+  values: Record<string, ParamValue>,
+  numbers: Record<string, number>,
+  options: Record<string, string>
+): ModelingPlaneReference | null {
+  const plane = commandPlane(slots, values, numbers, options);
+  if (!plane) return null;
+  const fields = offsetPlaneFields(plane, values.offset);
+  if (fields.datumFeatureId) {
+    return { type: 'datum', datumFeatureId: fields.datumFeatureId };
+  }
+  // A number written as a number stays one; anything else (an expression,
+  // or a number written otherwise, such as "50.0") is kept as typed, so an
+  // untouched edit stores what it reopened with (review).
+  const param = (text: string): ParamValue => {
+    const number = Number(text);
+    return Number.isFinite(number) && String(number) === text.trim()
+      ? number
+      : text;
+  };
+  const vector = (v: { x: string; y: string; z: string }) => ({
+    x: param(v.x),
+    y: param(v.y),
+    z: param(v.z)
+  });
+  return { origin: vector(fields.origin), normal: vector(fields.normal) };
+}
+
+const mirrorPattern: InPlaceToolSpec = {
+  id: 'mirror-pattern',
+  title: 'Mirror pattern',
+  profileMode: 'none',
+  bodyMode: 'one',
+  featureFaces: REPEAT_FEATURES,
+  wantsPlane: true,
+  wantsAxis: false,
+  wantsPath: false,
+  values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
+  options: [REPEAT_OPTION, PLANE_MODE_OPTION],
+  hint(slots, options) {
+    const pick = patternHint(slots, options ?? {});
+    if (pick) return pick;
+    if (options?.planeMode === 'typed') {
+      return 'Slide the plane, or tap its chips to type';
+    }
+    if (!slots.plane) return 'Pick a plane or flat face to mirror in';
+    return 'Slide the plane, or pick another';
+  },
+  ready: (slots, options, ctx) =>
+    patternSource(slots, options, ctx) !== null &&
+    (slots.plane !== null || options?.planeMode === 'typed'),
+  request(slots, values, options, ctx, numbers) {
+    const source = patternSource(slots, options, ctx);
+    const mirrorPlane = mirrorPatternPlane(
+      slots,
+      values,
+      numbers ?? {},
+      options
+    );
+    if (!source || !mirrorPlane) return null;
+    return {
+      tool: 'pattern',
+      ...source,
+      patternKind: 'mirror',
+      count: 2,
+      axis: ctx.saved?.featureKind === 'pattern' ? ctx.saved.axis : 'x',
+      mirrorPlane
+    };
+  },
+  handles(slots, values, ctx, options) {
+    // The offset arrow and typed chips stand on what is repeated.
+    const seed = patternSeed(slots, options, ctx);
+    return seed
+      ? planeHandles({ ...slots, bodies: [seed] }, values, ctx, options)
+      : [];
+  }
+};
 
 const gridPattern: InPlaceToolSpec = {
   id: 'grid-pattern',
@@ -6933,6 +7680,8 @@ export const IN_PLACE_TOOL_SPECS: Record<InPlaceToolId, InPlaceToolSpec> = {
   'circular-pattern': circularPattern,
   'grid-pattern': gridPattern,
   'point-pattern': pointPattern,
+  'path-pattern': pathPattern,
+  'mirror-pattern': mirrorPattern,
   fillet,
   chamfer,
   box: primitiveSpec('box'),

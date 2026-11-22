@@ -312,6 +312,12 @@ export interface InPlaceCommand {
    * stays on screen. Null for an entry refusal, which names its own value.
    */
   refusalInput: string | null;
+  /**
+   * While {@link refusalInput} is said, the values the frame still on
+   * screen built from: a handle's arrow stands on its kept value, at the
+   * model, while its chip reads the refused one. Null otherwise.
+   */
+  keptValues: Readonly<Record<string, number>> | null;
   canFinish: boolean;
   /** Re-arms the command that made a stored feature, seeded from it. */
   edit(tool: InPlaceToolId, seed: InPlaceEditSeed): void;
@@ -478,6 +484,10 @@ export function useInPlaceCommand(
    * built, by their bar names, for a tool that names them.
    */
   const [refusalInputs, setRefusalInputs] = useState<readonly string[]>([]);
+  /** The values the frame kept under a named refusal built from. */
+  const [keptValues, setKeptValues] = useState<Readonly<
+    Record<string, number>
+  > | null>(null);
   const [previewAdvisory, setPreviewAdvisory] = useState<string | null>(null);
   // A typed value the tool refused: it stands until the next accepted
   // value, and Done waits with it, since the chip went back to the value
@@ -571,6 +581,8 @@ export function useInPlaceCommand(
         optionsRef.current.imagePlaneBasis?.(plane) ?? null,
       sketchPoints: (sketchId) =>
         optionsRef.current.sketchPoints?.(sketchId) ?? [],
+      sketchPath: (sketchId, entityIds) =>
+        optionsRef.current.sketchPath?.(sketchId, entityIds) ?? null,
       curveMiddle: (sketchId, entityId) =>
         optionsRef.current.curveMiddle?.(sketchId, entityId) ?? null,
       holeFeature: (featureId) =>
@@ -773,6 +785,13 @@ export function useInPlaceCommand(
   );
   const requestRef = useRef(request);
   requestRef.current = request;
+  /** The values {@link request} was made from, read with it at a build. */
+  const requestValues = useMemo(
+    () => ({ ...numbers, ...values }),
+    [numbers, values]
+  );
+  const requestValuesRef = useRef(requestValues);
+  requestValuesRef.current = requestValues;
   const requestKey = request ? JSON.stringify(request) : null;
   const requestKeyRef = useRef(requestKey);
   requestKeyRef.current = requestKey;
@@ -794,6 +813,8 @@ export function useInPlaceCommand(
         base: number | null | undefined;
         built: InPlaceBuiltCommand;
         request: InPlaceRequest;
+        /** The values the request was made from. */
+        values: Readonly<Record<string, number>>;
       }
     >()
   ).current;
@@ -806,6 +827,7 @@ export function useInPlaceCommand(
     session: number | undefined;
     base: number | null | undefined;
     request: InPlaceRequest;
+    values: Readonly<Record<string, number>>;
   } | null>(null);
   /**
    * A refused request: a tool that names what changed keeps the last frame
@@ -824,6 +846,7 @@ export function useInPlaceCommand(
       JSON.stringify(refused) !== requestKeyRef.current
     ) {
       setRefusalInputs([]);
+      setKeptValues(null);
       return;
     }
     const inputs =
@@ -835,6 +858,10 @@ export function useInPlaceCommand(
         ? tool.refusedInputs(kept.request, refused)
         : [];
     setRefusalInputs(inputs);
+    // The handles stand on the values the kept frame built from, so a
+    // refused size (a 1000 mm radius) leaves its arrow and chip at the edge
+    // being edited rather than that far along the arrow, off the model.
+    setKeptValues(inputs.length > 0 && kept ? kept.values : null);
     if (inputs.length === 0) optionsRef.current.publishPreview(null);
   };
   /** The last frame published as valid; see {@link InPlacePreviewedFrame}. */
@@ -862,7 +889,8 @@ export function useInPlaceCommand(
           key: JSON.stringify(current),
           bodyId: command.resultBodyId,
           built: command,
-          request: current
+          request: current,
+          values: requestValuesRef.current
         });
         return built;
       },
@@ -934,12 +962,14 @@ export function useInPlaceCommand(
           lastBuilt.current = {
             session: sessionRef.current?.id,
             base: frame.base,
-            request: frame.request
+            request: frame.request,
+            values: frame.values
           };
         }
         if (valid) {
           setRefusal(null);
           setRefusalInputs([]);
+          setKeptValues(null);
           const key = (warning: { featureId: string; message: string }) =>
             JSON.stringify([warning.featureId, warning.message]);
           const known = new Set(
@@ -1009,6 +1039,7 @@ export function useInPlaceCommand(
       setPreviewValid(false);
       setRefusal(null);
       setRefusalInputs([]);
+      setKeptValues(null);
       // The frame comes down, so none is left to keep under a later refusal.
       lastBuilt.current = null;
       optionsRef.current.publishPreview(null);
@@ -1266,6 +1297,7 @@ export function useInPlaceCommand(
     setCommitting(false);
     setRefusal(null);
     setRefusalInputs([]);
+    setKeptValues(null);
     setEntryRefusals([]);
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
@@ -1534,12 +1566,8 @@ export function useInPlaceCommand(
     setSession((current) => {
       if (!current) return current;
       // While Options say so, clicks build a sweep's guide rail instead
-      // (only a sampled sweep takes one; an exact sweep has no rail).
-      const slot =
-        current.options.curves === 'guide' &&
-        current.options.build === 'sampled'
-          ? 'guide'
-          : 'path';
+      // (a sampled sweep's, or an exact one's straight rail, M04).
+      const slot = current.options.curves === 'guide' ? 'guide' : 'path';
       const path = current.slots[slot];
       const picked = path.some(
         (other) =>
@@ -2284,6 +2312,10 @@ export function useInPlaceCommand(
       entryRefusal || refusal === null || refusalInputs.length === 0
         ? null
         : refusalInputs.join(' and '),
+    // An entry refused meanwhile (a 0 typed over the refused radius) leaves
+    // the refused request and its kept frame as they were: the arrow stays.
+    keptValues:
+      refusal === null || refusalInputs.length === 0 ? null : keptValues,
     canFinish,
     edit,
     start,

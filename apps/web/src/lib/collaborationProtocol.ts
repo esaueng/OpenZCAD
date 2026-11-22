@@ -1,5 +1,6 @@
 import {
   isDocumentHistory,
+  LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS,
   MAX_CHECKPOINT_REASON_LENGTH,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   type CollaborationMember,
@@ -118,6 +119,26 @@ function isRoomDocument(
     (value.editHistory === undefined ||
       isDocumentHistory(value.editHistory, projectId))
   );
+}
+
+/**
+ * How often to renew the lease a `lease-granted` frame carries: the room's
+ * advertised `renewIntervalMs`, or the legacy 10 s cadence when a room build
+ * from before the advertisement (30 s TTL) sent none or a value outside
+ * 1–30 s. Following the room keeps a rollback from leaving open tabs renewing
+ * a 30 s lease every 25 s; the 30 s cap (half the 60 s TTL) keeps a bad
+ * value from spending the whole lease before its first renewal.
+ */
+export function leaseRenewIntervalMs(
+  message: Extract<CollaborationServerMessage, { type: 'lease-granted' }>
+): number {
+  const advertised: unknown = message.renewIntervalMs;
+  return typeof advertised === 'number' &&
+    Number.isFinite(advertised) &&
+    advertised >= 1_000 &&
+    advertised <= 30_000
+    ? advertised
+    : LEGACY_PROJECT_EDIT_LEASE_RENEW_INTERVAL_MS;
 }
 
 function isLease(value: unknown, projectId: string): value is ProjectEditLease {

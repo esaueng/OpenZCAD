@@ -103,3 +103,33 @@ export interface AssemblyInterferenceReport {
   pairs: AssemblyInterferencePair[];
   missing: string[];
 }
+
+/** AS04 through motion: a component the sweep may pose, with its body. */
+export interface AssemblySweepComponent {
+  componentId: string;
+  bodyId: string;
+}
+
+/** One position of a sweep, as the geometry worker checks it. */
+export interface AssemblySweepPosition {
+  /** Where along the motion: the joint's value, or seconds into a study. */
+  at: number;
+  /** Column-major 4×4 pose per component checked here. */
+  matrices: Record<string, number[]>;
+  /** The pairs checked here, each a before b in display order. */
+  pairs: [string, string][];
+}
+
+export interface AssemblySweepPositionResult {
+  at: number;
+  pairs: AssemblyInterferencePair[];
+}
+
+/**
+ * The worker's answer to a sweep: each position's verdicts, and the
+ * components with no exact geometry, whose pairs were left out.
+ */
+export interface AssemblySweepWorkerReport {
+  positions: AssemblySweepPositionResult[];
+  missing: string[];
+}

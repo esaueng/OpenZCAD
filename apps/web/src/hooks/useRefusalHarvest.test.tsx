@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
+  filletEdges,
   createProjectDocument,
   listFeaturesInOrder,
   listParameters,
@@ -192,6 +193,58 @@ describe('edit refusal ownership', () => {
     });
     expect(track).not.toHaveBeenCalled();
   });
+
+  it('checks parameters with the same body lineage requested by the viewport', async () => {
+    const { document } = scene();
+    const demand = document.bodyOrder;
+    expect(demand).not.toHaveLength(0);
+    const rebuild = vi.fn(async () => document.derived);
+    const { result } = renderHook(() =>
+      useRefusalHarvest({
+        document,
+        currentDocument: () => document,
+        warnings: [],
+        rebuild,
+        track: vi.fn()
+      })
+    );
+    await act(async () => {
+      await result.current.syncParameterCandidate('height', document, demand);
+    });
+    expect(rebuild).toHaveBeenCalledWith(document, undefined, demand, {
+      proposeCarry: false
+    });
+  });
+
+  it.each(['parameter', 'history'])(
+    'keeps full validation for a %s edit upstream of a hash-only fillet',
+    async (edit) => {
+      const base = scene().document;
+      const { document } = filletEdges(base, {
+        name: 'Edge finish',
+        targetBodyId: base.bodyOrder[0]!,
+        edgeHashes: [42],
+        size: 1
+      });
+      const rebuild = vi.fn(async () => document.derived);
+      const { result } = renderHook(() =>
+        useRefusalHarvest({
+          document,
+          currentDocument: () => document,
+          warnings: [],
+          rebuild,
+          track: vi.fn()
+        })
+      );
+      await act(async () => {
+        if (edit === 'history')
+          await result.current.syncOperationForCommit(document, []);
+        else
+          await result.current.syncParameterCandidate('height', document, []);
+      });
+      expect(rebuild).toHaveBeenCalledWith(document);
+    }
+  );
 
   it('keeps the latest-started attempt and invalidates old save callbacks', async () => {
     const { document, warning, derived } = scene();

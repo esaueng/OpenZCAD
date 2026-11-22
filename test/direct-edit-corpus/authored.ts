@@ -16,6 +16,7 @@ import {
   filletEdges,
   chamferEdges,
   listFeaturesInOrder,
+  setParameter,
   transformBody,
   updateFeature
 } from '@openzcad/document-core';
@@ -26,10 +27,13 @@ import type {
   BodyRepresentation,
   DerivedState,
   FaceTopology,
+  ParamValue,
   ProjectDocument
 } from '@openzcad/shared';
 
 import { directEditRejection } from '../../apps/web/src/lib/directEdit';
+import { offsetFacesName } from '../../apps/web/src/lib/faceSetOffset';
+import { buildRefusalReproduction } from '../../apps/web/src/lib/refusalReproduction';
 import {
   DIRECT_EDIT_FIXTURE_FORMAT,
   DIRECT_EDIT_FIXTURE_FORMAT_VERSION
@@ -39,6 +43,7 @@ import type {
   DirectEditFixtureEdit,
   DirectEditFixtureObservation
 } from '../../apps/web/src/lib/directEditFixture';
+import { replayFixture } from './replay';
 import { faceSelector } from './resolve';
 
 const USER = toUserId('user_direct_edit_corpus');
@@ -381,6 +386,160 @@ async function shortenedPostVolume(
   return requireBody(derived, bodyId, `${scenario} oracle`).volume;
 }
 
+/** The faces of an `offset-faces` set, in the edit's order. */
+function offsetFacesEdit(
+  bodyId: BodyId,
+  faces: readonly FaceTopology[],
+  offset: number
+): DirectEditFixtureEdit {
+  const [first, ...rest] = faces.map((face) => faceSelector(face));
+  return {
+    op: 'offset-faces',
+    targetBodyId: bodyId,
+    face: first!,
+    additionalFaces: rest,
+    value: offset
+  };
+}
+
+/** A face-set fixture: semantic only when every face in it carries a reference. */
+function offsetFacesFixture(
+  adapter: ExactKernelAdapter,
+  name: string,
+  document: ProjectDocument,
+  bodyId: BodyId,
+  body: BodyRepresentation,
+  faces: readonly FaceTopology[],
+  offset: number,
+  outcome: DirectEditFixtureObservation['outcome']
+): DirectEditFixture {
+  const built = fixture(
+    adapter,
+    name,
+    document,
+    body,
+    faces[0]!,
+    offsetFacesEdit(bodyId, faces, offset),
+    outcome
+  );
+  built.observed.lineage = faces.every((face) => face.reference)
+    ? 'semantic'
+    : 'hash-only';
+  return built;
+}
+
+/**
+ * The plate's top and bottom: parallel, but facing opposite ways, so the
+ * kernel refuses to offset them together by one signed distance.
+ */
+async function opposedCapsOfPlate(
+  adapter: ExactKernelAdapter,
+  scenario: string
+) {
+  const { document, bodyId } = plateDocument();
+  const derived = await adapter.syncDocument(document);
+  const body = requireBody(derived, bodyId, scenario);
+  return {
+    document,
+    bodyId,
+    body,
+    faces: [topPlanarFace(body), bottomPlanarFace(body)]
+  };
+}
+
+/**
+ * The union's two plate-top faces either side of the block: coplanar, both
+ * +z, at the plate's depth — the set the workspace's Offset takes.
+ */
+function plateTopsOfUnion(body: BodyRepresentation): FaceTopology[] {
+  const tops = (body.topology?.faces ?? []).filter(
+    (face) =>
+      face.geometry?.surfaceType === 'plane' &&
+      face.geometry.normal !== undefined &&
+      Math.abs(face.geometry.normal.z - 1) < 1e-9 &&
+      Math.abs(face.geometry.center.z - PLATE_DEPTH) < 1e-6
+  );
+  if (tops.length !== 2) {
+    throw new Error(
+      `The union "${body.name}" exposes ${tops.length} plate-top faces, not 2.`
+    );
+  }
+  return tops.sort(
+    (a, b) => (a.geometry?.center.x ?? 0) - (b.geometry?.center.x ?? 0)
+  );
+}
+
+/** The opposed caps committed to history as one `offset-faces` feature. */
+function opposedCapsFeature(
+  document: ProjectDocument,
+  bodyId: BodyId,
+  faces: readonly FaceTopology[],
+  offset: ParamValue
+): ProjectDocument {
+  const [first, ...rest] = faces.map((face) => {
+    const geometry = face.geometry!;
+    return {
+      faceHash: face.hash,
+      ...(face.reference ? { faceReference: face.reference } : {}),
+      sourceSurfaceType: 'plane' as const,
+      sourceArea: geometry.area,
+      sourceCenter: geometry.center,
+      sourceNormal: geometry.normal!
+    };
+  });
+  return directEditBody(document, {
+    name: offsetFacesName(faces.length),
+    targetBodyId: bodyId,
+    operation: {
+      kind: 'offset-faces',
+      ...first!,
+      offset,
+      additionalFaces: rest
+    }
+  }).document;
+}
+
+/**
+ * "Save reproduction" of the opposed caps refused as one `offset-faces`
+ * feature: the file carries that feature in its document and records every
+ * face of the set with the distance; replay is the rebuild of that feature.
+ */
+async function opposedCapsReproduction(
+  adapter: ExactKernelAdapter,
+  name: string,
+  offset: ParamValue
+): Promise<DirectEditFixture> {
+  const plate = await opposedCapsOfPlate(adapter, name);
+  const document =
+    typeof offset === 'string'
+      ? setParameter(plate.document, { name: offset, expression: '2' })
+      : plate.document;
+  const refused = opposedCapsFeature(
+    document,
+    plate.bodyId,
+    plate.faces,
+    offset
+  );
+  const feature = listFeaturesInOrder(refused).at(-1)!;
+  const derived = await adapter.syncDocument(refused);
+  const warning = derived.featureWarnings?.find(
+    (entry) => entry.featureId === feature.featureId
+  );
+  if (!warning) {
+    throw new Error(
+      `${name}: the opposed caps built without a feature warning. ` +
+        `Warnings: ${JSON.stringify(derived.warnings)}`
+    );
+  }
+  const reproduction = buildRefusalReproduction({
+    document: { ...refused, derived },
+    warning,
+    kernel: kernelInfo(adapter),
+    capturedAt: AUTHORED_AT
+  });
+  return { ...reproduction, name, origin: 'authored' };
+}
+
 export interface AuthoredScenario {
   name: string;
   build(adapter: ExactKernelAdapter): Promise<DirectEditFixture>;
@@ -548,6 +707,74 @@ export const AUTHORED_SCENARIOS: AuthoredScenario[] = [
       const derived = await adapter.syncDocument(taller.document);
       return requireBody(derived, taller.bodyId, scenario).volume;
     }
+  },
+  {
+    // M07 control: the union's two coplanar plate tops raised together as
+    // one `offset-faces` edit, the set the workspace's Offset builds.
+    name: 'union-plate-tops-offset-faces',
+    async build(adapter) {
+      const name = 'union-plate-tops-offset-faces';
+      const { document, bodyId } = unionDocument();
+      const derived = await adapter.syncDocument(document);
+      const body = requireBody(derived, bodyId, name);
+      return offsetFacesFixture(
+        adapter,
+        name,
+        document,
+        bodyId,
+        body,
+        plateTopsOfUnion(body),
+        2,
+        'committed'
+      );
+    }
+  },
+  {
+    // M07: a face set the kernel refuses, recorded as the interaction log
+    // records it. It must replay as the whole set, never as its first face
+    // alone, which would commit.
+    name: 'plate-opposed-caps-offset-faces-refused',
+    async build(adapter) {
+      const name = 'plate-opposed-caps-offset-faces-refused';
+      const { document, bodyId, body, faces } = await opposedCapsOfPlate(
+        adapter,
+        name
+      );
+      return offsetFacesFixture(
+        adapter,
+        name,
+        document,
+        bodyId,
+        body,
+        faces,
+        2,
+        'refused'
+      );
+    }
+  },
+  {
+    // M07: the same refusal through "Save reproduction". The file carries
+    // the refused `offset-faces` feature in its document and records every
+    // face of the set with the distance; replay is the rebuild of that
+    // feature, judged on the kernel's own refusal record.
+    name: 'plate-opposed-caps-offset-faces-reproduction',
+    build: (adapter) =>
+      opposedCapsReproduction(
+        adapter,
+        'plate-opposed-caps-offset-faces-reproduction',
+        2
+      )
+  },
+  {
+    // The same, with the distance a typed expression: the document keeps
+    // `travel`, the header records 0, and the replay still refuses.
+    name: 'plate-opposed-caps-offset-faces-expression-reproduction',
+    build: (adapter) =>
+      opposedCapsReproduction(
+        adapter,
+        'plate-opposed-caps-offset-faces-expression-reproduction',
+        'travel'
+      )
   }
 ];
 
@@ -573,6 +800,42 @@ export interface AuthoredReplayCheck {
  * measured separately from the replay corpus.
  */
 export const AUTHORED_REPLAY_CHECKS: AuthoredReplayCheck[] = [
+  {
+    name: 'union-plate-tops-offset-faces-rounded-distance',
+    description:
+      'A face set replayed from the log moves by the distance the app built, ' +
+      'rounded to 0.001 mm, not by the raw value recorded.',
+    async run(adapter) {
+      const scenario = 'union-plate-tops-offset-faces-rounded-distance';
+      const { document, bodyId } = unionDocument();
+      const derived = await adapter.syncDocument(document);
+      const body = requireBody(derived, bodyId, scenario);
+      const tops = plateTopsOfUnion(body);
+      const result = await replayFixture(
+        adapter,
+        offsetFacesFixture(
+          adapter,
+          scenario,
+          document,
+          bodyId,
+          body,
+          tops,
+          1.2344,
+          'committed'
+        )
+      );
+      const area = tops.reduce(
+        (sum, face) => sum + (face.geometry?.area ?? 0),
+        0
+      );
+      return {
+        rejection: result.outcome === 'refused' ? (result.message ?? '') : null,
+        volume: result.volumeAfter ?? Number.NaN,
+        expectedVolume: body.volume + 1.234 * area,
+        warnings: result.warnings
+      };
+    }
+  },
   {
     name: 'union-offset-then-upstream-width-change',
     description:

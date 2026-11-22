@@ -18,6 +18,7 @@ import {
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
+  type DrawingAnnotation,
   type DrawingSheet,
   type DrawingSheetId,
   type DrawingViewId,
@@ -30,7 +31,13 @@ import {
   drawingAssistantDigest,
   type DrawingAssistantSource
 } from '../apps/web/src/lib/drawing/assistantContext';
-import { preflightDrawingPatch } from '../apps/web/src/lib/drawing/assistantPreflight';
+import {
+  preflightDrawingPatch,
+  previewedAutoDimensionCommands,
+  scopedAutoDimensions
+} from '../apps/web/src/lib/drawing/assistantPreflight';
+import { planAutoDimensions } from '../apps/web/src/lib/drawing/autoDimension';
+import { auditDrawingDimensions } from '../apps/web/src/lib/drawing/dimensionAudit';
 
 type Adapter = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let adapter: Adapter;
@@ -95,7 +102,9 @@ async function drawnPlate() {
         bodies,
         units: doc.units,
         ready: true
-      })
+      }),
+    autoDimension: () =>
+      planAutoDimensions(doc.drawings!.sheets[0]!, views, bodies, doc.units)
   });
   return { base, document, manager, bodies, bodyId, source };
 }
@@ -367,5 +376,224 @@ describe('assistant drawing operations (D06 slice E)', () => {
     expect(() => commandsForCadPatch(document, raw)).toThrow(
       /not checked against the sheet/
     );
+  });
+
+  describe('auto_dimension_drawing: the generator behind the assistant', () => {
+    const autoProposal = (
+      viewIds: string[] | null,
+      dimensionKinds: string[] | null,
+      extra: unknown[] = []
+    ) => ({
+      proposalId: 'auto',
+      summary: 'Dimension the sheet',
+      assumptions: [],
+      preserveGeometry: false,
+      operations: [
+        { kind: 'auto_dimension_drawing', sheetId, viewIds, dimensionKinds },
+        ...extra
+      ]
+    });
+    const digestOf = (
+      document: ProjectDocument,
+      drawing: CadDigestDrawing
+    ) => ({
+      ...createCadDocumentDigest(document, {
+        featureIds: [],
+        bodyIds: [],
+        topologies: []
+      }),
+      drawing
+    });
+
+    it('adds what the check finds missing, as one undo step, and names what the views cannot show', async () => {
+      const { document, manager, bodies, source } = await drawnPlate();
+      const sheetSource = source(document);
+      const proposal = parseCadPatchProposal(
+        autoProposal(null, null),
+        digestOf(document, sheetSource.digest())
+      );
+      const { commands, sheet, leftOut } = preflightDrawingPatch(
+        document,
+        proposal,
+        sheetSource
+      );
+      const values = [
+        ...resolveSheetAnnotations(sheet, bodies, document.units).values()
+      ].map((resolution) => resolution.ok && resolution.resolved.label);
+      expect(values.sort()).toEqual(['10', '20']);
+      // The one front view cannot show the box's third axis: reported.
+      expect(leftOut.length).toBeGreaterThan(0);
+      const audit = auditDrawingDimensions(sheet, bodies, document.units);
+      expect(audit.redundant).toEqual([]);
+      expect(audit.missing).toEqual([]);
+
+      manager.runTransaction('Apply AI annotations', commands);
+      expect(manager.document.drawings!.sheets[0]!.annotations).toHaveLength(2);
+      manager.undo();
+      expect('annotations' in manager.document.drawings!.sheets[0]!).toBe(
+        false
+      );
+    });
+
+    it('reports what a scope leaves out, and refuses a scope that leaves nothing', async () => {
+      const { document, source } = await drawnPlate();
+      const sheetSource = source(document);
+      const digest = digestOf(document, sheetSource.digest());
+      expect(() =>
+        preflightDrawingPatch(
+          document,
+          parseCadPatchProposal(autoProposal(null, ['radius']), digest),
+          sheetSource
+        )
+      ).toThrow(
+        /^Auto-dimension has nothing to add\. Left out: 2 linear dimensions, by request; /
+      );
+      // Run again with the dimensions in place: the generator adds nothing.
+      const { commands } = preflightDrawingPatch(
+        document,
+        parseCadPatchProposal(autoProposal([frontId], ['linear']), digest),
+        sheetSource
+      );
+      const manager = new CommandManager(document);
+      manager.runTransaction('Apply AI annotations', commands);
+      expect(() =>
+        preflightDrawingPatch(
+          manager.document,
+          parseCadPatchProposal(
+            autoProposal(null, null),
+            digestOf(manager.document, source(manager.document).digest())
+          ),
+          source(manager.document)
+        )
+      ).toThrow(/^Auto-dimension has nothing to add/);
+    });
+
+    it('refuses an unknown view, another operation beside it, and a malformed scope', async () => {
+      const { document, source } = await drawnPlate();
+      const digest = digestOf(document, source(document).digest());
+      expect(() =>
+        parseCadPatchProposal(autoProposal(['dvw_nope'], null), digest)
+      ).toThrow('View dvw_nope is not on the sheet.');
+      expect(() =>
+        parseCadPatchProposal(
+          autoProposal(null, null, [
+            {
+              kind: 'remove_drawing_annotations',
+              sheetId,
+              annotationIds: ['dann_x']
+            }
+          ]),
+          digest
+        )
+      ).toThrow(/proposed alone/);
+      expect(() =>
+        parseCadPatchProposal(autoProposal(null, ['ordinate']), digest)
+      ).toThrow('auto_dimension_drawing has invalid dimensionKinds.');
+      expect(() =>
+        parseCadPatchProposal(autoProposal([], null), digest)
+      ).toThrow('auto_dimension_drawing has invalid viewIds.');
+    });
+
+    it('scopes a Ø span (a bolt-circle pitch) as a diameter, not a linear dimension', async () => {
+      const { document, source } = await drawnPlate();
+      const pitch = {
+        annotationId: 'dann_pitch',
+        kind: 'linear',
+        viewId: frontId,
+        diameter: true
+      } as unknown as DrawingAnnotation;
+      const span = {
+        annotationId: 'dann_span',
+        kind: 'linear',
+        viewId: frontId
+      } as unknown as DrawingAnnotation;
+      const fake = {
+        ...source(document),
+        autoDimension: () => ({
+          annotations: [pitch, span],
+          skipped: [],
+          onHiddenLines: 0,
+          sectionAdvice: null
+        })
+      };
+      const scoped = (dimensionKinds: ('linear' | 'diameter')[]) =>
+        scopedAutoDimensions(
+          {
+            kind: 'auto_dimension_drawing',
+            sheetId,
+            viewIds: null,
+            dimensionKinds
+          },
+          fake,
+          (viewId) => viewId
+        );
+      expect(scoped(['diameter'])).toEqual({
+        annotations: [pitch],
+        leftOut: ['1 linear dimension, by request']
+      });
+      expect(scoped(['linear'])).toEqual({
+        annotations: [span],
+        leftOut: ['1 diameter, by request']
+      });
+    });
+
+    it('applies exactly the previewed plan, only for that proposal on that document', async () => {
+      const { document, manager, source } = await drawnPlate();
+      const digest = digestOf(document, source(document).digest());
+      const proposal = parseCadPatchProposal(autoProposal(null, null), digest);
+      const { commands } = preflightDrawingPatch(
+        document,
+        proposal,
+        source(document)
+      );
+      const previewed = { proposal, document, commands };
+      // The previewed commands themselves, not a fresh plan.
+      expect(
+        previewedAutoDimensionCommands(proposal, previewed, document)
+      ).toBe(commands);
+      // Another proposal, even with the same provider id, is not the one
+      // previewed.
+      const twin = parseCadPatchProposal(
+        autoProposal(null, ['linear']),
+        digest
+      );
+      expect(twin.proposalId).toBe(proposal.proposalId);
+      expect(() =>
+        previewedAutoDimensionCommands(twin, previewed, document)
+      ).toThrow(/changed since these dimensions were previewed/);
+      // Any edit after the preview: refused, not re-planned.
+      manager.execute(
+        commandFactories.renameNode({
+          nodeId: document.rootNodeId,
+          name: 'Plate, edited'
+        })
+      );
+      expect(() =>
+        previewedAutoDimensionCommands(proposal, previewed, manager.document)
+      ).toThrow(/changed since these dimensions were previewed/);
+      expect(() =>
+        previewedAutoDimensionCommands(proposal, null, document)
+      ).toThrow(/changed since these dimensions were previewed/);
+      // A proposal naming its own annotations compiles as before.
+      expect(
+        previewedAutoDimensionCommands(proposalOf() as never, null, document)
+      ).toBeNull();
+    });
+
+    it('waits for the views to be drawn before planning', async () => {
+      const { document, source } = await drawnPlate();
+      const { autoDimension: _drawn, ...undrawn } = source(document);
+      void _drawn;
+      expect(() =>
+        preflightDrawingPatch(
+          document,
+          parseCadPatchProposal(
+            autoProposal(null, null),
+            digestOf(document, source(document).digest())
+          ),
+          undrawn
+        )
+      ).toThrow('Wait for every view to be drawn, then ask again.');
+    });
   });
 });

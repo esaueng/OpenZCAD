@@ -1425,6 +1425,37 @@ describe('worker api routes', () => {
       ).status
     ).toBe(200);
     expect(storedSettings.sketching.hiddenRelationGlyphs).toEqual([]);
+
+    // S02: a tab from before reference display units keeps the stored unit.
+    const inches = structuredClone(storedSettings);
+    inches.sketching.referenceDisplayUnit = 'inch';
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', { settings: inches, expectedRevision: 6 }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    const beforeUnits = structuredClone(storedSettings) as unknown as {
+      appearance: { theme: string };
+      sketching: Record<string, unknown>;
+    };
+    delete beforeUnits.sketching.referenceDisplayUnit;
+    beforeUnits.appearance.theme = 'dark';
+    expect(
+      (
+        await worker.fetch(
+          patch('/api/settings', {
+            settings: beforeUnits,
+            expectedRevision: 7
+          }),
+          workerEnv
+        )
+      ).status
+    ).toBe(200);
+    expect(storedSettings.appearance.theme).toBe('dark');
+    expect(storedSettings.sketching.referenceDisplayUnit).toBe('inch');
   });
 
   it('keeps the stored field of view, X-ray opacity, touch gestures, tangent edges and orbit mode when an older client omits them', async () => {
