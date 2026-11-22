@@ -27,7 +27,8 @@ export interface AxisPickerRig {
   group: THREE.Group;
   /** Meshes to raycast; the hit object carries `userData.pickAxis`. */
   targets(): THREE.Object3D[];
-  setHover(id: string | null): void;
+  /** Returns whether that changed anything, so a hover frame can skip a draw. */
+  setHover(id: string | null): boolean;
   /** Draws the picked axis solid and bright, the others stay dashed. */
   setSelected(id: string | null): void;
   /**
@@ -121,9 +122,10 @@ export function buildAxisPickerRig(
     group,
     targets: () => parts.map((part) => part.hit),
     setHover(id) {
-      if (id === hovered) return;
+      if (id === hovered) return false;
       hovered = id;
       paint();
+      return true;
     },
     setSelected(id) {
       if (id === selected) return;

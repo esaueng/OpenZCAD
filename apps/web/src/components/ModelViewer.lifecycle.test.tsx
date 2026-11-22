@@ -28,7 +28,9 @@ const gl = vi.hoisted(() => {
     created: 0,
     disposed: 0,
     contextsLost: 0,
-    shadowLightsDisposed: 0
+    shadowLightsDisposed: 0,
+    /** Scene draws, so a test can tell a drawn frame from a skipped one. */
+    draws: 0
   };
   class CountingRenderer {
     domElement: HTMLCanvasElement;
@@ -60,7 +62,9 @@ const gl = vi.hoisted(() => {
       return this.ratio;
     }
     setClearColor() {}
-    render() {}
+    render() {
+      state.draws += 1;
+    }
     getContext() {
       return { isContextLost: () => this.contextLost };
     }
@@ -345,6 +349,7 @@ afterEach(() => {
   gl.state.disposed = 0;
   gl.state.contextsLost = 0;
   gl.state.shadowLightsDisposed = 0;
+  gl.state.draws = 0;
 });
 
 describe('ModelViewer lifecycle', () => {
@@ -396,6 +401,115 @@ describe('ModelViewer lifecycle', () => {
       request.mockRestore();
       cancel.mockRestore();
       visibility.mockRestore();
+    }
+  });
+
+  it('draws nothing for a hover that changes nothing, and draws one that changes the hover target', () => {
+    // Sweeping the pointer over empty space used to draw every frame, as
+    // much work as an orbit, with nothing new on screen.
+    const callbacks = new Map<number, FrameRequestCallback>();
+    let next = 0;
+    const request = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => {
+        callbacks.set(++next, callback);
+        return next;
+      });
+    const cancel = vi
+      .spyOn(window, 'cancelAnimationFrame')
+      .mockImplementation((id) => {
+        callbacks.delete(id);
+      });
+    // One square body across the origin, where the camera looks; its
+    // corners leave empty space toward the canvas corners.
+    const props = {
+      ...idleProps(),
+      bodies: [
+        {
+          bodyId: 'plate',
+          name: 'Plate',
+          source: 'primitive',
+          color: '#334455',
+          faceCount: 1,
+          consumed: false,
+          exportableStep: true,
+          bbox: { min: { x: -20, y: -20, z: 0 }, max: { x: 20, y: 20, z: 0 } },
+          mesh: {
+            kind: 'mesh',
+            vertices: Float32Array.of(
+              -20,
+              -20,
+              0,
+              20,
+              -20,
+              0,
+              20,
+              20,
+              0,
+              -20,
+              20,
+              0
+            ),
+            indices: Uint32Array.of(0, 1, 2, 0, 2, 3)
+          }
+        }
+      ]
+    } as unknown as ModelViewerProps;
+    const view = render(createElement(ModelViewer, props));
+    const canvas = view.container.querySelector('canvas')!;
+    canvas.getBoundingClientRect = () => new DOMRect(0, 0, 800, 600);
+    let at = performance.now();
+    const step = () => {
+      const [id, callback] = callbacks.entries().next().value!;
+      callbacks.delete(id);
+      act(() => callback((at += 16)));
+    };
+    /** Runs frames until the loop sleeps; returns how many ran. */
+    const settle = () => {
+      let frames = 0;
+      while (callbacks.size > 0) {
+        expect(frames).toBeLessThan(500);
+        step();
+        frames += 1;
+      }
+      return frames;
+    };
+    const hover = (clientX: number, clientY: number) =>
+      fireEvent(
+        canvas,
+        new PointerEvent('pointermove', {
+          clientX,
+          clientY,
+          pointerId: 1,
+          pointerType: 'mouse',
+          bubbles: true
+        })
+      );
+    try {
+      settle();
+      const idle = gl.state.draws;
+      expect(idle).toBeGreaterThan(0);
+      // Empty space: the hover frame runs, and draws nothing.
+      hover(6, 6);
+      expect(settle()).toBe(1);
+      hover(12, 9);
+      expect(settle()).toBe(1);
+      expect(gl.state.draws).toBe(idle);
+      // Onto the body: preselection lights it, and the very frame that
+      // applies the hover draws it, not some later one.
+      hover(400, 300);
+      step();
+      expect(gl.state.draws).toBe(idle + 1);
+      settle();
+      const lit = gl.state.draws;
+      // Along the same body: nothing new, so nothing drawn.
+      hover(404, 303);
+      expect(settle()).toBe(1);
+      expect(gl.state.draws).toBe(lit);
+    } finally {
+      view.unmount();
+      request.mockRestore();
+      cancel.mockRestore();
     }
   });
 
