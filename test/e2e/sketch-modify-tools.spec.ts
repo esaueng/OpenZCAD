@@ -505,6 +505,57 @@ test('Linear pattern asks for spacing then count and repeats along a line', asyn
   expect(constraintKinds(constraints)).toEqual(['equal', 'equal']);
 });
 
+test('Linear pattern spreads its instances over an extent chosen beside its slot', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Linear pattern extent');
+  const center = at(0.35, 0.45);
+  await drawCircle(page, center, 24);
+  await drawLine(page, at(0.3, 0.7), at(0.5, 0.7));
+  const status = page.getByRole('contentinfo');
+
+  await modifyTool(page, 'Linear pattern');
+  await page
+    .getByRole('radiogroup', { name: 'Pattern spacing' })
+    .getByRole('radio', { name: 'Extent' })
+    .click();
+  await page.mouse.click(center.x + 24, center.y);
+  await expect(status).toContainText('Linear pattern: pick 2 of 2.');
+  await page.mouse.click(at(0.4, 0.7).x, at(0.4, 0.7).y);
+  const extent = page.getByRole('textbox', { name: 'Pattern extent' });
+  await expect(extent).toBeVisible();
+  await extent.fill('30');
+  await extent.press('Enter');
+  const count = page.getByRole('textbox', { name: 'Pattern count' });
+  await expect(count).toBeVisible();
+  await count.fill('4');
+  await count.press('Enter');
+  await expect(status).toContainText('Linear pattern added 3 linked circles.');
+
+  const { objects } = await exportSketch(page);
+  const circles = objects
+    .map((object) => object.data)
+    .filter(
+      (data): data is Extract<SketchObjectData, { objectKind: 'circle' }> =>
+        data.objectKind === 'circle'
+    );
+  const line = objects[1]!.data as Extract<
+    SketchObjectData,
+    { objectKind: 'line' }
+  >;
+  const dx = Number(line.x2) - Number(line.x1);
+  const length = Math.hypot(dx, Number(line.y2) - Number(line.y1));
+  // The last of four instances lies the extent from the source: steps of 10.
+  expect(circles).toHaveLength(4);
+  for (const [index, circle] of circles.entries()) {
+    expect(Number(circle.centerX) - Number(circles[0]!.centerX)).toBeCloseTo(
+      (10 * index * dx) / length,
+      6
+    );
+  }
+});
+
 test('Circular pattern turns an entity about a picked circle’s centre', async ({
   page
 }) => {

@@ -965,7 +965,8 @@ import type { SketchClipboard } from './lib/sketch/clipboard';
 import type {
   SketchEditHost,
   SketchEditPickContext,
-  SketchOffsetPick
+  SketchOffsetPick,
+  SketchPatternOptions
 } from './lib/sketch/edits';
 import type { SketchEditValidation } from './lib/sketch/editing';
 import { useSketchFilletDraft } from './lib/sketch/useSketchFilletDraft';
@@ -24151,6 +24152,7 @@ export function App() {
     values?: number[];
     raws?: string[];
     offset?: SketchOffsetPick;
+    pattern?: SketchPatternOptions;
     anchor?: { x: number; y: number };
     documentVersion: number;
   } | null>(null);
@@ -25119,11 +25121,11 @@ export function App() {
     if (doc && editingSketchNode) {
       const host = sketchEditHost(doc, clickPoint);
       const sketch = editingSketchNode;
-      const offset = session?.offsetOptions;
+      const options = session?.modifyOptions;
       void import('./lib/sketch/edits').then(({ advanceSketchEdit }) =>
         advanceSketchEdit(host, doc, sketch, pending, objectId, {
           ...context,
-          offset
+          options
         })
       );
     }
@@ -36897,9 +36899,9 @@ export function App() {
         }
         canConstrain={Boolean(interaction.session.sketchId)}
         pendingEdit={interaction.session.pendingEdit}
-        offsetOptions={interaction.session.offsetOptions}
-        onOffsetOptions={(options) =>
-          dispatchInteraction({ type: 'sketch-offset-options', options })
+        modifyOptions={interaction.session.modifyOptions}
+        onModifyOptions={(options) =>
+          dispatchInteraction({ type: 'sketch-modify-options', options })
         }
         constraints={sketchConstraintItems}
         selectedObjectId={interaction.session.selectedObjectId}
