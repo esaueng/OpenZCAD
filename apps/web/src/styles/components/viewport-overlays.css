@@ -315,6 +315,27 @@
   width: 100%;
 }
 
+/* M10: the pivot handle's toggle rests bare like Cancel and stays lit while
+   the gizmo places the pivot. */
+.move-pivot-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.move-pivot-toggle:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.move-pivot-toggle[aria-pressed='true'] {
+  color: var(--color-bg);
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
 /* M10: Move by two points rests bare like Cancel and stays lit while it
    picks. */
 .move-two-points {
@@ -334,6 +355,11 @@
   color: var(--color-bg);
   background: var(--color-accent);
   border-color: var(--color-accent);
+}
+
+.move-pivot-reset {
+  justify-self: start;
+  margin-top: 6px;
 }
 
 .move-grid {

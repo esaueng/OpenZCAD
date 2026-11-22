@@ -39,6 +39,16 @@ export interface MovePreview {
     /** What the first pick snapped to (an endpoint, a centre…), or null. */
     fromKind?: string | null;
   };
+  /**
+   * M10: the point the gizmo stands on and the rotation turns about, in
+   * world units. Omitted is the moved thing's centre.
+   */
+  pivot?: { x: number; y: number; z: number };
+  /**
+   * M10: the arrows and centre handle place the pivot instead of moving the
+   * body; the rings still turn it.
+   */
+  pivotMode?: boolean;
   translation: { x: number; y: number; z: number };
   rotationDeg: { x: number; y: number; z: number };
 }
