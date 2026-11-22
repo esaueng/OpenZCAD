@@ -275,6 +275,20 @@ export function MeasurementDock({
                 }${updating || entry.status !== 'current' ? ' stale' : ''}`}
                 role="listitem"
                 key={entry.id}
+                // M13: the whole row, actions included, holds the highlight:
+                // moving onto its Copy button or tabbing to an action keeps
+                // the measured entity lit.
+                onPointerEnter={() => onHover?.(entry.id)}
+                onPointerLeave={() => onHover?.(null)}
+                onFocus={() => onHover?.(entry.id)}
+                onBlur={(event) => {
+                  if (
+                    !event.currentTarget.contains(
+                      event.relatedTarget as Node | null
+                    )
+                  )
+                    onHover?.(null);
+                }}
               >
                 {editing ? (
                   <form
@@ -331,10 +345,6 @@ export function MeasurementDock({
                       type="button"
                       className="measurement-row-main"
                       onClick={() => onSelect(entry.id)}
-                      onPointerEnter={() => onHover?.(entry.id)}
-                      onPointerLeave={() => onHover?.(null)}
-                      onFocus={() => onHover?.(entry.id)}
-                      onBlur={() => onHover?.(null)}
                       aria-pressed={activeMeasurementId === entry.id}
                     >
                       <span className="measurement-row-heading">

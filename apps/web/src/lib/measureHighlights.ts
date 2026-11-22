@@ -18,7 +18,8 @@ export function measurementHighlightTargets(
             bodyId: target.bodyId,
             kind: target.kind,
             ...(target.topologyId ? { topologyId: target.topologyId } : {}),
-            ...(target.hash !== undefined ? { hash: target.hash } : {})
+            ...(target.hash !== undefined ? { hash: target.hash } : {}),
+            ...(target.reference ? { reference: target.reference } : {})
           }
         ]
       : []

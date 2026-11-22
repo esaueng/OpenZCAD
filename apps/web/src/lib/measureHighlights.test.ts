@@ -31,4 +31,14 @@ describe('measurement hover highlights (M13)', () => {
       { bodyId: 'body-1', kind: 'face', topologyId: 'face:1' }
     ]);
   });
+
+  it('carries the lineage reference, so the viewer resolves as Measure does', () => {
+    const reference = { kind: 'edge' } as never;
+    expect(
+      measurementHighlightTargets({
+        targets: [target('edge', { topologyId: 'edge:3', hash: 33, reference })]
+      })[0]
+    ).toMatchObject({ reference });
+  });
 });
+

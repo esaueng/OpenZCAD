@@ -10543,6 +10543,11 @@ export function App() {
   const [hoveredMeasurementId, setHoveredMeasurementId] = useState<
     string | null
   >(null);
+  // The dock unmounts when Measure turns off, with no pointer-leave to clear
+  // the row it held: a reopened dock must not light a stale row.
+  useEffect(() => {
+    if (!measuring) setHoveredMeasurementId(null);
+  }, [measuring]);
   const hoveredMeasurementTargets = useMemo<TopologySelection[]>(() => {
     if (!measuring || !hoveredMeasurementId) return NO_MEASURE_HIGHLIGHTS;
     const row = measurements.find(

@@ -340,6 +340,7 @@ import {
 } from '../lib/fitFrame';
 import type { DimensionMode } from '../lib/keypad';
 import type { ViewportCameraState } from '../lib/workspaceSession';
+import { resolveEdge, resolveFace } from '../lib/topologyResolution';
 import type { MeasurementViewportAnnotation } from '../lib/measurements';
 import {
   buildSketchModeRig,
@@ -15689,6 +15690,9 @@ export function ModelViewer({
     if (!context) return;
     const overlays: THREE.Object3D[] = [];
     const hover = SELECTION_SEMANTICS.hover;
+    const clip = settings.sectionView
+      ? sectionClippingPlane(settings.sectionView)
+      : null;
     for (const target of measureHighlights) {
       const body = bodies.find(
         (candidate) => candidate.bodyId === target.bodyId && !candidate.consumed
@@ -15697,11 +15701,10 @@ export function ModelViewer({
       if (!body?.topology || !object) continue;
       let overlay: THREE.Object3D | null = null;
       if (target.kind === 'face') {
-        const face = body.topology.faces.find(
-          (entry) =>
-            entry.topologyId === target.topologyId ||
-            (target.topologyId === undefined && entry.hash === target.hash)
-        );
+        // Resolved as Measure resolves it: an identity two faces now share
+        // lights neither, as the row reads unresolved.
+        const found = resolveFace(body, target);
+        const face = found.ok ? found.entry : undefined;
         const geometry = face && createFaceHighlightGeometry(object, face);
         if (geometry) {
           const mesh = new THREE.Mesh(
@@ -15721,11 +15724,8 @@ export function ModelViewer({
           overlay = mesh;
         }
       } else if (target.kind === 'edge') {
-        const edge = body.topology.edges.find(
-          (entry) =>
-            entry.topologyId === target.topologyId ||
-            (target.topologyId === undefined && entry.hash === target.hash)
-        );
+        const found = resolveEdge(body, target);
+        const edge = found.ok ? found.entry : undefined;
         if (edge && edge.points.length >= 6) {
           const points: THREE.Vector3[] = [];
           for (let index = 0; index + 2 < edge.points.length; index += 3)
@@ -15748,6 +15748,11 @@ export function ModelViewer({
       if (!overlay) continue;
       overlay.name = 'measure-hover-highlight';
       overlay.userData.selectionOverlay = true;
+      // The display-mode pass leaves it as drawn; an active section cut
+      // clips it as it clips the body.
+      overlay.userData.measureHighlight = true;
+      const material = (overlay as THREE.Mesh).material as THREE.Material;
+      material.clippingPlanes = clip ? [clip] : null;
       overlay.raycast = () => undefined;
       object.add(overlay);
       overlays.push(overlay);
@@ -15766,7 +15771,7 @@ export function ModelViewer({
         context.renderer.domElement.dataset.e2eMeasureHighlights = '0';
       context.requestRender();
     };
-  }, [measureHighlights, bodies]);
+  }, [measureHighlights, bodies, settings.sectionView]);
 
   // Move/Rotate gizmo: translation arrows, rotation rings, and a free-move
   // center handle at the target body's center. The active drag owns the

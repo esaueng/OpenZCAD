@@ -66,13 +66,18 @@ describe('MeasurementDock', () => {
     const onHover = vi.fn();
     renderDock({ onHover });
     const row = document.querySelector<HTMLElement>('.measurement-row-main')!;
-    fireEvent.pointerEnter(row);
+    const item = row.closest<HTMLElement>('[role="listitem"]')!;
+    fireEvent.pointerEnter(item);
     expect(onHover).toHaveBeenLastCalledWith('edge:b1/e1');
-    fireEvent.pointerLeave(row);
+    fireEvent.pointerLeave(item);
     expect(onHover).toHaveBeenLastCalledWith(null);
     fireEvent.focus(row);
     expect(onHover).toHaveBeenLastCalledWith('edge:b1/e1');
-    fireEvent.blur(row);
+    // Tabbing to another action in the same row keeps it lit.
+    const action = item.querySelectorAll('button')[1]!;
+    fireEvent.blur(row, { relatedTarget: action });
+    expect(onHover).toHaveBeenLastCalledWith('edge:b1/e1');
+    fireEvent.blur(row, { relatedTarget: document.body });
     expect(onHover).toHaveBeenLastCalledWith(null);
   });
 
