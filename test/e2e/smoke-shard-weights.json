@@ -209,5 +209,6 @@
   "iges-exchange.spec.ts": 20,
   "history-text-custom-feature.spec.ts": 20,
   "selected-face-hole.spec.ts": 15,
-  "variable-fillet-vertex-radii.spec.ts": 12
+  "variable-fillet-vertex-radii.spec.ts": 12,
+  "variable-fillet-radius-stations.spec.ts": 12
 }
