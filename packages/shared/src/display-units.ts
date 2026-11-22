@@ -2,7 +2,7 @@ import type { ProjectDocument, UnitSystem } from './index';
 import { millimetresPerUnit } from './index';
 
 /**
- * I03 display units (schema v143). A document stores every length in
+ * I03 display units (schema v148). A document stores every length in
  * `units`, the unit it was created in, and shows and takes lengths in
  * `displayUnits`. Switching the display unit converts what is shown and how
  * a plain typed number is read; it never rewrites a stored length, so the

@@ -1399,15 +1399,8 @@ describe('Patterns over a selection', () => {
       { objectKind: 'line', x1: 4, y1: 3, x2: 5, y2: 4 },
       { objectKind: 'line', x1: 8, y1: 3, x2: 9, y2: 4 }
     ]);
-    // Each instance links to its own source.
-    expect(kinds(sketch().constraints ?? [])).toEqual([
-      'equal',
-      'equal',
-      'equal',
-      'equal',
-      'parallel',
-      'parallel'
-    ]);
+    // Each source holds its own instances.
+    expect(kinds(sketch().constraints ?? [])).toEqual(['pattern', 'pattern']);
     manager.undo();
     expect(sketch().objectIds).toHaveLength(before);
   });
@@ -2000,7 +1993,7 @@ describe('Mirror', () => {
 });
 
 describe('Patterns', () => {
-  it('repeats a circle along a direction line, each instance equal to the source', () => {
+  it('repeats a circle along a direction line, held by one pattern relation', () => {
     const { manager, sketchId, ids, sketch, object, commit } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },
       { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 4 }
@@ -2024,14 +2017,22 @@ describe('Patterns', () => {
       { objectKind: 'circle', centerX: 0, centerY: 5, radius: 1 },
       { objectKind: 'circle', centerX: 0, centerY: 10, radius: 1 }
     ]);
-    expect((sketch().constraints ?? []).map((c) => c.data)).toEqual(
-      copies.map((copy) => ({ constraintKind: 'equal', a: circle, b: copy }))
-    );
+    expect((sketch().constraints ?? []).map((c) => c.data)).toEqual([
+      {
+        constraintKind: 'pattern',
+        source: circle,
+        instances: copies.map((objectId, index) => ({
+          objectId,
+          step: index + 1
+        })),
+        layout: { kind: 'linear', direction, spacing: 5 }
+      }
+    ]);
     manager.undo();
     expect(sketch().objectIds).toHaveLength(2);
   });
 
-  it('keeps pattern lines parallel and equal to the source', () => {
+  it('holds pattern lines with one relation, not separate links', () => {
     const { manager, sketchId, ids, sketch, commit } = sketchWith([
       { objectKind: 'line', x1: 0, y1: 0, x2: 0, y2: 4 },
       { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
@@ -2048,7 +2049,7 @@ describe('Patterns', () => {
         resolve
       )
     );
-    expect(kinds(sketch().constraints ?? [])).toEqual(['equal', 'parallel']);
+    expect(kinds(sketch().constraints ?? [])).toEqual(['pattern']);
   });
 
   it('refuses a linear pattern whose lines overlap along the direction, but lets them touch', () => {
@@ -2691,8 +2692,14 @@ describe('Patterns', () => {
     ]);
     const pivot = (pick: string) =>
       resolvePatternPivot(manager.document, sketch(), pick, resolve);
-    expect(pivot(ids[0]!)).toEqual({ pivot: { x: 3, y: 4 } });
-    expect(pivot(`${ids[1]!}#end`)).toEqual({ pivot: { x: 7, y: 9 } });
+    expect(pivot(ids[0]!)).toEqual({
+      pivot: { x: 3, y: 4 },
+      ref: { objectId: ids[0], point: 'center' }
+    });
+    expect(pivot(`${ids[1]!}#end`)).toEqual({
+      pivot: { x: 7, y: 9 },
+      ref: { objectId: ids[1], point: 'end' }
+    });
     expect('error' in pivot(ids[1]!)).toBe(true);
   });
 });

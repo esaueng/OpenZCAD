@@ -1577,7 +1577,8 @@ const SKETCH_CONSTRAINT_FIELDS: Readonly<
   angle: { objects: ['a', 'b'], values: ['valueDeg'] },
   symmetric: { points: ['a', 'b'], objects: ['axis'] },
   'point-on-object': { points: ['point'], objects: ['objectId'] },
-  lock: { points: ['point'] }
+  lock: { points: ['point'] },
+  pattern: { objects: ['source'] }
 };
 
 function isSketchPointSelector(value: unknown): boolean {
@@ -1626,7 +1627,41 @@ export function sketchConstraintShapeError(data: unknown): string | null {
     (typeof data.x !== 'number' || typeof data.y !== 'number')
   )
     return 'Sketch lock constraint needs a numeric position.';
+  if (kind === 'pattern') return sketchPatternShapeError(data);
   return null;
+}
+
+function sketchPatternShapeError(data: Record<string, unknown>): string | null {
+  const instances = data.instances;
+  if (
+    !Array.isArray(instances) ||
+    instances.length === 0 ||
+    !instances.every(
+      (instance) =>
+        isDocumentRecord(instance) &&
+        typeof instance.objectId === 'string' &&
+        !RESERVED_RECORD_KEYS.has(instance.objectId) &&
+        Number.isSafeInteger(instance.step) &&
+        (instance.step as number) > 0
+    )
+  )
+    return 'Sketch pattern needs its instances and their steps.';
+  const layout = data.layout;
+  if (!isDocumentRecord(layout)) return 'Sketch pattern needs its layout.';
+  if (layout.kind === 'linear')
+    return typeof layout.direction === 'string' &&
+      !RESERVED_RECORD_KEYS.has(layout.direction) &&
+      (typeof layout.spacing === 'number' || typeof layout.spacing === 'string')
+      ? null
+      : 'Sketch linear pattern needs a direction line and a spacing.';
+  if (layout.kind === 'circular')
+    return isSketchPointSelector(layout.pivot) &&
+      (typeof layout.stepDeg === 'number' ||
+        typeof layout.stepDeg === 'string') &&
+      (layout.orientation === 'rotate' || layout.orientation === 'uniform')
+      ? null
+      : 'Sketch circular pattern needs a pivot, a step angle and an orientation.';
+  return 'Sketch pattern has an unknown layout.';
 }
 
 /** The envelope read by all persistence and collaboration entry points. */

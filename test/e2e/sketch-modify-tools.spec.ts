@@ -9,7 +9,8 @@ import {
   finishInPlaceCommand,
   stubApi,
   test,
-  MODEL_ONLY
+  MODEL_ONLY,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 /**
@@ -508,7 +509,79 @@ test('Linear pattern asks for spacing then count and repeats along a line', asyn
     );
     expect(Number(circle.radius)).toBeCloseTo(Number(circles[0]!.radius), 9);
   }
-  expect(constraintKinds(constraints)).toEqual(['equal', 'equal']);
+  // One relation holds both instances' positions and sizes.
+  expect(constraintKinds(constraints)).toEqual(['pattern']);
+});
+
+test('dragging a linear pattern’s source carries every instance with it', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Pattern drag');
+  const center = at(0.35, 0.45);
+  await drawCircle(page, center, 24);
+  await drawLine(page, at(0.3, 0.7), at(0.5, 0.7));
+  const status = page.getByRole('contentinfo');
+  await modifyTool(page, 'Linear pattern');
+  await page.mouse.click(center.x + 24, center.y);
+  await expect(status).toContainText('Linear pattern: pick 2 of 2.');
+  await page.mouse.click(at(0.4, 0.7).x, at(0.4, 0.7).y);
+  const spacing = page.getByRole('textbox', { name: 'Pattern spacing' });
+  await expect(spacing).toBeVisible();
+  await spacing.fill('15');
+  await spacing.press('Enter');
+  const count = page.getByRole('textbox', { name: 'Pattern count' });
+  await count.fill('3');
+  await count.press('Enter');
+  await expect(status).toContainText('Linear pattern added 2 linked circles.');
+  await page.keyboard.press('Escape');
+
+  // Pick the source by its rim, then drag it by its grab dot.
+  await page.mouse.click(center.x - 24, center.y);
+  const editor = page.getByRole('form', { name: 'Edit circle' });
+  await expect(editor).toBeVisible();
+  const before = Number(await editor.getByLabel('Center Y').inputValue());
+  const handle = page.locator('.sketch-grab-handle');
+  await expect(handle).toBeVisible();
+  await waitForStillViewport(page);
+  const box = (await handle.boundingBox())!;
+  const grab = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await page.mouse.move(grab.x, grab.y);
+  await page.mouse.down();
+  await page.mouse.move(grab.x, grab.y - 40, { steps: 12 });
+  await page.mouse.up();
+  await expect(status).toContainText('Moved circle.');
+
+  const { objects, constraints } = await exportSketch(page);
+  const circles = objects
+    .map((object) => object.data)
+    .filter(
+      (data): data is Extract<SketchObjectData, { objectKind: 'circle' }> =>
+        data.objectKind === 'circle'
+    );
+  expect(circles).toHaveLength(3);
+  const source = circles[0]!;
+  // The source moved up; both instances kept their steps from it.
+  expect(Number(source.centerY)).toBeGreaterThan(before + 1);
+  const line = objects[1]!.data as Extract<
+    SketchObjectData,
+    { objectKind: 'line' }
+  >;
+  const dx = Number(line.x2) - Number(line.x1);
+  const dy = Number(line.y2) - Number(line.y1);
+  const length = Math.hypot(dx, dy);
+  for (const [index, circle] of circles.entries()) {
+    expect(Number(circle.centerX) - Number(source.centerX)).toBeCloseTo(
+      (15 * index * dx) / length,
+      6
+    );
+    expect(Number(circle.centerY) - Number(source.centerY)).toBeCloseTo(
+      (15 * index * dy) / length,
+      6
+    );
+    expect(Number(circle.radius)).toBeCloseTo(Number(source.radius), 9);
+  }
+  expect(constraintKinds(constraints)).toEqual(['pattern']);
 });
 
 test('Linear pattern spreads its instances over an extent chosen beside its slot', async ({

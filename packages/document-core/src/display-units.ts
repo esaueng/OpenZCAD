@@ -11,7 +11,7 @@ export interface DisplayUnitsSetInput {
 }
 
 /**
- * Sets the unit `document` shows and takes lengths in (schema v143). Only
+ * Sets the unit `document` shows and takes lengths in (schema v148). Only
  * `displayUnits` changes: every stored length stays in `units`, so nothing
  * rebuilds differently. Choosing the document's own unit clears the field,
  * so a document switched back reads as one that was never switched.

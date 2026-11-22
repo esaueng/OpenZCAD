@@ -1,5 +1,6 @@
 import {
   BetweenHorizontalEnd,
+  Columns3,
   CircleDot,
   createLucideIcon,
   Equal,
@@ -42,7 +43,11 @@ export const ArcGlyph = createLucideIcon('SketchArc', [
 ]);
 
 /** One glyph per constraint tool, shared by the rail and the entity editor. */
-export const CONSTRAINT_ICONS: Record<SketchConstraintToolKind, LucideIcon> = {
+export const CONSTRAINT_ICONS: Record<
+  SketchConstraintToolKind | 'pattern',
+  LucideIcon
+> = {
+  pattern: Columns3,
   horizontal: MoveHorizontal,
   vertical: MoveVertical,
   parallel: Parallel,
