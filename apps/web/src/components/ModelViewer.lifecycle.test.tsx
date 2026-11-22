@@ -459,14 +459,17 @@ describe('ModelViewer lifecycle', () => {
     const canvas = view.container.querySelector('canvas')!;
     canvas.getBoundingClientRect = () => new DOMRect(0, 0, 800, 600);
     let at = performance.now();
+    const step = () => {
+      const [id, callback] = callbacks.entries().next().value!;
+      callbacks.delete(id);
+      act(() => callback((at += 16)));
+    };
     /** Runs frames until the loop sleeps; returns how many ran. */
     const settle = () => {
       let frames = 0;
       while (callbacks.size > 0) {
         expect(frames).toBeLessThan(500);
-        const [id, callback] = callbacks.entries().next().value!;
-        callbacks.delete(id);
-        act(() => callback((at += 16)));
+        step();
         frames += 1;
       }
       return frames;
@@ -492,11 +495,13 @@ describe('ModelViewer lifecycle', () => {
       hover(12, 9);
       expect(settle()).toBe(1);
       expect(gl.state.draws).toBe(idle);
-      // Onto the body: preselection lights it, and that frame draws.
+      // Onto the body: preselection lights it, and the very frame that
+      // applies the hover draws it, not some later one.
       hover(400, 300);
+      step();
+      expect(gl.state.draws).toBe(idle + 1);
       settle();
       const lit = gl.state.draws;
-      expect(lit).toBeGreaterThan(idle);
       // Along the same body: nothing new, so nothing drawn.
       hover(404, 303);
       expect(settle()).toBe(1);
