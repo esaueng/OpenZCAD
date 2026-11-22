@@ -6,6 +6,8 @@
  * ciphertext only.
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { fromBase64Url } from '../packages/crypto/src/bytes';
+import { parseVersionSignature } from '../packages/crypto/src/signing';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
 import {
   EncryptedCommentsIntegrityError,
@@ -166,7 +168,18 @@ describe('encrypted comments (L08)', () => {
       'SELECT signature FROM e2ee_project_comment_logs WHERE user_id = ?',
       OTHER
     )[0]!;
-    const flipped = `${viewerLog.signature.slice(0, -2)}${viewerLog.signature.endsWith('AA') ? 'AB' : 'AA'}`;
+    // A character inside r || s: the record is `u8 version | u64 signedAt
+    // | 64-byte r || s`, so base64url character 12 holds 6 bits of r's
+    // first byte. The last character carries padding bits the decoder
+    // ignores (a final "AA" turned into "AB" left the bytes unchanged, 1 run
+    // in 256), and the first is the version, refused before verification.
+    const at = 12;
+    const flipped = `${viewerLog.signature.slice(0, at)}${viewerLog.signature[at] === 'A' ? 'B' : 'A'}${viewerLog.signature.slice(at + 1)}`;
+    // Still a v1 record with the same timestamp, so verification runs and fails.
+    const original = parseVersionSignature(fromBase64Url(viewerLog.signature));
+    const corrupted = parseVersionSignature(fromBase64Url(flipped));
+    expect(corrupted.signedAt).toBe(original.signedAt);
+    expect(corrupted.rs).not.toEqual(original.rs);
     srv.db
       .prepare(
         'UPDATE e2ee_project_comment_logs SET signature = ? WHERE user_id = ?'
