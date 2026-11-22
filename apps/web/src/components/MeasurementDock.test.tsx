@@ -362,6 +362,22 @@ describe('MeasurementDock', () => {
     }
   });
 
+  it('scrolls back to the reading when a new pick lands', () => {
+    const { rerender, props, container } = renderDock();
+    const body = container.querySelector<HTMLElement>(
+      '.measurement-dock-body'
+    )!;
+    body.scrollTop = 120;
+    expect(body.scrollTop).toBe(120);
+    rerender(
+      <MeasurementDock
+        {...props}
+        session={session({ first: { label: 'Edge 2' } })}
+      />
+    );
+    expect(body.scrollTop).toBe(0);
+  });
+
   it('names the first pick and waits for a second', () => {
     renderDock({
       session: session({ first: { label: 'Bracket · Hole center' } })

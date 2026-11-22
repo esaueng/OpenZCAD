@@ -179,6 +179,17 @@ export function MeasurementDock({
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const { first, second, readings, primary, distanceRefusal } = session;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // A new pick brings the card back to its top, where the picks and the
+  // reading are: scrolled down to the kept rows on a short screen, the
+  // reading the pick produced was out of sight.
+  const firstLabel = first?.label ?? null;
+  const secondLabel = second?.label ?? null;
+  useLayoutEffect(() => {
+    if (firstLabel === null && secondLabel === null) return;
+    const body = bodyRef.current;
+    if (body) body.scrollTop = 0;
+  }, [firstLabel, secondLabel]);
 
   const instruction = updating
     ? 'Measurements will refresh when the model finishes updating.'
@@ -218,7 +229,7 @@ export function MeasurementDock({
       {/* Everything between the head and the foot scrolls as one: on a short
           screen the reading, Keep and the kept rows stay reachable rather than
           the list collapsing to nothing under a card that cannot move. */}
-      <div className="measurement-dock-body">
+      <div className="measurement-dock-body" ref={bodyRef}>
         {settingsOpen ? (
           <div
             id="measurement-settings"
