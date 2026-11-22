@@ -120,11 +120,15 @@ oracle, replay determinism, resolving references, route equivalence), plus:
 10. **Constant-section volume delta.** When the move only lengthens or
     shortens a prism — a planar face whose neighbours are all walls parallel
     to the move — the volume changes by that prism's cross-section × distance.
-    The cross-section is not always the moved face's area: a chamfered or
-    blended cap translates together with its chamfer or blend, so the change
-    is the full wall section × distance (on part D, π r² × distance, not the
-    smaller cap area). Each scenario names which section applies. Moves that
-    change the section use the WS1 oracle.
+    The cross-section is not always the moved face's area: part D's
+    chamfered cap translates together with its chamfer, so the change is the
+    full wall section × distance (π r² × distance, not the smaller cap area).
+    The formula applies only where the scenario first establishes that the
+    moved end group translates rigidly — its faces keep their shape and only
+    move along the offset direction. Blended ends often rebuild instead: the
+    existing rounded-union push in `test/cylinder-resize-face-lineage.test.ts`
+    joins the shoulder and rim rounds and rebuilds approximate corners. Such
+    moves, and any that change the section, use the WS1 oracle.
 11. **Preview agrees with exact** (browser layer only): after release, the
     model either matches the previewed outline within the display tolerance
     or shows a refusal. A preview of a result that is then refused is
@@ -173,8 +177,10 @@ specs where they fit rather than duplicating them:
 
 An untagged full-suite case loads a 63-step history of part A, checks the
 History count and face census, reloads and checks them again. The history is
-generated from the authored part with the recorded operations and values, not
-committed from the user's session.
+generated from the authored part with the recorded kinds of operation, not
+committed from the user's session. Its values are synthetic; a recorded value
+is reused only after the same privacy review as a capture, since a derived
+fixture discloses a proprietary dimension as surely as the export would.
 
 Preview-only findings — a preview that disagrees with the exact result, as in
 O1 — belong here, because the kernel corpus never sees the preview.
@@ -197,12 +203,12 @@ followed by **Export interaction log**:
 Each kind of finding has its own route. Owners: K10 for kernel refusals and
 wrong results, U02 for preview and feedback, K05 for naming and re-picks.
 
-| Finding                                                            | Route                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A refusal that should not happen, or with the wrong reason         | **Save reproduction** from the refusal's details → privacy review → drop into `test/direct-edit-corpus/fixtures/` with its stem equal to `fixture.name` → pin in `pins.ts` with the literal message and owner.                                                                                                              |
-| A wrong result that committed                                      | **Save reproduction** only covers refused builds, and a literal-message pin requires replay to refuse, so neither can hold it. Write an authored scenario with an `expectedVolumeAfter` oracle and a shape pin.                                                                                                             |
-| A limit that is not monotonic (O2)                                 | A paired authored scenario: one starting document, the larger distance and the smaller distance on the same face. The pair passes only when the smaller distance builds whenever the larger one does, or when a named topology event explains the difference. The successful leg cannot be captured with Save reproduction. |
-| Preview disagrees with the exact result (O1); feedback and wording | A browser case (see [Browser layer](#browser-layer)).                                                                                                                                                                                                                                                                       |
+| Finding                                                            | Route                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A refusal that should not happen, or with the wrong reason         | **Save reproduction** from the refusal's details → privacy review → drop into `test/direct-edit-corpus/fixtures/` with its stem equal to `fixture.name` → pin in `pins.ts` with the literal message and owner.                                                                                                                                                           |
+| A wrong result that committed                                      | **Save reproduction** only covers refused builds, and a literal-message pin requires replay to refuse, so neither can hold it. Write an authored scenario with an `expectedVolumeAfter` oracle and a shape pin, plus a face-position or topology assertion on the face that was meant to move: a volume delta alone passes when the wrong face moves by the same amount. |
+| A limit that is not monotonic (O2)                                 | A paired authored scenario: one starting document, the larger distance and the smaller distance on the same face. The pair passes only when the smaller distance builds whenever the larger one does, or when a named topology event explains the difference. The successful leg cannot be captured with Save reproduction.                                              |
+| Preview disagrees with the exact result (O1); feedback and wording | A browser case (see [Browser layer](#browser-layer)).                                                                                                                                                                                                                                                                                                                    |
 
 Captured fixtures are never edited; a capture that stops reproducing has been
 repaired and its pin is retired.
@@ -217,20 +223,21 @@ geometry is native. **Save reproduction** replaces every project, part, body,
 feature and sketch name with a neutral label, but its parameter names and the
 geometry itself stay.
 
-Before any capture is committed, someone reads it for private names, values
+Before any capture — or any fixture derived from one — is committed, someone
+reads it for private names, values
 and geometry. A capture that contains any is not committed: the finding is
 rebuilt as an authored scenario with synthetic names and dimensions that
 reproduce the same refusal or result.
 
 ## Phases
 
-| Phase | Scope                                                                                                                                | Exit signal                                                                                 |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| P0    | O1 through Save reproduction and the privacy review, then a pin; O2 as a paired authored scenario that confirms or retires the lead. | O1 pinned with an owner; O2 confirmed and pinned, or retired.                               |
-| P1    | Parts A–D as authored scenarios; the distance ladder with the monotonic rule.                                                        | Every ladder cell is success or a pinned typed refusal; part A matches the recorded census. |
-| P2    | Chain generator and the PR slice in root Vitest.                                                                                     | Slice green within its measured budget; seeds reproduce.                                    |
-| P3    | Full chain campaign and ledger artifact; the two browser smoke cases and the 63-step reload case.                                    | Ledger committed; smoke cases tagged and passing.                                           |
-| P4    | Manual pass each release.                                                                                                            | Checklist complete; every finding triaged into the corpus or a follow-up.                   |
+| Phase | Scope                                                                                                                                | Exit signal                                                                                                                                             |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0    | O1 through Save reproduction and the privacy review, then a pin; O2 as a paired authored scenario that confirms or retires the lead. | O1 pinned with an owner and a browser case asserting the drag no longer previews a result the exact check refuses; O2 confirmed and pinned, or retired. |
+| P1    | Parts A–D as authored scenarios; the distance ladder with the monotonic rule.                                                        | Every ladder cell is success or a pinned typed refusal; part A matches the recorded census.                                                             |
+| P2    | Chain generator and the PR slice in root Vitest.                                                                                     | Slice green within its measured budget; seeds reproduce.                                                                                                |
+| P3    | Full chain campaign and ledger artifact; the two browser smoke cases and the 63-step reload case.                                    | Ledger committed; smoke cases tagged and passing.                                                                                                       |
+| P4    | Manual pass each release.                                                                                                            | Checklist complete; every finding triaged into the corpus or a follow-up.                                                                               |
 
 ## What not to do
 
