@@ -919,6 +919,15 @@ export function inPlaceEditSeed(
             seed.slots.edges.length === data.edgeHashes.length
               ? filletSelectionVertices(seed.slots.edges)
               : null;
+          // M03 (v146): the editor holds one interior station; a stored
+          // list of more is said, not silently cut to one.
+          if (data.radiusStations?.[0]) {
+            seed.options.radiusAt = 'along';
+            value('midRadius', data.radiusStations[0].radius);
+            value('midAt', data.radiusStations[0].at * 100);
+            if (data.radiusStations.length > 1)
+              seed.notice = `This fillet has ${data.radiusStations.length} radius stations; Done keeps only the first.`;
+          }
           if (data.vertexRadii && vertices) {
             seed.options.radiusAt = 'vertices';
             vertices.forEach((vertex, index) => {

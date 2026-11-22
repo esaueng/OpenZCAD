@@ -232,7 +232,8 @@ describe('per-vertex fillet radii (M03, v142)', { timeout: 120_000 }, () => {
     expect(() =>
       assertDocumentContentSchema({
         ...stored,
-        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+        // The last version before per-vertex radii (v142).
+        schemaVersion: 141
       } as never)
     ).toThrow(/Per-vertex fillet radii/);
   });

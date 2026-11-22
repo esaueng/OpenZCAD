@@ -3,6 +3,7 @@ import type {
   BodyId,
   EdgeTopologyReferenceV5,
   FeatureNode,
+  FilletRadiusStation,
   FilletVertexRadius,
   ParamValue,
   VariableFilletLaw
@@ -23,6 +24,8 @@ export interface EdgeModifierFormValue {
   radiusLaw?: VariableFilletLaw;
   /** Fillet only (M03, v142): per-vertex radii; absent means none. */
   vertexRadii?: FilletVertexRadius[];
+  /** Fillet only (M03, v146): interior radius stations; absent means none. */
+  radiusStations?: FilletRadiusStation[];
   /** Chamfer only: setback on the other face; absent means symmetric. */
   distance2?: ParamValue;
 }
@@ -50,10 +53,11 @@ export function edgeModifierCommand(
   const clearData =
     kind === 'fillet'
       ? value.endRadius === undefined
-        ? ['endRadius', 'radiusLaw', 'vertexRadii']
-        : value.vertexRadii === undefined
-          ? ['vertexRadii']
-          : []
+        ? ['endRadius', 'radiusLaw', 'vertexRadii', 'radiusStations']
+        : [
+            ...(value.vertexRadii === undefined ? ['vertexRadii'] : []),
+            ...(value.radiusStations === undefined ? ['radiusStations'] : [])
+          ]
       : [
           ...(value.angleDeg === undefined ? ['angleDeg'] : []),
           ...(value.distance2 === undefined ? ['distance2'] : [])
@@ -77,6 +81,9 @@ export function edgeModifierCommand(
                     radiusLaw: value.radiusLaw ?? 'linear',
                     ...(value.vertexRadii !== undefined
                       ? { vertexRadii: value.vertexRadii }
+                      : {}),
+                    ...(value.radiusStations !== undefined
+                      ? { radiusStations: value.radiusStations }
                       : {})
                   }
                 : {})

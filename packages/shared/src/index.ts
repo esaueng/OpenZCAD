@@ -559,7 +559,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // edge's lineage witness. An older client would round every edge from
 // `radius` to `endRadius`, so it must refuse the document. Builds on v141
 // (#1911 on main; v138–v140 stay claimed by the open S05/S07 sketch PRs).
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 142 as const;
+// v146 adds M03 radius stations (`radiusStations` on a variable-radius
+// fillet): interior radii along each selected edge, at fractions from the
+// edge's witness end 0, the law running between neighbouring stations. An
+// older client would round each edge from `radius` to `endRadius` only, so
+// it must refuse the document. Builds on v142 (v143–v145 are claimed by the
+// open #1915, #1913 and #1917).
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 146 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -818,6 +824,74 @@ export interface FilletVertexRadius {
   edge: number;
   end: 0 | 1;
   radius: ParamValue;
+}
+
+/**
+ * M03 (schema v146): one interior radius station of a variable-radius
+ * fillet, applied to every selected edge. `at` is the fraction of the edge
+ * from its witness end 0 (`edgeReferences[…].witness.endpoints[0]`),
+ * strictly inside (0, 1); the fillet's law (`radiusLaw`) runs between
+ * neighbouring stations, the edge's two ends included.
+ */
+export interface FilletRadiusStation {
+  at: number;
+  radius: ParamValue;
+}
+
+/** The most interior stations one fillet stores. */
+export const MAX_FILLET_RADIUS_STATIONS = 8;
+
+/**
+ * Why a fillet's `radiusStations` cannot be stored, or null when it can: it
+ * needs a variable law (`endRadius`) and a lineage reference for every
+ * selected edge (the fraction is measured from a witness end), and its
+ * fractions must lie strictly inside (0, 1), increasing.
+ */
+export function filletRadiusStationsProblem(data: {
+  edgeHashes: readonly number[];
+  edgeReferences?: readonly { currentHash: number }[];
+  endRadius?: ParamValue;
+  radiusStations?: unknown;
+}): string | null {
+  const stations = data.radiusStations;
+  if (stations === undefined) return null;
+  if (
+    !Array.isArray(stations) ||
+    stations.length === 0 ||
+    stations.length > MAX_FILLET_RADIUS_STATIONS
+  )
+    return `Fillet radius stations must be a list of 1 to ${MAX_FILLET_RADIUS_STATIONS}.`;
+  if (data.endRadius === undefined)
+    return 'Fillet radius stations need a variable-radius fillet.';
+  let previous = 0;
+  for (const station of stations as unknown[]) {
+    if (typeof station !== 'object' || station === null)
+      return 'Each fillet radius station must be an object.';
+    const { at, radius } = station as Record<string, unknown>;
+    if (
+      typeof at !== 'number' ||
+      !Number.isFinite(at) ||
+      at <= previous ||
+      at >= 1
+    )
+      return 'Fillet radius stations must stand strictly inside the edge, in increasing order.';
+    previous = at;
+    if (
+      !(typeof radius === 'string' && radius.trim() !== '') &&
+      !(typeof radius === 'number' && Number.isFinite(radius))
+    )
+      return 'A fillet radius station must be a number or an expression.';
+  }
+  if (
+    data.edgeHashes.some(
+      (hash) =>
+        !data.edgeReferences?.some(
+          (reference) => reference.currentHash === hash
+        )
+    )
+  )
+    return 'Fillet radius stations need the lineage reference of every selected edge.';
+  return null;
 }
 
 /**
@@ -3456,6 +3530,11 @@ export type FeatureData =
        * {@link FilletVertexRadius}. Only with `endRadius`.
        */
       vertexRadii?: FilletVertexRadius[];
+      /**
+       * M03 (schema v146): interior radii along every selected edge; see
+       * {@link FilletRadiusStation}. Only with `endRadius`.
+       */
+      radiusStations?: FilletRadiusStation[];
     }
   | {
       featureKind: 'chamfer';

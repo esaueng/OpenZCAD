@@ -46,7 +46,7 @@ describe('edge modifier edit command', () => {
       size: 2
     });
     expect(command.payload).toMatchObject({
-      clearData: ['endRadius', 'radiusLaw', 'vertexRadii']
+      clearData: ['endRadius', 'radiusLaw', 'vertexRadii', 'radiusStations']
     });
   });
 
@@ -62,11 +62,11 @@ describe('edge modifier edit command', () => {
     expect(command.payload).toMatchObject({
       data: { radius: 1, endRadius: 3, radiusLaw: 'scurve' },
       // M03 (v142): Start and end drops corners an earlier edit stored.
-      clearData: ['vertexRadii']
+      clearData: ['vertexRadii', 'radiusStations']
     });
   });
 
-  it('carries per-vertex radii and clears nothing (M03, v142)', () => {
+  it('carries per-vertex radii and clears only stations (M03, v142)', () => {
     const vertexRadii = [{ edge: 0, end: 0 as const, radius: 2 }];
     const command = edgeModifierCommand(feature, 'fillet', {
       name: 'Fillet edges',
@@ -77,8 +77,10 @@ describe('edge modifier edit command', () => {
       radiusLaw: 'linear',
       vertexRadii
     });
-    expect(command.payload).toMatchObject({ data: { vertexRadii } });
-    expect('clearData' in command.payload).toBe(false);
+    expect(command.payload).toMatchObject({
+      data: { vertexRadii },
+      clearData: ['radiusStations']
+    });
   });
 
   it('names the angle to drop so a second distance can be added', () => {

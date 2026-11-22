@@ -1,5 +1,6 @@
 import {
   documentNodesWithHistory,
+  filletRadiusStationsProblem,
   filletVertexRadiiProblem,
   patternSpacingModeProblem,
   type FeatureData,
@@ -1232,6 +1233,12 @@ export function assertDocumentContentCommandSchema(
           142,
           'Per-vertex fillet radii'
         );
+      if (fillet && fillet.radiusStations !== undefined)
+        assertMinimumProjectSchema(
+          document.schemaVersion,
+          146,
+          'Fillet radius stations'
+        );
     }
     switch (command.kind) {
       case 'sketch.add':
@@ -1285,6 +1292,11 @@ export function assertFilletContentSchema(
   data: Extract<FeatureData, { featureKind: 'fillet' }>,
   version: unknown
 ): void {
+  if (data.radiusStations !== undefined) {
+    assertMinimumProjectSchema(version, 146, 'Fillet radius stations');
+    const problem = filletRadiusStationsProblem(data);
+    if (problem) throw new Error(problem);
+  }
   if (data.vertexRadii === undefined) return;
   assertMinimumProjectSchema(version, 142, 'Per-vertex fillet radii');
   const problem = filletVertexRadiiProblem(data);
@@ -1573,11 +1585,7 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       Array.isArray(node.constraints) &&
       node.constraints.some(
         (constraint) =>
-          record(constraint) &&
-          isCurvedTangent(
-            constraint.data,
-            document.nodes
-          )
+          record(constraint) && isCurvedTangent(constraint.data, document.nodes)
       )
     )
       assertCurvedTangentSchema(document.schemaVersion);

@@ -120,6 +120,7 @@ import {
   patternMirrorProblem,
   patternSpacingModeProblem,
   filletVertexRadiiProblem,
+  filletRadiusStationsProblem,
   patternPathProblem,
   patternPointsProblem,
   holePointsProblem,
@@ -252,6 +253,7 @@ import {
   type UnitSystem,
   type UserId,
   type FilletVertexRadius,
+  type FilletRadiusStation,
   type VariableFilletLaw
 } from '@openzcad/shared';
 
@@ -883,6 +885,12 @@ export interface EdgeModifierInput {
    * edges; see `FilletVertexRadius`. Needs `endRadius` and `edgeReferences`.
    */
   vertexRadii?: FilletVertexRadius[];
+  /**
+   * Fillet only (M03, schema v146): interior radius stations along every
+   * selected edge; see `FilletRadiusStation`. Needs `endRadius` and
+   * `edgeReferences`.
+   */
+  radiusStations?: FilletRadiusStation[];
   /**
    * Chamfer only: the setback on the second face each selected edge borders,
    * `size` landing on the first. Absent means the symmetric chamfer.
@@ -5257,6 +5265,10 @@ export function filletEdges(
   input: EdgeModifierInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const edgeHashes = [...new Set(input.edgeHashes)];
+  if (input.radiusStations !== undefined) {
+    const problem = filletRadiusStationsProblem({ ...input, edgeHashes });
+    if (problem) throw new Error(problem);
+  }
   if (input.vertexRadii !== undefined) {
     if (edgeHashes.length !== input.edgeHashes.length)
       throw new Error(
@@ -5285,6 +5297,9 @@ export function filletEdges(
               : {}),
             ...(input.vertexRadii !== undefined
               ? { vertexRadii: deepClone(input.vertexRadii) }
+              : {}),
+            ...(input.radiusStations !== undefined
+              ? { radiusStations: deepClone(input.radiusStations) }
               : {})
           }
         : {})
@@ -6561,7 +6576,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'radius',
     'endRadius',
     'radiusLaw',
-    'vertexRadii'
+    'vertexRadii',
+    'radiusStations'
   ],
   'custom-feature': ['targetBodyId', 'script', 'inputs'],
   chamfer: [
@@ -6692,7 +6708,7 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'cornerRadius',
     'profilePosition'
   ],
-  fillet: ['endRadius', 'radiusLaw', 'vertexRadii'],
+  fillet: ['endRadius', 'radiusLaw', 'vertexRadii', 'radiusStations'],
   chamfer: ['angleDeg', 'distance2'],
   // R01: clearing a datum axis returns to the sketch or world axis.
   // U09: clearing a revolve's region returns it to the first-object profile.
@@ -6895,8 +6911,13 @@ export function updateFeature(
   } else if (feature.data.featureKind === 'fillet') {
     // M03 (v142): per-vertex radii go with the variable law; a patch that
     // returns the fillet to a constant radius drops them.
-    if (feature.data.endRadius === undefined) delete feature.data.vertexRadii;
-    const problem = filletVertexRadiiProblem(feature.data);
+    if (feature.data.endRadius === undefined) {
+      delete feature.data.vertexRadii;
+      delete feature.data.radiusStations;
+    }
+    const problem =
+      filletVertexRadiiProblem(feature.data) ??
+      filletRadiusStationsProblem(feature.data);
     if (problem) throw new Error(problem);
   }
   // R01: a datum may only read earlier datums, and Mirror/Split only an
