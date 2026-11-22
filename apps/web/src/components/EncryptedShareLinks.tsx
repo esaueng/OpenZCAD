@@ -371,6 +371,11 @@ const message = (caught: unknown) =>
 export interface EncryptedShareLinksSummary {
   readonly count: number;
   readonly attention: boolean;
+  /**
+   * A problem the owner must read wherever the dialog opens, such as a
+   * revoked link the server may still serve.
+   */
+  readonly problem?: string | null;
 }
 
 /** A link's status and comments, for its card's summary (its name says the mode). */
@@ -588,14 +593,19 @@ export function EncryptedShareLinks({
 
   // The Links tab's count, and a mark while a link needs the owner.
   const linkCount = state === null ? null : links.length;
+  const revocationPending = links.some(
+    (row) => row.status === 'revocation-pending'
+  );
   const attention =
     showRemoval ||
     showRetired ||
+    revocationPending ||
+    !!error ||
     (links.length > 0 && !!state?.needsConfirmation);
   useEffect(() => {
     if (linkCount === null) return;
-    onSummary?.({ count: linkCount, attention });
-  }, [onSummary, linkCount, attention]);
+    onSummary?.({ count: linkCount, attention, problem: error });
+  }, [onSummary, linkCount, attention, error]);
 
   const requestCreate = (draft: ShareLinkDraft) => {
     // One action (design review I79): Create link asks for the
@@ -855,6 +865,8 @@ export function EncryptedShareLinks({
                     disabled={busy !== null}
                     onCancel={() => {
                       setRevokingId(null);
+                      // Its card stays open, so focus has its Revoke to go back to.
+                      setExpandedId(row.shareId);
                       requestAnimationFrame(() =>
                         document
                           .querySelector<HTMLElement>(

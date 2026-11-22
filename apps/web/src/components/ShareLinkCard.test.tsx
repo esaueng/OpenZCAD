@@ -111,6 +111,8 @@ describe('ShareLinkCopyButton', () => {
     await user.keyboard('{Enter}');
     expect(onCopy).toHaveBeenCalledWith('https://x/#share=a', 'small');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    // The keyboard goes back to the control that opened the menu.
+    expect(caret).toHaveFocus();
   });
 
   it('closes its menu on a click outside it', async () => {

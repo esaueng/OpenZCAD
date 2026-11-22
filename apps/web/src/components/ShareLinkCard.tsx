@@ -164,6 +164,9 @@ export function ShareLinkCopyButton({
   }, [menuOpen]);
 
   const copy = (configurationId: string | null) => {
+    // Picked from the menu: the keyboard goes back to the control that
+    // opened it, not to the top of the dialog.
+    if (menuOpen) caretRef.current?.focus();
     setMenuOpen(false);
     void onCopy(url, configurationId).then(setCopied);
   };

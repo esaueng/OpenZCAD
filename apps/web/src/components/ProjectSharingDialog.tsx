@@ -606,7 +606,9 @@ export function ProjectSharingDialog({
       input.focus();
       input.select();
       const copied = document.execCommand('copy');
-      input.value = shown;
+      // Copied: the field shows the link as made again. Not copied: it keeps
+      // this link, selected, for the owner to copy by hand.
+      if (copied) input.value = shown;
       return copied;
     }
   };
@@ -1009,6 +1011,22 @@ export function ProjectSharingDialog({
               : {})}
             hidden={isOwner && tab !== 'people'}
           >
+            {isOwner && linksSummary?.problem ? (
+              // A link problem is read wherever the dialog opens: a revoked
+              // link the server may still serve cannot wait for a tab.
+              <div className="sharing-section">
+                <div className="sharing-share-notice" role="alert">
+                  <span className="sharing-tag">{linksSummary.problem}</span>
+                  <button
+                    type="button"
+                    className="sharing-row-action"
+                    onClick={() => setTab('links')}
+                  >
+                    Show links
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {isOwner ? (
               <section className="sharing-section sharing-invite-section">
                 <form
@@ -1941,6 +1959,8 @@ function PlaintextShareLinks({
                     disabled={disabled}
                     onCancel={() => {
                       setRevokingId(null);
+                      // Its card stays open, so focus has its Revoke to go back to.
+                      setExpandedId(id);
                       // Back to the card's Revoke, for the keyboard.
                       requestAnimationFrame(() =>
                         document

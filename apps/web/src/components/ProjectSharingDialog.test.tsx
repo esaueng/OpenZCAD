@@ -7,7 +7,7 @@ import {
   within
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   createProjectDocument,
   frozenShareDocument
@@ -577,6 +577,111 @@ describe('ProjectSharingDialog', () => {
     await user.keyboard('{ArrowLeft}');
     expect(people).toHaveFocus();
     expect(screen.getByRole('tabpanel', { name: /^People/ })).toBeVisible();
+  });
+
+  it('shows an encrypted link problem on the People tab it opens on', async () => {
+    const encryptedLinks: EncryptedShareLinkClient = {
+      list: vi.fn(async () => ({
+        links: [
+          {
+            shareId: 'shr_a',
+            mode: 'view' as const,
+            url: null,
+            status: 'revocation-pending' as const,
+            expiresAt: null
+          }
+        ],
+        needsConfirmation: false,
+        retired: [],
+        problem: 'A revoked link may still open for visitors.'
+      })),
+      create: vi.fn(),
+      revoke: vi.fn(),
+      confirm: vi.fn(),
+      reissue: vi.fn(),
+      subscribeRemovals: vi.fn(() => () => undefined)
+    };
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_problem"
+        role="owner"
+        encrypted
+        encryptedClient={{
+          list: vi.fn(async () => []),
+          invite: vi.fn(),
+          revoke: vi.fn(),
+          changeRole: vi.fn(),
+          remove: vi.fn(),
+          leave: vi.fn()
+        }}
+        encryptedShareLinkClient={encryptedLinks}
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    const people = await screen.findByRole('tabpanel', { name: /^People/ });
+    const warning = await within(people).findByRole('alert');
+    expect(warning).toHaveTextContent(
+      'A revoked link may still open for visitors.'
+    );
+    expect(
+      screen.getByRole('tab', { name: /needs attention/ })
+    ).toBeInTheDocument();
+    await user.click(
+      within(warning).getByRole('button', { name: 'Show links' })
+    );
+    expect(screen.getByRole('tab', { name: /^Links/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+  });
+
+  it('keeps a link with its configuration in the field when nothing can copy it', async () => {
+    const links = shareLinkClient();
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(
+      new Error('denied')
+    );
+    const execCommand = vi.fn(() => false);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand
+    });
+    onTestFinished(() => {
+      delete (document as { execCommand?: unknown }).execCommand;
+    });
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_fallback"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        configurations={[{ id: 'large', name: 'Large' }]}
+        onClose={vi.fn()}
+      />
+    );
+    await openLinks(user);
+    await user.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    const url = await screen.findByLabelText('Share link');
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Copy link opening on a configuration'
+      })
+    );
+    await user.click(screen.getByRole('menuitem', { name: 'Large' }));
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
+    expect(url).toHaveValue(
+      `${location.origin}/#share=${'a'.repeat(43)}&configuration=large`
+    );
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeVisible();
   });
 
   it('shows no tabs to someone who is not the owner', async () => {

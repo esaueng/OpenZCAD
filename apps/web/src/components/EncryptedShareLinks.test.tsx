@@ -872,6 +872,58 @@ describe('EncryptedShareLinks speed', () => {
 });
 
 describe('EncryptedShareLinks tab summary', () => {
+  it('reports a revocation the server did not confirm, with its warning', async () => {
+    const onSummary = vi.fn();
+    const client = fakeClient([
+      {
+        links: [
+          {
+            shareId: 'shr_a',
+            mode: 'view',
+            url: null,
+            status: 'revocation-pending',
+            expiresAt: null
+          }
+        ],
+        needsConfirmation: false,
+        retired: [],
+        problem: 'A revoked link may still open for visitors.'
+      }
+    ]);
+    render(
+      <EncryptedShareLinks
+        projectId="proj_x"
+        client={client}
+        onSummary={onSummary}
+      />
+    );
+    await waitFor(() =>
+      expect(onSummary).toHaveBeenLastCalledWith({
+        count: 1,
+        attention: true,
+        problem: 'A revoked link may still open for visitors.'
+      })
+    );
+  });
+
+  it('keeps a card open, and focus on its Revoke, when revoking is cancelled after another card opened', async () => {
+    const client = fakeClient([active]);
+    const user = userEvent.setup();
+    render(<EncryptedShareLinks projectId="proj_x" client={client} />);
+    await screen.findByText(/^Active until /);
+    await openCard('View only link', user);
+    await user.click(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    );
+    await openCard('Tweak link', user);
+    await user.click(screen.getByRole('button', { name: 'Keep link' }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Revoke View only link' })
+      ).toHaveFocus()
+    );
+  });
+
   it('reports the link count, and a link that needs the owner', async () => {
     const onSummary = vi.fn();
     const client = fakeClient([{ ...active, needsConfirmation: true }]);
@@ -883,7 +935,11 @@ describe('EncryptedShareLinks tab summary', () => {
       />
     );
     await waitFor(() =>
-      expect(onSummary).toHaveBeenLastCalledWith({ count: 2, attention: true })
+      expect(onSummary).toHaveBeenLastCalledWith({
+        count: 2,
+        attention: true,
+        problem: null
+      })
     );
     // Nothing is reported before the links are known.
     expect(onSummary).not.toHaveBeenCalledWith(
