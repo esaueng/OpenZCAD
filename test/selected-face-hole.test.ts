@@ -212,7 +212,7 @@ describe('selected-face exact hole proposals', { timeout: 120_000 }, () => {
       (face) => face.geometry?.surfaceType === 'cylinder'
     )!;
     const axis = bore.geometry!.axisStart!;
-    const anchor = top.geometry!.centroid!;
+    const anchor = top.geometry!.outerCentroid!;
     expect(axis.x).toBeCloseTo(anchor.x + 2, 6);
     expect(axis.y).toBeCloseTo(anchor.y - 5, 6);
   });
@@ -368,8 +368,10 @@ describe('selected-face exact hole proposals', { timeout: 120_000 }, () => {
       proposalFor('Drill a hole')
     );
     expect(commands.map((command) => command.kind)).toEqual(['feature.hole']);
+    // M01 (schema v150): measured from the face's outer boundary, as the
+    // manual Hole tool measures a new hole.
     expect(commands[0]!.payload).toMatchObject({
-      positionAnchor: 'centroid',
+      positionAnchor: 'outer-centroid',
       style: 'simple',
       depthMode: 'through'
     });

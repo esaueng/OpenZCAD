@@ -65,6 +65,11 @@ export type AssemblyPlaybackState =
       sweepS: number;
       /** performance.now() at start, ms. */
       startedAtMs: number;
+      /**
+       * Repeating sweeps only: stop after this many cycles, finishing on the
+       * saved pose. Absent plays until paused (the Play control's default).
+       */
+      cycles?: number;
     }
   | {
       kind: 'study';
@@ -380,7 +385,8 @@ export const assemblyRuntime = {
     jointId: string,
     dof: number,
     mode: AssemblyPlayback,
-    sweepS: number
+    sweepS: number,
+    cycles?: number
   ): void {
     patch({
       playback: {
@@ -389,7 +395,8 @@ export const assemblyRuntime = {
         dof,
         mode,
         sweepS,
-        startedAtMs: performance.now()
+        startedAtMs: performance.now(),
+        ...(cycles !== undefined ? { cycles } : {})
       },
       selectedJointId: jointId
     });

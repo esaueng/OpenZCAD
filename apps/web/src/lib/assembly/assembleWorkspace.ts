@@ -38,6 +38,12 @@ import {
  * one command path, so undo, permissions and sync treat it like any edit.
  */
 
+/** A sample's opening demonstration: a few sweeps, then paused. */
+export interface InitialPlayback {
+  mode: 'ping-pong';
+  cycles: number;
+}
+
 /** Runs one command through the app; false when it was refused or failed. */
 export type AssemblyExecute = (command: AnyCommand) => boolean;
 
@@ -45,8 +51,11 @@ export interface AssembleWorkspaceApp {
   document: ProjectDocument | null;
   /** Applied only when opening a project, before the user chooses a selection. */
   initialJointId?: string;
-  /** Start only on project open, using the normal transient playback engine. */
-  initialPlayback?: 'ping-pong';
+  /**
+   * Start only on project open, using the normal transient playback engine,
+   * for a fixed number of cycles: an opened sample must not redraw forever.
+   */
+  initialPlayback?: InitialPlayback;
   execute: AssemblyExecute;
   onStatus(message: string): void;
 }
@@ -245,7 +254,8 @@ export function removeAssemblyJoint(
 /** Plays the selected joint, or pauses it when it is the one playing. */
 export function toggleJointPlayback(
   app: AssembleWorkspaceApp,
-  jointId: string
+  jointId: string,
+  cycles?: number
 ): boolean {
   const set = app.document?.assembly;
   const saved = set?.joints.find((j) => j.id === jointId);
@@ -264,7 +274,13 @@ export function toggleJointPlayback(
     return false;
   }
   const prefs = getAnimatePrefs();
-  assemblyRuntime.startJointSweep(jointId, dof, prefs.mode, prefs.sweepS);
+  assemblyRuntime.startJointSweep(
+    jointId,
+    dof,
+    prefs.mode,
+    prefs.sweepS,
+    cycles
+  );
   return true;
 }
 
@@ -384,8 +400,12 @@ export function useAssembleWorkspace(
         getAssemblyRuntime().active &&
         !solveAssembly(document.assembly).unsolved.has(initialJointId)
       ) {
-        setAnimatePrefs({ mode: initialPlayback });
-        toggleJointPlayback(latest.current, initialJointId);
+        setAnimatePrefs({ mode: initialPlayback.mode });
+        toggleJointPlayback(
+          latest.current,
+          initialJointId,
+          initialPlayback.cycles
+        );
       }
     }
   }, [projectId]);

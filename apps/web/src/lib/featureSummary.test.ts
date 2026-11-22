@@ -253,6 +253,22 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('R 1–2.5 mm');
+    // M03 (v151): a per-corner fillet reads its corners' range.
+    expect(
+      featureValueSummary(
+        feature({
+          featureKind: 'fillet',
+          radius: 1,
+          endRadius: 1,
+          vertexRadii: [
+            { edge: 0, end: 0, radius: 0.5 },
+            { edge: 0, end: 1, radius: 'r' }
+          ]
+        }),
+        { r: 3 },
+        'mm'
+      )
+    ).toBe('R 0.5–3 mm by corner');
     expect(
       featureValueSummary(
         feature({ featureKind: 'chamfer', distance: 1.5, angleDeg: 30 }),
