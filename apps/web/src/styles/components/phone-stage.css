@@ -52,8 +52,8 @@
   }
 
   /* The short set. Everything else in the viewer bar's View group, Free
-     values, and the layout menu and the activity log under the panels'
-     buttons wait behind the toggle. */
+     values, and the layout menu under the panels' buttons wait behind the
+     toggle. */
   .instrument-rail:not(:has(.rail-more-toggle[aria-expanded='true']))
     .rail-group[aria-label='Edit']
     > :is(.rail-divider, [aria-label='Free values']),
@@ -73,9 +73,8 @@
     display: none;
   }
 
-  /* Opened, the whole rail in three columns: twelve instruments and seven
-     panel controls are 339px tall, which the shortest of these stages
-     holds. The dividers would each take a row of their own. */
+  /* Three columns keep the expanded rail within the shortest phone
+     stages. The dividers would each take a row of their own. */
   .workspace.column-layout {
     --rail-open-w: calc(44px * 3 + 2px * 2 + 8px);
   }

@@ -8,11 +8,7 @@ import {
   STATUS_CLOCK_STEP_MS,
   STATUS_LIFETIME_MS
 } from '../lib/statusLifetime';
-import {
-  ActivityLogButton,
-  ViewportDockExtras,
-  WorkspaceReadout
-} from './WorkspaceReadout';
+import { ViewportDockExtras, WorkspaceReadout } from './WorkspaceReadout';
 
 const SUMMARY = {
   prompt: 'Click a body, face, or edge · Shift+Click adds to selection',
@@ -1283,26 +1279,11 @@ describe('ViewportDockExtras', () => {
     expect(screen.getByTitle('Sketch snap: 1 mm')).toHaveTextContent(
       'Snap 1 mm'
     );
-    // Q is the filter's only control now; the log's button lives on the
-    // instrument rail.
     expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('says nothing with no sketch open', () => {
     const { container } = render(<ViewportDockExtras snap={null} />);
     expect(container.textContent).toBe('');
-  });
-});
-
-describe('ActivityLogButton', () => {
-  it('is a rail button that opens the log in Settings', async () => {
-    const user = userEvent.setup();
-    const onOpenLog = vi.fn();
-    render(<ActivityLogButton onOpenLog={onOpenLog} />);
-    const button = screen.getByRole('button', { name: 'Open activity log' });
-    expect(button).toHaveClass('rail-button');
-    expect(button).toHaveAttribute('aria-haspopup', 'dialog');
-    await user.click(button);
-    expect(onOpenLog).toHaveBeenCalledTimes(1);
   });
 });

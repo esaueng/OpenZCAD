@@ -12,6 +12,7 @@ import {
   stubApi,
   MODEL_ONLY,
   expectBodyCount,
+  openActivityLogFromSettings,
   waitForStillViewport
 } from './openzcad-fixtures';
 
@@ -414,11 +415,7 @@ for (const completed of [true, false]) {
         // the Activity log keeps the full refusal.
         await page.keyboard.press('Escape');
         await expect(notice).toHaveCount(0);
-        await page
-          .getByRole('button', { name: /^Open activity log/ })
-          .first()
-          .click();
-        const log = page.getByRole('region', { name: 'Activity log' });
+        const log = await openActivityLogFromSettings(page);
         await expect(log).toContainText(refusalText);
         await expect(log.locator('ol')).toBeVisible();
         await testInfo.attach('refusal-after-deselect', {

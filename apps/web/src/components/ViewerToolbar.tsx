@@ -864,7 +864,7 @@ export function ViewerToolbar({
           description={
             moreShown
               ? 'Back to the short rail'
-              : 'Measure, grid, projection, orbit, section, display, views, panel layout and the activity log'
+              : 'Measure, grid, projection, orbit, section, display, views and panel layout'
           }
         >
           <button

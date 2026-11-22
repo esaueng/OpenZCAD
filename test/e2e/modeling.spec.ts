@@ -8,6 +8,7 @@ import {
   expectBodyCount,
   expectConsumedBodyCount,
   locateEdge,
+  openActivityLogFromSettings,
   openAssistant,
   promptField,
   revealModelPanel,
@@ -2887,10 +2888,8 @@ test('refuses an unparseable STEP file without leaving a feature behind', async 
   await expect(page.getByRole('region', { name: 'File import' })).toContainText(
     guidance
   );
-  await page.getByRole('button', { name: /^Open activity log/ }).click();
-  await expect(
-    page.getByRole('region', { name: 'Activity log' })
-  ).toContainText('parse error: entity #999999 not found');
+  const log = await openActivityLogFromSettings(page);
+  await expect(log).toContainText('parse error: entity #999999 not found');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('contentinfo')).not.toContainText(
     'Imported editable STEP solid'

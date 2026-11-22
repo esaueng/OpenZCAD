@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode
 } from 'react';
-import { Info, Magnet, ScrollText } from 'lucide-react';
+import { Info, Magnet } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import { usePacedStatus } from '../hooks/usePacedStatus';
@@ -17,7 +17,6 @@ import {
 } from '../lib/statusLifetime';
 import { WORKSPACE_SAVE_STATE_PRESENTATION } from '../lib/workspaceSaveStatePresentation';
 import type { StatusTone } from './StatusActivityLog';
-import { Tooltip } from './Tooltip';
 
 /**
  * A message worth going back to the log for: a warning, or a refusal worded
@@ -537,8 +536,7 @@ export function WorkspaceReadout({
         <button
           type="button"
           className={`workspace-toast-body${quiet ? ' quiet' : ''}`}
-          // Faded out, it was an invisible tab stop that opened the log. The
-          // rail's log button stays the keyboard path.
+          // Keep the toast out of the tab order while it is faded out.
           tabIndex={shown ? undefined : -1}
           title={
             quiet
@@ -626,37 +624,6 @@ export function WorkspaceReadout({
         </div>
       </footer>
     </>
-  );
-}
-
-interface ActivityLogButtonProps {
-  /** Opens Settings › Activity log. */
-  onOpenLog(): void;
-}
-
-/**
- * The activity log's button, on the instrument rail with the other panels.
- * It used to close the bottom-left readout, which made that island as wide
- * as the column for one chip and one icon; here it sits with Objects, History
- * and Parameters, which is what it is: a panel about the model.
- */
-export function ActivityLogButton({ onOpenLog }: ActivityLogButtonProps) {
-  return (
-    <Tooltip
-      label="Activity log"
-      description="Every status message and warning this session"
-    >
-      <button
-        type="button"
-        className="rail-button"
-        aria-label="Open activity log"
-        aria-haspopup="dialog"
-        onClick={onOpenLog}
-      >
-        {/* Not the clock: that is rollback and Restore, one rail up from here. */}
-        <ScrollText size={16} aria-hidden="true" />
-      </button>
-    </Tooltip>
   );
 }
 
