@@ -25689,7 +25689,8 @@ export function App() {
     }
     if (
       draft.kind === 'offset' &&
-      !(typeof storedValue === 'string' || storedValue > 0)
+      // An expression is judged by its value too: `1 - 3` is not a distance.
+      !(evaluatedValue > 0)
     ) {
       setStatus(
         'An offset distance is positive; its side stays with each copy.'
@@ -26098,7 +26099,8 @@ export function App() {
           sketch.constraints?.some(({ data }) => {
             const value =
               data.constraintKind === 'distance' ||
-              data.constraintKind === 'radius'
+              data.constraintKind === 'radius' ||
+              data.constraintKind === 'offset'
                 ? data.value
                 : data.constraintKind === 'angle'
                   ? data.valueDeg

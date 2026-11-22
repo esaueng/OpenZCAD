@@ -7,7 +7,8 @@ import {
 import {
   createProjectDocument,
   findSketch,
-  normalizeDocument
+  normalizeDocument,
+  rewriteNodeExpressions
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -916,6 +917,108 @@ describe('S05 Offset on the pinned kernel', () => {
         schemaVersion: 145 as typeof saved.schemaVersion
       })
     ).toThrow(/Sketch offset dimensions/);
+  });
+
+  it('refuses a round copy on the wrong side of its source', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 5 }
+    ]);
+    const [circle] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, circle, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    const copy = fixture.sketch().objectIds.map(String).at(-1)!;
+    fixture.constrain(lock(circle, 'center', 0, 0));
+    fixture.constrain({
+      constraintKind: 'radius',
+      objectId: circle as EntityId,
+      value: 5
+    });
+    expectGood(await fixture.solve());
+    // The copy edited inside: radius 4 is 1 from the source too, on the
+    // side the relation does not record.
+    const inside = structuredClone(fixture.manager.document);
+    (
+      inside.nodes[copy as EntityId] as unknown as {
+        data: Record<string, number>;
+      }
+    ).data.radius = 4;
+    const held = await adapter.solveSketch(inside, fixture.sketchId, {
+      anchor: { objectIds: [copy] }
+    });
+    expect(held.converged).toBe(false);
+    expect(held.classification).toBe('unsatisfied');
+  });
+
+  it('states a collinear chain corner once, so the offset adds no redundancy', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 5, y2: 0 },
+      { objectKind: 'line', x1: 5, y1: 0, x2: 10, y2: 0 }
+    ]);
+    const [a, b] = fixture.ids as [string, string];
+    fixture.constrain({
+      constraintKind: 'coincident',
+      a: { objectId: a as EntityId, point: 'end' },
+      b: { objectId: b as EntityId, point: 'start' }
+    });
+    expectGood(await fixture.solve());
+    await fixture.commit(
+      offsetPlan(fixture, a, 1, { join: 'miter', chain: true, side: 1 })
+    );
+    expect(
+      fixture
+        .sketch()
+        .constraints!.some(({ data }) => data.constraintKind === 'offset')
+    ).toBe(true);
+    expectGood(await fixture.solve());
+  });
+
+  it('offsets a full-turn arc to a circle and records the pair', async () => {
+    const fixture = sketchWith([
+      {
+        objectKind: 'arc',
+        centerX: 0,
+        centerY: 0,
+        radius: 5,
+        startAngleDeg: 0,
+        endAngleDeg: 360
+      }
+    ]);
+    const [arc] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, arc, 1, { join: 'miter', chain: false, side: 1 })
+    );
+    const offset = fixture
+      .sketch()
+      .constraints!.find(({ data }) => data.constraintKind === 'offset')!;
+    if (offset.data.constraintKind !== 'offset') throw new Error('no offset');
+    expect(offset.data.pairs).toHaveLength(1);
+    expect(offset.data.pairs[0]!.source).toBe(arc);
+    expectGood(await fixture.solve());
+  });
+
+  it('follows a renamed parameter and refuses an expression that is not positive', async () => {
+    const fixture = sketchWith([
+      { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }
+    ]);
+    const [line] = fixture.ids as [string];
+    await fixture.commit(
+      offsetPlan(fixture, line, 1, { join: 'miter', chain: false, side: 1 })
+    );
+    setOffset(fixture, 'gap');
+    const sketch = structuredClone(fixture.sketch());
+    rewriteNodeExpressions(sketch, (expression) =>
+      expression === 'gap' ? 'clearance' : expression
+    );
+    const renamed = sketch.constraints!.find(
+      ({ data }) => data.constraintKind === 'offset'
+    )!.data as { value: unknown };
+    expect(renamed.value).toBe('clearance');
+
+    setOffset(fixture, '1 - 3');
+    await expect(fixture.solve()).rejects.toThrow(
+      /offset distance is positive/
+    );
   });
 
   it('holds an offset circle concentric with its source through an edit', async () => {

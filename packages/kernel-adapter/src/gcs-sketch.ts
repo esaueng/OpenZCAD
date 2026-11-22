@@ -597,16 +597,82 @@ export function solveSketchWithGcs(
     const object = objects.find((entry) => entry.objectId === objectId);
     return object && 'radius' in object ? object.radius : 0;
   };
+  // Points joined by coincidences, so a chain's shared corner is one key.
+  const joinedTo = new Map<string, string>();
+  const joinKey = (ref: SketchPointRef): string => {
+    let key = `${ref.objectId}:${ref.point}`;
+    while (joinedTo.has(key)) key = joinedTo.get(key)!;
+    return key;
+  };
+  for (const { data } of constraints) {
+    if (data.constraintKind !== 'coincident') continue;
+    const a = joinKey(data.a);
+    const b = joinKey(data.b);
+    if (a !== b) joinedTo.set(a, b);
+  }
+  const lineAt = (objectId: EntityId) => {
+    const object = objects.find((entry) => entry.objectId === objectId);
+    return object?.kind === 'line' ? object : null;
+  };
+  /** Whether two lines lie on one carrier, by their input geometry. */
+  const collinear = (a: EntityId, b: EntityId): boolean => {
+    const p = lineAt(a);
+    const q = lineAt(b);
+    if (!p || !q) return false;
+    const length = Math.hypot(p.x2 - p.x1, p.y2 - p.y1);
+    if (!(length > 0)) return false;
+    const off = (x: number, y: number) =>
+      Math.abs((p.x2 - p.x1) * (y - p.y1) - (p.y2 - p.y1) * (x - p.x1)) /
+      length;
+    const tolerance = 1e-9 * Math.max(1, length);
+    return off(q.x1, q.y1) <= tolerance && off(q.x2, q.y2) <= tolerance;
+  };
+  /** Each offset copy as the solve must leave it, read back afterwards. */
+  const offsetChecks: {
+    constraintId: string;
+    expected: number;
+    read: () => number | null;
+  }[] = [];
   const addOffsetRelation = (
     id: string,
     data: Extract<SketchConstraintData, { constraintKind: 'offset' }>
   ) => {
-    const value = Math.abs(resolveValue(data.value, 'distance'));
+    const value = resolveValue(data.value, 'distance');
+    if (!(value > 0)) {
+      throw new Error(
+        'An offset distance is positive; its side stays with each copy.'
+      );
+    }
+    // A chain's copies share their corners; where two sources lie on one
+    // carrier, the shared corner's distance from it is stated once.
+    const heldFrom = new Map<string, EntityId[]>();
     for (const { source, copy, side } of data.pairs) {
       const from = objectHandles(source);
       const to = objectHandles(copy);
       if (from.kind === 'line' && to.kind === 'line') {
         for (const end of ['start', 'end'] as const) {
+          const key = joinKey({ objectId: copy, point: end });
+          const earlier = heldFrom.get(key) ?? [];
+          const point = pointHandle({ objectId: copy, point: end });
+          offsetChecks.push({
+            constraintId: id,
+            expected: side * value,
+            read: () => {
+              const line = solvedObjects.find(
+                (entry) => entry.objectId === source
+              );
+              if (line?.kind !== 'line') return null;
+              const at = readPoint(point);
+              const length = Math.hypot(line.x2 - line.x1, line.y2 - line.y1);
+              return length > 0
+                ? ((line.x2 - line.x1) * (at.y - line.y1) -
+                    (line.y2 - line.y1) * (at.x - line.x1)) /
+                    length
+                : null;
+            }
+          });
+          if (earlier.some((other) => collinear(other, source))) continue;
+          heldFrom.set(key, [...earlier, source]);
           add(id, {
             type: 'pointLineDistance',
             point: pointHandle({ objectId: copy, point: end }),
@@ -688,6 +754,25 @@ export function solveSketchWithGcs(
         value: 0
       });
       add(id, { type: 'distance', a: onSource, b: onCopy, value });
+      // The ray runs both ways from the centre and the distance is
+      // unsigned: read the copy's signed reach past the source's radius.
+      offsetChecks.push({
+        constraintId: id,
+        expected: side * value,
+        read: () => {
+          const c = readPoint(centre);
+          const p = readPoint(onCopy);
+          const q = readPoint(onSource);
+          const sourceAt = solvedObjects.find(
+            (entry) => entry.objectId === source
+          );
+          if (!sourceAt || !('radius' in sourceAt)) return null;
+          const sameSide =
+            (p.x - c.x) * (q.x - c.x) + (p.y - c.y) * (q.y - c.y);
+          if (!(sameSide > 0)) return Number.NaN;
+          return Math.hypot(p.x - c.x, p.y - c.y) - sourceAt.radius;
+        }
+      });
     }
   };
 
@@ -1134,6 +1219,27 @@ export function solveSketchWithGcs(
           Math.max(patternMisses.get(constraintId) ?? 0, miss)
         );
       }
+    }
+  }
+  if (patternMisses.size > 0) classification = 'unsatisfied';
+
+  // S05 offsets: the equations leave each copy's side free; a copy on the
+  // wrong side, or at the wrong reach, fails its relation.
+  for (const check of offsetChecks) {
+    const actual = check.read();
+    if (actual === null) continue;
+    const miss = Number.isNaN(actual)
+      ? Infinity
+      : Math.abs(actual - check.expected);
+    const tolerance = 1e-7 * Math.max(1, Math.abs(check.expected));
+    if (miss > tolerance) {
+      patternMisses.set(
+        check.constraintId,
+        Math.max(
+          patternMisses.get(check.constraintId) ?? 0,
+          Number.isFinite(miss) ? miss : Math.abs(check.expected) * 2
+        )
+      );
     }
   }
   if (patternMisses.size > 0) classification = 'unsatisfied';

@@ -2604,12 +2604,12 @@ export function validateSketchConstraint(
           throw new Error('Each offset copy is a separate curve, held once.');
         }
         copies.add(copy);
-        if (
-          (sourceKind === 'line') !== (copyKind === 'line') ||
-          (sourceKind === 'circle') !== (copyKind === 'circle')
-        ) {
+        // A round pairs with a round: a full-turn arc offsets to a circle.
+        if ((sourceKind === 'line') !== (copyKind === 'line')) {
           throw new Error(
-            `An offset of a ${sourceKind} is a ${sourceKind} too.`
+            sourceKind === 'line'
+              ? 'An offset of a line is a line too.'
+              : `An offset of a ${sourceKind} is a circle or an arc.`
           );
         }
         if (side !== 1 && side !== -1) {

@@ -441,7 +441,8 @@ export function rewriteNodeExpressions(
       const data = constraint.data;
       if (
         data.constraintKind === 'distance' ||
-        data.constraintKind === 'radius'
+        data.constraintKind === 'radius' ||
+        data.constraintKind === 'offset'
       )
         fields(data, ['value'], rewrite, 'length');
       else if (data.constraintKind === 'angle')
