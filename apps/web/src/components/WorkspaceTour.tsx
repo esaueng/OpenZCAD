@@ -95,6 +95,7 @@ export function WorkspaceTour({
   onDismissRef.current = onDismiss;
   const cardRef = useRef<HTMLElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
   /**
    * The step's text scrolls in a card capped on a short phone (#1953). It
    * then takes the keyboard too: Safari gives a scroller no stop of its
@@ -206,6 +207,24 @@ export function WorkspaceTour({
   // the card rather than over its Next and Finish (UX-001).
   useStageFootClaim(cardRef, '--workspace-tour-claim', !finished && !!step);
 
+  // Folded by the workspace rather than by hand (a card on a phone, a
+  // window resized into a short phone's band), the card hides Next or the
+  // step with the keyboard on it: focus moves to Expand instead of being
+  // lost to the page (PR review).
+  useLayoutEffect(() => {
+    const card = cardRef.current;
+    const active = card?.ownerDocument.activeElement;
+    if (
+      minimized &&
+      card &&
+      active instanceof HTMLElement &&
+      card.contains(active) &&
+      active.closest('[hidden]') !== null
+    ) {
+      toggleRef.current?.focus();
+    }
+  }, [minimized]);
+
   useLayoutEffect(() => {
     const content = contentRef.current;
     if (!content || minimized) {
@@ -235,6 +254,7 @@ export function WorkspaceTour({
     >
       <header className="workspace-tour-head">
         <button
+          ref={toggleRef}
           type="button"
           className="icon-button"
           aria-label={

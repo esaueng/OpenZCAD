@@ -426,6 +426,24 @@ for (const { width, height } of [
     await expect.poll(() => reachable(next)).toBe(true);
     await expectOnScreen(page, next);
 
+    // The notice row stands just over the card, over an in-place command's
+    // bar too, lifted by the card alone (PR review: by the bar twice, a
+    // warning rose a whole bar's height higher, toward the top bar).
+    const noticeOverCard = async () => {
+      await waitForSurfacesToSettle(page, ['.workspace-tour']);
+      const notice = (await page.locator('.workspace-toast').boundingBox())!;
+      const over = (await tour.boundingBox())!;
+      expect(notice.y + notice.height).toBeLessThanOrEqual(over.y + 0.5);
+      expect(notice.y + notice.height).toBeGreaterThanOrEqual(over.y - 24);
+    };
+    await noticeOverCard();
+    await page.keyboard.press('b');
+    await expect(
+      page.getByRole('group', { name: 'Box command' })
+    ).toBeVisible();
+    await noticeOverCard();
+    await page.keyboard.press('Escape');
+
     // Opened by hand, it stays open on the next visit.
     await page.reload();
     await expect(

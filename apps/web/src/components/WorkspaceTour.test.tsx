@@ -93,6 +93,18 @@ describe('WorkspaceTour', () => {
     expect(onMinimizedChange).not.toHaveBeenCalled();
   });
 
+  it('moves focus to Expand when the workspace folds it under the keyboard', () => {
+    // A resize into a short phone's band, or a card on a phone, folds the
+    // card with Next focused: focus went to the page (PR review).
+    const props = { ...idle, onDismiss: vi.fn() };
+    const { rerender } = render(<WorkspaceTour {...props} minimized={false} />);
+    screen.getByRole('button', { name: 'Next' }).focus();
+    rerender(<WorkspaceTour {...props} minimized />);
+    expect(
+      screen.getByRole('button', { name: 'Expand modeling guide' })
+    ).toHaveFocus();
+  });
+
   it('opens on the create step and auto-advances as work happens', () => {
     const { rerender } = render(
       <WorkspaceTour {...idle} onDismiss={vi.fn()} />

@@ -337,6 +337,19 @@
         var(--lane-base) - var(--workspace-tour-claim, 0px) - var(--island-gap)
       );
   }
+
+  /* With an in-place command up the notices already stand on its bar
+     (quiet-stage.css), where the guide's foot is too: they lift by the
+     guide alone, not by the bar a second time (PR review). */
+  .workspace.column-layout
+    .viewer-area:has(.workspace-tour):has(.in-place-command)
+    :is(.workspace-toast, .activity-lane, .toast) {
+    translate: 0
+      calc(
+        var(--lane-base) + var(--in-place-command-h, 38px) -
+          var(--workspace-tour-claim, 0px)
+      );
+  }
 }
 
 /* The first-run tour on a phone held upright (I12, design review 13 Nov).
