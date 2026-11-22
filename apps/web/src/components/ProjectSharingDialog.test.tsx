@@ -7,7 +7,7 @@ import {
   within
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   createProjectDocument,
   frozenShareDocument
@@ -120,7 +120,7 @@ function shareLinkClient(): ProjectShareLinkClient {
       async (
         projectId: string,
         mode: 'tweak' | 'view',
-        _label?: string | null,
+        label?: string | null,
         _comments?: boolean,
         frozenDocument?: ProjectDocument
       ) => {
@@ -131,7 +131,7 @@ function shareLinkClient(): ProjectShareLinkClient {
           mode,
           createdAt,
           revokedAt: null,
-          label: null,
+          label: label ?? null,
           ...(frozenDocument
             ? { history: false as const, frozenAt: createdAt }
             : {})
@@ -169,6 +169,23 @@ function shareLinkClient(): ProjectShareLinkClient {
     }),
     fetchSharedProject: vi.fn(async () => null)
   };
+}
+
+/** The owner's Links tab, where share links are made and listed. */
+async function openLinks(
+  user: { click(element: Element): Promise<void> } = userEvent
+) {
+  await user.click(await screen.findByRole('tab', { name: /^Links/ }));
+}
+
+/** Opens a link's card, which holds its name, settings and actions. */
+async function openCard(
+  name: string | RegExp,
+  user: { click(element: Element): Promise<void> } = userEvent
+) {
+  await user.click(
+    await screen.findByRole('button', { name, expanded: false })
+  );
 }
 
 describe('ProjectSharingDialog', () => {
@@ -515,6 +532,178 @@ describe('ProjectSharingDialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it('splits people and links into tabs the arrow keys move between', async () => {
+    const links = shareLinkClient();
+    await links.createProjectShareLink('proj_tabs', 'view');
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_tabs"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        onClose={vi.fn()}
+      />
+    );
+    const people = await screen.findByRole('tab', { name: /^People/ });
+    const linksTab = screen.getByRole('tab', { name: /^Links/ });
+    expect(people).toHaveAttribute('aria-selected', 'true');
+    // The tab says how many links there are once they are listed.
+    await waitFor(() => expect(linksTab).toHaveTextContent(/^Links1$/));
+    expect(screen.getByRole('tabpanel', { name: /^People/ })).toBeVisible();
+    expect(
+      screen.queryByRole('region', { name: 'General access' })
+    ).not.toBeInTheDocument();
+
+    people.focus();
+    await user.keyboard('{ArrowRight}');
+    expect(linksTab).toHaveFocus();
+    expect(linksTab).toHaveAttribute('aria-selected', 'true');
+    expect(
+      screen.getByRole('region', { name: 'General access' })
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: /^View link · / })).toBeVisible();
+    // With a link listed, the new-link card waits behind New link.
+    expect(
+      screen.queryByRole('button', { name: 'Create link' })
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'New link' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'New link' })).toBeVisible();
+
+    linksTab.focus();
+    await user.keyboard('{ArrowLeft}');
+    expect(people).toHaveFocus();
+    expect(screen.getByRole('tabpanel', { name: /^People/ })).toBeVisible();
+  });
+
+  it('shows an encrypted link problem on the People tab it opens on', async () => {
+    const encryptedLinks: EncryptedShareLinkClient = {
+      list: vi.fn(async () => ({
+        links: [
+          {
+            shareId: 'shr_a',
+            mode: 'view' as const,
+            url: null,
+            status: 'revocation-pending' as const,
+            expiresAt: null
+          }
+        ],
+        needsConfirmation: false,
+        retired: [],
+        problem: 'A revoked link may still open for visitors.'
+      })),
+      create: vi.fn(),
+      revoke: vi.fn(),
+      confirm: vi.fn(),
+      reissue: vi.fn(),
+      subscribeRemovals: vi.fn(() => () => undefined)
+    };
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_problem"
+        role="owner"
+        encrypted
+        encryptedClient={{
+          list: vi.fn(async () => []),
+          invite: vi.fn(),
+          revoke: vi.fn(),
+          changeRole: vi.fn(),
+          remove: vi.fn(),
+          leave: vi.fn()
+        }}
+        encryptedShareLinkClient={encryptedLinks}
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    const people = await screen.findByRole('tabpanel', { name: /^People/ });
+    const warning = await within(people).findByRole('alert');
+    expect(warning).toHaveTextContent(
+      'A revoked link may still open for visitors.'
+    );
+    expect(
+      screen.getByRole('tab', { name: /needs attention/ })
+    ).toBeInTheDocument();
+    await user.click(
+      within(warning).getByRole('button', { name: 'Show links' })
+    );
+    expect(screen.getByRole('tab', { name: /^Links/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+  });
+
+  it('keeps a link with its configuration in the field when nothing can copy it', async () => {
+    const links = shareLinkClient();
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(
+      new Error('denied')
+    );
+    const execCommand = vi.fn(() => false);
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: execCommand
+    });
+    onTestFinished(() => {
+      delete (document as { execCommand?: unknown }).execCommand;
+    });
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_fallback"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={links}
+        configurations={[{ id: 'large', name: 'Large' }]}
+        onClose={vi.fn()}
+      />
+    );
+    await openLinks(user);
+    await user.click(
+      await screen.findByRole('button', { name: 'Create link' })
+    );
+    const url = await screen.findByLabelText('Share link');
+    await user.click(
+      screen.getByRole('button', {
+        name: 'Copy link opening on a configuration'
+      })
+    );
+    await user.click(screen.getByRole('menuitem', { name: 'Large' }));
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith('copy'));
+    expect(url).toHaveValue(
+      `${location.origin}/#share=${'a'.repeat(43)}&configuration=large`
+    );
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeVisible();
+  });
+
+  it('shows no tabs to someone who is not the owner', async () => {
+    render(
+      <ProjectSharingDialog
+        projectId="proj_member"
+        role="viewer"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      await screen.findByText(
+        'Only the project owner can manage members and invitations.'
+      )
+    ).toBeVisible();
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+  });
+
   it('mints a commenter link when visitors may comment (L08)', async () => {
     const base = createProjectDocument('Commenter links', owner);
     const links = shareLinkClient();
@@ -530,13 +719,14 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
+    await openLinks(user);
     const comments = await screen.findByRole('checkbox', {
       name: /Visitors can comment/
     });
     await user.click(comments);
     // The disclosure is read with the control, not only shown beside it.
     expect(comments).toHaveAccessibleDescription(
-      /They see every comment and sign theirs with a name\./
+      /Visitors see every comment and sign theirs with a name\./
     );
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     await waitFor(() =>
@@ -564,17 +754,17 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
+    await openLinks(user);
     const access = await screen.findByRole('radiogroup', {
       name: 'Link access'
     });
     // A plaintext link still defaults to Tweak.
     expect(within(access).getByRole('radio', { name: 'Tweak' })).toBeChecked();
     await user.click(within(access).getByRole('radio', { name: 'View' }));
-    expect(
-      screen.getByText(
-        'Visitors can look, measure and export. Links expire after 30 days.'
-      )
-    ).toBeVisible();
+    expect(access).toHaveAccessibleDescription(
+      'Visitors can look, measure and export.'
+    );
+    expect(screen.getByText(/Links expire after 30 days\./)).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Create link' }));
     await waitFor(() =>
       expect(links.createProjectShareLink).toHaveBeenCalledWith(
@@ -604,15 +794,21 @@ describe('ProjectSharingDialog', () => {
       />
     );
 
+    // People come first; links are one tab away.
+    expect(await screen.findByRole('tab', { name: /^People/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    await openLinks(user);
     expect(
       await screen.findByRole('button', { name: 'Create link' })
     ).toBeEnabled();
     expect(screen.getByText('Only invited people')).toBeVisible();
     expect(
-      screen.getByText(
-        'Visitors can also change parameters. Their changes stay with them. Links expire after 30 days.'
-      )
-    ).toBeVisible();
+      screen.getByRole('radiogroup', { name: 'Link access' })
+    ).toHaveAccessibleDescription(
+      'Visitors can also change parameters. Their changes stay with them.'
+    );
     expect(
       screen.queryByRole('button', { name: /Revoke share link/ })
     ).not.toBeInTheDocument();
@@ -639,11 +835,13 @@ describe('ProjectSharingDialog', () => {
       screen.getByText('Tweak link · shown once — copy it now.')
     ).toBeVisible();
     expect(screen.getByText('Anyone with a link · 1 active')).toBeVisible();
-    const row = screen
-      .getByRole('button', { name: /^Rename Tweak link · / })
-      .closest('li');
-    expect(row).toHaveTextContent('Tweak · Expires in 30d');
+    expect(
+      screen.getByRole('button', { name: /^Tweak link · / })
+    ).toHaveAccessibleDescription('Tweak · Expires in 30d');
+    // A plaintext link's address is shown once, so its card has no Copy.
+    expect(screen.getAllByRole('button', { name: /^Cop/ })).toHaveLength(1);
 
+    await openCard(/^Tweak link · /, user);
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })
     );
@@ -691,22 +889,41 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
+    await openLinks(user);
+    // The configuration is a choice made when copying, not a link setting.
+    expect(
+      screen.queryByRole('combobox', { name: 'Opens on' })
+    ).not.toBeInTheDocument();
     await user.click(
       await screen.findByRole('button', { name: 'Create link' })
     );
     const plain = `${location.origin}/#share=${'a'.repeat(43)}`;
     const url = await screen.findByLabelText('Share link');
-    const opensOn = screen.getByRole('combobox', { name: 'Opens on' });
-    expect(opensOn).toHaveValue('');
     expect(url).toHaveValue(plain);
-    await user.selectOptions(opensOn, 'Large');
-    expect(url).toHaveValue(`${plain}&configuration=large`);
-    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    const opensOn = screen.getByRole('button', {
+      name: 'Copy link opening on a configuration'
+    });
+    await user.click(opensOn);
+    const menu = screen.getByRole('menu', {
+      name: 'Copy a link that opens on'
+    });
+    expect(
+      within(menu).getByRole('menuitem', { name: 'The saved configuration' })
+    ).toHaveFocus();
+    await user.click(within(menu).getByRole('menuitem', { name: 'Large' }));
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith(`${plain}&configuration=large`)
     );
-    await user.selectOptions(opensOn, 'The saved configuration');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(url).toHaveValue(plain);
+    // Copy itself copies the link as saved.
+    await user.click(screen.getByRole('button', { name: /^Cop(y|ied)$/ }));
+    await waitFor(() => expect(writeText).toHaveBeenLastCalledWith(plain));
+    // Escape closes the menu, not the dialog.
+    await user.click(opensOn);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(opensOn).toHaveFocus();
   });
 
   it('names a new link, renames links in place, and clears a blank name', async () => {
@@ -730,58 +947,55 @@ describe('ProjectSharingDialog', () => {
       screen.getByRole('heading', { name: 'Share · Bracket rev C' })
     ).toBeVisible();
 
-    await user.click(
-      await screen.findByRole('button', { name: 'Create link' })
+    // The new link is named before it is made, in one request.
+    await openLinks(user);
+    await user.type(
+      await screen.findByRole('textbox', { name: 'Link name' }),
+      '  Supplier   review '
     );
-    const createdName = await screen.findByRole('textbox', {
-      name: 'New link name'
+    await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await waitFor(() =>
+      expect(links.createProjectShareLink).toHaveBeenCalledWith(
+        base.projectId,
+        'tweak',
+        'Supplier review'
+      )
+    );
+    expect(await screen.findByText('Supplier review is ready')).toBeVisible();
+    expect(links.renameProjectShareLink).not.toHaveBeenCalled();
+    const named = await screen.findByRole('button', {
+      name: 'Supplier review'
     });
-    await waitFor(() => expect(createdName).toBeEnabled());
-    await user.type(createdName, '  Supplier   review {Enter}');
+    expect(named).toHaveAccessibleDescription('Tweak · Expires in 30d');
+
+    // Its card holds the name field; Escape discards only the edit.
+    await openCard('Supplier review', user);
+    const field = screen.getByRole('textbox', { name: 'Link name' });
+    expect(field).toHaveValue('Supplier review');
+    await user.type(field, ' draft');
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(field).toHaveValue('Supplier review');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    await user.clear(field);
+    await user.type(field, 'Forum post');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
       expect(links.renameProjectShareLink).toHaveBeenCalledWith(
         base.projectId,
         'share_1',
-        'Supplier review'
+        'Forum post'
       )
     );
-    const named = await screen.findByRole('button', {
-      name: 'Rename Supplier review'
-    });
-    expect(named.closest('li')).toHaveTextContent(
-      /Tweak · created .* · Expires in 30d/
-    );
-
-    // Clicking the name opens the field; Escape cancels only the edit.
-    await user.click(named);
-    const field = screen.getByRole('textbox', { name: 'Link name' });
-    expect(field).toHaveFocus();
-    expect(field).toHaveValue('Supplier review');
-    await user.keyboard('{Escape}');
-    expect(onClose).not.toHaveBeenCalled();
     expect(
-      screen.getByRole('button', { name: 'Rename Supplier review' })
-    ).toBeVisible();
-    expect(links.renameProjectShareLink).toHaveBeenCalledTimes(1);
-
-    await user.click(
-      screen.getByRole('button', { name: 'Rename Supplier review' })
-    );
-    await user.clear(screen.getByRole('textbox', { name: 'Link name' }));
-    await user.type(
-      screen.getByRole('textbox', { name: 'Link name' }),
-      'Forum post'
-    );
-    await user.click(screen.getByRole('button', { name: 'Save' }));
-    expect(
-      await screen.findByRole('button', { name: 'Rename Forum post' })
+      await screen.findByRole('button', { name: 'Forum post', expanded: true })
     ).toBeVisible();
     expect(
       screen.getByRole('button', { name: 'Revoke share link Forum post' })
     ).toBeInTheDocument();
 
     // A blank name clears it back to the dated default.
-    await user.click(screen.getByRole('button', { name: 'Rename Forum post' }));
     await user.clear(screen.getByRole('textbox', { name: 'Link name' }));
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
@@ -792,7 +1006,7 @@ describe('ProjectSharingDialog', () => {
       )
     );
     expect(
-      await screen.findByRole('button', { name: /^Rename Tweak link · / })
+      await screen.findByRole('button', { name: /^Tweak link · / })
     ).toBeVisible();
   });
 
@@ -812,9 +1026,8 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
-    await user.click(
-      await screen.findByRole('button', { name: /^Rename Tweak link · / })
-    );
+    await openLinks(user);
+    await openCard(/^Tweak link · /, user);
     // maxLength keeps typed names within the limit; a pasted control
     // character is what the shared normalizer still refuses here.
     const field = screen.getByRole('textbox', { name: 'Link name' });
@@ -892,11 +1105,11 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
+    await openLinks(user);
     expect(
-      (
-        await screen.findByRole('button', { name: /^Rename View link · / })
-      ).closest('li')
-    ).toHaveTextContent('View · Expired');
+      await screen.findByRole('button', { name: /^View link · / })
+    ).toHaveAccessibleDescription('View · Expired');
+    await openCard(/^View link · /, user);
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })
     );
@@ -922,6 +1135,7 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
+    await openLinks();
     expect(
       await screen.findByText(/Save the source files for synthetic.step/)
     ).toBeVisible();
@@ -947,6 +1161,7 @@ describe('ProjectSharingDialog', () => {
         onClose={vi.fn()}
       />
     );
+    await openLinks(user);
     await user.click(
       await screen.findByRole('button', { name: 'Create link' })
     );
@@ -1288,16 +1503,20 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     expect(screen.queryByText(/^Added/)).not.toBeInTheDocument();
     // Share links are the encrypted ones (slice 5-10), never the plaintext
     // routes'; what the metadata route lists is still shown.
-    expect(
-      screen.getByRole('region', { name: 'Encrypted share links' })
-    ).toBeVisible();
+    // Listed (and kept up) while the People tab is open.
     await waitFor(() =>
       expect(encryptedLinks.list).toHaveBeenCalledWith('proj_encrypted')
     );
+    expect(screen.queryByText('pending@example.com')).toBeVisible();
+    await openLinks(user);
+    expect(
+      screen.getByRole('region', { name: 'Encrypted share links' })
+    ).toBeVisible();
     expect(screen.getAllByRole('button', { name: 'Create link' })).toHaveLength(
       1
     );
-    expect(screen.queryByText('pending@example.com')).toBeVisible();
+    expect(screen.queryByText('pending@example.com')).not.toBeVisible();
+    await user.click(screen.getByRole('tab', { name: /^People/ }));
     expect(sharingClient.getProjectSharing).toHaveBeenCalled();
     expect(links.listProjectShareLinks).not.toHaveBeenCalled();
     expect(links.createProjectShareLink).not.toHaveBeenCalled();
@@ -1647,11 +1866,13 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
         onClose={vi.fn()}
       />
     );
+    await openLinks();
     expect(
       await screen.findByRole('button', { name: 'Create link' })
     ).toBeVisible();
     await waitFor(() => expect(links.listProjectShareLinks).toHaveBeenCalled());
     expect(encrypted.list).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('tab', { name: /^People/ }));
     expect(
       await screen.findByRole('combobox', { name: /Role for/ })
     ).toBeVisible();
@@ -1665,7 +1886,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
       { name, stepText: 'ISO-10303-21;', color: null, opacity: null }
     ]);
 
-  function open(
+  async function open(
     links: ProjectShareLinkClient,
     props: Partial<Parameters<typeof ProjectSharingDialog>[0]> = {}
   ) {
@@ -1682,12 +1903,13 @@ describe('ProjectSharingDialog links without history (L08)', () => {
         {...props}
       />
     );
+    await openLinks();
     return base;
   }
 
   it('includes history by default and offers no choice where a model cannot be frozen', async () => {
     const links = shareLinkClient();
-    const base = open(links);
+    const base = await open(links);
     await screen.findByRole('button', { name: 'Create link' });
     expect(
       screen.queryByRole('checkbox', { name: 'Include history' })
@@ -1704,7 +1926,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
   it('keeps today’s link when Include history stays ticked', async () => {
     const links = shareLinkClient();
     const onFreezeModel = vi.fn();
-    const base = open(links, { onFreezeModel });
+    const base = await open(links, { onFreezeModel });
     expect(
       await screen.findByRole('checkbox', { name: 'Include history' })
     ).toBeChecked();
@@ -1723,7 +1945,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     const user = userEvent.setup();
     let frozen: ProjectDocument | null = null;
     const onBeforeCreateShareLink = vi.fn();
-    const base = open(links, {
+    const base: ProjectDocument = await open(links, {
       onBeforeCreateShareLink,
       // A source file only on this device blocks a link to the project,
       // but a frozen model needs no file from the account.
@@ -1754,8 +1976,9 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     expect(frozen).not.toBeNull();
     // No save is awaited: the model comes from this browser.
     expect(onBeforeCreateShareLink).not.toHaveBeenCalled();
-    // The owner's list says so, and offers Update.
+    // The owner's list says so, and its card offers Update.
     expect(await screen.findByText(/View · No history, as of/)).toBeVisible();
+    await openCard(/^View link · /, user);
     expect(
       screen.getByRole('button', { name: /^Update .* to the current model$/ })
     ).toBeVisible();
@@ -1764,7 +1987,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
   it('makes no link when the model cannot be frozen', async () => {
     const links = shareLinkClient();
     const user = userEvent.setup();
-    open(links, {
+    await open(links, {
       onFreezeModel: vi.fn(async () => {
         throw new Error('This model has no solid body to share.');
       })
@@ -1783,7 +2006,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
     const links = shareLinkClient();
     const user = userEvent.setup();
     const models: ProjectDocument[] = [];
-    const base = open(links, {
+    const base: ProjectDocument = await open(links, {
       onFreezeModel: vi.fn(async () => {
         const next = frozenOf(base, `Plate v${models.length + 1}`);
         models.push(next);
@@ -1794,6 +2017,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
       await screen.findByRole('checkbox', { name: 'Include history' })
     );
     await user.click(screen.getByRole('button', { name: 'Create link' }));
+    await openCard(/^View link · /, user);
     await user.click(
       await screen.findByRole('button', {
         name: /^Update .* to the current model$/
@@ -1813,7 +2037,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
 
   it('offers no Update on a link that shares its history', async () => {
     const links = shareLinkClient();
-    const base = open(links, { onFreezeModel: vi.fn() });
+    const base = await open(links, { onFreezeModel: vi.fn() });
     await userEvent.click(
       await screen.findByRole('button', { name: 'Create link' })
     );
@@ -1823,7 +2047,7 @@ describe('ProjectSharingDialog links without history (L08)', () => {
         'tweak'
       )
     );
-    await screen.findByRole('list', { name: /share links/i }).catch(() => null);
+    await openCard(/^Tweak link · /);
     expect(
       screen.queryByRole('button', { name: /to the current model$/ })
     ).not.toBeInTheDocument();

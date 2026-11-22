@@ -58,16 +58,23 @@ for (const { width, hasTouch } of [
     await alice.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await alice.getByRole('button', { name: /Open project sharing/ }).click();
+    await dialog.getByRole('tab', { name: /^Links/ }).click();
     const copy = links.getByRole('button', { name: 'Copy View only link' });
     await expect(copy).toBeVisible({ timeout: SYNC_BUDGET_MS });
-    const revoke = links.getByRole('button', { name: 'Revoke View only link' });
     await alice.mouse.move(0, 0);
     // Copy stays discoverable for keyboard and pointer users alike.
     await expect(copy).toHaveCSS('opacity', '1');
+    // The link's card opens onto its actions.
+    await links
+      .getByRole('button', { name: 'View only link', exact: true })
+      .click();
+    const revoke = links.getByRole('button', { name: 'Revoke View only link' });
+    await alice.mouse.move(0, 0);
+    await expect(revoke).toHaveCSS('opacity', '1');
     if (!hasTouch) {
       await copy.hover();
       await expect(copy).toHaveCSS('opacity', '1');
-      await copy.press('Tab');
+      await revoke.focus();
       await alice.mouse.move(0, 0);
       await expect(revoke).toBeFocused();
       await expect(revoke).toHaveCSS('opacity', '1');
@@ -79,7 +86,9 @@ for (const { width, hasTouch } of [
     ).toBeFocused();
     expect(
       server.db
-        .prepare('SELECT COUNT(*) AS revoked FROM e2ee_share_links WHERE revoked_at IS NOT NULL')
+        .prepare(
+          'SELECT COUNT(*) AS revoked FROM e2ee_share_links WHERE revoked_at IS NOT NULL'
+        )
         .get()
     ).toEqual({ revoked: 0 });
     await links.getByRole('button', { name: 'Revoke link' }).click();
