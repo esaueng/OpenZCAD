@@ -148,6 +148,20 @@ export function formatDocumentLength(
 }
 
 /**
+ * The decimals that tell two hundredths of the stored unit apart once
+ * multiplied by `scale` (the stored-to-shown factor): 2 when the document is
+ * shown in its own unit, 4 for millimetres shown in inches, 5 in metres.
+ * `formatDocumentHundredths` and the offset chip's limit
+ * (`offsetLimitChipText`) share it, so the keypad and the chip state one
+ * limit the same way.
+ */
+export function storedHundredthDecimals(scale: number): number {
+  const resolution = Math.abs(0.01 * scale);
+  if (!Number.isFinite(resolution) || resolution === 0) return 2;
+  return Math.min(12, Math.max(0, Math.ceil(-Math.log10(resolution) - 1e-9)));
+}
+
+/**
  * A stored-unit length that stands for a hundredth of the stored unit (an
  * offset, its limit, a Keep value, a Total) in the document's display unit,
  * with just the decimals that tell two such hundredths apart: 17.6 and
@@ -161,11 +175,7 @@ export function formatDocumentHundredths(
 ): string {
   const stored = document?.units ?? 'mm';
   const shown = document ? documentDisplayUnits(document) : stored;
-  const resolution = Math.abs(convertLength(0.01, stored, shown));
-  const decimals = Math.min(
-    12,
-    Math.max(0, Math.ceil(-Math.log10(resolution) - 1e-9))
-  );
+  const decimals = storedHundredthDecimals(convertLength(1, stored, shown));
   const number = Number(convertLength(value, stored, shown).toFixed(decimals));
   const text = String(Object.is(number, -0) ? 0 : number);
   return document ? `${text} ${displayLengthName(shown)}` : text;

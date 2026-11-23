@@ -1420,8 +1420,14 @@
    Technical details. Placing the card around a guide whose height and
    corner change with every breakpoint followed each resize a frame late;
    standing aside while the user reads why holds at every size. The guide
-   comes back when the explanation closes. */
-.viewer-area:has(.edit-refusal.is-bar.is-open) .workspace-tour {
+   comes back when the explanation closes.
+   The exact-entry keypad says its refusal in place (`.is-control`), with
+   Why? showing as soon as the entry is refused: the keypad stands wherever
+   its chip put it, and after a resize the guide covered the Why? button and
+   then its explanation. The keypad and the guide share the viewer area, so
+   the guide stands aside while the keypad's refusal is up at all. */
+.viewer-area:has(.edit-refusal.is-bar.is-open) .workspace-tour,
+.viewer-area:has(.numeric-keypad .edit-refusal.is-control) .workspace-tour {
   visibility: hidden;
 }
 

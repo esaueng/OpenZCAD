@@ -415,6 +415,61 @@ describe('a handle chip under a model panel', () => {
     expect(after.bottom).toBeLessThanOrEqual(402);
     expect(after.top).toBeGreaterThanOrEqual(102);
   });
+
+  /** The canvas's rect as the viewer reads it: sides are getters. */
+  class StageRect {
+    constructor(
+      private readonly x: number,
+      private readonly y: number,
+      private readonly w: number,
+      private readonly h: number
+    ) {}
+    get left() {
+      return this.x;
+    }
+    get top() {
+      return this.y;
+    }
+    get right() {
+      return this.x + this.w;
+    }
+    get bottom() {
+      return this.y + this.h;
+    }
+  }
+
+  it('keeps a phone pair on the stage given a DOMRect-like stage', () => {
+    // The offset pair clamped to a phone's left edge, under Objects: a
+    // spread of the canvas's DOMRect lost its left side, and the pair was
+    // dodged off the stage (Offset ▾ at x −79).
+    const phone = new StageRect(0, 0, 390, 844);
+    const objects = { left: 60, top: 406, right: 330, bottom: 635 };
+    const pair = { left: 4, top: 519, right: 135, bottom: 547 };
+    const after = moved(pair, chipPanelDodge(pair, [objects], phone, 60));
+    expect(after.left).toBeGreaterThanOrEqual(0);
+    expect(after.right).toBeLessThanOrEqual(390);
+    expect(covered(after, objects)).toBe(false);
+  });
+
+  it('never dodges below the foot a pill is clamped above', () => {
+    // Below the folded guide is under the floor `place` holds the pills
+    // above: clamped back, the next frame measured from the wrong start and
+    // the pair swung above Objects and back every frame.
+    const phone = new StageRect(0, 0, 390, 844);
+    const panels = [
+      { left: 10, top: 244, right: 50, bottom: 702 },
+      { left: 60, top: 596, right: 330, bottom: 664 },
+      { left: 60, top: 357, right: 330, bottom: 586 }
+    ];
+    const pair = { left: 4, top: 519, right: 135, bottom: 547 };
+    const after = moved(
+      pair,
+      chipPanelDodge(pair, panels, phone, 60, null, 675)
+    );
+    expect(after.bottom).toBeLessThanOrEqual(675);
+    expect(after.left).toBeGreaterThanOrEqual(0);
+    for (const panel of panels) expect(covered(after, panel)).toBe(false);
+  });
 });
 
 describe('a refused offset that names its limit', () => {
@@ -538,6 +593,55 @@ describe('a refused face offset read as a Total', () => {
       'A neighbouring face would shrink to nothing once the face moves 0.748 in (a Total of 0.1969 in). Try a larger Total.'
     );
     expect(inches.keepLabel).toBe('Keep Total 0.1972 in');
+  });
+
+  it('has the chip state the limit as the keypad does, in inches', () => {
+    // The collapse block's Front face, stored in millimetres and shown in
+    // inches: the keypad says "below 0.6929 in" (17.6 mm), and the chip
+    // beside it read "min 0.693 in" from three significant figures.
+    const scale = 1 / 25.4;
+    const limit = -6.400000000000002;
+    const keypad = offsetRefusalInTotal(
+      {
+        message:
+          'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.',
+        limit
+      },
+      -6.39,
+      {
+        baseline: 24,
+        sense: 1,
+        formatLength: (value) =>
+          formatDocumentHundredths({ units: 'mm', displayUnits: 'inch' }, value)
+      }
+    );
+    expect(keypad.error.headline).toBe('Total can’t go below 0.6929 in here');
+    const chip = {
+      limit: limit * scale,
+      sense: 1,
+      units: 'in',
+      precise: true,
+      scale
+    };
+    expect(
+      offsetLimitChipText({ ...chip, mode: 'total', span: 24 * scale })
+    ).toBe('min 0.6929 in');
+    // How far the face can move: 6.4 mm, as the keypad's "moves 0.252 in"
+    // resolves it.
+    expect(offsetLimitChipText({ ...chip, mode: 'offset', span: null })).toBe(
+      `max ${formatDocumentHundredths({ units: 'mm', displayUnits: 'inch' }, 6.4)}`
+    );
+    // Shown in its own unit the chip keeps its hundredths.
+    expect(
+      offsetLimitChipText({
+        limit,
+        sense: 1,
+        units: 'mm',
+        mode: 'total',
+        span: 24,
+        scale: 1
+      })
+    ).toBe('min 17.6 mm');
   });
 
   it('keeps the bound and Keep apart in metres (the chip reads min 0.0176 m)', () => {

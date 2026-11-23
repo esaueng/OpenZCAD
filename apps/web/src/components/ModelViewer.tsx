@@ -311,6 +311,7 @@ import { isBehindCamera } from '../lib/cameraDepth';
 import { commentPlacementTarget } from '../lib/commentPlacement';
 import {
   chipPanelDodge,
+  EDGE_CHIP_MARGIN_PX,
   edgeChipCenterX,
   laneLeavesRoom,
   pinChipPairStart,
@@ -2473,6 +2474,17 @@ function stepRetiringRigs(retiring: DragRig[], dtMs: number): boolean {
 
 /** Screen gap between a pin's centre and its value chip. */
 const PIN_CHIP_GAP_PX = 44;
+
+/**
+ * What a handle's value chip and its tag come out from under, besides the
+ * right lane: the model panels, the tool column's rail at the stage's left
+ * edge (a pick's face tools), and the modeling guide. The column itself
+ * spans the stage's height without taking presses, so its children are what
+ * stand there. Clamped to the stage's left edge at a phone width, the
+ * offset pair sat under the face tools, which took the press meant for the
+ * value, and below Objects it sat under the folded guide.
+ */
+const HANDLE_CHIP_OBSTACLES = `${MODEL_PANEL_OBSTACLES}, .workspace-column-float > *, .workspace-tour`;
 
 /**
  * How far inside the right lane's edge a pin's value chip may start before
@@ -9061,7 +9073,9 @@ export function ModelViewer({
                     : spanShown * shownScaleRef.current,
                 sense: totalSense,
                 units: shownLabelRef.current,
-                precise: shownScaleRef.current !== 1
+                precise: shownScaleRef.current !== 1,
+                // The limit reads as the keypad's refusal says it.
+                scale: shownScaleRef.current
               })}`;
             }
           }
@@ -9131,7 +9145,7 @@ export function ModelViewer({
       const otherPanels = [
         ...(renderer.domElement
           .closest('.viewer-area')
-          ?.querySelectorAll<HTMLElement>(MODEL_PANEL_OBSTACLES) ?? [])
+          ?.querySelectorAll<HTMLElement>(HANDLE_CHIP_OBSTACLES) ?? [])
       ]
         .filter((element) => !element.closest('[inert]'))
         .map((element) => ({ element, rect: element.getBoundingClientRect() }))
@@ -9162,7 +9176,14 @@ export function ModelViewer({
               laneLeft === null ? null : laneLeft + stageRect.left,
               renderer.domElement.ownerDocument
                 .querySelector('.app-shell > .topbar')
-                ?.getBoundingClientRect().bottom ?? null
+                ?.getBoundingClientRect().bottom ?? null,
+              // No lower than `place` lets a pill stand: a dodge below the
+              // floor was clamped back, so the next frame measured the pair
+              // from the wrong start and swung it above Objects and back
+              // every frame.
+              footTop === null
+                ? null
+                : stageRect.top + footTop - COMMAND_CHIP_MARGIN_PX
             )
           : { dx: 0, dy: 0 };
       const place = (element: HTMLElement, x: number, y: number) =>
@@ -9757,6 +9778,18 @@ export function ModelViewer({
               radiusLabelChip.hidden = false;
               screen = { x: x + width - valueWidth / 2, y };
             } else {
+              // The dodge was measured on last frame's pills; after a resize
+              // the pair's start moves under it. The pair, dodged, stays on
+              // the stage, and the dodge kept is the move made, so the next
+              // frame measures from where the pair really stands.
+              const dodged = Math.max(
+                EDGE_CHIP_MARGIN_PX,
+                Math.min(
+                  start + chipDodge.dx,
+                  stageRect.width - EDGE_CHIP_MARGIN_PX - width
+                )
+              );
+              chipDodge = { ...chipDodge, dx: dodged - start };
               place(chip, start + tagWidth + 2 + valueWidth / 2, screen.y);
               place(radiusLabelChip, start + tagWidth, screen.y);
             }

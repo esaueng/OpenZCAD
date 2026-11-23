@@ -1,5 +1,6 @@
 import { formatNumber } from './model';
 import { roundShownLength } from './liveLabels';
+import { storedHundredthDecimals } from './displayUnits';
 import {
   selectionCalloutObstacleShift,
   type ScreenRect
@@ -199,13 +200,28 @@ export function offsetLimitChipText(input: {
   sense: number;
   units: string;
   precise?: boolean;
+  /**
+   * I03: the stored-to-shown factor the limit and span were converted by.
+   * A converted limit then keeps the decimals that resolve a hundredth of
+   * the stored unit (`storedHundredthDecimals`), as the keypad's refusal
+   * and Keep say it (`formatDocumentHundredths`): three significant figures
+   * read "min 0.693 in" beside the keypad's "minimum 0.6929 in".
+   */
+  scale?: number;
 }): string {
-  const { limit, mode, span, sense, units, precise } = input;
+  const { limit, mode, span, sense, units, precise, scale } = input;
+  const decimals =
+    scale !== undefined && scale !== 1 ? storedHundredthDecimals(scale) : null;
+  const shown = (value: number) => {
+    if (decimals === null) return shownNumber(reading(value, precise), precise);
+    const number = Number(value.toFixed(decimals));
+    return String(Object.is(number, -0) ? 0 : number);
+  };
   if (mode === 'total' && span !== null) {
-    const bound = reading(span + sense * limit, precise);
-    return `${sense * limit < 0 ? 'min' : 'max'} ${shownNumber(bound, precise)} ${units}`;
+    const bound = span + sense * limit;
+    return `${sense * limit < 0 ? 'min' : 'max'} ${shown(bound)} ${units}`;
   }
-  return `max ${shownNumber(reading(Math.abs(limit), precise), precise)} ${units}`;
+  return `max ${shown(Math.abs(limit))} ${units}`;
 }
 
 /**
@@ -271,7 +287,7 @@ function sameOffsetValue(a: number, b: number): boolean {
 }
 
 /** The gap kept between an edge chip and the right lane or the stage edge. */
-const EDGE_CHIP_MARGIN_PX = 8;
+export const EDGE_CHIP_MARGIN_PX = 8;
 
 /**
  * Where an edge rig's value chip centres horizontally: clear of the right
@@ -354,15 +370,19 @@ export function pinChipPairStart(input: {
  * the left dock. The right lane keeps its own rule (`edgeChipCenterX`, the
  * pin's swap to its other side), so while the stage has room left of the
  * lane no move here takes the chip into it. Nor does one take it above
- * `topbarBottom`: the top bar stands over the stage's top. A chip nothing
- * covers, or one no move inside the stage clears, stays where it is.
+ * `topbarBottom`: the top bar stands over the stage's top, or below
+ * `footBottom`, where the chip would be clamped back over what it dodged. A
+ * chip nothing covers, or one no move inside the stage clears, stays where
+ * it is.
  */
 export function chipPanelDodge(
   chip: ScreenRect,
   panels: readonly ScreenRect[],
   stage: ScreenRect,
   laneLeft: number | null,
-  topbarBottom: number | null = null
+  topbarBottom: number | null = null,
+  /** The lowest a pill's foot may stand (above a command's bar), if any. */
+  footBottom: number | null = null
 ): { dx: number; dy: number } {
   if (panels.length === 0) return { dx: 0, dy: 0 };
   const top =
@@ -376,8 +396,18 @@ export function chipPanelDodge(
   return selectionCalloutObstacleShift(
     chip,
     panels,
-    // A chip the lane rule left over the lane (a phone's) may stay there.
-    { ...stage, top, right: Math.max(laneEdge, chip.right) },
+    // Each side by name: the stage is the canvas's DOMRect, whose sides are
+    // getters a spread does not copy. Spread, the bounds had no left or
+    // bottom, and a phone's offset pair dodged the Objects panel off the
+    // stage's left edge.
+    {
+      left: stage.left,
+      top,
+      // A chip the lane rule left over the lane (a phone's) may stay there.
+      right: Math.max(laneEdge, chip.right),
+      bottom:
+        footBottom === null ? stage.bottom : Math.min(stage.bottom, footBottom)
+    },
     EDGE_CHIP_MARGIN_PX
   );
 }

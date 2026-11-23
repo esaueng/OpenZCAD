@@ -230,3 +230,178 @@ test('a drag cancelled on a refused frame logs its limit with units', async ({
   });
   await expect(log).not.toContainText(/past -6\.4\. /);
 });
+
+/** Whether the guide stands over `box`: hidden, it stands over nothing. */
+async function guideCovers(page: Page, box: Box | null) {
+  const guide = page.locator('.workspace-tour');
+  if (box === null || !(await guide.isVisible())) return false;
+  const shown = await guide.boundingBox();
+  return shown !== null && overlaps(shown, box);
+}
+
+/** What a press at the centre of `box` lands on, by the guide or not. */
+async function pressLandsOnGuide(page: Page, box: Box) {
+  return page.evaluate(
+    ([x, y]) =>
+      document.elementFromPoint(x!, y!)?.closest('.workspace-tour') !== null,
+    [box.x + box.width / 2, box.y + box.height / 2]
+  );
+}
+
+test('the guide never covers the exact-entry keypad’s Why? or its explanation, across a resize', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await openCollapseBlock(page, { width: 1280, height: 844 }, MODEL_ONLY, true);
+  await page.keyboard.press('?');
+  await page.getByRole('button', { name: 'Open modeling guide' }).click();
+  const guide = page.locator('.workspace-tour');
+  await expect(guide).toBeVisible();
+
+  // Typed past the Front face's 6.4 mm limit in exact entry: the keypad
+  // says the refusal in place, Why? beside it.
+  await clickWorldPoint(page, [8, 0, 8]);
+  await expect(page.getByRole('group', { name: 'Picked' })).toContainText(
+    'Block · Front face'
+  );
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.locator('.numeric-keypad');
+  await expect(keypad).toBeVisible();
+  await keypad.getByRole('textbox').fill('-9');
+  const refusal = keypad.locator('.edit-refusal.is-control');
+  const why = refusal.getByRole('button', { name: 'Why?' });
+  await expect(why).toBeVisible({ timeout: 30_000 });
+  // The keypad stands wherever its chip put it, so the guide stands aside
+  // while its refusal is up, rather than being placed around it.
+  await expect(guide).toBeHidden();
+
+  // Unopened, at each size, the guide neither covers the keypad nor takes
+  // the press meant for Why?.
+  for (const size of [
+    { width: 1280, height: 844 },
+    { width: 390, height: 844 },
+    { width: 1280, height: 844 }
+  ]) {
+    await page.setViewportSize(size);
+    await expect(why).toBeVisible();
+    await expect
+      .poll(async () => guideCovers(page, await keypad.boundingBox()))
+      .toBe(false);
+    expect(await pressLandsOnGuide(page, (await why.boundingBox())!)).toBe(
+      false
+    );
+  }
+
+  await why.click();
+  const card = refusal.locator('.edit-refusal-card');
+  await expect(card).toBeVisible();
+  for (const size of [
+    { width: 1280, height: 844 },
+    { width: 390, height: 844 },
+    { width: 1280, height: 844 }
+  ]) {
+    await page.setViewportSize(size);
+    await expect(card).toBeVisible();
+    await expect
+      .poll(async () => guideCovers(page, await card.boundingBox()))
+      .toBe(false);
+    expect(await pressLandsOnGuide(page, (await card.boundingBox())!)).toBe(
+      false
+    );
+  }
+
+  // Escape closes the explanation first; the refusal (and Why?) is still
+  // up, so the guide still stands aside. It comes back once the keypad
+  // closes.
+  await page.keyboard.press('Escape');
+  await expect(card).toBeHidden();
+  await expect(why).toBeVisible();
+  await expect(guide).toBeHidden();
+  await page.keyboard.press('Escape');
+  await expect(keypad).toBeHidden();
+  await expect(guide).toBeVisible();
+});
+
+for (const folded of [false, true]) {
+  test(`a phone’s offset pair stays on the stage, clear of Objects and the face tools, after exact entry across a resize${
+    folded ? ' (guide folded)' : ''
+  }`, async ({ page }) => {
+    test.setTimeout(120_000);
+    // Objects docked at the desktop width, as the finding had it.
+    await openCollapseBlock(
+      page,
+      { width: 1280, height: 844 },
+      { right: [['bodies']] },
+      folded
+    );
+    if (folded) {
+      await page.keyboard.press('?');
+      await page.getByRole('button', { name: 'Open modeling guide' }).click();
+      await page
+        .locator('.workspace-tour')
+        .getByRole('button', { name: 'Minimize modeling guide' })
+        .click();
+      await expect(
+        page.getByRole('button', { name: 'Expand modeling guide' })
+      ).toBeVisible();
+    }
+    await clickWorldPoint(page, [8, 0, 8]);
+    await expect(page.getByRole('group', { name: 'Picked' })).toContainText(
+      'Block · Front face'
+    );
+    const objectsButton = page
+      .getByRole('toolbar', { name: 'Model panels' })
+      .getByRole('button', { name: 'Objects panel' });
+    await expect(objectsButton).toHaveAttribute('aria-pressed', 'true');
+
+    const value = page.getByTestId('direct-manipulation-value');
+    const mode = page.getByTestId('direct-manipulation-mode');
+    await expect(mode).toHaveText(/^Offset/);
+    await value.click();
+    const keypad = page.locator('.numeric-keypad');
+    await expect(keypad).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.keyboard.press('Escape');
+    await expect(keypad).toBeHidden();
+
+    const objects = page.locator('.model-panel').first();
+    const rail = page.locator('.selection-rail');
+    const guide = page.locator('.workspace-tour');
+    await expect(objects).toBeVisible();
+    await expect(rail).toBeVisible();
+    const placement = async () => {
+      const [modeBox, valueBox, objectsBox, railBox] = await Promise.all([
+        mode.boundingBox(),
+        value.boundingBox(),
+        objects.boundingBox(),
+        rail.boundingBox()
+      ]);
+      const guideBox = (await guide.isVisible())
+        ? await guide.boundingBox()
+        : null;
+      const viewport = page.viewportSize()!;
+      return [modeBox, valueBox].map((box) =>
+        box === null
+          ? 'missing'
+          : box.x < 0 ||
+              box.y < 0 ||
+              box.x + box.width > viewport.width ||
+              box.y + box.height > viewport.height
+            ? `off-screen ${JSON.stringify(box)}`
+            : objectsBox && overlaps(box, objectsBox)
+              ? 'under Objects'
+              : railBox && overlaps(box, railBox)
+                ? 'under the face tools'
+                : guideBox && overlaps(box, guideBox)
+                  ? 'under the guide'
+                  : 'clear'
+      );
+    };
+    await expect.poll(placement).toEqual(['clear', 'clear']);
+    // And it holds: no frame-to-frame swing once settled.
+    await page.waitForTimeout(500);
+    expect(await placement()).toEqual(['clear', 'clear']);
+    await expect(mode).toBeInViewport({ ratio: 1 });
+    await expect(value).toBeInViewport({ ratio: 1 });
+  });
+}
