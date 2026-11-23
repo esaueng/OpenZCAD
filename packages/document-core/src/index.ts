@@ -425,6 +425,13 @@ export interface SketchObjectUpdateInput {
   sketchId: SketchId;
   objectId: EntityId;
   data: SketchObjectData;
+  /**
+   * F06: set only by the sketch re-solve that stores the geometry a change
+   * of parameter values drives, so history can tell those solved writes
+   * from a user's own sketch edit. Replay ignores it; a log without it
+   * replays as before.
+   */
+  derivedFrom?: 'parameter-resolve';
 }
 
 export interface SketchObjectDeleteInput {

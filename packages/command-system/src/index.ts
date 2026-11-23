@@ -6151,7 +6151,31 @@ export function commandsForCadPatch(
  * type picker, so its undo and redo must not retype a parameter either.
  */
 function historyCommandKind(entry: SerializedCommand): string {
-  return isParameterRetype(entry) ? 'parameter.retype' : entry.kind;
+  if (isParameterRetype(entry)) return 'parameter.retype';
+  if (isParameterResolvedSketchUpdate(entry))
+    return PARAMETER_RESOLVED_SKETCH_UPDATE_KIND;
+  return entry.kind;
+}
+
+/**
+ * F06: the history kind of a `sketch.object.update` the parameter re-solve
+ * wrote (payload `derivedFrom: 'parameter-resolve'`): the solved geometry a
+ * value edit or row switch stores beside itself. Only that kind, never a
+ * plain sketch update, rides along in a Tweak entry.
+ */
+export const PARAMETER_RESOLVED_SKETCH_UPDATE_KIND =
+  'sketch.object.update.parameter-resolve';
+
+/** Whether a command is a sketch update the parameter re-solve wrote. */
+export function isParameterResolvedSketchUpdate(command: {
+  kind: string;
+  payload?: unknown;
+}): boolean {
+  return (
+    command.kind === 'sketch.object.update' &&
+    (command.payload as SketchObjectUpdateInput | undefined)?.derivedFrom ===
+      'parameter-resolve'
+  );
 }
 
 /**
@@ -6187,16 +6211,19 @@ export function isTweakCommand(command: {
 
 /**
  * Tweak's own history entries: value edits and row switches, together with
- * the solved sketch geometry such an entry stores for the sketches its new
- * values drive (`sketch.object.update`). Solved geometry alone, without a
- * value edit beside it, is a sketch edit and stays a Build entry.
+ * the solved sketch geometry the re-solve stores for the sketches its new
+ * values drive (`PARAMETER_RESOLVED_SKETCH_UPDATE_KIND`). A plain sketch
+ * update, such as a History-text edit moving a circle beside a value edit,
+ * is Build's; so is solved geometry without a value edit beside it.
  */
 function parameterOnly(kinds: string[] | null): boolean {
   return (
     !!kinds?.length &&
     kinds.some(isTweakCommandKind) &&
     kinds.every(
-      (kind) => isTweakCommandKind(kind) || kind === 'sketch.object.update'
+      (kind) =>
+        isTweakCommandKind(kind) ||
+        kind === PARAMETER_RESOLVED_SKETCH_UPDATE_KIND
     )
   );
 }

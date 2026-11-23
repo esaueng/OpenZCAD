@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
-  type AnyCommand
+  isParameterResolvedSketchUpdate,
+  replayCommands,
+  type SerializedCommand
 } from '@openzcad/command-system';
 import {
   activateConfiguration,
@@ -63,7 +65,9 @@ async function fixture() {
     manager: new CommandManager(driven.document),
     centres,
     storedCircleX: driven.storedCircleX,
-    columnOf: driven.columnOf
+    columnOf: driven.columnOf,
+    distanceSketch: driven.distanceSketch,
+    circleId: driven.circleId
   };
 }
 
@@ -75,6 +79,78 @@ function expectCentres(
   expect(actual.boss).toBeCloseTo(boss, 6);
   expect(actual.copy).toBeCloseTo(copy, 6);
 }
+
+describe('Tweak undo and solved sketch geometry', () => {
+  it(
+    'refuses a value edit carrying a user sketch edit, as History text writes one',
+    { timeout: 180_000 },
+    async () => {
+      const f = await fixture();
+      const base = f.manager.document;
+      const circle = base.nodes[f.circleId as never] as unknown as {
+        kind: string;
+        data: Record<string, unknown>;
+      };
+      expect(circle.kind).toBe('sketch-object');
+      // A Build user changes an unrelated parameter and moves the circle in
+      // one History-text edit; the text compiles to this proposal. A mark
+      // smuggled onto the operation is not carried into the command.
+      const proposal = {
+        proposalId: 'proposal_value_and_move',
+        summary: 'Widen the pitch and move the circle.',
+        assumptions: [],
+        operations: [
+          {
+            kind: 'set_parameter' as const,
+            name: 'pitch',
+            expression: '20 mm'
+          },
+          {
+            kind: 'update_sketch_object' as const,
+            sketchId: f.distanceSketch,
+            objectId: f.circleId,
+            data: { ...circle.data, centerY: 4 },
+            derivedFrom: 'parameter-resolve'
+          }
+        ]
+      };
+      const preflight = await preflightCadPatch(
+        base,
+        proposal as never,
+        (candidate) => adapter.syncDocument(candidate),
+        solve
+      );
+      const plain = preflight.commands.filter(
+        (command) =>
+          command.kind === 'sketch.object.update' &&
+          !isParameterResolvedSketchUpdate(command)
+      );
+      expect(plain).toHaveLength(1);
+      // The pattern's solved copies are marked; the move is not.
+      expect(
+        preflight.commands.some(isParameterResolvedSketchUpdate)
+      ).toBe(true);
+      const manager = new CommandManager(base);
+      manager.runTransaction('Apply history text', preflight.commands);
+      expect(manager.undoIsParameterOnly).toBe(false);
+      manager.undo();
+      expect(manager.redoIsParameterOnly).toBe(false);
+
+      // The same value edit alone, with only its solved geometry, is Tweak's.
+      const valueOnly = await preflightCadPatch(
+        base,
+        { ...proposal, operations: [proposal.operations[0]!] },
+        (candidate) => adapter.syncDocument(candidate),
+        solve
+      );
+      const tweak = new CommandManager(base);
+      tweak.runTransaction('Apply AI patch', valueOnly.commands);
+      expect(tweak.undoIsParameterOnly).toBe(true);
+      tweak.undo();
+      expect(tweak.redoIsParameterOnly).toBe(true);
+    }
+  );
+});
 
 describe('a parameter value changed outside the Parameters table', () => {
   it(
@@ -104,11 +180,15 @@ describe('a parameter value changed outside the Parameters table', () => {
       );
       if (!resolved?.ok) throw new Error('the row did not solve');
       expect(resolved.commands.length).toBeGreaterThan(0);
+      // Each solved write is marked as the re-solve's own.
       expect(
         resolved.commands.every(
-          (command) => command.kind === 'sketch.object.update'
+          (command) =>
+            command.kind === 'sketch.object.update' &&
+            isParameterResolvedSketchUpdate(command)
         )
       ).toBe(true);
+      const logStart = base.commandLog.length;
       f.manager.runTransaction('Switch to Large', [
         activate,
         ...resolved.commands
@@ -123,12 +203,25 @@ describe('a parameter value changed outside the Parameters table', () => {
       sketchOnly.runTransaction('Edit sketch geometry', resolved.commands);
       expect(sketchOnly.undoIsParameterOnly).toBe(false);
 
-      // Replay needs no solver: the recorded commands store the geometry.
-      const replayed = new CommandManager(base).runTransaction(
-        'Switch to Large',
-        [activate, ...resolved.commands] as AnyCommand[]
-      );
+      // Replay needs no solver: the recorded log, serialized as a save or a
+      // peer carries it, replays to the same geometry and keeps the mark.
+      const log = JSON.parse(
+        JSON.stringify(live.commandLog.slice(logStart))
+      ) as SerializedCommand[];
+      const replayed = replayCommands(base, log);
       expect(f.storedCircleX(replayed)).toBeCloseTo(45, 6);
+      expectCentres(await f.centres(replayed), 45, 70);
+      const replayedLeaves = JSON.stringify(replayed.commandLog);
+      expect(replayedLeaves).toContain('"derivedFrom":"parameter-resolve"');
+      // A log written before the mark existed replays the same way.
+      const unmarked = JSON.parse(
+        JSON.stringify(log).replaceAll(',"derivedFrom":"parameter-resolve"', '')
+      ) as SerializedCommand[];
+      expect(JSON.stringify(unmarked)).not.toContain('derivedFrom');
+      expect(f.storedCircleX(replayCommands(base, unmarked))).toBeCloseTo(
+        45,
+        6
+      );
 
       // And back: the Small row's sizes return.
       const back = activateConfiguration(live, { rowId: 'row_small' });

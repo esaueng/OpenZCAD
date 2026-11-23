@@ -237,6 +237,8 @@ export function drivenSketchesDocument() {
   };
   return {
     document: configured,
+    distanceSketch,
+    circleId,
     circleBody,
     copyBody,
     storedCircleX,

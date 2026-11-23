@@ -8,9 +8,10 @@
  * Every path that moves parameter values runs this: a parameter set, a
  * configuration row switch or active-row cell, an assistant patch, and the
  * read-only documents built for another row (a share link's row, a view or
- * component on a row, a row's export). The returned commands are plain
- * `sketch.object.update`s, so a recorded entry replays to the same geometry
- * without a solver.
+ * component on a row, a row's export). The returned commands are
+ * `sketch.object.update`s marked `derivedFrom: 'parameter-resolve'`, so a
+ * recorded entry replays to the same geometry without a solver and Tweak's
+ * undo can tell them from a user's own sketch edit.
  */
 import type { AnyCommand } from '@openzcad/command-system';
 import {
@@ -106,7 +107,9 @@ export async function resolveSketchesForValueChange(
     for (const command of solvedSketchCommands(
       document,
       sketch.sketchId,
-      outcome
+      outcome,
+      undefined,
+      'parameter-resolve'
     )) {
       command.validate(document);
       document = command.apply(document);

@@ -75,7 +75,12 @@ export function solvedSketchCommands(
   document: ProjectDocument,
   sketchId: SketchId,
   outcome: SketchSolveOutcome,
-  tolerance = APPLY_EPSILON
+  tolerance = APPLY_EPSILON,
+  /**
+   * F06: marks each write as the parameter re-solve's, so history admits it
+   * into a Tweak entry beside the value edit. Only `parameterResolve` sets it.
+   */
+  derivedFrom?: 'parameter-resolve'
 ): AnyCommand[] {
   if (!outcome.converged || outcome.rolledBack) {
     return [];
@@ -196,7 +201,12 @@ export function solvedSketchCommands(
     if (next) {
       commands.push(
         commandFactories.updateSketchObject(
-          { sketchId, objectId: solved.objectId, data: next },
+          {
+            sketchId,
+            objectId: solved.objectId,
+            data: next,
+            ...(derivedFrom ? { derivedFrom } : {})
+          },
           'Solve sketch'
         )
       );
