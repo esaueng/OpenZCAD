@@ -406,9 +406,12 @@ export async function assertEditedShape(
             geometry?.blendRadius === undefined ? [] : [geometry.blendRadius]
           )
           .sort((a, b) => a - b);
-      expect(bandRadii(after)).toEqual(
-        bandRadii(source.body).map((value) => expect.closeTo(value, 8))
-      );
+      const expectedRadii = bandRadii(source.body);
+      const actualRadii = bandRadii(after);
+      expect(actualRadii).toHaveLength(expectedRadii.length);
+      for (const [index, radius] of expectedRadii.entries()) {
+        expect(actualRadii[index]).toBeCloseTo(radius, 8);
+      }
       return;
     }
   } else {
