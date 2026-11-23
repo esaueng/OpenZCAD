@@ -66,11 +66,12 @@ import {
   type TopologyReferenceV5,
   type UnitSystem
 } from '@openzcad/shared';
-import {
-  createExactKernelAdapter,
-  type ExactKernelAdapter,
-  type ExactKernelAdapterOptions
-} from './exact';
+// Types only: `exact.ts` re-exports this module, and its graph awaits the
+// Remus runtime at load. A value import back into it is an import cycle
+// whose two async module inits wait on each other forever in the bundle
+// (the geometry worker never got past loading the kernel), so the adapter
+// factory is imported when a build runs, after `exact.ts` has loaded.
+import type { ExactKernelAdapter, ExactKernelAdapterOptions } from './exact';
 import {
   claimReferenceRecapture,
   referenceRecaptureFeature,
@@ -1198,7 +1199,9 @@ async function coldBuild(
 ): Promise<{ derived: DerivedState; milliseconds: number }> {
   const adapter = options.createAdapter
     ? await options.createAdapter()
-    : await createExactKernelAdapter({
+    : await (
+        await import('./exact')
+      ).createExactKernelAdapter({
         historyCheckpointLimit: 0,
         importedStepCacheBytes: 0,
         importedMeshCacheBytes: 0,
