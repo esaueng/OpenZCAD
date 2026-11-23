@@ -58,6 +58,7 @@ import {
   type Rect,
   unpinnedSlotReserves
 } from '../../lib/panelLayout';
+import { measureRailBand, railBandParts } from '../../lib/railBand';
 import type { ContextMenuItem } from '../ContextMenu';
 import type { PanelDockControls, PanelPlacement } from './PanelFrame';
 import { PANEL_ICONS, PANEL_TITLES } from './panelMeta';
@@ -236,7 +237,10 @@ function titlesOf(entries: readonly PanelEntry[]): string {
  *
  * The docks' widths (`--left-dock-w`, `--right-dock-w`) and the unpinned
  * panel's (`--right-peek-w`) are published on `.workspace`, where the rails,
- * the lanes and the stage's other islands read them.
+ * the lanes and the stage's other islands read them, and so is the right
+ * rail band measured from the instrument rail's islands (`--rail-band`,
+ * lib/railBand.ts), which the right lane stands past as the unpinned panel
+ * does.
  */
 export function PanelDock({
   layout,
@@ -282,12 +286,39 @@ export function PanelDock({
   useLayoutEffect(() => {
     const layer = layerRef.current;
     if (!layer) return;
+    // The rail band is measured from the instrument rail's islands, which
+    // fold, widen and move with the pointer, the window and sketch mode: a
+    // ResizeObserver on each island sees one fold, show or hide; a
+    // MutationObserver sees the relations mount and the rail itself come
+    // and go; a pointer-type change re-reads them all.
+    const area = layer.closest('.viewer-area') ?? layer.parentElement;
+    const resize =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => measure());
+    let rail: Element | null = null;
+    let watched: Element[] = [];
+    const watchRail = () => {
+      rail = area?.querySelector('.instrument-rail') ?? null;
+      const next = rail ? [rail, ...railBandParts(rail)] : [];
+      if (
+        next.length === watched.length &&
+        next.every((element, index) => element === watched[index])
+      ) {
+        return;
+      }
+      for (const element of watched) resize?.unobserve(element);
+      for (const element of next) resize?.observe(element);
+      watched = next;
+    };
     const measure = () => {
+      watchRail();
       const rect = layer.getBoundingClientRect();
       const style = getComputedStyle(layer);
-      // The rail band is the layer's right padding (quiet-stage.css); a
-      // stage without that style keeps the geometry's own gap-rail-gap.
-      const railBand = pixels(style.paddingRight, 0);
+      const gap = pixels(style.getPropertyValue('--island-gap'), 10);
+      // Unmeasurable (no rail, or no layout): the geometry keeps its own
+      // gap-rail-gap.
+      const railBand = measureRailBand(rail, gap);
       const next: PanelStage = {
         width: Math.round(rect.width),
         height: Math.round(rect.height),
@@ -296,20 +327,44 @@ export function PanelDock({
         insets: {
           top: pixels(style.paddingTop, 0),
           bottom: pixels(style.paddingBottom, 0),
-          gap: pixels(style.getPropertyValue('--island-gap'), 10),
+          gap,
           between: pixels(style.getPropertyValue('--dock-gap'), 4),
           rail: pixels(style.getPropertyValue('--rail-w'), 40),
-          ...(railBand > 0 ? { railBand } : {})
+          ...(railBand !== null ? { railBand } : {})
         }
       };
       setStage((current) => (sameStage(current, next) ? current : next));
       setLaneMin(pixels(style.getPropertyValue('--context-w'), 330));
     };
     measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(layer);
-    return () => observer.disconnect();
+    resize?.observe(layer);
+    // Only what can move the islands: the rail mounting or leaving, or
+    // something mounting inside it (the relations entering a sketch).
+    const mutations =
+      area && typeof MutationObserver !== 'undefined'
+        ? new MutationObserver((records) => {
+            const current = rail;
+            if (
+              current
+                ? !current.isConnected ||
+                  records.some((record) => current.contains(record.target))
+                : area.querySelector('.instrument-rail')
+            ) {
+              measure();
+            }
+          })
+        : null;
+    mutations?.observe(area!, { childList: true, subtree: true });
+    const pointer =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia('(pointer: coarse)')
+        : null;
+    pointer?.addEventListener?.('change', measure);
+    return () => {
+      resize?.disconnect();
+      mutations?.disconnect();
+      pointer?.removeEventListener?.('change', measure);
+    };
   }, []);
 
   useEffect(() => {
@@ -376,12 +431,16 @@ export function PanelDock({
       ? slotWidth
       : 0;
 
+  const railBand = measured?.insets?.railBand;
   useLayoutEffect(() => {
     const workspace = layerRef.current?.closest<HTMLElement>('.workspace');
     workspace?.style.setProperty('--left-dock-w', `${leftWidth}px`);
     workspace?.style.setProperty('--right-dock-w', `${rightWidth}px`);
     workspace?.style.setProperty('--right-peek-w', `${peekWidth}px`);
-  }, [leftWidth, rightWidth, peekWidth]);
+    // Unmeasured, the stylesheet's own band (--lane-end) stands in.
+    if (railBand === undefined) workspace?.style.removeProperty('--rail-band');
+    else workspace?.style.setProperty('--rail-band', `${railBand}px`);
+  }, [leftWidth, rightWidth, peekWidth, railBand]);
 
   useLayoutEffect(() => {
     const workspace = layerRef.current?.closest<HTMLElement>('.workspace');
@@ -389,6 +448,7 @@ export function PanelDock({
       workspace?.style.removeProperty('--left-dock-w');
       workspace?.style.removeProperty('--right-dock-w');
       workspace?.style.removeProperty('--right-peek-w');
+      workspace?.style.removeProperty('--rail-band');
     };
   }, []);
 

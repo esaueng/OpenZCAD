@@ -284,9 +284,10 @@ export interface PanelInsets {
   rail: number;
   /**
    * The right rail band: from the right dock's inner edge to the unpinned
-   * panel's, `gap + rail + gap` unless measured. Sketching widens it by the
-   * relations rail beside the instrument rail, which the panel must clear
-   * (the layer's right padding, `--lane-end` less the panels).
+   * panel's, `gap + rail + gap` unless measured. PanelDock measures it from
+   * the instrument rail's islands (lib/railBand.ts): sketching adds the
+   * relations and the snap readout, and the pointer and the window's height
+   * fold the rail into two columns or two islands side by side.
    */
   railBand?: number;
 }
@@ -1835,8 +1836,22 @@ export function popOutPanel(
 }
 
 /**
+ * The model's free room across the stage: from a gap past the left rail
+ * (beside any left dock) to the right rail band (beside any right dock),
+ * where nothing but the model stands.
+ */
+function freeRoom(geometry: PanelGeometry): { left: number; right: number } {
+  const { insets, rails, stage, dockWidth } = geometry;
+  return {
+    left: rails.left.x + rails.left.w + insets.gap,
+    right: stage.width - dockWidth.right - railBandOf(insets)
+  };
+}
+
+/**
  * Where Pop out puts a panel: across from where it shows, toward the middle
- * of the stage, a little lower so both are visible during the move.
+ * of the model's free room and inside it, a little lower so both are
+ * visible during the move.
  */
 export function popOutRect(geometry: PanelGeometry, id: PanelId): Rect {
   const rect = geometry.panels[id];
@@ -1844,16 +1859,20 @@ export function popOutRect(geometry: PanelGeometry, id: PanelId): Rect {
   if (!rect) {
     return defaultFloatRect(geometry.layout, geometry.stage);
   }
-  // Toward the middle of the room between the docks, not of the stage: a
-  // wide rail band (a sketch's relations) put the unpinned panel's left
-  // edge short of the stage's middle beside a right dock, and the window
-  // went right, over the docked column.
-  const middle =
-    (geometry.dockWidth.left +
-      geometry.stage.width -
-      geometry.dockWidth.right) /
-    2;
-  const x = rect.x < middle ? rect.x + POP_OUT_OFFSET : rect.x - POP_OUT_OFFSET;
+  // Across the model's free room, from the left rail to the right rail
+  // band (the relations and the readout while sketching, measured), not
+  // the stage's middle: at 900px the band put the unpinned panel's left
+  // edge short of the stage's middle, and the window went right, over the
+  // rails and the readout, or over a right dock's column.
+  const room = freeRoom(geometry);
+  const middle = (room.left + room.right) / 2;
+  const centre = rect.x + rect.w / 2;
+  let x = centre < middle ? rect.x + POP_OUT_OFFSET : rect.x - POP_OUT_OFFSET;
+  // Kept inside the room where it fits; a stage too narrow for it leaves
+  // the stage's own bounds to clamp it.
+  if (room.right - room.left >= w) {
+    x = clamp(x, room.left, room.right - w);
+  }
   return clampFloatRect(
     {
       x,
