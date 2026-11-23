@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { documentForConfiguration } from '@openzcad/document-core';
 import type { GeometryReadyState, ProjectDocument } from '@openzcad/shared';
 import { geometryContentKey } from '../worker/exactRebuildCache';
-import { resolvedForDisplay, type SolveSketch } from './sketch/parameterResolve';
+import {
+  resolvedForDisplay,
+  type SolveSketch
+} from './sketch/parameterResolve';
 
 /**
  * F06 slice 4: configuration rows shown beside the active one. A view or an

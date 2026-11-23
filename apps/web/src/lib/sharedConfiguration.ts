@@ -1,6 +1,9 @@
 import { documentForConfiguration } from '@openzcad/document-core';
 import type { FeatureWarning, ProjectDocument } from '@openzcad/shared';
-import { resolvedForDisplay, type SolveSketch } from './sketch/parameterResolve';
+import {
+  resolvedForDisplay,
+  type SolveSketch
+} from './sketch/parameterResolve';
 
 /** Builds a document's geometry and reports what it warned about. */
 export type BuildForWarnings = (document: ProjectDocument) => Promise<{

@@ -19082,7 +19082,7 @@ export function App() {
         current,
         proposal,
         (candidate, analysis) => geometry.syncOnce(candidate, analysis),
-          (document, sketchId) => geometry.solveSketch(document, sketchId)
+        (document, sketchId) => geometry.solveSketch(document, sketchId)
       );
       const live = managerRef.current?.document;
       if (
@@ -20903,10 +20903,7 @@ export function App() {
           }
         : {}),
       produce: async (options) => {
-        const { document: exported } = await solvedExportTarget(
-          target,
-          source
-        );
+        const { document: exported } = await solvedExportTarget(target, source);
         const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
           ...(allShownBodies ? { allShownBodies: true } : {}),
@@ -20951,13 +20948,13 @@ export function App() {
           deflection,
           options: tolerances,
           target: solved,
-        info: MESH_EXPORT_FILE_INFO[format],
-        units: exportUnitsFor(units),
-        stemOf: exportStemFor,
-        setStatus,
-        runExportJob,
-        exportModel: geometry.exportModel
-      }),
+          info: MESH_EXPORT_FILE_INFO[format],
+          units: exportUnitsFor(units),
+          stemOf: exportStemFor,
+          setStatus,
+          runExportJob,
+          exportModel: geometry.exportModel
+        }),
       (error: unknown) =>
         setStatus(errorMessage(error, 'That configuration cannot be exported.'))
     );
@@ -21039,22 +21036,21 @@ export function App() {
       );
     }
     const source = doc;
-    if (!source)
-      return Promise.reject(new Error('No project is open.'));
+    if (!source) return Promise.reject(new Error('No project is open.'));
     return solvedExportTarget(target, source).then((solved) =>
       geometry.meshQuality(solved.document, solved.bodyIds, deflection, {
-      ...(target.allShownBodies ? { allShownBodies: true } : {}),
-      ...(options?.angularTolerance !== undefined
-        ? { angularTolerance: options.angularTolerance }
-        : {}),
-      ...(options?.units !== undefined ? { units: options.units } : {}),
-      onState: (state) => {
-        const progress = exportProgressFor(state);
-        if (progress) {
-          options?.onProgress?.(progress);
+        ...(target.allShownBodies ? { allShownBodies: true } : {}),
+        ...(options?.angularTolerance !== undefined
+          ? { angularTolerance: options.angularTolerance }
+          : {}),
+        ...(options?.units !== undefined ? { units: options.units } : {}),
+        onState: (state) => {
+          const progress = exportProgressFor(state);
+          if (progress) {
+            options?.onProgress?.(progress);
+          }
         }
-      }
-    })
+      })
     );
   }
 
