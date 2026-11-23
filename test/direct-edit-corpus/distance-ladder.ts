@@ -5,6 +5,7 @@ import { buildOffsetFaces } from '../../apps/web/src/lib/faceSetOffset';
 import { planFaceOffset } from '../../apps/web/src/lib/interaction/faceOffsetPlan';
 import { blendCarrierSnapshot } from '../../packages/kernel-adapter/src/exact-measure';
 import {
+  BASE_CHAMFER,
   BOX,
   EMBED,
   POST,
@@ -57,12 +58,46 @@ export const LADDERS: readonly Ladder[] = [
     target: 'bottom',
     operation: 'offset',
     pick: [horizontal(0, -1)],
+    inward: BOX.depth - ROOT - BASE_CHAMFER,
+    outward: null
+  },
+  {
+    part: 'A',
+    target: 'post-cap',
+    operation: 'offset',
+    pick: [horizontal(POST.height)],
+    inward: POST.height - BOX.depth - ROOT - RIM,
+    outward: null,
+    section: postArea
+  },
+  {
+    part: 'A',
+    target: 'shoulder',
+    operation: 'offset',
+    pick: [horizontal(BOX.depth)],
+    inward: BOX.depth - ROOT - BASE_CHAMFER,
+    outward: POST.height - BOX.depth - ROOT - RIM
+  },
+  {
+    part: 'A',
+    target: 'root',
+    operation: 'blend-radius',
+    pick: [root],
+    inward: ROOT,
+    outward:
+      Math.min(BOX.depth - BASE_CHAMFER, POST.height - BOX.depth - RIM) - ROOT
+  },
+  {
+    part: 'frustum',
+    target: 'bottom',
+    operation: 'offset',
+    pick: [horizontal(0, -1)],
     inward: BOX.depth - 2 * RIM,
     outward: null,
     section: roundedPlateArea
   },
   {
-    part: 'A',
+    part: 'frustum',
     target: 'cone-cap',
     operation: 'offset',
     pick: [horizontal(BOX.depth + bossRise)],
@@ -71,7 +106,7 @@ export const LADDERS: readonly Ladder[] = [
       (TAPER.topRadius * TAPER.height) / (TAPER.bottomRadius - TAPER.topRadius)
   },
   {
-    part: 'A',
+    part: 'frustum',
     target: 'shoulder',
     operation: 'offset',
     pick: [horizontal(BOX.depth)],
@@ -79,7 +114,7 @@ export const LADDERS: readonly Ladder[] = [
     outward: bossRise - ROOT
   },
   {
-    part: 'A',
+    part: 'frustum',
     target: 'root',
     operation: 'blend-radius',
     pick: [root],
@@ -168,7 +203,12 @@ export const LADDERS: readonly Ladder[] = [
 
 export function ladderSteps(ladder: Ladder, sign: -1 | 1): number[] {
   const limit = sign < 0 ? ladder.inward : ladder.outward;
-  const span = ladder.part === 'D' ? POST.height : BOX.width;
+  const span =
+    ladder.part === 'D'
+      ? POST.height
+      : ladder.part === 'A'
+        ? BOX.width + POST.radius
+        : BOX.width;
   const values =
     limit === null
       ? [0.1, 1, span / 4, span / 2, span, 2 * span]

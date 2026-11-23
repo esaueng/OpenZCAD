@@ -34,24 +34,27 @@ import {
 } from './ladder-oracles';
 import {
   BOX_CORNER_ONLY_STEPS,
+  CAP_JOIN_PINS,
   LADDER_LIMIT_PINS,
   LADDER_MONOTONIC_PINS,
   LADDER_REFUSAL_PINS
 } from './pins';
 import {
+  BASE_CHAMFER,
   BOX,
   EMBED,
   POST,
+  checkConstructionAccuracy,
   referencePart,
   type PartName,
   type ReferencePart
 } from './reference-parts';
 
-const PARTS = ['A', 'B', 'C', 'D'] as const;
+const PARTS = ['A', 'frustum', 'B', 'C', 'D'] as const;
 const DIRECTIONS = [-1, 1] as const;
 const CELL_TIMEOUT = 30_000;
 const reference = new Map<PartName, ReferencePart>();
-type Outcome = 'committed' | 'refused';
+type Outcome = 'committed' | 'fitted cap join' | 'refused';
 
 function historyLengths(document: ProjectDocument) {
   return {
@@ -83,10 +86,31 @@ beforeAll(async () => {
 }, CELL_TIMEOUT);
 afterAll(() => session?.adapter.dispose());
 
-it('preserves the authored part A surface census', () => {
-  // Synthetic construction census. The recorded part's census is still
-  // needed for the independent comparison called for by the plan.
-  expect(faceCensus(reference.get('A')!.body)).toEqual([
+it(
+  'matches the recorded pre-edit Part A census and base chamfer',
+  async () => {
+    session.deadline = Date.now() + CELL_TIMEOUT;
+    const part = reference.get('A')!;
+    expect(faceCensus(part.body)).toEqual([
+      ...Array<string>(2).fill('bspline'),
+      ...Array<string>(6).fill('cone'),
+      ...Array<string>(10).fill('cylinder'),
+      ...Array<string>(11).fill('plane'),
+      'sphere',
+      ...Array<string>(4).fill('torus')
+    ]);
+    for (const { geometry } of part.body.topology!.faces) {
+      if (geometry?.surfaceType === 'cone') {
+        expect(geometry.center.z).toBeCloseTo(BASE_CHAMFER / 2, 8);
+      }
+    }
+    await assertSolid(session, part.document, part.body);
+  },
+  CELL_TIMEOUT
+);
+
+it('preserves the frustum control surface census', () => {
+  expect(faceCensus(reference.get('frustum')!.body)).toEqual([
     'cone',
     ...Array<string>(12).fill('cylinder'),
     ...Array<string>(7).fill('plane'),
@@ -160,14 +184,25 @@ for (const ladder of LADDERS) {
               return;
             }
 
-            outcomes.set(distance, 'committed');
             expect(pin, 'The pinned refusal now builds').toBeUndefined();
             const after = kernelBody(derived, part);
-            expect(
-              derived.featureWarnings?.filter((warning) =>
-                /approximate/i.test(warning.message)
-              ) ?? []
-            ).toEqual([]);
+            const join = CAP_JOIN_PINS.find(
+              (cell) => cell.target === target && cell.distance === distance
+            );
+            const warnings = derived.featureWarnings ?? [];
+            const editId = draft.document.featureOrder.at(-1)!;
+            if (join) {
+              expect(
+                warnings.filter((warning) => warning.featureId === editId)
+              ).toMatchObject([{ kind: 'advisory', message: join.message }]);
+            }
+            checkConstructionAccuracy(
+              part,
+              join
+                ? warnings.filter((warning) => warning.featureId !== editId)
+                : warnings
+            );
+            outcomes.set(distance, join ? 'fitted cap join' : 'committed');
             const commit = await commitWithCarry(
               session,
               before.document,
@@ -186,7 +221,12 @@ for (const ladder of LADDERS) {
             const cornerOnly =
               target === 'B/edge-round' &&
               BOX_CORNER_ONLY_STEPS.includes(distance);
-            await assertSolid(session, manager.document, after, cornerOnly);
+            await assertSolid(
+              session,
+              manager.document,
+              after,
+              cornerOnly || !!join || target === 'A/root'
+            );
             await assertEditedShape(
               session,
               part,
@@ -194,7 +234,8 @@ for (const ladder of LADDERS) {
               faces,
               distance,
               after,
-              cornerOnly
+              cornerOnly,
+              join
             );
 
             const serialized = manager.document.commandLog.slice(
@@ -247,13 +288,13 @@ for (const ladder of LADDERS) {
         departures.push(
           ...steps.filter((distance) => {
             const below = limit === null || Math.abs(distance) < limit;
-            return below !== (outcomes.get(distance) === 'committed');
+            return below !== (outcomes.get(distance) !== 'refused');
           })
         );
         if (firstRefusal < 0) continue;
         const laterSuccesses = steps
           .slice(firstRefusal + 1)
-          .filter((distance) => outcomes.get(distance) === 'committed');
+          .filter((distance) => outcomes.get(distance) !== 'refused');
         if (laterSuccesses.length)
           nonmonotonic.push({
             firstRefusal: steps[firstRefusal]!,
@@ -288,9 +329,12 @@ it('each ladder pin applies to exactly one measured cell or direction', () => {
       )
     )
   );
-  const pinned = LADDER_REFUSAL_PINS.flatMap((pin) =>
-    pin.distances.map((distance) => `${pin.target}/${distance}`)
-  );
+  const pinned = [
+    ...CAP_JOIN_PINS.map((pin) => `${pin.target}/${pin.distance}`),
+    ...LADDER_REFUSAL_PINS.flatMap((pin) =>
+      pin.distances.map((distance) => `${pin.target}/${distance}`)
+    )
+  ];
   expect(pinned.filter((cell) => !cells.has(cell))).toEqual([]);
   expect(new Set(pinned).size).toBe(pinned.length);
   expect(
@@ -310,7 +354,7 @@ describe('offset sets refused by a blend move', () => {
   const bossRise = POST.height - EMBED;
   const cases = [
     {
-      part: 'A',
+      part: 'frustum',
       target: 'cone-cap+shoulder',
       pick: [plane('z', BOX.depth + bossRise), plane('z', BOX.depth)],
       distances: [-1, 1],
