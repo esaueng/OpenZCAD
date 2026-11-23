@@ -35125,9 +35125,17 @@ export function App() {
       if (global === 'panels-hide-all') {
         event.preventDefault();
         if (!modelingLocked) {
-          setPanelLayout((current) =>
-            setOption(current, 'hidden', !current.options.hidden)
-          );
+          // Showing the panels is asked for; hiding them leaves the drawer.
+          if (panelLayout.options.hidden) {
+            presentPanelChange(
+              (current) => setOption(current, 'hidden', false),
+              null
+            );
+          } else {
+            setPanelLayout((current) =>
+              setOption(current, 'hidden', !current.options.hidden)
+            );
+          }
         }
         return;
       }
@@ -36036,6 +36044,59 @@ export function App() {
   // A tool's first open would otherwise wait on its card's chunk (G16).
   useCommandCardPrefetch(doc !== null);
 
+  // The model panels as they project onto the measured stage: which are
+  // drawn, and the one a phone-width lane shows.
+  const panelStageOrUndefined = panelStage ?? undefined;
+  const panelGeometry = panelStage
+    ? computePanelGeometry(panelLayout, panelStage)
+    : null;
+  const panelsHidden = panelLayout.options.hidden;
+  const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
+  /** Whether the Tools drawer is drawn, as the command card reports it. */
+  const toolsDrawerShownRef = useRef(false);
+  /**
+   * Applies a panel change someone asked for: a rail press, a palette
+   * result, a notice's action, a layout preset, showing hidden panels. A
+   * phone has one lane for the model panels, and the Tools drawer opens over
+   * it: left open (it is remembered), it covered a panel brought up beside
+   * it. When the change puts `id` (any panel, for null) in that lane while
+   * the drawer is showing, the drawer is put away, as taking a tool from it
+   * does; opened again, it stands over the panel until a panel is brought up
+   * once more.
+   *
+   * Only an asked-for change does this. The lane filling on its own (start
+   * up, a resize, a failure presenting History), a drawer a command has
+   * folded and one a held rail has put away for a drag leave the
+   * remembered drawer as it was: the drawer is only closed when it is drawn.
+   */
+  const presentPanelChange = (
+    change: (current: PanelLayout) => PanelLayout,
+    id: PanelId | null
+  ) => {
+    if (
+      toolFold.commandFoldOpen &&
+      toolsDrawerShownRef.current &&
+      !modelingLocked &&
+      panelStage
+    ) {
+      const next = change(panelLayout);
+      const geometry = computePanelGeometry(next, panelStage);
+      if (
+        !next.options.hidden &&
+        geometry.phone &&
+        geometry.phonePanel !== null &&
+        (id === null || geometry.phonePanel === id)
+      ) {
+        setPanelState((current) =>
+          current.commandFoldOpen
+            ? { ...current, commandFoldOpen: false }
+            : current
+        );
+      }
+    }
+    setPanelLayout((current) => change(current));
+  };
+
   /**
    * Projects carrying an unresolved divergence marker. Recomputed from the
    * shelf rather than tracked in state: the markers outlive the session that
@@ -36453,14 +36514,6 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
-  // The model panels as they project onto the measured stage: which are
-  // drawn, and the one a phone-width lane shows.
-  const panelStageOrUndefined = panelStage ?? undefined;
-  const panelGeometry = panelStage
-    ? computePanelGeometry(panelLayout, panelStage)
-    : null;
-  const panelsHidden = panelLayout.options.hidden;
-  const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
   /** Whether a panel is on screen right now, for its rail button. */
   const panelShowing = (id: PanelId) =>
     !panelsHidden &&
@@ -36471,8 +36524,9 @@ export function App() {
         : !panelGeometry.parked[id] || panelLayout.revealed === id));
   /** Panel controls work the same way during and between tool sessions. */
   const pressRailPanel = (id: PanelId) => {
-    setPanelLayout((current) =>
-      togglePanel(current, id, panelStageOrUndefined)
+    presentPanelChange(
+      (current) => togglePanel(current, id, panelStageOrUndefined),
+      id
     );
   };
   /**
@@ -36484,8 +36538,9 @@ export function App() {
   const showModelPanel = (
     id: 'history' | 'parameters' | 'revisions' | 'diagnostics'
   ) => {
-    setPanelLayout((current) =>
-      presentPanel(current, id, panelStageOrUndefined)
+    presentPanelChange(
+      (current) => presentPanel(current, id, panelStageOrUndefined),
+      id
     );
   };
   const panelControls = (
@@ -37988,6 +38043,9 @@ export function App() {
           setPanelState((current) => ({ ...current, toolDrawerQuery }))
         }
         moreOpen={toolFold.commandFoldOpen}
+        onDrawerShownChange={(shown) => {
+          toolsDrawerShownRef.current = shown;
+        }}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
           // keeps it open for the rest of the command.
@@ -38603,13 +38661,24 @@ export function App() {
                     options={panelLayout.options}
                     preset={matchingPreset(panelLayout)}
                     hideShortcut={keymap.label('panels-hide-all')}
+                    // A preset and showing hidden panels are panels asked
+                    // for; hiding them and the other settings leave the
+                    // drawer.
                     onPreset={(preset) =>
-                      setPanelLayout((current) => applyPreset(current, preset))
+                      presentPanelChange(
+                        (current) => applyPreset(current, preset),
+                        null
+                      )
                     }
                     onToggle={(key) =>
-                      setPanelLayout((current) =>
-                        setOption(current, key, !current.options[key])
-                      )
+                      key === 'hidden' && panelLayout.options.hidden
+                        ? presentPanelChange(
+                            (current) => setOption(current, 'hidden', false),
+                            null
+                          )
+                        : setPanelLayout((current) =>
+                            setOption(current, key, !current.options[key])
+                          )
                     }
                     onWidth={(width) =>
                       setPanelLayout((current) =>
@@ -38621,8 +38690,9 @@ export function App() {
                 {panelLayout.options.hidden && (
                   <PanelsHiddenPill
                     onShow={() =>
-                      setPanelLayout((current) =>
-                        setOption(current, 'hidden', false)
+                      presentPanelChange(
+                        (current) => setOption(current, 'hidden', false),
+                        null
                       )
                     }
                   />

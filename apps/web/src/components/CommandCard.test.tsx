@@ -493,6 +493,35 @@ describe('CommandCard', () => {
     ]);
   });
 
+  it('reports the drawer as drawn, less a held rail, and gone with the card', () => {
+    const face = { ...NOTHING, faceSelected: true, bodyCount: 1 };
+    const onDrawerShownChange = vi.fn();
+    const card = (pick: SelectionCalloutContent | null) => (
+      <CommandCard
+        summary={null}
+        activeTool={null}
+        availability={AVAILABILITY}
+        selection={face}
+        onLaunchTool={vi.fn()}
+        moreOpen
+        onToggleMore={vi.fn()}
+        onDrawerShownChange={onDrawerShownChange}
+        pickSummary="1 face"
+        pick={pick}
+      />
+    );
+    const { rerender, unmount } = render(card(offsetPick('armed')));
+    expect(onDrawerShownChange).toHaveBeenLastCalledWith(true);
+    // A held rail puts the remembered drawer away for the drag: a panel
+    // asked for meanwhile has no drawer to close.
+    rerender(card(offsetPick('dragging')));
+    expect(onDrawerShownChange).toHaveBeenLastCalledWith(false);
+    rerender(card(offsetPick('armed')));
+    expect(onDrawerShownChange).toHaveBeenLastCalledWith(true);
+    unmount();
+    expect(onDrawerShownChange).toHaveBeenLastCalledWith(false);
+  });
+
   it('never flashes the pinned tools when the pick drops out on release', () => {
     vi.useFakeTimers();
     try {

@@ -19,9 +19,13 @@ import {
   waitForStillViewport,
   finishInPlaceCommand,
   pressTool,
+  promptField,
   expect,
+  ensureToolsDrawerOpen,
   expectBodyCount,
+  modelPanel,
   pickPlanarFace,
+  railPanelButton,
   stubApi,
   test,
   waitForSurfacesToSettle
@@ -939,4 +943,374 @@ test('Next reframes a tablet’s box clear of the open Tools drawer', async ({
   await expect
     .poll(async () => (await bodiesOnScreen(page)).left)
     .toBeGreaterThanOrEqual(drawer.x + drawer.width);
+});
+
+// The Tools drawer is remembered open, and on a phone it opens over the
+// lane the model panels share: History brought up beside it stood under it,
+// History as text and the first rows with it (found writing
+// history-text-layout.spec.ts on #1981). A panel coming up in the lane puts
+// the drawer away.
+for (const [width, height] of [
+  [390, 844],
+  [360, 740],
+  [430, 932]
+] as const) {
+  test(`History comes up clear of an open Tools drawer on a ${width} × ${height} phone`, async ({
+    page
+  }) => {
+    test.setTimeout(90_000);
+    // The suite's baseline leaves the drawer open, as a phone it was left
+    // open on reopens it.
+    await stubApi(page);
+    await page.setViewportSize({ width, height });
+    await createProject(page, 'Drawer and History');
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    const drawer = page.locator('.command-flyout');
+    await expect(drawer).toBeVisible();
+
+    await railPanelButton(page, 'History').tap();
+    const history = modelPanel(page, 'History');
+    await expect(history).toBeVisible();
+    for (const control of [
+      history.getByRole('button', { name: 'History as text' }),
+      history.getByRole('button', { name: 'Find a step' }),
+      history.getByRole('button', { name: 'Close History' }),
+      history.getByRole('button', { name: 'Box', exact: true })
+    ]) {
+      await expect(control).toBeInViewport();
+      await expect
+        .poll(() => reachable(control), { message: String(control) })
+        .toBe(true);
+    }
+    await expect(drawer).toHaveCount(0);
+    await shot(page, `history-${width}x${height}`);
+    // History as text opens from that press, with no drawer to close first.
+    await history.getByRole('button', { name: 'History as text' }).tap();
+    const dialog = page.getByRole('dialog', { name: 'History as text' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Close' }).tap();
+    await expect(dialog).toHaveCount(0);
+
+    // The drawer opened again stands over the panel, the newest surface,
+    // and its own Close tools drawer gives the panel back.
+    await page
+      .getByRole('button', { name: /More tools/i })
+      .first()
+      .tap();
+    await expect(drawer).toBeVisible();
+    await page.getByRole('button', { name: 'Close tools drawer' }).tap();
+    await expect(drawer).toHaveCount(0);
+    await expect(history).toBeVisible();
+    await expect
+      .poll(() =>
+        reachable(history.getByRole('button', { name: 'History as text' }))
+      )
+      .toBe(true);
+  });
+}
+
+/** The Tools drawer as the device remembers it, open or closed. */
+function storedToolsDrawer(page: Page) {
+  return page.evaluate(() => {
+    const raw = window.localStorage.getItem('openzcad-panel-state:v1');
+    return raw
+      ? (JSON.parse(raw) as { commandFoldOpen?: boolean }).commandFoldOpen
+      : undefined;
+  });
+}
+
+// Bringing up the panel the lane already shows is asked for as much as
+// bringing up another: the palette naming a parameter while Parameters
+// stands under the reopened drawer put the field it focused out of reach.
+test('the palette brings Parameters back out from under a reopened Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Tweak', exact: true })
+  ).toBeVisible({ timeout: 90_000 });
+  const drawer = page.locator('.command-flyout');
+  await ensureToolsDrawerOpen(page);
+  await expect(drawer).toBeVisible();
+  await railPanelButton(page, 'Parameters').tap();
+  const parameters = modelPanel(page, 'Parameters');
+  await expect(parameters).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await page
+    .getByRole('button', { name: /More tools/i })
+    .first()
+    .tap();
+  await expect(drawer).toBeVisible();
+
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(promptField(page)).toBeFocused();
+  await page.keyboard.type('/plate_t');
+  await page
+    .getByRole('option')
+    .filter({ hasText: 'plate_t' })
+    .filter({ hasText: 'Parameter' })
+    .click();
+  const field = page.getByRole('textbox', { name: 'Expression for plate_t' });
+  await expect(field).toBeFocused();
+  await expect(drawer).toHaveCount(0);
+  await expect(field).toBeInViewport();
+  await expect.poll(() => reachable(field)).toBe(true);
+});
+
+// The lane filling on its own is nobody asking for a panel: starting at a
+// phone width, or narrowing to one, with History docked put the remembered
+// drawer away for good, and a wider window came back without it.
+test('starting or resizing at a phone width keeps the remembered Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: { right: [['history']] } });
+  await page.setViewportSize({ width: 600, height: 900 });
+  await createProject(page, 'Drawer remembered');
+  const history = railPanelButton(page, 'History');
+  await expect(history).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => storedToolsDrawer(page)).toBe(true);
+  const more = page.getByRole('button', { name: /^More tools/ });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  expect(await storedToolsDrawer(page)).toBe(true);
+
+  await page.setViewportSize({ width: 600, height: 900 });
+  await expect(history).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => storedToolsDrawer(page)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  expect(await storedToolsDrawer(page)).toBe(true);
+});
+
+// A command folds the drawer; the drawer comes back when the command ends.
+// A panel brought up meanwhile has no drawer to put away, and must not
+// close the one the command will give back.
+test('a panel brought up during Box leaves the Tools drawer to come back', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await createProject(page, 'Drawer after Box');
+  const drawer = page.locator('.command-flyout');
+  await expect(drawer).toBeVisible();
+
+  await pressTool(page, /^Box \(B\)/);
+  await expect(page.getByRole('group', { name: 'Box command' })).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await railPanelButton(page, 'History').tap();
+  await expect(modelPanel(page, 'History')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+  expect(await storedToolsDrawer(page)).toBe(true);
+});
+
+/** The Panel layout menu, opened if it is closed. */
+async function panelLayoutMenu(page: Page) {
+  const menu = page.getByRole('menu', { name: 'Panel layout' });
+  if (!(await menu.isVisible())) {
+    // A phone keeps the layout menu behind the viewer bar's toggle.
+    const more = page.getByRole('button', { name: 'More view tools' });
+    if ((await more.getAttribute('aria-expanded')) !== 'true') {
+      await more.click();
+    }
+    await page
+      .getByRole('toolbar', { name: 'Model panels' })
+      .getByRole('button', { name: 'Panel layout' })
+      .click();
+  }
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/** A box with History brought up in the lane and the drawer opened over it. */
+async function historyUnderReopenedDrawer(
+  page: Page,
+  name: string,
+  { width, height } = { width: 390, height: 844 }
+) {
+  await stubApi(page);
+  await page.setViewportSize({ width, height });
+  await createProject(page, name);
+  await createPrimitiveInPlace(page, 'box');
+  await expectBodyCount(page, 1);
+  const drawer = page.locator('.command-flyout');
+  await railPanelButton(page, 'History').tap();
+  await expect(modelPanel(page, 'History')).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await page
+    .getByRole('button', { name: /More tools/i })
+    .first()
+    .tap();
+  await expect(drawer).toBeVisible();
+  return drawer;
+}
+
+// Showing the panels from the Panel layout menu is asked for as much as
+// the pill's Show panels and Ctrl+\: the menu wrote Hide off straight into
+// the layout, and History came back under the drawer.
+test('the Panel layout menu’s Hide all brings History back clear of the Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const drawer = await historyUnderReopenedDrawer(page, 'Menu Hide all');
+  const hide = (await panelLayoutMenu(page)).getByRole('menuitemcheckbox', {
+    name: 'Hide all panels'
+  });
+  await hide.click();
+  await expect(hide).toHaveAttribute('aria-checked', 'true');
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
+  // Hiding the panels leaves the drawer as it is.
+  await expect(drawer).toBeVisible();
+  await hide.click();
+  await expect(hide).toHaveAttribute('aria-checked', 'false');
+  await page.keyboard.press('Escape');
+  const history = modelPanel(page, 'History');
+  await expect(history).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await expect
+    .poll(() =>
+      reachable(history.getByRole('button', { name: 'History as text' }))
+    )
+    .toBe(true);
+});
+
+// A preset turns Hide off so the picked layout shows: picking Review with
+// the panels hidden put History back in the lane, under the drawer.
+test('a preset picked with the panels hidden brings History up clear of the Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const drawer = await historyUnderReopenedDrawer(page, 'Preset Review');
+  await page.keyboard.press('Control+\\');
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+  const review = (await panelLayoutMenu(page)).getByRole('menuitemradio', {
+    name: 'Review',
+    exact: true
+  });
+  await review.click();
+  await expect(review).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  const history = modelPanel(page, 'History');
+  await expect(history).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await expect
+    .poll(() =>
+      reachable(history.getByRole('button', { name: 'History as text' }))
+    )
+    .toBe(true);
+});
+
+// A held rail puts the drawer away for a drag without forgetting it. A
+// panel asked for under the hand has no drawer to put away: Ctrl+\ showing
+// History mid-drag closed the remembered drawer, and it stayed closed
+// after the release.
+test('panels shown during a face drag leave the Tools drawer to come back', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 150_000);
+  // The widest phone stage, where the drawer leaves the box beside it.
+  const drawer = await historyUnderReopenedDrawer(page, 'Drawer under drag', {
+    width: 700,
+    height: 900
+  });
+  await page.keyboard.press('Control+\\');
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+
+  // The open drawer stands over the stage's left side, and the box with it:
+  // pan the box out beside the drawer, then take the first face whose handle
+  // a finger can reach there.
+  const canvas = page.locator('.viewer-host canvas');
+  const drawerBox = (await drawer.boundingBox())!;
+  const panFrom = { x: drawerBox.x + drawerBox.width + 30, y: 220 };
+  await page.mouse.move(panFrom.x, panFrom.y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(panFrom.x + 200, panFrom.y, { steps: 12 });
+  await page.mouse.up({ button: 'right' });
+  await waitForStillViewport(page);
+  const operation = page.getByRole('region', { name: 'Offset Face operation' });
+  let grab: { start: { x: number; y: number }; dx: number; dy: number } | null =
+    null;
+  for (const normal of [
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: 0, z: 1 },
+    { x: 0, y: -1, z: 0 }
+  ]) {
+    await expect
+      .poll(() =>
+        canvas.evaluate(
+          (element, normal) =>
+            new Promise((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-planar-face', {
+                  detail: { normal, resolve }
+                })
+              );
+            }),
+          normal
+        )
+      )
+      .not.toBeNull();
+    await page
+      .locator('.selection-rail')
+      .getByRole('button', { name: 'Selection: Offset', exact: true })
+      .click();
+    await expect(operation).toBeVisible();
+    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+    const bounds = (await canvas.boundingBox())!;
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      pixels: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    const start = { x: bounds.x + handle.x, y: bounds.y + handle.y };
+    const onCanvas = await canvas.evaluate(
+      (element, { x, y }) => document.elementFromPoint(x, y) === element,
+      start
+    );
+    if (onCanvas) {
+      grab = {
+        start,
+        dx: handle.dx * handle.pixels * 3,
+        dy: handle.dy * handle.pixels * 3
+      };
+      break;
+    }
+    await page.keyboard.press('Escape');
+    await expect(operation).toHaveCount(0);
+  }
+  expect(grab, 'a face handle clear of the drawer').not.toBeNull();
+  const { start } = grab!;
+  await expect(drawer).toBeVisible();
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x + grab!.dx, start.y + grab!.dy, {
+    steps: 12
+  });
+  await expect(operation).toHaveAttribute('data-hold', 'drag');
+  await expect(drawer).toHaveCount(0);
+  expect(await storedToolsDrawer(page)).toBe(true);
+
+  await page.keyboard.press('Control+\\');
+  await expect(modelPanel(page, 'History')).toBeVisible();
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  await expect(drawer).toBeVisible();
+  expect(await storedToolsDrawer(page)).toBe(true);
 });
