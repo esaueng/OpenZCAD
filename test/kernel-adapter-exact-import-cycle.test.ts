@@ -94,10 +94,7 @@ function existingModule(base: string): string | undefined {
  * The workspace source file `specifier` names from `from`, or undefined for
  * anything outside the workspace (`node:`, `vitest`, Remus, …).
  */
-function resolveModule(
-  from: string,
-  specifier: string
-): string | undefined {
+function resolveModule(from: string, specifier: string): string | undefined {
   if (specifier.startsWith('.'))
     return existingModule(resolve(dirname(from), specifier));
   const match = /^(@openzcad\/[^/]+)(?:\/(.+))?$/.exec(specifier);
@@ -106,7 +103,9 @@ function resolveModule(
   const subpath = match![2] ? `./${match![2]}` : '.';
   const target = workspace.exports[subpath];
   // A subpath the package does not export cannot be imported at all.
-  return target ? existingModule(resolve(workspace.directory, target)) : undefined;
+  return target
+    ? existingModule(resolve(workspace.directory, target))
+    : undefined;
 }
 
 /**

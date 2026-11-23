@@ -936,10 +936,11 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
     [planeFace(40, 10, 0), planeFace(40, 12, 10)]
   );
   const scaledEdge = (order: 'same' | 'reversed' | 'faces') => {
-    const samples = sourceEdge.samples.map((sample) =>
-      scaled([...sample], k)
-    );
-    const faces = [planeFace(40 * k, 10 * k, 0), planeFace(40 * k, 12 * k, 10 * k)];
+    const samples = sourceEdge.samples.map((sample) => scaled([...sample], k));
+    const faces = [
+      planeFace(40 * k, 10 * k, 0),
+      planeFace(40 * k, 12 * k, 10 * k)
+    ];
     return edge(
       order === 'reversed' ? samples.reverse() : samples,
       order === 'faces' ? faces.reverse() : faces
@@ -1193,11 +1194,7 @@ describe('datum position tolerance', () => {
 
   it('is per component: a far-out X never widens the check on Y', () => {
     for (const x of [0, 1000]) {
-      const moved = unitConversionGeometryOracle(
-        at(x, 0),
-        at(x, 0.0000015),
-        1
-      );
+      const moved = unitConversionGeometryOracle(at(x, 0), at(x, 0.0000015), 1);
       expect(
         moved.refusals.map(({ code, field }) => `${code} ${field}`)
       ).toEqual(['geometry-mismatch datumPoints.y']);

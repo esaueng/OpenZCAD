@@ -105,7 +105,10 @@ export function measureBlendEdgeOrientation(
   const span = kernel.getEdgeParamSpan(edge);
   const at = (fraction: number) =>
     pointOf(
-      kernel.evaluateEdgeCurve(edge, span[0]! + (span[1]! - span[0]!) * fraction)
+      kernel.evaluateEdgeCurve(
+        edge,
+        span[0]! + (span[1]! - span[0]!) * fraction
+      )
     );
   return {
     samples: [pointOf(ends, 0), at(0.25), at(0.75), pointOf(ends, 3)],

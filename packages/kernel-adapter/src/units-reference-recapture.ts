@@ -297,8 +297,7 @@ export function blendOrientationCorrespondence(
       scaledWitnessMatches('face', face, target.faces[order(index)]!, factor)
     );
   const facesKept = faces((index) => index);
-  const facesSwapped =
-    source.faces.length === 2 && faces((index) => 1 - index);
+  const facesSwapped = source.faces.length === 2 && faces((index) => 1 - index);
   if (forward && facesKept && !backward && !facesSwapped) return 'same';
   if ((forward && backward) || (facesKept && facesSwapped)) return 'ambiguous';
   if (backward || facesSwapped) return 'reversed';
@@ -1101,9 +1100,7 @@ function compareDatums(
     const tolerance = (value: number) =>
       scaled ? positionTolerance(value) : DATUM_DIRECTION_TOLERANCE;
     for (const axis of ['x', 'y', 'z'] as const)
-      if (
-        !(Math.abs(to[axis] - expected[axis]) <= tolerance(expected[axis]))
-      )
+      if (!(Math.abs(to[axis] - expected[axis]) <= tolerance(expected[axis])))
         mismatch(
           subject,
           `${field}.${axis}`,
