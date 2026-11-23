@@ -202,5 +202,6 @@
   "workspace-polish.spec.ts": 95,
   "workspace-tour.spec.ts": 14,
   "offset-face-set.spec.ts": 205,
-  "selected-face-hole.spec.ts": 15
+  "selected-face-hole.spec.ts": 15,
+  "history-text-layout.spec.ts": 16
 }
