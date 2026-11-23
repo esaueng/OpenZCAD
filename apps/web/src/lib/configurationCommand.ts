@@ -68,8 +68,17 @@ export async function runConfigurationCommand(
     command.kind === 'configuration.activate'
       ? ++deps.latestActivation.current
       : null;
+  /** Still the manager and project this command was checked against. */
+  const sameProject = () => {
+    const live = deps.manager();
+    return live === manager && live.document.projectId === base.projectId;
+  };
+  // Overtaken only by a later switch in this same project: one made after
+  // the workspace moved to another project says nothing about this one.
   const overtaken = () =>
-    ticket !== null && deps.latestActivation.current !== ticket;
+    ticket !== null &&
+    deps.latestActivation.current !== ticket &&
+    sameProject();
   const isCurrent = () =>
     !overtaken() && deps.manager() === manager && manager.document === base;
   let resolved: Awaited<ReturnType<typeof resolveSketchesForValueChange>>;
@@ -91,10 +100,9 @@ export async function runConfigurationCommand(
     // A second click on the row the first one is switching to: by now that
     // row is active and there is nothing left to do. Only for the same
     // manager and project: another project's document answers nothing.
-    const live = deps.manager();
-    if (live === manager && live.document.projectId === base.projectId) {
+    if (sameProject()) {
       try {
-        if (command.apply(live.document) === live.document) return null;
+        if (command.apply(manager.document) === manager.document) return null;
       } catch {
         // Refused against the live document: the move is the answer.
       }

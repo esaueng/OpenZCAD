@@ -160,4 +160,32 @@ describe('quick configuration row switches', () => {
       );
     }
   );
+
+  it(
+    'is not silenced by a switch made in another project',
+    { timeout: 120_000 },
+    async () => {
+      const f = threeRows();
+      const { holder, gate, deps } = harness(f.document);
+      const large = runConfigurationCommand(activate('row_large'), deps);
+      // The workspace moves to another project and switches a row there,
+      // taking the next ticket.
+      holder.manager = new CommandManager({
+        ...f.document,
+        projectId: 'project_other' as ProjectDocument['projectId'],
+        editHistory: undefined
+      });
+      const other = runConfigurationCommand(activate('row_xl'), deps);
+      gate('row_large').release();
+      // The first switch moved with its project; it is not overtaken.
+      await expect(large).resolves.toBe(
+        'The project changed while the sketches were solved. Try again.'
+      );
+      gate('row_xl').release();
+      await expect(other).resolves.toBeNull();
+      expect(holder.manager.document.configurations?.activeRowId).toBe(
+        'row_xl'
+      );
+    }
+  );
 });
