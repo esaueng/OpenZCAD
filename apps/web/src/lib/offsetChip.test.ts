@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { formatShownLength } from './displayUnits';
 import {
   chipPanelDodge,
   edgeChipCenterX,
@@ -478,7 +479,8 @@ describe('a refused offset that names its limit', () => {
 // offset the kernel measured: "smaller offset" beside a Total of 5 asked for
 // the opposite of what builds.
 describe('a refused face offset read as a Total', () => {
-  const reading = { baseline: 24, sense: 1, units: 'mm' };
+  const mmLength = (value: number) => formatShownLength(value, 'mm', 'mm');
+  const reading = { baseline: 24, sense: 1, formatLength: mmLength };
   const collapse = {
     message:
       'A neighbouring face would shrink to nothing past -19. Try a smaller offset.',
@@ -496,7 +498,7 @@ describe('a refused face offset read as a Total', () => {
   });
 
   it('reads the limit sentence once the workspace has given it its unit', () => {
-    const shown = offsetLimitInUnits(collapse, (value) => `${value} mm`);
+    const shown = offsetLimitInUnits(collapse, mmLength);
     expect(shown.message).toBe(
       'A neighbouring face would shrink to nothing past -19 mm. Try a smaller offset.'
     );
@@ -522,6 +524,20 @@ describe('a refused face offset read as a Total', () => {
     expect(under.keepLabel).toBeNull();
   });
 
+  it('states Totals, the move and Keep in the display unit', () => {
+    // Stored in millimetres, shown in inches: 5 mm is 0.197 in.
+    const read = offsetRefusalInTotal(collapse, -18.99, {
+      baseline: 24,
+      sense: 1,
+      formatLength: (value) => formatShownLength(value, 'mm', 'inch')
+    });
+    expect(read.error.headline).toBe('Total can’t go below 0.197 in here');
+    expect(read.error.message).toBe(
+      'A neighbouring face would shrink to nothing once the face moves 0.748 in (a Total of 0.197 in). Try a larger Total.'
+    );
+    expect(read.keepLabel).toBe('Keep Total 0.197 in');
+  });
+
   it('points a refusal with no named limit back toward the size before the edit', () => {
     const read = offsetRefusalInTotal(
       {
@@ -542,7 +558,7 @@ describe('a refused face offset read as a Total', () => {
 // ("past 6.4") beside a signed "Keep −6.39 mm". They state the limit signed
 // like the offset, in the document's display unit.
 describe('an offset-limit sentence in units', () => {
-  const mm = (value: number) => `${value} mm`;
+  const mm = (value: number) => formatShownLength(value, 'mm', 'mm');
 
   it('states the typed limit, signed, with the unit', () => {
     expect(
@@ -572,6 +588,22 @@ describe('an offset-limit sentence in units', () => {
       ).message
     ).toBe(
       "This face's chamfered or drafted edge can't move with it past -0.5 mm. Try a smaller offset."
+    );
+  });
+
+  it('rounds the limit once, in the unit it is shown in', () => {
+    const sentence = (limit: number) => ({
+      message: `A neighbouring face would shrink to nothing past ${limit}. Try a smaller offset.`,
+      limit
+    });
+    const inToMm = (value: number) => formatShownLength(value, 'inch', 'mm');
+    // -0.2519685 in is -6.4 mm; rounded to hundredths first it read -6.35.
+    expect(offsetLimitInUnits(sentence(-0.2519685), inToMm).message).toBe(
+      'A neighbouring face would shrink to nothing past -6.4 mm. Try a smaller offset.'
+    );
+    // A small limit keeps its direction rather than rounding to 0.
+    expect(offsetLimitInUnits(sentence(-0.004), inToMm).message).toBe(
+      'A neighbouring face would shrink to nothing past -0.102 mm. Try a smaller offset.'
     );
   });
 

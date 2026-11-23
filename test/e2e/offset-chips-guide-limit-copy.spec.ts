@@ -7,6 +7,7 @@ import {
   expectBodyCount,
   clickWorldPoint,
   waitForStillViewport,
+  openActivityLogFromSettings,
   MODEL_ONLY,
   type SeedPanelLayout
 } from './openzcad-fixtures';
@@ -184,4 +185,48 @@ test('a refused offset names its limit with units, and the guide never covers wh
   await card.getByRole('button', { name: /close/i }).click();
   await expect(card).toBeHidden();
   await expect(guide).toBeVisible();
+});
+
+test('a drag cancelled on a refused frame logs its limit with units', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await openCollapseBlock(page, { width: 1280, height: 800 }, MODEL_ONLY);
+  await clickWorldPoint(page, [8, 0, 8]);
+  await expect(page.getByRole('group', { name: 'Picked' })).toContainText(
+    'Block · Front face'
+  );
+  const canvas = page.locator('.viewer-host canvas');
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  const at = (units: number) => ({
+    x: bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * units,
+    y: bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * units
+  });
+  await page.mouse.move(at(0).x, at(0).y);
+  await page.mouse.down();
+  for (let step = 1; step <= 10; step += 1) {
+    await page.mouse.move(at(-0.9 * step).x, at(-0.9 * step).y);
+    await page.waitForTimeout(50);
+  }
+  // Held past the limit until the preview's refused frame is back.
+  await expect(page.getByTestId('direct-manipulation-value')).toContainText(
+    'max',
+    { timeout: 30_000 }
+  );
+  // Cancelled: no release-time refusal ever restates the limit.
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+
+  const log = await openActivityLogFromSettings(page);
+  await expect(log).toContainText('shrink to nothing past -6.4 mm', {
+    timeout: 30_000
+  });
+  await expect(log).not.toContainText(/past -6\.4\. /);
 });

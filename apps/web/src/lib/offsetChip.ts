@@ -397,7 +397,8 @@ const OFFSET_LIMIT_SENTENCE =
  * nothing past -6.4 mm. Try a smaller offset." The typed limit, when the
  * refusal carries one, wins over the sentence's rounded (and, from an older
  * adapter, unsigned) number; `formatLength` writes a stored-unit length in
- * the display unit with its suffix (`formatDocumentLength`).
+ * the display unit with its suffix (`formatDocumentLength`), rounding in
+ * that unit.
  */
 export function offsetLimitInUnits<
   T extends { message: string; limit?: number }
@@ -412,12 +413,14 @@ export function offsetLimitInUnits<
       ? error.limit
       : stated;
   if (!Number.isFinite(limit)) return error;
-  const rounded = Math.round(limit * 100) / 100;
+  // Unrounded: `formatLength` rounds once, in the unit it shows. Rounding
+  // here first, in the stored unit, moved an inch limit off its millimetre
+  // value (-0.2519685 in read -6.35 mm) and a small one to an unsigned 0.
   return {
     ...error,
     message: error.message.replace(
       OFFSET_LIMIT_SENTENCE,
-      ` past ${formatLength(rounded === 0 ? 0 : rounded)}$2`
+      ` past ${formatLength(limit)}$2`
     )
   };
 }
@@ -447,14 +450,17 @@ export function offsetRefusalInTotal<T extends OffsetRefusalReading['error']>(
     /** The span before this edit: the keypad's `totalBaseline`. */
     baseline: number;
     sense: number;
-    units: string;
+    /**
+     * A stored-unit length in the document's display unit with its suffix
+     * (`formatDocumentLength`), so a document shown in inches reads its
+     * Totals in inches.
+     */
+    formatLength: (value: number) => string;
   }
 ): { error: T & { headline?: string }; keepLabel: string | null } {
-  const { baseline, sense, units } = reading;
-  const total = (offset: number) =>
-    formatNumber(Math.round((baseline + sense * offset) * 100) / 100);
-  const keepLabel =
-    keep === null ? null : `Keep Total ${total(keep)} ${units}`.trim();
+  const { baseline, sense, formatLength } = reading;
+  const total = (offset: number) => formatLength(baseline + sense * offset);
+  const keepLabel = keep === null ? null : `Keep Total ${total(keep)}`;
   const limit = error.limit;
   if (limit === undefined || !Number.isFinite(limit) || limit === 0) {
     return {
@@ -462,15 +468,15 @@ export function offsetRefusalInTotal<T extends OffsetRefusalReading['error']>(
         ...error,
         message: error.message.replace(
           /Try a smaller offset\./,
-          `Try a Total nearer ${total(0)} ${units}.`
+          `Try a Total nearer ${total(0)}.`
         )
       },
       keepLabel
     };
   }
   const shrinks = sense * limit < 0;
-  const bound = `${total(limit)} ${units}`;
-  const move = `${formatNumber(Math.round(Math.abs(limit) * 100) / 100)} ${units}`;
+  const bound = total(limit);
+  const move = formatLength(Math.abs(limit));
   return {
     error: {
       ...error,

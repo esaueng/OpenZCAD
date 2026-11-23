@@ -31439,8 +31439,12 @@ export function App() {
       diagnostic,
       value
     });
+    // The status line (and so the Activity log) says the limit in the
+    // display unit too: a drag cancelled after a refused frame has no
+    // release-time refusal to say it. The recorded fixture keeps the
+    // adapter's words.
     setStatus(
-      diagnostic.message,
+      shownOffsetLimit(diagnostic).message,
       diagnostic.detail ? { detail: diagnostic.detail } : undefined
     );
     // One diagnostic fixture per gesture: every refused frame of a drag past
@@ -32515,8 +32519,12 @@ export function App() {
    * shown in.
    */
   function shownOffsetLimit<T extends CommandDiagnostic>(error: T): T {
+    // Read at call time: the live previews are built once and keep the
+    // first render's closures, where `doc` was still null and the limit
+    // came out without its unit.
+    const current = managerRef.current?.document ?? doc;
     return offsetLimitInUnits(error, (value) =>
-      formatDocumentLength(doc, value)
+      formatDocumentLength(current, value)
     );
   }
   function shownToolCard<T extends { error?: CommandDiagnostic }>(
@@ -32549,7 +32557,8 @@ export function App() {
       {
         baseline: request.totalBaseline,
         sense: request.totalSense ?? 1,
-        units: doc?.units ?? ''
+        formatLength: (length) =>
+          formatDocumentLength(managerRef.current?.document ?? doc, length)
       }
     );
     return {
