@@ -450,7 +450,7 @@ const FEATURE_ENUM_FIELDS = {
     thread: new Set<string>(STANDARD_PART_THREADS)
   },
   fillet: { radiusLaw: RADIUS_LAWS },
-  'imported-mesh': { assumedUnits: UNIT_SYSTEMS },
+  'imported-mesh': { assumedUnits: UNIT_SYSTEMS, payloadUnits: UNIT_SYSTEMS },
   'imported-step': {
     stepReader: valuesOf<
       NonNullable<FeatureDataOf<'imported-step'>['stepReader']>

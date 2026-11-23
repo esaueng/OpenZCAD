@@ -115,6 +115,14 @@ export function decodeImportedMeshPayload(
   };
 }
 
+/** Absent, or a known unit where the field may appear at all. */
+function isKnownUnit(value: unknown, allowed: boolean): boolean {
+  return (
+    value === undefined ||
+    (allowed && typeof value === 'string' && Object.hasOwn(UNIT_TO_MM, value))
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -123,7 +131,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Runtime payload contract for mesh imports received from storage or peers:
  * the triangles embedded, or a reference to them — exactly one of the two.
  * The arrays' contents are the kernel's to judge; this only keeps a document
- * from carrying a mesh no rebuild could even look for.
+ * from carrying a mesh no rebuild could even look for. `payloadUnits` (v153)
+ * describes the referenced payload only, so it is refused beside embedded
+ * triangles, which are always in document units.
  */
 export function isImportedMeshSourceData(
   value: unknown
@@ -138,9 +148,8 @@ export function isImportedMeshSourceData(
     typeof value.artifactId === 'string' &&
     typeof value.sourceName === 'string' &&
     typeof value.triangleCount === 'number' &&
-    (value.assumedUnits === undefined ||
-      (typeof value.assumedUnits === 'string' &&
-        Object.hasOwn(UNIT_TO_MM, value.assumedUnits))) &&
+    isKnownUnit(value.assumedUnits, true) &&
+    isKnownUnit(value.payloadUnits, value.meshPayloadRef !== undefined) &&
     (value.meshPayloadRef === undefined
       ? embedded
       : neitherArray && isImportedSourceReference(value.meshPayloadRef))

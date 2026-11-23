@@ -404,6 +404,24 @@ export function assertImportedStepContentSchema(
     );
 }
 
+/**
+ * I03: an imported mesh whose payload states its own units needs v153, or an
+ * older reader would read the triangles in the document's unit instead.
+ */
+export const MESH_PAYLOAD_UNITS_SCHEMA_VERSION = 153;
+
+export function assertImportedMeshContentSchema(
+  data: unknown,
+  version: unknown
+): void {
+  if (record(data) && data.payloadUnits !== undefined)
+    assertMinimumProjectSchema(
+      version,
+      MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
+      'Mesh payload units'
+    );
+}
+
 /** L15: custom features need the schema that declares them. */
 export const CUSTOM_FEATURE_SCHEMA_VERSION = 110;
 
@@ -1180,6 +1198,14 @@ export function assertDocumentContentCommandSchema(
       assertThreadContentSchema(command.payload, document.schemaVersion);
     if (command.kind === 'import.step')
       assertImportedStepContentSchema(command.payload, document.schemaVersion);
+    // I03: an import, or a patch however it names its kind (the field is the
+    // imported mesh's alone).
+    if (command.kind === 'import.mesh')
+      assertImportedMeshContentSchema(command.payload, document.schemaVersion);
+    assertImportedMeshContentSchema(
+      command.payload.data,
+      document.schemaVersion
+    );
     if (command.kind === 'feature.custom-feature')
       assertCustomFeatureSchema(document.schemaVersion);
     if (command.kind === 'feature.pattern')
@@ -1623,6 +1649,8 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
       assertFilletContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'imported-step')
       assertImportedStepContentSchema(node.data, document.schemaVersion);
+    if (node.kind === 'feature' && node.data.featureKind === 'imported-mesh')
+      assertImportedMeshContentSchema(node.data, document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'custom-feature')
       assertCustomFeatureSchema(document.schemaVersion);
     if (node.kind === 'feature' && node.data.featureKind === 'pattern')

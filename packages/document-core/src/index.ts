@@ -83,7 +83,8 @@ import {
   assertHoleContentSchema,
   assertSketchObjectContentSchema,
   assertThreadContentSchema,
-  assertMinimumProjectSchema
+  assertMinimumProjectSchema,
+  MESH_PAYLOAD_UNITS_SCHEMA_VERSION
 } from './document-content-schema';
 export * from './sketch-composites';
 export * from './sketch-projections';
@@ -6896,7 +6897,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'vertices',
     'indices',
     'meshPayloadRef',
-    'assumedUnits'
+    'assumedUnits',
+    'payloadUnits'
   ]
 };
 
@@ -7106,6 +7108,17 @@ export function updateFeature(
         document.schemaVersion,
         151,
         'Per-vertex fillet radii'
+      );
+    }
+    // I03 (v153): nor state a mesh payload's units.
+    if (
+      feature.featureKind === 'imported-mesh' &&
+      (input.data as { payloadUnits?: unknown }).payloadUnits !== undefined
+    ) {
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
+        'Mesh payload units'
       );
     }
     const patch = { ...input.data } as Record<string, unknown>;

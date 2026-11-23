@@ -1,3 +1,4 @@
+import type { UnitSystem } from '@openzcad/shared';
 import type { ImportedMeshFeatureData } from './imported-mesh';
 
 /**
@@ -29,17 +30,25 @@ export interface ImportedMeshStore {
 /**
  * The cache key for a referenced payload, or undefined for embedded facets,
  * which have no content address to key on. The triangle count is part of the
- * key because the builder validates the payload against it.
+ * key because the builder validates the payload against it. So is the scale
+ * the payload is read at (I03 `payloadUnits`), named by its unit pair: one
+ * blob loaded as millimetres into an inch document and as-is into another
+ * must not share a converted solid. An unscaled read keeps the original key.
  */
 export function importedMeshCacheKey(
   data: Pick<
     ImportedMeshFeatureData,
-    'vertices' | 'indices' | 'meshPayloadRef' | 'triangleCount'
-  >
+    'vertices' | 'indices' | 'meshPayloadRef' | 'triangleCount' | 'payloadUnits'
+  >,
+  documentUnits: UnitSystem
 ): string | undefined {
   if (data.vertices && data.indices) return undefined;
   const checksum = data.meshPayloadRef?.checksumSha256;
-  return checksum ? `${checksum}:${data.triangleCount}` : undefined;
+  if (!checksum) return undefined;
+  const key = `${checksum}:${data.triangleCount}`;
+  return data.payloadUnits === undefined || data.payloadUnits === documentUnits
+    ? key
+    : `${key}:${data.payloadUnits}>${documentUnits}`;
 }
 
 function entryBytes(entry: CachedImportedMesh): number {

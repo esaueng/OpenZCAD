@@ -2,7 +2,9 @@ import { MAX_IMPORT_TRIANGLES, writeAsciiStl } from '@openzcad/io-stl';
 import {
   decodeImportedMeshPayload,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
-  type ImportedMeshTriangles
+  millimetresPerUnit,
+  type ImportedMeshTriangles,
+  type UnitSystem
 } from '@openzcad/shared';
 import type { ImportedMeshFeatureData } from './imported-mesh';
 
@@ -78,10 +80,17 @@ export function importedMeshStl(
  * keyed by checksum. A missing entry means this device could neither find the
  * payload locally nor fetch it, which is reported against the feature by name
  * rather than left to read as a malformed mesh.
+ *
+ * A payload stored in other units than the document's (`payloadUnits`, I03)
+ * is scaled into `documentUnits` here, the one place every consumer — the
+ * solid conversion, the reference-mesh fallback, and through them display,
+ * export and analysis — reads it from. Embedded triangles are always in
+ * document units and are returned untouched.
  */
 export function importedMeshTriangles(
   data: ImportedMeshFeatureData,
-  payloads: ReadonlyMap<string, Uint8Array>
+  payloads: ReadonlyMap<string, Uint8Array>,
+  documentUnits: UnitSystem
 ): ImportedMeshTriangles {
   // Embedded data wins over a reference, as `stepText` always has.
   if (data.vertices && data.indices) {
@@ -97,9 +106,32 @@ export function importedMeshTriangles(
         `Mesh data for "${data.sourceName}" is not available on this device.`
       );
     }
-    return decodeImportedMeshPayload(bytes);
+    const decoded = decodeImportedMeshPayload(bytes);
+    const scale = importedMeshPayloadScale(data, documentUnits);
+    // The decoder hands back views on its own copy, so scaling in place
+    // never touches the fetched bytes another feature may share.
+    if (scale !== 1) {
+      for (let index = 0; index < decoded.vertices.length; index++)
+        decoded.vertices[index]! *= scale;
+    }
+    return decoded;
   }
   throw new Error(
     'Imported mesh data is malformed or exceeds the import limit.'
   );
+}
+
+/**
+ * The factor a referenced payload's coordinates are multiplied by to read
+ * them in `documentUnits`: 1 when `payloadUnits` is absent (the payload is in
+ * document units, as every payload written before v153 is) or names the
+ * document's unit.
+ */
+export function importedMeshPayloadScale(
+  data: Pick<ImportedMeshFeatureData, 'payloadUnits'>,
+  documentUnits: UnitSystem
+): number {
+  const payloadUnits = data.payloadUnits;
+  if (payloadUnits === undefined || payloadUnits === documentUnits) return 1;
+  return millimetresPerUnit(payloadUnits) / millimetresPerUnit(documentUnits);
 }

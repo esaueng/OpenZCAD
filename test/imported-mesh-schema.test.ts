@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
+  MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
+  assertStorableDocument,
   createProjectDocument,
-  normalizeDocument
+  normalizeDocument,
+  updateFeature
 } from '@openzcad/document-core';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -163,5 +166,127 @@ describe('assumed units on a unitless mesh import (v52)', () => {
     expect(isImportedMeshSourceData({ ...data, assumedUnits: 25.4 })).toBe(
       false
     );
+  });
+});
+
+describe('mesh payload units (v153)', () => {
+  function withPayloadUnits(
+    document: ProjectDocument,
+    payloadUnits: unknown
+  ): ProjectDocument {
+    const next = structuredClone(document);
+    for (const node of Object.values(next.nodes))
+      if (node.kind === 'feature' && node.data.featureKind === 'imported-mesh')
+        (node.data as Record<string, unknown>).payloadUnits = payloadUnits;
+    return next;
+  }
+  const meshData = (document: ProjectDocument) =>
+    Object.values(document.nodes).flatMap((node) =>
+      node.kind === 'feature' && node.data.featureKind === 'imported-mesh'
+        ? [node.data]
+        : []
+    )[0]!;
+
+  it('is part of the current schema', () => {
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(
+      MESH_PAYLOAD_UNITS_SCHEMA_VERSION
+    );
+  });
+
+  it('round-trips through save, normalization and replay', () => {
+    const document = withPayloadUnits(meshDocument('reference'), 'mm');
+    const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;
+    expect(meshData(normalizeDocument(saved)).payloadUnits).toBe('mm');
+    expect(normalizeDocument(saved)).toEqual(normalizeDocument(document));
+    expect(meshData(assertStorableDocument(saved)).payloadUnits).toBe('mm');
+    // Absent stays absent: an import never writes it.
+    expect('payloadUnits' in meshData(meshDocument('reference'))).toBe(false);
+  });
+
+  it('refuses a document that declares an older schema', () => {
+    const document = withPayloadUnits(meshDocument('reference'), 'inch');
+    expect(() =>
+      normalizeDocument({
+        ...document,
+        schemaVersion: MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1
+      } as never)
+    ).toThrow(/Mesh payload units require project schema v153/);
+    // A command log that patched it in is refused too, node or not.
+    const plain = meshDocument('reference');
+    const feature = Object.values(plain.nodes).find(
+      (node) => node.kind === 'feature'
+    )!;
+    const patched = {
+      ...plain,
+      schemaVersion: MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1,
+      commandLog: [
+        ...plain.commandLog,
+        {
+          ...plain.commandLog.at(-1)!,
+          kind: 'feature.update',
+          payload: {
+            featureId: feature.kind === 'feature' ? feature.featureId : '',
+            data: { payloadUnits: 'mm' }
+          }
+        }
+      ]
+    };
+    expect(() => normalizeDocument(patched as never)).toThrow(/v153/);
+    // The same document without the field still opens at that schema.
+    expect(() =>
+      normalizeDocument({
+        ...meshDocument('reference'),
+        schemaVersion: MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1
+      } as never)
+    ).not.toThrow();
+  });
+
+  it('refuses a patch that writes it into an older document', () => {
+    const document = {
+      ...meshDocument('reference'),
+      schemaVersion: MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1
+    } as never as ProjectDocument;
+    const feature = Object.values(document.nodes).find(
+      (node) => node.kind === 'feature'
+    )!;
+    if (feature.kind !== 'feature') throw new Error('No mesh feature.');
+    expect(() =>
+      updateFeature(document, {
+        featureId: feature.featureId,
+        data: { payloadUnits: 'mm' }
+      } as never)
+    ).toThrow(/v153/);
+  });
+
+  it('accepts any known unit, only beside a payload reference', () => {
+    const reference = meshData(meshDocument('reference'));
+    for (const unit of ['mm', 'cm', 'm', 'inch'])
+      expect(
+        isImportedMeshSourceData({ ...reference, payloadUnits: unit })
+      ).toBe(true);
+    for (const bad of ['furlong', 'Inch', 25.4, null, {}])
+      expect(
+        isImportedMeshSourceData({ ...reference, payloadUnits: bad })
+      ).toBe(false);
+    // Embedded triangles are always in document units.
+    const embedded = meshData(meshDocument('embedded'));
+    expect(isImportedMeshSourceData(embedded)).toBe(true);
+    expect(isImportedMeshSourceData({ ...embedded, payloadUnits: 'mm' })).toBe(
+      false
+    );
+    expect(() =>
+      assertStorableDocument(
+        JSON.parse(
+          JSON.stringify(withPayloadUnits(meshDocument('embedded'), 'mm'))
+        )
+      )
+    ).toThrow();
+    expect(() =>
+      assertStorableDocument(
+        JSON.parse(
+          JSON.stringify(withPayloadUnits(meshDocument('reference'), 'ft'))
+        )
+      )
+    ).toThrow();
   });
 });
