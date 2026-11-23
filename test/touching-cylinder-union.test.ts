@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   addDatumAxis,
   addPrimitiveFeature,
@@ -24,13 +24,14 @@ import {
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import {
-  contactRepairFaults,
-  fuseAllMergingFaceContacts,
   faceComponentsOf,
-  isFaceConnectedSolid,
-  MAX_CONTACT_REPAIR_OPERANDS
+  isFaceConnectedSolid
 } from '../packages/kernel-adapter/src/exact-boolean-helpers';
-import { AdapterRefusal } from '../packages/kernel-adapter/src/adapter-refusal';
+import {
+  exactBooleanOutcome,
+  exactFuseAll
+} from '../packages/kernel-adapter/src/exact-boolean-refusal';
+import { validationReport } from '../packages/kernel-adapter/src/kernel-validation';
 
 /**
  * QA 2026-11-14 finding #1: a hub standing EXACTLY on a flange (a cylinder
@@ -42,15 +43,13 @@ import { AdapterRefusal } from '../packages/kernel-adapter/src/adapter-refusal';
  * concave blend adds it, and a later cut through the hub dropped the hub
  * entirely. Nothing warned: the body validated and its volume was the sum.
  *
- * The cause is the pinned Remus `fuseAll`, which joins groups it judges
- * disjoint without a boolean and misjudges cap-on-cap contact between two
- * cylinders (esaueng/remus#1738). The pairwise `fuse` merges the same pair
- * correctly, though it refuses parallel cylinders overlapping by 1 mm or less
- * (esaueng/remus#1742), and the union gate now regroups a result `fuseAll`
- * left in pieces with both. The same gate serves extrude Add, so a circular
- * boss extruded from a cylinder's top face had the identical defect. Once
- * both issues are fixed upstream, these cases are the oracles the plain
- * `fuseAll` must pass before the workaround goes.
+ * The cause was two Remus defects: `fuseAll` misjudged cap-on-cap cylinder
+ * contact as disjoint (esaueng/remus#1738, fixed in Remus 2026.1.141 / #1792),
+ * and pairwise `fuse` refused parallel cylinders overlapping by 1 mm or less
+ * (esaueng/remus#1742, fixed upstream and verified on Remus 2026.1.160).
+ * With both fixed, the adapter's `fuseAllMergingFaceContacts` workaround is
+ * retired and these oracles pin the plain `exactFuseAll` and pairwise `fuse`
+ * directly.
  *
  * Every expectation is a closed form. The overlapping hub (base at z = 5) is
  * the control the QA pass used and was always correct.
@@ -243,13 +242,13 @@ describe('a cylinder standing exactly on another cylinder', () => {
     expect(planes[1]).toBeCloseTo(ANNULUS, 6);
   }, 120_000);
 
-  it('folds only a fuseAll result left in pieces', () => {
+  it('merges touching cylinders and keeps disjoint cylinders in two pieces via exactFuseAll', () => {
     const kernel = new RemusKernel();
     const touching = [
       kernel.makeCylinder(FLANGE_R, FLANGE_H),
       lifted(kernel, kernel.makeCylinder(HUB_R, TOP - FLANGE_H), 0, FLANGE_H)
     ];
-    const merged = fuseAllMergingFaceContacts(kernel, touching);
+    const merged = exactFuseAll(kernel, touching);
     expect(isFaceConnectedSolid(kernel, merged)).toBe(true);
     expect(kernel.getSolidFaces(merged)).toHaveLength(5);
 
@@ -264,46 +263,12 @@ describe('a cylinder standing exactly on another cylinder', () => {
         FLANGE_H + 1
       )
     ];
-    const disjoint = fuseAllMergingFaceContacts(kernel, apart);
+    const disjoint = exactFuseAll(kernel, apart);
     expect(faceComponentsOf(kernel, disjoint)).toHaveLength(2);
     expect(kernel.volume(disjoint, 0.01)).toBeCloseTo(
       Math.PI * FLANGE_R ** 2 * FLANGE_H +
         Math.PI * HUB_R ** 2 * (TOP - FLANGE_H),
       6
-    );
-  });
-
-  it('refuses, by type, a contact it cannot merge instead of returning the wall', () => {
-    const kernel = new RemusKernel();
-    // A cube standing on a slab: the stand-in fuseAll needs straight edges.
-    const touching = boxOnBox(kernel);
-    // A kernel whose `fuseAll` keeps the two caps gets the contact repaired
-    // by the pairwise fuse: one piece, the exact material, no wall.
-    const repaired = withFuseAllLeavingPieces(() =>
-      fuseAllMergingFaceContacts(kernel, touching)
-    );
-    expect(faceComponentsOf(kernel, repaired)).toHaveLength(1);
-    expect(kernel.getSolidFaces(repaired)).toHaveLength(11);
-    expect(kernel.volume(repaired, 0.01)).toBeCloseTo(BOX_ON_BOX_VOLUME, 6);
-    // Stand in for a kernel that can merge the contact by neither entry
-    // point: once the contact is proved, the pairwise fuse refuses, and
-    // `fuseAll` keeps the two caps.
-    let refusal: unknown;
-    withFuseAllLeavingPieces(() =>
-      withRepairFuse(
-        () => null,
-        () => {
-          try {
-            fuseAllMergingFaceContacts(kernel, touching);
-          } catch (error) {
-            refusal = error;
-          }
-        }
-      )
-    );
-    expect(refusal).toBeInstanceOf(AdapterRefusal);
-    expect((refusal as AdapterRefusal).adapterCode).toBe(
-      'union_unmerged_contact'
     );
   });
 });
@@ -375,10 +340,10 @@ describe('several bodies standing on one flange', () => {
 
   it('keeps an enclosed cavity in a united body without refusing it', async () => {
     // A cavity is a second boundary component that is NOT a missed merge:
-    // it must neither be repaired nor refused. (On the pin `fuseAll` refuses,
-    // by its own typed refusal, any hub on a hollow CYLINDER flange, so the
-    // document case is prismatic; the piece count of a hollow body is pinned
-    // at kernel level below.)
+    // the union must keep it and must not refuse. (On the pin `fuseAll`
+    // refuses, by its own typed refusal, any hub on a hollow CYLINDER flange,
+    // so the document case is prismatic; the piece count of a hollow body is
+    // pinned at kernel level below.)
     let document = createProjectDocument(
       'Hollow plate',
       toUserId('user_touching')
@@ -435,9 +400,7 @@ describe('several bodies standing on one flange', () => {
       lifted(kernel, kernel.makeBox(10, 10, 10), 5, 5, 5)
     );
     expect(isFaceConnectedSolid(kernel, hollow)).toBe(false);
-    // Fused with a box on its side: a contact group, certified despite the
-    // cavity's second boundary component, and not refused.
-    const united = fuseAllMergingFaceContacts(kernel, [
+    const united = exactFuseAll(kernel, [
       hollow,
       lifted(kernel, kernel.makeBox(20, 20, 20), 20, 0)
     ]);
@@ -445,56 +408,6 @@ describe('several bodies standing on one flange', () => {
     expect(kernel.volume(united, 0.01)).toBeCloseTo(15000, 6);
   });
 });
-
-/**
- * Run `body` with the repair's pairwise fuse replaced by `injected`; the
- * gate's contact proof still reaches the real kernel.
- */
-function withRepairFuse<T>(
-  injected: (kernel: RemusKernel, left: number, right: number) => number | null,
-  body: () => T
-): T {
-  contactRepairFaults.pairwiseFuse = injected;
-  try {
-    return body();
-  } finally {
-    delete contactRepairFaults.pairwiseFuse;
-  }
-}
-
-/**
- * Run `body` with every `fuseAll` the gate makes replaced by the kernel's
- * behaviour before esaueng/remus#1792: the operands joined without a
- * boolean, every face of every operand sewn into one solid, so each contact
- * keeps both caps while the material stays exact and a correct repair can
- * still be accepted. Sewing takes straight edges only, so the fixtures run
- * under it are boxes. The contact proof still reads the real operands.
- */
-function withFuseAllLeavingPieces<T>(body: () => T): T {
-  contactRepairFaults.fuseAll = (kernel, solids) =>
-    kernel.sewFaces(
-      Uint32Array.from(
-        Array.from(solids).flatMap((solid) =>
-          Array.from<number>(kernel.getSolidFaces(kernel.copySolid(solid)))
-        )
-      ),
-      1e-7
-    );
-  try {
-    return body();
-  } finally {
-    delete contactRepairFaults.fuseAll;
-  }
-}
-
-/** A 20 mm cube standing on a 40 × 40 × 10 slab, both offset by `by`. */
-function boxOnBox(kernel: RemusKernel, by = 0): number[] {
-  return [
-    lifted(kernel, kernel.makeBox(40, 40, 10), by, by, by),
-    lifted(kernel, kernel.makeBox(20, 20, 20), 10 + by, 10 + by, 10 + by)
-  ];
-}
-const BOX_ON_BOX_VOLUME = 40 * 40 * 10 + 20 * 20 * 20;
 
 /** Planar face areas of `solid`, ascending. */
 function planeAreas(kernel: RemusKernel, solid: number): number[] {
@@ -515,7 +428,7 @@ function thinTube(kernel: RemusKernel, wall: number, x: number, y = 0): number {
   );
 }
 
-describe('certifying each contact group on its own', () => {
+describe('direct kernel fuse and fuseAll contact oracles', () => {
   /** A copy of `solid` moved by `by` on every axis. */
   const far = (kernel: RemusKernel, solid: number, by: number) =>
     lifted(kernel, solid, by, by, by);
@@ -534,37 +447,75 @@ describe('certifying each contact group on its own', () => {
     ).length === 1;
 
   it.each([0, 1e5, 1e7])(
-    'fuseAll merges a hub standing on a flange at %s (esaueng/remus#1738)',
+    'exactFuseAll merges a hub standing on a flange at %s (esaueng/remus#1738)',
     (by) => {
-      // Until esaueng/remus#1792 (2026.1.141) the plain fuseAll left two
-      // pieces here, both caps intact. It now merges the contact itself.
       const kernel = new RemusKernel();
-      const fused = kernel.fuseAll(Uint32Array.from(hubOnFlange(kernel, by)));
+      const fused = exactFuseAll(kernel, hubOnFlange(kernel, by));
       expect(faceComponentsOf(kernel, fused)).toHaveLength(1);
+      expect(kernel.getSolidFaces(fused)).toHaveLength(5);
       expect(flangeTopMerged(kernel, fused)).toBe(true);
     }
   );
 
-  it.each([0, 1e5, 1e7])(
-    'never returns the hub-on-flange wall silently at %s',
-    (by) => {
+  it.each([1, 0.5, 0.1])(
+    'exact pairwise fuse and exactFuseAll merge parallel r20 cylinders overlapping by %s mm (esaueng/remus#1742)',
+    (overlap) => {
       const kernel = new RemusKernel();
-      let result: number | undefined;
-      try {
-        result = fuseAllMergingFaceContacts(kernel, hubOnFlange(kernel, by));
-      } catch (error) {
-        expect((error as AdapterRefusal).adapterCode).toBe(
-          'union_unmerged_contact'
-        );
-        return;
+      const halfSpan = HUB_R - overlap / 2;
+      const lens =
+        2 * HUB_R ** 2 * Math.acos(halfSpan / HUB_R) -
+        halfSpan * Math.sqrt(4 * HUB_R ** 2 - 4 * halfSpan ** 2);
+      const height = TOP - FLANGE_H;
+      const expectedSameZ = (2 * Math.PI * HUB_R ** 2 - lens) * height;
+
+      const left = lifted(
+        kernel,
+        kernel.makeCylinder(HUB_R, height),
+        -halfSpan,
+        FLANGE_H
+      );
+      const right = lifted(
+        kernel,
+        kernel.makeCylinder(HUB_R, height),
+        halfSpan,
+        FLANGE_H
+      );
+
+      const pair = exactBooleanOutcome(kernel, 'fuse', left, right);
+      expect(pair.status).toBe('ok');
+      if (pair.status === 'ok') {
+        expect(validationReport(kernel, pair.solid).errorCount).toBe(0);
+        expect(faceComponentsOf(kernel, pair.solid)).toHaveLength(1);
+        expect(kernel.volume(pair.solid, 0.01)).toBeCloseTo(expectedSameZ, 3);
       }
-      expect(faceComponentsOf(kernel, result)).toHaveLength(1);
-      expect(kernel.getSolidFaces(result)).toHaveLength(5);
+
+      const fusedAll = exactFuseAll(kernel, [left, right]);
+      expect(validationReport(kernel, fusedAll).errorCount).toBe(0);
+      expect(faceComponentsOf(kernel, fusedAll)).toHaveLength(1);
+      expect(kernel.volume(fusedAll, 0.01)).toBeCloseTo(expectedSameZ, 3);
+
+      // Offset cap planes (z = 10..40 and z = 12..42, 28 mm shared height).
+      const offsetRight = lifted(
+        kernel,
+        kernel.makeCylinder(HUB_R, height),
+        halfSpan,
+        FLANGE_H + 2
+      );
+      const offsetPair = exactBooleanOutcome(kernel, 'fuse', left, offsetRight);
+      expect(offsetPair.status).toBe('ok');
+      if (offsetPair.status === 'ok') {
+        expect(validationReport(kernel, offsetPair.solid).errorCount).toBe(0);
+        expect(faceComponentsOf(kernel, offsetPair.solid)).toHaveLength(1);
+        expect(kernel.volume(offsetPair.solid, 0.01)).toBeCloseTo(
+          2 * Math.PI * HUB_R ** 2 * height - lens * (height - 2),
+          3
+        );
+      }
     }
   );
 
   it.each([0, 1e5])(
-    'unites a tiny hollow cube with its neighbour at %s without refusing',
+    'unites a tiny hollow cube with its neighbour at %s',
     (by) => {
       const kernel = new RemusKernel();
       const hollow = kernel.cut(
@@ -580,116 +531,35 @@ describe('certifying each contact group on its own', () => {
         lifted(kernel, kernel.makeBox(0.2, 0.2, 0.2), 0.2, 0),
         by
       );
-      // Before 06483e5: at 1e5 the cavity read as a second piece of
-      // material and the union was refused.
-      const united = fuseAllMergingFaceContacts(kernel, [hollow, neighbour]);
+      const united = exactFuseAll(kernel, [hollow, neighbour]);
       expect(kernel.volume(united, 0.01)).toBeCloseTo(0.015, 9);
     }
   );
 
-  it('accepts no retry that drops material, however few pieces it has', () => {
-    const kernel = new RemusKernel();
-    const operands = boxOnBox(kernel);
-    const flange = operands[0]!;
-    // A pairwise fuse that "merges" by returning the slab alone: one piece,
-    // no wall — and no cube. Before 06483e5 (on a hub and flange):
-    // accepted, 50265.48 mm³ shipped for an 87964.59 mm³ union.
-    withFuseAllLeavingPieces(() =>
-      withRepairFuse(
-        (k) => k.copySolid(flange),
-        () => {
-          expect(() => fuseAllMergingFaceContacts(kernel, operands)).toThrow(
-            AdapterRefusal
-          );
-        }
-      )
-    );
-  });
-
-  it('accepts no retry that drops a small feature off a large body far away', () => {
-    const kernel = new RemusKernel();
-    // A 2 m block at (1e7, 1e7, 1e7) with a 0.5 mm 40 × 40 boss on top.
-    // Before 1f6c3fc (on an r1000 flange with an r20 boss): coordinate-scaled
-    // tolerances passed a retry returning the flange alone, and 628.32 mm³
-    // of boss was lost.
-    const flange = far(kernel, kernel.makeBox(2000, 2000, 1000), 1e7);
-    const boss = far(
-      kernel,
-      lifted(kernel, kernel.makeBox(40, 40, 0.5), 980, 1000, 980),
-      1e7
-    );
-    withFuseAllLeavingPieces(() =>
-      withRepairFuse(
-        (k) => k.copySolid(flange),
-        () => {
-          expect(() =>
-            fuseAllMergingFaceContacts(kernel, [flange, boss])
-          ).toThrow(AdapterRefusal);
-        }
-      )
-    );
-  });
-
   it.each([
     ['eleven r1 pins and one r0.1 pin', 0.1],
     ['twelve r1 pins', 1]
-  ])('refuses a flange with %s rather than ship their caps', (_label, last) => {
+  ])('merges a flange with %s into one component', (_label, lastRadius) => {
     const kernel = new RemusKernel();
-    // Thirteen operands in one contact group: past the repair cap, so the
-    // group cannot be repaired and fails closed. Before 1f6c3fc the r0.1 pin
-    // read as unknown and silenced the refusal for all.
     const operands = [kernel.makeCylinder(FLANGE_R, FLANGE_H)];
     for (let index = 0; index < 12; index += 1) {
       const angle = (index * Math.PI) / 6;
       operands.push(
         lifted(
           kernel,
-          kernel.makeCylinder(index === 11 ? last : 1, 3),
+          kernel.makeCylinder(index === 11 ? lastRadius : 1, 3),
           30 * Math.cos(angle),
           FLANGE_H,
           30 * Math.sin(angle)
         )
       );
     }
-    expect(operands.length).toBeGreaterThan(MAX_CONTACT_REPAIR_OPERANDS);
-    // The pinned fuseAll merges every pin itself (esaueng/remus#1792): one
-    // piece holding the flange and all twelve pins.
-    const united = fuseAllMergingFaceContacts(kernel, operands);
+    const united = exactFuseAll(kernel, operands);
     expect(faceComponentsOf(kernel, united)).toHaveLength(1);
     expect(kernel.volume(united, 0.01)).toBeCloseTo(
       Math.PI * FLANGE_R ** 2 * FLANGE_H +
-        Math.PI * 3 * (11 * 1 ** 2 + last ** 2),
+        Math.PI * 3 * (11 * 1 ** 2 + lastRadius ** 2),
       6
-    );
-    // A kernel that left them in pieces could not be repaired past the cap,
-    // and the gate fails closed. The stand-in needs straight edges, so the
-    // same layout is built from a slab and square pins.
-    const boxes = [
-      lifted(kernel, kernel.makeBox(80, 80, FLANGE_H), -40, 0, -40)
-    ];
-    for (let index = 0; index < 12; index += 1) {
-      const angle = (index * Math.PI) / 6;
-      const side = 2 * (index === 11 ? last : 1);
-      boxes.push(
-        lifted(
-          kernel,
-          kernel.makeBox(side, side, 3),
-          30 * Math.cos(angle) - side / 2,
-          FLANGE_H,
-          30 * Math.sin(angle) - side / 2
-        )
-      );
-    }
-    let refusal: unknown;
-    withFuseAllLeavingPieces(() => {
-      try {
-        fuseAllMergingFaceContacts(kernel, boxes);
-      } catch (error) {
-        refusal = error;
-      }
-    });
-    expect((refusal as AdapterRefusal | undefined)?.adapterCode).toBe(
-      'union_unmerged_contact'
     );
   });
 
@@ -697,13 +567,9 @@ describe('certifying each contact group on its own', () => {
     ['one thin tube', 1],
     ['eleven thin tubes', 11]
   ])(
-    'never lets %s elsewhere hide a hub left standing on its flange',
+    'merges a hub standing on its flange alongside %s apart',
     (_label, tubes) => {
       const kernel = new RemusKernel();
-      // Before: each r20 tube with a 1 µm wall stood apart as a component
-      // whose sign could not be read, and the hub's contact caps shipped in
-      // silence — 10 faces with one tube, 50 with eleven. The tubes touch
-      // nothing, so they are no contact group's business.
       const operands = [
         kernel.makeCylinder(FLANGE_R, FLANGE_H),
         lifted(kernel, kernel.makeCylinder(HUB_R, TOP - FLANGE_H), 0, FLANGE_H)
@@ -711,76 +577,21 @@ describe('certifying each contact group on its own', () => {
       for (let index = 0; index < tubes; index += 1) {
         operands.push(thinTube(kernel, 0.001, 200 + index * 100));
       }
-      let result: number;
-      try {
-        result = fuseAllMergingFaceContacts(kernel, operands);
-      } catch (error) {
-        expect((error as AdapterRefusal).adapterCode).toBe(
-          'union_unmerged_contact'
-        );
-        return;
-      }
+      const result = exactFuseAll(kernel, operands);
       expect(flangeTopMerged(kernel, result)).toBe(true);
       expect(faceComponentsOf(kernel, result)).toHaveLength(1 + tubes);
     }
   );
 
-  it('does no extra work on a union whose operands touch nowhere', () => {
-    const kernel = new RemusKernel();
-    // Thin tubes and a plate holding sixteen small cavities, all apart: the result
-    // is in many pieces, but no two operands touch, so the gate tessellates
-    // nothing and returns exactly what fuseAll made.
-    const plate = () => {
-      let body = kernel.makeBox(80, 80, 10);
-      for (let i = 0; i < 4; i += 1) {
-        for (let j = 0; j < 4; j += 1) {
-          body = kernel.cut(
-            body,
-            lifted(
-              kernel,
-              kernel.makeBox(1, 1, 1),
-              10 + i * 20,
-              4.5,
-              10 + j * 20
-            )
-          );
-        }
-      }
-      return body;
-    };
-    const operands = () => [
-      plate(),
-      thinTube(kernel, 0.001, 200),
-      thinTube(kernel, 0.01, 300)
-    ];
-    const plain = kernel.fuseAll(Uint32Array.from(operands()));
-    const gated = operands();
-    const tessellate = vi.spyOn(RemusKernel.prototype, 'tessellateFace');
-    try {
-      const result = fuseAllMergingFaceContacts(kernel, gated);
-      expect(tessellate).not.toHaveBeenCalled();
-      expect(kernel.getSolidFaces(result)).toHaveLength(
-        kernel.getSolidFaces(plain).length
-      );
-      expect(kernel.volume(result, 0.01)).toBeCloseTo(
-        kernel.volume(plain, 0.01),
-        9
-      );
-    } finally {
-      tessellate.mockRestore();
-    }
-  });
-
-  it('certifies each contact of compound operands, not one witness per operand', () => {
+  it('merges each contact of compound operands into two components', () => {
     const kernel = new RemusKernel();
     // Operand A is one body of two flanges 200 mm apart. Operand B is one
     // body of a small cylinder inside the first flange and a tall r40
     // cylinder resting on the second. fuseAll merges both contacts: two
-    // separate regions, 251327.41 mm³. Before: A's single witness sat in
-    // region 1, B's in region 2, and the union was refused as walled.
+    // separate regions, 251327.41 mm³.
     const compound = (solids: number[]) =>
       kernel.fuseAll(Uint32Array.from(solids));
-    const operands = () => [
+    const operands = [
       compound([
         kernel.makeCylinder(40, 10),
         lifted(kernel, kernel.makeCylinder(40, 10), 200, 0)
@@ -790,12 +601,8 @@ describe('certifying each contact group on its own', () => {
         lifted(kernel, kernel.makeCylinder(40, 30), 200, 10)
       ])
     ];
-    const plain = kernel.fuseAll(Uint32Array.from(operands()));
-    const result = fuseAllMergingFaceContacts(kernel, operands());
+    const result = exactFuseAll(kernel, operands);
     expect(kernel.volume(result, 0.01)).toBeCloseTo(251327.412287, 5);
-    expect(kernel.getSolidFaces(result)).toHaveLength(
-      kernel.getSolidFaces(plain).length
-    );
     expect(faceComponentsOf(kernel, result)).toHaveLength(2);
   });
 
@@ -803,12 +610,7 @@ describe('certifying each contact group on its own', () => {
     'unites a block resting on a %s mm plate held in a compound body',
     (thickness) => {
       const kernel = new RemusKernel();
-      // A 1 m × 1 m plate compounded with a separate 1 mm cube, and a block
-      // resting on the plate. Before: a witness had to clear every face by
-      // 1e-6 of the plate's DIAGONAL (≈ 0.0014 mm), more than half the
-      // plate's thickness, so the plate had no witness and the union was
-      // refused.
-      const operands = () => [
+      const operands = [
         kernel.fuseAll(
           Uint32Array.from([
             kernel.makeBox(1000, 1000, thickness),
@@ -817,41 +619,29 @@ describe('certifying each contact group on its own', () => {
         ),
         lifted(kernel, kernel.makeBox(10, 10, 1), 100, thickness, 100)
       ];
-      const plain = kernel.fuseAll(Uint32Array.from(operands()));
-      const result = fuseAllMergingFaceContacts(kernel, operands());
+      const result = exactFuseAll(kernel, operands);
       expect(kernel.volume(result, 0.01)).toBeCloseTo(
         1000 * 1000 * thickness + 1 + 100,
         6
-      );
-      expect(kernel.getSolidFaces(result)).toHaveLength(
-        kernel.getSolidFaces(plain).length
       );
       expect(faceComponentsOf(kernel, result)).toHaveLength(2);
     }
   );
 
-  it('leaves cubes that share only a vertex exactly as fuseAll makes them', () => {
+  it('keeps cubes that share only a vertex in two components with exact volume', () => {
     const kernel = new RemusKernel();
-    // A shared vertex cannot hold an internal wall. Before: distance 0 made
-    // the pair a contact group, its two shells failed certification, and
-    // the union was refused.
-    const operands = () => [
+    // A shared vertex cannot hold an internal wall.
+    const result = exactFuseAll(kernel, [
       kernel.makeBox(10, 10, 10),
       lifted(kernel, kernel.makeBox(10, 10, 10), 10, 10, 10)
-    ];
-    const plain = kernel.fuseAll(Uint32Array.from(operands()));
-    const result = fuseAllMergingFaceContacts(kernel, operands());
+    ]);
     expect(kernel.volume(result, 0.01)).toBeCloseTo(2000, 9);
-    expect(faceComponentsOf(kernel, result)).toHaveLength(
-      faceComponentsOf(kernel, plain)!.length
-    );
+    expect(faceComponentsOf(kernel, result)).toHaveLength(2);
   });
 
-  it('counts several cavities as part of one certified piece', () => {
+  it('keeps several cavities intact when a box joins a voided block', () => {
     const kernel = new RemusKernel();
-    // Two voids: three boundary components, one piece of material. (An
-    // island floating inside a void — a cavity nested in a cavity — cannot
-    // be built on the pin: every exact route to it is refused.)
+    // Two voids: three boundary components, one piece of material.
     const voided = kernel.cut(
       kernel.cut(
         kernel.makeBox(30, 30, 30),
@@ -859,7 +649,7 @@ describe('certifying each contact group on its own', () => {
       ),
       lifted(kernel, kernel.makeBox(5, 5, 5), 20, 20, 20)
     );
-    const united = fuseAllMergingFaceContacts(kernel, [
+    const united = exactFuseAll(kernel, [
       voided,
       lifted(kernel, kernel.makeBox(30, 30, 30), 30, 0)
     ]);
@@ -870,17 +660,13 @@ describe('certifying each contact group on its own', () => {
     );
   });
 
-  it('certifies a contact group holding a void finer than the deflection', () => {
+  it('unites a block holding a 0.05 mm void with its neighbour', () => {
     const kernel = new RemusKernel();
-    // A 0.05 mm cubic void, finer than the 0.08 measurement deflection,
-    // inside a block that a second block touches. (The pin refuses to fuse a
-    // block holding a curved void with its neighbour, so the void is
-    // prismatic.)
     const pitted = kernel.cut(
       kernel.makeBox(10, 10, 10),
       lifted(kernel, kernel.makeBox(0.05, 0.05, 0.05), 5, 5, 5)
     );
-    const united = fuseAllMergingFaceContacts(kernel, [
+    const united = exactFuseAll(kernel, [
       pitted,
       lifted(kernel, kernel.makeBox(10, 10, 10), 10, 0)
     ]);
@@ -889,13 +675,10 @@ describe('certifying each contact group on its own', () => {
   });
 
   it.each([0.1, 0.01, 0.001])(
-    'merges a %s mm tube wall standing on a flange without refusing',
+    'merges a %s mm tube wall standing on a flange alongside a hub and a separate block',
     (wall) => {
       const kernel = new RemusKernel();
-      // A thin tube resting on the flange top, beside a hub that also rests
-      // there and a separate block that makes the result more than one
-      // piece: every contact group must certify, thin walls included.
-      const result = fuseAllMergingFaceContacts(kernel, [
+      const result = exactFuseAll(kernel, [
         kernel.makeCylinder(FLANGE_R, FLANGE_H),
         lifted(kernel, thinTube(kernel, wall, 0), 0, FLANGE_H),
         lifted(kernel, kernel.makeCylinder(10, 5), 0, FLANGE_H),
