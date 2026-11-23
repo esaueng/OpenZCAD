@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { kernelRefusalRecordOf } from './kernel-refusal';
 import {
   OFFSET_FACE_COLLAPSES_NEIGHBOR,
+  offsetBlendMoveRefusalOf,
   offsetFaceRefusalOf
 } from './exact-offset-face-refusal';
 
@@ -52,5 +53,45 @@ describe('offsetFaceRefusalOf', () => {
       offsetFaceRefusalOf(new Error('swept face reaches nonadjacent face'), -9)
     ).toBeNull();
     expect(offsetFaceRefusalOf('not an error', -9)).toBeNull();
+  });
+});
+
+describe('offsetBlendMoveRefusalOf', () => {
+  const prefix =
+    'resize blend: exact reconstruction refused: remove/rebuild failed ';
+  it('types the two failed paths for a conical support', () => {
+    const error = new Error(
+      prefix +
+        '(resize blend: unsupported analytic support pair: cone x plane); exact prismatic blend translation failed (resize blend: exact reconstruction refused: blend face 59 reaches non-invariant cone support face 61 across edge 103)'
+    );
+    const refusal = offsetBlendMoveRefusalOf(error);
+    expect(kernelRefusalRecordOf(refusal)).toEqual({
+      family: 'direct-edit',
+      operation: 'offset-face',
+      category: 'unsupported',
+      code: 'offset_face_conical_blend'
+    });
+    expect(refusal?.cause).toBe(error);
+  });
+
+  it('types a translated blend reaching a fixed rim', () => {
+    const error = new Error(
+      prefix +
+        '(resize blend: unexpected volume); exact prismatic blend translation failed (offset: move-face would change topology at face Some(Id(55)), edge None: moving blend reaches fixed rim face 19 before completing the move)'
+    );
+    expect(kernelRefusalRecordOf(offsetBlendMoveRefusalOf(error))).toEqual({
+      family: 'direct-edit',
+      operation: 'offset-face',
+      category: 'invalid_topology',
+      code: 'offset_face_blend_reaches_fixed_rim'
+    });
+  });
+
+  it('keeps unrelated combined failures on their existing path', () => {
+    const error = new Error(
+      prefix +
+        '(resize blend: unsupported analytic support pair: plane x cone); exact prismatic blend translation failed (offset: swept face reaches nonadjacent face)'
+    );
+    expect(offsetBlendMoveRefusalOf(error)).toBeNull();
   });
 });

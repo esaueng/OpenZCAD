@@ -27,6 +27,7 @@ import {
   RIM,
   ROOT,
   referencePart,
+  unequalCorner,
   type ReferencePart
 } from './reference-parts';
 
@@ -396,7 +397,19 @@ export async function assertEditedShape(
       expect(carriers.some((geometry) => geometry.blendRadius === RIM)).toBe(
         true
       );
-      return; // The STEP mesh integral checks this unequal-radius corner.
+      const source = await unequalCorner(session, radius);
+      expectVolume(after.volume, source.body.volume);
+      expect(faceCensus(after)).toEqual(faceCensus(source.body));
+      const bandRadii = (body: BodyRepresentation) =>
+        body
+          .topology!.faces.flatMap(({ geometry }) =>
+            geometry?.blendRadius === undefined ? [] : [geometry.blendRadius]
+          )
+          .sort((a, b) => a - b);
+      expect(bandRadii(after)).toEqual(
+        bandRadii(source.body).map((value) => expect.closeTo(value, 8))
+      );
+      return;
     }
   } else {
     expect(

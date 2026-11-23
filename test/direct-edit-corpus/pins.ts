@@ -138,6 +138,7 @@ export interface LadderRefusalPin {
   family: string;
   category: string;
   code: string;
+  limit?: number;
   owner: 'K10' | 'K05' | 'U02';
 }
 
@@ -432,6 +433,7 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     family: 'direct-edit',
     category: 'invalid_topology',
     code: 'offset_face_collapses_chamfered_cylinder_wall',
+    limit: -21,
     owner: 'K10'
   },
   {

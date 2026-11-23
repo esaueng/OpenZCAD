@@ -4,7 +4,10 @@ import type { RemusKernel } from './remus-runtime';
 import type { RemusMoveFacesRelation } from './remus-lineage';
 import { analyticSurfaceRecord, brepEdgeCircle } from './exact-brep';
 import { revolveRadialProfile } from './exact-cylinder-ops';
-import { OffsetFaceRefusal } from './exact-offset-face-refusal';
+import {
+  OffsetFaceRefusal,
+  roundOffsetLimit
+} from './exact-offset-face-refusal';
 import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
@@ -226,7 +229,9 @@ export function tryExactChamferedCylinderCapOffset(
       kernelMessage: reason,
       reason,
       message: reason,
-      limit: rod.ends[0].shoulder.axial - rod.ends[1].shoulder.axial
+      limit: roundOffsetLimit(
+        rod.ends[0].shoulder.axial - rod.ends[1].shoulder.axial
+      )
     });
   }
   const low = ends[0]!;

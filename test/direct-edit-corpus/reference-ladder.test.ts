@@ -135,7 +135,8 @@ for (const ladder of LADDERS) {
               expect(failure.kernelRefusal).toMatchObject({
                 family: pin!.family,
                 category: pin!.category,
-                code: pin!.code
+                code: pin!.code,
+                ...(pin!.limit !== undefined ? { limit: pin!.limit } : {})
               });
               expect(before.document).toBe(part.document);
               expect(historyLengths(before.document)).toEqual(lengths);

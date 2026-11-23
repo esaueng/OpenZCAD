@@ -94,6 +94,33 @@ function edges(part: ReferencePart): EdgeTopology[] {
   );
 }
 
+/** Independent feature route for B when the selected corner grows alone. */
+export async function unequalCorner(
+  session: Session,
+  radius: number
+): Promise<ReferencePart> {
+  const box = await referencePart(session, 'B', { rim: 0 });
+  const corner = edges(box).filter((edge) => {
+    const { x, y } = edgeCenter(edge);
+    return edge.curve?.type === 'LINE' && x === 0 && y === 0;
+  });
+  if (corner.length !== 1)
+    throw new Error('The wide corner has no unique vertical edge.');
+  const wide = await blend(session, box, corner, radius);
+  const other = edges(wide).filter((edge) => {
+    const { x, y, z } = edgeCenter(edge);
+    return (
+      edge.curve?.type === 'LINE' &&
+      (z === 0 ||
+        z === BOX.depth ||
+        ((x === 0 || x === BOX.width) && (y === 0 || y === BOX.height)))
+    );
+  });
+  if (other.length !== 11)
+    throw new Error(`Expected 11 narrow edges, found ${other.length}.`);
+  return blend(session, wide, other, RIM);
+}
+
 async function blend(
   session: Session,
   part: ReferencePart,

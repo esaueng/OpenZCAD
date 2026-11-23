@@ -132,7 +132,10 @@ import {
   holeMouthRims,
   holeMouthRimsCarried
 } from './exact-offset-face-hole-mouth';
-import { offsetFaceRefusalOf } from './exact-offset-face-refusal';
+import {
+  offsetBlendMoveRefusalOf,
+  offsetFaceRefusalOf
+} from './exact-offset-face-refusal';
 import { modelingOperationRefusal } from './remus-operation-refusal';
 import {
   isNonadjacentFaceCollision,
@@ -2592,6 +2595,7 @@ export function applyDirectEdit(
         throw (
           offsetFaceRefusalOf(error, offset) ??
           holeChamferRefusalOf(error, mouthRims, offset) ??
+          offsetBlendMoveRefusalOf(error) ??
           modelingOperationRefusal(
             'offset_face',
             error,

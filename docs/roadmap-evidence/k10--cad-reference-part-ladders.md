@@ -11,7 +11,9 @@ spheres). Comparison with the recorded part's census is pending. Readout
 D 11 / 17. There are no unexplained monotonic violations. The conical
 fillets on A limit direct edits even at 0.1 mm. On B, zero removes the
 connected rounds, and the larger positive steps re-blend only the selected
-corner. On C, zero removes the boss root fillet. The local resize refuses
+corner. A separate feature history with the enlarged corner and the remaining
+rounds at their original radius confirms its volume and blend census. On C,
+zero removes the boss root fillet. The local resize refuses
 at an outward root radius of 9.9 mm and an inward wall radius of 0.1 mm.
 Both −11.9 mm shoulder moves build locally, while the source fillet
 rebuild refuses with a 0.1 mm plate. On D, local radius edits cannot carry
