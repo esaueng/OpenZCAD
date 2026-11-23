@@ -465,6 +465,25 @@ describe('commitUnitsConversion: bound to the project it was prepared for', () =
     expect(manager.document.units).toBe('mm');
   });
 
+  it('converts the prepared document after a rebuild re-attached its derived state', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    // What the workspace's geometry sync does while the worker checks.
+    manager.commitDerivedState({ ...source.derived, updatedAt: 'later' });
+    expect(manager.document).not.toBe(source);
+    const { persistence } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        expectedProjectId: source.projectId,
+        expectedDocument: source
+      }
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it('converts the document it was prepared from', async () => {
     const source = boxDocument();
     const manager = new CommandManager(source, USER);

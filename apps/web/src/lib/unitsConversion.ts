@@ -185,6 +185,26 @@ const DEVICE_STORE: UnitsConversionPersistence = {
   saveSaveStates: saveLocalSaveStates
 };
 
+/**
+ * Whether `current` is `prepared`, or `prepared` with only its derived state
+ * re-attached (`attachDerivedState`, which a rebuild commits without a
+ * version bump): every other top-level field is the very same object. A
+ * hydrated, echoed or edited document fails even when it is equal.
+ */
+export function isPreparedDocument(
+  current: ProjectDocument,
+  prepared: ProjectDocument
+): boolean {
+  if (current === prepared) return true;
+  const keys = Object.keys(current) as (keyof ProjectDocument)[];
+  if (keys.length !== Object.keys(prepared).length) return false;
+  return keys.every(
+    (key) =>
+      key === 'derived' ||
+      (Object.hasOwn(prepared, key) && current[key] === prepared[key])
+  );
+}
+
 export interface CommitUnitsConversionOptions {
   /**
    * The project's save points live on this device only (a member editing
@@ -213,10 +233,11 @@ export interface CommitUnitsConversionOptions {
    */
   expectedProjectId?: string;
   /**
-   * The exact document the conversion was prepared from. When the active
-   * manager holds any other document object (an edit, a hydrated revision,
-   * another project with the same version), the conversion is refused
-   * (`stale`) before anything is written.
+   * The document the conversion was prepared from. Unless the active
+   * manager holds that document, or it with only its derived state
+   * re-attached by a rebuild ({@link isPreparedDocument}), the conversion is
+   * refused (`stale`) before anything is written: an edit, a hydrated or
+   * echoed revision, or another project with the same version.
    */
   expectedDocument?: ProjectDocument;
   /**
@@ -326,7 +347,7 @@ export async function commitUnitsConversion(
     (options.expectedProjectId !== undefined &&
       current.projectId !== options.expectedProjectId) ||
     (options.expectedDocument !== undefined &&
-      current !== options.expectedDocument)
+      !isPreparedDocument(current, options.expectedDocument))
   )
     return {
       ok: false,
