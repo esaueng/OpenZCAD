@@ -521,11 +521,17 @@ const TRANSLATIONS: readonly Translation[] = [
     // A face move re-limits its neighbours; pushed past the length of a
     // neighbour's flat, that flat would vanish (`collapse`) or turn inside
     // out (`reverse`), which changes the body's topology. The kernel names
-    // the extent it ran against, and that is how far the face can go.
+    // the extent it ran against, and that is how far the face can go; it is
+    // stated signed like the move, as the adapter's typed refusal states it
+    // (the workspace adds the unit: `offsetLimitInUnits`).
     pattern:
-      /move-face would change topology.*?would (?:collapse|reverse): a move of -?[\d.]+(?:e-?\d+)? against a fixed-to-moving extent of (\d+(?:\.\d+)?(?:e-?\d+)?)/i,
-    sentence: (match) =>
-      `A neighbouring face would shrink to nothing past ${Math.round(Number(match[1]) * 100) / 100}. Try a smaller offset.`
+      /move-face would change topology.*?would (?:collapse|reverse): a move of (-?)[\d.]+(?:e-?\d+)? against a fixed-to-moving extent of (\d+(?:\.\d+)?(?:e-?\d+)?)/i,
+    sentence: (match) => {
+      const extent = Math.round(Number(match[2]) * 100) / 100;
+      return `A neighbouring face would shrink to nothing past ${
+        match[1] && extent !== 0 ? -extent : extent
+      }. Try a smaller offset.`;
+    }
   },
   {
     pattern:

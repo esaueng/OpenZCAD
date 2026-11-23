@@ -20,6 +20,7 @@ export type {
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { edgeTopologyWitnessSignature as edgeSignatureOfWitness } from '@openzcad/shared';
 import { fingerprintOfSignature } from './topology-fingerprint';
+import { referenceRecaptureHooks } from './reference-recapture-slot';
 
 /**
  * Kernel-neutral persistent-topology contracts from ADR-013.
@@ -1422,6 +1423,27 @@ export function resolveTopologyReference(
   reference: TopologyReferenceV5 | LegacyTopologyHashReference,
   candidates: readonly TopologyResolutionCandidate[],
   lineageAvailability: LineageAvailability = { status: 'available' }
+): TopologyResolutionResult {
+  const hooks = referenceRecaptureHooks();
+  return hooks
+    ? hooks.resolveTopology(
+        reference,
+        candidates,
+        lineageAvailability,
+        (next) =>
+          resolveTopologyReferenceDirect(next, candidates, lineageAvailability)
+      )
+    : resolveTopologyReferenceDirect(
+        reference,
+        candidates,
+        lineageAvailability
+      );
+}
+
+function resolveTopologyReferenceDirect(
+  reference: TopologyReferenceV5 | LegacyTopologyHashReference,
+  candidates: readonly TopologyResolutionCandidate[],
+  lineageAvailability: LineageAvailability
 ): TopologyResolutionResult {
   if (
     !Number.isSafeInteger(reference.currentHash) ||

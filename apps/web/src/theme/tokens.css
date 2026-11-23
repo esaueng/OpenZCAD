@@ -88,6 +88,9 @@
   --color-on-danger: #ffffff;
   /* Material gained. Also the success tone: both mean "this adds". */
   --color-success: #48cd8f;
+  /* The brand's Dev tag (ChannelTag): unreleased code, told apart from
+     the warning amber at a glance. */
+  --color-channel-dev: #fb923c;
   /* Material removed by a cut. Distinct from --color-error: a cut is an
      intended result, not a failure. */
   --color-cut: #ff644d;
@@ -346,6 +349,7 @@
   --color-error: #dc2626;
   --color-error-text: #b91c1c;
   --color-success: #137638;
+  --color-channel-dev: #c2410c;
   --color-scroll-shade: rgba(0, 0, 0, 0.1);
   --thumbnail-blend: normal;
 
@@ -395,6 +399,7 @@
     --color-error: #dc2626;
     --color-error-text: #b91c1c;
     --color-success: #137638;
+    --color-channel-dev: #c2410c;
     --color-scroll-shade: rgba(0, 0, 0, 0.1);
     --thumbnail-blend: normal;
     --color-viewport-bg: #eeeeee;

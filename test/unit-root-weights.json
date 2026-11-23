@@ -357,6 +357,7 @@
   "test/desktop-auth.test.ts": 0.1,
   "test/desktop-release-privacy.test.ts": 0,
   "test/detached-text-cache.test.ts": 5,
+  "test/direct-edit-corpus/chains.test.ts": 53.2,
   "test/direct-edit-corpus/corpus.test.ts": 2,
   "test/direct-edit-corpus/reference-ladder.test.ts": 222.1,
   "test/direct-edit-face-repair.test.ts": 0.2,

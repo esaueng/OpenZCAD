@@ -31,6 +31,11 @@ import {
   MAX_CONTACT_REPAIR_OPERANDS
 } from '../packages/kernel-adapter/src/exact-boolean-helpers';
 import { AdapterRefusal } from '../packages/kernel-adapter/src/adapter-refusal';
+import {
+  exactBooleanOutcome,
+  exactFuseAll
+} from '../packages/kernel-adapter/src/exact-boolean-refusal';
+import { validationReport } from '../packages/kernel-adapter/src/kernel-validation';
 
 /**
  * QA 2026-11-14 finding #1: a hub standing EXACTLY on a flange (a cylinder
@@ -545,6 +550,99 @@ describe('certifying each contact group on its own', () => {
     }
   );
 
+  /** Two parallel r20 cylinders 30 tall overlapping by `overlap`. */
+  const overlappingCylinders = (
+    kernel: RemusKernel,
+    overlap: number,
+    capOffset: number
+  ) => {
+    const halfSpan = HUB_R - overlap / 2;
+    return [
+      lifted(kernel, kernel.makeCylinder(HUB_R, 30), -halfSpan, 0),
+      lifted(kernel, kernel.makeCylinder(HUB_R, 30), halfSpan, capOffset)
+    ];
+  };
+  const overlapVolume = (overlap: number, capOffset: number) => {
+    const halfSpan = HUB_R - overlap / 2;
+    const lens =
+      2 * HUB_R ** 2 * Math.acos(halfSpan / HUB_R) -
+      halfSpan * Math.sqrt(4 * HUB_R ** 2 - 4 * halfSpan ** 2);
+    return 2 * Math.PI * HUB_R ** 2 * 30 - lens * (30 - capOffset);
+  };
+
+  it.each([
+    [2, 0],
+    [1, 0],
+    [0.5, 0],
+    [0.1, 0],
+    [0.01, 0],
+    [2, 3],
+    [1, 3],
+    [0.5, 3],
+    [0.1, 3],
+    [0.01, 3]
+  ])(
+    'pairwise fuse and fuseAll merge parallel cylinders overlapping by %s mm, caps offset %s (esaueng/remus#1742)',
+    (overlap, capOffset) => {
+      // Until the 2026.1.160 pin the exact pairwise fuse refused an overlap
+      // of 1 mm or less, whatever the cap planes.
+      const kernel = new RemusKernel();
+      const expected = overlapVolume(overlap, capOffset);
+      const [left, right] = overlappingCylinders(kernel, overlap, capOffset);
+      const pair = exactBooleanOutcome(kernel, 'fuse', left!, right!);
+      expect(pair.status).toBe('ok');
+      const pairSolid = (pair as { solid: number }).solid;
+      const fused = exactFuseAll(
+        kernel,
+        overlappingCylinders(kernel, overlap, capOffset)
+      );
+      for (const solid of [pairSolid, fused]) {
+        expect(validationReport(kernel, solid).errorCount).toBe(0);
+        expect(faceComponentsOf(kernel, solid)).toHaveLength(1);
+        expect(kernel.volume(solid, 0.01)).toBeCloseTo(expected, 6);
+      }
+    }
+  );
+
+  it('still needs the gate for a sub-tolerance near-contact far from the origin', async () => {
+    // Two coaxial r5 × 10 cylinders at z = 1e7, the upper one 5e-8 mm above
+    // the lower one's top: contact within the scaled connectivity tolerance.
+    // The plain fuseAll leaves them in pieces, and only the gate's pairwise
+    // repair joins them; without it the union refused as `union_not_solid`
+    // (found in review of the attempt to retire the gate on 2026.1.160).
+    // When this canary flips, the gate may be retirable.
+    const kernel = new RemusKernel();
+    const nearContact = () => [
+      lifted(kernel, kernel.makeCylinder(5, 10), 0, 1e7),
+      lifted(kernel, kernel.makeCylinder(5, 10), 0, 1e7 + 10 + 5e-8)
+    ];
+    const plain = kernel.fuseAll(Uint32Array.from(nearContact()));
+    expect(faceComponentsOf(kernel, plain)!.length).toBeGreaterThan(1);
+    const gated = fuseAllMergingFaceContacts(kernel, nearContact());
+    expect(faceComponentsOf(kernel, gated)).toHaveLength(1);
+    expect(kernel.getSolidFaces(gated)).toHaveLength(3);
+
+    const adapter = await createExactKernelAdapter();
+    try {
+      let document = createProjectDocument('Near', toUserId('user_touching'));
+      document = cylinder(document, 'Lower', 5, 10, 1e7);
+      const lower = last(document);
+      document = cylinder(document, 'Upper', 5, 10, 1e7 + 10 + 5e-8);
+      document = booleanBodies(document, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [lower, last(document)]
+      }).document;
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[last(document)]!;
+      expect(body.topology!.faces).toHaveLength(3);
+      expect(body.volume).toBeCloseTo(Math.PI * 5 ** 2 * 20, 4);
+    } finally {
+      adapter.dispose();
+    }
+  }, 120_000);
+
   it.each([0, 1e5, 1e7])(
     'never returns the hub-on-flange wall silently at %s',
     (by) => {
@@ -584,6 +682,8 @@ describe('certifying each contact group on its own', () => {
       // material and the union was refused.
       const united = fuseAllMergingFaceContacts(kernel, [hollow, neighbour]);
       expect(kernel.volume(united, 0.01)).toBeCloseTo(0.015, 9);
+      // One exterior and one cavity: no contact wall left between them.
+      expect(faceComponentsOf(kernel, united)).toHaveLength(2);
     }
   );
 

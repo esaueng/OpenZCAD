@@ -1667,8 +1667,11 @@ function unmergedContactRefusal(): AdapterRefusal {
  * by 1 mm or less). `test/touching-cylinder-union.test.ts` holds the oracles
  * the plain `exactFuseAll` must then pass on its own. #1738 is fixed from
  * Remus 2026.1.141 (esaueng/remus#1768, #1792), whose `fuseAll` merges the
- * contact itself, so on the pin this gate now returns at step 1; it stays
- * until #1742 is fixed too.
+ * contact itself, and #1742 is fixed on Remus 2026.1.160. The gate still
+ * stays: the plain `fuseAll` leaves a sub-tolerance near-contact far from the
+ * origin (coaxial cylinders 5e-8 mm apart at z = 1e7) in pieces, which only
+ * the pairwise repair below joins; `test/touching-cylinder-union.test.ts`
+ * pins that case as the canary for retiring it.
  *
  * Before that fix `fuseAll` joined the groups it judged disjoint "directly
  * without a boolean", and that judgement missed planar contact between two

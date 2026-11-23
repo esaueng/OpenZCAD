@@ -106,7 +106,8 @@ function nativeDetailFeature(
   );
   if (!feature || isFeatureSuppressed(feature)) return null;
   return (feature.data.featureKind === 'hole' &&
-    /^hole\.face\.(bore|counterbore|shoulder|floor)$/.test(
+    // A hole on sketch points names each bore by its point (M01, v64).
+    /^hole\.face\.(?:at\.[^.]+\.)?(bore|counterbore|shoulder|floor)$/.test(
       reference.lineageName
     )) ||
     (feature.data.featureKind === 'chamfer' &&

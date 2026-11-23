@@ -103,7 +103,7 @@ describe('settings at narrow windows (Settings review, 14 Nov 2026)', () => {
     const brand = rule('.settings-nav-head .brand');
     expect(brand).toMatch(/font-size:\s*var\(--fs-md\)/);
     expect(brand).toMatch(/gap:\s*7px/);
-    expect(rule('.settings-nav-head .brand .beta-tag')).toMatch(
+    expect(rule('.settings-nav-head .brand .channel-tag')).toMatch(
       /display:\s*inline-flex/
     );
   });

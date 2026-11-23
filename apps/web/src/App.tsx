@@ -27,6 +27,7 @@ import type { PrintClearanceState } from './components/PrintClearanceRow';
 import {
   DisplayUnitsProvider,
   displayEntryText,
+  formatDocumentHundredths,
   formatDocumentLength
 } from './lib/displayUnits';
 import { roundShownLength } from './lib/liveLabels';
@@ -2169,6 +2170,7 @@ import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
 import {
   keptOffsetValue,
   offsetFaceCommitMessage,
+  offsetLimitInUnits,
   offsetRefusalInTotal
 } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
@@ -2256,8 +2258,11 @@ import {
 } from './lib/panelLayout';
 import {
   useHistoryFind,
+  useHistoryText,
   useObjectsView
 } from './components/modelPanels/panelViews';
+import { HistoryTextHost } from './components/modelPanels/HistoryTextHost';
+import { commitCheckedPatch, patchApplyReport } from './lib/checkedPatchCommit';
 import {
   loadSettingsViewState,
   updateSettingsViewState
@@ -3530,7 +3535,8 @@ export function App() {
   // different project starts them afresh.
   const objectsView = useObjectsView(doc?.projectId ?? null);
   const historyFind = useHistoryFind(doc?.projectId ?? null);
-  const modelPanelViews = { objects: objectsView, historyFind };
+  const historyText = useHistoryText(doc?.projectId ?? null);
+  const modelPanelViews = { objects: objectsView, historyFind, historyText };
   const textOutlineBudgetError = useMemo(
     () => (doc ? documentTextBudgetError(doc) : null),
     [doc]
@@ -4933,6 +4939,8 @@ export function App() {
     isolateBody
   };
   const managerRef = useRef<CommandManager | null>(null);
+  /** The latest patch Apply, by token (see patchApplyReport). */
+  const patchApplyTokenRef = useRef(0);
   /** Sketch entities copied with Cmd/Ctrl+C, for Cmd/Ctrl+V. */
   const sketchClipboardRef = useRef<SketchClipboard | null>(null);
   const parameterEditRequest = useRef(0);
@@ -6401,6 +6409,9 @@ export function App() {
       dispatchInteraction({ type: 'validation-start', value });
     },
     onValidationFailed: (diagnostic, value) => {
+      // What the status line and the top bar say: a face offset's limit
+      // with its unit, as the card says it. The record keeps the adapter's.
+      const shownMessage = shownOffsetLimit(diagnostic).message;
       const pending = pendingDirectEditRef.current;
       pendingDirectEditRef.current = null;
       const current = managerRef.current?.document;
@@ -6413,7 +6424,7 @@ export function App() {
         setLastDirectEditFailure({
           projectId: current.projectId,
           version: current.version,
-          message: diagnostic.message,
+          message: shownMessage,
           selectionKey: refusalSubjectKey(pending.interaction)
         });
       }
@@ -6468,7 +6479,7 @@ export function App() {
         // and a refusal that were never its own.
         const name = directEditBodyName(pending);
         setStatus(
-          name ? `${name}: ${diagnostic.message}` : diagnostic.message,
+          name ? `${name}: ${shownMessage}` : shownMessage,
           diagnostic.detail ? { detail: diagnostic.detail } : undefined
         );
         return;
@@ -6482,7 +6493,7 @@ export function App() {
       // retains the same diagnostic for the Activity log even when the bar is
       // muted behind that card.
       setStatus(
-        diagnostic.message,
+        shownMessage,
         diagnostic.detail ? { detail: diagnostic.detail } : undefined
       );
     },
@@ -19196,6 +19207,17 @@ export function App() {
       setStatus(source.moved);
       return false;
     }
+    patchApplyTokenRef.current += 1;
+    const applyToken = patchApplyTokenRef.current;
+    // The status and busy flag are the open project's: an Apply that ends
+    // after another project opened reports nothing there.
+    const report = () =>
+      patchApplyReport({
+        projectId: current.projectId,
+        openProjectId: managerRef.current?.document.projectId,
+        latest: patchApplyTokenRef.current === applyToken,
+        opening: navigationBusyRef.current !== null
+      });
     setBusy(true);
     // E2E-only interruption gate: while the flag is true the preflight has
     // started and the transaction below has not committed. The flag is
@@ -19209,38 +19231,37 @@ export function App() {
       setStatus(
         source?.checking ?? 'Checking the AI change against exact geometry…'
       );
-      let preflight: Awaited<ReturnType<typeof preflightCadPatch>>;
-      if (e2eApplyGate) {
-        const pending = preflightCadPatch(
-          current,
-          proposal,
-          (candidate, analysis) => geometry.syncOnce(candidate, analysis),
-          (document, sketchId) => geometry.solveSketch(document, sketchId)
-        );
-        [preflight] = await Promise.all([pending, holdNextExactCheckForE2E()]);
-      } else {
-        preflight = await preflightCadPatch(
-          current,
-          proposal,
-          (candidate, analysis) => geometry.syncOnce(candidate, analysis),
-          (document, sketchId) => geometry.solveSketch(document, sketchId)
-        );
-      }
-      const live = managerRef.current?.document;
-      if (
-        !live ||
-        live.projectId !== current.projectId ||
-        live.version !== current.version
-      ) {
-        throw new Error(
+      const applied = await commitCheckedPatch({
+        base: current,
+        live: () => managerRef.current?.document,
+        // History text compiled its commands against this exact document:
+        // a copy adopted meanwhile can share its project and version and
+        // still hold other values, which the commands would overwrite.
+        exact: Boolean(source),
+        moved:
           source?.moved ??
-            'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
-        );
-      }
-      const applied = executeTransaction(
-        source?.label ?? 'Apply AI patch',
-        preflight.commands
-      );
+          'The document changed during exact AI preflight. Review the refreshed proposal before applying it.',
+        check: async (base) => {
+          const pending = preflightCadPatch(
+            base,
+            proposal,
+            (candidate, analysis) => geometry.syncOnce(candidate, analysis),
+            // F06: a value the patch sets stores the sketches it drives.
+            (document, sketchId) => geometry.solveSketch(document, sketchId)
+          );
+          if (!e2eApplyGate) return pending;
+          const [checked] = await Promise.all([
+            pending,
+            holdNextExactCheckForE2E()
+          ]);
+          return checked;
+        },
+        commit: (preflight) =>
+          executeTransaction(
+            source?.label ?? 'Apply AI patch',
+            preflight.commands
+          )
+      });
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
@@ -19250,11 +19271,13 @@ export function App() {
       }
       return applied;
     } catch (error) {
-      setStatus(errorMessage(error, 'Patch could not be applied.'));
+      if (report().status) {
+        setStatus(errorMessage(error, 'Patch could not be applied.'));
+      }
       return false;
     } finally {
       if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = false;
-      setBusy(false);
+      if (report().clearBusy) setBusy(false);
     }
   }
 
@@ -27474,6 +27497,7 @@ export function App() {
   }, [doc, inPlaceEditFeatureId]);
   const inPlace = useInPlaceCommand({
     ...(doc?.units ? { units: doc.units } : {}),
+    ...(doc ? { displayUnits: documentDisplayUnits(doc) } : {}),
     sketchViews: availableSketchViews,
     datumAxes: inPlaceDatumAxes,
     linearSnap: appSettings.sketching.snapEnabled
@@ -31578,8 +31602,12 @@ export function App() {
       diagnostic,
       value
     });
+    // The status line (and so the Activity log) says the limit in the
+    // display unit too: a drag cancelled after a refused frame has no
+    // release-time refusal to say it. The recorded fixture keeps the
+    // adapter's words.
     setStatus(
-      diagnostic.message,
+      shownOffsetLimit(diagnostic).message,
       diagnostic.detail ? { detail: diagnostic.detail } : undefined
     );
     // One diagnostic fixture per gesture: every refused frame of a drag past
@@ -32301,7 +32329,9 @@ export function App() {
       !(current.target.offsetFaceSet && current.lastValue !== offset)
     ) {
       setStatus(
-        current.error?.message ?? 'The current offset preview is invalid.'
+        current.error
+          ? shownOffsetLimit(current.error).message
+          : 'The current offset preview is invalid.'
       );
       return retaking ? 'blocked' : 'refused';
     }
@@ -32646,6 +32676,29 @@ export function App() {
       : null;
 
   /**
+   * A refused face offset's limit sentence in the document's display unit
+   * ("past -6.4 mm"), signed like the Keep beside it: the adapter states the
+   * limit without a unit, since it does not know the unit the document is
+   * shown in.
+   */
+  function shownOffsetLimit<T extends CommandDiagnostic>(error: T): T {
+    // Read at call time: the live previews are built once and keep the
+    // first render's closures, where `doc` was still null and the limit
+    // came out without its unit.
+    const current = managerRef.current?.document ?? doc;
+    return offsetLimitInUnits(error, (value) =>
+      formatDocumentHundredths(current, value)
+    );
+  }
+  function shownToolCard<T extends { error?: CommandDiagnostic }>(
+    model: T | null
+  ): T | null {
+    return model?.error
+      ? { ...model, error: shownOffsetLimit(model.error) }
+      : model;
+  }
+
+  /**
    * U11: the refusal as the open keypad reads it. A face offset entered as
    * a Total hears its limit, its remedy and its Keep as Totals too; the
    * kernel's offset numbers stay in the cause and the technical details.
@@ -32667,7 +32720,8 @@ export function App() {
       {
         baseline: request.totalBaseline,
         sense: request.totalSense ?? 1,
-        units: doc?.units ?? ''
+        formatLength: (length) =>
+          formatDocumentHundredths(managerRef.current?.document ?? doc, length)
       }
     );
     return {
@@ -32688,7 +32742,7 @@ export function App() {
     selectionCallout?.anchor === 'selection' &&
     selectedBodyIds.length > 0 &&
     (interaction.mode === 'face' || interaction.mode === 'edges')
-      ? toolCardFor(interaction, cylinderDimensionMode)
+      ? shownToolCard(toolCardFor(interaction, cylinderDimensionMode))
       : null;
   const calloutEdgeCount =
     interaction.mode === 'edges' && edgeModifierBody?.topology
@@ -37327,7 +37381,9 @@ export function App() {
         (body.opacity ?? 1) > 0
     ) &&
     isExtrudeChangeClipped(regionExtrudeResolution, sectionView);
-  const baseToolCard = toolCardFor(interaction, cylinderDimensionMode);
+  const baseToolCard = shownToolCard(
+    toolCardFor(interaction, cylinderDimensionMode)
+  );
   const editingSketchName =
     interaction.mode === 'sketch' && interaction.session.sketchId
       ? (sketchOptions.find(
@@ -37847,8 +37903,6 @@ export function App() {
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       document={doc}
-      historyTextEditBlocked={editDisabledReason}
-      onApplyHistoryText={applyPatch}
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
       hiddenReferenceImageIds={hiddenReferenceImageIds}
@@ -39515,7 +39569,7 @@ export function App() {
                         interaction.mode !== 'idle' &&
                         interaction.mode !== 'sketch' &&
                         interaction.error
-                          ? interaction.error.message
+                          ? shownOffsetLimit(interaction.error).message
                           : null
                       }
                       onCommit={(value, raw) => {
@@ -39767,6 +39821,15 @@ export function App() {
             />
           )}
           {pinResetDialog}
+          {/* Drawn here, once, not by the History panel: the dock and the
+              phone lane each mount their own, and crossing the phone
+              breakpoint swaps one for the other. */}
+          <HistoryTextHost
+            view={historyText}
+            document={doc}
+            editBlocked={editDisabledReason}
+            onApply={applyPatch}
+          />
           <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }

@@ -9,8 +9,10 @@ import {
 import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import { readHistoryText } from '@openzcad/scripting';
 import { toUserId } from '@openzcad/shared';
+import type { ProjectDocument } from '@openzcad/shared';
 import HistoryTextDialog from './HistoryTextDialog';
 import type { PatchSource } from './modelPanels/modelPanelProps';
+import { useHistoryText } from './modelPanels/panelViews';
 
 function block(width: string) {
   let document = createProjectDocument('Bracket', toUserId('owner'));
@@ -28,6 +30,32 @@ function block(width: string) {
 
 function textArea(): HTMLTextAreaElement {
   return screen.getByLabelText(/History text, \d+ lines/);
+}
+
+/** The dialog drawn from workspace-held state, as HistoryTextHost does. */
+function Held({
+  document,
+  onApply
+}: {
+  document: ProjectDocument;
+  onApply(proposal: CadPatchProposal, source: PatchSource): Promise<boolean>;
+}) {
+  const view = useHistoryText(document.projectId);
+  return (
+    <>
+      <button type="button" onClick={view.toggle}>
+        Open history text
+      </button>
+      {view.open && (
+        <HistoryTextDialog
+          document={document}
+          onApply={onApply}
+          session={view}
+          onClose={view.close}
+        />
+      )}
+    </>
+  );
 }
 
 function type(value: string) {
@@ -150,11 +178,49 @@ describe('HistoryTextDialog', () => {
     );
     expect(textArea().value).toBe(edited);
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'The model changed since you started editing.'
+      'The model changed since this draft was started'
     );
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Reload text' }));
     expect(textArea().value).not.toBe(edited);
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('refuses an edit started against another copy of the same version', async () => {
+    const user = userEvent.setup();
+    const document = block('40 mm');
+    const onApply = vi.fn();
+    const view = render(
+      <HistoryTextDialog
+        document={document}
+        onApply={onApply}
+        onClose={vi.fn()}
+      />
+    );
+    const edited = textArea().value.replace('height: 20', 'height: 25');
+    type(edited);
+    // A cloud copy taken in a conflict, or a collaborator's change, can
+    // carry the same version number with other content: here another
+    // parameter. Applied, the whole old text would write `40 mm` back.
+    const other = block('55 mm');
+    view.rerender(
+      <HistoryTextDialog
+        document={{
+          ...other,
+          projectId: document.projectId,
+          version: document.version
+        }}
+        onApply={onApply}
+        onClose={vi.fn()}
+      />
+    );
+    expect(textArea().value).toBe(edited);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The model changed since this draft was started'
+    );
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    expect(apply).toBeDisabled();
+    await user.click(apply);
     expect(onApply).not.toHaveBeenCalled();
   });
 
@@ -172,6 +238,9 @@ describe('HistoryTextDialog', () => {
     expect(apply).toBeDisabled();
     expect(apply).toHaveAttribute(
       'title',
+      'View mode is read-only — switch to Build to edit'
+    ); // Shown, not only in a tooltip a phone never displays.
+    expect(screen.getByRole('status')).toHaveTextContent(
       'View mode is read-only — switch to Build to edit'
     );
   });
@@ -206,6 +275,30 @@ describe('HistoryTextDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Copy' }));
     expect(screen.getByRole('status')).toHaveTextContent(
       'Copy failed; select the text instead.'
+    );
+  });
+
+  it('shows how an Apply ended in a dialog opened again while it ran', async () => {
+    const user = userEvent.setup();
+    const document = block('40 mm');
+    let refuse!: (applied: boolean) => void;
+    const onApply = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          refuse = resolve;
+        })
+    );
+    render(<Held document={document} onApply={onApply} />);
+    await user.click(screen.getByRole('button', { name: 'Open history text' }));
+    type(textArea().value.replace('height: 20', 'height: 25'));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Checking');
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await user.click(screen.getByRole('button', { name: 'Open history text' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Checking');
+    await act(async () => refuse(false));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Not applied. The status bar says why.'
     );
   });
 });

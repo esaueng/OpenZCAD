@@ -101,6 +101,7 @@ export function withReportedPixelRatio<T>(
 export const NAVIGATION_PIXEL_RATIO = 1.25;
 /** Below 45 frames a second, a moving view trades sharpness for motion. */
 export const SLOW_FRAME_MS = 1000 / 45;
+export const SEVERE_FRAME_MS = 4 * SLOW_FRAME_MS;
 
 /**
  * The pixel ratio to navigate at, or null to keep the current one: only a
@@ -117,8 +118,7 @@ export function navigationPixelRatio(
   )
     return null;
   // Below roughly 11 FPS, render fewer than one sample per CSS pixel.
-  const cap =
-    frameIntervalMs > 4 * SLOW_FRAME_MS ? 0.75 : NAVIGATION_PIXEL_RATIO;
+  const cap = frameIntervalMs > SEVERE_FRAME_MS ? 0.75 : NAVIGATION_PIXEL_RATIO;
   return cap < devicePixelRatio ? cap : null;
 }
 
@@ -136,10 +136,20 @@ export class NavigationResolution {
     this.limitedRatio = null;
   }
 
-  ratio(now: number, moving: boolean, fullRatio: number): number {
+  ratio(
+    now: number,
+    moving: boolean,
+    fullRatio: number,
+    fullDrawGpuMs: number | null = null
+  ): number {
     if (!moving) {
       this.reset();
       return fullRatio;
+    }
+    // Measured full-size GPU cost or a still-unfinished full-size draw can
+    // qualify navigation before the backlog reaches the animation clock.
+    if (fullDrawGpuMs !== null && fullDrawGpuMs > SEVERE_FRAME_MS) {
+      this.limitedRatio = navigationPixelRatio(fullRatio, fullDrawGpuMs);
     }
     const currentRatio = Math.min(fullRatio, this.limitedRatio ?? fullRatio);
     if (this.lastFrame !== null) {

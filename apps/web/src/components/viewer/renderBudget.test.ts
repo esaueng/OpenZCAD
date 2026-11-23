@@ -115,6 +115,15 @@ describe('render budget', () => {
 });
 
 describe('NavigationResolution', () => {
+  it('uses severe GPU time for the first moving frame and restores full size at rest', () => {
+    const budget = new NavigationResolution();
+    expect(budget.ratio(0, false, 2, 300)).toBe(2);
+    expect(budget.ratio(30_000, true, 2, 300)).toBe(0.75);
+    expect(budget.ratio(30_016, true, 2)).toBe(0.75);
+    expect(budget.ratio(30_032, false, 2, 300)).toBe(2);
+    expect(budget.ratio(40_000, true, 2, 35)).toBe(2);
+  });
+
   it('keeps idle gaps, isolated slow frames and healthy drags at full resolution', () => {
     const budget = new NavigationResolution();
     for (const now of [0, 16, 32, 180, 196, 212]) {

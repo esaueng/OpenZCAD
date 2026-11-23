@@ -1377,3 +1377,9 @@ function runOracle(
   }
   return result;
 }
+
+/** The registry scope of one node (phase 4's reference sites walk the same). */
+export const unitsConversionNodeScope = nodeScope;
+
+/** How a conversion refusal names a node: `Name (id)`. */
+export const unitsConversionSubject = subjectOf;

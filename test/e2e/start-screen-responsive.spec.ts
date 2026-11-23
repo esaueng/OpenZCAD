@@ -73,7 +73,7 @@ test(
     const second = await cards.nth(1).boundingBox();
     if (!first || !second) throw new Error('Cards are missing');
     expect(Math.abs(first.y - second.y)).toBeLessThan(1);
-    await expect(page.locator('.start-brand .beta-tag')).toBeVisible();
+    await expect(page.locator('.start-brand .channel-tag')).toBeVisible();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth

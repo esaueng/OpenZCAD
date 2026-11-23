@@ -617,10 +617,12 @@ export function useInPlaceCommand(
         optionsRef.current.curveMiddle?.(sketchId, entityId) ?? null,
       holeFeature: (featureId) =>
         optionsRef.current.holeFeature?.(featureId) ?? null,
-      ...(options.units ? { units: options.units } : {})
+      ...(options.units ? { units: options.units } : {}),
+      ...(options.displayUnits ? { displayUnits: options.displayUnits } : {})
     }),
     [
       options.units,
+      options.displayUnits,
       options.sketchViews,
       options.datumAxes,
       options.linearSnap,
@@ -1935,7 +1937,8 @@ export function useInPlaceCommand(
         optionId,
         value,
         inPlacePanelState(spec, current.options, numbersFor(current)),
-        ctxRef.current
+        ctxRef.current,
+        slotsOf(current)
       );
       if (!carried) return { ...current, options };
       const values = { ...current.values };
@@ -2265,9 +2268,22 @@ export function useInPlaceCommand(
     [spec, end]
   );
 
+  // While a refusal keeps the last frame that built, the handles stand on
+  // the values that frame built from (a hole's step chips on the kept
+  // counterbore's rim, not on the refused one's), as their arrows do.
+  const heldFrameValues =
+    refusal === null || refusalInputs.length === 0 ? null : keptValues;
   const handles = useMemo(
-    () => (spec ? spec.handles(slots, values, ctx, chosen) : []),
-    [spec, slots, values, ctx, chosen]
+    () =>
+      spec
+        ? spec.handles(
+            slots,
+            heldFrameValues ? { ...values, ...heldFrameValues } : values,
+            ctx,
+            chosen
+          )
+        : [],
+    [spec, slots, values, heldFrameValues, ctx, chosen]
   );
   // A refused entry holds Done until its value is taken, or until the value
   // no longer applies: a choice (a hole's style) that hides its chip, or its

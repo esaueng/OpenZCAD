@@ -572,6 +572,20 @@ const DEPTH_BIAS_UNIFORM_ANCHOR = 'uniform vec2 resolution;';
 const DEPTH_BIAS_VIEW_ANCHOR =
   'vec4 end = modelViewMatrix * vec4( instanceEnd, 1.0 );';
 
+// Both native and expanded screen-space edges use this view-space endpoint.
+const EDGE_VIEW_BIAS = /* glsl */ `
+  uniform float depthBias;
+  void biasEdgeEndpoint(inout vec4 endpoint) {
+    if (depthBias > 0.0) {
+      if (projectionMatrix[2][3] == -1.0) {
+        endpoint.xyz *= max(1.0 - depthBias / max(length(endpoint.xyz), 1e-6), 0.5);
+      } else {
+        endpoint.z += depthBias;
+      }
+    }
+  }
+`;
+
 /**
  * LineMaterial's vertex shader with a `depthBias` uniform.
  *
@@ -591,20 +605,13 @@ const DEPTH_BIASED_LINE_VERTEX_SHADER = (() => {
   return source
     .replace(
       DEPTH_BIAS_UNIFORM_ANCHOR,
-      `${DEPTH_BIAS_UNIFORM_ANCHOR}\n\t\tuniform float depthBias;`
+      `${DEPTH_BIAS_UNIFORM_ANCHOR}\n${EDGE_VIEW_BIAS}`
     )
     .replace(
       DEPTH_BIAS_VIEW_ANCHOR,
       `${DEPTH_BIAS_VIEW_ANCHOR}
-			if ( depthBias > 0.0 ) {
-				if ( projectionMatrix[ 2 ][ 3 ] == - 1.0 ) {
-					start.xyz *= max( 1.0 - depthBias / max( length( start.xyz ), 1e-6 ), 0.5 );
-					end.xyz *= max( 1.0 - depthBias / max( length( end.xyz ), 1e-6 ), 0.5 );
-				} else {
-					start.z += depthBias;
-					end.z += depthBias;
-				}
-			}`
+      biasEdgeEndpoint(start);
+      biasEdgeEndpoint(end);`
     );
 })();
 
@@ -638,6 +645,46 @@ const HARD_CLIPPED_LINE_FRAGMENT_SHADER = (() => {
 			#endif`
   );
 })();
+
+/** Standard sharp-edge ink on native one-pixel segments during navigation. */
+export function nativeEdgeMaterial(
+  source: LineMaterial
+): THREE.ShaderMaterial | null {
+  if (
+    source.vertexShader !== DEPTH_BIASED_LINE_VERTEX_SHADER ||
+    source.fragmentShader !== HARD_CLIPPED_LINE_FRAGMENT_SHADER
+  )
+    return null;
+  return new THREE.ShaderMaterial({
+    uniforms: source.uniforms,
+    transparent: source.transparent,
+    depthTest: source.depthTest,
+    depthWrite: source.depthWrite,
+    depthFunc: source.depthFunc,
+    toneMapped: source.toneMapped,
+    fog: source.fog,
+    clipping: source.clipping,
+    // vUv=0 is the fully covered center of the original LineMaterial stroke.
+    fragmentShader: source.fragmentShader,
+    vertexShader: /* glsl */ `
+      #include <common>
+      #include <fog_pars_vertex>
+      #include <logdepthbuf_pars_vertex>
+      #include <clipping_planes_pars_vertex>
+      varying vec2 vUv;
+      ${EDGE_VIEW_BIAS}
+      void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        biasEdgeEndpoint(mvPosition);
+        gl_Position = projectionMatrix * mvPosition;
+        vUv = vec2(0.0);
+        #include <logdepthbuf_vertex>
+        #include <clipping_planes_vertex>
+        #include <fog_vertex>
+      }
+    `
+  });
+}
 
 /**
  * The stencil bit a translucent line uses to draw each pixel once.

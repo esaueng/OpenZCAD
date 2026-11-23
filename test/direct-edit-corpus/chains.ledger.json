@@ -1,0 +1,23 @@
+{
+  "summary": {
+    "qualified": 12,
+    "typed-refusal": 0,
+    "untyped-refusal": 0,
+    "wrong": 0,
+    "timeout": 0
+  },
+  "cells": {
+    "A/seed-1/20": "qualified",
+    "A/seed-2/20": "qualified",
+    "A/seed-3/20": "qualified",
+    "B/seed-1/20": "qualified",
+    "B/seed-2/20": "qualified",
+    "B/seed-3/20": "qualified",
+    "C/seed-1/20": "qualified",
+    "C/seed-2/20": "qualified",
+    "C/seed-3/20": "qualified",
+    "D/seed-1/20": "qualified",
+    "D/seed-2/20": "qualified",
+    "D/seed-3/20": "qualified"
+  }
+}

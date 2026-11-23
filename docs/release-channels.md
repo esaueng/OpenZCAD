@@ -27,6 +27,15 @@ binds an unexpected service, points Glimpse at the beta entrypoint, defines
 Previews, or uses another
 channel's sender or origin. CI dry-runs both deploys on every PR.
 
+## The brand's channel tag
+
+The word beside the OpenZCAD wordmark names the channel the page runs on
+(`apps/web/src/lib/releaseChannel.ts`): **Stable** in green on `zcad.app`,
+`stable.zcad.app` and the desktop app; **Beta** in the accent blue on
+`beta.zcad.app` and self-hosted deployments; **Dev** in orange on a Vite
+development server, a local build (`localhost`, loopback) and Worker
+Previews (`*.dev.zcad.app`).
+
 ## Realms: each channel's state in the browser
 
 The same email signs in as the same user id on both channels, with a

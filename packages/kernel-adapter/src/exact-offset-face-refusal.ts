@@ -37,9 +37,16 @@ export function roundOffsetLimit(value: number): number {
   return Math.round(value * 1e9) / 1e9;
 }
 
-/** The limit as the sentence states it: hundredths, trailing zeros dropped. */
-function formatLimit(value: number): string {
-  return String(Math.round(value * 100) / 100);
+/**
+ * The limit as an offset-limit sentence states it: signed like the offset
+ * (and like the "Keep" value beside it), hundredths, trailing zeros dropped,
+ * in document units without a suffix — the adapter does not know the unit
+ * the document is shown in, so the workspace adds it
+ * (`offsetLimitInUnits` in apps/web). `-0` reads `0`.
+ */
+export function formatOffsetLimit(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  return String(rounded === 0 ? 0 : rounded);
 }
 
 /**
@@ -76,7 +83,7 @@ export function offsetFaceRefusalOf(
   const reason =
     limit === undefined
       ? 'A neighbouring face would shrink to nothing at this distance. Try a smaller offset.'
-      : `A neighbouring face would shrink to nothing past ${formatLimit(Math.abs(limit))}. Try a smaller offset.`;
+      : `A neighbouring face would shrink to nothing past ${formatOffsetLimit(limit)}. Try a smaller offset.`;
   return new OffsetFaceRefusal({
     family: 'direct-edit',
     category: 'invalid_topology',

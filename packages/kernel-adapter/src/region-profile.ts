@@ -8,13 +8,15 @@ import {
   type SketchProfileDiagnostic,
   type SketchRegion
 } from '@openzcad/geometry';
+import { referenceRecaptureHooks } from './reference-recapture-slot';
 import {
   resolveSketchPromotionBoundaryTokens,
   type ProjectDocument,
   type SketchEntityProfileReference,
   type SketchNode,
   type SketchObjectNode,
-  type SketchProfileReference
+  type SketchProfileReference,
+  type SketchRegionProfileReference
 } from '@openzcad/shared';
 
 export interface ProfileReferenceData {
@@ -145,18 +147,9 @@ export function resolveRegionProfilesInSketch(
       )
     }
   );
-  const resolved = references.flatMap((reference) => {
-    if (reference.all === true) {
-      if ('sourceBoundaryLoops' in reference)
-        throw new Error(
-          'Broken profile reference — entity-wide selection cannot carry boundary provenance.'
-        );
-      return resolveEntityProfiles(
-        reference,
-        analysis.profiles,
-        analysis.diagnostics
-      );
-    }
+  const resolveOne = (
+    reference: SketchRegionProfileReference
+  ): SketchRegion => {
     if (
       'sourceBoundaryLoops' in reference &&
       reference.sourceBoundaryLoops !== undefined
@@ -259,6 +252,23 @@ export function resolveRegionProfilesInSketch(
     throw new Error(
       'Broken profile reference — the bounded sketch region used by this extrude no longer resolves uniquely.'
     );
+  };
+  const resolved = references.flatMap((reference) => {
+    if (reference.all === true) {
+      if ('sourceBoundaryLoops' in reference)
+        throw new Error(
+          'Broken profile reference — entity-wide selection cannot carry boundary provenance.'
+        );
+      return resolveEntityProfiles(
+        reference,
+        analysis.profiles,
+        analysis.diagnostics
+      );
+    }
+    const hooks = referenceRecaptureHooks();
+    return hooks
+      ? hooks.resolveProfile(reference, analysis.profiles, resolveOne)
+      : resolveOne(reference);
   });
   const unique = new Map(
     resolved.map((profile) => [profile.profileId, profile])

@@ -15,8 +15,10 @@ describe('offsetFaceRefusalOf', () => {
     const cause = new Error(kernelText('reverse', -9));
     const refusal = offsetFaceRefusalOf(cause, -9);
     expect(refusal).not.toBeNull();
+    // Signed like the offset and the "Keep" beside it; the workspace adds
+    // the document's display unit (`offsetLimitInUnits`).
     expect(refusal!.reason).toBe(
-      'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.'
+      'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.'
     );
     expect(refusal!.message.split('\n')[1]).toBe(cause.message);
     expect(refusal!.cause).toBe(cause);
@@ -31,9 +33,14 @@ describe('offsetFaceRefusalOf', () => {
   });
 
   it('reads the collapse wording and an outward move alike', () => {
-    expect(
-      offsetFaceRefusalOf(new Error(kernelText('collapse', 6.4)), 6.4)?.limit
-    ).toBe(6.4);
+    const outward = offsetFaceRefusalOf(
+      new Error(kernelText('collapse', 6.4)),
+      6.4
+    );
+    expect(outward?.limit).toBe(6.4);
+    expect(outward?.reason).toBe(
+      'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.'
+    );
   });
 
   it('offers no limit when the kernel moved something else', () => {
