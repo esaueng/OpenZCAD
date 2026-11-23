@@ -124,6 +124,18 @@ describe('useStageFootClaim', () => {
     expect(onGrow).toHaveBeenCalledTimes(3);
   });
 
+  it('does not count the card’s own entrance rise as growth', () => {
+    // Mounted mid-rise 8 px low, the entrance's end must not ask for a
+    // second glide (review on #1964).
+    const top = { value: 412 };
+    layOut(top);
+    const onGrow = vi.fn<(surface: DOMRect, stage: DOMRect) => void>();
+    const { getByTestId } = render(<Card shown onGrow={onGrow} />);
+    top.value = 404;
+    fireEvent.animationEnd(getByTestId('card'));
+    expect(onGrow).toHaveBeenCalledTimes(1);
+  });
+
   it('publishes nothing while inactive', () => {
     const top = { value: 404 };
     layOut(top);

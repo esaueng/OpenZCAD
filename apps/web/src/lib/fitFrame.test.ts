@@ -360,6 +360,18 @@ describe('the modeling guide', () => {
     expect(measureFitFrame(canvas)).toBeUndefined();
   });
 
+  it('leaves a 768 px stage’s card out even where it crosses the middle', () => {
+    // The undocked Build layout at 768: the 296 px card from x 116 to 412
+    // crosses the middle (384) but stands beside the model (review on #1964).
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 768, 1024);
+    area.append(canvas);
+    document.body.append(area);
+    guide(area, 116, 700, 412, 960);
+    expect(measureFitFrame(canvas)).toBeUndefined();
+  });
+
   it('frames as if it were not there where it would leave only a strip', () => {
     const { area, canvas } = phoneStage();
     guide(area, 72, 90, 318, 655);

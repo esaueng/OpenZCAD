@@ -3224,6 +3224,8 @@ export function ModelViewer({
    * chip-only value) and its chip — and the drag holding one of them.
    */
   const commandRigsRef = useRef(new Map<string, CommandRigEntry>());
+  /** Whether a creation footprint is being dragged out. */
+  const footprintDragActiveRef = useRef(false);
   const commandDragRef = useRef<{
     pointerId: number;
     valueId: string;
@@ -12099,6 +12101,7 @@ export function ModelViewer({
         start = hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
       }
       if (!start) return false;
+      footprintDragActiveRef.current = true;
       footprintDrag = {
         pointerId: event.pointerId,
         frame,
@@ -12136,6 +12139,7 @@ export function ModelViewer({
       const drag = footprintDrag;
       if (!drag) return;
       footprintDrag = null;
+      footprintDragActiveRef.current = false;
       clearFootprintOutline();
       gestures.release(event, null);
       if (report) onFootprintRef.current?.(footprintGesture(drag, 'end'));
@@ -12144,6 +12148,7 @@ export function ModelViewer({
       const drag = footprintDrag;
       if (!drag) return;
       footprintDrag = null;
+      footprintDragActiveRef.current = false;
       clearFootprintOutline();
       gestures.release(drag.pointerId, null);
     };
@@ -18760,7 +18765,9 @@ export function ModelViewer({
   // A request made with nothing to frame (a phone's modeling guide rising
   // over an empty project) is kept, and honoured once when the first bodies
   // arrive: the box the guide then asks to be tapped stood under it.
-  const handledClearStageRef = useRef(0);
+  // Requests made before this viewer mounted (another project's) are not
+  // its own to replay.
+  const handledClearStageRef = useRef(clearStageRequest);
   const clearStagePendingRef = useRef(false);
   useEffect(() => {
     const context = contextRef.current;
@@ -18776,6 +18783,20 @@ export function ModelViewer({
     // cancels them, and the request must still be there for the next run.
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
+        // A hand on a handle or a footprint owns the camera: the request
+        // waits, still pending, for the change its release brings.
+        if (
+          commandDragRef.current ||
+          moveDragActiveRef.current ||
+          edgeDragActiveRef.current ||
+          offsetDragActiveRef.current ||
+          cylinderRadiusDragActiveRef.current ||
+          footprintDragActiveRef.current
+        ) {
+          handledClearStageRef.current = clearStageRequest;
+          clearStagePendingRef.current = true;
+          return;
+        }
         handledClearStageRef.current = clearStageRequest;
         const targets = [
           ...context.bodyGroup.children,

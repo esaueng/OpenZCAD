@@ -12,6 +12,9 @@ import { useLayoutEffect, useRef, type RefObject } from 'react';
 export type StageFootClaim =
   '--workspace-tour-claim' | '--motion-timeline-claim';
 
+/** Less than this, a claim reaching higher is not growth (an entrance rise). */
+export const FOOT_CLAIM_GROWTH_PX = 16;
+
 /** CSS px from the stage's bottom edge up to the surface's top edge. */
 export function stageFootClaim(
   stage: Pick<DOMRectReadOnly, 'bottom'>,
@@ -29,10 +32,11 @@ export function stageFootClaim(
  * the guide above an in-place command's bar by the height the bar publishes
  * there, which moves it without resizing it (#1947).
  *
- * `onGrow` hears each time the claim reaches higher than it did (from
- * nothing when the surface comes up), with where the surface and the stage
- * stand then: a surface that rises over the model can ask for it to be
- * framed clear again.
+ * `onGrow` hears each time the claim reaches more than
+ * {@link FOOT_CLAIM_GROWTH_PX} higher than it last stood (from nothing when
+ * the surface comes up), with where the surface and the stage stand then:
+ * a surface that rises over the model can ask for it to be framed clear
+ * again. Its own entrance rise, a few pixels, is not growth.
  */
 export function useStageFootClaim(
   ref: RefObject<HTMLElement | null>,
@@ -56,8 +60,14 @@ export function useStageFootClaim(
       if (stage.style.getPropertyValue(property) !== claim) {
         stage.style.setProperty(property, claim);
       }
-      if (height > reached) onGrowRef.current?.(surfaceRect, stageRect);
-      reached = height;
+      if (height > reached + FOOT_CLAIM_GROWTH_PX) {
+        onGrowRef.current?.(surfaceRect, stageRect);
+      }
+      // Growth is measured from where it last stood, so a fold and a new
+      // rise count again; an entrance's last few pixels do not.
+      if (height < reached || height > reached + FOOT_CLAIM_GROWTH_PX) {
+        reached = height;
+      }
     };
     measure();
     const observer =
