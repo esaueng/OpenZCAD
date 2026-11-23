@@ -323,8 +323,14 @@ interface SilhouetteState {
   positions: Float32Array;
   /** Each candidate's midpoint, where a perspective eye ray is aimed. */
   readonly midpoints: Float32Array;
-  /** Undefined until a second view needs bounds, null when the scan is cheaper. */
+  /**
+   * Per-block bounds over the resting midpoints and normals: undefined until
+   * a second view needs them (and again after a preview rewrites the
+   * midpoints), null when the body has too few candidates to repay them.
+   */
   blocks: Float32Array | null | undefined;
+  /** Views left to scan per edge before the blocks are tried again. */
+  blockPause: number;
   /** The drawn segments: the first `instanceCount` are this view's outline. */
   readonly drawn: Float32Array;
   readonly buffer: THREE.InterleavedBuffer;
@@ -375,6 +381,7 @@ export function createSilhouetteLines(
     positions: candidates.positions,
     midpoints,
     blocks: undefined,
+    blockPause: 0,
     drawn: start.data.array as Float32Array,
     buffer: start.data,
     lastEye: new Float64Array(3),
@@ -409,6 +416,9 @@ function writeMidpoints(positions: Float32Array, midpoints: Float32Array) {
 // Consecutive mesh edges usually belong to a small patch of the same surface.
 // When every neighbouring normal in a patch faces the same way we can skip it.
 const OUTLINE_BLOCK_SIZE = 32;
+// After a view where the blocks skip too little, scan this many views per edge
+// before trying them again, so one grazing view does not disable them for good.
+const OUTLINE_BLOCK_RETRY_VIEWS = 16;
 
 /** Per axis: min/max normal (both neighbours), then min/max midpoint. */
 function outlineBlockBounds(
@@ -515,6 +525,10 @@ function deformSilhouette(
   let active = true;
   const write = (delta: number) => {
     const { midpoints } = state;
+    // The block bounds describe the midpoints they were built from. Any
+    // rewrite drops them; the next moved view at rest builds them again.
+    state.blocks = undefined;
+    state.blockPause = 0;
     const bounds = lines.geometry.boundingBox ?? new THREE.Box3();
     bounds.copy(fixedBounds);
     for (let slot = 0; slot < moving.length; slot += 1) {
@@ -635,7 +649,11 @@ function pickSilhouette(
   let kept = 0;
   // A preview moves the midpoints away from their bounds at rest. Its
   // per-edge test uses the updated midpoints until the preview restores them.
-  const blocks = positions === state.candidates.positions ? state.blocks : null;
+  let blocks = positions === state.candidates.positions ? state.blocks : null;
+  if (blocks && state.blockPause > 0) {
+    state.blockPause -= 1;
+    blocks = null;
+  }
   const blockSize = blocks ? OUTLINE_BLOCK_SIZE : count;
   let skippedCandidates = 0;
   for (let first = 0, slot = 0; first < count; first += blockSize, slot += 12) {
@@ -663,8 +681,11 @@ function pickSilhouette(
     }
   }
   // A few coherent patches amid interleaved faces cannot repay testing every
-  // block. Keep the index only while it avoids at least a quarter of the scan.
-  if (blocks && skippedCandidates < count / 4) state.blocks = null;
+  // block. When a view avoids less than a quarter of the scan, scan per edge
+  // for a while, then try the blocks again for the views that follow.
+  if (blocks && skippedCandidates < count / 4) {
+    state.blockPause = OUTLINE_BLOCK_RETRY_VIEWS;
+  }
   lines.geometry.instanceCount = kept;
   state.buffer.clearUpdateRanges();
   if (kept > 0) {
