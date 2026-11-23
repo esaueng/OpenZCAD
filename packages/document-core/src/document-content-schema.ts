@@ -233,6 +233,21 @@ export function assertDisplayUnitsSchema(version: unknown): void {
 }
 
 /**
+ * I03 stored-unit conversion (schema v154): the `units.convert` command. An
+ * older reader would skip it on replay and rebuild every later edit in the
+ * old unit.
+ */
+export const UNITS_CONVERT_SCHEMA_VERSION = 154;
+
+export function assertUnitsConvertSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    UNITS_CONVERT_SCHEMA_VERSION,
+    'Stored-unit conversions'
+  );
+}
+
+/**
  * D07 model-based definition (schema v106): `pmi` and its commands. An
  * older reader would drop the section on save.
  */
@@ -1069,6 +1084,8 @@ export function assertDocumentContentCommandSchema(
       assertPrintClearanceSchema(document.schemaVersion);
     if (command.kind === 'displayUnits.set')
       assertDisplayUnitsSchema(document.schemaVersion);
+    if (command.kind === 'units.convert')
+      assertUnitsConvertSchema(document.schemaVersion);
     if (typeof command.kind === 'string' && command.kind.startsWith('pmi.'))
       assertModelPmiSchema(document.schemaVersion);
     if (

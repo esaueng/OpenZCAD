@@ -63,6 +63,32 @@ describe('describeSaveStateDiff', () => {
   });
 });
 
+describe('describeSaveStateDiff: a stored-unit conversion (I03)', () => {
+  it('summarises the conversion in one row, not a row per value', () => {
+    expect(
+      describeSaveStateDiff(
+        diff({
+          identical: false,
+          unitConversion: { from: 'mm', to: 'inch', values: 42 }
+        })
+      )
+    ).toEqual([
+      {
+        heading: 'Project',
+        lines: ['Converted stored units mm → in (42 values)']
+      }
+    ]);
+    expect(
+      describeSaveStateDiff(
+        diff({
+          identical: false,
+          unitConversion: { from: 'inch', to: 'cm', values: 1 }
+        })
+      )[0]!.lines
+    ).toEqual(['Converted stored units in → cm (1 value)']);
+  });
+});
+
 describe('SaveStateCompareDialog', () => {
   it('compares with the project now, then with another save', async () => {
     const user = userEvent.setup();

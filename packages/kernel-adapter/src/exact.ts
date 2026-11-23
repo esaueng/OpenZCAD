@@ -7297,3 +7297,8 @@ export type {
   BlendOrientationReport
 } from './blend-orientation';
 export { topologyHashOfWitness } from './topology-lineage';
+export {
+  prepareUnitsConversion,
+  type UnitsConversionPreparation,
+  type UnitsConversionPreparationOptions
+} from './units-convert-authoring';

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { GitCompare } from 'lucide-react';
-import type {
-  SaveStateDiff,
-  SaveStateDiffGroup
+import {
+  UNITS_CONVERT_SYMBOLS,
+  type SaveStateDiff,
+  type SaveStateDiffGroup
 } from '@openzcad/document-core';
 import { useModalFocus } from '../lib/useModalFocus';
 
@@ -27,10 +28,17 @@ export function describeSaveStateDiff(
   const sections: SaveStateDiffSection[] = [
     {
       heading: 'Project',
-      lines: diff.properties.map(
-        (property) =>
-          `${property.field === 'name' ? 'Name' : 'Units'}: ${property.before} → ${property.after}`
-      )
+      lines: [
+        ...diff.properties.map(
+          (property) =>
+            `${property.field === 'name' ? 'Name' : 'Units'}: ${property.before} → ${property.after}`
+        ),
+        ...(diff.unitConversion
+          ? [
+              `Converted stored units ${UNITS_CONVERT_SYMBOLS[diff.unitConversion.from]} → ${UNITS_CONVERT_SYMBOLS[diff.unitConversion.to]} (${diff.unitConversion.values} ${diff.unitConversion.values === 1 ? 'value' : 'values'})`
+            ]
+          : [])
+      ]
     },
     {
       heading: 'Features',

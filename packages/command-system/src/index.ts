@@ -250,6 +250,9 @@ import {
   type PrintClearanceSetInput,
   setDisplayUnits,
   type DisplayUnitsSetInput,
+  applyUnitsConversion,
+  unitsConvertLabel,
+  type UnitsConvertInput,
   createConfigurations,
   deleteConfigurations,
   addConfigurationRow,
@@ -471,6 +474,7 @@ export type CommandKind =
   | 'objectFolder.move'
   | 'printClearance.set'
   | 'displayUnits.set'
+  | 'units.convert'
   | 'configuration.create'
   | 'configuration.delete'
   | 'configuration.row.add'
@@ -603,6 +607,7 @@ export type AnyCommand =
   | CommandDefinition<ObjectFolderMoveInput>
   | CommandDefinition<PrintClearanceSetInput>
   | CommandDefinition<DisplayUnitsSetInput>
+  | CommandDefinition<UnitsConvertInput>
   | CommandDefinition<ConfigurationCreateInput>
   | CommandDefinition<Record<string, never>>
   | CommandDefinition<ConfigurationRowAddInput>
@@ -3947,6 +3952,20 @@ export const commandFactories = {
       setDisplayUnits(document, payload)
     );
   },
+  /**
+   * I03 (schema v154): converts the stored units by a payload the kernel
+   * authored (`prepareUnitsConversion`). Applying it needs no kernel: the
+   * pure transform and the recorded reference map, exactly as replay does.
+   * A refusal throws before anything is logged.
+   */
+  convertUnits(
+    payload: UnitsConvertInput,
+    label = unitsConvertLabel(payload.from, payload.to)
+  ): CommandDefinition<UnitsConvertInput> {
+    return makeCommand('units.convert', label, payload, (document) =>
+      applyUnitsConversion(document, payload)
+    );
+  },
   addDrawingAnnotation(
     payload: DrawingAnnotationAddInput
   ): CommandDefinition<DrawingAnnotationAddInput> {
@@ -7267,6 +7286,9 @@ export function replayCommands(
         break;
       case 'displayUnits.set':
         next = setDisplayUnits(next, command.payload as DisplayUnitsSetInput);
+        break;
+      case 'units.convert':
+        next = applyUnitsConversion(next, command.payload as UnitsConvertInput);
         break;
       case 'drawing.annotation.add':
         next = addDrawingAnnotation(

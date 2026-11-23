@@ -3,6 +3,7 @@ import {
   PARAMETER_QUANTITIES,
   SKETCH_NODE_QUANTITIES,
   SKETCH_OBJECT_QUANTITIES,
+  MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
   millimetresPerUnit,
   walkQuantities,
   type ConfigurationRow,
@@ -32,9 +33,9 @@ import {
  * I03 stored-unit conversion, phase 2 (plan
  * `docs/plans/i03-stored-unit-conversion-plan.md` §2, §5.4, §6 step 1, §9):
  * the pure document transform that rewrites a document from `units = A` to
- * `units = B`, and the field-level oracle that checks it. Nothing calls it
- * yet: the `units.convert` command (phase 5) and the reference re-capture
- * (phase 4) wire it in.
+ * `units = B`, and the field-level oracle that checks it. The
+ * `units.convert` command (phase 5, `units-convert-command.ts`) applies it
+ * and then the re-captured reference map (phase 4).
  *
  * What it does, per quantity registry class:
  *
@@ -69,8 +70,9 @@ import {
  * - a custom feature (its script's literals cannot be rewritten, Q5);
  * - stored data in an area the registry does not classify yet: drawings,
  *   PMI, assemblies and reference images;
- * - an imported mesh whose triangles live in a content-addressed payload
- *   with no unit of its own (plan §3.4, phase 3);
+ * - an imported mesh that keeps embedded triangles beside a payload
+ *   reference (only a referenced payload alone can carry `payloadUnits`),
+ *   or a referenced payload in a document older than schema v153;
  * - a length field whose expression does not evaluate, or evaluates to
  *   something other than a length or a plain number;
  * - any expression (field, parameter or configuration cell) that applies an
@@ -89,6 +91,24 @@ import {
  *   value is not a finite normal double (zero only when it was zero);
  * - any field whose converted value is not the scaled original (the oracle,
  *   §6 step 1), the second line of defence.
+ *
+ * An imported mesh whose triangles live in a content-addressed payload
+ * keeps the blob (and, for E2EE projects, its encryption) as it is: the
+ * conversion records the unit the payload was written in as `payloadUnits`
+ * (schema v153, plan §3.4), and the kernel scales the triangles on load.
+ *
+ * Two narrow cases convert but are reported as warnings
+ * ({@link UnitsConversionWarning}), because a later edit could make them
+ * mean something else even though today's value agrees:
+ *
+ * - `rounding-of-length-ratio`: a rounding, modulo, sign or guard applied to
+ *   a unit-free value computed from lengths (`round(width / 1 mm) * 1 mm`).
+ *   The ratio is the same number in every unit only to within an ulp, so a
+ *   value that lands exactly on a jump (`.5`) can round the other way;
+ * - `pole-or-domain-edge`: a division by, or a square root of, a sum or
+ *   difference of lengths (`1 / (width - 3 mm)`,
+ *   `sqrt((width - 3 mm) * 1 mm)`),
+ *   which an ulp can move across zero when an edit brings it there.
  *
  * The input is never mutated.
  */
@@ -127,6 +147,25 @@ export interface UnitsConversionRewrite {
   after: string;
 }
 
+export type UnitsConversionWarningCode =
+  'rounding-of-length-ratio' | 'pole-or-domain-edge';
+
+/**
+ * A field that converts and agrees today but could change meaning after a
+ * later edit (see the module comment). The review screen lists them.
+ */
+export interface UnitsConversionWarning {
+  code: UnitsConversionWarningCode;
+  subject: string;
+  field: string;
+  /** The expression as written before conversion. */
+  expression: string;
+  /** The operation at risk: `round`, `/`, `sqrt` and so on. */
+  operation: string;
+  /** A sentence for the review screen. */
+  message: string;
+}
+
 export interface UnitsConversionReport {
   from: ConvertibleUnit;
   to: ConvertibleUnit;
@@ -150,6 +189,13 @@ export interface UnitsConversionReport {
   configurationRows: number;
   /** What happened to `displayUnits` (plan §5.4). */
   displayUnits: 'none' | 'cleared' | 'kept';
+  /**
+   * Imported meshes whose referenced payload now names the unit it was
+   * written in (`payloadUnits`), or no longer needs to; the blob is kept.
+   */
+  meshPayloads: number;
+  /** Fields that convert but could change meaning after a later edit. */
+  warnings: UnitsConversionWarning[];
   /** Fields the oracle evaluated in both documents. */
   oracleChecks: number;
 }
@@ -456,13 +502,25 @@ function preconditionRefusals(
     if (
       node.data.featureKind === 'imported-mesh' &&
       node.data.meshPayloadRef !== undefined
-    )
-      refusals.push({
-        code: 'imported-mesh-payload',
-        subject: subjectOf(node),
-        field: 'meshPayloadRef',
-        message: `${node.name} keeps its triangles in a stored payload in document units, which cannot be converted yet.`
-      });
+    ) {
+      if (node.data.vertices !== undefined || node.data.indices !== undefined)
+        refusals.push({
+          code: 'imported-mesh-payload',
+          subject: subjectOf(node),
+          field: 'meshPayloadRef',
+          message: `${node.name} keeps embedded triangles beside a stored payload, so the payload's unit cannot be recorded.`
+        });
+      else if (
+        typeof document.schemaVersion !== 'number' ||
+        document.schemaVersion < MESH_PAYLOAD_UNITS_SCHEMA_VERSION
+      )
+        refusals.push({
+          code: 'imported-mesh-payload',
+          subject: subjectOf(node),
+          field: 'meshPayloadRef',
+          message: `${node.name} keeps its triangles in a stored payload, whose unit needs project schema v${MESH_PAYLOAD_UNITS_SCHEMA_VERSION} or newer to record.`
+        });
+    }
   }
   return refusals;
 }
@@ -565,36 +623,215 @@ function scaleVariantOperation(
     : undefined;
 }
 
+/** One residual risk an audit found (see {@link UnitsConversionWarning}). */
+interface ScaleRisk {
+  code: UnitsConversionWarningCode;
+  operation: string;
+}
+
 interface ScaleAudit {
   result: ExpressionQuantityValue;
   /** Whether any value inside the expression carries a length. */
   dimensional: boolean;
   /** The first scale-variant operation, described. */
   variant?: string;
+  /**
+   * Operations that survive a change of unit today but sit on a jump a
+   * later edit could reach (see {@link auditScale}).
+   */
+  risks: ScaleRisk[];
+  /**
+   * Whether the value is a sum or difference computed from a length (or
+   * one scaled by a product or quotient), which a later edit can zero.
+   */
+  lengthSum: boolean;
 }
 
-/** Evaluates `expression` once, auditing every operation; throws as the evaluator does. */
+/**
+ * Evaluates `expression` once, auditing every operation; throws as the
+ * evaluator does.
+ *
+ * Besides refusals, it records two residual risks (plan §2.2, owner-approved
+ * as warnings). The trace reports each operation after its operands were
+ * evaluated, in evaluation order, so it is an approximation of data flow:
+ *
+ * - a unit-free-only operation (`round`, `mod`, a guard) whose operands are
+ *   unit-free but computed from a length, or that follows a length traced
+ *   earlier in the expression, or sits in an expression that reads a
+ *   parameter computed from a length (`lengthNames`): the unit-free value
+ *   may be a ratio of lengths. This over-approximates (`2 mm + round(n)`
+ *   warns), which a warning may and a refusal may not;
+ * - a division by, or a square root (or a negative or non-integer power)
+ *   of, a value that is a sum or difference computed from a length, or one
+ *   scaled from it by a product or quotient, inside the expression or a
+ *   parameter of that kind it reads (`sumNames`). Values are matched by
+ *   value, since the trace reports operands and not where they came from.
+ */
 function auditScale(
   expression: string,
   scope: Record<string, number>,
-  units: UnitSystem
+  units: UnitSystem,
+  context: ScaleRiskContext = NO_RISK_CONTEXT
 ): ScaleAudit {
   let dimensional = false;
   let variant: string | undefined;
+  let lastSum = false;
+  const risks: ScaleRisk[] = [];
+  const identifiers = expressionIdentifiers(expression);
+  const readsLengthRatio = identifiers.some((name) =>
+    context.lengthNames.has(name)
+  );
+  // Values computed from a length (`derived`), and those of them that a
+  // sum or difference produced, directly or scaled by a product or a
+  // quotient (`sums`): the ones a later edit can bring to zero. Matched by
+  // value, since the trace reports operands, not where they came from.
+  const derived = new Set<number>();
+  const sums = new Set<number>();
+  for (const name of identifiers) {
+    const value = scope[name];
+    if (value === undefined) continue;
+    if (context.lengthNames.has(name)) derived.add(value);
+    if (context.sumNames.has(name)) sums.add(value);
+  }
+  const risk = (code: UnitsConversionWarningCode, operation: string) => {
+    if (!risks.some((r) => r.code === code && r.operation === operation))
+      risks.push({ code, operation });
+  };
   const result = traceExpression(
     expression,
     scope,
     { documentUnits: units },
     (operation, operands) => {
-      if (operands.some((operand) => operand.length !== 0)) dimensional = true;
+      const carriesLength = operands.some((operand) => operand.length !== 0);
+      const fromLength = operands.some(
+        (operand) => operand.length !== 0 || derived.has(operand.value)
+      );
+      const scaling = UNITS_CONVERSION_OPERATION_SCALING[operation];
+      if (
+        !carriesLength &&
+        scaling !== 'equivariant' &&
+        scaling !== 'per-use' &&
+        (fromLength || dimensional || readsLengthRatio)
+      )
+        risk('rounding-of-length-ratio', operation);
+      const [a, b] = operands;
+      const nearZero = (operand: ExpressionQuantityValue | undefined) =>
+        operand !== undefined && sums.has(operand.value);
+      if (operation === '/' && nearZero(b)) risk('pole-or-domain-edge', '/');
+      if (operation === 'sqrt' && nearZero(a))
+        risk('pole-or-domain-edge', 'sqrt');
+      if (
+        operation === '^' &&
+        nearZero(a) &&
+        b !== undefined &&
+        (b.value < 0 || !Number.isInteger(b.value))
+      )
+        risk('pole-or-domain-edge', '^');
+
+      let value: number | undefined;
+      let sum = false;
+      if (
+        a &&
+        b &&
+        (operation === '+' || operation === '-' || operation === 'juxtapose')
+      ) {
+        value = operation === '-' ? a.value - b.value : a.value + b.value;
+        sum = fromLength;
+      } else if (a && b && operation === '*') {
+        value = a.value * b.value;
+        sum = nearZero(a) || nearZero(b);
+      } else if (a && b && operation === '/') {
+        value = a.value / b.value;
+        sum = nearZero(a);
+      } else if (a && operation === 'abs') {
+        value = Math.abs(a.value);
+        sum = nearZero(a);
+      } else if (a && operation === 'sqrt') value = Math.sqrt(a.value);
+      if (value !== undefined) {
+        if (fromLength) derived.add(value);
+        if (sum) sums.add(value);
+      }
+      lastSum = sum;
+      if (carriesLength) dimensional = true;
       variant ??= scaleVariantOperation(operation, operands);
     }
   );
   return {
     result,
     dimensional: dimensional || result.length !== 0,
-    ...(variant ? { variant } : {})
+    ...(variant ? { variant } : {}),
+    risks,
+    lengthSum: lastSum
   };
+}
+
+/** What an audit needs to know about the parameters an expression reads. */
+interface ScaleRiskContext {
+  /** Parameters whose value is computed from a length. */
+  lengthNames: ReadonlySet<string>;
+  /** Parameters whose value is a sum or difference computed from a length. */
+  sumNames: ReadonlySet<string>;
+}
+
+const NO_RISK_CONTEXT: ScaleRiskContext = {
+  lengthNames: new Set(),
+  sumNames: new Set()
+};
+
+/**
+ * The parameters whose value is a sum or difference computed from a length
+ * (`gap = width - 3 mm`, and `half = gap / 2` through it): a division by
+ * one is a pole a later edit can reach. Evaluated in the document as it
+ * stands, to a fixed point over chains of parameters.
+ */
+function lengthSumParameters(
+  document: ProjectDocument,
+  lengthNames: ReadonlySet<string>
+): Set<string> {
+  const scope = getParameterScope(document).scope;
+  const parameters = listParameters(document);
+  const names = new Set<string>();
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const parameter of parameters) {
+      if (names.has(parameter.name)) continue;
+      try {
+        if (
+          auditScale(parameter.expression, scope, document.units, {
+            lengthNames,
+            sumNames: names
+          }).lengthSum
+        ) {
+          names.add(parameter.name);
+          changed = true;
+        }
+      } catch {
+        // Not in scope: nothing evaluates against it.
+      }
+    }
+  }
+  return names;
+}
+
+function recordRisks(
+  converter: Converter,
+  audit: ScaleAudit,
+  expression: string,
+  subject: string,
+  field: string
+): void {
+  for (const { code, operation } of audit.risks)
+    converter.report.warnings.push({
+      code,
+      subject,
+      field,
+      expression,
+      operation,
+      message:
+        code === 'rounding-of-length-ratio'
+          ? `"${expression}" applies ${operation}() to a ratio of lengths. It converts exactly today, but the ratio is the same number in ${converter.to} only to within rounding, so a value that lands exactly on a step (such as .5) after a later edit could round the other way.`
+          : `"${expression}" ${operation === '/' ? 'divides by' : operation === 'sqrt' ? 'takes the square root of' : 'raises to a fractional or negative power'} a sum or difference of lengths. It converts exactly today, but if a later edit brings that value to zero, the two units can land on opposite sides of it.`
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +851,8 @@ interface Converter {
    * (see {@link lengthDependentParameters}).
    */
   lengthDependent: ReadonlySet<string>;
+  /** What audits need to report residual risks. */
+  risks: ScaleRiskContext;
 }
 
 function refuseScaleVariant(
@@ -662,10 +901,31 @@ function auditUnscaledExpression(
 ): void {
   let audit: ScaleAudit;
   try {
-    audit = auditScale(expression, scope, converter.from);
+    audit = auditScale(expression, scope, converter.from, converter.risks);
   } catch {
     return;
   }
+  const before = converter.refusals.length;
+  auditUnscaledFindings(
+    converter,
+    audit,
+    expression,
+    subject,
+    field,
+    parameter
+  );
+  if (converter.refusals.length === before)
+    recordRisks(converter, audit, expression, subject, field);
+}
+
+function auditUnscaledFindings(
+  converter: Converter,
+  audit: ScaleAudit,
+  expression: string,
+  subject: string,
+  field: string,
+  parameter: boolean
+): void {
   if (audit.variant)
     refuseScaleVariant(converter, expression, audit.variant, subject, field);
   else if (parameter ? audit.result.length !== 0 : audit.dimensional)
@@ -708,7 +968,7 @@ function convertLengthExpression(
   const { from, to, N, D, report } = converter;
   let audit: ScaleAudit;
   try {
-    audit = auditScale(expression, scope, from);
+    audit = auditScale(expression, scope, from, converter.risks);
   } catch (error) {
     converter.refusals.push({
       code: 'unclassifiable',
@@ -737,6 +997,7 @@ function convertLengthExpression(
     refuseOutOfRange(converter, expression, subject, field);
     return undefined;
   }
+  recordRisks(converter, audit, expression, subject, field);
   if (isLength) {
     report.unchangedExpressions += 1;
     return expression;
@@ -1287,13 +1548,18 @@ export function convertDocumentUnits(
   const target = to as ConvertibleUnit;
   const N = millimetresPerUnit(from);
   const D = millimetresPerUnit(target);
+  const lengthDependent = lengthDependentParameters(document);
   const converter: Converter = {
     from,
     to: target,
     N,
     D,
     refusals: [],
-    lengthDependent: lengthDependentParameters(document),
+    lengthDependent,
+    risks: {
+      lengthNames: lengthDependent,
+      sumNames: lengthSumParameters(document, lengthDependent)
+    },
     report: {
       from,
       to: target,
@@ -1305,6 +1571,8 @@ export function convertDocumentUnits(
       unchangedExpressions: 0,
       configurationRows: 0,
       displayUnits: 'none',
+      meshPayloads: 0,
+      warnings: [],
       oracleChecks: 0
     }
   };
@@ -1323,6 +1591,21 @@ export function convertDocumentUnits(
   next.units = target;
   for (const node of Object.values(next.nodes))
     if (node.kind === 'project') node.units = target;
+  // A referenced payload stays where it is, in the unit it was written in
+  // (plan §3.4): absent means the document's unit, which just changed.
+  for (const id of Object.keys(next.nodes).sort()) {
+    const node = next.nodes[id]!;
+    if (
+      node.kind !== 'feature' ||
+      node.data.featureKind !== 'imported-mesh' ||
+      node.data.meshPayloadRef === undefined
+    )
+      continue;
+    const written = node.data.payloadUnits ?? from;
+    if (written === target) delete node.data.payloadUnits;
+    else node.data.payloadUnits = written;
+    converter.report.meshPayloads += 1;
+  }
   if (next.displayUnits !== undefined) {
     if (next.displayUnits === target) {
       delete next.displayUnits;

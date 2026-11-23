@@ -103,6 +103,7 @@ export * from './print-clearance';
 export * from './display-units';
 export * from './units-convert';
 export * from './units-reference-map';
+export * from './units-convert-command';
 export * from './configurations';
 export * from './reference-images';
 export * from './model-pmi';

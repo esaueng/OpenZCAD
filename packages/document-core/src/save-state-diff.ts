@@ -1,8 +1,16 @@
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   type DocumentNode,
-  type ProjectDocument
+  type ProjectDocument,
+  type SerializedCommand,
+  type UnitSystem
 } from '@openzcad/shared';
+import {
+  UNITS_CONVERT_COMMAND_KIND,
+  runUnitsConversion,
+  unitsConvertValueCount,
+  type UnitsConvertInput
+} from './units-convert-command';
 
 /**
  * L03: what changed between two save states, in the terms the model is
@@ -53,8 +61,17 @@ export interface SaveStateDiff {
   /** Added, removed or re-expressed parameters, by name. */
   parameters: SaveStateParameterChange[];
   drawingSheets: SaveStateDiffGroup;
-  /** Project-level fields: its name and units. */
+  /**
+   * Project-level fields: its name and units. A recorded stored-unit
+   * conversion is reported as {@link unitConversion} instead of a units row.
+   */
   properties: { field: 'name' | 'units'; before: string; after: string }[];
+  /**
+   * I03: the later state converted the earlier one's stored units with a
+   * recorded `units.convert`. Every value it scaled is compared as scaled,
+   * so this one summary stands for them instead of a row per value.
+   */
+  unitConversion?: { from: UnitSystem; to: UnitSystem; values: number };
   /** Nothing in the model differs. */
   identical: boolean;
 }
@@ -160,11 +177,54 @@ function group<T extends DocumentNode>(
   };
 }
 
-/** What changed from `before` to `after`. */
-export function diffSaveStates(
+function commandLeaves(
+  commands: readonly SerializedCommand[]
+): SerializedCommand[] {
+  return commands.flatMap((command) =>
+    command.kind === 'transaction' && Array.isArray(command.payload)
+      ? commandLeaves(command.payload as SerializedCommand[])
+      : [command]
+  );
+}
+
+/**
+ * `before` with the stored-unit conversion `after` recorded applied to it,
+ * when `after`'s log holds one from `before`'s unit to its own that applies
+ * to `before` cleanly: the baseline the rest of the comparison reads, so a
+ * scaled value is not an edit. The newest such command wins.
+ */
+function convertedBaseline(
   before: ProjectDocument,
   after: ProjectDocument
+): { document: ProjectDocument; values: number } | undefined {
+  if (before.units === after.units) return undefined;
+  const conversions = commandLeaves(after.commandLog).filter(
+    (command) => command.kind === UNITS_CONVERT_COMMAND_KIND
+  );
+  for (const command of conversions.reverse()) {
+    const payload = command.payload as Partial<UnitsConvertInput> | undefined;
+    if (payload?.from !== before.units || payload.to !== after.units) continue;
+    try {
+      const result = runUnitsConversion(before, payload as UnitsConvertInput);
+      if (result.ok)
+        return {
+          document: result.document,
+          values: unitsConvertValueCount(result.report)
+        };
+    } catch {
+      // A payload this reader cannot apply: compare without a baseline.
+    }
+  }
+  return undefined;
+}
+
+/** What changed from `before` to `after`. */
+export function diffSaveStates(
+  original: ProjectDocument,
+  after: ProjectDocument
 ): SaveStateDiff {
+  const conversion = convertedBaseline(original, after);
+  const before = conversion?.document ?? original;
   const beforeFeatures = nodesOfKind(before, 'feature', before.featureOrder);
   const afterFeatures = nodesOfKind(after, 'feature', after.featureOrder);
   const features = group(
@@ -272,6 +332,11 @@ export function diffSaveStates(
       before: String(before.units),
       after: String(after.units)
     });
+  const unitConversion = conversion && {
+    from: original.units,
+    to: after.units,
+    values: conversion.values
+  };
 
   const empty = (entry: SaveStateDiffGroup) =>
     !entry.added.length && !entry.removed.length && !entry.changed.length;
@@ -282,7 +347,9 @@ export function diffSaveStates(
     parameters,
     drawingSheets,
     properties,
+    ...(unitConversion ? { unitConversion } : {}),
     identical:
+      !unitConversion &&
       empty(features) &&
       !reordered &&
       empty(sketches) &&
