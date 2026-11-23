@@ -1252,15 +1252,18 @@ export function createEncryptedProjectStore(
     projectId: string,
     revisionHashes: Map<string, Uint8Array>,
     document: ProjectDocument,
-    head: { documentVersion: number; hash: string }
+    head: { documentVersion: number; hash: string },
+    /** A write: a failed lookup fails it rather than drop the save. */
+    strict = false
   ): Promise<void> {
     const own = document.revisions.at(-1)?.revisionId as string | undefined;
     if (!own || revisionHashes.has(own)) return;
     let listed: E2eeRevisionsResponse['revisions'];
     try {
       listed = (await api.revisions(projectId)).revisions;
-    } catch {
-      // The map stays as signed; the next read tries again.
+    } catch (error) {
+      if (strict) throw error;
+      // The map stays as signed; the next read or write tries again.
       return;
     }
     if (
@@ -1289,11 +1292,48 @@ export function createEncryptedProjectStore(
     projectId: string,
     revisionHashes: Map<string, Uint8Array>,
     document: ProjectDocument,
-    head: { documentVersion: number; hash: string }
+    head: { documentVersion: number; hash: string },
+    strict = false
   ): Promise<void> {
     const own = document.revisions.at(-1)?.revisionId;
     if (!own || document.checkpoints.at(-1)?.revisionId !== own) return;
-    await withOwnNamedSave(projectId, revisionHashes, document, head);
+    await withOwnNamedSave(projectId, revisionHashes, document, head, strict);
+  }
+
+  /**
+   * The revision map a version sealed on `head` carries. A head that is a
+   * save point whose own hash its reader could not confirm (the account's
+   * revision list failed then) is checked again here, and a failure now
+   * fails the write: sealing without it would drop that save state from
+   * every later signed map for good.
+   */
+  async function sealingHashes(
+    projectId: string,
+    head: {
+      version: number;
+      hash: string;
+      revisionHashes: ReadonlyMap<string, Uint8Array>;
+      document: ProjectDocument;
+    }
+  ): Promise<ReadonlyMap<string, Uint8Array>> {
+    const own = head.document.revisions.at(-1)?.revisionId as
+      string | undefined;
+    if (
+      !own ||
+      head.revisionHashes.has(own) ||
+      head.document.checkpoints.at(-1)?.revisionId !== own
+    ) {
+      return head.revisionHashes;
+    }
+    const hashes = new Map(head.revisionHashes);
+    await withOwnRoomSavePoint(
+      projectId,
+      hashes,
+      head.document,
+      { documentVersion: head.version, hash: head.hash },
+      true
+    );
+    return hashes;
   }
 
   /**
@@ -1851,6 +1891,7 @@ export function createEncryptedProjectStore(
           remember: false
         });
       }
+      const baseHashes = await sealingHashes(projectId, head);
       const sealed = await sealDocument(
         device,
         material,
@@ -1858,7 +1899,7 @@ export function createEncryptedProjectStore(
         toSeal,
         head.version,
         head.hash,
-        head.revisionHashes,
+        baseHashes,
         links
       );
       const upload = {
@@ -1918,10 +1959,7 @@ export function createEncryptedProjectStore(
         documentVersion: response.version,
         keyEpoch: sealed.keyEpoch
       });
-      const revisionHashes = retainedHashes(
-        head.revisionHashes,
-        sealed.document
-      );
+      const revisionHashes = retainedHashes(baseHashes, sealed.document);
       if (revisionId !== null) {
         revisionHashes.set(revisionId, fromHex(sealed.hash));
       }
@@ -2189,6 +2227,11 @@ export function createEncryptedProjectStore(
 
   /** Room versions this page sealed, until their ack. */
   const roomSealed = new WeakSet<EncryptedRoomSealed>();
+  /** The revision map each room version was sealed with, for its ack. */
+  const roomSealedHashes = new WeakMap<
+    EncryptedRoomSealed,
+    ReadonlyMap<string, Uint8Array>
+  >();
 
   /**
    * The account's log from `since` through the room's head, which the room
@@ -2381,6 +2424,7 @@ export function createEncryptedProjectStore(
       }
       const material = await currentMaterial(device, projectId);
       await requireOwnEditingRole(projectId, material);
+      const baseHashes = await sealingHashes(projectId, base);
       const sealed = await sealDocument(
         device,
         material,
@@ -2388,7 +2432,7 @@ export function createEncryptedProjectStore(
         document,
         base.version,
         base.hash,
-        base.revisionHashes,
+        baseHashes,
         base.shareLinks?.set
       );
       const result: EncryptedRoomSealed = {
@@ -2402,6 +2446,7 @@ export function createEncryptedProjectStore(
         signerDeviceId: sealed.signerDeviceId
       };
       roomSealed.add(result);
+      roomSealedHashes.set(result, baseHashes);
       return result;
     },
 
@@ -2446,7 +2491,7 @@ export function createEncryptedProjectStore(
       }
       const previous = heads.get(projectId);
       const revisionHashes = retainedHashes(
-        base.revisionHashes,
+        roomSealedHashes.get(sealed) ?? base.revisionHashes,
         sealed.document
       );
       await withOwnRoomSavePoint(projectId, revisionHashes, sealed.document, {

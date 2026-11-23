@@ -443,6 +443,45 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     ).toBe(named.version);
   });
 
+  it('checks a named save again before a room edit when its first lookup failed', async () => {
+    const srv = roomServer();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const named = await laptop.store.saveRevision({
+      projectId,
+      reason: 'Before the change',
+      expectedVersion: v1.version,
+      document: v1
+    });
+    const revisionId = named.revisions.at(-1)!.revisionId;
+    const page = reload(srv, laptop);
+    // The account's revision list fails once, as the room opens the head.
+    let failures = 1;
+    page.before = async (path, init) => {
+      if (
+        failures > 0 &&
+        (init.method ?? 'GET') === 'GET' &&
+        new URL(path, 'https://example.com').pathname.endsWith('/revisions')
+      ) {
+        failures--;
+        throw new Error('revisions unavailable');
+      }
+    };
+    const a = await live(srv, page, projectId, 'client_reloaded');
+    const state = await a.next('state');
+    expect(state.document?.version).toBe(named.version);
+    expect(failures).toBe(0);
+    const later = withBox(state.document!, 'After the change');
+    await a.send(later, named.version);
+    expect(await a.next('ack')).toMatchObject({ version: later.version });
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(projectId);
+    expect(
+      (await desktop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+  });
+
   it('keeps an account named save loadable after a reload joins the room and edits', async () => {
     const srv = roomServer();
     const laptop = device(srv, owner, 'owner_laptop');
