@@ -7264,3 +7264,25 @@ function shownExportBodies(
   return { written, skipped };
 }
 export { wrapOrientationProbe } from './exact-wrap';
+
+export {
+  computeConversionReferenceMap,
+  lineageNameFamily,
+  matchScaledProfile,
+  matchScaledTopology,
+  recaptureWindow,
+  scaledWitnessMatches,
+  unitConversionGeometryOracle,
+  RECAPTURE_WINDOW_QUANTA,
+  UNIT_CONVERSION_MEASURE_RTOL,
+  type ConversionReferenceMapOptions,
+  type ConversionReferenceMapResult,
+  type ConversionReferenceRefusal,
+  type ConversionReferenceRefusalCode,
+  type ConversionReferenceReport,
+  type GeometryOracleStats,
+  type SourceProfileEntity,
+  type SourceTopologyEntity,
+  type TopologyMatch
+} from './units-reference-recapture';
+export { topologyHashOfWitness } from './topology-lineage';
