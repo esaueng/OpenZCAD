@@ -21,9 +21,9 @@ nine refusal classes. Eight are owned by K10, including the design limit
 probes, part A's chamfer-plane offsets and the D/wall chamfer carry. The
 `reference_missing` re-pick, raised when an earlier edit removes a later
 edit's face (O4), is owned by K05. Two consecutive runs produced identical
-step lists and volumes. The file took 63 s on a shared 32-core workstation
-at load average 26–38: 50 s for part A's chains and 11 s for B–D together.
-It took 128 s at load average 60–90. It is not yet measured on a CI runner.
+step lists and volumes. The file took 53 s on a shared 32-core workstation
+at load average 9: 43 s for part A's chains and 9 s for B–D together. At
+load average 60–90 it took 128 s. It is not yet measured on a CI runner.
 `K10_SHRINK=1` enables a
 chain shrinker through `LedgerRunner.shrink`. It drops steps and rounds
 values only while the failure signature (oracle, refusal category and code,
