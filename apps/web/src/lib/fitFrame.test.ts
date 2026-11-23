@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cornersWithinFrame,
   measureClearStage,
@@ -370,6 +370,70 @@ describe('the modeling guide', () => {
     document.body.append(area);
     guide(area, 116, 700, 412, 960);
     expect(measureFitFrame(canvas)).toBeUndefined();
+  });
+
+  describe('on a tablet', () => {
+    let touch: { mockRestore(): void };
+    beforeEach(() => {
+      touch = vi.spyOn(window, 'matchMedia').mockImplementation(
+        (query: string) =>
+          ({
+            matches: query.includes('pointer: coarse'),
+            media: query
+          }) as MediaQueryList
+      );
+    });
+    afterEach(() => touch.mockRestore());
+
+    function tabletStage(width: number, height: number, column: number) {
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      const canvas = placed(
+        document.createElement('canvas'),
+        0,
+        0,
+        width,
+        height
+      );
+      area.append(canvas);
+      // The docked column the tablet keeps on its right.
+      const layer = document.createElement('div');
+      layer.className = 'panel-dock-layer';
+      const docked = document.createElement('div');
+      docked.className = 'panel-column';
+      layer.append(placed(docked, column, 60, width, height));
+      area.append(layer);
+      document.body.append(area);
+      return { area, canvas };
+    }
+
+    it('frames a portrait tablet’s model above its corner card', () => {
+      // 768 × 1024: the 296 px card from x 116 to 412 stood over the new
+      // box it asks to be tapped, beside the docked column.
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      guide(area, 116, 606, 412, 845);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(606 - 12);
+      expect(stage.rect.right).toBe(462 - 12);
+    });
+
+    it('frames a landscape tablet’s model beside its card where that leaves more', () => {
+      // 1024 × 768: the card from y 350 left a 278 px band above it, and
+      // 412 px beside it.
+      const { area, canvas } = tabletStage(1024, 768, 864);
+      guide(area, 124, 350, 420, 589);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(768);
+      expect(stage.rect.left).toBe(420 + 12);
+      expect(stage.rect.right).toBe(864 - 12);
+    });
+
+    it('leaves a card out that stands clear of the stage', () => {
+      // The card under the docked column: nothing of the model's to cover.
+      const { area, canvas } = tabletStage(1024, 768, 500);
+      guide(area, 600, 350, 896, 589);
+      expect(measureClearStage(canvas)!.rect.bottom).toBe(768);
+    });
   });
 
   it('frames as if it were not there where it would leave only a strip', () => {

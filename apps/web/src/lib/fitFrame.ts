@@ -4,6 +4,7 @@ import {
   type NdcFrame,
   type StageRect
 } from '@openzcad/viewport';
+import { TOUCH_ONLY_QUERY } from '../hooks/useMediaQuery';
 import { SELECTION_CALLOUT_OBSTACLES } from './selectionCalloutView';
 
 /**
@@ -24,11 +25,41 @@ const WORKSPACE_STAGE_OBSTACLES = '.assistant-panel:not(.assistant-off-screen)';
 /**
  * The modeling guide's card. At a phone width it spans most of the stage,
  * over the model it asks to be tapped ("Select to edit"), and the model is
- * framed above it. A wider stage's card (296 px in a corner, which at 768 px
- * still crosses the middle) is not framed around: the model stands beside
- * it, and a band for it would move every first-run fit.
+ * framed above it. On a tablet its 296 px corner card stood over the new
+ * box too (768 × 1024 and 1024 × 768 alike), and the model is framed above
+ * or beside it, whichever leaves more room. A desktop's card, under a
+ * mouse, is left out: there the model stands beside it, and a band for it
+ * would move every first-run fit (review on #1964).
  */
 const FOOT_GUIDE = '.workspace-tour';
+
+/** A touch screen with no hover: a phone or a tablet, not a desktop. */
+function touchOnly(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia(TOUCH_ONLY_QUERY).matches
+  );
+}
+
+/**
+ * Whether the modeling guide's card is framed around: a phone's across the
+ * stage (`guideCoversStage`) or, on any touch screen, a tablet's in its
+ * corner. Shared with the card, which asks for the model to be framed clear
+ * of it on the same terms.
+ */
+export function guideFramedAround(
+  card: Pick<DOMRectReadOnly, 'left' | 'right'>,
+  stage: Pick<DOMRectReadOnly, 'left' | 'right'>
+): boolean {
+  const middle = stage.left + (stage.right - stage.left) / 2;
+  return (
+    (guideCoversStage(card, stage) &&
+      card.left < middle - 1 &&
+      card.right > middle + 1) ||
+    touchOnly()
+  );
+}
 
 /**
  * Whether the modeling guide's card spans the stage as a phone's does:
@@ -145,9 +176,47 @@ export function measureClearStage(
       guide.left < middle - 1 &&
       guide.right > middle + 1;
     const guideTop = Math.max(guide.top, bounds.top);
-    if (!across || guideTop >= bottom) continue;
+    if (guideTop >= bottom) continue;
     const nextBottom = guideTop - STAGE_FRAME_GAP_PX;
-    if (nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) bottom = nextBottom;
+    if (across) {
+      if (nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) bottom = nextBottom;
+      continue;
+    }
+    if (!touchOnly()) continue;
+    // A tablet's corner card: framed above it or beside it, whichever
+    // leaves the larger square, and only where it stands in the stage.
+    const clear = (bandBottom: number, panels: readonly StageRect[]) => {
+      const vertical = {
+        left: bounds.left,
+        right: bounds.right,
+        top,
+        bottom: bandBottom
+      };
+      const side = sideFrame(vertical, panels);
+      return {
+        left: bounds.left + (((side?.minX ?? -1) + 1) / 2) * width,
+        right: bounds.left + (((side?.maxX ?? 1) + 1) / 2) * width,
+        top,
+        bottom: bandBottom
+      };
+    };
+    const now = clear(bottom, sides);
+    if (guide.right <= now.left || guide.left >= now.right) continue;
+    const room = (rect: StageRect) =>
+      Math.min(rect.right - rect.left, rect.bottom - rect.top);
+    const above =
+      nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX
+        ? room(clear(nextBottom, sides))
+        : -Infinity;
+    const besideRect = clear(bottom, [...sides, guide]);
+    // Beside counts only where the guide is not the panel let go.
+    const beside =
+      besideRect.left >= guide.right || besideRect.right <= guide.left
+        ? room(besideRect)
+        : -Infinity;
+    if (above === -Infinity && beside === -Infinity) continue;
+    if (above >= beside) bottom = nextBottom;
+    else sides.push(guide);
   }
   if (bottom <= top) return undefined;
   const verticalBounds = {

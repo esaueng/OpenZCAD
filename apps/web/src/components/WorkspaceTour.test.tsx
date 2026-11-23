@@ -494,4 +494,41 @@ describe('WorkspaceTour over a phone stage', () => {
     expect(onCoverStage).not.toHaveBeenCalled();
     spy.mockRestore();
   });
+
+  it('asks on a tablet, whose corner card stood over the new box', () => {
+    const spy = layOut(150);
+    const touch = vi.spyOn(window, 'matchMedia').mockImplementation(
+      (query: string) =>
+        ({
+          matches: query.includes('pointer: coarse'),
+          media: query,
+          addEventListener() {},
+          removeEventListener() {}
+        }) as unknown as MediaQueryList
+    );
+    const onCoverStage = vi.fn();
+    const { rerender } = render(
+      <div className="viewer-area">
+        <WorkspaceTour
+          {...idle}
+          onDismiss={vi.fn()}
+          onCoverStage={onCoverStage}
+        />
+      </div>
+    );
+    const asked = onCoverStage.mock.calls.length;
+    rerender(
+      <div className="viewer-area">
+        <WorkspaceTour
+          {...idle}
+          featureCount={1}
+          onDismiss={vi.fn()}
+          onCoverStage={onCoverStage}
+        />
+      </div>
+    );
+    expect(onCoverStage.mock.calls.length).toBeGreaterThan(asked);
+    touch.mockRestore();
+    spy.mockRestore();
+  });
 });
