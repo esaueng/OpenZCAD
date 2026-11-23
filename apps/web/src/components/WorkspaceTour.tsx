@@ -53,8 +53,8 @@ interface WorkspaceTourProps extends WorkspaceTourSignals {
   onIndexChange?(index: number): void;
   /**
    * The card rose where it can stand over the model it asks to be tapped
-   * (a phone's across the stage, a tablet's in its corner, coming up or
-   * expanding): whoever owns the camera frames the model clear of it again.
+   * (a phone's across the stage, a wider stage's in its corner, coming up
+   * or expanding): whoever owns the camera frames the model clear of it.
    */
   onCoverStage?(): void;
 }
@@ -222,8 +222,7 @@ export function WorkspaceTour({
 
   // A phone's panel shares the card's corner of the stage; it ends above
   // the card rather than over its Next and Finish (UX-001).
-  // A new step over a phone's or a tablet's stage asks the same, the card
-  // already up: a box made in the card's company lands when the step moves
+  // A new step asks the same, the card already up: a box made in the card's company lands when the step moves
   // on to "Select to edit", under the card it is asked from (preview check
   // on #1964).
   useEffect(() => {
@@ -232,9 +231,8 @@ export function WorkspaceTour({
     if (canvas && guideShapesClearStage(canvas)) onCoverStageRef.current?.();
   }, [index, finished]);
 
-  // Risen over a phone's or a tablet's stage, it can stand over the model:
-  // ask for the model to be framed clear of it. A desktop's card stands
-  // beside the model, and asks nothing.
+  // Risen, it can stand over the model: ask for the model to be framed
+  // clear of it, wherever it changes the clear stage.
   useStageFootClaim(
     cardRef,
     '--workspace-tour-claim',

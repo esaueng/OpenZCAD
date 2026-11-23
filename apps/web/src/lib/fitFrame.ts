@@ -4,7 +4,6 @@ import {
   type NdcFrame,
   type StageRect
 } from '@openzcad/viewport';
-import { TOUCH_ONLY_QUERY } from '../hooks/useMediaQuery';
 import { SELECTION_CALLOUT_OBSTACLES } from './selectionCalloutView';
 
 /**
@@ -25,29 +24,18 @@ const WORKSPACE_STAGE_OBSTACLES = '.assistant-panel:not(.assistant-off-screen)';
 /**
  * The modeling guide's card. At a phone width it spans most of the stage,
  * over the model it asks to be tapped ("Select to edit"), and the model is
- * framed above it. On a tablet its 296 px corner card stood over the new
- * box too (768 × 1024 and 1024 × 768 alike), and the model is framed above
- * or beside it, whichever leaves more room. A desktop's card, under a
- * mouse, is left out: there the model stands beside it, and a band for it
- * would move every first-run fit (review on #1964).
+ * framed above it. Wider, its 296 px corner card stood over the new box
+ * too (a 768 × 1024 or 1024 × 768 tablet, a 1280 × 800 desktop), and the
+ * model is framed above or beside it, whichever leaves more room.
  */
 const FOOT_GUIDE = '.workspace-tour';
 
-/** A touch screen with no hover: a phone or a tablet, not a desktop. */
-function touchOnly(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia(TOUCH_ONLY_QUERY).matches
-  );
-}
-
 /**
  * Whether the modeling guide's card changes the clear stage on `canvas`: a
- * phone's across it, a tablet's over its corner. The card asks for the
- * model to be framed clear of it only then; where it changes nothing (a
- * desktop's card, or one standing over a docked column) a request could
- * only undo the user's own pan (review on #1964's tablet follow-up).
+ * phone's across it, a wider stage's over its corner. The card asks for
+ * the model to be framed clear of it only then; where it changes nothing
+ * (a card standing over a docked column) a request could only undo the
+ * user's own pan (review on #1969).
  */
 export function guideShapesClearStage(canvas: HTMLElement): boolean {
   const withGuide = measureClearStage(canvas)?.rect;
@@ -187,8 +175,7 @@ export function measureClearStage(
       if (nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) bottom = nextBottom;
       continue;
     }
-    if (!touchOnly()) continue;
-    // A tablet's corner card: framed above it or beside it, whichever
+    // A corner card: framed above it or beside it, whichever
     // leaves the larger square, and only where it stands in the stage.
     const clear = (bandBottom: number, panels: readonly StageRect[]) => {
       const vertical = {

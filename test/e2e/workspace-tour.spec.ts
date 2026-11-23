@@ -1,6 +1,7 @@
 import type { Locator } from '@playwright/test';
 import {
   createPrimitiveInPlace,
+  expectBodyCount,
   test,
   expect,
   createProject,
@@ -288,5 +289,58 @@ for (const view of [
         await expect(page.locator('.feature-row')).toHaveCount(1);
       }
     });
+  });
+}
+
+// The desktop's corner card stood over part of the new box it asks to be
+// clicked too, at 1280 × 800 and an undocked 768 × 1024 under a mouse. The
+// box is framed above or beside the card now.
+for (const [width, height] of [
+  [1280, 800],
+  [768, 1024]
+] as const) {
+  test(`the guide leaves the new box clear on a ${width} × ${height} desktop`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width, height });
+    await stubApi(page, { workspaceTour: true });
+    await createProject(page, 'Desktop guide box');
+    const tour = page.locator('.workspace-tour');
+    await expect(tour).toBeVisible();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await expect(tour).toContainText('Select to edit');
+    await waitForSurfacesToSettle(page, ['.workspace-tour']);
+    const canvas = page.locator('.viewer-host canvas');
+    const card = (await tour.boundingBox())!;
+    await expect
+      .poll(async () => {
+        const view = await canvas.evaluate(
+          (element) =>
+            new Promise<{
+              screen: {
+                left: number;
+                right: number;
+                top: number;
+                bottom: number;
+              } | null;
+            }>((resolve) =>
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-bodies-in-view', {
+                  detail: { resolve }
+                })
+              )
+            )
+        );
+        const box = view.screen;
+        if (box === null) return null;
+        return (
+          box.bottom <= card.y + 0.5 ||
+          box.left >= card.x + card.width - 0.5 ||
+          box.right <= card.x + 0.5
+        );
+      })
+      .toBe(true);
   });
 }

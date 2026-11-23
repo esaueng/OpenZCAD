@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   cornersWithinFrame,
   guideShapesClearStage,
@@ -351,7 +351,7 @@ describe('the modeling guide', () => {
     expect(measureClearStage(canvas)!.rect.bottom).toBe(610 - 12);
   });
 
-  it('asks a phone’s card across the stage for a reframe, a desktop’s not', () => {
+  it('asks a phone’s card and a desktop’s alike for a reframe', () => {
     const { area, canvas } = phoneStage();
     guide(area, 72, 405, 318, 655);
     expect(guideShapesClearStage(canvas)).toBe(true);
@@ -368,44 +368,38 @@ describe('the modeling guide', () => {
     desk.append(deskCanvas);
     document.body.append(desk);
     guide(desk, 116, 700, 412, 960);
-    expect(guideShapesClearStage(deskCanvas)).toBe(false);
+    expect(guideShapesClearStage(deskCanvas)).toBe(true);
   });
 
-  it('leaves a wider stage’s corner card out of the frame', () => {
+  it('frames a desktop’s model beside its corner card where that leaves more', () => {
+    // 1440 × 900: above the card leaves 588 px of height, beside it the
+    // whole height.
     const area = document.createElement('div');
     area.className = 'viewer-area';
     const canvas = placed(document.createElement('canvas'), 0, 0, 1440, 900);
     area.append(canvas);
     document.body.append(area);
     guide(area, 72, 600, 368, 840);
-    expect(measureFitFrame(canvas)).toBeUndefined();
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.left).toBe(368 + 12);
+    expect(stage.rect.bottom).toBe(900);
   });
 
-  it('leaves a 768 px stage’s card out even where it crosses the middle', () => {
+  it('frames a mouse’s 768 px model above the card where that leaves more', () => {
     // The undocked Build layout at 768: the 296 px card from x 116 to 412
-    // crosses the middle (384) but stands beside the model (review on #1964).
+    // leaves 344 px beside it and the full width above it.
     const area = document.createElement('div');
     area.className = 'viewer-area';
     const canvas = placed(document.createElement('canvas'), 0, 0, 768, 1024);
     area.append(canvas);
     document.body.append(area);
     guide(area, 116, 700, 412, 960);
-    expect(measureFitFrame(canvas)).toBeUndefined();
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.bottom).toBe(700 - 12);
+    expect(stage.rect.left).toBe(0);
   });
 
-  describe('on a tablet', () => {
-    let touch: { mockRestore(): void };
-    beforeEach(() => {
-      touch = vi.spyOn(window, 'matchMedia').mockImplementation(
-        (query: string) =>
-          ({
-            matches: query.includes('pointer: coarse'),
-            media: query
-          }) as MediaQueryList
-      );
-    });
-    afterEach(() => touch.mockRestore());
-
+  describe('in a corner, beside docked panels', () => {
     function tabletStage(width: number, height: number, column: number) {
       const area = document.createElement('div');
       area.className = 'viewer-area';
