@@ -74,11 +74,19 @@ import {
  * - a length field whose expression does not evaluate, or evaluates to
  *   something other than a length or a plain number;
  * - any expression (field, parameter or configuration cell) that applies an
- *   operation which does not commute with a change of length unit to a
- *   length, whatever its value today: `round(width)` with a typed `width`,
- *   or a length in a field or parameter that does not scale (see
+ *   operation which is not continuous and equivariant in a length to a
+ *   length, whatever its value today: `round(width)`, `mod(width, 10 mm)`
+ *   or `require_min(width, 3 mm)` with a typed `width`, or a length in a
+ *   parameter that does not scale (see
  *   {@link UNITS_CONVERSION_OPERATION_SCALING});
- * - a stored number whose scaled value is not a finite non-zero double;
+ * - any field that does not scale (an angle, count, ratio, fraction or
+ *   condition) whose value depends on a length at all, directly or through
+ *   a parameter: the kernel rounds counts and compares conditions and
+ *   angles, so a value that moves by an ulp in the new unit can land on the
+ *   other side of a threshold after a later edit, even when today's value
+ *   agrees;
+ * - a stored number, or the value of a length expression, whose scaled
+ *   value is not a finite normal double (zero only when it was zero);
  * - any field whose converted value is not the scaled original (the oracle,
  *   §6 step 1), the second line of defence.
  *
@@ -208,12 +216,18 @@ function scaleBy(value: number, N: number, D: number): number {
     : (value / D) * N;
 }
 
+/** The smallest positive normal double; below it precision is lost. */
+const MIN_NORMAL = 2 ** -1022;
+
 /**
- * Whether a stored number scaled to `scaled` is still representable: finite,
- * and not a non-zero value that underflowed to zero.
+ * Whether a value `value` scaled to `scaled` is still representable: finite,
+ * zero only when `value` was zero, and otherwise a normal double. A
+ * non-zero value that underflows to zero or to a subnormal would cross zero
+ * or lose its digits.
  */
 function representable(value: number, scaled: number): boolean {
-  return Number.isFinite(scaled) && (scaled !== 0 || value === 0);
+  if (!Number.isFinite(scaled)) return false;
+  return value === 0 ? scaled === 0 : Math.abs(scaled) >= MIN_NORMAL;
 }
 
 const PURE_NUMERAL = /^\s*[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?\s*$/;
@@ -459,24 +473,38 @@ function preconditionRefusals(
 
 /**
  * How each operation of the expression evaluator behaves when every length
- * in it is multiplied by the same k > 0 (a change of stored unit):
+ * in it is multiplied by the same k > 0 (a change of stored unit).
  *
- * - `equivariant`: the result scales by k to its own length power, so the
- *   formula means the same in any unit. The evaluator already refuses mixed
- *   dimensions for these (`width + 3`, `min(width, 3)`,
- *   `require_min(width, 3)`, `mod(width, 3)` all throw), so a comparison
- *   or a bound is always between two quantities of one dimension, and
- *   comparing `k·a` with `k·b` for k > 0 decides as comparing `a` with `b`.
- *   `mod(a, b)` is `a - b·floor(a / b)` with `a / b` unit-free, so
- *   `mod(k·a, k·b) = k·mod(a, b)`. `sign` and `atan2` of matching lengths
- *   are unit-free and unchanged.
- * - `unit-free-only`: the result depends on the number a length happens to
- *   be in this unit (`round(127 mm)` is 127 in millimetres and 5 in inches,
- *   but `round(128 mm)` is 128 and 5). Refused when an argument carries a
- *   length; a unit-free argument (`round(width / 1 mm)`, `round(n)`) is the
- *   same number in every unit and is fine. Trigonometry and the inverse
- *   functions already refuse lengths in the evaluator; they are listed here
- *   so a future relaxation still refuses conversion.
+ * The rule: the converted document is evaluated in floating point, so every
+ * length is k times the original only to within a few ulps, and stays so
+ * after any later edit. An operation that is continuous and equivariant
+ * turns a few ulps in into a few ulps out, which no consumer can see. An
+ * operation that is discontinuous in a length (rounding, a comparison, a
+ * modulo, a guard, a branch cut) can put the two documents on opposite
+ * sides of the jump, today or after the next edit, so it is refused
+ * structurally whenever a length reaches it, whatever today's value.
+ *
+ * - `equivariant`: continuous, and the result scales by k to its own
+ *   length power, so the formula means the same in any unit: `+ - * /`,
+ *   juxtaposition, `abs`, `sqrt`, `min`, `max`, `avg` and `pi`.
+ * - `unit-free-only`: refused when an argument carries a length. A
+ *   unit-free argument (`round(width / 1 mm)`, `round(n)`) is the same
+ *   number in every unit up to rounding, and rule D wraps a unit-free result
+ *   outside the operation, so it is fine.
+ *   - `round`, `floor`, `ceil`: depend on the number a length happens to be
+ *     (`round(127 mm)` is 127 in millimetres, 5 in inches).
+ *   - `mod`: `mod(k·a, k·b) = k·mod(a, b)` in exact arithmetic, but it
+ *     jumps by `b` where `a / b` crosses an integer, and k-scaling moves
+ *     `a / b` by an ulp: `10 mm + mod(width, 10 mm)` at `width = 30 mm` is
+ *     10 mm in millimetres and 20 mm in inches.
+ *   - `require_min`, `require_one_of`: a guard either returns or throws,
+ *     and comparing `k·a` with `k·b` in floating point need not decide as
+ *     comparing `a` with `b` (`require_one_of(width, 3 mm)` at
+ *     `width = 1 mm + 2 mm`).
+ *   - `sign`: jumps at zero, which a difference of lengths can cross.
+ *   - `atan2`: jumps by 360° across its branch cut.
+ *   - trigonometry and the inverse functions, which the evaluator already
+ *     refuses for lengths; listed so a future relaxation still refuses.
  * - `^` is decided per use: a length base needs an integer exponent (the
  *   evaluator enforces it too) and the exponent must be unit-free.
  *
@@ -499,12 +527,12 @@ export const UNITS_CONVERSION_OPERATION_SCALING: Readonly<
   min: 'equivariant',
   max: 'equivariant',
   avg: 'equivariant',
-  mod: 'equivariant',
-  sign: 'equivariant',
-  atan2: 'equivariant',
-  require_min: 'equivariant',
-  require_one_of: 'equivariant',
   pi: 'equivariant',
+  mod: 'unit-free-only',
+  sign: 'unit-free-only',
+  atan2: 'unit-free-only',
+  require_min: 'unit-free-only',
+  require_one_of: 'unit-free-only',
   round: 'unit-free-only',
   floor: 'unit-free-only',
   ceil: 'unit-free-only',
@@ -581,6 +609,11 @@ interface Converter {
   D: number;
   report: UnitsConversionReport;
   refusals: UnitsConversionRefusal[];
+  /**
+   * Parameters whose value depends on a length, in any configuration row
+   * (see {@link lengthDependentParameters}).
+   */
+  lengthDependent: ReadonlySet<string>;
 }
 
 function refuseScaleVariant(
@@ -600,12 +633,24 @@ function refuseScaleVariant(
 
 /**
  * Audits an expression in a field or parameter that does not scale (angle,
- * number, ratio, condition, unitless parameter). Refuses a scale-variant
- * operation on a length, and a length result anywhere but a condition: a
- * condition is read only as zero or not (the kernel's `activeWhen`), which a
- * positive factor never changes, while an angle, count or unitless parameter
- * holding a length would hold another number after conversion. An
- * expression that does not evaluate is left to the oracle.
+ * number, ratio, fraction, condition, unitless parameter). Refuses a
+ * scale-variant operation on a length, and then:
+ *
+ * - a field (`parameter` false) whose value depends on a length at all,
+ *   directly or through a parameter. The kernel rounds counts (pattern
+ *   counts, gear teeth, thread and worm starts, polygon sides), reads a
+ *   condition as zero or not and compares angles and ratios against
+ *   limits; a value that is a few ulps off in the new unit (`a / b * 343`
+ *   is 3.4999999999999996 in millimetres and 3.500000000000002 in inches)
+ *   can land on the other side, today or after any edit. The field must be
+ *   written without lengths to convert;
+ * - a parameter whose result carries a length (`5 mm` in a unitless
+ *   parameter would be another number after conversion). A unitless
+ *   parameter computed from lengths (`width / 1 mm`) is allowed: every field
+ *   that does not scale and reads it is refused by the rule above, and a
+ *   length field reading it scales continuously.
+ *
+ * An expression that does not evaluate is left to the oracle.
  */
 function auditUnscaledExpression(
   converter: Converter,
@@ -613,7 +658,7 @@ function auditUnscaledExpression(
   scope: Record<string, number>,
   subject: string,
   field: string,
-  condition: boolean
+  parameter: boolean
 ): void {
   let audit: ScaleAudit;
   try {
@@ -623,11 +668,26 @@ function auditUnscaledExpression(
   }
   if (audit.variant)
     refuseScaleVariant(converter, expression, audit.variant, subject, field);
-  else if (audit.result.length !== 0 && !condition)
+  else if (parameter ? audit.result.length !== 0 : audit.dimensional)
     refuseScaleVariant(
       converter,
       expression,
-      'a length where the value does not scale (a number, angle or unitless parameter)',
+      parameter
+        ? 'a length where the value does not scale (a number, angle or unitless parameter)'
+        : 'a length in a field that does not scale (a count, angle, ratio, fraction or condition), which the kernel may round or compare',
+      subject,
+      field
+    );
+  else if (
+    !parameter &&
+    expressionIdentifiers(expression).some((name) =>
+      converter.lengthDependent.has(name)
+    )
+  )
+    refuseScaleVariant(
+      converter,
+      expression,
+      'a parameter computed from a length in a field that does not scale (a count, angle, ratio, fraction or condition), which the kernel may round or compare',
       subject,
       field
     );
@@ -663,11 +723,8 @@ function convertLengthExpression(
     return undefined;
   }
   const dimensions = audit.result;
-  if (dimensions.length === 1 && dimensions.angle === 0) {
-    report.unchangedExpressions += 1;
-    return expression;
-  }
-  if (dimensions.length !== 0 || dimensions.angle !== 0) {
+  const isLength = dimensions.length === 1 && dimensions.angle === 0;
+  if (!isLength && (dimensions.length !== 0 || dimensions.angle !== 0)) {
     converter.refusals.push({
       code: 'unclassifiable',
       subject,
@@ -675,6 +732,14 @@ function convertLengthExpression(
       message: `"${expression}" is not a length or a plain number, so it cannot be converted.`
     });
     return undefined;
+  }
+  if (!representable(dimensions.value, scaleBy(dimensions.value, N, D))) {
+    refuseOutOfRange(converter, expression, subject, field);
+    return undefined;
+  }
+  if (isLength) {
+    report.unchangedExpressions += 1;
+    return expression;
   }
   if (PURE_NUMERAL.test(expression)) {
     const value = Number(expression);
@@ -711,7 +776,7 @@ function refuseOutOfRange(
     code: 'out-of-range',
     subject,
     field,
-    message: `${String(value)} ${converter.from} is out of range in ${converter.to}: it would not be a finite non-zero number.`
+    message: `${String(value)} ${converter.from} is out of range in ${converter.to}: it would not be a finite normal number (or would no longer be non-zero).`
   });
 }
 
@@ -733,7 +798,7 @@ function convertLeaf(
         scope,
         subject,
         field,
-        leaf.quantity === 'condition'
+        false
       );
     return;
   }
@@ -782,7 +847,7 @@ function convertNode(
         scope,
         subject,
         'expression',
-        false
+        true
       );
       return;
     }
@@ -881,7 +946,7 @@ function convertConfigurations(
           scope,
           subject,
           field,
-          false
+          true
         );
         continue;
       }
@@ -922,7 +987,10 @@ function evaluateLeaf(
  *
  * - it is finite, and has the same sign and zero-ness. The kernel reads a
  *   condition as "exactly zero or not", and a zero length or radius often
- *   means "none", so no tolerance may move a value across zero;
+ *   means "none", so no tolerance may move a value across zero. A scaled
+ *   value is zero exactly when its `source` (the value before scaling) is,
+ *   and otherwise a normal double, judged against `source` because
+ *   `expected` itself may have underflowed;
  * - a length or area (power > 0) agrees to {@link
  *   UNITS_CONVERSION_ORACLE_TOLERANCE} relative, with an absolute floor of
  *   the same size below one unit, where the 15-digit rounding of a numeral
@@ -937,6 +1005,7 @@ function evaluateLeaf(
  *   is a different number of pattern instances once floored.
  */
 function agrees(
+  source: number,
   expected: number,
   actual: number,
   power: number,
@@ -944,6 +1013,9 @@ function agrees(
   counted: boolean
 ): boolean {
   if (!Number.isFinite(actual) || !Number.isFinite(expected)) return false;
+  // Zero-ness against the source, not against `expected`, which may itself
+  // have underflowed: a non-zero length must stay a normal non-zero double.
+  if (power > 0 && !representable(source, actual)) return false;
   if (expected === actual) return true;
   if (Math.sign(expected) !== Math.sign(actual)) return false;
   const difference = Math.abs(expected - actual);
@@ -1007,6 +1079,33 @@ function lengthDerivedParameters(
   return derived;
 }
 
+/**
+ * {@link lengthDerivedParameters} over the document and every configuration
+ * row: a parameter that is a plain number in the active row may be computed
+ * from a length in another. A row that cannot be applied is refused by
+ * `convertConfigurations`.
+ */
+function lengthDependentParameters(document: ProjectDocument): Set<string> {
+  const names = lengthDerivedParameters(
+    document,
+    getParameterScope(document).scope
+  );
+  for (const row of document.configurations?.rows ?? []) {
+    if (row.id === document.configurations!.activeRowId) continue;
+    try {
+      const rowDocument = documentForConfiguration(document, row.id);
+      for (const name of lengthDerivedParameters(
+        rowDocument,
+        getParameterScope(rowDocument).scope
+      ))
+        names.add(name);
+    } catch {
+      // Refused where the row's cells are converted.
+    }
+  }
+  return names;
+}
+
 /** Whether `leaf` is a condition whose expression evaluates to a length. */
 function lengthCondition(
   leaf: QuantityLeaf,
@@ -1042,8 +1141,10 @@ function expressionDerived(
  * Evaluates every classified field (and every parameter) of `source` and
  * `converted` and checks that lengths and positions scaled by k, areas by
  * k² and everything else kept its value, by the rules of {@link agrees}.
- * Stored literals (mesh vertices, fingerprints' source measurements) are
- * checked too: each scaled exactly once and finite. A field that evaluated
+ * Stored numbers (mesh vertices, fingerprints' source measurements, plain
+ * numbers in expression fields) are checked bit for bit against their
+ * canonical scaled value: each scaled exactly once, finite, and non-zero
+ * when it was. A field that evaluated
  * before and not after, or to another value, is a refusal naming it. Hash
  * leaves are skipped: phase 4 re-captures them.
  */
@@ -1078,6 +1179,7 @@ export function unitsConversionOracle(
     if (
       actual === undefined ||
       !agrees(
+        expected,
         scaled,
         actual,
         power,
@@ -1106,6 +1208,28 @@ export function unitsConversionOracle(
     }
     const power = scalePower(leaf.quantity);
     if (power === null || leaf.quantity === 'script') return;
+    if (typeof leaf.value === 'number') {
+      // A stored number scales deterministically, so it must be exactly
+      // the canonical scaled value: scaled once, never twice or not at all,
+      // with no tolerance that a tiny coordinate could hide under.
+      checks += 1;
+      const want =
+        power === 0
+          ? leaf.value
+          : canonicalScaledNumber(leaf.value, N ** power, D ** power);
+      const got = other.leaf.value;
+      if (
+        typeof got !== 'number' ||
+        !Object.is(got, want) ||
+        (power > 0 && !representable(leaf.value, got))
+      )
+        mismatch(
+          subject,
+          field,
+          `${leaf.value} ${source.units} should be stored as exactly ${want}${power ? ` ${converted.units}` : ''}, but is ${String(got)}.`
+        );
+      return;
+    }
     let expected: number;
     try {
       expected = evaluateLeaf(leaf.value, sourceScope, source.units);
@@ -1127,6 +1251,7 @@ export function unitsConversionOracle(
           // only whether it is exactly zero, so sign and zero-ness must hold.
           Number.isFinite(actual) && Math.sign(actual) === Math.sign(expected)
         : agrees(
+            expected,
             scaled,
             actual,
             power,
@@ -1168,6 +1293,7 @@ export function convertDocumentUnits(
     N,
     D,
     refusals: [],
+    lengthDependent: lengthDependentParameters(document),
     report: {
       from,
       to: target,

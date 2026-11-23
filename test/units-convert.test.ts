@@ -440,23 +440,6 @@ describe('convertDocumentUnits: expression rule D', () => {
     });
   });
 
-  it('keeps guards exact, suffixed or wrapped', () => {
-    expect(
-      boxWidth(
-        converted(
-          convertWidth('require_min(w, 3 mm)', 'inch', [['w', '10', 'length']])
-        ),
-        'Box'
-      )
-    ).toBe('require_min(w, 3 mm)');
-    expect(
-      boxWidth(
-        converted(convertWidth('require_min(w, 3)', 'inch', [['w', '10']])),
-        'Box'
-      )
-    ).toBe('(require_min(w, 3)) / 25.4');
-  });
-
   it('keeps a*b as "a number of the old unit"', () => {
     const target = converted(
       convertWidth('a * b', 'inch', [
@@ -1036,28 +1019,6 @@ describe('convertDocumentUnits: the oracle keeps unscaled values exact (#1965 fi
     expect(parameterValues(target).slope).not.toBe(7 / 3);
     expect(parameterValues(target).slope).toBeCloseTo(7 / 3, 14);
   });
-
-  it('lets a condition hold a length, judged by zero-ness and sign', () => {
-    for (const [width, active] of [
-      ['10 mm', false],
-      ['12 mm', true]
-    ] as const) {
-      let source = withParameter(newDocument('mm'), 'width', width, 'length');
-      source = withFeatureNode(source, 'cut', {
-        featureKind: 'boolean',
-        activeWhen: 'width - 10 mm',
-        operation: 'subtract',
-        targetBodyIds: []
-      });
-      const target = converted(convertDocumentUnits(source, 'inch'));
-      const activeWhen = featureData<{ activeWhen: string }>(
-        target,
-        'cut'
-      ).activeWhen;
-      expect(activeWhen).toBe('width - 10 mm');
-      expect(valueIn(target, activeWhen) !== 0).toBe(active);
-    }
-  });
 });
 
 describe('convertDocumentUnits: no overflow, and every literal checked (#1965 finding 2)', () => {
@@ -1203,7 +1164,7 @@ describe('convertDocumentUnits: scale-variant formulas refuse whatever their val
   it('converts round(width / 1 mm) * 1 mm and keeps its meaning after an edit', () => {
     for (const formula of [
       'round(width / 1 mm) * 1 mm',
-      'mod(width, 10 mm)',
+      'min(width, 3 mm)',
       'width ^ 2 / 1 mm'
     ]) {
       let original = withParameter(
@@ -1328,5 +1289,274 @@ describe('convertDocumentUnits: the active configuration row (#1965 finding 4)',
     const targetA = activateConfiguration(targetB, { rowId: 'a' });
     expect(boxWidthMm(sourceA)).toBe(10);
     expect(boxWidthMm(targetA)).toBeCloseTo(10, 12);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scoped re-check on #1965: operations discontinuous in a length refuse
+// structurally, ranges and literals are exact
+// ---------------------------------------------------------------------------
+
+describe('convertDocumentUnits: discontinuities in a length refuse structurally (#1965 re-check)', () => {
+  /** A pattern whose count is `count`, beside typed lengths `a` and `b`. */
+  function patternDocument(count: string): ProjectDocument {
+    let document = withParameter(newDocument('mm'), 'a', '1', 'length');
+    document = withParameter(document, 'b', '98', 'length');
+    return withFeatureNode(document, 'pattern', {
+      featureKind: 'pattern',
+      targetBodyId: 'body',
+      patternKind: 'linear',
+      count,
+      spacing: 10,
+      direction: { x: 1, y: 0, z: 0 }
+    });
+  }
+
+  it('refuses a count computed from lengths, which the kernel rounds (finding 1)', () => {
+    const source = patternDocument('a / b * 343');
+    // The hazard: 3.4999999999999996 rounds to 3 instances in millimetres,
+    // 3.500000000000002 to 4 in inches, and a ratio within 1e-12 passed
+    // the value oracle.
+    expect(valueIn(source, 'a / b * 343')).toBe(3.4999999999999996);
+    const inch = structuredClone(source);
+    inch.units = 'inch';
+    for (const node of Object.values(inch.nodes)) {
+      if (node.kind === 'project') node.units = 'inch';
+      if (node.kind === 'parameter')
+        node.expression = String(
+          canonicalScaledNumber(Number(node.expression), 1, 25.4)
+        );
+    }
+    expect(Math.round(valueIn(inch, 'a / b * 343'))).toBe(4);
+    expect(refusals(convertDocumentUnits(source, 'inch'))).toEqual([
+      expect.objectContaining({
+        code: 'scale-variant',
+        subject: 'pattern (pattern)',
+        field: 'count'
+      })
+    ]);
+    // Through a unitless parameter, too.
+    const viaParameter = withParameter(source, 'n', 'a / b * 343');
+    featureData<{ count: string }>(viaParameter, 'pattern').count = 'n';
+    expect(refusals(convertDocumentUnits(viaParameter, 'inch'))).toEqual([
+      expect.objectContaining({ code: 'scale-variant', field: 'count' })
+    ]);
+    // A count without lengths converts.
+    const plain = withParameter(patternDocument('n * 2'), 'n', '3');
+    expect(
+      featureData<{ count: string }>(
+        converted(convertDocumentUnits(plain, 'inch')),
+        'pattern'
+      ).count
+    ).toBe('n * 2');
+  });
+
+  it('refuses any unscaled field that depends on a length: angle, condition, any row', () => {
+    // An angle from lengths.
+    const angle = patternDocument('3');
+    featureData<{ angleDeg: string }>(angle, 'pattern').angleDeg = 'a / b * 90';
+    expect(refusals(convertDocumentUnits(angle, 'inch'))).toEqual([
+      expect.objectContaining({ code: 'scale-variant', field: 'angleDeg' })
+    ]);
+    // A condition holding a length: `width - 10 mm` is exactly zero in
+    // millimetres at 10 mm and need not be in inches after `width = 4 + 6`.
+    const condition = withFeatureNode(
+      withParameter(newDocument('mm'), 'width', '12 mm', 'length'),
+      'cut',
+      {
+        featureKind: 'boolean',
+        activeWhen: 'width - 10 mm',
+        operation: 'subtract',
+        targetBodyIds: []
+      }
+    );
+    expect(refusals(convertDocumentUnits(condition, 'inch'))).toEqual([
+      expect.objectContaining({ code: 'scale-variant', field: 'activeWhen' })
+    ]);
+    // A count reading a parameter that is a length ratio only in another row.
+    let rows = withParameter(patternDocument('n'), 'n', '3');
+    const n = listParameters(rows).find((p) => p.name === 'n')!;
+    rows = createConfigurations(rows, { rowId: 'r1', name: 'One' });
+    rows = addConfigurationColumn(rows, {
+      column: { kind: 'parameter', parameterId: n.parameterId }
+    });
+    rows = addConfigurationRow(rows, { rowId: 'r2', name: 'Two' });
+    rows = setConfigurationCell(rows, {
+      rowId: 'r2',
+      column: { kind: 'parameter', parameterId: n.parameterId },
+      value: 'a / b * 343'
+    });
+    expect(refusals(convertDocumentUnits(rows, 'inch'))).toEqual([
+      expect.objectContaining({
+        code: 'scale-variant',
+        subject: 'pattern (pattern)',
+        field: 'count'
+      })
+    ]);
+  });
+
+  it('refuses mod of lengths, even under a huge offset (finding 2)', () => {
+    for (const formula of [
+      '10 mm + mod(width, 10 mm)',
+      '1e13 mm + mod(width, 10 mm)'
+    ])
+      expect(
+        refusals(convertWidth(formula, 'inch', [['width', '35 mm', 'length']])),
+        formula
+      ).toEqual([
+        expect.objectContaining({
+          code: 'scale-variant',
+          field: 'dimensions.width',
+          message: expect.stringContaining('mod() of a length') as string
+        })
+      ]);
+    // The hazard after an edit to width = 1 mm + 29 mm: 10 mm in
+    // millimetres, 20 mm in inches.
+    const mm = withParameter(
+      newDocument('mm'),
+      'width',
+      '1 mm + 29 mm',
+      'length'
+    );
+    const inch = withParameter(
+      newDocument('inch'),
+      'width',
+      '1 mm + 29 mm',
+      'length'
+    );
+    expect(valueIn(mm, '10 mm + mod(width, 10 mm)')).toBe(10);
+    expect(valueIn(inch, '10 mm + mod(width, 10 mm)') * 25.4).toBeCloseTo(
+      20,
+      9
+    );
+    // Unit-free mod is wrapped outside, so it converts.
+    expect(
+      boxWidth(
+        converted(convertWidth('mod(w, 4)', 'inch', [['w', '10']])),
+        'Box'
+      )
+    ).toBe('(mod(w, 4)) / 25.4');
+  });
+
+  it('refuses guards, sign and atan2 over lengths (finding 3)', () => {
+    for (const formula of [
+      'require_one_of(width, 4 mm, 3 mm)',
+      'require_min(width, 3 mm)',
+      'width * sign(width - 3 mm)',
+      'width * atan2(width, 3 mm) / 45'
+    ])
+      expect(
+        refusals(convertWidth(formula, 'inch', [['width', '4 mm', 'length']])),
+        formula
+      ).toEqual([
+        expect.objectContaining({
+          code: 'scale-variant',
+          field: 'dimensions.width'
+        })
+      ]);
+    // The hazard after an edit to width = 1 mm + 2 mm.
+    const formula = 'require_one_of(width, 4 mm, 3 mm)';
+    const mm = withParameter(
+      newDocument('mm'),
+      'width',
+      '1 mm + 2 mm',
+      'length'
+    );
+    const inch = withParameter(
+      newDocument('inch'),
+      'width',
+      '1 mm + 2 mm',
+      'length'
+    );
+    expect(valueIn(mm, formula)).toBe(3);
+    expect(() => valueIn(inch, formula)).toThrow();
+    // Guards over unit-free values are wrapped outside, so they convert.
+    expect(
+      boxWidth(
+        converted(convertWidth('require_min(w, 3)', 'inch', [['w', '10']])),
+        'Box'
+      )
+    ).toBe('(require_min(w, 3)) / 25.4');
+  });
+
+  it('keeps continuous, equivariant forms converting', () => {
+    for (const formula of [
+      'round(width / 1 mm) * 1 mm',
+      'width ^ 2 / 1 mm',
+      'min(width, 3 mm)',
+      'max(width, 3 mm) + abs(width - 50 mm)',
+      'sqrt(width * 2 mm)',
+      'avg(width, 3 mm)'
+    ]) {
+      const target = converted(
+        convertWidth(formula, 'inch', [['width', '127 mm', 'length']])
+      );
+      expect(boxWidth(target, 'Box'), formula).toBe(formula);
+    }
+    expect(
+      boxWidth(
+        converted(convertWidth('round(n) * 1 mm', 'inch', [['n', '7.6']])),
+        'Box'
+      )
+    ).toBe('round(n) * 1 mm');
+  });
+
+  it('refuses a length expression whose value underflows (finding 4)', () => {
+    for (const formula of ['5e-324 * 1', '5e-324 mm', '1e-310 * 1'])
+      expect(refusals(convertWidth(formula, 'inch')), formula).toEqual([
+        expect.objectContaining({
+          code: 'out-of-range',
+          field: 'dimensions.width'
+        })
+      ]);
+    // The oracle judges zero-ness against the source value, not against an
+    // expected value that underflowed with it.
+    const source = withBox(newDocument('mm'), 'Box', { width: '5e-324 * 1' });
+    const after = structuredClone(source);
+    after.units = 'inch';
+    for (const node of Object.values(after.nodes))
+      if (node.kind === 'project') node.units = 'inch';
+    const data = feature(after, 'Box').data as Extract<
+      FeatureData,
+      { featureKind: 'primitive' }
+    >;
+    data.dimensions.width = '(5e-324 * 1) / 25.4';
+    data.dimensions.height = canonicalScaledNumber(1, 1, 25.4);
+    data.dimensions.depth = canonicalScaledNumber(1, 1, 25.4);
+    expect(valueIn(after, '(5e-324 * 1) / 25.4')).toBe(0);
+    expect(unitsConversionOracle(source, after).refusals).toEqual([
+      expect.objectContaining({
+        code: 'oracle-mismatch',
+        field: 'dimensions.width'
+      })
+    ]);
+  });
+
+  it('checks every stored literal bit for bit, however small (finding 5)', () => {
+    const source = withFeatureNode(newDocument('mm'), 'mesh', {
+      featureKind: 'imported-mesh',
+      artifactId: 'artifact',
+      sourceName: 'mesh.stl',
+      triangleCount: 1,
+      vertices: [1e-13, 2e-13, 3e-13],
+      indices: [0, 1, 2]
+    });
+    const target = converted(convertDocumentUnits(source, 'inch'));
+    expect(unitsConversionOracle(source, target).refusals).toEqual([]);
+    for (const [index, value] of [
+      [0, 1e-13], // never scaled
+      [1, 2e-13 / 25.4 / 25.4], // scaled twice
+      [2, canonicalScaledNumber(3e-13, 1, 25.4) * (1 + 2 ** -52)] // one ulp
+    ] as const) {
+      const broken = structuredClone(target);
+      featureData<{ vertices: number[] }>(broken, 'mesh').vertices[index] =
+        value;
+      expect(unitsConversionOracle(source, broken).refusals).toEqual([
+        expect.objectContaining({
+          code: 'oracle-mismatch',
+          field: `vertices.${index}`
+        })
+      ]);
+    }
   });
 });
