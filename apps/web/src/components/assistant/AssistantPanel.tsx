@@ -479,6 +479,7 @@ export function AssistantPanel({
   const [consentPrompt, setConsentPrompt] = useState<{
     route: string;
     label: string;
+    mayTrain: boolean;
     resolve(allowed: boolean): void;
   } | null>(null);
   const consentRef = useRef(consent);
@@ -644,6 +645,7 @@ export function AssistantPanel({
         setConsentPrompt({
           route,
           label: describeAssistantRoute(current),
+          mayTrain: current.encryptedProjectMayTrain === true,
           resolve: settle
         });
       });
@@ -2004,6 +2006,7 @@ export function AssistantPanel({
       {consentPrompt && consent && (
         <AssistantConsentDialog
           routeLabel={consentPrompt.label}
+          mayTrain={consentPrompt.mayTrain}
           error={consent.error}
           onAllow={async () => {
             if (await consent.allow(consentPrompt.route)) {

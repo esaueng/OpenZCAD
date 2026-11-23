@@ -271,8 +271,7 @@ interface ProposalInput {
   operations?: readonly string[];
   /**
    * The digest is of an end-to-end encrypted project, sent under its
-   * owner's consent (ADR-024 Phase 6): OpenRouter routes it only to
-   * providers that do not collect it (`openRouterProviderOptions`).
+   * owner's consent (ADR-024 Phase 6), including the route's data policy.
    */
   encryptedProject?: boolean;
 }
@@ -283,6 +282,7 @@ export interface AssistantStatus {
   model: string;
   reasoningEffort: string;
   encryptedProjectUnsupported?: true;
+  encryptedProjectMayTrain?: true;
 }
 
 export interface AssistantRuntimeConfig {
@@ -798,16 +798,37 @@ function reasoningRequest(effort: string): {
     : { reasoning: { effort } };
 }
 
+export function deploymentUsesFreeOpenRouter(env: CloudflareEnv): boolean {
+  const provider = providerFor(env);
+  return (
+    isCloudflareFeatureEnabled(env, 'AI_DEPLOYMENT_FREE_ENABLED') &&
+    provider === 'openrouter' &&
+    (!env.AI_PROVIDER || env.AI_PROVIDER === 'openrouter') &&
+    modelFor(env, provider).endsWith(':free') &&
+    !env.AI_BASE_URL
+  );
+}
+
+function encryptedFreeModelMayTrain(env: CloudflareEnv): boolean {
+  return (
+    isCloudflareFeatureEnabled(env, 'AI_ENCRYPTED_FREE_TRAINING_ENABLED') &&
+    deploymentUsesFreeOpenRouter(env)
+  );
+}
+
 export function getAssistantStatus(env: CloudflareEnv): AssistantStatus {
   const provider = providerFor(env);
   const model = modelFor(env, provider);
+  const mayTrain = encryptedFreeModelMayTrain(env);
   return {
     configured: Boolean(apiKeyFor(env, provider)),
     provider,
     model,
     reasoningEffort: env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT,
     // NVIDIA's free endpoint retains prompts and is excluded by data_collection: deny.
-    ...(provider === 'openrouter' &&
+    ...(mayTrain ? { encryptedProjectMayTrain: true } : {}),
+    ...(!mayTrain &&
+    provider === 'openrouter' &&
     model === NEMOTRON_FREE_MODEL &&
     (!env.AI_BASE_URL || env.AI_BASE_URL.trim() === OPENROUTER_RESPONSES_URL)
       ? { encryptedProjectUnsupported: true }
@@ -834,7 +855,7 @@ function proposalProviderErrorMessage(
   status: number,
   usesPersonalConfiguration: boolean,
   provider: string,
-  encryptedProject: boolean
+  requiresPrivateProvider: boolean
 ): string {
   if (status === 401 || status === 403) {
     return usesPersonalConfiguration
@@ -845,7 +866,7 @@ function proposalProviderErrorMessage(
     return "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later.";
   }
   if (status === 404 && provider === 'openrouter') {
-    if (encryptedProject) {
+    if (requiresPrivateProvider) {
       const action = usesPersonalConfiguration
         ? 'Choose another model in AI Assistant settings.'
         : 'Switch to Personal token in AI Assistant settings to use another model.';
@@ -1286,18 +1307,18 @@ async function requestAnthropic(
 }
 
 /**
- * OpenRouter's provider preferences. A request carrying an encrypted
- * project's model (ADR-024 amendment 2026-11-14) may go only to providers
- * whose policy is not to store or train on prompts: `data_collection:
- * 'deny'`. OpenRouter refuses the request rather than falling back to one
- * that does, and the Worker reports that as no eligible route.
+ * Keep the zero-price guard even if OpenRouter changes its available routes.
+ * Encrypted requests name the data policy in their consent (ADR-024).
  */
-export function openRouterProviderOptions(model: string, privateData = false) {
+export function openRouterProviderOptions(
+  model: string,
+  dataCollection?: 'deny' | 'allow'
+) {
   return {
     require_parameters: true,
-    ...(privateData ? { data_collection: 'deny' as const } : {}),
+    ...(dataCollection ? { data_collection: dataCollection } : {}),
     ...(model.endsWith(':free')
-      ? { max_price: { prompt: 0, completion: 0, request: 0 } }
+      ? { max_price: { prompt: 0, completion: 0, request: 0, image: 0 } }
       : {})
   };
 }
@@ -1380,6 +1401,11 @@ export async function streamAssistantProposal(
   env = assistantEnvForClient(env, input.operations);
   const provider = runtime?.provider ?? providerFor(env);
   const model = runtime?.model ?? modelFor(env, provider);
+  const dataCollection = input.encryptedProject
+    ? !runtime && encryptedFreeModelMayTrain(env)
+      ? 'allow'
+      : 'deny'
+    : undefined;
   const promptedSchema = usesPromptedJsonSchema(provider, model);
   const requestId = crypto.randomUUID();
   const apiKey = runtime?.apiKey ?? apiKeyFor(env, provider);
@@ -1451,10 +1477,7 @@ export async function streamAssistantProposal(
         stream: true,
         ...(provider === 'openrouter'
           ? {
-              provider: openRouterProviderOptions(
-                model,
-                input.encryptedProject === true
-              )
+              provider: openRouterProviderOptions(model, dataCollection)
             }
           : {}),
         ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {})
@@ -1495,10 +1518,7 @@ export async function streamAssistantProposal(
                 runtime?.maxOutputTokens ?? maxOutputTokensFor(env)
             }),
         stream: false,
-        provider: openRouterProviderOptions(
-          model,
-          input.encryptedProject === true
-        ),
+        provider: openRouterProviderOptions(model, dataCollection),
         ...(safetyIdentifier ? { user: safetyIdentifier } : {})
       })
     });
@@ -1593,7 +1613,7 @@ export async function streamAssistantProposal(
         upstream.status,
         Boolean(runtime),
         provider,
-        input.encryptedProject === true
+        dataCollection === 'deny'
       ),
       'AI_UPSTREAM_ERROR',
       502,

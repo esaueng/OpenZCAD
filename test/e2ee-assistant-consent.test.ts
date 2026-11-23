@@ -217,6 +217,97 @@ afterEach(() => {
 });
 
 describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
+  it('requires consent to the free model training policy and keeps both provider requests free', async () => {
+    const model = 'nvidia/nemotron-3.5-super-vl:free';
+    const { call, projectId } = await seed({
+      ...FLAGS_ON,
+      AI_MODEL: model,
+      AI_DEPLOYMENT_FREE_ENABLED: 'true',
+      AI_ENCRYPTED_FREE_TRAINING_ENABLED: 'true'
+    });
+    const upstream = stubProvider()
+      .mockResolvedValueOnce(
+        Response.json({ error: { code: 404 } }, { status: 404 })
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          choices: [
+            {
+              finish_reason: 'stop',
+              message: { content: '{"replyKind":"message","message":"Hello."}' }
+            }
+          ]
+        })
+      );
+    const status = await call('GET', '/api/assistant/status');
+    const configured = (await status.json()) as Parameters<
+      typeof assistantConsentRoute
+    >[0];
+    expect(configured).toMatchObject({
+      configured: true,
+      model,
+      encryptedProjectMayTrain: true
+    });
+    expect(configured).not.toHaveProperty('encryptedProjectUnsupported');
+    const oldRoute = assistantConsentRoute({
+      source: 'deployment',
+      provider: 'openrouter',
+      model,
+      endpoint: 'https://openrouter.ai/api/v1/responses'
+    });
+    const currentRoute = assistantConsentRoute(configured);
+    expect(currentRoute).not.toBe(oldRoute);
+    const consentPath = `/api/e2ee/assistant-consents/${projectId}`;
+    const send = (route: string, sequence: number) =>
+      call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+        body: {
+          ...proposal(projectId),
+          expectedConsent: assistantConsentVersion({
+            route,
+            sequence,
+            copyVersion: ASSISTANT_CONSENT_COPY_VERSION
+          })
+        }
+      });
+    expect(
+      (
+        await call('PUT', consentPath, {
+          body: await consentBody(projectId, 1, { route: oldRoute })
+        })
+      ).status
+    ).toBe(200);
+    const refused = await send(oldRoute, 1);
+    expect(refused.status).toBe(409);
+    expect(await codeOf(refused)).toBe(
+      ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+    );
+    expect(upstream).not.toHaveBeenCalled();
+
+    expect(
+      (
+        await call('PUT', consentPath, {
+          body: await consentBody(projectId, 2, { route: currentRoute })
+        })
+      ).status
+    ).toBe(200);
+    const response = await send(currentRoute, 2);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('Hello.');
+    expect(upstream.mock.calls.map(([url]) => url)).toEqual([
+      'https://openrouter.ai/api/v1/responses',
+      'https://openrouter.ai/api/v1/chat/completions'
+    ]);
+    for (const [, init] of upstream.mock.calls) {
+      expect(JSON.parse(init?.body as string)).toMatchObject({
+        model,
+        provider: {
+          data_collection: 'allow',
+          max_price: { prompt: 0, completion: 0, request: 0, image: 0 }
+        }
+      });
+    }
+  });
+
   it('refuses an encrypted project as before without the flag; plaintext is untouched', async () => {
     const { call, projectId, plaintextId } = await seed();
     const upstream = stubProvider();

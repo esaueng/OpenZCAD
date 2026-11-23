@@ -40,6 +40,8 @@ export interface AssistantConsentRouteInput {
    * `AI_BASE_URL` or the provider's default. Absent from older Workers.
    */
   endpoint?: string;
+  /** The consent also binds permission to use a provider that may train. */
+  encryptedProjectMayTrain?: true;
 }
 
 /**
@@ -65,7 +67,10 @@ export function assistantConsentRoute(
         source,
         input.provider,
         input.model,
-        input.endpoint ?? ''
+        input.endpoint ?? '',
+        ...(input.encryptedProjectMayTrain === true
+          ? ['provider-may-train']
+          : [])
       ])
     )
   ].join('|');

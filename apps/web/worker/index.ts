@@ -1884,8 +1884,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         }
       }
       response = await streamAssistantProposal(
-        // Only an encrypted project needs consent: its model goes only to
-        // providers that do not collect it.
+        // The current consent binds the route and whether it may train.
         { ...payload, encryptedProject: consent !== null },
         env,
         assistantSafetyIdentifier(providerIdentity, payload.retryAttempt),

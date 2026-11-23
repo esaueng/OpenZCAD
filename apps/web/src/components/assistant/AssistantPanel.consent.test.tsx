@@ -143,8 +143,10 @@ function Harness({
   project: { projectId: ProjectId; storageFormat: 1 | 2 };
   document?: typeof doc;
   request?: { id: number; text: string } | null;
-  status?:
-    typeof configured | (Omit<typeof configured, 'model'> & { model: string });
+  status?: Omit<typeof configured, 'model'> & {
+    model: string;
+    encryptedProjectMayTrain?: true;
+  };
 }) {
   const gate = useAssistantConsentGate(USER, project, {
     loadModule: async () => consentModule,
@@ -228,6 +230,37 @@ async function ask(
 }
 
 describe('assistant consent on an encrypted project (ADR-024 6-1)', () => {
+  it('warns about training and asks again when the built-in data policy changes', async () => {
+    const user = userEvent.setup();
+    const server = consentServer();
+    const status = { ...configured, encryptedProjectMayTrain: true } as const;
+    const props = {
+      server,
+      pins: consentModule.memoryConsentPins(),
+      project: ENCRYPTED,
+      status
+    };
+    await server.forge(doc.projectId, 1, ACCOUNT_KEY);
+    const { rerender } = render(<Harness {...props} />);
+    await act(async () => {});
+    await ask(rerender, props, 1);
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Let the assistant read this encrypted project?'
+    });
+    expect(dialog).toHaveTextContent(
+      'may keep your request and use it for training'
+    );
+    expect(dialog).toHaveTextContent('Don’t send anything confidential.');
+    expect(proposals).toHaveLength(0);
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Allow for this project' })
+    );
+    await waitFor(() => expect(proposals).toHaveLength(1));
+    expect(server.rows.get(doc.projectId)?.route).toBe(
+      assistantConsentRoute(status)
+    );
+  });
+
   it('asks first, sends nothing when declined, and sends exactly the listed fields once allowed', async () => {
     const user = userEvent.setup();
     const server = consentServer();
