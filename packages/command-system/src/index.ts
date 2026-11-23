@@ -114,6 +114,7 @@ import {
   type SketchCompositeAddInput,
   addSketchReferenceDimension,
   restoreSketchReferenceDimensionForReplay,
+  setParameterForReplay,
   assertReferenceCommandSchema,
   assertReferenceDocumentSchema,
   assertSketchProvenance,
@@ -7013,7 +7014,13 @@ export function replayCommands(
         next = deleteFeature(next, command.payload as FeatureDeleteInput);
         break;
       case 'parameter.set':
-        next = setParameter(next, command.payload as ParameterSetInput);
+        // Replay skips the retype refusal, as it skips
+        // `validateParameterDelete`: a retype recorded before a field became
+        // a typed reader still replays, and the build names the feature.
+        next = setParameterForReplay(
+          next,
+          command.payload as ParameterSetInput
+        );
         break;
       case 'parameter.configure-toggle':
         next = configureParameterToggle(

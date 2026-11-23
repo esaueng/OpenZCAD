@@ -6036,6 +6036,30 @@ export function setParameter(
   document: ProjectDocument,
   input: ParameterSetInput
 ): ProjectDocument {
+  return applyParameterSet(document, input, true);
+}
+
+/**
+ * Replays a recorded `parameter.set` without the retype refusal
+ * (`parameterQuantityRefusal`). A log written before a field became a typed
+ * reader (I03 added a tapped hole's thread length and clearance and a sketch
+ * pattern's spacing and step angle) may hold a retype that field now
+ * refuses. Replay keeps the recorded edit; the build then refuses the
+ * feature that reads it by name (`typedParameterMisuse`), as for any stored
+ * mix-up. Authoring still refuses the retype through `setParameter`.
+ */
+export function setParameterForReplay(
+  document: ProjectDocument,
+  input: ParameterSetInput
+): ProjectDocument {
+  return applyParameterSet(document, input, false);
+}
+
+function applyParameterSet(
+  document: ProjectDocument,
+  input: ParameterSetInput,
+  refuseRetypedReaders: boolean
+): ProjectDocument {
   const name = input.name.trim();
   if (!isValidParameterName(name)) {
     throw new Error(
@@ -6073,7 +6097,9 @@ export function setParameter(
       input.quantity !== undefined &&
       (input.quantity ?? undefined) !== existing.quantity
     ) {
-      const refusal = parameterQuantityRefusal(next, name, input.quantity);
+      const refusal = refuseRetypedReaders
+        ? parameterQuantityRefusal(next, name, input.quantity)
+        : null;
       if (refusal) throw new Error(refusal);
       if (input.quantity) existing.quantity = input.quantity;
       else delete existing.quantity;
