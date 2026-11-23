@@ -404,6 +404,22 @@ describe('CameraController external orbit lifecycle', () => {
     controller.dispose();
   });
 
+  it('reports a camera gesture as held from its start until its release', () => {
+    // A reframe asked for mid-pan waits on this (preview check on #1969).
+    const { controller } = createController(false);
+    const orbit = controller.controls as unknown as THREE.EventDispatcher<{
+      start: object;
+      end: object;
+    }> & { state: number };
+    expect(controller.gestureHeld).toBe(false);
+    orbit.state = 2; // PAN
+    orbit.dispatchEvent({ type: 'start' });
+    expect(controller.gestureHeld).toBe(true);
+    orbit.dispatchEvent({ type: 'end' });
+    orbit.state = -1;
+    expect(controller.gestureHeld).toBe(false);
+  });
+
   it('lands a held roll when its glide is interrupted, and releases it to an orbit', () => {
     const { controller } = createController(false);
     const v = new THREE.Vector3(1, 0, 0);
