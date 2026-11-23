@@ -3,7 +3,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, replayCommands } from '@openzcad/command-system';
 import { listFeaturesInOrder } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import type { BodyRepresentation, ProjectDocument } from '@openzcad/shared';
+import type {
+  BodyRepresentation,
+  FaceTopology,
+  ProjectDocument
+} from '@openzcad/shared';
 
 import { validatedFeatureRejection } from '../../apps/web/src/lib/featureValidation';
 import { GENERIC_REFUSAL } from '../../apps/web/src/lib/refusalLanguage';
@@ -18,7 +22,8 @@ import {
   LADDERS,
   ladderCommand,
   ladderFaces,
-  ladderSteps
+  ladderSteps,
+  type Ladder
 } from './distance-ladder';
 import {
   assertCylinderSourceRadius,
@@ -34,6 +39,9 @@ import {
   LADDER_REFUSAL_PINS
 } from './pins';
 import {
+  BOX,
+  EMBED,
+  POST,
   referencePart,
   type PartName,
   type ReferencePart
@@ -290,4 +298,82 @@ it('each ladder pin applies to exactly one measured cell or direction', () => {
       (pin) => !targets.has(pin.target)
     )
   ).toEqual([]);
+});
+
+// An offset set's first group takes the kernel's blend-aware move a single
+// face takes, so its combined blend diagnostic keeps the specific reason.
+describe('offset sets refused by a blend move', () => {
+  const plane = (axis: 'x' | 'z', at?: number) => (face: FaceTopology) =>
+    face.geometry?.surfaceType === 'plane' &&
+    face.geometry.normal?.[axis] === 1 &&
+    (at === undefined || Math.abs(face.geometry.center.z - at) < 1e-9);
+  const bossRise = POST.height - EMBED;
+  const cases = [
+    {
+      part: 'A',
+      target: 'cone-cap+shoulder',
+      pick: [plane('z', BOX.depth + bossRise), plane('z', BOX.depth)],
+      distances: [-1, 1],
+      code: 'offset_face_conical_blend'
+    },
+    {
+      part: 'C',
+      target: 'shoulder+side',
+      pick: [plane('z', BOX.depth), plane('x')],
+      distances: [20],
+      code: 'offset_face_blend_reaches_fixed_rim'
+    }
+  ] as const;
+  for (const entry of cases) {
+    for (const distance of entry.distances) {
+      it(
+        `${entry.part}/${entry.target} ${distance} mm`,
+        async () => {
+          session.deadline = Date.now() + CELL_TIMEOUT;
+          const part = reference.get(entry.part)!;
+          const ladder: Ladder = {
+            part: entry.part,
+            target: entry.target,
+            operation: 'offset-set',
+            pick: entry.pick,
+            inward: null,
+            outward: null
+          };
+          const faces = ladderFaces(part, ladder);
+          const draft = new CommandManager(part.document);
+          draft.execute(ladderCommand(part, ladder, faces, distance));
+          const derived = await sync(session, draft.document, part.bodyId, {
+            proposeCarry: true
+          });
+          const failure = derived.featureWarnings?.find(
+            (warning) =>
+              warning.kind === 'build-failed' || warning.kind === 'refusal'
+          );
+          expect(failure).toBeDefined();
+          const rejection = validatedFeatureRejection({
+            featureName: failure!.featureName,
+            featureId: failure!.featureId,
+            bodyPresent: derived.bodyRepresentations[part.bodyId] !== undefined,
+            warnings: derived.warnings,
+            featureWarnings: derived.featureWarnings,
+            documentMoved: false
+          });
+          const pin = LADDER_REFUSAL_PINS.find(
+            (p) =>
+              p.target === `${entry.part}/shoulder` &&
+              p.code === entry.code &&
+              p.distances.includes(distance)
+          );
+          expect(pin).toBeDefined();
+          expect(rejection?.message).toBe(pin!.message);
+          expect(failure!.kernelRefusal).toMatchObject({
+            family: pin!.family,
+            category: pin!.category,
+            code: entry.code
+          });
+        },
+        CELL_TIMEOUT
+      );
+    }
+  }
 });

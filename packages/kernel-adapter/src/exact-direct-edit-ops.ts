@@ -1961,11 +1961,11 @@ function offsetFaces(
           error
         );
       }
-      // Opposite sets were refused by name above; whatever the kernel still
-      // refuses is typed from its error, never read as prose.
+      // The first group uses the same blend-aware kernel move as a single face.
       const message = error instanceof Error ? error.message : String(error);
       throw (
         offsetFaceRefusalOf(error, offset) ??
+        offsetBlendMoveRefusalOf(error) ??
         modelingOperationRefusal('offset_face', error, message, 'direct-edit')
       );
     }
