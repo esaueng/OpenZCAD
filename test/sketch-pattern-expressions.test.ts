@@ -35,8 +35,7 @@ import {
   describeConstraint,
   sketchesDrivenByParameterEdit
 } from '../apps/web/src/lib/sketch/constraints';
-import { solvedSketchCommands } from '../apps/web/src/lib/sketch/applySolve';
-import { evalParamValue } from '../apps/web/src/lib/model';
+import { resolveSketchesForValueChange } from '../apps/web/src/lib/sketch/parameterResolve';
 import { computeSketchRegions } from '@openzcad/geometry';
 import { printHistory } from '@openzcad/scripting';
 
@@ -342,25 +341,13 @@ async function setParameterAsTheAppDoes(
   const base = manager.document;
   const parameter = commandFactories.setParameter({ name, expression });
   parameter.validate(base);
-  let prospective = parameter.apply(base);
-  const before = getParameterScope(base).scope;
-  const after = getParameterScope(prospective).scope;
-  const commands: AnyCommand[] = [parameter];
-  for (const sketch of sketchesDrivenByParameterEdit(
-    listNodesByKind(prospective, 'sketch'),
-    (value) => evalParamValue(value, before, base.units) ?? undefined,
-    (value) => evalParamValue(value, after, prospective.units) ?? undefined
-  )) {
-    const outcome = await adapter.solveSketch(prospective, sketch.sketchId);
-    expect(outcome.converged).toBe(true);
-    expect(outcome.rolledBack).toBe(false);
-    const solved = solvedSketchCommands(prospective, sketch.sketchId, outcome);
-    for (const command of solved) {
-      command.validate(prospective);
-      prospective = command.apply(prospective);
-    }
-    commands.push(...solved);
-  }
+  const resolved = await resolveSketchesForValueChange(
+    base,
+    parameter.apply(base),
+    (document, sketchId) => adapter.solveSketch(document, sketchId)
+  );
+  if (!resolved?.ok) throw new Error('the parameter edit did not solve');
+  const commands: AnyCommand[] = [parameter, ...resolved.commands];
   manager.execute(composeCommands(`Set parameter ${name}`, commands));
 }
 

@@ -337,6 +337,10 @@ describe('a parameter value changed outside the Parameters table', () => {
       expectCentres(await f.centres(live), 45, 70);
       // Tweak's undo admits the entry: a row switch and its solved sketches.
       expect(f.manager.undoIsParameterOnly).toBe(true);
+      // Solved geometry without a value edit beside it is a sketch edit.
+      const sketchOnly = new CommandManager(base);
+      sketchOnly.runTransaction('Edit sketch geometry', resolved.commands);
+      expect(sketchOnly.undoIsParameterOnly).toBe(false);
 
       // Replay needs no solver: the recorded commands store the geometry.
       const replayed = new CommandManager(base).runTransaction(
