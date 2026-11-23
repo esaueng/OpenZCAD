@@ -992,7 +992,10 @@ for (const [width, height] of [
 
     // The drawer opened again stands over the panel, the newest surface,
     // and its own Close tools drawer gives the panel back.
-    await page.getByRole('button', { name: /More tools/i }).first().tap();
+    await page
+      .getByRole('button', { name: /More tools/i })
+      .first()
+      .tap();
     await expect(drawer).toBeVisible();
     await page.getByRole('button', { name: 'Close tools drawer' }).tap();
     await expect(drawer).toHaveCount(0);

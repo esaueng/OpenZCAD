@@ -35996,8 +35996,7 @@ export function App() {
   // panel coming up in that lane puts the drawer away, as taking a tool from
   // the drawer does; the drawer opened again stands over the panel until it
   // is closed or a panel is brought up once more.
-  const phoneLanePanel =
-    !modelingLocked && !panelsHidden ? phonePanel : null;
+  const phoneLanePanel = !modelingLocked && !panelsHidden ? phonePanel : null;
   useEffect(() => {
     if (phoneLanePanel === null) return;
     setPanelState((current) =>
