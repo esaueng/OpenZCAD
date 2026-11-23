@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { FaceGeometry } from '@openzcad/shared';
 import { RemusKernel } from './remus-runtime';
-import { measureFaceGeometry, withFaceGeometryMemo } from './exact-measure';
+import {
+  boreAxisMeasurement,
+  classifyThroughHoleFace,
+  measureFaceGeometry,
+  withFaceGeometryMemo
+} from './exact-measure';
 
 /**
  * One body measurement reads each face from several places (its published
@@ -59,4 +65,94 @@ describe('face geometry memo', () => {
     measureFaceGeometry(kernel, faces[0]!);
     expect(area).toHaveBeenCalledTimes(2);
   });
+});
+
+describe('bore classification during solid measurement', () => {
+  const cylinder: FaceGeometry = {
+    surfaceType: 'cylinder',
+    area: 20 * Math.PI,
+    center: { x: 0, y: 0, z: 0 },
+    axisStart: { x: 0, y: 0, z: 0 },
+    axisEnd: { x: 0, y: 0, z: 10 },
+    axialLength: 10,
+    radius: 1,
+    diameter: 2
+  };
+
+  it('reuses only the identical interior point during a single pass', () => {
+    const kernel = new RemusKernel();
+    try {
+      const classify = vi
+        .spyOn(kernel, 'classifyPoint')
+        .mockReturnValueOnce('inside')
+        .mockReturnValueOnce('unknown')
+        .mockImplementationOnce(() => {
+          throw Error('temporary failure');
+        })
+        .mockReturnValue('outside');
+      const outside = boreAxisMeasurement(kernel, 1);
+      const point = { x: 0, y: 0, z: 5 };
+      expect(outside(point)).toBe(false);
+      point.x = 1e-12;
+      expect(outside(point)).toBe(false);
+      expect(outside(point)).toBe(false);
+      expect(outside(point)).toBe(true);
+      expect(outside({ ...point, x: 0 })).toBe(false);
+      expect(outside({ ...point, x: -0 })).toBe(true);
+      expect(boreAxisMeasurement(kernel, 2)({ ...point, x: 0 })).toBe(true);
+      expect(boreAxisMeasurement(kernel, 1)({ ...point, x: 0 })).toBe(true);
+      expect(classify).toHaveBeenCalledTimes(7);
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it.each([
+    ['through', true, 7],
+    ['boss', false, 1],
+    ['external', false, 4],
+    ['boundary', false, 4],
+    ['mixed', false, 5],
+    ['blind', false, 2]
+  ] as const)(
+    'publishes the same positive proof for %s walls',
+    (kind, proven, probes) => {
+      const kernel = new RemusKernel();
+      try {
+        vi.spyOn(kernel, 'getSurfaceDomain').mockReturnValue(
+          Float64Array.of(0, 2 * Math.PI, 0, 10)
+        );
+        const probe = vi
+          .spyOn(kernel, 'classifyPoint')
+          .mockImplementation((_solid, x, y, z) => {
+            if (x === 0 && y === 0) {
+              if (kind === 'boss' || (kind === 'blind' && z < 0))
+                return 'inside';
+              return 'outside';
+            }
+            if (kind === 'boundary') return 'boundary';
+            if (kind === 'external' || (kind === 'mixed' && x > 0.9))
+              return 'outside';
+            return 'inside';
+          });
+        const detailed = classifyThroughHoleFace(kernel, 1, 42, cylinder);
+        expect(detailed.status === 'through-hole').toBe(proven);
+        const reason = detailed.status === 'refused' ? detailed.message : '';
+        if (kind === 'blind') expect(reason).toContain('blind pocket');
+        if (kind === 'external') expect(reason).toContain('external wall');
+        probe.mockClear();
+        const measured = classifyThroughHoleFace(
+          kernel,
+          1,
+          42,
+          cylinder,
+          boreAxisMeasurement(kernel, 1)
+        );
+        expect(measured.status).toBe(detailed.status);
+        expect(probe).toHaveBeenCalledTimes(probes);
+      } finally {
+        kernel.free();
+      }
+    }
+  );
 });

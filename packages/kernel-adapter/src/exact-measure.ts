@@ -416,6 +416,28 @@ export function classifySolidPoint(
 }
 
 /**
+ * Axis test for one immutable solid's measurement pass. Cylindrical patches
+ * on a toothed or stepped part can share the same point inside stock. One
+ * exact interior witness suffices even with unrelated bores between them.
+ */
+export function boreAxisMeasurement(kernel: RemusKernel, solid: number) {
+  let interior: Vec3 | undefined;
+  return (center: Vec3) => {
+    if (
+      interior &&
+      Object.is(center.x, interior.x) &&
+      Object.is(center.y, interior.y) &&
+      Object.is(center.z, interior.z)
+    ) {
+      return false;
+    }
+    const result = classifySolidPoint(kernel, solid, center);
+    if (result === 'inside') interior = { ...center };
+    return result === 'outside';
+  };
+}
+
+/**
  * Decide whether a cylindrical face is a through-hole: an internal bore that
  * opens at both ends, as opposed to a blind pocket or an external wall.
  *
@@ -435,7 +457,8 @@ export function classifyThroughHoleFace(
   kernel: RemusKernel,
   solid: number,
   face: number,
-  geometry: FaceGeometry | undefined
+  geometry: FaceGeometry | undefined,
+  publicationAxisTest?: (center: Vec3) => boolean
 ): ThroughHoleClassification {
   if (!geometry) {
     return refuseThroughHole('The selected face could not be measured.');
@@ -480,7 +503,10 @@ export function classifyThroughHoleFace(
     geometry.axialLength * 0.01
   );
   const center = scale(add(geometry.axisStart, geometry.axisEnd), 0.5);
-  if (classifySolidPoint(kernel, solid, center) !== 'outside') {
+  const openAxis = publicationAxisTest
+    ? publicationAxisTest(center)
+    : classifySolidPoint(kernel, solid, center) === 'outside';
+  if (!openAxis) {
     return refuseThroughHole(
       'The selected cylindrical face encloses material along its axis, so it is a boss rather than a hole.'
     );
@@ -519,10 +545,12 @@ export function classifyThroughHoleFace(
     );
   }
   const bearingV = cross(axis, bearingU);
-  const outsideWall = [0, 0.25, 0.5, 0.75].map((turn) => {
+  let insideCount = 0;
+  let outsideCount = 0;
+  for (const turn of [0, 0.25, 0.5, 0.75]) {
     const angle = turn * FULL_REVOLUTION;
-    const offset = geometry.radius! + radialProbe;
-    return classifySolidPoint(
+    const offset = geometry.radius + radialProbe;
+    const material = classifySolidPoint(
       kernel,
       solid,
       add(
@@ -533,11 +561,19 @@ export function classifyThroughHoleFace(
         )
       )
     );
-  });
-  if (outsideWall.every((classification) => classification === 'inside')) {
+    if (material === 'inside') insideCount += 1;
+    else if (publicationAxisTest) {
+      // Publication only needs a positive proof. A single failed bearing
+      // rules that out. Explicit edits still diagnose the whole wall below.
+      return refuseThroughHole(
+        'The cylindrical wall lacks material at a radial probe.'
+      );
+    } else if (material === 'outside') outsideCount += 1;
+  }
+  if (insideCount === 4) {
     return { status: 'through-hole' };
   }
-  if (outsideWall.every((classification) => classification === 'outside')) {
+  if (outsideCount === 4) {
     return refuseThroughHole(
       'The selected cylindrical face has material only on its inside, so it is an external wall rather than a bore.'
     );
@@ -553,7 +589,8 @@ export function measureOwnedFaceGeometry(
   solid: number,
   face: number,
   onBlendRegion?: (region: BlendRegionMeasurement) => void,
-  onMeasurement?: (geometry: FaceGeometry | undefined) => void
+  onMeasurement?: (geometry: FaceGeometry | undefined) => void,
+  publicationAxisTest?: (center: Vec3) => boolean
 ): FaceGeometry | undefined {
   const geometry = measureFaceGeometry(kernel, face);
   onMeasurement?.(geometry);
@@ -590,8 +627,8 @@ export function measureOwnedFaceGeometry(
     }
   } else if (
     geometry.surfaceType === 'cylinder' &&
-    classifyThroughHoleFace(kernel, solid, face, geometry).status ===
-      'through-hole'
+    classifyThroughHoleFace(kernel, solid, face, geometry, publicationAxisTest)
+      .status === 'through-hole'
   ) {
     geometry.featureType = 'through-hole';
     geometry.editableDimension = 'diameter';
