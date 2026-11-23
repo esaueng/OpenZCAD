@@ -1647,7 +1647,7 @@
   font-size: var(--fs-md);
 }
 
-.settings-nav-head .brand .beta-tag {
+.settings-nav-head .brand .channel-tag {
   display: inline-flex;
 }
 
@@ -1741,7 +1741,7 @@
     gap: 0;
   }
 
-  .settings-nav-head .brand .beta-tag {
+  .settings-nav-head .brand .channel-tag {
     display: none;
   }
 

@@ -101,8 +101,8 @@
 
 /* The top bar's flanks are equal (quiet-stage.css), so the identity island
    has under half the window, less the full-width mode switch: below 1200px
-   the full "OpenZCAD BETA" took the room the project name needed, which was
-   squeezed to a letter and then to nothing. The brand is its mark alone
+   the full wordmark and its channel tag took the room the project name
+   needed, which was squeezed to a letter and then to nothing. The brand is its mark alone
    from there; the button is still named OpenZCAD. */
 @media (max-width: 1199px) {
   .brand {
@@ -111,7 +111,7 @@
     font-size: 0;
   }
 
-  .brand .beta-tag {
+  .brand .channel-tag {
     display: none;
   }
 }
@@ -124,7 +124,7 @@
   font-size: 0;
 }
 
-.topbar[data-name-room='tight'] .brand .beta-tag {
+.topbar[data-name-room='tight'] .brand .channel-tag {
   display: none;
 }
 

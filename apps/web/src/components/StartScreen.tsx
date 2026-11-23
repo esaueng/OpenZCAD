@@ -108,6 +108,7 @@ import { encryptedPinProblem, encryptionHeldHere } from '../lib/api';
 import { pinProblemText, useEncryptedPins } from './encryptedPinsState';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
+import { ChannelTag } from './ChannelTag';
 import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
@@ -3423,7 +3424,7 @@ export function StartScreen({
       <header className="start-brand">
         <h1 className="brand">
           <BrandMark compact />
-          OpenZCAD <span className="beta-tag">Beta</span>
+          OpenZCAD <ChannelTag />
         </h1>
       </header>
 
