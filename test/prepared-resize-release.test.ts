@@ -6,6 +6,7 @@ import type {
   BodyId,
   BodyRepresentation,
   DerivedState,
+  GeometryReadyState,
   ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -165,8 +166,11 @@ function bandsAt(derived: DerivedState, bodyId: BodyId, radius: number) {
 }
 
 /** The enclosed volume of a body's closed display mesh. */
-function displayVolume(derived: DerivedState, bodyId: BodyId): number {
-  const { mesh } = derived.bodyRepresentations[bodyId]!;
+function displayVolume(
+  state: Pick<GeometryReadyState, 'bodyRepresentations'>,
+  bodyId: BodyId
+): number {
+  const { mesh } = state.bodyRepresentations[bodyId]!;
   const closure = inspectTriangleMeshClosure(mesh.vertices, mesh.indices);
   expect(
     isClosedConsistentlyOrientedMesh(closure),
@@ -250,7 +254,7 @@ it('releases a connected blend resize as its preview and replay build it', async
     ] as const) {
       session.deadline = Date.now() + 120_000;
       prepare.mockClear();
-      let preview: DerivedState | undefined;
+      let preview: GeometryReadyState | undefined;
       for (const frame of [radius - 0.5, radius - 0.25, radius])
         preview = await adapter.previewGeometry(resize(frame), {
           deferTopology: true,
