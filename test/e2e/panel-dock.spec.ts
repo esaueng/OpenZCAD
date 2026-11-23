@@ -776,82 +776,72 @@ test('an unpinned panel opened mid-sketch stands clear of the relations and the 
   await expect.poll(() => ownsItsCentre(close)).toBe(true);
 });
 
-test('entering a sketch moves an open unpinned panel clear with no resize', async ({
-  page
-}) => {
-  // The band is measured from the rail's islands, so the relations and the
-  // readout arriving at a fixed window size move the panel at once.
-  for (const viewport of [
-    { width: 900, height: 800 },
-    { width: 900, height: 575 }
-  ]) {
-    await openWorkspace(
-      page,
-      `Sketch entry at ${viewport.height}`,
-      MODEL_ONLY,
-      viewport
-    );
+// The band is measured from the rail's islands, so the relations and the
+// readout arriving at a fixed window size move the panel at once.
+for (const viewport of [
+  { width: 900, height: 800 },
+  { width: 900, height: 575 }
+]) {
+  test(`entering a sketch at ${viewport.width} x ${viewport.height} moves an open unpinned panel clear with no resize`, async ({
+    page
+  }) => {
+    await openWorkspace(page, 'Sketch entry', MODEL_ONLY, viewport);
     await railPanelButton(page, 'Parameters').click();
     const panel = modelPanel(page, 'Parameters');
     await expect(panel).toHaveClass(/is-unpinned/);
     const before = await box(panel);
     await enterSketch(page);
-    await expectClearOfRails(
-      page,
-      panel,
-      `entering a sketch at ${viewport.width} x ${viewport.height}`
-    );
+    await expectClearOfRails(page, panel, 'entering a sketch');
     expect((await box(panel)).x).toBeLessThan(before.x);
-  }
-});
+  });
+}
 
-test('the profile card stands clear of an unpinned Parameters while sketching', async ({
+test('the right lane, where command cards stand, keeps clear of an unpinned Parameters while sketching', async ({
   page
 }) => {
-  // The right lane stood past the old band: the card ended 40px inside
-  // Parameters at 900 x 800.
-  await openWorkspace(page, 'Sketch profile card', MODEL_ONLY, {
+  // The right lane (.stage-right) is the command card's slot: the closed
+  // profile's Extrude card, Measure. It stood past the old band (--lane-end)
+  // while the panel stood past the readout, and the card ended 40px inside
+  // Parameters at 900 x 800. The lane's own box is the reservation; every
+  // card in it is inside it.
+  await openWorkspace(page, 'Sketch lane clears panel', MODEL_ONLY, {
     width: 900,
     height: 800
   });
   await enterSketch(page);
-  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
-  // Screen-space clicks wait for the head-on entry tween to settle.
-  await page.waitForTimeout(800);
-  const canvas = page.locator('.viewer-host canvas');
-  const bounds = await box(canvas);
-  const corner = {
-    x: bounds.x + bounds.width * 0.3,
-    y: bounds.y + bounds.height * 0.45
-  };
-  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
-  await page.mouse.click(corner.x, corner.y);
-  await page.mouse.move(corner.x + 80, corner.y + 60, { steps: 5 });
-  await page.mouse.click(corner.x + 80, corner.y + 60);
-  await sketchTools.getByRole('button', { name: /^Select/ }).click();
   await railPanelButton(page, 'Parameters').click();
   const panel = modelPanel(page, 'Parameters');
   await expect(panel).toHaveClass(/is-unpinned/);
-  const card = page.getByRole('region', { name: 'Selected closed profile' });
-  await expect
-    .poll(async () => {
-      await canvas.evaluate((element) =>
-        element.dispatchEvent(
-          new CustomEvent('openzcad:e2e-select-profile', {
-            detail: { index: 0, additive: false }
-          })
-        )
-      );
-      return card.count();
-    })
-    .toBe(1);
-  await expect.poll(() => boxesOverlap(card, panel)).toBe(false);
-  await expectClearOfRails(page, panel, 'beside the profile card');
-  await expect
-    .poll(() =>
-      ownsItsCentre(card.getByRole('button', { name: 'Deselect profile' }))
-    )
-    .toBe(true);
+  const lane = page.locator('.stage-right');
+  for (const viewport of SKETCH_SIZES) {
+    await page.setViewportSize(viewport);
+    await expect
+      .poll(
+        async () => {
+          const [laneBox, panelBox] = [await box(lane), await box(panel)];
+          return laneBox.x + laneBox.width <= panelBox.x + 0.5;
+        },
+        { message: `the lane at ${viewport.width} x ${viewport.height}` }
+      )
+      .toBe(true);
+  }
+});
+
+test('a phone lane panel opened mid-sketch stands clear of the snap readout', async ({
+  page
+}) => {
+  // At a phone-width stage the one panel shows in the right lane, which
+  // stood past --lane-end and ran 40px under the readout beside the rail:
+  // at 720 x 800 the readout took the click meant for Close.
+  await openWorkspace(page, 'Phone lane clears readout', MODEL_ONLY, {
+    width: 720,
+    height: 800
+  });
+  await enterSketch(page);
+  await railPanelButton(page, 'Parameters').click();
+  const panel = page.locator('.panel-lane-float .model-panel');
+  await expect(panel).toBeVisible();
+  await expectClearOfRails(page, panel, 'the phone lane at 720 x 800');
 });
 
 test.describe('with a touch pointer', () => {
