@@ -38,8 +38,12 @@ import {
   type CadSelectionContext
 } from '@openzcad/ai-contracts';
 import { createGrowingHolderHoleProposal } from '@openzcad/command-system';
-import type { ProjectDocument } from '@openzcad/shared';
 import {
+  ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+  type ProjectDocument
+} from '@openzcad/shared';
+import {
+  AssistantStreamError,
   loadAssistantStatus,
   streamAssistantReply,
   type AssistantStatus
@@ -432,7 +436,14 @@ export function AssistantPanel({
   // missed, and one fed every streamed delta reads out half-sentences.
   const [announcement, setAnnouncement] = useState('');
   const [loadedStatus, setStatus] = useState<AssistantStatus | null>(null);
-  const status = effectiveAssistant ?? loadedStatus;
+  const [refreshedStatus, setRefreshedStatus] = useState<{
+    from: typeof effectiveAssistant;
+    status: AssistantStatus;
+  } | null>(null);
+  const status =
+    refreshedStatus && refreshedStatus.from === effectiveAssistant
+      ? refreshedStatus.status
+      : (effectiveAssistant ?? loadedStatus);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [applyingEntryId, setApplyingEntryId] = useState<string | null>(null);
@@ -479,6 +490,7 @@ export function AssistantPanel({
   const [consentPrompt, setConsentPrompt] = useState<{
     route: string;
     label: string;
+    mayTrain: boolean;
     resolve(allowed: boolean): void;
   } | null>(null);
   const consentRef = useRef(consent);
@@ -644,6 +656,7 @@ export function AssistantPanel({
         setConsentPrompt({
           route,
           label: describeAssistantRoute(current),
+          mayTrain: current.encryptedProjectMayTrain === true,
           resolve: settle
         });
       });
@@ -734,6 +747,7 @@ export function AssistantPanel({
   useEffect(() => {
     const controller = new AbortController();
     setStatus(null);
+    setRefreshedStatus(null);
     setStatusError(null);
     void (
       effectiveAssistant
@@ -1061,6 +1075,19 @@ export function AssistantPanel({
         }
         setAnnouncement(announcementFor(reply));
       } catch (error) {
+        if (
+          !controller.signal.aborted &&
+          error instanceof AssistantStreamError &&
+          error.code === ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+        ) {
+          const refreshed = await loadAssistantStatus(controller.signal).catch(
+            () => null
+          );
+          if (refreshed && !controller.signal.aborted) {
+            consentedRequestRef.current = null;
+            setRefreshedStatus({ from: effectiveAssistant, status: refreshed });
+          }
+        }
         if (controller.signal.aborted) {
           dispatch({ type: 'cancel' });
           setAnnouncement('Stopped.');
@@ -1086,7 +1113,8 @@ export function AssistantPanel({
       selection,
       drawingDigest,
       findDirectSuggestion,
-      ensureConsent
+      ensureConsent,
+      effectiveAssistant
     ]
   );
 
@@ -2004,6 +2032,7 @@ export function AssistantPanel({
       {consentPrompt && consent && (
         <AssistantConsentDialog
           routeLabel={consentPrompt.label}
+          mayTrain={consentPrompt.mayTrain}
           error={consent.error}
           onAllow={async () => {
             if (await consent.allow(consentPrompt.route)) {

@@ -17,12 +17,14 @@ import { useModalFocus } from '../../lib/useModalFocus';
  */
 export function AssistantConsentDialog({
   routeLabel,
+  mayTrain = false,
   error,
   onAllow,
   onCancel
 }: {
   /** "OpenZCAD’s AI provider, OpenRouter, model …" or "your own key with …". */
   routeLabel: string;
+  mayTrain?: boolean;
   error?: string | null;
   onAllow(): Promise<void> | void;
   onCancel(): void;
@@ -71,7 +73,18 @@ export function AssistantConsentDialog({
           ))}
         </ul>
         <p>
-          {ASSISTANT_CONSENT_TRANSIT} {ASSISTANT_CONSENT_RETENTION}
+          {ASSISTANT_CONSENT_TRANSIT}{' '}
+          {mayTrain ? (
+            <>
+              <strong>
+                OpenRouter and the model’s provider may keep your request and
+                use it for training.
+              </strong>{' '}
+              Don’t send anything confidential.
+            </>
+          ) : (
+            ASSISTANT_CONSENT_RETENTION
+          )}
         </p>
         <p>
           {ASSISTANT_CONSENT_FINALITY} This choice is for you, on this project

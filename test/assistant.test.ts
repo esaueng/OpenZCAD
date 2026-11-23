@@ -1562,6 +1562,58 @@ describe('assistant integration', () => {
     expect(errorBody.error).toContain('Switch to Personal token');
   });
 
+  it.each([
+    ['a personal token', true, {}],
+    ['a paid deployment model', false, { AI_MODEL: 'openai/gpt-5.6-sol' }],
+    [
+      'an endpoint override',
+      false,
+      { AI_BASE_URL: 'https://openrouter.ai/api/v1/responses' }
+    ],
+    [
+      'public free access disabled',
+      false,
+      { AI_DEPLOYMENT_FREE_ENABLED: 'false' }
+    ]
+  ] as const)(
+    'keeps data collection denied for %s after the free policy is enabled',
+    async (_label, personal, overrides) => {
+      const fetchMock = vi.fn(
+        async (_url: RequestInfo | URL, _init?: RequestInit) =>
+          new Response('provider unavailable', { status: 500 })
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      await streamAssistantProposal(
+        { ...input, encryptedProject: true },
+        {
+          OPENROUTER_API_KEY: 'test-key',
+          AI_DEPLOYMENT_FREE_ENABLED: 'true',
+          AI_ENCRYPTED_FREE_TRAINING_ENABLED: 'true',
+          ...overrides
+        },
+        undefined,
+        personal
+          ? {
+              provider: 'openrouter',
+              apiKey: 'test-personal-key',
+              model: DEFAULT_OPENROUTER_MODEL,
+              reasoningEffort: 'high',
+              maxOutputTokens: 4096,
+              timeoutMs: 10_000,
+              customInstructions: ''
+            }
+          : undefined
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(
+        JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)
+      ).toMatchObject({
+        provider: { data_collection: 'deny' }
+      });
+    }
+  );
+
   it('keeps free MiniMax and its zero price cap with JSON mode and the exact prompt schema', async () => {
     const output = JSON.stringify({
       replyKind: 'message',

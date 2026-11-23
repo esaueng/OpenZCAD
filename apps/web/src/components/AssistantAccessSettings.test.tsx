@@ -25,12 +25,13 @@ import { AssistantConsentSummary } from './assistant/AssistantConsentSummary';
 
 const USER = 'user_alice';
 const ACCOUNT_KEY = new Uint8Array(32).fill(5);
-const ROUTE = assistantConsentRoute({
+const ASSISTANT_STATUS = {
   source: 'deployment',
   provider: 'openrouter',
   model: 'test-model',
   endpoint: 'https://openrouter.ai/api/v1/responses'
-});
+} as const;
+const ROUTE = assistantConsentRoute(ASSISTANT_STATUS);
 
 describe('routeWords', () => {
   it('names the key, provider and model of a stored route', () => {
@@ -281,6 +282,7 @@ describe('the project properties row (ADR-024 6-1, M6)', () => {
       <AssistantConsentSummary
         projectId="proj_a"
         userId={async () => USER}
+        loadStatus={async () => ASSISTANT_STATUS}
         context={(_module, userId) => ({
           userId,
           accountKey: ACCOUNT_KEY,
@@ -292,6 +294,30 @@ describe('the project properties row (ADR-024 6-1, M6)', () => {
     expect(
       await screen.findByText('Allowed by you · allowed by 1 other member')
     ).toBeTruthy();
+  });
+
+  it('says it will ask again when the provider policy changes', async () => {
+    const { api } = fakeApi([await row('proj_a', 2)]);
+    render(
+      <AssistantConsentSummary
+        projectId="proj_a"
+        userId={async () => USER}
+        loadStatus={async () => ({
+          ...ASSISTANT_STATUS,
+          encryptedProjectMayTrain: true
+        })}
+        context={(_module, userId) => ({
+          userId,
+          accountKey: ACCOUNT_KEY,
+          api,
+          pins: memoryConsentPins()
+        })}
+      />
+    );
+    expect(
+      await screen.findByText(/older provider policy; it asks again/)
+    ).toBeTruthy();
+    expect(screen.queryByText(/Allowed by you/)).toBeNull();
   });
 
   it('does not trust a record the account key does not verify', async () => {
