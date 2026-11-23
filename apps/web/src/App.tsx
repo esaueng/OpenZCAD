@@ -760,6 +760,7 @@ import {
 } from './lib/projectShareLink';
 import { sharedDocumentOnRow } from './lib/sharedConfiguration';
 import {
+  currentConfigurationRow,
   useConfigurationRowGeometry,
   type BuildRowGeometry
 } from './lib/configurationRowGeometry';
@@ -875,6 +876,7 @@ import {
   tangentChainAdditions
 } from './lib/interaction/chamferChain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
+import { planarFaceTarget, selectionBodies } from './lib/planarFaceTarget';
 import {
   bodyFeature,
   deleteKeyRemovesFeature,
@@ -9303,6 +9305,11 @@ export function App() {
     blendPreviewSelectionKey(interaction) === null;
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
+  const selectionRepresentations = selectionBodies(
+    renderedRepresentations,
+    previewDoc !== null,
+    viewerRowDocument
+  );
   const { autoFrame, recordLocalCommit, clearAutoFrame } = useLocalAutoFrame(
     doc,
     exactGeometryReady,
@@ -9318,7 +9325,7 @@ export function App() {
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology && !currentFaceGeometryPreview) {
       const resolved = resolveSelectionTopology(
-        renderedRepresentations[selectedTopology.bodyId],
+        selectionRepresentations[selectedTopology.bodyId],
         selectedTopology
       );
       if (resolved) return resolved;
@@ -9441,46 +9448,14 @@ export function App() {
     representations,
     renderedOffsetPreview,
     renderedRepresentations,
+    selectionRepresentations,
     currentFaceGeometryPreview,
     selectedTopology
   ]);
-  const normalToFaceTarget = useMemo(() => {
-    const selection = renderedSelectedTopology;
-    if (selection?.kind !== 'face' || !selection.topologyId) {
-      return null;
-    }
-    const body = renderedRepresentations[selection.bodyId];
-    const face = body?.topology?.faces.find(
-      (candidate) =>
-        candidate.topologyId === selection.topologyId ||
-        (selection.hash !== undefined && candidate.hash === selection.hash)
-    );
-    const geometry = face?.geometry;
-    if (
-      !body ||
-      !face ||
-      face.triangleCount <= 0 ||
-      geometry?.surfaceType !== 'plane' ||
-      !geometry.normal ||
-      ![
-        geometry.center.x,
-        geometry.center.y,
-        geometry.center.z,
-        geometry.normal.x,
-        geometry.normal.y,
-        geometry.normal.z
-      ].every(Number.isFinite) ||
-      Math.hypot(geometry.normal.x, geometry.normal.y, geometry.normal.z) <
-        1e-12
-    ) {
-      return null;
-    }
-    return {
-      bodyId: body.bodyId,
-      topologyId: face.topologyId,
-      label: faceLabel(body, face.hash, face.topologyId)
-    };
-  }, [renderedRepresentations, renderedSelectedTopology]);
+  const normalToFaceTarget = useMemo(
+    () => planarFaceTarget(selectionRepresentations, renderedSelectedTopology),
+    [selectionRepresentations, renderedSelectedTopology]
+  );
   // Meshes whose analysis the worker has not finished. Saved measurements
   // wait for it in every case.
   const analysisPendingSnapshot =
@@ -20788,7 +20763,13 @@ export function App() {
    */
   function shownRowExportDocument(): ProjectDocument | null {
     if (shownExportRowId === null) return doc;
-    if (viewerRowDocument) return viewerRowDocument;
+    // Only a build of the row as the document now stands: the row cache
+    // keeps the previous build on screen while the next one runs.
+    const current = currentConfigurationRow(
+      configurationRows,
+      shownExportRowId
+    );
+    if (current) return current;
     setStatus(
       configurationRows.errors.get(shownExportRowId) ??
         'Wait for the configuration to finish building.'

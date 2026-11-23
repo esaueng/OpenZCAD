@@ -27,6 +27,29 @@ export interface ConfigurationRowGeometry {
   builds: ReadonlyMap<string, ConfigurationRowBuild>;
   /** Rows that could not be built, with the reason. */
   errors: ReadonlyMap<string, string>;
+  /**
+   * `geometryContentKey` of the live document, or '' while no row is named.
+   * A build whose own key differs is the last good one kept on screen.
+   */
+  contentKey: string;
+}
+
+/**
+ * A row's build only when it was built from the document as it now stands.
+ * The hook keeps the previous build drawn while the next one runs, so an
+ * export or any other result that must match the model reads this rather
+ * than `builds` directly.
+ */
+export function currentConfigurationRow(
+  geometry: ConfigurationRowGeometry,
+  rowId: string
+): ProjectDocument | null {
+  const entry = geometry.builds.get(rowId);
+  return entry &&
+    geometry.contentKey !== '' &&
+    entry.contentKey === geometry.contentKey
+    ? entry.document
+    : null;
 }
 
 export type BuildRowGeometry = (
@@ -185,8 +208,8 @@ export function useConfigurationRowGeometry(
     const errors = new Map(
       [...state.errors].filter(([rowId]) => keep.has(rowId))
     );
-    return { builds, errors };
+    return { builds, errors, contentKey };
     // `wanted` is derived from `wantedKey`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, wantedKey, document?.projectId]);
+  }, [state, wantedKey, document?.projectId, contentKey]);
 }
