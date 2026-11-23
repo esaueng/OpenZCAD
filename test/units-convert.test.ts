@@ -1,0 +1,871 @@
+/**
+ * I03 stored-unit conversion, phase 2: `convertDocumentUnits`, expression
+ * rule D, numeral canonicalization and the field-level oracle (plan
+ * `docs/plans/i03-stored-unit-conversion-plan.md` §2.2, §5.4, §6, §9).
+ */
+import { readFileSync } from 'node:fs';
+
+import { beforeAll, describe, expect, it } from 'vitest';
+
+import {
+  addConfigurationColumn,
+  addConfigurationRow,
+  addPrimitiveFeature,
+  canonicalScaledNumber,
+  convertDocumentUnits,
+  createConfigurations,
+  createProjectDocument,
+  listParameters,
+  normalizeDocument,
+  setConfigurationCell,
+  setDisplayUnits,
+  setParameter,
+  unitsConversionOracle,
+  type UnitsConversionRefusal,
+  type UnitsConversionResult
+} from '@openzcad/document-core';
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import {
+  FEATURE_QUANTITIES,
+  SKETCH_NODE_QUANTITIES,
+  SKETCH_OBJECT_QUANTITIES,
+  toUserId,
+  walkQuantities,
+  type DocumentNode,
+  type FeatureData,
+  type ParameterKind,
+  type ProjectDocument,
+  type QuantityLeaf,
+  type QuantityMapShape,
+  type SwitchQuantity,
+  type UnitSystem
+} from '@openzcad/shared';
+
+import { PARITY_SCENARIOS } from './parity/scenarios';
+import {
+  assertUnitRoundTrips,
+  reportRefusalRate
+} from './support/units-convert-round-trip';
+import {
+  SAMPLE_FEATURES,
+  SAMPLE_SKETCH_NODES,
+  SAMPLE_SKETCH_OBJECTS
+} from './support/quantity-registry-samples';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function newDocument(units: UnitSystem = 'mm'): ProjectDocument {
+  return createProjectDocument('Units', toUserId('user_units'), units);
+}
+
+function withParameter(
+  document: ProjectDocument,
+  name: string,
+  expression: string,
+  quantity?: ParameterKind
+): ProjectDocument {
+  return setParameter(document, {
+    name,
+    expression,
+    ...(quantity ? { quantity } : {})
+  });
+}
+
+function withBox(
+  document: ProjectDocument,
+  name: string,
+  dimensions: Record<string, string | number>
+): ProjectDocument {
+  return addPrimitiveFeature(document, {
+    name,
+    primitiveKind: 'box',
+    dimensions: { width: 1, height: 1, depth: 1, ...dimensions }
+  });
+}
+
+function feature(
+  document: ProjectDocument,
+  name: string
+): Extract<DocumentNode, { kind: 'feature' }> {
+  const node = Object.values(document.nodes).find(
+    (candidate) => candidate.kind === 'feature' && candidate.name === name
+  );
+  if (!node || node.kind !== 'feature') throw new Error(`no feature ${name}`);
+  return node;
+}
+
+function boxWidth(document: ProjectDocument, name: string): string | number {
+  const data = feature(document, name).data as Extract<
+    FeatureData,
+    { featureKind: 'primitive' }
+  >;
+  return data.dimensions.width!;
+}
+
+function converted(result: UnitsConversionResult): ProjectDocument {
+  if (!result.ok)
+    throw new Error(
+      `refused: ${result.refusals.map((refusal) => refusal.message).join(' | ')}`
+    );
+  return result.document;
+}
+
+function refusals(result: UnitsConversionResult): UnitsConversionRefusal[] {
+  if (result.ok) throw new Error('expected a refusal');
+  return result.refusals;
+}
+
+/** One box whose width is `expression`, converted mm → `to`. */
+function convertWidth(
+  expression: string,
+  to: UnitSystem = 'inch',
+  parameters: [string, string, ParameterKind?][] = []
+): UnitsConversionResult {
+  let document = newDocument('mm');
+  for (const [name, value, quantity] of parameters)
+    document = withParameter(document, name, value, quantity);
+  document = withBox(document, 'Box', { width: expression });
+  return convertDocumentUnits(document, to);
+}
+
+function parameterValues(document: ProjectDocument): Record<string, number> {
+  return Object.fromEntries(
+    listParameters(document).map((parameter) => [
+      parameter.name,
+      parameter.value
+    ])
+  );
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null) {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** A document holding every registry sample (plan §1, every class). */
+function sampleDocument(units: UnitSystem = 'mm'): ProjectDocument {
+  const document = newDocument(units);
+  const base = { parentId: null, revisionId: null };
+  let index = 0;
+  const add = (node: Record<string, unknown>) => {
+    const id = `sample-${String(index++).padStart(3, '0')}`;
+    document.nodes[id] = { ...base, name: id, ...node, id } as DocumentNode;
+  };
+  for (const data of SAMPLE_FEATURES) {
+    // A custom feature and a stored mesh payload refuse (tested below).
+    if (data.featureKind === 'custom-feature') continue;
+    const stored =
+      data.featureKind === 'imported-mesh'
+        ? (({ meshPayloadRef: _ref, ...rest }) => rest)(data)
+        : data;
+    add({
+      kind: 'feature',
+      featureId: `f${index}`,
+      featureKind: data.featureKind,
+      data: structuredClone(stored)
+    });
+  }
+  for (const data of SAMPLE_SKETCH_OBJECTS)
+    add({
+      kind: 'sketch-object',
+      objectKind: data.objectKind,
+      data: structuredClone(data)
+    });
+  for (const node of SAMPLE_SKETCH_NODES)
+    add(structuredClone(node) as unknown as Record<string, unknown>);
+  return document;
+}
+
+function nodeMap(
+  node: DocumentNode
+): { value: object; map: QuantityMapShape | SwitchQuantity<never> } | null {
+  if (node.kind === 'feature')
+    return { value: node.data, map: FEATURE_QUANTITIES };
+  if (node.kind === 'sketch-object')
+    return { value: node.data, map: SKETCH_OBJECT_QUANTITIES };
+  if (node.kind === 'sketch')
+    return { value: node, map: SKETCH_NODE_QUANTITIES };
+  return null;
+}
+
+function leaves(document: ProjectDocument): Map<string, QuantityLeaf> {
+  const out = new Map<string, QuantityLeaf>();
+  for (const [id, node] of Object.entries(document.nodes)) {
+    const scoped = nodeMap(node);
+    if (scoped)
+      walkQuantities(scoped.value, scoped.map, (leaf) =>
+        out.set(`${id} ${leaf.path.join('.')}`, leaf)
+      );
+  }
+  return out;
+}
+
+/** Every expression-capable leaf of `document` set to `expression`. */
+function expressionsEverywhere(
+  document: ProjectDocument,
+  expression: string
+): ProjectDocument {
+  const next = structuredClone(document);
+  for (const node of Object.values(next.nodes)) {
+    const scoped = nodeMap(node);
+    if (scoped)
+      walkQuantities(scoped.value, scoped.map, (leaf) => {
+        if (leaf.role !== 'literal') leaf.holder[leaf.key] = expression;
+      });
+  }
+  return next;
+}
+
+// ---------------------------------------------------------------------------
+// Every registry class
+// ---------------------------------------------------------------------------
+
+describe('convertDocumentUnits: registry classes', () => {
+  it('scales lengths and positions by k, areas by k², and nothing else', () => {
+    const source = sampleDocument('mm');
+    const result = convertDocumentUnits(source, 'inch');
+    const target = converted(result);
+    const before = leaves(source);
+    const after = leaves(target);
+    expect(after.size).toBe(before.size);
+    const seen = new Set<string>();
+    for (const [path, leaf] of before) {
+      const next = after.get(path)!;
+      seen.add(leaf.quantity);
+      expect(typeof leaf.value, path).toBe('number');
+      const value = leaf.value as number;
+      switch (leaf.quantity) {
+        case 'length':
+        case 'position':
+          expect(next.value, `${path} ${leaf.quantity}`).toBe(
+            canonicalScaledNumber(value, 1, 25.4)
+          );
+          break;
+        case 'area':
+          expect(next.value, path).toBe(
+            canonicalScaledNumber(value, 1, 25.4 * 25.4)
+          );
+          break;
+        default:
+          // Angles, radians, counts, ratios, directions, fractions,
+          // conditions, indices and hashes keep their stored value.
+          expect(next.value, `${path} ${leaf.quantity}`).toBe(value);
+      }
+    }
+    // The samples reach every class a feature or sketch can hold.
+    expect([...seen].sort()).toEqual([
+      'angle',
+      'angle-rad',
+      'area',
+      'condition',
+      'direction',
+      'fraction',
+      'hash',
+      'index',
+      'length',
+      'number',
+      'position'
+    ]);
+    expect(target.units).toBe('inch');
+    if (!result.ok) return;
+    expect(result.report.scaledNumbers).toBeGreaterThan(100);
+  });
+
+  it('treats a gear pitch and an arc lock by their instance', () => {
+    const target = converted(convertDocumentUnits(sampleDocument(), 'cm'));
+    const pitches = Object.values(target.nodes)
+      .filter(
+        (node): node is Extract<DocumentNode, { kind: 'feature' }> =>
+          node.kind === 'feature' && node.data.featureKind === 'gear'
+      )
+      .map(
+        (node) =>
+          (node.data as Extract<FeatureData, { featureKind: 'gear' }>).pitch
+      );
+    // Module sizing: a length. Diametral pitch: teeth per inch, unchanged.
+    expect(pitches).toEqual([0.1, 1]);
+    const sketch = Object.values(target.nodes).find(
+      (node) => node.kind === 'sketch' && node.constraints?.length
+    ) as Extract<DocumentNode, { kind: 'sketch' }>;
+    const locks = sketch
+      .constraints!.map((constraint) => constraint.data)
+      .filter((data) => data.constraintKind === 'lock-entity')
+      .map((data) => data.at);
+    expect(locks).toEqual([
+      [0.1, 0.1, 0.1, 0.1],
+      [0.1, 0.1, 0.1, 1, 1]
+    ]);
+  });
+
+  it('wraps a unitless expression in every length field and leaves the rest', () => {
+    let source = sampleDocument('mm');
+    source = withParameter(source, 'u', '2');
+    source = expressionsEverywhere(source, 'u');
+    const target = converted(convertDocumentUnits(source, 'inch'));
+    const before = leaves(source);
+    const after = leaves(target);
+    let wrapped = 0;
+    for (const [path, leaf] of before) {
+      if (leaf.role === 'literal') continue;
+      const next = after.get(path)!.value;
+      if (leaf.quantity === 'length' || leaf.quantity === 'position') {
+        expect(next, path).toBe('(u) / 25.4');
+        wrapped += 1;
+      } else expect(next, `${path} ${leaf.quantity}`).toBe('u');
+    }
+    // Including the fields `rewriteNodeExpressions` does not visit today
+    // (a tapped hole's length, a sketch pattern's spacing): conversion goes
+    // by class whatever the visit role.
+    expect(
+      after.get([...after.keys()].find((key) => key.endsWith('tapped.length'))!)
+        ?.value
+    ).toBe('(u) / 25.4');
+    expect(wrapped).toBeGreaterThan(100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rule D (plan §2.2)
+// ---------------------------------------------------------------------------
+
+describe('convertDocumentUnits: expression rule D', () => {
+  it('leaves an expression that carries its own length unchanged', () => {
+    for (const expression of ['5 mm', '2 cm + 3 mm', '1\' 2"', 'w + 2 mm']) {
+      const target = converted(
+        convertWidth(expression, 'inch', [['w', '10', 'length']])
+      );
+      expect(boxWidth(target, 'Box')).toBe(expression);
+    }
+  });
+
+  it('wraps a unit-free expression with an exact short factor', () => {
+    const cases: [UnitSystem, string][] = [
+      ['inch', '(20 / 2) / 25.4'],
+      ['cm', '(20 / 2) / 10']
+    ];
+    for (const [to, expected] of cases)
+      expect(boxWidth(converted(convertWidth('20 / 2', to)), 'Box')).toBe(
+        expected
+      );
+    let inch = newDocument('inch');
+    inch = withBox(inch, 'Box', { width: '20 / 2' });
+    expect(boxWidth(converted(convertDocumentUnits(inch, 'mm')), 'Box')).toBe(
+      '(20 / 2) * 25.4'
+    );
+    expect(boxWidth(converted(convertDocumentUnits(inch, 'cm')), 'Box')).toBe(
+      '(20 / 2) * 2.54'
+    );
+    let cm = newDocument('cm');
+    cm = withBox(cm, 'Box', { width: '20 / 2' });
+    expect(boxWidth(converted(convertDocumentUnits(cm, 'inch')), 'Box')).toBe(
+      '(20 / 2) / 2.54'
+    );
+  });
+
+  it('keeps scale-variant functions over a unit-free length exact', () => {
+    for (const expression of [
+      'round(10.4)',
+      'floor(w * 1.3)',
+      'ceil(w / 3)',
+      'mod(w, 4)'
+    ]) {
+      const result = convertWidth(expression, 'inch', [['w', '10']]);
+      expect(boxWidth(converted(result), 'Box')).toBe(`(${expression}) / 25.4`);
+    }
+  });
+
+  it('refuses round(width) over a typed length, naming the field', () => {
+    const result = convertWidth('round(width)', 'inch', [
+      ['width', '10.4', 'length']
+    ]);
+    const [refusal, ...rest] = refusals(result);
+    expect(rest).toEqual([]);
+    expect(refusal).toMatchObject({
+      code: 'oracle-mismatch',
+      field: 'dimensions.width'
+    });
+    expect(refusal!.subject).toContain('Box');
+    expect(refusal!.message).toContain('round(width)');
+  });
+
+  it('refuses a scale-variant typed parameter the same way', () => {
+    const result = convertWidth('w2', 'inch', [
+      ['width', '10.4', 'length'],
+      ['w2', 'round(width)', 'length']
+    ]);
+    const found = refusals(result);
+    expect(found.map((refusal) => refusal.code)).toContain('oracle-mismatch');
+    expect(found.some((refusal) => refusal.subject.includes('w2'))).toBe(true);
+  });
+
+  it('refuses an unitless parameter that holds a length', () => {
+    // `5 mm` in a legacy unitless parameter is the number of document units:
+    // after conversion it would be another number.
+    const result = convertWidth('w', 'inch', [['w', '5 mm']]);
+    expect(refusals(result).map((refusal) => refusal.code)).toContain(
+      'oracle-mismatch'
+    );
+  });
+
+  it('keeps trigonometry: angles never scale', () => {
+    const lengths = converted(
+      convertWidth('w * sin(30)', 'inch', [['w', '10', 'length']])
+    );
+    expect(boxWidth(lengths, 'Box')).toBe('w * sin(30)');
+    const numbers = converted(convertWidth('10 * cos(60)', 'inch'));
+    expect(boxWidth(numbers, 'Box')).toBe('(10 * cos(60)) / 25.4');
+    const angle = converted(convertWidth('5', 'inch', [['a', '30', 'angle']]));
+    expect(listParameters(angle)[0]).toMatchObject({
+      expression: '30',
+      value: 30
+    });
+  });
+
+  it('keeps guards exact, suffixed or wrapped', () => {
+    expect(
+      boxWidth(
+        converted(
+          convertWidth('require_min(w, 3 mm)', 'inch', [['w', '10', 'length']])
+        ),
+        'Box'
+      )
+    ).toBe('require_min(w, 3 mm)');
+    expect(
+      boxWidth(
+        converted(convertWidth('require_min(w, 3)', 'inch', [['w', '10']])),
+        'Box'
+      )
+    ).toBe('(require_min(w, 3)) / 25.4');
+  });
+
+  it('keeps a*b as "a number of the old unit"', () => {
+    const target = converted(
+      convertWidth('a * b', 'inch', [
+        ['a', '3'],
+        ['b', '4']
+      ])
+    );
+    expect(boxWidth(target, 'Box')).toBe('(a * b) / 25.4');
+    // a and b are unitless: untouched, so every count or ratio use survives.
+    expect(listParameters(target).map((p) => p.expression)).toEqual(['3', '4']);
+  });
+
+  it('converts typed-length parameters by the same rule and recomputes values', () => {
+    let document = newDocument('mm');
+    document = withParameter(document, 'w', '10', 'length');
+    document = withParameter(document, 'h', '2 * 3', 'length');
+    document = withParameter(document, 'd', 'w + 1 mm', 'length');
+    document = withParameter(document, 'n', '4', 'number');
+    document = withParameter(document, 'a', '45', 'angle');
+    document = withParameter(document, 'u', '7');
+    const target = converted(convertDocumentUnits(document, 'inch'));
+    expect(
+      listParameters(target).map((parameter) => [
+        parameter.name,
+        parameter.expression
+      ])
+    ).toEqual([
+      ['w', '0.393700787401575'],
+      ['h', '(2 * 3) / 25.4'],
+      ['d', 'w + 1 mm'],
+      ['n', '4'],
+      ['a', '45'],
+      ['u', '7']
+    ]);
+    const values = parameterValues(target);
+    expect(values.w).toBeCloseTo(10 / 25.4, 14);
+    expect(values.h).toBeCloseTo(6 / 25.4, 14);
+    expect(values.d).toBeCloseTo(11 / 25.4, 14);
+    expect([values.n, values.a, values.u]).toEqual([4, 45, 7]);
+  });
+
+  it('refuses a length field that does not evaluate', () => {
+    const [refusal] = refusals(convertWidth('missing * 2'));
+    expect(refusal).toMatchObject({
+      code: 'unclassifiable',
+      field: 'dimensions.width'
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Numerals and wrappers
+// ---------------------------------------------------------------------------
+
+describe('convertDocumentUnits: numerals and wrappers', () => {
+  it('canonicalizes scaled numbers to 15 significant digits', () => {
+    expect(canonicalScaledNumber(10, 1, 25.4)).toBe(0.393700787401575);
+    expect(canonicalScaledNumber(0.393700787401575, 25.4, 1)).toBe(10);
+    expect(canonicalScaledNumber(1, 1, 10)).toBe(0.1);
+    expect(canonicalScaledNumber(0, 25.4, 1)).toBe(0);
+    expect(Object.is(canonicalScaledNumber(-0, 25.4, 1), 0)).toBe(true);
+    // Fifteen digits alone would bring 3 mm back as 2.99999999999999 mm:
+    // the shortest rounding that converts back exactly is kept instead.
+    expect(Number(((3 * 1) / 25.4).toPrecision(15))).toBe(0.118110236220472);
+    const three = canonicalScaledNumber(3, 1, 25.4);
+    expect(three).toBe(0.1181102362204725);
+    expect(canonicalScaledNumber(three, 25.4, 1)).toBe(3);
+    // Every short decimal survives mm → in → mm and mm → cm → mm.
+    for (let tenths = -2000; tenths <= 2000; tenths += 1) {
+      const value = tenths / 10;
+      for (const D of [25.4, 10]) {
+        const there = canonicalScaledNumber(value, 1, D);
+        expect(canonicalScaledNumber(there, D, 1), `${value} via ${D}`).toBe(
+          value === 0 ? 0 : value
+        );
+      }
+    }
+    const target = converted(convertWidth('12.5', 'inch'));
+    expect(boxWidth(target, 'Box')).toBe('0.492125984251969');
+    const numeric = converted(
+      convertDocumentUnits(withBox(newDocument(), 'Box', { width: 12.5 }), 'cm')
+    );
+    expect(boxWidth(numeric, 'Box')).toBe(1.25);
+  });
+
+  it('unwraps its own wrapper so a round trip restores the text', () => {
+    const there = converted(convertWidth('w * 2', 'inch', [['w', '3']]));
+    expect(boxWidth(there, 'Box')).toBe('(w * 2) / 25.4');
+    const back = converted(convertDocumentUnits(there, 'mm'));
+    expect(boxWidth(back, 'Box')).toBe('w * 2');
+  });
+
+  it('never stacks wrappers, through any chain of units', () => {
+    let document = withParameter(newDocument('mm'), 'w', '3');
+    document = withBox(document, 'Box', { width: 'w * 2' });
+    const texts: string[] = [];
+    for (const to of ['cm', 'inch', 'cm', 'mm', 'inch', 'mm'] as const) {
+      document = converted(convertDocumentUnits(document, to));
+      texts.push(String(boxWidth(document, 'Box')));
+    }
+    expect(texts).toEqual([
+      '(w * 2) / 10',
+      '(w * 2) / 25.4',
+      '(w * 2) / 10',
+      'w * 2',
+      '(w * 2) / 25.4',
+      'w * 2'
+    ]);
+  });
+
+  it('does not take a lookalike for a wrapper', () => {
+    // `(a) * (b) / 25.4` ends like a wrapper but its first parenthesis
+    // closes early: it is wrapped like any other unit-free expression.
+    const target = converted(
+      convertWidth('(a) * (b) / 25.4', 'inch', [
+        ['a', '3'],
+        ['b', '4']
+      ])
+    );
+    expect(boxWidth(target, 'Box')).toBe('((a) * (b) / 25.4) / 25.4');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Configurations, display units, immutability
+// ---------------------------------------------------------------------------
+
+describe('convertDocumentUnits: the rest of the document', () => {
+  it('rewrites every configuration row, not only the active one', () => {
+    let document = newDocument('mm');
+    document = withParameter(document, 'width', '20', 'length');
+    document = withParameter(document, 'count', '3', 'number');
+    document = withBox(document, 'Box', { width: 'width' });
+    const [width, count] = listParameters(document).map((p) => p.parameterId);
+    document = createConfigurations(document, { rowId: 'small', name: 'S' });
+    for (const parameterId of [width!, count!])
+      document = addConfigurationColumn(document, {
+        column: { kind: 'parameter', parameterId }
+      });
+    document = addConfigurationRow(document, { rowId: 'large', name: 'L' });
+    document = setConfigurationCell(document, {
+      rowId: 'large',
+      column: { kind: 'parameter', parameterId: width! },
+      value: 'count * 15'
+    });
+    document = addConfigurationRow(document, { rowId: 'suffix', name: 'X' });
+    document = setConfigurationCell(document, {
+      rowId: 'suffix',
+      column: { kind: 'parameter', parameterId: width! },
+      value: '2 in'
+    });
+    const result = convertDocumentUnits(document, 'inch');
+    const target = converted(result);
+    const rows = target.configurations!.rows.map((row) => [
+      row.id,
+      row.parameters[width!],
+      row.parameters[count!]
+    ]);
+    expect(rows).toEqual([
+      ['small', '0.78740157480315', '3'],
+      ['large', '(count * 15) / 25.4', '3'],
+      ['suffix', '2 in', '3']
+    ]);
+    if (result.ok) expect(result.report.configurationRows).toBe(3);
+  });
+
+  it('refuses a configuration row that would change meaning', () => {
+    let document = newDocument('mm');
+    document = withParameter(document, 'width', '20', 'length');
+    document = withParameter(document, 'w2', 'width', 'length');
+    document = withBox(document, 'Box', { width: 'w2' });
+    const [, w2] = listParameters(document).map((p) => p.parameterId);
+    document = createConfigurations(document, { rowId: 'a', name: 'A' });
+    document = addConfigurationColumn(document, {
+      column: { kind: 'parameter', parameterId: w2! }
+    });
+    document = addConfigurationRow(document, { rowId: 'b', name: 'B' });
+    document = setConfigurationCell(document, {
+      rowId: 'b',
+      column: { kind: 'parameter', parameterId: w2! },
+      value: 'round(width / 3)'
+    });
+    const found = refusals(convertDocumentUnits(document, 'inch'));
+    expect(found.every((refusal) => refusal.code === 'oracle-mismatch')).toBe(
+      true
+    );
+    expect(found.some((refusal) => refusal.subject.includes('"B"'))).toBe(true);
+  });
+
+  it('converts the print clearance', () => {
+    const document = { ...newDocument('mm'), printClearance: '0.2' };
+    expect(converted(convertDocumentUnits(document, 'cm')).printClearance).toBe(
+      '0.02'
+    );
+    const numeric = { ...newDocument('mm'), printClearance: 0.25 };
+    expect(
+      converted(convertDocumentUnits(numeric, 'inch')).printClearance
+    ).toBe(0.00984251968503937);
+  });
+
+  it('sets both unit tags and shows the new stored unit (§5.4)', () => {
+    const plain = converted(convertDocumentUnits(newDocument('mm'), 'inch'));
+    expect(plain.units).toBe('inch');
+    for (const node of Object.values(plain.nodes))
+      if (node.kind === 'project') expect(node.units).toBe('inch');
+    expect('displayUnits' in plain).toBe(false);
+
+    const shownInInch = setDisplayUnits(newDocument('mm'), { units: 'inch' });
+    const cleared = convertDocumentUnits(shownInInch, 'inch');
+    expect('displayUnits' in converted(cleared)).toBe(false);
+    if (cleared.ok) expect(cleared.report.displayUnits).toBe('cleared');
+
+    const shownInCm = setDisplayUnits(newDocument('mm'), { units: 'cm' });
+    const kept = convertDocumentUnits(shownInCm, 'inch');
+    expect(converted(kept).displayUnits).toBe('cm');
+    if (kept.ok) expect(kept.report.displayUnits).toBe('kept');
+
+    const shownInM = setDisplayUnits(newDocument('mm'), { units: 'm' });
+    expect(converted(convertDocumentUnits(shownInM, 'cm')).displayUnits).toBe(
+      'm'
+    );
+  });
+
+  it('drops derived state and bumps the version', () => {
+    const document = withBox(newDocument('mm'), 'Box', {});
+    const target = converted(convertDocumentUnits(document, 'cm'));
+    expect(target.derived.bodyRepresentations).toEqual({});
+    expect(target.derived.warnings).toEqual([]);
+    expect(target.version).toBe(document.version + 1);
+  });
+
+  it('never mutates its input', () => {
+    let document = newDocument('mm');
+    document = withParameter(document, 'w', '10', 'length');
+    document = withParameter(document, 'u', '3');
+    document = withBox(document, 'Box', { width: 'w', height: 'u * 2' });
+    document = setDisplayUnits(document, { units: 'inch' });
+    const snapshot = JSON.stringify(document);
+    deepFreeze(document);
+    const target = converted(convertDocumentUnits(document, 'inch'));
+    expect(JSON.stringify(document)).toBe(snapshot);
+    expect(target).not.toBe(document);
+    expect(target.nodes).not.toBe(document.nodes);
+    // Refusals do not mutate either.
+    convertDocumentUnits(document, 'm');
+    convertWidth('round(width)', 'inch', [['width', '10.4', 'length']]);
+    expect(JSON.stringify(document)).toBe(snapshot);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Refusals
+// ---------------------------------------------------------------------------
+
+describe('convertDocumentUnits: refusals', () => {
+  it('refuses metres either way, and no change of unit', () => {
+    expect(refusals(convertDocumentUnits(newDocument('mm'), 'm'))).toEqual([
+      expect.objectContaining({ code: 'unsupported-unit' })
+    ]);
+    expect(refusals(convertDocumentUnits(newDocument('m'), 'mm'))).toEqual([
+      expect.objectContaining({ code: 'unsupported-unit' })
+    ]);
+    expect(refusals(convertDocumentUnits(newDocument('cm'), 'cm'))).toEqual([
+      expect.objectContaining({ code: 'same-unit' })
+    ]);
+  });
+
+  it('refuses any custom-feature script', () => {
+    const document = newDocument('mm');
+    const custom = SAMPLE_FEATURES.find(
+      (data) => data.featureKind === 'custom-feature'
+    )!;
+    document.nodes.custom = {
+      id: 'custom',
+      parentId: null,
+      revisionId: null,
+      name: 'Knurl',
+      kind: 'feature',
+      featureId: 'custom' as never,
+      featureKind: 'custom-feature',
+      data: custom
+    } as unknown as DocumentNode;
+    expect(refusals(convertDocumentUnits(document, 'inch'))).toEqual([
+      expect.objectContaining({
+        code: 'custom-feature',
+        subject: 'Knurl (custom)'
+      })
+    ]);
+  });
+
+  it('refuses an imported mesh with a stored payload', () => {
+    const document = newDocument('mm');
+    const mesh = SAMPLE_FEATURES.find(
+      (data) => data.featureKind === 'imported-mesh'
+    )!;
+    expect('meshPayloadRef' in mesh).toBe(true);
+    document.nodes.mesh = {
+      id: 'mesh',
+      parentId: null,
+      revisionId: null,
+      name: 'Scan',
+      kind: 'feature',
+      featureId: 'mesh' as never,
+      featureKind: 'imported-mesh',
+      data: mesh
+    } as unknown as DocumentNode;
+    expect(refusals(convertDocumentUnits(document, 'inch'))).toEqual([
+      expect.objectContaining({ code: 'imported-mesh-payload' })
+    ]);
+  });
+
+  it('refuses the areas it does not convert yet, and only when they hold data', () => {
+    const empty: ProjectDocument = {
+      ...newDocument('mm'),
+      drawings: { sheets: [] },
+      pmi: { annotations: [] },
+      referenceImages: { images: [] },
+      assembly: {
+        components: [],
+        joints: [],
+        positions: [],
+        studies: []
+      }
+    };
+    expect(convertDocumentUnits(empty, 'inch').ok).toBe(true);
+    const full = {
+      ...empty,
+      drawings: { sheets: [{}] },
+      pmi: { annotations: [{}] },
+      referenceImages: { images: [{}] },
+      assembly: { ...empty.assembly!, components: [{}] }
+    } as unknown as ProjectDocument;
+    expect(
+      refusals(convertDocumentUnits(full, 'inch')).map((refusal) => [
+        refusal.code,
+        refusal.subject
+      ])
+    ).toEqual([
+      ['unsupported-area', 'drawings'],
+      ['unsupported-area', 'pmi'],
+      ['unsupported-area', 'assembly'],
+      ['unsupported-area', 'referenceImages']
+    ]);
+  });
+
+  it('has an oracle that catches a hand-made misconversion', () => {
+    const document = withBox(newDocument('mm'), 'Box', { width: 10 });
+    const target = converted(convertDocumentUnits(document, 'inch'));
+    expect(unitsConversionOracle(document, target).refusals).toEqual([]);
+    // Pretend a field was missed: left at 10 in an inch document.
+    const broken = structuredClone(target);
+    (
+      feature(broken, 'Box').data as Extract<
+        FeatureData,
+        { featureKind: 'primitive' }
+      >
+    ).dimensions.width = 10;
+    expect(unitsConversionOracle(document, broken).refusals).toEqual([
+      expect.objectContaining({
+        code: 'oracle-mismatch',
+        field: 'dimensions.width'
+      })
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round trips over real documents
+// ---------------------------------------------------------------------------
+
+const FIXTURE_DOCUMENTS = [
+  'test/fixtures/legacy-documents/writer-8dcb1643b.json',
+  'test/scripting/contract/v1/history/document.json'
+];
+
+describe('convertDocumentUnits: round trips', () => {
+  const corpus: { key: string; document: ProjectDocument }[] = [];
+
+  beforeAll(async () => {
+    const adapter = await createExactKernelAdapter();
+    for (const scenario of PARITY_SCENARIOS) {
+      if (scenario.expectedBuildFailure) continue;
+      corpus.push({
+        key: `parity:${scenario.key}`,
+        document: await scenario.build((doc) => adapter.syncDocument(doc))
+      });
+    }
+    for (const path of FIXTURE_DOCUMENTS)
+      corpus.push({
+        key: path,
+        document: normalizeDocument(
+          JSON.parse(readFileSync(path, 'utf8')) as ProjectDocument
+        )
+      });
+    corpus.push({ key: 'samples', document: sampleDocument('mm') });
+  }, 180_000);
+
+  it('restores every document byte for byte, or refuses it with a reason', () => {
+    const outcomes = new Map<string, string[]>();
+    let checks = 0;
+    for (const { key, document } of corpus) {
+      const { reasons, oracleChecks } = assertUnitRoundTrips(key, document);
+      outcomes.set(key, reasons);
+      checks += oracleChecks;
+    }
+    // Not vacuous: the oracle evaluated real fields.
+    expect(checks).toBeGreaterThan(200);
+    const { converted: count, refused } = reportRefusalRate(
+      'unit conversion (parity scenarios, fixtures, samples)',
+      outcomes
+    );
+    // Pinned so a change in what converts is seen: the Scissors demo holds
+    // an assembly and the scripting fixture a custom feature (both refused
+    // by design until later I03 phases); everything else converts.
+    expect({ count, refused }).toEqual({
+      count: corpus.length - 2,
+      refused: 2
+    });
+    expect(outcomes.get('parity:scissors')).toEqual([
+      'unsupported-area: assembly'
+    ]);
+    expect(
+      outcomes.get('test/scripting/contract/v1/history/document.json')
+    ).toEqual([expect.stringMatching(/^custom-feature: /)]);
+  });
+});
