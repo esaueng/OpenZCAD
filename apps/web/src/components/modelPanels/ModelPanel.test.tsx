@@ -760,7 +760,9 @@ describe('ModelPanel', () => {
     expect(reopened.value).toBe(edited);
     expect(reopened).toHaveAttribute('readonly');
     const dialog = screen.getByRole('dialog', { name: 'History as text' });
-    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    expect(
+      within(dialog).getByRole('button', { name: 'Apply' })
+    ).toBeDisabled();
     expect(within(dialog).getByRole('status')).toHaveTextContent(
       'Checking against exact geometry…'
     );
@@ -790,7 +792,9 @@ describe('ModelPanel', () => {
       projectId: document.projectId,
       version: document.version
     };
-    rerender(<TextWorkspace phone={false} document={cloud} onApply={onApply} />);
+    rerender(
+      <TextWorkspace phone={false} document={cloud} onApply={onApply} />
+    );
     await user.click(screen.getByRole('button', { name: 'History as text' }));
     const dialog = await screen.findByRole('dialog', {
       name: 'History as text'
@@ -801,7 +805,9 @@ describe('ModelPanel', () => {
     expect(within(dialog).getByRole('alert')).toHaveTextContent(
       'The model changed since this draft was started'
     );
-    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    expect(
+      within(dialog).getByRole('button', { name: 'Apply' })
+    ).toBeDisabled();
     expect(onApply).not.toHaveBeenCalled();
   });
 
@@ -820,7 +826,9 @@ describe('ModelPanel', () => {
     expect(
       screen.queryByRole('dialog', { name: 'History as text' })
     ).toBeNull();
-    expect(screen.getByRole('button', { name: 'History as text' })).toHaveFocus();
+    expect(
+      screen.getByRole('button', { name: 'History as text' })
+    ).toHaveFocus();
   });
 
   it('offers no history text without a document', () => {

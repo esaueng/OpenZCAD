@@ -268,12 +268,24 @@ test(
 
     // The dock and the phone lane each mount their own History panel, so
     // the dialog the desktop one opened once closed here and lost the edit.
+    // The modal hides the workspace from the accessibility tree, so the
+    // panels are found by placement: the phone lane's carries `is-phone`.
+    const phoneHistory = page.locator('section.model-panel-history.is-phone');
+    const dockHistory = page.locator(
+      'section.model-panel-history:not(.is-phone)'
+    );
+    await expect(dockHistory).toHaveCount(1);
+    await expect(phoneHistory).toHaveCount(0);
     for (const viewport of [
-      { width: 390, height: 844 },
-      { width: 1280, height: 800 }
+      { width: 390, height: 844, phone: true },
+      { width: 1280, height: 800, phone: false }
     ]) {
       const label = `${viewport.width}×${viewport.height}`;
       await page.setViewportSize(viewport);
+      // The switch really happened: the other layout's History panel is the
+      // one mounted now, and the first is gone.
+      await expect(phoneHistory, label).toHaveCount(viewport.phone ? 1 : 0);
+      await expect(dockHistory, label).toHaveCount(viewport.phone ? 0 : 1);
       await expect(dialog, label).toBeVisible();
       await expect(text, label).toHaveValue(draft);
       await expect(
@@ -283,7 +295,14 @@ test(
     }
 
     await dialog.getByRole('button', { name: 'Revert' }).click();
-    await dialog.getByRole('button', { name: 'Close' }).click();
+    // Opened from the desktop toggle, closed in the phone layout: focus
+    // goes to the phone panel's toggle, not the page body.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(phoneHistory).toHaveCount(1);
+    await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
+    await expect(
+      phoneHistory.getByRole('button', { name: 'History as text' })
+    ).toBeFocused();
   }
 );

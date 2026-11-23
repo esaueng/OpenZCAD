@@ -133,7 +133,9 @@ export interface HistoryTextView extends HistoryTextSession {
   close(): void;
 }
 
-export function useHistoryTextSession(scope: unknown = null): HistoryTextSession {
+export function useHistoryTextSession(
+  scope: unknown = null
+): HistoryTextSession {
   const [draft, setDraft] = useState<HistoryTextDraft | null>(null);
   const [applying, setApplying] = useState(false);
   // The Apply in flight, by token: one started for another project, or

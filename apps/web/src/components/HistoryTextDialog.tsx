@@ -215,8 +215,8 @@ export default function HistoryTextDialog({
         {stale && (
           <div className="history-text-stale" role="alert">
             <span>
-              The model changed since this draft was started. Copy your text
-              to keep it, then reload.
+              The model changed since this draft was started. Copy your text to
+              keep it, then reload.
             </span>
             <button
               type="button"

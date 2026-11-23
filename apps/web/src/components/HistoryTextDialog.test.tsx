@@ -211,7 +211,7 @@ describe('HistoryTextDialog', () => {
     expect(apply).toHaveAttribute(
       'title',
       'View mode is read-only — switch to Build to edit'
-    );    // Shown, not only in a tooltip a phone never displays.
+    ); // Shown, not only in a tooltip a phone never displays.
     expect(screen.getByRole('status')).toHaveTextContent(
       'View mode is read-only — switch to Build to edit'
     );
