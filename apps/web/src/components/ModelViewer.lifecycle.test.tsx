@@ -13,6 +13,7 @@ import type * as Three from 'three';
 import type * as Viewport from '@openzcad/viewport';
 import type { ModelViewerProps } from './ModelViewer';
 import type { FrameSample } from '../lib/frameStats';
+import { StationaryDrawTimer } from './viewer/stationaryDrawTimer';
 
 /**
  * The viewer's mount/unmount lifecycle, with the real ModelViewer mounted in
@@ -72,7 +73,10 @@ const gl = vi.hoisted(() => {
       state.draws += 1;
     }
     getContext() {
-      return { isContextLost: () => this.contextLost };
+      return {
+        isContextLost: () => this.contextLost,
+        getExtension: () => null
+      };
     }
     dispose() {
       state.disposed += 1;
@@ -466,6 +470,7 @@ describe('ModelViewer lifecycle', () => {
     const canvas = view.container.querySelector('canvas')!;
     canvas.getBoundingClientRect = () => new DOMRect(0, 0, 800, 600);
     let at = performance.now();
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => at);
     const step = () => {
       const [id, callback] = callbacks.entries().next().value!;
       callbacks.delete(id);
@@ -513,9 +518,37 @@ describe('ModelViewer lifecycle', () => {
       hover(404, 303);
       expect(settle()).toBe(1);
       expect(gl.state.draws).toBe(lit);
+      hover(6, 6);
+      settle();
+      // A camera glide schedules its own next draw. While its full-size
+      // frame is still on the GPU, empty hovers must leave that draw queued.
+      view.rerender(
+        createElement(ModelViewer, {
+          ...props,
+          viewRequest: { view: 'top', nonce: 1 }
+        })
+      );
+      step();
+      const gliding = gl.state.draws;
+      const busy = vi
+        .spyOn(StationaryDrawTimer.prototype, 'waitingForFullSize')
+        .mockReturnValue(true);
+      try {
+        for (const x of [9, 12, 15]) {
+          hover(x, 6);
+          step();
+          expect(gl.state.draws).toBe(gliding);
+        }
+        hover(400, 300);
+        step();
+        expect(gl.state.draws).toBe(gliding + 1);
+      } finally {
+        busy.mockRestore();
+      }
     } finally {
       view.unmount();
       request.mockRestore();
+      clock.mockRestore();
       cancel.mockRestore();
     }
   });

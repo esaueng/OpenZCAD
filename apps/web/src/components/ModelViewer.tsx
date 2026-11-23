@@ -78,6 +78,7 @@ import {
 import { pointerSlack } from '../lib/pointerSlack';
 import { renderChipText, setElementText } from '../lib/domText';
 import { TouchLoupe } from './viewer/touchLoupe';
+import { StationaryDrawTimer } from './viewer/stationaryDrawTimer';
 import {
   NavigationResolution,
   displayPixelRatio,
@@ -187,6 +188,7 @@ import {
   type CylinderProfilePreview,
   faceTrianglesCentroid,
   createBodyEdgeOverlay,
+  withNavigationEdges,
   DEFAULT_TANGENT_EDGE_STYLE,
   type TangentEdgeStyle,
   installSilhouetteUpdates,
@@ -3600,10 +3602,15 @@ export function ModelViewer({
     const canvasHeight = () =>
       canvasCssHeight || renderer.domElement.clientHeight;
     const navigationResolution = new NavigationResolution();
+    // This three.js renderer requires WebGL 2; its type also lists WebGL 1.
+    const createStationaryTimer = () =>
+      new StationaryDrawTimer(renderer.getContext() as WebGL2RenderingContext);
+    let stationaryDraws = createStationaryTimer();
     let fullPixelRatio = viewportPixelRatio(sampling, window.devicePixelRatio);
     renderer.setPixelRatio(fullPixelRatio);
     const updateFullPixelRatio = (displayRatio: number) => {
       navigationResolution.reset();
+      stationaryDraws.reset();
       fullPixelRatio = viewportPixelRatio(sampling, displayRatio);
       renderer.setPixelRatio(fullPixelRatio);
     };
@@ -4084,8 +4091,10 @@ export function ModelViewer({
      * Starts set, for the first frame.
      */
     let drawPending = true;
+    let automaticFrame = false;
 
     function requestRender() {
+      automaticFrame = false;
       drawPending = true;
       requestHoverFrame();
     }
@@ -14017,12 +14026,14 @@ export function ModelViewer({
     const handleContextLost = (event: Event) => {
       event.preventDefault();
       renderer.domElement.dataset.contextLost = 'true';
+      stationaryDraws.reset();
       // Teardown removes this listener before `forceContextLoss`, so only
       // a loss the browser imposed is counted (and not in a hidden tab).
       trackGpuLost();
     };
     const handleContextRestored = () => {
       delete renderer.domElement.dataset.contextLost;
+      stationaryDraws = createStationaryTimer();
       if (profile.environment) {
         const previous = scene.environment;
         scene.environment = createStudioEnvironment(renderer);
@@ -14173,6 +14184,20 @@ export function ModelViewer({
     };
     document.addEventListener('visibilitychange', resetAnimationContinuity);
     function animate(now: number) {
+      if (automaticFrame && stationaryDraws.waitingForFullSize()) {
+        // Apply the pointer hit immediately. Only a changed highlight requests
+        // a draw and preempts the wait for an automatic fade or camera glide.
+        if (pendingHoverEvent) {
+          const hover = pendingHoverEvent;
+          pendingHoverEvent = null;
+          applyHoverAt(hover);
+        }
+        if (automaticFrame) {
+          animationFrame = window.requestAnimationFrame(animate);
+          return;
+        }
+      }
+      automaticFrame = false;
       animationFrame = null;
       // Read and cleared before anything this frame can ask again: a request
       // made while the frame runs is drawn by it and by the next one too,
@@ -14211,6 +14236,7 @@ export function ModelViewer({
       }
       if (resizePending) {
         resizePending = false;
+        stationaryDraws.reset();
         const width = viewerHost.clientWidth;
         const height = viewerHost.clientHeight;
         cameraRig.handleResize();
@@ -14246,7 +14272,33 @@ export function ModelViewer({
       // button, an idle gap or an animated overlay alone cannot qualify.
       const navigating =
         cameraMoved && (cameraRig.gestureHeld || trackpadPanning);
-      const ratio = navigationResolution.ratio(now, navigating, fullPixelRatio);
+      const shadedEdges =
+        displayModeRef.current === 'shaded-edges' &&
+        !xrayRef.current &&
+        !sectionViewRef.current;
+      const model =
+        shadedEdges && context.renderedBodies?.length
+          ? context.renderedBodies
+          : null;
+      const perspective = context.projection === 'perspective';
+      const viewHeight =
+        (perspective
+          ? camera.position.distanceTo(context.controls.target)
+          : 1) / Math.abs(context.activeCamera.projectionMatrix.elements[5]);
+      const stationaryGpuMs = stationaryDraws.read(
+        model,
+        viewHeight,
+        perspective
+      );
+      const navigationCost =
+        stationaryGpuMs ??
+        (navigating ? stationaryDraws.backlogMs(performance.now()) : null);
+      const ratio = navigationResolution.ratio(
+        now,
+        navigating,
+        fullPixelRatio,
+        navigationCost
+      );
       const resolutionChanged = ratio !== renderer.getPixelRatio();
       if (resolutionChanged) renderer.setPixelRatio(ratio);
 
@@ -14615,7 +14667,19 @@ export function ModelViewer({
         );
       } else {
         renderStarted = performance.now();
-        renderer.render(scene, context.activeCamera);
+        const drawScene = () => renderer.render(scene, context.activeCamera);
+        if (navigating && shadedEdges && ratio < fullPixelRatio) {
+          withNavigationEdges(
+            context.edgeOverlaysByBodyId.values(),
+            context.activeCamera,
+            ratio,
+            drawScene
+          );
+        } else if (!cameraMoved && !renderer.shadowMap.needsUpdate) {
+          stationaryDraws.draw(drawScene);
+        } else {
+          drawScene();
+        }
       }
       // Read while this frame is still the drawing buffer's.
       if (touchLoupe.visible) {
@@ -14759,8 +14823,12 @@ export function ModelViewer({
         context.fadeIns.size > 0;
       loopWasAnimating = sceneAnimating || occlusionFading;
       loopOnlyFading = occlusionFading && !sceneAnimating;
+      if (ratio === fullPixelRatio) {
+        stationaryDraws.submittedFullSize(performance.now());
+      }
       if (loopWasAnimating) {
         requestRender();
+        automaticFrame = true;
       }
       const cpuMs = performance.now() - frameStarted;
       frameStatsRef?.current?.({
@@ -14803,6 +14871,7 @@ export function ModelViewer({
     performance.measure?.('oz:viewer.init', 'oz:viewer.init:begin');
 
     return () => {
+      stationaryDraws.reset();
       interactionShaderWarmup.dispose();
       ambientOcclusion?.dispose();
       document.removeEventListener(

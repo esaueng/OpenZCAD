@@ -16,6 +16,7 @@ export * from './render/studio';
 export * from './render/semantics';
 export * from './render/selectionTint';
 export * from './render/edgeOverlay';
+export * from './render/navigationEdges';
 export * from './render/ambientOcclusion';
 export {
   installSilhouetteUpdates,

@@ -195,6 +195,16 @@ function installProbe(gpuTimer: boolean) {
       value: function (this: WebGL2RenderingContext, ...args: unknown[]) {
         const state = stateOf(this);
         if (state.ext && probe.recording && !state.open) {
+          const target = state.ext.TIME_ELAPSED_EXT;
+          // A stationary scene-cost sample can already own this target. Skip
+          // that render burst so neither timer closes the other's query.
+          if (this.getQuery(target, this.CURRENT_QUERY)) {
+            state.open = true;
+            queueMicrotask(() => {
+              state.open = false;
+            });
+            return Reflect.apply(original, this, args);
+          }
           const query = this.createQuery();
           if (query) {
             this.beginQuery(state.ext.TIME_ELAPSED_EXT, query);
