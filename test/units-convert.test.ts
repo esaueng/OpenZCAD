@@ -798,7 +798,7 @@ describe('convertDocumentUnits: refusals', () => {
     const older = {
       ...withMesh(newDocument('mm')),
       schemaVersion: MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1
-    };
+    } as unknown as ProjectDocument;
     expect(refusals(convertDocumentUnits(older, 'inch'))).toEqual([
       expect.objectContaining({
         code: 'imported-mesh-payload',

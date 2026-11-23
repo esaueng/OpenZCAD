@@ -345,9 +345,9 @@ describe('units.convert without references', () => {
       expect.objectContaining({
         stage: 'transform',
         code: 'scale-variant',
-        subject: expect.stringMatching(/^Box \(/),
+        subject: expect.stringMatching(/^Box \(/) as string,
         field: 'dimensions.width',
-        message: expect.stringContaining('round(width)')
+        message: expect.stringContaining('round(width)') as string
       })
     ]);
     const manager = new CommandManager(source);
@@ -366,8 +366,11 @@ describe('units.convert schema gate', () => {
   });
 
   it('refuses the command on an older schema, in execute and in authoring', async () => {
-    const source = { ...plainDocument(), schemaVersion: older };
-    const manager = new CommandManager(source as ProjectDocument);
+    const source = {
+      ...plainDocument(),
+      schemaVersion: older
+    } as unknown as ProjectDocument;
+    const manager = new CommandManager(source);
     expect(() =>
       manager.execute(commandFactories.convertUnits(payloadFor(source, 'inch')))
     ).toThrow(/Stored-unit conversions require project schema v/);
@@ -385,14 +388,17 @@ describe('units.convert schema gate', () => {
     manager.execute(commandFactories.convertUnits(payloadFor(source, 'inch')));
     const log = [lastCommand(manager.document)];
     expect(() =>
-      replayCommands({ ...source, schemaVersion: older }, log)
+      replayCommands(
+        { ...source, schemaVersion: older } as unknown as ProjectDocument,
+        log
+      )
     ).toThrow(/Stored-unit conversions require project schema v/);
     expect(
       () =>
         new CommandManager({
           ...manager.document,
           schemaVersion: older
-        } as ProjectDocument)
+        } as unknown as ProjectDocument)
     ).toThrow(/Stored-unit conversions require project schema v/);
   });
 });
@@ -512,7 +518,7 @@ describe('stored-unit conversion warnings (residual risks)', () => {
     ).toEqual([
       expect.objectContaining({
         code: 'rounding-of-length-ratio',
-        subject: expect.stringMatching(/^Box \(/),
+        subject: expect.stringMatching(/^Box \(/) as string,
         field: 'dimensions.width',
         expression: 'round(width / 1 mm) * 1 mm',
         operation: 'round'
