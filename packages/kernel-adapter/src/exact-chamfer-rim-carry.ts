@@ -41,6 +41,7 @@ import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
   add,
+  cross,
   dot,
   finiteVec3,
   length,
@@ -187,7 +188,8 @@ function chamferBand(
   solid: number,
   face: number,
   normal: Vec3,
-  setbacks: readonly ChamferSetback[]
+  /** The history's chamfer setbacks, or null to take the shape alone. */
+  setbacks: readonly ChamferSetback[] | null
 ): number[] | null {
   const edgesOf = new Map<number, number[]>();
   const owners = new Map<number, number[]>();
@@ -225,6 +227,7 @@ function chamferBand(
       if (!inBand.has(other) && role(other) !== 'wall') return null;
     }
   }
+  if (setbacks === null) return band;
   // A drafted section standing on walls is the same shape as a chamfer
   // band; only history tells them apart. Carry a band only when every face
   // of it has the setbacks of a chamfer the document applied.
@@ -757,4 +760,549 @@ export function tryCarryChamferRim(
     );
   }
   return carried;
+}
+
+/*
+ * A chamfer-shaped band the carry above does not take.
+ *
+ * Without a chamfer in the history (a STEP import, chiefly) a band of tilted
+ * faces between the cap and its walls may be a chamfer or a drafted
+ * section; the two are the same B-rep. Neither the kernel's recognizer (it
+ * calls any plane tilted between two planes a chamfer, drafts included) nor
+ * the band's proportions separate them. So the kernel's move keeps such a
+ * band, and its re-limit is the right offset of a drafted section (on
+ * some bands, one with a chamfered hole mouth or a full cone, the pinned
+ * kernel carries the band instead, which is right for a chamfer). What is
+ * refused is a result that is neither:
+ *
+ * - pushed in as far as the band's top, the tilted faces would have to pass
+ *   their walls. The move does not change topology, so it cannot consume
+ *   the band: the pinned kernel extends the tilted planes past the walls,
+ *   growing the body sideways (a box chamfered 0.35 round its base, pushed
+ *   in 2, came out 1.65 wider on every side, its walls ending at 0.35
+ *   under an overhang).
+ * - pulled out until tilted faces cross, the re-limited face turns inside
+ *   out (a 60 × 40 base pulled 20 under a 0.35 chamfer became a 19.3 × 0.7
+ *   strip traced backwards; pulled 120, both pairs crossed and the face
+ *   kept its winding at 180.7 × 200.7) and the solid still validates.
+ *
+ * Both are read exactly off the move's output: the moved face must be on
+ * the plane it was sent to, each of its loops must keep its winding and not
+ * cross another, and each straight edge must lie on a neighbouring plane of
+ * the source (in place for a re-limit, translated with the face for a
+ * carry) with the face on the same side of it. Pushed in past the band's
+ * top, only the carry is accepted: every tilted plane and every arc must
+ * have moved with the face. Nothing is sampled.
+ */
+
+/** One edge of a face's loop, in the loop's direction. */
+type LoopEdge =
+  | { kind: 'line'; a: Vec3; b: Vec3; edge: number }
+  | {
+      kind: 'arc';
+      a: Vec3;
+      b: Vec3;
+      center: Vec3;
+      radius: number;
+      /** The circle's axis, and the swept angle about it (signed). */
+      axis: Vec3;
+      start: number;
+      sweep: number;
+      u: Vec3;
+      v: Vec3;
+    };
+
+interface CapLoop {
+  /** The winding about the face's outward normal: 1 or -1. */
+  sign: number;
+  edges: LoopEdge[];
+}
+
+function parseArena(kernel: RemusKernel, solid: number): Arena {
+  return JSON.parse(
+    new TextDecoder().decode(kernel.serializeSolids(Uint32Array.of(solid)))
+  ) as Arena;
+}
+
+/**
+ * The loops of one serialized face, each with its winding about the face's
+ * outward normal, or null when a loop has an edge kind with no exact area.
+ */
+function capLoops(
+  arena: Arena,
+  face: number,
+  outward: Vec3,
+  tolerance: number
+): CapLoop[] | null {
+  const record = arena.faces[face]!;
+  const loops: CapLoop[] = [];
+  for (const wire of [record.outer_wire, ...record.inner_wires]) {
+    const edges: LoopEdge[] = [];
+    // Twice the area vector: a × b per line, c × (b − a) + r²Δθ·n per arc.
+    let area: Vec3 = { x: 0, y: 0, z: 0 };
+    for (const use of arena.wires[wire]!.edges) {
+      const edge = arena.edges[use.edge]!;
+      const from = vector(
+        arena.vertices[use.forward ? edge.start : edge.end]!.point
+      );
+      const to = vector(
+        arena.vertices[use.forward ? edge.end : edge.start]!.point
+      );
+      if (edge.curve === 'Line') {
+        edges.push({ kind: 'line', a: from, b: to, edge: use.edge });
+        area = add(area, cross(from, to));
+        continue;
+      }
+      const circle = edge.curve.Circle;
+      const trim = edge.trim;
+      if (!circle || !trim) return null;
+      const u = unitOf(circle.u_axis);
+      const v = unitOf(circle.v_axis);
+      if (!u || !v) return null;
+      const axis = cross(u, v);
+      const center = vector(circle.center);
+      const span = trim[1] - trim[0];
+      if (!(span > 0)) return null;
+      const sweep = use.forward ? span : -span;
+      edges.push({
+        kind: 'arc',
+        a: from,
+        b: to,
+        center,
+        radius: circle.radius,
+        axis,
+        start: use.forward ? trim[0] : trim[1],
+        sweep,
+        u,
+        v
+      });
+      area = add(
+        area,
+        add(
+          cross(center, subtract(to, from)),
+          scale(axis, circle.radius * circle.radius * sweep)
+        )
+      );
+    }
+    const winding = dot(area, outward) / 2;
+    if (!(Math.abs(winding) > tolerance)) return null;
+    loops.push({ sign: Math.sign(winding), edges });
+  }
+  return loops;
+}
+
+/** Planar faces of the arena with this outward normal, on the plane through `at`. */
+function facesOnPlane(
+  arena: Arena,
+  normal: Vec3,
+  at: Vec3,
+  tolerance: number
+): { face: number; outward: Vec3 }[] {
+  const found: { face: number; outward: Vec3 }[] = [];
+  arena.faces.forEach((record, face) => {
+    const plane = record.surface.Plane;
+    if (!plane) return;
+    const n = unitOf(plane.normal);
+    if (!n) return;
+    const outward = record.reversed ? scale(n, -1) : n;
+    if (dot(outward, normal) < 1 - ANALYTIC_MATCH_EPSILON) return;
+    if (Math.abs(dot(n, at) - plane.d) > tolerance) return;
+    found.push({ face, outward });
+  });
+  return found;
+}
+
+/** The angle of `p` on an arc's circle, unwrapped from the arc's start. */
+function onArc(
+  arc: Extract<LoopEdge, { kind: 'arc' }>,
+  p: Vec3,
+  slack: number
+): boolean {
+  const d = subtract(p, arc.center);
+  let angle = Math.atan2(dot(d, arc.v), dot(d, arc.u)) - arc.start;
+  const turn = 2 * Math.PI;
+  if (arc.sweep >= 0) {
+    angle = ((angle % turn) + turn) % turn;
+    return angle <= arc.sweep + slack || angle >= turn - slack;
+  }
+  angle = ((-angle % turn) + turn) % turn;
+  return angle <= -arc.sweep + slack || angle >= turn - slack;
+}
+
+/** Whether two loop edges meet (or come within `tolerance`), in the cap plane. */
+function edgesMeet(a: LoopEdge, b: LoopEdge, tolerance: number): boolean {
+  if (a.kind === 'line' && b.kind === 'line') {
+    return segmentDistance(a.a, a.b, b.a, b.b) <= tolerance;
+  }
+  if (a.kind === 'line' || b.kind === 'line') {
+    const line = (a.kind === 'line' ? a : b) as Extract<
+      LoopEdge,
+      { kind: 'line' }
+    >;
+    const arc = (a.kind === 'arc' ? a : b) as Extract<
+      LoopEdge,
+      { kind: 'arc' }
+    >;
+    // The segment against the circle, then the hits against the arc.
+    const span = subtract(line.b, line.a);
+    const reach = length(span);
+    if (!(reach > 0)) return true;
+    const dir = scale(span, 1 / reach);
+    const toCenter = subtract(arc.center, line.a);
+    const along = dot(toCenter, dir);
+    const offAxis = across(toCenter, dir);
+    if (offAxis > arc.radius + tolerance) return false;
+    const half = Math.sqrt(
+      Math.max(0, arc.radius * arc.radius - offAxis * offAxis)
+    );
+    const slack = tolerance / Math.max(arc.radius, tolerance);
+    for (const t of [along - half, along + half, along]) {
+      if (t < -tolerance || t > reach + tolerance) continue;
+      const hit = add(line.a, scale(dir, Math.min(reach, Math.max(0, t))));
+      const radial = Math.abs(length(subtract(hit, arc.center)) - arc.radius);
+      if (radial <= tolerance && onArc(arc, hit, slack)) return true;
+    }
+    // An arc end on the segment.
+    return [arc.a, arc.b].some(
+      (p) => segmentDistance(p, p, line.a, line.b) <= tolerance
+    );
+  }
+  // Two arcs: the circles' crossings, then each against both arcs.
+  const between = subtract(b.center, a.center);
+  const gap = length(between);
+  const slack = tolerance / Math.max(Math.min(a.radius, b.radius), tolerance);
+  if (gap <= tolerance && Math.abs(a.radius - b.radius) <= tolerance) {
+    // One circle: they meet where either holds an end of the other.
+    return (
+      onArc(a, b.a, slack) ||
+      onArc(a, b.b, slack) ||
+      onArc(b, a.a, slack) ||
+      onArc(b, a.b, slack)
+    );
+  }
+  if (
+    gap > a.radius + b.radius + tolerance ||
+    gap < Math.abs(a.radius - b.radius) - tolerance
+  )
+    return false;
+  const toward = scale(between, 1 / gap);
+  const x = (gap * gap + a.radius * a.radius - b.radius * b.radius) / (2 * gap);
+  const h = Math.sqrt(Math.max(0, a.radius * a.radius - x * x));
+  const side = normalized(cross(a.axis, toward));
+  if (!side) return true;
+  const foot = add(a.center, scale(toward, x));
+  return [add(foot, scale(side, h)), subtract(foot, scale(side, h))].some(
+    (p) => onArc(a, p, slack) && onArc(b, p, slack)
+  );
+}
+
+/** The least distance between two segments. */
+function segmentDistance(p1: Vec3, q1: Vec3, p2: Vec3, q2: Vec3): number {
+  const d1 = subtract(q1, p1);
+  const d2 = subtract(q2, p2);
+  const r = subtract(p1, p2);
+  const a = dot(d1, d1);
+  const e = dot(d2, d2);
+  const f = dot(d2, r);
+  let s: number;
+  let t: number;
+  if (a <= 0 && e <= 0) return length(r);
+  if (a <= 0) {
+    s = 0;
+    t = Math.min(1, Math.max(0, f / e));
+  } else {
+    const c = dot(d1, r);
+    if (e <= 0) {
+      t = 0;
+      s = Math.min(1, Math.max(0, -c / a));
+    } else {
+      const b = dot(d1, d2);
+      const denom = a * e - b * b;
+      s = denom > 0 ? Math.min(1, Math.max(0, (b * f - c * e) / denom)) : 0;
+      t = (b * s + f) / e;
+      if (t < 0) {
+        t = 0;
+        s = Math.min(1, Math.max(0, -c / a));
+      } else if (t > 1) {
+        t = 1;
+        s = Math.min(1, Math.max(0, (b - c) / a));
+      }
+    }
+  }
+  return length(subtract(add(p1, scale(d1, s)), add(p2, scale(d2, t))));
+}
+
+/**
+ * The winding of a face's outer loop when its holes wind the other way, as
+ * every valid face does, else null.
+ */
+function windingOf(loops: readonly CapLoop[]): number | null {
+  const outer = loops[0]?.sign;
+  return outer !== undefined &&
+    loops.slice(1).every((loop) => loop.sign === -outer)
+    ? outer
+    : null;
+}
+
+/** Why the loops are not a face's boundary, or null when they are. */
+function loopsFault(
+  loops: readonly CapLoop[],
+  winding: number,
+  tolerance: number
+): string | null {
+  if (windingOf(loops) !== winding) {
+    return 'the moved face would turn inside out';
+  }
+  const all = loops.flatMap((loop, l) =>
+    loop.edges.map((edge, i) => ({ edge, l, i, n: loop.edges.length }))
+  );
+  for (let x = 0; x < all.length; x++) {
+    for (let y = x + 1; y < all.length; y++) {
+      const p = all[x]!;
+      const q = all[y]!;
+      if (
+        p.l === q.l &&
+        (Math.abs(p.i - q.i) <= 1 || Math.abs(p.i - q.i) === p.n - 1)
+      )
+        continue;
+      if (edgesMeet(p.edge, q.edge, tolerance)) {
+        return 'the moved face would cross itself';
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Guards the kernel's move of a chamfer-shaped band the carry did not take
+ * (see the note above). Returns null when the face's rim is not such a
+ * band. Otherwise it returns the check the move's output must pass, which
+ * throws the typed refusal when the moved face is not where it was sent,
+ * its loops turned or crossed, or its edges left their neighbours.
+ */
+export function guardUncarriedChamferBand(
+  kernel: RemusKernel,
+  solid: number,
+  face: number,
+  offset: number
+): ((output: number) => void) | null {
+  if (
+    !Number.isFinite(offset) ||
+    Math.abs(offset) <= GEOMETRY_EPSILON ||
+    surfaceTypeOf(kernel, face) !== 'plane'
+  ) {
+    return null;
+  }
+  const normal = finiteVec3(Array.from(kernel.getFaceNormal(face)));
+  if (!normal) return null;
+  const band = chamferBand(kernel, solid, face, normal, null);
+  if (band === null) return null;
+  const capEdges = uniqueEdges(kernel, face);
+  const capPoint = edgeEnds(kernel, capEdges[0]!)[0];
+  const inward = scale(normal, -1);
+  // The band's top: the lowest of its corners off the face.
+  let top = Infinity;
+  for (const f of band) {
+    for (const edge of uniqueEdges(kernel, f)) {
+      for (const p of edgeEnds(kernel, edge)) {
+        const rise = dot(subtract(p, capPoint), inward);
+        if (rise > GEOMETRY_EPSILON) top = Math.min(top, rise);
+      }
+    }
+  }
+  if (!Number.isFinite(top)) return null;
+  const tolerance = Math.max(1, top, Math.abs(offset)) * ANALYTIC_MATCH_EPSILON;
+  // Pushed in this far, a re-limit would run the tilted faces past their
+  // walls; only a carry can be right, and a refusal names the limit.
+  const limit =
+    offset < 0 && -offset >= top - tolerance
+      ? -Math.round(top * 1e9) / 1e9
+      : undefined;
+  const refuse = (detail: string) =>
+    uncarriedBandRefusal(offset, detail, limit);
+  // The source face read the way the output's will be: its loops' winding,
+  // and the side of each straight edge its neighbour's plane lies on.
+  const source = parseArena(kernel, solid);
+  const owners = edgeOwners(source);
+  const windings = new Set<number | null>();
+  const sides: EdgeSide[] = [];
+  const arcs: Extract<LoopEdge, { kind: 'arc' }>[] = [];
+  for (const candidate of facesOnPlane(source, normal, capPoint, tolerance)) {
+    const loops = capLoops(
+      source,
+      candidate.face,
+      candidate.outward,
+      tolerance
+    );
+    windings.add(loops === null ? null : windingOf(loops));
+    for (const edge of loops?.flatMap((loop) => loop.edges) ?? []) {
+      if (edge.kind !== 'line') {
+        arcs.push(edge);
+        continue;
+      }
+      for (const owner of owners.get(edge.edge) ?? []) {
+        if (owner === candidate.face) continue;
+        const plane = source.faces[owner]!.surface.Plane;
+        const n = plane && unitOf(plane.normal);
+        if (!plane || !n) continue;
+        sides.push({ n, d: plane.d, side: sideOf(edge, normal, n) });
+      }
+    }
+  }
+  const expected = windings.size === 1 ? [...windings][0] : null;
+  if (expected === null || expected === undefined) {
+    throw refuse('the face could not be read exactly');
+  }
+  const sent = add(capPoint, scale(normal, offset));
+  return (output: number) => {
+    const arena = parseArena(kernel, output);
+    const after = facesOnPlane(arena, normal, sent, tolerance);
+    if (after.length === 0) {
+      throw refuse('the move left the face short of where it was sent');
+    }
+    for (const candidate of after) {
+      const loops = capLoops(
+        arena,
+        candidate.face,
+        candidate.outward,
+        tolerance
+      );
+      const fault =
+        loops === null
+          ? 'the moved face could not be read exactly'
+          : (loopsFault(loops, expected, tolerance) ??
+            sidesFault(
+              loops,
+              sides,
+              normal,
+              offset,
+              limit !== undefined,
+              tolerance
+            ) ??
+            (limit === undefined
+              ? null
+              : arcsFault(loops, arcs, normal, offset, tolerance)));
+      if (fault !== null) throw refuse(fault);
+    }
+  };
+}
+
+/** A straight edge's neighbouring plane, and the side the face lies on. */
+interface EdgeSide {
+  n: Vec3;
+  d: number;
+  side: number;
+}
+
+function edgeOwners(arena: Arena): Map<number, number[]> {
+  const owners = new Map<number, number[]>();
+  arena.faces.forEach((record, face) => {
+    for (const wire of [record.outer_wire, ...record.inner_wires]) {
+      for (const { edge } of arena.wires[wire]!.edges) {
+        const list = owners.get(edge) ?? [];
+        if (!list.includes(face)) list.push(face);
+        owners.set(edge, list);
+      }
+    }
+  });
+  return owners;
+}
+
+/**
+ * Which way a loop edge's neighbour plane leans from the face: the face
+ * lies left of its edges about its outward normal, so this is the sign of
+ * that leftward direction against the neighbour's normal.
+ */
+function sideOf(
+  edge: Extract<LoopEdge, { kind: 'line' }>,
+  outward: Vec3,
+  n: Vec3
+): number {
+  return Math.sign(dot(cross(outward, subtract(edge.b, edge.a)), n));
+}
+
+/**
+ * Why the moved face's straight edges are not its neighbours' edges, or
+ * null when they are. A re-limit leaves every neighbouring plane where it
+ * was; a carry translates the band's with the face (a wall's is unchanged
+ * either way). Past the band's top, a re-limited tilted face would stand
+ * past its wall, so only the carried plane will do. Each edge must lie on one of them and keep the face on the
+ * side it was: a reversed edge is a face turned past where its neighbours
+ * cross, which can keep the loop's winding when two pairs reverse at once.
+ */
+function sidesFault(
+  loops: readonly CapLoop[],
+  sides: readonly EdgeSide[],
+  outward: Vec3,
+  offset: number,
+  /** Past the band's top: only a carried neighbour will do. */
+  carriedOnly: boolean,
+  tolerance: number
+): string | null {
+  for (const edge of loops.flatMap((loop) => loop.edges)) {
+    if (edge.kind !== 'line') continue;
+    const on = sides.filter(({ n, d }) =>
+      (carriedOnly
+        ? [d + offset * dot(n, outward)]
+        : [d, d + offset * dot(n, outward)]
+      ).some((level) =>
+        [edge.a, edge.b].every((p) => Math.abs(dot(n, p) - level) <= tolerance)
+      )
+    );
+    if (on.length === 0) {
+      return 'the moved face has left the faces beside it';
+    }
+    if (on.some(({ n, side }) => sideOf(edge, outward, n) !== side)) {
+      return 'the moved face would turn past where its neighbours cross';
+    }
+  }
+  return null;
+}
+
+/**
+ * Past the band's top, why a moved arc is not one of the face's arcs carried
+ * with it, or null when each is: a re-limited cone there has run past its
+ * wall.
+ */
+function arcsFault(
+  loops: readonly CapLoop[],
+  arcs: readonly Extract<LoopEdge, { kind: 'arc' }>[],
+  outward: Vec3,
+  offset: number,
+  tolerance: number
+): string | null {
+  const shift = scale(outward, offset);
+  for (const edge of loops.flatMap((loop) => loop.edges)) {
+    if (edge.kind !== 'arc') continue;
+    const carried = arcs.some(
+      (arc) =>
+        Math.abs(arc.radius - edge.radius) <= tolerance &&
+        length(subtract(add(arc.center, shift), edge.center)) <= tolerance
+    );
+    if (!carried) return 'a rounded part of the edge would run past its wall';
+  }
+  return null;
+}
+
+function uncarriedBandRefusal(
+  offset: number,
+  detail: string,
+  limit?: number
+): OffsetFaceRefusal {
+  const reason =
+    limit === undefined
+      ? "This face's chamfered or drafted edge can't move with it this far. Try a smaller offset."
+      : `This face's chamfered or drafted edge can't move with it past ${
+          Math.round(Math.abs(limit) * 100) / 100
+        }. Try a smaller offset.`;
+  const kernelMessage = `Offsetting the face by ${offset}: ${detail}`;
+  return new OffsetFaceRefusal({
+    family: 'direct-edit',
+    category: 'unsupported',
+    kernelCode: OFFSET_FACE_CHAMFER_RIM_NOT_CARRIED,
+    kernelMessage,
+    reason,
+    message: `${reason}\n${kernelMessage}`,
+    ...(limit === undefined ? {} : { limit })
+  });
 }
