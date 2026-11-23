@@ -323,6 +323,8 @@ interface SilhouetteState {
   positions: Float32Array;
   /** Each candidate's midpoint, where a perspective eye ray is aimed. */
   readonly midpoints: Float32Array;
+  /** Undefined until a second view needs bounds, null when the scan is cheaper. */
+  blocks: Float32Array | null | undefined;
   /** The drawn segments: the first `instanceCount` are this view's outline. */
   readonly drawn: Float32Array;
   readonly buffer: THREE.InterleavedBuffer;
@@ -372,6 +374,7 @@ export function createSilhouetteLines(
     candidates,
     positions: candidates.positions,
     midpoints,
+    blocks: undefined,
     drawn: start.data.array as Float32Array,
     buffer: start.data,
     lastEye: new Float64Array(3),
@@ -401,6 +404,69 @@ function writeMidpoints(positions: Float32Array, midpoints: Float32Array) {
         0.5 * (positions[i * 6 + axis]! + positions[i * 6 + 3 + axis]!);
     }
   }
+}
+
+// Consecutive mesh edges usually belong to a small patch of the same surface.
+// When every neighbouring normal in a patch faces the same way we can skip it.
+const OUTLINE_BLOCK_SIZE = 32;
+
+/** Per axis: min/max normal (both neighbours), then min/max midpoint. */
+function outlineBlockBounds(
+  candidates: SilhouetteCandidates,
+  midpoints: Float32Array
+) {
+  const count = midpoints.length / 3;
+  if (count < 1024) return null;
+  const bounds = new Float32Array(Math.ceil(count / OUTLINE_BLOCK_SIZE) * 12);
+  for (let first = 0, slot = 0; first < count; first += OUTLINE_BLOCK_SIZE) {
+    const end = Math.min(count, first + OUTLINE_BLOCK_SIZE) * 3;
+    for (let axis = 0; axis < 3; axis++) {
+      let lo = Infinity;
+      let hi = -Infinity;
+      let near = Infinity;
+      let far = -Infinity;
+      for (let n = first * 3 + axis; n < end; n += 3) {
+        lo = Math.min(lo, candidates.normalsA[n]!, candidates.normalsB[n]!);
+        hi = Math.max(hi, candidates.normalsA[n]!, candidates.normalsB[n]!);
+        near = Math.min(near, midpoints[n]!);
+        far = Math.max(far, midpoints[n]!);
+      }
+      bounds[slot++] = lo;
+      bounds[slot++] = hi;
+      bounds[slot++] = near;
+      bounds[slot++] = far;
+    }
+  }
+  return bounds;
+}
+
+/**
+ * Interval bounds on n · (eye - midpoint), using the same floating-point
+ * operations and axis order as the per-edge test. The extrema of an interval
+ * product occur at its four corners. A block touching zero still takes the
+ * exact path, including the case where two tiny same-sign factors underflow.
+ */
+function sameFacingBlock(
+  bounds: Float32Array,
+  slot: number,
+  eye: Float64Array,
+  perspective: boolean
+) {
+  let lower = 0;
+  let upper = 0;
+  for (let axis = 0; axis < 3; axis++, slot += 4) {
+    const nLo = bounds[slot]!;
+    const nHi = bounds[slot + 1]!;
+    const dLo = perspective ? eye[axis]! - bounds[slot + 3]! : eye[axis]!;
+    const dHi = perspective ? eye[axis]! - bounds[slot + 2]! : eye[axis]!;
+    const a = nLo * dLo,
+      b = nLo * dHi,
+      c = nHi * dLo,
+      d = nHi * dHi;
+    lower += Math.min(a, b, c, d);
+    upper += Math.max(a, b, c, d);
+  }
+  return (lower > 0 && lower * lower > 0) || (upper < 0 && upper * upper > 0);
 }
 
 /**
@@ -534,6 +600,15 @@ export function updateSilhouette(
   ) {
     return false;
   }
+  // A newly installed body may draw once and be replaced by the next edit.
+  // Build the index only when the view actually moves on the same geometry.
+  if (
+    state.lastPerspective !== null &&
+    state.blocks === undefined &&
+    state.positions === state.candidates.positions
+  ) {
+    state.blocks = outlineBlockBounds(state.candidates, state.midpoints);
+  }
   state.lastPerspective = perspective;
   state.lastEye[0] = eye.x;
   state.lastEye[1] = eye.y;
@@ -558,23 +633,38 @@ function pickSilhouette(
   let toY = y;
   let toZ = z;
   let kept = 0;
-  for (let i = 0; i < count; i += 1) {
-    const n = i * 3;
-    if (perspective) {
-      toX = x - midpoints[n]!;
-      toY = y - midpoints[n + 1]!;
-      toZ = z - midpoints[n + 2]!;
+  // A preview moves the midpoints away from their bounds at rest. Its
+  // per-edge test uses the updated midpoints until the preview restores them.
+  const blocks = positions === state.candidates.positions ? state.blocks : null;
+  const blockSize = blocks ? OUTLINE_BLOCK_SIZE : count;
+  let skippedCandidates = 0;
+  for (let first = 0, slot = 0; first < count; first += blockSize, slot += 12) {
+    const end = Math.min(first + blockSize, count);
+    if (blocks && sameFacingBlock(blocks, slot, state.lastEye, perspective)) {
+      skippedCandidates += end - first;
+      continue;
     }
-    const facingA =
-      normalsA[n]! * toX + normalsA[n + 1]! * toY + normalsA[n + 2]! * toZ;
-    const facingB =
-      normalsB[n]! * toX + normalsB[n + 1]! * toY + normalsB[n + 2]! * toZ;
-    if (facingA * facingB > 0) continue;
-    const from = i * 6;
-    const to = kept * 6;
-    for (let k = 0; k < 6; k += 1) drawn[to + k] = positions[from + k]!;
-    kept += 1;
+    for (let i = first; i < end; i += 1) {
+      const n = i * 3;
+      if (perspective) {
+        toX = x - midpoints[n]!;
+        toY = y - midpoints[n + 1]!;
+        toZ = z - midpoints[n + 2]!;
+      }
+      const facingA =
+        normalsA[n]! * toX + normalsA[n + 1]! * toY + normalsA[n + 2]! * toZ;
+      const facingB =
+        normalsB[n]! * toX + normalsB[n + 1]! * toY + normalsB[n + 2]! * toZ;
+      if (facingA * facingB > 0) continue;
+      const from = i * 6;
+      const to = kept * 6;
+      for (let k = 0; k < 6; k += 1) drawn[to + k] = positions[from + k]!;
+      kept += 1;
+    }
   }
+  // A few coherent patches amid interleaved faces cannot repay testing every
+  // block. Keep the index only while it avoids at least a quarter of the scan.
+  if (blocks && skippedCandidates < count / 4) state.blocks = null;
   lines.geometry.instanceCount = kept;
   state.buffer.clearUpdateRanges();
   if (kept > 0) {

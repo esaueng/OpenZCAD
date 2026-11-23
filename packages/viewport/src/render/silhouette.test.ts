@@ -165,6 +165,89 @@ describe('curved-surface outlines', () => {
     }
   });
 
+  it('packs exactly the straddling segments across full and partial blocks', () => {
+    const { mesh, faces } = cylinderMesh(1_037);
+    const candidates = silhouetteCandidates(mesh, faces)!;
+    const { positions, normalsA, normalsB } = candidates;
+    const count = positions.length / 6;
+    expect(count).toBe(1_037);
+    // A degenerate neighbour and an edge exactly tangent to the viewing
+    // axis both contribute their segments under the inclusive facing rule.
+    normalsA.fill(0, 0, 32 * 3);
+    normalsB.set([1, 0, 0], (count - 1) * 3);
+
+    const lines = createSilhouetteLines(candidates, { color: 0, linewidth: 1 });
+    const buffer = lines.geometry.getAttribute(
+      'instanceStart'
+    ) as THREE.InterleavedBufferAttribute;
+    for (const perspective of [true, false]) {
+      const camera = perspective
+        ? new THREE.PerspectiveCamera()
+        : new THREE.OrthographicCamera();
+      for (const position of [
+        [0, 0, 10],
+        [4.99, 0, 0],
+        [-40, 30, -15],
+        [1e15, -1e14, 1e14]
+      ]) {
+        camera.position.fromArray(position);
+        camera.lookAt(0, 0, 0);
+        camera.updateMatrixWorld();
+        updateSilhouette(lines, camera);
+
+        const expected: number[] = [];
+        const viewAxis = new THREE.Vector3()
+          .setFromMatrixColumn(camera.matrixWorld, 2)
+          .normalize();
+        for (let i = 0; i < count; i++) {
+          const p = i * 6;
+          const direction = viewAxis.clone();
+          if (perspective) {
+            const midpoint = new THREE.Vector3(
+              Math.fround((positions[p]! + positions[p + 3]!) / 2),
+              Math.fround((positions[p + 1]! + positions[p + 4]!) / 2),
+              Math.fround((positions[p + 2]! + positions[p + 5]!) / 2)
+            );
+            direction.subVectors(camera.position, midpoint);
+          }
+          const a = new THREE.Vector3()
+            .fromArray(normalsA, i * 3)
+            .dot(direction);
+          const b = new THREE.Vector3()
+            .fromArray(normalsB, i * 3)
+            .dot(direction);
+          if (a * b <= 0) expected.push(...positions.subarray(p, p + 6));
+        }
+        expect(
+          buffer.data.array.slice(0, lines.geometry.instanceCount * 6)
+        ).toEqual(Float32Array.from(expected));
+      }
+    }
+  });
+
+  it('retains same-sign neighbours whose facing product underflows to zero', () => {
+    const count = 1024;
+    const positions = new Float32Array(count * 6);
+    const normals = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      positions[i * 6 + 4] = 1;
+      normals[i * 3] = 1;
+    }
+    const lines = createSilhouetteLines(
+      { positions, normalsA: normals, normalsB: normals },
+      { color: 0, linewidth: 1 }
+    );
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.x = 1;
+    camera.updateMatrixWorld();
+    updateSilhouette(lines, camera);
+    expect(lines.geometry.instanceCount).toBe(0);
+    camera.position.x = 1e-200;
+    camera.updateMatrixWorld();
+    updateSilhouette(lines, camera);
+    expect(lines.geometry.instanceCount).toBe(count);
+  });
+
   it('picks the outline for whichever camera renders the scene', () => {
     const { mesh, faces } = cylinderMesh(24);
     const scene = new THREE.Scene();

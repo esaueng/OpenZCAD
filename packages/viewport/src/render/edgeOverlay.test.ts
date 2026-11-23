@@ -358,10 +358,18 @@ describe('BodyEdgeOverlay', () => {
     const overlay = makeOverlay();
     const hoverGeometry = overlay.hoverEdges.geometry;
 
-    overlay.setHovered(overlay.ownerAtSegment(0), ['edge-a', 'edge-b']);
+    overlay.setHovered(overlay.ownerAtSegment(2), [
+      'edge-a',
+      'edge-b',
+      'edge-seam'
+    ]);
 
     expect(overlay.hoverEdges.geometry).toBe(hoverGeometry);
     expect(overlay.hoverEdges.geometry.instanceCount).toBe(3);
+    // The owner is edge-b and the continuation lists it a second time.
+    // The overlay still draws a's two segments before b, like the idle ink.
+    const start = overlay.hoverEdges.geometry.getAttribute('instanceStart');
+    expect([start.getY(0), start.getY(1), start.getY(2)]).toEqual([0, 0, 2]);
   });
 
   it('draws a brighter face-boundary tier without seams in shaded mode', () => {

@@ -20,8 +20,8 @@ import {
  */
 
 /** A sphere (one curved face) standing in for a blend, and one edge on it. */
-function sphereBody(): BodyRepresentation {
-  const geometry = new THREE.SphereGeometry(5, 24, 16);
+function sphereBody(segments = 24): BodyRepresentation {
+  const geometry = new THREE.SphereGeometry(5, segments, 16);
   geometry.translate(0, 20, 0);
   const vertices = Float32Array.from(geometry.getAttribute('position').array);
   const indices = Uint32Array.from(geometry.getIndex()!.array);
@@ -229,10 +229,14 @@ describe.each(previews)('a $name preview', ({ begin, move }) => {
     expect(silhouette.geometry.boundingBox!.max.y).toBeCloseTo(25, 3);
   });
 
-  it('keeps the outline of a body already drawn', () => {
-    const body = sphereBody();
+  it('keeps the outline of a dense body already drawn', () => {
+    const body = sphereBody(96);
     const { mesh, silhouette } = install(body);
     const view = camera();
+    updateSilhouette(silhouette, view);
+    // Changing the view once builds the bounds at rest before the drag.
+    view.position.x = 4;
+    view.updateMatrixWorld(true);
     updateSilhouette(silhouette, view);
     const preview = begin(mesh, body);
     preview.apply(2);
