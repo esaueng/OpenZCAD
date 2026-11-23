@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
   assertStorableDocument,
@@ -13,6 +17,7 @@ import {
   importedSourceReferenceOf,
   isImportedMeshSourceData,
   toUserId,
+  type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -193,14 +198,145 @@ describe('mesh payload units (v153)', () => {
     );
   });
 
-  it('round-trips through save, normalization and replay', () => {
-    const document = withPayloadUnits(meshDocument('reference'), 'mm');
-    const saved = JSON.parse(JSON.stringify(document)) as ProjectDocument;
-    expect(meshData(normalizeDocument(saved)).payloadUnits).toBe('mm');
-    expect(normalizeDocument(saved)).toEqual(normalizeDocument(document));
-    expect(meshData(assertStorableDocument(saved)).payloadUnits).toBe('mm');
-    // Absent stays absent: an import never writes it.
+  function featureIdOf(document: ProjectDocument): FeatureId {
+    const feature = Object.values(document.nodes).find(
+      (node) => node.kind === 'feature'
+    );
+    if (feature?.kind !== 'feature') throw new Error('No mesh feature.');
+    return feature.featureId;
+  }
+  function olderSchema(document: ProjectDocument): ProjectDocument {
+    return {
+      ...structuredClone(document),
+      schemaVersion: MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1
+    } as never;
+  }
+  const importInput = (
+    form: 'embedded' | 'reference',
+    payloadUnits?: 'mm' | 'inch'
+  ) => ({
+    name: 'Triangle',
+    sourceName: 'triangle.stl',
+    artifactId: 'artifact_triangle',
+    triangleCount: 1,
+    ...(form === 'reference'
+      ? { meshPayloadRef: reference }
+      : { vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0], indices: [0, 1, 2] }),
+    ...(payloadUnits ? { payloadUnits } : {})
+  });
+
+  it('round-trips a feature.update and an import.mesh through save, normalization and replay', () => {
+    const base = createProjectDocument(
+      'Converted mesh',
+      toUserId('user_mesh_schema')
+    );
+    const manager = new CommandManager(base);
+    manager.execute(commandFactories.importMesh(importInput('reference')));
+    const patchedId = featureIdOf(manager.document);
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: patchedId,
+        data: { payloadUnits: 'mm' }
+      })
+    );
+    manager.execute(
+      commandFactories.importMesh(importInput('reference', 'inch'))
+    );
+    const meshes = (document: ProjectDocument) =>
+      Object.fromEntries(
+        Object.values(document.nodes).flatMap((node) =>
+          node.kind === 'feature' && node.data.featureKind === 'imported-mesh'
+            ? [[node.featureId, node.data.payloadUnits]]
+            : []
+        )
+      );
+    const written = meshes(manager.document);
+    expect(Object.keys(written)).toHaveLength(2);
+    expect(written[patchedId]).toBe('mm');
+    expect(Object.values(written).filter((unit) => unit === 'inch')).toEqual([
+      'inch'
+    ]);
+
+    // The command log carries both, and replaying it rebuilds both.
+    expect(manager.document.commandLog.map((command) => command.kind)).toEqual(
+      expect.arrayContaining(['import.mesh', 'feature.update'])
+    );
+    const replayed = replayCommands(base, manager.document.commandLog);
+    expect(meshes(replayed)).toEqual(written);
+
+    const saved = JSON.parse(
+      JSON.stringify(manager.document)
+    ) as ProjectDocument;
+    const reopened = normalizeDocument(saved);
+    expect(meshes(reopened)).toEqual(written);
+    expect(meshes(assertStorableDocument(saved))).toEqual(written);
+    expect(meshes(replayCommands(base, reopened.commandLog))).toEqual(written);
+    const reopenedManager = new CommandManager(reopened);
+    reopenedManager.undo();
+    expect(meshes(reopenedManager.document)[patchedId]).toBe('mm');
+    reopenedManager.undo();
+    expect(meshes(reopenedManager.document)[patchedId]).toBeUndefined();
+    reopenedManager.redo();
+    reopenedManager.redo();
+    expect(meshes(reopenedManager.document)).toEqual(written);
+
+    // Absent stays absent: an import that states none writes none.
     expect('payloadUnits' in meshData(meshDocument('reference'))).toBe(false);
+  });
+
+  it('refuses it beside inline vertices, on update and on import', () => {
+    const embedded = meshDocument('embedded');
+    expect(() =>
+      updateFeature(embedded, {
+        featureId: featureIdOf(embedded),
+        data: { payloadUnits: 'mm' }
+      } as never)
+    ).toThrow(/payload/i);
+    const manager = new CommandManager(embedded);
+    const before = manager.document;
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: featureIdOf(embedded),
+          data: { payloadUnits: 'mm' }
+        })
+      )
+    ).toThrow(/payload/i);
+    expect(manager.document).toBe(before);
+    expect(() =>
+      manager.execute(
+        commandFactories.importMesh({
+          ...importInput('embedded'),
+          payloadUnits: 'mm'
+        })
+      )
+    ).toThrow(/payload/i);
+    expect(manager.document).toBe(before);
+    // Nor an unknown unit beside a reference.
+    const referenced = meshDocument('reference');
+    expect(() =>
+      updateFeature(referenced, {
+        featureId: featureIdOf(referenced),
+        data: { payloadUnits: 'furlong' }
+      } as never)
+    ).toThrow(/payload/i);
+  });
+
+  it('refuses an import.mesh carrying it on an older-schema manager', () => {
+    const older = olderSchema(
+      createProjectDocument('Older', toUserId('user_mesh_schema'))
+    );
+    const manager = new CommandManager(older);
+    expect(() =>
+      manager.execute(
+        commandFactories.importMesh(importInput('reference', 'mm'))
+      )
+    ).toThrow(/Mesh payload units require project schema v153/);
+    expect(manager.document).toBe(older);
+    expect(manager.document.commandLog).toEqual(older.commandLog);
+    // The same import without the field still runs there.
+    manager.execute(commandFactories.importMesh(importInput('reference')));
+    expect(() => normalizeDocument(manager.document)).not.toThrow();
   });
 
   it('refuses a document that declares an older schema', () => {

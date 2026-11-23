@@ -123,6 +123,25 @@ function isKnownUnit(value: unknown, allowed: boolean): boolean {
   );
 }
 
+/**
+ * Why an imported mesh's `payloadUnits` (v153) cannot stand, if it cannot:
+ * an unknown unit, or the field beside embedded triangles, which are always
+ * in document units and which no load would scale. Commands that write the
+ * field ask this before they commit, so a refused value never reaches the
+ * document or its command log.
+ */
+export function importedMeshPayloadUnitsProblem(data: {
+  payloadUnits?: unknown;
+  meshPayloadRef?: unknown;
+}): string | undefined {
+  if (data.payloadUnits === undefined) return undefined;
+  if (data.meshPayloadRef === undefined)
+    return 'Mesh payload units describe a referenced mesh payload; embedded triangles are always in document units.';
+  if (!isKnownUnit(data.payloadUnits, true))
+    return `Unknown mesh payload units ${JSON.stringify(data.payloadUnits)}.`;
+  return undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -156,11 +175,29 @@ export function isImportedMeshSourceData(
   );
 }
 
-/** Checks active mesh imports and those undo/redo can restore. Not a full document validator. */
+/**
+ * I03: an imported mesh whose payload states its own units needs v153, or an
+ * older reader would read the triangles in the document's unit instead.
+ */
+export const MESH_PAYLOAD_UNITS_SCHEMA_VERSION = 153;
+
+/**
+ * Checks active mesh imports and those undo/redo can restore. Not a full
+ * document validator. Servers that read nothing else of a document's
+ * content (the account's save parser, the collaboration room) still run it,
+ * so it also refuses `payloadUnits` on a document declaring a schema older
+ * than v153: a v152 reader would open that document and draw the payload in
+ * the document's unit, 25.4x off for a millimetre payload in an inch part.
+ */
 export function hasValidImportedMeshSources(
   document: ProjectDocument
 ): boolean {
   if (!isRecord(document.nodes)) return false;
+  const version: unknown = document.schemaVersion;
+  const payloadUnitsDeclared =
+    typeof version === 'number' &&
+    Number.isSafeInteger(version) &&
+    version >= MESH_PAYLOAD_UNITS_SCHEMA_VERSION;
   for (const node of documentNodesWithHistory(document)) {
     if (!isRecord(node)) return false;
     if (node.kind !== 'feature') continue;
@@ -168,7 +205,8 @@ export function hasValidImportedMeshSources(
     if (
       (node.featureKind === 'imported-mesh' ||
         node.data.featureKind === 'imported-mesh') &&
-      !isImportedMeshSourceData(node.data)
+      (!isImportedMeshSourceData(node.data) ||
+        (node.data.payloadUnits !== undefined && !payloadUnitsDeclared))
     )
       return false;
   }

@@ -2,6 +2,7 @@ import {
   documentNodesWithHistory,
   filletRadiusStationsProblem,
   filletVertexRadiiProblem,
+  MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
   patternSpacingModeProblem,
   type FeatureData,
   type PatternKind,
@@ -404,11 +405,8 @@ export function assertImportedStepContentSchema(
     );
 }
 
-/**
- * I03: an imported mesh whose payload states its own units needs v153, or an
- * older reader would read the triangles in the document's unit instead.
- */
-export const MESH_PAYLOAD_UNITS_SCHEMA_VERSION = 153;
+/** I03 (v153); declared beside the mesh source check that also reads it. */
+export { MESH_PAYLOAD_UNITS_SCHEMA_VERSION };
 
 export function assertImportedMeshContentSchema(
   data: unknown,
