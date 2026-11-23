@@ -11,10 +11,12 @@ import {
   setParameter
 } from '@openzcad/document-core';
 import {
+  PARAMETER_RESOLVED_SKETCH_UPDATE_KIND,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   toArtifactId,
   toUserId
 } from '@openzcad/shared';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   backupFileBytes,
   MAX_PROJECT_BACKUP_BYTES,
@@ -97,6 +99,42 @@ describe('complete project backups', () => {
     expect(copy.document.commandLog).toEqual(backup.document.commandLog);
     expect(backup.document.ownerUserId).toBe('original');
     expect(await parseProjectBackup(JSON.stringify(copy))).toEqual(copy);
+  });
+  it('does not let imported history claim a sketch write is Tweak’s', () => {
+    let document = createProjectDocument('Tweak', toUserId('original'));
+    document = setParameter(document, { name: 'gap', expression: '30' });
+    const manager = new CommandManager(document);
+    manager.runTransaction('Widen', [
+      commandFactories.setParameter({ name: 'gap', expression: '45' })
+    ]);
+    // A backup written elsewhere says the entry also stored the re-solve's
+    // sketch geometry: a kind only the recording session may write.
+    const forged = structuredClone(manager.document);
+    const entry = forged.editHistory!.entries.at(-1)!;
+    entry.commandKinds = [
+      ...entry.commandKinds!,
+      PARAMETER_RESOLVED_SKETCH_UPDATE_KIND
+    ];
+    const copy = importProjectCopy(
+      { format: 'openzcad-project', version: 1, document: forged, files: [] },
+      toUserId('importer')
+    );
+    expect(copy.document.editHistory!.entries.at(-1)!.commandKinds).toEqual([
+      'parameter.set',
+      'sketch.object.update'
+    ]);
+    expect(new CommandManager(copy.document).undoIsParameterOnly).toBe(false);
+    // History without the kind is imported as it was.
+    const plain = importProjectCopy(
+      {
+        format: 'openzcad-project',
+        version: 1,
+        document: structuredClone(manager.document),
+        files: []
+      },
+      toUserId('importer')
+    );
+    expect(new CommandManager(plain.document).undoIsParameterOnly).toBe(true);
   });
   it('includes binary files exactly and rejects damaged content', async () => {
     const backup = fixture();

@@ -175,6 +175,37 @@ describe('Tweak undo and solved sketch geometry', () => {
       expect(tweak.redoIsParameterOnly).toBe(true);
     }
   );
+
+  it(
+    'drops a marker any caller puts on a sketch update’s payload',
+    { timeout: 180_000 },
+    async () => {
+      const f = await fixture();
+      const base = f.manager.document;
+      const circle = base.nodes[f.circleId as never] as unknown as {
+        data: Record<string, unknown>;
+      };
+      // A command built from data (a patch, History text, a stored log or
+      // a peer) cannot say the re-solve wrote it.
+      const forged = commandFactories.updateSketchObject({
+        sketchId: f.distanceSketch,
+        objectId: f.circleId,
+        data: { ...circle.data, centerY: 4 },
+        derivedFrom: 'parameter-resolve'
+      } as never);
+      expect(isParameterResolvedSketchUpdate(forged)).toBe(false);
+      expect(JSON.stringify(forged.serialize())).not.toContain('derivedFrom');
+      const manager = new CommandManager(base);
+      manager.runTransaction('Widen and move', [
+        commandFactories.setParameter({ name: 'pitch', expression: '20 mm' }),
+        forged
+      ]);
+      expect(
+        manager.document.editHistory!.entries.at(-1)!.commandKinds
+      ).toEqual(['parameter.set', 'sketch.object.update']);
+      expect(manager.undoIsParameterOnly).toBe(false);
+    }
+  );
 });
 
 describe('a parameter value changed outside the Parameters table', () => {
@@ -229,24 +260,15 @@ describe('a parameter value changed outside the Parameters table', () => {
       expect(sketchOnly.undoIsParameterOnly).toBe(false);
 
       // Replay needs no solver: the recorded log, serialized as a save or a
-      // peer carries it, replays to the same geometry and keeps the mark.
+      // peer carries it, replays to the same geometry. The mark is never in
+      // it: the log holds ordinary sketch updates.
       const log = JSON.parse(
         JSON.stringify(live.commandLog.slice(logStart))
       ) as SerializedCommand[];
+      expect(JSON.stringify(log)).not.toContain('derivedFrom');
       const replayed = replayCommands(base, log);
       expect(f.storedCircleX(replayed)).toBeCloseTo(45, 6);
       expectCentres(await f.centres(replayed), 45, 70);
-      const replayedLeaves = JSON.stringify(replayed.commandLog);
-      expect(replayedLeaves).toContain('"derivedFrom":"parameter-resolve"');
-      // A log written before the mark existed replays the same way.
-      const unmarked = JSON.parse(
-        JSON.stringify(log).replaceAll(',"derivedFrom":"parameter-resolve"', '')
-      ) as SerializedCommand[];
-      expect(JSON.stringify(unmarked)).not.toContain('derivedFrom');
-      expect(f.storedCircleX(replayCommands(base, unmarked))).toBeCloseTo(
-        45,
-        6
-      );
 
       // And back: the Small row's sizes return.
       const back = activateConfiguration(live, { rowId: 'row_small' });

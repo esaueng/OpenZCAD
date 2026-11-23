@@ -4,7 +4,11 @@
  * runs the returned commands through one `executeTransaction`, so N moved
  * objects are one undo step.
  */
-import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import {
+  commandFactories,
+  parameterResolvedSketchUpdate,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   findSketch,
   getParameterScope,
@@ -199,16 +203,11 @@ export function solvedSketchCommands(
       }
     }
     if (next) {
+      const payload = { sketchId, objectId: solved.objectId, data: next };
       commands.push(
-        commandFactories.updateSketchObject(
-          {
-            sketchId,
-            objectId: solved.objectId,
-            data: next,
-            ...(derivedFrom ? { derivedFrom } : {})
-          },
-          'Solve sketch'
-        )
+        derivedFrom
+          ? parameterResolvedSketchUpdate(payload)
+          : commandFactories.updateSketchObject(payload, 'Solve sketch')
       );
     }
   }

@@ -22,6 +22,7 @@ import {
   isImportedSourceReference,
   isProjectCheckpoint,
   isRevisionRecord,
+  withUnverifiedHistoryKinds,
   type ArtifactRecord,
   type ProjectDocument,
   type UserId
@@ -424,6 +425,9 @@ export function importProjectCopy(
       throw new Error('Project backup has invalid imported mesh data.');
     Object.assign(document, normalized, { projectId, ownerUserId });
     if (document.editHistory) {
+      // The importer's own from here on, so nothing in it may claim more
+      // than its commands show (F06).
+      document.editHistory = withUnverifiedHistoryKinds(document.editHistory);
       document.editHistory.projectId = projectId;
       document.editHistory.actorUserId = ownerUserId;
       for (const historical of documentNodesWithHistory(document)) {
