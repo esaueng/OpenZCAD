@@ -12,6 +12,7 @@ import {
 } from '@openzcad/crypto';
 import {
   ASSISTANT_CONSENT_COPY_VERSION,
+  ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   toUserId,
   type E2eeAssistantConsentRecord,
   type ProjectId
@@ -259,6 +260,59 @@ describe('assistant consent on an encrypted project (ADR-024 6-1)', () => {
     expect(server.rows.get(doc.projectId)?.route).toBe(
       assistantConsentRoute(status)
     );
+  });
+
+  it('reloads the assistant policy after a consent rejection in an open tab', async () => {
+    const user = userEvent.setup();
+    const server = consentServer();
+    const props = {
+      server,
+      pins: consentModule.memoryConsentPins(),
+      project: ENCRYPTED
+    };
+    const nextStatus = { ...configured, encryptedProjectMayTrain: true };
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const respond = fetchMock.getMockImplementation()!;
+    let stale = true;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (input === '/api/assistant/status') return Response.json(nextStatus);
+      if (input === '/api/assistant/consented-proposals' && stale) {
+        stale = false;
+        return Response.json(
+          {
+            code: ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+            error: 'The provider policy changed.'
+          },
+          { status: 409 }
+        );
+      }
+      return respond(input, init);
+    });
+    const { rerender } = render(<Harness {...props} />);
+    await act(async () => {});
+    await ask(rerender, props, 1);
+    await user.click(
+      await screen.findByRole('button', { name: 'Allow for this project' })
+    );
+    expect(
+      await screen.findByText('The provider policy changed.')
+    ).toBeTruthy();
+    expect(fetchMock.mock.calls.map(([url]) => url)).toContain(
+      '/api/assistant/status'
+    );
+    expect(proposals).toHaveLength(0);
+
+    await ask(rerender, props, 2);
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Let the assistant read this encrypted project?'
+    });
+    expect(dialog).toHaveTextContent(
+      'may keep your request and use it for training'
+    );
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Allow for this project' })
+    );
+    await waitFor(() => expect(proposals).toHaveLength(1));
   });
 
   it('asks first, sends nothing when declined, and sends exactly the listed fields once allowed', async () => {

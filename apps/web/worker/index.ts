@@ -1852,7 +1852,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       throw new SharingRequestError(
         409,
         ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
-        'The assistant provider changed since you allowed it for this encrypted project. Allow it again. Nothing was sent.'
+        'The assistant provider or data policy changed. Try again to review it. If this persists, reload OpenZCAD. Nothing was sent to the provider.'
       );
     }
     const providerIdentity = await assistantProviderIdentity(userId, env);

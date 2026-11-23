@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ASSISTANT_CONSENT_COPY_VERSION } from '@openzcad/shared';
+import {
+  ASSISTANT_CONSENT_COPY_VERSION,
+  assistantConsentRoute,
+  type AssistantConsentRouteInput
+} from '@openzcad/shared';
 import type * as ConsentModule from '../../lib/e2ee/assistantConsent';
 
 type Module = typeof ConsentModule;
@@ -15,9 +19,13 @@ export interface AssistantConsentSummaryProps {
   ) => ConsentModule.AssistantConsentContext | null;
   /** Injected in tests: the signed-in account. */
   userId?: () => Promise<string | null>;
+  /** Injected in tests. */
+  loadStatus?: () => Promise<AssistantConsentRouteInput>;
 }
 
 const defaultLoader = () => import('../../lib/e2ee/assistantConsent');
+const defaultLoadStatus = async () =>
+  (await import('../../lib/assistantStream')).loadAssistantStatus();
 
 /**
  * The project-properties row for an encrypted project's assistant consent
@@ -28,6 +36,7 @@ const defaultLoader = () => import('../../lib/e2ee/assistantConsent');
 export function AssistantConsentSummary({
   projectId,
   loadModule = defaultLoader,
+  loadStatus = defaultLoadStatus,
   context,
   userId
 }: AssistantConsentSummaryProps) {
@@ -54,7 +63,9 @@ export function AssistantConsentSummary({
                 ? 'Stopped by you'
                 : state.copyVersion !== ASSISTANT_CONSENT_COPY_VERSION
                   ? 'Allowed for an older notice; it asks again'
-                  : 'Allowed by you';
+                  : state.route === assistantConsentRoute(await loadStatus())
+                    ? 'Allowed by you'
+                    : 'Allowed for an older provider policy; it asks again';
       } catch (caught) {
         const status = (caught as { status?: unknown } | null)?.status;
         return status === 501 || status === 503 || status === 404
@@ -81,6 +92,6 @@ export function AssistantConsentSummary({
     return () => {
       cancelled = true;
     };
-  }, [context, loadModule, projectId, userId]);
+  }, [context, loadModule, loadStatus, projectId, userId]);
   return <>{text}</>;
 }
