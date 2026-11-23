@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
   RESERVED_IDENTIFIERS,
   UNITS_CONVERSION_OPERATION_SCALING,
   activateConfiguration,
@@ -732,7 +733,7 @@ describe('convertDocumentUnits: refusals', () => {
     ]);
   });
 
-  it('refuses an imported mesh with a stored payload', () => {
+  it('refuses an imported mesh with embedded triangles beside a stored payload', () => {
     const document = newDocument('mm');
     const mesh = SAMPLE_FEATURES.find(
       (data) => data.featureKind === 'imported-mesh'
@@ -750,6 +751,60 @@ describe('convertDocumentUnits: refusals', () => {
     } as unknown as DocumentNode;
     expect(refusals(convertDocumentUnits(document, 'inch'))).toEqual([
       expect.objectContaining({ code: 'imported-mesh-payload' })
+    ]);
+  });
+
+  it('records the unit of a stored mesh payload instead of rewriting it (phase 5)', () => {
+    const sample = SAMPLE_FEATURES.find(
+      (data) => data.featureKind === 'imported-mesh'
+    )!;
+    const {
+      vertices: _vertices,
+      indices: _indices,
+      ...referenced
+    } = sample as Record<string, unknown>;
+    const withMesh = (document: ProjectDocument): ProjectDocument => {
+      document.nodes.mesh = {
+        id: 'mesh',
+        parentId: null,
+        revisionId: null,
+        name: 'Scan',
+        kind: 'feature',
+        featureId: 'mesh' as never,
+        featureKind: 'imported-mesh',
+        data: structuredClone(referenced)
+      } as unknown as DocumentNode;
+      return document;
+    };
+    const meshData = (document: ProjectDocument) =>
+      (document.nodes.mesh as unknown as { data: Record<string, unknown> })
+        .data;
+
+    const source = withMesh(newDocument('mm'));
+    const result = convertDocumentUnits(source, 'inch');
+    const inch = converted(result);
+    expect(meshData(inch).payloadUnits).toBe('mm');
+    expect(meshData(inch).meshPayloadRef).toEqual(referenced.meshPayloadRef);
+    expect(result.ok && result.report.meshPayloads).toBe(1);
+    // Through another unit it keeps naming where the bytes were written,
+    // and back in that unit the field is absent again: byte for byte.
+    const cm = converted(convertDocumentUnits(inch, 'cm'));
+    expect(meshData(cm).payloadUnits).toBe('mm');
+    const back = converted(convertDocumentUnits(cm, 'mm'));
+    expect('payloadUnits' in meshData(back)).toBe(false);
+    expect(back.nodes).toEqual(source.nodes);
+
+    // A document too old to record the unit refuses.
+    const older = {
+      ...withMesh(newDocument('mm')),
+      schemaVersion: MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1
+    } as unknown as ProjectDocument;
+    expect(refusals(convertDocumentUnits(older, 'inch'))).toEqual([
+      expect.objectContaining({
+        code: 'imported-mesh-payload',
+        subject: 'Scan (mesh)',
+        field: 'meshPayloadRef'
+      })
     ]);
   });
 

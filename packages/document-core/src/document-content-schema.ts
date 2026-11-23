@@ -10,6 +10,7 @@ import {
   type SketchObjectData
 } from '@openzcad/shared';
 import { assertSketchObjectProjection } from './sketch-projections';
+import { unitsConvertPayloadShapeProblem } from './units-convert-payload';
 
 /** New content needs a declared schema; coercion or a missing version is no proof. */
 export function assertMinimumProjectSchema(
@@ -230,6 +231,21 @@ export function assertPrintClearanceSchema(version: unknown): void {
  */
 export function assertDisplayUnitsSchema(version: unknown): void {
   assertMinimumProjectSchema(version, 148, 'Display units');
+}
+
+/**
+ * I03 stored-unit conversion (schema v154): the `units.convert` command. An
+ * older reader would skip it on replay and rebuild every later edit in the
+ * old unit.
+ */
+export const UNITS_CONVERT_SCHEMA_VERSION = 154;
+
+export function assertUnitsConvertSchema(version: unknown): void {
+  assertMinimumProjectSchema(
+    version,
+    UNITS_CONVERT_SCHEMA_VERSION,
+    'Stored-unit conversions'
+  );
 }
 
 /**
@@ -1069,6 +1085,16 @@ export function assertDocumentContentCommandSchema(
       assertPrintClearanceSchema(document.schemaVersion);
     if (command.kind === 'displayUnits.set')
       assertDisplayUnitsSchema(document.schemaVersion);
+    if (command.kind === 'units.convert') {
+      assertUnitsConvertSchema(document.schemaVersion);
+      // The shape replay reads, so a log that opens is one that replays
+      // (a v154 log with the pre-review `pointer → value` map does not).
+      const problem = unitsConvertPayloadShapeProblem(command.payload);
+      if (problem)
+        throw new Error(
+          `The project's stored units.convert command is malformed: ${problem}`
+        );
+    }
     if (typeof command.kind === 'string' && command.kind.startsWith('pmi.'))
       assertModelPmiSchema(document.schemaVersion);
     if (

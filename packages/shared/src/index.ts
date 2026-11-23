@@ -600,7 +600,12 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // content-addressed (and possibly encrypted) blob alone. An older client
 // would read the triangles in the document's unit and draw the mesh 25.4x
 // off, so it must refuse the document. Builds on v152.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 153 as const;
+// v154 adds the I03 `units.convert` command: a recorded stored-unit
+// conversion (`from`, `to`, the exact factor and the re-captured reference
+// map), replayed as a pure transform. An older client would skip the
+// unknown command on replay and rebuild every later edit in the old unit,
+// so it must refuse the document. Builds on v153.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 154 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {

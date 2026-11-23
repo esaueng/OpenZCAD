@@ -1,5 +1,6 @@
 import {
   isCanonicalEdgeTopologyReference,
+  storedTopologyReferenceError,
   walkQuantities,
   type ProjectDocument,
   type SketchRegionProfileReference,
@@ -56,6 +57,23 @@ export type ConversionReferenceValue =
 /** Old place → new value, for every reference site of a converted document. */
 export type ConversionReferenceMap = Readonly<
   Record<string, ConversionReferenceValue>
+>;
+
+/**
+ * One recorded replacement (phase 5): the value the source document stored
+ * at a site when the conversion was authored, and the value it becomes. A
+ * replay checks `from` before writing `to`, so it never overwrites a value
+ * something else changed since (a reordered or rebased history that
+ * re-selected the edge at the same place).
+ */
+export interface ConversionReferenceReplacement {
+  from: ConversionReferenceValue;
+  to: ConversionReferenceValue;
+}
+
+/** Old place → recorded replacement: the `units.convert` payload's map. */
+export type RecordedConversionReferences = Readonly<
+  Record<string, ConversionReferenceReplacement>
 >;
 
 interface SiteBase {
@@ -138,6 +156,8 @@ export function isStoredTopologyReference(
     isRecord(value.witness)
   );
 }
+
+export { isConversionReferenceValue } from './units-convert-payload';
 
 function isRegionProfileReference(
   value: unknown
@@ -371,7 +391,11 @@ export function listConversionReferenceSites(
 }
 
 export type ApplyReferenceMapRefusalCode =
-  'unknown-site' | 'missing-site' | 'wrong-type' | 'invalid-reference';
+  | 'unknown-site'
+  | 'missing-site'
+  | 'wrong-type'
+  | 'invalid-reference'
+  | 'reference-changed';
 
 export interface ApplyReferenceMapRefusal {
   code: ApplyReferenceMapRefusalCode;
@@ -395,8 +419,9 @@ function validReplacement(
         return 'expects a schema-v5 topology reference';
       if (value.kind !== site.reference.kind)
         return `expects a ${site.reference.kind} reference, not a ${value.kind}`;
-      if (!Number.isSafeInteger(value.currentHash) || value.currentHash <= 0)
-        return 'carries an invalid hash';
+      // The validator stored references use: identity, hash, witness shape.
+      const malformed = storedTopologyReferenceError(value, value.kind);
+      if (malformed) return malformed;
       if (value.kind === 'edge' && !isCanonicalEdgeTopologyReference(value))
         return 'carries an edge witness that does not hash to its currentHash';
       return undefined;
@@ -486,4 +511,82 @@ export function applyReferenceMap(
       typeof value === 'object' ? structuredClone(value) : value;
   }
   return { ok: true, document: next };
+}
+
+/** JSON with object keys sorted: equal values compare equal however stored. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (isRecord(value))
+    return `{${Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(',')}}`;
+  return JSON.stringify(value) ?? 'undefined';
+}
+
+/**
+ * Records a re-captured map against the source document it was authored
+ * from: each entry keeps the value `source` stores at its place as the
+ * replacement's precondition. A place `source` does not hold records no
+ * `from`, which {@link isConversionReferenceValue} then refuses.
+ */
+export function recordConversionReferences(
+  source: ProjectDocument,
+  references: ConversionReferenceMap
+): RecordedConversionReferences {
+  const recorded: Record<string, ConversionReferenceReplacement> = {};
+  for (const [pointer, to] of Object.entries(references)) {
+    const path = parsePointer(pointer);
+    const from = path ? valueAt(source, path) : undefined;
+    recorded[pointer] = {
+      from: (typeof from === 'object'
+        ? structuredClone(from)
+        : from) as ConversionReferenceValue,
+      to
+    };
+  }
+  return recorded;
+}
+
+/** The new values of a recorded map, as {@link applyReferenceMap} takes them. */
+export function conversionReferenceTargets(
+  recorded: RecordedConversionReferences
+): ConversionReferenceMap {
+  return Object.fromEntries(
+    Object.entries(recorded).map(([pointer, entry]) => [pointer, entry.to])
+  );
+}
+
+/**
+ * Every place where `source` no longer stores the value a recorded
+ * replacement was authored against (code `reference-changed`), in pointer
+ * order. Empty means every precondition holds and the replacement may be
+ * written. Values compare structurally, ignoring object key order.
+ */
+export function conversionReferencePreconditionRefusals(
+  source: ProjectDocument,
+  recorded: RecordedConversionReferences
+): ApplyReferenceMapRefusal[] {
+  const sites = new Map(
+    listConversionReferenceSites(source).map((site) => [site.pointer, site])
+  );
+  const refusals: ApplyReferenceMapRefusal[] = [];
+  for (const pointer of Object.keys(recorded).sort()) {
+    const path = parsePointer(pointer);
+    const current = path ? valueAt(source, path) : undefined;
+    if (canonicalJson(current) === canonicalJson(recorded[pointer]!.from))
+      continue;
+    const site = sites.get(pointer);
+    const subject = site?.subject ?? 'document';
+    const field = site?.field ?? pointer;
+    refusals.push({
+      code: 'reference-changed',
+      pointer,
+      subject,
+      field,
+      message: `${subject}: ${field} is no longer the selection this conversion was recorded against (it changed after the conversion was checked), so replaying it would overwrite the newer one. Stored units were not converted.`
+    });
+  }
+  return refusals;
 }
