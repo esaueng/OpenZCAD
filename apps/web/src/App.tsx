@@ -1045,7 +1045,6 @@ import {
 import {
   edgeLabel,
   edgeLengthMeasurement,
-  faceLabel,
   textLabelSegments,
   topologySelectionLabel,
   topologySelectionLabelSegments,
