@@ -265,14 +265,15 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
   it('refuses when another tab joins during the write, keeping the checkpoint', async () => {
     const source = boxDocument();
     const manager = new CommandManager(source, USER);
-    let room = liveRoom();
+    // The workspace's room state, updated in place as presence arrives.
+    const room = liveRoom();
     const { persistence, writes } = writing(manager, () => {
-      room = liveRoom({ members: [member('me', 'Me'), member('tab2', 'Me')] });
+      room.members = [member('me', 'Me'), member('tab2', 'Me')];
     });
     const result = await commitUnitsConversion(manager, preparedFor(source), {
       persistence,
-      collaboration: () => room,
-      now: () => 1_000
+      collaboration: room,
+      now: 1_000
     });
     expect(result).toMatchObject({
       ok: false,
@@ -296,6 +297,7 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
     const { persistence, writes } = writing(manager, () => {
       clock = 2_500;
     });
+    // Read through functions, as the workspace passes its latest state.
     const result = await commitUnitsConversion(manager, preparedFor(source), {
       persistence,
       collaboration: () => liveRoom(),

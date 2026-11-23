@@ -6,6 +6,7 @@ import {
 } from '@openzcad/command-system';
 import {
   createProjectDocument,
+  documentHistoryBytes,
   listFeaturesInOrder,
   normalizeDocument,
   recordDocumentEdit,
@@ -562,5 +563,58 @@ describe('undo byte bound', () => {
     expect(recorded.cursor).toBe(expected.cursor);
     expect(recorded.trimmed).toBe(expected.trimmed);
     expect(isDocumentHistory(recorded, before.projectId)).toBe(true);
+  });
+
+  it('keeps the newest entry whenever it fits alone, and only then', () => {
+    // The bound drops the oldest first, so the edit just made survives
+    // every earlier step. It cannot survive alone over the bound: the
+    // validator would refuse the history and the project would not open,
+    // so the stored-unit conversion refuses such a step before applying.
+    const before = initial();
+    const filler = (index: number) => ({
+      id: `entry_${index}`,
+      label: `Edit ${index}`,
+      changes: [
+        {
+          kind: 'value' as const,
+          field: 'name' as const,
+          before: 'x'.repeat(1_000),
+          after: `Name ${index}`
+        }
+      ]
+    });
+    const entries = Array.from({ length: 5 }, (_, index) => filler(index));
+    const history: DocumentHistory = {
+      schemaVersion: 1,
+      projectId: before.projectId,
+      actorUserId: owner,
+      entries,
+      cursor: entries.length,
+      trimmed: 0
+    };
+    const record = (length: number) =>
+      recordDocumentEdit(
+        { ...before, editHistory: history },
+        { ...before, name: 'y'.repeat(length) },
+        'Long name',
+        owner
+      ).editHistory!;
+    // Size the name so the newest entry, alone, is exactly the bound.
+    const probe = record(1_000);
+    const alone = (length: number) =>
+      documentHistoryBytes({
+        ...probe,
+        entries: [record(length).entries.at(-1)!],
+        cursor: 1,
+        trimmed: entries.length
+      });
+    const fits = 1_000 + MAX_UNDO_BYTES - alone(1_000);
+    expect(alone(fits)).toBe(MAX_UNDO_BYTES);
+    const kept = record(fits);
+    expect(kept.entries.map((entry) => entry.label)).toEqual(['Long name']);
+    expect(kept.trimmed).toBe(entries.length);
+    expect(documentHistoryBytes(kept)).toBe(MAX_UNDO_BYTES);
+    expect(isDocumentHistory(kept, before.projectId)).toBe(true);
+    expect(record(fits + 1).entries).toEqual([]);
   });
 });
