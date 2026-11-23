@@ -1119,6 +1119,11 @@ test('a panel brought up during Box leaves the Tools drawer to come back', async
 async function panelLayoutMenu(page: Page) {
   const menu = page.getByRole('menu', { name: 'Panel layout' });
   if (!(await menu.isVisible())) {
+    // A phone keeps the layout menu behind the viewer bar's toggle.
+    const more = page.getByRole('button', { name: 'More view tools' });
+    if ((await more.getAttribute('aria-expanded')) !== 'true') {
+      await more.click();
+    }
     await page
       .getByRole('toolbar', { name: 'Model panels' })
       .getByRole('button', { name: 'Panel layout' })
@@ -1129,9 +1134,13 @@ async function panelLayoutMenu(page: Page) {
 }
 
 /** A box with History brought up in the lane and the drawer opened over it. */
-async function historyUnderReopenedDrawer(page: Page, name: string) {
+async function historyUnderReopenedDrawer(
+  page: Page,
+  name: string,
+  { width, height } = { width: 390, height: 844 }
+) {
   await stubApi(page);
-  await page.setViewportSize({ width: 390, height: 844 });
+  await page.setViewportSize({ width, height });
   await createProject(page, name);
   await createPrimitiveInPlace(page, 'box');
   await expectBodyCount(page, 1);
@@ -1211,50 +1220,87 @@ test('panels shown during a face drag leave the Tools drawer to come back', asyn
   page
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 150_000);
-  const drawer = await historyUnderReopenedDrawer(page, 'Drawer under drag');
+  // The widest phone stage, where the drawer leaves the box beside it.
+  const drawer = await historyUnderReopenedDrawer(page, 'Drawer under drag', {
+    width: 700,
+    height: 900
+  });
   await page.keyboard.press('Control+\\');
   await expect(modelPanel(page, 'History')).toHaveCount(0);
   await expect(drawer).toBeVisible();
 
+  // The open drawer stands over the stage's left side, and the box with it:
+  // pan the box out beside the drawer, then take the first face whose handle
+  // a finger can reach there.
   const canvas = page.locator('.viewer-host canvas');
-  await expect
-    .poll(() =>
-      canvas.evaluate(
-        (element) =>
-          new Promise((resolve) => {
-            element.dispatchEvent(
-              new CustomEvent('openzcad:e2e-select-planar-face', {
-                detail: { normal: { x: 0, y: -1, z: 0 }, resolve }
-              })
-            );
-          })
-      )
-    )
-    .not.toBeNull();
-  await page
-    .locator('.selection-rail')
-    .getByRole('button', { name: 'Selection: Offset', exact: true })
-    .click();
+  const drawerBox = (await drawer.boundingBox())!;
+  const panFrom = { x: drawerBox.x + drawerBox.width + 30, y: 220 };
+  await page.mouse.move(panFrom.x, panFrom.y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(panFrom.x + 200, panFrom.y, { steps: 12 });
+  await page.mouse.up({ button: 'right' });
+  await waitForStillViewport(page);
   const operation = page.getByRole('region', { name: 'Offset Face operation' });
-  await expect(operation).toBeVisible();
+  let grab: { start: { x: number; y: number }; dx: number; dy: number } | null =
+    null;
+  for (const normal of [
+    { x: 1, y: 0, z: 0 },
+    { x: 0, y: 0, z: 1 },
+    { x: 0, y: -1, z: 0 }
+  ]) {
+    await expect
+      .poll(() =>
+        canvas.evaluate(
+          (element, normal) =>
+            new Promise((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-planar-face', {
+                  detail: { normal, resolve }
+                })
+              );
+            }),
+          normal
+        )
+      )
+      .not.toBeNull();
+    await page
+      .locator('.selection-rail')
+      .getByRole('button', { name: 'Selection: Offset', exact: true })
+      .click();
+    await expect(operation).toBeVisible();
+    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+    const bounds = (await canvas.boundingBox())!;
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      pixels: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    const start = { x: bounds.x + handle.x, y: bounds.y + handle.y };
+    const onCanvas = await canvas.evaluate(
+      (element, { x, y }) => document.elementFromPoint(x, y) === element,
+      start
+    );
+    if (onCanvas) {
+      grab = {
+        start,
+        dx: handle.dx * handle.pixels * 3,
+        dy: handle.dy * handle.pixels * 3
+      };
+      break;
+    }
+    await page.keyboard.press('Escape');
+    await expect(operation).toHaveCount(0);
+  }
+  expect(grab, 'a face handle clear of the drawer').not.toBeNull();
+  const { start } = grab!;
   await expect(drawer).toBeVisible();
-  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
-  const bounds = (await canvas.boundingBox())!;
-  const handle = await canvas.evaluate((element) => ({
-    x: Number(element.dataset.e2eHandleX),
-    y: Number(element.dataset.e2eHandleY),
-    dx: Number(element.dataset.e2eHandleDx),
-    dy: Number(element.dataset.e2eHandleDy),
-    pixels: Number(element.dataset.e2eHandlePixelsPerUnit)
-  }));
-  const start = { x: bounds.x + handle.x, y: bounds.y + handle.y };
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
-  await page.mouse.move(
-    start.x + handle.dx * handle.pixels * 3,
-    start.y + handle.dy * handle.pixels * 3,
-    { steps: 12 }
-  );
+  await page.mouse.move(start.x + grab!.dx, start.y + grab!.dy, {
+    steps: 12
+  });
   await expect(operation).toHaveAttribute('data-hold', 'drag');
   await expect(drawer).toHaveCount(0);
   expect(await storedToolsDrawer(page)).toBe(true);
