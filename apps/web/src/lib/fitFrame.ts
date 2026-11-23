@@ -207,11 +207,19 @@ export function measureClearStage(
     };
     const now = clear(bottom, sides);
     if (guide.right <= now.left || guide.left >= now.right) continue;
-    // A candidate counts only inside the stage the other panels leave: one
-    // that let a docked column go to clear the card would frame the model
-    // behind the column instead.
+    // A candidate counts only where it reaches no panel the stage without
+    // it keeps clear of: one that let a docked column go to clear the card
+    // would frame the model behind the column instead. A panel below the
+    // band above the card is one it does not reach.
+    const reached = (rect: StageRect) =>
+      sides.filter(
+        (panel) =>
+          Math.min(panel.right, rect.right) > Math.max(panel.left, rect.left) &&
+          Math.min(panel.bottom, rect.bottom) > Math.max(panel.top, rect.top)
+      );
+    const alreadyReached = reached(now);
     const room = (rect: StageRect) =>
-      rect.left >= now.left - 0.5 && rect.right <= now.right + 0.5
+      reached(rect).every((panel) => alreadyReached.includes(panel))
         ? Math.min(rect.right - rect.left, rect.bottom - rect.top)
         : -Infinity;
     const above =

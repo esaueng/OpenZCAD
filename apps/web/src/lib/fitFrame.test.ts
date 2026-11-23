@@ -463,6 +463,22 @@ describe('the modeling guide', () => {
       expect(stage.rect.right).toBe(462 - 12);
     });
 
+    it('frames above the card past a floating panel standing below that band', () => {
+      // The right panel floats from y 650 to 900, under the band above the
+      // card: that band is clear of it, and wider than the stage beside it
+      // (re-check on this change).
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      area.querySelector('.panel-dock-layer')!.replaceChildren();
+      const floating = document.createElement('div');
+      floating.className = 'panel-unpinned';
+      area
+        .querySelector('.panel-dock-layer')!
+        .append(placed(floating, 462, 650, 768, 900));
+      guide(area, 116, 606, 412, 845);
+      expect(measureClearStage(canvas)!.rect.bottom).toBe(606 - 12);
+      expect(guideShapesClearStage(canvas)).toBe(true);
+    });
+
     it('asks for a reframe only where the card changes the stage', () => {
       const { area, canvas } = tabletStage(768, 1024, 462);
       const card = guide(area, 116, 606, 412, 845);
