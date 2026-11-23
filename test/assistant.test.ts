@@ -1314,7 +1314,8 @@ describe('assistant integration', () => {
       configured: true,
       provider: 'openrouter',
       model: DEFAULT_OPENROUTER_MODEL,
-      reasoningEffort: 'high'
+      reasoningEffort: 'high',
+      encryptedProjectUnsupported: true
     });
   });
 
@@ -1524,6 +1525,41 @@ describe('assistant integration', () => {
       },
       text: { format: { type: 'json_schema', strict: true } }
     });
+  });
+
+  it('keeps encrypted routing restrictions on fallback and explains an ineligible model', async () => {
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({ error: { code: 404 } }, { status: 404 })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(
+      { ...input, encryptedProject: true },
+      { OPENROUTER_API_KEY: 'test-key' }
+    );
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://openrouter.ai/api/v1/responses',
+      'https://openrouter.ai/api/v1/chat/completions'
+    ]);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(JSON.parse(init?.body as string)).toMatchObject({
+        provider: {
+          data_collection: 'deny',
+          max_price: { prompt: 0, completion: 0, request: 0 }
+        }
+      });
+    }
+    expect(response.status).toBe(502);
+    const errorBody = (await response.json()) as {
+      code: string;
+      error: string;
+    };
+    expect(errorBody.code).toBe('AI_UPSTREAM_ERROR');
+    expect(errorBody.error).toContain('Switch to Personal token');
   });
 
   it('keeps free MiniMax and its zero price cap with JSON mode and the exact prompt schema', async () => {

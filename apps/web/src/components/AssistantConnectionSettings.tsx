@@ -31,11 +31,13 @@ export function AssistantConnectionSettings({
   assistant,
   accountState,
   sessionUserId,
+  encryptedProjectOpen,
   onChange
 }: {
   assistant: AppSettings['assistant'];
   accountState: AppSettingsResponse | null;
   sessionUserId: string | undefined;
+  encryptedProjectOpen: boolean;
   onChange(next: Partial<AppSettings['assistant']>): void;
 }) {
   const effective = accountState?.effectiveAssistant;
@@ -67,6 +69,19 @@ export function AssistantConnectionSettings({
   const currentRead = read?.userId === sessionUserId ? read : null;
   const status = effective ?? currentRead?.result;
   const loading = !effective && currentRead === null;
+  const encryptedProjectUnsupported =
+    encryptedProjectOpen && status?.encryptedProjectUnsupported === true;
+  const badge = loading
+    ? 'Loading…'
+    : !status
+      ? 'Unavailable'
+      : !assistant.enabled
+        ? 'Off'
+        : !status.configured
+          ? 'Unavailable'
+          : encryptedProjectUnsupported
+            ? 'Unavailable for encrypted projects'
+            : 'Configured';
   const policy =
     status?.provider === 'openrouter'
       ? {
@@ -142,20 +157,12 @@ export function AssistantConnectionSettings({
               tone={
                 loading || !assistant.enabled
                   ? undefined
-                  : status?.configured
+                  : status?.configured && !encryptedProjectUnsupported
                     ? 'good'
                     : 'warning'
               }
             >
-              {loading
-                ? 'Loading…'
-                : !status
-                  ? 'Unavailable'
-                  : !assistant.enabled
-                    ? 'Off'
-                    : status.configured
-                      ? 'Ready'
-                      : 'Unavailable'}
+              {badge}
             </Status>
           </SettingRow>
         )}

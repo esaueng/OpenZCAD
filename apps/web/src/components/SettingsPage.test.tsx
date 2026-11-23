@@ -953,7 +953,7 @@ describe('assistant data disclosure', () => {
   it.each([
     { enabled: false, configured: false, badge: 'Off' },
     { enabled: false, configured: true, badge: 'Off' },
-    { enabled: true, configured: true, badge: 'Ready' },
+    { enabled: true, configured: true, badge: 'Configured' },
     { enabled: true, configured: false, badge: 'Unavailable' }
   ])(
     'labels enabled=$enabled and configured=$configured as $badge',
@@ -981,6 +981,28 @@ describe('assistant data disclosure', () => {
       expect(screen.queryByText('Not configured')).toBeNull();
     }
   );
+
+  it('shows that the configured built-in model is unavailable for the open encrypted project', async () => {
+    const settings = defaultAppSettings();
+    settings.assistant.enabled = true;
+    vi.mocked(loadAssistantStatus).mockResolvedValue({
+      configured: true,
+      source: 'deployment',
+      provider: 'openrouter',
+      model: 'nvidia/nemotron-3.5-super-vl:free',
+      reasoningEffort: 'high',
+      encryptedProjectUnsupported: true
+    });
+    renderSettings(null, {
+      settings,
+      initialSection: 'assistant',
+      encryptedProjectOpen: true
+    });
+    expect(
+      await screen.findByText('Unavailable for encrypted projects')
+    ).toBeVisible();
+    expect(screen.queryByText('Configured')).toBeNull();
+  });
 
   it('explains the free built-in model and data use, then keeps the personal model option', async () => {
     const user = userEvent.setup();

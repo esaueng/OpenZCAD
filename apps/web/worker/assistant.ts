@@ -30,7 +30,8 @@ import { isPrivateHostname } from './privateNetwork';
 import { matchesAssistantSchema } from './assistantJsonSchema';
 
 export const DEFAULT_AI_MODEL = 'gpt-6-luna';
-export const DEFAULT_OPENROUTER_MODEL = 'nvidia/nemotron-3.5-super-vl:free';
+const NEMOTRON_FREE_MODEL = 'nvidia/nemotron-3.5-super-vl:free';
+export const DEFAULT_OPENROUTER_MODEL = NEMOTRON_FREE_MODEL;
 export const DEFAULT_AI_REASONING_EFFORT = 'high';
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 32_000;
 export const DEFAULT_AI_TIMEOUT_MS = 90_000;
@@ -281,6 +282,7 @@ export interface AssistantStatus {
   provider: string;
   model: string;
   reasoningEffort: string;
+  encryptedProjectUnsupported?: true;
 }
 
 export interface AssistantRuntimeConfig {
@@ -798,11 +800,18 @@ function reasoningRequest(effort: string): {
 
 export function getAssistantStatus(env: CloudflareEnv): AssistantStatus {
   const provider = providerFor(env);
+  const model = modelFor(env, provider);
   return {
     configured: Boolean(apiKeyFor(env, provider)),
     provider,
-    model: modelFor(env, provider),
-    reasoningEffort: env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT
+    model,
+    reasoningEffort: env.AI_REASONING_EFFORT ?? DEFAULT_AI_REASONING_EFFORT,
+    // NVIDIA's free endpoint retains prompts and is excluded by data_collection: deny.
+    ...(provider === 'openrouter' &&
+    model === NEMOTRON_FREE_MODEL &&
+    (!env.AI_BASE_URL || env.AI_BASE_URL.trim() === OPENROUTER_RESPONSES_URL)
+      ? { encryptedProjectUnsupported: true }
+      : {})
   };
 }
 
@@ -824,7 +833,8 @@ function jsonError(
 function proposalProviderErrorMessage(
   status: number,
   usesPersonalConfiguration: boolean,
-  provider: string
+  provider: string,
+  encryptedProject: boolean
 ): string {
   if (status === 401 || status === 403) {
     return usesPersonalConfiguration
@@ -835,6 +845,12 @@ function proposalProviderErrorMessage(
     return "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later.";
   }
   if (status === 404 && provider === 'openrouter') {
+    if (encryptedProject) {
+      const action = usesPersonalConfiguration
+        ? 'Choose another model in AI Assistant settings.'
+        : 'Switch to Personal token in AI Assistant settings to use another model.';
+      return `OpenRouter found no eligible provider route. This encrypted project requires a provider that does not collect prompts. ${action}`;
+    }
     return 'OpenRouter found no eligible route for this model and structured-output request. Check the model and the OpenRouter account privacy and provider-routing settings.';
   }
   if (status === 400 || status === 404 || status === 422) {
@@ -1573,7 +1589,12 @@ export async function streamAssistantProposal(
       providerRequestId: failure.providerRequestId ?? null
     });
     return jsonError(
-      proposalProviderErrorMessage(upstream.status, Boolean(runtime), provider),
+      proposalProviderErrorMessage(
+        upstream.status,
+        Boolean(runtime),
+        provider,
+        input.encryptedProject === true
+      ),
       'AI_UPSTREAM_ERROR',
       502,
       requestId
