@@ -106,6 +106,68 @@ describe('useModalFocus', () => {
     expect(background).not.toHaveAttribute('inert');
   });
 
+  it('falls back when the opener has unmounted by the time the dialog closes', async () => {
+    const user = userEvent.setup();
+    function FallbackModal({
+      onSwitch,
+      onClose
+    }: {
+      onSwitch(): void;
+      onClose(): void;
+    }) {
+      const dialogRef = useRef<HTMLDivElement | null>(null);
+      useModalFocus(dialogRef, {
+        autoFocus: true,
+        returnFocusFallback: () =>
+          document.querySelector<HTMLElement>('[data-opener]')
+      });
+      return (
+        <div ref={dialogRef} role="dialog" aria-label="Moved" tabIndex={-1}>
+          <button type="button" onClick={onSwitch}>
+            Switch layout
+          </button>
+          <button type="button" onClick={onClose}>
+            Close moved
+          </button>
+        </div>
+      );
+    }
+    // A layout switch swaps the opener for its twin while the dialog is up.
+    function Swap() {
+      const [open, setOpen] = useState(false);
+      const [phone, setPhone] = useState(false);
+      return (
+        <>
+          {phone ? (
+            <button key="phone" type="button" data-opener="">
+              Phone opener
+            </button>
+          ) : (
+            <button
+              key="desk"
+              type="button"
+              data-opener=""
+              onClick={() => setOpen(true)}
+            >
+              Desk opener
+            </button>
+          )}
+          {open && (
+            <FallbackModal
+              onSwitch={() => setPhone(true)}
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </>
+      );
+    }
+    render(<Swap />);
+    await user.click(screen.getByRole('button', { name: 'Desk opener' }));
+    await user.click(screen.getByRole('button', { name: 'Switch layout' }));
+    await user.click(screen.getByRole('button', { name: 'Close moved' }));
+    expect(screen.getByRole('button', { name: 'Phone opener' })).toHaveFocus();
+  });
+
   it('keeps the topmost concurrent dialog interactive and reactivates the one below', async () => {
     const user = userEvent.setup();
 

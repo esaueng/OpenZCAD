@@ -20,14 +20,17 @@ import {
 } from '@openzcad/shared';
 import {
   createProjectDocument,
-  createSavedRevision
+  createSavedRevision,
+  setParameter
 } from '@openzcad/document-core';
-import { toUserId } from '@openzcad/shared';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import {
   loadLocalSaveState,
   saveLocalSaveStates
 } from '../../lib/localProjectStore';
 import type { PanelId } from '../../lib/panelLayout';
+import type { PatchSource } from './modelPanelProps';
 import { ModelPanel, type ModelPanelProps } from './ModelPanel';
 import { PINNED_HINT, TEMPORARY_HINT, type PanelControls } from './PanelFrame';
 import { HistoryTextHost } from './HistoryTextHost';
@@ -671,6 +674,153 @@ describe('ModelPanel', () => {
     expect(
       (await screen.findByLabelText<HTMLTextAreaElement>(/History text/)).value
     ).toBe(edited);
+  });
+
+  /**
+   * The workspace's History panel in the dock or, at phone width, the lane,
+   * with History as text drawn once beside them, as App draws it.
+   */
+  function TextWorkspace({
+    phone,
+    document,
+    onApply
+  }: {
+    phone: boolean;
+    document: ProjectDocument;
+    onApply(proposal: CadPatchProposal, source: PatchSource): Promise<boolean>;
+  }) {
+    const views = {
+      objects: useObjectsView(),
+      historyFind: useHistoryFind(),
+      historyText: useHistoryText()
+    };
+    const panel = (
+      <ModelPanel
+        id="history"
+        controls={controls()}
+        views={views}
+        {...source({ document })}
+      />
+    );
+    return (
+      <>
+        {phone ? (
+          <section key="lane">{panel}</section>
+        ) : (
+          <div key="dock">{panel}</div>
+        )}
+        <HistoryTextHost
+          view={views.historyText}
+          document={document}
+          onApply={onApply}
+        />
+      </>
+    );
+  }
+
+  function widthDocument(width: string) {
+    return setParameter(createProjectDocument('Text', toUserId('owner')), {
+      name: 'width',
+      expression: width,
+      quantity: 'length'
+    });
+  }
+
+  it('shows an Apply still running when History as text is opened again', async () => {
+    const user = userEvent.setup();
+    const document = widthDocument('40 mm');
+    let finish!: (applied: boolean) => void;
+    const onApply = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        })
+    );
+    render(
+      <TextWorkspace phone={false} document={document} onApply={onApply} />
+    );
+    await user.click(screen.getByRole('button', { name: 'History as text' }));
+    const field =
+      await screen.findByLabelText<HTMLTextAreaElement>(/History text/);
+    const edited = field.value.replace('`40 mm`', '`45 mm`');
+    fireEvent.change(field, { target: { value: edited } });
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApply).toHaveBeenCalledTimes(1);
+
+    // Escape during the slow exact check, then open the text again.
+    await user.keyboard('{Escape}');
+    expect(
+      screen.queryByRole('dialog', { name: 'History as text' })
+    ).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'History as text' }));
+    const reopened =
+      await screen.findByLabelText<HTMLTextAreaElement>(/History text/);
+    // Still applying: the text cannot take edits the commit would then
+    // clear, and Apply cannot start twice.
+    expect(reopened.value).toBe(edited);
+    expect(reopened).toHaveAttribute('readonly');
+    const dialog = screen.getByRole('dialog', { name: 'History as text' });
+    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    expect(within(dialog).getByRole('status')).toHaveTextContent(
+      'Checking against exact geometry…'
+    );
+
+    await act(async () => finish(true));
+    expect(reopened).not.toHaveAttribute('readonly');
+  });
+
+  it('refuses a kept History as text edit once another copy of the model is adopted', async () => {
+    const user = userEvent.setup();
+    const document = widthDocument('40 mm');
+    const onApply = vi.fn(async () => true);
+    const { rerender } = render(
+      <TextWorkspace phone={false} document={document} onApply={onApply} />
+    );
+    await user.click(screen.getByRole('button', { name: 'History as text' }));
+    const field =
+      await screen.findByLabelText<HTMLTextAreaElement>(/History text/);
+    const edited = `${field.value}# kept\n`;
+    fireEvent.change(field, { target: { value: edited } });
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+
+    // A sync conflict resolved by taking the cloud copy: same project and
+    // version number, another value for the parameter.
+    const cloud = {
+      ...widthDocument('55 mm'),
+      projectId: document.projectId,
+      version: document.version
+    };
+    rerender(<TextWorkspace phone={false} document={cloud} onApply={onApply} />);
+    await user.click(screen.getByRole('button', { name: 'History as text' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'History as text'
+    });
+    expect(
+      within(dialog).getByLabelText<HTMLTextAreaElement>(/History text/).value
+    ).toBe(edited);
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'The model changed since this draft was started'
+    );
+    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('returns focus to the History as text toggle of the layout now shown', async () => {
+    const user = userEvent.setup();
+    const document = widthDocument('40 mm');
+    const onApply = vi.fn(async () => false);
+    const { rerender } = render(
+      <TextWorkspace phone={false} document={document} onApply={onApply} />
+    );
+    await user.click(screen.getByRole('button', { name: 'History as text' }));
+    await screen.findByLabelText(/History text/);
+    // The desktop toggle that opened the dialog unmounts with the dock.
+    rerender(<TextWorkspace phone document={document} onApply={onApply} />);
+    await user.keyboard('{Escape}');
+    expect(
+      screen.queryByRole('dialog', { name: 'History as text' })
+    ).toBeNull();
+    expect(screen.getByRole('button', { name: 'History as text' })).toHaveFocus();
   });
 
   it('offers no history text without a document', () => {

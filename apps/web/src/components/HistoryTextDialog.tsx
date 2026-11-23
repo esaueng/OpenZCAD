@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type SetStateAction
-} from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileCode2 } from 'lucide-react';
 import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import {
@@ -18,7 +11,11 @@ import type { ProjectDocument } from '@openzcad/shared';
 import { useModalFocus } from '../lib/useModalFocus';
 import { useKeyboardInset } from '../lib/keyboardInset';
 import type { PatchSource } from './modelPanels/modelPanelProps';
-import type { HistoryTextDraft } from './modelPanels/panelViews';
+import {
+  historyTextDraftStale,
+  useHistoryTextSession,
+  type HistoryTextSession
+} from './modelPanels/panelViews';
 
 export interface HistoryTextDialogProps {
   document: ProjectDocument;
@@ -31,12 +28,17 @@ export interface HistoryTextDialogProps {
    */
   onApply?(proposal: CadPatchProposal, source: PatchSource): Promise<boolean>;
   /**
-   * The unapplied edit, held by the caller so it outlives this dialog
-   * remounting (the workspace crossing the phone breakpoint). Given with
-   * `onDraftChange`; absent, the dialog holds its own.
+   * The unapplied edit and any Apply in flight, held by the caller so they
+   * outlive this dialog closing or remounting (the workspace crossing the
+   * phone breakpoint). Absent, the dialog holds its own.
    */
-  draft?: HistoryTextDraft | null;
-  onDraftChange?: Dispatch<SetStateAction<HistoryTextDraft | null>>;
+  session?: HistoryTextSession;
+  /**
+   * Where focus goes on close when the control that opened the dialog is
+   * gone (the desktop History panel, unmounted by a switch to the phone
+   * layout).
+   */
+  returnFocus?(): HTMLElement | null;
   onClose(): void;
 }
 
@@ -57,6 +59,8 @@ function print(document: ProjectDocument): {
   }
 }
 
+const CHECKING = 'Checking against exact geometry…';
+
 function where(diagnostic: HistoryTextDiagnostic): string {
   return `Line ${diagnostic.span.start.line}, column ${diagnostic.span.start.column}`;
 }
@@ -73,28 +77,35 @@ export default function HistoryTextDialog({
   document,
   editBlocked = null,
   onApply,
-  draft: heldDraft,
-  onDraftChange,
+  session: heldSession,
+  returnFocus,
   onClose
 }: HistoryTextDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const printed = useMemo(() => print(document), [document]);
-  // The edit and the version it was printed from; null while unedited.
-  const [ownDraft, setOwnDraft] = useState<HistoryTextDraft | null>(null);
-  const held = onDraftChange !== undefined;
-  const draft = held ? (heldDraft ?? null) : ownDraft;
-  const setDraft = onDraftChange ?? setOwnDraft;
+  // The edit and what it was printed from (null while unedited), and any
+  // Apply in flight: held by the caller when given, so a dialog opened
+  // again shows an Apply still running instead of taking edits it clears.
+  const ownSession = useHistoryTextSession();
+  const { draft, setDraft, applying, startApply } = heldSession ?? ownSession;
   const [checked, setChecked] = useState<HistoryEditResult | null>(null);
   const [status, setStatus] = useState('');
-  const [applying, setApplying] = useState(false);
-  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: textRef });
+  useModalFocus(dialogRef, {
+    autoFocus: true,
+    initialFocusRef: textRef,
+    ...(returnFocus ? { returnFocusFallback: returnFocus } : {})
+  });
   // An on-screen keyboard shrinks the visual viewport, not 100dvh; the
   // dialog's height subtracts it so the actions stay above the keyboard.
   useKeyboardInset(dialogRef);
 
   const text = draft?.text ?? printed.text;
-  const stale = draft !== null && draft.baseVersion !== document.version;
+  // Written against another document: compiling the whole old text against
+  // this one would undo whatever changed since, so it is kept, not applied.
+  const stale =
+    draft !== null &&
+    historyTextDraftStale(draft, document.version, printed.text);
   const editable = Boolean(onApply) && printed.error === null;
   const lineCount = text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 
@@ -118,13 +129,16 @@ export default function HistoryTextDialog({
   }
 
   async function apply() {
-    if (!onApply || !draft || stale) return;
+    if (!onApply || !draft || stale || applying || editBlocked !== null) {
+      return;
+    }
     const result = check();
     if (!result.proposal) return;
-    setApplying(true);
-    setStatus('Checking against exact geometry…');
+    const finish = startApply(draft.text);
+    setStatus(CHECKING);
+    let applied = false;
     try {
-      const applied = await onApply(result.proposal, {
+      applied = await onApply(result.proposal, {
         label: 'Edit history text',
         action: 'edit the history text',
         checking: 'Checking the history text against exact geometry…',
@@ -132,15 +146,15 @@ export default function HistoryTextDialog({
           'The model changed while the history text was checked. Reload the text and make the edit again.',
         baseVersion: draft.baseVersion
       });
-      if (applied) {
-        setDraft(null);
-        setChecked(null);
-        setStatus('Applied as one undo step.');
-      } else {
-        setStatus('Not applied. The status bar says why.');
-      }
     } finally {
-      setApplying(false);
+      // Clears the draft only while it is still the text applied.
+      finish(applied);
+    }
+    if (applied) {
+      setChecked(null);
+      setStatus('Applied as one undo step.');
+    } else {
+      setStatus('Not applied. The status bar says why.');
     }
   }
 
@@ -164,6 +178,12 @@ export default function HistoryTextDialog({
   }
 
   const diagnostics = checked?.diagnostics ?? [];
+  // Why Apply is unavailable, shown in the status line: a tooltip alone
+  // never shows on a phone.
+  const blocked = editable && editBlocked !== null ? editBlocked : null;
+  const shownStatus = [applying ? CHECKING : status, blocked]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <div className="modal-backdrop">
@@ -194,7 +214,10 @@ export default function HistoryTextDialog({
         </p>
         {stale && (
           <div className="history-text-stale" role="alert">
-            <span>The model changed since you started editing.</span>
+            <span>
+              The model changed since this draft was started. Copy your text
+              to keep it, then reload.
+            </span>
             <button
               type="button"
               className="secondary"
@@ -229,11 +252,17 @@ export default function HistoryTextDialog({
               const next = event.target.value;
               setDraft((current) =>
                 next === printed.text &&
-                (!current || current.baseVersion === document.version)
+                (!current ||
+                  !historyTextDraftStale(
+                    current,
+                    document.version,
+                    printed.text
+                  ))
                   ? null
                   : {
                       text: next,
-                      baseVersion: current?.baseVersion ?? document.version
+                      baseVersion: current?.baseVersion ?? document.version,
+                      baseText: current?.baseText ?? printed.text
                     }
               );
               setStatus('');
@@ -267,7 +296,7 @@ export default function HistoryTextDialog({
         )}
         <div className="history-text-actions">
           <span className="history-text-status" role="status">
-            {status}
+            {shownStatus}
           </span>
           {/* One group, so when it and the status do not fit one row the
               status keeps a row of its own above every button. */}

@@ -42,13 +42,74 @@ describe('model panel view state', () => {
     );
     act(() => {
       result.current.toggle();
-      result.current.setDraft({ text: 'edited', baseVersion: 3 });
+      result.current.setDraft({
+        text: 'edited',
+        baseVersion: 3,
+        baseText: 'printed'
+      });
     });
     rerender({ scope: 'project-a' });
     expect(result.current.open).toBe(true);
-    expect(result.current.draft).toEqual({ text: 'edited', baseVersion: 3 });
+    expect(result.current.draft).toMatchObject({
+      text: 'edited',
+      baseVersion: 3
+    });
     rerender({ scope: 'project-b' });
     expect(result.current.open).toBe(false);
     expect(result.current.draft).toBeNull();
+  });
+
+  it('keeps an edit typed after an Apply began when that Apply commits', () => {
+    const { result } = renderHook(() => useHistoryText('project-a'));
+    let finish!: (applied: boolean) => void;
+    act(() => {
+      result.current.setDraft({
+        text: 'applied',
+        baseVersion: 3,
+        baseText: 'printed'
+      });
+    });
+    act(() => {
+      finish = result.current.startApply('applied');
+    });
+    expect(result.current.applying).toBe(true);
+    act(() => {
+      result.current.setDraft({
+        text: 'newer',
+        baseVersion: 3,
+        baseText: 'printed'
+      });
+    });
+    act(() => finish(true));
+    expect(result.current.applying).toBe(false);
+    expect(result.current.draft?.text).toBe('newer');
+
+    // An Apply of the text still shown clears it once it commits.
+    act(() => {
+      finish = result.current.startApply('newer');
+    });
+    act(() => finish(true));
+    expect(result.current.draft).toBeNull();
+  });
+
+  it('ends an Apply of another project without touching this one', () => {
+    const { result, rerender } = renderHook(
+      ({ scope }) => useHistoryText(scope),
+      { initialProps: { scope: 'project-a' } }
+    );
+    let finish!: (applied: boolean) => void;
+    act(() => {
+      finish = result.current.startApply('a');
+    });
+    rerender({ scope: 'project-b' });
+    expect(result.current.applying).toBe(false);
+    let current!: (applied: boolean) => void;
+    act(() => {
+      current = result.current.startApply('b');
+    });
+    act(() => finish(true));
+    expect(result.current.applying).toBe(true);
+    act(() => current(false));
+    expect(result.current.applying).toBe(false);
   });
 });

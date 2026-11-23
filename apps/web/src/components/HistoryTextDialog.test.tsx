@@ -150,11 +150,49 @@ describe('HistoryTextDialog', () => {
     );
     expect(textArea().value).toBe(edited);
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'The model changed since you started editing.'
+      'The model changed since this draft was started'
     );
     expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Reload text' }));
     expect(textArea().value).not.toBe(edited);
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('refuses an edit started against another copy of the same version', async () => {
+    const user = userEvent.setup();
+    const document = block('40 mm');
+    const onApply = vi.fn();
+    const view = render(
+      <HistoryTextDialog
+        document={document}
+        onApply={onApply}
+        onClose={vi.fn()}
+      />
+    );
+    const edited = textArea().value.replace('height: 20', 'height: 25');
+    type(edited);
+    // A cloud copy taken in a conflict, or a collaborator's change, can
+    // carry the same version number with other content: here another
+    // parameter. Applied, the whole old text would write `40 mm` back.
+    const other = block('55 mm');
+    view.rerender(
+      <HistoryTextDialog
+        document={{
+          ...other,
+          projectId: document.projectId,
+          version: document.version
+        }}
+        onApply={onApply}
+        onClose={vi.fn()}
+      />
+    );
+    expect(textArea().value).toBe(edited);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'The model changed since this draft was started'
+    );
+    const apply = screen.getByRole('button', { name: 'Apply' });
+    expect(apply).toBeDisabled();
+    await user.click(apply);
     expect(onApply).not.toHaveBeenCalled();
   });
 
@@ -172,6 +210,9 @@ describe('HistoryTextDialog', () => {
     expect(apply).toBeDisabled();
     expect(apply).toHaveAttribute(
       'title',
+      'View mode is read-only — switch to Build to edit'
+    );    // Shown, not only in a tooltip a phone never displays.
+    expect(screen.getByRole('status')).toHaveTextContent(
       'View mode is read-only — switch to Build to edit'
     );
   });

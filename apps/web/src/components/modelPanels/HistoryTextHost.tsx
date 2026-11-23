@@ -5,6 +5,7 @@ import type { ProjectDocument } from '@openzcad/shared';
 import { lazyWithStaleChunkNotice } from '../../lib/staleChunk';
 import type { PatchSource } from './modelPanelProps';
 import type { HistoryTextView } from './panelViews';
+import { historyTextToggle } from './HistoryPanel';
 
 /** L15: loaded with the scripting package only when it is first opened. */
 const HistoryTextDialog = lazyWithStaleChunkNotice(
@@ -47,8 +48,8 @@ export function HistoryTextHost({
         document={document}
         editBlocked={editBlocked}
         {...(onApply ? { onApply } : {})}
-        draft={view.draft}
-        onDraftChange={view.setDraft}
+        session={view}
+        returnFocus={historyTextToggle}
         onClose={view.close}
       />
     </Suspense>,

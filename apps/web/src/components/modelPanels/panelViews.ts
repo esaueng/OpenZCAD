@@ -74,45 +74,115 @@ export function useHistoryFind(scope: unknown = null): HistoryFind {
   };
 }
 
-/** An unapplied History-as-text edit and the version it was printed from. */
+/**
+ * An unapplied History-as-text edit and what it was written against: the
+ * document version and the exact text printed from it. The version alone
+ * was not enough: a cloud copy taken in a sync conflict can carry the same
+ * number with other content, and the whole old text then compiled against
+ * it wrote that copy's changes back.
+ */
 export interface HistoryTextDraft {
   text: string;
   baseVersion: number;
+  /** The history printed from the document the edit began on. */
+  baseText: string;
 }
 
 /**
- * History as text: whether the dialog is open, and its unapplied edit. Held
- * above the panel, and the dialog drawn once outside the dock and the phone
- * lane, because crossing the phone breakpoint unmounts one History panel and
- * mounts the other: kept in the panel, the dialog closed and its edit was
- * lost without a word.
+ * Whether `draft` was written against something other than the document
+ * that printed `printed` now: an undo or redo, a restored checkpoint, a
+ * collaborator's edit or an adopted cloud copy all change one or the other.
  */
-export interface HistoryTextView {
-  open: boolean;
-  toggle(): void;
-  close(): void;
+export function historyTextDraftStale(
+  draft: HistoryTextDraft,
+  version: number,
+  printed: string
+): boolean {
+  return draft.baseVersion !== version || draft.baseText !== printed;
+}
+
+/**
+ * History as text's edit and any Apply of it in flight. Held by the
+ * workspace (HistoryTextView) so both outlive the dialog closing or
+ * remounting; a dialog drawn on its own holds them itself.
+ */
+export interface HistoryTextSession {
   /** The unapplied edit, or null while the text is unedited. */
   draft: HistoryTextDraft | null;
   setDraft: Dispatch<SetStateAction<HistoryTextDraft | null>>;
+  /** An Apply is being checked against exact geometry. */
+  applying: boolean;
+  /**
+   * Marks an Apply of `text` in flight. The returned call ends it; once
+   * applied it clears the draft only while that still reads `text`, so an
+   * edit made after the Apply began is kept.
+   */
+  startApply(text: string): (applied: boolean) => void;
 }
 
-export function useHistoryText(scope: unknown = null): HistoryTextView {
-  const [open, setOpen] = useState(false);
+/**
+ * History as text: whether the dialog is open, its unapplied edit and any
+ * Apply in flight. Held above the panel, and the dialog drawn once outside
+ * the dock and the phone lane, because crossing the phone breakpoint
+ * unmounts one History panel and mounts the other: kept in the panel, the
+ * dialog closed and its edit was lost without a word.
+ */
+export interface HistoryTextView extends HistoryTextSession {
+  open: boolean;
+  toggle(): void;
+  close(): void;
+}
+
+export function useHistoryTextSession(scope: unknown = null): HistoryTextSession {
   const [draft, setDraft] = useState<HistoryTextDraft | null>(null);
+  const [applying, setApplying] = useState(false);
+  // The Apply in flight, by token: one started for another project, or
+  // superseded, ends without touching the current one.
+  const running = useRef<number | null>(null);
+  const nextToken = useRef(0);
   // Another project's history is other text: an edit printed from this one
   // never carries over, as it did not when the workspace unmounted.
   const [shownScope, setShownScope] = useState(scope);
   if (shownScope !== scope) {
     setShownScope(scope);
-    setOpen(false);
     setDraft(null);
+    setApplying(false);
+    running.current = null;
   }
   return {
+    draft,
+    setDraft,
+    applying,
+    startApply(text) {
+      nextToken.current += 1;
+      const token = nextToken.current;
+      running.current = token;
+      setApplying(true);
+      return (applied) => {
+        if (running.current !== token) return;
+        running.current = null;
+        setApplying(false);
+        if (applied) {
+          setDraft((held) => (held?.text === text ? null : held));
+        }
+      };
+    }
+  };
+}
+
+export function useHistoryText(scope: unknown = null): HistoryTextView {
+  const [open, setOpen] = useState(false);
+  const session = useHistoryTextSession(scope);
+  const [shownScope, setShownScope] = useState(scope);
+  if (shownScope !== scope) {
+    setShownScope(scope);
+    setOpen(false);
+  }
+  return {
+    ...session,
     open,
     toggle: () => setOpen((current) => !current),
-    close: () => setOpen(false),
-    draft,
-    setDraft
+    close: () => setOpen(false)
   };
 }
 

@@ -33,6 +33,15 @@ export function HistoryFindToggle({ find }: { find: HistoryFind }) {
  * The header's History-as-text button (L15). It shares the Find toggle's
  * look and touch sizing, which its class carries.
  */
+/**
+ * The History as text toggle now on screen. The dock and the phone lane each
+ * draw their own, so the one that opened the dialog can be gone by the time
+ * it closes.
+ */
+export function historyTextToggle(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-history-text-toggle]');
+}
+
 export function HistoryTextToggle({
   open,
   onToggle
@@ -48,6 +57,7 @@ export function HistoryTextToggle({
       aria-label="History as text"
       aria-haspopup="dialog"
       aria-pressed={open}
+      data-history-text-toggle=""
       onClick={onToggle}
     >
       <FileCode2 size={12} aria-hidden="true" />
