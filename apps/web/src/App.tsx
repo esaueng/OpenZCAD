@@ -1600,6 +1600,7 @@ const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
 const MEASUREMENT_SHEET_MEDIA = '(max-width: 620px)';
 /** Where View's parts list stands over the middle of the model. */
 const PHONE_PARTS_LIST_MEDIA = `(max-width: ${PANEL_LANE_REST_MAX_WIDTH}px)`;
+const SHORT_PHONE_STAGE_MEDIA = `(pointer: coarse) and (max-width: ${PANEL_LANE_REST_MAX_WIDTH}px) and (min-height: 541px) and (max-height: 620px)`;
 const ROOM_SETTLE_TIMEOUT_MS = 5000;
 
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
@@ -18974,6 +18975,8 @@ export function App() {
   // the window has now, not the one the project opened at: a wider stage
   // never moves the camera.
   const phoneStage = useMediaQuery(PHONE_PARTS_LIST_MEDIA);
+  // phone-stage.css's 541–620 px band, where the rails keep two columns.
+  const shortPhoneStage = useMediaQuery(SHORT_PHONE_STAGE_MEDIA);
   const phonePartsShown =
     phoneStage &&
     viewMode &&
@@ -39550,7 +39553,10 @@ export function App() {
             tourProjectId === doc.projectId &&
             interaction.mode !== 'sketch' && (
               <WorkspaceTour
-                minimized={panelState.workspaceTourMinimized}
+                // Folded at first on a phone too short for the open card
+                // between its two-column rails (#1957), until folded or
+                // opened by hand.
+                minimized={panelState.workspaceTourMinimized ?? shortPhoneStage}
                 // On a phone the guide and a command card share the right
                 // lane's foot; expanded, it left the card a 13 px sliver
                 // (#1945). It folds to its header while one is up.
