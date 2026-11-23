@@ -77,8 +77,14 @@ const point = (v: Vec3): Point => [v.x, v.y, v.z];
 
 /** The tilt that separates a chamfer from a wall (0) or a step (1). */
 const TILT_EPSILON = 1e-6;
-/** Closer to parallel than this, a neighbour is coplanar with the face. */
-const PARALLEL_EPSILON = 1e-12;
+/**
+ * The guard's cutoff for parallel: any tilt a double can tell from 1. A
+ * nearly flat bevel (10 across, 0.00001 up) is still one the kernel's move
+ * can spread. The carry keeps TILT_EPSILON: it only takes bands whose
+ * setbacks a chamfer in the history explains, and a flatter reading lets an
+ * unrelated chamfer's setbacks match an imported band.
+ */
+const GUARD_PARALLEL_EPSILON = 4 * Number.EPSILON;
 
 export function chamferRimNotCarriedRefusal(
   offset: number,
@@ -145,16 +151,19 @@ type Role = 'chamfer' | 'wall' | 'other';
  * the band can slide along (a square plane, or a cylinder about the
  * normal), or anything else. Read on the live kernel before serialization.
  */
-function roleOf(kernel: RemusKernel, face: number, normal: Vec3): Role {
+function roleOf(
+  kernel: RemusKernel,
+  face: number,
+  normal: Vec3,
+  parallelEpsilon: number
+): Role {
   const type = surfaceTypeOf(kernel, face);
   if (type === 'plane') {
     const m = finiteVec3(Array.from(kernel.getFaceNormal(face)));
     if (!m) return 'other';
     const tilt = dot(m, normal);
     if (Math.abs(tilt) <= ANALYTIC_MATCH_EPSILON) return 'wall';
-    // Any tilt short of parallel is part of the band: a nearly flat bevel
-    // (10 across, 0.01 up) is still one the kernel's move can extend.
-    return tilt > TILT_EPSILON && tilt < 1 - PARALLEL_EPSILON
+    return tilt > TILT_EPSILON && tilt < 1 - parallelEpsilon
       ? 'chamfer'
       : 'other';
   }
@@ -195,7 +204,8 @@ function chamferBand(
   face: number,
   normal: Vec3,
   /** The history's chamfer setbacks, or null to take the shape alone. */
-  setbacks: readonly ChamferSetback[] | null
+  setbacks: readonly ChamferSetback[] | null,
+  parallelEpsilon = TILT_EPSILON
 ): number[] | null {
   const edgesOf = new Map<number, number[]>();
   const owners = new Map<number, number[]>();
@@ -215,7 +225,7 @@ function chamferBand(
   const role = (f: number) => {
     let known = roles.get(f);
     if (known === undefined) {
-      known = roleOf(kernel, f, normal);
+      known = roleOf(kernel, f, normal, parallelEpsilon);
       roles.set(f, known);
     }
     return known;
@@ -1109,8 +1119,33 @@ export function guardUncarriedChamferBand(
   }
   const normal = finiteVec3(Array.from(kernel.getFaceNormal(face)));
   if (!normal) return null;
-  const band = chamferBand(kernel, solid, face, normal, null);
+  const band = chamferBand(
+    kernel,
+    solid,
+    face,
+    normal,
+    null,
+    GUARD_PARALLEL_EPSILON
+  );
   if (band === null) return null;
+  // Re-limited or carried, a band on walls stays inside the hull of the
+  // body and the body moved by the offset: walls only lengthen or shorten
+  // and the tilted faces only re-trim. A spread past it (a flat bevel
+  // extended 2000 wide) needs no reading of the band to refuse.
+  const sourceBox = kernel.boundingBox(solid);
+  const shift = scale(normal, offset);
+  const hullLow = [0, 1, 2].map((i) =>
+    Math.min(sourceBox[i]!, sourceBox[i]! + [shift.x, shift.y, shift.z][i]!)
+  );
+  const hullHigh = [0, 1, 2].map((i) =>
+    Math.max(
+      sourceBox[i + 3]!,
+      sourceBox[i + 3]! + [shift.x, shift.y, shift.z][i]!
+    )
+  );
+  const hullSlack =
+    ANALYTIC_MATCH_EPSILON *
+    Math.max(1, ...hullLow.map(Math.abs), ...hullHigh.map(Math.abs));
   const capEdges = uniqueEdges(kernel, face);
   const capPoint = edgeEnds(kernel, capEdges[0]!)[0];
   const inward = scale(normal, -1);
@@ -1169,6 +1204,15 @@ export function guardUncarriedChamferBand(
   }
   const sent = add(capPoint, scale(normal, offset));
   return (output: number) => {
+    const box = kernel.boundingBox(output);
+    for (let i = 0; i < 3; i++) {
+      if (
+        box[i]! < hullLow[i]! - hullSlack ||
+        box[i + 3]! > hullHigh[i]! + hullSlack
+      ) {
+        throw refuse('the move spread the body past its walls');
+      }
+    }
     const arena = parseArena(kernel, output);
     const after = facesOnPlane(arena, normal, sent, tolerance);
     if (after.length === 0) {

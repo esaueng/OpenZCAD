@@ -532,6 +532,96 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
     // Review regressions: a nearly flat bevel the guard must still see, a
     // small loop far from the origin whose winding must survive, and an
     // offset just inside the band's top that must stay the kernel's.
+    it('flatter bevel: refuses the spread without reading the band', async () => {
+      // 10 across, 0.00001 up: tilted within 5e-13 of parallel.
+      const f = await importedFixture('imported-flatter-bevel', (kernel) => {
+        const box = kernel.makeBox(X, Y, Z);
+        return kernel.chamferV2(
+          box,
+          edgesWhere(kernel, box, bottomRim),
+          10,
+          0.00001
+        );
+      });
+      const candidate = offsetBy(f, -2);
+      for (const derived of [
+        await adapter.previewGeometry(candidate, { deferTopology: true }),
+        await adapter.syncDocument(candidate)
+      ]) {
+        const [refusal] = failures(derived.featureWarnings);
+        expect(refusal, 'the offset is refused').toBeDefined();
+        expect(refusal!.kernelRefusal?.code).toBe(
+          'offset_face_chamfer_rim_not_carried'
+        );
+      }
+      const body = (await adapter.syncDocument(candidate)).bodyRepresentations[
+        f.bodyId
+      ]!;
+      expect(body.bbox.min.x).toBeCloseTo(0, 6);
+      expect(body.bbox.max.x).toBeCloseTo(X, 6);
+    });
+
+    it("opposite rim: another edge's chamfer does not carry an imported band", async () => {
+      // An imported 10 × 0.01 base bevel, and a same-sized chamfer the user
+      // adds to the top rim. The base is still a band with no chamfer of
+      // its own in the history: it keeps the kernel's re-limit.
+      const f = await importedFixture('imported-opposite-rim', (kernel) => {
+        const box = kernel.makeBox(X, Y, Z);
+        return kernel.chamferV2(
+          box,
+          edgesWhere(kernel, box, bottomRim),
+          10,
+          0.01
+        );
+      });
+      const top = (await adapter.syncDocument(f.document)).bodyRepresentations[
+        f.bodyId
+      ]!.topology!.edges.filter(along((_x, _y, z) => near(z, Z)));
+      expect(top).toHaveLength(4);
+      const chamfered = chamferEdges(f.document, {
+        name: 'Top chamfer',
+        targetBodyId: f.bodyId,
+        edgeHashes: top.map((edge) => edge.hash),
+        edgeReferences: top.map((edge) => edge.reference!),
+        size: 10,
+        distance2: 0.01
+      });
+      const before = await adapter.syncDocument(chamfered.document);
+      expect(before.warnings).toEqual([]);
+      const bottom = before.bodyRepresentations[
+        chamfered.bodyId
+      ]!.topology!.faces.filter(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.normal!.z < -0.999
+      ).sort((a, b) => b.geometry!.area - a.geometry!.area)[0]!;
+      expect(bottom.geometry!.area).toBeCloseTo(800, 6);
+      const committed = await adapter.syncDocument(
+        offsetBy(
+          {
+            document: chamfered.document,
+            bodyId: chamfered.bodyId,
+            bottom,
+            volume: 0,
+            section: 0
+          },
+          -0.005
+        )
+      );
+      expect(failures(committed.featureWarnings)).toEqual([]);
+      const moved = Object.values(committed.bodyRepresentations)
+        .at(-1)!
+        .topology!.faces.filter(
+          (face) =>
+            face.geometry?.surfaceType === 'plane' &&
+            face.geometry.normal!.z < -1 + 1e-12 &&
+            near(face.geometry.center.z, 0.005)
+        );
+      expect(moved).toHaveLength(1);
+      // Re-limited halfway up the 0.01 bevel: 50 × 30, not carried at 800.
+      expect(moved[0]!.geometry!.area).toBeCloseTo(1500, 4);
+    });
+
     it('flat bevel: refuses the move that spread the body 2000 wide', async () => {
       const f = await importedFixture('imported-flat-bevel', (kernel) => {
         const box = kernel.makeBox(X, Y, Z);
