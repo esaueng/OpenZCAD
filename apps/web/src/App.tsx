@@ -2256,10 +2256,7 @@ import {
   useObjectsView
 } from './components/modelPanels/panelViews';
 import { HistoryTextHost } from './components/modelPanels/HistoryTextHost';
-import {
-  commitCheckedPatch,
-  patchApplyReport
-} from './lib/checkedPatchCommit';
+import { commitCheckedPatch, patchApplyReport } from './lib/checkedPatchCommit';
 import {
   loadSettingsViewState,
   updateSettingsViewState
