@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   convertDocumentUnits,
@@ -18,10 +18,12 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { loadLocalSaveState, saveLocalProject } from './localProjectStore';
+import { claimProjectOwnership } from './projectTabOwnership';
+import { withLockManager } from '../test/fakeLockManager';
 import {
   commitUnitsConversion,
   unitsConversionCollaborationRefusal,
-  unitsConversionOwnershipRefusal,
+  unitsConversionWriteAccess,
   type PreparedUnitsConversion,
   type ProjectStorageOwnership,
   type UnitsConversionCollaborationState,
@@ -30,6 +32,10 @@ import {
 
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 const USER = toUserId('user_units_commit');
@@ -552,25 +558,38 @@ describe('commitUnitsConversion: storage ownership before the checkpoint', () =>
   });
 });
 
-describe('unitsConversionOwnershipRefusal', () => {
+describe('unitsConversionWriteAccess', () => {
   const claim = (
     projectId: string,
     settle: (record: ProjectStorageOwnership) => void
   ) => {
-    const record: ProjectStorageOwnership = {
+    const record: ProjectStorageOwnership & { holds: number } = {
       projectId,
       owned: false,
-      settled: Promise.resolve()
+      settled: Promise.resolve(),
+      holds: 0,
+      retain: () => {
+        if (!record.owned) return null;
+        record.holds += 1;
+        return () => (record.holds -= 1);
+      }
     };
     record.settled = Promise.resolve().then(() => settle(record));
     return record;
   };
 
-  it('allows the write once this tab’s claim is confirmed held', async () => {
+  it('grants the write, holding the claim, once this tab’s claim is confirmed held', async () => {
     const record = claim('copy', (r) => (r.owned = true));
-    expect(
-      await unitsConversionOwnershipRefusal(() => record, 'copy', 'no')
-    ).toBeNull();
+    const access = await unitsConversionWriteAccess(() => record, 'copy', 'no');
+    expect(access).toMatchObject({ kind: 'write-access' });
+    if (!('held' in access)) throw new Error('refused');
+    expect(record.holds).toBe(1);
+    expect(access.held()).toBe(true);
+    access.release();
+    expect(record.holds).toBe(0);
+    // Given up by the workspace: no longer held.
+    record.owned = false;
+    expect(access.held()).toBe(false);
   });
 
   it('refuses when the claim settles owned by another tab', async () => {
@@ -578,17 +597,18 @@ describe('unitsConversionOwnershipRefusal', () => {
     // when asked, and answers "not owned".
     const record = claim('copy', () => undefined);
     expect(
-      await unitsConversionOwnershipRefusal(() => record, 'copy', 'Elsewhere.')
+      await unitsConversionWriteAccess(() => record, 'copy', 'Elsewhere.')
     ).toMatchObject({ code: 'second-tab', message: 'Elsewhere.' });
+    expect(record.holds).toBe(0);
   });
 
   it('refuses a claim for another project, or none, without waiting', async () => {
     const record = claim('original', (r) => (r.owned = true));
     expect(
-      await unitsConversionOwnershipRefusal(() => record, 'copy', 'no')
+      await unitsConversionWriteAccess(() => record, 'copy', 'no')
     ).toMatchObject({ code: 'second-tab' });
     expect(
-      await unitsConversionOwnershipRefusal(() => null, 'copy', 'no')
+      await unitsConversionWriteAccess(() => null, 'copy', 'no')
     ).toMatchObject({ code: 'second-tab' });
   });
 
@@ -600,8 +620,144 @@ describe('unitsConversionOwnershipRefusal', () => {
     });
     current = record;
     expect(
-      await unitsConversionOwnershipRefusal(() => current, 'copy', 'no')
+      await unitsConversionWriteAccess(() => current, 'copy', 'no')
     ).toMatchObject({ code: 'second-tab' });
+    expect(record.holds).toBe(0);
+  });
+});
+
+describe('commitUnitsConversion: the storage claim is held until the command runs', () => {
+  /** The workspace's claim record, as App builds it over a real claim. */
+  async function workspaceClaim(projectId: string) {
+    let given: Awaited<ReturnType<typeof claimProjectOwnership>> | null = null;
+    const ownership: ProjectStorageOwnership = {
+      projectId,
+      owned: false,
+      settled: Promise.resolve(),
+      retain: () => (ownership.owned && given ? given.retain() : null)
+    };
+    ownership.settled = claimProjectOwnership(projectId, () => undefined).then(
+      (result) => {
+        given = result;
+        ownership.owned = result.owned;
+      }
+    );
+    let current: ProjectStorageOwnership | null = ownership;
+    await ownership.settled;
+    return {
+      read: () => current,
+      /** What App's cleanup does when the tab leaves the project. */
+      giveUp() {
+        ownership.owned = false;
+        current = null;
+        given?.release();
+      }
+    };
+  }
+
+  it('refuses, writing nothing, when the claim is given up after it was confirmed', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    const { persistence, writes } = recordingPersistence(manager);
+    let given = false;
+    const release = vi.fn();
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        writeAccessLostMessage: 'Open in another tab.',
+        async confirmWriteAccess() {
+          // Confirmed held; the tab then navigates away before the commit
+          // continues.
+          queueMicrotask(() => (given = true));
+          return { kind: 'write-access', held: () => !given, release };
+        }
+      }
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ code: 'second-tab', message: 'Open in another tab.' }]
+    });
+    expect(result).not.toHaveProperty('checkpoint');
+    expect(writes).toEqual([]);
+    expect(release).toHaveBeenCalled();
+    expect(manager.document).toBe(source);
+  });
+
+  it('does not execute when the claim is given up while the checkpoint is written', async () => {
+    withLockManager();
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    const tab = await workspaceClaim(source.projectId);
+    // A second tab waiting for the project, as one opened beside it is.
+    const promoted = vi.fn();
+    const other = await claimProjectOwnership(source.projectId, promoted);
+    expect(other.owned).toBe(false);
+
+    let finishWrite: () => void = () => undefined;
+    const writes: ProjectDocument[] = [];
+    const persistence: UnitsConversionPersistence = {
+      async saveProject(document) {
+        writes.push(document);
+        await new Promise<void>((resolve) => (finishWrite = resolve));
+      },
+      async saveSaveStates() {}
+    };
+    const committing = commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        writeAccessLostMessage: 'Open in another tab.',
+        confirmWriteAccess: (document) =>
+          unitsConversionWriteAccess(tab.read, document.projectId, 'no')
+      }
+    );
+    await vi.waitFor(() => expect(writes).toHaveLength(1));
+    // The tab leaves the project mid-write: the waiting tab must not take
+    // it (and save) before this write has landed.
+    tab.giveUp();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(promoted).not.toHaveBeenCalled();
+
+    finishWrite();
+    const result = await committing;
+    expect(result).toMatchObject({
+      ok: false,
+      checkpoint: writes[0],
+      refusals: [{ code: 'second-tab', message: 'Open in another tab.' }]
+    });
+    expect(manager.document).toBe(source);
+    expect(manager.document.units).toBe('mm');
+    // The write landed; only now is the project handed on.
+    await vi.waitFor(() => expect(promoted).toHaveBeenCalledTimes(1));
+    other.release();
+  });
+
+  it('converts, and lets the claim go after the write, while the claim stays held', async () => {
+    withLockManager();
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    const tab = await workspaceClaim(source.projectId);
+    const { persistence } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        confirmWriteAccess: (document) =>
+          unitsConversionWriteAccess(tab.read, document.projectId, 'no')
+      }
+    );
+    expect(result.ok).toBe(true);
+    expect(manager.document.units).toBe('inch');
+    // Nothing still retains the lock: giving the project up hands it on.
+    const promoted = vi.fn();
+    const other = await claimProjectOwnership(source.projectId, promoted);
+    tab.giveUp();
+    await vi.waitFor(() => expect(promoted).toHaveBeenCalledTimes(1));
+    other.release();
   });
 });
 

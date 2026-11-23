@@ -239,6 +239,10 @@ test('converts a copy and leaves the original in millimeters', async ({
     'Unit conversion is unchanged.',
     CHECKED
   );
+  // The original has a save point, so the copy names it: no lineage caveat.
+  await expect(dialog.getByRole('status')).not.toContainText(
+    'does not record that it came from'
+  );
   await dialog.getByRole('button', { name: 'Done' }).click();
   // The copy is open, converted; the original still stores millimeters.
   const copy = await exportDocument(page);

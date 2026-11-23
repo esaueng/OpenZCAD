@@ -2180,7 +2180,7 @@ import {
 } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import { collaborationClientId } from './lib/collaborationProtocol';
-import { withCopyBranchPoint } from './lib/copyBranchPoint';
+import { copyLineageNote, withCopyBranchPoint } from './lib/copyBranchPoint';
 import {
   CONVERT_UNIT_WORDS,
   unitsConvertCopyBranchReason,
@@ -8210,7 +8210,10 @@ export function App() {
     const ownership: ProjectStorageOwnership = {
       projectId,
       owned: false,
-      settled: Promise.resolve()
+      settled: Promise.resolve(),
+      // A conversion's checkpoint write keeps the lock until it lands, so a
+      // tab promoted by this cleanup never saves before it (I03).
+      retain: () => (ownership.owned && claim ? claim.retain() : null)
     };
     const settled = claimProjectOwnership(projectId, () => {
       if (cancelled) {
@@ -26376,7 +26379,7 @@ export function App() {
           ? PROJECT_OPEN_ELSEWHERE_NOTICE
           : cannotSentence('convert stored units', reason)
       );
-    const { commitUnitsConversion, unitsConversionOwnershipRefusal } =
+    const { commitUnitsConversion, unitsConversionWriteAccess } =
       await import('./lib/unitsConversion');
     const result = await commitUnitsConversion(
       () => managerRef.current,
@@ -26385,12 +26388,13 @@ export function App() {
         expectedProjectId: source.projectId,
         expectedDocument: source,
         confirmWriteAccess: (document) =>
-          unitsConversionOwnershipRefusal(
+          unitsConversionWriteAccess(
             () =>
               shareSessionRef.current ? null : projectOwnershipRef.current,
             document.projectId,
             PROJECT_OPEN_ELSEWHERE_NOTICE
           ),
+        writeAccessLostMessage: PROJECT_OPEN_ELSEWHERE_NOTICE,
         deviceOnlyHistory: sharedAccountProjectRef.current,
         collaboration: () => unitsConversionRoomRef.current,
         now: () => Date.now()
@@ -26473,7 +26477,7 @@ export function App() {
     onStep('converting');
     const outcome = await convertStoredUnitsInPlaceRef.current(preparation);
     if (!outcome.ok) return { ...outcome, context: notConverted };
-    const message = `Made “${opened.name}” and converted it to ${CONVERT_UNIT_WORDS[to]}. ${project.name} is unchanged. “${unitsConvertCheckpointName(preparation.payload.from, to)}” was saved in the copy first.`;
+    const message = `Made “${opened.name}” and converted it to ${CONVERT_UNIT_WORDS[to]}. ${project.name} is unchanged. “${unitsConvertCheckpointName(preparation.payload.from, to)}” was saved in the copy first.${copyLineageNote(opened, project.name)}`;
     setStatus(message);
     return { ok: true, message };
   }
