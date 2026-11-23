@@ -385,6 +385,20 @@ describe('the modeling guide', () => {
     expect(stage.rect.bottom).toBe(900);
   });
 
+  it('frames a desktop’s model above a minimized guide’s header', () => {
+    // 1600 × 900: the header from y 838 to 888 costs a 62 px band; beside
+    // it would have given up a full-height strip (review on #1969).
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 1600, 900);
+    area.append(canvas);
+    document.body.append(area);
+    guide(area, 116, 838, 412, 888);
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.bottom).toBe(838 - 12);
+    expect(stage.rect.left).toBe(0);
+  });
+
   it('frames a mouse’s 768 px model above the card where that leaves more', () => {
     // The undocked Build layout at 768: the 296 px card from x 116 to 412
     // leaves 344 px beside it and the full width above it.

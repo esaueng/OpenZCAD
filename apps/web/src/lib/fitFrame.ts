@@ -26,7 +26,7 @@ const WORKSPACE_STAGE_OBSTACLES = '.assistant-panel:not(.assistant-off-screen)';
  * over the model it asks to be tapped ("Select to edit"), and the model is
  * framed above it. Wider, its 296 px corner card stood over the new box
  * too (a 768 × 1024 or 1024 × 768 tablet, a 1280 × 800 desktop), and the
- * model is framed above or beside it, whichever leaves more room.
+ * model is framed above or beside it, whichever leaves the larger area.
  */
 const FOOT_GUIDE = '.workspace-tour';
 
@@ -176,7 +176,9 @@ export function measureClearStage(
       continue;
     }
     // A corner card: framed above it or beside it, whichever
-    // leaves the larger square, and only where it stands in the stage.
+    // leaves the larger area, and only where it stands in the stage. (The
+    // larger square sent a minimized guide's 50 px header beside the
+    // model, giving up a full-height strip for it: review on #1969.)
     const clear = (bandBottom: number, panels: readonly StageRect[]) => {
       const vertical = {
         left: bounds.left,
@@ -207,7 +209,7 @@ export function measureClearStage(
     const alreadyReached = reached(now);
     const room = (rect: StageRect) =>
       reached(rect).every((panel) => alreadyReached.includes(panel))
-        ? Math.min(rect.right - rect.left, rect.bottom - rect.top)
+        ? (rect.right - rect.left) * (rect.bottom - rect.top)
         : -Infinity;
     const above =
       nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX
