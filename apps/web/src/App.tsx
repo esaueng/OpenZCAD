@@ -2254,8 +2254,11 @@ import {
 } from './lib/panelLayout';
 import {
   useHistoryFind,
+  useHistoryText,
   useObjectsView
 } from './components/modelPanels/panelViews';
+import { HistoryTextHost } from './components/modelPanels/HistoryTextHost';
+import { commitCheckedPatch, patchApplyReport } from './lib/checkedPatchCommit';
 import {
   loadSettingsViewState,
   updateSettingsViewState
@@ -3528,7 +3531,8 @@ export function App() {
   // different project starts them afresh.
   const objectsView = useObjectsView(doc?.projectId ?? null);
   const historyFind = useHistoryFind(doc?.projectId ?? null);
-  const modelPanelViews = { objects: objectsView, historyFind };
+  const historyText = useHistoryText(doc?.projectId ?? null);
+  const modelPanelViews = { objects: objectsView, historyFind, historyText };
   const textOutlineBudgetError = useMemo(
     () => (doc ? documentTextBudgetError(doc) : null),
     [doc]
@@ -4931,6 +4935,8 @@ export function App() {
     isolateBody
   };
   const managerRef = useRef<CommandManager | null>(null);
+  /** The latest patch Apply, by token (see patchApplyReport). */
+  const patchApplyTokenRef = useRef(0);
   /** Sketch entities copied with Cmd/Ctrl+C, for Cmd/Ctrl+V. */
   const sketchClipboardRef = useRef<SketchClipboard | null>(null);
   const parameterEditRequest = useRef(0);
@@ -19171,6 +19177,17 @@ export function App() {
       setStatus(source.moved);
       return false;
     }
+    patchApplyTokenRef.current += 1;
+    const applyToken = patchApplyTokenRef.current;
+    // The status and busy flag are the open project's: an Apply that ends
+    // after another project opened reports nothing there.
+    const report = () =>
+      patchApplyReport({
+        projectId: current.projectId,
+        openProjectId: managerRef.current?.document.projectId,
+        latest: patchApplyTokenRef.current === applyToken,
+        opening: navigationBusyRef.current !== null
+      });
     setBusy(true);
     // E2E-only interruption gate: while the flag is true the preflight has
     // started and the transaction below has not committed. The flag is
@@ -19184,36 +19201,35 @@ export function App() {
       setStatus(
         source?.checking ?? 'Checking the AI change against exact geometry…'
       );
-      let preflight: Awaited<ReturnType<typeof preflightCadPatch>>;
-      if (e2eApplyGate) {
-        const pending = preflightCadPatch(
-          current,
-          proposal,
-          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
-        );
-        [preflight] = await Promise.all([pending, holdNextExactCheckForE2E()]);
-      } else {
-        preflight = await preflightCadPatch(
-          current,
-          proposal,
-          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
-        );
-      }
-      const live = managerRef.current?.document;
-      if (
-        !live ||
-        live.projectId !== current.projectId ||
-        live.version !== current.version
-      ) {
-        throw new Error(
+      const applied = await commitCheckedPatch({
+        base: current,
+        live: () => managerRef.current?.document,
+        // History text compiled its commands against this exact document:
+        // a copy adopted meanwhile can share its project and version and
+        // still hold other values, which the commands would overwrite.
+        exact: Boolean(source),
+        moved:
           source?.moved ??
-            'The document changed during exact AI preflight. Review the refreshed proposal before applying it.'
-        );
-      }
-      const applied = executeTransaction(
-        source?.label ?? 'Apply AI patch',
-        preflight.commands
-      );
+          'The document changed during exact AI preflight. Review the refreshed proposal before applying it.',
+        check: async (base) => {
+          const pending = preflightCadPatch(
+            base,
+            proposal,
+            (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+          );
+          if (!e2eApplyGate) return pending;
+          const [checked] = await Promise.all([
+            pending,
+            holdNextExactCheckForE2E()
+          ]);
+          return checked;
+        },
+        commit: (preflight) =>
+          executeTransaction(
+            source?.label ?? 'Apply AI patch',
+            preflight.commands
+          )
+      });
       if (applied) {
         // Topology ids belong to the pre-patch body. A fillet, boolean, or
         // pattern may consume that body and rebuild different edges/faces, so
@@ -19223,11 +19239,13 @@ export function App() {
       }
       return applied;
     } catch (error) {
-      setStatus(errorMessage(error, 'Patch could not be applied.'));
+      if (report().status) {
+        setStatus(errorMessage(error, 'Patch could not be applied.'));
+      }
       return false;
     } finally {
       if (e2eApplyGate) window.__openzcadE2EApplyCheckInFlight = false;
-      setBusy(false);
+      if (report().clearBusy) setBusy(false);
     }
   }
 
@@ -37756,8 +37774,6 @@ export function App() {
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       document={doc}
-      historyTextEditBlocked={editDisabledReason}
-      onApplyHistoryText={applyPatch}
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
       hiddenReferenceImageIds={hiddenReferenceImageIds}
@@ -39676,6 +39692,15 @@ export function App() {
             />
           )}
           {pinResetDialog}
+          {/* Drawn here, once, not by the History panel: the dock and the
+              phone lane each mount their own, and crossing the phone
+              breakpoint swaps one for the other. */}
+          <HistoryTextHost
+            view={historyText}
+            document={doc}
+            editBlocked={editDisabledReason}
+            onApply={applyPatch}
+          />
           <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }

@@ -22,6 +22,12 @@ interface ModalFocusOptions {
    * Only for an overlay the map itself drives (the shortcut sheet).
    */
   workspaceKeys?: boolean;
+  /**
+   * Where focus goes on close when the control that opened the dialog has
+   * unmounted meanwhile (a layout switch replaced it with its twin). Read
+   * at close time, so it can find the control mounted then.
+   */
+  returnFocusFallback?: () => HTMLElement | null;
 }
 
 interface InertState {
@@ -250,7 +256,10 @@ function deactivateModal(registration: ModalRegistration): void {
  * Re-picks the visually top registration. `returnFocus` is the opener of a
  * modal that just closed, handed to the one below when it was opened from it.
  */
-function refreshActiveModal(returnFocus: HTMLElement | null = null): void {
+function refreshActiveModal(
+  returnFocus: HTMLElement | null = null,
+  fallback?: () => HTMLElement | null
+): void {
   let next: ModalRegistration | null = null;
   for (const candidate of modalStack) {
     if (!candidate.dialog.isConnected) {
@@ -285,6 +294,11 @@ function refreshActiveModal(returnFocus: HTMLElement | null = null): void {
     activateModal(next, returnFocus);
   } else if (stackOpener?.isConnected) {
     stackOpener.focus();
+  } else if (fallback) {
+    // The opener is gone: leaving focus on the body loses the keyboard's
+    // place, so hand it to the control that stands in for the opener.
+    const target = fallback();
+    if (target?.isConnected) target.focus();
   }
   if (modalStack.length === 0) {
     stackOpener = null;
@@ -335,10 +349,18 @@ export function useModalFocus(
     enabled = true,
     autoFocus = false,
     initialFocusRef,
-    workspaceKeys = false
+    workspaceKeys = false,
+    returnFocusFallback
   }: ModalFocusOptions = {}
 ): void {
   const registrationRef = useRef<ModalRegistration | null>(null);
+  // Read when the dialog closes, not when it opens, and kept out of the
+  // registration effect's dependencies so a new function each render does
+  // not re-register the dialog.
+  const fallbackRef = useRef(returnFocusFallback);
+  useLayoutEffect(() => {
+    fallbackRef.current = returnFocusFallback;
+  });
   useLayoutEffect(() => {
     if (!enabled) {
       return;
@@ -372,7 +394,7 @@ export function useModalFocus(
       if (index !== -1) {
         modalStack.splice(index, 1);
       }
-      refreshActiveModal(opener);
+      refreshActiveModal(opener, () => fallbackRef.current?.() ?? null);
     };
   }, [autoFocus, enabled, initialFocusRef, ref, workspaceKeys]);
 
