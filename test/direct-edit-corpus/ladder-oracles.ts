@@ -46,7 +46,11 @@ export function sameSnapshot(
   expect(faceCensus(actual)).toEqual(faceCensus(expected));
 }
 
-function expectVolume(actual: number, expected: number, oracleError = 0): void {
+export function expectVolume(
+  actual: number,
+  expected: number,
+  oracleError = 0
+): void {
   const tolerance = Math.max(0.05, 1e-6 * Math.abs(expected), 4 * oracleError);
   expect(
     Math.abs(actual - expected),
@@ -54,7 +58,7 @@ function expectVolume(actual: number, expected: number, oracleError = 0): void {
   ).toBeLessThanOrEqual(tolerance);
 }
 
-function integratedVolume(
+export function integratedVolume(
   positions: ArrayLike<number>,
   indices: ArrayLike<number>
 ): number {
@@ -123,7 +127,8 @@ export async function assertSolid(
   }
 }
 
-function boxVolume(radius: number): number {
+/** Part B's closed form: the box with every edge rounded at `radius`. */
+export function boxVolume(radius: number): number {
   const a = BOX.width - 2 * radius;
   const b = BOX.height - 2 * radius;
   const c = BOX.depth - 2 * radius;

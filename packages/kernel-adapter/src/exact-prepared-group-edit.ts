@@ -71,9 +71,15 @@ export function preparedGroupEdit(
 export function hasPreparedGroupEdit(kernel: RemusKernel): boolean {
   return targets.get(kernel)?.handle != null;
 }
-/** The prepared journal can take the ordinary local construction route.
- * Its V1 publisher is still needed for the adapter's support-derived roles.
+/** Whether a prepared journal entry lacks geometry-derived origin, so its
+ * V1 construction publisher would still be needed for support-derived roles.
  * Inferred group history must never be promoted to construction history.
+ *
+ * No release consults it now. A blend release used it to keep a geometry-
+ * origin journaled commit, but that commit is the single-band
+ * `resizeBlendJournaled`, not the group route its frames and replay build,
+ * so the release rebuilds that route instead. A cylinder release keeps its
+ * journaled commit, which is the route its replay takes.
  */
 export function preparedCommitNeedsEvolution(
   kernel: RemusKernel,
