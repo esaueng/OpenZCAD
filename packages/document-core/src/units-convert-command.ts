@@ -1,6 +1,5 @@
 import {
   MAX_UNDO_BYTES,
-  millimetresPerUnit,
   nowIso,
   type ProjectDocument,
   type UnitSystem,
@@ -22,9 +21,17 @@ import {
   applyReferenceMap,
   conversionReferencePreconditionRefusals,
   conversionReferenceTargets,
-  isConversionReferenceValue,
   type RecordedConversionReferences
 } from './units-reference-map';
+import {
+  unitsConvertFactor,
+  unitsConvertPayloadShapeProblem
+} from './units-convert-payload';
+
+export {
+  unitsConvertFactor,
+  unitsConvertPayloadShapeProblem
+} from './units-convert-payload';
 
 /**
  * I03 stored-unit conversion, phase 5 (plan
@@ -101,8 +108,6 @@ export type UnitsConvertResult =
   | { ok: true; document: ProjectDocument; report: UnitsConversionReport }
   | { ok: false; refusals: UnitsConvertRefusal[] };
 
-const CONVERTIBLE: readonly UnitSystem[] = ['mm', 'cm', 'inch'];
-
 /** How the summary names a unit: `mm → in`. */
 export const UNITS_CONVERT_SYMBOLS: Readonly<Record<UnitSystem, string>> = {
   mm: 'mm',
@@ -110,14 +115,6 @@ export const UNITS_CONVERT_SYMBOLS: Readonly<Record<UnitSystem, string>> = {
   m: 'm',
   inch: 'in'
 };
-
-/** The exact factor a conversion between two units records. */
-export function unitsConvertFactor(
-  from: UnitSystem,
-  to: UnitSystem
-): [number, number] {
-  return [millimetresPerUnit(from), millimetresPerUnit(to)];
-}
 
 /** "Convert stored units mm → in": the command's label and undo step. */
 export function unitsConvertLabel(from: UnitSystem, to: UnitSystem): string {
@@ -148,42 +145,16 @@ export function unitsConvertValueCount(report: UnitsConversionReport): number {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /** Why `input` is not a well-formed payload for `document`, if it is not. */
 export function unitsConvertPayloadProblem(
   document: Pick<ProjectDocument, 'units'>,
   input: unknown
 ): string | undefined {
-  if (!isRecord(input)) return 'The conversion payload is not an object.';
-  const { from, to, factor, references } = input;
-  if (!CONVERTIBLE.includes(from as UnitSystem))
-    return `The conversion's source unit ${JSON.stringify(from)} is not millimetres, centimetres or inches.`;
-  if (!CONVERTIBLE.includes(to as UnitSystem))
-    return `The conversion's target unit ${JSON.stringify(to)} is not millimetres, centimetres or inches.`;
-  if (from === to) return 'The conversion does not change the unit.';
+  const problem = unitsConvertPayloadShapeProblem(input);
+  if (problem) return problem;
+  const { from } = input as { from: UnitSystem };
   if (document.units !== from)
     return `The conversion is from ${String(from)}, but the document is stored in ${document.units}.`;
-  const [N, D] = unitsConvertFactor(from as UnitSystem, to as UnitSystem);
-  if (
-    !Array.isArray(factor) ||
-    factor.length !== 2 ||
-    !Object.is(factor[0], N) ||
-    !Object.is(factor[1], D)
-  )
-    return `The conversion's factor ${JSON.stringify(factor)} is not ${N} / ${D}.`;
-  if (!isRecord(references))
-    return "The conversion's reference map is not an object.";
-  for (const [pointer, entry] of Object.entries(references))
-    if (
-      !pointer.startsWith('/') ||
-      !isRecord(entry) ||
-      !isConversionReferenceValue(entry.from) ||
-      !isConversionReferenceValue(entry.to)
-    )
-      return `The conversion's reference map holds an invalid entry at ${JSON.stringify(pointer)}.`;
   return undefined;
 }
 

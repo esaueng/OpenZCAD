@@ -6431,7 +6431,8 @@ function applyRollbackPlacement(
 export class CommandManager {
   constructor(
     public document: ProjectDocument,
-    private readonly actorUserId: UserId = document.ownerUserId
+    /** Whose undo history this manager records (the owner by default). */
+    readonly actorUserId: UserId = document.ownerUserId
   ) {
     assertDocumentHistory(document);
     assertSketchProvenance(document);

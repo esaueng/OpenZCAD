@@ -157,7 +157,9 @@ describe(
         adapter.dispose();
       }
       expect(source, 'a parity scenario with references').toBeDefined();
-      toInch = prepared(await prepareUnitsConversion(source, 'inch'));
+      toInch = prepared(await prepareUnitsConversion(source, 'inch', {
+        actorUserId: source.ownerUserId
+      }));
     });
 
     it('records the factor, the units and a reference for every site', () => {
@@ -198,7 +200,9 @@ describe(
       const manager = new CommandManager(source);
       manager.execute(commandFactories.convertUnits(toInch.payload));
       const back = prepared(
-        await prepareUnitsConversion(manager.document, 'mm')
+        await prepareUnitsConversion(manager.document, 'mm', {
+        actorUserId: manager.document.ownerUserId
+      })
       );
       expect(back.payload.factor).toEqual([25.4, 1]);
       manager.execute(commandFactories.convertUnits(back.payload));
@@ -355,7 +359,9 @@ describe('units.convert without references', () => {
       primitiveKind: 'box',
       dimensions: { width: 'round(width)', height: 1, depth: 1 }
     });
-    const preparation = await prepareUnitsConversion(source, 'inch');
+    const preparation = await prepareUnitsConversion(source, 'inch', {
+        actorUserId: source.ownerUserId
+      });
     expect(preparation.ok).toBe(false);
     if (preparation.ok) return;
     expect(preparation.refusals).toEqual([
@@ -427,7 +433,9 @@ describe('units.convert schema gate', () => {
       manager.execute(commandFactories.convertUnits(payloadFor(source, 'inch')))
     ).toThrow(/Stored-unit conversions require project schema v/);
     expect(manager.document.commandLog).toHaveLength(source.commandLog.length);
-    const preparation = await prepareUnitsConversion(source, 'inch');
+    const preparation = await prepareUnitsConversion(source, 'inch', {
+        actorUserId: source.ownerUserId
+      });
     expect(preparation).toMatchObject({
       ok: false,
       refusals: [{ stage: 'payload', code: 'schema' }]
@@ -628,7 +636,9 @@ describe('the undo bound keeps the conversion step (plan §5.2)', () => {
         [boxId]: { ...plain.nodes[boxId]!, name: 'x'.repeat(4_500_000) }
       }
     } as ProjectDocument;
-    const preparation = await prepareUnitsConversion(document, 'inch');
+    const preparation = await prepareUnitsConversion(document, 'inch', {
+        actorUserId: document.ownerUserId
+      });
     expect(preparation).toMatchObject({
       ok: false,
       refusals: [{ stage: 'payload', code: 'undo-too-large' }]
@@ -745,7 +755,9 @@ describe('stored-unit conversion warnings (residual risks)', () => {
       dimensions: { width: 'round(width / 1 mm) * 1 mm', height: 1, depth: 1 }
     });
     const preparation = prepared(
-      await prepareUnitsConversion(document, 'inch')
+      await prepareUnitsConversion(document, 'inch', {
+        actorUserId: document.ownerUserId
+      })
     );
     expect(preparation.report.warnings).toHaveLength(1);
     expect(unitsConvertValueCount(preparation.report)).toBeGreaterThan(0);
@@ -788,7 +800,10 @@ describe(
       checksumSha256: createHash('sha256').update(bytes).digest('hex'),
       logicalBytes: bytes.byteLength
     };
-    const options = { resolveSourceBytes: async () => bytes };
+    const options = {
+      resolveSourceBytes: async () => bytes,
+      actorUserId: USER
+    };
 
     function meshDocument(): ProjectDocument {
       const manager = new CommandManager(

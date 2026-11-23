@@ -25,7 +25,8 @@ function abortError(): Error {
 export function prepareUnitsConversionInWorker(
   document: ProjectDocument,
   to: UnitSystem,
-  options: { actorUserId?: UserId; signal?: AbortSignal } = {}
+  /** `actorUserId`: the actor of the manager the conversion commits through. */
+  options: { actorUserId: UserId; signal?: AbortSignal }
 ): Promise<UnitsConversionPreparation> {
   const { signal, actorUserId } = options;
   if (signal?.aborted) {
@@ -88,7 +89,7 @@ export function prepareUnitsConversionInWorker(
       requestId,
       document,
       to,
-      ...(actorUserId ? { actorUserId } : {})
+      actorUserId
     };
     worker.postMessage(request);
   });

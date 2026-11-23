@@ -1,8 +1,10 @@
 import {
   appendRevision,
   createCheckpoint,
+  estimateUnitsConvertUndo,
   runUnitsConversion,
   unitsConvertCheckpointName,
+  unitsConvertUndoRefusal,
   type UnitsConvertRefusal
 } from '@openzcad/document-core';
 import {
@@ -171,21 +173,35 @@ export type CommitUnitsConversionResult =
     };
 
 /**
- * Applies a prepared conversion to `manager`'s document (plan §5.2, §5.3):
+ * Applies a prepared conversion to the workspace's active document (plan
+ * §5.2, §5.3):
  *
  * 1. refuses while others could edit ({@link unitsConversionCollaborationRefusal}),
- *    when the document moved since it was prepared, or when the payload
- *    does not apply (checked without changing anything);
+ *    when the document moved since it was prepared, when the payload does
+ *    not apply (checked without changing anything), or when the active
+ *    manager's undo history could not keep the conversion's step
+ *    (`undo-too-large`, measured for the manager's own actor and current
+ *    history, not the actor preparation assumed);
  * 2. writes the checkpoint "Before unit conversion (mm → in)" on a fresh
  *    revision and persists it *before* applying, as a restore does, so the
  *    state being left is reachable past any undo depth;
- * 3. executes `units.convert` through the command manager: one undo step,
- *    one more revision, the version still monotonic.
+ * 3. checks step 1 again once the checkpoint is persisted, synchronously
+ *    and immediately before executing, with no await in between: the
+ *    manager must still be the active one and still hold the document it
+ *    was checked on, and a tab that joined, a lease that expired or an undo
+ *    entry that no longer fits refuses the conversion (the result then
+ *    names the checkpoint, which stays);
+ * 4. executes `units.convert` through that manager: one undo step, one more
+ *    revision, the version still monotonic.
  *
- * 4. checks step 1 again once the checkpoint is persisted, synchronously
- *    and immediately before executing, with no await in between: a tab
- *    that joined or a lease that expired during the write refuses the
- *    conversion (the result then names the checkpoint, which stays).
+ * Caller contract (phase 6): pass `activeManager` as a live getter that
+ * returns the manager the workspace edits *now* (in the app, read
+ * `managerRef.current`), never a manager captured earlier. Remote
+ * hydration and project switches replace that manager; a conversion whose
+ * manager was replaced during the write is refused (`stale`) and nothing
+ * is applied, so the caller re-runs preparation on the new document. Pass
+ * `collaboration` and `now` as functions for the same reason. Apply the
+ * returned document (persist, sync, rebuild) only when `ok` is true.
  *
  * A refusal at step 1 writes nothing. A failure persisting the checkpoint
  * throws before the command exists. The room's edit lease renews on its own
@@ -193,10 +209,16 @@ export type CommitUnitsConversionResult =
  * second check is what closes the window.
  */
 export async function commitUnitsConversion(
-  manager: CommandManager,
+  activeManager: () => CommandManager | null | undefined,
   prepared: PreparedUnitsConversion,
   options: CommitUnitsConversionOptions = {}
 ): Promise<CommitUnitsConversionResult> {
+  const stale = (message: string): UnitsConvertRefusal => ({
+    stage: 'payload',
+    code: 'stale',
+    subject: 'document',
+    message
+  });
   const eligibility = () =>
     unitsConversionCollaborationRefusal(
       typeof options.collaboration === 'function'
@@ -206,6 +228,14 @@ export async function commitUnitsConversion(
         ? options.now()
         : (options.now ?? Date.now())
     );
+  const manager = activeManager();
+  if (!manager)
+    return {
+      ok: false,
+      refusals: [
+        stale('No project is open to convert. Open it and check the conversion again.')
+      ]
+    };
   const collaboration = eligibility();
   if (collaboration) return { ok: false, refusals: [collaboration] };
   const current = manager.document;
@@ -213,13 +243,9 @@ export async function commitUnitsConversion(
     return {
       ok: false,
       refusals: [
-        {
-          stage: 'payload',
-          code: 'stale',
-          subject: 'document',
-          message:
-            'The project changed after the conversion was checked. Check it again.'
-        }
+        stale(
+          'The project changed after the conversion was checked. Check it again.'
+        )
       ]
     };
   const dryRun = runUnitsConversion(current, prepared.payload);
@@ -231,28 +257,45 @@ export async function commitUnitsConversion(
     prepared.payload.to
   );
   const guarded = createCheckpoint(appendRevision(current, name), name);
+  // Device-only history keeps the shared document's save points as they
+  // are; the checkpoint lives in this device's save states. `base` is the
+  // document the command will execute on.
+  const base = options.deviceOnlyHistory ? current : guarded;
+  const converted = runUnitsConversion(base, prepared.payload);
+  if (!converted.ok) return { ok: false, refusals: converted.refusals };
+  // The undo entry as this manager will record it: its actor and its
+  // history, which need not be what preparation measured.
+  const undoRefusal = () => {
+    const undo = estimateUnitsConvertUndo(
+      base,
+      prepared.payload,
+      manager.actorUserId,
+      converted.document
+    );
+    return undo.exceedsLimit ? unitsConvertUndoRefusal(undo) : null;
+  };
+  const tooLarge = undoRefusal();
+  if (tooLarge) return { ok: false, refusals: [tooLarge] };
+
   if (options.deviceOnlyHistory) await persistence.saveSaveStates([guarded]);
   else await persistence.saveProject(guarded);
   // Everything step 1 checked, again, now that the write has finished.
   // Nothing below awaits, so nothing can change before the command runs.
-  if (manager.document !== current)
+  if (activeManager() !== manager || manager.document !== current)
     return {
       ok: false,
       checkpoint: guarded,
       refusals: [
-        {
-          stage: 'payload',
-          code: 'stale',
-          subject: 'document',
-          message:
-            'The project changed while the safety checkpoint was being saved. Check the conversion again.'
-        }
+        stale(
+          'The project changed while the safety checkpoint was being saved. Check the conversion again.'
+        )
       ]
     };
   const changed = eligibility();
   if (changed) return { ok: false, checkpoint: guarded, refusals: [changed] };
-  // Device-only history keeps the shared document's save points as they
-  // are; the checkpoint lives in this device's save states.
+  const undoChanged = undoRefusal();
+  if (undoChanged)
+    return { ok: false, checkpoint: guarded, refusals: [undoChanged] };
   if (!options.deviceOnlyHistory) manager.document = guarded;
   const document = manager.execute(
     commandFactories.convertUnits(prepared.payload)

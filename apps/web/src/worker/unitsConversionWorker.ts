@@ -9,8 +9,8 @@ export interface UnitsConversionWorkerRequest {
   requestId: string;
   document: ProjectDocument;
   to: UnitSystem;
-  /** Whose undo history the estimate measures. */
-  actorUserId?: UserId;
+  /** Whose undo history the estimate measures: the committing manager's actor. */
+  actorUserId: UserId;
 }
 
 export type UnitsConversionWorkerResult =
@@ -50,7 +50,7 @@ self.onmessage = async (event: MessageEvent<UnitsConversionWorkerRequest>) => {
       request.to,
       {
         resolveSourceBytes: resolveExactSourceBytes,
-        ...(request.actorUserId ? { actorUserId: request.actorUserId } : {})
+        actorUserId: request.actorUserId
       }
     );
     const result: UnitsConversionWorkerResult = {

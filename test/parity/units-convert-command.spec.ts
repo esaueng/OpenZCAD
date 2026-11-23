@@ -95,7 +95,9 @@ describe('units.convert authored through the kernel replays without it', () => {
     adapter.dispose();
 
     for (const { key, document } of documents) {
-      const preparation = await prepareUnitsConversion(document, 'inch');
+      const preparation = await prepareUnitsConversion(document, 'inch', {
+        actorUserId: document.ownerUserId
+      });
       if (!preparation.ok) {
         outcomes.set(key, preparation.refusals[0]!.stage);
         continue;

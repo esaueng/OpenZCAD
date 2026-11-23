@@ -1,5 +1,6 @@
 import {
   isCanonicalEdgeTopologyReference,
+  storedTopologyReferenceError,
   walkQuantities,
   type ProjectDocument,
   type SketchRegionProfileReference,
@@ -156,21 +157,7 @@ export function isStoredTopologyReference(
   );
 }
 
-/**
- * Whether `value` is one of the {@link ConversionReferenceValue} kinds a
- * site can store: a v5 reference, a hash or end index, a profile id, or an
- * edge-run flag. The one guard every payload validator shares.
- */
-export function isConversionReferenceValue(
-  value: unknown
-): value is ConversionReferenceValue {
-  return (
-    (typeof value === 'number' && Number.isFinite(value)) ||
-    (typeof value === 'string' && value.length > 0) ||
-    typeof value === 'boolean' ||
-    isStoredTopologyReference(value)
-  );
-}
+export { isConversionReferenceValue } from './units-convert-payload';
 
 function isRegionProfileReference(
   value: unknown
@@ -432,8 +419,9 @@ function validReplacement(
         return 'expects a schema-v5 topology reference';
       if (value.kind !== site.reference.kind)
         return `expects a ${site.reference.kind} reference, not a ${value.kind}`;
-      if (!Number.isSafeInteger(value.currentHash) || value.currentHash <= 0)
-        return 'carries an invalid hash';
+      // The validator stored references use: identity, hash, witness shape.
+      const malformed = storedTopologyReferenceError(value, value.kind);
+      if (malformed) return malformed;
       if (value.kind === 'edge' && !isCanonicalEdgeTopologyReference(value))
         return 'carries an edge witness that does not hash to its currentHash';
       return undefined;

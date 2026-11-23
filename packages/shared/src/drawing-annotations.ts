@@ -5,6 +5,7 @@ import type {
   FaceTopologyReferenceV5
 } from './index';
 import type { DrawingViewId } from './drawings';
+import { storedTopologyReferenceError } from './topology-reference';
 
 /**
  * D02 drawing annotations (schema v31): dimensions and notes placed on a
@@ -833,126 +834,18 @@ function isTopologyHash(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) > 0;
 }
 
-function isQuantizedPoint(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.length === 3 &&
-    value.every((coordinate) => Number.isSafeInteger(coordinate))
-  );
-}
-
-/** Lexicographic order of two quantized points. */
-function comparePoints(left: number[], right: number[]): number {
-  for (let index = 0; index < 3; index += 1) {
-    const difference = left[index]! - right[index]!;
-    if (difference !== 0) return difference;
-  }
-  return 0;
-}
-
-/**
- * Whether `value` is a canonical `EdgeWitnessV1`: the shape and every rule
- * the kernel adapter's witness inspection calls invalid (a non-empty curve
- * type, a non-negative quantized length, quantized points, open endpoints
- * in lexicographic order, a non-zero sign-canonical closed axis). Its hash
- * is checked where the fingerprint lives, when the annotation resolves.
- */
-function isEdgeWitness(value: unknown): boolean {
-  if (
-    !isRecord(value) ||
-    typeof value.curveType !== 'string' ||
-    value.curveType.trim().length === 0 ||
-    value.curveType.length > 64 ||
-    !Number.isSafeInteger(value.length) ||
-    (value.length as number) < 0
-  )
-    return false;
-  if (value.closed === false)
-    return (
-      Array.isArray(value.endpoints) &&
-      value.endpoints.length === 2 &&
-      value.endpoints.every(isQuantizedPoint) &&
-      isQuantizedPoint(value.midpoint) &&
-      comparePoints(
-        value.endpoints[0] as number[],
-        value.endpoints[1] as number[]
-      ) <= 0
-    );
-  if (value.closed === true) {
-    if (!isQuantizedPoint(value.center)) return false;
-    if (value.axis === null) return true;
-    if (!isQuantizedPoint(value.axis)) return false;
-    const first = (value.axis as number[]).find((component) => component !== 0);
-    return first !== undefined && first > 0;
-  }
-  return false;
-}
-
-const CLOSURES: readonly unknown[] = ['open', 'closed', 'unknown'];
-
-/**
- * Whether `value` is a well-formed `FaceWitnessV1`: a non-empty surface
- * type, a non-negative quantized perimeter, a quantized centroid or null,
- * one of the analytic carrier terms, and a closure per direction. Its hash
- * is checked when the annotation resolves, as an edge witness's is.
- */
-function isFaceWitness(value: unknown): boolean {
-  if (
-    !isRecord(value) ||
-    typeof value.surfaceType !== 'string' ||
-    value.surfaceType.trim().length === 0 ||
-    value.surfaceType.length > 64 ||
-    !Number.isSafeInteger(value.perimeter) ||
-    (value.perimeter as number) < 0 ||
-    (value.centroid !== null && !isQuantizedPoint(value.centroid)) ||
-    !isRecord(value.closure) ||
-    !CLOSURES.includes(value.closure.u) ||
-    !CLOSURES.includes(value.closure.v)
-  )
-    return false;
-  const analytic = value.analytic;
-  if (!isRecord(analytic)) return false;
-  switch (analytic.kind) {
-    case 'none':
-      return true;
-    case 'plane':
-      return (
-        isQuantizedPoint(analytic.normal) &&
-        Number.isSafeInteger(analytic.offset)
-      );
-    case 'cylinder':
-      return (
-        isQuantizedPoint(analytic.axis) &&
-        isQuantizedPoint(analytic.axisFoot) &&
-        Number.isSafeInteger(analytic.radius) &&
-        (analytic.radius as number) >= 0
-      );
-    default:
-      return false;
-  }
-}
-
 function topologyReferenceError(
   value: unknown,
   hash: number,
   kind: 'edge' | 'face'
 ): string | null {
-  if (!isRecord(value) || value.kind !== kind)
-    return `is not ${kind === 'edge' ? 'an edge' : 'a face'} reference`;
-  if (
-    !isShortText(value.producingFeatureId, 128) ||
-    typeof value.lineageName !== 'string' ||
-    value.lineageName.length === 0 ||
-    !isTopologyHash(value.currentHash) ||
-    value.witnessVersion !== 1 ||
-    !(kind === 'edge' ? isEdgeWitness : isFaceWitness)(value.witness)
-  )
-    return `has a malformed ${kind} reference`;
+  const malformed = storedTopologyReferenceError(value, kind);
+  if (malformed) return malformed;
   if (JSON.stringify(value).length > MAX_REFERENCE_JSON_LENGTH)
     return `has an oversized ${kind} reference`;
   // The reference names the edge the hash fingerprints; one that disagrees
   // would resolve by its lineage to some other edge.
-  if (value.currentHash !== hash)
+  if ((value as { currentHash: number }).currentHash !== hash)
     return `has ${kind === 'edge' ? 'an edge' : 'a face'} reference that contradicts its hash`;
   return null;
 }

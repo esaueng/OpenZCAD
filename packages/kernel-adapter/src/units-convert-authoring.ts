@@ -67,8 +67,13 @@ export function presentReferenceRefusal(
 }
 
 export interface UnitsConversionPreparationOptions extends ConversionReferenceMapOptions {
-  /** Whose undo history the estimate measures; the owner by default. */
-  actorUserId?: UserId;
+  /**
+   * Whose undo history the estimate measures: the actor of the manager the
+   * conversion will be committed through. Required, not defaulted to the
+   * owner: a member's longer id can tip an entry the owner's would keep
+   * over the bound (`commitUnitsConversion` measures again regardless).
+   */
+  actorUserId: UserId;
 }
 
 export type UnitsConversionPreparation =
@@ -100,7 +105,7 @@ export type UnitsConversionPreparation =
 export async function prepareUnitsConversion(
   document: ProjectDocument,
   to: UnitSystem,
-  options: UnitsConversionPreparationOptions = {}
+  options: UnitsConversionPreparationOptions
 ): Promise<UnitsConversionPreparation> {
   const sourceVersion = document.version;
   const refuse = (
@@ -174,7 +179,7 @@ export async function prepareUnitsConversion(
   const undo = estimateUnitsConvertUndo(
     document,
     payload,
-    actorUserId ?? document.ownerUserId,
+    actorUserId,
     replayed.document
   );
   if (undo.exceedsLimit)
