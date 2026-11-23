@@ -14,6 +14,12 @@
  * The bodies are built the way a user builds them (box, rounds, chamfer),
  * because only a band matching a chamfer in the history is carried: the
  * same shape as a drafted section keeps the kernel's re-limiting move.
+ *
+ * A STEP import has no history, so its chamfer-shaped band keeps that move
+ * too; the adapter refuses, typed, the results that are wrong whether the
+ * band is a chamfer or a draft (pushed past the band's top, the base came
+ * out wider than the walls; pulled until the tilted faces cross, it turned
+ * inside out).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -22,7 +28,8 @@ import {
   addPrimitiveFeature,
   chamferEdges,
   createProjectDocument,
-  filletEdges
+  filletEdges,
+  importStepBody
 } from '@openzcad/document-core';
 import { RemusKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -34,9 +41,13 @@ import {
   type FeatureWarning,
   type ProjectDocument
 } from '@openzcad/shared';
-import { RemusKernel } from '../../packages/kernel-adapter/src/remus-runtime';
+import {
+  RemusKernel,
+  loadRemusTranslators
+} from '../../packages/kernel-adapter/src/remus-runtime';
 import {
   chamferSetbacksBefore,
+  guardUncarriedChamferBand,
   tryCarryChamferRim
 } from '../../packages/kernel-adapter/src/exact-chamfer-rim-carry';
 
@@ -272,6 +283,427 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
     expect(chamferSetbacksBefore(other, later, otherBody, {})).toEqual([]);
   });
 
+  describe('a chamfer-shaped band with no history (a STEP import)', () => {
+    const imported = new Map<string, Fixture>();
+    /** tan 10°: the drafted foot's taper per unit of height. */
+    const TAPER = Math.tan((10 * Math.PI) / 180);
+    const FOOT = 5;
+
+    function edgesWhere(
+      kernel: RemusKernel,
+      solid: number,
+      keep: (a: number[], b: number[]) => boolean
+    ): Uint32Array {
+      return Uint32Array.from(
+        Array.from(kernel.getSolidEdges(solid)).filter((edge) => {
+          const v = kernel.getEdgeVertices(edge);
+          return keep([v[0]!, v[1]!, v[2]!], [v[3]!, v[4]!, v[5]!]);
+        })
+      );
+    }
+    const bottomRim = (a: number[], b: number[]) =>
+      near(a[2]!, 0) && near(b[2]!, 0);
+    const placed = (kernel: RemusKernel, solid: number, z: number) =>
+      kernel.copyAndTransformSolid(
+        solid,
+        Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, z, 0, 0, 0, 1)
+      );
+
+    async function importedFixture(
+      name: string,
+      build: (kernel: RemusKernel) => number
+    ): Promise<Fixture> {
+      const kernel = new RemusKernel();
+      const io = await loadRemusTranslators();
+      const step = new TextDecoder().decode(
+        io.exportStep(kernel.serializeSolids(Uint32Array.of(build(kernel))))
+      );
+      const result = importStepBody(
+        createProjectDocument(name, toUserId('user_chamfer_rim')),
+        {
+          name: 'Block',
+          sourceName: `${name}.step`,
+          artifactId: `artifact_${name}`,
+          stepText: step
+        }
+      );
+      const derived = await adapter.syncDocument(result.document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[result.bodyId]!;
+      const bottom = body
+        .topology!.faces.filter(
+          (face) =>
+            face.geometry?.surfaceType === 'plane' &&
+            face.geometry.normal!.z < -0.999
+        )
+        .sort((a, b) => b.geometry!.area - a.geometry!.area)[0]!;
+      return {
+        document: result.document,
+        bodyId: result.bodyId,
+        bottom,
+        volume: body.volume,
+        section: X * Y
+      };
+    }
+
+    beforeAll(async () => {
+      imported.set(
+        'sharp',
+        await importedFixture('imported-sharp', (kernel) => {
+          const box = kernel.makeBox(X, Y, Z);
+          return kernel.chamfer(
+            box,
+            edgesWhere(kernel, box, bottomRim),
+            CHAMFER
+          );
+        })
+      );
+      imported.set(
+        'one-edge',
+        await importedFixture('imported-one-edge', (kernel) => {
+          const box = kernel.makeBox(X, Y, Z);
+          return kernel.chamfer(
+            box,
+            edgesWhere(
+              kernel,
+              box,
+              (a, b) => bottomRim(a, b) && near(a[1]!, 0) && near(b[1]!, 0)
+            ),
+            CHAMFER
+          );
+        })
+      );
+      imported.set(
+        'rounded',
+        await importedFixture('imported-rounded', (kernel) => {
+          const box = kernel.makeBox(X, Y, Z);
+          const rounded = kernel.filletDetailed(
+            box,
+            edgesWhere(
+              kernel,
+              box,
+              (a, b) => near(a[0]!, b[0]!) && near(a[1]!, b[1]!)
+            ),
+            ROUND,
+            true
+          );
+          if (rounded.status !== 'ok') throw new Error('fixture fillet');
+          return kernel.chamfer(
+            rounded.value,
+            edgesWhere(kernel, rounded.value, bottomRim),
+            CHAMFER
+          );
+        })
+      );
+      // A foot drafted 10° in under straight walls: the shape of a chamfer
+      // band, 5 tall, made by a draft.
+      imported.set(
+        'drafted',
+        await importedFixture('imported-drafted', (kernel) => {
+          const foot = kernel.makeBox(X, Y, FOOT);
+          const sides = Uint32Array.from(
+            Array.from(kernel.getSolidFaces(foot)).filter(
+              (face) => Math.abs(kernel.getFaceNormal(face)[2]!) < 0.5
+            )
+          );
+          const drafted = kernel.draft(foot, sides, 0, 0, 1, 0, 0, FOOT, 10);
+          return kernel.fuse(
+            drafted,
+            placed(kernel, kernel.makeBox(X, Y, Z - FOOT), FOOT)
+          );
+        })
+      );
+      // A Ø10 through hole chamfered with the rim: the kernel's move
+      // carries this band, which the guard must accept.
+      imported.set(
+        'holed',
+        await importedFixture('imported-holed', (kernel) => {
+          const bore = kernel.copyAndTransformSolid(
+            kernel.makeCylinder(5, Z + 10),
+            Float64Array.of(1, 0, 0, 20, 0, 1, 0, 20, 0, 0, 1, -5, 0, 0, 0, 1)
+          );
+          const plate = kernel.cut(kernel.makeBox(X, Y, Z), bore);
+          return kernel.chamfer(
+            plate,
+            edgesWhere(kernel, plate, bottomRim),
+            CHAMFER
+          );
+        })
+      );
+    });
+
+    async function offsetImported(shape: string, offset: number) {
+      const f = imported.get(shape)!;
+      const candidate = offsetBy(f, offset);
+      const preview = await adapter.previewGeometry(candidate, {
+        deferTopology: true
+      });
+      const committed = await adapter.syncDocument(candidate);
+      return { f, preview, committed };
+    }
+
+    /**
+     * The base's sides as a function of how far it has moved out (`t`): the
+     * tilted faces stay where they are and the base re-limits along them.
+     * Its area, and the volume it sweeps, integrated exactly.
+     */
+    const relimit = {
+      sharp: (t: number) => [X - 2 * (CHAMFER + t), Y - 2 * (CHAMFER + t)],
+      'one-edge': (t: number) => [X, Y - (CHAMFER + t)],
+      drafted: (t: number) => [
+        X - 2 * TAPER * (FOOT + t),
+        Y - 2 * TAPER * (FOOT + t)
+      ]
+    } as const;
+    const swept = (sides: (t: number) => number[], t: number) => {
+      // Each side is linear in t, so the area is quadratic: Simpson's rule
+      // is exact for it.
+      const area = (s: number) => sides(s)[0]! * sides(s)[1]!;
+      return (t / 6) * (area(0) + 4 * area(t / 2) + area(t));
+    };
+
+    for (const [shape, offsets] of [
+      ['sharp', [2, 0.1, -0.1, -0.3]],
+      ['one-edge', [20, 2, -0.1, -0.3]],
+      ['drafted', [20, 2, 0.1, -0.1, -2]]
+    ] as const) {
+      for (const offset of offsets) {
+        it(`${shape}: keeps the kernel's re-limit at ${offset}`, async () => {
+          const { f, preview, committed } = await offsetImported(shape, offset);
+          expect(failures(preview.featureWarnings)).toEqual([]);
+          expect(failures(committed.featureWarnings)).toEqual([]);
+          const body = Object.values(committed.bodyRepresentations).at(-1)!;
+          expect(body.bbox.min.x).toBeCloseTo(0, 6);
+          expect(body.bbox.max.x).toBeCloseTo(X, 6);
+          expect(body.bbox.min.y).toBeCloseTo(0, 6);
+          expect(body.bbox.max.y).toBeCloseTo(Y, 6);
+          expect(body.bbox.min.z).toBeCloseTo(-offset, 6);
+          const sides = relimit[shape];
+          const moved = body.topology!.faces.filter(
+            (face) =>
+              face.geometry?.surfaceType === 'plane' &&
+              face.geometry.normal!.z < -0.999
+          );
+          expect(moved).toHaveLength(1);
+          expect(moved[0]!.geometry!.area).toBeCloseTo(
+            sides(offset)[0]! * sides(offset)[1]!,
+            6
+          );
+          expect(body.volume).toBeCloseTo(f.volume + swept(sides, offset), 2);
+        });
+      }
+    }
+
+    for (const [shape, offset, limit] of [
+      // Past the band's top: the kernel's move built a body wider than its
+      // walls (the one-edge body ~34 000 mm³ short at -2).
+      ['sharp', -2, -CHAMFER],
+      ['sharp', -12, -CHAMFER],
+      ['one-edge', -2, -CHAMFER],
+      ['drafted', -12, -FOOT],
+      // Pulled until the tilted faces cross: the base turned inside out, or
+      // (both pairs crossed, at 120) kept its winding over a wider body.
+      ['sharp', 20, undefined],
+      ['sharp', 120, undefined],
+      ['one-edge', 120, undefined],
+      ['drafted', 120, undefined]
+    ] as const) {
+      it(`${shape}: refuses ${offset}, where no reading of the band holds`, async () => {
+        const { f, preview, committed } = await offsetImported(shape, offset);
+        for (const derived of [preview, committed]) {
+          const [refusal] = failures(derived.featureWarnings);
+          expect(refusal, 'the offset is refused').toBeDefined();
+          expect(refusal!.kernelRefusal).toMatchObject({
+            family: 'direct-edit',
+            category: 'unsupported',
+            code: 'offset_face_chamfer_rim_not_carried'
+          });
+          expect(refusal!.kernelRefusal!.limit).toBe(limit);
+          expect(refusal!.message).toContain(
+            "This face's chamfered or drafted edge can't move with it"
+          );
+        }
+        // Nothing was committed: the body is the import, unchanged.
+        const body = committed.bodyRepresentations[f.bodyId]!;
+        expect(body.volume).toBeCloseTo(f.volume, 6);
+      });
+    }
+
+    // Review regressions: a nearly flat bevel the guard must still see, a
+    // small loop far from the origin whose winding must survive, and an
+    // offset just inside the band's top that must stay the kernel's.
+    it('flatter bevel: refuses the spread without reading the band', async () => {
+      // 10 across, 0.00001 up: tilted within 5e-13 of parallel.
+      const f = await importedFixture('imported-flatter-bevel', (kernel) => {
+        const box = kernel.makeBox(X, Y, Z);
+        return kernel.chamferV2(
+          box,
+          edgesWhere(kernel, box, bottomRim),
+          10,
+          0.00001
+        );
+      });
+      const candidate = offsetBy(f, -2);
+      for (const derived of [
+        await adapter.previewGeometry(candidate, { deferTopology: true }),
+        await adapter.syncDocument(candidate)
+      ]) {
+        const [refusal] = failures(derived.featureWarnings);
+        expect(refusal, 'the offset is refused').toBeDefined();
+        expect(refusal!.kernelRefusal?.code).toBe(
+          'offset_face_chamfer_rim_not_carried'
+        );
+      }
+      const body = (await adapter.syncDocument(candidate)).bodyRepresentations[
+        f.bodyId
+      ]!;
+      expect(body.bbox.min.x).toBeCloseTo(0, 6);
+      expect(body.bbox.max.x).toBeCloseTo(X, 6);
+    });
+
+    it("opposite rim: another edge's chamfer does not carry an imported band", async () => {
+      // An imported 10 × 0.01 base bevel, and a same-sized chamfer the user
+      // adds to the top rim. The base is still a band with no chamfer of
+      // its own in the history: it keeps the kernel's re-limit.
+      const f = await importedFixture('imported-opposite-rim', (kernel) => {
+        const box = kernel.makeBox(X, Y, Z);
+        return kernel.chamferV2(
+          box,
+          edgesWhere(kernel, box, bottomRim),
+          10,
+          0.01
+        );
+      });
+      const top = (await adapter.syncDocument(f.document)).bodyRepresentations[
+        f.bodyId
+      ]!.topology!.edges.filter(along((_x, _y, z) => near(z, Z)));
+      expect(top).toHaveLength(4);
+      const chamfered = chamferEdges(f.document, {
+        name: 'Top chamfer',
+        targetBodyId: f.bodyId,
+        edgeHashes: top.map((edge) => edge.hash),
+        edgeReferences: top.map((edge) => edge.reference!),
+        size: 10,
+        distance2: 0.01
+      });
+      const before = await adapter.syncDocument(chamfered.document);
+      expect(before.warnings).toEqual([]);
+      const bottom = before.bodyRepresentations[
+        chamfered.bodyId
+      ]!.topology!.faces.filter(
+        (face) =>
+          face.geometry?.surfaceType === 'plane' &&
+          face.geometry.normal!.z < -0.999
+      ).sort((a, b) => b.geometry!.area - a.geometry!.area)[0]!;
+      expect(bottom.geometry!.area).toBeCloseTo(800, 6);
+      const committed = await adapter.syncDocument(
+        offsetBy(
+          {
+            document: chamfered.document,
+            bodyId: chamfered.bodyId,
+            bottom,
+            volume: 0,
+            section: 0
+          },
+          -0.005
+        )
+      );
+      expect(failures(committed.featureWarnings)).toEqual([]);
+      const moved = Object.values(committed.bodyRepresentations)
+        .at(-1)!
+        .topology!.faces.filter(
+          (face) =>
+            face.geometry?.surfaceType === 'plane' &&
+            face.geometry.normal!.z < -1 + 1e-12 &&
+            near(face.geometry.center.z, 0.005)
+        );
+      expect(moved).toHaveLength(1);
+      // Re-limited halfway up the 0.01 bevel: 50 × 30, not carried at 800.
+      expect(moved[0]!.geometry!.area).toBeCloseTo(1500, 4);
+    });
+
+    it('flat bevel: refuses the move that spread the body 2000 wide', async () => {
+      const f = await importedFixture('imported-flat-bevel', (kernel) => {
+        const box = kernel.makeBox(X, Y, Z);
+        // 10 across the base, 0.01 up the walls.
+        return kernel.chamferV2(
+          box,
+          edgesWhere(kernel, box, bottomRim),
+          10,
+          0.01
+        );
+      });
+      const candidate = offsetBy(f, -2);
+      for (const derived of [
+        await adapter.previewGeometry(candidate, { deferTopology: true }),
+        await adapter.syncDocument(candidate)
+      ]) {
+        const [refusal] = failures(derived.featureWarnings);
+        expect(refusal, 'the offset is refused').toBeDefined();
+        expect(refusal!.kernelRefusal?.code).toBe(
+          'offset_face_chamfer_rim_not_carried'
+        );
+      }
+    });
+
+    it("far from the origin: keeps a small band's winding", async () => {
+      const f = await importedFixture('imported-far', (kernel) => {
+        const box = kernel.copyAndTransformSolid(
+          kernel.makeBox(0.1, 0.1, Z),
+          Float64Array.of(1, 0, 0, 1e7, 0, 1, 0, 1e7, 0, 0, 1, 0, 0, 0, 0, 1)
+        );
+        return kernel.chamfer(box, edgesWhere(kernel, box, bottomRim), 0.005);
+      });
+      const candidate = offsetBy(f, 0.005);
+      const preview = await adapter.previewGeometry(candidate, {
+        deferTopology: true
+      });
+      expect(failures(preview.featureWarnings)).toEqual([]);
+      const committed = await adapter.syncDocument(candidate);
+      expect(failures(committed.featureWarnings)).toEqual([]);
+      const body = Object.values(committed.bodyRepresentations).at(-1)!;
+      expect(body.bbox.min.z).toBeCloseTo(-0.005, 6);
+    });
+
+    it('just inside the band top: keeps the kernel re-limit', async () => {
+      const f = await importedFixture('imported-tall', (kernel) => {
+        const box = kernel.makeBox(X, Y, 40);
+        return kernel.chamfer(box, edgesWhere(kernel, box, bottomRim), 5);
+      });
+      const candidate = offsetBy(f, -4.9999996);
+      const preview = await adapter.previewGeometry(candidate, {
+        deferTopology: true
+      });
+      expect(failures(preview.featureWarnings)).toEqual([]);
+      const committed = await adapter.syncDocument(candidate);
+      expect(failures(committed.featureWarnings)).toEqual([]);
+    });
+
+    it('rounded: leaves the kernel refusal over rounded corners alone', async () => {
+      // The kernel refuses this band's move at any distance; refusing is
+      // right for a draft, and nothing here can tell it from a chamfer.
+      for (const offset of [2, -0.1, -2]) {
+        const { committed } = await offsetImported('rounded', offset);
+        const [refusal] = failures(committed.featureWarnings);
+        expect(refusal, `${offset} is refused`).toBeDefined();
+        expect(refusal!.kernelRefusal?.code).toBe('offset_face_refused');
+      }
+    });
+
+    for (const offset of [20, 2, -2, -12]) {
+      it(`holed: accepts the kernel carrying the band at ${offset}`, async () => {
+        const { f, committed } = await offsetImported('holed', offset);
+        expect(failures(committed.featureWarnings)).toEqual([]);
+        const body = Object.values(committed.bodyRepresentations).at(-1)!;
+        expect(body.bbox.min.z).toBeCloseTo(-offset, 6);
+        expect(body.volume).toBeCloseTo(
+          f.volume + offset * (X * Y - Math.PI * 25),
+          2
+        );
+      });
+    }
+  });
+
   describe('the carry on bare kernel bodies', () => {
     const bottomOf = (kernel: RemusKernel, solid: number) =>
       Array.from(kernel.getSolidFaces(solid)).find(
@@ -330,6 +762,57 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
       expect(() =>
         tryCarryChamferRim(kernel, solid, bottom, 1000, [[0.1, 0.1]])
       ).toThrow(/chamfered edge can't move with it/);
+    });
+
+    it("accepts the kernel's move of round bands and loops, and reads its faults", () => {
+      const kernel = new RemusKernel();
+      const bore = (x: number) =>
+        kernel.copyAndTransformSolid(
+          kernel.makeCylinder(4, Z + 10),
+          Float64Array.of(1, 0, 0, x, 0, 1, 0, 20, 0, 0, 1, -5, 0, 0, 0, 1)
+        );
+      // Two chamfered hole mouths beside each other in a chamfered base:
+      // the base's loops hold two circles as well as its lines.
+      const plate = kernel.cut(
+        kernel.cut(kernel.makeBox(X, Y, Z), bore(20)),
+        bore(30)
+      );
+      const twoHoles = kernel.chamfer(
+        plate,
+        bottomEdges(kernel, plate),
+        CHAMFER
+      );
+      // A drafted cone foot under a column: one circle.
+      const coneFoot = kernel.fuse(
+        kernel.makeCone(10, 15, 10),
+        kernel.copyAndTransformSolid(
+          kernel.makeCylinder(15, 30),
+          Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 10, 0, 0, 0, 1)
+        )
+      );
+      for (const solid of [twoHoles, coneFoot]) {
+        const bottom = bottomOf(kernel, solid);
+        for (const offset of [2, -0.1]) {
+          const guard = guardUncarriedChamferBand(
+            kernel,
+            solid,
+            bottom,
+            offset
+          );
+          expect(guard).not.toBeNull();
+          const moved = kernel.moveFaces(solid, Uint32Array.of(bottom), offset);
+          expect(() => guard!(moved)).not.toThrow();
+          // The unmoved body leaves the face short of where it was sent.
+          expect(() => guard!(solid)).toThrow(
+            /chamfered or drafted edge can't move with it/
+          );
+        }
+      }
+      // A plain box has no band to guard.
+      const box = kernel.makeBox(X, Y, Z);
+      expect(
+        guardUncarriedChamferBand(kernel, box, bottomOf(kernel, box), 2)
+      ).toBeNull();
     });
 
     it('leaves a drafted section on straight walls to the kernel move', () => {

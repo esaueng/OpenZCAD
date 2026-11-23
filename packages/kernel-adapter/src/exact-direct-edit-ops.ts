@@ -149,6 +149,7 @@ import {
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
 import {
+  guardUncarriedChamferBand,
   tryCarryChamferRim,
   type ChamferSetback
 } from './exact-chamfer-rim-carry';
@@ -2628,6 +2629,13 @@ export function applyDirectEdit(
           // refuse instead of carrying (see exact-chamfer-rim-carry.ts).
           tryCarryChamferRim(kernel, solid, face, offset, chamferSetbacks))
         : { solid: analytic, relation: null };
+    // A chamfer-shaped band with no chamfer in the history (an import) may
+    // be a draft, so it keeps the kernel's re-limiting move; what is wrong
+    // whichever it is gets refused (see exact-chamfer-rim-carry.ts).
+    const bandGuard =
+      exactCap === null
+        ? guardUncarriedChamferBand(kernel, solid, face, offset)
+        : null;
     const moved = exactCap ?? moveFace();
     const output = moved.solid;
     if (kernel.validateSolidRelaxed(output) !== 0) {
@@ -2635,6 +2643,9 @@ export function applyDirectEdit(
         `Offsetting the face by ${offset} does not produce a valid solid.`
       );
     }
+    // The sweep past a collision builds a prism, not a re-limit; the guard
+    // reads the re-limit's failures.
+    if (!sweptPastCollision) bandGuard?.(output);
     // The kernel validates a stretched hole chamfer as a clean solid, so it
     // is checked here: every hole-mouth rim must still be on the moved face,
     // about its own axis, at its own radius. The exact cap paths and the
