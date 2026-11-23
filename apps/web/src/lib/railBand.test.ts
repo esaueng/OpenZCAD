@@ -37,9 +37,7 @@ function rail(...islands: HTMLElement[]): HTMLElement {
 
 describe('the measured rail band', () => {
   it('is gap, rail, gap for a lone rail', () => {
-    expect(
-      measureRailBand(rail(island('viewer-rail', 850, 890)), 10)
-    ).toBe(60);
+    expect(measureRailBand(rail(island('viewer-rail', 850, 890)), 10)).toBe(60);
   });
 
   it('reaches the leftmost island: the relations and the readout beside the rail', () => {

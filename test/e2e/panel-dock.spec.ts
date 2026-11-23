@@ -693,57 +693,78 @@ test('a sketch keeps docked and unpinned panels visible and respects manual clos
   await expect(unpinned).toBeVisible();
 });
 
-test('an unpinned panel opened mid-sketch stands clear of the relations and the sketch readout', async ({
-  page
-}) => {
-  // The new-device layout (MODEL_ONLY until a panel opens) at a laptop
-  // window and a narrower one: the relations rail stands a gap left of the
-  // instrument rail while sketching, with the snap and grid readout over
-  // both. The unpinned panel stood one rail in, under both, and the
-  // readout's Snap took the clicks meant for its Close button.
-  await openWorkspace(page, 'Sketch clears unpinned panel', MODEL_ONLY, {
-    width: 1280,
-    height: 800
-  });
+/** Enters a sketch on Top (XY) and waits for its rails. */
+async function enterSketch(page: Page) {
   await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
   await page.getByRole('button', { name: 'Top (XY)' }).click();
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
-  const relations = page.getByRole('toolbar', { name: 'Relations' });
-  const readout = page.getByRole('group', { name: 'Viewport readout' });
-  await expect(relations).toBeVisible();
-  await expect(readout).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: 'Relations' })).toBeVisible();
+  await expect(
+    page.getByRole('group', { name: 'Viewport readout' })
+  ).toBeVisible();
+}
+
+/**
+ * The panel stands clear of every island of the right rails — the viewer
+ * bar, the panels' buttons, the relations and the snap readout — and its
+ * Close button takes a click at its centre.
+ */
+async function expectClearOfRails(page: Page, panel: Locator, label: string) {
+  const islands = [
+    ...(await page.locator('.instrument-rail > .viewer-rail').all()),
+    page.getByRole('toolbar', { name: 'Relations' }),
+    page.getByRole('group', { name: 'Viewport readout' })
+  ];
+  for (const island of islands) {
+    await expect
+      .poll(() => boxesOverlap(panel, island), { message: label })
+      .toBe(false);
+  }
+  const close = panel.getByRole('button', { name: /^Close / });
+  await expect
+    .poll(() => ownsItsCentre(close), { message: `${label}: Close` })
+    .toBe(true);
+}
+
+// The new-device layout (MODEL_ONLY until a panel opens). While sketching
+// the relations stand a gap left of the instrument rail and the snap and
+// grid readout hangs over or beside them; media queries fold the rail to
+// two columns (a mouse rail 541-600px tall, a touch rail up to 900px) or
+// stand its islands side by side (540px and under). The unpinned panel
+// stood past per-breakpoint constants and the readout still covered it:
+// by about 10px at 900 x 575, 36px with a touch rail at 900 x 800.
+const SKETCH_SIZES = [
+  { width: 1280, height: 800 },
+  { width: 1024, height: 768 },
+  { width: 900, height: 800 },
+  { width: 900, height: 575 },
+  { width: 900, height: 500 }
+];
+
+test('an unpinned panel opened mid-sketch stands clear of the relations and the sketch readout', async ({
+  page
+}) => {
+  await openWorkspace(page, 'Sketch clears unpinned panel', MODEL_ONLY, {
+    width: 1280,
+    height: 800
+  });
+  await enterSketch(page);
   await railPanelButton(page, 'Parameters').click();
   const panel = modelPanel(page, 'Parameters');
   await expect(panel).toHaveClass(/is-unpinned/);
-  const close = panel.getByRole('button', { name: 'Close Parameters' });
-
-  // 960px and narrower the readout stands beside the instrument rail, a
-  // rail past the relations (it overlapped the panel by 40px at 900px), and
-  // 540px tall and under beside a rail folded to two columns.
-  for (const viewport of [
-    { width: 1280, height: 800 },
-    { width: 1024, height: 768 },
-    { width: 900, height: 800 },
-    { width: 900, height: 500 }
-  ]) {
+  for (const viewport of SKETCH_SIZES) {
     await page.setViewportSize(viewport);
-    for (const chrome of [
-      relations,
-      readout,
-      page.locator('.instrument-rail')
-    ]) {
-      await expect
-        .poll(() => boxesOverlap(panel, chrome), {
-          message: `the panel at ${viewport.width}px`
-        })
-        .toBe(false);
-    }
-    await expect.poll(() => ownsItsCentre(close)).toBe(true);
+    await expectClearOfRails(
+      page,
+      panel,
+      `the panel at ${viewport.width} x ${viewport.height}`
+    );
   }
 
   // Its Close button takes the click, and the rail button still toggles it.
+  const close = panel.getByRole('button', { name: 'Close Parameters' });
   await close.click();
   await expect(panel).toHaveCount(0);
   await expect(railPanelButton(page, 'Parameters')).toHaveAttribute(
@@ -753,6 +774,119 @@ test('an unpinned panel opened mid-sketch stands clear of the relations and the 
   await railPanelButton(page, 'Parameters').click();
   await expect(panel).toBeVisible();
   await expect.poll(() => ownsItsCentre(close)).toBe(true);
+});
+
+test('entering a sketch moves an open unpinned panel clear with no resize', async ({
+  page
+}) => {
+  // The band is measured from the rail's islands, so the relations and the
+  // readout arriving at a fixed window size move the panel at once.
+  for (const viewport of [
+    { width: 900, height: 800 },
+    { width: 900, height: 575 }
+  ]) {
+    await openWorkspace(
+      page,
+      `Sketch entry at ${viewport.height}`,
+      MODEL_ONLY,
+      viewport
+    );
+    await railPanelButton(page, 'Parameters').click();
+    const panel = modelPanel(page, 'Parameters');
+    await expect(panel).toHaveClass(/is-unpinned/);
+    const before = await box(panel);
+    await enterSketch(page);
+    await expectClearOfRails(
+      page,
+      panel,
+      `entering a sketch at ${viewport.width} x ${viewport.height}`
+    );
+    expect((await box(panel)).x).toBeLessThan(before.x);
+  }
+});
+
+test('the profile card stands clear of an unpinned Parameters while sketching', async ({
+  page
+}) => {
+  // The right lane stood past the old band: the card ended 40px inside
+  // Parameters at 900 x 800.
+  await openWorkspace(page, 'Sketch profile card', MODEL_ONLY, {
+    width: 900,
+    height: 800
+  });
+  await enterSketch(page);
+  const sketchTools = page.getByRole('toolbar', { name: 'Sketch tools' });
+  // Screen-space clicks wait for the head-on entry tween to settle.
+  await page.waitForTimeout(800);
+  const canvas = page.locator('.viewer-host canvas');
+  const bounds = await box(canvas);
+  const corner = {
+    x: bounds.x + bounds.width * 0.3,
+    y: bounds.y + bounds.height * 0.45
+  };
+  await sketchTools.getByRole('button', { name: /^Rectangle/ }).click();
+  await page.mouse.click(corner.x, corner.y);
+  await page.mouse.move(corner.x + 80, corner.y + 60, { steps: 5 });
+  await page.mouse.click(corner.x + 80, corner.y + 60);
+  await sketchTools.getByRole('button', { name: /^Select/ }).click();
+  await railPanelButton(page, 'Parameters').click();
+  const panel = modelPanel(page, 'Parameters');
+  await expect(panel).toHaveClass(/is-unpinned/);
+  const card = page.getByRole('region', { name: 'Selected closed profile' });
+  await expect
+    .poll(async () => {
+      await canvas.evaluate((element) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-select-profile', {
+            detail: { index: 0, additive: false }
+          })
+        )
+      );
+      return card.count();
+    })
+    .toBe(1);
+  await expect.poll(() => boxesOverlap(card, panel)).toBe(false);
+  await expectClearOfRails(page, panel, 'beside the profile card');
+  await expect
+    .poll(() =>
+      ownsItsCentre(card.getByRole('button', { name: 'Deselect profile' }))
+    )
+    .toBe(true);
+});
+
+test.describe('with a touch pointer', () => {
+  // Touch emulation gives Chromium `pointer: coarse`: 52px rails, folded to
+  // two columns up to 900px tall (target-size.css).
+  test.use({ hasTouch: true });
+
+  test('an unpinned panel stands clear of a touch rail, its relations and the readout', async ({
+    page
+  }) => {
+    await openWorkspace(page, 'Touch sketch clears panel', MODEL_ONLY, {
+      width: 900,
+      height: 800
+    });
+    expect(
+      await page.evaluate(() => matchMedia('(pointer: coarse)').matches)
+    ).toBe(true);
+    await enterSketch(page);
+    await railPanelButton(page, 'Parameters').click();
+    const panel = modelPanel(page, 'Parameters');
+    await expect(panel).toHaveClass(/is-unpinned/);
+    for (const viewport of [
+      { width: 900, height: 800 },
+      { width: 1024, height: 768 },
+      // Short, both islands stand side by side with the readout beside.
+      { width: 900, height: 500 }
+    ]) {
+      await page.setViewportSize(viewport);
+      await expectClearOfRails(
+        page,
+        panel,
+        `a touch rail at ${viewport.width} x ${viewport.height}`
+      );
+    }
+  });
 });
 
 test('a drag on the model keeps the dock and an open unpinned panel where they are', async ({

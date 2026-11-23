@@ -4077,7 +4077,12 @@ describe('the unpinned slot beside the right lane', () => {
       // while the stage holds the band, the slot and the card.
       const fits = railBand + CW + 10 + 10 + 330;
       expect(
-        unpinnedSlotReserves({ width: fits, height: 720, insets: band }, 0, CW + 10, 330)
+        unpinnedSlotReserves(
+          { width: fits, height: 720, insets: band },
+          0,
+          CW + 10,
+          330
+        )
       ).toBe(true);
       expect(
         unpinnedSlotReserves(
