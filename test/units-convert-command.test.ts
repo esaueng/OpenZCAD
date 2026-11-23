@@ -36,6 +36,7 @@ import {
 import {
   createExactKernelAdapter,
   prepareUnitsConversion,
+  presentReferenceRefusal,
   type UnitsConversionPreparation
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -355,6 +356,41 @@ describe('units.convert without references', () => {
       manager.execute(commandFactories.convertUnits(payloadFor(source, 'inch')))
     ).toThrow(UnitsConversionError);
     expect(manager.document.commandLog).toHaveLength(source.commandLog.length);
+  });
+});
+
+describe('re-capture refusals on the review screen', () => {
+  it('restates a blend-orientation refusal in modelling terms, keeping the edge', () => {
+    const refusal = presentReferenceRefusal({
+      code: 'blend-orientation',
+      subject: 'Fillet 1 (feat_fillet)',
+      field: 'edgeHashes.0',
+      message:
+        'Fillet 1 (feat_fillet): selection edge 0 reads A→B, and in the converted build edgeHashes.0 runs the other way or lists its faces the other way round, so the blend would be built mirrored; refusing rather than swapping its sides.'
+    });
+    expect(refusal).toMatchObject({
+      stage: 'references',
+      code: 'blend-orientation',
+      subject: 'Fillet 1 (feat_fillet)',
+      field: 'edgeHashes.0'
+    });
+    expect(refusal.message).toContain('Fillet 1 (feat_fillet)');
+    expect(refusal.message).toContain('mirrored');
+    expect(refusal.message).toContain('Stored units were not converted');
+    expect(refusal.message).not.toMatch(/edgeHashes|swapping its sides/);
+  });
+
+  it('passes the other re-capture refusals through with their own message', () => {
+    const busy = {
+      code: 'busy' as const,
+      subject: 'document',
+      message:
+        'Another conversion is being checked. Try again when it finishes.'
+    };
+    expect(presentReferenceRefusal(busy)).toEqual({
+      stage: 'references',
+      ...busy
+    });
   });
 });
 

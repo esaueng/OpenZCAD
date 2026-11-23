@@ -37,8 +37,28 @@ import type { ProjectDocument, UnitSystem, UserId } from '@openzcad/shared';
 import {
   computeConversionReferenceMap,
   type ConversionReferenceMapOptions,
+  type ConversionReferenceRefusal,
   type ConversionReferenceReport
 } from './units-reference-recapture';
+
+/**
+ * A re-capture refusal as the review screen shows it. Most phase-4
+ * messages already name the node and say what to change; a
+ * `blend-orientation` one describes kernel edge parameterisation, so it is
+ * restated in modelling terms (the blend would come out mirrored) with
+ * what to do next. The field still names the edge.
+ */
+export function presentReferenceRefusal(
+  refusal: ConversionReferenceRefusal
+): UnitsConvertRefusal {
+  if (refusal.code === 'blend-orientation')
+    return {
+      stage: 'references',
+      ...refusal,
+      message: `${refusal.subject} would be rebuilt on the other side of its edges after the conversion, so its fillet or chamfer would come out mirrored. Stored units were not converted. Re-select the edges of ${refusal.subject} and try again.`
+    };
+  return { stage: 'references', ...refusal };
+}
 
 export interface UnitsConversionPreparationOptions extends ConversionReferenceMapOptions {
   /** Whose undo history the estimate measures; the owner by default. */
@@ -115,10 +135,7 @@ export async function prepareUnitsConversion(
   );
   if (!recaptured.ok)
     return refuse(
-      recaptured.refusals.map((refusal) => ({
-        stage: 'references',
-        ...refusal
-      })),
+      recaptured.refusals.map(presentReferenceRefusal),
       report.warnings
     );
 
