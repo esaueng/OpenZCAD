@@ -62,6 +62,37 @@ export function offsetFaceRefusalOf(
   }
   const match = NEIGHBOR_COLLAPSE.exec(error.message);
   if (!match) {
+    // The journaled move reports these two causes inside its combined
+    // remove/rebuild and translation diagnostic. Keep the full diagnostic.
+    if (
+      error.message.startsWith('resize blend: exact reconstruction refused:')
+    ) {
+      if (
+        /unsupported analytic support pair: (?:plane x cone|cone x plane)\)/.test(
+          error.message
+        ) &&
+        /non-invariant cone support face/.test(error.message)
+      ) {
+        return blendMoveRefusal(
+          error,
+          'unsupported',
+          'offset_face_conical_blend',
+          'This face meets a fillet on a cone that cannot be rebuilt during an offset. Edit the cone or fillet in History instead.'
+        );
+      }
+      if (
+        /exact prismatic blend translation failed \(offset: move-face would change topology.*moving blend reaches fixed rim face/.test(
+          error.message
+        )
+      ) {
+        return blendMoveRefusal(
+          error,
+          'invalid_topology',
+          'offset_face_blend_reaches_fixed_rim',
+          'The moving fillet would reach another face before completing this offset. Try a smaller offset.'
+        );
+      }
+    }
     return null;
   }
   const move = Number(match[2]);
@@ -87,6 +118,23 @@ export function offsetFaceRefusalOf(
     message: `${reason}\n${error.message}`,
     kernelReason: match[1]!.toLowerCase(),
     ...(limit === undefined ? {} : { limit }),
+    cause: error
+  });
+}
+
+function blendMoveRefusal(
+  error: Error,
+  category: 'unsupported' | 'invalid_topology',
+  kernelCode: string,
+  reason: string
+): OffsetFaceRefusal {
+  return new OffsetFaceRefusal({
+    family: 'direct-edit',
+    category,
+    kernelCode,
+    kernelMessage: error.message,
+    reason,
+    message: `${reason}\n${error.message}`,
     cause: error
   });
 }
