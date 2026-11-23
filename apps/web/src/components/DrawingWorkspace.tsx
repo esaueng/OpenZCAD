@@ -745,6 +745,8 @@ function useViewProjections(
       { base: string; matrix: readonly number[] }
     >();
     const passMarkers = new Map<string, ViewState>();
+    /** F06: the plain (not section) views of this pass, by their row. */
+    const viewKeysByRow = new Map<string, string[]>();
     for (const view of sheet.views) {
       const key = projectionKey(fingerprint, view);
       if (cache.current.has(key) || passMarkers.has(key)) continue;
@@ -776,6 +778,8 @@ function useViewProjections(
         const placements = view.exploded
           ? latest.current.explodedMatrices
           : null;
+        const rowKey = row ?? '';
+        viewKeysByRow.set(rowKey, [...(viewKeysByRow.get(rowKey) ?? []), key]);
         views.push({
           key,
           orientation: view.orientation,
@@ -841,6 +845,30 @@ function useViewProjections(
       };
       /** A section refused by the kernel: final, not a transport failure. */
       const refusals = new Map<string, string>();
+      /** F06: rows whose bodies could not be meshed, with why. */
+      const rowFailures = new Map<string, unknown>();
+      /**
+       * Forgets a view this pass could not draw, so the next pass asks
+       * again; after two more tries it shows the error. A closed client (an
+       * unmount, React's development remount) never counts.
+       */
+      const failView = (key: string, error: unknown) => {
+        const marker = passMarkers.get(key);
+        // A view already answered keeps its answer, and one another
+        // workspace has asked for since is not this pass's to forget.
+        markers.current.delete(key);
+        if (!marker || cache.current.get(key) !== marker) return;
+        const aborted = error instanceof Error && error.name === 'AbortError';
+        const tries = (failures.current.get(key) ?? 0) + 1;
+        if (!aborted) failures.current.set(key, tries);
+        if (aborted || tries < 3) cache.current.delete(key);
+        else
+          cache.current.set(key, {
+            state: 'error',
+            message:
+              error instanceof Error ? error.message : 'Projection failed.'
+          });
+      };
       const sectioned = [...cuts].map(([planeKey, cut]) => {
         if (known.sections.has(planeKey)) return Promise.resolve();
         if (!section)
@@ -879,11 +907,22 @@ function useViewProjections(
                   return groups;
                 }, new Map<string, string[]>())
               ].map(async ([row, keys]) => {
-                const meshed = await tessellate(
-                  documentFor(row || null),
-                  keys.map((key) => bodyOf.get(key)!.id).sort(),
-                  signal
-                );
+                let meshed: Record<string, ProjectionBodyInput>;
+                try {
+                  meshed = await tessellate(
+                    documentFor(row || null),
+                    keys.map((key) => bodyOf.get(key)!.id).sort(),
+                    signal
+                  );
+                } catch (error) {
+                  // F06: a row that cannot be built (a sketch its values
+                  // leave unsolvable) fails its own views, not the sheet's.
+                  // The active row ('') is a row like any other here.
+                  if (error instanceof Error && error.name === 'AbortError')
+                    throw error;
+                  rowFailures.set(row, error);
+                  return [];
+                }
                 return keys.flatMap((key) => {
                   const input = meshed[bodyOf.get(key)!.id];
                   return input ? [[key, input] as const] : [];
@@ -907,19 +946,37 @@ function useViewProjections(
             closed.name = 'AbortError';
             throw closed;
           }
+          // Nothing else on the sheet could be drawn: the whole request
+          // failed, and is retried and reported as one.
+          if (
+            rowFailures.size > 0 &&
+            cuts.size === 0 &&
+            [...viewKeysByRow.keys()].every((row) => rowFailures.has(row))
+          )
+            throw rowFailures.values().next().value;
           for (const id of missing) {
             const input = meshed[id];
             if (input) known.bodies.set(id, input);
           }
+          // F06: a row that could not be meshed answers its own views with
+          // the reason, and the rest of the sheet is drawn.
+          for (const [row, error] of rowFailures) {
+            const failed = new Set(viewKeysByRow.get(row) ?? []);
+            for (const key of failed) failView(key, error);
+            for (let index = views.length - 1; index >= 0; index -= 1)
+              if (failed.has(views[index]!.key)) views.splice(index, 1);
+          }
           // Every body or none: a view missing one would look complete.
           const inputs: Record<string, ProjectionBodyInput> = {};
           for (const id of bodyIds) {
+            if (rowFailures.has(bodyOf.get(id)!.row ?? '')) continue;
             const input = known.bodies.get(id);
             if (!input) throw new Error(`Body ${id} has no geometry to draw.`);
             inputs[id] = input;
           }
           for (const [key, { base, matrix }] of placedOf)
-            inputs[key] = placedProjectionInput(inputs[base]!, matrix);
+            if (inputs[base])
+              inputs[key] = placedProjectionInput(inputs[base], matrix);
           // Section views project from their cut bodies; a body wholly in
           // front of the plane is simply not in the section. A refused cut
           // is shown on its view at once: retrying cannot change it.
@@ -1034,25 +1091,7 @@ function useViewProjections(
             // failing gets two more tries before the views show the error. A
             // closed client (an unmount, React's development remount) never
             // counts.
-            const aborted =
-              error instanceof Error && error.name === 'AbortError';
-            for (const [key, marker] of passMarkers) {
-              // A view already answered keeps its answer, and one another
-              // workspace has asked for since is not this pass's to forget.
-              markers.current.delete(key);
-              if (cache.current.get(key) !== marker) continue;
-              const tries = (failures.current.get(key) ?? 0) + 1;
-              if (!aborted) failures.current.set(key, tries);
-              if (aborted || tries < 3) cache.current.delete(key);
-              else
-                cache.current.set(key, {
-                  state: 'error',
-                  message:
-                    error instanceof Error
-                      ? error.message
-                      : 'Projection failed.'
-                });
-            }
+            for (const key of passMarkers.keys()) failView(key, error);
           }
         )
         .finally(() => {

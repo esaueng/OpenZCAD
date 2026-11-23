@@ -4702,6 +4702,11 @@ export interface GeometryReadyState {
   warnings: string[];
   /** Current build attribution; never borrowed from a completed projection. */
   featureWarnings?: FeatureWarning[];
+  /**
+   * A geometry-only preview's solved sketch geometry, shaped as
+   * `DerivedState.sketchGeometry`. Only `previewGeometry` sets it.
+   */
+  sketchGeometry?: DerivedState['sketchGeometry'];
   updatedAt: string;
   analysis: 'pending';
 }

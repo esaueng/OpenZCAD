@@ -4,7 +4,11 @@
  * runs the returned commands through one `executeTransaction`, so N moved
  * objects are one undo step.
  */
-import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import {
+  commandFactories,
+  parameterResolvedSketchUpdate,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   findSketch,
   getParameterScope,
@@ -75,7 +79,12 @@ export function solvedSketchCommands(
   document: ProjectDocument,
   sketchId: SketchId,
   outcome: SketchSolveOutcome,
-  tolerance = APPLY_EPSILON
+  tolerance = APPLY_EPSILON,
+  /**
+   * F06: marks each write as the parameter re-solve's, so history admits it
+   * into a Tweak entry beside the value edit. Only `parameterResolve` sets it.
+   */
+  derivedFrom?: 'parameter-resolve'
 ): AnyCommand[] {
   if (!outcome.converged || outcome.rolledBack) {
     return [];
@@ -194,11 +203,11 @@ export function solvedSketchCommands(
       }
     }
     if (next) {
+      const payload = { sketchId, objectId: solved.objectId, data: next };
       commands.push(
-        commandFactories.updateSketchObject(
-          { sketchId, objectId: solved.objectId, data: next },
-          'Solve sketch'
-        )
+        derivedFrom
+          ? parameterResolvedSketchUpdate(payload)
+          : commandFactories.updateSketchObject(payload, 'Solve sketch')
       );
     }
   }

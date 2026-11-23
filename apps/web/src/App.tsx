@@ -371,7 +371,6 @@ import {
   lockConstraintIds,
   measureDrivingDimension,
   movedEntityLock,
-  sketchesDrivenByParameterEdit,
   planConstraintFromSelection,
   refusePick,
   relationSolveAnchor,
@@ -406,6 +405,11 @@ import {
   solveStatusLabel,
   solvedSketchCommands
 } from './lib/sketch/applySolve';
+import {
+  resolveSketchesForValueChange,
+  resolvedForDisplay
+} from './lib/sketch/parameterResolve';
+import { runConfigurationCommand as runResolvedConfigurationCommand } from './lib/configurationCommand';
 import {
   sketchContentFramePoints,
   type UnreferencedSnap
@@ -756,6 +760,7 @@ import {
 } from './lib/projectShareLink';
 import { sharedDocumentOnRow } from './lib/sharedConfiguration';
 import {
+  currentConfigurationRow,
   useConfigurationRowGeometry,
   type BuildRowGeometry
 } from './lib/configurationRowGeometry';
@@ -871,6 +876,7 @@ import {
   tangentChainAdditions
 } from './lib/interaction/chamferChain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
+import { planarFaceTarget, selectionBodies } from './lib/planarFaceTarget';
 import {
   bodyFeature,
   deleteKeyRemovesFeature,
@@ -1039,7 +1045,6 @@ import {
 import {
   edgeLabel,
   edgeLengthMeasurement,
-  faceLabel,
   textLabelSegments,
   topologySelectionLabel,
   topologySelectionLabelSegments,
@@ -7237,6 +7242,11 @@ export function App() {
    */
   const [viewerRowId, setViewerRowId] = useState<string | null>(null);
   if (viewerRowId !== null && !viewMode) setViewerRowId(null);
+  const solveConfigurationRowSketch = useCallback(
+    (rowDocument: ProjectDocument, sketchId: SketchId) =>
+      geometryRef.current.solveSketch(rowDocument, sketchId),
+    []
+  );
   const buildConfigurationRowGeometry = useCallback<BuildRowGeometry>(
     (rowDocument, options) =>
       geometryRef.current.previewGeometry(rowDocument, options),
@@ -7254,7 +7264,8 @@ export function App() {
         : [])
     ],
     buildConfigurationRowGeometry,
-    exactGeometryReady
+    exactGeometryReady,
+    solveConfigurationRowSketch
   );
   /** The row View shows in place of the active one, once it is built. */
   const viewerRowDocument =
@@ -9207,6 +9218,29 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  /**
+   * F06: the sketches the viewport outlines, read from the document whose
+   * solids it draws. View showing another row draws that row's solved
+   * sketches under its own values, so the outlines move with the solids;
+   * otherwise the model's, with its exact solved geometry.
+   */
+  const sketchDisplay = useMemo(
+    () =>
+      viewerRowDocument
+        ? {
+            document: viewerRowDocument,
+            read: resolvedSketchDocument(viewerRowDocument),
+            scope: getParameterScope(viewerRowDocument).scope
+          }
+        : doc
+          ? {
+              document: doc,
+              read: sketchReadDocument ?? doc,
+              scope: parameterScope.scope
+            }
+          : null,
+    [viewerRowDocument, doc, sketchReadDocument, parameterScope.scope]
+  );
   // F06: the variant table as it reads, the active row as the model holds it.
   const configurationView = useMemo((): ConfigurationSet | undefined => {
     const set = doc?.configurations;
@@ -9270,6 +9304,11 @@ export function App() {
     blendPreviewSelectionKey(interaction) === null;
   const renderedRepresentations =
     previewDoc?.derived.bodyRepresentations ?? representations;
+  const selectionRepresentations = selectionBodies(
+    renderedRepresentations,
+    previewDoc !== null,
+    viewerRowDocument
+  );
   const { autoFrame, recordLocalCommit, clearAutoFrame } = useLocalAutoFrame(
     doc,
     exactGeometryReady,
@@ -9285,7 +9324,7 @@ export function App() {
   const renderedSelectedTopology = useMemo<TopologySelection | null>(() => {
     if (selectedTopology && !currentFaceGeometryPreview) {
       const resolved = resolveSelectionTopology(
-        renderedRepresentations[selectedTopology.bodyId],
+        selectionRepresentations[selectedTopology.bodyId],
         selectedTopology
       );
       if (resolved) return resolved;
@@ -9408,46 +9447,14 @@ export function App() {
     representations,
     renderedOffsetPreview,
     renderedRepresentations,
+    selectionRepresentations,
     currentFaceGeometryPreview,
     selectedTopology
   ]);
-  const normalToFaceTarget = useMemo(() => {
-    const selection = renderedSelectedTopology;
-    if (selection?.kind !== 'face' || !selection.topologyId) {
-      return null;
-    }
-    const body = renderedRepresentations[selection.bodyId];
-    const face = body?.topology?.faces.find(
-      (candidate) =>
-        candidate.topologyId === selection.topologyId ||
-        (selection.hash !== undefined && candidate.hash === selection.hash)
-    );
-    const geometry = face?.geometry;
-    if (
-      !body ||
-      !face ||
-      face.triangleCount <= 0 ||
-      geometry?.surfaceType !== 'plane' ||
-      !geometry.normal ||
-      ![
-        geometry.center.x,
-        geometry.center.y,
-        geometry.center.z,
-        geometry.normal.x,
-        geometry.normal.y,
-        geometry.normal.z
-      ].every(Number.isFinite) ||
-      Math.hypot(geometry.normal.x, geometry.normal.y, geometry.normal.z) <
-        1e-12
-    ) {
-      return null;
-    }
-    return {
-      bodyId: body.bodyId,
-      topologyId: face.topologyId,
-      label: faceLabel(body, face.hash, face.topologyId)
-    };
-  }, [renderedRepresentations, renderedSelectedTopology]);
+  const normalToFaceTarget = useMemo(
+    () => planarFaceTarget(selectionRepresentations, renderedSelectedTopology),
+    [selectionRepresentations, renderedSelectedTopology]
+  );
   // Meshes whose analysis the worker has not finished. Saved measurements
   // wait for it in every case.
   const analysisPendingSnapshot =
@@ -10625,15 +10632,15 @@ export function App() {
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
-    if (!doc) {
+    if (!sketchDisplay) {
       return [];
     }
-    const scope = parameterScope.scope;
+    const { document: shown, read, scope } = sketchDisplay;
     const resolve = (value: ParamValue) =>
-      evalParamValue(value, scope, doc.units);
-    return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
+      evalParamValue(value, scope, shown.units);
+    return listNodesByKind(shown, 'sketch').flatMap((sketch) => {
       const objectNode = sketch.objectIds[0]
-        ? sketchReadDocument?.nodes[sketch.objectIds[0]]
+        ? read.nodes[sketch.objectIds[0]]
         : undefined;
       if (objectNode?.kind !== 'sketch-object') {
         return [];
@@ -10688,7 +10695,7 @@ export function App() {
       let basis: PlaneBasis;
       try {
         basis = resolvedSketchPlaneBasis(
-          doc,
+          shown,
           sketch.planeRef,
           (value) => resolve(value) ?? 0,
           sketch.name
@@ -10714,13 +10721,7 @@ export function App() {
         }
       ];
     });
-  }, [
-    doc,
-    parameterScope,
-    selectedSketch,
-    selectedSketchProfileId,
-    sketchReadDocument
-  ]);
+  }, [sketchDisplay, selectedSketch, selectedSketchProfileId]);
 
   // The viewport installs and tears down real scene objects when these props
   // change identity, so each one is memoized rather than built inline: a fresh
@@ -16609,7 +16610,9 @@ export function App() {
         const opening = await sharedDocumentOnRow(
           shared.document,
           shareRowId,
-          (candidate) => geometryRef.current.previewGeometry(candidate)
+          (candidate) => geometryRef.current.previewGeometry(candidate),
+          (document, sketchId) =>
+            geometryRef.current.solveSketch(document, sketchId)
         );
         if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
@@ -19081,7 +19084,8 @@ export function App() {
       const preflight = await preflightCadPatch(
         current,
         proposal,
-        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+        (candidate, analysis) => geometry.syncOnce(candidate, analysis),
+        (document, sketchId) => geometry.solveSketch(document, sketchId)
       );
       const live = managerRef.current?.document;
       if (
@@ -19215,7 +19219,9 @@ export function App() {
           const pending = preflightCadPatch(
             base,
             proposal,
-            (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+            (candidate, analysis) => geometry.syncOnce(candidate, analysis),
+            // F06: a value the patch sets stores the sketches it drives.
+            (document, sketchId) => geometry.solveSketch(document, sketchId)
           );
           if (!e2eApplyGate) return pending;
           const [checked] = await Promise.all([
@@ -20266,7 +20272,12 @@ export function App() {
     if (exportBlockedByUpdate() || !doc) {
       return;
     }
-    const face = representations[target.bodyId as BodyId]?.topology?.faces.find(
+    // F06: the face is picked on the row View shows, so it is that row's.
+    const shown = shownRowExportDocument();
+    if (!shown) return;
+    const face = shown.derived.bodyRepresentations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find(
       (candidate) => candidate.topologyId === target.topologyId
     );
     if (!face) {
@@ -20278,7 +20289,7 @@ export function App() {
       setStatus('Exporting face outline as DXF…');
       const result = await geometry.exportModel(
         'dxf',
-        doc,
+        shown,
         [target.bodyId as BodyId],
         {
           units: exportUnitsFor(doc.units),
@@ -20378,11 +20389,14 @@ export function App() {
     if (!doc) {
       return;
     }
+    // F06: the sketch as the row View shows it, at that row's sizes.
+    const shown = shownRowExportDocument();
+    if (!shown) return;
     const fileName = `${exportFileStem(doc.name)}-sketch.${format}`;
     const name = format.toUpperCase();
     try {
       setStatus(`Exporting the sketch ${name}…`);
-      const result = await geometry.exportModel(format, doc, [], {
+      const result = await geometry.exportModel(format, shown, [], {
         sketchId: options.sketchId as SketchId,
         transparent: options.transparent
       });
@@ -20731,6 +20745,44 @@ export function App() {
   }
 
   /**
+   * F06: the configuration row a whole-model export writes when none is
+   * named: the one View shows, or null for the active row. File › Export,
+   * the palette and the desktop menu all read it, so a file never holds a
+   * row other than the one on screen.
+   */
+  const shownExportRowId =
+    viewerRowId !== null && viewerRowId !== doc?.configurations?.activeRowId
+      ? viewerRowId
+      : null;
+
+  /**
+   * F06: the document an export of what is on screen reads: the row View
+   * shows (its sketches solved for that row, its bodies built) or the
+   * model. Null, with the reason said, while that row is still building.
+   */
+  function shownRowExportDocument(): ProjectDocument | null {
+    if (shownExportRowId === null) return doc;
+    // Only a build of the row as the document now stands: the row cache
+    // keeps the previous build on screen while the next one runs.
+    const current = currentConfigurationRow(
+      configurationRows,
+      shownExportRowId
+    );
+    if (current) return current;
+    setStatus(
+      configurationRows.errors.get(shownExportRowId) ??
+        'Wait for the configuration to finish building.'
+    );
+    return null;
+  }
+
+  /** F06: opens the mesh dialog on the row View shows. */
+  function openMeshExport() {
+    setExportRowId(shownExportRowId);
+    setMeshExportOpen(true);
+  }
+
+  /**
    * F06: what an export of `rowId` writes. The active row (or none) is the
    * model as shown, with the export scope's bodies. Another row is built for
    * the file alone from `documentForConfiguration`, nothing in the open
@@ -20743,6 +20795,8 @@ export function App() {
     rowName: string | null;
   } | null {
     if (!doc) return null;
+    // Another row's sketches are solved for its values when an export
+    // starts (`solvedExportTarget`); this stays synchronous for the checks.
     const set = doc.configurations;
     const row =
       rowId && set && rowId !== set.activeRowId
@@ -20761,6 +20815,47 @@ export function App() {
       allShownBodies: true,
       rowName: row.name
     };
+  }
+
+  /**
+   * F06: an export target whose document is another row, with the sketches
+   * that row's parameter values drive solved again, so the file has the
+   * row's geometry rather than the active row's stored sketch sizes. The
+   * active row's target is returned as it is.
+   */
+  async function solvedExportTarget<
+    T extends { document: ProjectDocument; allShownBodies: boolean }
+  >(target: T, source: ProjectDocument): Promise<T> {
+    if (!target.allShownBodies) return target;
+    const document = await resolvedForDisplay(
+      source,
+      target.document,
+      (candidate, sketchId) => geometry.solveSketch(candidate, sketchId)
+    );
+    return document === target.document ? target : { ...target, document };
+  }
+
+  /**
+   * F06: a drawing view on another configuration row draws that row's
+   * document (`documentForConfiguration`). Its sketches are solved for the
+   * row's parameter values against the model they came from, so the view
+   * shows the row's sizes. The model itself, or a row whose values drive no
+   * sketch, is drawn as it is.
+   */
+  function solvedDrawingSource(
+    source: ProjectDocument
+  ): Promise<ProjectDocument> {
+    const live = managerRef.current?.document;
+    if (
+      !live ||
+      source === live ||
+      source.projectId !== live.projectId ||
+      source.configurations?.activeRowId === live.configurations?.activeRowId
+    )
+      return Promise.resolve(source);
+    return resolvedForDisplay(live, source, (candidate, sketchId) =>
+      geometry.solveSketch(candidate, sketchId)
+    );
   }
 
   /** The file stem of an export, naming a configuration that is not active. */
@@ -20819,45 +20914,60 @@ export function App() {
    * scope's bodies laid flat as one layered DXF.
    */
   function handleExportCncLayout() {
-    const target = readyExportTarget(null);
+    const target = readyExportTarget(shownExportRowId);
     if (!target || !doc) return;
-    const stem = exportStemFor(null);
+    const source = doc;
+    const stem = exportStemFor(target.rowName);
     const units = exportUnitsFor(doc.units);
-    void import('./lib/cncLayoutDxf').then((lazy) =>
-      lazy.writeCncLayoutDxf({
-        geometry,
-        target,
-        units,
-        stem,
-        save: saveCadTextFile,
-        announce: setStatus
-      })
+    void Promise.all([
+      import('./lib/cncLayoutDxf'),
+      solvedExportTarget(target, source)
+    ]).then(
+      ([lazy, solved]) =>
+        lazy.writeCncLayoutDxf({
+          geometry,
+          target: solved,
+          units,
+          stem,
+          save: saveCadTextFile,
+          announce: setStatus
+        }),
+      (error: unknown) =>
+        setStatus(errorMessage(error, 'That configuration cannot be exported.'))
     );
   }
 
   /** I06: File › Export IGES, run from its lazy module. */
   function handleExportIges() {
-    const target = readyExportTarget(null);
+    const target = readyExportTarget(shownExportRowId);
     if (!target || !doc) return;
-    const fileName = `${exportStemFor(null)}.igs`;
+    const source = doc;
+    const fileName = `${exportStemFor(target.rowName)}.igs`;
     const { units } = doc;
-    void import('./lib/igesImport').then((lazy) =>
-      lazy.exportIges({
-        target,
-        fileName,
-        units: exportUnitsFor(units),
-        runExportJob,
-        exportModel: geometry.exportModel
-      })
+    void Promise.all([
+      import('./lib/igesImport'),
+      solvedExportTarget(target, source)
+    ]).then(
+      ([lazy, solved]) =>
+        lazy.exportIges({
+          target: solved,
+          fileName,
+          units: exportUnitsFor(units),
+          runExportJob,
+          exportModel: geometry.exportModel
+        }),
+      (error: unknown) =>
+        setStatus(errorMessage(error, 'That configuration cannot be exported.'))
     );
   }
 
-  async function handleExportStep(rowId: string | null = null) {
+  async function handleExportStep(rowId: string | null = shownExportRowId) {
     const target = readyExportTarget(rowId);
     if (!target || !doc) {
       return;
     }
-    const { document: exported, bodyIds, allShownBodies, rowName } = target;
+    const source = doc;
+    const { bodyIds, allShownBodies, rowName } = target;
     const fileName = `${exportStemFor(rowName)}.step`;
     await runExportJob({
       fileName,
@@ -20868,6 +20978,7 @@ export function App() {
           }
         : {}),
       produce: async (options) => {
+        const { document: exported } = await solvedExportTarget(target, source);
         const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
           ...(allShownBodies ? { allShownBodies: true } : {}),
@@ -20901,19 +21012,26 @@ export function App() {
       return;
     }
     const { units } = doc;
-    void import('./lib/meshExportPackage').then((lazy) =>
-      lazy.exportMesh({
-        format,
-        deflection,
-        options: tolerances,
-        target,
-        info: MESH_EXPORT_FILE_INFO[format],
-        units: exportUnitsFor(units),
-        stemOf: exportStemFor,
-        setStatus,
-        runExportJob,
-        exportModel: geometry.exportModel
-      })
+    const source = doc;
+    void Promise.all([
+      import('./lib/meshExportPackage'),
+      solvedExportTarget(target, source)
+    ]).then(
+      ([lazy, solved]) =>
+        lazy.exportMesh({
+          format,
+          deflection,
+          options: tolerances,
+          target: solved,
+          info: MESH_EXPORT_FILE_INFO[format],
+          units: exportUnitsFor(units),
+          stemOf: exportStemFor,
+          setStatus,
+          runExportJob,
+          exportModel: geometry.exportModel
+        }),
+      (error: unknown) =>
+        setStatus(errorMessage(error, 'That configuration cannot be exported.'))
     );
   }
 
@@ -20932,7 +21050,8 @@ export function App() {
     if (!written || !doc) {
       return;
     }
-    const { document: exported, bodyIds, allShownBodies, rowName } = written;
+    const source = doc;
+    const { bodyIds, allShownBodies, rowName } = written;
     const slicer = DESKTOP_SLICERS.find((entry) => entry.id === target);
     if (!slicer && target !== 'download') return;
     const info = MESH_EXPORT_FILE_INFO['3mf'];
@@ -20945,6 +21064,10 @@ export function App() {
           ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
           : `Downloaded ${bodies} as ${fileName}. Open it from your browser’s downloads in your slicer.`,
       produce: async (options) => {
+        const { document: exported } = await solvedExportTarget(
+          written,
+          source
+        );
         const result = await geometry.exportModel('3mf', exported, bodyIds, {
           deflection,
           ...tolerances,
@@ -20987,19 +21110,23 @@ export function App() {
         new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
-    return geometry.meshQuality(target.document, target.bodyIds, deflection, {
-      ...(target.allShownBodies ? { allShownBodies: true } : {}),
-      ...(options?.angularTolerance !== undefined
-        ? { angularTolerance: options.angularTolerance }
-        : {}),
-      ...(options?.units !== undefined ? { units: options.units } : {}),
-      onState: (state) => {
-        const progress = exportProgressFor(state);
-        if (progress) {
-          options?.onProgress?.(progress);
+    const source = doc;
+    if (!source) return Promise.reject(new Error('No project is open.'));
+    return solvedExportTarget(target, source).then((solved) =>
+      geometry.meshQuality(solved.document, solved.bodyIds, deflection, {
+        ...(target.allShownBodies ? { allShownBodies: true } : {}),
+        ...(options?.angularTolerance !== undefined
+          ? { angularTolerance: options.angularTolerance }
+          : {}),
+        ...(options?.units !== undefined ? { units: options.units } : {}),
+        onState: (state) => {
+          const progress = exportProgressFor(state);
+          if (progress) {
+            options?.onProgress?.(progress);
+          }
         }
-      }
-    });
+      })
+    );
   }
 
   /** "Save reproduction": the held refusal as a corpus fixture, locally. */
@@ -21125,8 +21252,8 @@ export function App() {
         void handleExportStep();
         break;
       case 'export-mesh':
-        if (exportBodyIds.length > 0) {
-          setMeshExportOpen(true);
+        if (exportBodyIds.length > 0 || shownExportRowId !== null) {
+          openMeshExport();
         } else {
           setStatus(emptyExportReason);
         }
@@ -26016,24 +26143,26 @@ export function App() {
    * real. An assistant patch already landing is awaited first, since its
    * commit is what the edit must be checked against.
    */
+  /** F06: the ticket of the latest row switch (`runConfigurationCommand`). */
+  const latestConfigurationActivationRef = useRef(0);
+
   /**
    * F06: runs one configuration command, checked against the document first
-   * so a refusal is answered (and nothing is committed) rather than thrown.
+   * so a refusal is answered (and nothing is committed) rather than thrown,
+   * with the sketches its values drive solved into the same entry. The last
+   * of several quick row switches wins.
    */
-  function runConfigurationCommand(command: AnyCommand): string | null {
-    const manager = managerRef.current;
-    if (!manager) return 'Editing is unavailable.';
-    try {
-      command.validate(manager.document);
-      command.apply(manager.document);
-    } catch (error) {
-      return error instanceof Error
-        ? error.message
-        : 'The configurations were not changed.';
-    }
-    return executeCommand(command)
-      ? null
-      : 'The configurations were not changed.';
+  function runConfigurationCommand(
+    command: AnyCommand
+  ): Promise<string | null> {
+    return runResolvedConfigurationCommand(command, {
+      manager: () => managerRef.current,
+      solve: (document, sketchId) => geometry.solveSketch(document, sketchId),
+      execute: (single) => executeCommand(single),
+      executeTransaction: (label, commands, permission) =>
+        executeTransaction(label, commands, undefined, permission),
+      latestActivation: latestConfigurationActivationRef
+    });
   }
 
   /** F06: exports one configuration row, as STEP or from the mesh dialog. */
@@ -26054,8 +26183,10 @@ export function App() {
       });
       return;
     }
-    void geometryRef.current
-      .exportBodies(target)
+    void resolvedForDisplay(exportRowDocument, target, (candidate, sketchId) =>
+      geometryRef.current.solveSketch(candidate, sketchId)
+    )
+      .then((solved) => geometryRef.current.exportBodies(solved))
       .then(
         (bodies) => bodies,
         (error: unknown) => {
@@ -26275,14 +26406,6 @@ export function App() {
       if (inputError) return { kind: 'refused', message: inputError };
       const beforeScope = getParameterScope(base).scope;
       const afterScope = getParameterScope(prospective).scope;
-      // Pattern spacing and step count too: a copy left where the old value
-      // put it would disagree with the label reading the new one.
-      const constrainedSketches = sketchesDrivenByParameterEdit(
-        listNodesByKind(prospective, 'sketch'),
-        (value) => evalParamValue(value, beforeScope, base.units) ?? undefined,
-        (value) =>
-          evalParamValue(value, afterScope, prospective.units) ?? undefined
-      );
       for (const sketch of listNodesByKind(prospective, 'sketch')) {
         const locked = movedEntityLock(
           prospective,
@@ -26299,31 +26422,19 @@ export function App() {
           };
         }
       }
-      const commands: AnyCommand[] = [parameterCommand];
       setStatus(`Checking ${name}…`);
-      for (const sketch of constrainedSketches) {
-        const outcome = await geometry.solveSketch(
-          prospective,
-          sketch.sketchId
-        );
-        if (!current()) return stale();
-        if (!outcome.converged || outcome.rolledBack) {
-          return {
-            kind: 'refused',
-            message: `${sketch.name} is ${solveStatusLabel(outcome)}.`
-          };
-        }
-        const solved = solvedSketchCommands(
-          prospective,
-          sketch.sketchId,
-          outcome
-        );
-        for (const command of solved) {
-          command.validate(prospective);
-          prospective = command.apply(prospective);
-        }
-        commands.push(...solved);
-      }
+      // Pattern spacing and step count too: a copy left where the old value
+      // put it would disagree with the label reading the new one.
+      const resolved = await resolveSketchesForValueChange(
+        base,
+        prospective,
+        (document, sketchId) => geometry.solveSketch(document, sketchId),
+        current
+      );
+      if (!resolved) return stale();
+      if (!resolved.ok) return { kind: 'refused', message: resolved.reason };
+      prospective = resolved.document;
+      const commands: AnyCommand[] = [parameterCommand, ...resolved.commands];
       // Keep the live document, history and last valid geometry untouched while
       // the worker checks every dependent feature, including the final union.
       setParameterCandidate({ base, document: prospective });
@@ -26738,12 +26849,13 @@ export function App() {
     );
   }, [doc, inPlaceEditFeatureId]);
   const availableSketchViews = useMemo(() => {
-    if (!doc) {
+    if (!sketchDisplay) {
       return [];
     }
-    const scope = parameterScope.scope;
-    const resolve = sketchValueResolver(scope, doc.units);
-    return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
+    // F06: in View, the shown row's sketches, as its solids are drawn.
+    const { document: shown, read, scope } = sketchDisplay;
+    const resolve = sketchValueResolver(scope, shown.units);
+    return listNodesByKind(shown, 'sketch').flatMap((sketch) => {
       const active =
         interaction.mode === 'sketch' &&
         interaction.session.sketchId === sketch.sketchId;
@@ -26761,7 +26873,7 @@ export function App() {
         selectedSketch?.sketchId === sketch.sketchId ||
         selectedSketchProfileId === sketch.sketchId;
       const objects = sketch.objectIds.flatMap((objectId) => {
-        const node = sketchReadDocument?.nodes[objectId];
+        const node = read.nodes[objectId];
         return node?.kind === 'sketch-object'
           ? [{ id: objectId, data: node.data }]
           : [];
@@ -26772,7 +26884,7 @@ export function App() {
       let basis: PlaneBasis;
       try {
         basis = resolvedSketchPlaneBasis(
-          doc,
+          shown,
           sketch.planeRef,
           resolve,
           sketch.name
@@ -26864,8 +26976,7 @@ export function App() {
       ];
     });
   }, [
-    doc,
-    parameterScope,
+    sketchDisplay,
     interaction,
     selectedSketch,
     selectedSketchProfileId,
@@ -26877,8 +26988,7 @@ export function App() {
     hiddenSketchIds,
     movingSketch,
     modelingEditFeature,
-    inPlaceEditInputSketchIds,
-    sketchReadDocument
+    inPlaceEditInputSketchIds
   ]);
   /**
    * U09: an in-place request as the command its commit would run. A line
@@ -36974,7 +37084,7 @@ export function App() {
           : exportBodyIds.length === 0
             ? emptyExportReason
             : null,
-      run: () => setMeshExportOpen(true)
+      run: () => openMeshExport()
     },
     // I03: one command per unit, found by its name and by "units".
     ...(['mm', 'cm', 'm', 'inch'] as const).map((unit) => ({
@@ -38357,7 +38467,7 @@ export function App() {
           onExportStep={() => void handleExportStep()}
           onExportIges={() => void handleExportIges()}
           onExportCncLayout={handleExportCncLayout}
-          onOpenMeshExport={() => setMeshExportOpen(true)}
+          onOpenMeshExport={openMeshExport}
           onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal
             ? {
@@ -38455,7 +38565,7 @@ export function App() {
             }
             onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
-            onOpenMeshExport={() => setMeshExportOpen(true)}
+            onOpenMeshExport={openMeshExport}
             // Make a copy is the top bar's labelled button now (I73).
             share={null}
             configuration={
@@ -38464,7 +38574,7 @@ export function App() {
                     rows: doc.configurations.rows,
                     activeRowId: doc.configurations.activeRowId,
                     onActivate: (rowId) =>
-                      void Promise.resolve(
+                      Promise.resolve(
                         configurationActions.activate(rowId)
                       ).then((refused) => {
                         if (refused) setStatus(refused);
@@ -40209,10 +40319,16 @@ export function App() {
                 }
                 defaultBodyIds={drawingDefaultBodyIds}
                 requestTessellation={(source, bodyIds, signal) =>
-                  geometry.drawingTessellation(source, bodyIds, { signal })
+                  solvedDrawingSource(source).then((solved) =>
+                    geometry.drawingTessellation(solved, bodyIds, { signal })
+                  )
                 }
                 requestSection={(source, bodyIds, plane, signal) =>
-                  geometry.drawingSection(source, bodyIds, plane, { signal })
+                  solvedDrawingSource(source).then((solved) =>
+                    geometry.drawingSection(solved, bodyIds, plane, {
+                      signal
+                    })
+                  )
                 }
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}

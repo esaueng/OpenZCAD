@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { documentForConfiguration } from '@openzcad/document-core';
 import type { GeometryReadyState, ProjectDocument } from '@openzcad/shared';
 import { geometryContentKey } from '../worker/exactRebuildCache';
+import {
+  resolvedForDisplay,
+  type SolveSketch
+} from './sketch/parameterResolve';
 
 /**
  * F06 slice 4: configuration rows shown beside the active one. A view or an
@@ -23,6 +27,29 @@ export interface ConfigurationRowGeometry {
   builds: ReadonlyMap<string, ConfigurationRowBuild>;
   /** Rows that could not be built, with the reason. */
   errors: ReadonlyMap<string, string>;
+  /**
+   * `geometryContentKey` of the live document, or '' while no row is named.
+   * A build whose own key differs is the last good one kept on screen.
+   */
+  contentKey: string;
+}
+
+/**
+ * A row's build only when it was built from the document as it now stands.
+ * The hook keeps the previous build drawn while the next one runs, so an
+ * export or any other result that must match the model reads this rather
+ * than `builds` directly.
+ */
+export function currentConfigurationRow(
+  geometry: ConfigurationRowGeometry,
+  rowId: string
+): ProjectDocument | null {
+  const entry = geometry.builds.get(rowId);
+  return entry &&
+    geometry.contentKey !== '' &&
+    entry.contentKey === geometry.contentKey
+    ? entry.document
+    : null;
 }
 
 export type BuildRowGeometry = (
@@ -53,21 +80,33 @@ export async function buildConfigurationRow(
   document: ProjectDocument,
   rowId: string,
   build: BuildRowGeometry,
-  signal: AbortSignal
+  signal: AbortSignal,
+  /** Solves the sketches the row's parameter values drive, for display. */
+  solve?: SolveSketch
 ): Promise<ProjectDocument> {
-  const row = documentForConfiguration(document, rowId);
+  const switched = documentForConfiguration(document, rowId);
+  const row = solve
+    ? await resolvedForDisplay(document, switched, solve)
+    : switched;
+  signal.throwIfAborted();
   const ready = await build(row, { signal });
+  // The active row's solve never stands in for this row's.
+  const { sketchGeometry: _activeGeometry, ...derived } = row.derived;
   return {
     ...row,
     derived: {
-      ...row.derived,
+      ...derived,
       // Display geometry: drawn, picked and measured, never weighed. A row's
       // volume and mass come from its exact export or the Inspector's own
       // request, so the analysis fields a preview build leaves out are never
       // read from these.
       bodyRepresentations:
         ready.bodyRepresentations as ProjectDocument['derived']['bodyRepresentations'],
-      warnings: ready.warnings
+      warnings: ready.warnings,
+      // The build's own solve: sketches tied to a linked projection are
+      // solved against the row's re-projected edge only here, so the
+      // overlays (`resolvedSketchDocument`) draw them where the solids are.
+      ...(ready.sketchGeometry ? { sketchGeometry: ready.sketchGeometry } : {})
     }
   };
 }
@@ -81,7 +120,13 @@ export function useConfigurationRowGeometry(
    * while the worker is still building the model (just after a reload, say)
    * would be dropped or refused, and is asked for again once it is ready.
    */
-  ready = true
+  ready = true,
+  /**
+   * Solves a sketch. A row's parameter values can drive a sketch the active
+   * row solved to other sizes; each row's build solves those again, so it
+   * shows the row's geometry rather than the active row's.
+   */
+  solve?: SolveSketch
 ): ConfigurationRowGeometry {
   const wanted = configurationRowsToBuild(document, rowIds);
   const wantedKey = wanted.join('\n');
@@ -92,6 +137,8 @@ export function useConfigurationRowGeometry(
   );
   const latest = useRef(document);
   latest.current = document;
+  const solveRef = useRef(solve);
+  solveRef.current = solve;
   const [state, setState] = useState<{
     builds: Map<string, ConfigurationRowBuild>;
     errors: Map<string, string>;
@@ -118,7 +165,8 @@ export function useConfigurationRowGeometry(
             document,
             rowId,
             build,
-            abort.signal
+            abort.signal,
+            solveRef.current
           );
           if (abort.signal.aborted) return;
           setState((current) => {
@@ -160,8 +208,8 @@ export function useConfigurationRowGeometry(
     const errors = new Map(
       [...state.errors].filter(([rowId]) => keep.has(rowId))
     );
-    return { builds, errors };
+    return { builds, errors, contentKey };
     // `wanted` is derived from `wantedKey`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, wantedKey, document?.projectId]);
+  }, [state, wantedKey, document?.projectId, contentKey]);
 }

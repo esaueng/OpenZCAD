@@ -304,4 +304,51 @@ describe('TweakPanel refusals', () => {
       screen.queryByRole('combobox', { name: 'Configuration' })
     ).not.toBeInTheDocument();
   });
+  it('lets the active row overtake a pending switch, then shows the model row (F06)', async () => {
+    const user = userEvent.setup();
+    const pending: Array<(refused: string | null) => void> = [];
+    const onActivate = vi.fn(
+      () =>
+        new Promise<string | null>((resolve) => {
+          pending.push(resolve);
+        })
+    );
+    render(
+      <TweakPanel
+        parameters={[width]}
+        parameterValues={{ width: 80 }}
+        canExport
+        exportScope={null}
+        onSetParameter={vi.fn()}
+        onViewActivityLog={vi.fn()}
+        onExportStep={vi.fn()}
+        onOpenMeshExport={vi.fn()}
+        share={null}
+        configuration={{
+          rows: [
+            { id: 'small', name: 'Small' },
+            { id: 'large', name: 'Large' }
+          ],
+          activeRowId: 'small',
+          onActivate
+        }}
+        panelOpen
+        onTogglePanel={vi.fn()}
+      />
+    );
+    const picker = screen.getByRole('combobox', { name: 'Configuration' });
+    await user.selectOptions(picker, 'Large');
+    expect(onActivate).toHaveBeenLastCalledWith('large');
+    // Still solving: the picker shows the pick, so Small is a real change.
+    expect(picker).toHaveValue('large');
+    await user.selectOptions(picker, 'Small');
+    expect(onActivate).toHaveBeenLastCalledWith('small');
+    expect(picker).toHaveValue('small');
+
+    // A refused switch falls back to the model's active row.
+    await user.selectOptions(picker, 'Large');
+    expect(picker).toHaveValue('large');
+    pending.at(-1)?.('That configuration cannot be built.');
+    await waitFor(() => expect(picker).toHaveValue('small'));
+  });
 });

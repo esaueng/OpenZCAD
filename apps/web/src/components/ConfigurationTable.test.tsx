@@ -117,6 +117,29 @@ describe('ConfigurationTable', () => {
     expect(screen.getByRole('button', { name: 'Delete Large' })).toBeEnabled();
   });
 
+  it('passes a click on the active row on, so it overtakes a pending switch', async () => {
+    const run = actions();
+    // Large is still solving: the model, and so the radio, stays on Small.
+    vi.mocked(run.activate).mockReturnValue(new Promise(() => {}));
+    renderTable(set, run);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'Use Large' }));
+    });
+    expect(screen.getByRole('radio', { name: 'Use Small' })).toBeChecked();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'Use Small' }));
+    });
+    expect(vi.mocked(run.activate).mock.calls).toEqual([['large'], ['small']]);
+  });
+
+  it('passes a click on Large on exactly once', async () => {
+    const run = renderTable(set)!;
+    await act(async () => {
+      fireEvent.click(screen.getByRole('radio', { name: 'Use Large' }));
+    });
+    expect(run.activate).toHaveBeenCalledTimes(1);
+  });
+
   it('activates, edits cells and adds rows and columns through its actions', async () => {
     const run = renderTable(set)!;
     await act(async () => {

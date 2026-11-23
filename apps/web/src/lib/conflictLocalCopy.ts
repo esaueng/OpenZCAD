@@ -9,6 +9,7 @@ import {
   duplicateProjectName,
   toProjectId,
   referenceImagesWithHistory,
+  withUnverifiedHistoryKinds,
   type ProjectDocument,
   type UserId
 } from '@openzcad/shared';
@@ -39,6 +40,9 @@ export async function localConflictCopy(
   copy.projectId = projectId;
   copy.ownerUserId = ownerUserId;
   if (copy.editHistory) {
+    // The copy's owner may not be the source's (a shared project): its
+    // history claims no more than its commands show (F06).
+    copy.editHistory = withUnverifiedHistoryKinds(copy.editHistory);
     copy.editHistory.projectId = projectId;
     copy.editHistory.actorUserId = ownerUserId;
     for (const historical of documentNodesWithHistory(copy)) {

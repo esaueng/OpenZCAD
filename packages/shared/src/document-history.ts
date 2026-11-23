@@ -105,6 +105,47 @@ export function isHistoryCommandKinds(value: unknown): value is string[] {
   );
 }
 
+/**
+ * F06: the history kind of a sketch write the parameter re-solve stored
+ * beside a value edit or row switch. It admits the entry into Tweak's undo,
+ * so only the recording `CommandManager` may write it (from a mark that never
+ * travels in a payload); history from anywhere else cannot prove it.
+ */
+export const PARAMETER_RESOLVED_SKETCH_UPDATE_KIND =
+  'sketch.object.update.parameter-resolve';
+
+/**
+ * History that becomes another owner's, as an imported backup or a copy of
+ * a shared project does: a recorded kind that grants Tweak more than the
+ * entry's commands can show is read as the plain kind it stands for, so the
+ * entry stays Build's. Unchanged when there is none.
+ */
+export function withUnverifiedHistoryKinds(
+  history: DocumentHistory
+): DocumentHistory {
+  if (
+    !history.entries.some((entry) =>
+      entry.commandKinds?.includes(PARAMETER_RESOLVED_SKETCH_UPDATE_KIND)
+    )
+  )
+    return history;
+  return {
+    ...history,
+    entries: history.entries.map((entry) =>
+      entry.commandKinds?.includes(PARAMETER_RESOLVED_SKETCH_UPDATE_KIND)
+        ? {
+            ...entry,
+            commandKinds: entry.commandKinds.map((kind) =>
+              kind === PARAMETER_RESOLVED_SKETCH_UPDATE_KIND
+                ? 'sketch.object.update'
+                : kind
+            )
+          }
+        : entry
+    )
+  };
+}
+
 /** Validate before traversing data received from disk, a backup, or a peer. */
 export function isDocumentHistory(
   value: unknown,

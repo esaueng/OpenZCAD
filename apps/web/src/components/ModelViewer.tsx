@@ -7470,6 +7470,7 @@ export function ModelViewer({
               name: string;
               renderOrder: number;
               visible: boolean;
+              worldBounds?: { min: number[]; max: number[] };
             }[];
           }) => void;
         }>
@@ -7565,9 +7566,16 @@ export function ModelViewer({
           visible: boolean;
           materialVisible: boolean;
           opacity: number;
+          /** Where the line is drawn, so a test can tell which sizes. */
+          worldBounds?: { min: number[]; max: number[] };
         }[] = [];
         root.traverse((child) => {
           if (child instanceof LineSegments2) {
+            child.updateWorldMatrix(true, false);
+            child.geometry.computeBoundingBox();
+            const worldBounds = child.geometry.boundingBox
+              ?.clone()
+              .applyMatrix4(child.matrixWorld);
             states.push({
               depthTest: child.material.depthTest,
               depthWrite: child.material.depthWrite,
@@ -7575,7 +7583,15 @@ export function ModelViewer({
               renderOrder: child.renderOrder,
               visible: child.visible,
               materialVisible: child.material.visible,
-              opacity: child.material.opacity
+              opacity: child.material.opacity,
+              ...(worldBounds && !worldBounds.isEmpty()
+                ? {
+                    worldBounds: {
+                      min: worldBounds.min.toArray(),
+                      max: worldBounds.max.toArray()
+                    }
+                  }
+                : {})
             });
           }
         });

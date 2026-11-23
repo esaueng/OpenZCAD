@@ -368,6 +368,7 @@ import {
   documentIdentifierError
 } from '@openzcad/document-core';
 import {
+  PARAMETER_RESOLVED_SKETCH_UPDATE_KIND,
   SHEET_METAL_MAX_BEND_ANGLE_DEG,
   SHEET_METAL_MOLD_LINE_MAX_ANGLE_DEG,
   sheetMetalGaugeById,
@@ -2712,9 +2713,15 @@ export const commandFactories = {
     );
   },
   updateSketchObject(
-    payload: SketchObjectUpdateInput,
+    input: SketchObjectUpdateInput,
     label = 'Edit sketch geometry'
   ): CommandDefinition<SketchObjectUpdateInput> {
+    // F06: no payload can say who wrote it. A `derivedFrom` marker from a
+    // patch, History text, a stored log or any other caller is dropped; the
+    // parameter re-solve's writes are marked out of band
+    // (`parameterResolvedSketchUpdate`).
+    const { derivedFrom: _claimed, ...payload } =
+      input as SketchObjectUpdateInput & { derivedFrom?: unknown };
     return makeCommand(
       'sketch.object.update',
       label,
@@ -6169,8 +6176,58 @@ export function commandsForCadPatch(
  * a type (F05) records `parameter.retype`: Tweak turns values and hides the
  * type picker, so its undo and redo must not retype a parameter either.
  */
-function historyCommandKind(entry: SerializedCommand): string {
-  return isParameterRetype(entry) ? 'parameter.retype' : entry.kind;
+function historyCommandKind(entry: {
+  kind: string;
+  payload?: unknown;
+}): string {
+  if (isParameterRetype(entry)) return 'parameter.retype';
+  return entry.kind;
+}
+
+/**
+ * F06: the history kind of a `sketch.object.update` the parameter re-solve
+ * wrote: the solved geometry a value edit or row switch stores beside
+ * itself. Only that kind, never a plain sketch update, rides along in a
+ * Tweak entry.
+ */
+export { PARAMETER_RESOLVED_SKETCH_UPDATE_KIND } from '@openzcad/shared';
+
+/**
+ * The re-solve's own writes. Module-private and keyed by the command object,
+ * so the mark never travels in a payload: nothing a patch, History text, a
+ * stored log or a peer supplies can carry it, and replay sees an ordinary
+ * `sketch.object.update`.
+ */
+const parameterResolvedUpdates = new WeakSet<object>();
+
+/**
+ * A `sketch.object.update` that stores geometry the parameter re-solve
+ * solved for a change of values. Only the re-solve
+ * (`resolveSketchesForValueChange`) builds these; every other sketch write
+ * goes through `commandFactories.updateSketchObject`, which cannot mark.
+ */
+export function parameterResolvedSketchUpdate(
+  payload: SketchObjectUpdateInput,
+  label = 'Solve sketch'
+): CommandDefinition<SketchObjectUpdateInput> {
+  const command = commandFactories.updateSketchObject(payload, label);
+  parameterResolvedUpdates.add(command);
+  return command;
+}
+
+/** Whether a command is a sketch update the parameter re-solve wrote. */
+export function isParameterResolvedSketchUpdate(command: object): boolean {
+  return parameterResolvedUpdates.has(command);
+}
+
+/** The history kinds of a command's leaves, in serialized order. */
+function leafHistoryKinds(command: AnyCommand): string[] {
+  if (command.commands) return command.commands.flatMap(leafHistoryKinds);
+  return [
+    parameterResolvedUpdates.has(command)
+      ? PARAMETER_RESOLVED_SKETCH_UPDATE_KIND
+      : historyCommandKind(command)
+  ];
 }
 
 /**
@@ -6204,8 +6261,23 @@ export function isTweakCommand(command: {
   return isTweakCommandKind(command.kind) && !isParameterRetype(command);
 }
 
+/**
+ * Tweak's own history entries: value edits and row switches, together with
+ * the solved sketch geometry the re-solve stores for the sketches its new
+ * values drive (`PARAMETER_RESOLVED_SKETCH_UPDATE_KIND`). A plain sketch
+ * update, such as a History-text edit moving a circle beside a value edit,
+ * is Build's; so is solved geometry without a value edit beside it.
+ */
 function parameterOnly(kinds: string[] | null): boolean {
-  return !!kinds?.length && kinds.every(isTweakCommandKind);
+  return (
+    !!kinds?.length &&
+    kinds.some(isTweakCommandKind) &&
+    kinds.every(
+      (kind) =>
+        isTweakCommandKind(kind) ||
+        kind === PARAMETER_RESOLVED_SKETCH_UPDATE_KIND
+    )
+  );
 }
 
 /** D01: a command that edits drawing sheets and never the model. */
@@ -6616,7 +6688,7 @@ export class CommandManager {
       next,
       command.label,
       this.actorUserId,
-      serialized.map(historyCommandKind)
+      leafHistoryKinds(command)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;
@@ -6752,7 +6824,7 @@ export class CommandManager {
       next,
       label,
       this.actorUserId,
-      serialized.map(historyCommandKind)
+      commands.flatMap(leafHistoryKinds)
     );
     assertDocumentTextBudget(recorded);
     this.document = recorded;

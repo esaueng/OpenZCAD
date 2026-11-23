@@ -5294,7 +5294,18 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             featureWarnings: build.featureWarnings,
             updatedAt: nowIso(),
             analysis: 'pending' as const,
-            ...(deferTopology ? { topology: 'pending' as const } : {})
+            ...(deferTopology ? { topology: 'pending' as const } : {}),
+            // A shown-only build (another configuration row, say) draws its
+            // sketches from this build's solve, as an exact rebuild does.
+            ...(build.sketchObjectOverrides?.size
+              ? {
+                  sketchGeometry: {
+                    projectId: document.projectId,
+                    documentVersion: document.version,
+                    objects: Object.fromEntries(build.sketchObjectOverrides)
+                  }
+                }
+              : {})
           })
         );
       }
