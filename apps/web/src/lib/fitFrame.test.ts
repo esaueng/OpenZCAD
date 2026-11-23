@@ -4,6 +4,7 @@ import {
   cornersWithinFrame,
   guideShapesClearStage,
   measureClearStage,
+  measureClearStageRequestFrame,
   measureCreationFrame,
   measureFitFrame,
   measureOpeningFrame,
@@ -599,6 +600,48 @@ describe('the modeling guide', () => {
       expect(cornersClearOfStage(canvas, corners)).toBe(false);
     });
 
+    it('holds a model inside a panel’s gap, clear of the panel', () => {
+      // A rail from x 1200: the stage keeps 12 px from it, and a model 7 px
+      // clear of it read as covered (preview check on #1974).
+      const canvas = desk();
+      const rail = document.createElement('div');
+      rail.className = 'instrument-rail';
+      canvas
+        .closest('.viewer-area')!
+        .append(placed(rail, 1200, 100, 1240, 800));
+      expect(cornersClearOfStage(canvas, box(900, 100, 1193, 500))).toBe(true);
+      expect(cornersClearOfStage(canvas, box(900, 100, 1205, 500))).toBe(false);
+    });
+
+    it('judges a model by its outline, not its bounding rectangle', () => {
+      // A diamond whose bounding rectangle (x 300–530, y 370–700) reaches
+      // over the card's corner (x 72–368, y 600–840) while the diamond's
+      // own edge passes x 390 at the card's top.
+      const canvas = desk();
+      const ndc = (x: number, y: number) => ({
+        x: (x / 1440) * 2 - 1,
+        y: 1 - (y / 900) * 2,
+        z: 0
+      });
+      const diamond = [
+        ndc(300, 450),
+        ndc(450, 370),
+        ndc(530, 450),
+        ndc(450, 700)
+      ];
+      expect(cornersClearOfStage(canvas, diamond)).toBe(true);
+      const over = [ndc(200, 620), ndc(450, 370), ndc(530, 450), ndc(450, 700)];
+      expect(cornersClearOfStage(canvas, over)).toBe(false);
+    });
+
+    it('lets a model under the Tools drawer’s fold be reframed', () => {
+      const canvas = desk();
+      const fold = document.createElement('div');
+      fold.className = 'command-flyout';
+      canvas.closest('.viewer-area')!.append(placed(fold, 400, 60, 640, 700));
+      expect(cornersClearOfStage(canvas, box(500, 100, 900, 500))).toBe(false);
+    });
+
     it('holds a model inside the clear stage', () => {
       expect(cornersClearOfStage(desk(), box(500, 100, 900, 800))).toBe(true);
     });
@@ -612,6 +655,27 @@ describe('the modeling guide', () => {
 });
 
 describe('measurePickFrame', () => {
+  it('reframes a clear-stage request clear of the open tool fold, Fit not', () => {
+    // 1024 × 768 with the docked column: a guide's reframe landed the model
+    // behind the Tools drawer (preview check on #1974). Fit, as before,
+    // frames as if the passing fold were shut.
+    const canvas = stage('docked');
+    const column = placed(document.createElement('div'), 10, 260, 50, 590);
+    column.className = 'workspace-column-float';
+    const fold = placed(document.createElement('div'), 60, 260, 304, 740);
+    fold.className = 'command-flyout';
+    column.append(fold);
+    canvas.closest('.viewer-area')!.append(column);
+    expect(measureClearStageRequestFrame(canvas)!.minX).toBeCloseTo(
+      ((304 + 12) / 1024) * 2 - 1,
+      12
+    );
+    expect(measureFitFrame(canvas)!.minX).toBeCloseTo(
+      ((50 + 12) / 1024) * 2 - 1,
+      12
+    );
+  });
+
   it('keeps a pick clear of the open tool fold as well as the card', () => {
     const canvas = stage('docked');
     const column = placed(document.createElement('div'), 10, 260, 50, 590);
