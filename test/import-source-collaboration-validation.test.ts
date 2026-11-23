@@ -18,6 +18,10 @@ import {
   createTestRoom,
   installWorkerSocketGlobals
 } from './collaboration-room-harness';
+import {
+  MESH_PAYLOAD_UNITS_COMMAND_CARRIERS,
+  meshPayloadUnitsCommandDocument
+} from './helpers/mesh-payload-units-commands';
 
 let globals: ReturnType<typeof installWorkerSocketGlobals>;
 beforeAll(() => {
@@ -311,5 +315,50 @@ describe.each(['http', 'websocket'])(
         document.nodes
       );
     });
+  }
+);
+
+describe.each(['http', 'websocket'])(
+  'mesh payload units in saved commands over %s collaboration (I03, v153)',
+  (transport) => {
+    const meshPayloadRef = {
+      marker: 'openzcad-source-ref' as const,
+      version: 1 as const,
+      hashAlgorithm: 'sha256' as const,
+      checksumSha256: 'b'.repeat(64),
+      logicalBytes: 128
+    };
+
+    it.each(MESH_PAYLOAD_UNITS_COMMAND_CARRIERS)(
+      'refuses payload units in a %s command of a document older than v153',
+      async (carrier) => {
+        const document = meshPayloadUnitsCommandDocument(
+          MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1,
+          carrier,
+          meshPayloadRef,
+          'user_room'
+        );
+        const { result, values } = await submission(transport, document);
+        expect(result).toMatchObject({ code: 'document-invalid' });
+        expect(values.has('room:latest')).toBe(false);
+      }
+    );
+
+    it.each(MESH_PAYLOAD_UNITS_COMMAND_CARRIERS)(
+      'stores payload units in a %s command of a v153 document',
+      async (carrier) => {
+        const document = meshPayloadUnitsCommandDocument(
+          MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
+          carrier,
+          meshPayloadRef,
+          'user_room'
+        );
+        const { result, values } = await submission(transport, document);
+        expect(result).toMatchObject({ type: 'ack' });
+        expect(
+          (values.get('room:latest') as ProjectDocument).commandLog
+        ).toEqual(document.commandLog);
+      }
+    );
   }
 );

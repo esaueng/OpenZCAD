@@ -125,18 +125,27 @@ function isKnownUnit(value: unknown, allowed: boolean): boolean {
 
 /**
  * Why an imported mesh's `payloadUnits` (v153) cannot stand, if it cannot:
- * an unknown unit, or the field beside embedded triangles, which are always
- * in document units and which no load would scale. Commands that write the
- * field ask this before they commit, so a refused value never reaches the
- * document or its command log.
+ * an unknown unit, or the field anywhere but beside a reference alone.
+ * Embedded triangles are always in document units and no load scales them;
+ * and where a mesh holds both forms the kernel reads the embedded ones, so
+ * the field would describe bytes nothing reads. Either embedded array
+ * refuses it, with or without a reference beside it. Commands that write the
+ * field ask this of the merged data before they commit, so a refused value
+ * never reaches the document, its command log or its undo history.
  */
 export function importedMeshPayloadUnitsProblem(data: {
   payloadUnits?: unknown;
   meshPayloadRef?: unknown;
+  vertices?: unknown;
+  indices?: unknown;
 }): string | undefined {
   if (data.payloadUnits === undefined) return undefined;
-  if (data.meshPayloadRef === undefined)
-    return 'Mesh payload units describe a referenced mesh payload; embedded triangles are always in document units.';
+  if (
+    data.meshPayloadRef === undefined ||
+    data.vertices !== undefined ||
+    data.indices !== undefined
+  )
+    return 'Mesh payload units describe a referenced mesh payload only; embedded triangles are always in document units.';
   if (!isKnownUnit(data.payloadUnits, true))
     return `Unknown mesh payload units ${JSON.stringify(data.payloadUnits)}.`;
   return undefined;
@@ -182,12 +191,54 @@ export function isImportedMeshSourceData(
 export const MESH_PAYLOAD_UNITS_SCHEMA_VERSION = 153;
 
 /**
+ * Whether any saved command carries an imported mesh's `payloadUnits`: an
+ * `import.mesh` input, or the `data` of any command (a `feature.update` or a
+ * whole-data History edit, whatever kind it names), in the command log, in a
+ * transaction, or in a command list an undo entry restores. Mirrors the
+ * browser's `assertDocumentContentCommandSchema` walk, which refuses the same
+ * commands below v153, so a server never stores a log the browser cannot
+ * reopen.
+ */
+function commandsCarryMeshPayloadUnits(document: ProjectDocument): boolean {
+  const pending: unknown[] = [document.commandLog];
+  const history: unknown = document.editHistory;
+  if (isRecord(history) && Array.isArray(history.entries))
+    for (const entry of history.entries)
+      if (isRecord(entry) && Array.isArray(entry.changes))
+        for (const change of entry.changes)
+          if (isRecord(change) && change.field === 'commandLog')
+            pending.push(change.before, change.after);
+  const seen = new Set<object>();
+  while (pending.length) {
+    const command = pending.pop();
+    if (Array.isArray(command)) {
+      if (seen.has(command)) continue;
+      seen.add(command);
+      for (const child of command) pending.push(child);
+      continue;
+    }
+    if (!isRecord(command) || seen.has(command)) continue;
+    seen.add(command);
+    if (command.kind === 'transaction') pending.push(command.payload);
+    const payload = command.payload;
+    if (!isRecord(payload)) continue;
+    if (command.kind === 'import.mesh' && payload.payloadUnits !== undefined)
+      return true;
+    if (isRecord(payload.data) && payload.data.payloadUnits !== undefined)
+      return true;
+  }
+  return false;
+}
+
+/**
  * Checks active mesh imports and those undo/redo can restore. Not a full
  * document validator. Servers that read nothing else of a document's
  * content (the account's save parser, the collaboration room) still run it,
  * so it also refuses `payloadUnits` on a document declaring a schema older
- * than v153: a v152 reader would open that document and draw the payload in
- * the document's unit, 25.4x off for a millimetre payload in an inch part.
+ * than v153, in its nodes, its undo history or its saved commands: a v152
+ * reader would open that document and draw the payload in the document's
+ * unit, 25.4x off for a millimetre payload in an inch part, and the browser
+ * refuses to reopen a log that carries it.
  */
 export function hasValidImportedMeshSources(
   document: ProjectDocument
@@ -198,6 +249,8 @@ export function hasValidImportedMeshSources(
     typeof version === 'number' &&
     Number.isSafeInteger(version) &&
     version >= MESH_PAYLOAD_UNITS_SCHEMA_VERSION;
+  if (!payloadUnitsDeclared && commandsCarryMeshPayloadUnits(document))
+    return false;
   for (const node of documentNodesWithHistory(document)) {
     if (!isRecord(node)) return false;
     if (node.kind !== 'feature') continue;

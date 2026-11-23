@@ -139,12 +139,14 @@ describe('assumed units on a unitless mesh import (v52)', () => {
     );
     return manager.document;
   }
-  const meshData = (document: ProjectDocument) =>
+  const meshDataOrUndefined = (document: ProjectDocument) =>
     Object.values(document.nodes).flatMap((node) =>
       node.kind === 'feature' && node.data.featureKind === 'imported-mesh'
         ? [node.data]
         : []
-    )[0]!;
+    )[0];
+  const meshData = (document: ProjectDocument) =>
+    meshDataOrUndefined(document)!;
 
   it('records the reading on the feature, and it survives save and replay', () => {
     const document = importWith('inch');
@@ -185,12 +187,14 @@ describe('mesh payload units (v153)', () => {
         (node.data as Record<string, unknown>).payloadUnits = payloadUnits;
     return next;
   }
-  const meshData = (document: ProjectDocument) =>
+  const meshDataOrUndefined = (document: ProjectDocument) =>
     Object.values(document.nodes).flatMap((node) =>
       node.kind === 'feature' && node.data.featureKind === 'imported-mesh'
         ? [node.data]
         : []
-    )[0]!;
+    )[0];
+  const meshData = (document: ProjectDocument) =>
+    meshDataOrUndefined(document)!;
 
   it('is part of the current schema', () => {
     expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(
@@ -320,6 +324,72 @@ describe('mesh payload units (v153)', () => {
         data: { payloadUnits: 'furlong' }
       } as never)
     ).toThrow(/payload/i);
+  });
+
+  it('refuses inline triangles patched in beside it, before anything changes', () => {
+    // A referenced mesh that states its payload's units, then a patch that
+    // adds embedded triangles: the merged data would carry the field beside
+    // triangles the kernel reads in document units, which storage refuses.
+    const base = createProjectDocument(
+      'Patched mesh',
+      toUserId('user_mesh_schema')
+    );
+    const manager = new CommandManager(base);
+    manager.execute(
+      commandFactories.importMesh(importInput('reference', 'mm'))
+    );
+    const featureId = featureIdOf(manager.document);
+    const inline = {
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      indices: [0, 1, 2]
+    };
+    const before = manager.document;
+    const beforeLog = structuredClone(before.commandLog);
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId,
+          data: inline
+        })
+      )
+    ).toThrow(/payload units/i);
+    expect(manager.document).toBe(before);
+    expect(manager.document.commandLog).toEqual(beforeLog);
+    expect(manager.canRedo).toBe(false);
+    // Undo still returns to the empty document, and what remains stores.
+    expect(() =>
+      assertStorableDocument(JSON.parse(JSON.stringify(manager.document)))
+    ).not.toThrow();
+    manager.undo();
+    expect(meshDataOrUndefined(manager.document)).toBeUndefined();
+    manager.redo();
+    expect(meshData(manager.document).payloadUnits).toBe('mm');
+    expect(() =>
+      assertStorableDocument(JSON.parse(JSON.stringify(manager.document)))
+    ).not.toThrow();
+    // Either array alone is refused as well.
+    for (const partial of [
+      { vertices: inline.vertices },
+      { indices: inline.indices }
+    ])
+      expect(() =>
+        updateFeature(manager.document, {
+          featureId,
+          data: partial
+        })
+      ).toThrow(/payload units/i);
+    // Replay applies the same rule: a log carrying the patch is refused.
+    const forged = [
+      ...manager.document.commandLog,
+      {
+        ...manager.document.commandLog.at(-1)!,
+        kind: 'feature.update',
+        payload: { featureId, data: inline }
+      }
+    ];
+    expect(() => replayCommands(base, forged as never)).toThrow(
+      /payload units/i
+    );
   });
 
   it('refuses an import.mesh carrying it on an older-schema manager', () => {

@@ -22,6 +22,10 @@ import {
   parseSaveProjectDocumentRequest,
   parseSaveRevisionRequest
 } from '../apps/web/worker/validation';
+import {
+  MESH_PAYLOAD_UNITS_COMMAND_CARRIERS,
+  meshPayloadUnitsCommandDocument
+} from './helpers/mesh-payload-units-commands';
 
 const reference = {
   marker: 'openzcad-source-ref' as const,
@@ -358,6 +362,40 @@ describe.each(parsers)(
           MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
           location
         );
+        expect(parse(document).document).toBe(document);
+      }
+    );
+  }
+);
+
+describe.each(parsers)(
+  'mesh payload units in saved commands at $name ingress (I03, v153)',
+  ({ parse }) => {
+    const ref = { ...reference, logicalBytes: 128 };
+    it.each(MESH_PAYLOAD_UNITS_COMMAND_CARRIERS)(
+      'refuses payload units in a %s command of a document older than v153',
+      (carrier) => {
+        const document = meshPayloadUnitsCommandDocument(
+          MESH_PAYLOAD_UNITS_SCHEMA_VERSION - 1,
+          carrier,
+          ref
+        );
+        // The browser refuses to reopen it, so storage must not take it.
+        expect(() => assertStorableDocument(document)).toThrow(/v153/);
+        expect(() => parse(document)).toThrow(HttpError);
+        expect(() => parse(document)).toThrow(/invalid imported mesh data/);
+      }
+    );
+
+    it.each(MESH_PAYLOAD_UNITS_COMMAND_CARRIERS)(
+      'accepts payload units in a %s command of a v153 document',
+      (carrier) => {
+        const document = meshPayloadUnitsCommandDocument(
+          MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
+          carrier,
+          ref
+        );
+        expect(() => assertStorableDocument(document)).not.toThrow();
         expect(parse(document).document).toBe(document);
       }
     );

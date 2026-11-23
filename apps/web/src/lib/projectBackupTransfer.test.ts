@@ -777,3 +777,45 @@ it('refuses a cloud backup of a project the account lists otherwise than this de
     forgetEncryptedProject(document.projectId);
   }
 });
+
+it('refuses a backup copy whose embedded mesh states payload units (I03)', async () => {
+  let document = createProjectDocument('Inline mesh', toUserId('original'));
+  document = importMeshBody(document, {
+    name: 'Triangle',
+    sourceName: 'triangle.stl',
+    artifactId: 'artifact_local_triangle',
+    triangleCount: 1,
+    vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+    indices: [0, 1, 2]
+  }).document;
+  await saveLocalProject(document);
+  const text = await createProjectBackup(document, false);
+  // A backup holding the triangles embedded, as older backups do.
+  const embedded = (payloadUnits?: string) => {
+    const backup = JSON.parse(text) as {
+      document: { nodes: Record<string, { kind: string; data?: object }> };
+    };
+    for (const node of Object.values(backup.document.nodes))
+      if (node.kind === 'feature') {
+        const { meshPayloadRef: _ref, ...data } = node.data as {
+          meshPayloadRef?: unknown;
+        };
+        node.data = {
+          ...data,
+          vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+          indices: [0, 1, 2],
+          ...(payloadUnits ? { payloadUnits } : {})
+        };
+      }
+    return JSON.stringify(backup);
+  };
+  expect(() =>
+    importProjectCopy(JSON.parse(embedded()) as never, toUserId('new-owner'))
+  ).not.toThrow();
+  // Embedded triangles are always in document units; storage refuses the
+  // field beside them, so the copy must not be made at all.
+  const backup = await parseProjectBackup(embedded('mm'));
+  expect(() => importProjectCopy(backup, toUserId('new-owner'))).toThrow(
+    /invalid imported mesh data/
+  );
+});
