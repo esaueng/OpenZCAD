@@ -2393,17 +2393,34 @@ function patternCommands(
  * What a pattern relation stores for its step: the evaluated `step` when the
  * value was a plain numeral, else the typed expression divided into steps
  * exactly as the evaluated value was (`divisor` 1 keeps it as typed).
+ *
+ * The stored expression must evaluate to the step the copies were placed
+ * with. When it does not (wrapping pushed it past the evaluator's token
+ * limit, or a near-full turn was placed as a full one), the evaluated step is
+ * stored instead, as before expressions were kept (review #1971).
  */
 export function storedPatternStep(
   step: number,
   text: string | undefined,
-  divisor: number
+  divisor: number,
+  resolve: Resolve
 ): ParamValue {
   const typed = text?.trim();
   if (!typed || Number.isFinite(Number(typed))) {
     return step;
   }
-  return divisor === 1 ? typed : `(${typed}) / ${divisor}`;
+  const stored = divisor === 1 ? typed : `(${typed}) / ${divisor}`;
+  let value: number | undefined;
+  try {
+    value = resolve(stored);
+  } catch {
+    value = undefined;
+  }
+  const agrees =
+    value !== undefined &&
+    Number.isFinite(value) &&
+    Math.abs(value - step) <= 1e-12 * Math.max(1, Math.abs(step));
+  return agrees ? stored : step;
 }
 
 /**
@@ -2544,7 +2561,8 @@ export function planSketchLinearPattern(
         spacing: storedPatternStep(
           spacing,
           distanceText,
-          extent ? count - 1 : 1
+          extent ? count - 1 : 1,
+          resolve
         )
       }
     )
@@ -2699,7 +2717,8 @@ export function planSketchCircularPattern(
             stepDeg: storedPatternStep(
               (stepRad * 180) / Math.PI,
               totalText,
-              full ? count : count - 1
+              full ? count : count - 1,
+              resolve
             ),
             orientation
           }

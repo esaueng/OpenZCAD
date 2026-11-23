@@ -3002,9 +3002,12 @@ describe('modify tool picking', () => {
             (command.payload as { constraint: SketchConstraintData }).constraint
         )
         .find((constraint) => constraint.constraintKind === 'pattern');
-    // The keypad resolves the typed text; the relation keeps it.
+    // The keypad resolves the typed text; the relation keeps it. The stored
+    // step is checked against the placed one, so its wrapper resolves too.
     const typed = (value: ParamValue) =>
-      typeof value === 'number' ? value : { gap: 6, turn: 30 }[value];
+      typeof value === 'number'
+        ? value
+        : { gap: 6, turn: 30, '(turn) / 2': 15 }[value];
     const applied: { commands: AnyCommand[]; label: string }[] = [];
     const { host: driver } = host(applied);
     driver.resolve = (value) =>

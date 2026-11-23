@@ -321,16 +321,34 @@ describe('a sketch pattern typed with an expression', () => {
 });
 
 describe('storedPatternStep', () => {
+  const resolve = resolverFor(parameterised());
+
   it('keeps a plain numeral as the evaluated number', () => {
-    expect(storedPatternStep(24, '24', 1)).toBe(24);
-    expect(storedPatternStep(12, ' 24 ', 2)).toBe(12);
-    expect(storedPatternStep(6, undefined, 5)).toBe(6);
-    expect(storedPatternStep(6, '', 5)).toBe(6);
+    expect(storedPatternStep(24, '24', 1, resolve)).toBe(24);
+    expect(storedPatternStep(12, ' 24 ', 2, resolve)).toBe(12);
+    expect(storedPatternStep(6, undefined, 5, resolve)).toBe(6);
+    expect(storedPatternStep(6, '', 5, resolve)).toBe(6);
   });
 
   it('keeps an expression, divided into steps when the value was', () => {
-    expect(storedPatternStep(24, 'pitchL * 2', 1)).toBe('pitchL * 2');
-    expect(storedPatternStep(6, 'stepA', 5)).toBe('(stepA) / 5');
-    expect(storedPatternStep(60, ' 360 deg ', 6)).toBe('(360 deg) / 6');
+    expect(storedPatternStep(24, 'pitchL * 2', 1, resolve)).toBe('pitchL * 2');
+    expect(storedPatternStep(6, 'stepA', 5, resolve)).toBe('(stepA) / 5');
+    expect(storedPatternStep(60, ' 360 deg ', 6, resolve)).toBe(
+      '(360 deg) / 6'
+    );
+  });
+
+  it('stores the number when the wrapped expression no longer evaluates', () => {
+    // 255 tokens are accepted; the wrapper adds four, past the evaluator's
+    // 256-token limit (review #1971).
+    const long = `120${' + 0'.repeat(127)}`;
+    expect(resolve(long)).toBe(120);
+    expect(storedPatternStep(60, long, 2, resolve)).toBe(60);
+  });
+
+  it('stores the number when the expression disagrees with the placed step', () => {
+    // A near-full turn placed as a full one: the copy sits at 180°, but the
+    // expression would read 179.99999999975° (review #1971).
+    expect(storedPatternStep(180, '359.9999999995 deg', 2, resolve)).toBe(180);
   });
 });
