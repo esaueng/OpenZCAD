@@ -109,7 +109,7 @@ function extrudeRegionOf(
       ]
     })
   );
-  return manager.document.bodyOrder.at(-1)! as BodyId;
+  return manager.document.bodyOrder.at(-1)!;
 }
 
 /**
