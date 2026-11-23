@@ -51,7 +51,7 @@ export interface EdgeSegmentOwner {
 }
 
 interface EdgeEntry {
-  owner: EdgeSegmentOwner;
+  order: number;
   /** Disjoint xyz/xyz pairs consumed by LineSegmentsGeometry. */
   positions: number[];
 }
@@ -76,7 +76,7 @@ interface HighlightDeformation {
   readonly velocityAt: PreviewVelocity;
   delta: number;
   /** Each highlighted edge's velocities, measured the first time it draws. */
-  readonly velocities: Map<string, Float32Array>;
+  readonly velocities: Map<EdgeEntry, Float32Array>;
 }
 
 const EMPTY_SEGMENT = [0, 0, 0, 0, 0, 0] as const;
@@ -458,7 +458,11 @@ export class BodyEdgeOverlay extends THREE.Group {
         facetJoints += 1;
         continue;
       }
-      this.entriesByKey.set(edgeKey(owner), { owner, positions });
+      const key = edgeKey(owner);
+      this.entriesByKey.set(key, {
+        order: this.entriesByKey.get(key)?.order ?? this.entriesByKey.size,
+        positions
+      });
       const batch = drawsAsTangent(edge, tangentIds) ? tangent : sharp;
       batch.positions.push(...positions);
       const segmentCount = positions.length / 6;
@@ -944,13 +948,13 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   /** An edge's segments where the body is drawn now. */
-  private positionsOf(key: string, entry: EdgeEntry): readonly number[] {
+  private positionsOf(entry: EdgeEntry): readonly number[] {
     const deformation = this.deformation;
     if (!deformation || deformation.delta === 0) return entry.positions;
-    let velocity = deformation.velocities.get(key);
+    let velocity = deformation.velocities.get(entry);
     if (!velocity) {
       velocity = previewVelocities(entry.positions, deformation.velocityAt);
-      deformation.velocities.set(key, velocity);
+      deformation.velocities.set(entry, velocity);
     }
     const { delta } = deformation;
     return entry.positions.map((value, i) => value + delta * velocity[i]!);
@@ -1052,14 +1056,24 @@ export class BodyEdgeOverlay extends THREE.Group {
     }
   }
 
+  /** Look up just the highlighted edges, packing them in topology order. */
+  private highlightPositions(
+    keys: ReadonlySet<string>,
+    exclude?: ReadonlySet<string>
+  ) {
+    const entries: EdgeEntry[] = [];
+    for (const key of keys) {
+      if (!exclude?.has(key)) entries.push(this.entriesByKey.get(key)!);
+    }
+    if (entries.length === 1) return this.positionsOf(entries[0]!);
+    entries.sort((a, b) => a.order - b.order);
+    return entries.flatMap((entry) => this.positionsOf(entry));
+  }
+
   private refreshHoveredPositions() {
     const positions = this.hoverTier.isClearing
       ? []
-      : [...this.entriesByKey]
-          .filter(
-            ([key]) => this.hoveredKeys.has(key) && !this.selectedKeys.has(key)
-          )
-          .flatMap(([key, entry]) => this.positionsOf(key, entry));
+      : this.highlightPositions(this.hoveredKeys, this.selectedKeys);
     replacePositions(this.hoverEdges, positions);
     replacePositions(this.hoverHiddenEdges, positions);
   }
@@ -1067,9 +1081,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   private refreshSelectedPositions() {
     const positions = this.selectedTier.isClearing
       ? []
-      : [...this.entriesByKey]
-          .filter(([key]) => this.selectedKeys.has(key))
-          .flatMap(([key, entry]) => this.positionsOf(key, entry));
+      : this.highlightPositions(this.selectedKeys);
     replacePositions(this.selectedEdges, positions);
     replacePositions(this.selectedHiddenEdges, positions);
   }
@@ -1077,9 +1089,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   private refreshFaceBoundaryPositions() {
     const positions = this.faceBoundaryTier.isClearing
       ? []
-      : [...this.entriesByKey]
-          .filter(([key]) => this.selectedFaceBoundaryKeys.has(key))
-          .flatMap(([key, entry]) => this.positionsOf(key, entry));
+      : this.highlightPositions(this.selectedFaceBoundaryKeys);
     replacePositions(this.selectedFaceBoundaryEdges, positions);
     replacePositions(this.selectedFaceBoundaryHiddenEdges, positions);
   }

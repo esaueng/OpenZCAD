@@ -108,6 +108,29 @@ describe('verified operation lineage', () => {
       carryAnalyticFaces(kernel, 1, 2, duplicate).faceReferences.has(1)
     ).toBe(false);
   });
+  it('distinguishes faces with the same hash by closure when carrying names and verifying edge supports', () => {
+    // Closure is part of witness equality but is absent from the 32-bit hash.
+    const closed: FaceWitnessV1 = {
+      ...face,
+      closure: { u: 'closed', v: 'open' }
+    };
+    const sourceFaces = [f(1, face), f(2, side)];
+    vi.mocked(topologyCandidatesForSolid).mockImplementation(
+      (_kernel, solid) =>
+        solid === 1 ? sourceFaces : [f(10, closed), f(11, face)]
+    );
+    const carried = carryAnalyticFaces(kernel, 1, 2, source());
+    expect([...carried.faceReferences.keys()]).toEqual([11]);
+
+    vi.mocked(topologyCandidatesForSolid).mockReturnValue([
+      f(1, closed),
+      f(2, side),
+      e(3)
+    ]);
+    expect(
+      withBoundaryEdgeLineage(kernel, 1, feature, source()).edgeReferences.size
+    ).toBe(0);
+  });
   it('names one boundary and refuses multiple edges shared by the same face pair', () => {
     vi.mocked(topologyCandidatesForSolid).mockReturnValue([
       f(1, face),
