@@ -726,8 +726,8 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
 /**
  * Every refusal the fixed-seed chain slice (`chains.test.ts`) reaches, keyed
  * by kernel taxonomy and the literal user sentence. A chain refusal that
- * matches no entry leaves the chain's ledger state, and `cells` must equal
- * the cells that reached the entry, so a pin cannot outlive its refusal.
+ * matches no entry leaves the chain's ledger state, and `at` must equal the
+ * steps that reached the entry, so a pin cannot outlive any of its refusals.
  */
 export interface ChainRefusalPin {
   id: string;
@@ -736,8 +736,11 @@ export interface ChainRefusalPin {
   code: string;
   /** Literal sentences the app shows for this refusal. */
   messages: readonly string[];
-  /** Chain cells whose history reaches this refusal. */
-  cells: readonly string[];
+  /**
+   * Every step that reaches this refusal, as `<cell>#<step index>`, so each
+   * occurrence is pinned on its own and none can start building unnoticed.
+   */
+  at: readonly string[];
   owner: 'K10' | 'K05' | 'U02';
   reason: string;
 }
@@ -754,12 +757,15 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     messages: [
       'The face would run into another part of the body before it got that far.'
     ],
-    cells: [
-      'A/seed-1/20',
-      'A/seed-3/20',
-      'B/seed-1/20',
-      'B/seed-3/20',
-      'C/seed-2/20'
+    at: [
+      'A/seed-1/20#1',
+      'A/seed-1/20#8',
+      'A/seed-3/20#13',
+      'B/seed-1/20#11',
+      'B/seed-1/20#12',
+      'B/seed-3/20#5',
+      'C/seed-2/20#0',
+      'C/seed-2/20#1'
     ],
     owner: 'K10',
     reason:
@@ -773,7 +779,19 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     messages: [
       "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead."
     ],
-    cells: ['A/seed-1/20', 'A/seed-2/20', 'A/seed-3/20'],
+    at: [
+      'A/seed-1/20#3',
+      'A/seed-1/20#4',
+      'A/seed-1/20#10',
+      'A/seed-1/20#17',
+      'A/seed-2/20#3',
+      'A/seed-2/20#7',
+      'A/seed-2/20#13',
+      'A/seed-3/20#0',
+      'A/seed-3/20#1',
+      'A/seed-3/20#3',
+      'A/seed-3/20#7'
+    ],
     owner: 'K10',
     reason:
       "Part A's slanted base-chamfer planes meet the post's conical chamfer and the blends; the local offset cannot carry those neighbours."
@@ -786,7 +804,7 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     messages: [
       "This face's chamfered edge can't move with it here. Remove the chamfer in History, offset the face, then chamfer the edge again."
     ],
-    cells: ['A/seed-2/20'],
+    at: ['A/seed-2/20#11'],
     owner: 'K10',
     reason: 'The same chamfer-carry limit the A/bottom ladder pins.'
   },
@@ -798,7 +816,13 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     messages: [
       'That distance would leave no cylindrical wall between the end faces.'
     ],
-    cells: ['D/seed-1/20', 'D/seed-2/20', 'D/seed-3/20'],
+    at: [
+      'D/seed-1/20#0',
+      'D/seed-2/20#8',
+      'D/seed-2/20#15',
+      'D/seed-3/20#13',
+      'D/seed-3/20#17'
+    ],
     owner: 'K10',
     reason:
       "Designed refusal: the limit probe moves part D's cap past the opposite chamfer."
@@ -809,7 +833,7 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     category: 'invalid_input',
     code: 'blend_radius_negative',
     messages: ['Blend radius must be zero or greater.'],
-    cells: ['A/seed-1/20'],
+    at: ['A/seed-1/20#7'],
     owner: 'K10',
     reason: 'Designed refusal: the limit probe asks for a radius below zero.'
   },
@@ -821,7 +845,7 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     messages: [
       'That radius is too large for the faces this blend joins. Try a smaller radius.'
     ],
-    cells: ['C/seed-3/20'],
+    at: ['C/seed-3/20#18'],
     owner: 'K10',
     reason:
       'Designed refusal: the limit probe asks for a radius wider than the faces it joins.'
@@ -834,7 +858,7 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     messages: [
       'The adjoining fillets could not be rebuilt at this radius. Try a smaller radius or edit the fillets in History.'
     ],
-    cells: ['A/seed-3/20'],
+    at: ['A/seed-3/20#4', 'A/seed-3/20#12'],
     owner: 'K10',
     reason:
       "Resizing one of part A's edge blends needs the adjoining fillets re-blended, which the kernel refuses both for a new 0.5 mm resize and for an earlier resize edited by -0.5 mm."
@@ -845,7 +869,19 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     category: 'unsupported',
     code: 'resize_left_blend_behind',
     messages: [7, 7.5, 8.5, 9, 9.5].map(RESIZE_LEFT_BLEND_BEHIND),
-    cells: ['D/seed-1/20', 'D/seed-2/20', 'D/seed-3/20'],
+    at: [
+      'D/seed-1/20#12',
+      'D/seed-1/20#16',
+      'D/seed-1/20#17',
+      'D/seed-2/20#1',
+      'D/seed-2/20#3',
+      'D/seed-2/20#13',
+      'D/seed-2/20#16',
+      'D/seed-2/20#18',
+      'D/seed-2/20#19',
+      'D/seed-3/20#1',
+      'D/seed-3/20#19'
+    ],
     owner: 'K10',
     reason:
       'The D/wall ladder limit: a local cylinder resize cannot carry the two chamfers.'
@@ -858,7 +894,7 @@ export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
     messages: [
       'A selected face no longer exists. Re-select the face(s) and re-create this feature.'
     ],
-    cells: ['A/seed-2/20', 'B/seed-1/20'],
+    at: ['A/seed-2/20#10', 'B/seed-1/20#14'],
     owner: 'K05',
     reason:
       'Observation O4: changing an earlier value removes the face a later edit picked, and the later edit refuses. The chain requires that typed re-pick refusal, never an edit of a different face.'

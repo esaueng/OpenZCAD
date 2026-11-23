@@ -60,18 +60,21 @@ describe('K10 direct-edit chain generator contracts', () => {
 
   // Runs after the ledger suite above; a filtered run cannot see every pin.
   it.skipIf(!!process.env.K10_CELL || !!process.env.K10_FILTER)(
-    'reaches every chain refusal pin in exactly its pinned cells and messages',
+    'reaches every chain refusal pin at exactly its pinned steps and sentences',
     () => {
       const runs = cells.map(
         (cell) => [cell.id, lastChainRun(cell.id)] as const
       );
       expect(runs.filter(([, run]) => !run).map(([id]) => id)).toEqual([]);
-      const reached = new Map<string, Set<string>>();
+      const reached = new Map<string, string[]>();
       const sentences = new Set<string>();
       for (const [id, run] of runs) {
         for (const step of run!.executed) {
           if (!step.pin) continue;
-          reached.set(step.pin, (reached.get(step.pin) ?? new Set()).add(id));
+          reached.set(step.pin, [
+            ...(reached.get(step.pin) ?? []),
+            `${id}#${step.index}`
+          ]);
           sentences.add(step.refusalMessage!);
         }
       }
@@ -79,8 +82,8 @@ describe('K10 direct-edit chain generator contracts', () => {
         CHAIN_REFUSAL_PINS.length
       );
       for (const pin of CHAIN_REFUSAL_PINS) {
-        expect([...(reached.get(pin.id) ?? [])].sort(), pin.id).toEqual(
-          [...pin.cells].sort()
+        expect((reached.get(pin.id) ?? []).sort(), pin.id).toEqual(
+          [...pin.at].sort()
         );
         expect(
           pin.messages.filter((message) => !sentences.has(message)),

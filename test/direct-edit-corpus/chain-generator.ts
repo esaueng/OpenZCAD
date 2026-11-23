@@ -130,6 +130,7 @@ export type ChainOracle =
   | 'refusal-explanation'
   | 'refusal-unchanged'
   | 'refusal-pin'
+  | 'resize-oracle'
   | 'approximation-disclosure'
   | 'solid-validity'
   | 'mesh-closure'
@@ -363,17 +364,54 @@ function sameHistoryLengths(
   );
 }
 
-/** Bit-identical volume, topology counts and sorted surface census. */
+/**
+ * Every face's surface type, centre and area, sorted. Volume and census alone
+ * would accept the same body moved or a face swapped for an equal-area one.
+ */
+function faceSignature(body: BodyRepresentation): string[] {
+  return (body.topology?.faces ?? [])
+    .map(({ geometry: g }) =>
+      g
+        ? `${g.surfaceType}@${g.center.x},${g.center.y},${g.center.z}:${g.area}`
+        : 'unknown'
+    )
+    .sort();
+}
+
+/**
+ * Bit-identical volume, bounding box, topology counts, surface census and
+ * per-face placement and area.
+ */
 function sameExactSnapshot(
   left: BodyRepresentation,
   right: BodyRepresentation
 ): boolean {
   if (left.volume !== right.volume) return false;
+  if (JSON.stringify(left.bbox) !== JSON.stringify(right.bbox)) return false;
   if (census(left) !== census(right)) return false;
   const a = faceCensus(left);
   const b = faceCensus(right);
   if (a.length !== b.length) return false;
-  return a.every((type, index) => type === b[index]);
+  if (!a.every((type, index) => type === b[index])) return false;
+  const placedA = faceSignature(left);
+  const placedB = faceSignature(right);
+  return placedA.every((face, index) => face === placedB[index]);
+}
+
+/** The kernel taxonomy of a rebuild's refusal, for an exact failure signature. */
+function refusalIdentity(derived: DerivedState): {
+  refusalCategory: string;
+  refusalCode?: string;
+} {
+  const kernelRefusal = derived.featureWarnings?.find(
+    (warning) => warning.kernelRefusal
+  )?.kernelRefusal;
+  return kernelRefusal
+    ? {
+        refusalCategory: kernelRefusal.category,
+        refusalCode: kernelRefusal.code
+      }
+    : { refusalCategory: 'untyped' };
 }
 
 function dot(a: Vector3, b: Vector3): number {
@@ -554,7 +592,8 @@ async function verifyStepSolid(
     }
     const stepVolume = kernel.volume(solid, 0.001);
     const volTol = Math.max(0.05, 1e-6 * Math.abs(body.volume));
-    if (Math.abs(stepVolume - body.volume) > volTol) {
+    // Written so a NaN volume fails instead of slipping past the comparison.
+    if (!(Math.abs(stepVolume - body.volume) <= volTol)) {
       return {
         failure: {
           state: 'wrong',
@@ -730,6 +769,102 @@ function checkOffsetShapeOracle(
     }
   }
   return null;
+}
+
+function radiusCount(
+  body: BodyRepresentation,
+  radius: number,
+  blend: boolean
+): number {
+  return (body.topology?.faces ?? []).filter(({ geometry }) => {
+    const measured = blend
+      ? blendCarrierSnapshot(geometry)?.radius
+      : geometry?.surfaceType === 'cylinder' && geometry.featureType !== 'blend'
+        ? geometry.radius
+        : undefined;
+    return measured !== undefined && Math.abs(measured - radius) < 1e-8;
+  }).length;
+}
+
+/**
+ * Whether a later active edit could legitimately absorb a change to this one:
+ * a resize records an absolute radius, so a later resize of the same kind
+ * (as in C/seed-1, a cylinder resized twice) overrides the earlier value.
+ * Offsets are relative and are never superseded.
+ */
+function supersededLater(
+  document: ProjectDocument,
+  featureId: FeatureId | undefined
+): boolean {
+  const features = listFeaturesInOrder(document);
+  const index = features.findIndex((node) => node.featureId === featureId);
+  const target = features[index];
+  if (!target || target.data.featureKind !== 'direct-edit') return false;
+  const kind = target.data.operation.kind;
+  if (kind === 'offset-face') return false;
+  return features
+    .slice(index + 1)
+    .some(
+      (node) =>
+        node.data.featureKind === 'direct-edit' &&
+        node.data.operation.kind === kind
+    );
+}
+
+/**
+ * A committed resize must actually take the requested radius: more faces
+ * carry the new radius and fewer the old one (a zero blend removes faces).
+ * An edit of an earlier value must change the body unless a later resize
+ * supersedes it. Either way a build that
+ * silently keeps the previous solid fails.
+ */
+function checkResizeOracle(
+  step: ChainStep,
+  before: BodyRepresentation,
+  after: BodyRepresentation,
+  picked: FaceTopology | undefined,
+  superseded: boolean
+): { failure: FailureSignature; evidence: string } | null {
+  const wrong = (wrongCheck: string, evidence: string) => ({
+    failure: {
+      state: 'wrong' as const,
+      oracle: 'resize-oracle' as const,
+      wrongCheck
+    },
+    evidence
+  });
+  if (step.kind === 'edit-earlier') {
+    return !superseded &&
+      before.volume === after.volume &&
+      faceSignature(before).join('|') === faceSignature(after).join('|')
+      ? wrong(
+          'edit-earlier-no-change',
+          `editing ${step.targetStepId} by ${step.delta} mm left the body unchanged`
+        )
+      : null;
+  }
+  if (step.kind !== 'resize-blend' && step.kind !== 'resize-cylinder')
+    return null;
+  const blend = step.kind === 'resize-blend';
+  const oldRadius = blend
+    ? blendCarrierSnapshot(picked?.geometry)?.radius
+    : picked?.geometry?.radius;
+  if (oldRadius === undefined) return null;
+  const newRadius = cleanDecimal(oldRadius + step.delta);
+  const removed =
+    blend && newRadius === 0
+      ? (after.topology?.faces.length ?? 0) <
+        (before.topology?.faces.length ?? 0)
+      : radiusCount(after, newRadius, blend) >
+          radiusCount(before, newRadius, blend) &&
+        radiusCount(after, oldRadius, blend) <
+          radiusCount(before, oldRadius, blend);
+  return removed
+    ? null
+    : wrong(
+        'radius-not-applied',
+        `resize from ${oldRadius} to ${newRadius} mm: faces at the new radius ${radiusCount(before, newRadius, blend)} -> ${radiusCount(after, newRadius, blend)}, at the old radius ${radiusCount(before, oldRadius, blend)} -> ${radiusCount(after, oldRadius, blend)}`
+      );
 }
 
 function checkApproximationDisclosure(
@@ -1180,9 +1315,7 @@ export async function runChainDetailed(
                 ? 'typed-refusal'
                 : 'untyped-refusal',
             oracle: 'reopen-exact',
-            refusalCategory:
-              cold.featureWarnings?.find((w) => w.kernelRefusal)?.kernelRefusal
-                ?.category ?? 'untyped'
+            ...refusalIdentity(cold)
           };
           return makeFailureResult(
             failure,
@@ -1302,9 +1435,7 @@ export async function runChainDetailed(
                   ? 'typed-refusal'
                   : 'untyped-refusal',
               oracle: 'undo-exact',
-              refusalCategory:
-                undoneDerived.featureWarnings?.find((w) => w.kernelRefusal)
-                  ?.kernelRefusal?.category ?? 'untyped'
+              ...refusalIdentity(undoneDerived)
             },
             undoRefused.evidence,
             stepIndex,
@@ -1351,9 +1482,7 @@ export async function runChainDetailed(
                     ? 'typed-refusal'
                     : 'untyped-refusal',
                 oracle: 'redo-exact',
-                refusalCategory:
-                  redoneDerived.featureWarnings?.find((w) => w.kernelRefusal)
-                    ?.kernelRefusal?.category ?? 'untyped'
+                ...refusalIdentity(redoneDerived)
               },
               redoRefused.evidence,
               stepIndex,
@@ -1700,6 +1829,27 @@ export async function runChainDetailed(
         );
       }
 
+      const resizeIssue = checkResizeOracle(
+        step,
+        currentBody,
+        afterBody!,
+        builtCommand.pickedFace,
+        step.kind === 'edit-earlier' &&
+          supersededLater(beforeDoc, stepIdToFeatureId.get(step.targetStepId))
+      );
+      if (resizeIssue) {
+        summary.elapsedMs = Date.now() - startMs;
+        return makeFailureResult(
+          resizeIssue.failure,
+          `step ${stepIndex} (${step.kind}): ${resizeIssue.evidence}`,
+          stepIndex,
+          recordedSteps,
+          executed,
+          afterBody!,
+          summary
+        );
+      }
+
       if (step.kind === 'offset-face' && builtCommand.pickedFace) {
         const shapeIssue = checkOffsetShapeOracle(
           cell.part,
@@ -1865,9 +2015,7 @@ export async function runChainDetailed(
               ? 'typed-refusal'
               : 'untyped-refusal',
           oracle: 'cold-replay',
-          refusalCategory:
-            cold.featureWarnings?.find((w) => w.kernelRefusal)?.kernelRefusal
-              ?.category ?? 'untyped'
+          ...refusalIdentity(cold)
         },
         coldRefused.evidence,
         undefined,
