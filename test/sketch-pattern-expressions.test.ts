@@ -2,12 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   CommandManager,
   commandFactories,
-  composeCommands
+  composeCommands,
+  type AnyCommand
 } from '@openzcad/command-system';
 import {
   createProjectDocument,
   findSketch,
+  getNode,
   getParameterScope,
+  listNodesByKind,
   renameParameter,
   resolveParamValue,
   setParameter
@@ -28,7 +31,13 @@ import {
   type SketchPatternOptions
 } from '../apps/web/src/lib/sketch/edits';
 import { storedPatternStep } from '../apps/web/src/lib/sketch/modify';
-import { describeConstraint } from '../apps/web/src/lib/sketch/constraints';
+import {
+  describeConstraint,
+  sketchesDrivenByParameterEdit
+} from '../apps/web/src/lib/sketch/constraints';
+import { solvedSketchCommands } from '../apps/web/src/lib/sketch/applySolve';
+import { evalParamValue } from '../apps/web/src/lib/model';
+import { computeSketchRegions } from '@openzcad/geometry';
 import { printHistory } from '@openzcad/scripting';
 
 /**
@@ -145,7 +154,7 @@ function fixture(document = parameterised()) {
       return [solved.centerX, solved.centerY] as const;
     });
   };
-  return { manager, sketchId, pattern, relation, centres };
+  return { manager, sketchId, sketch, pattern, relation, centres };
 }
 
 function expectSameCentres(
@@ -317,6 +326,184 @@ describe('a sketch pattern typed with an expression', () => {
     expect(describeConstraint(seven.relation(), name)).toMatch(
       /^Circular pattern 51\.429° · /
     );
+  });
+});
+
+/**
+ * A parameter edit as the Parameters panel commits it (`handleSetParameter`):
+ * the value change plus, in the same history entry, the solved geometry of
+ * every sketch whose stored relations it drives.
+ */
+async function setParameterAsTheAppDoes(
+  manager: CommandManager,
+  name: string,
+  expression: string
+) {
+  const base = manager.document;
+  const parameter = commandFactories.setParameter({ name, expression });
+  parameter.validate(base);
+  let prospective = parameter.apply(base);
+  const before = getParameterScope(base).scope;
+  const after = getParameterScope(prospective).scope;
+  const commands: AnyCommand[] = [parameter];
+  for (const sketch of sketchesDrivenByParameterEdit(
+    listNodesByKind(prospective, 'sketch'),
+    (value) => evalParamValue(value, before, base.units) ?? undefined,
+    (value) => evalParamValue(value, after, prospective.units) ?? undefined
+  )) {
+    const outcome = await adapter.solveSketch(prospective, sketch.sketchId);
+    expect(outcome.converged).toBe(true);
+    expect(outcome.rolledBack).toBe(false);
+    const solved = solvedSketchCommands(prospective, sketch.sketchId, outcome);
+    for (const command of solved) {
+      command.validate(prospective);
+      prospective = command.apply(prospective);
+    }
+    commands.push(...solved);
+  }
+  manager.execute(composeCommands(`Set parameter ${name}`, commands));
+}
+
+describe('a parameter edit through the app moves an expression pattern', () => {
+  // The preview check's steps: a 3-instance pattern typed against
+  // `pitchL` (12 mm), the sketch finished and extruded, the parameter
+  // renamed and then changed to 15 mm. The copies, the extruded last copy
+  // and the label must all follow, not only the label (review #1971).
+  it.each([
+    {
+      mode: 'spacing' as const,
+      typed: 'pitchL * 2',
+      label: ['24', '30'],
+      before: [34, 58],
+      after: [40, 70]
+    },
+    {
+      mode: 'extent' as const,
+      typed: 'pitchL * 5',
+      label: ['30', '37.5'],
+      before: [40, 70],
+      after: [47.5, 85]
+    }
+  ])(
+    'follows a renamed, changed parameter with a $mode pattern',
+    async ({ mode, typed, label, before, after }) => {
+      const linear = fixture();
+      const { manager, sketchId } = linear;
+      linear.pattern(
+        'linear-pattern',
+        [mode === 'extent' ? 60 : 24, 3],
+        [typed, '3'],
+        { spacing: mode, orientation: 'rotate' }
+      );
+      const name = () => 'entity';
+      const labelNow = () =>
+        describeConstraint(
+          linear.relation(),
+          name,
+          undefined,
+          resolverFor(manager.document)
+        );
+      expect(labelNow()).toMatch(new RegExp(`^Linear pattern ${label[0]} · `));
+      /** Each copy's centre as the document stores it. */
+      const stored = () =>
+        linear.relation().instances.map(({ objectId }) => {
+          const node = getNode(manager.document, objectId);
+          if (node?.kind !== 'sketch-object') throw new Error('no copy');
+          const data = node.data as {
+            centerX: ParamValue;
+            centerY: ParamValue;
+          };
+          const resolve = resolverFor(manager.document);
+          return [resolve(data.centerX), resolve(data.centerY)] as const;
+        });
+      expectSameCentres(
+        stored(),
+        before.map((x) => [x, 0] as const)
+      );
+
+      // Extrude the last copy, so the rebuilt solid shows where it is.
+      const lastCopy = String(linear.relation().instances.at(-1)!.objectId);
+      const objects = findSketch(manager.document, sketchId)!.objectIds.map(
+        (id) => {
+          const node = getNode(manager.document, id);
+          if (node?.kind !== 'sketch-object') throw new Error('no object');
+          return { id: String(id), data: node.data };
+        }
+      );
+      const region = computeSketchRegions(objects, (value) =>
+        Number(resolverFor(manager.document)(value))
+      ).find(
+        (candidate) =>
+          candidate.sourceEntityIds.length === 1 &&
+          String(candidate.sourceEntityIds[0]) === lastCopy
+      )!;
+      expect(region).toBeDefined();
+      const extrude = commandFactories.extrudeSketch({
+        name: 'Extrude',
+        sketchId,
+        distance: 5,
+        profiles: [
+          {
+            profileId: region.profileId,
+            regionFingerprint: region.regionFingerprint,
+            samplePoint: region.samplePoint,
+            sourceArea: region.area,
+            sourceEntityIds: region.sourceEntityIds
+          }
+        ]
+      });
+      manager.execute(extrude);
+      const bodyId = listNodesByKind(manager.document, 'body')[0]!.bodyId;
+      const bodyCentreX = async () => {
+        const derived = await adapter.syncDocument(manager.document);
+        expect(derived.warnings).toEqual([]);
+        const { bbox } = derived.bodyRepresentations[bodyId]!;
+        return (bbox.min.x + bbox.max.x) / 2;
+      };
+      expect(await bodyCentreX()).toBeCloseTo(before.at(-1)!, 6);
+
+      manager.execute(
+        commandFactories.renameParameter({
+          name: 'pitchL',
+          newName: 'pitchWide'
+        })
+      );
+      await setParameterAsTheAppDoes(manager, 'pitchWide', '15 mm');
+
+      expect(labelNow()).toMatch(new RegExp(`^Linear pattern ${label[1]} · `));
+      // The stored copies moved with the label, as a reopened sketch reads
+      // them, and the rebuild extrudes the last copy where it now is.
+      expectSameCentres(
+        stored(),
+        after.map((x) => [x, 0] as const)
+      );
+      expectSameCentres(await linear.centres(), stored());
+      expect(await bodyCentreX()).toBeCloseTo(after.at(-1)!, 6);
+    },
+    120_000
+  );
+});
+
+describe('sketchesDrivenByParameterEdit', () => {
+  it('re-solves a sketch whose pattern step a changed parameter drives', () => {
+    const circular = fixture();
+    circular.pattern('circular-pattern', [3, 30], ['3', 'stepA']);
+    const numeric = fixture();
+    numeric.pattern('circular-pattern', [3, 30], ['3', '30']);
+    const before = resolverFor(parameterised());
+    const after = resolverFor(
+      setParameter(parameterised(), {
+        name: 'stepA',
+        expression: '40 deg',
+        quantity: 'angle'
+      })
+    );
+    const sketches = [circular.sketch(), numeric.sketch()];
+    expect(sketchesDrivenByParameterEdit(sketches, before, after)).toEqual([
+      circular.sketch()
+    ]);
+    // A parameter the step does not read leaves both alone.
+    expect(sketchesDrivenByParameterEdit(sketches, before, before)).toEqual([]);
   });
 });
 

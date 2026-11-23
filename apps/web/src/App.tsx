@@ -370,6 +370,7 @@ import {
   lockConstraintIds,
   measureDrivingDimension,
   movedEntityLock,
+  sketchesDrivenByParameterEdit,
   planConstraintFromSelection,
   refusePick,
   relationSolveAnchor,
@@ -26251,23 +26252,13 @@ export function App() {
       if (inputError) return { kind: 'refused', message: inputError };
       const beforeScope = getParameterScope(base).scope;
       const afterScope = getParameterScope(prospective).scope;
-      const constrainedSketches = listNodesByKind(prospective, 'sketch').filter(
-        (sketch) =>
-          sketch.constraints?.some(({ data }) => {
-            const value =
-              data.constraintKind === 'distance' ||
-              data.constraintKind === 'radius' ||
-              data.constraintKind === 'offset'
-                ? data.value
-                : data.constraintKind === 'angle'
-                  ? data.valueDeg
-                  : undefined;
-            return (
-              typeof value === 'string' &&
-              evalParamValue(value, beforeScope, base.units) !==
-                evalParamValue(value, afterScope, prospective.units)
-            );
-          }) ?? false
+      // Pattern spacing and step count too: a copy left where the old value
+      // put it would disagree with the label reading the new one.
+      const constrainedSketches = sketchesDrivenByParameterEdit(
+        listNodesByKind(prospective, 'sketch'),
+        (value) => evalParamValue(value, beforeScope, base.units) ?? undefined,
+        (value) =>
+          evalParamValue(value, afterScope, prospective.units) ?? undefined
       );
       for (const sketch of listNodesByKind(prospective, 'sketch')) {
         const locked = movedEntityLock(

@@ -949,6 +949,54 @@ export function movedEntityLock(
   return null;
 }
 
+/**
+ * The values a parameter can drive in one stored relation: a dimension's
+ * length, radius or angle, an offset's distance, and a pattern's spacing or
+ * step. Every other relation holds no value.
+ */
+export function constraintDrivingValues(
+  data: SketchConstraintData
+): ParamValue[] {
+  switch (data.constraintKind) {
+    case 'distance':
+    case 'radius':
+    case 'offset':
+      return [data.value];
+    case 'angle':
+      return [data.valueDeg];
+    case 'pattern':
+      return [
+        data.layout.kind === 'linear'
+          ? data.layout.spacing
+          : data.layout.stepDeg
+      ];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The sketches a parameter edit has to solve again: those holding a relation
+ * whose expression evaluates differently under `after` than under `before`.
+ * Their stored geometry was solved under the old value, so it would
+ * otherwise keep the old size or (for a pattern) the old copy positions
+ * while the relation and its label read the new value.
+ */
+export function sketchesDrivenByParameterEdit(
+  sketches: readonly SketchNode[],
+  before: ResolveParam,
+  after: ResolveParam
+): SketchNode[] {
+  return sketches.filter(
+    (sketch) =>
+      sketch.constraints?.some(({ data }) =>
+        constraintDrivingValues(data).some(
+          (value) => typeof value === 'string' && before(value) !== after(value)
+        )
+      ) ?? false
+  );
+}
+
 /** Ids of the entity lock holding one whole entity (none or one). */
 export function entityLockConstraintIds(
   sketch: SketchNode,
