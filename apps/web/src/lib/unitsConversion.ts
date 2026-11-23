@@ -250,8 +250,7 @@ export async function commitUnitsConversion(
       ]
     };
   const changed = eligibility();
-  if (changed)
-    return { ok: false, checkpoint: guarded, refusals: [changed] };
+  if (changed) return { ok: false, checkpoint: guarded, refusals: [changed] };
   // Device-only history keeps the shared document's save points as they
   // are; the checkpoint lives in this device's save states.
   if (!options.deviceOnlyHistory) manager.document = guarded;

@@ -934,7 +934,7 @@ function variableFillet(run = true): {
 } {
   const box = plainDocument();
   const bodyId = box.bodyOrder.at(-1)!;
-  const boxId = box.featureOrder.at(-1)! as FeatureId;
+  const boxId = box.featureOrder.at(-1)!;
   const edge = xEdge(boxId, 0, 20);
   const { document } = filletEdges(box, {
     name: 'Round',
@@ -952,7 +952,7 @@ function variableFillet(run = true): {
   });
   return {
     document,
-    filletId: document.featureOrder.at(-1)! as FeatureId,
+    filletId: document.featureOrder.at(-1)!,
     boxId
   };
 }
@@ -987,11 +987,12 @@ function recapturedToInch(
             (other) =>
               other.kind === 'topology' &&
               other.reference.currentHash === site.hash &&
-              (value as EdgeTopologyReferenceV5).lineageName ===
-                other.reference.lineageName
+              value.lineageName === other.reference.lineageName
           )
       );
-      map[site.pointer] = (reference![1] as EdgeTopologyReferenceV5).currentHash;
+      map[site.pointer] = (
+        reference![1] as EdgeTopologyReferenceV5
+      ).currentHash;
     }
   return recordConversionReferences(source, map);
 }
@@ -1048,7 +1049,9 @@ describe('review findings on PR 1990', () => {
     expect(refusals.map((refusal) => refusal.code)).toEqual(
       expect.arrayContaining(['reference-changed'])
     );
-    expect(refusals.every((refusal) => refusal.code === 'reference-changed')).toBe(true);
+    expect(
+      refusals.every((refusal) => refusal.code === 'reference-changed')
+    ).toBe(true);
     expect(refusals.map((refusal) => refusal.field).sort()).toEqual([
       'edgeHashes.0',
       'edgeReferences.0'

@@ -363,9 +363,7 @@ export function estimateUnitsConvertUndo(
     changes: documentChanges(before, executed),
     commandKinds: kinds
   };
-  const entryBytes = new TextEncoder().encode(
-    JSON.stringify(entry)
-  ).byteLength;
+  const entryBytes = new TextEncoder().encode(JSON.stringify(entry)).byteLength;
   const recorded = recordDocumentEdit(
     before,
     executed,

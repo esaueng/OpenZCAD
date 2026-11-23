@@ -221,10 +221,7 @@ function convertedBaseline(
     const payload = command.payload as Partial<UnitsConvertInput> | undefined;
     if (payload?.from !== before.units || payload.to !== after.units) continue;
     try {
-      const result = runUnitsConversion(
-        baseline,
-        payload as UnitsConvertInput
-      );
+      const result = runUnitsConversion(baseline, payload as UnitsConvertInput);
       if (result.ok)
         return {
           document: result.document,
