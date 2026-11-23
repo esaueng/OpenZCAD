@@ -555,10 +555,16 @@ describe('the modeling guide', () => {
       const canvas = desk();
       const lane = document.createElement('div');
       lane.className = 'command-bar-lane';
-      canvas.closest('.workspace')!.append(placed(lane, 0, 860, 1440, 900));
+      placed(lane, 0, 860, 1440, 900);
+      // The bar it holds is centred, 520 px wide.
+      const bar = document.createElement('div');
+      bar.className = 'command-search';
+      lane.append(placed(bar, 460, 860, 980, 900));
+      canvas.closest('.workspace')!.append(lane);
       expect(cornersClearOfStage(canvas, box(375, 700, 600, 880))).toBe(false);
-      lane.remove();
-      expect(cornersClearOfStage(canvas, box(375, 700, 600, 880))).toBe(true);
+      // Past the bar's end, the lane is only a transparent wrapper (re-check
+      // on #1974).
+      expect(cornersClearOfStage(canvas, box(1000, 700, 1200, 880))).toBe(true);
     });
 
     it('lets a model under a panel the stage let go be reframed', () => {

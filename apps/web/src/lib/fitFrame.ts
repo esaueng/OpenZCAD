@@ -353,7 +353,9 @@ export function cornersClearOfStage(
     ...panelsOver(canvas, FOOT_GUIDE),
     ...panelsOver(canvas, CLEAR_STAGE_OBSTACLES),
     ...panelsOver(canvas, WORKSPACE_STAGE_OBSTACLES, false, '.workspace'),
-    ...panelsOver(canvas, '.command-bar-lane', false, '.workspace')
+    // The lane is a transparent full-width column; what it holds (the
+    // command's bar, the search row) is centred and as wide as it reads.
+    ...panelsOver(canvas, '.command-bar-lane > *', false, '.workspace')
   ];
   return covers.every(
     (cover) =>
