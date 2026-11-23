@@ -15,7 +15,9 @@ import {
   type AnyCommand
 } from '@openzcad/command-system';
 import {
+  addConfigurationRow,
   addPrimitiveFeature,
+  createConfigurations,
   createProjectDocument
 } from '@openzcad/document-core';
 import {
@@ -1140,6 +1142,71 @@ describe('DrawingWorkspace', () => {
       ).toBeGreaterThan(0)
     );
     expect(requestTessellation).toHaveBeenCalledTimes(3);
+  });
+
+  it('fails only the views of a configuration row that cannot be built', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    let base = createConfigurations(
+      createProjectDocument('Bracket', toUserId('test')),
+      { rowId: 'row_small', name: 'Small' }
+    );
+    base = addConfigurationRow(base, { rowId: 'row_large', name: 'Large' });
+    const sheet = starter(fingerprint);
+    // The first view draws Large, which a sketch leaves unsolvable.
+    const [first, ...rest] = sheet.views;
+    const rowSheet: DrawingSheet = {
+      ...sheet,
+      views: [
+        { ...first!, configurationId: 'row_large' },
+        ...rest
+      ]
+    };
+    const bodies = { [bodyId]: cube() };
+    const mesh = displayTessellation(bodies);
+    const requestTessellation = vi.fn(
+      (document: ProjectDocument, ids: BodyId[]) =>
+        document.configurations?.activeRowId === 'row_large'
+          ? Promise.reject(new Error('Pegs is Constraints conflict.'))
+          : mesh(document, ids)
+    );
+    render(
+      <DrawingWorkspace
+        document={{
+          ...base,
+          bodyOrder: [bodyId],
+          drawings: { sheets: [rowSheet] }
+        }}
+        bodies={bodies}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={requestTessellation}
+        editDisabledReason={null}
+        onCommand={vi.fn(() => true)}
+        onStatus={vi.fn()}
+      />
+    );
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    // The Large view says why, after its own retries.
+    await waitFor(() =>
+      expect(
+        within(canvas).getAllByText(/Constraints conflict/).length
+      ).toBeGreaterThan(0)
+    );
+    // The active row's views are drawn all the same.
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(1)
+    );
+    expect(
+      canvas.querySelectorAll('.drawing-strokes.is-visible polyline').length
+    ).toBeGreaterThan(0);
+    const largeCalls = requestTessellation.mock.calls.filter(
+      ([document]) => document.configurations?.activeRowId === 'row_large'
+    );
+    expect(largeCalls).toHaveLength(3);
   });
 
   it('abandons a tessellation still in the geometry worker when the workspace closes', async () => {

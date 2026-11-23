@@ -408,6 +408,7 @@ import {
   resolveSketchesForValueChange,
   resolvedForDisplay
 } from './lib/sketch/parameterResolve';
+import { runConfigurationCommand as runResolvedConfigurationCommand } from './lib/configurationCommand';
 import {
   sketchContentFramePoints,
   type UnreferencedSnap
@@ -9205,6 +9206,29 @@ export function App() {
     () => requiredValueResolver(parameterScope.scope, doc?.units),
     [parameterScope.scope, doc?.units]
   );
+  /**
+   * F06: the sketches the viewport outlines, read from the document whose
+   * solids it draws. View showing another row draws that row's solved
+   * sketches under its own values, so the outlines move with the solids;
+   * otherwise the model's, with its exact solved geometry.
+   */
+  const sketchDisplay = useMemo(
+    () =>
+      viewerRowDocument
+        ? {
+            document: viewerRowDocument,
+            read: resolvedSketchDocument(viewerRowDocument),
+            scope: getParameterScope(viewerRowDocument).scope
+          }
+        : doc
+          ? {
+              document: doc,
+              read: sketchReadDocument ?? doc,
+              scope: parameterScope.scope
+            }
+          : null,
+    [viewerRowDocument, doc, sketchReadDocument, parameterScope.scope]
+  );
   // F06: the variant table as it reads, the active row as the model holds it.
   const configurationView = useMemo((): ConfigurationSet | undefined => {
     const set = doc?.configurations;
@@ -10623,15 +10647,15 @@ export function App() {
 
   // Sketch profiles lifted onto their 3D planes for the viewport overlay.
   const sketchOverlays = useMemo<SketchOverlay[]>(() => {
-    if (!doc) {
+    if (!sketchDisplay) {
       return [];
     }
-    const scope = parameterScope.scope;
+    const { document: shown, read, scope } = sketchDisplay;
     const resolve = (value: ParamValue) =>
-      evalParamValue(value, scope, doc.units);
-    return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
+      evalParamValue(value, scope, shown.units);
+    return listNodesByKind(shown, 'sketch').flatMap((sketch) => {
       const objectNode = sketch.objectIds[0]
-        ? sketchReadDocument?.nodes[sketch.objectIds[0]]
+        ? read.nodes[sketch.objectIds[0]]
         : undefined;
       if (objectNode?.kind !== 'sketch-object') {
         return [];
@@ -10686,7 +10710,7 @@ export function App() {
       let basis: PlaneBasis;
       try {
         basis = resolvedSketchPlaneBasis(
-          doc,
+          shown,
           sketch.planeRef,
           (value) => resolve(value) ?? 0,
           sketch.name
@@ -10712,13 +10736,7 @@ export function App() {
         }
       ];
     });
-  }, [
-    doc,
-    parameterScope,
-    selectedSketch,
-    selectedSketchProfileId,
-    sketchReadDocument
-  ]);
+  }, [sketchDisplay, selectedSketch, selectedSketchProfileId]);
 
   // The viewport installs and tears down real scene objects when these props
   // change identity, so each one is memoized rather than built inline: a fresh
@@ -20257,7 +20275,12 @@ export function App() {
     if (exportBlockedByUpdate() || !doc) {
       return;
     }
-    const face = representations[target.bodyId as BodyId]?.topology?.faces.find(
+    // F06: the face is picked on the row View shows, so it is that row's.
+    const shown = shownRowExportDocument();
+    if (!shown) return;
+    const face = shown.derived.bodyRepresentations[
+      target.bodyId as BodyId
+    ]?.topology?.faces.find(
       (candidate) => candidate.topologyId === target.topologyId
     );
     if (!face) {
@@ -20269,7 +20292,7 @@ export function App() {
       setStatus('Exporting face outline as DXF…');
       const result = await geometry.exportModel(
         'dxf',
-        doc,
+        shown,
         [target.bodyId as BodyId],
         {
           units: exportUnitsFor(doc.units),
@@ -20369,11 +20392,14 @@ export function App() {
     if (!doc) {
       return;
     }
+    // F06: the sketch as the row View shows it, at that row's sizes.
+    const shown = shownRowExportDocument();
+    if (!shown) return;
     const fileName = `${exportFileStem(doc.name)}-sketch.${format}`;
     const name = format.toUpperCase();
     try {
       setStatus(`Exporting the sketch ${name}…`);
-      const result = await geometry.exportModel(format, doc, [], {
+      const result = await geometry.exportModel(format, shown, [], {
         sketchId: options.sketchId as SketchId,
         transparent: options.transparent
       });
@@ -20722,6 +20748,38 @@ export function App() {
   }
 
   /**
+   * F06: the configuration row a whole-model export writes when none is
+   * named: the one View shows, or null for the active row. File › Export,
+   * the palette and the desktop menu all read it, so a file never holds a
+   * row other than the one on screen.
+   */
+  const shownExportRowId =
+    viewerRowId !== null && viewerRowId !== doc?.configurations?.activeRowId
+      ? viewerRowId
+      : null;
+
+  /**
+   * F06: the document an export of what is on screen reads: the row View
+   * shows (its sketches solved for that row, its bodies built) or the
+   * model. Null, with the reason said, while that row is still building.
+   */
+  function shownRowExportDocument(): ProjectDocument | null {
+    if (shownExportRowId === null) return doc;
+    if (viewerRowDocument) return viewerRowDocument;
+    setStatus(
+      configurationRows.errors.get(shownExportRowId) ??
+        'Wait for the configuration to finish building.'
+    );
+    return null;
+  }
+
+  /** F06: opens the mesh dialog on the row View shows. */
+  function openMeshExport() {
+    setExportRowId(shownExportRowId);
+    setMeshExportOpen(true);
+  }
+
+  /**
    * F06: what an export of `rowId` writes. The active row (or none) is the
    * model as shown, with the export scope's bodies. Another row is built for
    * the file alone from `documentForConfiguration`, nothing in the open
@@ -20853,40 +20911,54 @@ export function App() {
    * scope's bodies laid flat as one layered DXF.
    */
   function handleExportCncLayout() {
-    const target = readyExportTarget(null);
+    const target = readyExportTarget(shownExportRowId);
     if (!target || !doc) return;
-    const stem = exportStemFor(null);
+    const source = doc;
+    const stem = exportStemFor(target.rowName);
     const units = exportUnitsFor(doc.units);
-    void import('./lib/cncLayoutDxf').then((lazy) =>
-      lazy.writeCncLayoutDxf({
-        geometry,
-        target,
-        units,
-        stem,
-        save: saveCadTextFile,
-        announce: setStatus
-      })
+    void Promise.all([
+      import('./lib/cncLayoutDxf'),
+      solvedExportTarget(target, source)
+    ]).then(
+      ([lazy, solved]) =>
+        lazy.writeCncLayoutDxf({
+          geometry,
+          target: solved,
+          units,
+          stem,
+          save: saveCadTextFile,
+          announce: setStatus
+        }),
+      (error: unknown) =>
+        setStatus(errorMessage(error, 'That configuration cannot be exported.'))
     );
   }
 
   /** I06: File › Export IGES, run from its lazy module. */
   function handleExportIges() {
-    const target = readyExportTarget(null);
+    const target = readyExportTarget(shownExportRowId);
     if (!target || !doc) return;
-    const fileName = `${exportStemFor(null)}.igs`;
+    const source = doc;
+    const fileName = `${exportStemFor(target.rowName)}.igs`;
     const { units } = doc;
-    void import('./lib/igesImport').then((lazy) =>
-      lazy.exportIges({
-        target,
-        fileName,
-        units: exportUnitsFor(units),
-        runExportJob,
-        exportModel: geometry.exportModel
-      })
+    void Promise.all([
+      import('./lib/igesImport'),
+      solvedExportTarget(target, source)
+    ]).then(
+      ([lazy, solved]) =>
+        lazy.exportIges({
+          target: solved,
+          fileName,
+          units: exportUnitsFor(units),
+          runExportJob,
+          exportModel: geometry.exportModel
+        }),
+      (error: unknown) =>
+        setStatus(errorMessage(error, 'That configuration cannot be exported.'))
     );
   }
 
-  async function handleExportStep(rowId: string | null = null) {
+  async function handleExportStep(rowId: string | null = shownExportRowId) {
     const target = readyExportTarget(rowId);
     if (!target || !doc) {
       return;
@@ -21177,8 +21249,8 @@ export function App() {
         void handleExportStep();
         break;
       case 'export-mesh':
-        if (exportBodyIds.length > 0) {
-          setMeshExportOpen(true);
+        if (exportBodyIds.length > 0 || shownExportRowId !== null) {
+          openMeshExport();
         } else {
           setStatus(emptyExportReason);
         }
@@ -26068,63 +26140,24 @@ export function App() {
    * real. An assistant patch already landing is awaited first, since its
    * commit is what the edit must be checked against.
    */
+  /** F06: the ticket of the latest row switch (`runConfigurationCommand`). */
+  const latestConfigurationActivationRef = useRef(0);
+
   /**
    * F06: runs one configuration command, checked against the document first
-   * so a refusal is answered (and nothing is committed) rather than thrown.
+   * so a refusal is answered (and nothing is committed) rather than thrown,
+   * with the sketches its values drive solved into the same entry. The last
+   * of several quick row switches wins.
    */
-  async function runConfigurationCommand(
-    command: AnyCommand
-  ): Promise<string | null> {
-    const manager = managerRef.current;
-    if (!manager) return 'Editing is unavailable.';
-    const unchanged = 'The configurations were not changed.';
-    const base = manager.document;
-    let next: ProjectDocument;
-    try {
-      command.validate(base);
-      next = command.apply(base);
-    } catch (error) {
-      return error instanceof Error ? error.message : unchanged;
-    }
-    // A row switch, or a cell of the active row, writes parameter values
-    // into the model: every sketch those values drive is solved again and
-    // stored in the same entry, as a parameter set does. Without it the
-    // labels read the row's values while the geometry keeps the last row's.
-    const isCurrent = () =>
-      managerRef.current === manager && manager.document === base;
-    let resolved: Awaited<ReturnType<typeof resolveSketchesForValueChange>>;
-    try {
-      resolved = await resolveSketchesForValueChange(
-        base,
-        next,
-        (document, sketchId) => geometry.solveSketch(document, sketchId),
-        isCurrent
-      );
-    } catch (error) {
-      return errorMessage(error, unchanged);
-    }
-    if (!resolved || !isCurrent()) {
-      // A second click on the row the first one is switching to: by now
-      // that row is active and there is nothing left to do.
-      try {
-        const live = managerRef.current?.document;
-        if (live && command.apply(live) === live) return null;
-      } catch {
-        // Refused against the live document: the move is the answer.
-      }
-      return 'The project changed while the sketches were solved. Try again.';
-    }
-    if (!resolved.ok) return `${unchanged} ${resolved.reason}`;
-    if (resolved.commands.length === 0)
-      return executeCommand(command) ? null : unchanged;
-    return executeTransaction(
-      command.label,
-      [command, ...resolved.commands],
-      undefined,
-      isTweakCommand(command) ? 'parameters' : 'edit'
-    )
-      ? null
-      : unchanged;
+  function runConfigurationCommand(command: AnyCommand): Promise<string | null> {
+    return runResolvedConfigurationCommand(command, {
+      manager: () => managerRef.current,
+      solve: (document, sketchId) => geometry.solveSketch(document, sketchId),
+      execute: (single) => executeCommand(single),
+      executeTransaction: (label, commands, permission) =>
+        executeTransaction(label, commands, undefined, permission),
+      latestActivation: latestConfigurationActivationRef
+    });
   }
 
   /** F06: exports one configuration row, as STEP or from the mesh dialog. */
@@ -26811,12 +26844,13 @@ export function App() {
     );
   }, [doc, inPlaceEditFeatureId]);
   const availableSketchViews = useMemo(() => {
-    if (!doc) {
+    if (!sketchDisplay) {
       return [];
     }
-    const scope = parameterScope.scope;
-    const resolve = sketchValueResolver(scope, doc.units);
-    return listNodesByKind(doc, 'sketch').flatMap((sketch) => {
+    // F06: in View, the shown row's sketches, as its solids are drawn.
+    const { document: shown, read, scope } = sketchDisplay;
+    const resolve = sketchValueResolver(scope, shown.units);
+    return listNodesByKind(shown, 'sketch').flatMap((sketch) => {
       const active =
         interaction.mode === 'sketch' &&
         interaction.session.sketchId === sketch.sketchId;
@@ -26834,7 +26868,7 @@ export function App() {
         selectedSketch?.sketchId === sketch.sketchId ||
         selectedSketchProfileId === sketch.sketchId;
       const objects = sketch.objectIds.flatMap((objectId) => {
-        const node = sketchReadDocument?.nodes[objectId];
+        const node = read.nodes[objectId];
         return node?.kind === 'sketch-object'
           ? [{ id: objectId, data: node.data }]
           : [];
@@ -26845,7 +26879,7 @@ export function App() {
       let basis: PlaneBasis;
       try {
         basis = resolvedSketchPlaneBasis(
-          doc,
+          shown,
           sketch.planeRef,
           resolve,
           sketch.name
@@ -26937,8 +26971,7 @@ export function App() {
       ];
     });
   }, [
-    doc,
-    parameterScope,
+    sketchDisplay,
     interaction,
     selectedSketch,
     selectedSketchProfileId,
@@ -26950,8 +26983,7 @@ export function App() {
     hiddenSketchIds,
     movingSketch,
     modelingEditFeature,
-    inPlaceEditInputSketchIds,
-    sketchReadDocument
+    inPlaceEditInputSketchIds
   ]);
   /**
    * U09: an in-place request as the command its commit would run. A line
@@ -36961,7 +36993,7 @@ export function App() {
           : exportBodyIds.length === 0
             ? emptyExportReason
             : null,
-      run: () => setMeshExportOpen(true)
+      run: () => openMeshExport()
     },
     // I03: one command per unit, found by its name and by "units".
     ...(['mm', 'cm', 'm', 'inch'] as const).map((unit) => ({
@@ -38341,7 +38373,7 @@ export function App() {
           onExportStep={() => void handleExportStep()}
           onExportIges={() => void handleExportIges()}
           onExportCncLayout={handleExportCncLayout}
-          onOpenMeshExport={() => setMeshExportOpen(true)}
+          onOpenMeshExport={openMeshExport}
           onOpenImageExport={() => openImageExport()}
           {...(hasSheetMetal
             ? {
@@ -38439,7 +38471,7 @@ export function App() {
             }
             onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
-            onOpenMeshExport={() => setMeshExportOpen(true)}
+            onOpenMeshExport={openMeshExport}
             // Make a copy is the top bar's labelled button now (I73).
             share={null}
             configuration={

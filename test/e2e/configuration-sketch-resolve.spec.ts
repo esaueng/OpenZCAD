@@ -1,7 +1,8 @@
 import { Buffer } from 'node:buffer';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
-import type { Page } from '@playwright/test';
+import type { Download, Page } from '@playwright/test';
 import { drivenSketchesDocument } from '../support/driven-sketches';
+import { reimportSolids } from '../support/exchange-harness';
 import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
 
 const READY = { timeout: 30_000 };
@@ -46,6 +47,85 @@ async function stored(page: Page): Promise<ProjectDocument> {
   );
 }
 
+/** Opens the driven-sketches model from an imported project file. */
+async function importDriven(page: Page, document: ProjectDocument) {
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await expect(page).toHaveTitle('OpenZCAD');
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('button', { name: 'Import project', exact: true }).click()
+  ]);
+  await chooser.setFiles({
+    name: 'driven-sketches.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: [],
+        sources: [],
+        saveStates: []
+      })
+    )
+  });
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText(PROJECT_NAME, READY);
+  await expectBodyCount(page, 2, 30_000);
+}
+
+/** What the viewport draws: sketch lines and body faces, with bounds. */
+interface DrawnBounds {
+  sketchLines: { worldBounds?: { min: number[]; max: number[] } }[];
+  bodyFaces: {
+    visible: boolean;
+    worldBounds?: { min: number[]; max: number[] };
+  }[];
+}
+
+/**
+ * Where the viewport draws the distance sketch (on z = 0: its arm and
+ * circle end at gap + 2) and the bodies (the pattern copy ends at
+ * 10 + 4 × pitch + 1), as the largest x of each.
+ */
+async function drawnExtents(page: Page) {
+  const policy = await page.locator('.viewer-host canvas').evaluate(
+    (element) =>
+      new Promise<DrawnBounds>((resolve) => {
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: { resolve }
+          })
+        );
+      })
+  );
+  const round = (value: number) => Math.round(value * 1e3) / 1e3;
+  const onBase = policy.sketchLines.flatMap(({ worldBounds }) =>
+    worldBounds &&
+    Math.abs(worldBounds.min[2]!) < 1e-6 &&
+    Math.abs(worldBounds.max[2]!) < 1e-6
+      ? [worldBounds.max[0]!]
+      : []
+  );
+  const bodies = policy.bodyFaces.flatMap(({ visible, worldBounds }) =>
+    visible && worldBounds ? [worldBounds.max[0]!] : []
+  );
+  return {
+    sketch: onBase.length > 0 ? round(Math.max(...onBase)) : null,
+    bodies: bodies.length > 0 ? round(Math.max(...bodies)) : null
+  };
+}
+
+async function bytes(file: Download): Promise<Uint8Array> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of await file.createReadStream())
+    chunks.push(chunk as Buffer);
+  return Uint8Array.from(Buffer.concat(chunks));
+}
+
 test(
   'switching a configuration row moves the sketches its parameters drive',
   { tag: '@ci-smoke' },
@@ -54,32 +134,7 @@ test(
     const driven = drivenSketchesDocument();
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    await stubApi(page);
-    await page.setViewportSize({ width: 1440, height: 1000 });
-    await page.goto('/');
-    await expect(page).toHaveTitle('OpenZCAD');
-    const [chooser] = await Promise.all([
-      page.waitForEvent('filechooser'),
-      page.getByRole('button', { name: 'Import project', exact: true }).click()
-    ]);
-    await chooser.setFiles({
-      name: 'driven-sketches.openzcad',
-      mimeType: 'application/json',
-      buffer: Buffer.from(
-        JSON.stringify({
-          format: 'openzcad-project',
-          version: 1,
-          document: driven.document,
-          files: [],
-          sources: [],
-          saveStates: []
-        })
-      )
-    });
-    await expect(
-      page.getByRole('button', { name: 'Rename project' })
-    ).toContainText(PROJECT_NAME, READY);
-    await expectBodyCount(page, 2, 30_000);
+    await importDriven(page, driven.document);
 
     /** The rebuilt bodies' centres and the stored circle, once saved. */
     const centre = (document: ProjectDocument, bodyId: BodyId) => {
@@ -116,6 +171,66 @@ test(
     await page.getByRole('button', { name: 'Redo', exact: true }).click();
     await expect(page.getByRole('radio', { name: 'Use Large' })).toBeChecked();
     await expectModel(45, 70);
+    expect(errors).toEqual([]);
+  }
+);
+
+test(
+  'View draws and exports the row it shows, sketches and solids alike',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(150_000);
+    const driven = drivenSketchesDocument();
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await importDriven(page, driven.document);
+
+    // Both sketches outlined, then Large made the active row.
+    const objects = page.getByRole('list', { name: 'Objects' });
+    for (const name of ['Distance', 'Pattern'])
+      await objects.getByRole('button', { name: `Show sketch ${name}` }).click();
+    await page.getByRole('radio', { name: 'Use Large' }).click();
+    await expect(page.getByRole('radio', { name: 'Use Large' })).toBeChecked();
+    await expect.poll(() => drawnExtents(page), READY).toEqual({
+      sketch: 47,
+      bodies: 71
+    });
+
+    // View shows Small: the outlines move with the solids, not only the
+    // solids.
+    await page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'View', exact: true })
+      .click();
+    const shown = page.locator('.view-mode-rail-configuration select');
+    await shown.selectOption('row_small');
+    await expect.poll(() => drawnExtents(page), READY).toEqual({
+      sketch: 32,
+      bodies: 59
+    });
+
+    // File › Export STEP writes Small, the row on screen, not the active
+    // Large.
+    const fileMenu = page.locator('details.file-menu');
+    await fileMenu.locator('summary').click();
+    const download = page.waitForEvent('download');
+    await fileMenu.getByRole('button', { name: /Export STEP/ }).click();
+    const file = await download;
+    expect(file.suggestedFilename()).toMatch(/Small.*\.step$/i);
+    const measure = await reimportSolids('step', await bytes(file));
+    expect(measure.bodyCount).toBe(2);
+    expect(measure.bounds.max[0]).toBeCloseTo(59, 3);
+
+    // The mesh dialog opens on the same row.
+    await fileMenu.locator('summary').click();
+    await fileMenu.getByRole('button', { name: /Export mesh/ }).click();
+    await expect(
+      page
+        .getByRole('dialog', { name: 'Export mesh' })
+        .getByRole('combobox', { name: 'Configuration to export' })
+    ).toHaveValue('row_small');
+    // The model itself still holds Large.
+    expect(driven.storedCircleX(await stored(page))).toBeCloseTo(45, 4);
     expect(errors).toEqual([]);
   }
 );

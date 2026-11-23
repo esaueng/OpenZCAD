@@ -23,6 +23,7 @@
   "command-bar-names.spec.ts": 8,
   "configuration-export.spec.ts": 14,
   "configuration-instances.spec.ts": 12,
+  "configuration-sketch-resolve.spec.ts": 28,
   "configuration-tweak-link.spec.ts": 16,
   "configuration-views.spec.ts": 12,
   "configurations.spec.ts": 12,
