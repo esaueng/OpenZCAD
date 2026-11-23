@@ -722,3 +722,145 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     owner: 'K10'
   }
 ];
+
+/**
+ * Every refusal the fixed-seed chain slice (`chains.test.ts`) reaches, keyed
+ * by kernel taxonomy and the literal user sentence. A chain refusal that
+ * matches no entry leaves the chain's ledger state, and `cells` must equal
+ * the cells that reached the entry, so a pin cannot outlive its refusal.
+ */
+export interface ChainRefusalPin {
+  id: string;
+  family: string;
+  category: string;
+  code: string;
+  /** Literal sentences the app shows for this refusal. */
+  messages: readonly string[];
+  /** Chain cells whose history reaches this refusal. */
+  cells: readonly string[];
+  owner: 'K10' | 'K05' | 'U02';
+  reason: string;
+}
+
+const RESIZE_LEFT_BLEND_BEHIND = (radius: number) =>
+  `The wall could not be resized to radius ${radius}: the blend or chamfer along its edge would be left behind at the old size. Remove the blend, resize the wall, then add the blend again.`;
+
+export const CHAIN_REFUSAL_PINS: readonly ChainRefusalPin[] = [
+  {
+    id: 'offset-past-body',
+    family: 'direct-edit',
+    category: 'internal',
+    code: 'offset_face_refused',
+    messages: [
+      'The face would run into another part of the body before it got that far.'
+    ],
+    cells: [
+      'A/seed-1/20',
+      'A/seed-3/20',
+      'B/seed-1/20',
+      'B/seed-3/20',
+      'C/seed-2/20'
+    ],
+    owner: 'K10',
+    reason:
+      'Designed refusal: the limit probe moves a face inward past the far side of the body.'
+  },
+  {
+    id: 'chamfer-face-offset',
+    family: 'direct-edit',
+    category: 'unsupported',
+    code: 'offset_face_refused',
+    messages: [
+      "This face meets a curved surface that resizing and moving faces can't follow yet. Change the size on the original shape in History instead."
+    ],
+    cells: ['A/seed-1/20', 'A/seed-2/20', 'A/seed-3/20'],
+    owner: 'K10',
+    reason:
+      "Part A's slanted base-chamfer planes meet the post's conical chamfer and the blends; the local offset cannot carry those neighbours."
+  },
+  {
+    id: 'chamfer-rim',
+    family: 'direct-edit',
+    category: 'unsupported',
+    code: 'offset_face_chamfer_rim_not_carried',
+    messages: [
+      "This face's chamfered edge can't move with it here. Remove the chamfer in History, offset the face, then chamfer the edge again."
+    ],
+    cells: ['A/seed-2/20'],
+    owner: 'K10',
+    reason: 'The same chamfer-carry limit the A/bottom ladder pins.'
+  },
+  {
+    id: 'chamfered-wall-collapse',
+    family: 'direct-edit',
+    category: 'invalid_topology',
+    code: 'offset_face_collapses_chamfered_cylinder_wall',
+    messages: [
+      'That distance would leave no cylindrical wall between the end faces.'
+    ],
+    cells: ['D/seed-1/20', 'D/seed-2/20', 'D/seed-3/20'],
+    owner: 'K10',
+    reason:
+      "Designed refusal: the limit probe moves part D's cap past the opposite chamfer."
+  },
+  {
+    id: 'negative-blend-radius',
+    family: 'direct-edit',
+    category: 'invalid_input',
+    code: 'blend_radius_negative',
+    messages: ['Blend radius must be zero or greater.'],
+    cells: ['A/seed-1/20'],
+    owner: 'K10',
+    reason: 'Designed refusal: the limit probe asks for a radius below zero.'
+  },
+  {
+    id: 'blend-too-large',
+    family: 'blend',
+    category: 'invalid_input',
+    code: 'radius-too-large',
+    messages: [
+      'That radius is too large for the faces this blend joins. Try a smaller radius.'
+    ],
+    cells: ['C/seed-3/20'],
+    owner: 'K10',
+    reason:
+      'Designed refusal: the limit probe asks for a radius wider than the faces it joins.'
+  },
+  {
+    id: 'blend-cluster-reblend',
+    family: 'blend',
+    category: 'unsupported',
+    code: 'blend-cluster-reblend-failed',
+    messages: [
+      'The adjoining fillets could not be rebuilt at this radius. Try a smaller radius or edit the fillets in History.'
+    ],
+    cells: ['A/seed-3/20'],
+    owner: 'K10',
+    reason:
+      "Resizing one of part A's edge blends needs the adjoining fillets re-blended, which the kernel refuses both for a new 0.5 mm resize and for an earlier resize edited by -0.5 mm."
+  },
+  {
+    id: 'wall-resize-chamfer',
+    family: 'validation',
+    category: 'unsupported',
+    code: 'resize_left_blend_behind',
+    messages: [7, 7.5, 8.5, 9, 9.5].map(RESIZE_LEFT_BLEND_BEHIND),
+    cells: ['D/seed-1/20', 'D/seed-2/20', 'D/seed-3/20'],
+    owner: 'K10',
+    reason:
+      'The D/wall ladder limit: a local cylinder resize cannot carry the two chamfers.'
+  },
+  {
+    id: 'earlier-edit-repick',
+    family: 'reference',
+    category: 'invalid_input',
+    code: 'reference_missing',
+    messages: [
+      'A selected face no longer exists. Re-select the face(s) and re-create this feature.'
+    ],
+    cells: ['A/seed-2/20', 'B/seed-1/20'],
+    owner: 'K05',
+    reason:
+      'Observation O4: changing an earlier value removes the face a later edit picked, and the later edit refuses. The chain requires that typed re-pick refusal, never an edit of a different face.'
+  }
+];
