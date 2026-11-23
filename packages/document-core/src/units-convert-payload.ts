@@ -49,12 +49,15 @@ export function isConversionReferenceValue(
 }
 
 /**
- * Why `input` is not a well-formed `units.convert` payload, without asking
- * which unit a document is in: the units, the exact factor, and every
- * reference entry's `from` and `to`.
+ * Why `input` is not a well-formed `units.convert` payload: the units, the
+ * exact factor, and every reference entry's `from` and `to`. Pass
+ * `documentUnits` to also require that the conversion starts from them
+ * (replay); the stored-log gate omits it, since a log entry's document unit
+ * is the one its predecessors leave.
  */
 export function unitsConvertPayloadShapeProblem(
-  input: unknown
+  input: unknown,
+  documentUnits?: UnitSystem
 ): string | undefined {
   if (!isRecord(input)) return 'The conversion payload is not an object.';
   const { from, to, factor, references } = input;
@@ -63,6 +66,8 @@ export function unitsConvertPayloadShapeProblem(
   if (!CONVERTIBLE.includes(to as UnitSystem))
     return `The conversion's target unit ${JSON.stringify(to)} is not millimetres, centimetres or inches.`;
   if (from === to) return 'The conversion does not change the unit.';
+  if (documentUnits !== undefined && documentUnits !== from)
+    return `The conversion is from ${String(from)}, but the document is stored in ${documentUnits}.`;
   const [N, D] = unitsConvertFactor(from as UnitSystem, to as UnitSystem);
   if (
     !Array.isArray(factor) ||

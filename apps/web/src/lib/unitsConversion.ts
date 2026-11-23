@@ -233,7 +233,9 @@ export async function commitUnitsConversion(
     return {
       ok: false,
       refusals: [
-        stale('No project is open to convert. Open it and check the conversion again.')
+        stale(
+          'No project is open to convert. Open it and check the conversion again.'
+        )
       ]
     };
   const collaboration = eligibility();

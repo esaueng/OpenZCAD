@@ -139,9 +139,13 @@ describe('commitUnitsConversion: the safety checkpoint (plan §5.3)', () => {
     const manager = new CommandManager(source, USER);
     const { persistence, writes } = recordingPersistence(manager);
 
-    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
-      persistence
-    });
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence
+      }
+    );
     if (!result.ok) throw new Error(result.refusals[0]!.message);
 
     // Written once, while the manager still held the millimetre document.
@@ -185,10 +189,14 @@ describe('commitUnitsConversion: the safety checkpoint (plan §5.3)', () => {
     const source = boxDocument();
     const manager = new CommandManager(source, USER);
     const { persistence, writes } = recordingPersistence(manager);
-    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
-      persistence,
-      deviceOnlyHistory: true
-    });
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        deviceOnlyHistory: true
+      }
+    );
     expect(result.ok).toBe(true);
     expect(writes.map((write) => [write.kind, write.managerUnits])).toEqual([
       ['save-state', 'mm']
@@ -232,10 +240,14 @@ describe('commitUnitsConversion: the safety checkpoint (plan §5.3)', () => {
       const manager = new CommandManager(document, USER);
       const before = manager.document;
       const { persistence, writes } = recordingPersistence(manager);
-      const result = await commitUnitsConversion(() => manager, preparedFor(source), {
-        ...options,
-        persistence
-      });
+      const result = await commitUnitsConversion(
+        () => manager,
+        preparedFor(source),
+        {
+          ...options,
+          persistence
+        }
+      );
       expect(result).toMatchObject({ ok: false, refusals: [{ code }] });
       expect(writes).toEqual([]);
       expect(manager.document).toBe(before);
@@ -271,11 +283,15 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
     const { persistence, writes } = writing(manager, () => {
       room.members = [member('me', 'Me'), member('tab2', 'Me')];
     });
-    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
-      persistence,
-      collaboration: room,
-      now: 1_000
-    });
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        collaboration: room,
+        now: 1_000
+      }
+    );
     expect(result).toMatchObject({
       ok: false,
       refusals: [{ stage: 'collaboration', code: 'other-editors' }]
@@ -299,11 +315,15 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
       clock = 2_500;
     });
     // Read through functions, as the workspace passes its latest state.
-    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
-      persistence,
-      collaboration: () => liveRoom(),
-      now: () => clock
-    });
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        collaboration: () => liveRoom(),
+        now: () => clock
+      }
+    );
     expect(result).toMatchObject({
       ok: false,
       refusals: [{ stage: 'collaboration', code: 'editor-lock' }]
@@ -316,11 +336,15 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
     const source = boxDocument();
     const manager = new CommandManager(source, USER);
     const { persistence } = writing(manager, () => {});
-    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
-      persistence,
-      collaboration: () => liveRoom(),
-      now: () => 1_000
-    });
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        collaboration: () => liveRoom(),
+        now: () => 1_000
+      }
+    );
     expect(result.ok).toBe(true);
     expect(manager.document.units).toBe('inch');
   });
@@ -360,9 +384,13 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
     const { persistence, writes } = recordingPersistence(
       new CommandManager(source, USER)
     );
-    const result = await commitUnitsConversion(() => null, preparedFor(source), {
-      persistence
-    });
+    const result = await commitUnitsConversion(
+      () => null,
+      preparedFor(source),
+      {
+        persistence
+      }
+    );
     expect(result).toMatchObject({ ok: false, refusals: [{ code: 'stale' }] });
     expect(writes).toEqual([]);
   });

@@ -157,9 +157,11 @@ describe(
         adapter.dispose();
       }
       expect(source, 'a parity scenario with references').toBeDefined();
-      toInch = prepared(await prepareUnitsConversion(source, 'inch', {
-        actorUserId: source.ownerUserId
-      }));
+      toInch = prepared(
+        await prepareUnitsConversion(source, 'inch', {
+          actorUserId: source.ownerUserId
+        })
+      );
     });
 
     it('records the factor, the units and a reference for every site', () => {
@@ -201,8 +203,8 @@ describe(
       manager.execute(commandFactories.convertUnits(toInch.payload));
       const back = prepared(
         await prepareUnitsConversion(manager.document, 'mm', {
-        actorUserId: manager.document.ownerUserId
-      })
+          actorUserId: manager.document.ownerUserId
+        })
       );
       expect(back.payload.factor).toEqual([25.4, 1]);
       manager.execute(commandFactories.convertUnits(back.payload));
@@ -360,8 +362,8 @@ describe('units.convert without references', () => {
       dimensions: { width: 'round(width)', height: 1, depth: 1 }
     });
     const preparation = await prepareUnitsConversion(source, 'inch', {
-        actorUserId: source.ownerUserId
-      });
+      actorUserId: source.ownerUserId
+    });
     expect(preparation.ok).toBe(false);
     if (preparation.ok) return;
     expect(preparation.refusals).toEqual([
@@ -434,8 +436,8 @@ describe('units.convert schema gate', () => {
     ).toThrow(/Stored-unit conversions require project schema v/);
     expect(manager.document.commandLog).toHaveLength(source.commandLog.length);
     const preparation = await prepareUnitsConversion(source, 'inch', {
-        actorUserId: source.ownerUserId
-      });
+      actorUserId: source.ownerUserId
+    });
     expect(preparation).toMatchObject({
       ok: false,
       refusals: [{ stage: 'payload', code: 'schema' }]
@@ -637,8 +639,8 @@ describe('the undo bound keeps the conversion step (plan §5.2)', () => {
       }
     } as ProjectDocument;
     const preparation = await prepareUnitsConversion(document, 'inch', {
-        actorUserId: document.ownerUserId
-      });
+      actorUserId: document.ownerUserId
+    });
     expect(preparation).toMatchObject({
       ok: false,
       refusals: [{ stage: 'payload', code: 'undo-too-large' }]
@@ -1185,15 +1187,17 @@ describe('scoped re-check findings on PR 1990', () => {
         ok: false,
         refusals: [{ stage: 'payload' }]
       });
-      expect(() => replayCommands(source, [
-        {
-          kind: 'units.convert',
-          payload,
-          replayVersion: 1,
-          label: 'Convert stored units mm → in',
-          timestamp: new Date(0).toISOString()
-        }
-      ])).toThrow(UnitsConversionError);
+      expect(() =>
+        replayCommands(source, [
+          {
+            kind: 'units.convert',
+            payload,
+            replayVersion: 1,
+            label: 'Convert stored units mm → in',
+            timestamp: new Date(0).toISOString()
+          }
+        ])
+      ).toThrow(/invalid entry/);
     }
 
     // Applying the map refuses it too, whoever built the map.

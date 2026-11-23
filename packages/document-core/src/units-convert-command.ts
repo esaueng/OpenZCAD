@@ -150,12 +150,7 @@ export function unitsConvertPayloadProblem(
   document: Pick<ProjectDocument, 'units'>,
   input: unknown
 ): string | undefined {
-  const problem = unitsConvertPayloadShapeProblem(input);
-  if (problem) return problem;
-  const { from } = input as { from: UnitSystem };
-  if (document.units !== from)
-    return `The conversion is from ${String(from)}, but the document is stored in ${document.units}.`;
-  return undefined;
+  return unitsConvertPayloadShapeProblem(input, document.units);
 }
 
 /**
