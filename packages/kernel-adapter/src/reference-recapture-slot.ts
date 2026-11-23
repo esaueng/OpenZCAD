@@ -11,8 +11,10 @@
  * Nothing installs hooks outside `computeConversionReferenceMap`, and with
  * none installed every resolver behaves exactly as before. The slot is
  * realm-wide because the resolvers are free functions without an adapter in
- * scope, so a re-capture claims it exclusively for the length of its own
- * builds and refuses to start while another holds it. Its caller must also
+ * scope, so a re-capture claims it synchronously, before its first await,
+ * for its whole computation, and a second caller is told it is busy. The
+ * exact build loop reports each feature boundary, so every lookup is
+ * attributed to the feature whose build made it. Its caller must also
  * keep every other adapter in the realm idle meanwhile: phase 5 must run it
  * on the geometry worker's serial build queue (tests build sequentially).
  */
@@ -61,26 +63,63 @@ export interface ReferenceRecaptureHooks {
   ): P;
 }
 
+let claimed = false;
 let active: ReferenceRecaptureHooks | null = null;
+let feature: string | null = null;
 
-/** The installed hooks, or null outside a re-capture. */
+/** The installed hooks, or null outside a re-capture build. */
 export function referenceRecaptureHooks(): ReferenceRecaptureHooks | null {
   return active;
 }
 
-/** Runs `run` with `hooks` installed; refuses to nest or overlap. */
-export async function withReferenceRecapture<T>(
-  hooks: ReferenceRecaptureHooks,
-  run: () => Promise<T>
-): Promise<T> {
-  if (active)
-    throw new Error(
-      'A stored-unit reference re-capture is already running; run one at a time.'
-    );
-  active = hooks;
-  try {
-    return await run();
-  } finally {
-    active = null;
-  }
+/**
+ * The feature whose build is running, as the exact build loop reports it
+ * (null between features). Re-capture keys every lookup by it, so a stored
+ * identity is matched and verified from its own feature's lookup and never
+ * credited with another feature's lookup of an equal hash.
+ */
+export function referenceRecaptureFeature(): string | null {
+  return feature;
+}
+
+/** Called by the exact build loop at each feature boundary. */
+export function noteReferenceRecaptureFeature(featureId: string | null): void {
+  if (active) feature = featureId;
+}
+
+/** Exclusive ownership of the slot for one whole re-capture. */
+export interface ReferenceRecaptureClaim {
+  /** Runs `run` with `hooks` installed (one build). */
+  build<T>(hooks: ReferenceRecaptureHooks, run: () => Promise<T>): Promise<T>;
+  release(): void;
+}
+
+/**
+ * Claims the slot synchronously, or returns null when another re-capture
+ * holds it. Claiming before the first `await` is what lets a concurrent
+ * caller be told it is busy instead of failing in the middle of a build.
+ */
+export function claimReferenceRecapture(): ReferenceRecaptureClaim | null {
+  if (claimed) return null;
+  claimed = true;
+  let released = false;
+  return {
+    async build(hooks, run) {
+      if (released || active)
+        throw new Error('The stored-unit re-capture slot is not held.');
+      active = hooks;
+      feature = null;
+      try {
+        return await run();
+      } finally {
+        active = null;
+        feature = null;
+      }
+    },
+    release() {
+      if (released) return;
+      released = true;
+      claimed = false;
+    }
+  };
 }

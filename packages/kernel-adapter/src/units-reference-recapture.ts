@@ -57,6 +57,7 @@ import {
   type BodyId,
   type BodyRepresentation,
   type DerivedState,
+  type FeatureId,
   type EdgeWitnessV1,
   type FaceWitnessV1,
   type ProjectDocument,
@@ -71,9 +72,10 @@ import {
   type ExactKernelAdapterOptions
 } from './exact';
 import {
-  referenceRecaptureHooks,
-  withReferenceRecapture,
+  claimReferenceRecapture,
+  referenceRecaptureFeature,
   type FingerprintProbe,
+  type ReferenceRecaptureClaim,
   type FingerprintScheme,
   type ReferenceRecaptureHooks
 } from './reference-recapture-slot';
@@ -205,6 +207,36 @@ export function scaledWitnessMatches(
 }
 
 /**
+ * Which way a matched open edge's witness ends correspond: `same` when the
+ * converted end 0 is the source end 0 scaled, `swapped` when it is the
+ * source end 1 (the quantized sort reordered a near tie), `ambiguous` when
+ * both pairings fit (ends within the window of each other). Null for a
+ * closed edge or a face. Only meaningful for a pair that
+ * {@link scaledWitnessMatches} accepted.
+ */
+export type EdgeEndCorrespondence = 'same' | 'swapped' | 'ambiguous';
+
+export function edgeEndCorrespondence(
+  source: FaceWitnessV1 | EdgeWitnessV1,
+  target: FaceWitnessV1 | EdgeWitnessV1,
+  factor: number
+): EdgeEndCorrespondence | null {
+  if (!('curveType' in source) || !('curveType' in target)) return null;
+  if (source.closed || target.closed) return null;
+  const [a, b] = source.endpoints;
+  const [c, d] = target.endpoints;
+  const same = nearPoint(c, a, factor) && nearPoint(d, b, factor);
+  const swapped = nearPoint(c, b, factor) && nearPoint(d, a, factor);
+  return same && swapped
+    ? 'ambiguous'
+    : same
+      ? 'same'
+      : swapped
+        ? 'swapped'
+        : null;
+}
+
+/**
  * A lineage name with every embedded imported-STEP name reduced to its
  * family. An import names its topology by the witness hash (ADR-013 K0.6),
  * which a conversion changes, and later features nest those names
@@ -332,6 +364,16 @@ export function matchScaledProfile<P extends SketchProfile>(
 // Keys and the build sessions
 // ---------------------------------------------------------------------------
 
+/*
+ * Every lookup is keyed by the feature whose build made it (the build loop
+ * reports each feature boundary) and then by what it looked up. A stored
+ * identity is therefore matched and verified only from its own feature's
+ * lookups: two features whose stored hashes happen to be equal (identical
+ * quantized geometry on two bodies) never share a resolution, and a
+ * feature that never looks its identity up (suppressed, failed, or never
+ * reached) is refused rather than handed another feature's result.
+ */
+
 function topologyKey(
   reference: TopologyReferenceV5 | LegacyTopologyHashReference
 ): string {
@@ -348,6 +390,15 @@ function profileKey(reference: SketchRegionProfileReference): string {
   return `profile|${reference.profileId ?? ''}|${reference.regionFingerprint}`;
 }
 
+/** A lookup key qualified by the feature that made it. */
+function scoped(feature: string | null, key: string): string {
+  return `${feature ?? ''}#${key}`;
+}
+
+function currentScoped(key: string): string {
+  return scoped(referenceRecaptureFeature(), key);
+}
+
 interface SourceTopologyRecord extends SourceTopologyEntity {
   scheme: FingerprintScheme;
 }
@@ -357,7 +408,10 @@ interface SourceProfileRecord extends SourceProfileEntity {
   regionFingerprint: number;
 }
 
-function witnessHash(entity: SourceTopologyEntity): number {
+function witnessHash(entity: {
+  kind: 'face' | 'edge';
+  witness: FaceWitnessV1 | EdgeWitnessV1;
+}): number {
   return entity.kind === 'edge'
     ? topologyHashOfWitness('edge', entity.witness as EdgeWitnessV1)
     : topologyHashOfWitness('face', entity.witness as FaceWitnessV1);
@@ -391,9 +445,9 @@ class ObservedFingerprintMap extends Map<number, number[]> {
 }
 
 /**
- * Records what each stored identity resolves to. Used for the source build
- * and, unchanged, for the verification build, where it shows that every
- * identity resolved.
+ * Records what each stored identity resolves to, per feature. Used for the
+ * source build and, unchanged, for the verification build, where it shows
+ * that every identity resolved, and to which entity.
  */
 class RecordingSession implements ReferenceRecaptureHooks {
   readonly topology = new Map<string, SourceTopologyRecord[]>();
@@ -417,7 +471,7 @@ class RecordingSession implements ReferenceRecaptureHooks {
   ): TopologyResolutionResult {
     const result = resolve(reference);
     if (result.status === 'resolved')
-      this.addTopology(topologyKey(reference), {
+      this.addTopology(currentScoped(topologyKey(reference)), {
         kind: result.candidate.kind,
         witness: result.candidate.witness,
         ...(result.candidate.lineage
@@ -439,7 +493,7 @@ class RecordingSession implements ReferenceRecaptureHooks {
           (candidate) => probe.hashOf(candidate, handle) === hash
         );
         if (scheme)
-          this.addTopology(hashKey(probe.kind, hash), {
+          this.addTopology(currentScoped(hashKey(probe.kind, hash)), {
             kind: probe.kind,
             witness: probe.witnessOf(handle),
             scheme
@@ -455,7 +509,7 @@ class RecordingSession implements ReferenceRecaptureHooks {
     resolve: (reference: SketchRegionProfileReference) => P
   ): P {
     const profile = resolve(reference);
-    const key = profileKey(reference);
+    const key = currentScoped(profileKey(reference));
     const records = this.profiles.get(key) ?? [];
     if (!records.some((other) => other.profileId === profile.profileId))
       records.push({
@@ -472,12 +526,17 @@ class RecordingSession implements ReferenceRecaptureHooks {
 }
 
 type TranslationFailure =
-  'source-conflict' | 'missing' | 'ambiguous' | 'unresolved';
+  'source-conflict' | 'missing' | 'ambiguous' | 'unresolved' | 'non-injective';
 
 interface Translation {
   values: ConversionReferenceValue[];
   /** For a profile, the new profile id beside the fingerprint. */
   profileIds: string[];
+  /** Witness hashes of the source entity and of what it re-captured to. */
+  sourceWitnesses: Set<number>;
+  targetWitnesses: Set<number>;
+  /** For an open edge, how the matched ends correspond. */
+  ends: Set<EdgeEndCorrespondence>;
   failures: Set<TranslationFailure>;
   /** Kernel message of the last failed lookup, for the refusal. */
   detail?: string;
@@ -504,7 +563,14 @@ class TranslatingSession implements ReferenceRecaptureHooks {
   private entry(key: string): Translation {
     let entry = this.translations.get(key);
     if (!entry) {
-      entry = { values: [], profileIds: [], failures: new Set() };
+      entry = {
+        values: [],
+        profileIds: [],
+        sourceWitnesses: new Set(),
+        targetWitnesses: new Set(),
+        ends: new Set(),
+        failures: new Set()
+      };
       this.translations.set(key, entry);
     }
     return entry;
@@ -514,12 +580,30 @@ class TranslatingSession implements ReferenceRecaptureHooks {
     key: string,
     value: ConversionReferenceValue,
     profileId?: string
-  ): void {
+  ): Translation {
     const entry = this.entry(key);
     if (!entry.values.some((other) => sameValue(other, value)))
       entry.values.push(value);
     if (profileId !== undefined && !entry.profileIds.includes(profileId))
       entry.profileIds.push(profileId);
+    return entry;
+  }
+
+  private succeedTopology(
+    key: string,
+    value: ConversionReferenceValue,
+    source: SourceTopologyRecord,
+    target: { kind: 'face' | 'edge'; witness: FaceWitnessV1 | EdgeWitnessV1 }
+  ): void {
+    const entry = this.succeed(key, value);
+    entry.sourceWitnesses.add(witnessHash(source));
+    entry.targetWitnesses.add(witnessHash(target));
+    const ends = edgeEndCorrespondence(
+      source.witness,
+      target.witness,
+      this.factor
+    );
+    if (ends) entry.ends.add(ends);
   }
 
   private fail(
@@ -551,7 +635,7 @@ class TranslatingSession implements ReferenceRecaptureHooks {
       reference: TopologyReferenceV5 | LegacyTopologyHashReference
     ) => TopologyResolutionResult
   ): TopologyResolutionResult {
-    const key = topologyKey(reference);
+    const key = currentScoped(topologyKey(reference));
     const source = this.sourceTopology(key);
     if (!source) return resolve(reference);
     const match = matchScaledTopology(
@@ -585,7 +669,12 @@ class TranslatingSession implements ReferenceRecaptureHooks {
         : { kind: chosen.kind, currentHash: chosen.currentHash };
     const result = resolve(next);
     if (result.status === 'resolved' && result.candidate === chosen)
-      this.succeed(key, 'producingFeatureId' in next ? next : next.currentHash);
+      this.succeedTopology(
+        key,
+        'producingFeatureId' in next ? next : next.currentHash,
+        source,
+        chosen
+      );
     else
       this.fail(
         key,
@@ -601,7 +690,7 @@ class TranslatingSession implements ReferenceRecaptureHooks {
   ): Map<number, number[]> {
     const handles = [...new Set([...map.values()].flat())];
     return new ObservedFingerprintMap(map, (hash, direct) => {
-      const key = hashKey(probe.kind, hash);
+      const key = currentScoped(hashKey(probe.kind, hash));
       const source = this.sourceTopology(key);
       if (!source) return direct;
       const match = matchScaledTopology(
@@ -620,7 +709,12 @@ class TranslatingSession implements ReferenceRecaptureHooks {
         return direct;
       }
       const handle = match.candidate.handle;
-      this.succeed(key, probe.hashOf(source.scheme, handle));
+      this.succeedTopology(
+        key,
+        probe.hashOf(source.scheme, handle),
+        source,
+        match.candidate
+      );
       return [handle];
     });
   }
@@ -630,7 +724,7 @@ class TranslatingSession implements ReferenceRecaptureHooks {
     profiles: readonly P[],
     resolve: (reference: SketchRegionProfileReference) => P
   ): P {
-    const key = profileKey(reference);
+    const key = currentScoped(profileKey(reference));
     const records = this.source.profiles.get(key);
     if (!records) return resolve(reference);
     if (records.length !== 1) {
@@ -666,6 +760,43 @@ class TranslatingSession implements ReferenceRecaptureHooks {
     else this.fail(key, 'unresolved');
     return resolved;
   }
+
+  /**
+   * Within one feature, the re-capture must be one-to-one: two distinct
+   * source entities re-captured to one converted entity (or one to two)
+   * would merge or split the feature's selection. Marks every lookup that
+   * takes part as `non-injective`.
+   */
+  checkInjective(): void {
+    const byFeature = new Map<string, [string, Translation][]>();
+    for (const [key, translation] of this.translations) {
+      if (translation.sourceWitnesses.size === 0) continue;
+      const feature = key.slice(0, key.indexOf('#'));
+      byFeature.set(feature, [
+        ...(byFeature.get(feature) ?? []),
+        [key, translation]
+      ]);
+    }
+    for (const entries of byFeature.values()) {
+      const forward = new Map<number, Set<number>>();
+      const backward = new Map<number, Set<number>>();
+      for (const [, translation] of entries)
+        for (const from of translation.sourceWitnesses)
+          for (const to of translation.targetWitnesses) {
+            forward.set(from, (forward.get(from) ?? new Set()).add(to));
+            backward.set(to, (backward.get(to) ?? new Set()).add(from));
+          }
+      for (const [, translation] of entries) {
+        const split = [...translation.sourceWitnesses].some(
+          (from) => forward.get(from)!.size > 1
+        );
+        const merged = [...translation.targetWitnesses].some(
+          (to) => backward.get(to)!.size > 1
+        );
+        if (split || merged) translation.failures.add('non-injective');
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -692,6 +823,7 @@ export type ConversionReferenceRefusalCode =
   | 'missing-match'
   | 'ambiguous-match'
   | 'conflict'
+  | 'endpoint-order'
   | 'apply-refused'
   | 'unresolved-after-apply'
   | 'reference-repair'
@@ -732,6 +864,143 @@ export interface GeometryOracleStats {
   bodies: number;
   volumes: number;
   areas: number;
+  /** Datum planes, axes, points and coordinate systems compared. */
+  datums: number;
+}
+
+/**
+ * Datum direction tolerance: unit-vector components, which do not scale. A
+ * datum is derived from exact kernel positions, so the two builds agree to
+ * floating-point noise; a datum moved onto other geometry differs by far
+ * more.
+ */
+const DATUM_DIRECTION_TOLERANCE = 1e-9;
+
+type Vector = { x: number; y: number; z: number };
+
+/**
+ * Every datum the source build resolved must resolve in the converted build
+ * at the source's position scaled by `factor` and with the same directions.
+ * A datum owns no body, so without this a datum moved onto other geometry
+ * (a vertex re-captured at the other end of its edge) passes every body
+ * check.
+ */
+function compareDatums(
+  source: DerivedState,
+  converted: DerivedState,
+  factor: number,
+  mismatch: (subject: string, field: string, message: string) => void
+): number {
+  const groups: [
+    string,
+    Record<string, Record<string, Vector>> | undefined,
+    Record<string, Record<string, Vector>> | undefined,
+    readonly string[],
+    readonly string[]
+  ][] = [
+    [
+      'datumFrames',
+      source.datumFrames as never,
+      converted.datumFrames as never,
+      ['origin'],
+      ['u', 'v', 'normal']
+    ],
+    [
+      'datumAxes',
+      source.datumAxes as never,
+      converted.datumAxes as never,
+      ['origin'],
+      ['direction']
+    ],
+    [
+      'datumCsys',
+      source.datumCsys as never,
+      converted.datumCsys as never,
+      ['origin'],
+      ['x', 'y', 'z']
+    ]
+  ];
+  let compared = 0;
+  const check = (
+    subject: string,
+    field: string,
+    from: Vector,
+    to: Vector,
+    scaled: boolean
+  ) => {
+    const expected = scaled
+      ? { x: from.x * factor, y: from.y * factor, z: from.z * factor }
+      : from;
+    const tolerance = scaled
+      ? bboxTolerance(
+          Math.max(
+            Math.abs(expected.x),
+            Math.abs(expected.y),
+            Math.abs(expected.z)
+          )
+        )
+      : DATUM_DIRECTION_TOLERANCE;
+    for (const axis of ['x', 'y', 'z'] as const)
+      if (!(Math.abs(to[axis] - expected[axis]) <= tolerance))
+        mismatch(
+          subject,
+          `${field}.${axis}`,
+          `The datum's ${field}.${axis} is ${to[axis]}, not ${scaled ? `${from[axis]} × ${factor} = ` : ''}${expected[axis]}.`
+        );
+  };
+  const presence = (
+    group: string,
+    from: Record<string, unknown> | undefined,
+    to: Record<string, unknown> | undefined
+  ): string[] => {
+    const ids = [
+      ...new Set([...Object.keys(from ?? {}), ...Object.keys(to ?? {})])
+    ].sort();
+    return ids.filter((id) => {
+      if (from?.[id] && to?.[id]) return true;
+      mismatch(
+        `datum ${id}`,
+        group,
+        `The datum resolves only in the ${from?.[id] ? 'source' : 'converted'} build.`
+      );
+      return false;
+    });
+  };
+  for (const [group, from, to, positions, directions] of groups)
+    for (const id of presence(group, from, to)) {
+      compared += 1;
+      for (const field of positions)
+        check(
+          `datum ${id}`,
+          `${group}.${field}`,
+          from![id]![field]!,
+          to![id]![field]!,
+          true
+        );
+      for (const field of directions)
+        check(
+          `datum ${id}`,
+          `${group}.${field}`,
+          from![id]![field]!,
+          to![id]![field]!,
+          false
+        );
+    }
+  for (const id of presence(
+    'datumPoints',
+    source.datumPoints,
+    converted.datumPoints
+  )) {
+    compared += 1;
+    check(
+      `datum ${id}`,
+      'datumPoints',
+      source.datumPoints![id as FeatureId]!,
+      converted.datumPoints![id as FeatureId]!,
+      true
+    );
+  }
+  return compared;
 }
 
 /**
@@ -750,7 +1019,12 @@ export function unitConversionGeometryOracle(
   factor: number
 ): { refusals: ConversionReferenceRefusal[]; stats: GeometryOracleStats } {
   const refusals: ConversionReferenceRefusal[] = [];
-  const stats: GeometryOracleStats = { bodies: 0, volumes: 0, areas: 0 };
+  const stats: GeometryOracleStats = {
+    bodies: 0,
+    volumes: 0,
+    areas: 0,
+    datums: 0
+  };
   const mismatch = (subject: string, field: string, message: string) =>
     refusals.push({ code: 'geometry-mismatch', subject, field, message });
   const ids = [
@@ -851,6 +1125,7 @@ export function unitConversionGeometryOracle(
         );
     }
   }
+  stats.datums = compareDatums(source, converted, factor, mismatch);
   const exportFrom = [...source.exportableBodyIds].sort();
   const exportTo = [...converted.exportableBodyIds].sort();
   if (JSON.stringify(exportFrom) !== JSON.stringify(exportTo))
@@ -889,7 +1164,13 @@ export interface ConversionReferenceMapOptions {
 export interface ConversionReferenceReport {
   /** k: millimetres per source unit over millimetres per target unit. */
   factor: number;
-  sites: { topology: number; hash: number; profileId: number };
+  sites: {
+    topology: number;
+    hash: number;
+    profileId: number;
+    /** Datum vertex ends and fillet end radii / edge runs. */
+    edgeEnd: number;
+  };
   geometry: GeometryOracleStats;
   /** Wall-clock milliseconds of each build. */
   timings: { source: number; translate: number; verify: number };
@@ -910,6 +1191,7 @@ export type ConversionReferenceMapResult =
     };
 
 async function coldBuild(
+  claim: ReferenceRecaptureClaim,
   document: ProjectDocument,
   hooks: ReferenceRecaptureHooks,
   options: ConversionReferenceMapOptions
@@ -927,13 +1209,43 @@ async function coldBuild(
       });
   const started = performance.now();
   try {
-    const derived = await withReferenceRecapture(hooks, () =>
+    const derived = await claim.build(hooks, () =>
       adapter.syncDocument(document)
     );
     return { derived, milliseconds: performance.now() - started };
   } finally {
     adapter.dispose();
   }
+}
+
+/**
+ * The feature whose build looks up each node's stored identities: a
+ * feature node's own, and for a sketch or one of its objects the sketch
+ * feature that builds it. A node with none (or more than one) maps to
+ * nothing, and its sites are refused as never resolved.
+ */
+function siteFeatures(document: ProjectDocument): Map<string, string> {
+  const byNode = new Map<string, string>();
+  const sketchFeatures = new Map<string, string[]>();
+  for (const node of Object.values(document.nodes)) {
+    if (node.kind !== 'feature') continue;
+    byNode.set(node.id, node.featureId);
+    if (node.data.featureKind === 'sketch')
+      sketchFeatures.set(node.data.sketchId, [
+        ...(sketchFeatures.get(node.data.sketchId) ?? []),
+        node.featureId
+      ]);
+  }
+  for (const node of Object.values(document.nodes)) {
+    if (node.kind !== 'sketch') continue;
+    const features = sketchFeatures.get(node.sketchId);
+    if (features?.length !== 1) continue;
+    byNode.set(node.id, features[0]!);
+    for (const objectId of node.objectIds)
+      if (document.nodes[objectId]?.kind === 'sketch-object')
+        byNode.set(objectId, features[0]!);
+  }
+  return byNode;
 }
 
 /** One line per repair a build proposed: its kind, feature and extent. */
@@ -962,7 +1274,7 @@ function failureRefusal(
     return {
       code: 'source-unresolved',
       ...where,
-      message: `${site.subject}: the source build never resolved ${site.field}, so it cannot be re-captured.`
+      message: `${site.subject}: the source build never resolved ${site.field} while building this feature, so it cannot be re-captured.`
     };
   const failures = translation?.failures ?? new Set<TranslationFailure>();
   if (failures.has('source-conflict'))
@@ -996,6 +1308,48 @@ function failureRefusal(
   };
 }
 
+/** What one site re-captured to, gathered from its feature's lookups. */
+interface SiteCapture {
+  /** The lookup keys (feature-scoped) the site's identity may be under. */
+  keys: string[];
+  values: ConversionReferenceValue[];
+  translations: Translation[];
+}
+
+/**
+ * The feature-scoped lookup keys a site's stored identity is looked up
+ * under: a v5 reference by its whole identity, a profile by its
+ * fingerprint and id, and a bare hash as a legacy face or edge pick or as
+ * the hash of a v5 reference the same feature looked up.
+ */
+function siteKeys(
+  site: Exclude<ConversionReferenceSite, { kind: 'edge-end' }>,
+  feature: string,
+  lookedUp: Iterable<string>
+): string[] {
+  if (site.kind === 'topology')
+    return [scoped(feature, topologyKey(site.reference))];
+  if (site.kind === 'profile-id' || site.profile)
+    return [scoped(feature, profileKey(site.profile!))];
+  const keys = [
+    scoped(feature, hashKey('face', site.hash)),
+    scoped(feature, hashKey('edge', site.hash))
+  ];
+  const prefix = scoped(feature, 'v5|');
+  for (const key of lookedUp)
+    if (key.startsWith(prefix) && key.endsWith(`|${site.hash}`)) keys.push(key);
+  return keys;
+}
+
+function distinctValues(
+  values: readonly ConversionReferenceValue[]
+): ConversionReferenceValue[] {
+  return values.filter(
+    (value, index) =>
+      values.findIndex((other) => sameValue(other, value)) === index
+  );
+}
+
 /**
  * Re-captures every persisted reference of `converted` (the output of
  * `convertDocumentUnits(source, …)`) and verifies the result by rebuilding
@@ -1018,7 +1372,9 @@ export async function computeConversionReferenceMap(
           }
         ]
       };
-  if (referenceRecaptureHooks())
+  // Claimed before the first await, so a concurrent caller is refused here.
+  const claim = claimReferenceRecapture();
+  if (!claim)
     return {
       ok: false,
       refusals: [
@@ -1029,23 +1385,44 @@ export async function computeConversionReferenceMap(
         }
       ]
     };
+  try {
+    return await recapture(claim, source, converted, options);
+  } finally {
+    claim.release();
+  }
+}
+
+async function recapture(
+  claim: ReferenceRecaptureClaim,
+  source: ProjectDocument,
+  converted: ProjectDocument,
+  options: ConversionReferenceMapOptions
+): Promise<ConversionReferenceMapResult> {
   const factor =
     millimetresPerUnit(source.units) / millimetresPerUnit(converted.units);
 
   const recorded = new RecordingSession();
-  const sourceBuild = await coldBuild(source, recorded, options);
+  const sourceBuild = await coldBuild(claim, source, recorded, options);
   const translating = new TranslatingSession(recorded, factor);
-  const translateBuild = await coldBuild(converted, translating, options);
+  const translateBuild = await coldBuild(
+    claim,
+    converted,
+    translating,
+    options
+  );
+  translating.checkInjective();
 
   const sites = listConversionReferenceSites(converted);
+  const features = siteFeatures(converted);
   const report: ConversionReferenceReport = {
     factor,
     sites: {
       topology: sites.filter((site) => site.kind === 'topology').length,
       hash: sites.filter((site) => site.kind === 'hash').length,
-      profileId: sites.filter((site) => site.kind === 'profile-id').length
+      profileId: sites.filter((site) => site.kind === 'profile-id').length,
+      edgeEnd: sites.filter((site) => site.kind === 'edge-end').length
     },
-    geometry: { bodies: 0, volumes: 0, areas: 0 },
+    geometry: { bodies: 0, volumes: 0, areas: 0, datums: 0 },
     timings: {
       source: sourceBuild.milliseconds,
       translate: translateBuild.milliseconds,
@@ -1055,19 +1432,66 @@ export async function computeConversionReferenceMap(
 
   const references: Record<string, ConversionReferenceValue> = {};
   const refusals: ConversionReferenceRefusal[] = [];
-  const settle = (
-    site: ConversionReferenceSite,
-    keys: readonly string[],
-    values: readonly ConversionReferenceValue[],
-    translations: readonly (Translation | undefined)[]
-  ) => {
-    const distinct = values.filter(
-      (value, index) =>
-        values.findIndex((other) => sameValue(other, value)) === index
+  /** Per site, the converted witnesses it must resolve to when verified. */
+  const expected = new Map<string, Set<number>>();
+  /** Per edge topology site, how its matched ends correspond. */
+  const edgeEnds = new Map<string, Set<EdgeEndCorrespondence>>();
+
+  const capture = (
+    site: Exclude<ConversionReferenceSite, { kind: 'edge-end' }>,
+    feature: string
+  ): SiteCapture => {
+    const keys = siteKeys(site, feature, translating.translations.keys());
+    const found = keys.flatMap((key) => {
+      const translation = translating.translations.get(key);
+      return translation ? [[key, translation] as const] : [];
+    });
+    const translations = found.map(([, translation]) => translation);
+    const values = found.flatMap(([key, translation]) => {
+      if (site.kind === 'profile-id') return translation.profileIds;
+      // A bare hash beside a v5 lookup takes that reference's new hash.
+      if (site.kind === 'hash' && key.includes('#v5|'))
+        return translation.values.flatMap((value) =>
+          typeof value === 'object' && 'currentHash' in value
+            ? [value.currentHash]
+            : []
+        );
+      return translation.values;
+    });
+    return { keys, values, translations };
+  };
+
+  for (const site of sites) {
+    if (site.kind === 'edge-end') continue;
+    const feature = features.get(site.nodeId);
+    const { keys, values, translations } = feature
+      ? capture(site, feature)
+      : { keys: [], values: [], translations: [] };
+    const failed = translations.find(
+      (translation) => translation.failures.size > 0
     );
-    if (distinct.length === 1) {
+    if (failed?.failures.has('non-injective')) {
+      refusals.push({
+        code: 'conflict',
+        subject: site.subject,
+        field: site.field,
+        message: `${site.subject}: ${site.field} and another reference of this feature re-capture one-to-many or many-to-one; refusing rather than merging or splitting the selection.`
+      });
+      continue;
+    }
+    const distinct = distinctValues(values);
+    if (distinct.length === 1 && !failed) {
       references[site.pointer] = distinct[0]!;
-      return;
+      expected.set(
+        site.pointer,
+        new Set(translations.flatMap((t) => [...t.targetWitnesses]))
+      );
+      if (site.kind === 'topology' && site.reference.kind === 'edge')
+        edgeEnds.set(
+          site.pointer,
+          new Set(translations.flatMap((t) => [...t.ends]))
+        );
+      continue;
     }
     if (distinct.length > 1) {
       refusals.push({
@@ -1076,60 +1500,66 @@ export async function computeConversionReferenceMap(
         field: site.field,
         message: `${site.subject}: ${site.field} re-captures to ${distinct.length} different values.`
       });
-      return;
+      continue;
     }
     const resolvedInSource = keys.some(
       (key) => recorded.topology.has(key) || recorded.profiles.has(key)
     );
-    refusals.push(
-      failureRefusal(
-        site,
-        translations.find((translation) => translation !== undefined),
-        resolvedInSource
-      )
-    );
-  };
+    refusals.push(failureRefusal(site, failed, resolvedInSource));
+  }
 
+  // Witness end order (finding: a near tie on the leading axis sorts the
+  // two ends the other way in the new unit). The correspondence comes from
+  // the ends actually matched, never from the stored index.
+  const endOrderOf = (pointer: string | undefined) => {
+    const ends = pointer ? edgeEnds.get(pointer) : undefined;
+    if (!ends || ends.size === 0) return ends ? 'closed' : undefined;
+    return ends.size === 1 ? [...ends][0]! : 'ambiguous';
+  };
   for (const site of sites) {
-    if (site.kind === 'topology') {
-      const key = topologyKey(site.reference);
-      const translation = translating.translations.get(key);
-      settle(site, [key], translation?.values ?? [], [translation]);
-    } else if (site.kind === 'profile-id' || site.profile) {
-      const key = profileKey(site.profile!);
-      const translation = translating.translations.get(key);
-      settle(
-        site,
-        [key],
-        site.kind === 'profile-id'
-          ? (translation?.profileIds ?? [])
-          : (translation?.values ?? []),
-        [translation]
-      );
-    } else {
-      // A bare hash: a legacy lookup of either kind, or the hash a v5
-      // reference beside it was resolved by.
-      const keys = [hashKey('face', site.hash), hashKey('edge', site.hash)];
-      const values: ConversionReferenceValue[] = [];
-      const translations: (Translation | undefined)[] = [];
-      for (const key of keys) {
-        const translation = translating.translations.get(key);
-        translations.push(translation);
-        values.push(...(translation?.values ?? []));
+    if (site.kind === 'topology' && site.endpointOrder === 'significant') {
+      const order = endOrderOf(site.pointer);
+      if (order === 'swapped' || order === 'ambiguous') {
+        delete references[site.pointer];
+        refusals.push({
+          code: 'endpoint-order',
+          subject: site.subject,
+          field: site.field,
+          message: `${site.subject}: ${site.field} is an edge whose end order this feature reads, and in the new unit its ends ${order === 'swapped' ? 'sort the other way' : 'cannot be told apart'}; re-select the edge after converting.`
+        });
       }
-      const besideV5 = (key: string) =>
-        key.startsWith('v5|') && key.endsWith(`|${site.hash}`);
-      for (const key of recorded.topology.keys())
-        if (besideV5(key)) keys.push(key);
-      for (const [key, translation] of translating.translations) {
-        if (!besideV5(key)) continue;
-        translations.push(translation);
-        for (const value of translation.values)
-          if (typeof value === 'object' && 'currentHash' in value)
-            values.push(value.currentHash);
-      }
-      settle(site, keys, values, translations);
     }
+    if (site.kind !== 'edge-end') continue;
+    const order = endOrderOf(site.edgePointer);
+    if (order === undefined) {
+      // The edge itself was refused above, or the document names none.
+      if (
+        site.edgePointer === undefined ||
+        references[site.edgePointer] !== undefined
+      )
+        refusals.push({
+          code: 'endpoint-order',
+          subject: site.subject,
+          field: site.field,
+          message: `${site.subject}: ${site.field} names an end of an edge this document does not reference by lineage, so its end cannot be re-captured.`
+        });
+      continue;
+    }
+    if (order === 'ambiguous') {
+      refusals.push({
+        code: 'endpoint-order',
+        subject: site.subject,
+        field: site.field,
+        message: `${site.subject}: ${site.field} names an end of an edge whose two ends cannot be told apart in the new unit.`
+      });
+      continue;
+    }
+    references[site.pointer] =
+      order !== 'swapped'
+        ? site.value
+        : typeof site.value === 'boolean'
+          ? !site.value
+          : 1 - site.value;
   }
   if (refusals.length > 0) return { ok: false, refusals, report };
 
@@ -1146,28 +1576,47 @@ export async function computeConversionReferenceMap(
       report
     };
 
-  // Oracle 3: built as stored, nothing translated, every identity resolves.
+  // Oracle 3: built as stored, nothing translated, every identity resolves
+  // in its own feature, to the entity it was re-captured to.
   const verifying = new RecordingSession();
-  const verifyBuild = await coldBuild(applied.document, verifying, options);
+  const verifyBuild = await coldBuild(
+    claim,
+    applied.document,
+    verifying,
+    options
+  );
   report.timings.verify = verifyBuild.milliseconds;
   const derived = verifyBuild.derived;
+  const verifyFeatures = siteFeatures(applied.document);
   for (const site of listConversionReferenceSites(applied.document)) {
+    if (site.kind === 'edge-end') continue;
+    const feature = verifyFeatures.get(site.nodeId);
+    const keys = feature
+      ? siteKeys(site, feature, verifying.topology.keys())
+      : [];
+    const witnesses = keys.flatMap((key) =>
+      (verifying.topology.get(key) ?? []).map(witnessHash)
+    );
+    const profiles = keys.flatMap((key) => verifying.profiles.get(key) ?? []);
+    const want = expected.get(site.pointer);
     const resolved =
-      site.kind === 'topology'
-        ? verifying.topology.has(topologyKey(site.reference))
-        : site.kind === 'profile-id' || site.profile
-          ? verifying.profiles.has(profileKey(site.profile!))
-          : verifying.topology.has(hashKey('face', site.hash)) ||
-            verifying.topology.has(hashKey('edge', site.hash)) ||
-            [...verifying.topology.keys()].some(
-              (key) => key.startsWith('v5|') && key.endsWith(`|${site.hash}`)
-            );
+      site.kind === 'profile-id' || (site.kind === 'hash' && site.profile)
+        ? profiles.length > 0 &&
+          profiles.every(
+            (profile) =>
+              profile.regionFingerprint === site.profile!.regionFingerprint &&
+              (site.kind !== 'profile-id' ||
+                profile.profileId === site.profileId)
+          )
+        : witnesses.length > 0 &&
+          want !== undefined &&
+          witnesses.every((witness) => want.has(witness));
     if (!resolved)
       refusals.push({
         code: 'unresolved-after-apply',
         subject: site.subject,
         field: site.field,
-        message: `${site.subject}: ${site.field} does not resolve when the converted document is rebuilt.`
+        message: `${site.subject}: ${site.field} does not resolve to its re-captured entity when the converted document is rebuilt.`
       });
   }
   // A legacy hash-only pick gets upgrade advice (a proposed v5 reference)

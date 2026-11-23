@@ -8,12 +8,18 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addDatumAxis,
+  addDatumPoint,
   addPrimitiveFeature,
+  addSketchFeature,
   applyReferenceMap,
   convertDocumentUnits,
   createProjectDocument,
   directEditBody,
+  extrudeSketch,
   filletEdges,
+  findSketch,
+  importStepBody,
   listConversionReferenceSites
 } from '@openzcad/document-core';
 import {
@@ -29,11 +35,20 @@ import {
   recaptureWindow,
   scaledWitnessMatches,
   topologyHashOfWitness,
+  unitConversionGeometryOracle,
   type SourceTopologyEntity
 } from '@openzcad/kernel-adapter/exact';
 import {
+  loadRemusTranslators,
+  RemusKernel
+} from '../packages/kernel-adapter/src/remus-runtime';
+import { recognizePlanarEmboss } from '../packages/kernel-adapter/src/planar-emboss';
+import { letteredHolder } from './support/lettered-holder';
+import {
   toFeatureId,
   toUserId,
+  type BodyId,
+  type DerivedState,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
   type FaceWitnessV1,
@@ -574,5 +589,322 @@ describe('computeConversionReferenceMap', { timeout: 120_000 }, () => {
         field: 'operation.faceReference'
       }
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Review regressions (PR #1977)
+// ---------------------------------------------------------------------------
+
+async function buildOnce(document: ProjectDocument): Promise<DerivedState> {
+  const adapter = await createExactKernelAdapter();
+  try {
+    return await adapter.syncDocument(document);
+  } finally {
+    adapter.dispose();
+  }
+}
+
+/**
+ * A pad whose left side runs from (0, 10, 0) to (0.000002, 0, 0) mm. In mm
+ * the first point is witness end 0 (x 0 < 2 quanta); in inches both x
+ * coordinates quantize to 0, so end 0 becomes the second point (y sorts).
+ */
+async function nearTiePad(): Promise<{
+  document: ProjectDocument;
+  bodyId: BodyId;
+  edge: EdgeTopologyReferenceV5;
+}> {
+  const lines = [
+    [0, 10, 0.000002, 0],
+    [0.000002, 0, 20, 0],
+    [20, 0, 20, 10],
+    [20, 10, 0, 10]
+  ] as const;
+  const sketched = addSketchFeature(
+    createProjectDocument('Near tie', toUserId('user_recapture')),
+    {
+      name: 'Profile',
+      planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+      objects: lines.map(([x1, y1, x2, y2]) => ({
+        objectKind: 'line' as const,
+        x1,
+        y1,
+        x2,
+        y2
+      }))
+    }
+  );
+  const objectIds = [
+    ...(findSketch(sketched.document, sketched.sketchId)?.objectIds ?? [])
+  ];
+  const { document, bodyId } = extrudeSketch(sketched.document, {
+    name: 'Pad',
+    sketchId: sketched.sketchId,
+    distance: 5,
+    profiles: [{ all: true, sourceEntityIds: objectIds }]
+  });
+  const derived = await buildOnce(document);
+  expect(derived.warnings).toEqual([]);
+  const edge = derived.bodyRepresentations[bodyId]?.topology?.edges.find(
+    (candidate) => {
+      const witness = candidate.reference?.witness;
+      return (
+        witness !== undefined &&
+        !witness.closed &&
+        JSON.stringify(witness.endpoints) ===
+          JSON.stringify([
+            [0, 10_000_000, 0],
+            [2, 0, 0]
+          ])
+      );
+    }
+  )?.reference;
+  if (!edge) throw new Error('The near-tie edge was not built.');
+  return { document, bodyId, edge };
+}
+
+describe('re-capture review regressions', { timeout: 180_000 }, () => {
+  it('remaps a datum vertex end when the converted witness orders the ends the other way', async () => {
+    const { document: pad, bodyId, edge } = await nearTiePad();
+    const { document: source, featureId } = addDatumPoint(pad, {
+      name: 'Corner',
+      definition: {
+        kind: 'offset',
+        from: { type: 'edge-vertex', bodyId, edgeReference: edge, end: 0 },
+        offset: { x: 0, y: 0, z: 0 }
+      }
+    });
+    const before = await buildOnce(source);
+    expect(before.datumPoints?.[featureId]).toEqual({ x: 0, y: 10, z: 0 });
+
+    const there = convertDocumentUnits(source, 'inch');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document);
+    expect(result.ok ? [] : result.refusals).toEqual([]);
+    if (!result.ok) return;
+    const node = Object.values(result.document.nodes).find(
+      (candidate) =>
+        candidate.kind === 'feature' && candidate.featureId === featureId
+    ) as unknown as {
+      data: { definition: { from: { end: 0 | 1 } } };
+    };
+    expect(node.data.definition.from.end).toBe(1);
+    const after = await buildOnce(result.document);
+    const point = after.datumPoints?.[featureId];
+    expect(point?.x).toBeCloseTo(0, 9);
+    expect(point?.y).toBeCloseTo(10 / 25.4, 9);
+    expect(point?.z).toBeCloseTo(0, 9);
+    expect(result.report.geometry.datums).toBe(1);
+  });
+
+  it('refuses an edge whose end order is significant when the ends swap', async () => {
+    const { document: pad, bodyId, edge } = await nearTiePad();
+    const source = addDatumAxis(pad, {
+      name: 'Side axis',
+      definition: {
+        kind: 'edge',
+        source: { type: 'edge', bodyId, edgeReference: edge }
+      }
+    }).document;
+    const there = convertDocumentUnits(source, 'inch');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(
+      result.refusals.map(({ code, subject, field }) => ({
+        code,
+        subject: subject.replace(/ \(.*\)$/, ''),
+        field
+      }))
+    ).toEqual([
+      {
+        code: 'endpoint-order',
+        subject: 'Side axis',
+        field: 'definition.source.edgeReference'
+      }
+    ]);
+  });
+
+  it('the geometry oracle refuses a datum that moved, even when every body matches', () => {
+    const empty = (point: { x: number; y: number; z: number }) =>
+      ({
+        bodyRepresentations: {},
+        exportableBodyIds: [],
+        warnings: [],
+        datumPoints: { feat_point: point }
+      }) as unknown as DerivedState;
+    const k = MM_TO_INCH;
+    const same = unitConversionGeometryOracle(
+      empty({ x: 0, y: 10, z: 0 }),
+      empty({ x: 0, y: 10 * k, z: 0 }),
+      k
+    );
+    const moved = unitConversionGeometryOracle(
+      empty({ x: 0, y: 10, z: 0 }),
+      empty({ x: 0.000002 * k, y: 0, z: 0 }),
+      k
+    );
+    expect(moved.refusals.map(({ code, field }) => `${code} ${field}`)).toEqual(
+      ['geometry-mismatch datumPoints.y']
+    );
+    expect(same.refusals).toEqual([]);
+    expect(same.stats.datums).toBe(1);
+  });
+
+  /**
+   * Two inch boxes whose +Y faces sit at 1.0000001 and 1.0000004 in: one
+   * legacy fingerprint in inches, two in millimetres. Each is offset by a
+   * hash-only pick.
+   */
+  async function twinBoxes(): Promise<ProjectDocument> {
+    let document = createProjectDocument(
+      'Twins',
+      toUserId('user_recapture'),
+      'inch'
+    );
+    for (const [name, height] of [
+      ['A', 1.0000001],
+      ['B', 1.0000004]
+    ] as const)
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 2, height, depth: 1 }
+      });
+    const built = await buildOnce(document);
+    const tops = document.bodyOrder.map((bodyId) =>
+      built.bodyRepresentations[bodyId]!.topology!.faces.find(
+        (face) => face.geometry?.normal?.y === 1
+      )!
+    );
+    // The shared legacy fingerprint the review describes.
+    expect(tops[0]!.hash).toBe(tops[1]!.hash);
+    document.bodyOrder.forEach((bodyId, index) => {
+      const top = tops[index]!;
+      document = directEditBody(document, {
+        name: `Raise ${index === 0 ? 'A' : 'B'}`,
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: top.hash,
+          sourceSurfaceType: 'plane',
+          sourceArea: top.geometry!.area,
+          sourceCenter: top.geometry!.center,
+          sourceNormal: top.geometry!.normal!,
+          offset: 0.5
+        }
+      }).document;
+    });
+    expect((await buildOnce(document)).warnings).toEqual([]);
+    return document;
+  }
+
+  const suppressing = (name: string, document: ProjectDocument) => {
+    const next = structuredClone(document);
+    for (const node of Object.values(next.nodes))
+      if (node.kind === 'feature' && node.name === name)
+        node.metadata = { ...node.metadata, suppressed: true };
+    return next;
+  };
+
+  it('never lets one feature’s lookup stand in for a suppressed feature’s identical hash', async () => {
+    const source = suppressing('Raise B', await twinBoxes());
+    const there = convertDocumentUnits(source, 'mm');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(
+      result.refusals.map(({ code, subject, field }) => ({
+        code,
+        subject: subject.replace(/ \(.*\)$/, ''),
+        field
+      }))
+    ).toEqual([
+      {
+        code: 'source-unresolved',
+        subject: 'Raise B',
+        field: 'operation.faceHash'
+      }
+    ]);
+  });
+
+  it('re-captures two features’ identical hashes each from its own lookup', async () => {
+    const source = await twinBoxes();
+    const there = convertDocumentUnits(source, 'mm');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document);
+    expect(result.ok ? [] : result.refusals).toEqual([]);
+    if (!result.ok) return;
+    const hashes = listConversionReferenceSites(result.document).map(
+      (site) => site.kind === 'hash' && site.hash
+    );
+    expect(hashes).toHaveLength(2);
+    expect(new Set(hashes).size).toBe(2);
+    expect((await buildOnce(result.document)).warnings).toEqual([]);
+  });
+
+  it('refuses imported raised lettering by name (a known limitation)', async () => {
+    const kernel = new RemusKernel();
+    const io = await loadRemusTranslators();
+    let source: ProjectDocument;
+    try {
+      const step = io.exportStep(
+        kernel.serializeSolids(Uint32Array.of(letteredHolder(kernel)))
+      );
+      const solids = kernel.deserializeSolids(io.importStep(step));
+      const selection = recognizePlanarEmboss(kernel, solids[0]!);
+      if (!selection) throw new Error('The lettering must be recognized.');
+      source = importStepBody(
+        createProjectDocument('Lettering', toUserId('user_recapture')),
+        {
+          name: 'Text',
+          artifactId: 'public-generated-lettering',
+          sourceName: 'public-generated-lettering.step',
+          stepText: new TextDecoder().decode(step),
+          planarEmboss: { part: 'text', selection }
+        }
+      ).document;
+    } finally {
+      kernel.free();
+    }
+    expect((await buildOnce(source)).warnings).toEqual([]);
+    const there = convertDocumentUnits(source, 'inch');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    // The lettering check compares its whole measured selection (hashes,
+    // tidied depth and bounds) as one serialized key, never through a
+    // re-capture hook, so its hashes are never looked up. Fails closed.
+    expect(
+      [
+        ...new Set(
+          result.refusals.map(
+            ({ code, field }) => `${code} ${field?.replace(/\.\d+$/, '')}`
+          )
+        )
+      ].sort()
+    ).toEqual([
+      'source-unresolved planarEmboss.selection.capFaceHashes',
+      'source-unresolved planarEmboss.selection.supportFaceHash'
+    ]);
+  });
+
+  it('returns busy, not a rejected promise, to a second call in the same tick', async () => {
+    const source = await filletedBox();
+    const there = convertDocumentUnits(source, 'cm');
+    if (!there.ok) throw new Error('conversion refused');
+    const [first, second] = await Promise.all([
+      computeConversionReferenceMap(source, there.document),
+      computeConversionReferenceMap(source, there.document)
+    ]);
+    expect(first.ok ? [] : first.refusals).toEqual([]);
+    expect(second).toMatchObject({
+      ok: false,
+      refusals: [{ code: 'busy' }]
+    });
   });
 });
