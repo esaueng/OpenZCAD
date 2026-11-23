@@ -318,8 +318,8 @@ export function measureFitFrame(
  * stage, as long as it stays inside the stage without the card and off the
  * card itself: the clear stage is one rectangle, above or beside the card,
  * and a model beside a card framed above (or above one framed beside) is in
- * plain view all the same. Pressing Next reframed such a model (preview
- * check on #1969).
+ * plain view all the same, as long as nothing else is drawn over it either.
+ * Pressing Next reframed such a model (preview check on #1969).
  */
 export function cornersClearOfStage(
   canvas: HTMLElement,
@@ -345,12 +345,22 @@ export function cornersClearOfStage(
   const right = Math.max(...xs);
   const top = Math.min(...ys);
   const bottom = Math.max(...ys);
-  return panelsOver(canvas, FOOT_GUIDE).every(
-    (card) =>
-      card.right <= left ||
-      card.left >= right ||
-      card.bottom <= top ||
-      card.top >= bottom
+  // Off everything drawn over the canvas, not only the card: the stage
+  // without the card can let a panel go to stay wide enough (the Tools
+  // drawer beside a docked column), and it does not keep out the command
+  // bar's lane, which only a creation frame does (review on #1974).
+  const covers = [
+    ...panelsOver(canvas, FOOT_GUIDE),
+    ...panelsOver(canvas, CLEAR_STAGE_OBSTACLES),
+    ...panelsOver(canvas, WORKSPACE_STAGE_OBSTACLES, false, '.workspace'),
+    ...panelsOver(canvas, '.command-bar-lane', false, '.workspace')
+  ];
+  return covers.every(
+    (cover) =>
+      cover.right <= left ||
+      cover.left >= right ||
+      cover.bottom <= top ||
+      cover.top >= bottom
   );
 }
 

@@ -510,11 +510,14 @@ describe('the modeling guide', () => {
     // 1440 × 900 with the card at x 72–368, y 600–840: the clear stage is
     // framed beside it, from x 380.
     function desk() {
+      const workspace = document.createElement('main');
+      workspace.className = 'workspace';
       const area = document.createElement('div');
       area.className = 'viewer-area';
+      workspace.append(area);
       const canvas = placed(document.createElement('canvas'), 0, 0, 1440, 900);
       area.append(canvas);
-      document.body.append(area);
+      document.body.append(workspace);
       guide(area, 72, 600, 368, 840);
       return canvas;
     }
@@ -544,6 +547,50 @@ describe('the modeling guide', () => {
 
     it('lets a model past the canvas be reframed', () => {
       expect(cornersClearOfStage(desk(), box(900, 100, 1500, 500))).toBe(false);
+    });
+
+    it('lets a model beside the card but under the command bar be reframed', () => {
+      // The stage without the card reaches the canvas's foot, over the
+      // command bar's lane (review on #1974).
+      const canvas = desk();
+      const lane = document.createElement('div');
+      lane.className = 'command-bar-lane';
+      canvas.closest('.workspace')!.append(placed(lane, 0, 860, 1440, 900));
+      expect(cornersClearOfStage(canvas, box(375, 700, 600, 880))).toBe(false);
+      lane.remove();
+      expect(cornersClearOfStage(canvas, box(375, 700, 600, 880))).toBe(true);
+    });
+
+    it('lets a model under a panel the stage let go be reframed', () => {
+      // 768 × 1024: the Tools drawer and the docked column leave too narrow
+      // a gap, so the stage without the card lets the drawer go; a model
+      // under it is still covered (review on #1974).
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      const canvas = placed(document.createElement('canvas'), 0, 0, 768, 1024);
+      area.append(canvas);
+      const drawer = document.createElement('div');
+      drawer.className = 'workspace-column-float';
+      area.append(placed(drawer, 0, 60, 420, 1000));
+      const layer = document.createElement('div');
+      layer.className = 'panel-dock-layer';
+      const docked = document.createElement('div');
+      docked.className = 'panel-column';
+      layer.append(placed(docked, 462, 60, 768, 1024));
+      area.append(layer);
+      document.body.append(area);
+      guide(area, 116, 606, 412, 845);
+      const corners = [
+        [75, 650],
+        [105, 650],
+        [75, 720],
+        [105, 720]
+      ].map(([x = 0, y = 0]) => ({
+        x: (x / 768) * 2 - 1,
+        y: 1 - (y / 1024) * 2,
+        z: 0
+      }));
+      expect(cornersClearOfStage(canvas, corners)).toBe(false);
     });
 
     it('holds a model inside the clear stage', () => {
