@@ -1844,10 +1844,16 @@ export function popOutRect(geometry: PanelGeometry, id: PanelId): Rect {
   if (!rect) {
     return defaultFloatRect(geometry.layout, geometry.stage);
   }
-  const x =
-    rect.x < geometry.stage.width / 2
-      ? rect.x + POP_OUT_OFFSET
-      : rect.x - POP_OUT_OFFSET;
+  // Toward the middle of the room between the docks, not of the stage: a
+  // wide rail band (a sketch's relations) put the unpinned panel's left
+  // edge short of the stage's middle beside a right dock, and the window
+  // went right, over the docked column.
+  const middle =
+    (geometry.dockWidth.left +
+      geometry.stage.width -
+      geometry.dockWidth.right) /
+    2;
+  const x = rect.x < middle ? rect.x + POP_OUT_OFFSET : rect.x - POP_OUT_OFFSET;
   return clampFloatRect(
     {
       x,
@@ -2508,13 +2514,15 @@ export function computePanelGeometry(
   // Independent panels stand side by side when they fit. Where another
   // column would take the model's minimum share of the stage, the temporary
   // panel shares a docked column instead, under the panels pinned there:
-  // they give it room and stay in view (it used to cover them).
+  // they give it room and stay in view (it used to cover them). The left
+  // rail and its gap, then the right rail band the slot stands past.
   const slotNeedsRoom =
     dockWidth.left +
       dockWidth.right +
       columnWidth +
-      insets.gap * 3 +
-      insets.rail * 2 >
+      insets.gap +
+      insets.rail +
+      railBandOf(insets) >
     stage.width * PANEL_DOCK_CAP;
   const hostSide: DockSide | null =
     slot === null || !slotNeedsRoom

@@ -719,9 +719,14 @@ test('an unpinned panel opened mid-sketch stands clear of the relations and the 
   await expect(panel).toHaveClass(/is-unpinned/);
   const close = panel.getByRole('button', { name: 'Close Parameters' });
 
+  // 960px and narrower the readout stands beside the instrument rail, a
+  // rail past the relations (it overlapped the panel by 40px at 900px), and
+  // 540px tall and under beside a rail folded to two columns.
   for (const viewport of [
     { width: 1280, height: 800 },
-    { width: 1024, height: 768 }
+    { width: 1024, height: 768 },
+    { width: 900, height: 800 },
+    { width: 900, height: 500 }
   ]) {
     await page.setViewportSize(viewport);
     for (const chrome of [

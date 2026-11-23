@@ -3966,6 +3966,38 @@ describe('the unpinned slot beside the right lane', () => {
     expect(rect.x + rect.w).toBe(1170);
   });
 
+  it('pops the unpinned panel out away from a right dock however wide the band', () => {
+    // At 1400px the band puts the slot's left edge short of the
+    // stage's middle (688 < 700), but it is still right of the room
+    // between the docks: the window goes left, clear of the column.
+    const geometry = computePanelGeometry(
+      layoutWith({ right: [['history']], unpinned: 'parameters' }),
+      { ...stage(1400), insets: { ...insets, railBand: 110 } }
+    );
+    const slot = geometry.panels.parameters!;
+    expect(slot.x).toBeLessThan(700);
+    const rect = popOutRect(geometry, 'parameters');
+    expect(rect.x).toBeLessThan(slot.x);
+    expect(rect.x + rect.w).toBeLessThanOrEqual(
+      1400 - geometry.dockWidth.right
+    );
+  });
+
+  it('shares a docked column when the band leaves the model less than its share', () => {
+    // At 1200px beside one left column, gap-rail-gap on the right left
+    // room for a column of its own; the 110px band does not.
+    const layout = layoutWith({ left: [['history']], unpinned: 'parameters' });
+    expect(
+      computePanelGeometry(layout, stage(1200)).columns[0]?.guest
+    ).toBeNull();
+    const sketching = computePanelGeometry(layout, {
+      ...stage(1200),
+      insets: { ...insets, railBand: 110 }
+    });
+    expect(sketching.columns[0]?.guest).toBe('parameters');
+    expect(sketching.panels.parameters!.x).toBe(sketching.panels.history!.x);
+  });
+
   it('covers the lane when reserving would squeeze its card', () => {
     expect(unpinnedSlotReserves(stage(1011), 306, 306, 330)).toBe(false);
     // Just past the phone breakpoint a docked column and the slot would have

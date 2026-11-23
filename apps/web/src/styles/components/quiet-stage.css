@@ -435,6 +435,19 @@
    both rails instead (below). */
 .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
   --readout-head: calc(60px + var(--island-gap));
+  /* The rail band the unpinned panel stands past (.panel-dock-layer), to
+     the readout's left edge and a gap: the rail, the readout two rails
+     wide, and the gaps between them. It is a rail wider than the
+     relations, which the lane alone cleared, and covered 40px of the
+     panel at 900px. */
+  --readout-band: calc(var(--rail-w) * 3 + var(--island-gap) * 4);
+}
+
+/* 540px and under the rail folds to two columns, an island wider. */
+@media (max-height: 540px) {
+  .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
+    --readout-band: calc(var(--rail-w) * 4 + var(--island-gap) * 5);
+  }
 }
 
 .viewport-readout {
@@ -465,6 +478,8 @@
   .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
     --rail-head: calc(60px + var(--island-gap));
     --readout-head: 0px;
+    /* Over the rails it is within the lane's own band. */
+    --readout-band: 0px;
   }
 
   .viewport-readout {
@@ -3276,7 +3291,8 @@ button.command-rail.is-suggested {
    theirs against the top bar. Its right padding is the rail band, from the
    right dock's inner edge to the unpinned panel: the instrument rail and
    the gaps beside it, and while sketching the relations as well, wherever
-   a media query widens the rails (--lane-end less the panels outside it).
+   a media query widens the rails (--lane-end less the panels outside it),
+   or the snap readout where it stands beside the rail (--readout-band).
    The unpinned panel stood one rail in and covered the relations and the
    readout's Snap over its Close button. */
 .panel-dock-layer {
@@ -3284,7 +3300,10 @@ button.command-rail.is-suggested {
   inset: 0;
   box-sizing: border-box;
   padding-top: var(--stage-top);
-  padding-right: calc(var(--lane-end) - var(--right-panels-w));
+  padding-right: max(
+    calc(var(--lane-end) - var(--right-panels-w)),
+    var(--readout-band, 0px)
+  );
   padding-bottom: var(--island-gap);
   pointer-events: none;
 }
