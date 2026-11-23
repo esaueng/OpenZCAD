@@ -2351,6 +2351,16 @@ describe('review: values the cards accepted stay expressible', () => {
       spec.optionCarries!('place', 'points', state, ctx, slots)
     ).toBeNull();
     expect(spec.optionCarries!('style', 'typed', state, ctx, slots)).toBeNull();
+    // Typed chosen again keeps what was typed since.
+    expect(
+      spec.optionCarries!(
+        'place',
+        'typed',
+        { options: { place: 'typed' }, numbers: { positionU: 7 } },
+        ctx,
+        slots
+      )
+    ).toBeNull();
   });
 
   it("a standard hole's hint reads its size in the display unit (I03)", () => {

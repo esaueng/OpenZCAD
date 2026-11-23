@@ -374,6 +374,15 @@ test('a refused Hole step keeps its last preview, names the input, and Escape co
   await expect
     .poll(async () => (await commandHandle(canvas, 'diameter'))?.value)
     .toBe(6);
+  // The step's chip stays on the kept Ø10.8 counterbore's rim (5.4 mm
+  // along V, +X), not on the refused Ø4 one's.
+  const keptRim = await projected(canvas, [BORE[0] + 5.4, BORE[1], BORE[2]]);
+  await expect
+    .poll(async () => {
+      const chip = await commandHandle(canvas, 'counterboreDiameter');
+      return chip ? Math.hypot(chip.x - keptRim.x, chip.y - keptRim.y) : 1e9;
+    })
+    .toBeLessThan(2);
   await page.keyboard.press('Escape');
   await expect(bar).toHaveCount(0);
   const document = await exportedDocument(page);

@@ -4041,10 +4041,12 @@ const hole: InPlaceToolSpec = {
       ? { tapLength: numbers.depth ?? 10 }
       : {})
   }),
-  optionCarries(optionId, value, _state, ctx, slots) {
+  optionCarries(optionId, value, state, ctx, slots) {
     // U01: a clicked hole switched to Typed stays where it stands, its U and
     // V reading the position it was built at, instead of jumping to (0, 0).
+    // Typed chosen again keeps the U and V already typed.
     if (optionId !== 'place' || value !== 'typed') return null;
+    if (state.options.place === 'typed') return null;
     const face = slots?.faces[0];
     if (!face || face.savedPosition) return null;
     const placed = holeClickedPosition(face, ctx);
