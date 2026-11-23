@@ -21,10 +21,15 @@ import {
   addPrimitiveFeature,
   applyReferenceMap,
   applyUnitsConversion,
+  conversionReferenceTargets,
   convertDocumentUnits,
   createProjectDocument,
+  documentHistoryBytes,
   diffSaveStates,
   estimateUnitsConvertUndo,
+  filletEdges,
+  recordConversionReferences,
+  updateFeature,
   listConversionReferenceSites,
   runUnitsConversion,
   setParameter,
@@ -37,6 +42,7 @@ import {
   createExactKernelAdapter,
   prepareUnitsConversion,
   presentReferenceRefusal,
+  topologyHashOfWitness,
   type UnitsConversionPreparation
 } from '@openzcad/kernel-adapter/exact';
 import {
@@ -44,6 +50,9 @@ import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   encodeImportedMeshPayload,
   toUserId,
+  type EdgeTopologyReferenceV5,
+  type EdgeWitnessV1,
+  type FeatureId,
   type ImportedSourceReference,
   type ProjectDocument,
   type SerializedCommand,
@@ -169,7 +178,7 @@ describe(
       if (!transformed.ok) throw new Error('transform refused');
       const expected = applyReferenceMap(
         transformed.document,
-        toInch.payload.references
+        conversionReferenceTargets(toInch.payload.references)
       );
       if (!expected.ok) throw new Error('map refused');
       expect(manager.document.units).toBe('inch');
@@ -257,7 +266,10 @@ describe(
         { ...toInch.payload, references: missing },
         {
           ...toInch.payload,
-          references: { ...toInch.payload.references, '/nodes/nope': 7 }
+          references: {
+            ...toInch.payload.references,
+            '/nodes/nope': { from: 7, to: 7 }
+          }
         }
       ]) {
         const manager = new CommandManager(source);
@@ -452,9 +464,11 @@ describe('the undo-size estimate (plan §5.2)', () => {
     const entry = manager.document.editHistory!.entries.at(-1)!;
     expect(estimate).toEqual({
       entryBytes: new TextEncoder().encode(JSON.stringify(entry)).byteLength,
+      historyBytes: documentHistoryBytes(manager.document.editHistory!),
       limitBytes: MAX_UNDO_BYTES,
       exceedsLimit: false,
-      stepsDropped: 0
+      stepsDropped: 0,
+      keepsOnlyConversion: false
     });
   });
 
@@ -522,6 +536,99 @@ describe('the undo-size estimate (plan §5.2)', () => {
       huge
     );
     expect(estimate.exceedsLimit).toBe(true);
+  });
+});
+
+describe('the undo bound keeps the conversion step (plan §5.2)', () => {
+  const source = plainDocument();
+  const payload = payloadFor(source, 'inch');
+  const converted = applyUnitsConversion(source, payload);
+  /** The converted document carrying `length` extra bytes in one node. */
+  const padded = (length: number) =>
+    ({
+      ...converted,
+      nodes: {
+        ...converted.nodes,
+        bulk: {
+          id: 'bulk',
+          parentId: null,
+          revisionId: null,
+          name: 'y'.repeat(length),
+          kind: 'folder'
+        }
+      }
+    }) as unknown as ProjectDocument;
+  const estimate = (length: number, before = source) =>
+    estimateUnitsConvertUndo(before, payload, USER, padded(length));
+  /** The padding whose history, with the conversion alone, is `bytes`. */
+  const paddingFor = (bytes: number) => {
+    const probe = estimate(1_000);
+    return 1_000 + bytes - probe.historyBytes;
+  };
+
+  it('keeps the entry when its history is exactly the bound', () => {
+    const at = estimate(paddingFor(MAX_UNDO_BYTES));
+    expect(at.historyBytes).toBe(MAX_UNDO_BYTES);
+    expect(at.exceedsLimit).toBe(false);
+  });
+
+  it('drops it one byte over, though the bare entry is under the bound', () => {
+    const over = estimate(paddingFor(MAX_UNDO_BYTES + 1));
+    expect(over.historyBytes).toBe(MAX_UNDO_BYTES + 1);
+    // The envelope tips it over: the entry alone measures under 8 MB.
+    expect(over.entryBytes).toBeLessThan(MAX_UNDO_BYTES);
+    expect(over.exceedsLimit).toBe(true);
+  });
+
+  it('keeps it just under the bound, dropping every earlier step', () => {
+    const filler = {
+      id: crypto.randomUUID(),
+      label: 'Step',
+      changes: [
+        {
+          kind: 'value' as const,
+          field: 'name' as const,
+          before: 'a'.repeat(1_000),
+          after: 'b'
+        }
+      ]
+    };
+    const before: ProjectDocument = {
+      ...source,
+      editHistory: {
+        schemaVersion: 1,
+        projectId: source.projectId,
+        actorUserId: USER,
+        entries: [filler, { ...filler, id: crypto.randomUUID() }],
+        cursor: 2,
+        trimmed: 0
+      }
+    };
+    const under = estimate(paddingFor(MAX_UNDO_BYTES - 10), before);
+    expect(under.exceedsLimit).toBe(false);
+    expect(under.stepsDropped).toBe(2);
+    expect(under.keepsOnlyConversion).toBe(true);
+  });
+
+  it('refuses to author a conversion it could not undo', async () => {
+    // The box's bare depth scales, so its node is in the entry twice
+    // (before and after): a 4.5 MB name puts the entry over the bound.
+    const plain = plainDocument();
+    const boxId = Object.keys(plain.nodes).find(
+      (id) => plain.nodes[id]!.name === 'Box'
+    )!;
+    const document = {
+      ...plain,
+      nodes: {
+        ...plain.nodes,
+        [boxId]: { ...plain.nodes[boxId]!, name: 'x'.repeat(4_500_000) }
+      }
+    } as ProjectDocument;
+    const preparation = await prepareUnitsConversion(document, 'inch');
+    expect(preparation).toMatchObject({
+      ok: false,
+      refusals: [{ stage: 'payload', code: 'undo-too-large' }]
+    });
   });
 });
 
@@ -784,5 +891,201 @@ describe('the save-state diff of a conversion', () => {
     expect(diff.properties).toEqual([
       { field: 'units', before: 'mm', after: 'inch' }
     ]);
+  });
+});
+
+/** A synthetic edge reference along x, from x0 to x1 (in some unit). */
+function xEdge(
+  producingFeatureId: FeatureId,
+  x0: number,
+  x1: number,
+  lineageName = 'primitive.box.edge.x.y-min.z-min'
+): EdgeTopologyReferenceV5 {
+  const q = (value: number) => Math.round(value / 1e-6);
+  const witness: EdgeWitnessV1 = {
+    curveType: 'line',
+    length: q(x1 - x0),
+    closed: false,
+    endpoints: [
+      [q(x0), 0, 0],
+      [q(x1), 0, 0]
+    ],
+    midpoint: [q((x0 + x1) / 2), 0, 0]
+  };
+  return {
+    kind: 'edge',
+    producingFeatureId,
+    lineageName,
+    currentHash: topologyHashOfWitness('edge', witness),
+    witnessVersion: 1,
+    witness
+  };
+}
+
+/**
+ * A box with a variable fillet on one picked edge, stored with its edge
+ * runs and per-end radii: four kinds of reference site, among them the
+ * boolean `edgeRuns` flag. No kernel: the references are synthetic.
+ */
+function variableFillet(run = true): {
+  document: ProjectDocument;
+  filletId: FeatureId;
+  boxId: FeatureId;
+} {
+  const box = plainDocument();
+  const bodyId = box.bodyOrder.at(-1)!;
+  const boxId = box.featureOrder.at(-1)! as FeatureId;
+  const edge = xEdge(boxId, 0, 20);
+  const { document } = filletEdges(box, {
+    name: 'Round',
+    targetBodyId: bodyId,
+    edgeHashes: [edge.currentHash],
+    edgeReferences: [edge],
+    size: 1,
+    endRadius: 1,
+    radiusLaw: 'linear',
+    vertexRadii: [
+      { edge: 0, end: 0, radius: 1 },
+      { edge: 0, end: 1, radius: 2 }
+    ],
+    edgeRuns: [run]
+  });
+  return {
+    document,
+    filletId: document.featureOrder.at(-1)! as FeatureId,
+    boxId
+  };
+}
+
+/**
+ * What re-capture would record converting `source` mm → in: each edge
+ * reference scaled (its ends keep their order), each hash its reference's
+ * new hash, each end index and edge-run flag unchanged.
+ */
+function recapturedToInch(
+  source: ProjectDocument
+): ReturnType<typeof recordConversionReferences> {
+  const map: Record<string, EdgeTopologyReferenceV5 | number | boolean> = {};
+  const sites = listConversionReferenceSites(source);
+  for (const site of sites)
+    if (site.kind === 'topology' && site.reference.kind === 'edge') {
+      const witness = site.reference.witness;
+      if (witness.closed) throw new Error('closed edge');
+      map[site.pointer] = xEdge(
+        site.reference.producingFeatureId,
+        (witness.endpoints[0][0] * 1e-6) / 25.4,
+        (witness.endpoints[1][0] * 1e-6) / 25.4,
+        site.reference.lineageName
+      );
+    } else if (site.kind === 'edge-end') map[site.pointer] = site.value;
+  for (const site of sites)
+    if (site.kind === 'hash') {
+      const reference = Object.entries(map).find(
+        ([, value]) =>
+          typeof value === 'object' &&
+          sites.some(
+            (other) =>
+              other.kind === 'topology' &&
+              other.reference.currentHash === site.hash &&
+              (value as EdgeTopologyReferenceV5).lineageName ===
+                other.reference.lineageName
+          )
+      );
+      map[site.pointer] = (reference![1] as EdgeTopologyReferenceV5).currentHash;
+    }
+  return recordConversionReferences(source, map);
+}
+
+describe('review findings on PR 1990', () => {
+  it('accepts the edge-run flag re-capture records, and replays it', () => {
+    for (const run of [true, false]) {
+      const { document: source } = variableFillet(run);
+      const references = recapturedToInch(source);
+      const pointer = Object.keys(references).find((key) =>
+        key.endsWith('/edgeRuns/0')
+      )!;
+      expect(references[pointer]).toEqual({ from: run, to: run });
+      const payload = payloadFor(source, 'inch', references);
+      const manager = new CommandManager(source);
+      manager.execute(commandFactories.convertUnits(payload));
+      expect(manager.document.units).toBe('inch');
+      const fillet = Object.values(manager.document.nodes).find(
+        (node) => node.kind === 'feature' && node.name === 'Round'
+      );
+      expect(
+        (fillet as { data: { edgeRuns: boolean[] } }).data.edgeRuns
+      ).toEqual([run]);
+      expect(
+        content(replayCommands(source, [lastCommand(manager.document)]))
+      ).toBe(content(manager.document));
+    }
+  });
+
+  it('refuses to replay over a selection that changed at the same place', () => {
+    const { document: source, filletId, boxId } = variableFillet();
+    const payload = payloadFor(source, 'inch', recapturedToInch(source));
+    const command = lastCommand(
+      new CommandManager(source).execute(commandFactories.convertUnits(payload))
+    );
+    // Unchanged: the recorded preconditions hold, and it replays.
+    expect(replayCommands(source, [command]).units).toBe('inch');
+
+    // Reordered history: an edit that switched the fillet from edge A to
+    // edge B now comes before the conversion.
+    const other = xEdge(boxId, 0, 30, 'primitive.box.edge.x.y-max.z-min');
+    const reselected = updateFeature(source, {
+      featureId: filletId,
+      data: { edgeHashes: [other.currentHash], edgeReferences: [other] }
+    });
+    let refused: unknown;
+    try {
+      replayCommands(reselected, [command]);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(UnitsConversionError);
+    const refusals = (refused as UnitsConversionError).refusals;
+    expect(refusals.map((refusal) => refusal.code)).toEqual(
+      expect.arrayContaining(['reference-changed'])
+    );
+    expect(refusals.every((refusal) => refusal.code === 'reference-changed')).toBe(true);
+    expect(refusals.map((refusal) => refusal.field).sort()).toEqual([
+      'edgeHashes.0',
+      'edgeReferences.0'
+    ]);
+    expect(refusals[0]!.message).toContain('Round (');
+    // Nothing was partially applied: the result is a refusal, not a document.
+    expect(runUnitsConversion(reselected, payload)).toMatchObject({
+      ok: false
+    });
+  });
+
+  it('refuses a payload whose recorded precondition is missing', () => {
+    const { document: source } = variableFillet();
+    const references = Object.fromEntries(
+      Object.entries(recapturedToInch(source)).map(([pointer, entry]) => [
+        pointer,
+        { to: entry.to }
+      ])
+    ) as unknown as UnitsConvertInput['references'];
+    expect(
+      runUnitsConversion(source, payloadFor(source, 'inch', references))
+    ).toMatchObject({ ok: false, refusals: [{ stage: 'payload' }] });
+  });
+
+  it('compares a pre-upgrade save state with a converted project as one summary', () => {
+    const current = plainDocument();
+    const manager = new CommandManager(current);
+    manager.execute(commandFactories.convertUnits(payloadFor(current, 'inch')));
+    // The checkpoint was saved before the upgrade, on schema v153.
+    const before = {
+      ...current,
+      schemaVersion: UNITS_CONVERT_SCHEMA_VERSION - 1
+    } as unknown as ProjectDocument;
+    const diff = diffSaveStates(before, manager.document);
+    expect(diff.unitConversion).toMatchObject({ from: 'mm', to: 'inch' });
+    expect(diff.properties).toEqual([]);
+    expect(diff.features.changed).toEqual([]);
+    expect(diff.parameters).toEqual([]);
   });
 });

@@ -7,7 +7,11 @@ import {
   type UserId
 } from '@openzcad/shared';
 import { assertUnitsConvertSchema } from './document-content-schema';
-import { documentChanges, recordDocumentEdit } from './document-history';
+import {
+  documentChanges,
+  documentHistoryBytes,
+  recordDocumentEdit
+} from './document-history';
 import { appendRevision } from './index';
 import {
   convertDocumentUnits,
@@ -16,8 +20,10 @@ import {
 } from './units-convert';
 import {
   applyReferenceMap,
-  isStoredTopologyReference,
-  type ConversionReferenceMap
+  conversionReferencePreconditionRefusals,
+  conversionReferenceTargets,
+  isConversionReferenceValue,
+  type RecordedConversionReferences
 } from './units-reference-map';
 
 /**
@@ -36,6 +42,13 @@ import {
  * `factor` is redundant with the two units but pins the arithmetic: a
  * replay refuses a payload whose factor is not the exact millimetre ratio
  * of its units, rather than convert by another number.
+ *
+ * Each reference entry records the value it replaces (`from`) as well as
+ * the new one (`to`). A replay refuses the whole conversion when the
+ * document it meets stores anything else at one of those places (a history
+ * reordered or rebased so that a later edit re-selected the edge first),
+ * rather than overwrite the newer selection; `from` must also be the
+ * document's current unit.
  */
 
 /** The command kind (schema v154). */
@@ -47,8 +60,11 @@ export interface UnitsConvertInput {
   to: ConvertibleUnit;
   /** k = N / D: millimetres per `from` unit over millimetres per `to`. */
   factor: readonly [number, number];
-  /** Every persisted reference re-captured, keyed by JSON pointer. */
-  references: ConversionReferenceMap;
+  /**
+   * Every persisted reference re-captured, keyed by JSON pointer: the value
+   * the source stored there (the replay's precondition) and its new value.
+   */
+  references: RecordedConversionReferences;
 }
 
 /** Where a conversion refused: each stage names the node and the field. */
@@ -160,14 +176,12 @@ export function unitsConvertPayloadProblem(
     return `The conversion's factor ${JSON.stringify(factor)} is not ${N} / ${D}.`;
   if (!isRecord(references))
     return "The conversion's reference map is not an object.";
-  for (const [pointer, value] of Object.entries(references))
+  for (const [pointer, entry] of Object.entries(references))
     if (
       !pointer.startsWith('/') ||
-      !(
-        typeof value === 'number' ||
-        (typeof value === 'string' && value.length > 0) ||
-        isStoredTopologyReference(value)
-      )
+      !isRecord(entry) ||
+      !isConversionReferenceValue(entry.from) ||
+      !isConversionReferenceValue(entry.to)
     )
       return `The conversion's reference map holds an invalid entry at ${JSON.stringify(pointer)}.`;
   return undefined;
@@ -213,6 +227,23 @@ export function runUnitsConversion(
         }
       ]
     };
+  // Every replacement's precondition, checked on the document as it is
+  // before anything changes: one stale place refuses the whole replay.
+  const changed = conversionReferencePreconditionRefusals(
+    document,
+    input.references
+  );
+  if (changed.length > 0)
+    return {
+      ok: false,
+      refusals: changed.map((refusal) => ({
+        stage: 'references',
+        code: refusal.code,
+        subject: refusal.subject ?? 'document',
+        ...(refusal.field ? { field: refusal.field } : {}),
+        message: refusal.message
+      }))
+    };
   const converted = convertDocumentUnits(document, input.to);
   if (!converted.ok)
     return {
@@ -222,7 +253,10 @@ export function runUnitsConversion(
         ...refusal
       }))
     };
-  const applied = applyReferenceMap(converted.document, input.references);
+  const applied = applyReferenceMap(
+    converted.document,
+    conversionReferenceTargets(input.references)
+  );
   if (!applied.ok)
     return {
       ok: false,
@@ -255,26 +289,43 @@ export function applyUnitsConversion(
 export interface UnitsConvertUndoEstimate {
   /** The UTF-8 bytes of the conversion's own undo entry. */
   entryBytes: number;
+  /**
+   * The bytes of an undo history holding only that entry, envelope
+   * included: the measure the history's bound applies
+   * (`documentHistoryBytes`), so the entry is kept exactly when this is at
+   * most {@link limitBytes}.
+   */
+  historyBytes: number;
   /** The whole undo history's bound (`MAX_UNDO_BYTES`). */
   limitBytes: number;
   /**
-   * Whether the entry alone exceeds the bound: the history then keeps no
-   * entry at all, so the conversion itself cannot be undone and the safety
-   * checkpoint is the only way back.
+   * Whether the entry cannot be kept even alone: the history would drop it
+   * and the conversion could not be undone. Authoring refuses such a
+   * conversion (`undo-too-large`) rather than apply a step Ctrl+Z cannot
+   * reverse; the history cannot hold a larger entry without becoming
+   * unreadable.
    */
   exceedsLimit: boolean;
   /** Earlier undo steps the history would drop to make room for it. */
   stepsDropped: number;
+  /**
+   * Whether the conversion would be the only undo step left: every
+   * earlier step drops (and there was at least one). The review screen
+   * warns that earlier undo will be lost.
+   */
+  keepsOnlyConversion: boolean;
 }
 
 /**
  * Measures the undo step converting `before` by `input` would record for
  * `actorUserId`, and how much earlier undo it would push out, by recording
  * it exactly as the command manager will: the converted document with the
- * command appended to its log and a revision, through `recordDocumentEdit`.
- * Only the log entry's timestamp and the ids differ from the real step, and
- * those have fixed lengths, so the byte count is exact. Pass `after` (the
- * result of {@link applyUnitsConversion}) to skip converting again.
+ * command appended to its log and a revision, through `recordDocumentEdit`,
+ * whose bound drops the oldest entries first and so keeps the conversion
+ * whenever it fits alone. Only the log entry's timestamp and the ids differ
+ * from the real step, and those have fixed lengths, so the byte counts are
+ * exact. Pass `after` (the result of {@link applyUnitsConversion}) to skip
+ * converting again.
  */
 export function estimateUnitsConvertUndo(
   before: ProjectDocument,
@@ -300,19 +351,21 @@ export function estimateUnitsConvertUndo(
     label
   );
   const kinds = [UNITS_CONVERT_COMMAND_KIND];
-  const entryBytes = new TextEncoder().encode(
-    JSON.stringify({
-      id: crypto.randomUUID(),
-      label: label.slice(0, 256),
-      changes: documentChanges(before, executed),
-      commandKinds: kinds
-    })
-  ).byteLength;
   const previous =
     before.editHistory?.actorUserId === actorUserId
       ? before.editHistory
       : undefined;
-  const kept = previous?.cursor ?? 0;
+  const earlier = previous?.cursor ?? 0;
+  // The entry exactly as `recordDocumentEdit` builds it.
+  const entry = {
+    id: crypto.randomUUID(),
+    label: label.slice(0, 256),
+    changes: documentChanges(before, executed),
+    commandKinds: kinds
+  };
+  const entryBytes = new TextEncoder().encode(
+    JSON.stringify(entry)
+  ).byteLength;
   const recorded = recordDocumentEdit(
     before,
     executed,
@@ -320,13 +373,43 @@ export function estimateUnitsConvertUndo(
     actorUserId,
     kinds
   ).editHistory;
-  const exceedsLimit = entryBytes > MAX_UNDO_BYTES;
-  // Without the new entry, every remaining entry is an earlier step.
-  const remaining = (recorded?.entries.length ?? 0) - (exceedsLimit ? 0 : 1);
+  // The bound drops from the oldest end, so the result is a suffix of the
+  // earlier steps plus the new one: any entry left is the conversion.
+  const length = recorded?.entries.length ?? 0;
+  const exceedsLimit = length === 0;
+  // The history the bound measures with the conversion as its only entry,
+  // carrying the counter it has once every earlier step dropped.
+  const historyBytes = documentHistoryBytes({
+    schemaVersion: 1,
+    projectId: executed.projectId,
+    actorUserId,
+    entries: [entry],
+    cursor: 1,
+    trimmed: (previous?.trimmed ?? 0) + earlier
+  });
+  const stepsDropped = exceedsLimit ? earlier : earlier - (length - 1);
   return {
     entryBytes,
+    historyBytes,
     limitBytes: MAX_UNDO_BYTES,
     exceedsLimit,
-    stepsDropped: Math.max(0, kept - Math.max(0, remaining))
+    stepsDropped,
+    keepsOnlyConversion: !exceedsLimit && earlier > 0 && length === 1
+  };
+}
+
+/**
+ * The refusal for a conversion whose undo step the history could not keep
+ * (plan §5.2): applying it would leave a step Ctrl+Z cannot reverse.
+ */
+export function unitsConvertUndoRefusal(
+  undo: UnitsConvertUndoEstimate
+): UnitsConvertRefusal {
+  const megabytes = (bytes: number) => (bytes / 1_000_000).toFixed(1);
+  return {
+    stage: 'payload',
+    code: 'undo-too-large',
+    subject: 'document',
+    message: `Converting stored units would record a ${megabytes(undo.historyBytes)} MB undo step, more than the ${megabytes(undo.limitBytes)} MB undo history can hold, so it could not be undone. Stored units were not converted.`
   };
 }

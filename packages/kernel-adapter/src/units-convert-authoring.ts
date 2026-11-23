@@ -11,7 +11,11 @@
  * 3. the recorded payload replayed without the kernel
  *    (`runUnitsConversion`), which must reproduce the verified document
  *    exactly, so what replay builds is what the oracles checked;
- * 4. the undo entry measured against `MAX_UNDO_BYTES` (plan §5.2).
+ * 4. the undo entry measured against `MAX_UNDO_BYTES` (plan §5.2): a
+ *    conversion whose undo step the history could not keep even alone is
+ *    refused (`undo-too-large`), so an applied conversion can always be
+ *    undone; one that pushes out every earlier step says so
+ *    (`undo.keepsOnlyConversion`).
  *
  * It returns either the payload with everything a review screen shows
  * (counts, rewritten expressions, warnings, the undo estimate), or every
@@ -24,6 +28,7 @@ import {
   assertUnitsConvertSchema,
   convertDocumentUnits,
   estimateUnitsConvertUndo,
+  recordConversionReferences,
   runUnitsConversion,
   unitsConvertFactor,
   type ConvertibleUnit,
@@ -31,7 +36,8 @@ import {
   type UnitsConversionWarning,
   type UnitsConvertInput,
   type UnitsConvertRefusal,
-  type UnitsConvertUndoEstimate
+  type UnitsConvertUndoEstimate,
+  unitsConvertUndoRefusal
 } from '@openzcad/document-core';
 import type { ProjectDocument, UnitSystem, UserId } from '@openzcad/shared';
 import {
@@ -143,7 +149,7 @@ export async function prepareUnitsConversion(
     from: document.units as ConvertibleUnit,
     to: to as ConvertibleUnit,
     factor: unitsConvertFactor(document.units, to),
-    references: recaptured.references
+    references: recordConversionReferences(document, recaptured.references)
   };
   const replayed = runUnitsConversion(document, payload);
   if (!replayed.ok)
@@ -165,17 +171,21 @@ export async function prepareUnitsConversion(
       report.warnings
     );
 
+  const undo = estimateUnitsConvertUndo(
+    document,
+    payload,
+    actorUserId ?? document.ownerUserId,
+    replayed.document
+  );
+  if (undo.exceedsLimit)
+    return refuse([unitsConvertUndoRefusal(undo)], report.warnings);
+
   return {
     ok: true,
     payload,
     sourceVersion,
     report,
     references: recaptured.report,
-    undo: estimateUnitsConvertUndo(
-      document,
-      payload,
-      actorUserId ?? document.ownerUserId,
-      replayed.document
-    )
+    undo
   };
 }

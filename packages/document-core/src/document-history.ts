@@ -171,6 +171,17 @@ function utf8Bytes(value: unknown): number {
 }
 
 /**
+ * The UTF-8 bytes of `history` as JSON: the measure {@link bounded} holds
+ * to `MAX_UNDO_BYTES` and the history validator checks. Exported so a
+ * caller predicting whether an entry survives (the stored-unit
+ * conversion's undo estimate) measures exactly what the bound measures,
+ * envelope included.
+ */
+export function documentHistoryBytes(history: DocumentHistory): number {
+  return utf8Bytes(history);
+}
+
+/**
  * Serializes each entry once and keeps a running total as entries drop.
  * Re-serializing the whole history per dropped entry cost seconds on the main
  * thread for one mid-size mesh import. The total is exact: the history's JSON

@@ -5,6 +5,8 @@ import {
   type SerializedCommand,
   type UnitSystem
 } from '@openzcad/shared';
+import { UNITS_CONVERT_SCHEMA_VERSION } from './document-content-schema';
+import { normalizeDocument } from './index';
 import {
   UNITS_CONVERT_COMMAND_KIND,
   runUnitsConversion,
@@ -192,12 +194,26 @@ function commandLeaves(
  * when `after`'s log holds one from `before`'s unit to its own that applies
  * to `before` cleanly: the baseline the rest of the comparison reads, so a
  * scaled value is not an edit. The newest such command wins.
+ *
+ * A save state written before the project reached the command's schema
+ * (a v153 checkpoint of a project converted on v154) is normalized first,
+ * as opening it would, so the command applies to it.
  */
 function convertedBaseline(
   before: ProjectDocument,
   after: ProjectDocument
 ): { document: ProjectDocument; values: number } | undefined {
   if (before.units === after.units) return undefined;
+  let baseline = before;
+  if (
+    typeof before.schemaVersion === 'number' &&
+    before.schemaVersion < UNITS_CONVERT_SCHEMA_VERSION
+  )
+    try {
+      baseline = normalizeDocument(before);
+    } catch {
+      return undefined;
+    }
   const conversions = commandLeaves(after.commandLog).filter(
     (command) => command.kind === UNITS_CONVERT_COMMAND_KIND
   );
@@ -205,7 +221,10 @@ function convertedBaseline(
     const payload = command.payload as Partial<UnitsConvertInput> | undefined;
     if (payload?.from !== before.units || payload.to !== after.units) continue;
     try {
-      const result = runUnitsConversion(before, payload as UnitsConvertInput);
+      const result = runUnitsConversion(
+        baseline,
+        payload as UnitsConvertInput
+      );
       if (result.ok)
         return {
           document: result.document,

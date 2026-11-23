@@ -242,6 +242,87 @@ describe('commitUnitsConversion: the safety checkpoint (plan §5.3)', () => {
   });
 });
 
+describe('commitUnitsConversion: eligibility while the checkpoint saves', () => {
+  /** A persistence whose write runs `during` before it resolves. */
+  function writing(
+    manager: CommandManager,
+    during: () => void
+  ): ReturnType<typeof recordingPersistence> {
+    const recording = recordingPersistence(manager);
+    const { saveProject } = recording.persistence;
+    return {
+      ...recording,
+      persistence: {
+        ...recording.persistence,
+        async saveProject(document) {
+          await saveProject(document);
+          during();
+        }
+      }
+    };
+  }
+
+  it('refuses when another tab joins during the write, keeping the checkpoint', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    let room = liveRoom();
+    const { persistence, writes } = writing(manager, () => {
+      room = liveRoom({ members: [member('me', 'Me'), member('tab2', 'Me')] });
+    });
+    const result = await commitUnitsConversion(manager, preparedFor(source), {
+      persistence,
+      collaboration: () => room,
+      now: () => 1_000
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ stage: 'collaboration', code: 'other-editors' }]
+    });
+    // The checkpoint was written and stays: it names the unconverted model.
+    expect(writes).toHaveLength(1);
+    if (result.ok) return;
+    expect(result.checkpoint?.units).toBe('mm');
+    expect(result.checkpoint?.checkpoints.at(-1)!.reason).toBe(
+      'Before unit conversion (mm → in)'
+    );
+    expect(manager.document).toBe(source);
+    expect(manager.document.commandLog.at(-1)?.kind).not.toBe('units.convert');
+  });
+
+  it('refuses when the lease expires during the write', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    let clock = 1_000;
+    const { persistence, writes } = writing(manager, () => {
+      clock = 2_500;
+    });
+    const result = await commitUnitsConversion(manager, preparedFor(source), {
+      persistence,
+      collaboration: () => liveRoom(),
+      now: () => clock
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ stage: 'collaboration', code: 'editor-lock' }]
+    });
+    expect(writes).toHaveLength(1);
+    expect(manager.document).toBe(source);
+  });
+
+  it('converts when nothing changed during the write', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    const { persistence } = writing(manager, () => {});
+    const result = await commitUnitsConversion(manager, preparedFor(source), {
+      persistence,
+      collaboration: () => liveRoom(),
+      now: () => 1_000
+    });
+    expect(result.ok).toBe(true);
+    expect(manager.document.units).toBe('inch');
+  });
+});
+
 describe('unitsConversionCollaborationRefusal (ADR-007, ADR-019)', () => {
   it('lets a project without a room convert', () => {
     expect(unitsConversionCollaborationRefusal(null)).toBeNull();

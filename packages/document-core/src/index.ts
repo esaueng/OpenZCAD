@@ -117,7 +117,8 @@ export {
   type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
   recordDocumentEdit,
-  normalizeDocumentHistory
+  normalizeDocumentHistory,
+  documentHistoryBytes
 } from './document-history';
 import {
   configurationHiddenBodyIds,

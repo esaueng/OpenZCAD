@@ -135,9 +135,19 @@ export interface CommitUnitsConversionOptions {
    * save state and never advertised in the shared document.
    */
   deviceOnlyHistory?: boolean;
-  collaboration?: UnitsConversionCollaborationState | null;
+  /**
+   * The live room, or a function that reads it. Pass the function (reading
+   * the workspace's latest state): eligibility is checked again after the
+   * checkpoint is persisted, and a snapshot taken before that write cannot
+   * see a tab that joined, or a lease that expired, meanwhile.
+   */
+  collaboration?:
+    | UnitsConversionCollaborationState
+    | null
+    | (() => UnitsConversionCollaborationState | null | undefined);
   persistence?: UnitsConversionPersistence;
-  now?: number;
+  /** The clock eligibility is judged by; `Date.now` by default. */
+  now?: number | (() => number);
 }
 
 export type CommitUnitsConversionResult =
@@ -148,7 +158,17 @@ export type CommitUnitsConversionResult =
       /** The persisted pre-conversion document the checkpoint names. */
       checkpoint: ProjectDocument;
     }
-  | { ok: false; refusals: UnitsConvertRefusal[] };
+  | {
+      ok: false;
+      refusals: UnitsConvertRefusal[];
+      /**
+       * Set when the refusal came after the safety checkpoint was persisted
+       * (eligibility changed while it was written). The checkpoint stays
+       * where it was saved: it names the current, unconverted document, so
+       * keeping it is harmless and restoring it changes nothing.
+       */
+      checkpoint?: ProjectDocument;
+    };
 
 /**
  * Applies a prepared conversion to `manager`'s document (plan §5.2, §5.3):
@@ -162,18 +182,31 @@ export type CommitUnitsConversionResult =
  * 3. executes `units.convert` through the command manager: one undo step,
  *    one more revision, the version still monotonic.
  *
+ * 4. checks step 1 again once the checkpoint is persisted, synchronously
+ *    and immediately before executing, with no await in between: a tab
+ *    that joined or a lease that expired during the write refuses the
+ *    conversion (the result then names the checkpoint, which stays).
+ *
  * A refusal at step 1 writes nothing. A failure persisting the checkpoint
- * throws before the command exists.
+ * throws before the command exists. The room's edit lease renews on its own
+ * timer while connected; there is no lock to hold across the write, so the
+ * second check is what closes the window.
  */
 export async function commitUnitsConversion(
   manager: CommandManager,
   prepared: PreparedUnitsConversion,
   options: CommitUnitsConversionOptions = {}
 ): Promise<CommitUnitsConversionResult> {
-  const collaboration = unitsConversionCollaborationRefusal(
-    options.collaboration,
-    options.now
-  );
+  const eligibility = () =>
+    unitsConversionCollaborationRefusal(
+      typeof options.collaboration === 'function'
+        ? options.collaboration()
+        : options.collaboration,
+      typeof options.now === 'function'
+        ? options.now()
+        : (options.now ?? Date.now())
+    );
+  const collaboration = eligibility();
   if (collaboration) return { ok: false, refusals: [collaboration] };
   const current = manager.document;
   if (current.version !== prepared.sourceVersion)
@@ -200,9 +233,12 @@ export async function commitUnitsConversion(
   const guarded = createCheckpoint(appendRevision(current, name), name);
   if (options.deviceOnlyHistory) await persistence.saveSaveStates([guarded]);
   else await persistence.saveProject(guarded);
+  // Everything step 1 checked, again, now that the write has finished.
+  // Nothing below awaits, so nothing can change before the command runs.
   if (manager.document !== current)
     return {
       ok: false,
+      checkpoint: guarded,
       refusals: [
         {
           stage: 'payload',
@@ -213,6 +249,9 @@ export async function commitUnitsConversion(
         }
       ]
     };
+  const changed = eligibility();
+  if (changed)
+    return { ok: false, checkpoint: guarded, refusals: [changed] };
   // Device-only history keeps the shared document's save points as they
   // are; the checkpoint lives in this device's save states.
   if (!options.deviceOnlyHistory) manager.document = guarded;
