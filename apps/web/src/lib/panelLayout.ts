@@ -282,6 +282,14 @@ export interface PanelInsets {
   between: number;
   /** A rail's width (`--rail-w`). */
   rail: number;
+  /**
+   * The right rail band: from the right dock's inner edge to the unpinned
+   * panel's, `gap + rail + gap` unless measured. PanelDock measures it from
+   * the instrument rail's islands (lib/railBand.ts): sketching adds the
+   * relations and the snap readout, and the pointer and the window's height
+   * fold the rail into two columns or two islands side by side.
+   */
+  railBand?: number;
 }
 
 /** The quiet stage's tokens: a 40px top bar between two 10px gaps. */
@@ -483,6 +491,11 @@ export function resizeColumn(
 
 function insetsOf(stage: PanelStage): PanelInsets {
   return { ...DEFAULT_PANEL_INSETS, ...stage.insets };
+}
+
+/** The right rail band: `gap + rail + gap` unless the stage measured one. */
+function railBandOf(insets: PanelInsets): number {
+  return insets.railBand ?? insets.gap * 2 + insets.rail;
 }
 
 export function columnWidthOf(options: PanelLayoutOptions): number {
@@ -1093,7 +1106,11 @@ export function defaultFloatRect(
   const w = clamp(geometry.columnWidth, FLOAT_MIN_WIDTH, FLOAT_MAX_WIDTH);
   return clampFloatRect(
     {
-      x: geometry.rails.right.x - geometry.insets.gap - w,
+      x:
+        stage.width -
+        geometry.dockWidth.right -
+        railBandOf(geometry.insets) -
+        w,
       y: geometry.dock.top,
       w,
       h: FLOAT_DEFAULT_HEIGHT
@@ -1819,8 +1836,22 @@ export function popOutPanel(
 }
 
 /**
+ * The model's free room across the stage: from a gap past the left rail
+ * (beside any left dock) to the right rail band (beside any right dock),
+ * where nothing but the model stands.
+ */
+function freeRoom(geometry: PanelGeometry): { left: number; right: number } {
+  const { insets, rails, stage, dockWidth } = geometry;
+  return {
+    left: rails.left.x + rails.left.w + insets.gap,
+    right: stage.width - dockWidth.right - railBandOf(insets)
+  };
+}
+
+/**
  * Where Pop out puts a panel: across from where it shows, toward the middle
- * of the stage, a little lower so both are visible during the move.
+ * of the model's free room and inside it, a little lower so both are
+ * visible during the move.
  */
 export function popOutRect(geometry: PanelGeometry, id: PanelId): Rect {
   const rect = geometry.panels[id];
@@ -1828,10 +1859,20 @@ export function popOutRect(geometry: PanelGeometry, id: PanelId): Rect {
   if (!rect) {
     return defaultFloatRect(geometry.layout, geometry.stage);
   }
-  const x =
-    rect.x < geometry.stage.width / 2
-      ? rect.x + POP_OUT_OFFSET
-      : rect.x - POP_OUT_OFFSET;
+  // Across the model's free room, from the left rail to the right rail
+  // band (the relations and the readout while sketching, measured), not
+  // the stage's middle: at 900px the band put the unpinned panel's left
+  // edge short of the stage's middle, and the window went right, over the
+  // rails and the readout, or over a right dock's column.
+  const room = freeRoom(geometry);
+  const middle = (room.left + room.right) / 2;
+  const centre = rect.x + rect.w / 2;
+  let x = centre < middle ? rect.x + POP_OUT_OFFSET : rect.x - POP_OUT_OFFSET;
+  // Kept inside the room where it fits; a stage too narrow for it leaves
+  // the stage's own bounds to clamp it.
+  if (room.right - room.left >= w) {
+    x = clamp(x, room.left, room.right - w);
+  }
   return clampFloatRect(
     {
       x,
@@ -2301,8 +2342,9 @@ export function unpinnedSlotReserves(
   laneMin: number,
   leftDockWidth = 0
 ): boolean {
-  const { rail, gap } = insetsOf(stage);
-  const laneEnd = rail + gap * 2 + dockWidth + slotWidth;
+  const insets = insetsOf(stage);
+  const laneEnd = railBandOf(insets) + dockWidth + slotWidth;
+  const { gap } = insets;
   return stage.width - laneEnd - gap - leftDockWidth >= laneMin;
 }
 
@@ -2491,13 +2533,15 @@ export function computePanelGeometry(
   // Independent panels stand side by side when they fit. Where another
   // column would take the model's minimum share of the stage, the temporary
   // panel shares a docked column instead, under the panels pinned there:
-  // they give it room and stay in view (it used to cover them).
+  // they give it room and stay in view (it used to cover them). The left
+  // rail and its gap, then the right rail band the slot stands past.
   const slotNeedsRoom =
     dockWidth.left +
       dockWidth.right +
       columnWidth +
-      insets.gap * 3 +
-      insets.rail * 2 >
+      insets.gap +
+      insets.rail +
+      railBandOf(insets) >
     stage.width * PANEL_DOCK_CAP;
   const hostSide: DockSide | null =
     slot === null || !slotNeedsRoom
@@ -2616,13 +2660,17 @@ export function computePanelGeometry(
   }
 
   // No docked column to share, or room for a column of its own: the slot
-  // stands beside the right rail's inner edge.
+  // stands beside the right rail's inner edge, past the relations while
+  // sketching (the rail band).
   if (slot && !geometry.panels[slot]) {
     const naturalHeight = stage.naturals?.[slot];
     geometry.panels[slot] = {
       id: slot,
       mode: revealed ? 'revealed' : 'unpinned',
-      x: Math.max(insets.gap, rails.right.x - insets.gap - columnWidth),
+      x: Math.max(
+        insets.gap,
+        stage.width - dockWidth.right - railBandOf(insets) - columnWidth
+      ),
       y: dock.top,
       w: columnWidth,
       h:
