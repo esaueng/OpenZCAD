@@ -24,11 +24,30 @@ const WORKSPACE_STAGE_OBSTACLES = '.assistant-panel:not(.assistant-off-screen)';
 /**
  * The modeling guide's card. At a phone width it spans most of the stage,
  * over the model it asks to be tapped ("Select to edit"), and the model is
- * framed above it. A wider stage's card (296 px in a corner, which at 768 px
- * still crosses the middle) is not framed around: the model stands beside
- * it, and a band for it would move every first-run fit.
+ * framed above it. Wider, its 296 px corner card stood over the new box
+ * too (a 768 × 1024 or 1024 × 768 tablet, a 1280 × 800 desktop), and the
+ * model is framed above or beside it, whichever leaves the larger area.
  */
 const FOOT_GUIDE = '.workspace-tour';
+
+/**
+ * Whether the modeling guide's card changes the clear stage on `canvas`: a
+ * phone's across it, a wider stage's over its corner. The card asks for
+ * the model to be framed clear of it only then; where it changes nothing
+ * (a card standing over a docked column) a request could only undo the
+ * user's own pan (review on #1969).
+ */
+export function guideShapesClearStage(canvas: HTMLElement): boolean {
+  const withGuide = measureClearStage(canvas)?.rect;
+  const without = measureClearStage(canvas, { ignoreGuide: true })?.rect;
+  if (!withGuide || !without) return withGuide !== without;
+  return (
+    withGuide.left !== without.left ||
+    withGuide.right !== without.right ||
+    withGuide.top !== without.top ||
+    withGuide.bottom !== without.bottom
+  );
+}
 
 /**
  * Whether the modeling guide's card spans the stage as a phone's does:
@@ -80,7 +99,10 @@ export interface ClearStage {
 
 export function measureClearStage(
   canvas: HTMLElement,
-  { throughCover = false }: { throughCover?: boolean } = {}
+  {
+    throughCover = false,
+    ignoreGuide = false
+  }: { throughCover?: boolean; ignoreGuide?: boolean } = {}
 ): ClearStage | undefined {
   const bounds = canvas.getBoundingClientRect();
   const panels = [
@@ -139,15 +161,69 @@ export function measureClearStage(
   }
   // The guide across the middle takes its band off the foot, however little
   // it leaves above a minimum: there is no side to frame beside it.
-  for (const guide of panelsOver(canvas, FOOT_GUIDE, throughCover)) {
+  for (const guide of ignoreGuide
+    ? []
+    : panelsOver(canvas, FOOT_GUIDE, throughCover)) {
     const across =
       guideCoversStage(guide, bounds) &&
       guide.left < middle - 1 &&
       guide.right > middle + 1;
     const guideTop = Math.max(guide.top, bounds.top);
-    if (!across || guideTop >= bottom) continue;
+    if (guideTop >= bottom) continue;
     const nextBottom = guideTop - STAGE_FRAME_GAP_PX;
-    if (nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) bottom = nextBottom;
+    if (across) {
+      if (nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) bottom = nextBottom;
+      continue;
+    }
+    // A corner card: framed above it or beside it, whichever
+    // leaves the larger area, and only where it stands in the stage. (The
+    // larger square sent a minimized guide's 50 px header beside the
+    // model, giving up a full-height strip for it: review on #1969.)
+    const clear = (bandBottom: number, panels: readonly StageRect[]) => {
+      const vertical = {
+        left: bounds.left,
+        right: bounds.right,
+        top,
+        bottom: bandBottom
+      };
+      const side = sideFrame(vertical, panels);
+      return {
+        left: bounds.left + (((side?.minX ?? -1) + 1) / 2) * width,
+        right: bounds.left + (((side?.maxX ?? 1) + 1) / 2) * width,
+        top,
+        bottom: bandBottom
+      };
+    };
+    const now = clear(bottom, sides);
+    if (guide.right <= now.left || guide.left >= now.right) continue;
+    // A candidate counts only where it reaches no panel the stage without
+    // it keeps clear of: one that let a docked column go to clear the card
+    // would frame the model behind the column instead. A panel below the
+    // band above the card is one it does not reach.
+    const reached = (rect: StageRect) =>
+      sides.filter(
+        (panel) =>
+          Math.min(panel.right, rect.right) > Math.max(panel.left, rect.left) &&
+          Math.min(panel.bottom, rect.bottom) > Math.max(panel.top, rect.top)
+      );
+    const alreadyReached = reached(now);
+    const room = (rect: StageRect) =>
+      reached(rect).every((panel) => alreadyReached.includes(panel))
+        ? (rect.right - rect.left) * (rect.bottom - rect.top)
+        : -Infinity;
+    const above =
+      nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX
+        ? room(clear(nextBottom, sides))
+        : -Infinity;
+    const besideRect = clear(bottom, [...sides, guide]);
+    // Beside counts only where the guide is not the panel let go.
+    const beside =
+      besideRect.left >= guide.right || besideRect.right <= guide.left
+        ? room(besideRect)
+        : -Infinity;
+    if (above === -Infinity && beside === -Infinity) continue;
+    if (above >= beside) bottom = nextBottom;
+    else sides.push(guide);
   }
   if (bottom <= top) return undefined;
   const verticalBounds = {

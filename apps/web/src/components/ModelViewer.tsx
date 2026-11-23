@@ -1960,6 +1960,8 @@ export interface SceneContext {
    */
   renderedBodies: readonly GeometryBodyRepresentation[] | null;
   hasFitCamera: boolean;
+  /** Whether an orbit, pan or zoom is held on the camera. */
+  cameraGestureHeld(): boolean;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
   dimensionLabels: Set<DimensionLabelBinding>;
@@ -4144,6 +4146,7 @@ export function ModelViewer({
       edgeOverlaysByBodyId,
       renderedBodies: null,
       hasFitCamera: false,
+      cameraGestureHeld: () => cameraRig.gestureHeld,
       get hoveredBodyId() {
         return selection.hoveredBodyId;
       },
@@ -18999,10 +19002,12 @@ export function ModelViewer({
     // cancels them, and the request must still be there for the next run.
     let frame = 0;
     const run = () => {
-      // A hand on a handle or a footprint owns the camera: the request
+      // A hand on a handle, a footprint or the camera itself (an orbit or
+      // a pan held while the guide expands) owns the camera: the request
       // waits for it to let go, looked at again each frame, so a release
-      // that changes nothing still brings it.
+      // that changes nothing still brings it (preview check on #1969).
       if (
+        context.cameraGestureHeld() ||
         commandDragRef.current ||
         moveDragActiveRef.current ||
         edgeDragActiveRef.current ||

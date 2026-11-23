@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   cornersWithinFrame,
+  guideShapesClearStage,
   measureClearStage,
   measureCreationFrame,
   measureFitFrame,
@@ -350,26 +351,158 @@ describe('the modeling guide', () => {
     expect(measureClearStage(canvas)!.rect.bottom).toBe(610 - 12);
   });
 
-  it('leaves a wider stage’s corner card out of the frame', () => {
+  it('asks a phone’s card and a desktop’s alike for a reframe', () => {
+    const { area, canvas } = phoneStage();
+    guide(area, 72, 405, 318, 655);
+    expect(guideShapesClearStage(canvas)).toBe(true);
+    document.body.replaceChildren();
+    const desk = document.createElement('div');
+    desk.className = 'viewer-area';
+    const deskCanvas = placed(
+      document.createElement('canvas'),
+      0,
+      0,
+      768,
+      1024
+    );
+    desk.append(deskCanvas);
+    document.body.append(desk);
+    guide(desk, 116, 700, 412, 960);
+    expect(guideShapesClearStage(deskCanvas)).toBe(true);
+  });
+
+  it('frames a desktop’s model beside its corner card where that leaves more', () => {
+    // 1440 × 900: above the card leaves 588 px of height, beside it the
+    // whole height.
     const area = document.createElement('div');
     area.className = 'viewer-area';
     const canvas = placed(document.createElement('canvas'), 0, 0, 1440, 900);
     area.append(canvas);
     document.body.append(area);
     guide(area, 72, 600, 368, 840);
-    expect(measureFitFrame(canvas)).toBeUndefined();
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.left).toBe(368 + 12);
+    expect(stage.rect.bottom).toBe(900);
   });
 
-  it('leaves a 768 px stage’s card out even where it crosses the middle', () => {
+  it('frames a desktop’s model above a minimized guide’s header', () => {
+    // 1600 × 900: the header from y 838 to 888 costs a 62 px band; beside
+    // it would have given up a full-height strip (review on #1969).
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 1600, 900);
+    area.append(canvas);
+    document.body.append(area);
+    guide(area, 116, 838, 412, 888);
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.bottom).toBe(838 - 12);
+    expect(stage.rect.left).toBe(0);
+  });
+
+  it('frames a mouse’s 768 px model above the card where that leaves more', () => {
     // The undocked Build layout at 768: the 296 px card from x 116 to 412
-    // crosses the middle (384) but stands beside the model (review on #1964).
+    // leaves 344 px beside it and the full width above it.
     const area = document.createElement('div');
     area.className = 'viewer-area';
     const canvas = placed(document.createElement('canvas'), 0, 0, 768, 1024);
     area.append(canvas);
     document.body.append(area);
     guide(area, 116, 700, 412, 960);
-    expect(measureFitFrame(canvas)).toBeUndefined();
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.bottom).toBe(700 - 12);
+    expect(stage.rect.left).toBe(0);
+  });
+
+  describe('in a corner, beside docked panels', () => {
+    function tabletStage(width: number, height: number, column: number) {
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      const canvas = placed(
+        document.createElement('canvas'),
+        0,
+        0,
+        width,
+        height
+      );
+      area.append(canvas);
+      // The docked column the tablet keeps on its right.
+      const layer = document.createElement('div');
+      layer.className = 'panel-dock-layer';
+      const docked = document.createElement('div');
+      docked.className = 'panel-column';
+      layer.append(placed(docked, column, 60, width, height));
+      area.append(layer);
+      document.body.append(area);
+      return { area, canvas };
+    }
+
+    it('frames a portrait tablet’s model above its corner card', () => {
+      // 768 × 1024: the 296 px card from x 116 to 412 stood over the new
+      // box it asks to be tapped, beside the docked column.
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      guide(area, 116, 606, 412, 845);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(606 - 12);
+      expect(stage.rect.right).toBe(462 - 12);
+    });
+
+    it('frames a landscape tablet’s model beside its card where that leaves more', () => {
+      // 1024 × 768: the card from y 350 left a 278 px band above it, and
+      // 412 px beside it.
+      const { area, canvas } = tabletStage(1024, 768, 864);
+      guide(area, 124, 350, 420, 589);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(768);
+      expect(stage.rect.left).toBe(420 + 12);
+      expect(stage.rect.right).toBe(864 - 12);
+    });
+
+    it('never frames beside the card by letting a docked column go', () => {
+      // 768 × 1024 with a left rail to x 104 and the column from x 462:
+      // beside the card left 26 px, and letting the column go to widen it
+      // framed the box behind the column (review on this change).
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      const rail = document.createElement('div');
+      rail.className = 'workspace-column-float';
+      area.append(placed(rail, 0, 60, 104, 1024));
+      guide(area, 116, 606, 412, 845);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(606 - 12);
+      expect(stage.rect.right).toBe(462 - 12);
+    });
+
+    it('frames above the card past a floating panel standing below that band', () => {
+      // The right panel floats from y 650 to 900, under the band above the
+      // card: that band is clear of it, and wider than the stage beside it
+      // (re-check on this change).
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      area.querySelector('.panel-dock-layer')!.replaceChildren();
+      const floating = document.createElement('div');
+      floating.className = 'panel-unpinned';
+      area
+        .querySelector('.panel-dock-layer')!
+        .append(placed(floating, 462, 650, 768, 900));
+      guide(area, 116, 606, 412, 845);
+      expect(measureClearStage(canvas)!.rect.bottom).toBe(606 - 12);
+      expect(guideShapesClearStage(canvas)).toBe(true);
+    });
+
+    it('asks for a reframe only where the card changes the stage', () => {
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      const card = guide(area, 116, 606, 412, 845);
+      expect(guideShapesClearStage(canvas)).toBe(true);
+      // Over the docked column, the card changes nothing: a request could
+      // only undo the user's pan.
+      placed(card, 470, 606, 766, 845);
+      expect(guideShapesClearStage(canvas)).toBe(false);
+    });
+
+    it('leaves a card out that stands clear of the stage', () => {
+      // The card under the docked column: nothing of the model's to cover.
+      const { area, canvas } = tabletStage(1024, 768, 500);
+      guide(area, 600, 350, 896, 589);
+      expect(measureClearStage(canvas)!.rect.bottom).toBe(768);
+    });
   });
 
   it('frames as if it were not there where it would leave only a strip', () => {

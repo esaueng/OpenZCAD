@@ -525,6 +525,14 @@ export class CameraController {
     return this.orbit;
   }
 
+  /**
+   * Whether a hand holds the camera: an orbit, pan or zoom gesture from its
+   * start until its release. A camera move asked for meanwhile waits.
+   */
+  get gestureHeld(): boolean {
+    return this.gestureActive;
+  }
+
   get activeCamera(): THREE.Camera {
     return this.active;
   }

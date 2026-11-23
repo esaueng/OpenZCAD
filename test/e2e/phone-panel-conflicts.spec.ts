@@ -281,6 +281,59 @@ test('the guide opened over a dragged-out Box leaves the box clear after Done', 
     .toBe(true);
 });
 
+// A tablet's corner card stood over the new box the same way, in portrait
+// (768 × 1024) and landscape (1024 × 768) alike. The box is framed above
+// or beside the card now.
+for (const [width, height] of [
+  [768, 1024],
+  [1024, 768]
+] as const) {
+  test(`the modeling guide leaves the new box clear to tap on a ${width} × ${height} tablet`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width, height });
+    await stubApi(page, { workspaceTour: true });
+    await createProject(page, 'Tablet guide box');
+    const tour = page.locator('.workspace-tour');
+    await expect(tour).toBeVisible();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await expect(tour).toContainText('Select to edit');
+    await waitForSurfacesToSettle(page, ['.workspace-tour']);
+    const canvas = page.locator('.viewer-host canvas');
+    const card = (await tour.boundingBox())!;
+    await expect
+      .poll(async () => {
+        const view = await canvas.evaluate(
+          (element) =>
+            new Promise<{
+              screen: {
+                left: number;
+                right: number;
+                top: number;
+                bottom: number;
+              } | null;
+            }>((resolve) =>
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-bodies-in-view', {
+                  detail: { resolve }
+                })
+              )
+            )
+        );
+        const box = view.screen;
+        if (box === null) return null;
+        return (
+          box.bottom <= card.y + 0.5 ||
+          box.left >= card.x + card.width - 0.5 ||
+          box.right <= card.x + 0.5
+        );
+      })
+      .toBe(true);
+  });
+}
+
 // A 360 × 640 phone with the guide up on its second step (#1945). It
 // stood over the opened view tools, Measure under its text, and expanded
 // it left the measurement workbench a 13 px sliver of the lane. The rail
