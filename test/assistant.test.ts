@@ -1554,10 +1554,12 @@ describe('assistant integration', () => {
       });
     }
     expect(response.status).toBe(502);
-    expect(await response.json()).toMatchObject({
-      code: 'AI_UPSTREAM_ERROR',
-      error: expect.stringContaining('Switch to Personal token')
-    });
+    const errorBody = (await response.json()) as {
+      code: string;
+      error: string;
+    };
+    expect(errorBody.code).toBe('AI_UPSTREAM_ERROR');
+    expect(errorBody.error).toContain('Switch to Personal token');
   });
 
   it('keeps free MiniMax and its zero price cap with JSON mode and the exact prompt schema', async () => {
