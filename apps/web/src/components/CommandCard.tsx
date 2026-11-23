@@ -133,6 +133,12 @@ interface CommandCardProps {
   /** The "More tools" drawer, remembered per device in the panel state. */
   moreOpen: boolean;
   onToggleMore(): void;
+  /**
+   * Told whether the drawer is drawn: `moreOpen` less a held rail, which
+   * puts the drawer away for a drag without forgetting it. Reported again
+   * as false when the card goes.
+   */
+  onDrawerShownChange?(shown: boolean): void;
   /** The tools pinned to the rail, in order; the original eight by default. */
   pinnedTools?: readonly ToolId[];
   onPinnedToolsChange?(tools: ToolId[]): void;
@@ -207,6 +213,7 @@ export function CommandCard({
   onLaunchTool,
   moreOpen,
   onToggleMore,
+  onDrawerShownChange,
   pick: pickProp = null,
   pickRevision,
   isPickLive,
@@ -238,6 +245,12 @@ export function CommandCard({
   // toggle never claims an open drawer that is not there and the layout
   // hooks let go of a drawer that has gone.
   const drawerOpen = moreOpen && !held;
+  const reportDrawerShown = useRef(onDrawerShownChange);
+  reportDrawerShown.current = onDrawerShownChange;
+  useLayoutEffect(() => {
+    reportDrawerShown.current?.(drawerOpen);
+  }, [drawerOpen]);
+  useLayoutEffect(() => () => reportDrawerShown.current?.(false), []);
   const pins = pick ? [] : pinnedTools;
   const suggested = pick
     ? []

@@ -35998,24 +35998,33 @@ export function App() {
     : null;
   const panelsHidden = panelLayout.options.hidden;
   const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
+  /** Whether the Tools drawer is drawn, as the command card reports it. */
+  const toolsDrawerShownRef = useRef(false);
   /**
    * Applies a panel change someone asked for: a rail press, a palette
-   * result, a notice's action, showing hidden panels. A phone has one lane
-   * for the model panels, and the Tools drawer opens over it: left open (it
-   * is remembered), it covered a panel brought up beside it. When the change
-   * puts `id` (any panel, for null) in that lane while the drawer is showing,
-   * the drawer is put away, as taking a tool from it does; opened again, it
-   * stands over the panel until a panel is brought up once more.
+   * result, a notice's action, a layout preset, showing hidden panels. A
+   * phone has one lane for the model panels, and the Tools drawer opens over
+   * it: left open (it is remembered), it covered a panel brought up beside
+   * it. When the change puts `id` (any panel, for null) in that lane while
+   * the drawer is showing, the drawer is put away, as taking a tool from it
+   * does; opened again, it stands over the panel until a panel is brought up
+   * once more.
    *
    * Only an asked-for change does this. The lane filling on its own (start
-   * up, a resize, a failure presenting History) and a drawer a command has
-   * folded leave the remembered drawer as it was.
+   * up, a resize, a failure presenting History), a drawer a command has
+   * folded and one a held rail has put away for a drag leave the
+   * remembered drawer as it was: the drawer is only closed when it is drawn.
    */
   const presentPanelChange = (
     change: (current: PanelLayout) => PanelLayout,
     id: PanelId | null
   ) => {
-    if (toolFold.commandFoldOpen && !modelingLocked && panelStage) {
+    if (
+      toolFold.commandFoldOpen &&
+      toolsDrawerShownRef.current &&
+      !modelingLocked &&
+      panelStage
+    ) {
       const next = change(panelLayout);
       const geometry = computePanelGeometry(next, panelStage);
       if (
@@ -37980,6 +37989,9 @@ export function App() {
           setPanelState((current) => ({ ...current, toolDrawerQuery }))
         }
         moreOpen={toolFold.commandFoldOpen}
+        onDrawerShownChange={(shown) => {
+          toolsDrawerShownRef.current = shown;
+        }}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
           // keeps it open for the rest of the command.
@@ -38595,13 +38607,24 @@ export function App() {
                     options={panelLayout.options}
                     preset={matchingPreset(panelLayout)}
                     hideShortcut={keymap.label('panels-hide-all')}
+                    // A preset and showing hidden panels are panels asked
+                    // for; hiding them and the other settings leave the
+                    // drawer.
                     onPreset={(preset) =>
-                      setPanelLayout((current) => applyPreset(current, preset))
+                      presentPanelChange(
+                        (current) => applyPreset(current, preset),
+                        null
+                      )
                     }
                     onToggle={(key) =>
-                      setPanelLayout((current) =>
-                        setOption(current, key, !current.options[key])
-                      )
+                      key === 'hidden' && panelLayout.options.hidden
+                        ? presentPanelChange(
+                            (current) => setOption(current, 'hidden', false),
+                            null
+                          )
+                        : setPanelLayout((current) =>
+                            setOption(current, key, !current.options[key])
+                          )
                     }
                     onWidth={(width) =>
                       setPanelLayout((current) =>

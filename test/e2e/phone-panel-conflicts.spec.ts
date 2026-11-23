@@ -1114,3 +1114,157 @@ test('a panel brought up during Box leaves the Tools drawer to come back', async
   await expect(drawer).toBeVisible();
   expect(await storedToolsDrawer(page)).toBe(true);
 });
+
+/** The Panel layout menu, opened if it is closed. */
+async function panelLayoutMenu(page: Page) {
+  const menu = page.getByRole('menu', { name: 'Panel layout' });
+  if (!(await menu.isVisible())) {
+    await page
+      .getByRole('toolbar', { name: 'Model panels' })
+      .getByRole('button', { name: 'Panel layout' })
+      .click();
+  }
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+/** A box with History brought up in the lane and the drawer opened over it. */
+async function historyUnderReopenedDrawer(page: Page, name: string) {
+  await stubApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await createProject(page, name);
+  await createPrimitiveInPlace(page, 'box');
+  await expectBodyCount(page, 1);
+  const drawer = page.locator('.command-flyout');
+  await railPanelButton(page, 'History').tap();
+  await expect(modelPanel(page, 'History')).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await page
+    .getByRole('button', { name: /More tools/i })
+    .first()
+    .tap();
+  await expect(drawer).toBeVisible();
+  return drawer;
+}
+
+// Showing the panels from the Panel layout menu is asked for as much as
+// the pill's Show panels and Ctrl+\: the menu wrote Hide off straight into
+// the layout, and History came back under the drawer.
+test('the Panel layout menu’s Hide all brings History back clear of the Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const drawer = await historyUnderReopenedDrawer(page, 'Menu Hide all');
+  const hide = (await panelLayoutMenu(page)).getByRole('menuitemcheckbox', {
+    name: 'Hide all panels'
+  });
+  await hide.click();
+  await expect(hide).toHaveAttribute('aria-checked', 'true');
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
+  // Hiding the panels leaves the drawer as it is.
+  await expect(drawer).toBeVisible();
+  await hide.click();
+  await expect(hide).toHaveAttribute('aria-checked', 'false');
+  await page.keyboard.press('Escape');
+  const history = modelPanel(page, 'History');
+  await expect(history).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await expect
+    .poll(() =>
+      reachable(history.getByRole('button', { name: 'History as text' }))
+    )
+    .toBe(true);
+});
+
+// A preset turns Hide off so the picked layout shows: picking Review with
+// the panels hidden put History back in the lane, under the drawer.
+test('a preset picked with the panels hidden brings History up clear of the Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const drawer = await historyUnderReopenedDrawer(page, 'Preset Review');
+  await page.keyboard.press('Control+\\');
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+  const review = (await panelLayoutMenu(page)).getByRole('menuitemradio', {
+    name: 'Review',
+    exact: true
+  });
+  await review.click();
+  await expect(review).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
+  const history = modelPanel(page, 'History');
+  await expect(history).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await expect
+    .poll(() =>
+      reachable(history.getByRole('button', { name: 'History as text' }))
+    )
+    .toBe(true);
+});
+
+// A held rail puts the drawer away for a drag without forgetting it. A
+// panel asked for under the hand has no drawer to put away: Ctrl+\ showing
+// History mid-drag closed the remembered drawer, and it stayed closed
+// after the release.
+test('panels shown during a face drag leave the Tools drawer to come back', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 150_000);
+  const drawer = await historyUnderReopenedDrawer(page, 'Drawer under drag');
+  await page.keyboard.press('Control+\\');
+  await expect(modelPanel(page, 'History')).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+
+  const canvas = page.locator('.viewer-host canvas');
+  await expect
+    .poll(() =>
+      canvas.evaluate(
+        (element) =>
+          new Promise((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-planar-face', {
+                detail: { normal: { x: 0, y: -1, z: 0 }, resolve }
+              })
+            );
+          })
+      )
+    )
+    .not.toBeNull();
+  await page
+    .locator('.selection-rail')
+    .getByRole('button', { name: 'Selection: Offset', exact: true })
+    .click();
+  const operation = page.getByRole('region', { name: 'Offset Face operation' });
+  await expect(operation).toBeVisible();
+  await expect(drawer).toBeVisible();
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  const bounds = (await canvas.boundingBox())!;
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixels: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const start = { x: bounds.x + handle.x, y: bounds.y + handle.y };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixels * 3,
+    start.y + handle.dy * handle.pixels * 3,
+    { steps: 12 }
+  );
+  await expect(operation).toHaveAttribute('data-hold', 'drag');
+  await expect(drawer).toHaveCount(0);
+  expect(await storedToolsDrawer(page)).toBe(true);
+
+  await page.keyboard.press('Control+\\');
+  await expect(modelPanel(page, 'History')).toBeVisible();
+  await page.mouse.up();
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  await expect(drawer).toBeVisible();
+  expect(await storedToolsDrawer(page)).toBe(true);
+});
