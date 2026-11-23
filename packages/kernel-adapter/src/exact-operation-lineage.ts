@@ -14,8 +14,10 @@ import {
 import {
   createRemusSemanticLineage,
   mergeRemusLineageStates,
+  referenceMatchesCandidate,
   type RemusLineageState,
-  type RemusSemanticAssignment
+  type RemusSemanticAssignment,
+  witnessMatcher
 } from './remus-lineage';
 import {
   faceWitnessName,
@@ -57,6 +59,20 @@ const CURVED_CARRIERS: ReadonlySet<string> = new Set([
   'sphere'
 ]);
 
+/** Count all source references, including names attached to off-solid handles. */
+function uniqueFaceIdentities(source: RemusLineageState): Map<number, string> {
+  const handles = new Map<string, number | null>();
+  for (const [handle, reference] of source.faceReferences) {
+    const identity = identityOf(reference);
+    handles.set(identity, handles.has(identity) ? null : handle);
+  }
+  const identities = new Map<number, string>();
+  for (const [identity, handle] of handles) {
+    if (handle !== null) identities.set(handle, identity);
+  }
+  return identities;
+}
+
 export function carryAnalyticFaces(
   kernel: RemusKernel,
   sourceSolid: number,
@@ -75,8 +91,10 @@ export function carryAnalyticFaces(
   const after = topologyCandidatesForSolid(kernel, resultSolid).filter(
     (c) => c.kind === 'face'
   );
-  const identity = (r: FaceTopologyReferenceV5) =>
-    JSON.stringify([r.producingFeatureId, r.lineageName]);
+  const identities = uniqueFaceIdentities(source);
+  const sourceByHandle = new Map(before.map((face) => [face.handle, face]));
+  const sourceMatches = witnessMatcher('face', before);
+  const resultMatches = witnessMatcher('face', after);
   const unreadCarriers = new Set(
     [...before, ...after]
       .map((c) => c.witness as FaceWitnessV1)
@@ -100,21 +118,13 @@ export function carryAnalyticFaces(
       .map((c) => (c.witness as FaceWitnessV1).surfaceType)
   );
   for (const [handle, reference] of source.faceReferences) {
-    const origin = before.find((c) => c.handle === handle);
     if (
-      !origin ||
-      reference.currentHash !==
-        topologyHashOfWitness('face', reference.witness) ||
-      !topologyWitnessesEqual('face', reference.witness, origin.witness) ||
-      [...source.faceReferences.values()].filter(
-        (r) => identity(r) === identity(reference)
-      ).length !== 1
+      !identities.has(handle) ||
+      !referenceMatchesCandidate(reference, sourceByHandle.get(handle))
     )
       continue;
-    const matchesWitness = (c: (typeof before)[number]) =>
-      topologyWitnessesEqual('face', reference.witness, c.witness);
-    let matches = after.filter(matchesWitness);
-    if (before.filter(matchesWitness).length !== 1 || matches.length !== 1) {
+    let matches = resultMatches(reference.witness);
+    if (sourceMatches(reference.witness).length !== 1 || matches.length !== 1) {
       if (
         reference.witness.analytic.kind === 'none' &&
         CURVED_CARRIERS.has(reference.witness.surfaceType)
@@ -197,6 +207,18 @@ export function withBoundaryEdgeLineage(
   source: RemusLineageState
 ): RemusLineageState {
   const candidates = topologyCandidatesForSolid(kernel, solid);
+  const identities = uniqueFaceIdentities(source);
+  const verifiedFaces = new Map<number, string>();
+  for (const face of candidates) {
+    if (face.kind !== 'face') continue;
+    const identity = identities.get(face.handle);
+    if (
+      identity !== undefined &&
+      referenceMatchesCandidate(source.faceReferences.get(face.handle), face)
+    ) {
+      verifiedFaces.set(face.handle, identity);
+    }
+  }
   const facesByEdge = new Map<number, number[]>();
   for (const face of kernel.getSolidFaces(solid)) {
     for (const edge of new Set(kernel.getFaceEdges(face))) {
@@ -210,42 +232,13 @@ export function withBoundaryEdgeLineage(
     if (candidate.kind !== 'edge') continue;
     const faces = facesByEdge.get(candidate.handle) ?? [];
     if (faces.length !== 2) continue;
-    const references = faces.map((face) => source.faceReferences.get(face));
-    if (references.some((reference) => !reference)) continue;
-    const verified = references as FaceTopologyReferenceV5[];
-    if (
-      verified.some(
-        (reference) =>
-          [...source.faceReferences.values()].filter(
-            (other) =>
-              other.producingFeatureId === reference.producingFeatureId &&
-              other.lineageName === reference.lineageName
-          ).length !== 1
-      )
-    )
+    const first = verifiedFaces.get(faces[0]!);
+    const second = verifiedFaces.get(faces[1]!);
+    if (first === undefined || second === undefined || first === second)
       continue;
-    const identities = verified
-      .map((r) => JSON.stringify([r.producingFeatureId, r.lineageName]))
-      .sort();
-    if (identities[0] === identities[1]) continue;
-    for (let i = 0; i < faces.length; i++) {
-      const face = candidates.find(
-        (c) => c.kind === 'face' && c.handle === faces[i]
-      );
-      if (
-        !face ||
-        !topologyWitnessesEqual('face', verified[i]!.witness, face.witness) ||
-        verified[i]!.currentHash !==
-          topologyHashOfWitness('face', verified[i]!.witness)
-      ) {
-        references.length = 0;
-        break;
-      }
-    }
-    if (references.length !== 2) continue;
     assignments.push({
       ...candidate,
-      lineageName: `boundary.edge.${JSON.stringify(identities)}`
+      lineageName: `boundary.edge.${JSON.stringify([first, second].sort())}`
     });
   }
   // The semantic publisher rejects every repeated role, rather than choosing
@@ -327,8 +320,8 @@ export function holeLineage(
 /**
  * The most faces either solid may have for Shell or Draft to name anything.
  *
- * Their naming is quadratic in faces: the shared carrier carry, the
- * contention scan and the result uniqueness checks each compare faces in
+ * Their naming is quadratic in faces: the carrier fallback, the
+ * contention scan and the result uniqueness checks still compare faces in
  * pairs. On a mocked kernel the whole step took 76 ms at 200 planar faces,
  * 1.3 s at 1000 and 12 s at 3000, before the real kernel's witness reads.
  * Enclosures and housings, the parts these features shape, sit well under

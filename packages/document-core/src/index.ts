@@ -83,7 +83,9 @@ import {
   assertHoleContentSchema,
   assertSketchObjectContentSchema,
   assertThreadContentSchema,
-  assertMinimumProjectSchema
+  assertMinimumProjectSchema,
+  assertImportedMeshContentSchema,
+  MESH_PAYLOAD_UNITS_SCHEMA_VERSION
 } from './document-content-schema';
 export * from './sketch-composites';
 export * from './sketch-projections';
@@ -131,6 +133,7 @@ import {
   holeStandardProblem,
   standardPartProblem,
   holeTappedProblem,
+  importedMeshPayloadUnitsProblem,
   patternSourceProblem,
   skippedInstancesProblem,
   suppliedIds,
@@ -960,6 +963,11 @@ export interface ImportedMeshInput {
   meshPayloadRef?: ImportedSourceReference;
   /** The unit a file that stated none was read in (v52); see the feature. */
   assumedUnits?: UnitSystem;
+  /**
+   * I03 (v153): the unit the referenced payload is stored in; see the
+   * feature. Only beside `meshPayloadRef`.
+   */
+  payloadUnits?: UnitSystem;
   ids?: BodyFeatureIds;
 }
 
@@ -5856,6 +5864,13 @@ export function importMeshBody(
       'A mesh import needs exactly one of vertices+indices and meshPayloadRef.'
     );
   }
+  // I03 (v153): an import may state its payload's units, but only on a
+  // document that declares them, and only beside a payload reference. Both
+  // checks run before anything is built, so a refused import leaves neither
+  // a node nor a command log entry behind.
+  assertImportedMeshContentSchema(input, document.schemaVersion);
+  const payloadUnitsProblem = importedMeshPayloadUnitsProblem(input);
+  if (payloadUnitsProblem) throw new Error(payloadUnitsProblem);
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
     suppliedIds(input.ids) ?? createBodyFeatureIds();
@@ -5877,7 +5892,8 @@ export function importMeshBody(
       ...(input.meshPayloadRef
         ? { meshPayloadRef: { ...input.meshPayloadRef } }
         : { vertices: input.vertices!, indices: input.indices! }),
-      ...(input.assumedUnits ? { assumedUnits: input.assumedUnits } : {})
+      ...(input.assumedUnits ? { assumedUnits: input.assumedUnits } : {}),
+      ...(input.payloadUnits ? { payloadUnits: input.payloadUnits } : {})
     }
   };
 
@@ -6923,7 +6939,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'vertices',
     'indices',
     'meshPayloadRef',
-    'assumedUnits'
+    'assumedUnits',
+    'payloadUnits'
   ]
 };
 
@@ -7135,6 +7152,17 @@ export function updateFeature(
         'Per-vertex fillet radii'
       );
     }
+    // I03 (v153): nor state a mesh payload's units.
+    if (
+      feature.featureKind === 'imported-mesh' &&
+      (input.data as { payloadUnits?: unknown }).payloadUnits !== undefined
+    ) {
+      assertMinimumProjectSchema(
+        document.schemaVersion,
+        MESH_PAYLOAD_UNITS_SCHEMA_VERSION,
+        'Mesh payload units'
+      );
+    }
     const patch = { ...input.data } as Record<string, unknown>;
     if (
       'featureKind' in patch &&
@@ -7182,6 +7210,13 @@ export function updateFeature(
       }
       delete data[key];
     }
+  }
+  if (feature.data.featureKind === 'imported-mesh') {
+    // I03 (v153): judged on the merged data, so a patch cannot put payload
+    // units beside embedded triangles (or remove the reference they
+    // describe) and leave a document storage would refuse.
+    const problem = importedMeshPayloadUnitsProblem(feature.data);
+    if (problem) throw new Error(problem);
   }
   if (feature.data.featureKind === 'extrude') {
     validateExtrudeExtent(feature.data, extrudeParamResolver(next));

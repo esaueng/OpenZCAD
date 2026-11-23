@@ -915,6 +915,17 @@ own abuse-monitoring retention. Any other route, such as a user's own
 Responses-compatible endpoint, follows that provider's terms. The consent
 dialog says all of this. A plaintext project's request is unchanged.
 
+Built-in free assistant (2026-11-23). Hosted deployments may accept the
+model provider's data policy for the built-in free OpenRouter model. Before
+any encrypted-project request uses that route, the consent dialog says that
+OpenRouter and the model's provider may retain the plaintext request and use
+it for training. The route digest binds the new data policy, so older consent
+for the same model and endpoint must be renewed. The free route uses an
+explicit `:free` model, the standard endpoint and zero price caps for
+prompts, completions, requests and images. Personal OpenRouter tokens and
+deployments outside this opt-in keep `data_collection: 'deny'` on encrypted
+requests. The data policy for unencrypted requests is unchanged.
+
 ### Settled product decisions
 
 | Question                           | Decision                                                                                                                                                               |

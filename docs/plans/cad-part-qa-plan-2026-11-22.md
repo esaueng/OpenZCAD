@@ -11,8 +11,8 @@
 ## Why
 
 A beta session recorded on 2026-11-22 edited one part through a 63-step
-history: a union of a tapered cylinder and a box, blended at the junction and
-along its edges, then repeatedly changed with **Offset face** (Top, Right,
+history: a cylindrical corner post united with a box, blended at the junction
+and along its edges and chamfered around the base, then repeatedly changed with **Offset face** (Top, Right,
 Back, Bottom; −14 to +25 mm), **Resize Blend** (4 to 14.3 mm) and **Resize
 Cylinder** (20 to 30 mm).
 
@@ -67,7 +67,7 @@ itself stays local (see [Privacy of captures](#privacy-of-captures)).
 
 | Part | Construction                                                                                                                                  | Why                                                                                     |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| A    | Tapered cylinder ∪ box, junction blend, all remaining edges blended. Taper built with whichever feature reproduces the recorded conical face. | The recorded part: conical, cylindrical, planar, blend and merged union faces together. |
+| A    | Box united with a cylindrical post at a base corner. Fillet the junction, post cap and opposite corner, then chamfer the bottom perimeter. | The recorded base chamfer produces six conical faces. The junction includes two fitted B-spline faces. |
 | B    | Box with all edges filleted.                                                                                                                  | Blends meeting at corners; overlaps existing authored scenarios as a control.           |
 | C    | Plate with a cylindrical boss, fillet at the boss root.                                                                                       | Offsets that push a planar face through a blend into a cylinder.                        |
 | D    | Cylinder with chamfered caps.                                                                                                                 | Cap offsets bounded by a chamfer instead of a blend.                                    |

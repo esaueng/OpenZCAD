@@ -1852,7 +1852,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       throw new SharingRequestError(
         409,
         ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
-        'The assistant provider changed since you allowed it for this encrypted project. Allow it again. Nothing was sent.'
+        'The assistant provider or data policy changed. Try again to review it. If this persists, reload OpenZCAD. Nothing was sent to the provider.'
       );
     }
     const providerIdentity = await assistantProviderIdentity(userId, env);
@@ -1884,8 +1884,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         }
       }
       response = await streamAssistantProposal(
-        // Only an encrypted project needs consent: its model goes only to
-        // providers that do not collect it.
+        // The current consent binds the route and whether it may train.
         { ...payload, encryptedProject: consent !== null },
         env,
         assistantSafetyIdentifier(providerIdentity, payload.retryAttempt),

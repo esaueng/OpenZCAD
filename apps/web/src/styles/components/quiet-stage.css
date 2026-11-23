@@ -336,11 +336,20 @@
    command card, then the inspector hugging its content, and at a phone
    width the one model panel that shows, filling what they leave. One
    column, so a panel never pushes the inspector into the canvas, where it
-   covered the values riding the model. */
+   covered the values riding the model.
+   Its right edge is the measured rail band past the panels (--rail-band,
+   which PanelDock publishes from the rail's islands, as the unpinned panel
+   stands past it), or --lane-end until it is measured: per-breakpoint
+   bands left the profile card 40px over an unpinned Parameters at 900px,
+   and a phone's lane panel under the snap readout. */
 .stage-right {
+  --stage-right-end: calc(
+    var(--rail-band, calc(var(--lane-end) - var(--right-panels-w))) +
+      var(--right-panels-w)
+  );
   position: absolute;
   top: var(--stage-top);
-  right: var(--lane-end);
+  right: var(--stage-right-end);
   /* Above the bottom-right corner, not the window's edge: the lane is only
      ever as tall as the stage less the cube, so a tall command card (Hole)
      scrolls inside it instead of drawing through the cube and its roll
@@ -359,7 +368,10 @@
   /* Clear of the left dock's columns too (PanelDock's slot check matches). */
   width: min(
     var(--context-w),
-    calc(100% - var(--lane-end) - var(--island-gap) - var(--left-dock-w, 0px))
+    calc(
+      100% - var(--stage-right-end) - var(--island-gap) -
+        var(--left-dock-w, 0px)
+    )
   );
 }
 
@@ -3290,7 +3302,9 @@ button.command-rail.is-suggested {
    docked panel. PanelDock measures the layer as its stage and the padding
    as the docks' insets; only panels and gaps take the pointer. No z-index
    of its own: the columns, the unpinned panel and the windows each take
-   theirs against the top bar. */
+   theirs against the top bar. The right rail band the unpinned panel
+   stands past is measured from the rail's islands (lib/railBand.ts), not
+   padded here: constants per breakpoint missed folded and touch rails. */
 .panel-dock-layer {
   position: absolute;
   inset: 0;

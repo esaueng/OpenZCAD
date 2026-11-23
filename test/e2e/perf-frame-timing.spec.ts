@@ -48,8 +48,7 @@ import {
   ids), OZ_PERF_PORTRAIT=1 (1024 × 1366), OZ_PERF_GPU_TIMER=0 (skip GPU timer
   queries), OZ_PERF_DISPLAY=Shaded (orbit in another display mode, named as
   the toolbar does; Shaded draws no edges or outlines), OZ_PERF_WARMUP=1 (a
-  short orbit first, so a device already dropping frames navigates at the
-  touch budget's lowered pixel ratio, as it would from its second gesture).
+  short unmeasured orbit before the timed gesture).
 */
 test.skip(!process.env.OZ_PERF, 'Frame-timing probe; set OZ_PERF=1 to run it.');
 // Tests share the machine's CPU and GPU: one at a time, in order, without
@@ -483,6 +482,15 @@ for (const scene of scenes) {
         await waitForStillViewport(page);
       }
       const before = await readCamera(page);
+      const backingSize = () =>
+        page
+          .locator('.viewer-host canvas')
+          .first()
+          .evaluate((element) => {
+            const canvas = element as HTMLCanvasElement;
+            return [canvas.width, canvas.height];
+          });
+      const fullSize = await backingSize();
       await page.evaluate(() => {
         const probe = (window as ProbeWindow).__ozFrameProbe!;
         performance.clearMarks('oz:viewer.frame');
@@ -508,6 +516,7 @@ for (const scene of scenes) {
       });
       await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
       const after = await readCamera(page);
+      await expect.poll(backingSize).toEqual(fullSize);
       mkdirSync(OUT_DIR, { recursive: true });
       await page.screenshot({
         path: join(OUT_DIR, `${scene.id}--x${rate}.png`)

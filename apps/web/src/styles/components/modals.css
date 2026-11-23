@@ -746,19 +746,34 @@
 }
 
 /* ── L15 history as text (HistoryTextDialog) ── */
+/* An editor, so it takes the height the backdrop leaves it (88dvh less the
+   bottom gutter) instead of sizing to its content: a textarea's content
+   height is its default two rows, so a content-sized dialog showed a long
+   history two lines at a time. Only the text area grows; the rest keep their
+   own height, and the dialog itself scrolls when a short viewport (a phone
+   with its keyboard up) cannot fit the text area's minimum. A phone gives it
+   the screen's height, as Project properties does. An on-screen keyboard
+   shrinks only the visual viewport, so the height also gives up
+   --keyboard-inset (HistoryTextDialog measures it) to keep the actions above
+   the keyboard. */
 .history-text-dialog {
   width: min(760px, 100%);
-  max-height: calc(88vh - 16px);
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  height: calc(88dvh - 16px - var(--keyboard-inset, 0px));
+  display: flex;
+  flex-direction: column;
   gap: var(--sp-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: var(--sp-4);
   color: var(--color-text);
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-3);
+}
+
+.history-text-dialog > * {
+  flex: none;
 }
 
 .history-text-dialog h2 {
@@ -778,13 +793,17 @@
 }
 
 .history-text-dialog .history-text-error {
+  /* Takes the text area's place, so the actions stay at the bottom. */
+  flex: 1 1 auto;
   color: var(--color-error-text);
 }
 
 .history-text-body {
   width: 100%;
-  min-height: 0;
-  height: 100%;
+  /* At least twelve lines (1.5em each, plus padding and border) where the
+     viewport has them, and never more than half of a short one. */
+  flex: 1 1 auto;
+  min-height: min(calc(18em + 2 * var(--sp-3) + 2px), 50dvh);
   resize: none;
   margin: 0;
   padding: var(--sp-3);
@@ -846,18 +865,49 @@
   color: var(--color-text-muted);
 }
 
+/* The status keeps a readable width: when it and the buttons do not fit one
+   row (a phone, five buttons), it takes a row of its own above them instead
+   of shrinking to a column of single words. The buttons wrap as one group
+   (its basis is all of them in a row), so the status never shares a row with
+   only some of them; on a row of its own the group shrinks and wraps its
+   buttons. Empty, the status claims no row. */
 .history-text-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: var(--sp-2);
 }
 
 .history-text-status {
-  flex: 1 1 auto;
+  flex: 1 1 14rem;
   min-width: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.history-text-status:empty {
+  flex-basis: 0;
+}
+
+.history-text-buttons {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .modal-backdrop:has(> .history-text-dialog) {
+    padding-top: 16px;
+  }
+
+  .history-text-dialog {
+    height: calc(100dvh - 32px - var(--keyboard-inset, 0px));
+  }
 }
 
 /* ── Delete or suppress a feature other features build on ── */

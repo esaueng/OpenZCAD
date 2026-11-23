@@ -340,6 +340,8 @@ export interface CloudflareEnv {
   AI_DEPLOYMENT_ALLOWED_EMAILS?: string;
   /** Allow all verified accounts to use a free OpenRouter deployment model. */
   AI_DEPLOYMENT_FREE_ENABLED?: string;
+  /** Allow the public free model's data policy for explicitly consented encrypted projects. */
+  AI_ENCRYPTED_FREE_TRAINING_ENABLED?: string;
   /** Server-only comma-separated verified account emails with Premium access. */
   PREMIUM_USER_EMAILS?: string;
   /** Legacy name, read only when `PREMIUM_STORAGE_LIMIT_BYTES` is unset. */
@@ -374,6 +376,7 @@ export interface CloudflareEnv {
 
 export const CLOUDFLARE_BOOLEAN_FLAGS = [
   'AI_DEPLOYMENT_FREE_ENABLED',
+  'AI_ENCRYPTED_FREE_TRAINING_ENABLED',
   'DESKTOP_AUTH_ENABLED',
   'PROJECT_SHARING_ENABLED',
   'PROJECT_EDIT_LEASES_ENFORCED',

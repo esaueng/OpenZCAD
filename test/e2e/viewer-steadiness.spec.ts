@@ -65,6 +65,55 @@ async function addBox(page: Page) {
   await expectBodyCount(page, 1);
 }
 
+test.describe('trackpad rendering at 1.5× display density', () => {
+  test.use({ deviceScaleFactor: 1.5 });
+  test('a slow trackpad pan reduces the canvas and preserves the full image export size', async ({
+    page
+  }) => {
+    await enableFullRender(page);
+    await newProject(page, 'Trackpad resolution');
+    await addBox(page);
+    await waitForStillViewport(page);
+    const canvas = page.locator('.viewer-host canvas').first();
+    const size = () =>
+      canvas.evaluate((el: HTMLCanvasElement) => [el.width, el.height]);
+    const full = await size();
+    const before = await camera(canvas);
+
+    // Drive one actual camera draw per slow interval on fast CI GPUs as well.
+    await page.clock.install({ time: 0 });
+    await page.clock.pauseAt(1000);
+    for (let i = 0; i < 5; i++) {
+      await canvas.dispatchEvent('wheel', {
+        deltaX: 6,
+        deltaY: -9,
+        deltaMode: 0,
+        bubbles: true,
+        cancelable: true
+      });
+      await page.clock.fastForward(45);
+      // Let the camera damp for a draw without a new wheel packet.
+      await page.clock.fastForward(45);
+    }
+    expect((await camera(canvas)).target).not.toEqual(before.target);
+    const moving = await size();
+    expect(moving[0]).toBeLessThan(full[0]!);
+    expect(moving[1]).toBeLessThan(full[1]!);
+
+    // Open the dialog before advancing the clock to the first still draw.
+    const menu = page.locator('details.file-menu');
+    await menu.locator('summary').dispatchEvent('click');
+    await menu
+      .getByRole('button', { name: /Export image/ })
+      .dispatchEvent('click');
+    const dialog = page.getByRole('dialog', { name: 'Export image' });
+    await expect(dialog.getByLabel('Width (px)')).toHaveValue(String(full[0]));
+    await expect(dialog.getByLabel('Height (px)')).toHaveValue(String(full[1]));
+    await page.clock.runFor(500);
+    expect(await size()).toEqual(full);
+  });
+});
+
 test('first hover reuses prepared highlight shaders after a body rebuild', async ({
   page
 }) => {

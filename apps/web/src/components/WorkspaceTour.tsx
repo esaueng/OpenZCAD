@@ -19,7 +19,14 @@ import { platformShortcutLabel } from '../lib/platformShortcut';
 import { StableLabel } from './StableLabel';
 import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 import { useStageFootClaim } from '../hooks/useStageFootClaim';
-import { guideCoversStage } from '../lib/fitFrame';
+import { guideShapesClearStage } from '../lib/fitFrame';
+
+/** The viewport canvas of the stage the card stands on. */
+function stageCanvas(card: HTMLElement | null): HTMLElement | null {
+  return (
+    card?.closest('.viewer-area')?.querySelector<HTMLElement>('canvas') ?? null
+  );
+}
 
 interface WorkspaceTourProps extends WorkspaceTourSignals {
   /** Fired on skip AND on finishing the last step — either way it is over. */
@@ -45,9 +52,9 @@ interface WorkspaceTourProps extends WorkspaceTourSignals {
   /** The step now showing, for whoever keeps `startIndex`. */
   onIndexChange?(index: number): void;
   /**
-   * The card rose across the middle of the stage (a phone's guide, coming
-   * up or expanding), where it can stand over the model it asks to be
-   * tapped: whoever owns the camera frames the model clear of it again.
+   * The card rose where it can stand over the model it asks to be tapped
+   * (a phone's across the stage, a wider stage's in its corner, coming up
+   * or expanding): whoever owns the camera frames the model clear of it.
    */
   onCoverStage?(): void;
 }
@@ -215,40 +222,24 @@ export function WorkspaceTour({
 
   // A phone's panel shares the card's corner of the stage; it ends above
   // the card rather than over its Next and Finish (UX-001).
-  // A new step across a phone's stage asks the same, the card already up:
-  // a box made in the card's company lands when the step moves on to
-  // "Select to edit", under the card it is asked from (preview check on
-  // #1964).
+  // A new step asks the same, the card already up: a box made in the card's company lands when the step moves
+  // on to "Select to edit", under the card it is asked from (preview check
+  // on #1964).
   useEffect(() => {
-    const card = cardRef.current;
-    const stage = card?.closest('.viewer-area');
-    if (!card || !stage || finished) return;
-    const cardRect = card.getBoundingClientRect();
-    const stageRect = stage.getBoundingClientRect();
-    const middle = stageRect.left + stageRect.width / 2;
-    if (
-      guideCoversStage(cardRect, stageRect) &&
-      cardRect.left < middle &&
-      cardRect.right > middle
-    )
-      onCoverStageRef.current?.();
+    if (finished) return;
+    const canvas = stageCanvas(cardRef.current);
+    if (canvas && guideShapesClearStage(canvas)) onCoverStageRef.current?.();
   }, [index, finished]);
 
-  // Risen across a phone's stage, it can stand over the model: ask for the
-  // model to be framed clear of it. A wider stage's card stands beside the
-  // model, and asks nothing.
+  // Risen, it can stand over the model: ask for the model to be framed
+  // clear of it, wherever it changes the clear stage.
   useStageFootClaim(
     cardRef,
     '--workspace-tour-claim',
     !finished && !!step,
-    (card, stage) => {
-      const middle = stage.left + stage.width / 2;
-      if (
-        guideCoversStage(card, stage) &&
-        card.left < middle &&
-        card.right > middle
-      )
-        onCoverStage?.();
+    () => {
+      const canvas = stageCanvas(cardRef.current);
+      if (canvas && guideShapesClearStage(canvas)) onCoverStage?.();
     }
   );
 

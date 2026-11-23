@@ -231,6 +231,7 @@ import {
 } from './exact-prepared-group-edit';
 import {
   blendRegionKeyOfHashes,
+  boreAxisMeasurement,
   measureOwnedFaceGeometry,
   withFaceGeometryMemo
 } from './exact-measure';
@@ -3696,6 +3697,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             `Face handle count ${faceHandles.length} does not match tessellation groups ${faceOffsets.length - 1}.`
           );
         }
+        const publicationAxisTest = boreAxisMeasurement(kernel, solid);
         for (let index = 0; index < faceOffsets.length - 1; index += 1) {
           const start = faceOffsets[index]!;
           const end = faceOffsets[index + 1]!;
@@ -3742,7 +3744,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                       digest,
                       witness,
                       geometry
-                    )
+                    ),
+              publicationAxisTest
             )
           };
           faceTopologyByHandle.set(handle, publishedFace);

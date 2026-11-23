@@ -9,6 +9,7 @@ import {
   updateSilhouette
 } from './silhouette';
 import { createBodyEdgeOverlay } from './edgeOverlay';
+import { collectPreviewTargets } from './previewDeformation';
 
 /** A capped cylinder whose groups are its side, top and bottom faces. */
 function cylinderMesh(segments = 24) {
@@ -163,6 +164,181 @@ describe('curved-surface outlines', () => {
     for (let i = 0; i < lines.geometry.instanceCount; i += 1) {
       expect(Math.abs(drawn.getZ(i))).toBeGreaterThan(4);
     }
+  });
+
+  it('packs exactly the straddling segments across full and partial blocks', () => {
+    const { mesh, faces } = cylinderMesh(1_037);
+    const candidates = silhouetteCandidates(mesh, faces)!;
+    const { positions, normalsA, normalsB } = candidates;
+    const count = positions.length / 6;
+    expect(count).toBe(1_037);
+    // A degenerate neighbour and an edge exactly tangent to the viewing
+    // axis both contribute their segments under the inclusive facing rule.
+    normalsA.fill(0, 0, 32 * 3);
+    normalsB.set([1, 0, 0], (count - 1) * 3);
+
+    const lines = createSilhouetteLines(candidates, { color: 0, linewidth: 1 });
+    const buffer = lines.geometry.getAttribute(
+      'instanceStart'
+    ) as THREE.InterleavedBufferAttribute;
+    for (const perspective of [true, false]) {
+      const camera = perspective
+        ? new THREE.PerspectiveCamera()
+        : new THREE.OrthographicCamera();
+      for (const position of [
+        [0, 0, 10],
+        [4.99, 0, 0],
+        [-40, 30, -15],
+        [1e15, -1e14, 1e14]
+      ]) {
+        camera.position.fromArray(position);
+        camera.lookAt(0, 0, 0);
+        camera.updateMatrixWorld();
+        updateSilhouette(lines, camera);
+
+        const expected: number[] = [];
+        const viewAxis = new THREE.Vector3()
+          .setFromMatrixColumn(camera.matrixWorld, 2)
+          .normalize();
+        for (let i = 0; i < count; i++) {
+          const p = i * 6;
+          const direction = viewAxis.clone();
+          if (perspective) {
+            const midpoint = new THREE.Vector3(
+              Math.fround((positions[p]! + positions[p + 3]!) / 2),
+              Math.fround((positions[p + 1]! + positions[p + 4]!) / 2),
+              Math.fround((positions[p + 2]! + positions[p + 5]!) / 2)
+            );
+            direction.subVectors(camera.position, midpoint);
+          }
+          const a = new THREE.Vector3()
+            .fromArray(normalsA, i * 3)
+            .dot(direction);
+          const b = new THREE.Vector3()
+            .fromArray(normalsB, i * 3)
+            .dot(direction);
+          if (a * b <= 0) expected.push(...positions.subarray(p, p + 6));
+        }
+        expect(
+          buffer.data.array.slice(0, lines.geometry.instanceCount * 6)
+        ).toEqual(Float32Array.from(expected));
+      }
+    }
+  });
+
+  it('retains same-sign neighbours whose facing product underflows to zero', () => {
+    const count = 1024;
+    const positions = new Float32Array(count * 6);
+    const normals = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      positions[i * 6 + 4] = 1;
+      normals[i * 3] = 1;
+    }
+    const lines = createSilhouetteLines(
+      { positions, normalsA: normals, normalsB: normals },
+      { color: 0, linewidth: 1 }
+    );
+    const camera = new THREE.PerspectiveCamera();
+    camera.position.x = 1;
+    camera.updateMatrixWorld();
+    updateSilhouette(lines, camera);
+    expect(lines.geometry.instanceCount).toBe(0);
+    camera.position.x = 1e-200;
+    camera.updateMatrixWorld();
+    updateSilhouette(lines, camera);
+    expect(lines.geometry.instanceCount).toBe(count);
+  });
+
+  it('tries the blocks again after a view where they skip too little', () => {
+    const count = 1024;
+    const positions = new Float32Array(count * 6);
+    const normals = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      positions[i * 6 + 4] = 1;
+      normals[i * 3] = 1;
+    }
+    let reads = 0;
+    const counted = new Proxy(normals, {
+      get(target, key) {
+        if (typeof key === 'string' && /^\d+$/.test(key)) reads += 1;
+        const value = Reflect.get(target, key, target) as unknown;
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      }
+    });
+    const lines = createSilhouetteLines(
+      { positions, normalsA: counted, normalsB: counted },
+      { color: 0, linewidth: 1 }
+    );
+    const camera = new THREE.OrthographicCamera();
+    const view = (x: number, y: number, z: number) => {
+      camera.position.set(x, y, z);
+      camera.lookAt(0, 0, 0);
+      camera.updateMatrixWorld();
+      reads = 0;
+      updateSilhouette(lines, camera);
+      return reads;
+    };
+    view(1, 0, 0);
+    // Edge-on to every normal: each block straddles, so none is skipped.
+    view(0, 0, 1);
+    expect(lines.geometry.instanceCount).toBe(count);
+    const scans: number[] = [];
+    for (let k = 1; k <= 17; k++) scans.push(view(1, 0, k * 1e-3));
+    expect(lines.geometry.instanceCount).toBe(0);
+    // The views straight after the miss scan every edge; a later one skips
+    // every block again instead of scanning for the body's lifetime.
+    expect(scans[0]).toBe(count * 6);
+    expect(scans.at(-1)).toBe(0);
+  });
+
+  it('picks the exact outline after a drag preview moves the midpoints', () => {
+    const { mesh, faces } = cylinderMesh(1_037);
+    const candidates = silhouetteCandidates(mesh, faces)!;
+    const { positions, normalsA, normalsB } = candidates;
+    const count = positions.length / 6;
+    const lines = createSilhouetteLines(candidates, { color: 0, linewidth: 1 });
+    const buffer = lines.geometry.getAttribute(
+      'instanceStart'
+    ) as THREE.InterleavedBufferAttribute;
+    const camera = new THREE.PerspectiveCamera();
+    const view = (x: number, y: number, z: number) => {
+      camera.position.set(x, y, z);
+      camera.lookAt(0, 0, 0);
+      camera.updateMatrixWorld();
+      updateSilhouette(lines, camera);
+    };
+    view(0, 0, 10);
+    view(-40, 30, -15);
+    const deformation = collectPreviewTargets(
+      lines
+    ).deformables[0]!.beginPreviewDeformation((point) =>
+      point.set(0, 0, point.y > 0 ? 3 : 0)
+    );
+    deformation.apply(1);
+    deformation.restore();
+    view(12, -3, 7);
+
+    const expected: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const p = i * 6;
+      const direction = new THREE.Vector3().subVectors(
+        camera.position,
+        new THREE.Vector3(
+          Math.fround((positions[p]! + positions[p + 3]!) / 2),
+          Math.fround((positions[p + 1]! + positions[p + 4]!) / 2),
+          Math.fround((positions[p + 2]! + positions[p + 5]!) / 2)
+        )
+      );
+      const a = new THREE.Vector3().fromArray(normalsA, i * 3).dot(direction);
+      const b = new THREE.Vector3().fromArray(normalsB, i * 3).dot(direction);
+      if (a * b <= 0) expected.push(...positions.subarray(p, p + 6));
+    }
+    expect(expected.length).toBeGreaterThan(0);
+    expect(
+      buffer.data.array.slice(0, lines.geometry.instanceCount * 6)
+    ).toEqual(Float32Array.from(expected));
   });
 
   it('picks the outline for whichever camera renders the scene', () => {

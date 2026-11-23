@@ -143,7 +143,6 @@ import {
 } from './exact-face-sweep-fill';
 import {
   preparedGroupEdit,
-  preparedCommitNeedsEvolution,
   releasePreparedGroupEdit
 } from './exact-prepared-group-edit';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
@@ -1961,11 +1960,11 @@ function offsetFaces(
           error
         );
       }
-      // Opposite sets were refused by name above; whatever the kernel still
-      // refuses is typed from its error, never read as prose.
+      // The first group uses the same blend-aware kernel move as a single face.
       const message = error instanceof Error ? error.message : String(error);
       throw (
         offsetFaceRefusalOf(error, offset) ??
+        offsetBlendMoveRefusalOf(error) ??
         modelingOperationRefusal('offset_face', error, message, 'direct-edit')
       );
     }
@@ -2807,22 +2806,21 @@ export function applyDirectEdit(
             deferOutputLineage
           )
         : null;
-    let preparedOutput: number | undefined;
-    let needsEvolution = false;
-    if (prepared) {
+    if (prepared && deferOutputLineage) {
       try {
-        if (deferOutputLineage)
-          return { solids: [prepared.preview(newRadius)] };
-        // Commit rebuilds the canonical result with the authoritative journal.
-        const journal = decodeRemusMoveFacesJournal(prepared.commit(newRadius));
-        preparedOutput = journal.solid;
-        needsEvolution = preparedCommitNeedsEvolution(kernel, journal.op);
+        return { solids: [prepared.preview(newRadius)] };
       } catch {
         releasePreparedGroupEdit(kernel);
       }
+    } else if (prepared) {
+      // A release keeps what its frames showed and what replay rebuilds: the
+      // group route (`resizeBlend`). The journaled prepared commit is
+      // `resizeBlendJournaled`, which resizes only the seed band, so on a box
+      // with every edge rounded it kept one corner's new radius while the
+      // preview and a reopened document resized all twelve rounds.
+      releasePreparedGroupEdit(kernel);
     }
     const evolution =
-      (preparedOutput === undefined || needsEvolution) &&
       operation.surfaceClass === 'cylinder'
         ? withResizeBlendRefusal(() =>
             kernel.resizeBlendWithEvolution(
@@ -2835,7 +2833,6 @@ export function applyDirectEdit(
         : null;
     const output =
       evolution?.result.solid ??
-      preparedOutput ??
       withResizeBlendRefusal(() =>
         kernel.resizeBlend(solid, face, snapshot.radius, newRadius)
       );

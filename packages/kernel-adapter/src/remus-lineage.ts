@@ -903,10 +903,10 @@ export interface RemusMoveFacesRelation {
  * instead of compared with every reference: on a 160-face, 386-edge body the
  * pairwise scan rebuilt the same signature strings ~350 000 times per edit.
  */
-function witnessMatcher(
+export function witnessMatcher(
   kind: TopologyKind,
   candidates: Iterable<RemusTopologyCandidate>
-): (witness: TopologyWitnessV1) => RemusTopologyCandidate[] {
+): (witness: TopologyWitnessV1) => readonly RemusTopologyCandidate[] {
   let index: Map<string, RemusTopologyCandidate[]> | null = null;
   return (witness) => {
     if (!index) {
@@ -919,7 +919,7 @@ function witnessMatcher(
       }
     }
     if (index.size === 0) return [];
-    return [...(index.get(topologyWitnessKey(kind, witness)) ?? [])];
+    return index.get(topologyWitnessKey(kind, witness)) ?? [];
   };
 }
 
@@ -1448,7 +1448,7 @@ function sameHandleSet(
   );
 }
 
-function referenceMatchesCandidate(
+export function referenceMatchesCandidate(
   reference: FaceTopologyReferenceV5 | undefined,
   candidate: RemusTopologyCandidate | undefined
 ): reference is FaceTopologyReferenceV5 {

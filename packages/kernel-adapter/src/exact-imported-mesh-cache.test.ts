@@ -20,22 +20,55 @@ function referenceMesh() {
 describe('imported mesh conversion cache', () => {
   it('keys a referenced payload by checksum and triangle count, never embedded facets', () => {
     expect(
-      importedMeshCacheKey({ meshPayloadRef: ref, triangleCount: 12 })
+      importedMeshCacheKey({ meshPayloadRef: ref, triangleCount: 12 }, 'mm')
     ).toBe(`${'a'.repeat(64)}:12`);
     expect(
-      importedMeshCacheKey({ meshPayloadRef: ref, triangleCount: 13 })
+      importedMeshCacheKey({ meshPayloadRef: ref, triangleCount: 13 }, 'mm')
     ).not.toBe(
-      importedMeshCacheKey({ meshPayloadRef: ref, triangleCount: 12 })
+      importedMeshCacheKey({ meshPayloadRef: ref, triangleCount: 12 }, 'mm')
     );
     expect(
-      importedMeshCacheKey({
-        vertices: [0, 0, 0],
-        indices: [0, 0, 0],
-        meshPayloadRef: ref,
-        triangleCount: 1
-      })
+      importedMeshCacheKey(
+        {
+          vertices: [0, 0, 0],
+          indices: [0, 0, 0],
+          meshPayloadRef: ref,
+          triangleCount: 1
+        },
+        'mm'
+      )
     ).toBeUndefined();
-    expect(importedMeshCacheKey({ triangleCount: 1 })).toBeUndefined();
+    expect(importedMeshCacheKey({ triangleCount: 1 }, 'mm')).toBeUndefined();
+  });
+
+  it('keys a payload read at another scale apart from the unscaled read', () => {
+    const unscaled = importedMeshCacheKey(
+      { meshPayloadRef: ref, triangleCount: 12 },
+      'inch'
+    );
+    // Naming the document's own unit reads the payload as-is: same entry.
+    expect(
+      importedMeshCacheKey(
+        { meshPayloadRef: ref, triangleCount: 12, payloadUnits: 'inch' },
+        'inch'
+      )
+    ).toBe(unscaled);
+    const fromMm = importedMeshCacheKey(
+      { meshPayloadRef: ref, triangleCount: 12, payloadUnits: 'mm' },
+      'inch'
+    );
+    const fromCm = importedMeshCacheKey(
+      { meshPayloadRef: ref, triangleCount: 12, payloadUnits: 'cm' },
+      'inch'
+    );
+    expect(new Set([unscaled, fromMm, fromCm]).size).toBe(3);
+    // The same blob as millimetres in a millimetre document is unscaled.
+    expect(
+      importedMeshCacheKey(
+        { meshPayloadRef: ref, triangleCount: 12, payloadUnits: 'mm' },
+        'mm'
+      )
+    ).toBe(unscaled);
   });
 
   it('remembers a refused conversion, with its reference mesh, as well as a converted solid', () => {

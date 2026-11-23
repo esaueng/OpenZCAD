@@ -281,6 +281,59 @@ test('the guide opened over a dragged-out Box leaves the box clear after Done', 
     .toBe(true);
 });
 
+// A tablet's corner card stood over the new box the same way, in portrait
+// (768 × 1024) and landscape (1024 × 768) alike. The box is framed above
+// or beside the card now.
+for (const [width, height] of [
+  [768, 1024],
+  [1024, 768]
+] as const) {
+  test(`the modeling guide leaves the new box clear to tap on a ${width} × ${height} tablet`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width, height });
+    await stubApi(page, { workspaceTour: true });
+    await createProject(page, 'Tablet guide box');
+    const tour = page.locator('.workspace-tour');
+    await expect(tour).toBeVisible();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await expect(tour).toContainText('Select to edit');
+    await waitForSurfacesToSettle(page, ['.workspace-tour']);
+    const canvas = page.locator('.viewer-host canvas');
+    const card = (await tour.boundingBox())!;
+    await expect
+      .poll(async () => {
+        const view = await canvas.evaluate(
+          (element) =>
+            new Promise<{
+              screen: {
+                left: number;
+                right: number;
+                top: number;
+                bottom: number;
+              } | null;
+            }>((resolve) =>
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-bodies-in-view', {
+                  detail: { resolve }
+                })
+              )
+            )
+        );
+        const box = view.screen;
+        if (box === null) return null;
+        return (
+          box.bottom <= card.y + 0.5 ||
+          box.left >= card.x + card.width - 0.5 ||
+          box.right <= card.x + 0.5
+        );
+      })
+      .toBe(true);
+  });
+}
+
 // A 360 × 640 phone with the guide up on its second step (#1945). It
 // stood over the opened view tools, Measure under its text, and expanded
 // it left the measurement workbench a 13 px sliver of the lane. The rail
@@ -781,3 +834,109 @@ for (const { width, height } of [
     expect(edge.y + edge.height).toBeLessThanOrEqual(bar.y + 0.5);
   });
 }
+
+/** The bodies' projected screen bounds, from the viewer's e2e hook. */
+async function bodiesOnScreen(page: Page) {
+  const view = await page.locator('.viewer-host canvas').evaluate(
+    (element) =>
+      new Promise<{
+        screen: {
+          left: number;
+          right: number;
+          top: number;
+          bottom: number;
+        } | null;
+      }>((resolve) =>
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-bodies-in-view', {
+            detail: { resolve }
+          })
+        )
+      )
+  );
+  return view.screen!;
+}
+
+/** A tablet's new box at "Select to edit", the guide expanded. */
+async function tabletBoxAtSelect(page: Page, width: number, height: number) {
+  await page.setViewportSize({ width, height });
+  await stubApi(page, {
+    workspaceTour: true,
+    panelLayout: null,
+    commandFoldClosed: true
+  });
+  await createProject(page, 'Tablet guide next');
+  const tour = page.locator('.workspace-tour');
+  await expect(tour).toBeVisible();
+  await createPrimitiveInPlace(page, 'box');
+  await expectBodyCount(page, 1);
+  await expect(tour).toContainText('Select to edit');
+  await waitForSurfacesToSettle(page, ['.workspace-tour']);
+  await waitForStillViewport(page);
+  return tour;
+}
+
+/** Pans the view by (dx, dy) with a right-drag from below the bodies. */
+async function panBy(page: Page, dx: number, dy: number) {
+  const box = await bodiesOnScreen(page);
+  const x = (box.left + box.right) / 2;
+  const y = box.bottom + 20;
+  await page.mouse.move(x, y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(x + dx, y + dy, { steps: 12 });
+  await page.mouse.up({ button: 'right' });
+  await waitForStillViewport(page);
+}
+
+async function pressNext(page: Page, tour: Locator) {
+  await tour.getByRole('button', { name: 'Next' }).click();
+  await waitForSurfacesToSettle(page, ['.workspace-tour']);
+  await page.waitForTimeout(600);
+  await waitForStillViewport(page);
+}
+
+// A 768 × 1024 tablet's box nudged clear of everything, 7 px from the rail:
+// inside the clear stage's gap, it read as covered and Next moved it 32 px
+// (preview check on #1974).
+test('Next leaves a tablet’s box clear of the rail where it is', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const tour = await tabletBoxAtSelect(page, 768, 1024);
+  await panBy(page, 10, 45);
+  const panned = await bodiesOnScreen(page);
+  const rail = (await page.locator('.instrument-rail').boundingBox())!;
+  // The setup this guards: inside the stage's gap, clear of the rail.
+  expect(panned.right).toBeLessThan(rail.x);
+  await pressNext(page, tour);
+  const after = await bodiesOnScreen(page);
+  expect(Math.abs(after.left - panned.left)).toBeLessThan(1);
+  expect(Math.abs(after.top - panned.top)).toBeLessThan(1);
+});
+
+// A 1024 × 768 tablet with the Tools drawer open: a box panned behind it
+// was reframed on Next, still behind it (preview check on #1974).
+test('Next reframes a tablet’s box clear of the open Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const tour = await tabletBoxAtSelect(page, 1024, 768);
+  await page
+    .getByRole('button', { name: /More tools/i })
+    .first()
+    .click();
+  const fold = page.locator('.command-flyout');
+  await expect(fold).toBeVisible();
+  await waitForSurfacesToSettle(page, ['.command-flyout']);
+  const drawer = (await fold.boundingBox())!;
+  const before = await bodiesOnScreen(page);
+  await panBy(page, drawer.x + drawer.width - 40 - before.left, 0);
+  // The setup this guards: the box reaches under the drawer.
+  expect((await bodiesOnScreen(page)).left).toBeLessThan(
+    drawer.x + drawer.width
+  );
+  await pressNext(page, tour);
+  await expect
+    .poll(async () => (await bodiesOnScreen(page)).left)
+    .toBeGreaterThanOrEqual(drawer.x + drawer.width);
+});

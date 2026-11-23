@@ -594,7 +594,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // fall back to the vertex mean and drill the hole elsewhere, so it must
 // refuse. Builds on v148 (#1808); v149 is claimed by #1914. First claimed
 // as v118, then v147, and renumbered when later bumps landed first.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 152 as const;
+// v153 adds I03 mesh payload units (`payloadUnits` on an imported mesh): the
+// unit the referenced payload's triangles are stored in, when that differs
+// from the document's `units`, so a stored-unit conversion can leave the
+// content-addressed (and possibly encrypted) blob alone. An older client
+// would read the triangles in the document's unit and draw the mesh 25.4x
+// off, so it must refuse the document. Builds on v152.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 153 as const;
 /** M04 (v133): a section vertex a loft connection starts from. */
 export type LoftConnectionVertex =
   | {
@@ -3812,6 +3818,21 @@ export type FeatureData =
        * declare their unit and for imports saved before v52.
        */
       assumedUnits?: UnitSystem;
+      /**
+       * I03 (schema v153): the unit the triangles behind `meshPayloadRef`
+       * are stored in. Absent means the document's `units`, which is what
+       * every payload written before v153 holds. A stored-unit conversion
+       * sets it instead of rewriting the payload, which would mean a new
+       * blob, a new SHA-256 and, for an encrypted project, a re-encryption;
+       * the kernel scales the triangles by
+       * `millimetresPerUnit(payloadUnits) / millimetresPerUnit(units)` as it
+       * loads them.
+       *
+       * Only valid alongside `meshPayloadRef`. Embedded `vertices` are always
+       * in document units and a conversion scales them directly; this field
+       * never applies to them. Unlike `assumedUnits` it changes geometry.
+       */
+      payloadUnits?: UnitSystem;
     }
   | {
       featureKind: 'imported-step';
@@ -6729,6 +6750,10 @@ export interface EffectiveAssistantSettings {
   provider: AssistantProvider;
   model: string;
   reasoningEffort: string;
+  /** The deployment model has a known incompatibility with encrypted projects. */
+  encryptedProjectUnsupported?: true;
+  /** The built-in encrypted-project route may use prompts for training. */
+  encryptedProjectMayTrain?: true;
   /**
    * The upstream URL a request goes to, which an encrypted project's
    * assistant consent binds (ADR-024 6-1). Empty when none is usable.

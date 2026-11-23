@@ -1,6 +1,7 @@
 import {
   clearStageFrame,
   STAGE_FRAME_GAP_PX,
+  STAGE_FRAME_MIN_CLEAR_FRACTION,
   type NdcFrame,
   type StageRect
 } from '@openzcad/viewport';
@@ -16,6 +17,15 @@ import { SELECTION_CALLOUT_OBSTACLES } from './selectionCalloutView';
 const CLEAR_STAGE_OBSTACLES = `${SELECTION_CALLOUT_OBSTACLES}, .tweak-flyouts, .view-flyouts, [data-rail-flyout], .viewer-shell .measurement-dock`;
 
 /**
+ * The least share of the canvas's width a clear-stage request's side band
+ * keeps, against Fit's quarter: beside a 1024 × 768 tablet's Tools drawer
+ * there are 243 px, a quarter of the width less 13, and the reframe let the
+ * drawer go and left the model behind it (preview check on #1974). In view
+ * now beats large.
+ */
+const REQUEST_MIN_CLEAR_FRACTION = 0.2;
+
+/**
  * Surfaces outside the viewer area that still stand over the canvas: the
  * assistant's stream rises from the prompt line over the model.
  */
@@ -24,11 +34,30 @@ const WORKSPACE_STAGE_OBSTACLES = '.assistant-panel:not(.assistant-off-screen)';
 /**
  * The modeling guide's card. At a phone width it spans most of the stage,
  * over the model it asks to be tapped ("Select to edit"), and the model is
- * framed above it. A wider stage's card (296 px in a corner, which at 768 px
- * still crosses the middle) is not framed around: the model stands beside
- * it, and a band for it would move every first-run fit.
+ * framed above it. Wider, its 296 px corner card stood over the new box
+ * too (a 768 × 1024 or 1024 × 768 tablet, a 1280 × 800 desktop), and the
+ * model is framed above or beside it, whichever leaves the larger area.
  */
 const FOOT_GUIDE = '.workspace-tour';
+
+/**
+ * Whether the modeling guide's card changes the clear stage on `canvas`: a
+ * phone's across it, a wider stage's over its corner. The card asks for
+ * the model to be framed clear of it only then; where it changes nothing
+ * (a card standing over a docked column) a request could only undo the
+ * user's own pan (review on #1969).
+ */
+export function guideShapesClearStage(canvas: HTMLElement): boolean {
+  const withGuide = measureClearStage(canvas)?.rect;
+  const without = measureClearStage(canvas, { ignoreGuide: true })?.rect;
+  if (!withGuide || !without) return withGuide !== without;
+  return (
+    withGuide.left !== without.left ||
+    withGuide.right !== without.right ||
+    withGuide.top !== without.top ||
+    withGuide.bottom !== without.bottom
+  );
+}
 
 /**
  * Whether the modeling guide's card spans the stage as a phone's does:
@@ -80,8 +109,20 @@ export interface ClearStage {
 
 export function measureClearStage(
   canvas: HTMLElement,
-  { throughCover = false }: { throughCover?: boolean } = {}
+  {
+    throughCover = false,
+    ignoreGuide = false,
+    request = false
+  }: {
+    throughCover?: boolean;
+    ignoreGuide?: boolean;
+    /** A clear-stage request's frame: side bands down to a fifth. */
+    request?: boolean;
+  } = {}
 ): ClearStage | undefined {
+  const minClear = request
+    ? REQUEST_MIN_CLEAR_FRACTION
+    : STAGE_FRAME_MIN_CLEAR_FRACTION;
   const bounds = canvas.getBoundingClientRect();
   const panels = [
     ...panelsOver(canvas, CLEAR_STAGE_OBSTACLES, throughCover),
@@ -139,15 +180,69 @@ export function measureClearStage(
   }
   // The guide across the middle takes its band off the foot, however little
   // it leaves above a minimum: there is no side to frame beside it.
-  for (const guide of panelsOver(canvas, FOOT_GUIDE, throughCover)) {
+  for (const guide of ignoreGuide
+    ? []
+    : panelsOver(canvas, FOOT_GUIDE, throughCover)) {
     const across =
       guideCoversStage(guide, bounds) &&
       guide.left < middle - 1 &&
       guide.right > middle + 1;
     const guideTop = Math.max(guide.top, bounds.top);
-    if (!across || guideTop >= bottom) continue;
+    if (guideTop >= bottom) continue;
     const nextBottom = guideTop - STAGE_FRAME_GAP_PX;
-    if (nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) bottom = nextBottom;
+    if (across) {
+      if (nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) bottom = nextBottom;
+      continue;
+    }
+    // A corner card: framed above it or beside it, whichever
+    // leaves the larger area, and only where it stands in the stage. (The
+    // larger square sent a minimized guide's 50 px header beside the
+    // model, giving up a full-height strip for it: review on #1969.)
+    const clear = (bandBottom: number, panels: readonly StageRect[]) => {
+      const vertical = {
+        left: bounds.left,
+        right: bounds.right,
+        top,
+        bottom: bandBottom
+      };
+      const side = sideFrame(vertical, panels, minClear);
+      return {
+        left: bounds.left + (((side?.minX ?? -1) + 1) / 2) * width,
+        right: bounds.left + (((side?.maxX ?? 1) + 1) / 2) * width,
+        top,
+        bottom: bandBottom
+      };
+    };
+    const now = clear(bottom, sides);
+    if (guide.right <= now.left || guide.left >= now.right) continue;
+    // A candidate counts only where it reaches no panel the stage without
+    // it keeps clear of: one that let a docked column go to clear the card
+    // would frame the model behind the column instead. A panel below the
+    // band above the card is one it does not reach.
+    const reached = (rect: StageRect) =>
+      sides.filter(
+        (panel) =>
+          Math.min(panel.right, rect.right) > Math.max(panel.left, rect.left) &&
+          Math.min(panel.bottom, rect.bottom) > Math.max(panel.top, rect.top)
+      );
+    const alreadyReached = reached(now);
+    const room = (rect: StageRect) =>
+      reached(rect).every((panel) => alreadyReached.includes(panel))
+        ? (rect.right - rect.left) * (rect.bottom - rect.top)
+        : -Infinity;
+    const above =
+      nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX
+        ? room(clear(nextBottom, sides))
+        : -Infinity;
+    const besideRect = clear(bottom, [...sides, guide]);
+    // Beside counts only where the guide is not the panel let go.
+    const beside =
+      besideRect.left >= guide.right || besideRect.right <= guide.left
+        ? room(besideRect)
+        : -Infinity;
+    if (above === -Infinity && beside === -Infinity) continue;
+    if (above >= beside) bottom = nextBottom;
+    else sides.push(guide);
   }
   if (bottom <= top) return undefined;
   const verticalBounds = {
@@ -156,7 +251,7 @@ export function measureClearStage(
     top,
     bottom
   };
-  const side = sideFrame(verticalBounds, sides);
+  const side = sideFrame(verticalBounds, sides, minClear);
   const frame =
     !side && top === bounds.top && bottom === bounds.bottom
       ? undefined
@@ -186,7 +281,8 @@ export function measureClearStage(
  */
 function sideFrame(
   bounds: StageRect,
-  sides: readonly StageRect[]
+  sides: readonly StageRect[],
+  minClearFraction = STAGE_FRAME_MIN_CLEAR_FRACTION
 ): NdcFrame | undefined {
   const band = (panels: readonly StageRect[]) => {
     const middle = (bounds.left + bounds.right) / 2;
@@ -205,7 +301,12 @@ function sideFrame(
   };
   let panels = [...sides];
   while (panels.length > 0) {
-    const frame = clearStageFrame(bounds, panels);
+    const frame = clearStageFrame(
+      bounds,
+      panels,
+      STAGE_FRAME_GAP_PX,
+      minClearFraction
+    );
     if (frame) return frame;
     // Undefined because nothing covers a side: the whole canvas it is.
     if (band(panels) >= bounds.right - bounds.left) return undefined;
@@ -230,9 +331,159 @@ function sideFrame(
  */
 export function measureFitFrame(
   canvas: HTMLElement,
-  options: { throughCover?: boolean } = {}
+  options: {
+    throughCover?: boolean;
+    ignoreGuide?: boolean;
+    request?: boolean;
+  } = {}
 ): NdcFrame | undefined {
   return measureClearStage(canvas, options)?.frame;
+}
+
+/**
+ * The frame a clear-stage request reframes the model into: what Fit frames
+ * into, keeping a side band down to a fifth of the width (beside a 1024 ×
+ * 768 tablet's Tools drawer), and less the command bar's lane, as a
+ * creation frame is (a reframe left a corner under the bar: review on
+ * #1983). Undefined means the whole canvas.
+ */
+export function measureClearStageRequestFrame(
+  canvas: HTMLElement
+): NdcFrame | undefined {
+  const frame = measureFitFrame(canvas, { request: true });
+  const full = { minX: -1, maxX: 1, minY: -1, maxY: 1 };
+  const cut = aboveCommandLane(canvas, frame ?? full);
+  return cut.minY === full.minY &&
+    cut.maxY === full.maxY &&
+    cut.minX === full.minX &&
+    cut.maxX === full.maxX
+    ? undefined
+    : cut;
+}
+
+/**
+ * Whether a clear-stage request should leave a model whose bounding box
+ * projects to `corners` (normalized device coordinates on `canvas`) where it
+ * is: on the canvas, with its outline (the convex hull of its projected
+ * corners) off whatever covers the canvas that the request's frame
+ * (`measureClearStageRequestFrame`) keeps clear of: the top bar, the
+ * panels, the guide's card, the command bar. The clear stage is one
+ * rectangle kept a gap from each panel, so a model beside a card framed
+ * above it (preview check on #1969), or 7 px clear of a rail inside that
+ * gap (preview check on #1974), read as covered and was reframed. A cover
+ * the frame cannot keep clear of (a phone's Tools drawer, wider than half
+ * the stage; a tablet's in portrait, beside its docked column) does not
+ * count: a reframe would land the model behind it all the same (review on
+ * #1983).
+ */
+export function cornersClearOfStage(
+  canvas: HTMLElement,
+  corners: readonly { x: number; y: number; z: number }[]
+): boolean {
+  const frame = measureClearStageRequestFrame(canvas);
+  if (!frame) return true;
+  // On the canvas and between the near and far planes.
+  if (!cornersWithinFrame(corners, { minX: -1, maxX: 1, minY: -1, maxY: 1 })) {
+    return false;
+  }
+  const bounds = canvas.getBoundingClientRect();
+  const outline = convexHull(
+    corners.map((corner) => ({
+      x: bounds.left + ((corner.x + 1) / 2) * bounds.width,
+      y: bounds.top + ((1 - corner.y) / 2) * bounds.height
+    }))
+  );
+  const target = {
+    left: bounds.left + ((frame.minX + 1) / 2) * bounds.width,
+    right: bounds.left + ((frame.maxX + 1) / 2) * bounds.width,
+    top: bounds.top + ((1 - frame.maxY) / 2) * bounds.height,
+    bottom: bounds.top + ((1 - frame.minY) / 2) * bounds.height
+  };
+  // Off everything drawn over the canvas: the card, every panel the clear
+  // stage measures, the top bar, and the command bar's lane, which a
+  // request's frame keeps out as a creation frame does (review on #1974).
+  const topbar = canvas
+    .closest('.app-shell')
+    ?.querySelector('.topbar')
+    ?.getBoundingClientRect();
+  const covers = [
+    ...(topbar ? [topbar] : []),
+    ...panelsOver(canvas, FOOT_GUIDE),
+    ...panelsOver(canvas, CLEAR_STAGE_OBSTACLES),
+    ...panelsOver(canvas, WORKSPACE_STAGE_OBSTACLES, false, '.workspace'),
+    // The lane is a transparent full-width column; what it holds (the
+    // command's bar, the search row) is centred and as wide as it reads.
+    ...panelsOver(canvas, '.command-bar-lane > *', false, '.workspace')
+  ];
+  return covers
+    .filter(
+      (cover) =>
+        cover.right <= target.left ||
+        cover.left >= target.right ||
+        cover.bottom <= target.top ||
+        cover.top >= target.bottom
+    )
+    .every((cover) => !outlineMeetsRect(outline, cover));
+}
+
+type ScreenPoint = { x: number; y: number };
+
+/** The convex hull of `points`, in order around it (monotone chain). */
+function convexHull(points: readonly ScreenPoint[]): ScreenPoint[] {
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (sorted.length < 3) return sorted;
+  const cross = (o: ScreenPoint, a: ScreenPoint, b: ScreenPoint) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const half = (list: readonly ScreenPoint[]) => {
+    const chain: ScreenPoint[] = [];
+    for (const point of list) {
+      while (
+        chain.length >= 2 &&
+        cross(chain[chain.length - 2]!, chain[chain.length - 1]!, point) <= 0
+      ) {
+        chain.pop();
+      }
+      chain.push(point);
+    }
+    chain.pop();
+    return chain;
+  };
+  return [...half(sorted), ...half([...sorted].reverse())];
+}
+
+/**
+ * Whether a convex outline and a rectangle share any area: separated along
+ * neither screen axis nor any edge of the outline (separating axes).
+ */
+function outlineMeetsRect(
+  outline: readonly ScreenPoint[],
+  rect: Pick<DOMRectReadOnly, 'left' | 'right' | 'top' | 'bottom'>
+): boolean {
+  if (outline.length === 0) return false;
+  const corners: ScreenPoint[] = [
+    { x: rect.left, y: rect.top },
+    { x: rect.right, y: rect.top },
+    { x: rect.right, y: rect.bottom },
+    { x: rect.left, y: rect.bottom }
+  ];
+  const axes: ScreenPoint[] = [
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    ...outline.map((point, index) => {
+      const next = outline[(index + 1) % outline.length]!;
+      return { x: next.y - point.y, y: point.x - next.x };
+    })
+  ];
+  return axes.every((axis) => {
+    if (axis.x === 0 && axis.y === 0) return true;
+    const project = (point: ScreenPoint) => point.x * axis.x + point.y * axis.y;
+    const outlineSpan = outline.map(project);
+    const rectSpan = corners.map(project);
+    return (
+      Math.min(...outlineSpan) < Math.max(...rectSpan) &&
+      Math.min(...rectSpan) < Math.max(...outlineSpan)
+    );
+  });
 }
 
 /**
@@ -269,12 +520,17 @@ export function measurePickFrame(canvas: HTMLElement): NdcFrame | undefined {
  * Always a frame, the whole canvas when nothing covers it.
  */
 export function measureCreationFrame(canvas: HTMLElement): NdcFrame {
-  const frame = measureFitFrame(canvas) ?? {
-    minX: -1,
-    maxX: 1,
-    minY: -1,
-    maxY: 1
-  };
+  return aboveCommandLane(
+    canvas,
+    measureFitFrame(canvas) ?? { minX: -1, maxX: 1, minY: -1, maxY: 1 }
+  );
+}
+
+/**
+ * `frame` less the bottom lane, where the command's own bar and the search
+ * row stand over the model, unless that leaves under a third of it.
+ */
+function aboveCommandLane(canvas: HTMLElement, frame: NdcFrame): NdcFrame {
   const bounds = canvas.getBoundingClientRect();
   if (!(bounds.height > 0)) return frame;
   const lanes = [

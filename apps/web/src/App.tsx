@@ -371,6 +371,7 @@ import {
   lockConstraintIds,
   measureDrivingDimension,
   movedEntityLock,
+  sketchesDrivenByParameterEdit,
   planConstraintFromSelection,
   refusePick,
   relationSolveAnchor,
@@ -24819,6 +24820,12 @@ export function App() {
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
 
+  // A pattern's spacing or step reads as its value, stored expression or not.
+  const resolveLabelValue = useCallback(
+    (value: ParamValue) =>
+      evalParamValue(value, parameterScope.scope, doc?.units) ?? undefined,
+    [parameterScope.scope, doc?.units]
+  );
   const sketchConstraintItems = useMemo(() => {
     if (!editingSketchNode || !doc) {
       return [];
@@ -24846,7 +24853,8 @@ export function App() {
           label: describeConstraint(
             data,
             nameOf,
-            sketchPointNamer(editingSketchNode, sketchLabels)
+            sketchPointNamer(editingSketchNode, sketchLabels),
+            resolveLabelValue
           ),
           targets,
           conflicted: conflicting.has(String(constraintId)),
@@ -24862,7 +24870,14 @@ export function App() {
             data.constraintKind === 'offset'
         };
       });
-  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels, sketchFreedom]);
+  }, [
+    editingSketchNode,
+    doc,
+    sketchSolveStatus,
+    sketchLabels,
+    sketchFreedom,
+    resolveLabelValue
+  ]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -24885,7 +24900,8 @@ export function App() {
         label: describeConstraint(
           data,
           nameOf,
-          sketchPointNamer(editingSketchNode, sketchLabels)
+          sketchPointNamer(editingSketchNode, sketchLabels),
+          resolveLabelValue
         ),
         editable:
           data.constraintKind === 'distance' ||
@@ -24893,7 +24909,13 @@ export function App() {
           data.constraintKind === 'radius' ||
           data.constraintKind === 'offset'
       }));
-  }, [editingSketchNode, doc, selectedSketchEntity, sketchLabels]);
+  }, [
+    editingSketchNode,
+    doc,
+    selectedSketchEntity,
+    sketchLabels,
+    resolveLabelValue
+  ]);
 
   /**
    * The rectangle or polygon the selected line is a side of (S04), as its
@@ -25336,7 +25358,10 @@ export function App() {
       findSketch(prospective, sketchId),
       outcome.constraintResiduals,
       2,
-      attempted
+      attempted,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, prospective.units) ??
+        undefined
     );
     setSketchEditError(constraintRefusalMessage(refused, culprits));
     setStatus(
@@ -26232,23 +26257,13 @@ export function App() {
       if (inputError) return { kind: 'refused', message: inputError };
       const beforeScope = getParameterScope(base).scope;
       const afterScope = getParameterScope(prospective).scope;
-      const constrainedSketches = listNodesByKind(prospective, 'sketch').filter(
-        (sketch) =>
-          sketch.constraints?.some(({ data }) => {
-            const value =
-              data.constraintKind === 'distance' ||
-              data.constraintKind === 'radius' ||
-              data.constraintKind === 'offset'
-                ? data.value
-                : data.constraintKind === 'angle'
-                  ? data.valueDeg
-                  : undefined;
-            return (
-              typeof value === 'string' &&
-              evalParamValue(value, beforeScope, base.units) !==
-                evalParamValue(value, afterScope, prospective.units)
-            );
-          }) ?? false
+      // Pattern spacing and step count too: a copy left where the old value
+      // put it would disagree with the label reading the new one.
+      const constrainedSketches = sketchesDrivenByParameterEdit(
+        listNodesByKind(prospective, 'sketch'),
+        (value) => evalParamValue(value, beforeScope, base.units) ?? undefined,
+        (value) =>
+          evalParamValue(value, afterScope, prospective.units) ?? undefined
       );
       for (const sketch of listNodesByKind(prospective, 'sketch')) {
         const locked = movedEntityLock(
@@ -36116,6 +36131,7 @@ export function App() {
           desktopAuthorizationApproved={desktopAuthorizationApproved}
           desktopAuthorizationCode={desktopAuthorizationCode}
           workspaceOpen={doc !== null}
+          encryptedProjectOpen={encryptedProjectOpen || assistantHeldEncrypted}
           documentUnits={doc?.units}
           onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
           onChange={handleAppSettingsChange}

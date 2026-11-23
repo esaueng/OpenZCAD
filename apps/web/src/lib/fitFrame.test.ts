@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  cornersClearOfStage,
   cornersWithinFrame,
+  guideShapesClearStage,
   measureClearStage,
+  measureClearStageRequestFrame,
   measureCreationFrame,
   measureFitFrame,
   measureOpeningFrame,
@@ -350,26 +353,300 @@ describe('the modeling guide', () => {
     expect(measureClearStage(canvas)!.rect.bottom).toBe(610 - 12);
   });
 
-  it('leaves a wider stage’s corner card out of the frame', () => {
+  it('asks a phone’s card and a desktop’s alike for a reframe', () => {
+    const { area, canvas } = phoneStage();
+    guide(area, 72, 405, 318, 655);
+    expect(guideShapesClearStage(canvas)).toBe(true);
+    document.body.replaceChildren();
+    const desk = document.createElement('div');
+    desk.className = 'viewer-area';
+    const deskCanvas = placed(
+      document.createElement('canvas'),
+      0,
+      0,
+      768,
+      1024
+    );
+    desk.append(deskCanvas);
+    document.body.append(desk);
+    guide(desk, 116, 700, 412, 960);
+    expect(guideShapesClearStage(deskCanvas)).toBe(true);
+  });
+
+  it('frames a desktop’s model beside its corner card where that leaves more', () => {
+    // 1440 × 900: above the card leaves 588 px of height, beside it the
+    // whole height.
     const area = document.createElement('div');
     area.className = 'viewer-area';
     const canvas = placed(document.createElement('canvas'), 0, 0, 1440, 900);
     area.append(canvas);
     document.body.append(area);
     guide(area, 72, 600, 368, 840);
-    expect(measureFitFrame(canvas)).toBeUndefined();
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.left).toBe(368 + 12);
+    expect(stage.rect.bottom).toBe(900);
   });
 
-  it('leaves a 768 px stage’s card out even where it crosses the middle', () => {
+  it('frames a desktop’s model above a minimized guide’s header', () => {
+    // 1600 × 900: the header from y 838 to 888 costs a 62 px band; beside
+    // it would have given up a full-height strip (review on #1969).
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 1600, 900);
+    area.append(canvas);
+    document.body.append(area);
+    guide(area, 116, 838, 412, 888);
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.bottom).toBe(838 - 12);
+    expect(stage.rect.left).toBe(0);
+  });
+
+  it('frames a mouse’s 768 px model above the card where that leaves more', () => {
     // The undocked Build layout at 768: the 296 px card from x 116 to 412
-    // crosses the middle (384) but stands beside the model (review on #1964).
+    // leaves 344 px beside it and the full width above it.
     const area = document.createElement('div');
     area.className = 'viewer-area';
     const canvas = placed(document.createElement('canvas'), 0, 0, 768, 1024);
     area.append(canvas);
     document.body.append(area);
     guide(area, 116, 700, 412, 960);
-    expect(measureFitFrame(canvas)).toBeUndefined();
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.bottom).toBe(700 - 12);
+    expect(stage.rect.left).toBe(0);
+  });
+
+  describe('in a corner, beside docked panels', () => {
+    function tabletStage(width: number, height: number, column: number) {
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      const canvas = placed(
+        document.createElement('canvas'),
+        0,
+        0,
+        width,
+        height
+      );
+      area.append(canvas);
+      // The docked column the tablet keeps on its right.
+      const layer = document.createElement('div');
+      layer.className = 'panel-dock-layer';
+      const docked = document.createElement('div');
+      docked.className = 'panel-column';
+      layer.append(placed(docked, column, 60, width, height));
+      area.append(layer);
+      document.body.append(area);
+      return { area, canvas };
+    }
+
+    it('frames a portrait tablet’s model above its corner card', () => {
+      // 768 × 1024: the 296 px card from x 116 to 412 stood over the new
+      // box it asks to be tapped, beside the docked column.
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      guide(area, 116, 606, 412, 845);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(606 - 12);
+      expect(stage.rect.right).toBe(462 - 12);
+    });
+
+    it('frames a landscape tablet’s model beside its card where that leaves more', () => {
+      // 1024 × 768: the card from y 350 left a 278 px band above it, and
+      // 412 px beside it.
+      const { area, canvas } = tabletStage(1024, 768, 864);
+      guide(area, 124, 350, 420, 589);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(768);
+      expect(stage.rect.left).toBe(420 + 12);
+      expect(stage.rect.right).toBe(864 - 12);
+    });
+
+    it('never frames beside the card by letting a docked column go', () => {
+      // 768 × 1024 with a left rail to x 104 and the column from x 462:
+      // beside the card left 26 px, and letting the column go to widen it
+      // framed the box behind the column (review on this change).
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      const rail = document.createElement('div');
+      rail.className = 'workspace-column-float';
+      area.append(placed(rail, 0, 60, 104, 1024));
+      guide(area, 116, 606, 412, 845);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(606 - 12);
+      expect(stage.rect.right).toBe(462 - 12);
+    });
+
+    it('frames above the card past a floating panel standing below that band', () => {
+      // The right panel floats from y 650 to 900, under the band above the
+      // card: that band is clear of it, and wider than the stage beside it
+      // (re-check on this change).
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      area.querySelector('.panel-dock-layer')!.replaceChildren();
+      const floating = document.createElement('div');
+      floating.className = 'panel-unpinned';
+      area
+        .querySelector('.panel-dock-layer')!
+        .append(placed(floating, 462, 650, 768, 900));
+      guide(area, 116, 606, 412, 845);
+      expect(measureClearStage(canvas)!.rect.bottom).toBe(606 - 12);
+      expect(guideShapesClearStage(canvas)).toBe(true);
+    });
+
+    it('asks for a reframe only where the card changes the stage', () => {
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      const card = guide(area, 116, 606, 412, 845);
+      expect(guideShapesClearStage(canvas)).toBe(true);
+      // Over the docked column, the card changes nothing: a request could
+      // only undo the user's pan.
+      placed(card, 470, 606, 766, 845);
+      expect(guideShapesClearStage(canvas)).toBe(false);
+    });
+
+    it('leaves a card out that stands clear of the stage', () => {
+      // The card under the docked column: nothing of the model's to cover.
+      const { area, canvas } = tabletStage(1024, 768, 500);
+      guide(area, 600, 350, 896, 589);
+      expect(measureClearStage(canvas)!.rect.bottom).toBe(768);
+    });
+  });
+
+  describe('cornersClearOfStage', () => {
+    // 1440 × 900 with the card at x 72–368, y 600–840: the clear stage is
+    // framed beside it, from x 380.
+    function desk() {
+      const workspace = document.createElement('main');
+      workspace.className = 'workspace';
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      workspace.append(area);
+      const canvas = placed(document.createElement('canvas'), 0, 0, 1440, 900);
+      area.append(canvas);
+      document.body.append(workspace);
+      guide(area, 72, 600, 368, 840);
+      return canvas;
+    }
+    /** The corners of a screen rectangle, in the canvas's NDC. */
+    function box(left: number, top: number, right: number, bottom: number) {
+      const points: ReadonlyArray<readonly [number, number]> = [
+        [left, top],
+        [right, top],
+        [left, bottom],
+        [right, bottom]
+      ];
+      return points.map(([x, y]) => ({
+        x: (x / 1440) * 2 - 1,
+        y: 1 - (y / 900) * 2,
+        z: 0
+      }));
+    }
+
+    it('holds a model above the card though the stage was framed beside it', () => {
+      // Pressing Next reframed this (preview check on #1969).
+      expect(cornersClearOfStage(desk(), box(100, 100, 500, 560))).toBe(true);
+    });
+
+    it('lets a model under the card be reframed', () => {
+      expect(cornersClearOfStage(desk(), box(100, 400, 500, 700))).toBe(false);
+    });
+
+    it('lets a model past the canvas be reframed', () => {
+      expect(cornersClearOfStage(desk(), box(900, 100, 1500, 500))).toBe(false);
+    });
+
+    it('lets a model beside the card but under the command bar be reframed', () => {
+      // The stage without the card reaches the canvas's foot, over the
+      // command bar's lane (review on #1974).
+      const canvas = desk();
+      const lane = document.createElement('div');
+      lane.className = 'command-bar-lane';
+      placed(lane, 0, 860, 1440, 900);
+      // The bar it holds is centred, 520 px wide.
+      const bar = document.createElement('div');
+      bar.className = 'command-search';
+      lane.append(placed(bar, 460, 860, 980, 900));
+      canvas.closest('.workspace')!.append(lane);
+      expect(cornersClearOfStage(canvas, box(375, 700, 600, 880))).toBe(false);
+      // Past the bar's end, the lane is only a transparent wrapper (re-check
+      // on #1974).
+      expect(cornersClearOfStage(canvas, box(1000, 700, 1200, 880))).toBe(true);
+    });
+
+    it('leaves a model under a panel no frame can keep clear of', () => {
+      // 768 × 1024: the drawer and the docked column leave an 18 px band,
+      // so every frame lets the drawer go. A reframe would land the model
+      // behind it all the same, so the request leaves it (review on #1983;
+      // #1974 reframed it there).
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      const canvas = placed(document.createElement('canvas'), 0, 0, 768, 1024);
+      area.append(canvas);
+      const drawer = document.createElement('div');
+      drawer.className = 'workspace-column-float';
+      area.append(placed(drawer, 0, 60, 420, 1000));
+      const layer = document.createElement('div');
+      layer.className = 'panel-dock-layer';
+      const docked = document.createElement('div');
+      docked.className = 'panel-column';
+      layer.append(placed(docked, 462, 60, 768, 1024));
+      area.append(layer);
+      document.body.append(area);
+      guide(area, 116, 606, 412, 845);
+      const corners = [
+        [75, 650],
+        [105, 650],
+        [75, 720],
+        [105, 720]
+      ].map(([x = 0, y = 0]) => ({
+        x: (x / 768) * 2 - 1,
+        y: 1 - (y / 1024) * 2,
+        z: 0
+      }));
+      expect(cornersClearOfStage(canvas, corners)).toBe(true);
+    });
+
+    it('holds a model inside a panel’s gap, clear of the panel', () => {
+      // A rail from x 1200: the stage keeps 12 px from it, and a model 7 px
+      // clear of it read as covered (preview check on #1974).
+      const canvas = desk();
+      const rail = document.createElement('div');
+      rail.className = 'instrument-rail';
+      canvas
+        .closest('.viewer-area')!
+        .append(placed(rail, 1200, 100, 1240, 800));
+      expect(cornersClearOfStage(canvas, box(900, 100, 1193, 500))).toBe(true);
+      expect(cornersClearOfStage(canvas, box(900, 100, 1205, 500))).toBe(false);
+    });
+
+    it('judges a model by its outline, not its bounding rectangle', () => {
+      // A diamond whose bounding rectangle (x 300–530, y 370–700) reaches
+      // over the card's corner (x 72–368, y 600–840) while the diamond's
+      // own edge passes x 390 at the card's top.
+      const canvas = desk();
+      const ndc = (x: number, y: number) => ({
+        x: (x / 1440) * 2 - 1,
+        y: 1 - (y / 900) * 2,
+        z: 0
+      });
+      const diamond = [
+        ndc(300, 450),
+        ndc(450, 370),
+        ndc(530, 450),
+        ndc(450, 700)
+      ];
+      expect(cornersClearOfStage(canvas, diamond)).toBe(true);
+      const over = [ndc(200, 620), ndc(450, 370), ndc(530, 450), ndc(450, 700)];
+      expect(cornersClearOfStage(canvas, over)).toBe(false);
+    });
+
+    it('lets a model under the Tools drawer’s fold be reframed', () => {
+      const canvas = desk();
+      const fold = document.createElement('div');
+      fold.className = 'command-flyout';
+      fold.setAttribute('data-rail-flyout', '');
+      canvas.closest('.viewer-area')!.append(placed(fold, 400, 60, 640, 700));
+      expect(cornersClearOfStage(canvas, box(500, 100, 900, 500))).toBe(false);
+    });
+
+    it('holds a model inside the clear stage', () => {
+      expect(cornersClearOfStage(desk(), box(500, 100, 900, 800))).toBe(true);
+    });
   });
 
   it('frames as if it were not there where it would leave only a strip', () => {
@@ -380,6 +657,79 @@ describe('the modeling guide', () => {
 });
 
 describe('measurePickFrame', () => {
+  it('keeps a request’s frame beside the Tools drawer where Fit lets it go', () => {
+    // 1024 × 768, docked: the drawer (a rail flyout) leaves 243 px before
+    // the rail, under Fit's quarter (256) but over a request's fifth (205).
+    // The request kept letting the drawer go and framed the model behind
+    // it (preview check on #1974).
+    const canvas = stage('docked');
+    const column = placed(document.createElement('div'), 10, 260, 50, 590);
+    column.className = 'workspace-column-float';
+    const fold = placed(document.createElement('div'), 60, 60, 401, 740);
+    fold.className = 'command-flyout';
+    fold.setAttribute('data-rail-flyout', '');
+    column.append(fold);
+    canvas.closest('.viewer-area')!.append(column);
+    expect(measureClearStageRequestFrame(canvas)!.minX).toBeCloseTo(
+      ((401 + 12) / 1024) * 2 - 1,
+      12
+    );
+    expect(measureFitFrame(canvas)!.minX).toBeCloseTo(
+      ((50 + 12) / 1024) * 2 - 1,
+      12
+    );
+  });
+
+  it('leaves a phone’s model under its Tools drawer, which no frame avoids', () => {
+    // 390 × 844: the 236 px drawer is wider than half the stage, so every
+    // frame lets it go. A reframe landed the model behind it all the same
+    // (review on #1983).
+    const workspace = document.createElement('main');
+    workspace.className = 'workspace';
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 390, 844);
+    area.append(canvas);
+    const fold = placed(document.createElement('div'), 48, 60, 284, 700);
+    fold.className = 'command-flyout';
+    fold.setAttribute('data-rail-flyout', '');
+    area.append(fold);
+    workspace.append(area);
+    document.body.append(workspace);
+    const corners = [
+      [120, 250],
+      [270, 250],
+      [120, 380],
+      [270, 380]
+    ].map(([x = 0, y = 0]) => ({
+      x: (x / 390) * 2 - 1,
+      y: 1 - (y / 844) * 2,
+      z: 0
+    }));
+    expect(cornersClearOfStage(canvas, corners)).toBe(true);
+  });
+
+  it('reframes a request above the command bar, as a creation frame', () => {
+    // A reframe left a corner under the bar (review on #1983).
+    const canvas = stage('none');
+    const lane = document.createElement('div');
+    lane.className = 'command-bar-lane';
+    placed(lane, 200, 700, 824, 756);
+    const workspace = document.createElement('main');
+    workspace.className = 'workspace';
+    const area = canvas.closest('.viewer-area')!;
+    area.replaceWith(workspace);
+    workspace.append(area, lane);
+    expect(measureClearStageRequestFrame(canvas)!.minY).toBeCloseTo(
+      measureCreationFrame(canvas).minY,
+      12
+    );
+    expect(measureClearStageRequestFrame(canvas)!.minY).toBeCloseTo(
+      1 - ((700 - 12) / 768) * 2,
+      12
+    );
+  });
+
   it('keeps a pick clear of the open tool fold as well as the card', () => {
     const canvas = stage('docked');
     const column = placed(document.createElement('div'), 10, 260, 50, 590);

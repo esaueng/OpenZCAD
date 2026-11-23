@@ -21,6 +21,7 @@ import { cornerVolumeChange, vec } from '../support/combination-oracle';
 import type { Ladder } from './distance-ladder';
 import { LADDER_SOURCE_REFUSAL_PINS } from './pins';
 import {
+  BASE_CHAMFER,
   BOX,
   EMBED,
   POST,
@@ -46,7 +47,11 @@ export function sameSnapshot(
   expect(faceCensus(actual)).toEqual(faceCensus(expected));
 }
 
-function expectVolume(actual: number, expected: number, oracleError = 0): void {
+export function expectVolume(
+  actual: number,
+  expected: number,
+  oracleError = 0
+): void {
   const tolerance = Math.max(0.05, 1e-6 * Math.abs(expected), 4 * oracleError);
   expect(
     Math.abs(actual - expected),
@@ -54,7 +59,7 @@ function expectVolume(actual: number, expected: number, oracleError = 0): void {
   ).toBeLessThanOrEqual(tolerance);
 }
 
-function integratedVolume(
+export function integratedVolume(
   positions: ArrayLike<number>,
   indices: ArrayLike<number>
 ): number {
@@ -103,8 +108,8 @@ export async function assertSolid(
     expect(kernel.validateSolid(solid)).toBe(0);
     expectVolume(kernel.volume(solid, 0.001), body.volume);
     if (meshOracle) {
-      // WS1's two-resolution error estimate for a changed corner where the
-      // uniform rounded-box model no longer applies. Integrate the triangles
+      // WS1's two-resolution error estimate for a local band or changed corner.
+      // Integrate the triangles
       // directly, without calling the kernel's B-rep volume integrator.
       const measure = (deflection: number, angle: number) => {
         const mesh = kernel.tessellateSolidGroupedBinary(
@@ -123,7 +128,8 @@ export async function assertSolid(
   }
 }
 
-function boxVolume(radius: number): number {
+/** Part B's closed form: the box with every edge rounded at `radius`. */
+export function boxVolume(radius: number): number {
   const a = BOX.width - 2 * radius;
   const b = BOX.height - 2 * radius;
   const c = BOX.depth - 2 * radius;
@@ -351,6 +357,114 @@ async function assertOffset(
   expect(faceCensus(after)).toEqual(faceCensus(source.body));
 }
 
+function assertCornerPostRoot(
+  part: ReferencePart,
+  selected: FaceGeometry,
+  after: BodyRepresentation,
+  distance: number
+) {
+  // This edit resizes only the junction torus. Changing the source fillet
+  // would change four other edges as well. Check its circular profile and
+  // stationary neighbour bands, alongside the two-resolution volume oracle.
+  const radius = ROOT + distance;
+  const surfaces = after.topology!.faces.map((f) => f.geometry!);
+  const root = surfaces.filter(
+    (g) =>
+      g.surfaceType === 'torus' &&
+      pointMatches(g.torusCenter, { x: 0, y: 0, z: BOX.depth + radius }, 0) &&
+      Math.abs(g.majorRadius! - (POST.radius + radius)) < 1e-8
+  );
+  expect(root).toHaveLength(1);
+  expect(root[0]!.minorRadius).toBeCloseTo(radius, 8);
+  expect(faceCensus(after)).toEqual(faceCensus(part.body));
+  for (const { geometry } of part.body.topology!.faces) {
+    if (geometry?.surfaceType === 'torus' && geometry !== selected)
+      assertShift(geometry, after, 0, false);
+  }
+  const cylinders = (body: BodyRepresentation) =>
+    body
+      .topology!.faces.flatMap(({ geometry }) =>
+        geometry?.surfaceType === 'cylinder' ? [geometry.radius!] : []
+      )
+      .sort((a, b) => a - b);
+  expect(cylinders(after)).toEqual(cylinders(part.body));
+}
+
+async function assertCornerPostOffset(
+  session: Session,
+  part: ReferencePart,
+  ladder: Ladder,
+  face: FaceGeometry,
+  distance: number,
+  after: BodyRepresentation,
+  join?: { excessVolume: number }
+) {
+  const bottom = ladder.target === 'bottom';
+  const cap = ladder.target === 'post-cap';
+  const shoulder = ladder.target === 'shoulder';
+  const dz = face.normal!.z * distance;
+  if (join) {
+    expect(faceCensus(after)).toEqual(
+      [...faceCensus(part.body), 'torus', 'bspline', 'bspline'].sort()
+    );
+    const planes = after.topology!.faces.filter(
+      ({ geometry: g }) =>
+        g?.surfaceType === 'plane' &&
+        g.normal?.z === face.normal!.z &&
+        Math.abs(g.center.z - face.center.z - dz) < 1e-8
+    );
+    expect(planes).toHaveLength(1);
+    const capZ = POST.height + (cap ? distance : 0);
+    const rimCenter = { x: 0, y: 0, z: capZ - RIM };
+    const surfaces = after.topology!.faces.map(({ geometry }) => geometry!);
+    expect(
+      surfaces.filter(
+        (g) =>
+          g.surfaceType === 'torus' &&
+          pointMatches(g.torusCenter, rimCenter, 0) &&
+          Math.abs(g.minorRadius! - RIM) < 1e-8
+      )
+    ).toHaveLength(2);
+    expect(
+      surfaces.filter(
+        (g) =>
+          g.surfaceType === 'bspline' &&
+          g.center.z > rimCenter.z &&
+          g.center.z < capZ
+      )
+    ).toHaveLength(2);
+  } else {
+    expect(faceCensus(after)).toEqual(faceCensus(part.body));
+    // The base chamfer moves with the bottom. The prismatic section above
+    // it includes the round post, which stays fixed in a shoulder offset.
+    const disk = Math.PI * POST.radius ** 2;
+    const section = cap ? disk : part.baseSection! - (shoulder ? disk : 0);
+    const group = part.body
+      .topology!.faces.map((f) => f.geometry!)
+      .filter((g) =>
+        bottom
+          ? g.center.z <= BASE_CHAMFER
+          : cap
+            ? g.center.z >= POST.height - RIM
+            : Math.abs(g.center.z - face.center.z) <= ROOT &&
+              (g.surfaceType !== 'cylinder' || g.featureType === 'blend')
+      );
+    expect(group).toContain(face);
+    for (const g of group) assertShift(g, after, dz, false);
+    expectVolume(after.volume - part.body.volume, section * distance);
+  }
+  const rebuilt = await referencePart(session, 'A', {
+    depth: BOX.depth + (bottom || shoulder ? distance : 0),
+    postHeight: POST.height + (bottom || cap ? distance : 0)
+  });
+  if (join) {
+    expectVolume(after.volume - rebuilt.body.volume, join.excessVolume);
+  } else {
+    expectVolume(after.volume, rebuilt.body.volume);
+    expect(faceCensus(after)).toEqual(faceCensus(rebuilt.body));
+  }
+}
+
 export async function assertEditedShape(
   session: Session,
   part: ReferencePart,
@@ -358,8 +472,22 @@ export async function assertEditedShape(
   faces: FaceTopology[],
   distance: number,
   after: BodyRepresentation,
-  cornerOnly: boolean
+  cornerOnly: boolean,
+  join?: { excessVolume: number }
 ): Promise<void> {
+  if (ladder.part === 'A') {
+    if (ladder.operation === 'blend-radius')
+      return assertCornerPostRoot(part, faces[0]!.geometry!, after, distance);
+    return assertCornerPostOffset(
+      session,
+      part,
+      ladder,
+      faces[0]!.geometry!,
+      distance,
+      after,
+      join
+    );
+  }
   if (ladder.operation === 'offset' || ladder.operation === 'offset-set') {
     return assertOffset(session, part, ladder, faces, distance, after);
   }

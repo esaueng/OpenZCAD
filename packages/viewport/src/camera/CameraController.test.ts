@@ -404,6 +404,22 @@ describe('CameraController external orbit lifecycle', () => {
     controller.dispose();
   });
 
+  it('reports a camera gesture as held from its start until its release', () => {
+    // A reframe asked for mid-pan waits on this (preview check on #1969).
+    const { controller } = createController(false);
+    const orbit = controller.controls as unknown as THREE.EventDispatcher<{
+      start: object;
+      end: object;
+    }> & { state: number };
+    expect(controller.gestureHeld).toBe(false);
+    orbit.state = 2; // PAN
+    orbit.dispatchEvent({ type: 'start' });
+    expect(controller.gestureHeld).toBe(true);
+    orbit.dispatchEvent({ type: 'end' });
+    orbit.state = -1;
+    expect(controller.gestureHeld).toBe(false);
+  });
+
   it('lands a held roll when its glide is interrupted, and releases it to an orbit', () => {
     const { controller } = createController(false);
     const v = new THREE.Vector3(1, 0, 0);
@@ -1009,6 +1025,24 @@ describe('CameraController wheel device detection', () => {
 });
 
 describe('CameraController wheel zoom', () => {
+  it('reports a buttonless pan only when the wheel input is accepted as pan', () => {
+    const onTrackpadPan = vi.fn();
+    const { controller, wheel } = createController(false, undefined, {
+      onTrackpadPan,
+      pointerNavigation: () => 'trackpad'
+    });
+    wheel({ ctrlKey: true });
+    wheel({ deltaX: 4, deltaY: 10, buttons: 1 });
+    expect(onTrackpadPan).not.toHaveBeenCalled();
+    wheel({ deltaX: 4, deltaY: 10 });
+    expect(onTrackpadPan).toHaveBeenCalledOnce();
+    expect(controller.gestureHeld).toBe(false);
+    controller.controls.enablePan = false;
+    wheel({ deltaX: 4, deltaY: 10 });
+    expect(onTrackpadPan).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
   it('keeps trackpad pan inert while controls or panning are disabled', () => {
     const { controller, wheel } = createController(false);
     const before = controller.capture();

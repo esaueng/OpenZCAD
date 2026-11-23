@@ -428,13 +428,20 @@ describe('WorkspaceTour', () => {
 describe('WorkspaceTour over a phone stage', () => {
   // happy-dom lays nothing out: the stage and the card report where they
   // stand, a phone's 390 px stage under a 246 px card across its middle.
-  function layOut(cardWidth: number) {
+  function layOut(cardWidth: number, cardLeft = 72) {
     return vi
       .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
       .mockImplementation(function (this: HTMLElement) {
-        return this.classList.contains('viewer-area')
+        // The stage and its canvas share one rectangle.
+        return this.classList.contains('viewer-area') ||
+          this.tagName === 'CANVAS'
           ? DOMRect.fromRect({ x: 0, y: 0, width: 390, height: 844 })
-          : DOMRect.fromRect({ x: 72, y: 404, width: cardWidth, height: 250 });
+          : DOMRect.fromRect({
+              x: cardLeft,
+              y: 404,
+              width: cardWidth,
+              height: 250
+            });
       });
   }
 
@@ -445,6 +452,7 @@ describe('WorkspaceTour over a phone stage', () => {
     const onCoverStage = vi.fn();
     const { rerender, container } = render(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           onDismiss={vi.fn()}
@@ -456,6 +464,7 @@ describe('WorkspaceTour over a phone stage', () => {
     const asked = onCoverStage.mock.calls.length;
     rerender(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           featureCount={1}
@@ -469,11 +478,14 @@ describe('WorkspaceTour over a phone stage', () => {
     spy.mockRestore();
   });
 
-  it('asks nothing for a card that stands beside the model', () => {
-    const spy = layOut(150);
+  it('asks nothing for a card that leaves the clear stage as it was', () => {
+    // Off the stage's edge: framing clear of it changes nothing, and a
+    // request could only undo the user's pan.
+    const spy = layOut(150, 400);
     const onCoverStage = vi.fn();
     const { rerender } = render(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           onDismiss={vi.fn()}
@@ -483,6 +495,7 @@ describe('WorkspaceTour over a phone stage', () => {
     );
     rerender(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           featureCount={1}
@@ -492,6 +505,37 @@ describe('WorkspaceTour over a phone stage', () => {
       </div>
     );
     expect(onCoverStage).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('asks for a corner card that stood over the new box', () => {
+    // A tablet's or a desktop's 296 px card in its corner, narrower than
+    // half the stage (preview check on #1969's parent).
+    const spy = layOut(150);
+    const onCoverStage = vi.fn();
+    const { rerender } = render(
+      <div className="viewer-area">
+        <canvas />
+        <WorkspaceTour
+          {...idle}
+          onDismiss={vi.fn()}
+          onCoverStage={onCoverStage}
+        />
+      </div>
+    );
+    const asked = onCoverStage.mock.calls.length;
+    rerender(
+      <div className="viewer-area">
+        <canvas />
+        <WorkspaceTour
+          {...idle}
+          featureCount={1}
+          onDismiss={vi.fn()}
+          onCoverStage={onCoverStage}
+        />
+      </div>
+    );
+    expect(onCoverStage.mock.calls.length).toBeGreaterThan(asked);
     spy.mockRestore();
   });
 });

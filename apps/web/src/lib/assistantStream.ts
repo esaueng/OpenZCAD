@@ -17,6 +17,7 @@ import {
 } from './api';
 import {
   CONSENTED_ASSISTANT_PROPOSAL_PATH,
+  ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   assistantConsentVersion
 } from '@openzcad/shared';
 import { loadLocalAppSettings } from './appSettings';
@@ -37,6 +38,7 @@ interface AssistantStreamOptions {
 
 export type AssistantStreamErrorCode =
   | 'AI_E2EE_PROJECT'
+  | typeof ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
   | 'AI_EMPTY_REPLY'
   | 'AI_INVALID_JSON'
   | 'AI_INVALID_REPLY'
@@ -113,6 +115,8 @@ export interface AssistantStatus {
   provider: string;
   model: string;
   reasoningEffort: string;
+  encryptedProjectUnsupported?: true;
+  encryptedProjectMayTrain?: true;
   /** Where requests go; an encrypted project's consent binds it. */
   endpoint?: string;
 }
@@ -212,6 +216,12 @@ export function normalizeAssistantStatus(raw: unknown): AssistantStatus {
     provider: text(value.provider),
     model: text(value.model),
     reasoningEffort: text(value.reasoningEffort),
+    ...(value.encryptedProjectUnsupported === true
+      ? { encryptedProjectUnsupported: true }
+      : {}),
+    ...(value.encryptedProjectMayTrain === true
+      ? { encryptedProjectMayTrain: true }
+      : {}),
     ...(typeof value.endpoint === 'string' ? { endpoint: value.endpoint } : {})
   };
 }
@@ -444,7 +454,18 @@ async function streamAssistantReplyAttempt(
   if (!response.ok || !response.body) {
     const error = (await response.json().catch(() => null)) as {
       error?: string;
+      code?: string;
     } | null;
+    if (
+      response.status === 409 &&
+      error?.code === ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+    ) {
+      throw new AssistantStreamError(
+        ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
+        error.error ?? 'Assistant consent changed for this project.',
+        requestId
+      );
+    }
     throw new Error(
       messageWithReference(
         error?.error ?? `Assistant request failed (${response.status}).`,

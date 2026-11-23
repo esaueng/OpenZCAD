@@ -147,6 +147,7 @@
     "AI_MODEL": "nvidia/nemotron-3.5-super-vl:free",
     "AI_REASONING_EFFORT": "high",
     "AI_DEPLOYMENT_FREE_ENABLED": "true",
+    "AI_ENCRYPTED_FREE_TRAINING_ENABLED": "true",
     "PROJECT_SHARING_ENABLED": "true",
     "PROJECT_EDIT_LEASES_ENFORCED": "true",
     "PROJECT_PERSONAL_SYNC_ENABLED": "true",

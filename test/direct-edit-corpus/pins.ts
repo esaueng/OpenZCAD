@@ -145,21 +145,49 @@ export interface LadderRefusalPin {
 /** Departures from the authored geometric limit, including legal topology changes. */
 export const LADDER_LIMIT_PINS = [
   {
-    target: 'A/cone-cap',
+    target: 'A/bottom',
+    distances: [-8.9],
+    owner: 'K10',
+    reason:
+      'The chamfer carry refuses the last inward step before wall collapse.'
+  },
+  {
+    target: 'A/post-cap',
+    distances: [-8.6],
+    owner: 'K10',
+    reason:
+      'The cap rounds meet the shoulder blend at the nominal limit; the next step builds with changed topology.'
+  },
+  {
+    target: 'A/shoulder',
+    distances: [8.6],
+    owner: 'K10',
+    reason:
+      'The shoulder blend meets the cap round at the nominal limit; the next step builds with changed topology.'
+  },
+  {
+    target: 'A/root',
+    distances: [4.25, 8.4],
+    owner: 'K10',
+    reason:
+      'The adjoining fillets cannot re-blend at the larger requested radii.'
+  },
+  {
+    target: 'frustum/cone-cap',
     distances: [-0.1, -1, -5.5, -11, -21.9, 0.1, 1, 7.5, 15, 29.9],
     owner: 'K10',
     reason:
       'The conical rim fillet cannot be carried even before the cap reaches either bound.'
   },
   {
-    target: 'A/shoulder',
+    target: 'frustum/shoulder',
     distances: [-0.1, -1, -2.25, -4.5, -8.9, 0.1, 1, 5, 10, 19.9],
     owner: 'K10',
     reason:
       'The conical root fillet cannot be carried even before the shoulder reaches either bound.'
   },
   {
-    target: 'A/root',
+    target: 'frustum/root',
     distances: [-0.1, -0.5, -1, -1.9, 0.1, 1, 1.75, 3.5, 6.9],
     owner: 'K10',
     reason: 'The plane/cone pair cannot be re-filleted by direct resize.'
@@ -201,10 +229,40 @@ export const LADDER_MONOTONIC_PINS: readonly {
   laterSuccesses: readonly number[];
   owner: 'K10' | 'K05';
   finding: string;
-}[] = [];
+}[] = [
+  {
+    target: 'A/post-cap',
+    firstRefusal: -8.5,
+    laterSuccesses: [-8.6],
+    owner: 'K10',
+    finding:
+      'The rim touches the junction at contact. After crossing it the rebuild splits a torus and fits two additional corner patches.'
+  },
+  {
+    target: 'A/shoulder',
+    firstRefusal: 8.5,
+    laterSuccesses: [8.6],
+    owner: 'K10',
+    finding:
+      'The junction touches the rim at contact. After crossing it the rebuild splits a torus and fits two additional corner patches.'
+  }
+];
 
 /** The re-blend stopped resizing the whole connected cluster at these steps. */
 export const BOX_CORNER_ONLY_STEPS = [4.4, 4.5, 4.6, 9];
+
+/** The two ways of crossing the same rim give the same fitted cap join.
+ * The measured excess over the independent source build is in mm³. */
+export const CAP_JOIN_PINS = [
+  { target: 'A/post-cap', distance: -8.6 },
+  { target: 'A/shoulder', distance: 8.6 }
+].map((cell) => ({
+  ...cell,
+  owner: 'K10',
+  message:
+    'Feature "Offset face": The upper rim was rebuilt with approximate corner surfaces.',
+  excessVolume: 8.11027
+}));
 
 /** Separate from the local outcome. The root fillet refuses on source replay at 0.1 mm plate thickness. */
 export const LADDER_SOURCE_REFUSAL_PINS = [
@@ -225,16 +283,36 @@ export const LADDER_SOURCE_REFUSAL_PINS = [
 export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
   {
     target: 'A/bottom',
+    distances: [-8.9, -9, -9.1, -18],
+    message:
+      "This face's chamfered edge can't move with it here. Remove the chamfer in History, offset the face, then chamfer the edge again.",
+    family: 'direct-edit',
+    category: 'unsupported',
+    code: 'offset_face_chamfer_rim_not_carried',
+    owner: 'K10'
+  },
+  {
+    target: 'A/post-cap',
+    distances: [-8.5, -17],
+    message: 'The exact kernel failed internally on this operation.',
+    family: 'direct-edit',
+    category: 'internal',
+    code: 'offset_face_refused',
+    owner: 'K10'
+  },
+  {
+    target: 'A/shoulder',
     distances: [-9, -9.1],
     message:
       'A neighbouring face would shrink to nothing past -9. Try a smaller offset.',
     family: 'direct-edit',
     category: 'invalid_topology',
     code: 'offset_face_collapses_neighbor',
-    owner: 'K10'
+    owner: 'K10',
+    limit: -9
   },
   {
-    target: 'A/bottom',
+    target: 'A/shoulder',
     distances: [-18],
     message:
       'The face would run into another part of the body before it got that far.',
@@ -244,7 +322,65 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     owner: 'K10'
   },
   {
-    target: 'A/cone-cap',
+    target: 'A/shoulder',
+    distances: [8.5, 17],
+    message: 'The exact kernel failed internally on this operation.',
+    family: 'direct-edit',
+    category: 'internal',
+    code: 'offset_face_refused',
+    owner: 'K10'
+  },
+  {
+    target: 'A/root',
+    distances: [-2],
+    message:
+      'The exact kernel does not support this combination of shapes yet.',
+    family: 'blend',
+    category: 'unsupported',
+    code: 'resize-blend-failed',
+    owner: 'K10'
+  },
+  {
+    target: 'A/root',
+    distances: [-2.1, -4],
+    message: 'Blend radius must be zero or greater.',
+    family: 'direct-edit',
+    category: 'invalid_input',
+    code: 'blend_radius_negative',
+    owner: 'K10'
+  },
+  {
+    target: 'A/root',
+    distances: [4.25, 8.4, 8.5, 8.6, 17],
+    message:
+      'The adjoining fillets could not be rebuilt at this radius. Try a smaller radius or edit the fillets in History.',
+    family: 'blend',
+    category: 'unsupported',
+    code: 'blend-cluster-reblend-failed',
+    owner: 'K10'
+  },
+  {
+    target: 'frustum/bottom',
+    distances: [-9, -9.1],
+    message:
+      'A neighbouring face would shrink to nothing past 9. Try a smaller offset.',
+    family: 'direct-edit',
+    category: 'invalid_topology',
+    code: 'offset_face_collapses_neighbor',
+    owner: 'K10'
+  },
+  {
+    target: 'frustum/bottom',
+    distances: [-18],
+    message:
+      'The face would run into another part of the body before it got that far.',
+    family: 'direct-edit',
+    category: 'internal',
+    code: 'offset_face_refused',
+    owner: 'K10'
+  },
+  {
+    target: 'frustum/cone-cap',
     distances: [
       -0.1, -1, -5.5, -11, -21.9, -22, -22.1, -44, 0.1, 1, 7.5, 15, 29.9, 30,
       30.1, 60
@@ -257,7 +393,7 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     owner: 'K10'
   },
   {
-    target: 'A/shoulder',
+    target: 'frustum/shoulder',
     distances: [
       -0.1, -1, -2.25, -4.5, -8.9, -9, -9.1, -18, 0.1, 1, 5, 10, 19.9, 20, 20.1,
       40
@@ -270,7 +406,7 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     owner: 'K10'
   },
   {
-    target: 'A/root',
+    target: 'frustum/root',
     distances: [-0.1, -0.5, -1, -1.9, -2, 0.1, 1, 1.75, 3.5, 6.9, 7, 7.1, 14],
     message:
       "This fillet joins faces that removing or resizing a fillet can't rebuild yet; that works for fillets between flat and cylindrical faces. Edit the fillet in History instead.",
@@ -280,7 +416,7 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     owner: 'K10'
   },
   {
-    target: 'A/root',
+    target: 'frustum/root',
     distances: [-2.1, -4],
     message: 'Blend radius must be zero or greater.',
     family: 'direct-edit',

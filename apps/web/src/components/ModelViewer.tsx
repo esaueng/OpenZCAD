@@ -79,9 +79,7 @@ import { pointerSlack } from '../lib/pointerSlack';
 import { renderChipText, setElementText } from '../lib/domText';
 import { TouchLoupe } from './viewer/touchLoupe';
 import {
-  FrameIntervalMeter,
-  NAVIGATION_PIXEL_RATIO,
-  navigationPixelRatio,
+  NavigationResolution,
   displayPixelRatio,
   shadowMapSizeFor,
   viewportPixelRatio,
@@ -340,8 +338,10 @@ import {
   SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
 import {
+  cornersClearOfStage,
   cornersWithinFrame,
   measureClearStage,
+  measureClearStageRequestFrame,
   measureCreationFrame,
   measureFitFrame,
   measureOpeningFrame,
@@ -1963,6 +1963,8 @@ export interface SceneContext {
    */
   renderedBodies: readonly GeometryBodyRepresentation[] | null;
   hasFitCamera: boolean;
+  /** Whether an orbit, pan or zoom is held on the camera. */
+  cameraGestureHeld(): boolean;
   /** Viewport size in CSS pixels, the unit fat-line widths are given in. */
   fatLineResolution(): FatLineResolution;
   dimensionLabels: Set<DimensionLabelBinding>;
@@ -3597,11 +3599,14 @@ export function ModelViewer({
     const canvasWidth = () => canvasCssWidth || renderer.domElement.clientWidth;
     const canvasHeight = () =>
       canvasCssHeight || renderer.domElement.clientHeight;
-    const applyPixelRatio = () =>
-      renderer.setPixelRatio(
-        viewportPixelRatio(sampling, window.devicePixelRatio)
-      );
-    applyPixelRatio();
+    const navigationResolution = new NavigationResolution();
+    let fullPixelRatio = viewportPixelRatio(sampling, window.devicePixelRatio);
+    renderer.setPixelRatio(fullPixelRatio);
+    const updateFullPixelRatio = (displayRatio: number) => {
+      navigationResolution.reset();
+      fullPixelRatio = viewportPixelRatio(sampling, displayRatio);
+      renderer.setPixelRatio(fullPixelRatio);
+    };
     // Device pixel ratio is read once at construction, so dragging the window
     // to a display with a different ratio left the backing store at the old
     // one — permanently soft, or oversampled, with nothing to prompt a
@@ -3615,7 +3620,7 @@ export function ModelViewer({
       pixelRatioQuery.addEventListener('change', onPixelRatioChange);
     };
     function onPixelRatioChange() {
-      applyPixelRatio();
+      updateFullPixelRatio(window.devicePixelRatio);
       resizePending = true;
       requestRender();
       watchPixelRatio();
@@ -3697,6 +3702,8 @@ export function ModelViewer({
     // The camera rig owns both cameras, the orbit controls, the projection
     // mode, and view glides. `requestRender` is passed as a thunk because it
     // is a hoisted function declaration further down this effect.
+    let viewChangedSinceFrame = false;
+    let trackpadPanning = false;
     const cameraRig = new CameraController({
       host,
       domElement: renderer.domElement,
@@ -3704,7 +3711,13 @@ export function ModelViewer({
       wheelElement: host.parentElement ?? host,
       requestRender: () => requestRender(),
       fieldOfView: fieldOfViewRef.current,
-      onViewChange: (view) => onViewChangeRef.current(view),
+      onTrackpadPan: () => {
+        trackpadPanning = true;
+      },
+      onViewChange: (view) => {
+        viewChangedSinceFrame = true;
+        onViewChangeRef.current(view);
+      },
       onViewSettled: (view) => onViewSettledRef.current(view),
       reducedMotion: () => reducesMotion(reducedMotionRef.current),
       // Defaults on: zooming toward the pointer is what every modern CAD
@@ -4158,6 +4171,7 @@ export function ModelViewer({
       edgeOverlaysByBodyId,
       renderedBodies: null,
       hasFitCamera: false,
+      cameraGestureHeld: () => cameraRig.gestureHeld,
       get hoveredBodyId() {
         return selection.hoveredBodyId;
       },
@@ -4179,74 +4193,63 @@ export function ModelViewer({
       timer: new THREE.Timer()
     };
     contextRef.current = context;
+    const exportPixelRatio = () =>
+      sampling.supersampled
+        ? displayPixelRatio(window.devicePixelRatio)
+        : fullPixelRatio;
     const viewportImage: ViewportImageSource = {
       capture: (request) => {
         // A supersampled view draws at 2× on any display; the picture's
         // screen-pixel styling follows the display, as it always has.
-        const image = withReportedPixelRatio(
-          renderer,
-          sampling.supersampled
-            ? displayPixelRatio(window.devicePixelRatio)
-            : renderer.getPixelRatio(),
-          () =>
-            renderViewportImage(
-              {
-                renderer,
-                scene,
-                camera: cameraRig.activeCamera,
-                backdrop: gradientBackdrop,
-                grid: [grid, axes],
-                content: [
-                  skyLight,
-                  cameraKey,
-                  keyLight,
-                  keyLight.target,
-                  shadowCatcher,
-                  bodyGroup,
-                  regionGroup,
-                  sketchGroup
-                ],
-                sketches: [regionGroup, sketchGroup],
-                objectsByBodyId,
-                refreshShadowMap,
-                emphasizeBodyColors: () => {
-                  const restores: Array<() => void> = [];
-                  for (const body of context.renderedBodies ?? []) {
-                    const object = objectsByBodyId.get(body.bodyId);
-                    if (!object) continue;
-                    forEachMesh(object, (mesh) => {
-                      const was = mesh.material.color.clone();
-                      contextBodyColor(body.color, true, mesh.material.color);
-                      restores.push(() => mesh.material.color.copy(was));
-                    });
-                  }
-                  return () => {
-                    for (const restore of restores) restore();
-                  };
+        const image = withReportedPixelRatio(renderer, exportPixelRatio(), () =>
+          renderViewportImage(
+            {
+              renderer,
+              scene,
+              camera: cameraRig.activeCamera,
+              backdrop: gradientBackdrop,
+              grid: [grid, axes],
+              content: [
+                skyLight,
+                cameraKey,
+                keyLight,
+                keyLight.target,
+                shadowCatcher,
+                bodyGroup,
+                regionGroup,
+                sketchGroup
+              ],
+              sketches: [regionGroup, sketchGroup],
+              objectsByBodyId,
+              refreshShadowMap,
+              emphasizeBodyColors: () => {
+                const restores: Array<() => void> = [];
+                for (const body of context.renderedBodies ?? []) {
+                  const object = objectsByBodyId.get(body.bodyId);
+                  if (!object) continue;
+                  forEachMesh(object, (mesh) => {
+                    const was = mesh.material.color.clone();
+                    contextBodyColor(body.color, true, mesh.material.color);
+                    restores.push(() => mesh.material.color.copy(was));
+                  });
                 }
-              },
-              request
-            )
+                return () => {
+                  for (const restore of restores) restore();
+                };
+              }
+            },
+            request
+          )
         );
         requestRender();
         return image;
       },
       // The default export size is the view at the display's ratio, not the
       // supersampled backing store a 1× display would otherwise double.
-      viewSize: () =>
-        sampling.supersampled
-          ? {
-              width: Math.floor(
-                canvasWidth() * displayPixelRatio(window.devicePixelRatio)
-              ),
-              height: Math.floor(
-                canvasHeight() * displayPixelRatio(window.devicePixelRatio)
-              )
-            }
-          : {
-              width: renderer.domElement.width,
-              height: renderer.domElement.height
-            },
+      viewSize: () => ({
+        width: Math.floor(canvasWidth() * exportPixelRatio()),
+        height: Math.floor(canvasHeight() * exportPixelRatio())
+      }),
       // Read when asked, not at mount: the export is rare, and the renderer
       // need not be fully initialised for the viewer to start.
       get maxSide() {
@@ -7682,7 +7685,7 @@ export function ModelViewer({
         return;
       }
       // A supersampled context stays at 2×, as it would in production.
-      renderer.setPixelRatio(viewportPixelRatio(sampling, value));
+      updateFullPixelRatio(value);
       requestRender();
     };
     /**
@@ -13993,21 +13996,14 @@ export function ModelViewer({
       },
       canOrbit: () => cameraRig.controls.enableRotate,
       beginOrbit: (press) => {
-        lowerNavigationResolution();
         pivotOrbitOnCursor(press);
         cameraRig.beginOrbitDrag();
       },
       orbitBy: (deltaX, deltaY) => cameraRig.orbitByPixels(deltaX, deltaY),
-      beginPinch: () => {
-        lowerNavigationResolution();
-        cameraRig.beginPinchDrag();
-      },
+      beginPinch: () => cameraRig.beginPinchDrag(),
       panBy: (deltaX, deltaY) => cameraRig.panByPixels(deltaX, deltaY),
       zoomBy: (scale, x, y) => cameraRig.zoomByPinch(scale, x, y),
-      endNavigation: () => {
-        cameraRig.endOrbitDrag();
-        restoreNavigationResolution();
-      },
+      endNavigation: () => cameraRig.endOrbitDrag(),
       longPress: openTouchContextMenu,
       doubleTap: handleDoubleClick,
       history: (step) => onTouchHistoryRef.current?.(step),
@@ -14015,30 +14011,6 @@ export function ModelViewer({
       setTimer: (callback, delayMs) => window.setTimeout(callback, delayMs),
       clearTimer: (handle) => window.clearTimeout(handle)
     });
-    // A device that drops frames navigates at a lower pixel ratio and gets
-    // the full one back at rest. Once it has needed that, it keeps needing
-    // it: the lowered frames are fast, and would otherwise read as healthy.
-    let navigationNeedsLowRes = false;
-    let navigationResolutionLowered = false;
-    function lowerNavigationResolution() {
-      // Without MSAA, a ratio below 2 would navigate with no antialiasing.
-      if (sampling.supersampled) return;
-      const full = viewportPixelRatio(sampling, window.devicePixelRatio);
-      const lowered = navigationPixelRatio(full, frameMeter.intervalMs);
-      if (lowered !== null) navigationNeedsLowRes = true;
-      if (!navigationNeedsLowRes || full <= NAVIGATION_PIXEL_RATIO) return;
-      renderer.setPixelRatio(NAVIGATION_PIXEL_RATIO);
-      navigationResolutionLowered = true;
-      resizePending = true;
-      requestRender();
-    }
-    function restoreNavigationResolution() {
-      if (!navigationResolutionLowered) return;
-      navigationResolutionLowered = false;
-      applyPixelRatio();
-      resizePending = true;
-      requestRender();
-    }
     // iPadOS reclaims a background tab's GPU memory by losing the context.
     // three.js restores its own state; the frozen shadow map and the baked
     // environment are render targets whose contents went with it.
@@ -14195,8 +14167,8 @@ export function ModelViewer({
      * drawn at rest, so they say nothing about how fast the device navigates.
      */
     let loopOnlyFading = false;
-    const frameMeter = new FrameIntervalMeter();
     const resetAnimationContinuity = () => {
+      navigationResolution.reset();
       loopWasAnimating = false;
     };
     document.addEventListener('visibilitychange', resetAnimationContinuity);
@@ -14212,7 +14184,6 @@ export function ModelViewer({
         loopWasAnimating &&
         !loopOnlyFading &&
         document.visibilityState !== 'hidden';
-      frameMeter.sample(now, continuous);
       // The view cube's widget can remount with the chrome; follow whichever
       // link is current, and push it the camera at once so its hit layer is
       // not waiting for the next turn.
@@ -14258,6 +14229,27 @@ export function ModelViewer({
       // Ahead of the orbit step, which applies the turn and pan it queues.
       const sixDofMoving = cameraRig.stepSixDof(now);
       const controlsChanged = cameraRig.stepOrbit(now);
+      const cameraMoved =
+        viewChangedSinceFrame && document.visibilityState !== 'hidden';
+      viewChangedSinceFrame = false;
+      // Trackpads have no button lifecycle. Damping can move the camera on
+      // draws between wheel packets. End the pan when motion stops or another
+      // camera action takes over.
+      trackpadPanning =
+        trackpadPanning &&
+        cameraMoved &&
+        !cameraRig.gestureHeld &&
+        !tweening &&
+        !zooming &&
+        !sixDofMoving;
+      // OrbitControls and the touch layer both report pose changes. A held
+      // button, an idle gap or an animated overlay alone cannot qualify.
+      const navigating =
+        cameraMoved && (cameraRig.gestureHeld || trackpadPanning);
+      const ratio = navigationResolution.ratio(now, navigating, fullPixelRatio);
+      const resolutionChanged = ratio !== renderer.getPixelRatio();
+      if (resolutionChanged) renderer.setPixelRatio(ratio);
+
       const dragEvent = pendingDragEvent;
       pendingDragEvent = null;
       dragAppliedThisFrame = false;
@@ -14286,6 +14278,8 @@ export function ModelViewer({
         !zooming &&
         !sixDofMoving &&
         !controlsChanged &&
+        !navigating &&
+        !resolutionChanged &&
         !cubeLinkFresh &&
         !touchLoupe.visible
       ) {
@@ -14747,7 +14741,10 @@ export function ModelViewer({
 
       const hoverAnimating = selection.isSettling;
       const occlusionFading = occlusion?.animating ?? false;
+      // Inspect the frame following a moving camera even when damping is off.
+      // If the pointer parks, that frame restores full resolution before sleep.
       const sceneAnimating =
+        navigating ||
         tweening ||
         zooming ||
         sixDofMoving ||
@@ -19036,10 +19033,12 @@ export function ModelViewer({
     // cancels them, and the request must still be there for the next run.
     let frame = 0;
     const run = () => {
-      // A hand on a handle or a footprint owns the camera: the request
+      // A hand on a handle, a footprint or the camera itself (an orbit or
+      // a pan held while the guide expands) owns the camera: the request
       // waits for it to let go, looked at again each frame, so a release
-      // that changes nothing still brings it.
+      // that changes nothing still brings it (preview check on #1969).
       if (
+        context.cameraGestureHeld() ||
         commandDragRef.current ||
         moveDragActiveRef.current ||
         edgeDragActiveRef.current ||
@@ -19062,7 +19061,7 @@ export function ModelViewer({
         return;
       }
       clearStagePendingRef.current = false;
-      const stage = measureFitFrame(context.renderer.domElement);
+      const stage = measureClearStageRequestFrame(context.renderer.domElement);
       if (!stage) {
         return;
       }
@@ -19075,7 +19074,8 @@ export function ModelViewer({
           index & 4 ? reached.max.z : reached.min.z
         ).project(camera)
       );
-      if (cornersWithinFrame(corners, stage)) {
+      // In plain view, beside the guide's card or above it, it stays.
+      if (cornersClearOfStage(context.renderer.domElement, corners)) {
         return;
       }
       const pose = computeFitPose(
