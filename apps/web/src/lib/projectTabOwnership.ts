@@ -19,8 +19,20 @@ const LOCK_PREFIX = 'openzcad-project:';
 export interface ProjectOwnershipClaim {
   /** Whether this tab held the project at the moment the claim resolved. */
   readonly owned: boolean;
-  /** Gives the project up, promoting whichever tab is waiting for it. */
+  /**
+   * Gives the project up, promoting whichever tab is waiting for it. While a
+   * write holds the claim ({@link retain}) the lock is kept until that write
+   * lets go, so the next owner never starts on storage this tab is still
+   * writing.
+   */
   release(): void;
+  /**
+   * Keeps the lock through one write: call it before the write starts and
+   * the returned function once the write has settled. A release that comes
+   * in between takes effect when the last such write lets go. Null once the
+   * claim has been released, when there is nothing left to hold.
+   */
+  retain(): (() => void) | null;
 }
 
 /**
@@ -40,7 +52,13 @@ export function claimProjectOwnership(
     // Without the API there is no way to tell an unattended project from one
     // another tab is editing. Locking the user out of their own work on that
     // suspicion would be worse than the race it avoids.
-    return Promise.resolve({ owned: true, release: () => undefined });
+    return Promise.resolve(
+      heldClaim(
+        true,
+        () => undefined,
+        () => undefined
+      )
+    );
   }
 
   const name = `${LOCK_PREFIX}${projectId}`;
@@ -50,27 +68,27 @@ export function claimProjectOwnership(
   });
   let released = false;
   const waiting = new AbortController();
-  const release = () => {
+  // Remove an abandoned request immediately. Otherwise it can acquire the
+  // lock during another tab's reload and hold it until this background tab
+  // gets CPU time to run its no-longer-needed callback.
+  const abandon = () => {
     released = true;
-    // Remove an abandoned request immediately. Otherwise it can acquire the
-    // lock during another tab's reload and hold it until this background tab
-    // gets CPU time to run its no-longer-needed callback.
     waiting.abort();
-    releaseHeld();
   };
+  const claim = (owned: boolean) => heldClaim(owned, abandon, releaseHeld);
 
   return new Promise<ProjectOwnershipClaim>((resolveClaim) => {
     void locks
       .request(name, { ifAvailable: true }, async (lock) => {
         if (lock) {
-          resolveClaim({ owned: true, release });
+          resolveClaim(claim(true));
           await held;
           return;
         }
         // Held elsewhere. Report that first so the workspace can open
         // read-only, then queue: this request is granted when the owning tab
         // goes away, which is exactly when taking over is safe.
-        resolveClaim({ owned: false, release });
+        resolveClaim(claim(false));
         await locks.request(
           name,
           { signal: waiting.signal },
@@ -86,7 +104,43 @@ export function claimProjectOwnership(
       .catch(() => {
         // A refused lock request is not a reason to make the project
         // unopenable; fall back to the behaviour of a browser without locks.
-        resolveClaim({ owned: true, release });
+        resolveClaim(claim(true));
       });
   });
+}
+
+/**
+ * A claim whose `release` runs `abandon` at once (no longer waiting, no
+ * longer promotable) but lets go of the lock (`letGo`) only once no write
+ * retains it.
+ */
+function heldClaim(
+  owned: boolean,
+  abandon: () => void,
+  letGo: () => void
+): ProjectOwnershipClaim {
+  let released = false;
+  let writes = 0;
+  const settle = () => {
+    if (released && writes === 0) letGo();
+  };
+  return {
+    owned,
+    release() {
+      released = true;
+      abandon();
+      settle();
+    },
+    retain() {
+      if (released) return null;
+      writes += 1;
+      let done = false;
+      return () => {
+        if (done) return;
+        done = true;
+        writes -= 1;
+        settle();
+      };
+    }
+  };
 }

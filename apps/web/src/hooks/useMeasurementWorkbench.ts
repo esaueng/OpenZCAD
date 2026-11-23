@@ -314,14 +314,18 @@ export function useMeasurementWorkbench({
     const bodies = Object.values(representations).filter(
       (body) => !body.consumed
     );
+    // I03: rows kept in another stored unit (before a unit conversion, or
+    // after its undo) are rescaled to the bodies' unit before re-measuring.
     setMeasurements((current) =>
       measurementApi.refreshMeasurements(current, bodies, doc.version, {
-        force: true
+        force: true,
+        unit: doc.units
       })
     );
   }, [
     representations,
     doc?.version,
+    doc?.units,
     exactGeometryReady,
     geometryPending,
     measurementApi,

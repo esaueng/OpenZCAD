@@ -55,9 +55,7 @@ describe('length text across display units', () => {
   it('stores a typed plain number as the same length in the stored unit', () => {
     expect(storedLengthText('1', 'mm', 'inch')).toBe('25.4');
     expect(storedLengthText('2', 'inch', 'cm')).toBe(String(20 / 25.4));
-    expect(storedLengthText('width + 1 in', 'mm', 'inch')).toBe(
-      'width + 1 in'
-    );
+    expect(storedLengthText('width + 1 in', 'mm', 'inch')).toBe('width + 1 in');
     expect(storedLengthText('3', 'cm', 'cm')).toBe('3');
   });
 
@@ -216,7 +214,9 @@ describe('the keypad in a project shown in other units', () => {
       selectInitial: false,
       initialIsStored: true
     });
-    expect(proved.input.value).toBe(String(Number((2.5 / 25.4).toPrecision(12))));
+    expect(proved.input.value).toBe(
+      String(Number((2.5 / 25.4).toPrecision(12)))
+    );
     fireEvent.keyDown(proved.input, { key: 'Enter' });
     expect(proved.onCommit).toHaveBeenCalledWith(2.5, '2.5');
   });
@@ -238,9 +238,10 @@ describe('the File menu Units row', () => {
     expect(group).toHaveAccessibleDescription(
       'Shown and typed in in. The model is stored in mm and keeps its exact size.'
     );
-    expect(
-      screen.getByRole('radio', { name: 'Inches (in)' })
-    ).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Inches (in)' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
     fireEvent.click(screen.getByRole('radio', { name: 'Inches (in)' }));
     expect(onChange).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('radio', { name: 'Millimeters (mm)' }));
@@ -290,6 +291,39 @@ describe('the File menu Units row', () => {
     );
     for (const radio of screen.getAllByRole('radio'))
       expect(radio).toBeDisabled();
+  });
+
+  it('offers converting the stored unit below the display choice, disabled with a reason', () => {
+    const onConvertStored = vi.fn();
+    const { rerender } = render(
+      <DisplayUnitsRow
+        shown="mm"
+        stored="mm"
+        onChange={vi.fn()}
+        onConvertStored={onConvertStored}
+      />
+    );
+    const item = screen.getByRole('button', {
+      name: /^Convert stored units…/
+    });
+    expect(item).toHaveTextContent('rare · rewrites the model’s numbers');
+    fireEvent.click(item);
+    expect(onConvertStored).toHaveBeenCalledTimes(1);
+    rerender(
+      <DisplayUnitsRow
+        shown="mm"
+        stored="mm"
+        onChange={vi.fn()}
+        onConvertStored={onConvertStored}
+        convertDisabledReason="This shared project is read-only"
+      />
+    );
+    expect(
+      screen.getByRole('button', { name: /^Convert stored units…/ })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole('button', { name: /^Convert stored units…/ })
+    ).toHaveTextContent('This shared project is read-only');
   });
 });
 

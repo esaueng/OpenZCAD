@@ -16,7 +16,8 @@ import type {
   CollaborationMember,
   ProjectAccessRole,
   ProjectDocument,
-  ProjectEditLease
+  ProjectEditLease,
+  UnitSystem
 } from '@openzcad/shared';
 import { saveLocalProject, saveLocalSaveStates } from './localProjectStore';
 import type { CollaborationStatus } from './useCollaboration';
@@ -29,9 +30,26 @@ import type { CollaborationStatus } from './useCollaboration';
  * checkpoint exactly as a save-state restore does
  * (`prepareSaveStateRestore`), and submits the command as one undo step.
  *
- * The review dialog (phase 6) calls these two functions; nothing in the
- * workspace calls them yet.
+ * The review dialog (phase 6, `ConvertUnitsDialog`) calls these through
+ * the workspace.
  */
+
+/** "inches": how the conversion's sentences name a unit. */
+export const CONVERT_UNIT_WORDS: Readonly<Record<UnitSystem, string>> = {
+  mm: 'millimeters',
+  cm: 'centimeters',
+  m: 'meters',
+  inch: 'inches'
+};
+
+/**
+ * The reason a "Convert a copy" copy records in `branchedFrom`: what the
+ * copy was made for, shown as "Branched from Bracket · Copied to convert
+ * to inches".
+ */
+export function unitsConvertCopyBranchReason(to: UnitSystem): string {
+  return `Copied to convert to ${CONVERT_UNIT_WORDS[to]}`;
+}
 
 export type PreparedUnitsConversion = Extract<
   UnitsConversionPreparation,
@@ -119,6 +137,82 @@ export function unitsConversionCollaborationRefusal(
   return null;
 }
 
+/**
+ * This tab's claim on a project's device storage, as the workspace tracks
+ * it (`claimProjectOwnership`): exactly one tab writes a project there.
+ */
+export interface ProjectStorageOwnership {
+  projectId: string;
+  /** Settles once the claim has been answered. */
+  settled: Promise<unknown>;
+  /**
+   * True once this tab holds the project; false while waiting, refused, or
+   * once the workspace has let the claim go.
+   */
+  owned: boolean;
+  /**
+   * Keeps the claim's lock held through one write (see
+   * `ProjectOwnershipClaim.retain`): the returned function lets go. Null
+   * when there is no held claim to keep.
+   */
+  retain(): (() => void) | null;
+}
+
+/**
+ * Write access to a project's device storage, confirmed for one conversion.
+ * The claim's lock stays held until {@link release}, so another tab cannot
+ * take the project while the checkpoint write is in flight; {@link held}
+ * says, synchronously, whether the claim confirmed is still this tab's.
+ */
+export interface UnitsConversionWriteAccess {
+  readonly kind: 'write-access';
+  /** Still the same claim, for the same project, still owned. */
+  held(): boolean;
+  /** Lets go of the lock hold; safe to call more than once. */
+  release(): void;
+}
+
+function isWriteAccess(
+  value: UnitsConvertRefusal | UnitsConversionWriteAccess
+): value is UnitsConversionWriteAccess {
+  return (value as UnitsConversionWriteAccess).kind === 'write-access';
+}
+
+/**
+ * Waits for this tab's storage claim on `projectId` and refuses unless it
+ * is confirmed held: the conversion's checkpoint write must not land on a
+ * copy another tab owns (and may have saved newer work to), the overwrite
+ * autosave waits for the same answer to avoid. A claim still for another
+ * project, or none at all, refuses rather than waits. Granted access holds
+ * the claim's lock until released, so a navigation that gives the project
+ * up mid-write hands it on only once the write has landed.
+ */
+export async function unitsConversionWriteAccess(
+  read: () => ProjectStorageOwnership | null | undefined,
+  projectId: string,
+  message: string
+): Promise<UnitsConvertRefusal | UnitsConversionWriteAccess> {
+  const refusal: UnitsConvertRefusal = {
+    stage: 'collaboration',
+    code: 'second-tab',
+    subject: 'document',
+    message
+  };
+  const claim = read();
+  if (!claim || claim.projectId !== projectId) return refusal;
+  await claim.settled;
+  const held = () => {
+    const current = read();
+    return (
+      current === claim && current.projectId === projectId && current.owned
+    );
+  };
+  if (!held()) return refusal;
+  const letGo = claim.retain();
+  if (!letGo) return refusal;
+  return { kind: 'write-access', held, release: letGo };
+}
+
 /** Where the safety checkpoint is written; the device store by default. */
 export interface UnitsConversionPersistence {
   saveProject(document: ProjectDocument): Promise<void>;
@@ -129,6 +223,26 @@ const DEVICE_STORE: UnitsConversionPersistence = {
   saveProject: saveLocalProject,
   saveSaveStates: saveLocalSaveStates
 };
+
+/**
+ * Whether `current` is `prepared`, or `prepared` with only its derived state
+ * re-attached (`attachDerivedState`, which a rebuild commits without a
+ * version bump): every other top-level field is the very same object. A
+ * hydrated, echoed or edited document fails even when it is equal.
+ */
+export function isPreparedDocument(
+  current: ProjectDocument,
+  prepared: ProjectDocument
+): boolean {
+  if (current === prepared) return true;
+  const keys = Object.keys(current) as (keyof ProjectDocument)[];
+  if (keys.length !== Object.keys(prepared).length) return false;
+  return keys.every(
+    (key) =>
+      key === 'derived' ||
+      (Object.hasOwn(prepared, key) && current[key] === prepared[key])
+  );
+}
 
 export interface CommitUnitsConversionOptions {
   /**
@@ -150,6 +264,39 @@ export interface CommitUnitsConversionOptions {
   persistence?: UnitsConversionPersistence;
   /** The clock eligibility is judged by; `Date.now` by default. */
   now?: number | (() => number);
+  /**
+   * The project the conversion was prepared for. When the active manager
+   * holds another project, the conversion is refused (`stale`) before
+   * anything is written: a project switch while the worker ran must not
+   * convert, or checkpoint, the project that happens to be open now.
+   */
+  expectedProjectId?: string;
+  /**
+   * The document the conversion was prepared from. Unless the active
+   * manager holds that document, or it with only its derived state
+   * re-attached by a rebuild ({@link isPreparedDocument}), the conversion is
+   * refused (`stale`) before anything is written: an edit, a hydrated or
+   * echoed revision, or another project with the same version.
+   */
+  expectedDocument?: ProjectDocument;
+  /**
+   * Confirms this tab may write the project's storage, awaited after the
+   * first checks and before the checkpoint is written (in the app, the
+   * device-storage ownership autosave waits for). A refusal writes nothing.
+   * Everything checked before it is checked again once it settles. Granted
+   * {@link UnitsConversionWriteAccess} is held across the write, released
+   * once it settles, and must still be held (checked synchronously with
+   * the rest) before the conversion executes; `null` grants access with
+   * nothing to hold.
+   */
+  confirmWriteAccess?: (
+    document: ProjectDocument
+  ) => Promise<UnitsConvertRefusal | UnitsConversionWriteAccess | null>;
+  /**
+   * The refusal's message when confirmed write access is no longer held
+   * once the commit continues (in the app, the second-tab notice).
+   */
+  writeAccessLostMessage?: string;
 }
 
 export type CommitUnitsConversionResult =
@@ -188,13 +335,20 @@ export type CommitUnitsConversionResult =
  * 3. checks step 1 again once the checkpoint is persisted, synchronously
  *    and immediately before executing, with no await in between: the
  *    manager must still be the active one and still hold the document it
- *    was checked on, and a tab that joined, a lease that expired or an undo
+ *    was checked on, this tab must still hold the storage claim it
+ *    confirmed, and a tab that joined, a lease that expired or an undo
  *    entry that no longer fits refuses the conversion (the result then
  *    names the checkpoint, which stays);
  * 4. executes `units.convert` through that manager: one undo step, one more
  *    revision, the version still monotonic.
  *
- * Caller contract (phase 6): pass `activeManager` as a live getter that
+ * Caller contract (phase 6): pass `expectedProjectId` and `expectedDocument`
+ * (what preparation read) so a project switch refuses before the
+ * checkpoint is written, and `confirmWriteAccess` so the write waits for
+ * the same storage ownership autosave does and holds its lock while the
+ * write is in flight (a tab giving the project up mid-write hands it on
+ * only after the write lands, so the next owner's save is never
+ * overwritten by it). Pass `activeManager` as a live getter that
  * returns the manager the workspace edits *now* (in the app, read
  * `managerRef.current`), never a manager captured earlier. Remote
  * hydration and project switches replace that manager; a conversion whose
@@ -205,8 +359,8 @@ export type CommitUnitsConversionResult =
  *
  * A refusal at step 1 writes nothing. A failure persisting the checkpoint
  * throws before the command exists. The room's edit lease renews on its own
- * timer while connected; there is no lock to hold across the write, so the
- * second check is what closes the window.
+ * timer while connected; there is no room lock to hold across the write, so
+ * the second check is what closes that window.
  */
 export async function commitUnitsConversion(
   activeManager: () => CommandManager | null | undefined,
@@ -238,9 +392,25 @@ export async function commitUnitsConversion(
         )
       ]
     };
+  const current = manager.document;
+  // The project and the document it was prepared from come first: nothing
+  // else about another project (its room, its version) is worth judging.
+  if (
+    (options.expectedProjectId !== undefined &&
+      current.projectId !== options.expectedProjectId) ||
+    (options.expectedDocument !== undefined &&
+      !isPreparedDocument(current, options.expectedDocument))
+  )
+    return {
+      ok: false,
+      refusals: [
+        stale(
+          'A different project or version is open now than the one checked. Check the conversion again.'
+        )
+      ]
+    };
   const collaboration = eligibility();
   if (collaboration) return { ok: false, refusals: [collaboration] };
-  const current = manager.document;
   if (current.version !== prepared.sourceVersion)
     return {
       ok: false,
@@ -279,8 +449,47 @@ export async function commitUnitsConversion(
   const tooLarge = undoRefusal();
   if (tooLarge) return { ok: false, refusals: [tooLarge] };
 
-  if (options.deviceOnlyHistory) await persistence.saveSaveStates([guarded]);
-  else await persistence.saveProject(guarded);
+  let access: UnitsConversionWriteAccess | null = null;
+  const lostAccess = (): UnitsConvertRefusal | null =>
+    access && !access.held()
+      ? {
+          stage: 'collaboration',
+          code: 'second-tab',
+          subject: 'document',
+          message:
+            options.writeAccessLostMessage ??
+            'This tab no longer holds the project, so it may not save it. Nothing was converted.'
+        }
+      : null;
+  if (options.confirmWriteAccess) {
+    const answer = await options.confirmWriteAccess(current);
+    if (answer && !isWriteAccess(answer))
+      return { ok: false, refusals: [answer] };
+    access = answer;
+    // The wait could span a project switch or an edit, or the claim could
+    // have been given up since it was confirmed; nothing has been written
+    // yet, so a change refuses with nothing to keep.
+    const before = (): UnitsConvertRefusal | null => {
+      if (activeManager() !== manager || manager.document !== current)
+        return stale(
+          'The project changed while this tab confirmed it may save it. Check the conversion again.'
+        );
+      return lostAccess() ?? eligibility();
+    };
+    const refused = before();
+    if (refused) {
+      access?.release();
+      return { ok: false, refusals: [refused] };
+    }
+  }
+  try {
+    if (options.deviceOnlyHistory) await persistence.saveSaveStates([guarded]);
+    else await persistence.saveProject(guarded);
+  } finally {
+    // The write has landed (or failed): another tab may take the project
+    // from here on, and the check below sees that it did.
+    access?.release();
+  }
   // Everything step 1 checked, again, now that the write has finished.
   // Nothing below awaits, so nothing can change before the command runs.
   if (activeManager() !== manager || manager.document !== current)
@@ -293,6 +502,8 @@ export async function commitUnitsConversion(
         )
       ]
     };
+  const lost = lostAccess();
+  if (lost) return { ok: false, checkpoint: guarded, refusals: [lost] };
   const changed = eligibility();
   if (changed) return { ok: false, checkpoint: guarded, refusals: [changed] };
   const undoChanged = undoRefusal();
