@@ -17,10 +17,12 @@ const PREVIEW_SUFFIX = '.dev.zcad.app';
 
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
   'localhost',
-  '127.0.0.1',
   '::1',
   '[::1]'
 ]);
+
+/** All of 127.0.0.0/8 is loopback, not only 127.0.0.1. */
+const IPV4_LOOPBACK = /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 
 export function channelForPage(page: {
   readonly hostname: string;
@@ -33,6 +35,7 @@ export function channelForPage(page: {
   const hostname = page.hostname.toLowerCase().replace(/\.$/, '');
   if (
     LOOPBACK_HOSTS.has(hostname) ||
+    IPV4_LOOPBACK.test(hostname) ||
     hostname.endsWith('.localhost') ||
     hostname.endsWith(PREVIEW_SUFFIX)
   ) {

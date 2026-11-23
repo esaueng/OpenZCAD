@@ -33,6 +33,8 @@ describe('release channel for the brand tag', () => {
     expect(channelForPage(page('zcad.app', { devServer: true }))).toBe('dev');
     expect(channelForPage(page('localhost'))).toBe('dev');
     expect(channelForPage(page('127.0.0.1'))).toBe('dev');
+    expect(channelForPage(page('127.0.0.2'))).toBe('dev');
+    expect(channelForPage(page('127.255.10.1'))).toBe('dev');
     expect(channelForPage(page('[::1]'))).toBe('dev');
     expect(channelForPage(page('app.localhost'))).toBe('dev');
     expect(channelForPage(page('my-branch.dev.zcad.app'))).toBe('dev');
@@ -41,6 +43,8 @@ describe('release channel for the brand tag', () => {
   it('keeps self-hosted deployments on the tag they had', () => {
     expect(channelForPage(page('cad.example.com'))).toBe('beta');
     expect(channelForPage(page('dev.zcad.app.example.com'))).toBe('beta');
+    expect(channelForPage(page('127.0.0.1.example.com'))).toBe('beta');
+    expect(channelForPage(page('127.0.0.256'))).toBe('beta');
   });
 
   it('reads the channel from the page it loads in', async () => {
