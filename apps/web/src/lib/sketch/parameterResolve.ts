@@ -9,9 +9,10 @@
  * configuration row switch or active-row cell, an assistant patch, and the
  * read-only documents built for another row (a share link's row, a view or
  * component on a row, a row's export). The returned commands are
- * `sketch.object.update`s marked `derivedFrom: 'parameter-resolve'`, so a
- * recorded entry replays to the same geometry without a solver and Tweak's
- * undo can tell them from a user's own sketch edit.
+ * `sketch.object.update`s marked as the re-solve's own out of band
+ * (`parameterResolvedSketchUpdate`), so a recorded entry replays to the
+ * same geometry without a solver and Tweak's undo can tell them from a
+ * user's own sketch edit.
  */
 import type { AnyCommand } from '@openzcad/command-system';
 import {
