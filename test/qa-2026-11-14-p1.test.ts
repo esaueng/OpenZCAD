@@ -34,11 +34,11 @@ import { refusal } from './support/combination-matrix';
  * Production QA 2026-11-14 (docs/qa/2026-11-14/complex-cad-kernel-limits.md):
  * every P1 operation must build a correct exact body or refuse with a typed
  * reason, never refuse in prose and never ship a wrong body. Each case below
- * is the report's scenario reduced to primitives, and holds on any kernel
- * pin: a case that builds is held to exactness, a closed consistently
- * oriented mesh and, where one exists, a closed-form volume; a case that
- * refuses must carry `kernelRefusal`. When a kernel fix lands, a refusal here
- * turns into a checked build without the test changing.
+ * is the report's scenario reduced to primitives and pins the current Remus
+ * pin's exact outcome: a case that builds is asserted as `built` (exact,
+ * closed consistently oriented mesh, and closed-form or sign-checked volume),
+ * and a case that still refuses is asserted as `typed` with its exact refusal
+ * code rather than silently accepting either.
  *
  * Findings 1 and 2 have their own regressions
  * (`test/touching-cylinder-union.test.ts`); finding 8 is covered by #1500's
@@ -71,7 +71,10 @@ async function outcome(
   const refused = refusal(derived, 'step');
   if (refused) {
     expect(refused.state, refused.evidence).toBe('typed-refusal');
-    return { kind: 'typed', code: refused.evidence.split(' — ')[0]! };
+    return {
+      kind: 'typed',
+      code: refused.evidence.split(' — ')[0]!.replace(/^step:\s*/, '')
+    };
   }
   const volumes = bodyIds.map((id) => {
     const body = derived.bodyRepresentations[id];
@@ -86,6 +89,25 @@ async function outcome(
     return body!.volume;
   });
   return { kind: 'built', derived, volumes };
+}
+
+function expectBuilt(
+  result: Outcome,
+  label: string
+): Extract<Outcome, { kind: 'built' }> {
+  expect(
+    result.kind,
+    `${label}: expected built, got ${result.kind === 'typed' ? result.code : result.kind}`
+  ).toBe('built');
+  return result as Extract<Outcome, { kind: 'built' }>;
+}
+
+function expectTypedRefusal(
+  result: Outcome,
+  code: string,
+  label: string
+): void {
+  expect(result, label).toEqual({ kind: 'typed', code });
 }
 
 const topology = (derived: DerivedState, id: BodyId) =>
@@ -164,11 +186,8 @@ const draftSides = (
     neutralPoint: { x: 0, y: 0, z: 0 },
     angleDeg: 2
   });
-const built = async (document: ProjectDocument, id = last(document)) => {
-  const result = await outcome(document, [id]);
-  expect(result.kind, 'setup step builds').toBe('built');
-  return (result as Extract<Outcome, { kind: 'built' }>).derived;
-};
+const built = async (document: ProjectDocument, id = last(document)) =>
+  expectBuilt(await outcome(document, [id]), 'setup step').derived;
 
 describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
   it('draft first, then fillet the drafted walls', async () => {
@@ -179,16 +198,15 @@ describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
     const verticals = verticalEdges(derived, drafted.bodyId);
     expect(verticals).toHaveLength(4);
     const draftedVolume = derived.bodyRepresentations[drafted.bodyId]!.volume;
-    // A convex round removes material: a result no smaller than the drafted
-    // body is a blend that did nothing.
-    const roundRemoves = (result: Outcome) => {
-      if (result.kind === 'built') {
-        expect(result.volumes[0]!).toBeLessThan(draftedVolume - 1e-3);
-      }
-    };
-    for (const edges of [verticals.slice(0, 1), verticals]) {
+
+    // Vertical edges between two 2° drafted walls still refuse by type on the
+    // pin; the top-loop round on the drafted walls builds (esaueng/remus#1778).
+    for (const [label, edges] of [
+      ['1 drafted vertical edge', verticals.slice(0, 1)],
+      ['4 drafted vertical edges', verticals]
+    ] as const) {
       for (const size of [1, 5]) {
-        roundRemoves(
+        expectTypedRefusal(
           await outcome(
             filletEdges(drafted.document, {
               name: 'Round',
@@ -196,11 +214,16 @@ describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
               ...pickEdges(edges),
               size
             }).document
-          )
+          ),
+          'blend/quality_refused/edge_modifier_refused',
+          `${label} R${size}`
         );
       }
     }
-    roundRemoves(
+
+    // A convex round removes material: a result no smaller than the drafted
+    // body is a blend that did nothing.
+    const topLoop = expectBuilt(
       await outcome(
         filletEdges(drafted.document, {
           name: 'Round',
@@ -208,11 +231,13 @@ describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
           ...pickEdges(loopAt(derived, drafted.bodyId, 20)),
           size: 2
         }).document
-      )
+      ),
+      'drafted top loop R2'
     );
+    expect(topLoop.volumes[0]!).toBeLessThan(draftedVolume - 1e-3);
   }, 300_000);
 
-  it('fillet first, then draft the rounded walls', async () => {
+  it('fillet first, then draft the rounded walls (esaueng/remus#1772)', async () => {
     const document = box(40, 40, 20);
     const id = last(document);
     const base = await built(document);
@@ -222,16 +247,16 @@ describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
     // straight wall moves out by δ while the corner arcs keep their radius.
     const t = Math.tan((2 * Math.PI) / 180);
     const plainGain = (160 * t * 20 ** 2) / 2 + (4 * t ** 2 * 20 ** 3) / 3;
-    const plain = await outcome(draftSides(document, base, id).document);
-    expect(plain.kind).toBe('built');
-    expect(
-      (plain as Extract<Outcome, { kind: 'built' }>).volumes[0]!
-    ).toBeCloseTo(40 * 40 * 20 + plainGain, 6);
-    for (const [edges, size, tolerance] of [
-      [verticalEdges(base, id), 5, 1],
+    const plain = expectBuilt(
+      await outcome(draftSides(document, base, id).document),
+      'plain box draft'
+    );
+    expect(plain.volumes[0]!).toBeCloseTo(40 * 40 * 20 + plainGain, 6);
+    for (const [label, edges, size, tolerance] of [
+      ['vertical R5 -> draft', verticalEdges(base, id), 5, 1],
       // The top-loop rounds shrink the top band's sections, so the gain
       // stays within a few percent of the plain box's.
-      [loopAt(base, id, 20), 2, 0.05 * plainGain]
+      ['top-loop R2 -> draft', loopAt(base, id, 20), 2, 0.05 * plainGain]
     ] as const) {
       const rounded = filletEdges(document, {
         name: 'Round',
@@ -241,21 +266,22 @@ describe('QA 2026-11-14 P1 #3: draft and blends, in either order', () => {
       });
       const derived = await built(rounded.document, rounded.bodyId);
       const before = derived.bodyRepresentations[rounded.bodyId]!.volume;
-      const result = await outcome(
-        draftSides(rounded.document, derived, rounded.bodyId).document
+      const result = expectBuilt(
+        await outcome(
+          draftSides(rounded.document, derived, rounded.bodyId).document
+        ),
+        label
       );
-      if (result.kind === 'built') {
-        // A draft returned unchanged would gain nothing.
-        expect(Math.abs(result.volumes[0]! - before - plainGain)).toBeLessThan(
-          tolerance
-        );
-      }
+      // A draft returned unchanged would gain nothing.
+      expect(Math.abs(result.volumes[0]! - before - plainGain)).toBeLessThan(
+        tolerance
+      );
     }
   }, 300_000);
 });
 
 describe('QA 2026-11-14 P1 #4: split by plane through blends and shells', () => {
-  it('splits a 2 mm shell with R5 rounds, or refuses by type', async () => {
+  it('splits a 2 mm shell with R5 rounds along planes that build and refuses x = 2 by type', async () => {
     const document = box(60, 40, 30);
     const base = await built(document);
     const rounded = filletEdges(document, {
@@ -275,35 +301,54 @@ describe('QA 2026-11-14 P1 #4: split by plane through blends and shells', () => 
         : {}),
       thickness: 2
     });
-    const shellVolume = (await outcome(shelled.document, [
-      shelled.bodyId
-    ])) as Extract<Outcome, { kind: 'built' }>;
-    expect(shellVolume.kind).toBe('built');
-    const planes = [
-      { origin: { x: 0, y: 0, z: 15 }, normal: { x: 0, y: 0, z: 1 } },
-      { origin: { x: 30, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
-      { origin: { x: 2, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
+    const shellVolume = expectBuilt(
+      await outcome(shelled.document, [shelled.bodyId]),
+      '2 mm rounded shell'
+    );
+    const cases = [
       {
-        origin: { x: 3, y: 3, z: 0 },
-        normal: { x: Math.SQRT1_2, y: -Math.SQRT1_2, z: 0 }
+        label: 'z = 15',
+        plane: { origin: { x: 0, y: 0, z: 15 }, normal: { x: 0, y: 0, z: 1 } },
+        expected: 'built' as const
+      },
+      {
+        label: 'x = 30',
+        plane: { origin: { x: 30, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
+        expected: 'built' as const
+      },
+      {
+        label: 'x = 2 (crosses R5 curved edge)',
+        plane: { origin: { x: 2, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } },
+        expected: 'modeling/quality_refused/split_refused' as const
+      },
+      {
+        label: 'diagonal through (3, 3, 0)',
+        plane: {
+          origin: { x: 3, y: 3, z: 0 },
+          normal: { x: Math.SQRT1_2, y: -Math.SQRT1_2, z: 0 }
+        },
+        expected: 'built' as const
       }
     ];
-    for (const plane of planes) {
+    for (const entry of cases) {
       const split = addSplitFeature(shelled.document, {
         name: 'Split',
         targetBodyId: shelled.bodyId,
-        plane: plane
+        plane: entry.plane
       });
       const result = await outcome(split.document, [
         split.bodyId,
         split.secondBodyId
       ]);
-      if (result.kind === 'built') {
+      if (entry.expected === 'built') {
+        const halves = expectBuilt(result, entry.label);
         // The halves partition the shell.
-        expect(result.volumes[0]! + result.volumes[1]!).toBeCloseTo(
+        expect(halves.volumes[0]! + halves.volumes[1]!).toBeCloseTo(
           shellVolume.volumes[0]!,
           3
         );
+      } else {
+        expectTypedRefusal(result, entry.expected, entry.label);
       }
     }
   }, 300_000);
@@ -345,19 +390,20 @@ describe('QA 2026-11-14 P1 #5: patterned pins through a flat flange', () => {
         operation: 'subtract',
         targetBodyIds: [flange, last(document)]
       }).document;
-      const result = await outcome(document);
-      if (result.kind === 'built') {
-        expect(result.volumes[0]).toBeCloseTo(
-          Math.PI * 40 ** 2 * 10 - count * Math.PI * 3 ** 2 * 10,
-          6
-        );
-      }
+      const result = expectBuilt(
+        await outcome(document),
+        `pattern x${count} subtract`
+      );
+      expect(result.volumes[0]).toBeCloseTo(
+        Math.PI * 40 ** 2 * 10 - count * Math.PI * 3 ** 2 * 10,
+        6
+      );
     },
     300_000
   );
 });
 
-describe('QA 2026-11-14 P1 #6: face offset beside blends', () => {
+describe('QA 2026-11-14 P1 #6: face offset beside blends (esaueng/remus#1781)', () => {
   async function offsetTop(
     document: ProjectDocument,
     id: BodyId,
@@ -414,10 +460,9 @@ describe('QA 2026-11-14 P1 #6: face offset beside blends', () => {
           20,
           by
         );
-        if (result.kind === 'built') {
-          // The walls extend by `by`: the whole 60 × 40 cross-section.
-          expect(result.volumes[0]! - before).toBeCloseTo(60 * 40 * by, 3);
-        }
+        const moved = expectBuilt(result, `offset ${which} R${size} by ${by}`);
+        // The walls extend by `by`: the whole 60 × 40 cross-section.
+        expect(moved.volumes[0]! - before).toBeCloseTo(60 * 40 * by, 3);
       }
     },
     300_000
@@ -465,52 +510,79 @@ describe('QA 2026-11-14 P1 #6: face offset beside blends', () => {
       10,
       -2
     );
-    if (result.kind === 'built') {
-      // The flange annulus outside the fillet's foot drops by 2 mm.
-      expect(result.volumes[0]!).toBeLessThan(before);
-    }
+    const moved = expectBuilt(result, 'flange top -2 beside hub-foot R3');
+    // The flange annulus (r = 20..40) drops by 2 mm while the hub and foot
+    // fillet translate with it.
+    expect(moved.volumes[0]! - before).toBeCloseTo(
+      -Math.PI * (40 ** 2 - 20 ** 2) * 2,
+      3
+    );
   }, 300_000);
 });
 
-describe('QA 2026-11-14 P1 #7: pocket-floor fillet loops', () => {
-  it.each([3, 1, 0.3])(
-    'rounds the closed floor loop at R%s or refuses by type',
+describe('QA 2026-11-14 P1 #7: pocket-floor fillet loops (esaueng/remus#1778)', () => {
+  function pocketDocument(): ProjectDocument {
+    let document = box(60, 40, 20);
+    const block = last(document);
+    document = addPrimitiveFeature(document, {
+      name: 'Pocket',
+      primitiveKind: 'box',
+      dimensions: { width: 20, height: 20, depth: 10 }
+    });
+    document = transformBody(document, {
+      name: 'Place pocket',
+      targetBodyId: last(document),
+      translation: { x: 20, y: 10, z: 17 }
+    }).document;
+    return booleanBodies(document, {
+      name: 'Pocket cut',
+      operation: 'subtract',
+      targetBodyIds: [block, last(document)]
+    }).document;
+  }
+
+  it.each([1, 0.3])(
+    'rounds the closed 3 mm pocket floor loop at R%s',
     async (size) => {
-      let document = box(60, 40, 20);
-      const block = last(document);
-      document = addPrimitiveFeature(document, {
-        name: 'Pocket',
-        primitiveKind: 'box',
-        dimensions: { width: 20, height: 20, depth: 10 }
-      });
-      document = transformBody(document, {
-        name: 'Place pocket',
-        targetBodyId: last(document),
-        translation: { x: 20, y: 10, z: 17 }
-      }).document;
-      document = booleanBodies(document, {
-        name: 'Pocket cut',
-        operation: 'subtract',
-        targetBodyIds: [block, last(document)]
-      }).document;
+      const document = pocketDocument();
       const pocketed = await built(document);
       const floor = loopAt(pocketed, last(document), 17);
       expect(floor).toHaveLength(4);
-      const result = await outcome(
+      const result = expectBuilt(
+        await outcome(
+          filletEdges(document, {
+            name: 'Floor round',
+            targetBodyId: last(document),
+            ...pickEdges(floor),
+            size
+          }).document
+        ),
+        `pocket floor loop R${size}`
+      );
+      // A concave round adds material along the 80 mm floor perimeter.
+      expect(result.volumes[0]!).toBeGreaterThan(
+        pocketed.bodyRepresentations[last(document)]!.volume
+      );
+    },
+    300_000
+  );
+
+  it('refuses R3 on the 3 mm pocket floor loop by cliff code', async () => {
+    const document = pocketDocument();
+    const pocketed = await built(document);
+    const floor = loopAt(pocketed, last(document), 17);
+    expect(floor).toHaveLength(4);
+    expectTypedRefusal(
+      await outcome(
         filletEdges(document, {
           name: 'Floor round',
           targetBodyId: last(document),
           ...pickEdges(floor),
-          size
+          size: 3
         }).document
-      );
-      if (result.kind === 'built') {
-        // A concave round adds material along the 80 mm floor perimeter.
-        expect(result.volumes[0]!).toBeGreaterThan(
-          pocketed.bodyRepresentations[last(document)]!.volume
-        );
-      }
-    },
-    300_000
-  );
+      ),
+      'blend/internal/cliff-encountered',
+      'pocket floor loop R3 (equals pocket depth)'
+    );
+  }, 300_000);
 });
