@@ -113,11 +113,19 @@ export interface HistoryTextSession {
   /** An Apply is being checked against exact geometry. */
   applying: boolean;
   /**
-   * Marks an Apply of `text` in flight. The returned call ends it; once
-   * applied it clears the draft only while that still reads `text`, so an
-   * edit made after the Apply began is kept.
+   * The dialog's status line: what Check found, or how the last Apply
+   * ended. Held here so a dialog opened again while an Apply ran shows how
+   * it ended, which the closed one could not.
    */
-  startApply(text: string): (applied: boolean) => void;
+  status: string;
+  setStatus(status: string): void;
+  /**
+   * Marks an Apply of `text` in flight. The returned call ends it and shows
+   * `outcome`; once applied it clears the draft only while that still reads
+   * `text`, so an edit made after the Apply began is kept. An Apply
+   * superseded, or started for another project, ends without a word.
+   */
+  startApply(text: string): (applied: boolean, outcome: string) => void;
 }
 
 /**
@@ -138,6 +146,7 @@ export function useHistoryTextSession(
 ): HistoryTextSession {
   const [draft, setDraft] = useState<HistoryTextDraft | null>(null);
   const [applying, setApplying] = useState(false);
+  const [status, setStatus] = useState('');
   // The Apply in flight, by token: one started for another project, or
   // superseded, ends without touching the current one.
   const running = useRef<number | null>(null);
@@ -149,21 +158,25 @@ export function useHistoryTextSession(
     setShownScope(scope);
     setDraft(null);
     setApplying(false);
+    setStatus('');
     running.current = null;
   }
   return {
     draft,
     setDraft,
     applying,
+    status,
+    setStatus,
     startApply(text) {
       nextToken.current += 1;
       const token = nextToken.current;
       running.current = token;
       setApplying(true);
-      return (applied) => {
+      return (applied, outcome) => {
         if (running.current !== token) return;
         running.current = null;
         setApplying(false);
+        setStatus(outcome);
         if (applied) {
           setDraft((held) => (held?.text === text ? null : held));
         }
@@ -184,7 +197,12 @@ export function useHistoryText(scope: unknown = null): HistoryTextView {
     ...session,
     open,
     toggle: () => setOpen((current) => !current),
-    close: () => setOpen(false)
+    // A status belongs to the dialog that showed it; an Apply still running
+    // writes its outcome for the next one.
+    close: () => {
+      setOpen(false);
+      session.setStatus('');
+    }
   };
 }
 

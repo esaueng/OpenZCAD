@@ -9,8 +9,10 @@ import {
 import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import { readHistoryText } from '@openzcad/scripting';
 import { toUserId } from '@openzcad/shared';
+import type { ProjectDocument } from '@openzcad/shared';
 import HistoryTextDialog from './HistoryTextDialog';
 import type { PatchSource } from './modelPanels/modelPanelProps';
+import { useHistoryText } from './modelPanels/panelViews';
 
 function block(width: string) {
   let document = createProjectDocument('Bracket', toUserId('owner'));
@@ -28,6 +30,32 @@ function block(width: string) {
 
 function textArea(): HTMLTextAreaElement {
   return screen.getByLabelText(/History text, \d+ lines/);
+}
+
+/** The dialog drawn from workspace-held state, as HistoryTextHost does. */
+function Held({
+  document,
+  onApply
+}: {
+  document: ProjectDocument;
+  onApply(proposal: CadPatchProposal, source: PatchSource): Promise<boolean>;
+}) {
+  const view = useHistoryText(document.projectId);
+  return (
+    <>
+      <button type="button" onClick={view.toggle}>
+        Open history text
+      </button>
+      {view.open && (
+        <HistoryTextDialog
+          document={document}
+          onApply={onApply}
+          session={view}
+          onClose={view.close}
+        />
+      )}
+    </>
+  );
 }
 
 function type(value: string) {
@@ -247,6 +275,30 @@ describe('HistoryTextDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Copy' }));
     expect(screen.getByRole('status')).toHaveTextContent(
       'Copy failed; select the text instead.'
+    );
+  });
+
+  it('shows how an Apply ended in a dialog opened again while it ran', async () => {
+    const user = userEvent.setup();
+    const document = block('40 mm');
+    let refuse!: (applied: boolean) => void;
+    const onApply = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          refuse = resolve;
+        })
+    );
+    render(<Held document={document} onApply={onApply} />);
+    await user.click(screen.getByRole('button', { name: 'Open history text' }));
+    type(textArea().value.replace('height: 20', 'height: 25'));
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Checking');
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await user.click(screen.getByRole('button', { name: 'Open history text' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Checking');
+    await act(async () => refuse(false));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Not applied. The status bar says why.'
     );
   });
 });

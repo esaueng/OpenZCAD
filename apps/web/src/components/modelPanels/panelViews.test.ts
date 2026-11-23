@@ -61,7 +61,7 @@ describe('model panel view state', () => {
 
   it('keeps an edit typed after an Apply began when that Apply commits', () => {
     const { result } = renderHook(() => useHistoryText('project-a'));
-    let finish!: (applied: boolean) => void;
+    let finish!: (applied: boolean, outcome: string) => void;
     act(() => {
       result.current.setDraft({
         text: 'applied',
@@ -80,7 +80,7 @@ describe('model panel view state', () => {
         baseText: 'printed'
       });
     });
-    act(() => finish(true));
+    act(() => finish(true, 'done'));
     expect(result.current.applying).toBe(false);
     expect(result.current.draft?.text).toBe('newer');
 
@@ -88,7 +88,7 @@ describe('model panel view state', () => {
     act(() => {
       finish = result.current.startApply('newer');
     });
-    act(() => finish(true));
+    act(() => finish(true, 'done'));
     expect(result.current.draft).toBeNull();
   });
 
@@ -97,19 +97,39 @@ describe('model panel view state', () => {
       ({ scope }) => useHistoryText(scope),
       { initialProps: { scope: 'project-a' } }
     );
-    let finish!: (applied: boolean) => void;
+    let finish!: (applied: boolean, outcome: string) => void;
     act(() => {
       finish = result.current.startApply('a');
     });
     rerender({ scope: 'project-b' });
     expect(result.current.applying).toBe(false);
-    let current!: (applied: boolean) => void;
+    let current!: (applied: boolean, outcome: string) => void;
     act(() => {
       current = result.current.startApply('b');
     });
-    act(() => finish(true));
+    act(() => finish(true, 'done'));
     expect(result.current.applying).toBe(true);
-    act(() => current(false));
+    // Project A's outcome never reaches project B's dialog.
+    expect(result.current.status).toBe('');
+    act(() => current(false, 'refused'));
     expect(result.current.applying).toBe(false);
+    expect(result.current.status).toBe('refused');
+  });
+
+  it('keeps how an Apply ended for a dialog opened again', () => {
+    const { result } = renderHook(() => useHistoryText('project-a'));
+    let finish!: (applied: boolean, outcome: string) => void;
+    act(() => result.current.toggle());
+    act(() => {
+      finish = result.current.startApply('a');
+    });
+    act(() => result.current.close());
+    act(() => result.current.toggle());
+    expect(result.current.applying).toBe(true);
+    act(() => finish(false, 'Not applied.'));
+    expect(result.current.status).toBe('Not applied.');
+    // Closing retires it.
+    act(() => result.current.close());
+    expect(result.current.status).toBe('');
   });
 });

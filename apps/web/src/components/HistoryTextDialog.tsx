@@ -88,9 +88,9 @@ export default function HistoryTextDialog({
   // Apply in flight: held by the caller when given, so a dialog opened
   // again shows an Apply still running instead of taking edits it clears.
   const ownSession = useHistoryTextSession();
-  const { draft, setDraft, applying, startApply } = heldSession ?? ownSession;
+  const { draft, setDraft, applying, status, setStatus, startApply } =
+    heldSession ?? ownSession;
   const [checked, setChecked] = useState<HistoryEditResult | null>(null);
-  const [status, setStatus] = useState('');
   useModalFocus(dialogRef, {
     autoFocus: true,
     initialFocusRef: textRef,
@@ -135,7 +135,6 @@ export default function HistoryTextDialog({
     const result = check();
     if (!result.proposal) return;
     const finish = startApply(draft.text);
-    setStatus(CHECKING);
     let applied = false;
     try {
       applied = await onApply(result.proposal, {
@@ -147,15 +146,16 @@ export default function HistoryTextDialog({
         baseVersion: draft.baseVersion
       });
     } finally {
-      // Clears the draft only while it is still the text applied.
-      finish(applied);
+      // Clears the draft only while it is still the text applied, and
+      // reports to whichever dialog is open now: this one may have closed.
+      finish(
+        applied,
+        applied
+          ? 'Applied as one undo step.'
+          : 'Not applied. The status bar says why.'
+      );
     }
-    if (applied) {
-      setChecked(null);
-      setStatus('Applied as one undo step.');
-    } else {
-      setStatus('Not applied. The status bar says why.');
-    }
+    if (applied) setChecked(null);
   }
 
   function focusDiagnostic(diagnostic: HistoryTextDiagnostic) {
