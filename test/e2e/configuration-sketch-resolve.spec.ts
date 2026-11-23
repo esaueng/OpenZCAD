@@ -175,6 +175,48 @@ test(
   }
 );
 
+test('the last of two quick row clicks wins, even on the active row', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const driven = drivenSketchesDocument();
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await importDriven(page, driven.document);
+  const circle = async () =>
+    Math.round(driven.storedCircleX(await stored(page)) * 1e4) / 1e4;
+  await expect.poll(circle, READY).toBe(30);
+
+  // Large, then Small in the same task: Large is still solving, so Small
+  // still reads as checked when it is clicked again.
+  await page.evaluate(() => {
+    const radio = (name: string) =>
+      document.querySelector<HTMLInputElement>(
+        `input[type="radio"][aria-label="Use ${name}"]`
+      )!;
+    radio('Large').click();
+    radio('Small').click();
+  });
+  // Long enough for the Large solve to have landed had it not been dropped.
+  await page.waitForTimeout(3_000);
+  await expect(page.getByRole('radio', { name: 'Use Small' })).toBeChecked();
+  await expect(page.getByLabel('Expression for gap')).toHaveValue('30 mm');
+  expect(await circle()).toBe(30);
+
+  // Small, then Large: the later click still switches.
+  await page.evaluate(() => {
+    const radio = (name: string) =>
+      document.querySelector<HTMLInputElement>(
+        `input[type="radio"][aria-label="Use ${name}"]`
+      )!;
+    radio('Small').click();
+    radio('Large').click();
+  });
+  await expect(page.getByRole('radio', { name: 'Use Large' })).toBeChecked();
+  await expect.poll(circle, READY).toBe(45);
+  expect(errors).toEqual([]);
+});
+
 test(
   'View draws and exports the row it shows, sketches and solids alike',
   { tag: '@ci-smoke' },

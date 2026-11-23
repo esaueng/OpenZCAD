@@ -188,4 +188,39 @@ describe('quick configuration row switches', () => {
       );
     }
   );
+
+  it(
+    'keeps the active row when it is picked again after a slower switch',
+    { timeout: 120_000 },
+    async () => {
+      const f = threeRows();
+      const { holder, gate, deps } = harness(f.document);
+      const large = runConfigurationCommand(activate('row_large'), deps);
+      // Small is still the active row: picking it again overtakes Large.
+      const small = runConfigurationCommand(activate('row_small'), deps);
+      await expect(small).resolves.toBeNull();
+      gate('row_large').release();
+      await expect(large).resolves.toBeNull();
+      const live = holder.manager.document;
+      expect(live.configurations?.activeRowId).toBe('row_small');
+      expect(live).toBe(f.document);
+    }
+  );
+
+  it(
+    'keeps the active row when it is picked again and the switch lands first',
+    { timeout: 120_000 },
+    async () => {
+      const f = threeRows();
+      const { holder, gate, deps } = harness(f.document);
+      const large = runConfigurationCommand(activate('row_large'), deps);
+      const small = runConfigurationCommand(activate('row_small'), deps);
+      gate('row_large').release();
+      await expect(large).resolves.toBeNull();
+      await expect(small).resolves.toBeNull();
+      const live = holder.manager.document;
+      expect(live.configurations?.activeRowId).toBe('row_small');
+      expect(live).toBe(f.document);
+    }
+  );
 });

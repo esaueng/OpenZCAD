@@ -68,6 +68,9 @@ export async function runConfigurationCommand(
     command.kind === 'configuration.activate'
       ? ++deps.latestActivation.current
       : null;
+  // A pick of the row already active: its ticket has overtaken any switch
+  // still solving, and there is nothing else to do.
+  if (ticket !== null && next === base) return null;
   /** Still the manager and project this command was checked against. */
   const sameProject = () => {
     const live = deps.manager();

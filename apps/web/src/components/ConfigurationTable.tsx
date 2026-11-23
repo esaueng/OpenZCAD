@@ -353,6 +353,13 @@ export function ConfigurationTable({
                         onChange={() =>
                           void run(() => actions!.activate(row.id))
                         }
+                        // A click on the checked radio fires no change, yet
+                        // while another row is still switching it is a new
+                        // pick: it must overtake that switch, so the last
+                        // click wins. With nothing pending it does nothing.
+                        onClick={() => {
+                          if (active) void run(() => actions!.activate(row.id));
+                        }}
                       />
                       <TextCell
                         value={row.name}
