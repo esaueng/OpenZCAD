@@ -12,15 +12,24 @@ import {
   PR_SLICE_PARTS,
   PR_SLICE_SEEDS,
   chainReproduction,
+  checkResizeOracle,
   lastChainRun,
   prSliceChainCells,
   runChainDetailed,
   sameFailureSignature,
   shrinkChain,
+  supersededLater,
   type ChainCell,
   type ChainStep,
   type FailureSignature
 } from './chain-generator';
+import type {
+  BodyRepresentation,
+  FaceTopology,
+  FeatureId,
+  FeatureNode,
+  Vector3
+} from '@openzcad/shared';
 import { CHAIN_REFUSAL_PINS } from './pins';
 
 /**
@@ -202,4 +211,94 @@ describe('K10 direct-edit chain generator contracts', () => {
     expect(chainReproduction(minimal)).toContain('offset-face');
     expect(chainReproduction(minimal)).toContain('by 2 mm');
   }, 60_000);
+
+  describe('resize oracles stay local to the picked face', () => {
+    const v = (x: number, y: number, z: number): Vector3 => ({ x, y, z });
+    // A vertical edge blend whose axis sits at (x, y), radius r.
+    const blendFace = (hash: number, x: number, r: number): FaceTopology =>
+      ({
+        hash,
+        geometry: {
+          surfaceType: 'cylinder',
+          featureType: 'blend',
+          blendRadius: r,
+          radius: r,
+          axisStart: v(x, r, 0),
+          axisEnd: v(x, r, 12),
+          center: v(x, r, 6),
+          area: 10 * r
+        }
+      }) as unknown as FaceTopology;
+    const body = (faces: FaceTopology[], volume: number) =>
+      ({
+        volume,
+        topology: { faces, edges: [] }
+      }) as unknown as BodyRepresentation;
+    const before = body([blendFace(1, 1.5, 1.5), blendFace(2, 38.5, 1.5)], 100);
+    const step: ChainStep = {
+      kind: 'resize-blend',
+      stepId: 'step-0',
+      face: {} as never,
+      delta: 0.5
+    };
+
+    it('fails when a different blend of the same radius takes the new radius', () => {
+      const wrongFace = body([blendFace(1, 1.5, 1.5), blendFace(2, 38, 2)], 99);
+      expect(
+        checkResizeOracle(
+          step,
+          before,
+          wrongFace,
+          before.topology!.faces[0],
+          false
+        )?.failure.wrongCheck
+      ).toBe('radius-not-applied');
+      const picked = body([blendFace(1, 2, 2), blendFace(2, 38.5, 1.5)], 99);
+      expect(
+        checkResizeOracle(
+          step,
+          before,
+          picked,
+          before.topology!.faces[0],
+          false
+        )
+      ).toBeNull();
+    });
+
+    it('treats only a later resize of the same blend as superseding an edit', () => {
+      const resize = (
+        id: string,
+        x: number,
+        recordedRadius: number,
+        newRadius: number
+      ) =>
+        ({
+          featureId: id as FeatureId,
+          data: {
+            featureKind: 'direct-edit',
+            operation: {
+              kind: 'resize-blend',
+              faceHash: 0,
+              surfaceClass: 'cylinder',
+              recordedRadius,
+              recordedCenter: v(x, recordedRadius, 6),
+              recordedAxis: v(0, 0, 1),
+              newRadius
+            }
+          }
+        }) as unknown as FeatureNode;
+      const crown = resize('crown', 1.5, 1.5, 2);
+      // A separate corner blend resized later does not override the crown.
+      expect(
+        supersededLater(
+          [crown, resize('corner', 38.5, 1.5, 2.5)],
+          crown.featureId
+        )
+      ).toBe(false);
+      // The same blend resized again from the edited radius does.
+      expect(
+        supersededLater([crown, resize('again', 2, 2, 3)], crown.featureId)
+      ).toBe(true);
+    });
+  });
 });

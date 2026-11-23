@@ -771,6 +771,87 @@ function checkOffsetShapeOracle(
   return null;
 }
 
+function sub(a: Vector3, b: Vector3): Vector3 {
+  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+
+function norm(v: Vector3): number {
+  return Math.hypot(v.x, v.y, v.z);
+}
+
+/** Unit or not, whether two directions are parallel either way round. */
+function parallel(a: Vector3, b: Vector3): boolean {
+  return Math.abs(Math.abs(dot(a, b)) - norm(a) * norm(b)) < 1e-9;
+}
+
+/** Whether two segments' supporting lines coincide. */
+function sameLine(
+  aStart: Vector3,
+  aEnd: Vector3,
+  bStart: Vector3,
+  bEnd: Vector3
+): boolean {
+  const axis = sub(aEnd, aStart);
+  const offset = sub(bStart, aStart);
+  const along = dot(offset, axis) / dot(axis, axis);
+  const off = {
+    x: offset.x - along * axis.x,
+    y: offset.y - along * axis.y,
+    z: offset.z - along * axis.z
+  };
+  return parallel(axis, sub(bEnd, bStart)) && norm(off) < 1e-6;
+}
+
+/**
+ * Whether a later active resize of the SAME face could legitimately absorb a
+ * change to this one. A resize records an absolute radius, so resizing the
+ * same cylinder or blend again overrides the earlier value (C/seed-1 resizes
+ * one cylinder twice). The later resize must start from the edited radius on
+ * the same carrier: a collinear axis for a cylinder; the same class, a
+ * parallel axis and a centre within the distance the resize can move it for
+ * a blend. Offsets are relative and are never superseded. A missed match
+ * fails loudly; it never lets an unchanged body pass.
+ */
+export function supersededLater(
+  features: readonly FeatureNode[],
+  featureId: FeatureId | undefined
+): boolean {
+  const index = features.findIndex((node) => node.featureId === featureId);
+  const target = features[index];
+  if (!target || target.data.featureKind !== 'direct-edit') return false;
+  const op = target.data.operation;
+  return features.slice(index + 1).some((node) => {
+    if (node.data.featureKind !== 'direct-edit') return false;
+    const later = node.data.operation;
+    if (
+      op.kind === 'resize-cylindrical-face' &&
+      later.kind === 'resize-cylindrical-face'
+    ) {
+      return (
+        typeof op.radius === 'number' &&
+        Math.abs(later.sourceRadius - op.radius) < 1e-8 &&
+        sameLine(
+          op.sourceAxisStart,
+          op.sourceAxisEnd,
+          later.sourceAxisStart,
+          later.sourceAxisEnd
+        )
+      );
+    }
+    if (op.kind === 'resize-blend' && later.kind === 'resize-blend') {
+      if (typeof op.newRadius !== 'number') return false;
+      const shift = Math.abs(op.newRadius - op.recordedRadius);
+      return (
+        later.surfaceClass === op.surfaceClass &&
+        Math.abs(later.recordedRadius - op.newRadius) < 1e-8 &&
+        parallel(later.recordedAxis, op.recordedAxis) &&
+        norm(sub(later.recordedCenter, op.recordedCenter)) <= 4 * shift + 1e-6
+      );
+    }
+    return false;
+  });
+}
+
 function radiusCount(
   body: BodyRepresentation,
   radius: number,
@@ -787,38 +868,16 @@ function radiusCount(
 }
 
 /**
- * Whether a later active edit could legitimately absorb a change to this one:
- * a resize records an absolute radius, so a later resize of the same kind
- * (as in C/seed-1, a cylinder resized twice) overrides the earlier value.
- * Offsets are relative and are never superseded.
+ * A committed resize must actually take the requested radius ON THE PICKED
+ * FACE: its carrier no longer exists at the old radius (same class, centre
+ * and axis for a blend; same axis line for a cylinder), and more faces carry
+ * the new radius (a zero blend removes faces instead). A cylinder must also
+ * show the new radius on the picked axis line. So resizing a different face
+ * of the same radius, or keeping the previous solid, fails. An edit of an
+ * earlier value must change the body unless a later resize of the same face
+ * supersedes it.
  */
-function supersededLater(
-  document: ProjectDocument,
-  featureId: FeatureId | undefined
-): boolean {
-  const features = listFeaturesInOrder(document);
-  const index = features.findIndex((node) => node.featureId === featureId);
-  const target = features[index];
-  if (!target || target.data.featureKind !== 'direct-edit') return false;
-  const kind = target.data.operation.kind;
-  if (kind === 'offset-face') return false;
-  return features
-    .slice(index + 1)
-    .some(
-      (node) =>
-        node.data.featureKind === 'direct-edit' &&
-        node.data.operation.kind === kind
-    );
-}
-
-/**
- * A committed resize must actually take the requested radius: more faces
- * carry the new radius and fewer the old one (a zero blend removes faces).
- * An edit of an earlier value must change the body unless a later resize
- * supersedes it. Either way a build that
- * silently keeps the previous solid fails.
- */
-function checkResizeOracle(
+export function checkResizeOracle(
   step: ChainStep,
   before: BodyRepresentation,
   after: BodyRepresentation,
@@ -845,25 +904,52 @@ function checkResizeOracle(
   }
   if (step.kind !== 'resize-blend' && step.kind !== 'resize-cylinder')
     return null;
-  const blend = step.kind === 'resize-blend';
-  const oldRadius = blend
-    ? blendCarrierSnapshot(picked?.geometry)?.radius
-    : picked?.geometry?.radius;
-  if (oldRadius === undefined) return null;
-  const newRadius = cleanDecimal(oldRadius + step.delta);
-  const removed =
-    blend && newRadius === 0
-      ? (after.topology?.faces.length ?? 0) <
-        (before.topology?.faces.length ?? 0)
-      : radiusCount(after, newRadius, blend) >
-          radiusCount(before, newRadius, blend) &&
-        radiusCount(after, oldRadius, blend) <
-          radiusCount(before, oldRadius, blend);
-  return removed
+  const faces = after.topology?.faces ?? [];
+  if (step.kind === 'resize-blend') {
+    const carrier = blendCarrierSnapshot(picked?.geometry);
+    if (!carrier) return null;
+    const newRadius = cleanDecimal(carrier.radius + step.delta);
+    const pickedRemains = faces.some(({ geometry }) => {
+      const other = blendCarrierSnapshot(geometry);
+      return (
+        other !== undefined &&
+        other !== null &&
+        other.surfaceClass === carrier.surfaceClass &&
+        Math.abs(other.radius - carrier.radius) < 1e-8 &&
+        norm(sub(other.center, carrier.center)) < 1e-6 &&
+        parallel(other.axis, carrier.axis)
+      );
+    });
+    const applied =
+      newRadius === 0
+        ? faces.length < (before.topology?.faces.length ?? 0)
+        : radiusCount(after, newRadius, true) >
+          radiusCount(before, newRadius, true);
+    return !pickedRemains && applied
+      ? null
+      : wrong(
+          'radius-not-applied',
+          `blend resize from ${carrier.radius} to ${newRadius} mm: picked ${carrier.surfaceClass} carrier ${pickedRemains ? 'still at the old radius' : 'replaced'}, faces at the new radius ${radiusCount(before, newRadius, true)} -> ${radiusCount(after, newRadius, true)}`
+        );
+  }
+  const g = picked?.geometry;
+  if (!g?.axisStart || !g.axisEnd || g.radius === undefined) return null;
+  const newRadius = cleanDecimal(g.radius + step.delta);
+  const onAxis = (radius: number) =>
+    faces.some(
+      ({ geometry: f }) =>
+        f?.surfaceType === 'cylinder' &&
+        f.radius !== undefined &&
+        Math.abs(f.radius - radius) < 1e-8 &&
+        f.axisStart !== undefined &&
+        f.axisEnd !== undefined &&
+        sameLine(g.axisStart!, g.axisEnd!, f.axisStart, f.axisEnd)
+    );
+  return !onAxis(g.radius) && onAxis(newRadius)
     ? null
     : wrong(
         'radius-not-applied',
-        `resize from ${oldRadius} to ${newRadius} mm: faces at the new radius ${radiusCount(before, newRadius, blend)} -> ${radiusCount(after, newRadius, blend)}, at the old radius ${radiusCount(before, oldRadius, blend)} -> ${radiusCount(after, oldRadius, blend)}`
+        `cylinder resize from ${g.radius} to ${newRadius} mm on the picked axis: old radius ${onAxis(g.radius) ? 'remains' : 'gone'}, new radius ${onAxis(newRadius) ? 'present' : 'missing'}`
       );
 }
 
@@ -1835,7 +1921,10 @@ export async function runChainDetailed(
         afterBody!,
         builtCommand.pickedFace,
         step.kind === 'edit-earlier' &&
-          supersededLater(beforeDoc, stepIdToFeatureId.get(step.targetStepId))
+          supersededLater(
+            listFeaturesInOrder(beforeDoc),
+            stepIdToFeatureId.get(step.targetStepId)
+          )
       );
       if (resizeIssue) {
         summary.elapsedMs = Date.now() - startMs;
