@@ -269,7 +269,9 @@ import {
   withoutDerivedProjection,
   isSharedWithoutHistory,
   type ExtrudeInput,
-  type StaleDirectEditFaceRepair
+  type StaleDirectEditFaceRepair,
+  unitsConvertCheckpointName,
+  type ConvertibleUnit
 } from '@openzcad/document-core';
 import {
   CURRENT_CANONICAL_BASIS_REVISION,
@@ -1705,6 +1707,11 @@ const LazyImportUnitsDialog = lazyWithStaleChunkNotice(() =>
     default: module.ImportUnitsDialog
   }))
 );
+const LazyConvertUnitsDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ConvertUnitsDialog').then((module) => ({
+    default: module.ConvertUnitsDialog
+  }))
+);
 /**
  * The edit panel, which only exists while something is being edited.
  *
@@ -1879,6 +1886,7 @@ function FlatPatternDialog(
 const ShaprImportDialog = withSuspense(LazyShaprImportDialog);
 
 const ImportUnitsDialog = withSuspense(LazyImportUnitsDialog);
+const ConvertUnitsDialog = withSuspense(LazyConvertUnitsDialog);
 
 function Inspector(props: ComponentProps<typeof LazyInspector>) {
   return (
@@ -2170,6 +2178,17 @@ import {
   offsetRefusalInTotal
 } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
+import { collaborationClientId } from './lib/collaborationProtocol';
+import {
+  CONVERT_UNIT_WORDS,
+  unitsConversionCollaborationRefusal,
+  type UnitsConversionCollaborationState
+} from './lib/unitsConversion';
+import type {
+  ConvertCopyStep,
+  ConvertUnitsOutcome,
+  PreparedConversion
+} from './components/ConvertUnitsDialog';
 import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
   AssistantActivity,
@@ -3335,6 +3354,12 @@ export function App() {
     ComponentProps<typeof LazyImportUnitsDialog>,
     'onChoose'
   > | null>(null);
+  /**
+   * I03 phase 6: the stored-unit conversion review is open; the unit the
+   * project stored when it opened (kept while a copy opens in its place).
+   */
+  const [convertUnitsStored, setConvertUnitsStored] =
+    useState<UnitSystem | null>(null);
   /** Its answer's receiver; a newer prompt cancels an older one. */
   const importUnitsAnswerRef = useRef<
     ((units: UnitSystem | null) => void) | null
@@ -6889,20 +6914,21 @@ export function App() {
   useEffect(() => {
     retainEncryptionStatus(openProjectId);
   }, [openProjectId]);
+  // A signed-in user can still be editing a device-only project. Only attach
+  // account credentials to a collaboration room after this exact project has
+  // been resolved as a cloud-backed document. Desktop exchanges its native
+  // bearer credential for a short-lived, one-use WebSocket ticket.
+  const collaborationSession =
+    activeProjectIsCloud &&
+    cloudAvailable &&
+    liveCollaborationEnabled &&
+    (!encryptedMemberProject || projectSharingEnabled)
+      ? session
+      : null;
   const collaboration = useCollaboration({
     enabled: cloudFunctionsEnabled,
     document: doc,
-    // A signed-in user can still be editing a device-only project. Only attach
-    // account credentials to a collaboration room after this exact project has
-    // been resolved as a cloud-backed document. Desktop exchanges its native
-    // bearer credential for a short-lived, one-use WebSocket ticket.
-    session:
-      activeProjectIsCloud &&
-      cloudAvailable &&
-      liveCollaborationEnabled &&
-      (!encryptedMemberProject || projectSharingEnabled)
-        ? session
-        : null,
+    session: collaborationSession,
     encrypted: encryptedRoomProject,
     onAccountVersion(projectId, version) {
       // The room wrote this browser's version to the account: that is the
@@ -7019,6 +7045,23 @@ export function App() {
     }
   }, [encryptedRoomRole, encryptedRoomRoleProjectId]);
 
+  // I03 phase 6: what a stored-unit conversion checks about the room, read
+  // through a ref so the conversion sees the room as it is when it commits.
+  const unitsConversionRoomEnabled =
+    cloudFunctionsEnabled && collaborationSession !== null;
+  const unitsConversionRoom: UnitsConversionCollaborationState = {
+    enabled: unitsConversionRoomEnabled,
+    status: collaboration.status,
+    role: collaboration.role,
+    lease: collaboration.lease,
+    members: collaboration.members,
+    // Read only for a room: the id lives in session storage.
+    clientId: unitsConversionRoomEnabled ? collaborationClientId() : ''
+  };
+  const unitsConversionRoomRef = useRef(unitsConversionRoom);
+  unitsConversionRoomRef.current = unitsConversionRoom;
+  const sharedAccountProjectRef = useRef(sharedAccountProject);
+  sharedAccountProjectRef.current = sharedAccountProject;
   const activeCollaborationLease = Boolean(
     collaboration.lease &&
     collaboration.lease.projectId === doc?.projectId &&
@@ -17415,10 +17458,11 @@ export function App() {
     }
   }
 
+  /** Copies `project` (or branches its save state); resolves the copy's id. */
   async function handleDuplicateProject(
     project: ProjectSummary,
     saveState?: ProjectCheckpoint
-  ) {
+  ): Promise<string | null> {
     setBusy(true);
     try {
       await flushPendingLocalSave();
@@ -17563,7 +17607,7 @@ export function App() {
               ...(pictureWarning ? [pictureWarning] : [])
             ].join(' ')
           );
-          return;
+          return response.project.projectId;
         } catch (error) {
           // A project the account has never seen is not a failure — it just
           // means the device holding it has to make the copy.
@@ -17630,6 +17674,7 @@ export function App() {
           ? `Branched ${project.name} from “${saveState.reason}” as ${copy.name}.`
           : `Duplicated ${project.name} as ${copy.name}.`
       );
+      return copy.projectId;
     } catch (error) {
       setStatus(
         errorMessage(
@@ -17639,6 +17684,7 @@ export function App() {
             : 'Could not duplicate the project.'
         )
       );
+      return null;
     } finally {
       setBusy(false);
     }
@@ -26182,6 +26228,132 @@ export function App() {
           : `Lengths are shown in ${displayLengthName(target)}. The model is unchanged: it is still stored in ${displayLengthName(manager.document.units)}.`
       );
     return changed;
+  }
+
+  /** The conversion dialog's refusal for something outside the conversion. */
+  function unitsConversionRefusalOf(message: string): ConvertUnitsOutcome {
+    return {
+      ok: false,
+      refusals: [
+        { stage: 'payload', code: 'unavailable', subject: 'document', message }
+      ]
+    };
+  }
+
+  /**
+   * I03 phase 6: checks converting the open project to `to` in a disposable
+   * worker, for the manager that will commit it (its actor's undo history).
+   */
+  async function prepareStoredUnitsConversion(
+    to: ConvertibleUnit,
+    signal?: AbortSignal
+  ) {
+    const manager = managerRef.current;
+    if (!manager) throw new Error('No project is open to convert.');
+    const { prepareUnitsConversionInWorker } =
+      await import('./lib/unitsConversionWorkerClient');
+    return prepareUnitsConversionInWorker(manager.document, to, {
+      actorUserId: manager.actorUserId,
+      ...(signal ? { signal } : {})
+    });
+  }
+
+  /**
+   * I03 phase 6: converts the open project's stored units in place, after
+   * the safety checkpoint (plan §5.2, §5.3). `commitUnitsConversion` reads
+   * the manager, the room and the clock when it commits, not when this
+   * render was made, and refuses as `stale` when the project moved; only an
+   * applied conversion is put on screen.
+   */
+  async function convertStoredUnitsInPlace(
+    prepared: PreparedConversion
+  ): Promise<ConvertUnitsOutcome> {
+    const reason = editDisabledReasonRef.current;
+    if (reason)
+      return unitsConversionRefusalOf(
+        cannotSentence('convert stored units', reason)
+      );
+    const { commitUnitsConversion } = await import('./lib/unitsConversion');
+    const result = await commitUnitsConversion(
+      () => managerRef.current,
+      prepared,
+      {
+        deviceOnlyHistory: sharedAccountProjectRef.current,
+        collaboration: () => unitsConversionRoomRef.current,
+        now: () => Date.now()
+      }
+    );
+    if (!result.ok) return { ok: false, refusals: result.refusals };
+    const next = result.document;
+    recordLocalCommit(next, result.checkpoint.derived.bodyRepresentations);
+    clearAutoFrame();
+    // Every mesh on screen is in the unit being left.
+    geometry.invalidate();
+    setPreviewDoc(null);
+    setDoc(next);
+    setSelectedFeatureNode(null);
+    setSelectedTopology(null);
+    setSelectedEdges([]);
+    setSelectedBodyIds([]);
+    setSelectedSketchProfileId(null);
+    setSelectedProfiles([]);
+    setTool(null);
+    const { from, to } = prepared.payload;
+    const message = `Converted stored units to ${CONVERT_UNIT_WORDS[to]}. “${unitsConvertCheckpointName(from, to)}” was saved first: restore it to go back.`;
+    setStatus(message);
+    return { ok: true, message };
+  }
+  const convertStoredUnitsInPlaceRef = useRef(convertStoredUnitsInPlace);
+  convertStoredUnitsInPlaceRef.current = convertStoredUnitsInPlace;
+  const prepareStoredUnitsConversionRef = useRef(prepareStoredUnitsConversion);
+  prepareStoredUnitsConversionRef.current = prepareStoredUnitsConversion;
+
+  /**
+   * I03 phase 6, "Convert a copy" (plan §5.3): duplicates the project the
+   * usual way, opens the copy, checks the conversion again on the copy and
+   * converts it in place there. The original is never changed. Each step
+   * after the copy opens runs through refs, so it acts for the copy's
+   * manager and room, not the original's.
+   */
+  async function convertStoredUnitsCopy(
+    to: ConvertibleUnit,
+    onStep: (step: ConvertCopyStep) => void
+  ): Promise<ConvertUnitsOutcome> {
+    const current = managerRef.current?.document;
+    if (!current)
+      return unitsConversionRefusalOf('No project is open to convert.');
+    const project =
+      projects.find((summary) => summary.projectId === current.projectId) ??
+      summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
+    onStep('copying');
+    const copyId = await handleDuplicateProject(project);
+    if (!copyId)
+      return unitsConversionRefusalOf(
+        `${project.name} could not be copied, so nothing was converted.`
+      );
+    await handleOpenProject(copyId);
+    const opened = managerRef.current?.document;
+    if (opened?.projectId !== copyId)
+      return {
+        ...unitsConversionRefusalOf(
+          'The copy was made but did not open. Open it from the project list and convert it there.'
+        )
+      };
+    const notConverted = `The copy “${opened.name}” is open, still stored in ${CONVERT_UNIT_WORDS[opened.units]}. ${project.name} is unchanged.`;
+    onStep('checking');
+    const preparation = await prepareStoredUnitsConversionRef.current(to);
+    if (!preparation.ok)
+      return {
+        ok: false,
+        context: notConverted,
+        refusals: preparation.refusals
+      };
+    onStep('converting');
+    const outcome = await convertStoredUnitsInPlaceRef.current(preparation);
+    if (!outcome.ok) return { ...outcome, context: notConverted };
+    const message = `Made “${opened.name}” and converted it to ${CONVERT_UNIT_WORDS[to]}. ${project.name} is unchanged. “${unitsConvertCheckpointName(preparation.payload.from, to)}” was saved in the copy first.`;
+    setStatus(message);
+    return { ok: true, message };
   }
 
   /** L09: sets or clears the print clearance; answers with a refusal. */
@@ -35033,6 +35205,7 @@ export function App() {
     !pendingShaprImport &&
     !meshExportOpen &&
     !importUnitsPrompt &&
+    convertUnitsStored === null &&
     !pendingFeatureDelete &&
     !activeResumePrompt(pendingDetailCascade, doc) &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
@@ -38276,7 +38449,12 @@ export function App() {
             shown: documentDisplayUnits(doc),
             stored: doc.units,
             onChange: (units) => void handleSetDisplayUnits(units),
-            disabledReason: projectRenameDisabledReason
+            disabledReason: projectRenameDisabledReason,
+            onConvertStored: () => setConvertUnitsStored(doc.units),
+            convertDisabledReason:
+              doc.units === 'm'
+                ? 'Projects stored in meters cannot be converted yet'
+                : editDisabledReason
           }}
           canExport={
             exportBodyIds.length > 0 &&
@@ -41405,6 +41583,31 @@ export function App() {
                 onClose={() => setDismissedAccountConflict(accountConflict)}
               />
             )}
+          {convertUnitsStored && (
+            <ConvertUnitsDialog
+              stored={doc?.units ?? convertUnitsStored}
+              shown={doc ? documentDisplayUnits(doc) : convertUnitsStored}
+              blockedReason={
+                unitsConversionCollaborationRefusal(unitsConversionRoom)
+                  ?.message ??
+                (editDisabledReason
+                  ? cannotSentence('convert stored units', editDisabledReason)
+                  : null)
+              }
+              prepare={(to, signal) =>
+                prepareStoredUnitsConversionRef.current(to, signal)
+              }
+              convert={(prepared) =>
+                convertStoredUnitsInPlaceRef.current(prepared)
+              }
+              convertCopy={
+                shareSession
+                  ? undefined
+                  : (to, onStep) => convertStoredUnitsCopy(to, onStep)
+              }
+              onClose={() => setConvertUnitsStored(null)}
+            />
+          )}
           {importUnitsPrompt && (
             <ImportUnitsDialog
               fileName={importUnitsPrompt.fileName}

@@ -16,7 +16,8 @@ import type {
   CollaborationMember,
   ProjectAccessRole,
   ProjectDocument,
-  ProjectEditLease
+  ProjectEditLease,
+  UnitSystem
 } from '@openzcad/shared';
 import { saveLocalProject, saveLocalSaveStates } from './localProjectStore';
 import type { CollaborationStatus } from './useCollaboration';
@@ -29,9 +30,17 @@ import type { CollaborationStatus } from './useCollaboration';
  * checkpoint exactly as a save-state restore does
  * (`prepareSaveStateRestore`), and submits the command as one undo step.
  *
- * The review dialog (phase 6) calls these two functions; nothing in the
- * workspace calls them yet.
+ * The review dialog (phase 6, `ConvertUnitsDialog`) calls these through
+ * the workspace.
  */
+
+/** "inches": how the conversion's sentences name a unit. */
+export const CONVERT_UNIT_WORDS: Readonly<Record<UnitSystem, string>> = {
+  mm: 'millimeters',
+  cm: 'centimeters',
+  m: 'meters',
+  inch: 'inches'
+};
 
 export type PreparedUnitsConversion = Extract<
   UnitsConversionPreparation,

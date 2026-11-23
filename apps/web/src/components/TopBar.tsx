@@ -24,6 +24,7 @@ import {
   LoaderCircle,
   Pencil,
   RotateCw,
+  Ruler,
   MessageSquare,
   Save,
   Settings as SettingsIcon,
@@ -216,6 +217,13 @@ interface TopBarProps {
     onChange(units: UnitSystem): void;
     /** Why the unit cannot change now; the row is read-only then. */
     disabledReason?: string | null;
+    /**
+     * I03 phase 6: opens the stored-unit conversion review. Absent hides
+     * "Convert stored units…"; the shown unit is the everyday answer.
+     */
+    onConvertStored?(): void;
+    /** Why converting is unavailable here; the item is disabled then. */
+    convertDisabledReason?: string | null;
   };
   /**
    * M16: opens the sheet-metal flat-pattern view (layered DXF, SVG, bend
@@ -1421,7 +1429,19 @@ export function TopBar({
               ) : null}
               {/* I03: after Export, so adding it moved none of the actions
                   above it under panels that float over the menu. */}
-              {displayUnits ? <DisplayUnitsRow {...displayUnits} /> : null}
+              {displayUnits ? (
+                <DisplayUnitsRow
+                  {...displayUnits}
+                  {...(displayUnits.onConvertStored
+                    ? {
+                        onConvertStored: () => {
+                          closeFileMenuForDialog();
+                          displayUnits.onConvertStored?.();
+                        }
+                      }
+                    : {})}
+                />
+              ) : null}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">
                 <Files size={12} aria-hidden="true" />
@@ -1501,7 +1521,9 @@ export function DisplayUnitsRow({
   shown,
   stored,
   onChange,
-  disabledReason
+  disabledReason,
+  onConvertStored,
+  convertDisabledReason
 }: NonNullable<TopBarProps['displayUnits']>) {
   const labelId = useId();
   const noteId = useId();
@@ -1562,6 +1584,24 @@ export function DisplayUnitsRow({
           ? `Lengths are shown and typed in ${displayLengthName(shown)}.`
           : `Shown and typed in ${displayLengthName(shown)}. The model is stored in ${displayLengthName(stored)} and keeps its exact size.`}
       </small>
+      {onConvertStored ? (
+        <button
+          type="button"
+          className="topbar-menu-item"
+          disabled={Boolean(convertDisabledReason)}
+          title={
+            convertDisabledReason ??
+            'Rewrite every stored length in another unit. To only see lengths in another unit, choose it above.'
+          }
+          onClick={onConvertStored}
+        >
+          <Ruler size={13} aria-hidden="true" />
+          <span>Convert stored units…</span>
+          <small>
+            {convertDisabledReason ?? 'rare · rewrites the model’s numbers'}
+          </small>
+        </button>
+      ) : null}
     </>
   );
 }

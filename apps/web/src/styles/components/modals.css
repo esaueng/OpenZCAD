@@ -1134,6 +1134,113 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* I03: the stored-unit conversion review. The export dialog's frame; the
+   lists wrap long feature names and expressions instead of widening it. */
+.convert-units-dialog {
+  width: min(520px, 100%);
+}
+
+.convert-units-dialog h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.convert-units-dialog ul {
+  display: grid;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.convert-units-dialog li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.convert-units-dialog li strong {
+  font-weight: 600;
+}
+
+.convert-units-dialog code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.convert-units-summary,
+.convert-units-refusals,
+.convert-units-warnings {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.convert-units-facts li::before {
+  content: '·';
+  color: var(--color-text-subtle);
+}
+
+.convert-units-expressions summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+}
+
+.convert-units-expressions ul {
+  margin-top: var(--sp-2);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.convert-units-refusals {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-md);
+}
+
+.convert-units-refusals p {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.convert-units-refusals li strong {
+  color: var(--color-error-text);
+}
+
+.convert-units-warnings h3,
+.convert-units-undo {
+  color: var(--color-warning);
+}
+
+.convert-units-warnings li span {
+  flex-basis: 100%;
+  color: var(--color-text-muted);
+}
+
+.convert-units-undo {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.convert-units-undo > svg {
+  flex: none;
+}
+
+.convert-units-done {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
 /* Width and Height as one two-column table, so their fields line up under
    labels of different widths. The labels keep wrapping their inputs. */
 .export-dialog-size {
