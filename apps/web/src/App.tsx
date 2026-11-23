@@ -26103,8 +26103,17 @@ export function App() {
     } catch (error) {
       return errorMessage(error, unchanged);
     }
-    if (!resolved || !isCurrent())
+    if (!resolved || !isCurrent()) {
+      // A second click on the row the first one is switching to: by now
+      // that row is active and there is nothing left to do.
+      try {
+        const live = managerRef.current?.document;
+        if (live && command.apply(live) === live) return null;
+      } catch {
+        // Refused against the live document: the move is the answer.
+      }
       return 'The project changed while the sketches were solved. Try again.';
+    }
     if (!resolved.ok) return `${unchanged} ${resolved.reason}`;
     if (resolved.commands.length === 0)
       return executeCommand(command) ? null : unchanged;
