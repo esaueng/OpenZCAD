@@ -2715,9 +2715,8 @@ export const commandFactories = {
     // patch, History text, a stored log or any other caller is dropped; the
     // parameter re-solve's writes are marked out of band
     // (`parameterResolvedSketchUpdate`).
-    const { derivedFrom: _claimed, ...payload } = input as
-      | SketchObjectUpdateInput
-      | (SketchObjectUpdateInput & { derivedFrom?: unknown });
+    const { derivedFrom: _claimed, ...payload } =
+      input as SketchObjectUpdateInput & { derivedFrom?: unknown };
     return makeCommand(
       'sketch.object.update',
       label,
