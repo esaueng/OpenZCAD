@@ -1944,7 +1944,7 @@ describe('a preview refused under a held handle', () => {
   // neighbour keeps between two r8.8 rounds.
   const refusal = {
     message:
-      'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+      'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.',
     detail: 'move-face would change topology …',
     category: 'invalid_topology',
     limit: -6.4

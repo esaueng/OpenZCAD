@@ -375,7 +375,7 @@ describe('offsetPreviewRejection for a face pushed past a neighbour', () => {
   // (test/parity/offset-face-fillet-limit.spec.ts).
   const kernelWords =
     'resize blend: exact reconstruction refused: … exact prismatic blend translation failed (offset: move-face would change topology at face None, edge Some(Id(8)): line edge 8 with one moving end would reverse: a move of -9 against a fixed-to-moving extent of 6.400000000000002)';
-  const message = `Feature "Offset Face": A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.\n${kernelWords}`;
+  const message = `Feature "Offset Face": A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.\n${kernelWords}`;
 
   it('keeps the category, the kernel words and the limit', () => {
     const rejection = offsetPreviewRejection({
@@ -405,7 +405,7 @@ describe('offsetPreviewRejection for a face pushed past a neighbour', () => {
     });
     expect(rejection).toEqual({
       message:
-        'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+        'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.',
       detail: kernelWords,
       category: 'invalid_topology',
       // The typed code rides along since #1330 (`PlainRefusal.code`).

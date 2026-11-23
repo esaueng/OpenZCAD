@@ -312,6 +312,8 @@ import { commentPlacementTarget } from '../lib/commentPlacement';
 import {
   chipPanelDodge,
   edgeChipCenterX,
+  laneLeavesRoom,
+  pinChipPairStart,
   faceOffsetChipState,
   offsetChipText,
   offsetLimitChipText,
@@ -9358,7 +9360,12 @@ export function ModelViewer({
         // The right lane's first panel (the command card, the inspector, or
         // the model drawer alone) shares the lane's left edge with whatever
         // is under it.
-        if (laneLeft !== null) {
+        // Not where the lane spans a phone's stage: there no side of the
+        // pin is clear of it, and the clamp put the chip off the left edge.
+        if (
+          laneLeft !== null &&
+          laneLeavesRoom(laneLeft, CHIP_LANE_CLEARANCE_PX)
+        ) {
           const inspectorLeft = laneLeft;
           // A cap or region anchor can project underneath its floating
           // editor. Rather than clamp the chip back onto the pin, swap it to
@@ -9715,26 +9722,23 @@ export function ModelViewer({
             // dodge above only reserves a centred value's width): one that
             // would reach it goes to the pin's other side, and clamps only
             // when that side is under the lane too.
-            const limit = pairedEdge
-              ? Math.min(
-                  stageRect.width - 8,
-                  laneLeft !== null && laneLeft - 16 >= width
-                    ? laneLeft - 8
-                    : Number.POSITIVE_INFINITY
-                )
-              : laneLeft !== null
+            // At a phone width the lane spans the stage, and the lane rule
+            // put the face pair off the stage's left edge: the lane counts
+            // only while it leaves room, and the pair stays on the stage.
+            const limit = Math.min(
+              stageRect.width - 8,
+              laneLeft !== null && laneLeavesRoom(laneLeft, width)
                 ? laneLeft - 8
-                : Number.POSITIVE_INFINITY;
-            let start =
-              screen.x >= pinScreenAt.x
-                ? screen.x - clearance
-                : screen.x + clearance - width;
-            if (start + width > limit) {
-              start = Math.min(
-                pinScreenAt.x - clearance - width,
-                limit - width
-              );
-            }
+                : Number.POSITIVE_INFINITY
+            );
+            const start = pinChipPairStart({
+              anchorX: screen.x,
+              pinX: pinScreenAt.x,
+              width,
+              clearance,
+              laneLeft,
+              stageWidth: stageRect.width
+            });
             if (pairedEdge) {
               // Clamp and dodge the whole group. Flex owns the gap, including
               // the first frame after the value gains or loses a digit.

@@ -50,7 +50,10 @@ import {
   subtract
 } from './exact-math';
 import { editNativeArena, type Arena } from './exact-local-chamfer-cap';
-import { OffsetFaceRefusal } from './exact-offset-face-refusal';
+import {
+  formatOffsetLimit,
+  OffsetFaceRefusal
+} from './exact-offset-face-refusal';
 import { KernelRefusal } from './kernel-refusal';
 import { surfaceTypeOf } from './exact-sync-memo';
 import type { RemusKernel } from './remus-runtime';
@@ -1350,9 +1353,9 @@ function uncarriedBandRefusal(
   const reason =
     limit === undefined
       ? "This face's chamfered or drafted edge can't move with it this far. Try a smaller offset."
-      : `This face's chamfered or drafted edge can't move with it past ${
-          Math.round(Math.abs(limit) * 100) / 100
-        }. Try a smaller offset.`;
+      : `This face's chamfered or drafted edge can't move with it past ${formatOffsetLimit(
+          limit
+        )}. Try a smaller offset.`;
   const kernelMessage = `Offsetting the face by ${offset}: ${detail}`;
   return new OffsetFaceRefusal({
     family: 'direct-edit',

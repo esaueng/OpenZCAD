@@ -4,11 +4,14 @@ import {
   edgeChipCenterX,
   faceOffsetChipState,
   keptOffsetValue,
+  laneLeavesRoom,
   offsetChipText,
   offsetFaceCommitMessage,
   offsetLimitChipText,
+  offsetLimitInUnits,
   offsetRefusalInTotal,
   offsetTotalReading,
+  pinChipPairStart,
   rearmedChipMode,
   regionChipState,
   continuesOffsetFace,
@@ -478,7 +481,7 @@ describe('a refused face offset read as a Total', () => {
   const reading = { baseline: 24, sense: 1, units: 'mm' };
   const collapse = {
     message:
-      'A neighbouring face would shrink to nothing past 19. Try a smaller offset.',
+      'A neighbouring face would shrink to nothing past -19. Try a smaller offset.',
     limit: -19
   };
 
@@ -490,6 +493,16 @@ describe('a refused face offset read as a Total', () => {
     );
     expect(read.keepLabel).toBe('Keep Total 5.01 mm');
     expect(read.error.limit).toBe(-19);
+  });
+
+  it('reads the limit sentence once the workspace has given it its unit', () => {
+    const shown = offsetLimitInUnits(collapse, (value) => `${value} mm`);
+    expect(shown.message).toBe(
+      'A neighbouring face would shrink to nothing past -19 mm. Try a smaller offset.'
+    );
+    expect(offsetRefusalInTotal(shown, -18.99, reading).error.message).toBe(
+      'A neighbouring face would shrink to nothing once the face moves 19 mm (a Total of 5 mm). Try a larger Total.'
+    );
   });
 
   it('asks for a smaller Total when the face moves out, or the span shrinks as it grows', () => {
@@ -522,5 +535,165 @@ describe('a refused face offset read as a Total', () => {
     expect(read.error.message).toBe(
       'A neighbouring face would shrink to nothing at this distance. Try a Total nearer 24 mm.'
     );
+  });
+});
+
+// Browser check (beta): offset-limit sentences named a bare, unsigned number
+// ("past 6.4") beside a signed "Keep −6.39 mm". They state the limit signed
+// like the offset, in the document's display unit.
+describe('an offset-limit sentence in units', () => {
+  const mm = (value: number) => `${value} mm`;
+
+  it('states the typed limit, signed, with the unit', () => {
+    expect(
+      offsetLimitInUnits(
+        {
+          message:
+            'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.',
+          limit: -6.400000000000002,
+          detail: 'kernel words'
+        },
+        mm
+      )
+    ).toEqual({
+      message:
+        'A neighbouring face would shrink to nothing past -6.4 mm. Try a smaller offset.',
+      limit: -6.400000000000002,
+      detail: 'kernel words'
+    });
+    expect(
+      offsetLimitInUnits(
+        {
+          message:
+            "This face's chamfered or drafted edge can't move with it past -0.5. Try a smaller offset.",
+          limit: -0.5
+        },
+        mm
+      ).message
+    ).toBe(
+      "This face's chamfered or drafted edge can't move with it past -0.5 mm. Try a smaller offset."
+    );
+  });
+
+  it('signs an older unsigned sentence from the typed limit, outward too', () => {
+    expect(
+      offsetLimitInUnits(
+        {
+          message:
+            'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+          limit: -6.4
+        },
+        mm
+      ).message
+    ).toBe(
+      'A neighbouring face would shrink to nothing past -6.4 mm. Try a smaller offset.'
+    );
+    expect(
+      offsetLimitInUnits(
+        {
+          message:
+            'A neighbouring face would shrink to nothing past 2.5. Try a smaller offset.',
+          limit: 2.5
+        },
+        mm
+      ).message
+    ).toBe(
+      'A neighbouring face would shrink to nothing past 2.5 mm. Try a smaller offset.'
+    );
+  });
+
+  it('uses the display unit the formatter writes, and the sentence alone without a limit', () => {
+    const inches = (value: number) =>
+      `${Math.round((value / 25.4) * 1000) / 1000} in`;
+    expect(
+      offsetLimitInUnits(
+        {
+          message:
+            'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.'
+        },
+        inches
+      ).message
+    ).toBe(
+      'A neighbouring face would shrink to nothing past -0.252 in. Try a smaller offset.'
+    );
+  });
+
+  it('leaves every other refusal, and a sentence with no limit, alone', () => {
+    const plain = {
+      message:
+        'A neighbouring face would shrink to nothing at this distance. Try a smaller offset.',
+      limit: -6.4
+    };
+    expect(offsetLimitInUnits(plain, mm)).toBe(plain);
+    const other = {
+      message: 'The blend does not fit here. Try a smaller size.'
+    };
+    expect(offsetLimitInUnits(other, mm)).toBe(other);
+  });
+});
+
+// Browser check (beta): at 390 × 844 with the Objects panel open, the face
+// offset's "Offset ▾" tag and value were placed off the stage's left edge:
+// the lane rule clamped the pair to the lane's left edge, which on a phone
+// is the stage's own left inset.
+describe('a pin chip pair', () => {
+  const pair = { width: 130, clearance: 22, stageWidth: 390 };
+
+  it('keeps the lane rule only while the lane leaves room for the chip', () => {
+    expect(laneLeavesRoom(null, 72)).toBe(false);
+    expect(laneLeavesRoom(62, 72)).toBe(false);
+    expect(laneLeavesRoom(88, 72)).toBe(true);
+    expect(laneLeavesRoom(900, 130)).toBe(true);
+  });
+
+  it('stays on the stage when the lane spans a phone', () => {
+    // Objects open at 390px: the lane starts 62 px in.
+    const start = pinChipPairStart({
+      ...pair,
+      anchorX: 244,
+      pinX: 200,
+      laneLeft: 62
+    });
+    expect(start).toBeGreaterThanOrEqual(8);
+    expect(start + pair.width).toBeLessThanOrEqual(390 - 8);
+    // Beside the pin as on a wide stage: nothing pushed it.
+    expect(start).toBe(222);
+  });
+
+  it('never starts off the left edge when neither side of the pin has room', () => {
+    // The right rail at 340 leaves room, but not right of a pin at 100 or
+    // left of it: the pair stands at the lane edge, over the pin, rather
+    // than off the stage or under the tool column.
+    const start = pinChipPairStart({
+      ...pair,
+      width: 229,
+      anchorX: 144,
+      pinX: 100,
+      laneLeft: 340
+    });
+    expect(start).toBe(340 - 8 - 229);
+  });
+
+  it("still swaps to the pin's other side clear of a desktop lane", () => {
+    const start = pinChipPairStart({
+      anchorX: 944,
+      pinX: 900,
+      width: 130,
+      clearance: 22,
+      laneLeft: 960,
+      stageWidth: 1280
+    });
+    expect(start).toBe(900 - 22 - 130);
+    // Room right of the pin: it reads there.
+    expect(
+      pinChipPairStart({
+        anchorX: 544,
+        pinX: 500,
+        width: 130,
+        clearance: 22,
+        laneLeft: 960,
+        stageWidth: 1280
+      })
+    ).toBe(522);
   });
 });

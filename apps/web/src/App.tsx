@@ -2164,6 +2164,7 @@ import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
 import {
   keptOffsetValue,
   offsetFaceCommitMessage,
+  offsetLimitInUnits,
   offsetRefusalInTotal
 } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
@@ -6396,6 +6397,9 @@ export function App() {
       dispatchInteraction({ type: 'validation-start', value });
     },
     onValidationFailed: (diagnostic, value) => {
+      // What the status line and the top bar say: a face offset's limit
+      // with its unit, as the card says it. The record keeps the adapter's.
+      const shownMessage = shownOffsetLimit(diagnostic).message;
       const pending = pendingDirectEditRef.current;
       pendingDirectEditRef.current = null;
       const current = managerRef.current?.document;
@@ -6408,7 +6412,7 @@ export function App() {
         setLastDirectEditFailure({
           projectId: current.projectId,
           version: current.version,
-          message: diagnostic.message,
+          message: shownMessage,
           selectionKey: refusalSubjectKey(pending.interaction)
         });
       }
@@ -6463,7 +6467,7 @@ export function App() {
         // and a refusal that were never its own.
         const name = directEditBodyName(pending);
         setStatus(
-          name ? `${name}: ${diagnostic.message}` : diagnostic.message,
+          name ? `${name}: ${shownMessage}` : shownMessage,
           diagnostic.detail ? { detail: diagnostic.detail } : undefined
         );
         return;
@@ -6477,7 +6481,7 @@ export function App() {
       // retains the same diagnostic for the Activity log even when the bar is
       // muted behind that card.
       setStatus(
-        diagnostic.message,
+        shownMessage,
         diagnostic.detail ? { detail: diagnostic.detail } : undefined
       );
     },
@@ -32158,7 +32162,9 @@ export function App() {
       !(current.target.offsetFaceSet && current.lastValue !== offset)
     ) {
       setStatus(
-        current.error?.message ?? 'The current offset preview is invalid.'
+        current.error
+          ? shownOffsetLimit(current.error).message
+          : 'The current offset preview is invalid.'
       );
       return retaking ? 'blocked' : 'refused';
     }
@@ -32503,6 +32509,25 @@ export function App() {
       : null;
 
   /**
+   * A refused face offset's limit sentence in the document's display unit
+   * ("past -6.4 mm"), signed like the Keep beside it: the adapter states the
+   * limit without a unit, since it does not know the unit the document is
+   * shown in.
+   */
+  function shownOffsetLimit<T extends CommandDiagnostic>(error: T): T {
+    return offsetLimitInUnits(error, (value) =>
+      formatDocumentLength(doc, value)
+    );
+  }
+  function shownToolCard<T extends { error?: CommandDiagnostic }>(
+    model: T | null
+  ): T | null {
+    return model?.error
+      ? { ...model, error: shownOffsetLimit(model.error) }
+      : model;
+  }
+
+  /**
    * U11: the refusal as the open keypad reads it. A face offset entered as
    * a Total hears its limit, its remedy and its Keep as Totals too; the
    * kernel's offset numbers stay in the cause and the technical details.
@@ -32545,7 +32570,7 @@ export function App() {
     selectionCallout?.anchor === 'selection' &&
     selectedBodyIds.length > 0 &&
     (interaction.mode === 'face' || interaction.mode === 'edges')
-      ? toolCardFor(interaction, cylinderDimensionMode)
+      ? shownToolCard(toolCardFor(interaction, cylinderDimensionMode))
       : null;
   const calloutEdgeCount =
     interaction.mode === 'edges' && edgeModifierBody?.topology
@@ -37183,7 +37208,9 @@ export function App() {
         (body.opacity ?? 1) > 0
     ) &&
     isExtrudeChangeClipped(regionExtrudeResolution, sectionView);
-  const baseToolCard = toolCardFor(interaction, cylinderDimensionMode);
+  const baseToolCard = shownToolCard(
+    toolCardFor(interaction, cylinderDimensionMode)
+  );
   const editingSketchName =
     interaction.mode === 'sketch' && interaction.session.sketchId
       ? (sketchOptions.find(
@@ -39371,7 +39398,7 @@ export function App() {
                         interaction.mode !== 'idle' &&
                         interaction.mode !== 'sketch' &&
                         interaction.error
-                          ? interaction.error.message
+                          ? shownOffsetLimit(interaction.error).message
                           : null
                       }
                       onCommit={(value, raw) => {

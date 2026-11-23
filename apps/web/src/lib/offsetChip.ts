@@ -292,6 +292,62 @@ export function edgeChipCenterX(
 }
 
 /**
+ * Whether the stage left of the right lane can hold `width` px of chip with
+ * a margin either side. At a phone width the lane (the Objects or a tool
+ * panel) spans the stage from its left inset: a lane rule there would push
+ * the chip, and exact entry with it, off the stage's left edge.
+ */
+export function laneLeavesRoom(
+  laneLeft: number | null,
+  width: number
+): boolean {
+  return (
+    laneLeft !== null &&
+    laneLeft - EDGE_CHIP_MARGIN_PX - width >= EDGE_CHIP_MARGIN_PX
+  );
+}
+
+/**
+ * Where a pin's chip pair (the Offset/Total or Fillet/Chamfer tag, then the
+ * value; `width` px as one box, in canvas coordinates) starts. It reads
+ * beside the pin on the side `anchorX` is on, `clearance` px clear of the
+ * pin; one that would reach the right lane goes to the pin's other side.
+ * The lane counts only while it leaves room for the pair
+ * (`laneLeavesRoom`), and the pair never starts off the stage's left edge or
+ * ends past its right: a phone's offset tag and value were placed off the
+ * left edge with the Objects panel open.
+ */
+export function pinChipPairStart(input: {
+  anchorX: number;
+  pinX: number;
+  width: number;
+  clearance: number;
+  laneLeft: number | null;
+  stageWidth: number;
+}): number {
+  const { anchorX, pinX, width, clearance, laneLeft, stageWidth } = input;
+  const limit = Math.min(
+    stageWidth - EDGE_CHIP_MARGIN_PX,
+    laneLeavesRoom(laneLeft, width) && laneLeft !== null
+      ? laneLeft - EDGE_CHIP_MARGIN_PX
+      : Number.POSITIVE_INFINITY
+  );
+  let start =
+    anchorX >= pinX ? anchorX - clearance : anchorX + clearance - width;
+  if (start + width > limit) {
+    // The pin's other side, when the pair fits there; otherwise as far
+    // right as the limit allows, over the pin rather than off the stage
+    // (or under the tool column at its left edge).
+    const flipped = pinX - clearance - width;
+    start =
+      flipped >= EDGE_CHIP_MARGIN_PX
+        ? Math.min(flipped, limit - width)
+        : limit - width;
+  }
+  return Math.max(EDGE_CHIP_MARGIN_PX, Math.min(start, limit - width));
+}
+
+/**
  * How far a handle's chip — its value pill and any tag beside it, as one
  * box, in the same coordinates as `stage` — moves to come out from under a
  * model panel the right lane's rule does not cover: a floating window or
@@ -326,6 +382,46 @@ export function chipPanelDodge(
   );
 }
 
+/**
+ * The offset-limit sentence ("… past -6.4. Try a smaller offset.") as the
+ * adapter writes it: the limit signed like the offset, in document units but
+ * without a unit, because the adapter does not know the unit the document is
+ * shown in.
+ */
+const OFFSET_LIMIT_SENTENCE =
+  / past ([−-]?\d+(?:\.\d+)?(?:e-?\d+)?)(\. Try a smaller offset\.)/;
+
+/**
+ * A refused face offset's limit sentence with the document's unit, signed
+ * like the offset and like the "Keep −6.39 mm" beside it: "… shrink to
+ * nothing past -6.4 mm. Try a smaller offset." The typed limit, when the
+ * refusal carries one, wins over the sentence's rounded (and, from an older
+ * adapter, unsigned) number; `formatLength` writes a stored-unit length in
+ * the display unit with its suffix (`formatDocumentLength`).
+ */
+export function offsetLimitInUnits<
+  T extends { message: string; limit?: number }
+>(error: T, formatLength: (value: number) => string): T {
+  const match = OFFSET_LIMIT_SENTENCE.exec(error.message);
+  if (!match) return error;
+  const stated = Number(match[1]!.replace('−', '-'));
+  const limit =
+    error.limit !== undefined &&
+    Number.isFinite(error.limit) &&
+    error.limit !== 0
+      ? error.limit
+      : stated;
+  if (!Number.isFinite(limit)) return error;
+  const rounded = Math.round(limit * 100) / 100;
+  return {
+    ...error,
+    message: error.message.replace(
+      OFFSET_LIMIT_SENTENCE,
+      ` past ${formatLength(rounded === 0 ? 0 : rounded)}$2`
+    )
+  };
+}
+
 /** A refused face offset's line, as the control that refused it says it. */
 export interface OffsetRefusalReading {
   /** The refusal: its message, and the limit the kernel named, if any. */
@@ -337,7 +433,7 @@ export interface OffsetRefusalReading {
 /**
  * U11: a refused face offset said in the Total reading, while exact entry
  * takes a Total. The kernel and the way out speak in the offset the edit
- * records ("shrink to nothing past 19 · Try a smaller offset", "Keep
+ * records ("shrink to nothing past -19 mm · Try a smaller offset", "Keep
  * −18.99 mm"), which beside a Total of 5 reads as a second, unrelated
  * number: a smaller offset is a larger Total when the face moves in. The
  * limit is restated as the Total it leaves (as the chip's "min 5.01 mm"
@@ -380,7 +476,8 @@ export function offsetRefusalInTotal<T extends OffsetRefusalReading['error']>(
       ...error,
       headline: `Total can’t go ${shrinks ? 'below' : 'past'} ${bound} here`,
       message: error.message.replace(
-        /past -?[\d.]+(?:e-?\d+)?\. Try a smaller offset\./,
+        // Bare (the adapter's) or with its unit (`offsetLimitInUnits`).
+        /past [−-]?[\d.]+(?:e-?\d+)?(?: [a-z]+)?\. Try a smaller offset\./,
         `once the face moves ${move} (a Total of ${bound}). Try a ${
           shrinks ? 'larger' : 'smaller'
         } Total.`

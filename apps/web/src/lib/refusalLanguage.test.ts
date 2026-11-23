@@ -448,9 +448,10 @@ describe('exact-only typed refusals', () => {
       'resize blend: exact reconstruction refused: remove/rebuild failed (resize blend: exact reconstruction refused: blend region has unsupported support surfaces ["torus", "torus", "plane", "cylinder", "cylinder", "plane", "plane", "plane"]; expected all planes or one supported analytic pair); exact prismatic blend translation failed (offset: move-face would change topology at face None, edge Some(Id(8)): line edge 8 with one moving end would reverse: a move of -9 against a fixed-to-moving extent of 6.400000000000002)';
 
     it('names the limit instead of an internal failure', () => {
+      // Signed like the move (-9), as the adapter's typed refusal says it.
       expect(plainRefusal(captured, { category: 'internal' })).toEqual({
         message:
-          'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+          'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.',
         detail: captured,
         category: 'internal'
       });
@@ -465,15 +466,25 @@ describe('exact-only typed refusals', () => {
           )
         ).message
       ).toBe(
+        'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.'
+      );
+      expect(
+        plainRefusal(
+          captured.replace(
+            'would reverse: a move of -9',
+            'would collapse: a move of 9'
+          )
+        ).message
+      ).toBe(
         'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.'
       );
     });
 
     it('keeps the adapter sentence and the kernel words behind Why', () => {
-      const adapter = `A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.\n${captured}`;
+      const adapter = `A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.\n${captured}`;
       expect(plainRefusal(adapter, { category: 'invalid_topology' })).toEqual({
         message:
-          'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+          'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.',
         detail: captured,
         category: 'invalid_topology'
       });
