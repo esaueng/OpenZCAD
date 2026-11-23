@@ -16,6 +16,9 @@ import {
   keepMeasurement,
   createPrimitiveInPlace,
   createProject,
+  waitForStillViewport,
+  finishInPlaceCommand,
+  pressTool,
   expect,
   expectBodyCount,
   pickPlanarFace,
@@ -223,6 +226,59 @@ test('the modeling guide leaves the new box clear to tap on a phone', async ({
     })
     .toBe(true);
   await shot(page, 'guide-leaves-box-clear');
+});
+
+// The same, with the guide opened again over the Box command: it never
+// rose after Done, so only its step moving on to "Select to edit" can ask
+// for the model to be framed clear (preview check on #1964).
+test('the guide opened over a dragged-out Box leaves the box clear after Done', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubApi(page, { workspaceTour: true });
+  await createProject(page, 'Phone guide done');
+  const tour = page.locator('.workspace-tour');
+  await expect(tour).toBeVisible();
+  await pressTool(page, /^Box \(B\)/);
+  await expect(page.getByRole('group', { name: 'Box command' })).toBeVisible();
+  const expand = tour.getByRole('button', { name: 'Expand modeling guide' });
+  if (await expand.isVisible()) await expand.tap();
+  await expect(
+    tour.getByRole('button', { name: 'Minimize modeling guide' })
+  ).toBeVisible();
+  // Dragged out, as the check did: no typed value, so no creation reframe;
+  // only the step moving on asks for the box to be framed clear.
+  await waitForStillViewport(page);
+  await page.mouse.move(90, 300);
+  await page.mouse.down();
+  await page.mouse.move(300, 395, { steps: 12 });
+  await page.mouse.up();
+  await finishInPlaceCommand(page, 'Box');
+  await expectBodyCount(page, 1);
+  await expect(tour).toContainText('Select to edit');
+  await waitForSurfacesToSettle(page, ['.workspace-tour']);
+  const canvas = page.locator('.viewer-host canvas');
+  const card = (await tour.boundingBox())!;
+  await expect
+    .poll(async () => {
+      const view = await canvas.evaluate(
+        (element) =>
+          new Promise<{
+            screen: { top: number; bottom: number } | null;
+          }>((resolve) =>
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-bodies-in-view', {
+                detail: { resolve }
+              })
+            )
+          )
+      );
+      return view.screen === null
+        ? null
+        : view.screen.bottom <= card.y + 0.5 && view.screen.top >= 0;
+    })
+    .toBe(true);
 });
 
 // A 360 × 640 phone with the guide up on its second step (#1945). It
