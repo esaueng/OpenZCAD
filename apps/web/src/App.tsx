@@ -26336,7 +26336,8 @@ export function App() {
       actorUserId: manager.actorUserId,
       ...(signal ? { signal } : {})
     });
-    if (preparation.ok) unitsConversionSourcesRef.current.set(preparation, source);
+    if (preparation.ok)
+      unitsConversionSourcesRef.current.set(preparation, source);
     return preparation;
   }
 
@@ -26385,7 +26386,8 @@ export function App() {
         expectedDocument: source,
         confirmWriteAccess: (document) =>
           unitsConversionOwnershipRefusal(
-            () => (shareSessionRef.current ? null : projectOwnershipRef.current),
+            () =>
+              shareSessionRef.current ? null : projectOwnershipRef.current,
             document.projectId,
             PROJECT_OPEN_ELSEWHERE_NOTICE
           ),

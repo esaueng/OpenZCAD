@@ -245,5 +245,39 @@ test('converts a copy and leaves the original in millimeters', async ({
   expect(copy.projectId).not.toBe(original.projectId);
   expect(copy.name).not.toBe(original.name);
   expect(copy.units).toBe('inch');
+  // The copy names the project it was made from (plan §5.3).
+  expect(copy.branchedFrom).toMatchObject({
+    projectId: original.projectId,
+    projectName: original.name,
+    checkpointReason: 'Copied to convert to inches'
+  });
   await expectShownIn(page, 'Lengths are shown and typed in in.');
+
+  // Reopened, the original was never converted: still millimeters, its
+  // 50.8 mm line and reference distance exactly as imported.
+  await page.getByTitle('Back to projects').click();
+  await page
+    .locator('.start-tile-open', { hasText: original.name })
+    .filter({ hasNotText: copy.name })
+    .click();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+  await expectShownIn(page, 'Lengths are shown and typed in mm.');
+  const reopened = await exportDocument(page);
+  expect(reopened.projectId).toBe(original.projectId);
+  expect(reopened.units).toBe('mm');
+  expect(reopened.version).toBe(original.version);
+  expect(
+    reopened.checkpoints.map((checkpoint) => checkpoint.reason)
+  ).not.toContain(CHECKPOINT);
+  expect(findSketch(reopened, f.sketchId)!.referenceDimensions).toEqual(
+    findSketch(f.document, f.sketchId)!.referenceDimensions
+  );
+  expect(reopened.nodes).toEqual(original.nodes);
+  await enterSketch(page);
+  await expect(
+    page.getByRole('button', {
+      name: 'Reference distance, (50.8 mm)',
+      exact: true
+    })
+  ).toBeVisible(READY);
 });

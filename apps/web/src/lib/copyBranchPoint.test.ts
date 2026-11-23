@@ -22,13 +22,13 @@ describe('withCopyBranchPoint', () => {
       head,
       'Copied to convert to inches'
     );
-    expect(branched.branchedFrom).toEqual({
+    expect(branched.branchedFrom).toMatchObject({
       projectId: head.projectId,
       revisionId: head.revisions.at(-1)!.revisionId,
       projectName: 'Bracket',
-      checkpointReason: 'Copied to convert to inches',
-      branchedAt: expect.any(String)
+      checkpointReason: 'Copied to convert to inches'
     });
+    expect(typeof branched.branchedFrom?.branchedAt).toBe('string');
     expect(branched.projectId).toBe(copy.projectId);
     expect(branched.revisions).toBe(copy.revisions);
     expect(copy.branchedFrom).toBeUndefined();

@@ -49,8 +49,7 @@ export type ConvertCopyStep = 'copying' | 'checking' | 'converting';
  * and target unit cannot live in the dialog.
  */
 export type ConvertCopyState = { to: ConvertibleUnit } & (
-  | { step: ConvertCopyStep }
-  | { outcome: ConvertUnitsOutcome }
+  { step: ConvertCopyStep } | { outcome: ConvertUnitsOutcome }
 );
 
 export interface ConvertUnitsDialogProps {
