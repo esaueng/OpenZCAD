@@ -27369,6 +27369,7 @@ export function App() {
   }, [doc, inPlaceEditFeatureId]);
   const inPlace = useInPlaceCommand({
     ...(doc?.units ? { units: doc.units } : {}),
+    ...(doc ? { displayUnits: documentDisplayUnits(doc) } : {}),
     sketchViews: availableSketchViews,
     datumAxes: inPlaceDatumAxes,
     linearSnap: appSettings.sketching.snapEnabled

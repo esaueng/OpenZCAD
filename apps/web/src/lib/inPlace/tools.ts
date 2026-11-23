@@ -16,6 +16,7 @@ import {
   ANSI_HOLE_SIZES,
   ISO_HOLE_SIZES,
   MAX_HELICAL_SWEEP_TURNS,
+  displayLengthName,
   holeStandardDiameter,
   holeStandardFromChoices,
   holeStandardLabel,
@@ -64,6 +65,7 @@ import {
   type RevolveRigPlacement
 } from './revolve';
 import type { ModelingOperationFormState } from '../modelingOperations';
+import { roundShownLength } from '../liveLabels';
 import {
   holePositionAxes,
   holePositionFieldOrder,
@@ -493,6 +495,11 @@ export interface InPlaceContext {
   imagePlaneBasis?(plane: ReferenceImagePlane): PlaneBasis | null;
   /** The document's length unit, which a diametral pitch converts from. */
   units?: UnitSystem;
+  /**
+   * I03: the unit lengths are shown and typed in, when the document shows
+   * them in another unit than it stores; absent means `units`.
+   */
+  displayUnits?: UnitSystem;
   /**
    * M02: a sketch's point entities and where each stands in the world, for
    * a pattern on sketch points; empty when the sketch has none.
@@ -1028,7 +1035,8 @@ export interface InPlaceToolSpec {
     optionId: string,
     value: string,
     state: InPlacePanelState,
-    ctx: InPlaceContext
+    ctx: InPlaceContext,
+    slots?: InPlaceSlots
   ): Record<string, { value: number; from: string }> | null;
   wantsAxis: boolean;
   wantsPath: boolean;
@@ -3768,6 +3776,7 @@ const hole: InPlaceToolSpec = {
   profileMode: 'none',
   faceMode: 'one',
   faceFilter: 'planar',
+  refusedInputs: holeRefusedInputs,
   wantsAxis: false,
   // M01: its path is the sketch points it is drilled at, clicked one by one
   // under Position → Sketch points.
@@ -4032,14 +4041,34 @@ const hole: InPlaceToolSpec = {
       ? { tapLength: numbers.depth ?? 10 }
       : {})
   }),
+  optionCarries(optionId, value, state, ctx, slots) {
+    // U01: a clicked hole switched to Typed stays where it stands, its U and
+    // V reading the position it was built at, instead of jumping to (0, 0).
+    // Typed chosen again keeps the U and V already typed.
+    if (optionId !== 'place' || value !== 'typed') return null;
+    if (state.options.place === 'typed') return null;
+    const face = slots?.faces[0];
+    if (!face || face.savedPosition) return null;
+    const placed = holeClickedPosition(face, ctx);
+    if (!placed) return null;
+    return {
+      positionU: { value: Number(placed.u), from: 'positionU' },
+      positionV: { value: Number(placed.v), from: 'positionV' }
+    };
+  },
   hint(slots, options, ctx) {
     if (slots.faces.length === 0) return 'Click a flat face';
-    // A standard size sets the diameter: there is none to drag.
+    // A standard size sets the diameter: there is none to drag. Its size
+    // reads as the Options and chips read lengths: in the display unit,
+    // named when that is not the stored one (I03).
+    const shownUnits = ctx?.displayUnits ?? ctx?.units;
     const drag =
       options && holeStandardOn(options)
         ? ` · ${holeStandardLabel(holeStandardFromChoices(options)!)}${
-            ctx?.units
-              ? ` ⌀ ${formatHoleDiameter(holeStandardChosenDiameter(options, ctx.units)!)}`
+            ctx?.units && shownUnits
+              ? shownUnits === ctx.units
+                ? ` ⌀ ${formatHoleDiameter(holeStandardChosenDiameter(options, ctx.units)!)}`
+                : ` ⌀ ${roundShownLength(holeStandardChosenDiameter(options, shownUnits)!)} ${displayLengthName(shownUnits)}`
               : ''
           }`
         : ' · drag the diameter';
@@ -4063,12 +4092,6 @@ const hole: InPlaceToolSpec = {
     const points = options.place === 'points' ? holePointsPicked(slots) : null;
     if (options.place === 'points' && !points) return null;
     const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
-    // A new hole measures from the centroid of the face's outer boundary,
-    // which other holes in the face never move; an edited one keeps the
-    // anchor it was drilled against, which no edit may change.
-    const anchor = saved
-      ? savedHoleAnchor(saved.positionAnchor)
-      : newHoleAnchor(face);
     // Rounded to the sketch snap, exactly as the card placed a clicked hole;
     // a typed one as typed, expressions and all.
     // On sketch points the position is stored as it was, but not read.
@@ -4081,14 +4104,7 @@ const hole: InPlaceToolSpec = {
               u: String(saved.position.u),
               v: String(saved.position.v)
             }
-          : face.point
-            ? holePositionFromPick(
-                face,
-                anchor,
-                face.point,
-                ctx.linearSnap ?? null
-              )
-            : null;
+          : holeClickedPosition(face, ctx);
     // Unset step sizes derive from the bore's value, a typed expression's
     // too; a chip's value, typed or derived, is stored as it stands.
     // M01 (schema v65): a standard's table gives the diameter, stored too.
@@ -4147,15 +4163,32 @@ const hole: InPlaceToolSpec = {
     if (!axes) return [];
     const typed = options.place === 'typed';
     // A typed hole's handles stand where its U and V put it; one on sketch
-    // points, on its first point.
+    // points, on its first point. A clicked one's stand where the request
+    // drills it: the click rounded to the sketch snap, not the raw click,
+    // so the rim and arrows sit on the bore the preview and commit cut.
+    const placed =
+      !typed && options.place !== 'points' && !face.savedPosition
+        ? holeClickedPosition(face, ctx)
+        : null;
     const entry =
       options.place === 'points'
         ? holePointsEntry(slots, face, ctx)
         : typed
           ? typedHoleEntry(face, axes, values, ctx)
-          : clicked;
+          : placed
+            ? (typedHoleEntry(
+                face,
+                axes,
+                { positionU: Number(placed.u), positionV: Number(placed.v) },
+                ctx
+              ) ?? clicked)
+            : clicked;
     if (!entry) return [];
     const key = `${faceKey(face)}:${entry.x}:${entry.y}:${entry.z}`;
+    // The bore's diameter, the table's for a standard, which spaces the
+    // chips around it.
+    const boreDiameter =
+      holeStandardChosenDiameter(options, ctx.units) ?? values.diameter ?? 6;
     // A standard size's table sets the diameter, so it has no handle.
     const handles: HandleSpec[] = holeStandardOn(options)
       ? []
@@ -4179,7 +4212,7 @@ const hole: InPlaceToolSpec = {
     // M01: a tapped hole's thread length, down beside the bore, a diameter
     // and a half off the depth's arrow so neither's chip covers the other.
     if (holeTappedChosen(options)) {
-      const reach = -Math.max((values.diameter ?? 6) * 1.5, 1e-3);
+      const reach = -Math.max(boreDiameter * 1.5, 1e-3);
       handles.push({
         valueId: 'tapLength',
         kind: 'linear',
@@ -4225,7 +4258,7 @@ const hole: InPlaceToolSpec = {
     }
     if (typed) {
       // Its U and V across the hole, clear of the step's chips.
-      const reach = Math.max((values.diameter ?? 6) * 1.5, 1e-3);
+      const reach = Math.max(boreDiameter * 1.5, 1e-3);
       // Each chip names the world axis its field runs along: on a top face
       // U runs along −Y, which a bare "U" leaves the reader to guess.
       const labels = holePositionLabels(face.normal);
@@ -4293,6 +4326,82 @@ function holePointsEntry(
     (spot.at.y - planePoint.y) * normal.y +
     (spot.at.z - planePoint.z) * normal.z;
   return offset(spot.at, normal, -height);
+}
+
+/**
+ * Where a click drills a hole, as its request stores it: the picked point
+ * measured from the anchor the hole is drilled against and rounded to the
+ * sketch snap. Null with no click or no anchor.
+ */
+function holeClickedPosition(
+  face: FacePick,
+  ctx: InPlaceContext
+): { u: string; v: string } | null {
+  if (!face.point) return null;
+  const saved = ctx.saved?.featureKind === 'hole' ? ctx.saved : null;
+  // A new hole measures from the centroid of the face's outer boundary,
+  // which other holes in the face never move; an edited one keeps the
+  // anchor it was drilled against, which no edit may change.
+  const anchor = saved
+    ? savedHoleAnchor(saved.positionAnchor)
+    : newHoleAnchor(face);
+  return holePositionFromPick(face, anchor, face.point, ctx.linearSnap ?? null);
+}
+
+/**
+ * U11: the Hole inputs a refused request changed from the last one that
+ * built, so the kept preview stays on screen and the bar names what to put
+ * back. A step size that only followed a new bore is not named.
+ */
+export function holeRefusedInputs(
+  built: InPlaceRequest,
+  refused: InPlaceRequest
+): string[] {
+  if (
+    built.tool !== 'modeling' ||
+    built.state.operation !== 'hole' ||
+    refused.tool !== 'modeling' ||
+    refused.state.operation !== 'hole'
+  ) {
+    return [];
+  }
+  const a = built.state.value;
+  const b = refused.state.value;
+  const inputs: string[] = [];
+  const changed = (key: keyof typeof b) => !sameParam(a[key], b[key]);
+  if (changed('targetBodyId') || changed('faceHash')) inputs.push('Face');
+  if (changed('points')) inputs.push('Sketch points');
+  if (changed('style')) inputs.push('Style');
+  if (changed('standard')) inputs.push('Standard');
+  else if (changed('diameter')) inputs.push('⌀');
+  if (changed('depthMode') || (b.depthMode === 'blind' && changed('depth'))) {
+    inputs.push('Depth');
+  }
+  const bore = Number(b.diameter);
+  const followed = Number.isFinite(bore) ? holeStepSizes(bore) : null;
+  const boreMoved = changed('diameter') || changed('standard');
+  const step = (
+    key: 'counterboreDiameter' | 'counterboreDepth' | 'countersinkDiameter',
+    label: string
+  ) => {
+    if (!changed(key)) return;
+    if (boreMoved && followed && b[key] === String(followed[key])) return;
+    inputs.push(label);
+  };
+  if (!changed('style') && b.style === 'counterbore') {
+    step('counterboreDiameter', 'Counterbore ⌀');
+    step('counterboreDepth', 'Counterbore depth');
+  }
+  if (!changed('style') && b.style === 'countersink') {
+    step('countersinkDiameter', 'Countersink ⌀');
+    if (changed('countersinkAngleDeg')) inputs.push('Countersink angle');
+  }
+  if (!b.points) {
+    if (!sameParam(a.position.u, b.position.u)) inputs.push('U');
+    if (!sameParam(a.position.v, b.position.v)) inputs.push('V');
+  }
+  if (changed('tapped')) inputs.push('Thread');
+  return inputs;
 }
 
 /** M01: whether the Hole's options size it by a standard. */

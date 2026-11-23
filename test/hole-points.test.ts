@@ -16,6 +16,7 @@ import {
   updateSketchObject,
   type HoleInput
 } from '@openzcad/document-core';
+import { selectionFeature } from '../apps/web/src/lib/selectionFeature';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -345,6 +346,52 @@ describe('M01 holes on sketch points: exact build', () => {
         name.startsWith('hole.face.')
       )
     ).toEqual(ids.map((id) => `hole.face.at.${id}.bore`).sort());
+  }, 120_000);
+
+  it('a picked bore or its rim names the hole on sketch points (U01)', async () => {
+    // Edit, Delete and the readout read a pick's owning feature; a bore
+    // named by its point (`hole.face.at.<point>.bore`) must name the hole
+    // just as a single hole's `hole.face.bore` does.
+    const { document, ids } = await drill([
+      [20, 20],
+      [70, 20]
+    ]);
+    const derived = await adapter.syncDocument(document);
+    const bodyId = last(document);
+    const body = derived.bodyRepresentations[bodyId]!;
+    const holeId = lastFeature(document);
+    for (const id of ids) {
+      const face = body.topology!.faces.find(
+        (entry) => entry.reference?.lineageName === `hole.face.at.${id}.bore`
+      )!;
+      expect(face).toBeDefined();
+      expect(
+        selectionFeature(document, body, {
+          bodyId,
+          kind: 'face',
+          topologyId: face.topologyId,
+          hash: face.hash,
+          reference: face.reference
+        })?.featureId
+      ).toBe(holeId);
+      const rims = body.topology!.edges.filter(
+        (edge) =>
+          edge.displayRole !== 'seam' &&
+          edge.adjacentFaceHashes?.includes(face.hash)
+      );
+      expect(rims.length).toBeGreaterThan(0);
+      for (const edge of rims) {
+        expect(
+          selectionFeature(document, body, {
+            bodyId,
+            kind: 'edge',
+            topologyId: edge.topologyId,
+            hash: edge.hash,
+            reference: edge.reference
+          })?.featureId
+        ).toBe(holeId);
+      }
+    }
   }, 120_000);
 
   it('reuses only checked leading bores when editing a point on a plate', async () => {

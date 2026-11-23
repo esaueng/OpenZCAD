@@ -607,6 +607,11 @@ export function inPlaceEditSeed(
             : clearance === 0
               ? 'exact'
               : 'stored';
+        // U01: a clearance of its own reopens on a chip that says so, not
+        // with no Thread fit chosen; picking another replaces it.
+        if (seed.options.tapFit === 'stored') {
+          seed.choices.tapFit = [{ value: 'stored', label: 'As saved' }];
+        }
         value('tapLength', data.tapped.length);
         seed.options.tapForm = data.tapped.cosmetic ? 'cosmetic' : 'modeled';
       }
