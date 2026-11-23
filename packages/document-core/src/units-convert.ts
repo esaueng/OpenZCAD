@@ -69,7 +69,9 @@ import {
  * - a source or target of `m` (owner decision Q1), or no change of unit;
  * - a custom feature (its script's literals cannot be rewritten, Q5);
  * - stored data in an area the registry does not classify yet: drawings,
- *   PMI, assemblies and reference images;
+ *   PMI, assemblies and reference images, and node metadata that stores
+ *   lengths (a growing holder's recipe) or that is not recognised (see
+ *   {@link UNITS_CONVERSION_REFUSED_METADATA});
  * - an imported mesh that keeps embedded triangles beside a payload
  *   reference (only a referenced payload alone can carry `payloadUnits`),
  *   or a referenced payload in a document older than schema v153;
@@ -447,6 +449,50 @@ function parameterScalePower(quantity: ParameterKind | undefined): 0 | 1 {
 // Preconditions
 // ---------------------------------------------------------------------------
 
+/**
+ * Node `metadata` keys whose values hold no stored length: flags, colours,
+ * ids and a unit-free opacity. Node metadata is an open record the quantity
+ * registry does not walk, so every key a node may carry is decided here
+ * (PR #1999 audit, `test/units-convert-document-audit.test.ts`).
+ */
+export const UNITS_CONVERSION_UNIT_FREE_METADATA: readonly string[] = [
+  'suppressed',
+  'rollbackSuppressed',
+  'color',
+  'colorChosen',
+  'opacity',
+  'primitivePlacement',
+  'openzcad.growingHolderTextBody'
+];
+
+/**
+ * Node `metadata` keys whose JSON value stores lengths in document units,
+ * and what they are called on the review screen. The conversion refuses a
+ * document that has one rather than leave the numbers in the old unit: a
+ * growing holder's recipe (envelope, cuts, openings, section) and the source
+ * placement its history is verified against.
+ */
+export const UNITS_CONVERSION_REFUSED_METADATA: Readonly<
+  Record<string, string>
+> = {
+  'openzcad.growingHolderRecipe': 'a growing-holder recipe',
+  'openzcad.growingHolderSourcePlacement': 'a growing-holder source placement'
+};
+
+/** Whether an unlisted metadata value could be a stored number. */
+function mayHoldNumbers(value: unknown): boolean {
+  if (typeof value === 'number') return true;
+  if (typeof value !== 'string') return false;
+  const text = value.trim();
+  if (!text.startsWith('{') && !text.startsWith('[')) return false;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === 'object' && parsed !== null;
+  } catch {
+    return false;
+  }
+}
+
 function hasArrayContent(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === 'object' && value !== null)
@@ -492,6 +538,27 @@ function preconditionRefusals(
 
   for (const id of Object.keys(document.nodes).sort()) {
     const node = document.nodes[id]!;
+    for (const [key, value] of Object.entries(node.metadata ?? {})) {
+      if (value === undefined || value === null) continue;
+      const refused = UNITS_CONVERSION_REFUSED_METADATA[key];
+      if (refused)
+        refusals.push({
+          code: 'unsupported-area',
+          subject: subjectOf(node),
+          field: `metadata.${key}`,
+          message: `${node.name || node.id} keeps ${refused}, whose lengths stored-unit conversion does not convert yet.`
+        });
+      else if (
+        !UNITS_CONVERSION_UNIT_FREE_METADATA.includes(key) &&
+        mayHoldNumbers(value)
+      )
+        refusals.push({
+          code: 'unsupported-area',
+          subject: subjectOf(node),
+          field: `metadata.${key}`,
+          message: `${node.name || node.id} keeps data under "${key}" that stored-unit conversion does not recognise, so it cannot tell whether it holds lengths.`
+        });
+    }
     if (node.kind !== 'feature') continue;
     if (node.data.featureKind === 'custom-feature')
       refusals.push({

@@ -65,8 +65,9 @@ export function recipeFromRecognizedOpening(
  */
 export const GROWING_HOLDER_RECIPE_METADATA_KEY =
   'openzcad.growingHolderRecipe';
-const TEXT_BODY_METADATA_KEY = 'openzcad.growingHolderTextBody';
-const SOURCE_PLACEMENT_METADATA_KEY = 'openzcad.growingHolderSourcePlacement';
+export const TEXT_BODY_METADATA_KEY = 'openzcad.growingHolderTextBody';
+export const SOURCE_PLACEMENT_METADATA_KEY =
+  'openzcad.growingHolderSourcePlacement';
 
 export type OpeningAxis = 'x' | 'y' | 'z';
 

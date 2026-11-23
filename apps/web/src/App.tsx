@@ -1034,6 +1034,10 @@ import {
 } from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
+import {
+  scaledCameraPose,
+  useStoredUnitCamera
+} from './hooks/useStoredUnitCamera';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
@@ -11517,6 +11521,19 @@ export function App() {
   function handleViewportChange(camera: ViewportCameraState) {
     updateCameraPose(doc?.projectId ?? null, camera);
   }
+
+  // I03: a stored-unit conversion (or its undo, redo or checkpoint restore)
+  // rescales every number of the model, so the camera follows by the same k
+  // and the part stays where it was on screen. Scaling the pose rather than
+  // reframing keeps the user's view, as an edit does.
+  useStoredUnitCamera(doc?.projectId ?? null, doc?.units ?? null, (factor) => {
+    const snapshot = projectViewSnapshot();
+    if (snapshot)
+      requestView({
+        pose: scaledCameraPose(snapshot.camera, factor),
+        projection
+      });
+  });
 
   function handleViewportSettled(camera: ViewportCameraState) {
     persistCameraPose(doc?.projectId ?? null, camera);
@@ -26416,7 +26433,7 @@ export function App() {
     setSelectedProfiles([]);
     setTool(null);
     const { from, to } = prepared.payload;
-    const message = `Converted stored units to ${CONVERT_UNIT_WORDS[to]}. “${unitsConvertCheckpointName(from, to)}” was saved first: restore it to go back.`;
+    const message = `Converted stored units to ${CONVERT_UNIT_WORDS[to]}. “${unitsConvertCheckpointName(from, to)}” was saved first: restore it from Revisions to go back.`;
     setStatus(message);
     return { ok: true, message };
   }
@@ -41730,6 +41747,7 @@ export function App() {
             <ConvertUnitsDialog
               stored={doc?.units ?? convertUnitsStored}
               shown={doc ? documentDisplayUnits(doc) : convertUnitsStored}
+              {...(doc ? { nodes: doc.nodes } : {})}
               blockedReason={
                 unitsConversionCollaborationRefusal(unitsConversionRoom)
                   ?.message ??

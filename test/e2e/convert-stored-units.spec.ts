@@ -2,7 +2,16 @@ import type { Page } from '@playwright/test';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, findSketch } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
-import { expect, revealModelPanel, stubApi, test } from './openzcad-fixtures';
+import {
+  createPrimitiveInPlace,
+  expect,
+  keepMeasurement,
+  locateEdge,
+  revealModelPanel,
+  setSelectionFilter,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 /**
  * I03 phase 6 (plan §6, browser): converting a project's stored units from
@@ -284,4 +293,142 @@ test('converts a copy and leaves the original in millimeters', async ({
       exact: true
     })
   ).toBeVisible(READY);
+});
+
+async function switchWorkspace(page: Page, to: 'View' | 'Build') {
+  await page
+    .getByRole('group', { name: 'Workspace mode' })
+    .getByRole('button', { name: to })
+    .click();
+}
+
+/** The one kept measurement's value, with Measure armed in View. */
+async function keptReading(page: Page, unit: 'mm' | 'in') {
+  await switchWorkspace(page, 'View');
+  const workbench = page.getByLabel('Measurement workbench');
+  if (!(await workbench.isVisible()))
+    await page
+      .getByRole('toolbar', { name: 'View tools' })
+      .getByRole('button', { name: 'Measure' })
+      .click();
+  const row = workbench.getByRole('listitem');
+  await expect(row).toHaveCount(1, READY);
+  const pattern = new RegExp(`(\\d+\\.\\d+)\\s*${unit}\\b`);
+  await expect(row).toContainText(pattern, READY);
+  return Number(pattern.exec((await row.textContent()) ?? '')![1]);
+}
+
+async function cameraDistance(page: Page) {
+  return Number(
+    await page
+      .locator('.viewer-host canvas')
+      .getAttribute('data-e2e-camera-distance')
+  );
+}
+
+test('a kept measurement and the camera follow the conversion, its undo and a reload', async ({
+  page
+}) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await stubApi(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Kept measurement');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled(
+    READY
+  );
+
+  // Keep one edge's length, in millimetres.
+  await switchWorkspace(page, 'View');
+  await page
+    .getByRole('toolbar', { name: 'View tools' })
+    .getByRole('button', { name: 'Measure' })
+    .click();
+  await setSelectionFilter(page, 'Edge');
+  const edge = await locateEdge(page);
+  await page.mouse.click(edge.x, edge.y);
+  await keepMeasurement(page);
+  const millimetres = await keptReading(page, 'mm');
+  expect([18, 24, 30]).toContain(millimetres);
+  const inches = (millimetres / 25.4).toFixed(2);
+  // The list is written back debounced.
+  await page.waitForTimeout(700);
+
+  await switchWorkspace(page, 'Build');
+  await expect.poll(() => cameraDistance(page)).toBeGreaterThan(0);
+  const distance = await cameraDistance(page);
+  const dialog = await openConversion(page);
+  await dialog.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText(
+    `“${CHECKPOINT}” was saved first: restore it from Revisions`,
+    READY
+  );
+  await dialog.getByRole('button', { name: 'Done' }).click();
+
+  // The camera keeps the view: every length it holds scaled by 1 / 25.4.
+  await expect
+    .poll(async () => (await cameraDistance(page)) / distance, READY)
+    .toBeCloseTo(1 / 25.4, 4);
+  // 18 mm reads 0.71 in, not 18 read as millimetres and divided again.
+  expect((await keptReading(page, 'in')).toFixed(2)).toBe(inches);
+
+  // Undo puts the millimetres, the reading and the camera back.
+  await switchWorkspace(page, 'Build');
+  await page.keyboard.press('ControlOrMeta+z');
+  await expectShownIn(page, 'Lengths are shown and typed in mm.');
+  await expect
+    .poll(async () => (await cameraDistance(page)) / distance, READY)
+    .toBeCloseTo(1, 4);
+  expect(await keptReading(page, 'mm')).toBe(millimetres);
+
+  // Redo, then a reload: still inches, and still the same edge.
+  await switchWorkspace(page, 'Build');
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expectShownIn(page, 'Lengths are shown and typed in in.');
+  expect((await keptReading(page, 'in')).toFixed(2)).toBe(inches);
+  await page.waitForTimeout(700);
+  await expect(page.locator('.save-state')).toHaveClass(SAVED, READY);
+  await page.reload();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+  expect((await keptReading(page, 'in')).toFixed(2)).toBe(inches);
+  expect(errors).toEqual([]);
+});
+
+test('the review lists each fact beside its marker at phone width', async ({
+  page
+}) => {
+  test.setTimeout(240_000);
+  await open(page, fixture().document);
+  const dialog = await openConversion(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const facts = dialog.locator('.convert-units-facts li');
+  await expect(facts.first()).toBeVisible();
+  for (const fact of await facts.all()) {
+    // The marker hangs beside the first line of its own text.
+    const { marker, text } = await fact.evaluate((element) => {
+      const style = getComputedStyle(element, '::before');
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const first = range.getClientRects()[0]!;
+      return {
+        marker: {
+          position: style.position,
+          display: getComputedStyle(element).display
+        },
+        text: { top: first.top, item: element.getBoundingClientRect().top }
+      };
+    });
+    expect(marker.position).toBe('absolute');
+    expect(marker.display).toBe('block');
+    expect(Math.abs(text.top - text.item)).toBeLessThan(4);
+  }
+  const box = await dialog.boundingBox();
+  expect(box!.width).toBeLessThanOrEqual(390);
 });

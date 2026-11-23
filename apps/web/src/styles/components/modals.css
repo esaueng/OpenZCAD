@@ -1183,8 +1183,19 @@
   gap: var(--sp-2);
 }
 
+/* A fact is one run of text: as a flex row its marker was an item of its
+   own, and a sentence too long for a phone wrapped below it. The marker
+   hangs in the padding instead, beside the first line. */
+.convert-units-facts li {
+  display: block;
+  position: relative;
+  padding-left: var(--sp-3);
+}
+
 .convert-units-facts li::before {
   content: '·';
+  position: absolute;
+  left: 0;
   color: var(--color-text-subtle);
 }
 

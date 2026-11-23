@@ -9,8 +9,12 @@ import {
   type UnitsConvertRefusal
 } from '@openzcad/document-core';
 import type { UnitsConversionPreparation } from '@openzcad/kernel-adapter/exact';
-import type { UnitSystem } from '@openzcad/shared';
+import type { ProjectDocument, UnitSystem } from '@openzcad/shared';
 import { CONVERT_UNIT_WORDS } from '../lib/unitsConversion';
+import {
+  conversionPlaceLabels,
+  type ConversionPlace
+} from '../lib/unitsConversionPlaces';
 import { useModalFocus } from '../lib/useModalFocus';
 
 /** The stored units a document can be converted between (owner decision Q1). */
@@ -57,6 +61,11 @@ export interface ConvertUnitsDialogProps {
   stored: UnitSystem;
   /** The unit lengths are shown and typed in now. */
   shown: UnitSystem;
+  /**
+   * The open document's nodes, to name each refusal's feature and field as
+   * its editor does. Without them the stored names are shown, ids dropped.
+   */
+  nodes?: ProjectDocument['nodes'];
   /**
    * Why converting cannot start (other editors present, a read-only seat):
    * shown before anything runs, with every action but Cancel disabled.
@@ -113,12 +122,7 @@ function plural(count: number, one: string, many = `${one}s`) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-/** Where a refusal or warning is: the feature and the field, when named. */
-function placeOf(item: { subject: string; field?: string }): string | null {
-  const subject = item.subject === 'document' ? null : item.subject;
-  if (subject && item.field) return `${subject} · ${item.field}`;
-  return subject ?? item.field ?? null;
-}
+type PlaceLabels = ReturnType<typeof conversionPlaceLabels>;
 
 /** What happens to the shown unit once the conversion applies (plan §5.4). */
 export function displayUnitsAfterSentence(
@@ -141,6 +145,7 @@ export function displayUnitsAfterSentence(
 export function ConvertUnitsDialog({
   stored,
   shown,
+  nodes,
   blockedReason = null,
   prepare,
   convert,
@@ -288,6 +293,18 @@ export function ConvertUnitsDialog({
 
   const fromName = CONVERT_UNIT_WORDS[stored];
   const toName = CONVERT_UNIT_WORDS[target];
+  // Every place on screen together, so a name two of them share keeps ids.
+  const shownPlaces: ConversionPlace[] =
+    phase.kind === 'refused'
+      ? [...phase.refusals, ...phase.warnings]
+      : phase.kind === 'ready'
+        ? [
+            ...phase.prepared.report.wrapped,
+            ...phase.prepared.report.unwrapped,
+            ...phase.prepared.report.warnings
+          ]
+        : [];
+  const labels = conversionPlaceLabels(shownPlaces, nodes);
   const checkpoint = unitsConvertCheckpointName(stored, target);
   const canAct = Boolean(prepared) && !busy && !blocked;
 
@@ -375,6 +392,7 @@ export function ConvertUnitsDialog({
             prepared={phase.prepared}
             shown={shown}
             checkpoint={checkpoint}
+            labels={labels}
           />
         ) : null}
 
@@ -392,17 +410,17 @@ export function ConvertUnitsDialog({
             {phase.context ? <p>{phase.context}</p> : null}
             <ul>
               {phase.refusals.map((refusal, index) => {
-                const place = placeOf(refusal);
+                const place = labels.place(refusal);
                 return (
                   <li key={`${refusal.code}-${refusal.subject}-${index}`}>
                     {place ? <strong>{place}</strong> : null}
-                    <span>{refusal.message}</span>
+                    <span>{labels.message(refusal, refusal.message)}</span>
                   </li>
                 );
               })}
             </ul>
             {phase.warnings.length > 0 && !phase.prepared ? (
-              <WarningList warnings={phase.warnings} />
+              <WarningList warnings={phase.warnings} labels={labels} />
             ) : null}
           </section>
         ) : null}
@@ -457,9 +475,11 @@ export function ConvertUnitsDialog({
 }
 
 function WarningList({
-  warnings
+  warnings,
+  labels
 }: {
   warnings: readonly UnitsConversionWarning[];
+  labels: PlaceLabels;
 }) {
   return (
     <div className="convert-units-warnings">
@@ -469,12 +489,12 @@ function WarningList({
       </h3>
       <ul>
         {warnings.map((warning, index) => {
-          const place = placeOf(warning);
+          const place = labels.place(warning);
           return (
             <li key={`${warning.subject}-${warning.field}-${index}`}>
               {place ? <strong>{place}</strong> : null}
               <code>{warning.expression}</code>
-              <span>{warning.message}</span>
+              <span>{labels.message(warning, warning.message)}</span>
             </li>
           );
         })}
@@ -486,11 +506,13 @@ function WarningList({
 function ConversionSummary({
   prepared,
   shown,
-  checkpoint
+  checkpoint,
+  labels
 }: {
   prepared: PreparedConversion;
   shown: UnitSystem;
   checkpoint: string;
+  labels: PlaceLabels;
 }) {
   const { report, undo } = prepared;
   const count = unitsConvertValueCount(report);
@@ -508,8 +530,7 @@ function ConversionSummary({
             : `${plural(count, 'stored value')} will change.`}
         </li>
         <li>
-          “{checkpoint}” is saved first. Restore it from the save states to go
-          back.
+          “{checkpoint}” is saved first. Restore it from Revisions to go back.
         </li>
         <li>{displayUnitsAfterSentence(report, shown)}</li>
         {report.configurationRows > 0 ? (
@@ -528,9 +549,7 @@ function ConversionSummary({
           <ul>
             {rewritten.map((rewrite, index) => (
               <li key={`${rewrite.subject}-${rewrite.field}-${index}`}>
-                <strong>
-                  {rewrite.subject} · {rewrite.field}
-                </strong>
+                <strong>{labels.place(rewrite)}</strong>
                 <code>{rewrite.before}</code>
                 <span aria-hidden="true">→</span>
                 <span className="visually-hidden">becomes</span>
@@ -541,7 +560,7 @@ function ConversionSummary({
         </details>
       ) : null}
       {report.warnings.length > 0 ? (
-        <WarningList warnings={report.warnings} />
+        <WarningList warnings={report.warnings} labels={labels} />
       ) : null}
       {undo.keepsOnlyConversion ? (
         <p className="convert-units-undo" role="note">

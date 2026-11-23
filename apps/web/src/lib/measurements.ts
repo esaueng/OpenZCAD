@@ -1948,16 +1948,122 @@ function hasValidTargetArity(measurement: Measurement): boolean {
   return measurement.targets.length === 1;
 }
 
-/** Re-resolve only by authoritative body/topology identity; never proximity. */
+/**
+ * Unit-free numbers of a kept measurement: identity, ordering and the
+ * geometry fingerprint its targets were resolved by. Every other number in a
+ * {@link Measurement} is a length, area or volume in its `sourceUnit` and
+ * is rescaled by {@link measurementInUnit}. `test/measurement-stored-units.test.ts`
+ * walks a measurement of every kind and fails on a number in neither list.
+ *
+ * Fingerprints (`hash`, `reference`) are not scaled: like a document's
+ * references (I03 phase 4) they are re-captured, here by the next refresh,
+ * which re-resolves each target by identity and rebuilds it from the
+ * converted bodies. A target that no longer resolves leaves the row stale or
+ * unresolved, which the dock already reports, never a reading in the wrong
+ * unit.
+ */
+export const MEASUREMENT_UNIT_FREE_FIELDS: readonly string[] = [
+  'sourceRevision',
+  'targets.*.hash',
+  'targets.*.reference',
+  'targets.*.direction'
+];
+
+function scaledVector(vector: Vector3, factor: number): Vector3 {
+  return {
+    x: vector.x * factor,
+    y: vector.y * factor,
+    z: vector.z * factor
+  };
+}
+
+/**
+ * I03: a kept measurement re-expressed in another stored unit, every length,
+ * area and volume it carries scaled to `unit` (k, k², k³) and `sourceUnit`
+ * set to it. A document whose stored unit changed (a stored-unit conversion,
+ * its undo or redo, or a reload of either) passes its rows through this
+ * before re-measuring them against bodies now stored in `unit`; otherwise a
+ * fresh reading in the new unit would be labelled with the old one.
+ */
+export function measurementInUnit(
+  measurement: Measurement,
+  unit: UnitSystem
+): Measurement {
+  if (measurement.sourceUnit === unit) return measurement;
+  const k =
+    millimetresPerUnit(measurement.sourceUnit) / millimetresPerUnit(unit);
+  const scaled = (value: number, dimension: MeasurementDimension) =>
+    convertedValue(value, dimension, measurement.sourceUnit, unit);
+  const { result, annotation } = measurement;
+  return {
+    ...measurement,
+    sourceUnit: unit,
+    result: {
+      ...result,
+      value: scaled(result.value, result.dimension),
+      ...(result.components
+        ? { components: scaledVector(result.components, k) }
+        : {}),
+      ...(result.secondary
+        ? {
+            secondary: {
+              ...result.secondary,
+              value: scaled(result.secondary.value, result.secondary.dimension)
+            }
+          }
+        : {})
+    },
+    targets: measurement.targets.map((target) => ({
+      ...target,
+      ...(target.point ? { point: scaledVector(target.point, k) } : {}),
+      ...(target.endpoints
+        ? {
+            endpoints: [
+              scaledVector(target.endpoints[0], k),
+              scaledVector(target.endpoints[1], k)
+            ] as const
+          }
+        : {})
+    })),
+    ...(annotation
+      ? {
+          annotation: {
+            anchor: scaledVector(annotation.anchor, k),
+            segments: annotation.segments.map((segment) => ({
+              start: scaledVector(segment.start, k),
+              end: scaledVector(segment.end, k)
+            }))
+          }
+        }
+      : {})
+  };
+}
+
+/**
+ * Re-resolve only by authoritative body/topology identity; never proximity.
+ *
+ * `options.unit` is the unit `bodies` are stored in (the document's
+ * `units`). A row kept in another unit is first rescaled to it
+ * ({@link measurementInUnit}) and then re-measured, whatever its revision.
+ */
 export function refreshMeasurements(
   list: readonly Measurement[],
   bodies: readonly BodyRepresentation[],
   sourceRevision: number,
-  options: { force?: boolean } = {}
+  options: { force?: boolean; unit?: UnitSystem } = {}
 ): Measurement[] {
   let changed = false;
-  const refreshedList = list.map((measurement) => {
-    if (!options.force && measurement.sourceRevision === sourceRevision) {
+  const refreshedList = list.map((original) => {
+    const measurement =
+      options.unit === undefined
+        ? original
+        : measurementInUnit(original, options.unit);
+    if (measurement !== original) changed = true;
+    if (
+      !options.force &&
+      measurement === original &&
+      measurement.sourceRevision === sourceRevision
+    ) {
       return measurement;
     }
     if (!hasValidTargetArity(measurement)) {

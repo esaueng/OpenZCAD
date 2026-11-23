@@ -2,6 +2,7 @@ import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { UnitsConversionPreparation } from '@openzcad/kernel-adapter/exact';
+import type { DocumentNode } from '@openzcad/shared';
 import {
   ConvertUnitsDialog,
   type ConvertUnitsDialogProps,
@@ -101,7 +102,127 @@ function renderDialog(props: Partial<ConvertUnitsDialogProps> = {}) {
   return { ...handlers, ...props, rerender };
 }
 
+/** Nodes the review names: a box, and two parameters both called `width`. */
+const NODES = {
+  ent_box9d65: {
+    id: 'ent_box9d65',
+    kind: 'feature',
+    name: 'Box',
+    parentId: null,
+    revisionId: null,
+    featureId: 'f_box',
+    featureKind: 'primitive',
+    data: {
+      featureKind: 'primitive',
+      primitiveKind: 'box',
+      dimensions: { width: 25.4, height: 18, depth: 24 }
+    }
+  },
+  ent_a4810ced: {
+    id: 'ent_a4810ced',
+    kind: 'parameter',
+    name: 'width',
+    parentId: null,
+    revisionId: null,
+    parameterId: 'p_width',
+    expression: '20',
+    value: 20
+  },
+  ent_b5921dfe: {
+    id: 'ent_b5921dfe',
+    kind: 'parameter',
+    name: 'width',
+    parentId: null,
+    revisionId: null,
+    parameterId: 'p_width2',
+    expression: '30',
+    value: 30
+  }
+} as unknown as Record<string, DocumentNode>;
+
 describe('ConvertUnitsDialog', () => {
+  it('names a refused field as the box editor does, without the stored id or key', async () => {
+    renderDialog({
+      nodes: NODES,
+      prepare: vi.fn(() =>
+        Promise.resolve<UnitsConversionPreparation>({
+          ok: false,
+          sourceVersion: 7,
+          refusals: [
+            {
+              stage: 'transform',
+              code: 'scale-variant',
+              subject: 'Box (ent_box9d65)',
+              field: 'dimensions.height',
+              message:
+                'Box (ent_box9d65) applies round() to a length, which would round differently in inches.'
+            }
+          ],
+          warnings: []
+        })
+      )
+    });
+    const alert = await screen.findByRole('alert');
+    const [item] = within(alert).getAllByRole('listitem');
+    expect(within(item!).getByText('Box · Depth (Y)')).toBeVisible();
+    expect(item).toHaveTextContent(
+      'Box applies round() to a length, which would round differently in inches.'
+    );
+    expect(alert).not.toHaveTextContent('ent_');
+    expect(alert).not.toHaveTextContent('dimensions.height');
+  });
+
+  it('shows a rewritten parameter by its name, and keeps ids only for a name two share', async () => {
+    const user = userEvent.setup();
+    const rewrite = (subject: string) => ({
+      subject,
+      field: 'expression',
+      before: 'w * 2',
+      after: '(w * 2) / 25.4'
+    });
+    const { rerender } = renderDialog({
+      nodes: NODES,
+      prepare: vi.fn(() =>
+        Promise.resolve<UnitsConversionPreparation>(
+          prepared({
+            report: {
+              wrapped: [rewrite('width (ent_a4810ced)')],
+              warnings: []
+            }
+          })
+        )
+      )
+    });
+    await user.click(
+      await screen.findByText('1 expression rewritten to keep its size')
+    );
+    expect(screen.getByText('width · Expression')).toBeVisible();
+    expect(screen.queryByText(/ent_/)).toBeNull();
+
+    rerender({
+      nodes: NODES,
+      prepare: vi.fn(() =>
+        Promise.resolve<UnitsConversionPreparation>(
+          prepared({
+            report: {
+              wrapped: [
+                rewrite('width (ent_a4810ced)'),
+                rewrite('width (ent_b5921dfe)')
+              ],
+              warnings: []
+            }
+          })
+        )
+      )
+    });
+    await user.click(screen.getByRole('radio', { name: 'Centimeters (cm)' }));
+    await user.click(
+      await screen.findByText('2 expressions rewritten to keep their size')
+    );
+    expect(screen.getByText('width (ent_a4810ced) · Expression')).toBeVisible();
+    expect(screen.getByText('width (ent_b5921dfe) · Expression')).toBeVisible();
+  });
+
   it('offers the other two stored units and points to Units for display', async () => {
     renderDialog();
     const dialog = screen.getByRole('dialog', { name: 'Convert stored units' });
@@ -294,7 +415,7 @@ describe('ConvertUnitsDialog', () => {
       convertDone.resolve({
         ok: true,
         message:
-          'Converted stored units to inches. “Before unit conversion (mm → in)” was saved first: restore it to go back.'
+          'Converted stored units to inches. “Before unit conversion (mm → in)” was saved first: restore it from Revisions to go back.'
       });
     });
     expect(screen.getByRole('status')).toHaveTextContent(
