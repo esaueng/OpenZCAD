@@ -217,6 +217,41 @@ test('the last of two quick row clicks wins, even on the active row', async ({
   expect(errors).toEqual([]);
 });
 
+test('the last of two quick Tweak picks wins, even on the active row', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const driven = drivenSketchesDocument();
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await importDriven(page, driven.document);
+  const circle = async () =>
+    Math.round(driven.storedCircleX(await stored(page)) * 1e4) / 1e4;
+  await expect.poll(circle, READY).toBe(30);
+  await page.getByRole('button', { name: 'Tweak', exact: true }).click();
+  const picker = page.getByRole('combobox', { name: 'Configuration' });
+  await expect(picker).toHaveValue(driven.document.configurations!.activeRowId);
+
+  // Large, then Small in the same task: while Large is still solving the
+  // picker shows Large, so picking Small again is a real change.
+  await picker.evaluate((element) => {
+    const select = element as HTMLSelectElement;
+    const pick = (name: string) => {
+      const option = [...select.options].find((item) => item.text === name)!;
+      select.value = option.value;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    pick('Large');
+    pick('Small');
+  });
+  // Long enough for the Large solve to have landed had it not been dropped.
+  await page.waitForTimeout(3_000);
+  await expect(picker).toHaveValue(driven.document.configurations!.activeRowId);
+  await expect(page.getByLabel('Expression for gap')).toHaveValue('30 mm');
+  expect(await circle()).toBe(30);
+  expect(errors).toEqual([]);
+});
+
 test(
   'View draws and exports the row it shows, sketches and solids alike',
   { tag: '@ci-smoke' },

@@ -50,7 +50,12 @@ interface TweakPanelProps {
   configuration?: {
     rows: { id: string; name: string }[];
     activeRowId: string;
-    onActivate(rowId: string): void;
+    /**
+     * Switches to the row. A switch can be asynchronous (it re-solves
+     * sketches first); its promise settles once the switch commits, is
+     * refused, or is overtaken by a later one.
+     */
+    onActivate(rowId: string): void | Promise<unknown>;
   } | null;
   /**
    * The parameter table's flyout: open to begin with — the knobs are what
@@ -102,6 +107,31 @@ export function TweakPanel({
   parts
 }: TweakPanelProps) {
   const phone = useMediaQuery('(max-width: 479px)');
+  // F06: the row last picked while its switch is still pending. The picker
+  // shows it instead of the model's row, so picking the model's row again
+  // (to cancel a slower switch) is a real change that reaches onActivate.
+  const [requestedRowId, setRequestedRowId] = useState<string | null>(null);
+  const latestRequestRef = useRef(0);
+  const activeRowId = configuration?.activeRowId ?? null;
+  useEffect(() => {
+    if (activeRowId !== null && activeRowId === requestedRowId)
+      setRequestedRowId(null);
+  }, [activeRowId, requestedRowId]);
+  function activateConfiguration(rowId: string) {
+    if (!configuration) return;
+    const request = ++latestRequestRef.current;
+    const pending = configuration.onActivate(rowId);
+    if (!pending) {
+      setRequestedRowId(null);
+      return;
+    }
+    setRequestedRowId(rowId);
+    // Refused or overtaken: show the model's actual row again.
+    const settle = () => {
+      if (latestRequestRef.current === request) setRequestedRowId(null);
+    };
+    pending.then(settle, settle);
+  }
   const [phonePanel, setPhonePanel] = useState<'parameters' | 'parts'>(
     'parameters'
   );
@@ -306,9 +336,9 @@ export function TweakPanel({
               <label className="tweak-configuration">
                 <span>Configuration</span>
                 <select
-                  value={configuration.activeRowId}
+                  value={requestedRowId ?? configuration.activeRowId}
                   onChange={(event) =>
-                    configuration.onActivate(event.target.value)
+                    activateConfiguration(event.target.value)
                   }
                 >
                   {configuration.rows.map((row) => (

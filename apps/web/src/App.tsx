@@ -38516,7 +38516,7 @@ export function App() {
                     rows: doc.configurations.rows,
                     activeRowId: doc.configurations.activeRowId,
                     onActivate: (rowId) =>
-                      void Promise.resolve(
+                      Promise.resolve(
                         configurationActions.activate(rowId)
                       ).then((refused) => {
                         if (refused) setStatus(refused);
