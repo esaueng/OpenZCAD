@@ -2283,6 +2283,161 @@ describe('review: values the cards accepted stay expressible', () => {
     expect(Math.hypot(origin!.x - 10, origin!.y)).toBeLessThanOrEqual(2 + 1e-9);
   });
 
+  it('a clicked hole stands its handles on the snapped position it drills (U01)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    // The click is 1 along −Y and 2 along +X of the centroid; a 1.5 snap
+    // drills it at U −1.5, V 1.5: (11.5, 6.5) rather than (12, 6).
+    const ctx: InPlaceContext = { ...CTX, linearSnap: 1.5 };
+    const options = { depthMode: 'blind', style: 'simple' };
+    expect(
+      spec.request(slots, { diameter: 4, depth: 8 }, options, ctx)
+    ).toMatchObject({
+      state: { value: { position: { u: '-1.5', v: '1.5' } } }
+    });
+    const handles = spec.handles(
+      slots,
+      { diameter: 4, depth: 8 },
+      ctx,
+      options
+    );
+    expect(handles.map((handle) => handle.valueId)).toEqual([
+      'diameter',
+      'depth'
+    ]);
+    for (const handle of handles) {
+      const origin = 'origin' in handle.params ? handle.params.origin : null;
+      expect(origin?.x).toBeCloseTo(11.5, 9);
+      expect(origin?.y).toBeCloseTo(6.5, 9);
+      expect(origin?.z).toBeCloseTo(4, 9);
+    }
+    // With snapping off a click is drilled where it fell, to 0.01.
+    const [free] = spec.handles(slots, { diameter: 4 }, CTX, options);
+    expect(free && 'origin' in free.params ? free.params.origin : null).toEqual(
+      { x: 12, y: 6, z: 4 }
+    );
+  });
+
+  it('a clicked hole switched to Typed keeps its position (U01)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const ctx: InPlaceContext = { ...CTX, linearSnap: 1.5 };
+    const state = { options: { place: 'clicked' }, numbers: {} };
+    const carried = spec.optionCarries!('place', 'typed', state, ctx, slots);
+    expect(carried).toEqual({
+      positionU: { value: -1.5, from: 'positionU' },
+      positionV: { value: 1.5, from: 'positionV' }
+    });
+    // Typed at the carried values, it is drilled where it was clicked.
+    expect(
+      spec.request(
+        slots,
+        { diameter: 4, positionU: -1.5, positionV: 1.5 },
+        { place: 'typed' },
+        ctx
+      )
+    ).toMatchObject({
+      state: { value: { position: { u: '-1.5', v: '1.5' } } }
+    });
+    // An edit's stored position is already on its chips; other choices
+    // carry nothing.
+    expect(
+      spec.optionCarries!('place', 'typed', state, ctx, {
+        ...slots,
+        faces: [{ ...TOP, savedPosition: true }]
+      })
+    ).toBeNull();
+    expect(
+      spec.optionCarries!('place', 'points', state, ctx, slots)
+    ).toBeNull();
+    expect(spec.optionCarries!('style', 'typed', state, ctx, slots)).toBeNull();
+  });
+
+  it("a standard hole's hint reads its size in the display unit (I03)", () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const iso = {
+      standard: 'iso',
+      isoSize: 'M8',
+      holeFor: 'clearance',
+      fit: 'close'
+    };
+    expect(
+      spec.hint(slots, iso, { ...CTX, units: 'mm', displayUnits: 'mm' })
+    ).toBe('Click to move it · M8 clearance (close) ⌀ 8.4');
+    // Ø8.4 mm is 0.331 in, as the Options panel and chips read it.
+    expect(
+      spec.hint(slots, iso, { ...CTX, units: 'mm', displayUnits: 'inch' })
+    ).toBe('Click to move it · M8 clearance (close) ⌀ 0.331 in');
+  });
+
+  it("a standard hole's chips stand clear of the table's bore, not the typed one", () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const options = {
+      standard: 'iso',
+      isoSize: 'M20',
+      holeFor: 'tap-drill',
+      tap: 'tapped',
+      place: 'typed',
+      depthMode: 'blind'
+    };
+    const ctx: InPlaceContext = { ...CTX, units: 'mm' };
+    const handles = spec.handles(
+      { ...EMPTY, faces: [TOP] },
+      { diameter: 1, depth: 30, positionU: 0, positionV: 0 },
+      ctx,
+      options
+    );
+    // The M20 tap drill is Ø17.5: a typed Ø1 left over must not crowd the
+    // thread arrow and position chips onto the bore.
+    const tap = handles.find((handle) => handle.valueId === 'tapLength')!;
+    const origin = 'origin' in tap.params ? tap.params.origin : null;
+    expect(Math.hypot(origin!.x - 10, origin!.y - 5)).toBeCloseTo(
+      17.5 * 1.5,
+      6
+    );
+  });
+
+  it('a refused hole names the inputs that changed, not the steps that followed (U11)', () => {
+    const spec = IN_PLACE_TOOL_SPECS.hole;
+    const slots = { ...EMPTY, faces: [TOP] };
+    const request = (
+      values: Record<string, number>,
+      options: Record<string, string> = {}
+    ) =>
+      spec.request(
+        slots,
+        values,
+        { style: 'counterbore', depthMode: 'blind', ...options },
+        CTX
+      )!;
+    const built = request({ diameter: 4, depth: 8 });
+    expect(spec.refusedInputs!(built, built)).toEqual([]);
+    // A new bore its untouched counterbore follows names the bore alone.
+    expect(
+      spec.refusedInputs!(built, request({ diameter: 40, depth: 8 }))
+    ).toEqual(['⌀']);
+    expect(
+      spec.refusedInputs!(
+        built,
+        request({ diameter: 4, depth: 8, counterboreDiameter: 2 })
+      )
+    ).toEqual(['Counterbore ⌀']);
+    expect(
+      spec.refusedInputs!(built, request({ diameter: 4, depth: 0.5 }))
+    ).toEqual(['Depth']);
+    expect(
+      spec.refusedInputs!(
+        built,
+        request({ diameter: 4, depth: 8 }, { style: 'countersink' })
+      )
+    ).toEqual(['Style']);
+    // Another tool's requests are not a hole's to name.
+    expect(
+      spec.refusedInputs!(built, { ...built, tool: 'boolean' } as never)
+    ).toEqual([]);
+  });
+
   it('a typed hole names the world axis each position chip runs along', () => {
     const handles = IN_PLACE_TOOL_SPECS.hole.handles(
       { ...EMPTY, faces: [TOP] },

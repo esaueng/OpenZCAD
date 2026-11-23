@@ -617,10 +617,12 @@ export function useInPlaceCommand(
         optionsRef.current.curveMiddle?.(sketchId, entityId) ?? null,
       holeFeature: (featureId) =>
         optionsRef.current.holeFeature?.(featureId) ?? null,
-      ...(options.units ? { units: options.units } : {})
+      ...(options.units ? { units: options.units } : {}),
+      ...(options.displayUnits ? { displayUnits: options.displayUnits } : {})
     }),
     [
       options.units,
+      options.displayUnits,
       options.sketchViews,
       options.datumAxes,
       options.linearSnap,
@@ -1935,7 +1937,8 @@ export function useInPlaceCommand(
         optionId,
         value,
         inPlacePanelState(spec, current.options, numbersFor(current)),
-        ctxRef.current
+        ctxRef.current,
+        slotsOf(current)
       );
       if (!carried) return { ...current, options };
       const values = { ...current.values };

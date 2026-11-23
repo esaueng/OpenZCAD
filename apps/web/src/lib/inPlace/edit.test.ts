@@ -1838,6 +1838,28 @@ describe('an untouched edit writes the feature back as stored', () => {
       )!.seed.options.tapForm
     ).toBe('cosmetic');
     expect(armed.seed.values.tapLength).toBe(8);
+    // U01: a clearance of its own reopens on an "As saved" Thread fit chip,
+    // not with no fit chosen, and goes back as stored.
+    const ownFit = inPlaceEditSeed(
+      feature(
+        { ...saved, tapped: { ...saved.tapped, clearance: 0.1 } },
+        'body_h' as BodyId
+      ),
+      EDIT_CTX
+    )!;
+    expect(ownFit.seed.options.tapFit).toBe('stored');
+    expect(ownFit.seed.choices.tapFit).toEqual([
+      { value: 'stored', label: 'As saved' }
+    ]);
+    expect(armed.seed.choices.tapFit).toBeUndefined();
+    expect(
+      untouched(
+        feature(
+          { ...saved, tapped: { ...saved.tapped, clearance: 0.1 } },
+          'body_h' as BodyId
+        )
+      )
+    ).toMatchObject({ state: { value: { tapped: { clearance: 0.1 } } } });
     expect(untouched(feature(saved, 'body_h' as BodyId))).toMatchObject({
       state: { value: { tapped: { length: '8', clearance: 0, hand: 'left' } } }
     });
