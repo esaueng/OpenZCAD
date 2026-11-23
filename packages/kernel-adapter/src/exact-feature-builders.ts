@@ -358,14 +358,16 @@ function buildImportedMeshFeature(
   feature: FeatureNode,
   data: FeatureDataOf<'imported-mesh'>
 ): void {
-  const { kernel, result, importSources, importedSteps } = ctx;
+  const { kernel, result, importSources, importedSteps, document } = ctx;
   if (feature.bodyId) {
-    // A referenced payload's checksum determines the conversion, so a hit
-    // restores it exactly; only the handle is new. Without this an
-    // independent mesh re-ran STL generation, translation and sewing on
-    // every edit replayed past it.
+    // A referenced payload's checksum and read scale determine the
+    // conversion, so a hit restores it exactly; only the handle is new.
+    // Without this an independent mesh re-ran STL generation, translation
+    // and sewing on every edit replayed past it.
     const meshes = importedSteps?.meshes;
-    const cacheKey = meshes ? importedMeshCacheKey(data) : undefined;
+    const cacheKey = meshes
+      ? importedMeshCacheKey(data, document.units)
+      : undefined;
     const cached = cacheKey ? meshes?.lookup(cacheKey) : undefined;
     const advise = (message: string) =>
       raiseFeatureWarning(result, feature, message, 'advisory');
@@ -387,7 +389,11 @@ function buildImportedMeshFeature(
       // The kernel's own STL importer owns vertex welding and shell
       // orientation, so the document's triangle soup goes back through
       // it rather than being re-derived here — embedded or referenced alike.
-      const triangles = importedMeshTriangles(data, importSources);
+      const triangles = importedMeshTriangles(
+        data,
+        importSources,
+        document.units
+      );
       const source = {
         sourceName: data.sourceName,
         triangleCount: data.triangleCount,

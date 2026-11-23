@@ -5,6 +5,7 @@ import {
   documentAssetsWithHistory,
   referenceImagesWithHistory,
   importedSourceReferenceOf,
+  hasValidImportedMeshSources,
   assertDocumentHistory,
   documentStructureError
 } from '@openzcad/shared';
@@ -416,6 +417,11 @@ export function importProjectCopy(
     // published; `parseProjectBackup` normally refused it already.
     assertSafeDocumentIdentifiers(document);
     const normalized = withoutDerivedProjection(normalizeDocument(document));
+    // The mesh check storage runs on this same normalized document, so a
+    // backup it would refuse (payload units beside embedded triangles, I03)
+    // is refused here rather than restored as a project that cannot save.
+    if (!hasValidImportedMeshSources(normalized))
+      throw new Error('Project backup has invalid imported mesh data.');
     Object.assign(document, normalized, { projectId, ownerUserId });
     if (document.editHistory) {
       document.editHistory.projectId = projectId;
