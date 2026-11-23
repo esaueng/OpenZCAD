@@ -129,14 +129,6 @@ test(
       ]
     ] as { width: number; height: number; lines: number; scrolls?: true }[][]) {
       await page.setViewportSize(sizes[0]!);
-      // The phone opens the tools drawer over the panels; close it first.
-      const drawerClose = page.getByRole('button', {
-        name: 'Close tools drawer'
-      });
-      if (sizes[0]!.width < 480) {
-        await expect(drawerClose).toBeVisible();
-        await drawerClose.click();
-      }
       await revealModelPanel(page, 'History');
       await modelPanel(page, 'History')
         .getByRole('button', { name: 'History as text' })
@@ -207,11 +199,6 @@ test(
     await createProject(page, 'Phone keyboard');
     await createPrimitiveInPlace(page, 'box');
     await expectBodyCount(page, 1);
-    const drawerClose = page.getByRole('button', {
-      name: 'Close tools drawer'
-    });
-    await expect(drawerClose).toBeVisible();
-    await drawerClose.click();
     await emulateVisualViewport(page);
     await revealModelPanel(page, 'History');
     await modelPanel(page, 'History')

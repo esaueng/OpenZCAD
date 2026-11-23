@@ -21,7 +21,9 @@ import {
   pressTool,
   expect,
   expectBodyCount,
+  modelPanel,
   pickPlanarFace,
+  railPanelButton,
   stubApi,
   test,
   waitForSurfacesToSettle
@@ -940,3 +942,65 @@ test('Next reframes a tablet’s box clear of the open Tools drawer', async ({
     .poll(async () => (await bodiesOnScreen(page)).left)
     .toBeGreaterThanOrEqual(drawer.x + drawer.width);
 });
+
+// The Tools drawer is remembered open, and on a phone it opens over the
+// lane the model panels share: History brought up beside it stood under it,
+// History as text and the first rows with it (found writing
+// history-text-layout.spec.ts on #1981). A panel coming up in the lane puts
+// the drawer away.
+for (const [width, height] of [
+  [390, 844],
+  [360, 740],
+  [430, 932]
+] as const) {
+  test(`History comes up clear of an open Tools drawer on a ${width} × ${height} phone`, async ({
+    page
+  }) => {
+    test.setTimeout(90_000);
+    // The suite's baseline leaves the drawer open, as a phone it was left
+    // open on reopens it.
+    await stubApi(page);
+    await page.setViewportSize({ width, height });
+    await createProject(page, 'Drawer and History');
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    const drawer = page.locator('.command-flyout');
+    await expect(drawer).toBeVisible();
+
+    await railPanelButton(page, 'History').tap();
+    const history = modelPanel(page, 'History');
+    await expect(history).toBeVisible();
+    for (const control of [
+      history.getByRole('button', { name: 'History as text' }),
+      history.getByRole('button', { name: 'Find a step' }),
+      history.getByRole('button', { name: 'Close History' }),
+      history.getByRole('button', { name: 'Box', exact: true })
+    ]) {
+      await expect(control).toBeInViewport();
+      await expect
+        .poll(() => reachable(control), { message: String(control) })
+        .toBe(true);
+    }
+    await expect(drawer).toHaveCount(0);
+    await shot(page, `history-${width}x${height}`);
+    // History as text opens from that press, with no drawer to close first.
+    await history.getByRole('button', { name: 'History as text' }).tap();
+    const dialog = page.getByRole('dialog', { name: 'History as text' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Close' }).tap();
+    await expect(dialog).toHaveCount(0);
+
+    // The drawer opened again stands over the panel, the newest surface,
+    // and its own Close tools drawer gives the panel back.
+    await page.getByRole('button', { name: /More tools/i }).first().tap();
+    await expect(drawer).toBeVisible();
+    await page.getByRole('button', { name: 'Close tools drawer' }).tap();
+    await expect(drawer).toHaveCount(0);
+    await expect(history).toBeVisible();
+    await expect
+      .poll(() =>
+        reachable(history.getByRole('button', { name: 'History as text' }))
+      )
+      .toBe(true);
+  });
+}

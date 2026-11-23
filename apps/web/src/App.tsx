@@ -35982,6 +35982,29 @@ export function App() {
   // A tool's first open would otherwise wait on its card's chunk (G16).
   useCommandCardPrefetch(doc !== null);
 
+  // The model panels as they project onto the measured stage: which are
+  // drawn, and the one a phone-width lane shows.
+  const panelStageOrUndefined = panelStage ?? undefined;
+  const panelGeometry = panelStage
+    ? computePanelGeometry(panelLayout, panelStage)
+    : null;
+  const panelsHidden = panelLayout.options.hidden;
+  const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
+  // A phone has one lane for the model panels, and the Tools drawer opens
+  // over it from the rail: left open (it is remembered), it covered a panel
+  // brought up beside it, History as text and the first rows among it. A
+  // panel coming up in that lane puts the drawer away, as taking a tool from
+  // the drawer does; the drawer opened again stands over the panel until it
+  // is closed or a panel is brought up once more.
+  const phoneLanePanel =
+    !modelingLocked && !panelsHidden ? phonePanel : null;
+  useEffect(() => {
+    if (phoneLanePanel === null) return;
+    setPanelState((current) =>
+      current.commandFoldOpen ? { ...current, commandFoldOpen: false } : current
+    );
+  }, [phoneLanePanel]);
+
   /**
    * Projects carrying an unresolved divergence marker. Recomputed from the
    * shelf rather than tracked in state: the markers outlive the session that
@@ -36399,14 +36422,6 @@ export function App() {
   // View mode writes its own hints rather than filtering the build chain below.
   // Selecting a cylinder still arms the radius interaction even with its handle
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
-  // The model panels as they project onto the measured stage: which are
-  // drawn, and the one a phone-width lane shows.
-  const panelStageOrUndefined = panelStage ?? undefined;
-  const panelGeometry = panelStage
-    ? computePanelGeometry(panelLayout, panelStage)
-    : null;
-  const panelsHidden = panelLayout.options.hidden;
-  const phonePanel = panelGeometry?.phone ? panelGeometry.phonePanel : null;
   /** Whether a panel is on screen right now, for its rail button. */
   const panelShowing = (id: PanelId) =>
     !panelsHidden &&
