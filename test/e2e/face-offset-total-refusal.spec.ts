@@ -15,7 +15,7 @@ import {
 /**
  * U11 (#1771): a face offset refused while the keypad takes a Total is said
  * in Totals. The kernel refuses the move as an offset ("shrink to nothing
- * past 6.4 · Try a smaller offset", "Keep −6.39 mm"); beside a typed Total
+ * past -6.4 mm · Try a smaller offset", "Keep −6.39 mm"); beside a typed Total
  * of 15 that reads as an unrelated number, and "smaller offset" there means
  * a larger Total. The keypad states the limit, the remedy and Keep as Totals.
  */

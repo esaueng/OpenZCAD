@@ -1426,6 +1426,23 @@
   visibility: hidden;
 }
 
+/* So does a refusal's explanation ("Not built · Why?"), which opens upward
+   from the guidance row over the stage's foot: at 390px, and back at
+   1280 × 800 after a resize, the card covered "The solid is unchanged" and
+   Technical details. Placing the card around a guide whose height and
+   corner change with every breakpoint followed each resize a frame late;
+   standing aside while the user reads why holds at every size. The guide
+   comes back when the explanation closes.
+   The exact-entry keypad says its refusal in place (`.is-control`), with
+   Why? showing as soon as the entry is refused: the keypad stands wherever
+   its chip put it, and after a resize the guide covered the Why? button and
+   then its explanation. The keypad and the guide share the viewer area, so
+   the guide stands aside while the keypad's refusal is up at all. */
+.viewer-area:has(.edit-refusal.is-bar.is-open) .workspace-tour,
+.viewer-area:has(.numeric-keypad .edit-refusal.is-control) .workspace-tour {
+  visibility: hidden;
+}
+
 /* The Move instruction shares the viewport's overlay slot with the
    revert-sketch pill and starts where it does, under the top islands. At
    the focused sketch's 14px it sat beneath the mode switch, which covered

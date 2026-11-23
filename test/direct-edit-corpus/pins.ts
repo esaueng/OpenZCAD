@@ -304,7 +304,7 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     target: 'A/shoulder',
     distances: [-9, -9.1],
     message:
-      'A neighbouring face would shrink to nothing past 9. Try a smaller offset.',
+      'A neighbouring face would shrink to nothing past -9. Try a smaller offset.',
     family: 'direct-edit',
     category: 'invalid_topology',
     code: 'offset_face_collapses_neighbor',
@@ -363,7 +363,7 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     target: 'frustum/bottom',
     distances: [-9, -9.1],
     message:
-      'A neighbouring face would shrink to nothing past 9. Try a smaller offset.',
+      'A neighbouring face would shrink to nothing past -9. Try a smaller offset.',
     family: 'direct-edit',
     category: 'invalid_topology',
     code: 'offset_face_collapses_neighbor',
@@ -428,7 +428,7 @@ export const LADDER_REFUSAL_PINS: readonly LadderRefusalPin[] = [
     target: 'B/cap',
     distances: [-9, -9.1],
     message:
-      'A neighbouring face would shrink to nothing past 9. Try a smaller offset.',
+      'A neighbouring face would shrink to nothing past -9. Try a smaller offset.',
     family: 'direct-edit',
     category: 'invalid_topology',
     code: 'offset_face_collapses_neighbor',

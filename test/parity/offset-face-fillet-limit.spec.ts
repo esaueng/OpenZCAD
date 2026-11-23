@@ -216,7 +216,7 @@ describe(
           expect(refusal.kernelRefusal!.limit).toBeCloseTo(-FLAT, 6);
           // The headline names the limit; the kernel's words stay behind it.
           expect(refusal.message).toContain(
-            'A neighbouring face would shrink to nothing past 6.4.'
+            'A neighbouring face would shrink to nothing past -6.4.'
           );
           expect(refusal.message).toContain('move-face would change topology');
         }

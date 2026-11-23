@@ -1,5 +1,6 @@
 import { formatNumber } from './model';
 import { roundShownLength } from './liveLabels';
+import { storedHundredthDecimals } from './displayUnits';
 import {
   selectionCalloutObstacleShift,
   type ScreenRect
@@ -199,13 +200,28 @@ export function offsetLimitChipText(input: {
   sense: number;
   units: string;
   precise?: boolean;
+  /**
+   * I03: the stored-to-shown factor the limit and span were converted by.
+   * A converted limit then keeps the decimals that resolve a hundredth of
+   * the stored unit (`storedHundredthDecimals`), as the keypad's refusal
+   * and Keep say it (`formatDocumentHundredths`): three significant figures
+   * read "min 0.693 in" beside the keypad's "minimum 0.6929 in".
+   */
+  scale?: number;
 }): string {
-  const { limit, mode, span, sense, units, precise } = input;
+  const { limit, mode, span, sense, units, precise, scale } = input;
+  const decimals =
+    scale !== undefined && scale !== 1 ? storedHundredthDecimals(scale) : null;
+  const shown = (value: number) => {
+    if (decimals === null) return shownNumber(reading(value, precise), precise);
+    const number = Number(value.toFixed(decimals));
+    return String(Object.is(number, -0) ? 0 : number);
+  };
   if (mode === 'total' && span !== null) {
-    const bound = reading(span + sense * limit, precise);
-    return `${sense * limit < 0 ? 'min' : 'max'} ${shownNumber(bound, precise)} ${units}`;
+    const bound = span + sense * limit;
+    return `${sense * limit < 0 ? 'min' : 'max'} ${shown(bound)} ${units}`;
   }
-  return `max ${shownNumber(reading(Math.abs(limit), precise), precise)} ${units}`;
+  return `max ${shown(Math.abs(limit))} ${units}`;
 }
 
 /**
@@ -271,7 +287,7 @@ function sameOffsetValue(a: number, b: number): boolean {
 }
 
 /** The gap kept between an edge chip and the right lane or the stage edge. */
-const EDGE_CHIP_MARGIN_PX = 8;
+export const EDGE_CHIP_MARGIN_PX = 8;
 
 /**
  * Where an edge rig's value chip centres horizontally: clear of the right
@@ -292,21 +308,81 @@ export function edgeChipCenterX(
 }
 
 /**
+ * Whether the stage left of the right lane can hold `width` px of chip with
+ * a margin either side. At a phone width the lane (the Objects or a tool
+ * panel) spans the stage from its left inset: a lane rule there would push
+ * the chip, and exact entry with it, off the stage's left edge.
+ */
+export function laneLeavesRoom(
+  laneLeft: number | null,
+  width: number
+): boolean {
+  return (
+    laneLeft !== null &&
+    laneLeft - EDGE_CHIP_MARGIN_PX - width >= EDGE_CHIP_MARGIN_PX
+  );
+}
+
+/**
+ * Where a pin's chip pair (the Offset/Total or Fillet/Chamfer tag, then the
+ * value; `width` px as one box, in canvas coordinates) starts. It reads
+ * beside the pin on the side `anchorX` is on, `clearance` px clear of the
+ * pin; one that would reach the right lane goes to the pin's other side.
+ * The lane counts only while it leaves room for the pair
+ * (`laneLeavesRoom`), and the pair never starts off the stage's left edge or
+ * ends past its right: a phone's offset tag and value were placed off the
+ * left edge with the Objects panel open.
+ */
+export function pinChipPairStart(input: {
+  anchorX: number;
+  pinX: number;
+  width: number;
+  clearance: number;
+  laneLeft: number | null;
+  stageWidth: number;
+}): number {
+  const { anchorX, pinX, width, clearance, laneLeft, stageWidth } = input;
+  const limit = Math.min(
+    stageWidth - EDGE_CHIP_MARGIN_PX,
+    laneLeavesRoom(laneLeft, width) && laneLeft !== null
+      ? laneLeft - EDGE_CHIP_MARGIN_PX
+      : Number.POSITIVE_INFINITY
+  );
+  let start =
+    anchorX >= pinX ? anchorX - clearance : anchorX + clearance - width;
+  if (start + width > limit) {
+    // The pin's other side, when the pair fits there; otherwise as far
+    // right as the limit allows, over the pin rather than off the stage
+    // (or under the tool column at its left edge).
+    const flipped = pinX - clearance - width;
+    start =
+      flipped >= EDGE_CHIP_MARGIN_PX
+        ? Math.min(flipped, limit - width)
+        : limit - width;
+  }
+  return Math.max(EDGE_CHIP_MARGIN_PX, Math.min(start, limit - width));
+}
+
+/**
  * How far a handle's chip — its value pill and any tag beside it, as one
  * box, in the same coordinates as `stage` — moves to come out from under a
  * model panel the right lane's rule does not cover: a floating window or
  * the left dock. The right lane keeps its own rule (`edgeChipCenterX`, the
  * pin's swap to its other side), so while the stage has room left of the
  * lane no move here takes the chip into it. Nor does one take it above
- * `topbarBottom`: the top bar stands over the stage's top. A chip nothing
- * covers, or one no move inside the stage clears, stays where it is.
+ * `topbarBottom`: the top bar stands over the stage's top, or below
+ * `footBottom`, where the chip would be clamped back over what it dodged. A
+ * chip nothing covers, or one no move inside the stage clears, stays where
+ * it is.
  */
 export function chipPanelDodge(
   chip: ScreenRect,
   panels: readonly ScreenRect[],
   stage: ScreenRect,
   laneLeft: number | null,
-  topbarBottom: number | null = null
+  topbarBottom: number | null = null,
+  /** The lowest a pill's foot may stand (above a command's bar), if any. */
+  footBottom: number | null = null
 ): { dx: number; dy: number } {
   if (panels.length === 0) return { dx: 0, dy: 0 };
   const top =
@@ -320,10 +396,63 @@ export function chipPanelDodge(
   return selectionCalloutObstacleShift(
     chip,
     panels,
-    // A chip the lane rule left over the lane (a phone's) may stay there.
-    { ...stage, top, right: Math.max(laneEdge, chip.right) },
+    // Each side by name: the stage is the canvas's DOMRect, whose sides are
+    // getters a spread does not copy. Spread, the bounds had no left or
+    // bottom, and a phone's offset pair dodged the Objects panel off the
+    // stage's left edge.
+    {
+      left: stage.left,
+      top,
+      // A chip the lane rule left over the lane (a phone's) may stay there.
+      right: Math.max(laneEdge, chip.right),
+      bottom:
+        footBottom === null ? stage.bottom : Math.min(stage.bottom, footBottom)
+    },
     EDGE_CHIP_MARGIN_PX
   );
+}
+
+/**
+ * The offset-limit sentence ("… past -6.4. Try a smaller offset.") as the
+ * adapter writes it: the limit signed like the offset, in document units but
+ * without a unit, because the adapter does not know the unit the document is
+ * shown in.
+ */
+const OFFSET_LIMIT_SENTENCE =
+  / past ([−-]?\d+(?:\.\d+)?(?:e-?\d+)?)(\. Try a smaller offset\.)/;
+
+/**
+ * A refused face offset's limit sentence with the document's unit, signed
+ * like the offset and like the "Keep −6.39 mm" beside it: "… shrink to
+ * nothing past -6.4 mm. Try a smaller offset." The typed limit, when the
+ * refusal carries one, wins over the sentence's rounded (and, from an older
+ * adapter, unsigned) number; `formatLength` writes a stored-unit length in
+ * the display unit with its suffix (`formatDocumentLength`), rounding in
+ * that unit.
+ */
+export function offsetLimitInUnits<
+  T extends { message: string; limit?: number }
+>(error: T, formatLength: (value: number) => string): T {
+  const match = OFFSET_LIMIT_SENTENCE.exec(error.message);
+  if (!match) return error;
+  const stated = Number(match[1]!.replace('−', '-'));
+  const limit =
+    error.limit !== undefined &&
+    Number.isFinite(error.limit) &&
+    error.limit !== 0
+      ? error.limit
+      : stated;
+  if (!Number.isFinite(limit)) return error;
+  // Unrounded: `formatLength` rounds once, in the unit it shows. Rounding
+  // here first, in the stored unit, moved an inch limit off its millimetre
+  // value (-0.2519685 in read -6.35 mm) and a small one to an unsigned 0.
+  return {
+    ...error,
+    message: error.message.replace(
+      OFFSET_LIMIT_SENTENCE,
+      ` past ${formatLength(limit)}$2`
+    )
+  };
 }
 
 /** A refused face offset's line, as the control that refused it says it. */
@@ -337,7 +466,7 @@ export interface OffsetRefusalReading {
 /**
  * U11: a refused face offset said in the Total reading, while exact entry
  * takes a Total. The kernel and the way out speak in the offset the edit
- * records ("shrink to nothing past 19 · Try a smaller offset", "Keep
+ * records ("shrink to nothing past -19 mm · Try a smaller offset", "Keep
  * −18.99 mm"), which beside a Total of 5 reads as a second, unrelated
  * number: a smaller offset is a larger Total when the face moves in. The
  * limit is restated as the Total it leaves (as the chip's "min 5.01 mm"
@@ -351,14 +480,17 @@ export function offsetRefusalInTotal<T extends OffsetRefusalReading['error']>(
     /** The span before this edit: the keypad's `totalBaseline`. */
     baseline: number;
     sense: number;
-    units: string;
+    /**
+     * A stored-unit length in the document's display unit with its suffix
+     * (`formatDocumentLength`), so a document shown in inches reads its
+     * Totals in inches.
+     */
+    formatLength: (value: number) => string;
   }
 ): { error: T & { headline?: string }; keepLabel: string | null } {
-  const { baseline, sense, units } = reading;
-  const total = (offset: number) =>
-    formatNumber(Math.round((baseline + sense * offset) * 100) / 100);
-  const keepLabel =
-    keep === null ? null : `Keep Total ${total(keep)} ${units}`.trim();
+  const { baseline, sense, formatLength } = reading;
+  const total = (offset: number) => formatLength(baseline + sense * offset);
+  const keepLabel = keep === null ? null : `Keep Total ${total(keep)}`;
   const limit = error.limit;
   if (limit === undefined || !Number.isFinite(limit) || limit === 0) {
     return {
@@ -366,21 +498,22 @@ export function offsetRefusalInTotal<T extends OffsetRefusalReading['error']>(
         ...error,
         message: error.message.replace(
           /Try a smaller offset\./,
-          `Try a Total nearer ${total(0)} ${units}.`
+          `Try a Total nearer ${total(0)}.`
         )
       },
       keepLabel
     };
   }
   const shrinks = sense * limit < 0;
-  const bound = `${total(limit)} ${units}`;
-  const move = `${formatNumber(Math.round(Math.abs(limit) * 100) / 100)} ${units}`;
+  const bound = total(limit);
+  const move = formatLength(Math.abs(limit));
   return {
     error: {
       ...error,
       headline: `Total can’t go ${shrinks ? 'below' : 'past'} ${bound} here`,
       message: error.message.replace(
-        /past -?[\d.]+(?:e-?\d+)?\. Try a smaller offset\./,
+        // Bare (the adapter's) or with its unit (`offsetLimitInUnits`).
+        /past [−-]?[\d.]+(?:e-?\d+)?(?: [a-z]+)?\. Try a smaller offset\./,
         `once the face moves ${move} (a Total of ${bound}). Try a ${
           shrinks ? 'larger' : 'smaller'
         } Total.`
