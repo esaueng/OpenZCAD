@@ -32,6 +32,7 @@ import {
   type SourceTopologyEntity
 } from '@openzcad/kernel-adapter/exact';
 import {
+  toFeatureId,
   toUserId,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
@@ -91,7 +92,10 @@ describe('the scaled-witness matcher', () => {
     const source: SourceTopologyEntity = {
       kind: 'face',
       witness: planeFace(40, 20, 8),
-      lineage: { producingFeatureId: 'feat_box', lineageName: 'box.face.z-max' }
+      lineage: {
+        producingFeatureId: toFeatureId('feat_box'),
+        lineageName: 'box.face.z-max'
+      }
     };
     const candidates = [
       {
@@ -104,7 +108,7 @@ describe('the scaled-witness matcher', () => {
         kind: 'face' as const,
         witness: planeFace(40 * MM_TO_INCH, 20 * MM_TO_INCH, 0),
         lineage: {
-          producingFeatureId: 'feat_box',
+          producingFeatureId: toFeatureId('feat_box'),
           lineageName: 'box.face.z-min'
         },
         id: 'bottom'
@@ -139,14 +143,20 @@ describe('the scaled-witness matcher', () => {
     const source: SourceTopologyEntity = {
       kind: 'edge',
       witness: lineEdge([0, 0, 0], [10, 0, 0]),
-      lineage: { producingFeatureId: 'feat_box', lineageName: 'box.edge.0' }
+      lineage: {
+        producingFeatureId: toFeatureId('feat_box'),
+        lineageName: 'box.edge.0'
+      }
     };
     // The right geometry under another name, and the right name elsewhere.
     const candidates = [
       {
         kind: 'edge' as const,
         witness: lineEdge([0, 0, 0], scaled([10, 0, 0], MM_TO_INCH)),
-        lineage: { producingFeatureId: 'feat_box', lineageName: 'box.edge.1' }
+        lineage: {
+          producingFeatureId: toFeatureId('feat_box'),
+          lineageName: 'box.edge.1'
+        }
       },
       {
         kind: 'edge' as const,
@@ -178,7 +188,7 @@ describe('the scaled-witness matcher', () => {
     const named = [
       {
         ...candidates[0]!,
-        lineage: { producingFeatureId: 'f', lineageName: 'n' }
+        lineage: { producingFeatureId: toFeatureId('f'), lineageName: 'n' }
       }
     ];
     expect(matchScaledTopology(source, named, 0.1).status).toBe('missing');
@@ -307,7 +317,7 @@ function edgeReference(
 ): EdgeTopologyReferenceV5 {
   return {
     kind: 'edge',
-    producingFeatureId: 'feat_box',
+    producingFeatureId: toFeatureId('feat_box'),
     lineageName,
     currentHash: topologyHashOfWitness('edge', witness),
     witnessVersion: 1,
