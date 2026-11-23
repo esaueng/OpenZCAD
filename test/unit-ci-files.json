@@ -100,6 +100,7 @@
     "test/deploy-safety.test.ts",
     "test/deployment-config-validator.test.ts",
     "test/desktop-release-privacy.test.ts",
+    "test/direct-edit-corpus/chains.test.ts",
     "test/direct-edit-corpus/corpus.test.ts",
     "test/direct-edit-corpus/reference-ladder.test.ts",
     "test/direct-edit-lineage-pins.test.ts",
