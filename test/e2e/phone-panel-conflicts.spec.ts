@@ -19,7 +19,9 @@ import {
   waitForStillViewport,
   finishInPlaceCommand,
   pressTool,
+  promptField,
   expect,
+  ensureToolsDrawerOpen,
   expectBodyCount,
   modelPanel,
   pickPlanarFace,
@@ -1007,3 +1009,108 @@ for (const [width, height] of [
       .toBe(true);
   });
 }
+
+/** The Tools drawer as the device remembers it, open or closed. */
+function storedToolsDrawer(page: Page) {
+  return page.evaluate(() => {
+    const raw = window.localStorage.getItem('openzcad-panel-state:v1');
+    return raw
+      ? (JSON.parse(raw) as { commandFoldOpen?: boolean }).commandFoldOpen
+      : undefined;
+  });
+}
+
+// Bringing up the panel the lane already shows is asked for as much as
+// bringing up another: the palette naming a parameter while Parameters
+// stands under the reopened drawer put the field it focused out of reach.
+test('the palette brings Parameters back out from under a reopened Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(150_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  await expect(
+    page.getByRole('button', { name: 'Tweak', exact: true })
+  ).toBeVisible({ timeout: 90_000 });
+  const drawer = page.locator('.command-flyout');
+  await ensureToolsDrawerOpen(page);
+  await expect(drawer).toBeVisible();
+  await railPanelButton(page, 'Parameters').tap();
+  const parameters = modelPanel(page, 'Parameters');
+  await expect(parameters).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await page
+    .getByRole('button', { name: /More tools/i })
+    .first()
+    .tap();
+  await expect(drawer).toBeVisible();
+
+  await page.keyboard.press('ControlOrMeta+k');
+  await expect(promptField(page)).toBeFocused();
+  await page.keyboard.type('/plate_t');
+  await page
+    .getByRole('option')
+    .filter({ hasText: 'plate_t' })
+    .filter({ hasText: 'Parameter' })
+    .click();
+  const field = page.getByRole('textbox', { name: 'Expression for plate_t' });
+  await expect(field).toBeFocused();
+  await expect(drawer).toHaveCount(0);
+  await expect(field).toBeInViewport();
+  await expect.poll(() => reachable(field)).toBe(true);
+});
+
+// The lane filling on its own is nobody asking for a panel: starting at a
+// phone width, or narrowing to one, with History docked put the remembered
+// drawer away for good, and a wider window came back without it.
+test('starting or resizing at a phone width keeps the remembered Tools drawer', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page, { panelLayout: { right: [['history']] } });
+  await page.setViewportSize({ width: 600, height: 900 });
+  await createProject(page, 'Drawer remembered');
+  const history = railPanelButton(page, 'History');
+  await expect(history).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => storedToolsDrawer(page)).toBe(true);
+  const more = page.getByRole('button', { name: /^More tools/ });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  expect(await storedToolsDrawer(page)).toBe(true);
+
+  await page.setViewportSize({ width: 600, height: 900 });
+  await expect(history).toHaveAttribute('aria-pressed', 'true');
+  await expect.poll(() => storedToolsDrawer(page)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(more).toHaveAttribute('aria-expanded', 'true');
+  expect(await storedToolsDrawer(page)).toBe(true);
+});
+
+// A command folds the drawer; the drawer comes back when the command ends.
+// A panel brought up meanwhile has no drawer to put away, and must not
+// close the one the command will give back.
+test('a panel brought up during Box leaves the Tools drawer to come back', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await createProject(page, 'Drawer after Box');
+  const drawer = page.locator('.command-flyout');
+  await expect(drawer).toBeVisible();
+
+  await pressTool(page, /^Box \(B\)/);
+  await expect(page.getByRole('group', { name: 'Box command' })).toBeVisible();
+  await expect(drawer).toHaveCount(0);
+  await railPanelButton(page, 'History').tap();
+  await expect(modelPanel(page, 'History')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+  expect(await storedToolsDrawer(page)).toBe(true);
+});
