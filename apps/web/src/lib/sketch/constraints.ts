@@ -6,6 +6,7 @@
  */
 import type {
   EntityId,
+  ParamValue,
   SketchConstraintData,
   SketchNode,
   SketchObjectData,
@@ -1147,12 +1148,40 @@ export function measureDrivingDimension(
   return { value: (Math.acos(cosine) * 180) / Math.PI };
 }
 
-/** Compact one-line description for the constraint list. */
+/**
+ * A pattern's spacing or step as its label reads it: the value it evaluates
+ * to, rounded for reading, never the expression text it may be stored as.
+ * An expression that no longer evaluates reads as a dash.
+ */
+function patternStepText(
+  value: ParamValue,
+  resolve?: (value: ParamValue) => number | undefined
+): string {
+  let evaluated: number | undefined;
+  if (typeof value === 'number') {
+    evaluated = value;
+  } else {
+    try {
+      evaluated = resolve?.(value);
+    } catch {
+      evaluated = undefined;
+    }
+  }
+  return evaluated !== undefined && Number.isFinite(evaluated)
+    ? String(Math.round(evaluated * 1000) / 1000)
+    : '—';
+}
+
+/**
+ * Compact one-line description for the constraint list. `resolve` evaluates
+ * the expression a pattern's spacing or step is stored as.
+ */
 export function describeConstraint(
   data: SketchConstraintData,
   nameOf: (objectId: EntityId) => string,
   pointName: (ref: SketchPointRef) => string = (ref) =>
-    `${ref.point} of ${nameOf(ref.objectId)}`
+    `${ref.point} of ${nameOf(ref.objectId)}`,
+  resolve?: (value: ParamValue) => number | undefined
 ): string {
   const pair = (a: SketchPointRef, b: SketchPointRef, join: string) => {
     const first = pointName(a);
@@ -1195,8 +1224,8 @@ export function describeConstraint(
     case 'pattern': {
       const count = data.instances.length + 1;
       return data.layout.kind === 'linear'
-        ? `Linear pattern ${String(data.layout.spacing)} · ${nameOf(data.source)} ×${count} along ${nameOf(data.layout.direction)}`
-        : `Circular pattern ${String(data.layout.stepDeg)}° · ${nameOf(data.source)} ×${count} about ${pointName(data.layout.pivot)}${data.layout.orientation === 'uniform' ? ', uniform' : ''}`;
+        ? `Linear pattern ${patternStepText(data.layout.spacing, resolve)} · ${nameOf(data.source)} ×${count} along ${nameOf(data.layout.direction)}`
+        : `Circular pattern ${patternStepText(data.layout.stepDeg, resolve)}° · ${nameOf(data.source)} ×${count} about ${pointName(data.layout.pivot)}${data.layout.orientation === 'uniform' ? ', uniform' : ''}`;
     }
     case 'offset': {
       const first = data.pairs[0]!;
@@ -1242,13 +1271,15 @@ export function constraintToolsForObject(
  * the given sketch's stored constraints; unknown ids are skipped, so a stale
  * residual can never surface a phantom culprit. `exclude` leaves out the
  * constraint that was being added: it is the refused value, not a culprit.
+ * `resolve` evaluates a pattern's stored spacing or step for its label.
  */
 export function topResidualConstraints(
   document: ProjectDocument,
   sketch: SketchNode | undefined,
   residuals: ReadonlyArray<{ constraintId: string; maxResidual: number }>,
   limit = 2,
-  exclude: ReadonlySet<string> = new Set()
+  exclude: ReadonlySet<string> = new Set(),
+  resolve?: (value: ParamValue) => number | undefined
 ): string[] {
   if (!sketch) return [];
   const labels = sketchObjectLabels(resolvedSketchDocument(document), sketch);
@@ -1271,7 +1302,7 @@ export function topResidualConstraints(
     .sort((a, b) => b.maxResidual - a.maxResidual)
     .flatMap(({ constraintId }) => {
       const data = byId.get(String(constraintId));
-      return data ? [describeConstraint(data, nameOf, pointName)] : [];
+      return data ? [describeConstraint(data, nameOf, pointName, resolve)] : [];
     })
     .slice(0, Math.max(0, limit));
 }

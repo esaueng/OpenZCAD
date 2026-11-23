@@ -2987,6 +2987,90 @@ describe('modify tool picking', () => {
     expect(log.at(-1)).toBe('Linear pattern added 3 linked circles.');
   });
 
+  it('carries each pattern step’s typed text to the relation it writes', async () => {
+    const { manager, ids, sketch } = sketchWith([
+      { objectKind: 'circle', centerX: 4, centerY: 0, radius: 1 },
+      { objectKind: 'line', x1: 0, y1: -3, x2: 4, y2: -3 },
+      { objectKind: 'circle', centerX: 0, centerY: 0, radius: 0.5 }
+    ]);
+    const [circle, line, pivot] = ids as [string, string, string];
+    const layoutOf = (commands: AnyCommand[]) =>
+      commands
+        .filter((command) => command.kind === 'sketch.constraint.add')
+        .map(
+          (command) =>
+            (command.payload as { constraint: SketchConstraintData }).constraint
+        )
+        .find((constraint) => constraint.constraintKind === 'pattern');
+    // The keypad resolves the typed text; the relation keeps it.
+    const typed = (value: ParamValue) =>
+      typeof value === 'number' ? value : { gap: 6, turn: 30 }[value];
+    const applied: { commands: AnyCommand[]; label: string }[] = [];
+    const { host: driver } = host(applied);
+    driver.resolve = (value) =>
+      typeof value === 'number' ? value : (typed(value) ?? Number(value));
+    // Linear: spacing first, then the count.
+    await runSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      'linear-pattern',
+      [circle, line],
+      6,
+      'gap',
+      { values: [], raws: [] }
+    );
+    await runSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      'linear-pattern',
+      [circle, line],
+      2,
+      '2',
+      { values: [6], raws: ['gap'] }
+    );
+    expect(layoutOf(applied[0]!.commands)).toMatchObject({
+      layout: { kind: 'linear', spacing: 'gap' }
+    });
+    // Circular: the count first, then the total angle.
+    await runSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      'circular-pattern',
+      [circle, pivot],
+      30,
+      'turn',
+      { values: [3], raws: ['3'] }
+    );
+    expect(layoutOf(applied[1]!.commands)).toMatchObject({
+      layout: { kind: 'circular', stepDeg: '(turn) / 2' }
+    });
+    // A plain numeral still stores the number it evaluated to.
+    await runSketchEdit(
+      driver,
+      manager.document,
+      sketch(),
+      'circular-pattern',
+      [circle, pivot],
+      30,
+      '30',
+      { values: [3], raws: ['3'] }
+    );
+    const numeric = layoutOf(applied[2]!.commands);
+    expect(numeric?.constraintKind === 'pattern' && numeric.layout).toEqual(
+      expect.objectContaining({ kind: 'circular' })
+    );
+    const stepDeg =
+      numeric?.constraintKind === 'pattern' &&
+      numeric.layout.kind === 'circular'
+        ? numeric.layout.stepDeg
+        : null;
+    expect(typeof stepDeg).toBe('number');
+    expect(stepDeg as number).toBeCloseTo(15, 9);
+  });
+
   it('reads the pattern setting when the picks complete and keeps it through the values', async () => {
     const { manager, ids, sketch, object } = sketchWith([
       { objectKind: 'circle', centerX: 0, centerY: 0, radius: 1 },

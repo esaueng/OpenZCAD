@@ -24814,6 +24814,12 @@ export function App() {
     setSketchEditError(null);
   }, [doc?.version, editingSketchNode?.sketchId]);
 
+  // A pattern's spacing or step reads as its value, stored expression or not.
+  const resolveLabelValue = useCallback(
+    (value: ParamValue) =>
+      evalParamValue(value, parameterScope.scope, doc?.units) ?? undefined,
+    [parameterScope.scope, doc?.units]
+  );
   const sketchConstraintItems = useMemo(() => {
     if (!editingSketchNode || !doc) {
       return [];
@@ -24841,7 +24847,8 @@ export function App() {
           label: describeConstraint(
             data,
             nameOf,
-            sketchPointNamer(editingSketchNode, sketchLabels)
+            sketchPointNamer(editingSketchNode, sketchLabels),
+            resolveLabelValue
           ),
           targets,
           conflicted: conflicting.has(String(constraintId)),
@@ -24857,7 +24864,14 @@ export function App() {
             data.constraintKind === 'offset'
         };
       });
-  }, [editingSketchNode, doc, sketchSolveStatus, sketchLabels, sketchFreedom]);
+  }, [
+    editingSketchNode,
+    doc,
+    sketchSolveStatus,
+    sketchLabels,
+    sketchFreedom,
+    resolveLabelValue
+  ]);
 
   /** The selected entity's own constraints, for the entity editor's list. */
   const selectedEntityConstraints = useMemo(() => {
@@ -24880,7 +24894,8 @@ export function App() {
         label: describeConstraint(
           data,
           nameOf,
-          sketchPointNamer(editingSketchNode, sketchLabels)
+          sketchPointNamer(editingSketchNode, sketchLabels),
+          resolveLabelValue
         ),
         editable:
           data.constraintKind === 'distance' ||
@@ -24888,7 +24903,13 @@ export function App() {
           data.constraintKind === 'radius' ||
           data.constraintKind === 'offset'
       }));
-  }, [editingSketchNode, doc, selectedSketchEntity, sketchLabels]);
+  }, [
+    editingSketchNode,
+    doc,
+    selectedSketchEntity,
+    sketchLabels,
+    resolveLabelValue
+  ]);
 
   /**
    * The rectangle or polygon the selected line is a side of (S04), as its
@@ -25331,7 +25352,10 @@ export function App() {
       findSketch(prospective, sketchId),
       outcome.constraintResiduals,
       2,
-      attempted
+      attempted,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, prospective.units) ??
+        undefined
     );
     setSketchEditError(constraintRefusalMessage(refused, culprits));
     setStatus(
