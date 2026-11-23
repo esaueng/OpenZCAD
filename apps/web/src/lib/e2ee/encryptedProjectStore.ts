@@ -1248,24 +1248,38 @@ export function createEncryptedProjectStore(
    * on such a head). It adds no trust: a historical read already accepts
    * a revision the account places at the verified head.
    */
+  /**
+   * Save-point heads (`projectId:hash`) whose own revision this page could
+   * not look up because the account's revision list failed. A write sealed
+   * on one checks again first ({@link sealingHashes}).
+   */
+  const unconfirmedSavePoints = new Set<string>();
+
   async function withOwnNamedSave(
     projectId: string,
     revisionHashes: Map<string, Uint8Array>,
     document: ProjectDocument,
-    head: { documentVersion: number; hash: string },
+    head: { documentVersion: number; hash: string; first?: boolean },
     /** A write: a failed lookup fails it rather than drop the save. */
     strict = false
   ): Promise<void> {
     const own = document.revisions.at(-1)?.revisionId as string | undefined;
     if (!own || revisionHashes.has(own)) return;
+    const key = `${projectId}:${head.hash}`;
     let listed: E2eeRevisionsResponse['revisions'];
     try {
       listed = (await api.revisions(projectId)).revisions;
     } catch (error) {
       if (strict) throw error;
-      // The map stays as signed; the next read or write tries again.
+      // The map stays as signed; a save point is checked again before a
+      // write builds on it.
+      // A project's first version is never an account save.
+      if (!head.first && document.checkpoints.at(-1)?.revisionId === own) {
+        unconfirmedSavePoints.add(key);
+      }
       return;
     }
+    unconfirmedSavePoints.delete(key);
     if (
       listed.some(
         (revision) =>
@@ -1292,7 +1306,7 @@ export function createEncryptedProjectStore(
     projectId: string,
     revisionHashes: Map<string, Uint8Array>,
     document: ProjectDocument,
-    head: { documentVersion: number; hash: string },
+    head: { documentVersion: number; hash: string; first?: boolean },
     strict = false
   ): Promise<void> {
     const own = document.revisions.at(-1)?.revisionId;
@@ -1305,7 +1319,8 @@ export function createEncryptedProjectStore(
    * save point whose own hash its reader could not confirm (the account's
    * revision list failed then) is checked again here, and a failure now
    * fails the write: sealing without it would drop that save state from
-   * every later signed map for good.
+   * every later signed map for good. Any other head (a new project's first
+   * save point among them) seals as it is, with no request.
    */
   async function sealingHashes(
     projectId: string,
@@ -1321,7 +1336,7 @@ export function createEncryptedProjectStore(
     if (
       !own ||
       head.revisionHashes.has(own) ||
-      head.document.checkpoints.at(-1)?.revisionId !== own
+      !unconfirmedSavePoints.has(`${projectId}:${head.hash}`)
     ) {
       return head.revisionHashes;
     }
@@ -1502,7 +1517,8 @@ export function createEncryptedProjectStore(
       const revisionHashes = new Map(body.revisionVersionHashes);
       await withOwnNamedSave(projectId, revisionHashes, document, {
         documentVersion: header.documentVersion,
-        hash
+        hash,
+        first: header.previousVersionHash === null
       });
       const state: HeadState = {
         stateCode,
@@ -2390,7 +2406,8 @@ export function createEncryptedProjectStore(
       const revisionHashes = new Map(body.revisionVersionHashes);
       await withOwnRoomSavePoint(projectId, revisionHashes, document, {
         documentVersion: header.documentVersion,
-        hash
+        hash,
+        first: header.previousVersionHash === null
       });
       const state: HeadState = {
         stateCode,

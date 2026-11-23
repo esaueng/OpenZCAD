@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
+  appendRevision,
   createSavedRevision,
   mergeCollaborationDocuments
 } from '@openzcad/document-core';
@@ -480,6 +481,42 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     expect(
       (await desktop.store.loadRevision(projectId, revisionId))?.version
     ).toBe(named.version);
+  });
+
+  it('writes a new project while the revision list is down', async () => {
+    const srv = roomServer();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    let asked = 0;
+    laptop.before = async (path, init) => {
+      if (
+        (init.method ?? 'GET') === 'GET' &&
+        new URL(path, 'https://example.com').pathname.endsWith('/revisions')
+      ) {
+        asked++;
+        throw new Error('revisions unavailable');
+      }
+    };
+    // The first save point of a new project is no account save: neither a
+    // room edit nor an account write waits on the revision list for it,
+    // even on a page that met the project through a reload.
+    const page = reload(srv, laptop);
+    page.before = laptop.before;
+    const a = await live(srv, page, projectId, 'client_laptop');
+    await a.next('state');
+    // As the app's commands do, each edit appends its own revision.
+    const next = appendRevision(withBox(v1, 'Room box'), 'Add box');
+    await a.send(next, v1.version);
+    expect(await a.next('ack')).toMatchObject({ version: next.version });
+    const saved = await page.store.saveProjectDocument({
+      projectId,
+      expectedVersion: next.version,
+      document: appendRevision(withBox(next, 'Account box'), 'Add box')
+    });
+    expect(saved.version).toBeGreaterThan(next.version);
+    // Its reads did ask, and failed, without blocking either write.
+    expect(asked).toBeGreaterThan(0);
   });
 
   it('keeps an account named save loadable after a reload joins the room and edits', async () => {
