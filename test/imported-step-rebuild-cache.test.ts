@@ -41,7 +41,17 @@ function rounded(value: number): number {
   return Number(value.toPrecision(12));
 }
 
-function bodyGeometrySignature(body: BodyRepresentation) {
+/**
+ * A body's normalized geometry, serialized the moment it is read.
+ *
+ * A string, not an object: in a reused Vitest worker, Node 24's V8 has handed
+ * back a frozen signature whose `volume` field later read another body's
+ * value — the rebuilt Box showing the Frame's 17491.9185348 — although the
+ * body it came from, a fresh signature of it, and the direct volume checks
+ * all read 6000. A string cannot change after it is made, so a comparison of
+ * two signatures compares what each body held when it was read.
+ */
+function bodyGeometrySignature(body: BodyRepresentation): string {
   const vertices = body.mesh.vertices;
   const indices = body.mesh.indices;
   const bounds = [0, 1, 2].flatMap((axis) => {
@@ -65,8 +75,7 @@ function bodyGeometrySignature(body: BodyRepresentation) {
           (vertices[b]! * vertices[c + 1]! - vertices[b + 1]! * vertices[c]!)) /
       6;
   }
-  // Keep each normalized snapshot immutable while later bodies are normalized.
-  return Object.freeze({
+  return JSON.stringify({
     bodyId: body.bodyId,
     name: body.name,
     source: body.source,
@@ -91,6 +100,8 @@ function bodyGeometrySignature(body: BodyRepresentation) {
     }
   });
 }
+
+type ParsedSignature = Record<string, unknown> & { name: string };
 
 function geometrySignatures(derived: DerivedState) {
   return Object.fromEntries(
@@ -281,18 +292,20 @@ describe('imported STEP rebuild cache', () => {
       }
       const rebuiltSignature = geometrySignatures(rebuilt);
       const combinedSignature = geometrySignatures(combined);
-      // Check the persisted scalar snapshot independently of matcher traversal.
+      // Name the fields that disagree, read back from the fixed signatures.
       const differing = Object.entries(combinedSignature).flatMap(
-        ([id, signature]) =>
-          Object.entries(signature)
+        ([id, serialized]) => {
+          const signature = JSON.parse(serialized) as ParsedSignature;
+          const other = JSON.parse(
+            rebuiltSignature[id] ?? '{}'
+          ) as Partial<ParsedSignature>;
+          return Object.entries(signature)
             .filter(
               ([field, value]) =>
-                JSON.stringify(value) !==
-                JSON.stringify(
-                  rebuiltSignature[id]?.[field as keyof typeof signature]
-                )
+                JSON.stringify(value) !== JSON.stringify(other[field])
             )
-            .map(([field]) => `${signature.name}.${field}`)
+            .map(([field]) => `${signature.name}.${field}`);
+        }
       );
       expect(
         JSON.stringify(rebuiltSignature),
