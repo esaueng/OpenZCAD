@@ -9,7 +9,6 @@ import {
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '../packages/kernel-adapter/src/exact';
 import {
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
   filletRadiusStationsProblem,
   toUserId,
   type BodyId,
@@ -176,7 +175,9 @@ describe('fillet radius stations (M03, v152)', { timeout: 120_000 }, () => {
       expect(() =>
         assertDocumentContentSchema({
           ...stored,
-          schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+          // v151: the schema just before radius stations (v152). Pinned, as
+          // later bumps move the current constant past it.
+          schemaVersion: 151
         } as never)
       ).toThrow(/Fillet radius stations/);
       // One station, and not beside per-vertex radii: the editor holds one
@@ -200,7 +201,7 @@ describe('fillet radius stations (M03, v152)', { timeout: 120_000 }, () => {
       // Nor on an older document, by the exported mutations (review).
       const older = {
         ...document,
-        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+        schemaVersion: 151
       } as never;
       expect(() =>
         filletEdges(older, {
@@ -223,7 +224,7 @@ describe('fillet radius stations (M03, v152)', { timeout: 120_000 }, () => {
         updateFeature(
           {
             ...plain,
-            schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+            schemaVersion: 151
           } as never,
           {
             featureId: fillet.featureId,
