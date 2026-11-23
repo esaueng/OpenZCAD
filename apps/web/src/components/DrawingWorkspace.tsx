@@ -917,11 +917,8 @@ function useViewProjections(
                 } catch (error) {
                   // F06: a row that cannot be built (a sketch its values
                   // leave unsolvable) fails its own views, not the sheet's.
-                  // The active row's failure is still the whole request's.
-                  if (
-                    !row ||
-                    (error instanceof Error && error.name === 'AbortError')
-                  )
+                  // The active row ('') is a row like any other here.
+                  if (error instanceof Error && error.name === 'AbortError')
                     throw error;
                   rowFailures.set(row, error);
                   return [];
@@ -949,6 +946,14 @@ function useViewProjections(
             closed.name = 'AbortError';
             throw closed;
           }
+          // Nothing else on the sheet could be drawn: the whole request
+          // failed, and is retried and reported as one.
+          if (
+            rowFailures.size > 0 &&
+            cuts.size === 0 &&
+            [...viewKeysByRow.keys()].every((row) => rowFailures.has(row))
+          )
+            throw rowFailures.values().next().value;
           for (const id of missing) {
             const input = meshed[id];
             if (input) known.bodies.set(id, input);
