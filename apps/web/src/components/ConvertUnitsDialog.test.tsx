@@ -81,15 +81,24 @@ function renderDialog(props: Partial<ConvertUnitsDialogProps> = {}) {
     convert: vi.fn<ConvertUnitsDialogProps['convert']>(() =>
       Promise.resolve({ ok: true as const, message: 'Converted.' })
     ),
-    convertCopy: vi.fn<NonNullable<ConvertUnitsDialogProps['convertCopy']>>(
-      () => Promise.resolve({ ok: true as const, message: 'Copy converted.' })
-    ),
+    convertCopy: vi.fn<NonNullable<ConvertUnitsDialogProps['convertCopy']>>(),
+    onClearCopy: vi.fn(),
     onClose: vi.fn()
   };
-  render(
+  const view = render(
     <ConvertUnitsDialog stored="mm" shown="mm" {...handlers} {...props} />
   );
-  return { ...handlers, ...props };
+  const rerender = (next: Partial<ConvertUnitsDialogProps>) =>
+    view.rerender(
+      <ConvertUnitsDialog
+        stored="mm"
+        shown="mm"
+        {...handlers}
+        {...props}
+        {...next}
+      />
+    );
+  return { ...handlers, ...props, rerender };
 }
 
 describe('ConvertUnitsDialog', () => {
@@ -295,14 +304,57 @@ describe('ConvertUnitsDialog', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('converts a copy with its own progress', async () => {
+  it('converts a copy, showing the run the workspace reports', async () => {
     const user = userEvent.setup();
-    const { convertCopy } = renderDialog();
+    const { convertCopy, rerender, onClose } = renderDialog();
     await user.click(
       await screen.findByRole('button', { name: 'Convert a copy' })
     );
-    expect(convertCopy).toHaveBeenCalledWith('inch', expect.any(Function));
-    expect(await screen.findByText('Copy converted.')).toBeVisible();
+    expect(convertCopy).toHaveBeenCalledWith('inch');
+    rerender({ copy: { step: 'copying' } });
+    expect(screen.getByRole('status')).toHaveTextContent('Making a copy…');
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    rerender({ copy: { step: 'checking' } });
+    expect(screen.getByRole('status')).toHaveTextContent('Checking the copy…');
+    rerender({
+      copy: { outcome: { ok: true, message: 'Made “Part (copy)”.' } }
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('Made “Part (copy)”.');
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('a copy that opened but did not convert is checked again on request', async () => {
+    const user = userEvent.setup();
+    const { prepare, onClearCopy, rerender } = renderDialog({
+      copy: {
+        outcome: {
+          ok: false,
+          context:
+            'The copy “Part (copy)” is open, still stored in millimeters.',
+          refusals: [
+            {
+              stage: 'collaboration',
+              code: 'not-live',
+              subject: 'document',
+              message: 'Reconnect and try again.'
+            }
+          ]
+        }
+      }
+    });
+    // Remounted with a finished run: nothing is checked until asked.
+    expect(prepare).not.toHaveBeenCalled();
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('still stored in millimeters');
+    expect(alert).toHaveTextContent('Reconnect and try again.');
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    expect(onClearCopy).toHaveBeenCalled();
+    rerender({ copy: null });
+    expect(prepare).toHaveBeenCalled();
+    expect(
+      await screen.findByRole('button', { name: 'Convert' })
+    ).toBeEnabled();
   });
 
   it('re-checks when the target unit changes, cancelling the earlier check', async () => {

@@ -2185,6 +2185,7 @@ import {
   type UnitsConversionCollaborationState
 } from './lib/unitsConversion';
 import type {
+  ConvertCopyState,
   ConvertCopyStep,
   ConvertUnitsOutcome,
   PreparedConversion
@@ -3360,6 +3361,12 @@ export function App() {
    */
   const [convertUnitsStored, setConvertUnitsStored] =
     useState<UnitSystem | null>(null);
+  /**
+   * Its "Convert a copy" run. Held here, not in the dialog: opening the copy
+   * shows the opening screen in place of the workspace, dialog included.
+   */
+  const [convertUnitsCopy, setConvertUnitsCopy] =
+    useState<ConvertCopyState | null>(null);
   /** Its answer's receiver; a newer prompt cancels an older one. */
   const importUnitsAnswerRef = useRef<
     ((units: UnitSystem | null) => void) | null
@@ -26356,6 +26363,20 @@ export function App() {
     return { ok: true, message };
   }
 
+  /** Runs "Convert a copy", reporting each step to the dialog. */
+  function startStoredUnitsCopy(to: ConvertibleUnit) {
+    setConvertUnitsCopy({ step: 'copying' });
+    convertStoredUnitsCopy(to, (step) => setConvertUnitsCopy({ step })).then(
+      (outcome) => setConvertUnitsCopy({ outcome }),
+      (error: unknown) =>
+        setConvertUnitsCopy({
+          outcome: unitsConversionRefusalOf(
+            errorMessage(error, 'The copy could not be converted.')
+          )
+        })
+    );
+  }
+
   /** L09: sets or clears the print clearance; answers with a refusal. */
   function handleSetPrintClearance(value: ParamValue | null): string | null {
     const manager = managerRef.current;
@@ -41600,12 +41621,17 @@ export function App() {
               convert={(prepared) =>
                 convertStoredUnitsInPlaceRef.current(prepared)
               }
-              convertCopy={
-                shareSession
-                  ? undefined
-                  : (to, onStep) => convertStoredUnitsCopy(to, onStep)
-              }
-              onClose={() => setConvertUnitsStored(null)}
+              {...(shareSession
+                ? {}
+                : {
+                    convertCopy: startStoredUnitsCopy,
+                    copy: convertUnitsCopy,
+                    onClearCopy: () => setConvertUnitsCopy(null)
+                  })}
+              onClose={() => {
+                setConvertUnitsStored(null);
+                setConvertUnitsCopy(null);
+              }}
             />
           )}
           {importUnitsPrompt && (

@@ -43,6 +43,14 @@ export type ConvertUnitsOutcome =
 
 export type ConvertCopyStep = 'copying' | 'checking' | 'converting';
 
+/**
+ * A "Convert a copy" run, held by the workspace: opening the copy replaces
+ * the workspace (and this dialog) for a moment, so its progress and outcome
+ * cannot live in the dialog.
+ */
+export type ConvertCopyState =
+  { step: ConvertCopyStep } | { outcome: ConvertUnitsOutcome };
+
 export interface ConvertUnitsDialogProps {
   /** The unit the project stores. */
   stored: UnitSystem;
@@ -60,11 +68,15 @@ export interface ConvertUnitsDialogProps {
   ): Promise<UnitsConversionPreparation>;
   /** Converts the open project in place, after its safety checkpoint. */
   convert(prepared: PreparedConversion): Promise<ConvertUnitsOutcome>;
-  /** Copies the project, opens the copy and converts that. */
-  convertCopy?(
-    to: ConvertibleUnit,
-    onStep: (step: ConvertCopyStep) => void
-  ): Promise<ConvertUnitsOutcome>;
+  /**
+   * Starts copying the project, opening the copy and converting that; its
+   * progress and outcome come back as {@link copy}.
+   */
+  convertCopy?(to: ConvertibleUnit): void;
+  /** The "Convert a copy" run, while one is under way or has finished. */
+  copy?: ConvertCopyState | null;
+  /** Forgets a finished copy run, to check what is open again. */
+  onClearCopy?(): void;
   onClose(): void;
 }
 
@@ -132,29 +144,45 @@ export function ConvertUnitsDialog({
   prepare,
   convert,
   convertCopy,
+  copy = null,
+  onClearCopy,
   onClose
 }: ConvertUnitsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalFocus(dialogRef, { autoFocus: true });
   const choices = CONVERT_UNIT_CHOICES.filter((unit) => unit !== stored);
   const [target, setTarget] = useState<ConvertibleUnit>(defaultTarget(stored));
-  const [phase, setPhase] = useState<Phase>(
+  const [ownPhase, setPhase] = useState<Phase>(
     blockedReason ? { kind: 'blocked' } : { kind: 'checking' }
   );
+  const copyActive = copy !== null;
+  const phase: Phase = copy
+    ? 'step' in copy
+      ? { kind: 'converting', step: copy.step }
+      : copy.outcome.ok
+        ? { kind: 'done', message: copy.outcome.message }
+        : {
+            kind: 'refused',
+            refusals: copy.outcome.refusals,
+            warnings: [],
+            retry: true,
+            ...(copy.outcome.context ? { context: copy.outcome.context } : {})
+          }
+    : ownPhase;
   // Bumped to check again (a stale refusal, or a changed unit).
   const [checkRun, setCheckRun] = useState(0);
   const prepareRef = useRef(prepare);
   prepareRef.current = prepare;
   const blocked = Boolean(blockedReason);
 
-  const phaseRef = useRef(phase);
-  phaseRef.current = phase;
+  const phaseRef = useRef(ownPhase);
+  phaseRef.current = ownPhase;
 
   useEffect(() => {
     // A conversion under way, or finished, is not interrupted: opening a
     // copy can lock and unlock editing for a moment.
     const current = phaseRef.current.kind;
-    if (current === 'converting' || current === 'done') return;
+    if (copyActive || current === 'converting' || current === 'done') return;
     if (blocked) {
       setPhase({ kind: 'blocked' });
       return;
@@ -186,7 +214,7 @@ export function ConvertUnitsDialog({
         });
       });
     return () => controller.abort();
-  }, [target, checkRun, blocked]);
+  }, [target, checkRun, blocked, copyActive]);
 
   const busy = phase.kind === 'converting';
   const close = () => {
@@ -208,10 +236,8 @@ export function ConvertUnitsDialog({
 
   async function finish(
     run: () => Promise<ConvertUnitsOutcome>,
-    from?: PreparedConversion
+    from: PreparedConversion
   ) {
-    // Without a check to convert from (a copy), what is open has changed:
-    // offer to check it again.
     let outcome: ConvertUnitsOutcome;
     try {
       outcome = await run();
@@ -232,9 +258,9 @@ export function ConvertUnitsDialog({
     setPhase({
       kind: 'refused',
       refusals: outcome.refusals,
-      warnings: from?.report.warnings ?? [],
+      warnings: from.report.warnings,
       ...(outcome.context ? { context: outcome.context } : {}),
-      ...(from ? { prepared: from } : { retry: true })
+      prepared: from
     });
   }
 
@@ -246,10 +272,12 @@ export function ConvertUnitsDialog({
 
   function convertACopy() {
     if (!convertCopy || !prepared) return;
-    setPhase({ kind: 'converting', step: 'copying' });
-    void finish(() =>
-      convertCopy(target, (step) => setPhase({ kind: 'converting', step }))
-    );
+    convertCopy(target);
+  }
+
+  function checkAgain() {
+    if (copyActive) onClearCopy?.();
+    setCheckRun((run) => run + 1);
   }
 
   const fromName = CONVERT_UNIT_WORDS[stored];
@@ -389,11 +417,7 @@ export function ConvertUnitsDialog({
                 Cancel
               </button>
               {retry ? (
-                <button
-                  type="button"
-                  className="primary"
-                  onClick={() => setCheckRun((run) => run + 1)}
-                >
+                <button type="button" className="primary" onClick={checkAgain}>
                   Check again
                 </button>
               ) : (
