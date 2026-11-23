@@ -26,6 +26,10 @@ import { ownEntry, isFeatureSuppressed } from '@openzcad/shared';
 import { affectedFeatureTargets } from './affectedFeatureTargets';
 import { validatedFeatureRejection } from './featureValidation';
 import { exactWarningBaseline, newExactWarnings } from './exactWarnings';
+import {
+  resolveSketchesForValueChange,
+  type SolveSketch
+} from './sketch/parameterResolve';
 
 export interface ExactPatchTarget {
   featureName: string;
@@ -485,7 +489,13 @@ export async function preflightCadPatch(
   derive: (
     candidate: ProjectDocument,
     analysis?: EditAnalysisRequest
-  ) => Promise<ProjectDocument['derived']>
+  ) => Promise<ProjectDocument['derived']>,
+  /**
+   * Solves a sketch. A patch that changes a parameter value stores the
+   * solved geometry of every sketch that value drives, in the same
+   * transaction; without a solver those sketches are left as they are.
+   */
+  solve?: SolveSketch
 ): Promise<ExactPatchPreflight> {
   const analyses = proposal.operations.flatMap((op) =>
     op.kind === 'use_edit_candidate' && op.analysis ? [op.analysis] : []
@@ -503,11 +513,26 @@ export async function preflightCadPatch(
   const { expandEditCandidateProposal } =
     await import('@openzcad/ai-contracts');
   proposal = expandEditCandidateProposal(base, proposal);
-  const commands = await materializePatchCommands(base, proposal, derive);
-  const candidate = new CommandManager(base).runTransaction(
+  let commands = await materializePatchCommands(base, proposal, derive);
+  let candidate = new CommandManager(base).runTransaction(
     'Preflight AI patch',
     commands
   );
+  if (solve) {
+    const resolved = await resolveSketchesForValueChange(
+      base,
+      candidate,
+      solve
+    );
+    if (resolved && !resolved.ok) throw new Error(resolved.reason);
+    if (resolved && resolved.commands.length > 0) {
+      commands = [...commands, ...resolved.commands];
+      candidate = new CommandManager(base).runTransaction(
+        'Preflight AI patch',
+        commands
+      );
+    }
+  }
   const derived = await derive(candidate);
   const warnings = newExactWarnings(base, derived);
   if (warnings.length > 0) {

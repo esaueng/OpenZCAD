@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { documentForConfiguration } from '@openzcad/document-core';
 import type { GeometryReadyState, ProjectDocument } from '@openzcad/shared';
 import { geometryContentKey } from '../worker/exactRebuildCache';
+import { resolvedForDisplay, type SolveSketch } from './sketch/parameterResolve';
 
 /**
  * F06 slice 4: configuration rows shown beside the active one. A view or an
@@ -53,9 +54,15 @@ export async function buildConfigurationRow(
   document: ProjectDocument,
   rowId: string,
   build: BuildRowGeometry,
-  signal: AbortSignal
+  signal: AbortSignal,
+  /** Solves the sketches the row's parameter values drive, for display. */
+  solve?: SolveSketch
 ): Promise<ProjectDocument> {
-  const row = documentForConfiguration(document, rowId);
+  const switched = documentForConfiguration(document, rowId);
+  const row = solve
+    ? await resolvedForDisplay(document, switched, solve)
+    : switched;
+  signal.throwIfAborted();
   const ready = await build(row, { signal });
   return {
     ...row,
@@ -81,7 +88,13 @@ export function useConfigurationRowGeometry(
    * while the worker is still building the model (just after a reload, say)
    * would be dropped or refused, and is asked for again once it is ready.
    */
-  ready = true
+  ready = true,
+  /**
+   * Solves a sketch. A row's parameter values can drive a sketch the active
+   * row solved to other sizes; each row's build solves those again, so it
+   * shows the row's geometry rather than the active row's.
+   */
+  solve?: SolveSketch
 ): ConfigurationRowGeometry {
   const wanted = configurationRowsToBuild(document, rowIds);
   const wantedKey = wanted.join('\n');
@@ -92,6 +105,8 @@ export function useConfigurationRowGeometry(
   );
   const latest = useRef(document);
   latest.current = document;
+  const solveRef = useRef(solve);
+  solveRef.current = solve;
   const [state, setState] = useState<{
     builds: Map<string, ConfigurationRowBuild>;
     errors: Map<string, string>;
@@ -118,7 +133,8 @@ export function useConfigurationRowGeometry(
             document,
             rowId,
             build,
-            abort.signal
+            abort.signal,
+            solveRef.current
           );
           if (abort.signal.aborted) return;
           setState((current) => {

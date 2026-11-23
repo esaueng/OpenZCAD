@@ -6185,8 +6185,20 @@ export function isTweakCommand(command: {
   return isTweakCommandKind(command.kind) && !isParameterRetype(command);
 }
 
+/**
+ * Tweak's own history entries: value edits and row switches, together with
+ * the solved sketch geometry such an entry stores for the sketches its new
+ * values drive (`sketch.object.update`). Solved geometry alone, without a
+ * value edit beside it, is a sketch edit and stays a Build entry.
+ */
 function parameterOnly(kinds: string[] | null): boolean {
-  return !!kinds?.length && kinds.every(isTweakCommandKind);
+  return (
+    !!kinds?.length &&
+    kinds.some(isTweakCommandKind) &&
+    kinds.every(
+      (kind) => isTweakCommandKind(kind) || kind === 'sketch.object.update'
+    )
+  );
 }
 
 /** D01: a command that edits drawing sheets and never the model. */

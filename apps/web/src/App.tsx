@@ -370,7 +370,6 @@ import {
   lockConstraintIds,
   measureDrivingDimension,
   movedEntityLock,
-  sketchesDrivenByParameterEdit,
   planConstraintFromSelection,
   refusePick,
   relationSolveAnchor,
@@ -405,6 +404,10 @@ import {
   solveStatusLabel,
   solvedSketchCommands
 } from './lib/sketch/applySolve';
+import {
+  resolveSketchesForValueChange,
+  resolvedForDisplay
+} from './lib/sketch/parameterResolve';
 import {
   sketchContentFramePoints,
   type UnreferencedSnap
@@ -7226,6 +7229,11 @@ export function App() {
    */
   const [viewerRowId, setViewerRowId] = useState<string | null>(null);
   if (viewerRowId !== null && !viewMode) setViewerRowId(null);
+  const solveConfigurationRowSketch = useCallback(
+    (rowDocument: ProjectDocument, sketchId: SketchId) =>
+      geometryRef.current.solveSketch(rowDocument, sketchId),
+    []
+  );
   const buildConfigurationRowGeometry = useCallback<BuildRowGeometry>(
     (rowDocument, options) =>
       geometryRef.current.previewGeometry(rowDocument, options),
@@ -7243,7 +7251,8 @@ export function App() {
         : [])
     ],
     buildConfigurationRowGeometry,
-    exactGeometryReady
+    exactGeometryReady,
+    solveConfigurationRowSketch
   );
   /** The row View shows in place of the active one, once it is built. */
   const viewerRowDocument =
@@ -16598,7 +16607,9 @@ export function App() {
         const opening = await sharedDocumentOnRow(
           shared.document,
           shareRowId,
-          (candidate) => geometryRef.current.previewGeometry(candidate)
+          (candidate) => geometryRef.current.previewGeometry(candidate),
+          (document, sketchId) =>
+            geometryRef.current.solveSketch(document, sketchId)
         );
         if (!isCurrent()) return;
         // Before the document lands: the collaboration hook and the cloud
@@ -19070,7 +19081,8 @@ export function App() {
       const preflight = await preflightCadPatch(
         current,
         proposal,
-        (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+        (candidate, analysis) => geometry.syncOnce(candidate, analysis),
+          (document, sketchId) => geometry.solveSketch(document, sketchId)
       );
       const live = managerRef.current?.document;
       if (
@@ -19184,14 +19196,16 @@ export function App() {
         const pending = preflightCadPatch(
           current,
           proposal,
-          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+          (candidate, analysis) => geometry.syncOnce(candidate, analysis),
+          (document, sketchId) => geometry.solveSketch(document, sketchId)
         );
         [preflight] = await Promise.all([pending, holdNextExactCheckForE2E()]);
       } else {
         preflight = await preflightCadPatch(
           current,
           proposal,
-          (candidate, analysis) => geometry.syncOnce(candidate, analysis)
+          (candidate, analysis) => geometry.syncOnce(candidate, analysis),
+          (document, sketchId) => geometry.solveSketch(document, sketchId)
         );
       }
       const live = managerRef.current?.document;
@@ -20720,6 +20734,8 @@ export function App() {
     rowName: string | null;
   } | null {
     if (!doc) return null;
+    // Another row's sketches are solved for its values when an export
+    // starts (`solvedExportTarget`); this stays synchronous for the checks.
     const set = doc.configurations;
     const row =
       rowId && set && rowId !== set.activeRowId
@@ -20738,6 +20754,47 @@ export function App() {
       allShownBodies: true,
       rowName: row.name
     };
+  }
+
+  /**
+   * F06: an export target whose document is another row, with the sketches
+   * that row's parameter values drive solved again, so the file has the
+   * row's geometry rather than the active row's stored sketch sizes. The
+   * active row's target is returned as it is.
+   */
+  async function solvedExportTarget<
+    T extends { document: ProjectDocument; allShownBodies: boolean }
+  >(target: T, source: ProjectDocument): Promise<T> {
+    if (!target.allShownBodies) return target;
+    const document = await resolvedForDisplay(
+      source,
+      target.document,
+      (candidate, sketchId) => geometry.solveSketch(candidate, sketchId)
+    );
+    return document === target.document ? target : { ...target, document };
+  }
+
+  /**
+   * F06: a drawing view on another configuration row draws that row's
+   * document (`documentForConfiguration`). Its sketches are solved for the
+   * row's parameter values against the model they came from, so the view
+   * shows the row's sizes. The model itself, or a row whose values drive no
+   * sketch, is drawn as it is.
+   */
+  function solvedDrawingSource(
+    source: ProjectDocument
+  ): Promise<ProjectDocument> {
+    const live = managerRef.current?.document;
+    if (
+      !live ||
+      source === live ||
+      source.projectId !== live.projectId ||
+      source.configurations?.activeRowId === live.configurations?.activeRowId
+    )
+      return Promise.resolve(source);
+    return resolvedForDisplay(live, source, (candidate, sketchId) =>
+      geometry.solveSketch(candidate, sketchId)
+    );
   }
 
   /** The file stem of an export, naming a configuration that is not active. */
@@ -20834,7 +20891,8 @@ export function App() {
     if (!target || !doc) {
       return;
     }
-    const { document: exported, bodyIds, allShownBodies, rowName } = target;
+    const source = doc;
+    const { bodyIds, allShownBodies, rowName } = target;
     const fileName = `${exportStemFor(rowName)}.step`;
     await runExportJob({
       fileName,
@@ -20845,6 +20903,10 @@ export function App() {
           }
         : {}),
       produce: async (options) => {
+        const { document: exported } = await solvedExportTarget(
+          target,
+          source
+        );
         const result = await geometry.exportModel('step', exported, bodyIds, {
           ...options,
           ...(allShownBodies ? { allShownBodies: true } : {}),
@@ -20878,19 +20940,26 @@ export function App() {
       return;
     }
     const { units } = doc;
-    void import('./lib/meshExportPackage').then((lazy) =>
-      lazy.exportMesh({
-        format,
-        deflection,
-        options: tolerances,
-        target,
+    const source = doc;
+    void Promise.all([
+      import('./lib/meshExportPackage'),
+      solvedExportTarget(target, source)
+    ]).then(
+      ([lazy, solved]) =>
+        lazy.exportMesh({
+          format,
+          deflection,
+          options: tolerances,
+          target: solved,
         info: MESH_EXPORT_FILE_INFO[format],
         units: exportUnitsFor(units),
         stemOf: exportStemFor,
         setStatus,
         runExportJob,
         exportModel: geometry.exportModel
-      })
+      }),
+      (error: unknown) =>
+        setStatus(errorMessage(error, 'That configuration cannot be exported.'))
     );
   }
 
@@ -20909,7 +20978,8 @@ export function App() {
     if (!written || !doc) {
       return;
     }
-    const { document: exported, bodyIds, allShownBodies, rowName } = written;
+    const source = doc;
+    const { bodyIds, allShownBodies, rowName } = written;
     const slicer = DESKTOP_SLICERS.find((entry) => entry.id === target);
     if (!slicer && target !== 'download') return;
     const info = MESH_EXPORT_FILE_INFO['3mf'];
@@ -20922,6 +20992,10 @@ export function App() {
           ? `Opened ${bodies} in ${slicer.label} as ${fileName}.`
           : `Downloaded ${bodies} as ${fileName}. Open it from your browser’s downloads in your slicer.`,
       produce: async (options) => {
+        const { document: exported } = await solvedExportTarget(
+          written,
+          source
+        );
         const result = await geometry.exportModel('3mf', exported, bodyIds, {
           deflection,
           ...tolerances,
@@ -20964,7 +21038,11 @@ export function App() {
         new Error(emptyExportMessage(exportScopeInfo, 'checking printability'))
       );
     }
-    return geometry.meshQuality(target.document, target.bodyIds, deflection, {
+    const source = doc;
+    if (!source)
+      return Promise.reject(new Error('No project is open.'));
+    return solvedExportTarget(target, source).then((solved) =>
+      geometry.meshQuality(solved.document, solved.bodyIds, deflection, {
       ...(target.allShownBodies ? { allShownBodies: true } : {}),
       ...(options?.angularTolerance !== undefined
         ? { angularTolerance: options.angularTolerance }
@@ -20976,7 +21054,8 @@ export function App() {
           options?.onProgress?.(progress);
         }
       }
-    });
+    })
+    );
   }
 
   /** "Save reproduction": the held refusal as a corpus fixture, locally. */
@@ -25997,20 +26076,50 @@ export function App() {
    * F06: runs one configuration command, checked against the document first
    * so a refusal is answered (and nothing is committed) rather than thrown.
    */
-  function runConfigurationCommand(command: AnyCommand): string | null {
+  async function runConfigurationCommand(
+    command: AnyCommand
+  ): Promise<string | null> {
     const manager = managerRef.current;
     if (!manager) return 'Editing is unavailable.';
+    const unchanged = 'The configurations were not changed.';
+    const base = manager.document;
+    let next: ProjectDocument;
     try {
-      command.validate(manager.document);
-      command.apply(manager.document);
+      command.validate(base);
+      next = command.apply(base);
     } catch (error) {
-      return error instanceof Error
-        ? error.message
-        : 'The configurations were not changed.';
+      return error instanceof Error ? error.message : unchanged;
     }
-    return executeCommand(command)
+    // A row switch, or a cell of the active row, writes parameter values
+    // into the model: every sketch those values drive is solved again and
+    // stored in the same entry, as a parameter set does. Without it the
+    // labels read the row's values while the geometry keeps the last row's.
+    const isCurrent = () =>
+      managerRef.current === manager && manager.document === base;
+    let resolved: Awaited<ReturnType<typeof resolveSketchesForValueChange>>;
+    try {
+      resolved = await resolveSketchesForValueChange(
+        base,
+        next,
+        (document, sketchId) => geometry.solveSketch(document, sketchId),
+        isCurrent
+      );
+    } catch (error) {
+      return errorMessage(error, unchanged);
+    }
+    if (!resolved || !isCurrent())
+      return 'The project changed while the sketches were solved. Try again.';
+    if (!resolved.ok) return `${unchanged} ${resolved.reason}`;
+    if (resolved.commands.length === 0)
+      return executeCommand(command) ? null : unchanged;
+    return executeTransaction(
+      command.label,
+      [command, ...resolved.commands],
+      undefined,
+      isTweakCommand(command) ? 'parameters' : 'edit'
+    )
       ? null
-      : 'The configurations were not changed.';
+      : unchanged;
   }
 
   /** F06: exports one configuration row, as STEP or from the mesh dialog. */
@@ -26031,8 +26140,10 @@ export function App() {
       });
       return;
     }
-    void geometryRef.current
-      .exportBodies(target)
+    void resolvedForDisplay(exportRowDocument, target, (candidate, sketchId) =>
+      geometryRef.current.solveSketch(candidate, sketchId)
+    )
+      .then((solved) => geometryRef.current.exportBodies(solved))
       .then(
         (bodies) => bodies,
         (error: unknown) => {
@@ -26252,14 +26363,6 @@ export function App() {
       if (inputError) return { kind: 'refused', message: inputError };
       const beforeScope = getParameterScope(base).scope;
       const afterScope = getParameterScope(prospective).scope;
-      // Pattern spacing and step count too: a copy left where the old value
-      // put it would disagree with the label reading the new one.
-      const constrainedSketches = sketchesDrivenByParameterEdit(
-        listNodesByKind(prospective, 'sketch'),
-        (value) => evalParamValue(value, beforeScope, base.units) ?? undefined,
-        (value) =>
-          evalParamValue(value, afterScope, prospective.units) ?? undefined
-      );
       for (const sketch of listNodesByKind(prospective, 'sketch')) {
         const locked = movedEntityLock(
           prospective,
@@ -26276,31 +26379,19 @@ export function App() {
           };
         }
       }
-      const commands: AnyCommand[] = [parameterCommand];
       setStatus(`Checking ${name}…`);
-      for (const sketch of constrainedSketches) {
-        const outcome = await geometry.solveSketch(
-          prospective,
-          sketch.sketchId
-        );
-        if (!current()) return stale();
-        if (!outcome.converged || outcome.rolledBack) {
-          return {
-            kind: 'refused',
-            message: `${sketch.name} is ${solveStatusLabel(outcome)}.`
-          };
-        }
-        const solved = solvedSketchCommands(
-          prospective,
-          sketch.sketchId,
-          outcome
-        );
-        for (const command of solved) {
-          command.validate(prospective);
-          prospective = command.apply(prospective);
-        }
-        commands.push(...solved);
-      }
+      // Pattern spacing and step count too: a copy left where the old value
+      // put it would disagree with the label reading the new one.
+      const resolved = await resolveSketchesForValueChange(
+        base,
+        prospective,
+        (document, sketchId) => geometry.solveSketch(document, sketchId),
+        current
+      );
+      if (!resolved) return stale();
+      if (!resolved.ok) return { kind: 'refused', message: resolved.reason };
+      prospective = resolved.document;
+      const commands: AnyCommand[] = [parameterCommand, ...resolved.commands];
       // Keep the live document, history and last valid geometry untouched while
       // the worker checks every dependent feature, including the final union.
       setParameterCandidate({ base, document: prospective });
@@ -40076,10 +40167,16 @@ export function App() {
                 }
                 defaultBodyIds={drawingDefaultBodyIds}
                 requestTessellation={(source, bodyIds, signal) =>
-                  geometry.drawingTessellation(source, bodyIds, { signal })
+                  solvedDrawingSource(source).then((solved) =>
+                    geometry.drawingTessellation(solved, bodyIds, { signal })
+                  )
                 }
                 requestSection={(source, bodyIds, plane, signal) =>
-                  geometry.drawingSection(source, bodyIds, plane, { signal })
+                  solvedDrawingSource(source).then((solved) =>
+                    geometry.drawingSection(solved, bodyIds, plane, {
+                      signal
+                    })
+                  )
                 }
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}

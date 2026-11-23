@@ -1,5 +1,6 @@
 import { documentForConfiguration } from '@openzcad/document-core';
 import type { FeatureWarning, ProjectDocument } from '@openzcad/shared';
+import { resolvedForDisplay, type SolveSketch } from './sketch/parameterResolve';
 
 /** Builds a document's geometry and reports what it warned about. */
 export type BuildForWarnings = (document: ProjectDocument) => Promise<{
@@ -39,7 +40,12 @@ function failures(result: Awaited<ReturnType<BuildForWarnings>>): string[] {
 export async function sharedDocumentOnRow(
   document: ProjectDocument,
   rowId: string | null,
-  build: BuildForWarnings
+  build: BuildForWarnings,
+  /**
+   * Solves a sketch: the row's parameter values can drive sketches the
+   * saved row solved to other sizes, and the row is shown as it solves.
+   */
+  solve?: SolveSketch
 ): Promise<{ document: ProjectDocument; note: string | null }> {
   if (rowId === null) return { document, note: null };
   const row = document.configurations?.rows.find((entry) => entry.id === rowId);
@@ -61,6 +67,7 @@ export async function sharedDocumentOnRow(
   // The row the model was saved on needs no second build.
   if (candidate === document) return { document, note: `Showing ${row.name}.` };
   try {
+    if (solve) candidate = await resolvedForDisplay(document, candidate, solve);
     // One after the other: the geometry worker's preview channel answers
     // the latest request and drops the one before it.
     const built = await build(candidate);
