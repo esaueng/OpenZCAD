@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   convertDocumentUnits,
@@ -21,7 +21,9 @@ import { loadLocalSaveState, saveLocalProject } from './localProjectStore';
 import {
   commitUnitsConversion,
   unitsConversionCollaborationRefusal,
+  unitsConversionOwnershipRefusal,
   type PreparedUnitsConversion,
+  type ProjectStorageOwnership,
   type UnitsConversionCollaborationState,
   type UnitsConversionPersistence
 } from './unitsConversion';
@@ -393,6 +395,194 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
     );
     expect(result).toMatchObject({ ok: false, refusals: [{ code: 'stale' }] });
     expect(writes).toEqual([]);
+  });
+});
+
+describe('commitUnitsConversion: bound to the project it was prepared for', () => {
+  /** Another project, same version and unit: phase 5's other checks pass. */
+  function twin() {
+    const source = boxDocument();
+    const other = boxDocument();
+    expect(other.projectId).not.toBe(source.projectId);
+    expect(other.version).toBe(source.version);
+    return { source, other };
+  }
+
+  it('converts another project with the same version when nothing binds it', async () => {
+    // The hazard the binding closes: without it, a project switched to
+    // while the worker ran is accepted.
+    const { source, other } = twin();
+    const manager = new CommandManager(other, USER);
+    const { persistence } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      { persistence }
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses another project before writing the checkpoint', async () => {
+    const { source, other } = twin();
+    const manager = new CommandManager(other, USER);
+    const { persistence, writes } = recordingPersistence(manager);
+    const confirmWriteAccess = vi.fn(async () => null);
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        expectedProjectId: source.projectId,
+        confirmWriteAccess
+      }
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ stage: 'payload', code: 'stale' }]
+    });
+    expect(result).not.toHaveProperty('checkpoint');
+    expect(writes).toEqual([]);
+    expect(confirmWriteAccess).not.toHaveBeenCalled();
+    expect(manager.document).toBe(other);
+  });
+
+  it('refuses another document of the same project and version', async () => {
+    const source = boxDocument();
+    // A hydrated revision: equal content, a different document.
+    const manager = new CommandManager(structuredClone(source), USER);
+    const { persistence, writes } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        expectedProjectId: source.projectId,
+        expectedDocument: source
+      }
+    );
+    expect(result).toMatchObject({ ok: false, refusals: [{ code: 'stale' }] });
+    expect(writes).toEqual([]);
+    expect(manager.document.units).toBe('mm');
+  });
+
+  it('converts the document it was prepared from', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    const { persistence } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        expectedProjectId: source.projectId,
+        expectedDocument: source,
+        confirmWriteAccess: async () => null
+      }
+    );
+    expect(result.ok).toBe(true);
+    expect(manager.document.units).toBe('inch');
+  });
+});
+
+describe('commitUnitsConversion: storage ownership before the checkpoint', () => {
+  it('writes nothing when this tab does not own the project', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    const { persistence, writes } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      {
+        persistence,
+        confirmWriteAccess: async () => ({
+          stage: 'collaboration',
+          code: 'second-tab',
+          subject: 'document',
+          message: 'Open in another tab.'
+        })
+      }
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ code: 'second-tab' }]
+    });
+    expect(writes).toEqual([]);
+    expect(manager.document).toBe(source);
+  });
+
+  it('refuses, writing nothing, when the project switches while ownership is confirmed', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    let active = manager;
+    const { persistence, writes } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(
+      () => active,
+      preparedFor(source),
+      {
+        persistence,
+        expectedProjectId: source.projectId,
+        async confirmWriteAccess() {
+          active = new CommandManager(boxDocument(), USER);
+          return null;
+        }
+      }
+    );
+    expect(result).toMatchObject({ ok: false, refusals: [{ code: 'stale' }] });
+    expect(writes).toEqual([]);
+    expect(active.document.units).toBe('mm');
+  });
+});
+
+describe('unitsConversionOwnershipRefusal', () => {
+  const claim = (
+    projectId: string,
+    settle: (record: ProjectStorageOwnership) => void
+  ) => {
+    const record: ProjectStorageOwnership = {
+      projectId,
+      owned: false,
+      settled: Promise.resolve()
+    };
+    record.settled = Promise.resolve().then(() => settle(record));
+    return record;
+  };
+
+  it('allows the write once this tab’s claim is confirmed held', async () => {
+    const record = claim('copy', (r) => (r.owned = true));
+    expect(
+      await unitsConversionOwnershipRefusal(() => record, 'copy', 'no')
+    ).toBeNull();
+  });
+
+  it('refuses when the claim settles owned by another tab', async () => {
+    // The second tab opened the copy first: this tab's claim is pending
+    // when asked, and answers "not owned".
+    const record = claim('copy', () => undefined);
+    expect(
+      await unitsConversionOwnershipRefusal(() => record, 'copy', 'Elsewhere.')
+    ).toMatchObject({ code: 'second-tab', message: 'Elsewhere.' });
+  });
+
+  it('refuses a claim for another project, or none, without waiting', async () => {
+    const record = claim('original', (r) => (r.owned = true));
+    expect(
+      await unitsConversionOwnershipRefusal(() => record, 'copy', 'no')
+    ).toMatchObject({ code: 'second-tab' });
+    expect(
+      await unitsConversionOwnershipRefusal(() => null, 'copy', 'no')
+    ).toMatchObject({ code: 'second-tab' });
+  });
+
+  it('refuses when the claim was replaced while it settled', async () => {
+    let current: ProjectStorageOwnership | null = null;
+    const record = claim('copy', (r) => {
+      r.owned = true;
+      current = null;
+    });
+    current = record;
+    expect(
+      await unitsConversionOwnershipRefusal(() => current, 'copy', 'no')
+    ).toMatchObject({ code: 'second-tab' });
   });
 });
 

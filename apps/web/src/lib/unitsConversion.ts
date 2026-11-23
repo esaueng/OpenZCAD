@@ -128,6 +128,43 @@ export function unitsConversionCollaborationRefusal(
   return null;
 }
 
+/**
+ * This tab's claim on a project's device storage, as the workspace tracks
+ * it (`claimProjectOwnership`): exactly one tab writes a project there.
+ */
+export interface ProjectStorageOwnership {
+  projectId: string;
+  /** Settles once the claim has been answered. */
+  settled: Promise<unknown>;
+  /** True once this tab holds the project; false while waiting or refused. */
+  owned: boolean;
+}
+
+/**
+ * Waits for this tab's storage claim on `projectId` and refuses unless it
+ * is confirmed held: the conversion's checkpoint write must not land on a
+ * copy another tab owns (and may have saved newer work to), the overwrite
+ * autosave waits for the same answer to avoid. A claim still for another
+ * project, or none at all, refuses rather than waits.
+ */
+export async function unitsConversionOwnershipRefusal(
+  read: () => ProjectStorageOwnership | null | undefined,
+  projectId: string,
+  message: string
+): Promise<UnitsConvertRefusal | null> {
+  const refusal: UnitsConvertRefusal = {
+    stage: 'collaboration',
+    code: 'second-tab',
+    subject: 'document',
+    message
+  };
+  const claim = read();
+  if (!claim || claim.projectId !== projectId) return refusal;
+  await claim.settled;
+  const answered = read();
+  return answered === claim && answered.owned ? null : refusal;
+}
+
 /** Where the safety checkpoint is written; the device store by default. */
 export interface UnitsConversionPersistence {
   saveProject(document: ProjectDocument): Promise<void>;
@@ -159,6 +196,29 @@ export interface CommitUnitsConversionOptions {
   persistence?: UnitsConversionPersistence;
   /** The clock eligibility is judged by; `Date.now` by default. */
   now?: number | (() => number);
+  /**
+   * The project the conversion was prepared for. When the active manager
+   * holds another project, the conversion is refused (`stale`) before
+   * anything is written: a project switch while the worker ran must not
+   * convert, or checkpoint, the project that happens to be open now.
+   */
+  expectedProjectId?: string;
+  /**
+   * The exact document the conversion was prepared from. When the active
+   * manager holds any other document object (an edit, a hydrated revision,
+   * another project with the same version), the conversion is refused
+   * (`stale`) before anything is written.
+   */
+  expectedDocument?: ProjectDocument;
+  /**
+   * Confirms this tab may write the project's storage, awaited after the
+   * first checks and before the checkpoint is written (in the app, the
+   * device-storage ownership autosave waits for). A refusal writes nothing.
+   * Everything checked before it is checked again once it settles.
+   */
+  confirmWriteAccess?: (
+    document: ProjectDocument
+  ) => Promise<UnitsConvertRefusal | null>;
 }
 
 export type CommitUnitsConversionResult =
@@ -203,7 +263,10 @@ export type CommitUnitsConversionResult =
  * 4. executes `units.convert` through that manager: one undo step, one more
  *    revision, the version still monotonic.
  *
- * Caller contract (phase 6): pass `activeManager` as a live getter that
+ * Caller contract (phase 6): pass `expectedProjectId` and `expectedDocument`
+ * (what preparation read) so a project switch refuses before the
+ * checkpoint is written, and `confirmWriteAccess` so the write waits for
+ * the same storage ownership autosave does. Pass `activeManager` as a live getter that
  * returns the manager the workspace edits *now* (in the app, read
  * `managerRef.current`), never a manager captured earlier. Remote
  * hydration and project switches replace that manager; a conversion whose
@@ -247,9 +310,25 @@ export async function commitUnitsConversion(
         )
       ]
     };
+  const current = manager.document;
+  // The project and the document it was prepared from come first: nothing
+  // else about another project (its room, its version) is worth judging.
+  if (
+    (options.expectedProjectId !== undefined &&
+      current.projectId !== options.expectedProjectId) ||
+    (options.expectedDocument !== undefined &&
+      current !== options.expectedDocument)
+  )
+    return {
+      ok: false,
+      refusals: [
+        stale(
+          'A different project or version is open now than the one checked. Check the conversion again.'
+        )
+      ]
+    };
   const collaboration = eligibility();
   if (collaboration) return { ok: false, refusals: [collaboration] };
-  const current = manager.document;
   if (current.version !== prepared.sourceVersion)
     return {
       ok: false,
@@ -288,6 +367,23 @@ export async function commitUnitsConversion(
   const tooLarge = undoRefusal();
   if (tooLarge) return { ok: false, refusals: [tooLarge] };
 
+  if (options.confirmWriteAccess) {
+    const denied = await options.confirmWriteAccess(current);
+    if (denied) return { ok: false, refusals: [denied] };
+    // The wait could span a project switch or an edit; nothing has been
+    // written yet, so a change refuses with nothing to keep.
+    if (activeManager() !== manager || manager.document !== current)
+      return {
+        ok: false,
+        refusals: [
+          stale(
+            'The project changed while this tab confirmed it may save it. Check the conversion again.'
+          )
+        ]
+      };
+    const room = eligibility();
+    if (room) return { ok: false, refusals: [room] };
+  }
   if (options.deviceOnlyHistory) await persistence.saveSaveStates([guarded]);
   else await persistence.saveProject(guarded);
   // Everything step 1 checked, again, now that the write has finished.
