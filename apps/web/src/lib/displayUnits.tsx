@@ -148,6 +148,30 @@ export function formatDocumentLength(
 }
 
 /**
+ * A stored-unit length that stands for a hundredth of the stored unit (an
+ * offset, its limit, a Keep value, a Total) in the document's display unit,
+ * with just the decimals that tell two such hundredths apart: 17.6 and
+ * 17.61 mm read 0.0176 and 0.01761 m, 0.6929 and 0.6933 in, and an inch
+ * limit of -0.2519685 reads -6.4 mm. `formatDocumentLength`'s thousandths
+ * would merge the metre pair and drop the sign of a small limit.
+ */
+export function formatDocumentHundredths(
+  document: Pick<ProjectDocument, 'units' | 'displayUnits'> | null | undefined,
+  value: number
+): string {
+  const stored = document?.units ?? 'mm';
+  const shown = document ? documentDisplayUnits(document) : stored;
+  const resolution = Math.abs(convertLength(0.01, stored, shown));
+  const decimals = Math.min(
+    12,
+    Math.max(0, Math.ceil(-Math.log10(resolution) - 1e-9))
+  );
+  const number = Number(convertLength(value, stored, shown).toFixed(decimals));
+  const text = String(Object.is(number, -0) ? 0 : number);
+  return document ? `${text} ${displayLengthName(shown)}` : text;
+}
+
+/**
  * I03: a stored value handed back to a field that reads plain numbers in
  * the display unit, such as a refusal's proved size ("Try 2.5 mm") put into
  * the in-place Options panel. A length is converted; an angle or a count is

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatShownLength } from './displayUnits';
+import { formatDocumentHundredths } from './displayUnits';
 import {
   chipPanelDodge,
   edgeChipCenterX,
@@ -479,7 +479,8 @@ describe('a refused offset that names its limit', () => {
 // offset the kernel measured: "smaller offset" beside a Total of 5 asked for
 // the opposite of what builds.
 describe('a refused face offset read as a Total', () => {
-  const mmLength = (value: number) => formatShownLength(value, 'mm', 'mm');
+  const mmLength = (value: number) =>
+    formatDocumentHundredths({ units: 'mm' }, value);
   const reading = { baseline: 24, sense: 1, formatLength: mmLength };
   const collapse = {
     message:
@@ -525,17 +526,40 @@ describe('a refused face offset read as a Total', () => {
   });
 
   it('states Totals, the move and Keep in the display unit', () => {
-    // Stored in millimetres, shown in inches: 5 mm is 0.197 in.
-    const read = offsetRefusalInTotal(collapse, -18.99, {
+    // Stored in millimetres, shown in inches: 5 mm is 0.1969 in.
+    const inches = offsetRefusalInTotal(collapse, -18.99, {
       baseline: 24,
       sense: 1,
-      formatLength: (value) => formatShownLength(value, 'mm', 'inch')
+      formatLength: (value) =>
+        formatDocumentHundredths({ units: 'mm', displayUnits: 'inch' }, value)
     });
-    expect(read.error.headline).toBe('Total can’t go below 0.197 in here');
-    expect(read.error.message).toBe(
-      'A neighbouring face would shrink to nothing once the face moves 0.748 in (a Total of 0.197 in). Try a larger Total.'
+    expect(inches.error.headline).toBe('Total can’t go below 0.1969 in here');
+    expect(inches.error.message).toBe(
+      'A neighbouring face would shrink to nothing once the face moves 0.748 in (a Total of 0.1969 in). Try a larger Total.'
     );
-    expect(read.keepLabel).toBe('Keep Total 0.197 in');
+    expect(inches.keepLabel).toBe('Keep Total 0.1972 in');
+  });
+
+  it('keeps the bound and Keep apart in metres (the chip reads min 0.0176 m)', () => {
+    const metres = offsetRefusalInTotal(
+      {
+        message:
+          'A neighbouring face would shrink to nothing past -6.4. Try a smaller offset.',
+        limit: -6.4
+      },
+      -6.39,
+      {
+        baseline: 24,
+        sense: 1,
+        formatLength: (value) =>
+          formatDocumentHundredths({ units: 'mm', displayUnits: 'm' }, value)
+      }
+    );
+    expect(metres.error.headline).toBe('Total can’t go below 0.0176 m here');
+    expect(metres.keepLabel).toBe('Keep Total 0.01761 m');
+    expect(metres.error.message).toBe(
+      'A neighbouring face would shrink to nothing once the face moves 0.0064 m (a Total of 0.0176 m). Try a larger Total.'
+    );
   });
 
   it('points a refusal with no named limit back toward the size before the edit', () => {
@@ -558,7 +582,8 @@ describe('a refused face offset read as a Total', () => {
 // ("past 6.4") beside a signed "Keep −6.39 mm". They state the limit signed
 // like the offset, in the document's display unit.
 describe('an offset-limit sentence in units', () => {
-  const mm = (value: number) => formatShownLength(value, 'mm', 'mm');
+  const mm = (value: number) =>
+    formatDocumentHundredths({ units: 'mm' }, value);
 
   it('states the typed limit, signed, with the unit', () => {
     expect(
@@ -596,14 +621,15 @@ describe('an offset-limit sentence in units', () => {
       message: `A neighbouring face would shrink to nothing past ${limit}. Try a smaller offset.`,
       limit
     });
-    const inToMm = (value: number) => formatShownLength(value, 'inch', 'mm');
+    const inToMm = (value: number) =>
+      formatDocumentHundredths({ units: 'inch', displayUnits: 'mm' }, value);
     // -0.2519685 in is -6.4 mm; rounded to hundredths first it read -6.35.
     expect(offsetLimitInUnits(sentence(-0.2519685), inToMm).message).toBe(
       'A neighbouring face would shrink to nothing past -6.4 mm. Try a smaller offset.'
     );
     // A small limit keeps its direction rather than rounding to 0.
     expect(offsetLimitInUnits(sentence(-0.004), inToMm).message).toBe(
-      'A neighbouring face would shrink to nothing past -0.102 mm. Try a smaller offset.'
+      'A neighbouring face would shrink to nothing past -0.1 mm. Try a smaller offset.'
     );
   });
 

@@ -27,6 +27,7 @@ import type { PrintClearanceState } from './components/PrintClearanceRow';
 import {
   DisplayUnitsProvider,
   displayEntryText,
+  formatDocumentHundredths,
   formatDocumentLength
 } from './lib/displayUnits';
 import { roundShownLength } from './lib/liveLabels';
@@ -32524,7 +32525,7 @@ export function App() {
     // came out without its unit.
     const current = managerRef.current?.document ?? doc;
     return offsetLimitInUnits(error, (value) =>
-      formatDocumentLength(current, value)
+      formatDocumentHundredths(current, value)
     );
   }
   function shownToolCard<T extends { error?: CommandDiagnostic }>(
@@ -32558,7 +32559,7 @@ export function App() {
         baseline: request.totalBaseline,
         sense: request.totalSense ?? 1,
         formatLength: (length) =>
-          formatDocumentLength(managerRef.current?.document ?? doc, length)
+          formatDocumentHundredths(managerRef.current?.document ?? doc, length)
       }
     );
     return {
