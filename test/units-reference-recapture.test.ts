@@ -1096,10 +1096,7 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
     const there = convertDocumentUnits(source, 'inch');
     if (!there.ok) throw new Error('conversion refused');
     const result = await computeConversionReferenceMap(source, there.document);
-    expect(codes(result)).toEqual([
-      'geometry-mismatch Block Body area',
-      expect.stringMatching(/^geometry-mismatch Block Body faces\.\d+$/)
-    ]);
+    expect(codes(result)).toEqual(['geometry-mismatch Block Body area']);
   });
 
   it('refuses a variable fillet whose edge the converted build runs the other way', async () => {

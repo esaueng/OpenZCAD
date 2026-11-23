@@ -1199,27 +1199,36 @@ function compareFaces(
   if (!source || !converted) return 0;
   const vector = (value: Vector3 | undefined): number[] | undefined =>
     value ? [value.x, value.y, value.z] : undefined;
-  // A curved boundary's centroid is integrated over an inscribed polygon.
-  const centroidSlack = (face: MeasuredFace) =>
-    face.centroidProvenance === 'exact' ? 0 : 1e-6 * scale;
-  const alike = (a: MeasuredFace, b: MeasuredFace, k: number) => {
-    if (a.surfaceType !== b.surfaceType) return false;
-    if (relativeMismatch(b.area, a.area * k * k, UNIT_CONVERSION_MEASURE_RTOL))
-      return false;
-    if (!nearScaledPosition(vector(b.center)!, vector(a.center)!, k))
-      return false;
-    const ca = vector(a.centroid);
-    const cb = vector(b.centroid);
-    if ((ca === undefined) !== (cb === undefined)) return false;
-    if (!ca || !cb) return true;
-    const slack = Math.max(centroidSlack(a), centroidSlack(b));
-    return cb.every((value, axis) => {
-      const expected = ca[axis]! * k;
+  // Positions here tell faces apart; the box and volume checks carry the
+  // precision. An imported body's vertices carry the import's own noise
+  // (about 1e-6 mm on a 40 mm plate brought back from inches), so each
+  // position gets 1e-6 of the body's scale, and a centroid integrated over
+  // an inscribed polygon (a curved boundary) twice that. A blend built
+  // mirrored moves a trimmed face's centroid by a fraction of the blend.
+  const slack = (face: MeasuredFace) =>
+    (face.centroidProvenance === 'exact' ? 1e-6 : 2e-6) * scale;
+  const close = (
+    to: Vector3 | undefined,
+    from: Vector3 | undefined,
+    k: number,
+    allowance: number
+  ) => {
+    const a = vector(from);
+    const b = vector(to);
+    if ((a === undefined) !== (b === undefined)) return false;
+    if (!a || !b) return true;
+    return b.every((value, axis) => {
+      const expected = a[axis]! * k;
       return (
-        Math.abs(value - expected) <= positionTolerance(expected) + slack
+        Math.abs(value - expected) <= positionTolerance(expected) + allowance
       );
     });
   };
+  const alike = (a: MeasuredFace, b: MeasuredFace, k: number) =>
+    a.surfaceType === b.surfaceType &&
+    !relativeMismatch(b.area, a.area * k * k, UNIT_CONVERSION_MEASURE_RTOL) &&
+    close(b.center, a.center, k, 1e-6 * scale) &&
+    close(b.centroid, a.centroid, k, Math.max(slack(a), slack(b)));
   for (const face of source) {
     const twins = source.filter((other) => alike(face, other, 1)).length;
     const matches = converted.filter((other) =>
@@ -1278,6 +1287,7 @@ export function unitConversionGeometryOracle(
       continue;
     }
     stats.bodies += 1;
+    const before = refusals.length;
     const counts: [string, number | undefined, number | undefined][] = [
       ['faceCount', from.faceCount, to.faceCount],
       ['faces', from.topology?.faces.length, to.topology?.faces.length],
@@ -1356,9 +1366,12 @@ export function unitConversionGeometryOracle(
           `The surface area is ${areaTo}, not ${areaFrom} × k² = ${expected}.`
         );
     }
-    stats.faces += compareFaces(from, to, factor, scale, (field, message) =>
-      mismatch(subject, field, message)
-    );
+    // Face by face only for a body whose totals matched: past a total that
+    // already refused, every face it changed would repeat the refusal.
+    if (refusals.length === before)
+      stats.faces += compareFaces(from, to, factor, scale, (field, message) =>
+        mismatch(subject, field, message)
+      );
   }
   stats.datums = compareDatums(source, converted, factor, mismatch);
   const exportFrom = [...source.exportableBodyIds].sort();
