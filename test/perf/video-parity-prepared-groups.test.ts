@@ -168,9 +168,11 @@ for (const kind of ['blend', 'cylinder'] as const) {
         expect(
           canonical.warnings.filter((w) => !w.startsWith('Feature "Fillet":'))
         ).toEqual([]);
+        // A blend release rebuilds the group route its frames and replay use;
+        // the journaled prepared commit would resize only the seed band.
         expect(
           calls.some((c) => c.method === 'commitPreparedGroupEditJournaled')
-        ).toBe(true);
+        ).toBe(kind === 'cylinder');
         expect(
           calls.filter((c) => c.method === 'releasePreparedGroupEdit')
         ).toHaveLength(1);
