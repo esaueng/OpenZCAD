@@ -1,0 +1,249 @@
+import type { Page } from '@playwright/test';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
+import { createProjectDocument, findSketch } from '@openzcad/document-core';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { expect, revealModelPanel, stubApi, test } from './openzcad-fixtures';
+
+/**
+ * I03 phase 6 (plan §6, browser): converting a project's stored units from
+ * File › Units. One conversion, one undo step and a safety checkpoint that
+ * survives a reload and puts the millimetres back.
+ */
+
+const READY = { timeout: 30_000 };
+/** Preparation rebuilds the model three times in a worker. */
+const CHECKED = { timeout: 90_000 };
+const SAVED = /\bis-(?:local|synced)(?:\s|$)/;
+const CHECKPOINT = 'Before unit conversion (mm → in)';
+
+/** A 50.8 mm line, measured by one saved reference distance. */
+function fixture() {
+  const manager = new CommandManager(
+    createProjectDocument('Unit conversion', toUserId('user_i03p6'))
+  );
+  const add = commandFactories.addSketch({
+    name: 'Ruler',
+    planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+    objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 50.8, y2: 0 }]
+  });
+  manager.execute(add);
+  const sketchId = add.payload.ids!.sketchId;
+  const lineId = findSketch(manager.document, sketchId)!.objectIds[0]!;
+  manager.execute(
+    commandFactories.addSketchReferenceDimension({
+      sketchId,
+      data: {
+        dimensionKind: 'distance',
+        a: { objectId: lineId, point: 'start' },
+        b: { objectId: lineId, point: 'end' }
+      }
+    })
+  );
+  return { document: manager.document, sketchId };
+}
+
+async function open(page: Page, document: ProjectDocument) {
+  await stubApi(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await expect(page).toHaveTitle('OpenZCAD');
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('button', { name: 'Import project', exact: true }).click()
+  ]);
+  await chooser.setFiles({
+    name: 'unit-conversion.openzcad',
+    mimeType: 'application/json',
+    buffer: Buffer.from(
+      JSON.stringify({
+        format: 'openzcad-project',
+        version: 1,
+        document,
+        files: [],
+        sources: [],
+        saveStates: []
+      })
+    )
+  });
+  await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+}
+
+function fileMenu(page: Page) {
+  return page.locator('details.file-menu');
+}
+
+async function withFileMenu<T>(page: Page, run: () => Promise<T>) {
+  const menu = fileMenu(page);
+  if ((await menu.getAttribute('open')) === null)
+    await menu.locator('summary').click();
+  const result = await run();
+  if ((await menu.getAttribute('open')) !== null)
+    await menu.locator('summary').click();
+  return result;
+}
+
+/** The File menu's Units note: how lengths read now. */
+async function expectShownIn(page: Page, text: string) {
+  await withFileMenu(page, () =>
+    expect(fileMenu(page).locator('.topbar-units-note')).toHaveText(text)
+  );
+}
+
+async function exportDocument(page: Page): Promise<ProjectDocument> {
+  return withFileMenu(page, async () => {
+    const [download] = await Promise.all([
+      page.waitForEvent('download', READY),
+      fileMenu(page)
+        .getByRole('button', { name: /^Export project/ })
+        .click()
+    ]);
+    const stream = await download.createReadStream();
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    return (
+      JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
+        document: ProjectDocument;
+      }
+    ).document;
+  });
+}
+
+async function openConversion(page: Page) {
+  const menu = fileMenu(page);
+  if ((await menu.getAttribute('open')) === null)
+    await menu.locator('summary').click();
+  await menu.getByRole('button', { name: /^Convert stored units…/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Convert stored units' });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole('radio', { name: 'Inches (in)' })
+  ).toBeChecked();
+  await expect(
+    dialog.getByRole('status', { name: 'What converting changes' })
+  ).toContainText('stored value', CHECKED);
+  return dialog;
+}
+
+async function enterSketch(page: Page) {
+  await revealModelPanel(page, 'History');
+  await page.locator('.feature-row-main', { hasText: 'Ruler' }).click();
+  await page
+    .getByRole('button', { name: 'Edit sketch in viewport', exact: true })
+    .click();
+  await expect(page.getByRole('toolbar', { name: 'Sketch tools' })).toBeVisible(
+    READY
+  );
+  const toggle = page.getByRole('button', {
+    name: 'Sketch palette',
+    exact: true
+  });
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true')
+    await toggle.click();
+}
+
+test(
+  'converts stored units to inches, undoes, redoes, reloads and restores the safety checkpoint',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(240_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    const f = fixture();
+    await open(page, f.document);
+    await expectShownIn(page, 'Lengths are shown and typed in mm.');
+
+    const dialog = await openConversion(page);
+    await expect(dialog).toContainText(
+      'Lengths will be shown in inches, the new stored unit.'
+    );
+    await dialog.getByRole('button', { name: 'Convert', exact: true }).click();
+    await expect(dialog.getByRole('status')).toContainText(
+      `“${CHECKPOINT}” was saved first`,
+      READY
+    );
+    await dialog.getByRole('button', { name: 'Done' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Converted stored units to inches.'
+    );
+
+    // The read-outs are in inches, and the 50.8 mm line is stored as 2 in.
+    await expectShownIn(page, 'Lengths are shown and typed in in.');
+    const converted = await exportDocument(page);
+    expect(converted.units).toBe('inch');
+    expect(converted.displayUnits).toBeUndefined();
+    expect(
+      converted.checkpoints.map((checkpoint) => checkpoint.reason)
+    ).toContain(CHECKPOINT);
+    await enterSketch(page);
+    await expect(
+      page.getByRole('button', {
+        name: 'Reference distance, (2 in)',
+        exact: true
+      })
+    ).toBeVisible(READY);
+    await page
+      .getByRole('button', { name: 'Finish Sketch', exact: true })
+      .click();
+
+    // One undo step puts millimetres back; redo converts again.
+    await page.keyboard.press('ControlOrMeta+z');
+    await expectShownIn(page, 'Lengths are shown and typed in mm.');
+    expect((await exportDocument(page)).units).toBe('mm');
+    await page.keyboard.press('ControlOrMeta+Shift+z');
+    await expectShownIn(page, 'Lengths are shown and typed in in.');
+    expect((await exportDocument(page)).units).toBe('inch');
+
+    // The conversion and its checkpoint survive a reload.
+    await expect(page.locator('.save-state')).toHaveClass(SAVED, READY);
+    await page.reload();
+    await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+    await expectShownIn(page, 'Lengths are shown and typed in in.');
+
+    // Restoring the safety checkpoint brings the millimetre model back.
+    await revealModelPanel(page, 'Revisions');
+    const row = page.locator('.revision-row', {
+      has: page.locator('.revision-reason', { hasText: CHECKPOINT })
+    });
+    await expect(row).toBeVisible(READY);
+    await row.hover();
+    await row.getByRole('button', { name: `Restore ${CHECKPOINT}` }).click();
+    await expect(page.getByRole('contentinfo')).toContainText(
+      `Restored “${CHECKPOINT}”`,
+      READY
+    );
+    await expectShownIn(page, 'Lengths are shown and typed in mm.');
+    const restored = await exportDocument(page);
+    expect(restored.units).toBe('mm');
+    const line = findSketch(restored, f.sketchId)!;
+    expect(line.referenceDimensions).toEqual(
+      findSketch(f.document, f.sketchId)!.referenceDimensions
+    );
+    expect(errors).toEqual([]);
+  }
+);
+
+test('converts a copy and leaves the original in millimeters', async ({
+  page
+}) => {
+  test.setTimeout(240_000);
+  const f = fixture();
+  await open(page, f.document);
+  const original = await exportDocument(page);
+  const dialog = await openConversion(page);
+  await dialog.getByRole('button', { name: 'Convert a copy' }).click();
+  await expect(dialog.getByRole('status')).toContainText(
+    'Unit conversion is unchanged.',
+    CHECKED
+  );
+  await dialog.getByRole('button', { name: 'Done' }).click();
+  // The copy is open, converted; the original still stores millimeters.
+  const copy = await exportDocument(page);
+  expect(copy.projectId).not.toBe(original.projectId);
+  expect(copy.name).not.toBe(original.name);
+  expect(copy.units).toBe('inch');
+  await expectShownIn(page, 'Lengths are shown and typed in in.');
+});
