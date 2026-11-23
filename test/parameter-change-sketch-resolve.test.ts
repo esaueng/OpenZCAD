@@ -18,6 +18,7 @@ import {
   findSketch,
   getNode,
   listParameters,
+  resolvedSketchDocument,
   setConfigurationCell,
   setParameter
 } from '@openzcad/document-core';
@@ -489,7 +490,7 @@ async function projectedEdgeDocument() {
     column,
     value: '32'
   });
-  return { document, pegId: extruded.bodyId };
+  return { document, pegId: extruded.bodyId, circleId, edgeId };
 }
 
 describe('a value that moves an upstream edge a sketch projects', () => {
@@ -527,6 +528,45 @@ describe('a value that moves an upstream edge a sketch projects', () => {
       // Shown rather than switched, the row builds the same way.
       const shown = await resolvedForDisplay(base, switched, solve);
       expect(await pegX(shown)).toBeCloseTo(32, 6);
+    }
+  );
+
+  it(
+    'shows the row’s re-projected and solved sketch beside its solids',
+    { timeout: 180_000 },
+    async () => {
+      const {
+        document: base,
+        circleId,
+        edgeId
+      } = await projectedEdgeDocument();
+      // View on another row builds it with the preview build, as App does.
+      const row = await buildConfigurationRow(
+        base,
+        'row_wide',
+        (candidate) => adapter.previewGeometry(candidate),
+        new AbortController().signal,
+        solve
+      );
+      // The stored sketch keeps the active row's solve: the rebuild solves
+      // the linked sketch, and the overlays read that build's geometry.
+      const read = resolvedSketchDocument(row);
+      const circle = getNode(read, circleId);
+      if (circle?.kind !== 'sketch-object') throw new Error('no circle');
+      if (circle.data.objectKind !== 'circle') throw new Error('not a circle');
+      expect(Number(circle.data.centerX)).toBeCloseTo(32, 6);
+      const edge = getNode(read, edgeId);
+      if (edge?.kind !== 'sketch-object') throw new Error('no edge');
+      if (edge.data.objectKind !== 'line') throw new Error('not a line');
+      expect(Math.max(Number(edge.data.x1), Number(edge.data.x2))).toBeCloseTo(
+        32,
+        6
+      );
+      // The live document is untouched.
+      const live = getNode(resolvedSketchDocument(base), circleId);
+      if (live?.kind !== 'sketch-object' || live.data.objectKind !== 'circle')
+        throw new Error('no live circle');
+      expect(Number(live.data.centerX)).toBeCloseTo(20, 6);
     }
   );
 });

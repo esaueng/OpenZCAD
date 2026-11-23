@@ -67,17 +67,23 @@ export async function buildConfigurationRow(
     : switched;
   signal.throwIfAborted();
   const ready = await build(row, { signal });
+  // The active row's solve never stands in for this row's.
+  const { sketchGeometry: _activeGeometry, ...derived } = row.derived;
   return {
     ...row,
     derived: {
-      ...row.derived,
+      ...derived,
       // Display geometry: drawn, picked and measured, never weighed. A row's
       // volume and mass come from its exact export or the Inspector's own
       // request, so the analysis fields a preview build leaves out are never
       // read from these.
       bodyRepresentations:
         ready.bodyRepresentations as ProjectDocument['derived']['bodyRepresentations'],
-      warnings: ready.warnings
+      warnings: ready.warnings,
+      // The build's own solve: sketches tied to a linked projection are
+      // solved against the row's re-projected edge only here, so the
+      // overlays (`resolvedSketchDocument`) draw them where the solids are.
+      ...(ready.sketchGeometry ? { sketchGeometry: ready.sketchGeometry } : {})
     }
   };
 }
