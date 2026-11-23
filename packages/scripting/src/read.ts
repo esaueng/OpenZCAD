@@ -1115,14 +1115,17 @@ class Reader {
       for (const [key, dimension] of keys) {
         const source = sources?.get(key);
         if (!source) continue;
-        if (source.type === 'string') {
+        if (
+          source.type === 'string' &&
+          !isLegacyQuotedExpressionSite(node, container, key)
+        ) {
           this.error(
             `\`${key}\` is an expression field: write \`${source.value}\` in backticks, or a number.`,
             source.span
           );
           continue;
         }
-        if (source.type !== 'expression') continue;
+        if (source.type !== 'expression' && source.type !== 'string') continue;
         const unchanged = isStoredUnchanged(
           storedRoot,
           node,
@@ -1141,6 +1144,38 @@ class Reader {
       }
     }
   }
+}
+
+/**
+ * Fields history text v1 printed as quoted strings before they became
+ * expression sites (#1962): a tapped hole's thread `length` and `clearance`
+ * and a sketch pattern's `spacing` and `stepDeg`. Saved text keeps reading;
+ * the quoted expression is checked like a backtick one, and the printer now
+ * writes backticks. Every other expression field still refuses a quoted
+ * string.
+ */
+function isLegacyQuotedExpressionSite(
+  node: DocumentNode,
+  container: object,
+  key: string
+): boolean {
+  if (node.kind === 'feature') {
+    return (
+      (key === 'length' || key === 'clearance') &&
+      node.data.featureKind === 'hole' &&
+      container === node.data.tapped
+    );
+  }
+  if (node.kind === 'sketch') {
+    return (
+      (key === 'spacing' || key === 'stepDeg') &&
+      (node.constraints ?? []).some(
+        ({ data }) =>
+          data.constraintKind === 'pattern' && container === data.layout
+      )
+    );
+  }
+  return false;
 }
 
 function evaluateAt(

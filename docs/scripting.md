@@ -61,6 +61,12 @@ fillet #feat_… "Round" -> #body_… {
   checked with that field's quantity. A pick resolves only to a face or edge
   the document already stores; the text never invents one. A hash list that
   its picks imply is left out of the text.
+- An expression field takes a number or backticks, not a quoted string. Four
+  fields became expression fields after v1 shipped: a tapped hole's thread
+  `length` and `clearance`, and a sketch pattern's `spacing` and `stepDeg`.
+  Text printed before that quoted their expressions (`clearance: "adjust"`).
+  That legacy spelling still reads, and is checked like backticks. The
+  printer now writes backticks there.
 - Comments (`//`) and layout are free and are not kept: the text is printed
   again canonically after every change.
 
