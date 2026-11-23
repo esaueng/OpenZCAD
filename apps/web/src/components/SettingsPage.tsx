@@ -184,6 +184,7 @@ interface SettingsPageProps {
    * there is no view to apply defaults to and no workspace to go back to.
    */
   workspaceOpen?: boolean;
+  encryptedProjectOpen?: boolean;
   /**
    * The open project's units, which the linear snap is measured in; absent
    * from the start screen, where each project's own units apply.
@@ -777,6 +778,7 @@ export function SettingsPage({
   desktopAuthorizationApproved = false,
   desktopAuthorizationCode = '',
   workspaceOpen = true,
+  encryptedProjectOpen = false,
   documentUnits,
   onChange,
   onCloudFunctionsEnabledChange,
@@ -2001,6 +2003,7 @@ export function SettingsPage({
                 assistant={settings.assistant}
                 accountState={accountState}
                 sessionUserId={session?.userId}
+                encryptedProjectOpen={encryptedProjectOpen}
                 onChange={patchAssistant}
               />
 

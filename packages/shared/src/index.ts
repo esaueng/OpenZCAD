@@ -6750,6 +6750,8 @@ export interface EffectiveAssistantSettings {
   provider: AssistantProvider;
   model: string;
   reasoningEffort: string;
+  /** The deployment model has a known incompatibility with encrypted projects. */
+  encryptedProjectUnsupported?: true;
   /**
    * The upstream URL a request goes to, which an encrypted project's
    * assistant consent binds (ADR-024 6-1). Empty when none is usable.

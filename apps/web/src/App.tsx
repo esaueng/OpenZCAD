@@ -36081,6 +36081,7 @@ export function App() {
           desktopAuthorizationApproved={desktopAuthorizationApproved}
           desktopAuthorizationCode={desktopAuthorizationCode}
           workspaceOpen={doc !== null}
+          encryptedProjectOpen={encryptedProjectOpen || assistantHeldEncrypted}
           documentUnits={doc?.units}
           onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
           onChange={handleAppSettingsChange}

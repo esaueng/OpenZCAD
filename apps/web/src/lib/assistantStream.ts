@@ -113,6 +113,7 @@ export interface AssistantStatus {
   provider: string;
   model: string;
   reasoningEffort: string;
+  encryptedProjectUnsupported?: true;
   /** Where requests go; an encrypted project's consent binds it. */
   endpoint?: string;
 }
@@ -212,6 +213,9 @@ export function normalizeAssistantStatus(raw: unknown): AssistantStatus {
     provider: text(value.provider),
     model: text(value.model),
     reasoningEffort: text(value.reasoningEffort),
+    ...(value.encryptedProjectUnsupported === true
+      ? { encryptedProjectUnsupported: true }
+      : {}),
     ...(typeof value.endpoint === 'string' ? { endpoint: value.endpoint } : {})
   };
 }

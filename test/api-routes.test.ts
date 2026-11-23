@@ -1721,6 +1721,34 @@ describe('worker api routes', () => {
     });
   });
 
+  it.each([undefined, 'https://openrouter.ai/api/v1/responses'])(
+    'reports the encrypted-project restriction with the standard OpenRouter endpoint (%s)',
+    async (baseUrl) => {
+      const response = await worker.fetch(
+        new Request('https://example.com/api/assistant/status', {
+          headers: { cookie: '__Host-openzcad_session=test-session' }
+        }),
+        withEnabledDeploymentAssistant({
+          ENVIRONMENT: 'beta',
+          AUTH_MODE: 'email-code',
+          AI_PROVIDER: 'openrouter',
+          AI_MODEL: 'nvidia/nemotron-3.5-super-vl:free',
+          ...(baseUrl ? { AI_BASE_URL: baseUrl } : {}),
+          AI_DEPLOYMENT_FREE_ENABLED: 'true',
+          AI_DEPLOYMENT_ALLOWED_EMAILS: 'allowed@example.com',
+          OPENROUTER_API_KEY: 'secret-test-value'
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        configured: true,
+        source: 'deployment',
+        encryptedProjectUnsupported: true
+      });
+    }
+  );
+
   // Paid or non-public deployments still require an explicit eligibility grant.
   it('denies deployment assistant funding when no allowlist is configured', async () => {
     const response = await worker.fetch(
