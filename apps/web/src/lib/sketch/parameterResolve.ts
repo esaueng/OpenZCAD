@@ -62,9 +62,30 @@ export function parameterValueReader(
 }
 
 /**
+ * Whether a sketch holds a linked projection (I01). The solver pins such an
+ * object where its model edge was last projected, but a value change can
+ * move that edge: solving here would hold the old position against the new
+ * values and refuse a valid change. The exact rebuild re-projects the edge
+ * and solves the sketch's other objects against it on every build
+ * (`resolveSketchProjectionsAtHistory`), so it is left to the rebuild.
+ */
+function hasLinkedProjection(
+  document: ProjectDocument,
+  sketch: SketchNode
+): boolean {
+  return sketch.objectIds.some((objectId) => {
+    const node = ownEntry(document.nodes, objectId);
+    return (
+      node?.kind === 'sketch-object' && node.data.projection?.mode === 'linked'
+    );
+  });
+}
+
+/**
  * The sketches of `after` that `before` already had and whose relations
  * read differently under `after`'s parameter values. A sketch the change
- * itself adds was authored under the new values and has nothing stale.
+ * itself adds was authored under the new values and has nothing stale; one
+ * with a linked projection is solved by the rebuild instead.
  */
 export function sketchesDrivenByValueChange(
   before: ProjectDocument,
@@ -72,7 +93,9 @@ export function sketchesDrivenByValueChange(
 ): SketchNode[] {
   return sketchesDrivenByParameterEdit(
     listNodesByKind(after, 'sketch').filter(
-      (sketch) => ownEntry(before.nodes, sketch.id)?.kind === 'sketch'
+      (sketch) =>
+        ownEntry(before.nodes, sketch.id)?.kind === 'sketch' &&
+        !hasLinkedProjection(after, sketch)
     ),
     parameterValueReader(before),
     parameterValueReader(after)

@@ -8,13 +8,37 @@ import {
 } from '@openzcad/command-system';
 import {
   activateConfiguration,
-  setConfigurationCell
+  addConfigurationColumn,
+  addConfigurationRow,
+  addPrimitiveFeature,
+  addSketchConstraint,
+  addSketchFeature,
+  createConfigurations,
+  createProjectDocument,
+  extrudeSketch,
+  findSketch,
+  getNode,
+  listParameters,
+  setConfigurationCell,
+  setParameter
 } from '@openzcad/document-core';
+import {
+  computeSketchRegions,
+  frameForPlaneRef,
+  projectEdgeToSketch,
+  projectableCurveFromTopology
+} from '@openzcad/geometry';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import {
+  toUserId,
+  type BodyId,
+  type EntityId,
+  type ProjectDocument,
+  type SketchConstraintData
+} from '@openzcad/shared';
 import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
 import { buildConfigurationRow } from '../apps/web/src/lib/configurationRowGeometry';
 import { sharedDocumentOnRow } from '../apps/web/src/lib/sharedConfiguration';
@@ -23,7 +47,10 @@ import {
   resolvedForDisplay,
   type SolveSketch
 } from '../apps/web/src/lib/sketch/parameterResolve';
-import { drivenSketchesDocument } from './support/driven-sketches';
+import {
+  drivenSketchesDocument,
+  resolverFor
+} from './support/driven-sketches';
 
 /**
  * The document stores each sketch's solved coordinates and the rebuild
@@ -327,6 +354,182 @@ describe('a parameter value changed outside the Parameters table', () => {
       expect(f.storedCircleX(base)).toBeCloseTo(30, 6);
       const unchanged = await resolvedForDisplay(base, base, solve);
       expect(unchanged).toBe(base);
+    }
+  );
+});
+
+/**
+ * A box `w` wide, and above it a sketch whose linked projection follows the
+ * box's x = w edge. A construction line from a locked origin ends on that
+ * edge's projected endpoint and is dimensioned `w`; a circle sits at the
+ * line's end and is extruded. Rows Narrow (w 20) and Wide (w 32).
+ */
+async function projectedEdgeDocument() {
+  let document = setParameter(
+    createProjectDocument('Projected edge', toUserId('user_projected_edge')),
+    { name: 'w', expression: '20' }
+  );
+  document = addPrimitiveFeature(document, {
+    name: 'Block',
+    primitiveKind: 'box',
+    dimensions: { width: 'w', height: 10, depth: 5 }
+  });
+  const blockId = document.bodyOrder.at(-1)!;
+  const derived = await adapter.syncDocument(document);
+  const edge = (derived.bodyRepresentations[blockId]?.topology?.edges ?? [])
+    .filter((candidate) => {
+      const n = candidate.points.length;
+      return (
+        Math.abs(candidate.points[0]! - 20) < 1e-9 &&
+        Math.abs(candidate.points[n - 3]! - 20) < 1e-9 &&
+        Math.abs(candidate.points[2]! - 5) < 1e-9 &&
+        Math.abs(candidate.points[n - 1]! - 5) < 1e-9
+      );
+    })
+    .at(0);
+  if (!edge?.reference) throw new Error('no x = w top edge');
+  const plane = { type: 'canonical', plane: 'XY', offset: 8 } as const;
+  const projected = projectEdgeToSketch(
+    projectableCurveFromTopology(edge),
+    frameForPlaneRef(plane, (value) => Number(value))
+  );
+  if (projected.status !== 'projected') throw new Error(projected.reason);
+  const line = projected.data;
+  if (line.objectKind !== 'line') throw new Error('not a line');
+  const endAtOrigin = Math.abs(Number(line.y1)) < 1e-9 ? 'start' : 'end';
+  const sketched = addSketchFeature(document, {
+    name: 'Above',
+    planeRef: plane,
+    objects: [
+      {
+        ...line,
+        construction: true,
+        projection: {
+          mode: 'linked',
+          source: { bodyId: blockId, edgeReference: edge.reference }
+        }
+      },
+      { objectKind: 'line', x1: 0, y1: 0, x2: 20, y2: 0, construction: true },
+      { objectKind: 'circle', centerX: 20, centerY: 0, radius: 2 }
+    ]
+  });
+  document = sketched.document;
+  const [edgeId, armId, circleId] = findSketch(document, sketched.sketchId)!
+    .objectIds as [EntityId, EntityId, EntityId];
+  const constraints: SketchConstraintData[] = [
+    {
+      constraintKind: 'lock',
+      point: { objectId: armId, point: 'start' },
+      x: 0,
+      y: 0
+    },
+    { constraintKind: 'horizontal', objectId: armId },
+    {
+      constraintKind: 'coincident',
+      a: { objectId: armId, point: 'end' },
+      b: { objectId: edgeId, point: endAtOrigin }
+    },
+    {
+      constraintKind: 'coincident',
+      a: { objectId: armId, point: 'end' },
+      b: { objectId: circleId, point: 'center' }
+    },
+    { constraintKind: 'radius', objectId: circleId, value: 2 },
+    {
+      constraintKind: 'distance',
+      a: { objectId: armId, point: 'start' },
+      b: { objectId: armId, point: 'end' },
+      value: 'w'
+    }
+  ];
+  for (const constraint of constraints)
+    document = addSketchConstraint(document, {
+      sketchId: sketched.sketchId,
+      constraint
+    }).document;
+  const objects = findSketch(document, sketched.sketchId)!.objectIds.map(
+    (id) => {
+      const node = getNode(document, id);
+      if (node?.kind !== 'sketch-object') throw new Error('no object');
+      return { id: String(id), data: node.data };
+    }
+  );
+  const region = computeSketchRegions(objects, (value) =>
+    Number(resolverFor(document)(value))
+  ).find(
+    (candidate) =>
+      candidate.sourceEntityIds.length === 1 &&
+      String(candidate.sourceEntityIds[0]) === String(circleId)
+  );
+  if (!region) throw new Error('no circle region');
+  const extruded = extrudeSketch(document, {
+    name: 'Peg',
+    sketchId: sketched.sketchId,
+    distance: 3,
+    profiles: [
+      {
+        profileId: region.profileId,
+        regionFingerprint: region.regionFingerprint,
+        samplePoint: region.samplePoint,
+        sourceArea: region.area,
+        sourceEntityIds: region.sourceEntityIds
+      }
+    ]
+  });
+  document = createConfigurations(extruded.document, {
+    rowId: 'row_narrow',
+    name: 'Narrow'
+  });
+  const column = {
+    kind: 'parameter' as const,
+    parameterId: listParameters(document).find((p) => p.name === 'w')!
+      .parameterId
+  };
+  document = addConfigurationColumn(document, { column });
+  document = addConfigurationRow(document, { rowId: 'row_wide', name: 'Wide' });
+  document = setConfigurationCell(document, {
+    rowId: 'row_wide',
+    column,
+    value: '32'
+  });
+  return { document, pegId: extruded.bodyId };
+}
+
+describe('a value that moves an upstream edge a sketch projects', () => {
+  it(
+    'switches rows without solving against the old projection',
+    { timeout: 180_000 },
+    async () => {
+      const { document: base, pegId } = await projectedEdgeDocument();
+      const pegX = async (candidate: ProjectDocument) => {
+        const derived = await adapter.syncDocument(candidate);
+        expect(derived.warnings).toEqual([]);
+        const { bbox } = derived.bodyRepresentations[pegId]!;
+        return (bbox.min.x + bbox.max.x) / 2;
+      };
+      expect(await pegX(base)).toBeCloseTo(20, 6);
+      const activate = commandFactories.activateConfiguration({
+        rowId: 'row_wide'
+      });
+      activate.validate(base);
+      const switched = activate.apply(base);
+      const resolved = await resolveSketchesForValueChange(
+        base,
+        switched,
+        solve
+      );
+      if (!resolved?.ok)
+        throw new Error(resolved ? resolved.reason : 'stale resolve');
+      // The rebuild re-projects the edge and solves the sketch against it.
+      const manager = new CommandManager(base);
+      manager.runTransaction('Switch to Wide', [
+        activate,
+        ...resolved.commands
+      ]);
+      expect(await pegX(manager.document)).toBeCloseTo(32, 6);
+      // Shown rather than switched, the row builds the same way.
+      const shown = await resolvedForDisplay(base, switched, solve);
+      expect(await pegX(shown)).toBeCloseTo(32, 6);
     }
   );
 });
