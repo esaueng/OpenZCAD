@@ -340,6 +340,7 @@ import {
   cornersClearOfStage,
   cornersWithinFrame,
   measureClearStage,
+  measureClearStageRequestFrame,
   measureCreationFrame,
   measureFitFrame,
   measureOpeningFrame,
@@ -19031,7 +19032,7 @@ export function ModelViewer({
         return;
       }
       clearStagePendingRef.current = false;
-      const stage = measureFitFrame(context.renderer.domElement);
+      const stage = measureClearStageRequestFrame(context.renderer.domElement);
       if (!stage) {
         return;
       }
