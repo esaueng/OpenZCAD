@@ -1163,8 +1163,12 @@ describe('scoped re-check findings on PR 1990', () => {
     const from = listConversionReferenceSites(source).find(
       (site) => site.pointer === pointer
     );
-    if (from?.kind !== 'topology') throw new Error('no face site');
-    const good = { ...from.reference, currentHash: 42 };
+    if (from?.kind !== 'topology' || from.reference.kind !== 'face')
+      throw new Error('no face site');
+    const good: FaceTopologyReferenceV5 = {
+      ...from.reference,
+      currentHash: 42
+    };
     // Well formed, it converts: the site is real and replay writes it.
     expect(
       runUnitsConversion(
