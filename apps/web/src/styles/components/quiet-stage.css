@@ -3807,6 +3807,29 @@ button.command-rail.is-suggested {
 
 /* Every panel's frame. */
 .model-panel {
+  /* The stage publishes the heights of its lanes (the guidance row, the
+     in-place command, the activity pill, the motion timeline, the tour's
+     foot claim) as custom properties on the viewer area, and works its
+     notice lanes out from them. They change as an edit lands, and custom
+     properties inherit, so each write restyled and re-laid out every History
+     and Objects row: tens of milliseconds of a 100-step edit's frame.
+     Nothing in a panel reads them, so a panel takes none of them; `initial`
+     is the unset value, the same whatever the stage writes.
+     test/stage-metric-isolation.test.ts keeps this list complete. */
+  --activity-pill-live-h: initial;
+  --in-place-command-h: initial;
+  --lane-base: initial;
+  --lane-status: initial;
+  --motion-timeline-claim: initial;
+  --motion-timeline-h: initial;
+  --notice-least-lift: initial;
+  --panel-lane-bottom: initial;
+  --stage-foot-claim: initial;
+  --tour-bottom: initial;
+  --tour-lane-bottom: initial;
+  --workspace-guidance-h: initial;
+  --workspace-tour-claim: initial;
+
   min-height: 0;
   box-sizing: border-box;
   display: flex;
