@@ -463,9 +463,14 @@ in mm) is K-row work outside I03.
 ### 5.1 One command, recorded and replayable
 
 - **Kind:** `units.convert`. Payload:
-  `{ from, to, factor: [N, D], references: Record<path, TopologyReferenceV5 | number> }`.
-  `factor` is redundant with the units but pins the arithmetic for future
-  replays. `references` is the §3.2 map, keyed by registry path.
+  `{ from, to, factor: [N, D], references: Record<path, { from: value, to: value }> }`,
+  where a value is a `TopologyReferenceV5`, a hash or end index, a profile
+  id or an edge-run flag. `factor` is redundant with the units but pins the
+  arithmetic for future replays. `references` is the §3.2 map, keyed by
+  registry path, with each entry's `from` the value the source stored there.
+  Replay refuses the whole conversion when any place holds anything other
+  than its `from` (a reordered or rebased history re-selected it), rather
+  than overwrite the newer value.
 - **Replay:** `replayCommands` (`command-system/src/index.ts:6782`) applies
   a pure `convertDocumentUnits(document, payload)` in `document-core`. It
   needs no kernel, because the references are precomputed.
