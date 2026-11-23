@@ -2252,8 +2252,10 @@ import {
 } from './lib/panelLayout';
 import {
   useHistoryFind,
+  useHistoryText,
   useObjectsView
 } from './components/modelPanels/panelViews';
+import { HistoryTextHost } from './components/modelPanels/HistoryTextHost';
 import {
   loadSettingsViewState,
   updateSettingsViewState
@@ -3526,7 +3528,8 @@ export function App() {
   // different project starts them afresh.
   const objectsView = useObjectsView(doc?.projectId ?? null);
   const historyFind = useHistoryFind(doc?.projectId ?? null);
-  const modelPanelViews = { objects: objectsView, historyFind };
+  const historyText = useHistoryText(doc?.projectId ?? null);
+  const modelPanelViews = { objects: objectsView, historyFind, historyText };
   const textOutlineBudgetError = useMemo(
     () => (doc ? documentTextBudgetError(doc) : null),
     [doc]
@@ -37719,8 +37722,6 @@ export function App() {
       hiddenBodyIds={hiddenBodyIds}
       hiddenSketchIds={hiddenSketchIds}
       document={doc}
-      historyTextEditBlocked={editDisabledReason}
-      onApplyHistoryText={applyPatch}
       hiddenDatumIds={hiddenDatumIds}
       onHiddenDatumIdsChange={setHiddenDatumIds}
       hiddenReferenceImageIds={hiddenReferenceImageIds}
@@ -39639,6 +39640,15 @@ export function App() {
             />
           )}
           {pinResetDialog}
+          {/* Drawn here, once, not by the History panel: the dock and the
+              phone lane each mount their own, and crossing the phone
+              breakpoint swaps one for the other. */}
+          <HistoryTextHost
+            view={historyText}
+            document={doc}
+            editBlocked={editDisabledReason}
+            onApply={applyPatch}
+          />
           <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }

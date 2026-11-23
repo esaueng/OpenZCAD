@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import { useHistoryFind, useObjectsView } from './panelViews';
+import { useHistoryFind, useHistoryText, useObjectsView } from './panelViews';
 
 describe('model panel view state', () => {
   it('keeps the Objects view within a project and starts it afresh for another', () => {
@@ -33,5 +33,22 @@ describe('model panel view state', () => {
     expect(result.current.open).toBe(true);
     rerender({ scope: 'project-b' });
     expect(result.current.open).toBe(false);
+  });
+
+  it('drops History as text and its edit for another project', () => {
+    const { result, rerender } = renderHook(
+      ({ scope }) => useHistoryText(scope),
+      { initialProps: { scope: 'project-a' } }
+    );
+    act(() => {
+      result.current.toggle();
+      result.current.setDraft({ text: 'edited', baseVersion: 3 });
+    });
+    rerender({ scope: 'project-a' });
+    expect(result.current.open).toBe(true);
+    expect(result.current.draft).toEqual({ text: 'edited', baseVersion: 3 });
+    rerender({ scope: 'project-b' });
+    expect(result.current.open).toBe(false);
+    expect(result.current.draft).toBeNull();
   });
 });

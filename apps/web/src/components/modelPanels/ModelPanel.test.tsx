@@ -30,7 +30,8 @@ import {
 import type { PanelId } from '../../lib/panelLayout';
 import { ModelPanel, type ModelPanelProps } from './ModelPanel';
 import { PINNED_HINT, TEMPORARY_HINT, type PanelControls } from './PanelFrame';
-import { useHistoryFind, useObjectsView } from './panelViews';
+import { HistoryTextHost } from './HistoryTextHost';
+import { useHistoryFind, useHistoryText, useObjectsView } from './panelViews';
 
 function feature(
   index: number,
@@ -109,7 +110,11 @@ function Panels({
   props: PanelSource;
   frame: PanelControls;
 }) {
-  const views = { objects: useObjectsView(), historyFind: useHistoryFind() };
+  const views = {
+    objects: useObjectsView(),
+    historyFind: useHistoryFind(),
+    historyText: useHistoryText()
+  };
   return (
     <>
       {ids.map((id) => (
@@ -121,6 +126,7 @@ function Panels({
           {...props}
         />
       ))}
+      <HistoryTextHost view={views.historyText} document={props.document} />
     </>
   );
 }
@@ -444,7 +450,8 @@ describe('ModelPanel', () => {
     function Moving({ inLane }: { inLane: boolean }) {
       const views = {
         objects: useObjectsView(),
-        historyFind: useHistoryFind()
+        historyFind: useHistoryFind(),
+        historyText: useHistoryText()
       };
       const panels = (['bodies', 'history'] as const).map((id) => (
         <ModelPanel
@@ -594,6 +601,76 @@ describe('ModelPanel', () => {
     expect(
       screen.queryByRole('dialog', { name: 'History as text' })
     ).toBeNull();
+  });
+
+  it('keeps History as text open with its edit when the History panel remounts', async () => {
+    const user = userEvent.setup();
+    const document = createProjectDocument('Text', toUserId('owner'));
+    const props = source({ document });
+    const onApply = vi.fn(async () => false);
+    // The dock and the phone lane each mount their own History panel, so
+    // crossing the phone breakpoint unmounts one and mounts the other.
+    function Workspace({ phone }: { phone: boolean }) {
+      const views = {
+        objects: useObjectsView(),
+        historyFind: useHistoryFind(),
+        historyText: useHistoryText()
+      };
+      const panel = (
+        <ModelPanel
+          id="history"
+          controls={controls()}
+          views={views}
+          {...props}
+        />
+      );
+      return (
+        <>
+          {phone ? (
+            <section key="lane">{panel}</section>
+          ) : (
+            <div key="dock">{panel}</div>
+          )}
+          <HistoryTextHost
+            view={views.historyText}
+            document={document}
+            onApply={onApply}
+          />
+        </>
+      );
+    }
+    const { rerender } = render(<Workspace phone={false} />);
+    await user.click(screen.getByRole('button', { name: 'History as text' }));
+    const field =
+      await screen.findByLabelText<HTMLTextAreaElement>(/History text/);
+    await user.type(field, '# kept');
+    const edited = field.value;
+    expect(edited).toMatch(/# kept$/);
+
+    for (const phone of [true, false]) {
+      rerender(<Workspace phone={phone} />);
+      const dialog = screen.getByRole('dialog', { name: 'History as text' });
+      expect(
+        within(dialog).getByLabelText<HTMLTextAreaElement>(/History text/).value
+      ).toBe(edited);
+      expect(
+        within(dialog).getByRole('button', { name: 'Revert' })
+      ).toBeEnabled();
+      // The modal leaves the panel behind it inert.
+      expect(
+        screen.getByRole('button', { name: 'History as text', hidden: true })
+      ).toHaveAttribute('aria-pressed', 'true');
+    }
+
+    // Closed and opened again, the edit is still there to apply.
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(
+      screen.queryByRole('dialog', { name: 'History as text' })
+    ).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'History as text' }));
+    expect(
+      (await screen.findByLabelText<HTMLTextAreaElement>(/History text/)).value
+    ).toBe(edited);
   });
 
   it('offers no history text without a document', () => {

@@ -1,7 +1,4 @@
-import { Suspense, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { PanelId } from '../../lib/panelLayout';
-import { lazyWithStaleChunkNotice } from '../../lib/staleChunk';
 import { DiagnosticsPanel, diagnosticCount } from './DiagnosticsPanel';
 import {
   HistoryFindToggle,
@@ -21,11 +18,6 @@ import {
   revisionCount,
   useRevisionCheckpoints
 } from './RevisionsPanel';
-
-/** L15: loaded with the scripting package only when it is first opened. */
-const HistoryTextDialog = lazyWithStaleChunkNotice(
-  () => import('../HistoryTextDialog')
-);
 
 export interface ModelPanelProps extends ModelPanelSource {
   id: PanelId;
@@ -110,7 +102,9 @@ function ObjectsFrame(props: ModelPanelProps) {
 function HistoryFrame(props: ModelPanelProps) {
   const find = props.views.historyFind;
   const repair = useHistoryRepair(props);
-  const [textOpen, setTextOpen] = useState(false);
+  // The dialog itself is drawn once for the workspace (HistoryTextHost), so
+  // it outlives this panel remounting in the dock or the phone lane.
+  const text = props.views.historyText;
   const document = props.document;
   return (
     <PanelFrame
@@ -126,10 +120,7 @@ function HistoryFrame(props: ModelPanelProps) {
               onSelectFeature={props.onSelectFeature}
             />
             {document && (
-              <HistoryTextToggle
-                open={textOpen}
-                onToggle={() => setTextOpen((open) => !open)}
-              />
+              <HistoryTextToggle open={text.open} onToggle={text.toggle} />
             )}
             <HistoryFindToggle find={find} />
           </>
@@ -137,21 +128,6 @@ function HistoryFrame(props: ModelPanelProps) {
       }
     >
       <HistoryPanel {...props} find={find} repair={repair} />
-      {textOpen &&
-        document &&
-        createPortal(
-          <Suspense fallback={null}>
-            <HistoryTextDialog
-              document={document}
-              editBlocked={props.historyTextEditBlocked ?? null}
-              {...(props.onApplyHistoryText
-                ? { onApply: props.onApplyHistoryText }
-                : {})}
-              onClose={() => setTextOpen(false)}
-            />
-          </Suspense>,
-          window.document.body
-        )}
     </PanelFrame>
   );
 }

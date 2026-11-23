@@ -74,8 +74,51 @@ export function useHistoryFind(scope: unknown = null): HistoryFind {
   };
 }
 
+/** An unapplied History-as-text edit and the version it was printed from. */
+export interface HistoryTextDraft {
+  text: string;
+  baseVersion: number;
+}
+
+/**
+ * History as text: whether the dialog is open, and its unapplied edit. Held
+ * above the panel, and the dialog drawn once outside the dock and the phone
+ * lane, because crossing the phone breakpoint unmounts one History panel and
+ * mounts the other: kept in the panel, the dialog closed and its edit was
+ * lost without a word.
+ */
+export interface HistoryTextView {
+  open: boolean;
+  toggle(): void;
+  close(): void;
+  /** The unapplied edit, or null while the text is unedited. */
+  draft: HistoryTextDraft | null;
+  setDraft: Dispatch<SetStateAction<HistoryTextDraft | null>>;
+}
+
+export function useHistoryText(scope: unknown = null): HistoryTextView {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<HistoryTextDraft | null>(null);
+  // Another project's history is other text: an edit printed from this one
+  // never carries over, as it did not when the workspace unmounted.
+  const [shownScope, setShownScope] = useState(scope);
+  if (shownScope !== scope) {
+    setShownScope(scope);
+    setOpen(false);
+    setDraft(null);
+  }
+  return {
+    open,
+    toggle: () => setOpen((current) => !current),
+    close: () => setOpen(false),
+    draft,
+    setDraft
+  };
+}
+
 /** Every model panel's view state, held once for the workspace. */
 export interface ModelPanelViews {
   objects: ObjectsView;
   historyFind: HistoryFind;
+  historyText: HistoryTextView;
 }

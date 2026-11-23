@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction
+} from 'react';
 import { FileCode2 } from 'lucide-react';
 import type { CadPatchProposal } from '@openzcad/ai-contracts';
 import {
@@ -11,6 +18,7 @@ import type { ProjectDocument } from '@openzcad/shared';
 import { useModalFocus } from '../lib/useModalFocus';
 import { useKeyboardInset } from '../lib/keyboardInset';
 import type { PatchSource } from './modelPanels/modelPanelProps';
+import type { HistoryTextDraft } from './modelPanels/panelViews';
 
 export interface HistoryTextDialogProps {
   document: ProjectDocument;
@@ -22,6 +30,13 @@ export interface HistoryTextDialogProps {
    * is read only.
    */
   onApply?(proposal: CadPatchProposal, source: PatchSource): Promise<boolean>;
+  /**
+   * The unapplied edit, held by the caller so it outlives this dialog
+   * remounting (the workspace crossing the phone breakpoint). Given with
+   * `onDraftChange`; absent, the dialog holds its own.
+   */
+  draft?: HistoryTextDraft | null;
+  onDraftChange?: Dispatch<SetStateAction<HistoryTextDraft | null>>;
   onClose(): void;
 }
 
@@ -58,16 +73,18 @@ export default function HistoryTextDialog({
   document,
   editBlocked = null,
   onApply,
+  draft: heldDraft,
+  onDraftChange,
   onClose
 }: HistoryTextDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const textRef = useRef<HTMLTextAreaElement | null>(null);
   const printed = useMemo(() => print(document), [document]);
   // The edit and the version it was printed from; null while unedited.
-  const [draft, setDraft] = useState<{
-    text: string;
-    baseVersion: number;
-  } | null>(null);
+  const [ownDraft, setOwnDraft] = useState<HistoryTextDraft | null>(null);
+  const held = onDraftChange !== undefined;
+  const draft = held ? (heldDraft ?? null) : ownDraft;
+  const setDraft = onDraftChange ?? setOwnDraft;
   const [checked, setChecked] = useState<HistoryEditResult | null>(null);
   const [status, setStatus] = useState('');
   const [applying, setApplying] = useState(false);
