@@ -26172,7 +26172,9 @@ export function App() {
    * with the sketches its values drive solved into the same entry. The last
    * of several quick row switches wins.
    */
-  function runConfigurationCommand(command: AnyCommand): Promise<string | null> {
+  function runConfigurationCommand(
+    command: AnyCommand
+  ): Promise<string | null> {
     return runResolvedConfigurationCommand(command, {
       manager: () => managerRef.current,
       solve: (document, sketchId) => geometry.solveSketch(document, sketchId),

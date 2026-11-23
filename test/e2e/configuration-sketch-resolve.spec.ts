@@ -188,13 +188,17 @@ test(
     // Both sketches outlined, then Large made the active row.
     const objects = page.getByRole('list', { name: 'Objects' });
     for (const name of ['Distance', 'Pattern'])
-      await objects.getByRole('button', { name: `Show sketch ${name}` }).click();
+      await objects
+        .getByRole('button', { name: `Show sketch ${name}` })
+        .click();
     await page.getByRole('radio', { name: 'Use Large' }).click();
     await expect(page.getByRole('radio', { name: 'Use Large' })).toBeChecked();
-    await expect.poll(() => drawnExtents(page), READY).toEqual({
-      sketch: 47,
-      bodies: 71
-    });
+    await expect
+      .poll(() => drawnExtents(page), READY)
+      .toEqual({
+        sketch: 47,
+        bodies: 71
+      });
 
     // View shows Small: the outlines move with the solids, not only the
     // solids.
@@ -204,10 +208,12 @@ test(
       .click();
     const shown = page.locator('.view-mode-rail-configuration select');
     await shown.selectOption('row_small');
-    await expect.poll(() => drawnExtents(page), READY).toEqual({
-      sketch: 32,
-      bodies: 59
-    });
+    await expect
+      .poll(() => drawnExtents(page), READY)
+      .toEqual({
+        sketch: 32,
+        bodies: 59
+      });
 
     // File › Export STEP writes Small, the row on screen, not the active
     // Large.

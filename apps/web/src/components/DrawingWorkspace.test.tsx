@@ -1159,10 +1159,7 @@ describe('DrawingWorkspace', () => {
     const [first, ...rest] = sheet.views;
     const rowSheet: DrawingSheet = {
       ...sheet,
-      views: [
-        { ...first!, configurationId: 'row_large' },
-        ...rest
-      ]
+      views: [{ ...first!, configurationId: 'row_large' }, ...rest]
     };
     const bodies = { [bodyId]: cube() };
     const mesh = displayTessellation(bodies);

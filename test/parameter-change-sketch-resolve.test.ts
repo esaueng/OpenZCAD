@@ -3,8 +3,7 @@ import {
   CommandManager,
   commandFactories,
   isParameterResolvedSketchUpdate,
-  replayCommands,
-  type SerializedCommand
+  replayCommands
 } from '@openzcad/command-system';
 import {
   activateConfiguration,
@@ -37,6 +36,7 @@ import {
   type BodyId,
   type EntityId,
   type ProjectDocument,
+  type SerializedCommand,
   type SketchConstraintData
 } from '@openzcad/shared';
 import { preflightCadPatch } from '../apps/web/src/lib/aiPatchPreflight';
@@ -47,10 +47,7 @@ import {
   resolvedForDisplay,
   type SolveSketch
 } from '../apps/web/src/lib/sketch/parameterResolve';
-import {
-  drivenSketchesDocument,
-  resolverFor
-} from './support/driven-sketches';
+import { drivenSketchesDocument, resolverFor } from './support/driven-sketches';
 
 /**
  * The document stores each sketch's solved coordinates and the rebuild
@@ -154,9 +151,9 @@ describe('Tweak undo and solved sketch geometry', () => {
       );
       expect(plain).toHaveLength(1);
       // The pattern's solved copies are marked; the move is not.
-      expect(
-        preflight.commands.some(isParameterResolvedSketchUpdate)
-      ).toBe(true);
+      expect(preflight.commands.some(isParameterResolvedSketchUpdate)).toBe(
+        true
+      );
       const manager = new CommandManager(base);
       manager.runTransaction('Apply history text', preflight.commands);
       expect(manager.undoIsParameterOnly).toBe(false);
@@ -166,7 +163,7 @@ describe('Tweak undo and solved sketch geometry', () => {
       // The same value edit alone, with only its solved geometry, is Tweak's.
       const valueOnly = await preflightCadPatch(
         base,
-        { ...proposal, operations: [proposal.operations[0]!] },
+        { ...proposal, operations: [proposal.operations[0]!] } as never,
         (candidate) => adapter.syncDocument(candidate),
         solve
       );

@@ -865,7 +865,8 @@ function useViewProjections(
         else
           cache.current.set(key, {
             state: 'error',
-            message: error instanceof Error ? error.message : 'Projection failed.'
+            message:
+              error instanceof Error ? error.message : 'Projection failed.'
           });
       };
       const sectioned = [...cuts].map(([planeKey, cut]) => {
