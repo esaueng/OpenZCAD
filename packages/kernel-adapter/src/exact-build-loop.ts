@@ -41,6 +41,7 @@ import {
 } from './exact-idle-lineage-view';
 import { kernelRefusalRecordOf } from './kernel-refusal';
 import { blendAdviceOf } from './exact-edge-modifiers';
+import { noteReferenceRecaptureFeature } from './reference-recapture-slot';
 import {
   captureFeatureEntryState,
   firstManualSuppressionIndex,
@@ -332,6 +333,7 @@ function* buildDocumentHistorySteps(
       throwIfBuildCancelled(signal);
       idleLineageView?.begin(result);
       onFeatureStart?.(index);
+      noteReferenceRecaptureFeature(feature.featureId);
       if (isFeatureSuppressed(feature)) {
         const message = `Feature "${feature.name}": Suppressed; skipped during exact rebuild.`;
         result.warnings.push(message);
@@ -342,6 +344,7 @@ function* buildDocumentHistorySteps(
         // A skipped step that replaced one body leaves that body, unchanged,
         // where its dependents look for the result (F1 follow-up).
         passSuppressedFeatureThrough(result, feature);
+        noteReferenceRecaptureFeature(null);
         onFeature?.(index, result, idleLineageView?.finish(feature, result));
         yield;
         continue;
@@ -420,11 +423,13 @@ function* buildDocumentHistorySteps(
         result.warnings.push(message);
         attribute(result, feature, message, 'history-fork');
       }
+      noteReferenceRecaptureFeature(null);
       onFeature?.(index, result, idleLineageView?.finish(feature, result));
       yield;
     }
     return result;
   } finally {
+    noteReferenceRecaptureFeature(null);
     cancellation?.token.free();
   }
 }

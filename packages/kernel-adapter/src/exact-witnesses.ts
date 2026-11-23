@@ -36,6 +36,7 @@ import {
 import { canonicalDirection } from './topology-fingerprint';
 import { topologyHashOfWitness } from './topology-lineage';
 import { surfaceTypeOf, syncReadMemoFor } from './exact-sync-memo';
+import { referenceRecaptureHooks } from './reference-recapture-slot';
 
 /** Chord tolerance for identity sampling; mirrors the display default. */
 export { MEASUREMENT_DEFLECTION };
@@ -182,7 +183,19 @@ export function edgeHandlesByFingerprint(
       registerHandle(result, hash, edge);
     }
   }
-  return result;
+  const hooks = referenceRecaptureHooks();
+  return hooks
+    ? hooks.fingerprintMap(result, {
+        kind: 'edge',
+        witnessOf: (handle) => edgeWitnessOf(kernel, handle),
+        hashOf: (scheme, handle) =>
+          scheme === 'witness'
+            ? topologyHashOfWitness('edge', edgeWitnessOf(kernel, handle))
+            : scheme === 'fingerprint'
+              ? edgeFingerprint(kernel, handle)
+              : legacyEdgeFingerprint(kernel, handle)
+      })
+    : result;
 }
 
 export function analyticParamsSignature(kernel: RemusKernel, face: number): string {
@@ -530,5 +543,17 @@ export function faceHandlesByFingerprint(
       registerHandle(result, legacy, face);
     }
   }
-  return result;
+  const hooks = referenceRecaptureHooks();
+  return hooks
+    ? hooks.fingerprintMap(result, {
+        kind: 'face',
+        witnessOf: (handle) => faceWitnessOf(kernel, handle),
+        hashOf: (scheme, handle) =>
+          scheme === 'witness'
+            ? topologyHashOfWitness('face', faceWitnessOf(kernel, handle))
+            : scheme === 'fingerprint'
+              ? faceFingerprint(kernel, handle)
+              : legacyFaceFingerprint(kernel, handle)
+      })
+    : result;
 }

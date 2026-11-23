@@ -7267,3 +7267,33 @@ function shownExportBodies(
   return { written, skipped };
 }
 export { wrapOrientationProbe } from './exact-wrap';
+
+export {
+  blendOrientationCorrespondence,
+  compareBlendOrientations,
+  computeConversionReferenceMap,
+  lineageNameFamily,
+  positionTolerance,
+  matchScaledProfile,
+  matchScaledTopology,
+  recaptureWindow,
+  scaledWitnessMatches,
+  unitConversionGeometryOracle,
+  RECAPTURE_WINDOW_QUANTA,
+  UNIT_CONVERSION_MEASURE_RTOL,
+  type BlendOrientationCorrespondence,
+  type ConversionReferenceMapOptions,
+  type ConversionReferenceMapResult,
+  type ConversionReferenceRefusal,
+  type ConversionReferenceRefusalCode,
+  type ConversionReferenceReport,
+  type GeometryOracleStats,
+  type SourceProfileEntity,
+  type SourceTopologyEntity,
+  type TopologyMatch
+} from './units-reference-recapture';
+export type {
+  BlendEdgeOrientation,
+  BlendOrientationReport
+} from './blend-orientation';
+export { topologyHashOfWitness } from './topology-lineage';
