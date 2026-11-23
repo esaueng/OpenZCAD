@@ -901,7 +901,8 @@ function providerRequestId(response: Response): string | undefined {
 }
 
 async function readProviderFailure(
-  response: Response
+  response: Response,
+  workersAiEnvelope = false
 ): Promise<ProviderFailureDetails> {
   const headerRequestId = providerRequestId(response);
   if (!response.body) {
@@ -933,7 +934,14 @@ async function readProviderFailure(
     const payload = JSON.parse(text) as unknown;
     const root = schemaRecord(payload);
     const error = schemaRecord(root?.error);
-    const providerCode = safeDiagnosticIdentifier(error?.code ?? root?.code);
+    const workersAiErrors =
+      workersAiEnvelope && Array.isArray(root?.errors) ? root.errors : [];
+    const workersAiCode = schemaRecord(workersAiErrors[0])?.code;
+    const providerCode = safeDiagnosticIdentifier(
+      typeof workersAiCode === 'number'
+        ? String(workersAiCode)
+        : (workersAiCode ?? error?.code ?? root?.code)
+    );
     const bodyRequestId = safeDiagnosticIdentifier(
       error?.request_id ?? root?.request_id
     );
@@ -1668,10 +1676,13 @@ export async function streamEncryptedQwenProposal(
     );
   }
   if (upstream.status === 429) {
-    await upstream.body?.cancel();
+    const failure = await readProviderFailure(upstream, true);
+    const dailyLimit = failure.providerCode === '3036';
     return jsonError(
-      'Free Qwen has reached a usage limit. The daily free allowance resets at 00:00 UTC.',
-      'AI_QWEN_FREE_LIMIT',
+      dailyLimit
+        ? 'Free Qwen has reached its daily allowance. It resets at 00:00 UTC.'
+        : 'Free Qwen is temporarily at capacity. Try again shortly.',
+      dailyLimit ? 'AI_QWEN_FREE_LIMIT' : 'AI_QWEN_RATE_LIMITED',
       429,
       requestId
     );

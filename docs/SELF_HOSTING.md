@@ -193,6 +193,9 @@ account's subscription list. Any subscription, permissions error, or
 unverifiable response stops the request before project data is sent. The
 route uses synchronous Workers AI without AI Gateway and never falls back to
 another model when the billing check or inference fails.
+The Workers Free plan is the billing boundary. The subscription check and
+inference are separate API calls, so keep the inference account on Free
+while requests are enabled.
 
 The project asks for fresh consent when the provider, model, or inference
 account changes. Personal tokens and the built-in route for unencrypted

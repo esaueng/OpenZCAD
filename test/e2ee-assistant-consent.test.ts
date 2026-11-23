@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import worker from '../apps/web/worker/index';
+import * as assistantRateLimit from '../apps/web/worker/assistantRateLimit';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
 import {
   createProjectDocument,
@@ -235,6 +236,7 @@ function stubProvider() {
 
 afterEach(() => {
   provider?.mockRestore();
+  vi.restoreAllMocks();
 });
 
 describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
@@ -362,41 +364,49 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
       const upstream = stubProvider().mockImplementation(async () =>
         Response.json(payload, { status })
       );
+      const permit = vi.spyOn(assistantRateLimit, 'acquireAssistantPermit');
       const reply = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
         body: qwenProposal(projectId, 1)
       });
       expect(reply.status).toBe(503);
       expect(await codeOf(reply)).toBe('AI_QWEN_BILLING_UNVERIFIED');
+      expect(permit).not.toHaveBeenCalled();
       expect(upstream.mock.calls.map(([url]) => url)).toEqual([
         `${QWEN_ACCOUNT_URL}/subscriptions`
       ]);
     }
   );
 
-  it('stops at the free allowance without a paid fallback', async () => {
-    const { call, projectId } = await seed({ ...FLAGS_ON, ...QWEN_ENV });
-    expect(
-      (
-        await call('PUT', `/api/e2ee/assistant-consents/${projectId}`, {
-          body: await consentBody(projectId, 1, { route: QWEN_ROUTE })
-        })
-      ).status
-    ).toBe(200);
-    const upstream = stubProvider()
-      .mockResolvedValueOnce(Response.json({ success: true, result: [] }))
-      .mockResolvedValueOnce(
-        Response.json({ errors: [{ code: 3036 }] }, { status: 429 })
-      );
-    const reply = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
-      body: qwenProposal(projectId, 1)
-    });
-    expect(reply.status).toBe(429);
-    expect(await codeOf(reply)).toBe('AI_QWEN_FREE_LIMIT');
-    expect(upstream.mock.calls.map(([url]) => url)).toEqual([
-      `${QWEN_ACCOUNT_URL}/subscriptions`,
-      QWEN_URL
-    ]);
-  });
+  it.each([
+    [3036, 'AI_QWEN_FREE_LIMIT'],
+    [3040, 'AI_QWEN_RATE_LIMITED']
+  ])(
+    'stops on Qwen error %i without falling back',
+    async (providerCode, expectedCode) => {
+      const { call, projectId } = await seed({ ...FLAGS_ON, ...QWEN_ENV });
+      expect(
+        (
+          await call('PUT', `/api/e2ee/assistant-consents/${projectId}`, {
+            body: await consentBody(projectId, 1, { route: QWEN_ROUTE })
+          })
+        ).status
+      ).toBe(200);
+      const upstream = stubProvider()
+        .mockResolvedValueOnce(Response.json({ success: true, result: [] }))
+        .mockResolvedValueOnce(
+          Response.json({ errors: [{ code: providerCode }] }, { status: 429 })
+        );
+      const reply = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+        body: qwenProposal(projectId, 1)
+      });
+      expect(reply.status).toBe(429);
+      expect(await codeOf(reply)).toBe(expectedCode);
+      expect(upstream.mock.calls.map(([url]) => url)).toEqual([
+        `${QWEN_ACCOUNT_URL}/subscriptions`,
+        QWEN_URL
+      ]);
+    }
+  );
 
   it('checks consent again after verifying the free account', async () => {
     const { call, projectId } = await seed({ ...FLAGS_ON, ...QWEN_ENV });

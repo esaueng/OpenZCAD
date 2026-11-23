@@ -1866,6 +1866,19 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const providerIdentity = await assistantProviderIdentity(userId, env);
     const qwen = encryptedRoute ? encryptedQwenConfig(env) : null;
     if (encryptedRoute && !qwen) return assistantNotConfigured();
+    if (qwen) {
+      await enforceAccountReadRateLimit(env, userId);
+      if (!(await verifyQwenFreeAccount(qwen))) {
+        return json(
+          {
+            error:
+              'Free Qwen is unavailable because its billing status could not be verified. Nothing was sent.',
+            code: 'AI_QWEN_BILLING_UNVERIFIED'
+          },
+          503
+        );
+      }
+    }
     const maxOutputTokens = qwen
       ? QWEN_MAX_OUTPUT_TOKENS
       : (assistant.runtime?.maxOutputTokens ?? maxOutputTokensFor(env));
@@ -1880,17 +1893,6 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     }
     let response: Response;
     try {
-      if (qwen && !(await verifyQwenFreeAccount(qwen))) {
-        await permit.release();
-        return json(
-          {
-            error:
-              'Free Qwen is unavailable because its billing status could not be verified. Nothing was sent.',
-            code: 'AI_QWEN_BILLING_UNVERIFIED'
-          },
-          503
-        );
-      }
       if (consent) {
         const latest = await liveAssistantConsent(
           env.DB!,
