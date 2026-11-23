@@ -568,10 +568,11 @@ describe('the modeling guide', () => {
       expect(cornersClearOfStage(canvas, box(1000, 700, 1200, 880))).toBe(true);
     });
 
-    it('lets a model under a panel the stage let go be reframed', () => {
-      // 768 × 1024: the Tools drawer and the docked column leave too narrow
-      // a gap, so the stage without the card lets the drawer go; a model
-      // under it is still covered (review on #1974).
+    it('leaves a model under a panel no frame can keep clear of', () => {
+      // 768 × 1024: the drawer and the docked column leave an 18 px band,
+      // so every frame lets the drawer go. A reframe would land the model
+      // behind it all the same, so the request leaves it (review on #1983;
+      // #1974 reframed it there).
       const area = document.createElement('div');
       area.className = 'viewer-area';
       const canvas = placed(document.createElement('canvas'), 0, 0, 768, 1024);
@@ -597,7 +598,7 @@ describe('the modeling guide', () => {
         y: 1 - (y / 1024) * 2,
         z: 0
       }));
-      expect(cornersClearOfStage(canvas, corners)).toBe(false);
+      expect(cornersClearOfStage(canvas, corners)).toBe(true);
     });
 
     it('holds a model inside a panel’s gap, clear of the panel', () => {
@@ -638,6 +639,7 @@ describe('the modeling guide', () => {
       const canvas = desk();
       const fold = document.createElement('div');
       fold.className = 'command-flyout';
+      fold.setAttribute('data-rail-flyout', '');
       canvas.closest('.viewer-area')!.append(placed(fold, 400, 60, 640, 700));
       expect(cornersClearOfStage(canvas, box(500, 100, 900, 500))).toBe(false);
     });
@@ -655,23 +657,75 @@ describe('the modeling guide', () => {
 });
 
 describe('measurePickFrame', () => {
-  it('reframes a clear-stage request clear of the open tool fold, Fit not', () => {
-    // 1024 × 768 with the docked column: a guide's reframe landed the model
-    // behind the Tools drawer (preview check on #1974). Fit, as before,
-    // frames as if the passing fold were shut.
+  it('keeps a request’s frame beside the Tools drawer where Fit lets it go', () => {
+    // 1024 × 768, docked: the drawer (a rail flyout) leaves 243 px before
+    // the rail, under Fit's quarter (256) but over a request's fifth (205).
+    // The request kept letting the drawer go and framed the model behind
+    // it (preview check on #1974).
     const canvas = stage('docked');
     const column = placed(document.createElement('div'), 10, 260, 50, 590);
     column.className = 'workspace-column-float';
-    const fold = placed(document.createElement('div'), 60, 260, 304, 740);
+    const fold = placed(document.createElement('div'), 60, 60, 401, 740);
     fold.className = 'command-flyout';
+    fold.setAttribute('data-rail-flyout', '');
     column.append(fold);
     canvas.closest('.viewer-area')!.append(column);
     expect(measureClearStageRequestFrame(canvas)!.minX).toBeCloseTo(
-      ((304 + 12) / 1024) * 2 - 1,
+      ((401 + 12) / 1024) * 2 - 1,
       12
     );
     expect(measureFitFrame(canvas)!.minX).toBeCloseTo(
       ((50 + 12) / 1024) * 2 - 1,
+      12
+    );
+  });
+
+  it('leaves a phone’s model under its Tools drawer, which no frame avoids', () => {
+    // 390 × 844: the 236 px drawer is wider than half the stage, so every
+    // frame lets it go. A reframe landed the model behind it all the same
+    // (review on #1983).
+    const workspace = document.createElement('main');
+    workspace.className = 'workspace';
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 390, 844);
+    area.append(canvas);
+    const fold = placed(document.createElement('div'), 48, 60, 284, 700);
+    fold.className = 'command-flyout';
+    fold.setAttribute('data-rail-flyout', '');
+    area.append(fold);
+    workspace.append(area);
+    document.body.append(workspace);
+    const corners = [
+      [120, 250],
+      [270, 250],
+      [120, 380],
+      [270, 380]
+    ].map(([x = 0, y = 0]) => ({
+      x: (x / 390) * 2 - 1,
+      y: 1 - (y / 844) * 2,
+      z: 0
+    }));
+    expect(cornersClearOfStage(canvas, corners)).toBe(true);
+  });
+
+  it('reframes a request above the command bar, as a creation frame', () => {
+    // A reframe left a corner under the bar (review on #1983).
+    const canvas = stage('none');
+    const lane = document.createElement('div');
+    lane.className = 'command-bar-lane';
+    placed(lane, 200, 700, 824, 756);
+    const workspace = document.createElement('main');
+    workspace.className = 'workspace';
+    const area = canvas.closest('.viewer-area')!;
+    area.replaceWith(workspace);
+    workspace.append(area, lane);
+    expect(measureClearStageRequestFrame(canvas)!.minY).toBeCloseTo(
+      measureCreationFrame(canvas).minY,
+      12
+    );
+    expect(measureClearStageRequestFrame(canvas)!.minY).toBeCloseTo(
+      1 - ((700 - 12) / 768) * 2,
       12
     );
   });

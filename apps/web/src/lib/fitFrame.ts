@@ -17,14 +17,6 @@ import { SELECTION_CALLOUT_OBSTACLES } from './selectionCalloutView';
 const CLEAR_STAGE_OBSTACLES = `${SELECTION_CALLOUT_OBSTACLES}, .tweak-flyouts, .view-flyouts, [data-rail-flyout], .viewer-shell .measurement-dock`;
 
 /**
- * The Tools drawer's open fold, which hangs outside the column's box. Fit
- * frames as if it were shut (it is passing); a clear-stage request, which
- * keeps the model in view now, frames clear of it too (a reframe landed
- * the model behind it: preview check on #1974).
- */
-const TOOL_FOLD = '.command-flyout';
-
-/**
  * The least share of the canvas's width a clear-stage request's side band
  * keeps, against Fit's quarter: beside a 1024 × 768 tablet's Tools drawer
  * there are 243 px, a quarter of the width less 13, and the reframe let the
@@ -120,25 +112,20 @@ export function measureClearStage(
   {
     throughCover = false,
     ignoreGuide = false,
-    withToolFold = false
+    request = false
   }: {
     throughCover?: boolean;
     ignoreGuide?: boolean;
-    withToolFold?: boolean;
+    /** A clear-stage request's frame: side bands down to a fifth. */
+    request?: boolean;
   } = {}
 ): ClearStage | undefined {
-  const minClear = withToolFold
+  const minClear = request
     ? REQUEST_MIN_CLEAR_FRACTION
     : STAGE_FRAME_MIN_CLEAR_FRACTION;
   const bounds = canvas.getBoundingClientRect();
   const panels = [
-    ...panelsOver(
-      canvas,
-      withToolFold
-        ? `${CLEAR_STAGE_OBSTACLES}, ${TOOL_FOLD}`
-        : CLEAR_STAGE_OBSTACLES,
-      throughCover
-    ),
+    ...panelsOver(canvas, CLEAR_STAGE_OBSTACLES, throughCover),
     ...panelsOver(canvas, WORKSPACE_STAGE_OBSTACLES, throughCover, '.workspace')
   ];
   const width = bounds.width;
@@ -347,7 +334,7 @@ export function measureFitFrame(
   options: {
     throughCover?: boolean;
     ignoreGuide?: boolean;
-    withToolFold?: boolean;
+    request?: boolean;
   } = {}
 ): NdcFrame | undefined {
   return measureClearStage(canvas, options)?.frame;
@@ -355,32 +342,46 @@ export function measureFitFrame(
 
 /**
  * The frame a clear-stage request reframes the model into: what Fit frames
- * into, less the Tools drawer's open fold too.
+ * into, keeping a side band down to a fifth of the width (beside a 1024 ×
+ * 768 tablet's Tools drawer), and less the command bar's lane, as a
+ * creation frame is (a reframe left a corner under the bar: review on
+ * #1983). Undefined means the whole canvas.
  */
 export function measureClearStageRequestFrame(
   canvas: HTMLElement
 ): NdcFrame | undefined {
-  return measureFitFrame(canvas, { withToolFold: true });
+  const frame = measureFitFrame(canvas, { request: true });
+  const full = { minX: -1, maxX: 1, minY: -1, maxY: 1 };
+  const cut = aboveCommandLane(canvas, frame ?? full);
+  return cut.minY === full.minY &&
+    cut.maxY === full.maxY &&
+    cut.minX === full.minX &&
+    cut.maxX === full.maxX
+    ? undefined
+    : cut;
 }
 
 /**
- * Whether a model whose bounding box projects to `corners` (normalized
- * device coordinates on `canvas`) stands where nothing covers it. Inside the
- * clear stage it does. So it does wherever it is in plain view: on the
- * canvas, below the top bar, and with its outline (the convex hull of its
- * projected corners) off every panel, the guide's card and the command bar.
- * The clear stage is one rectangle kept a gap from each panel, so a model
- * beside a card framed above it (preview check on #1969), or 7 px clear of
- * a rail inside that gap (preview check on #1974), read as covered and the
- * guide's next step reframed it.
+ * Whether a clear-stage request should leave a model whose bounding box
+ * projects to `corners` (normalized device coordinates on `canvas`) where it
+ * is: on the canvas, with its outline (the convex hull of its projected
+ * corners) off whatever covers the canvas that the request's frame
+ * (`measureClearStageRequestFrame`) keeps clear of: the top bar, the
+ * panels, the guide's card, the command bar. The clear stage is one
+ * rectangle kept a gap from each panel, so a model beside a card framed
+ * above it (preview check on #1969), or 7 px clear of a rail inside that
+ * gap (preview check on #1974), read as covered and was reframed. A cover
+ * the frame cannot keep clear of (a phone's Tools drawer, wider than half
+ * the stage; a tablet's in portrait, beside its docked column) does not
+ * count: a reframe would land the model behind it all the same (review on
+ * #1983).
  */
 export function cornersClearOfStage(
   canvas: HTMLElement,
   corners: readonly { x: number; y: number; z: number }[]
 ): boolean {
-  // Not "inside the clear stage": that stage lets a panel go where the
-  // others leave too narrow a band (the Tools drawer on a 768 × 1024
-  // tablet), and a model under it is covered all the same.
+  const frame = measureClearStageRequestFrame(canvas);
+  if (!frame) return true;
   // On the canvas and between the near and far planes.
   if (!cornersWithinFrame(corners, { minX: -1, maxX: 1, minY: -1, maxY: 1 })) {
     return false;
@@ -392,10 +393,15 @@ export function cornersClearOfStage(
       y: bounds.top + ((1 - corner.y) / 2) * bounds.height
     }))
   );
+  const target = {
+    left: bounds.left + ((frame.minX + 1) / 2) * bounds.width,
+    right: bounds.left + ((frame.maxX + 1) / 2) * bounds.width,
+    top: bounds.top + ((1 - frame.maxY) / 2) * bounds.height,
+    bottom: bounds.top + ((1 - frame.minY) / 2) * bounds.height
+  };
   // Off everything drawn over the canvas: the card, every panel the clear
-  // stage measures (one it lets go to stay wide enough among them: the Tools
-  // drawer beside a docked column), the top bar, and the command bar's
-  // lane, which only a creation frame keeps out (review on #1974).
+  // stage measures, the top bar, and the command bar's lane, which a
+  // request's frame keeps out as a creation frame does (review on #1974).
   const topbar = canvas
     .closest('.app-shell')
     ?.querySelector('.topbar')
@@ -403,13 +409,21 @@ export function cornersClearOfStage(
   const covers = [
     ...(topbar ? [topbar] : []),
     ...panelsOver(canvas, FOOT_GUIDE),
-    ...panelsOver(canvas, `${CLEAR_STAGE_OBSTACLES}, ${TOOL_FOLD}`),
+    ...panelsOver(canvas, CLEAR_STAGE_OBSTACLES),
     ...panelsOver(canvas, WORKSPACE_STAGE_OBSTACLES, false, '.workspace'),
     // The lane is a transparent full-width column; what it holds (the
     // command's bar, the search row) is centred and as wide as it reads.
     ...panelsOver(canvas, '.command-bar-lane > *', false, '.workspace')
   ];
-  return covers.every((cover) => !outlineMeetsRect(outline, cover));
+  return covers
+    .filter(
+      (cover) =>
+        cover.right <= target.left ||
+        cover.left >= target.right ||
+        cover.bottom <= target.top ||
+        cover.top >= target.bottom
+    )
+    .every((cover) => !outlineMeetsRect(outline, cover));
 }
 
 type ScreenPoint = { x: number; y: number };
@@ -506,12 +520,17 @@ export function measurePickFrame(canvas: HTMLElement): NdcFrame | undefined {
  * Always a frame, the whole canvas when nothing covers it.
  */
 export function measureCreationFrame(canvas: HTMLElement): NdcFrame {
-  const frame = measureFitFrame(canvas) ?? {
-    minX: -1,
-    maxX: 1,
-    minY: -1,
-    maxY: 1
-  };
+  return aboveCommandLane(
+    canvas,
+    measureFitFrame(canvas) ?? { minX: -1, maxX: 1, minY: -1, maxY: 1 }
+  );
+}
+
+/**
+ * `frame` less the bottom lane, where the command's own bar and the search
+ * row stand over the model, unless that leaves under a third of it.
+ */
+function aboveCommandLane(canvas: HTMLElement, frame: NdcFrame): NdcFrame {
   const bounds = canvas.getBoundingClientRect();
   if (!(bounds.height > 0)) return frame;
   const lanes = [
