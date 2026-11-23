@@ -18,8 +18,10 @@ import {
 import {
   UNITS_CONVERT_SCHEMA_VERSION,
   UnitsConversionError,
+  addDatumAxis,
   addPrimitiveFeature,
   applyReferenceMap,
+  assertDocumentContentSchema,
   applyUnitsConversion,
   conversionReferenceTargets,
   convertDocumentUnits,
@@ -34,6 +36,7 @@ import {
   runUnitsConversion,
   setParameter,
   unitsConvertFactor,
+  unitsConvertPayloadProblem,
   unitsConvertValueCount,
   type UnitsConversionWarning,
   type UnitsConvertInput
@@ -52,6 +55,7 @@ import {
   toUserId,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
+  type FaceTopologyReferenceV5,
   type FeatureId,
   type ImportedSourceReference,
   type ProjectDocument,
@@ -1090,5 +1094,130 @@ describe('review findings on PR 1990', () => {
     expect(diff.properties).toEqual([]);
     expect(diff.features.changed).toEqual([]);
     expect(diff.parameters).toEqual([]);
+  });
+});
+
+/**
+ * A box with a cylinder datum axis on one of its faces: one stored face
+ * reference, a topology site with no hash beside it. No kernel: synthetic.
+ */
+function faceAxisDocument(): { document: ProjectDocument; pointer: string } {
+  const box = plainDocument();
+  const bodyId = box.bodyOrder.at(-1)!;
+  const boxId = box.featureOrder.at(-1)!;
+  const faceReference: FaceTopologyReferenceV5 = {
+    kind: 'face',
+    producingFeatureId: boxId,
+    lineageName: 'primitive.box.face.side',
+    currentHash: 41,
+    witnessVersion: 1,
+    witness: {
+      surfaceType: 'cylinder',
+      perimeter: 1_000,
+      centroid: null,
+      analytic: { kind: 'none' },
+      closure: { u: 'closed', v: 'open' }
+    }
+  };
+  const { document } = addDatumAxis(box, {
+    name: 'Axis',
+    definition: {
+      kind: 'cylinder',
+      source: { type: 'face', bodyId, faceReference }
+    }
+  });
+  const site = listConversionReferenceSites(document).find(
+    (candidate) =>
+      candidate.kind === 'topology' && candidate.reference.kind === 'face'
+  )!;
+  return { document, pointer: site.pointer };
+}
+
+describe('scoped re-check findings on PR 1990', () => {
+  const malformedFace = (reference: FaceTopologyReferenceV5) =>
+    ({
+      ...reference,
+      currentHash: 77,
+      witness: {}
+    }) as unknown as FaceTopologyReferenceV5;
+
+  it('refuses a malformed face reference as a payload and at replay', () => {
+    const { document: source, pointer } = faceAxisDocument();
+    const from = listConversionReferenceSites(source).find(
+      (site) => site.pointer === pointer
+    );
+    if (from?.kind !== 'topology') throw new Error('no face site');
+    const good = { ...from.reference, currentHash: 42 };
+    // Well formed, it converts: the site is real and replay writes it.
+    expect(
+      runUnitsConversion(
+        source,
+        payloadFor(source, 'inch', {
+          [pointer]: { from: from.reference, to: good }
+        })
+      ).ok
+    ).toBe(true);
+
+    for (const references of [
+      { [pointer]: { from: from.reference, to: malformedFace(good) } },
+      { [pointer]: { from: malformedFace(from.reference), to: good } }
+    ]) {
+      const payload = payloadFor(source, 'inch', references);
+      expect(unitsConvertPayloadProblem(source, payload)).toMatch(
+        /invalid entry/
+      );
+      expect(runUnitsConversion(source, payload)).toMatchObject({
+        ok: false,
+        refusals: [{ stage: 'payload' }]
+      });
+      expect(() => replayCommands(source, [
+        {
+          kind: 'units.convert',
+          payload,
+          replayVersion: 1,
+          label: 'Convert stored units mm → in',
+          timestamp: new Date(0).toISOString()
+        }
+      ])).toThrow(UnitsConversionError);
+    }
+
+    // Applying the map refuses it too, whoever built the map.
+    const converted = convertDocumentUnits(source, 'inch');
+    if (!converted.ok) throw new Error('refused');
+    expect(
+      applyReferenceMap(converted.document, {
+        [pointer]: malformedFace(good)
+      })
+    ).toMatchObject({
+      ok: false,
+      refusals: [{ code: 'invalid-reference', pointer }]
+    });
+  });
+
+  it('refuses a stored log whose units.convert payload has the old shape', () => {
+    const source = plainDocument();
+    const manager = new CommandManager(source);
+    manager.execute(commandFactories.convertUnits(payloadFor(source, 'inch')));
+    const stored = lastCommand(manager.document);
+    // Pre-review shape: pointer → new value, with no recorded `from`.
+    const old: SerializedCommand = {
+      ...stored,
+      payload: {
+        ...(stored.payload as UnitsConvertInput),
+        references: { '/nodes/a/data/edgeHashes/0': 12 }
+      }
+    };
+    const document = {
+      ...manager.document,
+      commandLog: [...manager.document.commandLog.slice(0, -1), old]
+    } as ProjectDocument;
+    expect(() => assertDocumentContentSchema(document)).toThrow(
+      /units\.convert|conversion/i
+    );
+    expect(() => new CommandManager(document)).toThrow(
+      /units\.convert|conversion/i
+    );
+    // The well-formed log still opens.
+    expect(() => assertDocumentContentSchema(manager.document)).not.toThrow();
   });
 });

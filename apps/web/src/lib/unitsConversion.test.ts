@@ -12,6 +12,7 @@ import {
 } from '@openzcad/document-core';
 import { CommandManager } from '@openzcad/command-system';
 import {
+  MAX_UNDO_BYTES,
   toUserId,
   type CollaborationMember,
   type ProjectDocument
@@ -138,7 +139,7 @@ describe('commitUnitsConversion: the safety checkpoint (plan §5.3)', () => {
     const manager = new CommandManager(source, USER);
     const { persistence, writes } = recordingPersistence(manager);
 
-    const result = await commitUnitsConversion(manager, preparedFor(source), {
+    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
       persistence
     });
     if (!result.ok) throw new Error(result.refusals[0]!.message);
@@ -184,7 +185,7 @@ describe('commitUnitsConversion: the safety checkpoint (plan §5.3)', () => {
     const source = boxDocument();
     const manager = new CommandManager(source, USER);
     const { persistence, writes } = recordingPersistence(manager);
-    const result = await commitUnitsConversion(manager, preparedFor(source), {
+    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
       persistence,
       deviceOnlyHistory: true
     });
@@ -231,7 +232,7 @@ describe('commitUnitsConversion: the safety checkpoint (plan §5.3)', () => {
       const manager = new CommandManager(document, USER);
       const before = manager.document;
       const { persistence, writes } = recordingPersistence(manager);
-      const result = await commitUnitsConversion(manager, preparedFor(source), {
+      const result = await commitUnitsConversion(() => manager, preparedFor(source), {
         ...options,
         persistence
       });
@@ -270,7 +271,7 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
     const { persistence, writes } = writing(manager, () => {
       room.members = [member('me', 'Me'), member('tab2', 'Me')];
     });
-    const result = await commitUnitsConversion(manager, preparedFor(source), {
+    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
       persistence,
       collaboration: room,
       now: 1_000
@@ -298,7 +299,7 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
       clock = 2_500;
     });
     // Read through functions, as the workspace passes its latest state.
-    const result = await commitUnitsConversion(manager, preparedFor(source), {
+    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
       persistence,
       collaboration: () => liveRoom(),
       now: () => clock
@@ -315,13 +316,166 @@ describe('commitUnitsConversion: eligibility while the checkpoint saves', () => 
     const source = boxDocument();
     const manager = new CommandManager(source, USER);
     const { persistence } = writing(manager, () => {});
-    const result = await commitUnitsConversion(manager, preparedFor(source), {
+    const result = await commitUnitsConversion(() => manager, preparedFor(source), {
       persistence,
       collaboration: () => liveRoom(),
       now: () => 1_000
     });
     expect(result.ok).toBe(true);
     expect(manager.document.units).toBe('inch');
+  });
+
+  it('refuses when a sync revision replaces the workspace manager during the write', async () => {
+    const source = boxDocument();
+    const manager = new CommandManager(source, USER);
+    let active = manager;
+    // An incoming revision, hydrated into a new manager as the workspace
+    // does; the detached one still holds the captured document.
+    const incoming = addPrimitiveFeature(source, {
+      name: 'Remote',
+      primitiveKind: 'box',
+      dimensions: { width: 2, height: 2, depth: 2 }
+    });
+    const { persistence, writes } = writing(manager, () => {
+      active = new CommandManager(incoming, USER);
+    });
+    const result = await commitUnitsConversion(
+      () => active,
+      preparedFor(source),
+      { persistence }
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ stage: 'payload', code: 'stale' }]
+    });
+    expect(writes).toHaveLength(1);
+    // Nothing applied: neither the detached manager nor the active one.
+    expect(manager.document).toBe(source);
+    expect(active.document).toBe(incoming);
+    expect(active.document.units).toBe('mm');
+  });
+
+  it('refuses when there is no active manager to convert', async () => {
+    const source = boxDocument();
+    const { persistence, writes } = recordingPersistence(
+      new CommandManager(source, USER)
+    );
+    const result = await commitUnitsConversion(() => null, preparedFor(source), {
+      persistence
+    });
+    expect(result).toMatchObject({ ok: false, refusals: [{ code: 'stale' }] });
+    expect(writes).toEqual([]);
+  });
+});
+
+describe('commitUnitsConversion: the undo step is kept (plan §5.2)', () => {
+  /** A longer member id: the history envelope carries the actor once. */
+  const MEMBER = toUserId(`user_units_member_${'m'.repeat(40)}`);
+
+  /**
+   * The box document padded so the conversion's undo history, measured for
+   * the owner, is exactly `MAX_UNDO_BYTES`: kept for the owner, one actor
+   * id too long for the member.
+   */
+  function documentAtBound(): ProjectDocument {
+    const plain = boxDocument();
+    const boxId = Object.keys(plain.nodes).find(
+      (id) => plain.nodes[id]!.name === 'Box'
+    )!;
+    const named = (length: number) =>
+      ({
+        ...plain,
+        nodes: {
+          ...plain.nodes,
+          [boxId]: { ...plain.nodes[boxId]!, name: 'x'.repeat(length) }
+        }
+      }) as ProjectDocument;
+    const bytes = (length: number) => {
+      const document = named(length);
+      return estimateUnitsConvertUndo(
+        document,
+        preparedFor(document).payload,
+        USER
+      ).historyBytes;
+    };
+    const base = 3_000_000;
+    const slope = (bytes(base + 1_000) - bytes(base)) / 1_000;
+    const length = base + Math.floor((MAX_UNDO_BYTES - bytes(base)) / slope);
+    const document = named(length);
+    const measured = bytes(length);
+    if (
+      measured > MAX_UNDO_BYTES ||
+      measured + (MEMBER.length - USER.length) <= MAX_UNDO_BYTES
+    )
+      throw new Error(`padding missed the bound: ${measured}`);
+    return document;
+  }
+
+  it('refuses when the committing actor’s undo history could not keep the entry', async () => {
+    const source = documentAtBound();
+    // Prepared (and measured) for the owner; committed by a member.
+    const prepared = preparedFor(source);
+    expect(prepared.undo.exceedsLimit).toBe(false);
+    const manager = new CommandManager(source, MEMBER);
+    const { persistence, writes } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(() => manager, prepared, {
+      persistence,
+      deviceOnlyHistory: true
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ stage: 'payload', code: 'undo-too-large' }]
+    });
+    expect(manager.document).toBe(source);
+    expect(manager.document.units).toBe('mm');
+    // Refused before the checkpoint was written.
+    expect(writes).toEqual([]);
+  });
+
+  it('converts for the owner the same entry fits, keeping one undo step', async () => {
+    const source = documentAtBound();
+    const manager = new CommandManager(source, USER);
+    const { persistence } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(
+      () => manager,
+      preparedFor(source),
+      { persistence, deviceOnlyHistory: true }
+    );
+    expect(result.ok).toBe(true);
+    expect(manager.document.units).toBe('inch');
+    expect(manager.undoLabel).toBe('Convert stored units mm → in');
+  });
+
+  it('refuses when the history changed after preparation so the entry no longer fits', async () => {
+    const source = documentAtBound();
+    const prepared = preparedFor(source);
+    // This actor's history moved on after preparation: its trimmed counter
+    // now takes 15 more digits of the envelope the bound measures.
+    const manager = new CommandManager(
+      {
+        ...source,
+        editHistory: {
+          schemaVersion: 1,
+          projectId: source.projectId,
+          actorUserId: USER,
+          entries: [],
+          cursor: 0,
+          trimmed: 1_000_000_000_000_000
+        }
+      },
+      USER
+    );
+    const before = manager.document;
+    const { persistence } = recordingPersistence(manager);
+    const result = await commitUnitsConversion(() => manager, prepared, {
+      persistence,
+      deviceOnlyHistory: true
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      refusals: [{ code: 'undo-too-large' }]
+    });
+    expect(manager.document).toBe(before);
   });
 });
 
