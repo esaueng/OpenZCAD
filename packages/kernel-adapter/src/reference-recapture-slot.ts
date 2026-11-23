@@ -19,6 +19,7 @@
  * on the geometry worker's serial build queue (tests build sequentially).
  */
 import type { SketchProfile } from '@openzcad/geometry';
+import type { BlendOrientationReport } from './blend-orientation';
 import type {
   EdgeWitnessV1,
   FaceWitnessV1,
@@ -61,6 +62,11 @@ export interface ReferenceRecaptureHooks {
     profiles: readonly P[],
     resolve: (reference: SketchRegionProfileReference) => P
   ): P;
+  /**
+   * The native orientation of an asymmetric blend's edges, reported by the
+   * edge-modifier build (`blend-orientation.ts`) once its edges resolve.
+   */
+  noteBlendOrientation?(report: BlendOrientationReport): void;
 }
 
 let claimed = false;

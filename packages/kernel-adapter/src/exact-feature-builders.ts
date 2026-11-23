@@ -195,6 +195,7 @@ import {
   stepImportEmptyReason
 } from './kernel-step-import';
 import { MEASUREMENT_DEFLECTION, edgeWitnessOf } from './exact-witnesses';
+import { reportBlendOrientation } from './blend-orientation';
 import { isBlendFace } from './exact-brep';
 import { priorBlendFaceTest } from './exact-prior-blend';
 import { importedMeshCacheKey } from './exact-imported-mesh-cache';
@@ -3731,6 +3732,16 @@ function buildEdgeModifierFeature(
           )
         }
       : settings.variableRadius;
+  // I03: a re-capture checks that an asymmetric blend's edges keep their
+  // native direction and face order in the new unit.
+  reportBlendOrientation(
+    kernel,
+    target,
+    selected,
+    data.featureKind,
+    settings,
+    'selection'
+  );
   // M02: where these edges stand now, measured before they are rounded, for
   // a feature pattern that repeats this one (review: an upstream edit moves
   // them away from the stored pick).
@@ -4817,6 +4828,8 @@ function buildPatternFeature(
   }
   if (featurePattern) {
     const copyIndices = kept.filter((index) => index !== 0);
+    // I03: numbers each repeated blend, in build order, for re-capture.
+    let patternBlendCopies = 0;
     buildFeaturePattern(
       ctx,
       feature,
@@ -4868,6 +4881,14 @@ function buildPatternFeature(
             "its radii are set per vertex on the original edges, which a copy's edges are not, so a pattern repeats only a fillet with one start and end radius; fillet the copies' edges directly."
           );
         }
+        reportBlendOrientation(
+          kernel,
+          solid,
+          edges,
+          blend.featureKind,
+          settings,
+          `pattern copy ${(patternBlendCopies += 1)}`
+        );
         let refusal: string | null = null;
         let approximate = false;
         const blended = applyEdgeModifier(

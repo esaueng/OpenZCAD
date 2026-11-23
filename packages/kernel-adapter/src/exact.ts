@@ -7266,8 +7266,11 @@ function shownExportBodies(
 export { wrapOrientationProbe } from './exact-wrap';
 
 export {
+  blendOrientationCorrespondence,
+  compareBlendOrientations,
   computeConversionReferenceMap,
   lineageNameFamily,
+  positionTolerance,
   matchScaledProfile,
   matchScaledTopology,
   recaptureWindow,
@@ -7275,6 +7278,7 @@ export {
   unitConversionGeometryOracle,
   RECAPTURE_WINDOW_QUANTA,
   UNIT_CONVERSION_MEASURE_RTOL,
+  type BlendOrientationCorrespondence,
   type ConversionReferenceMapOptions,
   type ConversionReferenceMapResult,
   type ConversionReferenceRefusal,
@@ -7285,4 +7289,8 @@ export {
   type SourceTopologyEntity,
   type TopologyMatch
 } from './units-reference-recapture';
+export type {
+  BlendEdgeOrientation,
+  BlendOrientationReport
+} from './blend-orientation';
 export { topologyHashOfWitness } from './topology-lineage';

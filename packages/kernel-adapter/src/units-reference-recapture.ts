@@ -46,6 +46,7 @@
 import {
   applyReferenceMap,
   listConversionReferenceSites,
+  unitsConversionSubject,
   type ConversionReferenceMap,
   type ConversionReferenceSite,
   type ConversionReferenceValue
@@ -59,6 +60,8 @@ import {
   type DerivedState,
   type FeatureId,
   type EdgeWitnessV1,
+  type FaceGeometry,
+  type Vector3,
   type FaceWitnessV1,
   type ProjectDocument,
   type QuantizedTopologyPoint,
@@ -72,6 +75,10 @@ import {
 // (the geometry worker never got past loading the kernel), so the adapter
 // factory is imported when a build runs, after `exact.ts` has loaded.
 import type { ExactKernelAdapter, ExactKernelAdapterOptions } from './exact';
+import type {
+  BlendEdgeOrientation,
+  BlendOrientationReport
+} from './blend-orientation';
 import {
   claimReferenceRecapture,
   referenceRecaptureFeature,
@@ -235,6 +242,67 @@ export function edgeEndCorrespondence(
       : swapped
         ? 'swapped'
         : null;
+}
+
+/**
+ * Tolerance on one scaled position component, in target units: the kernel's
+ * 1e-6 model-unit tolerance plus 1e-9 of the component's own magnitude for
+ * floating-point growth. Per component, so a large coordinate on one axis
+ * never widens the check on another.
+ */
+export function positionTolerance(expected: number): number {
+  return 1e-6 + 1e-9 * Math.abs(expected);
+}
+
+function nearScaledPosition(
+  target: readonly number[],
+  source: readonly number[],
+  factor: number
+): boolean {
+  return target.every((value, axis) => {
+    const expected = source[axis]! * factor;
+    return Math.abs(value - expected) <= positionTolerance(expected);
+  });
+}
+
+/**
+ * How a blended edge of the converted build is oriented against the same
+ * edge of the source build (`blend-orientation.ts`): `same` when its native
+ * start, curve samples, end and face order are the source's scaled by
+ * `factor`; `reversed` when the edge runs the other way or lists its faces
+ * the other way round; `ambiguous` when both readings fit (the samples or
+ * faces cannot be told apart); `unmatched` when neither does.
+ */
+export type BlendOrientationCorrespondence =
+  'same' | 'reversed' | 'ambiguous' | 'unmatched';
+
+export function blendOrientationCorrespondence(
+  source: BlendEdgeOrientation,
+  target: BlendEdgeOrientation,
+  factor: number
+): BlendOrientationCorrespondence {
+  const forward = source.samples.every((sample, index) =>
+    nearScaledPosition(target.samples[index]!, sample, factor)
+  );
+  const backward = source.samples.every((sample, index) =>
+    nearScaledPosition(
+      target.samples[source.samples.length - 1 - index]!,
+      sample,
+      factor
+    )
+  );
+  const faces = (order: (index: number) => number) =>
+    source.faces.length === target.faces.length &&
+    source.faces.every((face, index) =>
+      scaledWitnessMatches('face', face, target.faces[order(index)]!, factor)
+    );
+  const facesKept = faces((index) => index);
+  const facesSwapped =
+    source.faces.length === 2 && faces((index) => 1 - index);
+  if (forward && facesKept && !backward && !facesSwapped) return 'same';
+  if ((forward && backward) || (facesKept && facesSwapped)) return 'ambiguous';
+  if (backward || facesSwapped) return 'reversed';
+  return 'unmatched';
 }
 
 /**
@@ -445,6 +513,17 @@ class ObservedFingerprintMap extends Map<number, number[]> {
   }
 }
 
+/** Every asymmetric blend a build reported, by feature, in build order. */
+type BlendOrientationLog = Map<string, BlendOrientationReport[]>;
+
+function logBlendOrientation(
+  log: BlendOrientationLog,
+  report: BlendOrientationReport
+): void {
+  const feature = referenceRecaptureFeature() ?? '';
+  log.set(feature, [...(log.get(feature) ?? []), report]);
+}
+
 /**
  * Records what each stored identity resolves to, per feature. Used for the
  * source build and, unchanged, for the verification build, where it shows
@@ -453,6 +532,11 @@ class ObservedFingerprintMap extends Map<number, number[]> {
 class RecordingSession implements ReferenceRecaptureHooks {
   readonly topology = new Map<string, SourceTopologyRecord[]>();
   readonly profiles = new Map<string, SourceProfileRecord[]>();
+  readonly blends: BlendOrientationLog = new Map();
+
+  noteBlendOrientation(report: BlendOrientationReport): void {
+    logBlendOrientation(this.blends, report);
+  }
 
   private addTopology(key: string, record: SourceTopologyRecord): void {
     const records = this.topology.get(key) ?? [];
@@ -555,6 +639,11 @@ function sameValue(
 /** Replaces every lookup with the scaled match of what the source resolved. */
 class TranslatingSession implements ReferenceRecaptureHooks {
   readonly translations = new Map<string, Translation>();
+  readonly blends: BlendOrientationLog = new Map();
+
+  noteBlendOrientation(report: BlendOrientationReport): void {
+    logBlendOrientation(this.blends, report);
+  }
 
   constructor(
     private readonly source: RecordingSession,
@@ -800,6 +889,78 @@ class TranslatingSession implements ReferenceRecaptureHooks {
   }
 }
 
+/**
+ * Every asymmetric blend of the source build must be built in `build` (the
+ * converted or the verification build) on edges with the same native
+ * orientation: the same features, the same reports in the same order, the
+ * same edge count, and each edge {@link blendOrientationCorrespondence}
+ * `same`. A reversed edge would mirror the blend along the edge or across
+ * it under a reference that still matches, so it refuses, naming the
+ * feature and edge. Swapping the feature's radii or setbacks to follow it
+ * would edit parameters, not references, and is not attempted.
+ */
+export function compareBlendOrientations(
+  source: ReadonlyMap<string, readonly BlendOrientationReport[]>,
+  build: ReadonlyMap<string, readonly BlendOrientationReport[]>,
+  factor: number,
+  subjectOf: (featureId: string) => string,
+  buildName: string
+): ConversionReferenceRefusal[] {
+  const refusals: ConversionReferenceRefusal[] = [];
+  const features = [...new Set([...source.keys(), ...build.keys()])].sort();
+  for (const feature of features) {
+    const subject = subjectOf(feature);
+    const from = source.get(feature) ?? [];
+    const to = build.get(feature) ?? [];
+    const refuse = (field: string, message: string) =>
+      refusals.push({
+        code: 'blend-orientation',
+        subject,
+        field,
+        message: `${subject}: ${message}`
+      });
+    if (
+      from.length !== to.length ||
+      from.some(
+        (report, index) =>
+          report.label !== to[index]!.label ||
+          report.edges.length !== to[index]!.edges.length
+      )
+    ) {
+      refuse(
+        'edgeHashes',
+        `the ${buildName} build applied this blend to ${to.length} edge set(s), not the source build's ${from.length}, so the direction of its edges cannot be checked.`
+      );
+      continue;
+    }
+    from.forEach((report, index) =>
+      report.edges.forEach((edge, position) => {
+        const order = blendOrientationCorrespondence(
+          edge,
+          to[index]!.edges[position]!,
+          factor
+        );
+        if (order === 'same') return;
+        const field =
+          report.label === 'selection'
+            ? `edgeHashes.${position}`
+            : `${report.label} edge ${position}`;
+        refuse(
+          field,
+          `${report.reads}, and in the ${buildName} build ${field} ${
+            order === 'reversed'
+              ? 'runs the other way or lists its faces the other way round'
+              : order === 'ambiguous'
+                ? 'has a direction that cannot be told apart'
+                : 'no longer lies where the source edge does'
+          }, so the blend would be built mirrored; refusing rather than swapping its sides.`
+        );
+      })
+    );
+  }
+  return refusals;
+}
+
 // ---------------------------------------------------------------------------
 // Oracle 2: the geometry
 // ---------------------------------------------------------------------------
@@ -825,6 +986,7 @@ export type ConversionReferenceRefusalCode =
   | 'ambiguous-match'
   | 'conflict'
   | 'endpoint-order'
+  | 'blend-orientation'
   | 'apply-refused'
   | 'unresolved-after-apply'
   | 'reference-repair'
@@ -865,6 +1027,8 @@ export interface GeometryOracleStats {
   bodies: number;
   volumes: number;
   areas: number;
+  /** Faces compared one by one (area, surface class, centre, centroid). */
+  faces: number;
   /** Datum planes, axes, points and coordinate systems compared. */
   datums: number;
 }
@@ -932,17 +1096,14 @@ function compareDatums(
     const expected = scaled
       ? { x: from.x * factor, y: from.y * factor, z: from.z * factor }
       : from;
-    const tolerance = scaled
-      ? bboxTolerance(
-          Math.max(
-            Math.abs(expected.x),
-            Math.abs(expected.y),
-            Math.abs(expected.z)
-          )
-        )
-      : DATUM_DIRECTION_TOLERANCE;
+    // Per component (review): a tolerance taken from the largest
+    // coordinate let a datum far out on X drift on Y.
+    const tolerance = (value: number) =>
+      scaled ? positionTolerance(value) : DATUM_DIRECTION_TOLERANCE;
     for (const axis of ['x', 'y', 'z'] as const)
-      if (!(Math.abs(to[axis] - expected[axis]) <= tolerance))
+      if (
+        !(Math.abs(to[axis] - expected[axis]) <= tolerance(expected[axis]))
+      )
         mismatch(
           subject,
           `${field}.${axis}`,
@@ -1004,6 +1165,75 @@ function compareDatums(
   return compared;
 }
 
+type MeasuredFace = FaceGeometry & { readonly index: number };
+
+function measuredFaces(body: BodyRepresentation): MeasuredFace[] | undefined {
+  const faces = body.topology?.faces;
+  if (!faces || faces.length === 0) return undefined;
+  const measured: MeasuredFace[] = [];
+  for (const [index, face] of faces.entries()) {
+    if (!face.geometry) return undefined;
+    measured.push({ ...face.geometry, index });
+  }
+  return measured;
+}
+
+/**
+ * Face by face: every source face, scaled by `factor`, must be matched by as
+ * many converted faces as there are source faces it cannot be told from
+ * (same surface class, area ×k², vertex-mean centre and planar area centroid
+ * ×k). Totals cannot see a blend built mirrored on a symmetric body: an
+ * asymmetric fillet or chamfer whose sides swapped keeps the volume, the
+ * total area and the counts, but moves the area centroid of every face it
+ * trims. Returns how many faces were compared.
+ */
+function compareFaces(
+  from: BodyRepresentation,
+  to: BodyRepresentation,
+  factor: number,
+  scale: number,
+  mismatch: (field: string, message: string) => void
+): number {
+  const source = measuredFaces(from);
+  const converted = measuredFaces(to);
+  if (!source || !converted) return 0;
+  const vector = (value: Vector3 | undefined): number[] | undefined =>
+    value ? [value.x, value.y, value.z] : undefined;
+  // A curved boundary's centroid is integrated over an inscribed polygon.
+  const centroidSlack = (face: MeasuredFace) =>
+    face.centroidProvenance === 'exact' ? 0 : 1e-6 * scale;
+  const alike = (a: MeasuredFace, b: MeasuredFace, k: number) => {
+    if (a.surfaceType !== b.surfaceType) return false;
+    if (relativeMismatch(b.area, a.area * k * k, UNIT_CONVERSION_MEASURE_RTOL))
+      return false;
+    if (!nearScaledPosition(vector(b.center)!, vector(a.center)!, k))
+      return false;
+    const ca = vector(a.centroid);
+    const cb = vector(b.centroid);
+    if ((ca === undefined) !== (cb === undefined)) return false;
+    if (!ca || !cb) return true;
+    const slack = Math.max(centroidSlack(a), centroidSlack(b));
+    return cb.every((value, axis) => {
+      const expected = ca[axis]! * k;
+      return (
+        Math.abs(value - expected) <= positionTolerance(expected) + slack
+      );
+    });
+  };
+  for (const face of source) {
+    const twins = source.filter((other) => alike(face, other, 1)).length;
+    const matches = converted.filter((other) =>
+      alike(face, other, factor)
+    ).length;
+    if (matches !== twins)
+      mismatch(
+        `faces.${face.index}`,
+        `The ${face.surfaceType} face ${face.index} (area ${face.area}) is matched by ${matches} converted face(s) of its area and position scaled by ${factor}, not ${twins}.`
+      );
+  }
+  return source.length;
+}
+
 /**
  * Oracle 2 (plan §6 step 2): every body of the converted build is the
  * source body scaled by `factor`. Compares per body: the bounding box
@@ -1024,6 +1254,7 @@ export function unitConversionGeometryOracle(
     bodies: 0,
     volumes: 0,
     areas: 0,
+    faces: 0,
     datums: 0
   };
   const mismatch = (subject: string, field: string, message: string) =>
@@ -1125,6 +1356,9 @@ export function unitConversionGeometryOracle(
           `The surface area is ${areaTo}, not ${areaFrom} × k² = ${expected}.`
         );
     }
+    stats.faces += compareFaces(from, to, factor, scale, (field, message) =>
+      mismatch(subject, field, message)
+    );
   }
   stats.datums = compareDatums(source, converted, factor, mismatch);
   const exportFrom = [...source.exportableBodyIds].sort();
@@ -1415,6 +1649,14 @@ async function recapture(
   );
   translating.checkInjective();
 
+  const featureSubjects = new Map<string, string>();
+  for (const node of Object.values(converted.nodes))
+    if (node.kind === 'feature')
+      featureSubjects.set(node.featureId, unitsConversionSubject(node));
+  const subjectOfFeature = (feature: string) =>
+    featureSubjects.get(feature) ??
+    (feature === '' ? 'document' : `feature ${feature}`);
+
   const sites = listConversionReferenceSites(converted);
   const features = siteFeatures(converted);
   const report: ConversionReferenceReport = {
@@ -1425,7 +1667,7 @@ async function recapture(
       profileId: sites.filter((site) => site.kind === 'profile-id').length,
       edgeEnd: sites.filter((site) => site.kind === 'edge-end').length
     },
-    geometry: { bodies: 0, volumes: 0, areas: 0, datums: 0 },
+    geometry: { bodies: 0, volumes: 0, areas: 0, faces: 0, datums: 0 },
     timings: {
       source: sourceBuild.milliseconds,
       translate: translateBuild.milliseconds,
@@ -1564,6 +1806,15 @@ async function recapture(
           ? !site.value
           : 1 - site.value;
   }
+  refusals.push(
+    ...compareBlendOrientations(
+      recorded.blends,
+      translating.blends,
+      factor,
+      subjectOfFeature,
+      'converted'
+    )
+  );
   if (refusals.length > 0) return { ok: false, refusals, report };
 
   const applied = applyReferenceMap(converted, references);
@@ -1633,6 +1884,15 @@ async function recapture(
       subject: 'document',
       message: `The converted rebuild proposed reference repairs [${convertedRepairs.join(', ')}] where the source build proposed [${sourceRepairs.join(', ')}].`
     });
+  refusals.push(
+    ...compareBlendOrientations(
+      recorded.blends,
+      verifying.blends,
+      factor,
+      subjectOfFeature,
+      'verification'
+    )
+  );
   const oracle = unitConversionGeometryOracle(
     sourceBuild.derived,
     derived,

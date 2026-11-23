@@ -81,6 +81,13 @@ interface SiteBase {
  *   re-capture refuses unless the ends keep their order.
  *
  * A consumer not listed in {@link edgeEndpointOrder} is `significant`.
+ *
+ * This is the witness order only. A blend that reads the kernel's native
+ * edge direction or face order instead (a variable fillet's start and end
+ * radii, a two-distance or distance-angle chamfer's sides) is `irrelevant`
+ * here and checked by the kernel adapter's re-capture, which refuses unless
+ * the converted build orients each such edge as the source build did
+ * (`blend-orientation.ts`).
  */
 export type EdgeEndpointOrder = 'irrelevant' | 'indexed' | 'significant';
 

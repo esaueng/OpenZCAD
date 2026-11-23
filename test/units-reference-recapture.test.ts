@@ -13,6 +13,7 @@ import {
   addPrimitiveFeature,
   addSketchFeature,
   applyReferenceMap,
+  chamferEdges,
   convertDocumentUnits,
   createProjectDocument,
   directEditBody,
@@ -27,6 +28,8 @@ import {
   type SketchProfile
 } from '@openzcad/geometry';
 import {
+  blendOrientationCorrespondence,
+  compareBlendOrientations,
   computeConversionReferenceMap,
   createExactKernelAdapter,
   lineageNameFamily,
@@ -43,6 +46,11 @@ import {
   RemusKernel
 } from '../packages/kernel-adapter/src/remus-runtime';
 import { recognizePlanarEmboss } from '../packages/kernel-adapter/src/planar-emboss';
+import { referenceRecaptureHooks } from '../packages/kernel-adapter/src/reference-recapture-slot';
+import type {
+  BlendEdgeOrientation,
+  BlendOrientationReport
+} from '../packages/kernel-adapter/src/blend-orientation';
 import { letteredHolder } from './support/lettered-holder';
 import {
   toFeatureId,
@@ -906,5 +914,301 @@ describe('re-capture review regressions', { timeout: 180_000 }, () => {
       ok: false,
       refusals: [{ code: 'busy' }]
     });
+  });
+});
+
+/**
+ * Review of PR 1977: an asymmetric blend reads the kernel's native edge
+ * direction or face order, which a witness match cannot see.
+ */
+describe('native blend orientation', { timeout: 180_000 }, () => {
+  const k = MM_TO_INCH;
+  const pt = (x: number, y: number, z: number) => [x, y, z] as const;
+  const edge = (
+    samples: (readonly [number, number, number])[],
+    faces: FaceWitnessV1[]
+  ): BlendEdgeOrientation => ({
+    samples: samples as unknown as BlendEdgeOrientation['samples'],
+    faces
+  });
+  const sourceEdge = edge(
+    [pt(0, 0, 0), pt(10, 0, 0), pt(30, 0, 0), pt(40, 0, 0)],
+    [planeFace(40, 10, 0), planeFace(40, 12, 10)]
+  );
+  const scaledEdge = (order: 'same' | 'reversed' | 'faces') => {
+    const samples = sourceEdge.samples.map((sample) =>
+      scaled([...sample], k)
+    );
+    const faces = [planeFace(40 * k, 10 * k, 0), planeFace(40 * k, 12 * k, 10 * k)];
+    return edge(
+      order === 'reversed' ? samples.reverse() : samples,
+      order === 'faces' ? faces.reverse() : faces
+    );
+  };
+
+  it('tells a kept, reversed and face-swapped edge apart', () => {
+    expect(
+      blendOrientationCorrespondence(sourceEdge, scaledEdge('same'), k)
+    ).toBe('same');
+    expect(
+      blendOrientationCorrespondence(sourceEdge, scaledEdge('reversed'), k)
+    ).toBe('reversed');
+    expect(
+      blendOrientationCorrespondence(sourceEdge, scaledEdge('faces'), k)
+    ).toBe('reversed');
+    // A closed edge's start and end coincide; its curve samples still decide.
+    const loop = edge(
+      [pt(1, 0, 0), pt(0, 1, 0), pt(0, -1, 0), pt(1, 0, 0)],
+      [planeFace(2, 2, 0)]
+    );
+    const flipped = edge(
+      [pt(k, 0, 0), pt(0, -k, 0), pt(0, k, 0), pt(k, 0, 0)],
+      [planeFace(2 * k, 2 * k, 0)]
+    );
+    expect(blendOrientationCorrespondence(loop, flipped, k)).toBe('reversed');
+  });
+
+  it('refuses a blend whose edge set changed, by feature', () => {
+    const refusals = compareBlendOrientations(
+      new Map([
+        ['feat_a', [{ label: 'selection', reads: 'r', edges: [sourceEdge] }]]
+      ]),
+      new Map(),
+      k,
+      (feature) => `Fillet (${feature})`,
+      'converted'
+    );
+    expect(refusals.map(({ code, subject }) => `${code} ${subject}`)).toEqual([
+      'blend-orientation Fillet (feat_a)'
+    ]);
+  });
+
+  /** One box edge blended by `blend`, in millimetres. */
+  async function blendedBox(
+    blend: (
+      document: ProjectDocument,
+      input: {
+        name: string;
+        targetBodyId: BodyId;
+        edgeHashes: number[];
+        edgeReferences: EdgeTopologyReferenceV5[];
+      }
+    ) => ProjectDocument
+  ): Promise<ProjectDocument> {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Blend orientation', toUserId('user_recapture')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 40, height: 12, depth: 10 }
+      }
+    );
+    const bodyId = base.bodyOrder[0]!;
+    const built = await buildOnce(base);
+    const picked = (built.bodyRepresentations[bodyId]?.topology?.edges ?? [])
+      .filter((candidate) => candidate.displayRole !== 'seam')
+      .find((candidate) => candidate.reference)!;
+    const document = blend(base, {
+      name: 'Blend',
+      targetBodyId: bodyId,
+      edgeHashes: [picked.hash],
+      edgeReferences: [picked.reference!]
+    });
+    expect((await buildOnce(document)).warnings).toEqual([]);
+    return document;
+  }
+
+  const variableFillet = () =>
+    blendedBox(
+      (document, input) =>
+        filletEdges(document, { ...input, size: 1, endRadius: 3 }).document
+    );
+  const twoDistanceChamfer = () =>
+    blendedBox(
+      (document, input) =>
+        chamferEdges(document, { ...input, size: 1, distance2: 2.5 }).document
+    );
+
+  /**
+   * Cold adapters for the three re-capture builds; build `which` (2: the
+   * converted build, 3: the verification build) reports every blend edge
+   * through `mutate`, as a kernel that rebuilt it the other way would.
+   */
+  function reorienting(
+    which: number,
+    mutate: (edge: BlendEdgeOrientation) => BlendEdgeOrientation
+  ) {
+    let builds = 0;
+    return async () => {
+      const real = await createExactKernelAdapter({
+        historyCheckpointLimit: 0,
+        importedStepCacheBytes: 0,
+        importedMeshCacheBytes: 0,
+        measuredShapeCacheBytes: 0
+      });
+      builds += 1;
+      if (builds !== which) return real;
+      const syncDocument = real.syncDocument.bind(real);
+      real.syncDocument = async (document) => {
+        const hooks = referenceRecaptureHooks();
+        const note = hooks?.noteBlendOrientation;
+        if (hooks && note)
+          hooks.noteBlendOrientation = (report: BlendOrientationReport) =>
+            note.call(hooks, { ...report, edges: report.edges.map(mutate) });
+        return syncDocument(document);
+      };
+      return real;
+    };
+  }
+  const reverse = (edge: BlendEdgeOrientation): BlendEdgeOrientation => ({
+    ...edge,
+    samples: [...edge.samples].reverse() as never
+  });
+  const swapFaces = (edge: BlendEdgeOrientation): BlendEdgeOrientation => ({
+    ...edge,
+    faces: [...edge.faces].reverse()
+  });
+  const codes = (
+    result: Awaited<ReturnType<typeof computeConversionReferenceMap>>
+  ) =>
+    result.ok
+      ? []
+      : result.refusals.map(
+          ({ code, subject, field }) =>
+            `${code} ${subject.replace(/ \(.*\)$/, '')} ${field}`
+        );
+
+  it('re-captures a two-distance chamfer whose edges keep their direction', async () => {
+    const source = await twoDistanceChamfer();
+    const there = convertDocumentUnits(source, 'inch');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document);
+    expect(codes(result)).toEqual([]);
+    expect(result.ok && result.report.geometry.faces).toBeGreaterThan(0);
+  });
+
+  it('passes a variable fillet’s orientation, which the area oracle then refuses', async () => {
+    // Remus fits the variable blend face to a B-spline within a tolerance
+    // that does not scale with the unit, so its area differs between the
+    // two builds well past 1e-6 and the existing oracle refuses it. The
+    // orientation check itself accepts the unreversed edge.
+    const source = await variableFillet();
+    const there = convertDocumentUnits(source, 'inch');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document);
+    expect(codes(result)).toEqual([
+      'geometry-mismatch Block Body area',
+      expect.stringMatching(/^geometry-mismatch Block Body faces\.\d+$/)
+    ]);
+  });
+
+  it('refuses a variable fillet whose edge the converted build runs the other way', async () => {
+    const source = await variableFillet();
+    const there = convertDocumentUnits(source, 'inch');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document, {
+      createAdapter: reorienting(2, reverse)
+    });
+    expect(codes(result)).toEqual(['blend-orientation Blend edgeHashes.0']);
+  });
+
+  it('refuses a two-distance chamfer whose faces the verification build lists the other way', async () => {
+    const source = await twoDistanceChamfer();
+    const there = convertDocumentUnits(source, 'cm');
+    if (!there.ok) throw new Error('conversion refused');
+    const result = await computeConversionReferenceMap(source, there.document, {
+      createAdapter: reorienting(3, swapFaces)
+    });
+    expect(codes(result)).toEqual(['blend-orientation Blend edgeHashes.0']);
+  });
+
+  it('the geometry oracle refuses a blend built mirrored on a symmetric body', () => {
+    // Two trimmed faces whose vertex means, areas and totals all survive the
+    // swap; only their area centroids trade places.
+    const body = (
+      unit: number,
+      [left, right]: [number, number]
+    ): DerivedState =>
+      ({
+        bodyRepresentations: {
+          body_1: {
+            name: 'Block',
+            bbox: {
+              min: { x: -20 * unit, y: 0, z: 0 },
+              max: { x: 20 * unit, y: 10 * unit, z: 10 * unit }
+            },
+            volume: 4000 * unit ** 3,
+            faceCount: 2,
+            consumed: false,
+            exportableStep: true,
+            topology: {
+              faces: [10, 12].map((area, index) => ({
+                topologyId: `f${index}`,
+                hash: index + 1,
+                triangleStart: 0,
+                triangleCount: 0,
+                geometry: {
+                  surfaceType: 'plane',
+                  area: area * unit ** 2,
+                  center: { x: 0, y: 5 * unit, z: index * 10 * unit },
+                  centroid: {
+                    x: (index === 0 ? left : right) * unit,
+                    y: 5 * unit,
+                    z: index * 10 * unit
+                  },
+                  centroidProvenance: 'exact'
+                }
+              })),
+              edges: [],
+              vertices: []
+            }
+          }
+        },
+        exportableBodyIds: ['body_1'],
+        warnings: []
+      }) as unknown as DerivedState;
+    const kept = unitConversionGeometryOracle(
+      body(1, [-1, 1]),
+      body(k, [-1, 1]),
+      k
+    );
+    expect(kept.refusals).toEqual([]);
+    expect(kept.stats.faces).toBe(2);
+    const mirrored = unitConversionGeometryOracle(
+      body(1, [-1, 1]),
+      body(k, [1, -1]),
+      k
+    );
+    expect(
+      mirrored.refusals.map(({ code, field }) => `${code} ${field}`)
+    ).toEqual(['geometry-mismatch faces.0', 'geometry-mismatch faces.1']);
+  });
+});
+
+describe('datum position tolerance', () => {
+  const at = (x: number, y: number) =>
+    ({
+      bodyRepresentations: {},
+      exportableBodyIds: [],
+      warnings: [],
+      datumPoints: { feat_point: { x, y, z: 0 } }
+    }) as unknown as DerivedState;
+
+  it('is per component: a far-out X never widens the check on Y', () => {
+    for (const x of [0, 1000]) {
+      const moved = unitConversionGeometryOracle(
+        at(x, 0),
+        at(x, 0.0000015),
+        1
+      );
+      expect(
+        moved.refusals.map(({ code, field }) => `${code} ${field}`)
+      ).toEqual(['geometry-mismatch datumPoints.y']);
+      // Kernel noise on the far-out component itself is still accepted.
+      expect(
+        unitConversionGeometryOracle(at(x, 0), at(x * (1 + 1e-13), 0), 1)
+          .refusals
+      ).toEqual([]);
+    }
   });
 });
