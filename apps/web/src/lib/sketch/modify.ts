@@ -2390,10 +2390,46 @@ function patternCommands(
 }
 
 /**
+ * What a pattern relation stores for its step: the evaluated `step` when the
+ * value was a plain numeral, else the typed expression divided into steps
+ * exactly as the evaluated value was (`divisor` 1 keeps it as typed).
+ *
+ * The stored expression must evaluate to the step the copies were placed
+ * with. When it does not (wrapping pushed it past the evaluator's token
+ * limit, or a near-full turn was placed as a full one), the evaluated step is
+ * stored instead, as before expressions were kept (review #1971).
+ */
+export function storedPatternStep(
+  step: number,
+  text: string | undefined,
+  divisor: number,
+  resolve: Resolve
+): ParamValue {
+  const typed = text?.trim();
+  if (!typed || Number.isFinite(Number(typed))) {
+    return step;
+  }
+  const stored = divisor === 1 ? typed : `(${typed}) / ${divisor}`;
+  let value: number | undefined;
+  try {
+    value = resolve(stored);
+  } catch {
+    value = undefined;
+  }
+  const agrees =
+    value !== undefined &&
+    Number.isFinite(value) &&
+    Math.abs(value - step) <= 1e-12 * Math.max(1, Math.abs(step));
+  return agrees ? stored : step;
+}
+
+/**
  * `count` instances of the source (the source is the first) along the picked
  * direction line, measured from its start to its end: `distance` apart, or,
  * when `spacingMode` is `extent`, spread so the last instance lies `distance`
- * from the source.
+ * from the source. `distanceText` is the expression `distance` was typed as
+ * (absent for a plain numeral): the pattern keeps it, so a parameter-driven
+ * spacing follows renames and re-evaluation.
  */
 export function planSketchLinearPattern(
   document: ProjectDocument,
@@ -2405,7 +2441,8 @@ export function planSketchLinearPattern(
   count: number,
   resolve: Resolve,
   spacingMode: 'spacing' | 'extent' = 'spacing',
-  earlier: readonly PlannedCurve[] = []
+  earlier: readonly PlannedCurve[] = [],
+  distanceText?: string
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2518,7 +2555,16 @@ export function planSketchLinearPattern(
       copies,
       source.curve.kind === 'line',
       'Linear pattern',
-      { kind: 'linear', direction: directionId as EntityId, spacing }
+      {
+        kind: 'linear',
+        direction: directionId as EntityId,
+        spacing: storedPatternStep(
+          spacing,
+          distanceText,
+          extent ? count - 1 : 1,
+          resolve
+        )
+      }
     )
   };
 }
@@ -2530,6 +2576,9 @@ export function planSketchLinearPattern(
  * the pattern, or with `orientation` `uniform` keeps the source's
  * orientation: it is only moved, so its anchor (a line's midpoint, a circle's
  * or arc's centre) lands where the turn takes the source's anchor.
+ * `totalText` is the expression `totalDeg` was typed as (absent for a plain
+ * numeral): the pattern keeps it, divided into the step the way the angle
+ * is, so a parameter-driven angle follows renames and re-evaluation.
  */
 export function planSketchCircularPattern(
   document: ProjectDocument,
@@ -2542,7 +2591,8 @@ export function planSketchCircularPattern(
   resolve: Resolve,
   orientation: 'rotate' | 'uniform' = 'rotate',
   pivotRef?: SketchPointRef,
-  earlier: readonly PlannedCurve[] = []
+  earlier: readonly PlannedCurve[] = [],
+  totalText?: string
 ): SketchModifyPlan {
   const source = patternSource(document, sketch, sourceId, resolve);
   if ('error' in source) {
@@ -2664,7 +2714,12 @@ export function planSketchCircularPattern(
         ? {
             kind: 'circular',
             pivot: pivotRef,
-            stepDeg: (stepRad * 180) / Math.PI,
+            stepDeg: storedPatternStep(
+              (stepRad * 180) / Math.PI,
+              totalText,
+              full ? count : count - 1,
+              resolve
+            ),
             orientation
           }
         : undefined
@@ -2678,6 +2733,8 @@ export type SketchPatternSetSpec =
       kind: 'linear-pattern';
       directionId: string;
       distance: number;
+      /** The expression `distance` was typed as, kept by the pattern. */
+      distanceText?: string;
       count: number;
       spacingMode: 'spacing' | 'extent';
     }
@@ -2688,6 +2745,8 @@ export type SketchPatternSetSpec =
       pivotRef?: SketchPointRef;
       count: number;
       totalDeg: number;
+      /** The expression `totalDeg` was typed as, kept by the pattern. */
+      totalText?: string;
       orientation: 'rotate' | 'uniform';
     };
 
@@ -2745,7 +2804,8 @@ export function planSketchPatternSet(
             spec.count,
             resolve,
             spec.spacingMode,
-            earlier
+            earlier,
+            spec.distanceText
           )
         : planSketchCircularPattern(
             document,
@@ -2758,7 +2818,8 @@ export function planSketchPatternSet(
             resolve,
             spec.orientation,
             spec.pivotRef,
-            earlier
+            earlier,
+            spec.totalText
           );
     if (plan.status !== 'commands') {
       firstRefusal ??= plan.reason;

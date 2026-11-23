@@ -839,7 +839,8 @@ export type SketchEditPlan =
 /**
  * Turn a finished pick sequence plus its values into the kernel request and
  * the commands its answer becomes, or straight into commands for the
- * app-side tools. `values` and `raws` are the keypad steps in order.
+ * app-side tools. `value` and `raw` are the keypad steps in order: what
+ * each evaluated to, and the text it was typed as.
  */
 export function planSketchEdit(
   document: ProjectDocument,
@@ -848,7 +849,7 @@ export function planSketchEdit(
   kind: SketchEditToolKind,
   picks: readonly string[],
   value: number | readonly number[],
-  raw: string,
+  raw: string | readonly string[],
   resolve: ResolveParam,
   at?: Point2,
   offset?: SketchOffsetPick,
@@ -857,6 +858,7 @@ export function planSketchEdit(
 ): SketchEditPlan {
   const spec = sketchEditToolSpec(kind);
   const values = typeof value === 'number' ? [value] : value;
+  const raws = typeof raw === 'string' ? [raw] : raw;
   if (picks.length !== spec.picks) {
     return {
       status: 'refuse',
@@ -904,6 +906,7 @@ export function planSketchEdit(
             kind,
             directionId: picks[1]!,
             distance: values[0]!,
+            distanceText: raws[0],
             count: values[1]!,
             spacingMode: pattern?.spacing ?? 'spacing'
           }
@@ -913,6 +916,7 @@ export function planSketchEdit(
             pivotRef: pivot!.ref,
             count: values[0]!,
             totalDeg: values[1]!,
+            totalText: raws[1],
             orientation: pattern?.orientation ?? 'rotate'
           },
       resolve
@@ -928,7 +932,9 @@ export function planSketchEdit(
       values[0]!,
       values[1]!,
       resolve,
-      pattern?.spacing
+      pattern?.spacing,
+      [],
+      raws[0]
     );
   }
   if (kind === 'circular-pattern') {
@@ -946,10 +952,13 @@ export function planSketchEdit(
       values[1]!,
       resolve,
       pattern?.orientation,
-      pivot.ref
+      pivot.ref,
+      [],
+      raws[1]
     );
   }
   const amount = values[0]!;
+  const text = raws[0] ?? '';
   if (kind === 'offset') {
     return planSketchOffset(
       document,
@@ -960,7 +969,7 @@ export function planSketchEdit(
       offset ?? { ...DEFAULT_SKETCH_OFFSET_OPTIONS, side: 1 },
       resolve,
       // An expression stays parametric in the offset it drives.
-      Number.isFinite(Number(raw)) ? amount : raw
+      Number.isFinite(Number(text)) ? amount : text
     );
   }
   if (
@@ -1010,7 +1019,9 @@ export function planSketchEdit(
     };
   }
   // An expression stays parametric in the radius it drives.
-  const storedRadius: ParamValue = Number.isFinite(Number(raw)) ? amount : raw;
+  const storedRadius: ParamValue = Number.isFinite(Number(text))
+    ? amount
+    : text;
   return {
     status: 'operation',
     label: spec.label,
@@ -1270,7 +1281,7 @@ export async function runSketchEdit(
     kind,
     picks,
     values,
-    raws[0] ?? raw,
+    raws.length > 0 ? raws : raw,
     host.resolve,
     at,
     offset,
