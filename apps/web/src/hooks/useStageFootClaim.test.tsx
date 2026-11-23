@@ -134,6 +134,10 @@ describe('useStageFootClaim', () => {
     top.value = 404;
     fireEvent.animationEnd(getByTestId('card'));
     expect(onGrow).toHaveBeenCalledTimes(1);
+    // A lane growing 12 px under the settled card is real growth.
+    top.value = 392;
+    window.dispatchEvent(new Event('resize'));
+    expect(onGrow).toHaveBeenCalledTimes(2);
   });
 
   it('publishes nothing while inactive', () => {

@@ -12,8 +12,12 @@ import { useLayoutEffect, useRef, type RefObject } from 'react';
 export type StageFootClaim =
   '--workspace-tour-claim' | '--motion-timeline-claim';
 
-/** Less than this, a claim reaching higher is not growth (an entrance rise). */
-export const FOOT_CLAIM_GROWTH_PX = 16;
+/**
+ * Up to this, a claim reaching higher is not growth: a card's 8 px entrance
+ * rise, plus a pixel of rounding. Anything more, a lane growing under the
+ * card included, is.
+ */
+export const FOOT_CLAIM_GROWTH_PX = 9;
 
 /** CSS px from the stage's bottom edge up to the surface's top edge. */
 export function stageFootClaim(
