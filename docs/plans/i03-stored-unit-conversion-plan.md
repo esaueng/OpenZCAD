@@ -325,9 +325,19 @@ document, then:
   evaluates to length¹ is case 1. `sqrt(area)` is fine.
 - **Trigonometry.** `w * sin(30)` is a length times a number: case 1 or 2 by
   the dimension of `w`. Angles never scale.
-- **Guards** (`require_min(x, 3 mm)`): suffixed, so unchanged.
-  `require_min(x, 3)` with a dimension-0 `x` sits inside a wrapped
-  expression, so it is unchanged and exact.
+- **Guards** (`require_min(x, 3 mm)`): refused when `x` is a length. The
+  floating-point comparison of `k·x` with `k·3 mm` need not decide as the
+  original, so the guard can pass in one unit and throw in the other after
+  a later edit. `require_min(x, 3)` with a dimension-0 `x` sits inside a
+  wrapped expression, so it is unchanged and exact.
+- **Discontinuities refuse structurally** (implementation, #1965 re-check).
+  The value comparison only sees today's values. Any operation
+  discontinuous in a length (rounding, `mod`, guards, `sign`, `atan2`'s
+  branch cut) is refused whenever a length reaches it, and so is any field
+  that does not scale (a count, angle, ratio, fraction or condition) whose
+  value depends on a length, because the kernel rounds or compares it.
+  Continuous equivariant operations (`+ - * /`, `abs`, `sqrt`, `min`,
+  `max`, `avg`, `^` with an integer exponent) convert.
 - **Typed-length parameter expressions** convert by the same rule, with the
   parameter as the "field". Their `value` is recomputed by re-evaluation.
 - **Custom-feature scripts** (`script.source`): literals inside a script

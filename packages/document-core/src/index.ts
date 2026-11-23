@@ -99,6 +99,7 @@ export * from './gear-mesh';
 export * from './hole-callout';
 export * from './print-clearance';
 export * from './display-units';
+export * from './units-convert';
 export * from './configurations';
 export * from './reference-images';
 export * from './model-pmi';
@@ -8706,7 +8707,8 @@ export interface ExpressionOptions {
 function parseExpressionQuantity(
   expression: string,
   scope: Record<string, number>,
-  documentUnits: UnitSystem | undefined
+  documentUnits: UnitSystem | undefined,
+  trace?: ExpressionTrace
 ): ExpressionQuantity {
   const tokens = tokenizeExpression(expression);
   let position = 0;
@@ -8797,6 +8799,7 @@ function parseExpressionQuantity(
     if (fn.arity === 'nullary' && args.length !== 0) {
       throw new Error(`${name}() takes no arguments.`);
     }
+    trace?.(name, args);
     try {
       return fn.apply(args);
     } catch (error) {
@@ -8824,6 +8827,7 @@ function parseExpressionQuantity(
         if (following.length === 0 && following.angle === 0) {
           throw new Error('Unexpected trailing tokens in expression.');
         }
+        trace?.('juxtapose', [result, following]);
         if (
           result.length !== following.length ||
           result.angle !== following.angle
@@ -8881,6 +8885,7 @@ function parseExpressionQuantity(
       position += 1;
       // Right-associative: 2^3^2 = 2^(3^2).
       const exponent = parseUnary();
+      trace?.('^', [base, exponent]);
       if (exponent.length !== 0 || exponent.angle !== 0) {
         throw incompatibleDimensions(
           'the exponent must be a plain number, not',
@@ -8935,6 +8940,7 @@ function parseExpressionQuantity(
       }
       position += 1;
       const right = parseUnary();
+      trace?.(token.value, [value, right]);
       const scaled =
         (value.angle !== 0 && (right.length !== 0 || right.angle !== 0)) ||
         (right.angle !== 0 && (value.length !== 0 || value.angle !== 0));
@@ -8972,6 +8978,7 @@ function parseExpressionQuantity(
       }
       position += 1;
       const right = parseMultiplicative();
+      trace?.(token.value, [value, right]);
       if (value.length !== right.length || value.angle !== right.angle) {
         throw incompatibleDimensions(
           token.value === '+' ? 'cannot add' : 'cannot subtract',
@@ -9126,6 +9133,45 @@ export function getExpressionDimensions(
     throw new Error('Expression did not evaluate to a finite number.');
   }
   return { length: result.length, angle: result.angle };
+}
+
+/**
+ * One operation the parser applied, with its operands' values and
+ * dimensions: a function's name, or `+ - * / ^`, or `juxtapose` (`1' 2"`).
+ * Unary signs and parentheses are not reported: they keep the dimension.
+ */
+export type ExpressionTrace = (
+  operation: string,
+  operands: readonly ExpressionQuantityValue[]
+) => void;
+
+/** A value with its length and angle exponents, as the parser holds it. */
+export interface ExpressionQuantityValue extends ExpressionDimensions {
+  value: number;
+}
+
+/**
+ * Evaluates like {@link getExpressionDimensions}, reporting every operation
+ * to `trace` before it is applied (the unit-conversion audit uses it to find
+ * operations that do not commute with a change of length unit). Throws
+ * exactly where the evaluator throws.
+ */
+export function traceExpression(
+  expression: string,
+  scope: Record<string, number>,
+  options: ExpressionOptions | undefined,
+  trace: ExpressionTrace
+): ExpressionQuantityValue {
+  const result = parseExpressionQuantity(
+    expression,
+    scope,
+    options?.documentUnits,
+    trace
+  );
+  if (!Number.isFinite(result.value)) {
+    throw new Error('Expression did not evaluate to a finite number.');
+  }
+  return { ...result };
 }
 
 /**
