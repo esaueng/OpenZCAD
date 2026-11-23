@@ -432,7 +432,9 @@ describe('WorkspaceTour over a phone stage', () => {
     return vi
       .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
       .mockImplementation(function (this: HTMLElement) {
-        return this.classList.contains('viewer-area')
+        // The stage and its canvas share one rectangle.
+        return this.classList.contains('viewer-area') ||
+          this.tagName === 'CANVAS'
           ? DOMRect.fromRect({ x: 0, y: 0, width: 390, height: 844 })
           : DOMRect.fromRect({ x: 72, y: 404, width: cardWidth, height: 250 });
       });
@@ -445,6 +447,7 @@ describe('WorkspaceTour over a phone stage', () => {
     const onCoverStage = vi.fn();
     const { rerender, container } = render(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           onDismiss={vi.fn()}
@@ -456,6 +459,7 @@ describe('WorkspaceTour over a phone stage', () => {
     const asked = onCoverStage.mock.calls.length;
     rerender(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           featureCount={1}
@@ -474,6 +478,7 @@ describe('WorkspaceTour over a phone stage', () => {
     const onCoverStage = vi.fn();
     const { rerender } = render(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           onDismiss={vi.fn()}
@@ -483,6 +488,7 @@ describe('WorkspaceTour over a phone stage', () => {
     );
     rerender(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           featureCount={1}
@@ -509,6 +515,7 @@ describe('WorkspaceTour over a phone stage', () => {
     const onCoverStage = vi.fn();
     const { rerender } = render(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           onDismiss={vi.fn()}
@@ -519,6 +526,7 @@ describe('WorkspaceTour over a phone stage', () => {
     const asked = onCoverStage.mock.calls.length;
     rerender(
       <div className="viewer-area">
+        <canvas />
         <WorkspaceTour
           {...idle}
           featureCount={1}

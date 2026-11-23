@@ -19,7 +19,14 @@ import { platformShortcutLabel } from '../lib/platformShortcut';
 import { StableLabel } from './StableLabel';
 import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 import { useStageFootClaim } from '../hooks/useStageFootClaim';
-import { guideFramedAround } from '../lib/fitFrame';
+import { guideShapesClearStage } from '../lib/fitFrame';
+
+/** The viewport canvas of the stage the card stands on. */
+function stageCanvas(card: HTMLElement | null): HTMLElement | null {
+  return (
+    card?.closest('.viewer-area')?.querySelector<HTMLElement>('canvas') ?? null
+  );
+}
 
 interface WorkspaceTourProps extends WorkspaceTourSignals {
   /** Fired on skip AND on finishing the last step — either way it is over. */
@@ -220,16 +227,9 @@ export function WorkspaceTour({
   // on to "Select to edit", under the card it is asked from (preview check
   // on #1964).
   useEffect(() => {
-    const card = cardRef.current;
-    const stage = card?.closest('.viewer-area');
-    if (!card || !stage || finished) return;
-    if (
-      guideFramedAround(
-        card.getBoundingClientRect(),
-        stage.getBoundingClientRect()
-      )
-    )
-      onCoverStageRef.current?.();
+    if (finished) return;
+    const canvas = stageCanvas(cardRef.current);
+    if (canvas && guideShapesClearStage(canvas)) onCoverStageRef.current?.();
   }, [index, finished]);
 
   // Risen over a phone's or a tablet's stage, it can stand over the model:
@@ -239,8 +239,9 @@ export function WorkspaceTour({
     cardRef,
     '--workspace-tour-claim',
     !finished && !!step,
-    (card, stage) => {
-      if (guideFramedAround(card, stage)) onCoverStage?.();
+    () => {
+      const canvas = stageCanvas(cardRef.current);
+      if (canvas && guideShapesClearStage(canvas)) onCoverStage?.();
     }
   );
 

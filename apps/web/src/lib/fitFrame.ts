@@ -43,21 +43,21 @@ function touchOnly(): boolean {
 }
 
 /**
- * Whether the modeling guide's card is framed around: a phone's across the
- * stage (`guideCoversStage`) or, on any touch screen, a tablet's in its
- * corner. Shared with the card, which asks for the model to be framed clear
- * of it on the same terms.
+ * Whether the modeling guide's card changes the clear stage on `canvas`: a
+ * phone's across it, a tablet's over its corner. The card asks for the
+ * model to be framed clear of it only then; where it changes nothing (a
+ * desktop's card, or one standing over a docked column) a request could
+ * only undo the user's own pan (review on #1964's tablet follow-up).
  */
-export function guideFramedAround(
-  card: Pick<DOMRectReadOnly, 'left' | 'right'>,
-  stage: Pick<DOMRectReadOnly, 'left' | 'right'>
-): boolean {
-  const middle = stage.left + (stage.right - stage.left) / 2;
+export function guideShapesClearStage(canvas: HTMLElement): boolean {
+  const withGuide = measureClearStage(canvas)?.rect;
+  const without = measureClearStage(canvas, { ignoreGuide: true })?.rect;
+  if (!withGuide || !without) return withGuide !== without;
   return (
-    (guideCoversStage(card, stage) &&
-      card.left < middle - 1 &&
-      card.right > middle + 1) ||
-    touchOnly()
+    withGuide.left !== without.left ||
+    withGuide.right !== without.right ||
+    withGuide.top !== without.top ||
+    withGuide.bottom !== without.bottom
   );
 }
 
@@ -111,7 +111,10 @@ export interface ClearStage {
 
 export function measureClearStage(
   canvas: HTMLElement,
-  { throughCover = false }: { throughCover?: boolean } = {}
+  {
+    throughCover = false,
+    ignoreGuide = false
+  }: { throughCover?: boolean; ignoreGuide?: boolean } = {}
 ): ClearStage | undefined {
   const bounds = canvas.getBoundingClientRect();
   const panels = [
@@ -170,7 +173,9 @@ export function measureClearStage(
   }
   // The guide across the middle takes its band off the foot, however little
   // it leaves above a minimum: there is no side to frame beside it.
-  for (const guide of panelsOver(canvas, FOOT_GUIDE, throughCover)) {
+  for (const guide of ignoreGuide
+    ? []
+    : panelsOver(canvas, FOOT_GUIDE, throughCover)) {
     const across =
       guideCoversStage(guide, bounds) &&
       guide.left < middle - 1 &&
@@ -202,8 +207,13 @@ export function measureClearStage(
     };
     const now = clear(bottom, sides);
     if (guide.right <= now.left || guide.left >= now.right) continue;
+    // A candidate counts only inside the stage the other panels leave: one
+    // that let a docked column go to clear the card would frame the model
+    // behind the column instead.
     const room = (rect: StageRect) =>
-      Math.min(rect.right - rect.left, rect.bottom - rect.top);
+      rect.left >= now.left - 0.5 && rect.right <= now.right + 0.5
+        ? Math.min(rect.right - rect.left, rect.bottom - rect.top)
+        : -Infinity;
     const above =
       nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX
         ? room(clear(nextBottom, sides))

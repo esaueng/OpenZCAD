@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cornersWithinFrame,
+  guideShapesClearStage,
   measureClearStage,
   measureCreationFrame,
   measureFitFrame,
@@ -350,6 +351,26 @@ describe('the modeling guide', () => {
     expect(measureClearStage(canvas)!.rect.bottom).toBe(610 - 12);
   });
 
+  it('asks a phone’s card across the stage for a reframe, a desktop’s not', () => {
+    const { area, canvas } = phoneStage();
+    guide(area, 72, 405, 318, 655);
+    expect(guideShapesClearStage(canvas)).toBe(true);
+    document.body.replaceChildren();
+    const desk = document.createElement('div');
+    desk.className = 'viewer-area';
+    const deskCanvas = placed(
+      document.createElement('canvas'),
+      0,
+      0,
+      768,
+      1024
+    );
+    desk.append(deskCanvas);
+    document.body.append(desk);
+    guide(desk, 116, 700, 412, 960);
+    expect(guideShapesClearStage(deskCanvas)).toBe(false);
+  });
+
   it('leaves a wider stage’s corner card out of the frame', () => {
     const area = document.createElement('div');
     area.className = 'viewer-area';
@@ -426,6 +447,30 @@ describe('the modeling guide', () => {
       expect(stage.rect.bottom).toBe(768);
       expect(stage.rect.left).toBe(420 + 12);
       expect(stage.rect.right).toBe(864 - 12);
+    });
+
+    it('never frames beside the card by letting a docked column go', () => {
+      // 768 × 1024 with a left rail to x 104 and the column from x 462:
+      // beside the card left 26 px, and letting the column go to widen it
+      // framed the box behind the column (review on this change).
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      const rail = document.createElement('div');
+      rail.className = 'workspace-column-float';
+      area.append(placed(rail, 0, 60, 104, 1024));
+      guide(area, 116, 606, 412, 845);
+      const stage = measureClearStage(canvas)!;
+      expect(stage.rect.bottom).toBe(606 - 12);
+      expect(stage.rect.right).toBe(462 - 12);
+    });
+
+    it('asks for a reframe only where the card changes the stage', () => {
+      const { area, canvas } = tabletStage(768, 1024, 462);
+      const card = guide(area, 116, 606, 412, 845);
+      expect(guideShapesClearStage(canvas)).toBe(true);
+      // Over the docked column, the card changes nothing: a request could
+      // only undo the user's pan.
+      placed(card, 470, 606, 766, 845);
+      expect(guideShapesClearStage(canvas)).toBe(false);
     });
 
     it('leaves a card out that stands clear of the stage', () => {
