@@ -20,9 +20,15 @@ describe('stageFootClaim', () => {
   });
 });
 
-function Card({ shown }: { shown: boolean }) {
+function Card({
+  shown,
+  onGrow
+}: {
+  shown: boolean;
+  onGrow?: (surface: DOMRect, stage: DOMRect) => void;
+}) {
   const ref = useRef<HTMLElement | null>(null);
-  useStageFootClaim(ref, '--workspace-tour-claim', shown);
+  useStageFootClaim(ref, '--workspace-tour-claim', shown, onGrow);
   return (
     <div className="viewer-area" data-testid="stage">
       {shown && <section ref={ref} data-testid="card" />}
@@ -94,6 +100,28 @@ describe('useStageFootClaim', () => {
     expect(stage.style.getPropertyValue('--workspace-tour-claim')).toBe(
       '544px'
     );
+  });
+
+  it('says when the claim reaches higher, and only then', () => {
+    // A phone's guide expanding over the model asks for it to be framed
+    // clear again (preview check on #1951); folding or holding still does
+    // not.
+    const top = { value: 610 };
+    layOut(top);
+    const onGrow = vi.fn<(surface: DOMRect, stage: DOMRect) => void>();
+    const { getByTestId } = render(<Card shown onGrow={onGrow} />);
+    expect(onGrow).toHaveBeenCalledTimes(1);
+    expect(onGrow.mock.calls[0]![0].top).toBe(610);
+    top.value = 404;
+    window.dispatchEvent(new Event('resize'));
+    expect(onGrow).toHaveBeenCalledTimes(2);
+    window.dispatchEvent(new Event('resize'));
+    top.value = 610;
+    fireEvent.animationEnd(getByTestId('card'));
+    expect(onGrow).toHaveBeenCalledTimes(2);
+    top.value = 404;
+    window.dispatchEvent(new Event('resize'));
+    expect(onGrow).toHaveBeenCalledTimes(3);
   });
 
   it('publishes nothing while inactive', () => {

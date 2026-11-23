@@ -22,6 +22,22 @@ const CLEAR_STAGE_OBSTACLES = `${SELECTION_CALLOUT_OBSTACLES}, .tweak-flyouts, .
 const WORKSPACE_STAGE_OBSTACLES = '.assistant-panel:not(.assistant-off-screen)';
 
 /**
+ * The modeling guide's card. At a phone width it stands across the stage's
+ * middle, over the model it asks to be tapped ("Select to edit"), and the
+ * model is framed above it. Beside the model (a wider stage's corner card)
+ * it is not framed around: a side band for it would push every first-run
+ * fit sideways for a card the model is not under.
+ */
+const FOOT_GUIDE = '.workspace-tour';
+
+/**
+ * The least height the guide's band leaves the model. A shorter stage (a
+ * phone held sideways) frames as if the guide were not there, rather than
+ * fitting the part into a strip.
+ */
+const FOOT_GUIDE_MIN_BAND_PX = 96;
+
+/**
  * A panel standing over the stage's middle takes a band off it only while
  * what it leaves is at least this share of the canvas height: framed into
  * less, the model would be a sliver.
@@ -108,6 +124,15 @@ export function measureClearStage(
     }
     top = nextTop;
     bottom = nextBottom;
+  }
+  // The guide across the middle takes its band off the foot, however little
+  // it leaves above a minimum: there is no side to frame beside it.
+  for (const guide of panelsOver(canvas, FOOT_GUIDE, throughCover)) {
+    const across = guide.left < middle - 1 && guide.right > middle + 1;
+    const guideTop = Math.max(guide.top, bounds.top);
+    if (!across || guideTop >= bottom) continue;
+    const nextBottom = guideTop - STAGE_FRAME_GAP_PX;
+    if (nextBottom - top >= FOOT_GUIDE_MIN_BAND_PX) bottom = nextBottom;
   }
   if (bottom <= top) return undefined;
   const verticalBounds = {

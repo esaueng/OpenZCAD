@@ -1,4 +1,4 @@
-import { useLayoutEffect, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type RefObject } from 'react';
 
 /**
  * The stage's foot claims: a task surface anchored to the foot of the stage
@@ -28,25 +28,36 @@ export function stageFootClaim(
  * measures again when the stage's own style changes: the stylesheet moves
  * the guide above an in-place command's bar by the height the bar publishes
  * there, which moves it without resizing it (#1947).
+ *
+ * `onGrow` hears each time the claim reaches higher than it did (from
+ * nothing when the surface comes up), with where the surface and the stage
+ * stand then: a surface that rises over the model can ask for it to be
+ * framed clear again.
  */
 export function useStageFootClaim(
   ref: RefObject<HTMLElement | null>,
   property: StageFootClaim,
-  active: boolean
+  active: boolean,
+  onGrow?: (surface: DOMRect, stage: DOMRect) => void
 ) {
+  const onGrowRef = useRef(onGrow);
+  onGrowRef.current = onGrow;
   useLayoutEffect(() => {
     const surface = ref.current;
     const stage = surface?.closest<HTMLElement>('.viewer-area');
     if (!active || !surface || !stage) return;
+    let reached = 0;
     const measure = () => {
-      const claim = `${stageFootClaim(
-        stage.getBoundingClientRect(),
-        surface.getBoundingClientRect()
-      )}px`;
+      const stageRect = stage.getBoundingClientRect();
+      const surfaceRect = surface.getBoundingClientRect();
+      const height = stageFootClaim(stageRect, surfaceRect);
+      const claim = `${height}px`;
       // Unchanged, left alone: the write would wake the style observer below.
       if (stage.style.getPropertyValue(property) !== claim) {
         stage.style.setProperty(property, claim);
       }
+      if (height > reached) onGrowRef.current?.(surfaceRect, stageRect);
+      reached = height;
     };
     measure();
     const observer =

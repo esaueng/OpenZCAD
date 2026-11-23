@@ -18757,22 +18757,39 @@ export function ModelViewer({
   }, [creationFrame]);
 
   // Something opened over the stage: keep the model where it can be seen.
+  // A request made with nothing to frame (a phone's modeling guide rising
+  // over an empty project) is kept, and honoured once when the first bodies
+  // arrive: the box the guide then asks to be tapped stood under it.
+  const handledClearStageRef = useRef(0);
+  const clearStagePendingRef = useRef(false);
   useEffect(() => {
     const context = contextRef.current;
+    const fresh = clearStageRequest !== handledClearStageRef.current;
+    if (!fresh && !clearStagePendingRef.current) {
+      return;
+    }
     if (!clearStageRequest || !context || !context.hasFitCamera) {
       return;
     }
     // Two frames: whatever opened, and any preview it brought, are laid out.
+    // Marked handled only once they have run: a body change in between
+    // cancels them, and the request must still be there for the next run.
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => {
+        handledClearStageRef.current = clearStageRequest;
         const targets = [
           ...context.bodyGroup.children,
           ...(parameterPreviewController.current?.group.children ?? [])
         ].filter((child) => child.visible);
         const reached = new THREE.Box3();
         for (const object of targets) reached.expandByObject(object);
+        if (reached.isEmpty()) {
+          clearStagePendingRef.current = true;
+          return;
+        }
+        clearStagePendingRef.current = false;
         const stage = measureFitFrame(context.renderer.domElement);
-        if (reached.isEmpty() || !stage) {
+        if (!stage) {
           return;
         }
         const camera = context.activeCamera;
@@ -18806,7 +18823,7 @@ export function ModelViewer({
       });
     });
     return () => cancelAnimationFrame(frame);
-  }, [clearStageRequest]);
+  }, [clearStageRequest, bodies]);
   // View requests keep the current zoom and glide the camera to the axis —
   // named standard views and the cube's corner diagonals alike.
   useEffect(() => {

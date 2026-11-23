@@ -185,6 +185,46 @@ test('the modeling guide’s Finish stays clear of the phone’s panel (UX-001)'
   await expect(panel).toBeVisible();
 });
 
+// A fresh phone project (preview check on #1951): the expanded guide's
+// "Select to edit" step stood over the box it asked to be tapped. The new
+// body is framed above the guide now.
+test('the modeling guide leaves the new box clear to tap on a phone', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubApi(page, { workspaceTour: true });
+  await createProject(page, 'Phone guide box');
+  const tour = page.locator('.workspace-tour');
+  await expect(tour).toBeVisible();
+  await createPrimitiveInPlace(page, 'box');
+  await expectBodyCount(page, 1);
+  await expect(tour).toContainText('Select to edit');
+  await waitForSurfacesToSettle(page, ['.workspace-tour']);
+  const canvas = page.locator('.viewer-host canvas');
+  const card = (await tour.boundingBox())!;
+  await expect
+    .poll(async () => {
+      const view = await canvas.evaluate(
+        (element) =>
+          new Promise<{
+            screen: { top: number; bottom: number } | null;
+          }>((resolve) =>
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-bodies-in-view', {
+                detail: { resolve }
+              })
+            )
+          )
+      );
+      return view.screen === null
+        ? null
+        : view.screen.bottom <= card.y + 0.5 && view.screen.top >= 0;
+    })
+    .toBe(true);
+  await shot(page, 'guide-leaves-box-clear');
+});
+
 // A 360 × 640 phone with the guide up on its second step (#1945). It
 // stood over the opened view tools, Measure under its text, and expanded
 // it left the measurement workbench a 13 px sliver of the lane. The rail

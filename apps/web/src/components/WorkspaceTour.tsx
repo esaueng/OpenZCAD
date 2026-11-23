@@ -43,6 +43,12 @@ interface WorkspaceTourProps extends WorkspaceTourSignals {
   startIndex?: number;
   /** The step now showing, for whoever keeps `startIndex`. */
   onIndexChange?(index: number): void;
+  /**
+   * The card rose across the middle of the stage (a phone's guide, coming
+   * up or expanding), where it can stand over the model it asks to be
+   * tapped: whoever owns the camera frames the model clear of it again.
+   */
+  onCoverStage?(): void;
 }
 
 /**
@@ -62,7 +68,8 @@ export function WorkspaceTour({
   onMinimizedChange,
   yieldTo = null,
   startIndex = 0,
-  onIndexChange
+  onIndexChange,
+  onCoverStage
 }: WorkspaceTourProps) {
   const keymap = useKeymap();
   const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
@@ -204,7 +211,18 @@ export function WorkspaceTour({
 
   // A phone's panel shares the card's corner of the stage; it ends above
   // the card rather than over its Next and Finish (UX-001).
-  useStageFootClaim(cardRef, '--workspace-tour-claim', !finished && !!step);
+  // Risen across the stage's middle, it can stand over the model: ask for
+  // the model to be framed clear of it. A card in a wider stage's corner
+  // stands beside the model, and asks nothing.
+  useStageFootClaim(
+    cardRef,
+    '--workspace-tour-claim',
+    !finished && !!step,
+    (card, stage) => {
+      const middle = stage.left + stage.width / 2;
+      if (card.left < middle && card.right > middle) onCoverStage?.();
+    }
+  );
 
   useLayoutEffect(() => {
     const content = contentRef.current;

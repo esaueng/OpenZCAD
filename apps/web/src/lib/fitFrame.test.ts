@@ -304,6 +304,69 @@ describe('measureClearStage', () => {
   });
 });
 
+describe('the modeling guide', () => {
+  function phoneStage() {
+    const workspace = document.createElement('main');
+    workspace.className = 'workspace';
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 390, 844);
+    workspace.append(area);
+    area.append(canvas);
+    document.body.append(workspace);
+    return { area, canvas };
+  }
+  function guide(
+    area: HTMLElement,
+    left: number,
+    top: number,
+    right: number,
+    bottom: number
+  ) {
+    const card = document.createElement('section');
+    card.className = 'workspace-tour';
+    area.append(placed(card, left, top, right, bottom));
+    return card;
+  }
+
+  it('frames a phone’s model above the guide standing across its middle', () => {
+    // A 390 × 844 phone: the expanded guide stood over the new box it asked
+    // to be tapped (preview check on #1951).
+    const { area, canvas } = phoneStage();
+    guide(area, 72, 405, 318, 655);
+    const stage = measureClearStage(canvas)!;
+    expect(stage.rect.bottom).toBe(405 - 12);
+    expect(stage.frame!.minY).toBeCloseTo(1 - ((405 - 12) / 844) * 2, 12);
+    // A creation preview is kept above it too.
+    expect(measureCreationFrame(canvas).minY).toBeCloseTo(
+      1 - ((405 - 12) / 844) * 2,
+      12
+    );
+  });
+
+  it('follows the guide folded to its header', () => {
+    const { area, canvas } = phoneStage();
+    guide(area, 72, 610, 318, 655);
+    expect(measureClearStage(canvas)!.rect.bottom).toBe(610 - 12);
+  });
+
+  it('leaves a wider stage’s corner card out of the frame', () => {
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, 1440, 900);
+    area.append(canvas);
+    document.body.append(area);
+    guide(area, 72, 600, 368, 840);
+    expect(measureFitFrame(canvas)).toBeUndefined();
+  });
+
+  it('frames as if it were not there where it would leave only a strip', () => {
+    const { area, canvas } = phoneStage();
+    guide(area, 72, 90, 318, 655);
+    expect(measureClearStage(canvas)!.rect.bottom).toBe(844);
+  });
+});
+
 describe('measurePickFrame', () => {
   it('keeps a pick clear of the open tool fold as well as the card', () => {
     const canvas = stage('docked');
