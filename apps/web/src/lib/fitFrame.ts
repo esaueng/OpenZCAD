@@ -306,9 +306,64 @@ function sideFrame(
  */
 export function measureFitFrame(
   canvas: HTMLElement,
-  options: { throughCover?: boolean } = {}
+  options: { throughCover?: boolean; ignoreGuide?: boolean } = {}
 ): NdcFrame | undefined {
   return measureClearStage(canvas, options)?.frame;
+}
+
+/**
+ * Whether a model whose bounding box projects to `corners` (normalized
+ * device coordinates on `canvas`) stands where nothing covers it. Inside the
+ * clear stage it does. So it does where only the guide's card shaped that
+ * stage, as long as it stays inside the stage without the card and off the
+ * card itself: the clear stage is one rectangle, above or beside the card,
+ * and a model beside a card framed above (or above one framed beside) is in
+ * plain view all the same, as long as nothing else is drawn over it either.
+ * Pressing Next reframed such a model (preview check on #1969).
+ */
+export function cornersClearOfStage(
+  canvas: HTMLElement,
+  corners: readonly { x: number; y: number; z: number }[]
+): boolean {
+  const stage = measureFitFrame(canvas);
+  if (!stage || cornersWithinFrame(corners, stage)) return true;
+  const open = measureFitFrame(canvas, { ignoreGuide: true }) ?? {
+    minX: -1,
+    maxX: 1,
+    minY: -1,
+    maxY: 1
+  };
+  if (!cornersWithinFrame(corners, open)) return false;
+  const bounds = canvas.getBoundingClientRect();
+  const xs = corners.map(
+    (corner) => bounds.left + ((corner.x + 1) / 2) * bounds.width
+  );
+  const ys = corners.map(
+    (corner) => bounds.top + ((1 - corner.y) / 2) * bounds.height
+  );
+  const left = Math.min(...xs);
+  const right = Math.max(...xs);
+  const top = Math.min(...ys);
+  const bottom = Math.max(...ys);
+  // Off everything drawn over the canvas, not only the card: the stage
+  // without the card can let a panel go to stay wide enough (the Tools
+  // drawer beside a docked column), and it does not keep out the command
+  // bar's lane, which only a creation frame does (review on #1974).
+  const covers = [
+    ...panelsOver(canvas, FOOT_GUIDE),
+    ...panelsOver(canvas, CLEAR_STAGE_OBSTACLES),
+    ...panelsOver(canvas, WORKSPACE_STAGE_OBSTACLES, false, '.workspace'),
+    // The lane is a transparent full-width column; what it holds (the
+    // command's bar, the search row) is centred and as wide as it reads.
+    ...panelsOver(canvas, '.command-bar-lane > *', false, '.workspace')
+  ];
+  return covers.every(
+    (cover) =>
+      cover.right <= left ||
+      cover.left >= right ||
+      cover.bottom <= top ||
+      cover.top >= bottom
+  );
 }
 
 /**

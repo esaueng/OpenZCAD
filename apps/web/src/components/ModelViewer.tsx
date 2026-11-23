@@ -337,6 +337,7 @@ import {
   SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
 import {
+  cornersClearOfStage,
   cornersWithinFrame,
   measureClearStage,
   measureCreationFrame,
@@ -19043,7 +19044,8 @@ export function ModelViewer({
           index & 4 ? reached.max.z : reached.min.z
         ).project(camera)
       );
-      if (cornersWithinFrame(corners, stage)) {
+      // In plain view, beside the guide's card or above it, it stays.
+      if (cornersClearOfStage(context.renderer.domElement, corners)) {
         return;
       }
       const pose = computeFitPose(

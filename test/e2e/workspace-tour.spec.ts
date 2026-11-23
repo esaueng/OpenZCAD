@@ -8,6 +8,7 @@ import {
   MODEL_ONLY,
   modelPanel,
   stubApi,
+  waitForStillViewport,
   waitForSurfacesToSettle
 } from './openzcad-fixtures';
 
@@ -344,3 +345,70 @@ for (const [width, height] of [
       .toBe(true);
   });
 }
+
+// A box panned beside the card, clear of it but past the one-rectangle
+// clear stage above it, was reframed when Next was pressed (preview check
+// on #1969). In plain view, it stays where the user put it.
+test('Next leaves a box panned clear beside the guide where it is', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await stubApi(page, {
+    workspaceTour: true,
+    panelLayout: null,
+    commandFoldClosed: true
+  });
+  await createProject(page, 'Desktop guide next');
+  const tour = page.locator('.workspace-tour');
+  await expect(tour).toBeVisible();
+  await createPrimitiveInPlace(page, 'box');
+  await expectBodyCount(page, 1);
+  await expect(tour).toContainText('Select to edit');
+  await waitForSurfacesToSettle(page, ['.workspace-tour']);
+  await waitForStillViewport(page);
+  const canvas = page.locator('.viewer-host canvas');
+  const inView = () =>
+    canvas.evaluate(
+      (element) =>
+        new Promise<{
+          screen: {
+            left: number;
+            right: number;
+            top: number;
+            bottom: number;
+          } | null;
+        }>((resolve) =>
+          element.dispatchEvent(
+            new CustomEvent('openzcad:e2e-bodies-in-view', {
+              detail: { resolve }
+            })
+          )
+        )
+    );
+  const card = (await tour.boundingBox())!;
+  const before = (await inView()).screen!;
+  // Pan the box down until its foot is past the card's top, beside it.
+  const dy = card.y + 40 - before.bottom;
+  const dx = Math.max(0, card.x + card.width + 20 - before.left);
+  const x = (before.left + before.right) / 2;
+  const y = (before.top + before.bottom) / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down({ button: 'right' });
+  await page.mouse.move(x + dx, y + dy, { steps: 16 });
+  await page.mouse.up({ button: 'right' });
+  await waitForStillViewport(page);
+  const panned = (await inView()).screen!;
+  // The setup this guards: beside the card, past its top, off the card.
+  expect(panned.bottom).toBeGreaterThan(card.y);
+  expect(panned.left).toBeGreaterThanOrEqual(card.x + card.width);
+  expect(panned.right).toBeLessThan(1280);
+  await tour.getByRole('button', { name: 'Next' }).click();
+  await waitForSurfacesToSettle(page, ['.workspace-tour']);
+  await page.waitForTimeout(600);
+  await waitForStillViewport(page);
+  const after = (await inView()).screen!;
+  expect(Math.abs(after.left - panned.left)).toBeLessThan(1);
+  expect(Math.abs(after.top - panned.top)).toBeLessThan(1);
+  expect(Math.abs(after.right - panned.right)).toBeLessThan(1);
+});
