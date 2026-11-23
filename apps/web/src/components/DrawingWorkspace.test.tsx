@@ -36,6 +36,7 @@ import {
 import { DrawingWorkspace, resetRetainedProjections } from './DrawingWorkspace';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import { WHEEL_DEVICE_STORAGE_KEY } from '../lib/wheelDeviceMemory';
+import { viewConfigurationRows } from '../lib/drawing/viewConfigurations';
 import {
   createStarterSheet,
   drawingSourceFingerprint,
@@ -1194,11 +1195,15 @@ describe('DrawingWorkspace', () => {
         within(canvas).getAllByText(/Constraints conflict/).length
       ).toBeGreaterThan(0)
     );
-    // The active row's views are drawn all the same.
+    // The active row's views are drawn all the same; only Large's (the
+    // view and those projected from it) wait.
+    const largeViews = viewConfigurationRows(rowSheet, base).size;
+    expect(largeViews).toBeGreaterThan(0);
+    expect(largeViews).toBeLessThan(rowSheet.views.length);
     await waitFor(() =>
       expect(
         canvas.querySelectorAll('.drawing-view.is-placeholder')
-      ).toHaveLength(1)
+      ).toHaveLength(largeViews)
     );
     expect(
       canvas.querySelectorAll('.drawing-strokes.is-visible polyline').length
