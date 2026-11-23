@@ -289,7 +289,8 @@ import {
 } from '@openzcad/geometry';
 import type {
   ExportBodySummary,
-  SketchSolveOutcome
+  SketchSolveOutcome,
+  UnitsConversionPreparation
 } from '@openzcad/kernel-adapter/exact';
 import type {
   ArtifactKind,
@@ -2179,9 +2180,12 @@ import {
 } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import { collaborationClientId } from './lib/collaborationProtocol';
+import { withCopyBranchPoint } from './lib/copyBranchPoint';
 import {
   CONVERT_UNIT_WORDS,
+  unitsConvertCopyBranchReason,
   unitsConversionCollaborationRefusal,
+  type ProjectStorageOwnership,
   type UnitsConversionCollaborationState
 } from './lib/unitsConversion';
 import type {
@@ -3367,6 +3371,14 @@ export function App() {
    */
   const [convertUnitsCopy, setConvertUnitsCopy] =
     useState<ConvertCopyState | null>(null);
+  /**
+   * Each passing conversion check, keyed by the result the dialog holds, to
+   * the exact document it was prepared from: a commit converts only that
+   * document, and a result this map does not know refuses.
+   */
+  const unitsConversionSourcesRef = useRef(
+    new WeakMap<PreparedConversion, ProjectDocument>()
+  );
   /** Its answer's receiver; a newer prompt cancels an older one. */
   const importUnitsAnswerRef = useRef<
     ((units: UnitSystem | null) => void) | null
@@ -5610,6 +5622,12 @@ export function App() {
    * the claim exists to prevent.
    */
   const projectOwnershipSettledRef = useRef<Promise<void> | null>(null);
+  /**
+   * The same claim, naming its project and whether it is held: a write that
+   * must not land on the wrong project's storage (a stored-unit conversion's
+   * checkpoint) checks both, not just that some claim settled.
+   */
+  const projectOwnershipRef = useRef<ProjectStorageOwnership | null>(null);
   const [localSaveDirty, setLocalSaveDirty] = useState(false);
   const [localSaveFailed, setLocalSaveFailed] = useState(false);
   const localSaveCallbacksRef = useRef<LocalProjectAutosaveOptions>({
@@ -8183,15 +8201,22 @@ export function App() {
       // claim to make — and must not contest one. The owner opening their
       // own share link must not knock their real tab read-only.
       projectOwnershipSettledRef.current = null;
+      projectOwnershipRef.current = null;
       setProjectOpenElsewhere(false);
       return;
     }
     let cancelled = false;
     let claim: ProjectOwnershipClaim | null = null;
+    const ownership: ProjectStorageOwnership = {
+      projectId,
+      owned: false,
+      settled: Promise.resolve()
+    };
     const settled = claimProjectOwnership(projectId, () => {
       if (cancelled) {
         return;
       }
+      ownership.owned = true;
       projectOpenElsewhereRef.current = false;
       setProjectOpenElsewhere(false);
       setStatus('This tab can edit the project now.');
@@ -8202,6 +8227,7 @@ export function App() {
         return;
       }
       claim = result;
+      ownership.owned = result.owned;
       projectOpenElsewhereRef.current = !result.owned;
       setProjectOpenElsewhere(!result.owned);
       if (!result.owned) {
@@ -8215,9 +8241,14 @@ export function App() {
       }
     });
     projectOwnershipSettledRef.current = settled;
+    ownership.settled = settled;
+    projectOwnershipRef.current = ownership;
     return () => {
       cancelled = true;
+      ownership.owned = false;
       projectOwnershipSettledRef.current = null;
+      if (projectOwnershipRef.current === ownership)
+        projectOwnershipRef.current = null;
       claim?.release();
     };
   }, [doc?.projectId, shareSession, setStatus]);
@@ -17468,7 +17499,15 @@ export function App() {
   /** Copies `project` (or branches its save state); resolves the copy's id. */
   async function handleDuplicateProject(
     project: ProjectSummary,
-    saveState?: ProjectCheckpoint
+    saveState?: ProjectCheckpoint,
+    options: {
+      /**
+       * Records the source in the copy's `branchedFrom`, naming its current
+       * revision with this reason (I03 "Convert a copy", plan §5.3). A plain
+       * Duplicate passes nothing and records nothing.
+       */
+      branchReason?: string;
+    } = {}
   ): Promise<string | null> {
     setBusy(true);
     try {
@@ -17498,7 +17537,9 @@ export function App() {
                       reason: saveState.reason
                     }
                   }
-                : {})
+                : options.branchReason
+                  ? { branchReason: options.branchReason }
+                  : {})
             },
             session.userId,
             projects.map((summary) => summary.name),
@@ -17639,7 +17680,7 @@ export function App() {
         );
       }
       await cacheCopySources(source, loadSourceBlob, sha256Hex);
-      const copy = duplicateProjectDocument(
+      const built = duplicateProjectDocument(
         source,
         duplicateProjectName(
           copyBaseName(head.projectId, head.name),
@@ -17653,6 +17694,15 @@ export function App() {
             })
           : undefined
       );
+      const copy =
+        !saveState && options.branchReason
+          ? withCopyBranchPoint(
+              built,
+              { projectId: head.projectId, name: head.name },
+              head,
+              options.branchReason
+            )
+          : built;
       // A device copy or branch of a project this device keeps encrypted
       // (also one the account did not answer for) must stay encrypted:
       // recorded before the copy is written, or nothing is copied.
@@ -26250,41 +26300,95 @@ export function App() {
   /**
    * I03 phase 6: checks converting the open project to `to` in a disposable
    * worker, for the manager that will commit it (its actor's undo history).
+   * With `expectedProjectId`, refuses (`stale`) unless that project is open.
+   * A passing check is bound to the exact document it read
+   * ({@link unitsConversionSourcesRef}); only that document can commit it.
    */
   async function prepareStoredUnitsConversion(
     to: ConvertibleUnit,
-    signal?: AbortSignal
-  ) {
+    signal?: AbortSignal,
+    expectedProjectId?: string
+  ): Promise<UnitsConversionPreparation> {
     const manager = managerRef.current;
     if (!manager) throw new Error('No project is open to convert.');
+    const source = manager.document;
+    if (
+      expectedProjectId !== undefined &&
+      source.projectId !== expectedProjectId
+    )
+      return {
+        ok: false,
+        sourceVersion: source.version,
+        warnings: [],
+        refusals: [
+          {
+            stage: 'payload',
+            code: 'stale',
+            subject: 'document',
+            message:
+              'A different project is open now than the one to convert. Nothing was converted.'
+          }
+        ]
+      };
     const { prepareUnitsConversionInWorker } =
       await import('./lib/unitsConversionWorkerClient');
-    return prepareUnitsConversionInWorker(manager.document, to, {
+    const preparation = await prepareUnitsConversionInWorker(source, to, {
       actorUserId: manager.actorUserId,
       ...(signal ? { signal } : {})
     });
+    if (preparation.ok) unitsConversionSourcesRef.current.set(preparation, source);
+    return preparation;
   }
 
   /**
    * I03 phase 6: converts the open project's stored units in place, after
    * the safety checkpoint (plan §5.2, §5.3). `commitUnitsConversion` reads
    * the manager, the room and the clock when it commits, not when this
-   * render was made, and refuses as `stale` when the project moved; only an
-   * applied conversion is put on screen.
+   * render was made. It refuses as `stale`, before writing anything, unless
+   * the active manager still holds the exact project and document the check
+   * read, and writes the checkpoint only once this tab's claim on that
+   * project's storage is confirmed (the wait autosave makes, so a second
+   * tab's newer save is never overwritten). Only an applied conversion is
+   * put on screen.
    */
   async function convertStoredUnitsInPlace(
     prepared: PreparedConversion
   ): Promise<ConvertUnitsOutcome> {
+    const source = unitsConversionSourcesRef.current.get(prepared);
+    if (!source)
+      return {
+        ok: false,
+        refusals: [
+          {
+            stage: 'payload',
+            code: 'stale',
+            subject: 'document',
+            message:
+              'This check is not for the project open now. Check the conversion again.'
+          }
+        ]
+      };
     const reason = editDisabledReasonRef.current;
     if (reason)
       return unitsConversionRefusalOf(
-        cannotSentence('convert stored units', reason)
+        projectOpenElsewhereRef.current
+          ? PROJECT_OPEN_ELSEWHERE_NOTICE
+          : cannotSentence('convert stored units', reason)
       );
-    const { commitUnitsConversion } = await import('./lib/unitsConversion');
+    const { commitUnitsConversion, unitsConversionOwnershipRefusal } =
+      await import('./lib/unitsConversion');
     const result = await commitUnitsConversion(
       () => managerRef.current,
       prepared,
       {
+        expectedProjectId: source.projectId,
+        expectedDocument: source,
+        confirmWriteAccess: (document) =>
+          unitsConversionOwnershipRefusal(
+            () => (shareSessionRef.current ? null : projectOwnershipRef.current),
+            document.projectId,
+            PROJECT_OPEN_ELSEWHERE_NOTICE
+          ),
         deviceOnlyHistory: sharedAccountProjectRef.current,
         collaboration: () => unitsConversionRoomRef.current,
         now: () => Date.now()
@@ -26317,10 +26421,13 @@ export function App() {
 
   /**
    * I03 phase 6, "Convert a copy" (plan §5.3): duplicates the project the
-   * usual way, opens the copy, checks the conversion again on the copy and
-   * converts it in place there. The original is never changed. Each step
-   * after the copy opens runs through refs, so it acts for the copy's
-   * manager and room, not the original's.
+   * usual way, recording the original in the copy's `branchedFrom`, opens
+   * the copy, checks the conversion again on the copy and converts it in
+   * place there. The original is never changed. Each step after the copy
+   * opens runs through refs, so it acts for the copy's manager and room,
+   * not the original's, and both the check and the commit are bound to the
+   * copy's id: a project opened meanwhile (an accepted invitation, say)
+   * refuses instead of being converted.
    */
   async function convertStoredUnitsCopy(
     to: ConvertibleUnit,
@@ -26333,7 +26440,9 @@ export function App() {
       projects.find((summary) => summary.projectId === current.projectId) ??
       summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
     onStep('copying');
-    const copyId = await handleDuplicateProject(project);
+    const copyId = await handleDuplicateProject(project, undefined, {
+      branchReason: unitsConvertCopyBranchReason(to)
+    });
     if (!copyId)
       return unitsConversionRefusalOf(
         `${project.name} could not be copied, so nothing was converted.`
@@ -26348,7 +26457,11 @@ export function App() {
       };
     const notConverted = `The copy “${opened.name}” is open, still stored in ${CONVERT_UNIT_WORDS[opened.units]}. ${project.name} is unchanged.`;
     onStep('checking');
-    const preparation = await prepareStoredUnitsConversionRef.current(to);
+    const preparation = await prepareStoredUnitsConversionRef.current(
+      to,
+      undefined,
+      copyId
+    );
     if (!preparation.ok)
       return {
         ok: false,
@@ -26363,13 +26476,16 @@ export function App() {
     return { ok: true, message };
   }
 
-  /** Runs "Convert a copy", reporting each step to the dialog. */
+  /** Runs "Convert a copy", reporting each step (and its target) to the dialog. */
   function startStoredUnitsCopy(to: ConvertibleUnit) {
-    setConvertUnitsCopy({ step: 'copying' });
-    convertStoredUnitsCopy(to, (step) => setConvertUnitsCopy({ step })).then(
-      (outcome) => setConvertUnitsCopy({ outcome }),
+    setConvertUnitsCopy({ to, step: 'copying' });
+    convertStoredUnitsCopy(to, (step) =>
+      setConvertUnitsCopy({ to, step })
+    ).then(
+      (outcome) => setConvertUnitsCopy({ to, outcome }),
       (error: unknown) =>
         setConvertUnitsCopy({
+          to,
           outcome: unitsConversionRefusalOf(
             errorMessage(error, 'The copy could not be converted.')
           )

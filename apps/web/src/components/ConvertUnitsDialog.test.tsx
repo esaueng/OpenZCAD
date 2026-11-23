@@ -311,13 +311,16 @@ describe('ConvertUnitsDialog', () => {
       await screen.findByRole('button', { name: 'Convert a copy' })
     );
     expect(convertCopy).toHaveBeenCalledWith('inch');
-    rerender({ copy: { step: 'copying' } });
+    rerender({ copy: { to: 'inch', step: 'copying' } });
     expect(screen.getByRole('status')).toHaveTextContent('Making a copy…');
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
-    rerender({ copy: { step: 'checking' } });
+    rerender({ copy: { to: 'inch', step: 'checking' } });
     expect(screen.getByRole('status')).toHaveTextContent('Checking the copy…');
     rerender({
-      copy: { outcome: { ok: true, message: 'Made “Part (copy)”.' } }
+      copy: {
+        to: 'inch',
+        outcome: { ok: true, message: 'Made “Part (copy)”.' }
+      }
     });
     expect(screen.getByRole('status')).toHaveTextContent('Made “Part (copy)”.');
     await user.click(screen.getByRole('button', { name: 'Done' }));
@@ -328,6 +331,7 @@ describe('ConvertUnitsDialog', () => {
     const user = userEvent.setup();
     const { prepare, onClearCopy, rerender } = renderDialog({
       copy: {
+        to: 'inch',
         outcome: {
           ok: false,
           context:
@@ -355,6 +359,49 @@ describe('ConvertUnitsDialog', () => {
     expect(
       await screen.findByRole('button', { name: 'Convert' })
     ).toBeEnabled();
+  });
+
+  it('keeps a copy run’s target unit when the dialog remounts, and checks that unit again', async () => {
+    const user = userEvent.setup();
+    const { convertCopy } = renderDialog();
+    await user.click(
+      await screen.findByRole('radio', { name: 'Centimeters (cm)' })
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Convert a copy' })
+    );
+    expect(convertCopy).toHaveBeenCalledWith('cm');
+  });
+
+  it('a remounted dialog shows and re-checks the refused copy’s unit, not the default', async () => {
+    const user = userEvent.setup();
+    const { prepare, rerender } = renderDialog({
+      copy: {
+        to: 'cm',
+        outcome: {
+          ok: false,
+          refusals: [
+            {
+              stage: 'collaboration',
+              code: 'not-live',
+              subject: 'document',
+              message: 'Reconnect and try again.'
+            }
+          ]
+        }
+      }
+    });
+    expect(
+      screen.getByRole('radio', { name: 'Centimeters (cm)' })
+    ).toBeChecked();
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Stored units cannot be converted to centimeters'
+    );
+    expect(screen.getByRole('alert')).not.toHaveTextContent('inches');
+    await user.click(screen.getByRole('button', { name: 'Check again' }));
+    rerender({ copy: null });
+    expect(prepare).toHaveBeenCalledWith('cm', expect.any(AbortSignal));
+    expect(prepare).not.toHaveBeenCalledWith('inch', expect.anything());
   });
 
   it('re-checks when the target unit changes, cancelling the earlier check', async () => {

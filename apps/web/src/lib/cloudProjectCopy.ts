@@ -10,6 +10,7 @@
  * the save state it starts from is proven part of the history this browser
  * trusts now, and the source's pin never moves back.
  */
+import { withCopyBranchPoint } from './copyBranchPoint';
 import {
   duplicateProjectDocument,
   withoutDerivedProjection
@@ -44,6 +45,11 @@ export interface CloudProjectCopySource {
   projectName: string;
   /** Branch from this stored save state instead of the current document. */
   saveState?: { revisionId: string; reason: string };
+  /**
+   * Without `saveState`: record the source in the copy's `branchedFrom` at
+   * its current revision, with this reason (I03 "Convert a copy").
+   */
+  branchReason?: string;
 }
 
 export interface CloudProjectCopyStore {
@@ -104,7 +110,16 @@ export async function buildCloudProjectCopy(
         )
       : undefined
   );
-  const copy = encrypted ? withSourceBlobIds(document, built) : built;
+  const branched =
+    !saveState && source.branchReason
+      ? withCopyBranchPoint(
+          built,
+          { projectId: document.projectId, name: source.projectName },
+          document,
+          source.branchReason
+        )
+      : built;
+  const copy = encrypted ? withSourceBlobIds(document, branched) : branched;
   return {
     document: copy,
     documentDigest: await projectCopyDocumentDigest(copy),

@@ -42,6 +42,15 @@ export const CONVERT_UNIT_WORDS: Readonly<Record<UnitSystem, string>> = {
   inch: 'inches'
 };
 
+/**
+ * The reason a "Convert a copy" copy records in `branchedFrom`: what the
+ * copy was made for, shown as "Branched from Bracket · Copied to convert
+ * to inches".
+ */
+export function unitsConvertCopyBranchReason(to: UnitSystem): string {
+  return `Copied to convert to ${CONVERT_UNIT_WORDS[to]}`;
+}
+
 export type PreparedUnitsConversion = Extract<
   UnitsConversionPreparation,
   { ok: true }

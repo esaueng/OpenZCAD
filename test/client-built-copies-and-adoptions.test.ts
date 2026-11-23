@@ -245,6 +245,58 @@ describe('browser-built copies (ADR-024 Phase 1)', () => {
     );
   });
 
+  it('records the source in branchedFrom for a stated-purpose copy, which the account still checks as a duplicate', async () => {
+    const source = sourceDocument(owner);
+    const store = {
+      loadProject: async () => source,
+      loadRevision: async () => null
+    };
+    const branched = await buildCloudProjectCopy(
+      {
+        projectId: source.projectId,
+        projectName: source.name,
+        branchReason: 'Copied to convert to inches'
+      },
+      owner,
+      [],
+      store
+    );
+    expect(branched!.document!.branchedFrom).toMatchObject({
+      projectId: source.projectId,
+      revisionId: source.revisions.at(-1)!.revisionId,
+      projectName: 'Bracket',
+      checkpointReason: 'Copied to convert to inches'
+    });
+    expect(branched!.revisionId).toBeUndefined();
+    expect(branched!.document!.revisions.at(-1)!.reason).toBe(
+      'Duplicated from Bracket'
+    );
+    expect(() =>
+      assertClientProjectCopy(branched!.document!, {
+        userId: owner,
+        sourceProjectId: source.projectId
+      })
+    ).not.toThrow();
+    const stored = withoutDerivedProjection(
+      normalizeDocument(
+        JSON.parse(
+          JSON.stringify(withoutDerivedProjection(branched!.document!))
+        ) as ProjectDocument
+      )
+    );
+    expect(await projectCopyDocumentDigest(stored)).toBe(
+      branched!.documentDigest
+    );
+    // A plain Duplicate records no branch.
+    const plain = await buildCloudProjectCopy(
+      { projectId: source.projectId, projectName: source.name },
+      owner,
+      [],
+      store
+    );
+    expect(plain!.document!.branchedFrom).toBeUndefined();
+  });
+
   it('asks the device for a save state the account no longer stores', async () => {
     const source = sourceDocument(owner);
     await expect(

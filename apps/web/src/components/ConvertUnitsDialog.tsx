@@ -45,11 +45,13 @@ export type ConvertCopyStep = 'copying' | 'checking' | 'converting';
 
 /**
  * A "Convert a copy" run, held by the workspace: opening the copy replaces
- * the workspace (and this dialog) for a moment, so its progress and outcome
- * cannot live in the dialog.
+ * the workspace (and this dialog) for a moment, so its progress, outcome
+ * and target unit cannot live in the dialog.
  */
-export type ConvertCopyState =
-  { step: ConvertCopyStep } | { outcome: ConvertUnitsOutcome };
+export type ConvertCopyState = { to: ConvertibleUnit } & (
+  | { step: ConvertCopyStep }
+  | { outcome: ConvertUnitsOutcome }
+);
 
 export interface ConvertUnitsDialogProps {
   /** The unit the project stores. */
@@ -151,7 +153,12 @@ export function ConvertUnitsDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalFocus(dialogRef, { autoFocus: true });
   const choices = CONVERT_UNIT_CHOICES.filter((unit) => unit !== stored);
-  const [target, setTarget] = useState<ConvertibleUnit>(defaultTarget(stored));
+  // A copy run outlives the dialog it started in (the copy opens in the
+  // original's place), so its unit, not the default, is what a remounted
+  // dialog shows and checks again.
+  const [target, setTarget] = useState<ConvertibleUnit>(
+    copy && copy.to !== stored ? copy.to : defaultTarget(stored)
+  );
   const [ownPhase, setPhase] = useState<Phase>(
     blockedReason ? { kind: 'blocked' } : { kind: 'checking' }
   );
