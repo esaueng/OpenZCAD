@@ -179,7 +179,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
     name: 'Edit Fillet operation'
   });
   await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 1 mm');
+  await expect(chip).toHaveText('R 1 mm');
   await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
 
   await chip.click();
@@ -196,7 +196,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(status).toContainText('Set Fillet radius to R 2 mm.');
   await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 2 mm');
+  await expect(chip).toHaveText('R 2 mm');
 
   // The second edit uses the still-armed, re-resolved blend face. No viewport
   // selection event is dispatched between the two commits.
@@ -211,7 +211,7 @@ test('creates, re-edits twice, and removes a selected history fillet', async ({
   await keypad.getByRole('button', { name: 'Apply radius' }).click();
   await expect(status).toContainText('Set Fillet radius to R 3 mm.');
   await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 3 mm');
+  await expect(chip).toHaveText('R 3 mm');
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
 
   await chip.click();
@@ -289,7 +289,7 @@ test('Delete removes the fillet whose face is picked in the viewport', async ({
 
   // The pick alone names the fillet; Delete removes it, not the cylinder.
   expect(await readBlend(canvas, true)).not.toBeNull();
-  await expect(chip).toHaveText('Edit Fillet · R 1 mm');
+  await expect(chip).toHaveText('R 1 mm');
   await page.keyboard.press('Delete');
   const toast = page.locator('.toast');
   await expect(toast).toContainText('Deleted Fillet');
@@ -371,7 +371,7 @@ test('previews and reverses a box fillet backed by verified evolution lineage', 
     name: 'Edit Fillet operation'
   });
   await expect(editFillet).toBeVisible();
-  await expect(chip).toHaveText('Edit Fillet · R 1 mm');
+  await expect(chip).toHaveText('R 1 mm');
   await chip.click();
   keypad = page.getByRole('dialog', { name: 'Radius value' });
   await keypad.getByRole('textbox').fill('2');
@@ -503,7 +503,7 @@ test(
     });
     await expect(editFillet).toBeVisible();
     const chip = page.getByTestId('direct-manipulation-value');
-    await expect(chip).toHaveText('Edit Fillet · R 3 mm');
+    await expect(chip).toHaveText('R 3 mm');
 
     await chip.click();
     let keypad = page.getByRole('dialog', { name: 'Radius value' });
@@ -516,7 +516,7 @@ test(
     await keypad.getByRole('button', { name: 'Apply radius' }).click();
     await expect(status).toContainText('Set imported blend radius to R 2 mm.');
     await expect(editFillet).toBeVisible();
-    await expect(chip).toHaveText('Edit Fillet · R 2 mm');
+    await expect(chip).toHaveText('R 2 mm');
 
     // The import's persistent warning must leave the rearmed value clickable.
     await expect
@@ -547,7 +547,7 @@ test(
       })
       .toBeCloseTo(1.5, 6);
     await expect(editFillet).toBeVisible();
-    await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
+    await expect(chip).toHaveText('R 1.5 mm');
     await expect(
       page.getByRole('heading', { name: 'History 3' })
     ).toBeVisible();
@@ -557,7 +557,7 @@ test(
     await expect(editFillet).not.toBeVisible();
     expect(await readBlend(canvas, true)).not.toBeNull();
     await expect(editFillet).toBeVisible();
-    await expect(chip).toHaveText('Edit Fillet · R 1.5 mm');
+    await expect(chip).toHaveText('R 1.5 mm');
     expect(consoleErrors.filter((message) => !message.includes('404'))).toEqual(
       []
     );
@@ -645,6 +645,66 @@ test('still refuses an oversize radius after a slow blend preview', async ({
     })
     .toBeCloseTo(3, 6);
   await expect(chip).not.toHaveAttribute('data-state', 'warning');
+});
+
+test('a refused fillet drag leaves no ghost behind', async ({ page }) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  // Every preview of an oversize radius is refused, and so is its release:
+  // the part never changes, so only the handle re-arming can drop the ghost
+  // of the part the drag took. It used to stay in the scene.
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Refused blend ghost');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box');
+  const canvas = page.locator('.viewer-host canvas');
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate(
+          (element) =>
+            new Promise<boolean>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-edge', {
+                  detail: {
+                    resolve: (selection: unknown) => resolve(selection !== null)
+                  }
+                })
+              );
+            })
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+  const chip = page.getByTestId('direct-manipulation-value');
+  await expect(chip).toHaveText('R 0 mm');
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const box = (await canvas.boundingBox())!;
+  const start = { x: box.x + handle.x, y: box.y + handle.y };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  // 30 is genuinely oversize for this box; see the first test.
+  await page.mouse.move(
+    start.x + handle.dx * handle.pixelsPerUnit * 30,
+    start.y + handle.dy * handle.pixelsPerUnit * 30,
+    { steps: 1 }
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-edge-ghost', '1');
+  await expect(chip).toHaveAttribute('data-state', 'warning', {
+    timeout: 30_000
+  });
+  await page.mouse.up();
+  await expect(canvas).not.toHaveAttribute('data-e2e-edge-ghost', /.*/, {
+    timeout: 30_000
+  });
+  expect(await readBlend(canvas)).toBeNull();
 });
 
 interface BlendPreviewGate {
@@ -751,6 +811,8 @@ test(
     await expect.poll(shownRadius, { timeout: 30_000 }).toBeGreaterThan(0);
     const first = await shownRadius();
     expect(first).toBeCloseTo(await chipRadius(), 2);
+    // The part keeps its own shading over a ghost of its sharp edge.
+    await expect(canvas).toHaveAttribute('data-e2e-edge-ghost', '1');
     // The slow first frame landed where the hand is: nothing to catch up on.
     await expect(chip).toHaveAttribute('data-state', 'ready');
 
@@ -786,5 +848,6 @@ test(
     await expect(chip).toHaveAttribute('data-state', 'ready');
     await page.keyboard.press('Escape');
     await page.mouse.up();
+    await expect(canvas).not.toHaveAttribute('data-e2e-edge-ghost', /.*/);
   }
 );

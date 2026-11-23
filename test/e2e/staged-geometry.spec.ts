@@ -210,7 +210,7 @@ test('Delete accepts the complete displayed fillet while its worker analysis cat
     );
   await expect.poll(pickBlend).toBe(true);
   await expect(page.getByTestId('direct-manipulation-value')).toHaveText(
-    'Edit Fillet · R 1 mm'
+    'R 1 mm'
   );
   await page.keyboard.press('Delete');
   await expect(page.locator('.toast')).toContainText('Deleted Fillet');

@@ -6,7 +6,7 @@ import {
 } from './openzcad-fixtures';
 
 for (const tool of ['Fillet', 'Chamfer'] as const) {
-  test(`${tool} keeps its full size clear of the operation tag while dragging`, async ({
+  test(`${tool} lays its value along the arrow, clear of it and on screen, while dragging`, async ({
     page
   }) => {
     test.setTimeout(120_000);
@@ -80,33 +80,46 @@ for (const tool of ['Fillet', 'Chamfer'] as const) {
           await expect(chip).toHaveText(
             new RegExp(`^${tool === 'Fillet' ? 'R' : 'C'} [\\d.]+ mm$`)
           );
-          const samples = await chip.evaluate(async (element) => {
-            const tag = element
-              .closest('.viewer-host')!
-              .querySelector('.handle-label-chip')!;
+          // While the hand is on the arrow the operation tag steps aside
+          // and the value rides the leader, tilted to read along it, out
+          // past the arrow's head: never over the grab target, never off
+          // the viewport.
+          await expect(tag).toBeHidden();
+          await expect(chip).toHaveAttribute('data-variant', 'line');
+          const pin = await canvas.evaluate((element) => ({
+            x: Number(element.dataset.e2eHandleX),
+            y: Number(element.dataset.e2eHandleY)
+          }));
+          const samples = await chip.evaluate(async (element, grab) => {
             const samples = [];
             for (let frame = 0; frame < 4; frame += 1) {
               await new Promise(requestAnimationFrame);
               const value = element.getBoundingClientRect();
-              const label = tag.getBoundingClientRect();
               const host = element
                 .closest('.viewer-host')!
                 .getBoundingClientRect();
+              // Hit-tested, not boxed: a tilted pill's bounding box spans far
+              // more than the pill itself.
+              const hit = document.elementFromPoint(
+                host.left + grab.x,
+                host.top + grab.y
+              );
               samples.push({
-                gap: value.left - label.right,
-                left: label.left - host.left,
-                right: host.right - value.right
+                coversGrab: hit !== null && element.contains(hit),
+                left: value.left - host.left,
+                right: host.right - value.right,
+                rotated:
+                  getComputedStyle(element).getPropertyValue('--chip-rotate')
               });
             }
             return samples;
-          });
+          }, pin);
           for (const sample of samples) {
-            expect(
-              sample.gap,
-              `${tool}, ${width}px, drag distance ${distance}`
-            ).toBeGreaterThanOrEqual(2);
-            expect(sample.left).toBeGreaterThanOrEqual(0);
-            expect(sample.right).toBeGreaterThanOrEqual(0);
+            const where = `${tool}, ${width}px, drag distance ${distance}`;
+            expect(sample.coversGrab, where).toBe(false);
+            expect(sample.left, where).toBeGreaterThanOrEqual(0);
+            expect(sample.right, where).toBeGreaterThanOrEqual(0);
+            expect(sample.rotated, where).toMatch(/deg$/);
           }
         }
         if (process.env.OZ_CHIP_SCREENSHOTS) {

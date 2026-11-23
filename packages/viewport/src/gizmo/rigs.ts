@@ -819,36 +819,52 @@ export function buildCylinderRadiusHandle(
 
 export interface EdgeRadiusRigParams {
   origin: HandleVec3;
+  /** The way the hand pulls to grow the value; the arrow points along it. */
   direction: HandleVec3;
   /**
-   * How far the blend's surface moves along `direction` per unit of value
-   * (`edgeBlendFrame`'s `travel`). Given, the arrow rides it as the value
-   * changes; absent, it stays where it was placed.
+   * Signed travel of the blend's middle along `direction` per unit of value
+   * (`edgePullPlacement`'s `travel`): negative at an outside edge, where the
+   * blend eats into the material. The dashed leader starts there. Absent, it
+   * starts at `origin`, where the blend stood when the gesture began.
    */
   travel?: number;
+  /** The arrow's travel along `direction` per unit of value; default 1. */
+  reach?: number;
+  /**
+   * The value the arrow stands on `origin` at: an existing fillet's radius,
+   * picked on its face. Default 0, a sharp edge.
+   */
+  baseValue?: number;
 }
 
 /**
  * The fillet/chamfer arrow: the same solid double-headed pin as the face and
- * cylinder rigs, standing on the edge along the faces' bisector. With a
- * `travel` it rides the middle of the blend as the value grows — pushed into
- * an outside corner, drawn out of an inside one — so the arrow sits where the
- * material now ends and stays under the hand that drags it.
+ * cylinder rigs, standing on the edge along the faces' bisector, or on a
+ * picked fillet face along its radius. It is pulled away from the material
+ * to grow the blend and follows the hand there, and a dashed leader runs
+ * from the middle of the blend — eaten into an outside corner, grown out of
+ * an inside one — to the arrow, so the value the chip reads stays tied to
+ * the surface it sets.
  */
 export function buildEdgeRadiusHandle(params: EdgeRadiusRigParams): DragRig {
   const kind = 'edge-radius';
   const origin = toVector3(params.origin);
   const direction = toVector3(params.direction).normalize();
   const travel = params.travel ?? 0;
+  const reach = params.reach ?? 1;
+  const baseValue = params.baseValue ?? 0;
 
   const group = new THREE.Group();
   group.name = `${kind}-handle`;
   group.position.copy(origin);
   group.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
-  // Empty, but still part of the contract: consumers add both groups to the
-  // scene, so both have to come back out on dispose.
   const worldGroup = new THREE.Group();
   worldGroup.name = `${kind}-handle-world`;
+  // The same dashed dimension the cylinder radius and the measuring tape
+  // draw, without witness ticks: the blend has no edge to stand one off.
+  const leader = createDimensionGraphic();
+  leader.object.name = 'edge-radius-leader';
+  worldGroup.add(leader.object);
 
   const pin = solidPinParts(kind);
   const arrowParts = [...pin.arrow, pin.hit];
@@ -880,10 +896,30 @@ export function buildEdgeRadiusHandle(params: EdgeRadiusRigParams): DragRig {
     }
   };
 
-  let current = 0;
+  let current = baseValue;
   const place = () => {
-    group.position.copy(origin).addScaledVector(direction, current * travel);
+    const change = current - baseValue;
+    group.position.copy(origin).addScaledVector(direction, change * reach);
+    // Match the screen-space sizing of the handle, whose scale the viewer
+    // stamps on the group each frame.
+    const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+    const surface = origin.clone().addScaledVector(direction, change * travel);
+    const span = group.position.clone().sub(surface);
+    const length = span.length();
+    // Stops short of the arrow so the line's head stays clear of it, and
+    // only shows once there is a line to draw: at rest the arrow stands on
+    // the blend itself.
+    const clearance = DIMENSION_CLEARANCE * scale;
+    const room = length > clearance * 1.5;
+    leader.object.visible = room;
+    if (room) {
+      const end = group.position
+        .clone()
+        .addScaledVector(span, -clearance / length);
+      leader.update(surface, end, scale);
+    }
   };
+  place();
 
   return {
     kind,
@@ -909,6 +945,8 @@ export function buildEdgeRadiusHandle(params: EdgeRadiusRigParams): DragRig {
         PIN_RING_OPACITY * ringPresenceFor(across)
       );
       orderByDepth(pin.solids, camera);
+      place();
+      leader.orient(camera);
     },
     appear() {
       presence.showNow();
@@ -935,7 +973,21 @@ export function buildEdgeRadiusHandle(params: EdgeRadiusRigParams): DragRig {
     chipAnchor() {
       return group.position.clone();
     },
+    chipLine() {
+      // From the middle of the blend, along the leader, to just past the
+      // arrow's outer head: the viewer lays the value on from there, tilted
+      // to read along it, so it never covers the arrow it labels.
+      const scale = (group.userData.gizmoScale as number | undefined) ?? 1;
+      const change = current - baseValue;
+      return {
+        start: origin.clone().addScaledVector(direction, change * travel),
+        end: group.position
+          .clone()
+          .addScaledVector(direction, (ARROW_HALF_LENGTH + 0.2) * scale)
+      };
+    },
     dispose() {
+      leader.dispose();
       disposeRigGroups(group, worldGroup);
     }
   };

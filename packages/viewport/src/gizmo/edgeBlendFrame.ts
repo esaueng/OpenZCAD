@@ -27,6 +27,11 @@ export interface EdgeBlendFrame {
    * stays on the edge and points away from the body's middle.
    */
   travel?: { fillet: number; chamfer: number };
+  /**
+   * Whether the edge is an outside (convex) one, where a blend eats into the
+   * material. Absent with `travel`.
+   */
+  convex?: boolean;
 }
 
 /** One face bounding the edge, as a run of the body's display triangles. */
@@ -259,11 +264,59 @@ export function edgeBlendFrame(
   return {
     origin,
     direction: toVec(direction),
+    convex: behind < 0,
     travel: {
       // The arc's middle sits r / cos(θ/2) − r from the sharp edge.
       fillet: bounded(1 / Math.cos(halfTheta) - 1),
       // The flat's middle sits d · sin(θ/2) from it.
       chamfer: bounded(Math.sin(halfTheta))
     }
+  };
+}
+
+/**
+ * Where the fillet/chamfer arrow stands and how it moves, for one operation.
+ *
+ * The arrow is pulled away from the material to grow the blend, whichever
+ * way the blend's own surface moves: out of an outside corner, the way the
+ * material ends, and out into an inside one, ahead of the growing blend. It
+ * travels one unit per unit of value (never behind a surface that moves
+ * faster), so it stays under the hand, and the dashed leader the rig draws
+ * from the middle of the blend to the arrow spans the distance between them.
+ */
+export interface EdgePullPlacement {
+  origin: HandleVec3;
+  /** Unit direction the hand pulls to grow the value. */
+  direction: HandleVec3;
+  /**
+   * Signed travel of the blend's middle along `direction` per unit value:
+   * negative at an outside edge, where the blend eats into the material.
+   * Absent when the faces could not be read.
+   */
+  travel?: number;
+  /** The arrow's travel along `direction` per unit value. */
+  reach: number;
+}
+
+/** Pure. The pull placement of {@link edgeBlendFrame}'s frame for `op`. */
+export function edgePullPlacement(
+  frame: EdgeBlendFrame,
+  op: 'fillet' | 'chamfer'
+): EdgePullPlacement {
+  const travel = frame.travel?.[op];
+  if (travel === undefined || frame.convex === undefined) {
+    // The fallback frame already points away from the body's middle.
+    return { origin: frame.origin, direction: frame.direction, reach: 1 };
+  }
+  const sense = frame.convex ? -1 : 1;
+  return {
+    origin: frame.origin,
+    direction: {
+      x: frame.direction.x * sense,
+      y: frame.direction.y * sense,
+      z: frame.direction.z * sense
+    },
+    travel: travel * sense,
+    reach: frame.convex ? 1 : Math.max(1, travel)
   };
 }

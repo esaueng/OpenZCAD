@@ -320,8 +320,8 @@ test('fillet: Enter commits the chip value, Escape leaves history alone', async 
     },
     dialog: 'Radius value',
     chipBefore: 'R 0 mm',
-    // Re-editing an existing feature names the command on the chip itself.
-    chipAfter: 'Edit Fillet · R 2 mm',
+    // The chip reads the value alone; the operation card names the edit.
+    chipAfter: 'R 2 mm',
     commitValue: '2',
     cancelValue: '4',
     baseline: 0,

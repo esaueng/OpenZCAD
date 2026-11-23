@@ -9773,9 +9773,11 @@ export function App() {
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
   const faceDragInteraction =
-    interaction.mode === 'face' &&
-    (interaction.op === 'offset-face' ||
-      interaction.op === 'resize-cylinder-radius');
+    (interaction.mode === 'face' &&
+      (interaction.op === 'offset-face' ||
+        interaction.op === 'resize-cylinder-radius' ||
+        interaction.op === 'edit-fillet')) ||
+    interaction.mode === 'edges';
   const viewerBodies = useMemo<GeometryBodyRepresentation[]>(() => {
     const bodies = (
       currentFaceGeometryPreview
@@ -9789,7 +9791,9 @@ export function App() {
     // A face drag is the exception: an offset draws its result solid over a
     // ghost of the part as it was, a bore's handle and dimension line say
     // what is changing, and a whole flange flashing mint the moment a hole
-    // starts to grow read as a different part.
+    // starts to grow read as a different part. A fillet or chamfer dragged
+    // on its arrow is the same: the part keeps its own shading over a ghost
+    // of its sharp edges, and the new blend faces carry the preview mark.
     const faceDragPreview = currentFaceGeometryPreview && faceDragInteraction;
     return !faceDragPreview &&
       (currentFaceGeometryPreview || (previewDoc && !currentGeometrySnapshot))
@@ -29824,7 +29828,10 @@ export function App() {
             x: interaction.target.radialDirection[0],
             y: interaction.target.radialDirection[1],
             z: interaction.target.radialDirection[2]
-          }
+          },
+          // The arrow stands on the picked point at the radius it was picked
+          // at, and moves off it by the change.
+          baseValue: interaction.target.blendRadius
         },
         label: 'Edit Fillet',
         allowRemoval: true
