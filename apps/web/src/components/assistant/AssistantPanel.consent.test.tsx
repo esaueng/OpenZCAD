@@ -14,6 +14,7 @@ import {
   ASSISTANT_CONSENT_COPY_VERSION,
   toUserId,
   type E2eeAssistantConsentRecord,
+  type EffectiveAssistantSettings,
   type ProjectId
 } from '@openzcad/shared';
 import * as consentModule from '../../lib/e2ee/assistantConsent';
@@ -143,8 +144,7 @@ function Harness({
   project: { projectId: ProjectId; storageFormat: 1 | 2 };
   document?: typeof doc;
   request?: { id: number; text: string } | null;
-  status?:
-    typeof configured | (Omit<typeof configured, 'model'> & { model: string });
+  status?: EffectiveAssistantSettings;
 }) {
   const gate = useAssistantConsentGate(USER, project, {
     loadModule: async () => consentModule,
@@ -228,6 +228,45 @@ async function ask(
 }
 
 describe('assistant consent on an encrypted project (ADR-024 6-1)', () => {
+  it('requires a new consent naming Workers AI when the encrypted built-in route switches to Qwen', async () => {
+    const user = userEvent.setup();
+    const server = consentServer();
+    const encryptedProject = {
+      source: 'deployment',
+      provider: 'workers-ai',
+      configured: true,
+      model: '@cf/qwen/qwen3.8-27b',
+      reasoningEffort: 'off',
+      endpoint:
+        'https://api.cloudflare.com/client/v4/accounts/test/ai/run/@cf/qwen/qwen3.8-27b'
+    } as const;
+    const props = {
+      server,
+      pins: consentModule.memoryConsentPins(),
+      project: ENCRYPTED,
+      status: { ...configured, configured: false, encryptedProject }
+    };
+    await server.forge(doc.projectId, 1, ACCOUNT_KEY);
+    const { rerender } = render(<Harness {...props} />);
+    await act(async () => {});
+    await ask(rerender, props, 1);
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Let the assistant read this encrypted project?'
+    });
+    expect(dialog.textContent).toContain(
+      'Cloudflare Workers AI, model @cf/qwen/qwen3.8-27b'
+    );
+    expect(dialog.textContent).toContain('zero data retention');
+    expect(proposals).toHaveLength(0);
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Allow for this project' })
+    );
+    await waitFor(() => expect(proposals).toHaveLength(1));
+    expect(server.rows.get(doc.projectId)?.route).toBe(
+      assistantConsentRoute(encryptedProject)
+    );
+  });
+
   it('asks first, sends nothing when declined, and sends exactly the listed fields once allowed', async () => {
     const user = userEvent.setup();
     const server = consentServer();

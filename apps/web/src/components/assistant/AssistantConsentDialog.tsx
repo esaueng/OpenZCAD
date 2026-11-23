@@ -5,7 +5,8 @@ import {
   ASSISTANT_CONSENT_FINALITY,
   ASSISTANT_CONSENT_ITEMS,
   ASSISTANT_CONSENT_RETENTION,
-  ASSISTANT_CONSENT_TRANSIT
+  ASSISTANT_CONSENT_TRANSIT,
+  WORKERS_AI_CONSENT_RETENTION
 } from '../../lib/assistant/consentCopy';
 import { useModalFocus } from '../../lib/useModalFocus';
 
@@ -17,12 +18,14 @@ import { useModalFocus } from '../../lib/useModalFocus';
  */
 export function AssistantConsentDialog({
   routeLabel,
+  provider,
   error,
   onAllow,
   onCancel
 }: {
   /** "OpenZCAD’s AI provider, OpenRouter, model …" or "your own key with …". */
   routeLabel: string;
+  provider?: string;
   error?: string | null;
   onAllow(): Promise<void> | void;
   onCancel(): void;
@@ -71,7 +74,10 @@ export function AssistantConsentDialog({
           ))}
         </ul>
         <p>
-          {ASSISTANT_CONSENT_TRANSIT} {ASSISTANT_CONSENT_RETENTION}
+          {ASSISTANT_CONSENT_TRANSIT}{' '}
+          {provider === 'workers-ai'
+            ? WORKERS_AI_CONSENT_RETENTION
+            : ASSISTANT_CONSENT_RETENTION}
         </p>
         <p>
           {ASSISTANT_CONSENT_FINALITY} This choice is for you, on this project

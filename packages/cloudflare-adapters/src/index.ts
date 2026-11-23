@@ -340,6 +340,8 @@ export interface CloudflareEnv {
   AI_DEPLOYMENT_ALLOWED_EMAILS?: string;
   /** Allow all verified accounts to use a free OpenRouter deployment model. */
   AI_DEPLOYMENT_FREE_ENABLED?: string;
+  AI_QWEN_FREE_ACCOUNT_ID?: string;
+  AI_QWEN_FREE_API_TOKEN?: string;
   /** Server-only comma-separated verified account emails with Premium access. */
   PREMIUM_USER_EMAILS?: string;
   /** Legacy name, read only when `PREMIUM_STORAGE_LIMIT_BYTES` is unset. */

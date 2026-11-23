@@ -28,6 +28,10 @@ import {
 } from './assistantAnthropic';
 import { isPrivateHostname } from './privateNetwork';
 import { matchesAssistantSchema } from './assistantJsonSchema';
+import {
+  QWEN_MAX_OUTPUT_TOKENS,
+  type EncryptedQwenConfig
+} from './encryptedQwen';
 
 export const DEFAULT_AI_MODEL = 'gpt-6-luna';
 const NEMOTRON_FREE_MODEL = 'nvidia/nemotron-3.5-super-vl:free';
@@ -740,7 +744,7 @@ export function assistantReplySchemaFor(env: CloudflareEnv): unknown {
 
 function requestInstructions(
   env: CloudflareEnv,
-  runtime: AssistantRuntimeConfig | undefined,
+  runtime: Pick<AssistantRuntimeConfig, 'customInstructions'> | undefined,
   hasAttachments = false,
   onDrawingSheet = false
 ) {
@@ -944,9 +948,10 @@ async function readProviderFailure(
   }
 }
 
-async function translateOpenRouterChatCompletion(
+async function translateChatCompletion(
   response: Response,
-  validateText?: (text: string) => boolean
+  validateText?: (text: string) => boolean,
+  workersAiEnvelope = false
 ): Promise<Response> {
   if (!response.ok) {
     return response;
@@ -978,7 +983,10 @@ async function translateOpenRouterChatCompletion(
   } catch {
     payload = undefined;
   }
-  const root = schemaRecord(payload);
+  const envelope = schemaRecord(payload);
+  const root = workersAiEnvelope
+    ? schemaRecord(envelope?.success === true ? envelope.result : undefined)
+    : envelope;
   const choices = Array.isArray(root?.choices) ? root.choices : [];
   const choice = schemaRecord(choices[0]);
   const message = schemaRecord(choice?.message);
@@ -1186,7 +1194,7 @@ function structuredReplyFormat(env: CloudflareEnv) {
   };
 }
 
-function openRouterChatMessages(
+function assistantChatMessages(
   input: ProposalInput,
   instructions: string
 ): unknown[] {
@@ -1468,7 +1476,7 @@ export async function streamAssistantProposal(
       signal: AbortSignal.timeout(runtime?.timeoutMs ?? timeoutFor(env)),
       body: JSON.stringify({
         model,
-        messages: openRouterChatMessages(
+        messages: assistantChatMessages(
           input,
           requestInstructions(
             env,
@@ -1528,7 +1536,7 @@ export async function streamAssistantProposal(
             input.digest
           )
         : promptedSchema
-          ? await translateOpenRouterChatCompletion(
+          ? await translateChatCompletion(
               await requestOpenRouterChat(),
               jsonReplyValidator(env, input.digest)
             )
@@ -1546,9 +1554,7 @@ export async function streamAssistantProposal(
         providerCode: details.providerCode ?? null,
         providerRequestId: details.providerRequestId ?? null
       });
-      upstream = await translateOpenRouterChatCompletion(
-        await requestOpenRouterChat()
-      );
+      upstream = await translateChatCompletion(await requestOpenRouterChat());
     }
   } catch (error) {
     if (error instanceof AnthropicModelConfigurationError) {
@@ -1601,10 +1607,121 @@ export async function streamAssistantProposal(
     );
   }
 
+  return assistantReplyStream(upstream.body, env, {
+    requestId,
+    provider,
+    model
+  });
+}
+
+export async function streamEncryptedQwenProposal(
+  input: ProposalInput & { customInstructions?: string; retryAttempt?: 0 | 1 },
+  env: CloudflareEnv,
+  config: EncryptedQwenConfig,
+  safetyIdentifier: string
+): Promise<Response> {
+  env = assistantEnvForClient(env, input.operations);
+  const requestId = crypto.randomUUID();
+  const { provider, model, endpoint } = config.status;
+  const instructions = requestInstructions(
+    env,
+    { customInstructions: input.customInstructions ?? '' },
+    Boolean(input.attachments?.length),
+    input.digest.drawing !== undefined
+  );
+  let upstream: Response;
+  try {
+    upstream = await fetch(endpoint, {
+      method: 'POST',
+      redirect: 'error',
+      headers: {
+        authorization: `Bearer ${config.apiToken}`,
+        'content-type': 'application/json'
+      },
+      signal: AbortSignal.timeout(timeoutFor(env)),
+      body: JSON.stringify({
+        messages: assistantChatMessages(
+          input,
+          instructions +
+            (input.retryAttempt === 1
+              ? '\n\nThe previous reply did not match the schema. Return one complete reply matching every required field.'
+              : '')
+        ),
+        response_format: structuredReplyFormat(env),
+        max_completion_tokens: QWEN_MAX_OUTPUT_TOKENS,
+        chat_template_kwargs: { enable_thinking: false },
+        store: false,
+        stream: false,
+        user: safetyIdentifier
+      })
+    });
+  } catch (error) {
+    const timedOut =
+      error instanceof DOMException && error.name === 'TimeoutError';
+    return jsonError(
+      timedOut
+        ? 'Free Qwen timed out.'
+        : 'The modeling assistant could not reach free Qwen.',
+      timedOut ? 'AI_UPSTREAM_TIMEOUT' : 'AI_UPSTREAM_UNAVAILABLE',
+      timedOut ? 504 : 502,
+      requestId
+    );
+  }
+  if (upstream.status === 429) {
+    await upstream.body?.cancel();
+    return jsonError(
+      'Free Qwen has reached a usage limit. The daily free allowance resets at 00:00 UTC.',
+      'AI_QWEN_FREE_LIMIT',
+      429,
+      requestId
+    );
+  }
+  if (!upstream.ok) {
+    await upstream.body?.cancel();
+    console.error('Free Qwen provider failed:', {
+      requestId,
+      status: upstream.status
+    });
+    return jsonError(
+      'Free Qwen could not complete this request.',
+      'AI_UPSTREAM_ERROR',
+      502,
+      requestId
+    );
+  }
+  const translated = await translateChatCompletion(
+    upstream,
+    jsonReplyValidator(env, input.digest),
+    true
+  );
+  if (!translated.body) {
+    return jsonError(
+      'Free Qwen returned no reply.',
+      'AI_UPSTREAM_ERROR',
+      502,
+      requestId
+    );
+  }
+  return assistantReplyStream(translated.body, env, {
+    requestId,
+    provider,
+    model
+  });
+}
+
+function assistantReplyStream(
+  stream: ReadableStream<Uint8Array>,
+  env: CloudflareEnv,
+  {
+    requestId,
+    provider,
+    model
+  }: { requestId: string; provider: string; model: string }
+): Response {
   return new Response(
     observeAssistantResponse(
       gateAssistantResponse(
-        upstream.body,
+        stream,
         (replyText) => rolloutReplyRejection(env, replyText),
         { requestId }
       ),
@@ -1725,7 +1842,7 @@ export async function testAssistantConnection(
             timeoutSignal
           )
         : promptedSchema
-          ? await translateOpenRouterChatCompletion(
+          ? await translateChatCompletion(
               await requestOpenRouterChat(),
               jsonReplyValidator(env)
             )
@@ -1747,9 +1864,7 @@ export async function testAssistantConnection(
         providerCode: details.providerCode ?? null,
         providerRequestId: details.providerRequestId ?? null
       });
-      response = await translateOpenRouterChatCompletion(
-        await requestOpenRouterChat()
-      );
+      response = await translateChatCompletion(await requestOpenRouterChat());
     }
   } catch (error) {
     if (error instanceof AnthropicModelConfigurationError) {

@@ -38,6 +38,7 @@ import {
   getAssistantStatus,
   type AssistantRuntimeConfig
 } from './assistant';
+import { encryptedQwenConfig } from './encryptedQwen';
 import { isPrivateHostname } from './privateNetwork';
 import { HttpError } from './validation';
 import { SharingRequestError } from './sharing';
@@ -767,12 +768,20 @@ function credentialMetadata(
   };
 }
 
-function deploymentEffective(env: CloudflareEnv): EffectiveAssistantSettings {
+function deploymentEffective(
+  env: CloudflareEnv,
+  allowed: boolean
+): EffectiveAssistantSettings {
   const status = getAssistantStatus(env);
+  const qwen = encryptedQwenConfig(env);
   return {
     ...status,
+    configured: allowed && status.configured,
     source: 'deployment',
-    provider: status.provider as AssistantProvider
+    provider: status.provider as AssistantProvider,
+    ...(qwen
+      ? { encryptedProject: { ...qwen.status, configured: allowed } }
+      : {})
   };
 }
 
@@ -854,7 +863,7 @@ function unboundAssistantStatus(
     // through the defaults (assistant off), and would otherwise be shown that
     // personal default instead of the model the deployment actually serves.
     if (settings.assistant.credentialSource === 'deployment') {
-      return { ...deploymentEffective(env), configured: false };
+      return deploymentEffective(env, false);
     }
     return {
       configured: false,
@@ -865,12 +874,7 @@ function unboundAssistantStatus(
     };
   }
   if (settings.assistant.credentialSource === 'deployment') {
-    return deploymentAssistantAllowed(email, env)
-      ? deploymentEffective(env)
-      : {
-          ...deploymentEffective(env),
-          configured: false
-        };
+    return deploymentEffective(env, deploymentAssistantAllowed(email, env));
   }
   return {
     configured: Boolean(credential && env.SETTINGS_ENCRYPTION_KEY?.trim()),
@@ -925,12 +929,10 @@ async function resolveAssistantFromSettings(
   }
   if (settings.assistant.credentialSource === 'deployment') {
     return {
-      effective: deploymentAssistantAllowed(email, env)
-        ? deploymentEffective(env)
-        : {
-            ...deploymentEffective(env),
-            configured: false
-          },
+      effective: deploymentEffective(
+        env,
+        deploymentAssistantAllowed(email, env)
+      ),
       runtime: null
     };
   }

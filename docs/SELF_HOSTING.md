@@ -176,6 +176,31 @@ pnpm --filter @openzcad/web exec wrangler secret list --config ../../wrangler.se
 The command returns secret names only. Confirm the four required names above;
 do not print or copy their values into the repository.
 
+### Free Qwen for encrypted projects
+
+The built-in assistant can use `@cf/qwen/qwen3.8-27b` for encrypted projects.
+Use a dedicated, standalone Cloudflare Free account with an empty subscription
+list. Keep the account on the Free plan and leave it without a payment method.
+Set `AI_QWEN_FREE_ACCOUNT_ID` to that account's ID and
+`AI_QWEN_FREE_API_TOKEN` to its token as Worker secrets. Grant the token
+Workers AI Read and Billing Read on the inference account only. Set both
+secrets on each Worker or Preview base where the route should be available.
+Deployments using the same inference account share its daily allowance.
+
+Workers AI stops at the 10,000-neuron daily Free allocation, which resets at
+00:00 UTC. Before each encrypted Qwen request the Worker checks the inference
+account's subscription list. Any subscription, permissions error, or
+unverifiable response stops the request before project data is sent. The
+route uses synchronous Workers AI without AI Gateway and never falls back to
+another model when the billing check or inference fails.
+
+The project asks for fresh consent when the provider, model, or inference
+account changes. Personal tokens and the built-in route for unencrypted
+projects use their existing settings.
+
+- [Workers AI free allocation](https://developers.cloudflare.com/workers-ai/platform/pricing/)
+- [Workers AI data policy](https://developers.cloudflare.com/workers-ai/platform/data-usage/)
+
 ## Apply migrations and validate
 
 Apply the tracked D1 migrations to the database bound as `DB`:

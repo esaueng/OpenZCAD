@@ -86,8 +86,7 @@ describe('desktop external link allowlist', () => {
     const providerLinks = [
       ...settings.matchAll(/href: '(https:\/\/[^']+)'/g)
     ].map((match) => match[1]);
-    // OpenRouter's and OpenAI's data policies.
-    expect(providerLinks).toHaveLength(2);
+    expect(providerLinks).toHaveLength(3);
     for (const url of [privacyPolicyHref(), ...providerLinks]) {
       expect(approved).toContain(url);
     }

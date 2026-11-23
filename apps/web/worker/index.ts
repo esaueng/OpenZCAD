@@ -151,9 +151,15 @@ import {
   HttpAssistantConfigurationError,
   maxOutputTokensFor,
   streamAssistantProposal,
+  streamEncryptedQwenProposal,
   testAssistantConnection,
   timeoutFor
 } from './assistant';
+import {
+  encryptedQwenConfig,
+  QWEN_MAX_OUTPUT_TOKENS,
+  verifyQwenFreeAccount
+} from './encryptedQwen';
 import {
   acquireAssistantPermit,
   assistantQuotaCost
@@ -1840,14 +1846,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       );
     }
     const assistant = await resolveUserAssistant(userId, env, identity.email);
-    if (!assistant.effective.configured) {
+    const encryptedRoute = consent && assistant.effective.encryptedProject;
+    const effective = encryptedRoute || assistant.effective;
+    if (!effective.configured) {
       return assistantNotConfigured();
     }
     // An encrypted project's consent names who receives the data: another
     // key source, provider or model needs the user's consent again.
     if (
       consent !== null &&
-      consent.route !== assistantConsentRoute(assistant.effective)
+      consent.route !== assistantConsentRoute(effective)
     ) {
       throw new SharingRequestError(
         409,
@@ -1856,12 +1864,15 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       );
     }
     const providerIdentity = await assistantProviderIdentity(userId, env);
-    const maxOutputTokens =
-      assistant.runtime?.maxOutputTokens ?? maxOutputTokensFor(env);
+    const qwen = encryptedRoute ? encryptedQwenConfig(env) : null;
+    if (encryptedRoute && !qwen) return assistantNotConfigured();
+    const maxOutputTokens = qwen
+      ? QWEN_MAX_OUTPUT_TOKENS
+      : (assistant.runtime?.maxOutputTokens ?? maxOutputTokensFor(env));
     const permit = await acquireAssistantPermit(request, userId, env, {
       cost: assistantQuotaCost(payload.attachments.length, maxOutputTokens),
       leaseMs: assistant.runtime?.timeoutMs ?? timeoutFor(env),
-      deploymentFunded: assistant.effective.source === 'deployment',
+      deploymentFunded: effective.source === 'deployment',
       email: identity.email
     });
     if (!permit.allowed) {
@@ -1869,6 +1880,17 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     }
     let response: Response;
     try {
+      if (qwen && !(await verifyQwenFreeAccount(qwen))) {
+        await permit.release();
+        return json(
+          {
+            error:
+              'Free Qwen is unavailable because its billing status could not be verified. Nothing was sent.',
+            code: 'AI_QWEN_BILLING_UNVERIFIED'
+          },
+          503
+        );
+      }
       if (consent) {
         const latest = await liveAssistantConsent(
           env.DB!,
@@ -1883,14 +1905,23 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
           );
         }
       }
-      response = await streamAssistantProposal(
-        // Only an encrypted project needs consent: its model goes only to
-        // providers that do not collect it.
-        { ...payload, encryptedProject: consent !== null },
-        env,
-        assistantSafetyIdentifier(providerIdentity, payload.retryAttempt),
-        withRequestCustomInstructions(assistant.runtime, payload)
+      const safetyIdentifier = assistantSafetyIdentifier(
+        providerIdentity,
+        payload.retryAttempt
       );
+      response = qwen
+        ? await streamEncryptedQwenProposal(
+            payload,
+            env,
+            qwen,
+            safetyIdentifier
+          )
+        : await streamAssistantProposal(
+            { ...payload, encryptedProject: consent !== null },
+            env,
+            safetyIdentifier,
+            withRequestCustomInstructions(assistant.runtime, payload)
+          );
     } catch (error) {
       await permit.release();
       throw error;

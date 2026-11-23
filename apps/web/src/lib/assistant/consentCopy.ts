@@ -167,6 +167,7 @@ export const ASSISTANT_CONSENT_ITEMS: readonly AssistantConsentItem[] = [
 
 const PROVIDER_NAMES: Record<string, string> = {
   openrouter: 'OpenRouter',
+  'workers-ai': 'Cloudflare Workers AI',
   openai: 'OpenAI',
   anthropic: 'Anthropic',
   'responses-compatible': 'a Responses-compatible endpoint'
@@ -207,5 +208,7 @@ export const ASSISTANT_CONSENT_TRANSIT =
  */
 export const ASSISTANT_CONSENT_RETENTION =
   'Through OpenRouter, it goes only to providers whose policy is not to train on or store prompts, though a provider may still keep it for a while to check for abuse. OpenAI is asked not to store it, apart from its own abuse monitoring. Any other provider’s terms decide what it keeps.';
+export const WORKERS_AI_CONSENT_RETENTION =
+  'Cloudflare Workers AI’s standard inference policy provides zero data retention and no training on customer content, subject to its published exceptions.';
 export const ASSISTANT_CONSENT_FINALITY =
   'What has been sent cannot be recalled. Stopping only prevents later requests.';

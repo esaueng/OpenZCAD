@@ -432,7 +432,10 @@ export function AssistantPanel({
   // missed, and one fed every streamed delta reads out half-sentences.
   const [announcement, setAnnouncement] = useState('');
   const [loadedStatus, setStatus] = useState<AssistantStatus | null>(null);
-  const status = effectiveAssistant ?? loadedStatus;
+  const accountStatus = effectiveAssistant ?? loadedStatus;
+  const status: AssistantStatus | null = consent
+    ? (accountStatus?.encryptedProject ?? accountStatus)
+    : accountStatus;
   const [statusError, setStatusError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const [applyingEntryId, setApplyingEntryId] = useState<string | null>(null);
@@ -479,6 +482,7 @@ export function AssistantPanel({
   const [consentPrompt, setConsentPrompt] = useState<{
     route: string;
     label: string;
+    provider: string;
     resolve(allowed: boolean): void;
   } | null>(null);
   const consentRef = useRef(consent);
@@ -644,6 +648,7 @@ export function AssistantPanel({
         setConsentPrompt({
           route,
           label: describeAssistantRoute(current),
+          provider: current.provider,
           resolve: settle
         });
       });
@@ -2004,6 +2009,7 @@ export function AssistantPanel({
       {consentPrompt && consent && (
         <AssistantConsentDialog
           routeLabel={consentPrompt.label}
+          provider={consentPrompt.provider}
           error={consent.error}
           onAllow={async () => {
             if (await consent.allow(consentPrompt.route)) {

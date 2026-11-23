@@ -1004,6 +1004,40 @@ describe('assistant data disclosure', () => {
     expect(screen.queryByText('Configured')).toBeNull();
   });
 
+  it('shows Qwen and its free allowance for an encrypted project', async () => {
+    const settings = defaultAppSettings();
+    settings.assistant.enabled = true;
+    vi.mocked(loadAssistantStatus).mockResolvedValue({
+      configured: true,
+      source: 'deployment',
+      provider: 'openrouter',
+      model: 'nvidia/nemotron-3.5-super-vl:free',
+      reasoningEffort: 'high',
+      encryptedProjectUnsupported: true,
+      encryptedProject: {
+        configured: true,
+        source: 'deployment',
+        provider: 'workers-ai',
+        model: '@cf/qwen/qwen3.8-27b',
+        reasoningEffort: 'off',
+        endpoint:
+          'https://api.cloudflare.com/client/v4/accounts/test/ai/run/@cf/qwen/qwen3.8-27b'
+      }
+    });
+    renderSettings(null, {
+      settings,
+      initialSection: 'assistant',
+      encryptedProjectOpen: true
+    });
+    expect(await screen.findByText('Configured')).toBeVisible();
+    expect(screen.getByText(/@cf\/qwen\/qwen3\.8-27b/)).toBeVisible();
+    expect(screen.getByText(/shared daily allowance/)).toBeVisible();
+    expect(
+      screen.getByRole('link', { name: 'Cloudflare Workers AI data policy' })
+    ).toBeVisible();
+    expect(screen.queryByText('Unavailable for encrypted projects')).toBeNull();
+  });
+
   it('explains the free built-in model and data use, then keeps the personal model option', async () => {
     const user = userEvent.setup();
     const settings = defaultAppSettings();

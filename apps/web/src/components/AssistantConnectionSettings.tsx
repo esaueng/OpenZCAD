@@ -5,6 +5,7 @@ import {
   type AssistantStatus
 } from '../lib/assistantStream';
 import { ExternalAnchor } from './ExternalAnchor';
+import { WORKERS_AI_CONSENT_RETENTION } from '../lib/assistant/consentCopy';
 import {
   Group,
   Notice,
@@ -67,7 +68,10 @@ export function AssistantConnectionSettings({
   }, [effective, personal, sessionUserId]);
 
   const currentRead = read?.userId === sessionUserId ? read : null;
-  const status = effective ?? currentRead?.result;
+  const accountStatus = effective ?? currentRead?.result;
+  const status: AssistantStatus | null | undefined = encryptedProjectOpen
+    ? (accountStatus?.encryptedProject ?? accountStatus)
+    : accountStatus;
   const loading = !effective && currentRead === null;
   const encryptedProjectUnsupported =
     encryptedProjectOpen && status?.encryptedProjectUnsupported === true;
@@ -95,15 +99,21 @@ export function AssistantConnectionSettings({
             href: 'https://developers.openai.com/api/docs/guides/your-data',
             label: 'OpenAI API data policies'
           }
-        : {
-            text: `${SENT} this deployment’s AI provider, which may keep them or use them for training. Ask its operator which policies apply.`,
-            href: null,
-            label: ''
-          };
+        : status?.provider === 'workers-ai'
+          ? {
+              text: `${SENT} Cloudflare Workers AI. ${WORKERS_AI_CONSENT_RETENTION}`,
+              href: 'https://developers.cloudflare.com/workers-ai/platform/data-usage/',
+              label: 'Cloudflare Workers AI data policy'
+            }
+          : {
+              text: `${SENT} this deployment’s AI provider, which may keep them or use them for training. Ask its operator which policies apply.`,
+              href: null,
+              label: ''
+            };
   const free =
     status?.configured === true &&
-    status.provider === 'openrouter' &&
-    status.model.endsWith(':free');
+    (status.provider === 'workers-ai' ||
+      (status.provider === 'openrouter' && status.model.endsWith(':free')));
 
   return (
     <>
@@ -184,7 +194,11 @@ export function AssistantConnectionSettings({
               />
             ) : (
               <Notice>
-                {free ? `${FREE_MODEL_NOTICE} ` : null}
+                {free
+                  ? status?.provider === 'workers-ai'
+                    ? 'Free to use within a shared daily allowance that resets at 00:00 UTC. '
+                    : `${FREE_MODEL_NOTICE} `
+                  : null}
                 {policy.text} {CONFIDENTIAL}{' '}
                 {policy.href ? (
                   <ExternalAnchor href={policy.href}>

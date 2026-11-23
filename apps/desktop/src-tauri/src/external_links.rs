@@ -17,6 +17,7 @@ const APPROVED_EXTERNAL_URLS: &[&str] = &[
     // Assistant provider data policies (Settings > Assistant).
     "https://openrouter.ai/docs/guides/privacy/provider-logging",
     "https://developers.openai.com/api/docs/guides/your-data",
+    "https://developers.cloudflare.com/workers-ai/platform/data-usage/",
 ];
 
 pub(crate) fn approved_external_url(value: &str) -> Result<Url, String> {

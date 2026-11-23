@@ -17,7 +17,8 @@ import {
 } from './api';
 import {
   CONSENTED_ASSISTANT_PROPOSAL_PATH,
-  assistantConsentVersion
+  assistantConsentVersion,
+  type EncryptedProjectAssistantSettings
 } from '@openzcad/shared';
 import { loadLocalAppSettings } from './appSettings';
 import {
@@ -114,6 +115,7 @@ export interface AssistantStatus {
   model: string;
   reasoningEffort: string;
   encryptedProjectUnsupported?: true;
+  encryptedProject?: EncryptedProjectAssistantSettings;
   /** Where requests go; an encrypted project's consent binds it. */
   endpoint?: string;
 }
@@ -205,6 +207,8 @@ export function normalizeAssistantStatus(raw: unknown): AssistantStatus {
   }
   const value = raw as Record<string, unknown>;
   const text = (field: unknown) => (typeof field === 'string' ? field : '');
+  const encrypted = value.encryptedProject as
+    Partial<EncryptedProjectAssistantSettings> | undefined;
   return {
     configured: value.configured === true,
     ...(value.source === 'deployment' || value.source === 'personal'
@@ -215,6 +219,21 @@ export function normalizeAssistantStatus(raw: unknown): AssistantStatus {
     reasoningEffort: text(value.reasoningEffort),
     ...(value.encryptedProjectUnsupported === true
       ? { encryptedProjectUnsupported: true }
+      : {}),
+    ...(value.source === 'deployment' &&
+    encrypted?.provider === 'workers-ai' &&
+    typeof encrypted.model === 'string' &&
+    typeof encrypted.endpoint === 'string'
+      ? {
+          encryptedProject: {
+            configured: encrypted.configured === true,
+            source: 'deployment',
+            provider: 'workers-ai',
+            model: encrypted.model,
+            reasoningEffort: 'off',
+            endpoint: encrypted.endpoint
+          }
+        }
       : {}),
     ...(typeof value.endpoint === 'string' ? { endpoint: value.endpoint } : {})
   };

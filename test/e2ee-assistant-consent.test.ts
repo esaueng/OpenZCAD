@@ -35,6 +35,27 @@ const FLAGS_ON = {
 const PROVIDER_REPLY =
   'data: {"type":"response.output_text.done","text":"{}"}\n\n' +
   'data: {"type":"response.completed"}\n\n';
+const QWEN_ENV = {
+  AI_QWEN_FREE_ACCOUNT_ID: 'a'.repeat(32),
+  AI_QWEN_FREE_API_TOKEN: 'test-qwen-secret'
+};
+const QWEN_ACCOUNT_URL = `https://api.cloudflare.com/client/v4/accounts/${QWEN_ENV.AI_QWEN_FREE_ACCOUNT_ID}`;
+const QWEN_MODEL = '@cf/qwen/qwen3.8-27b';
+const QWEN_URL = `${QWEN_ACCOUNT_URL}/ai/run/${QWEN_MODEL}`;
+const QWEN_ROUTE = assistantConsentRoute({
+  source: 'deployment',
+  provider: 'workers-ai',
+  model: QWEN_MODEL,
+  endpoint: QWEN_URL
+});
+const qwenProposal = (projectId: string, sequence: number) => ({
+  ...proposal(projectId),
+  expectedConsent: assistantConsentVersion({
+    route: QWEN_ROUTE,
+    sequence,
+    copyVersion: ASSISTANT_CONSENT_COPY_VERSION
+  })
+});
 
 async function seed(
   extraEnv: Record<string, unknown> = {},
@@ -217,6 +238,188 @@ afterEach(() => {
 });
 
 describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
+  it('requires consent for the Qwen endpoint and keeps plaintext on OpenRouter', async () => {
+    const { call, projectId, plaintextId } = await seed({
+      ...FLAGS_ON,
+      ...QWEN_ENV
+    });
+    const upstream = stubProvider().mockImplementation(async (url) => {
+      if (url === `${QWEN_ACCOUNT_URL}/subscriptions`) {
+        return Response.json({ success: true, result: [] });
+      }
+      if (url === QWEN_URL) {
+        return Response.json({
+          success: true,
+          result: {
+            choices: [
+              {
+                finish_reason: 'stop',
+                message: {
+                  content: JSON.stringify({
+                    replyKind: 'message',
+                    proposal: null,
+                    questions: null,
+                    message: 'Test Qwen reply.',
+                    readings: null
+                  })
+                }
+              }
+            ]
+          }
+        });
+      }
+      return new Response(PROVIDER_REPLY);
+    });
+
+    const status = await call('GET', '/api/assistant/status');
+    expect(status.status).toBe(200);
+    const statusText = await status.text();
+    expect(statusText).not.toContain(QWEN_ENV.AI_QWEN_FREE_API_TOKEN);
+    expect(JSON.parse(statusText)).toMatchObject({
+      provider: 'openrouter',
+      encryptedProject: {
+        configured: true,
+        provider: 'workers-ai',
+        model: QWEN_MODEL,
+        endpoint: QWEN_URL
+      }
+    });
+
+    const consentPath = `/api/e2ee/assistant-consents/${projectId}`;
+    expect(
+      (
+        await call('PUT', consentPath, {
+          body: await consentBody(projectId, 1)
+        })
+      ).status
+    ).toBe(200);
+    const stale = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+      body: consentedProposal(projectId, 1)
+    });
+    expect(stale.status).toBe(409);
+    expect(await codeOf(stale)).toBe(
+      ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+    );
+    expect(upstream).not.toHaveBeenCalled();
+
+    expect(
+      (
+        await call('PUT', consentPath, {
+          body: await consentBody(projectId, 2, { route: QWEN_ROUTE })
+        })
+      ).status
+    ).toBe(200);
+    const encrypted = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+      body: {
+        ...qwenProposal(projectId, 2),
+        customInstructions: 'Use millimeters.'
+      }
+    });
+    expect(encrypted.status).toBe(200);
+    expect(await encrypted.text()).toContain('Test Qwen reply.');
+    expect(upstream.mock.calls.map(([url]) => url)).toEqual([
+      `${QWEN_ACCOUNT_URL}/subscriptions`,
+      QWEN_URL
+    ]);
+    expect(upstream.mock.calls[0]?.[1]?.body).toBeUndefined();
+    const request = JSON.parse(upstream.mock.calls[1]?.[1]?.body as string) as {
+      messages: Array<{ content: unknown }>;
+    };
+    expect(request).toMatchObject({
+      store: false,
+      stream: false,
+      max_completion_tokens: 4096,
+      response_format: { type: 'json_schema', json_schema: { strict: true } }
+    });
+    expect(request.messages[0]?.content).toContain('Use millimeters.');
+
+    const plain = await call('POST', '/api/assistant/proposals', {
+      body: proposal(plaintextId)
+    });
+    expect(plain.status).toBe(200);
+    await plain.text();
+    expect(upstream.mock.calls.at(-1)?.[0]).toBe(
+      'https://openrouter.ai/api/v1/responses'
+    );
+    expect(upstream).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    ['subscription present', { success: true, result: [{ price: 0 }] }, 200],
+    ['malformed billing response', { success: true, result: null }, 200],
+    ['billing permission denied', {}, 403]
+  ])(
+    'sends no encrypted content when Qwen cannot verify zero-overage billing (%s)',
+    async (_label, payload, status) => {
+      const { call, projectId } = await seed({ ...FLAGS_ON, ...QWEN_ENV });
+      expect(
+        (
+          await call('PUT', `/api/e2ee/assistant-consents/${projectId}`, {
+            body: await consentBody(projectId, 1, { route: QWEN_ROUTE })
+          })
+        ).status
+      ).toBe(200);
+      const upstream = stubProvider().mockImplementation(async () =>
+        Response.json(payload, { status })
+      );
+      const reply = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+        body: qwenProposal(projectId, 1)
+      });
+      expect(reply.status).toBe(503);
+      expect(await codeOf(reply)).toBe('AI_QWEN_BILLING_UNVERIFIED');
+      expect(upstream.mock.calls.map(([url]) => url)).toEqual([
+        `${QWEN_ACCOUNT_URL}/subscriptions`
+      ]);
+    }
+  );
+
+  it('stops at the free allowance without a paid fallback', async () => {
+    const { call, projectId } = await seed({ ...FLAGS_ON, ...QWEN_ENV });
+    expect(
+      (
+        await call('PUT', `/api/e2ee/assistant-consents/${projectId}`, {
+          body: await consentBody(projectId, 1, { route: QWEN_ROUTE })
+        })
+      ).status
+    ).toBe(200);
+    const upstream = stubProvider()
+      .mockResolvedValueOnce(Response.json({ success: true, result: [] }))
+      .mockResolvedValueOnce(
+        Response.json({ errors: [{ code: 3036 }] }, { status: 429 })
+      );
+    const reply = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+      body: qwenProposal(projectId, 1)
+    });
+    expect(reply.status).toBe(429);
+    expect(await codeOf(reply)).toBe('AI_QWEN_FREE_LIMIT');
+    expect(upstream.mock.calls.map(([url]) => url)).toEqual([
+      `${QWEN_ACCOUNT_URL}/subscriptions`,
+      QWEN_URL
+    ]);
+  });
+
+  it('checks consent again after verifying the free account', async () => {
+    const { call, projectId } = await seed({ ...FLAGS_ON, ...QWEN_ENV });
+    const path = `/api/e2ee/assistant-consents/${projectId}`;
+    const allowed = await consentBody(projectId, 1, { route: QWEN_ROUTE });
+    expect((await call('PUT', path, { body: allowed })).status).toBe(200);
+    const upstream = stubProvider().mockImplementation(async () => {
+      const revoked = await consentBody(projectId, 2, { allowed: false });
+      expect((await call('PUT', path, { body: revoked })).status).toBe(200);
+      return Response.json({ success: true, result: [] });
+    });
+    const reply = await call('POST', CONSENTED_ASSISTANT_PROPOSAL_PATH, {
+      body: qwenProposal(projectId, 1)
+    });
+    expect(reply.status).toBe(409);
+    expect(await codeOf(reply)).toBe(
+      ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE
+    );
+    expect(upstream.mock.calls.map(([url]) => url)).toEqual([
+      `${QWEN_ACCOUNT_URL}/subscriptions`
+    ]);
+  });
+
   it('refuses an encrypted project as before without the flag; plaintext is untouched', async () => {
     const { call, projectId, plaintextId } = await seed();
     const upstream = stubProvider();

@@ -1768,7 +1768,7 @@ const bodyRefSchema = {
 
 const existingBodyRefSchema = {
   type: 'string',
-  pattern: '^(?!\\$).+',
+  pattern: '^[^$\\n\\r\\u2028\\u2029]',
   description:
     'An existing live bodyId from the current digest. Topology-dependent operations cannot target a same-proposal alias.'
 } as const;
