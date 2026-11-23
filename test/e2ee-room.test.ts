@@ -46,6 +46,7 @@ import {
   createEncrypted,
   device,
   makeAccount,
+  reload,
   newServer,
   rows,
   type Account,
@@ -427,6 +428,50 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     expect(
       JSON.stringify(rows(srv, 'SELECT * FROM e2ee_project_revisions'))
     ).not.toContain('Before the holes');
+    // The next room edit still names that save state in its signed map, so
+    // a backup or restore of it opens once it is no longer the head.
+    const later = withBox(named, 'Later box');
+    await a.send(later, named.version);
+    expect(await a.next('ack')).toMatchObject({ version: later.version });
+    expect(
+      (await laptop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(projectId);
+    expect(
+      (await desktop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+  });
+
+  it('keeps an account named save loadable after a reload joins the room and edits', async () => {
+    const srv = roomServer();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const named = await laptop.store.saveRevision({
+      projectId,
+      reason: 'Before the change',
+      expectedVersion: v1.version,
+      document: v1
+    });
+    const revisionId = named.revisions.at(-1)!.revisionId;
+    // Reloaded: the room hands this page the named save as its first head,
+    // whose own body cannot name its own hash in the signed revision map.
+    const page = reload(srv, laptop);
+    const a = await live(srv, page, projectId, 'client_reloaded');
+    const state = await a.next('state');
+    expect(state.document?.version).toBe(named.version);
+    const later = withBox(state.document!, 'After the change');
+    await a.send(later, named.version);
+    expect(await a.next('ack')).toMatchObject({ version: later.version });
+    expect(
+      (await page.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(projectId);
+    expect(
+      (await desktop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
   });
 
   it('opens for the owner and its members, and only while encrypted projects are on', async () => {

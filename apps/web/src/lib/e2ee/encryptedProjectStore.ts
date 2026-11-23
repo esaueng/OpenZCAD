@@ -1276,6 +1276,27 @@ export function createEncryptedProjectStore(
   }
 
   /**
+   * {@link withOwnNamedSave} for a head a room relayed or acknowledged,
+   * asked of the account only when the head is a save point (its last
+   * checkpoint names its last revision), so ordinary room edits cost no
+   * extra request. Without it a page that met the named save through the
+   * room (a reload joining it, another tab or device, or a save point
+   * named through the room itself) sealed its next room edit without that
+   * save state, and every later read refused it as outside the history
+   * this browser trusts — the backup of that project among them.
+   */
+  async function withOwnRoomSavePoint(
+    projectId: string,
+    revisionHashes: Map<string, Uint8Array>,
+    document: ProjectDocument,
+    head: { documentVersion: number; hash: string }
+  ): Promise<void> {
+    const own = document.revisions.at(-1)?.revisionId;
+    if (!own || document.checkpoints.at(-1)?.revisionId !== own) return;
+    await withOwnNamedSave(projectId, revisionHashes, document, head);
+  }
+
+  /**
    * A head's verified share-link set (slice 5-10), against the head this
    * page held before it; a set that does not hold is an integrity error.
    */
@@ -2323,12 +2344,17 @@ export function createEncryptedProjectStore(
         const current = await pins.read(userId, projectId);
         if (current?.headHash !== hash) continue;
       }
+      const revisionHashes = new Map(body.revisionVersionHashes);
+      await withOwnRoomSavePoint(projectId, revisionHashes, document, {
+        documentVersion: header.documentVersion,
+        hash
+      });
       const state: HeadState = {
         stateCode,
         version: header.documentVersion,
         hash,
         keyEpoch: header.keyEpoch,
-        revisionHashes: new Map(body.revisionVersionHashes),
+        revisionHashes,
         document,
         shareLinks,
         infoName: heads.get(projectId)?.infoName ?? null,
@@ -2419,12 +2445,20 @@ export function createEncryptedProjectStore(
         }
       }
       const previous = heads.get(projectId);
+      const revisionHashes = retainedHashes(
+        base.revisionHashes,
+        sealed.document
+      );
+      await withOwnRoomSavePoint(projectId, revisionHashes, sealed.document, {
+        documentVersion: sealed.version,
+        hash: sealed.hash
+      });
       const state: HeadState = {
         stateCode,
         version: sealed.version,
         hash: sealed.hash,
         keyEpoch: sealed.keyEpoch,
-        revisionHashes: retainedHashes(base.revisionHashes, sealed.document),
+        revisionHashes,
         document: sealed.document,
         shareLinks: base.shareLinks ?? null,
         infoName: previous?.infoName ?? null,
