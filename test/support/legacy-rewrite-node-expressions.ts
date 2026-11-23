@@ -3,7 +3,10 @@
  * stood before I03 derived it from the quantity registry
  * (`packages/shared/src/quantity-registry.ts`). Only the characterization
  * test (`test/quantity-registry.test.ts`) uses it, to prove the derived
- * visitor visits the same fields, in the same order, with the same tags.
+ * visitor visits the same fields, in the same order, with the same tags,
+ * and that its only additions are the fields this copy skipped (a tapped
+ * hole's `length` and `clearance`, a sketch pattern's `layout.spacing` and
+ * `layout.stepDeg`), listed there as `ADDED_FIELD`.
  * Do not update it to follow new fields: classify those in the registry.
  */
 import type {

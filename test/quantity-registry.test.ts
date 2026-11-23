@@ -6,7 +6,10 @@
  *    true).
  * 2. Characterization: `rewriteNodeExpressions`, now derived from the
  *    registry, visits exactly the fields the hand-written visitor did, in the
- *    same order, with the same F05 tags.
+ *    same order, with the same F05 tags, plus only the four expression
+ *    fields it skipped (a tapped hole's length and clearance, a sketch
+ *    pattern's spacing and step angle). A promotion's verbatim `sourceData`
+ *    record stays unvisited.
  * 3. Coverage: every numeric leaf of the parity documents, the repository's
  *    document fixtures and the representative samples has a classification.
  */
@@ -209,6 +212,27 @@ function expressionsEverywhere<T>(value: T): T {
 
 type Visitor = typeof rewriteNodeExpressions;
 
+/**
+ * A visit the derived visitor makes that the frozen hand-written one did
+ * not: the expression fields it skipped, which the registry first listed as
+ * unvisited gaps and then classified as plain fields (I03 follow-up to
+ * #1955). Any other difference from the legacy visitor fails.
+ */
+const ADDED_FIELD =
+  /^(?:\.data\.tapped\.(?:length|clearance)|\.constraints\.\d+\.data\.layout\.(?:spacing|stepDeg))$/;
+const ADDED_FIELD_TAGS = [
+  '.constraints.data.layout.spacing:length',
+  '.constraints.data.layout.stepDeg:angle',
+  '.data.tapped.clearance:length',
+  '.data.tapped.length:length'
+];
+
+/** A visit's field path, without its expression and tag. */
+const visitPath = (visit: string): string => visit.slice(0, visit.indexOf('='));
+/** A visit's field path with array indices dropped, and its tag. */
+const visitField = (visit: string): string =>
+  `${visitPath(visit).replace(/\.\d+(?=\.)/g, '')}:${visit.slice(visit.lastIndexOf(':') + 1)}`;
+
 /** `path=expression:tag` for every field the visitor reports, in order. */
 function visits(node: DocumentNode, visitor: Visitor): string[] {
   const paths = new Map<object, string>();
@@ -330,22 +354,49 @@ describe('quantity registry', () => {
   });
 
   describe('rewriteNodeExpressions (characterization)', () => {
-    it('visits what the hand-written visitor visited, with the same tags and order', () => {
+    it('visits what the hand-written visitor visited, plus only the fields it skipped', () => {
       let compared = 0;
+      const added = new Set<string>();
       for (const { source, node } of corpus) {
         for (const subject of [node, expressionsEverywhere(node)]) {
           const before = visits(subject, legacyRewriteNodeExpressions);
           const after = visits(subject, rewriteNodeExpressions);
-          expect(after, `${source} ${label(node)}`).toEqual(before);
+          const isAdded = (visit: string) => ADDED_FIELD.test(visitPath(visit));
+          // Same fields, tags and order once the added visits are set aside.
+          expect(
+            after.filter((visit) => !isAdded(visit)),
+            `${source} ${label(node)}`
+          ).toEqual(before);
+          expect(before.filter(isAdded)).toEqual([]);
+          for (const visit of after.filter(isAdded))
+            added.add(visitField(visit));
           compared += before.length;
         }
       }
       // Guard against a vacuous pass: the stringified samples alone hold
       // hundreds of expression fields.
       expect(compared).toBeGreaterThan(500);
+      // Every added field is visited somewhere, with its tag.
+      expect([...added].sort()).toEqual(ADDED_FIELD_TAGS);
     });
 
-    it('rewrites the same fields in place', () => {
+    it('rewrites the same fields in place, plus only the fields it skipped', () => {
+      const differences = (
+        a: unknown,
+        b: unknown,
+        path = ''
+      ): { path: string; a: unknown; b: unknown }[] => {
+        if (typeof a !== 'object' || a === null)
+          return a === b ? [] : [{ path, a, b }];
+        return Object.keys(a).flatMap((key) =>
+          differences(
+            (a as Record<string, unknown>)[key],
+            (b as Record<string, unknown>)[key],
+            `${path}.${key}`
+          )
+        );
+      };
+      const changed = new Set<string>();
       for (const { source, node } of corpus) {
         const legacy = expressionsEverywhere(node);
         const derived = expressionsEverywhere(node);
@@ -357,8 +408,20 @@ describe('quantity registry', () => {
           derived,
           (expression, dimension) => `${expression}|${String(dimension)}`
         );
-        expect(derived, `${source} ${label(node)}`).toEqual(legacy);
+        for (const difference of differences(derived, legacy)) {
+          expect(difference.path, `${source} ${label(node)}`).toMatch(
+            ADDED_FIELD
+          );
+          // Rewritten in the derived copy, untouched in the legacy one.
+          expect(difference.a).toMatch(
+            new RegExp(`^${String(difference.b)}\\|(length|angle)$`)
+          );
+          changed.add(difference.path.replace(/\.\d+(?=\.)/g, ''));
+        }
       }
+      expect([...changed].sort()).toEqual(
+        ADDED_FIELD_TAGS.map((tag) => tag.slice(0, tag.lastIndexOf(':')))
+      );
     });
   });
 
@@ -504,7 +567,9 @@ describe('quantity registry', () => {
       ]);
     });
 
-    it('lists the expression fields not visited today', () => {
+    it('lists the expression fields never visited', () => {
+      // Only a promotion's verbatim legacy record: every other expression
+      // field is renamed and F05-checked.
       const gaps = new Set<string>();
       for (const node of sampleNodes())
         for (const leaf of classifiedLeaves(node))
@@ -515,10 +580,6 @@ describe('quantity registry', () => {
                 .join('.')}`
             );
       expect([...gaps].sort()).toEqual([
-        'hole tapped.clearance',
-        'hole tapped.length',
-        'sketch constraints.data.layout.spacing',
-        'sketch constraints.data.layout.stepDeg',
         'sketch promotions.sourceData.centerX',
         'sketch promotions.sourceData.centerY',
         'sketch promotions.sourceData.height',

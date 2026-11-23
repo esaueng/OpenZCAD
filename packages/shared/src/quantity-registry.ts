@@ -18,6 +18,9 @@
  *    rename, F05 typed-parameter checks and suggestions, display units) is
  *    derived from this registry rather than listing fields by hand.
  *
+ * Every expression-capable field is visited, except a sketch promotion's
+ * verbatim source record ({@link UnvisitedQuantity}).
+ *
  * Scope: feature data (direct edits included), sketch objects, sketch
  * constraints, the sketch node and a parameter's expression. The document's
  * top level (`printClearance`), drawings, PMI, assemblies and reference
@@ -115,10 +118,17 @@ export class LiteralQuantity<H = never> {
 }
 
 /**
- * An expression-capable field that `rewriteNodeExpressions` does not visit
- * today, kept unvisited so deriving the visitor changes no behaviour. Each
- * one is a known gap (parameter rename and typed-parameter checks miss it),
- * listed for a follow-up rather than fixed silently here.
+ * An expression-capable field `rewriteNodeExpressions` deliberately never
+ * visits: a sketch promotion's `sourceData`, the verbatim record of the
+ * legacy shape's parameters as the user wrote them before S04 converted it
+ * (sketch-composite-identity plan, "Explicit conversion mapping"). Nothing
+ * evaluates it (the kernel reads only its `objectKind`; the editable edges
+ * carry the geometry) and the user cannot see or edit it. It stays
+ * byte-identical through a parameter rename (S04,
+ * `test/sketch-legacy-conversion.test.ts`), and `isSketchPromotion` accepts
+ * a name no parameter holds. Visiting it would also let hidden inert text
+ * fail a build (F05 misuse), block a parameter delete or a retype, or sway a
+ * quantity suggestion.
  */
 export class UnvisitedQuantity {
   constructor(
@@ -660,16 +670,9 @@ export const FEATURE_QUANTITY_CASES: QuantityCases<FeatureData, 'featureKind'> =
       position: { u: 'length', v: 'length' },
       faceHash: literal('hash'),
       faceReference: FACE_REFERENCE,
-      tapped: {
-        length: unvisited(
-          'length',
-          'a tapped hole thread length is evaluated but not rewritten today'
-        ),
-        clearance: unvisited(
-          'length',
-          'a tapped hole clearance is evaluated but not rewritten today'
-        )
-      }
+      // The hole's thread: read as a Thread's `length` and `clearance`
+      // (kernel-adapter `tapHoleBores`), in document units.
+      tapped: { length: 'length', clearance: 'length' }
     },
     gear: {
       pitch: GEAR_PITCH,
@@ -923,16 +926,9 @@ export const SKETCH_CONSTRAINT_QUANTITIES = switchOn<SketchConstraintData>()(
     'lock-entity': { at: literal(LOCKED_ENTITY_SLOT) },
     pattern: {
       instances: { step: literal('number') },
-      layout: {
-        spacing: unvisited(
-          'length',
-          'a sketch pattern spacing is evaluated but not rewritten today'
-        ),
-        stepDeg: unvisited(
-          'angle',
-          'a sketch pattern step angle is evaluated but not rewritten today'
-        )
-      }
+      // Resolved as a distance and as degrees (kernel-adapter `gcs-sketch`
+      // and `gcs-pattern`), like `distance.value` and `angle.valueDeg`.
+      layout: { spacing: 'length', stepDeg: 'angle' }
     },
     offset: { value: 'length', pairs: { side: literal('number') } }
   }
@@ -950,6 +946,9 @@ const REFERENCE_TARGET = {
   topology: { version: literal('index') }
 } as const;
 
+const INERT_PROMOTION =
+  'the verbatim legacy record a promotion keeps; nothing evaluates it';
+
 /** A sketch node's own stored numbers (its `BaseNode` fields excluded). */
 export const SKETCH_NODE_QUANTITIES: QuantityMap<Omit<SketchNode, 'metadata'>> =
   {
@@ -964,14 +963,14 @@ export const SKETCH_NODE_QUANTITIES: QuantityMap<Omit<SketchNode, 'metadata'>> =
     },
     promotions: {
       version: literal('index'),
-      // An inert legacy shape kept for the conversion record.
+      // The verbatim conversion record (see `UnvisitedQuantity`).
       sourceData: {
-        width: unvisited('length', 'an inert legacy promotion record'),
-        height: unvisited('length', 'an inert legacy promotion record'),
-        centerX: unvisited('length', 'an inert legacy promotion record'),
-        centerY: unvisited('length', 'an inert legacy promotion record'),
-        radius: unvisited('length', 'an inert legacy promotion record'),
-        sides: unvisited('number', 'an inert legacy promotion record'),
+        width: unvisited('length', INERT_PROMOTION),
+        height: unvisited('length', INERT_PROMOTION),
+        centerX: unvisited('length', INERT_PROMOTION),
+        centerY: unvisited('length', INERT_PROMOTION),
+        radius: unvisited('length', INERT_PROMOTION),
+        sides: unvisited('number', INERT_PROMOTION),
         projection: PROJECTION
       },
       topology: { version: literal('index'), count: literal('index') },
@@ -1007,7 +1006,10 @@ export type QuantityRole =
   | 'expression'
   /** A stored number; never an expression. */
   | 'literal'
-  /** May hold an expression, but is not visited today (a listed gap). */
+  /**
+   * May hold an expression, but is a verbatim record nothing evaluates and
+   * nothing visits (see {@link UnvisitedQuantity}).
+   */
   | 'unvisited';
 
 export interface QuantityLeaf {
