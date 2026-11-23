@@ -23,10 +23,7 @@ import {
   conversionReferenceTargets,
   type RecordedConversionReferences
 } from './units-reference-map';
-import {
-  unitsConvertFactor,
-  unitsConvertPayloadShapeProblem
-} from './units-convert-payload';
+import { unitsConvertPayloadShapeProblem } from './units-convert-payload';
 
 export {
   unitsConvertFactor,
