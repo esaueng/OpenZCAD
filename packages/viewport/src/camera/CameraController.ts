@@ -228,6 +228,8 @@ export interface CameraControllerOptions {
   wheelElement?: HTMLElement;
   /** Invalidates the viewport so the render loop draws another frame. */
   requestRender(): void;
+  /** An accepted trackpad pan packet, which has no pointer down/up events. */
+  onTrackpadPan?(): void;
   /**
    * Starting perspective field of view, degrees; 45 when absent. Given here
    * rather than set afterwards so a restored pose, saved at this field of
@@ -459,6 +461,7 @@ export class CameraController {
       // scrolls a page down moves the model down.
       this.orbit.pan(-event.deltaX, -event.deltaY);
       this.orbit.update();
+      this.options.onTrackpadPan?.();
       // Debounced rather than written per event — a pan is hundreds of wheel
       // events, and the durable pose only has to match the last one.
       this.scheduleSettledViewChange();
