@@ -129,6 +129,15 @@ test(
       ]
     ] as { width: number; height: number; lines: number; scrolls?: true }[][]) {
       await page.setViewportSize(sizes[0]!);
+      // Narrowing to a phone leaves the remembered drawer open over the
+      // lane (only a panel brought up puts it away); close it first.
+      const drawerClose = page.getByRole('button', {
+        name: 'Close tools drawer'
+      });
+      if (sizes[0]!.width < 480) {
+        await expect(drawerClose).toBeVisible();
+        await drawerClose.click();
+      }
       await revealModelPanel(page, 'History');
       await modelPanel(page, 'History')
         .getByRole('button', { name: 'History as text' })
