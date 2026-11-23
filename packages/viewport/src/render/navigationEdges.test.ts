@@ -89,7 +89,7 @@ describe('native navigation edges', () => {
       expect(visible(position.getZ(2 * i + 1))).toBe(visible(firstEnd.getZ(i)));
     }
     const sharedBias = round.vertexShader.match(
-      /void biasEdgeEndpoint[\s\S]*?\n  }/
+      /void biasEdgeEndpoint[\s\S]*?\n {2}}/
     )![0];
     expect(ink.vertexShader).toContain(sharedBias);
     expect(round.vertexShader).toContain('biasEdgeEndpoint(start)');

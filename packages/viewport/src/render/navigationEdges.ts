@@ -83,7 +83,9 @@ function batchFor(
     camera instanceof THREE.OrthographicCamera
   ))
     return;
-  const bias = material.uniforms.depthBias?.value;
+  // The standard line shader supplies a scalar uniform. The finite check
+  // below also rejects missing or nonnumeric values from custom materials.
+  const bias = material.uniforms.depthBias?.value as number;
   if (!(bias >= 0 && Number.isFinite(bias))) return;
   line.updateWorldMatrix(true, false);
   const view = new THREE.Matrix4().multiplyMatrices(
