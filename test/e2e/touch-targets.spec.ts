@@ -137,36 +137,35 @@ test(
   }
 );
 
-test(
-  'a hidden profile name and email are each a 44 px reveal target',
-  async ({ page }) => {
-    await stubApi(page);
-    await page.route('**/api/session', (route) =>
-      route.fulfill({
-        json: {
-          userId: 'user_touch',
-          displayName: 'Touch Person',
-          email: 'touch@example.com',
-          mode: 'email-code'
-        }
-      })
-    );
-    await page.goto('/');
-    await page.getByRole('button', { name: 'Open settings' }).click();
-    await page.getByRole('button', { name: 'Account', exact: true }).click();
-    const reveal = page.locator('.setting-copy .private-text');
-    await expect(reveal).toHaveCount(2);
-    await expectTouchSized(
-      page,
-      'profile name and email',
-      '.setting-copy:has(.private-text)'
-    );
-    // Stacked, neither reaches over the other.
-    expect(overlaps(await box(reveal.first()), await box(reveal.last()))).toBe(
-      false
-    );
-  }
-);
+test('a hidden profile name and email are each a 44 px reveal target', async ({
+  page
+}) => {
+  await stubApi(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({
+      json: {
+        userId: 'user_touch',
+        displayName: 'Touch Person',
+        email: 'touch@example.com',
+        mode: 'email-code'
+      }
+    })
+  );
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Account', exact: true }).click();
+  const reveal = page.locator('.setting-copy .private-text');
+  await expect(reveal).toHaveCount(2);
+  await expectTouchSized(
+    page,
+    'profile name and email',
+    '.setting-copy:has(.private-text)'
+  );
+  // Stacked, neither reaches over the other.
+  expect(overlaps(await box(reveal.first()), await box(reveal.last()))).toBe(
+    false
+  );
+});
 
 test(
   'every workspace control is a 44 px touch target in Build, View, Measure and Tweak',
@@ -192,8 +191,14 @@ test(
     await expectTouchSized(page, 'File menu', '.topbar-menu-panel');
     await page.locator('.topbar-menu > summary').click();
 
+    // View and Tweak first stand a loading rail of the same class, swapped
+    // for the loaded one a moment later; between the two no animation runs,
+    // so waiting for the placeholder can measure the real rail at the start
+    // of its fade-in, as if it were drawn transparent.
     await page.getByRole('button', { name: 'View', exact: true }).click();
-    await expect(page.locator('.view-mode-bar')).toBeVisible();
+    await expect(
+      page.locator('.view-mode-bar:not(.view-tools-loading)')
+    ).toBeVisible();
     await expectTouchSized(page, 'View');
 
     await page
@@ -204,7 +209,9 @@ test(
     await expectTouchSized(page, 'Measure', '.measurement-dock');
 
     await page.getByRole('button', { name: 'Tweak', exact: true }).click();
-    await expect(page.locator('.tweak-rail')).toBeVisible();
+    await expect(
+      page.locator('.tweak-rail:not(.tweak-rail-loading)')
+    ).toBeVisible();
     await expectTouchSized(page, 'Tweak rail', '.tweak-rail');
   }
 );

@@ -1,4 +1,4 @@
-import { useLayoutEffect, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type RefObject } from 'react';
 
 /**
  * The stage's foot claims: a task surface anchored to the foot of the stage
@@ -11,6 +11,13 @@ import { useLayoutEffect, type RefObject } from 'react';
  */
 export type StageFootClaim =
   '--workspace-tour-claim' | '--motion-timeline-claim';
+
+/**
+ * Up to this, a claim reaching higher is not growth: a card's 8 px entrance
+ * rise, plus a pixel of rounding. Anything more, a lane growing under the
+ * card included, is.
+ */
+export const FOOT_CLAIM_GROWTH_PX = 9;
 
 /** CSS px from the stage's bottom edge up to the surface's top edge. */
 export function stageFootClaim(
@@ -28,24 +35,42 @@ export function stageFootClaim(
  * measures again when the stage's own style changes: the stylesheet moves
  * the guide above an in-place command's bar by the height the bar publishes
  * there, which moves it without resizing it (#1947).
+ *
+ * `onGrow` hears each time the claim reaches more than
+ * {@link FOOT_CLAIM_GROWTH_PX} higher than it last stood (from nothing when
+ * the surface comes up), with where the surface and the stage stand then:
+ * a surface that rises over the model can ask for it to be framed clear
+ * again. Its own entrance rise, a few pixels, is not growth.
  */
 export function useStageFootClaim(
   ref: RefObject<HTMLElement | null>,
   property: StageFootClaim,
-  active: boolean
+  active: boolean,
+  onGrow?: (surface: DOMRect, stage: DOMRect) => void
 ) {
+  const onGrowRef = useRef(onGrow);
+  onGrowRef.current = onGrow;
   useLayoutEffect(() => {
     const surface = ref.current;
     const stage = surface?.closest<HTMLElement>('.viewer-area');
     if (!active || !surface || !stage) return;
+    let reached = 0;
     const measure = () => {
-      const claim = `${stageFootClaim(
-        stage.getBoundingClientRect(),
-        surface.getBoundingClientRect()
-      )}px`;
+      const stageRect = stage.getBoundingClientRect();
+      const surfaceRect = surface.getBoundingClientRect();
+      const height = stageFootClaim(stageRect, surfaceRect);
+      const claim = `${height}px`;
       // Unchanged, left alone: the write would wake the style observer below.
       if (stage.style.getPropertyValue(property) !== claim) {
         stage.style.setProperty(property, claim);
+      }
+      if (height > reached + FOOT_CLAIM_GROWTH_PX) {
+        onGrowRef.current?.(surfaceRect, stageRect);
+      }
+      // Growth is measured from where it last stood, so a fold and a new
+      // rise count again; an entrance's last few pixels do not.
+      if (height < reached || height > reached + FOOT_CLAIM_GROWTH_PX) {
+        reached = height;
       }
     };
     measure();

@@ -424,3 +424,74 @@ describe('WorkspaceTour', () => {
     }
   });
 });
+
+describe('WorkspaceTour over a phone stage', () => {
+  // happy-dom lays nothing out: the stage and the card report where they
+  // stand, a phone's 390 px stage under a 246 px card across its middle.
+  function layOut(cardWidth: number) {
+    return vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('viewer-area')
+          ? DOMRect.fromRect({ x: 0, y: 0, width: 390, height: 844 })
+          : DOMRect.fromRect({ x: 72, y: 404, width: cardWidth, height: 250 });
+      });
+  }
+
+  it('asks for the model to be framed clear when its step moves on', () => {
+    // A box dragged out in the card's company lands as the step moves to
+    // "Select to edit", under the expanded card (preview check on #1964).
+    const spy = layOut(246);
+    const onCoverStage = vi.fn();
+    const { rerender, container } = render(
+      <div className="viewer-area">
+        <WorkspaceTour
+          {...idle}
+          onDismiss={vi.fn()}
+          onCoverStage={onCoverStage}
+        />
+      </div>
+    );
+    expect(container.textContent).not.toContain('Select to edit');
+    const asked = onCoverStage.mock.calls.length;
+    rerender(
+      <div className="viewer-area">
+        <WorkspaceTour
+          {...idle}
+          featureCount={1}
+          onDismiss={vi.fn()}
+          onCoverStage={onCoverStage}
+        />
+      </div>
+    );
+    expect(container.textContent).toContain('Select to edit');
+    expect(onCoverStage.mock.calls.length).toBeGreaterThan(asked);
+    spy.mockRestore();
+  });
+
+  it('asks nothing for a card that stands beside the model', () => {
+    const spy = layOut(150);
+    const onCoverStage = vi.fn();
+    const { rerender } = render(
+      <div className="viewer-area">
+        <WorkspaceTour
+          {...idle}
+          onDismiss={vi.fn()}
+          onCoverStage={onCoverStage}
+        />
+      </div>
+    );
+    rerender(
+      <div className="viewer-area">
+        <WorkspaceTour
+          {...idle}
+          featureCount={1}
+          onDismiss={vi.fn()}
+          onCoverStage={onCoverStage}
+        />
+      </div>
+    );
+    expect(onCoverStage).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});

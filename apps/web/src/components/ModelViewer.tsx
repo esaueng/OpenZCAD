@@ -3246,6 +3246,8 @@ export function ModelViewer({
    * chip-only value) and its chip — and the drag holding one of them.
    */
   const commandRigsRef = useRef(new Map<string, CommandRigEntry>());
+  /** Whether a creation footprint is being dragged out. */
+  const footprintDragActiveRef = useRef(false);
   const commandDragRef = useRef<{
     pointerId: number;
     valueId: string;
@@ -12298,6 +12300,7 @@ export function ModelViewer({
         start = hit ? new THREE.Vector3(hit.x, hit.y, hit.z) : null;
       }
       if (!start) return false;
+      footprintDragActiveRef.current = true;
       footprintDrag = {
         pointerId: event.pointerId,
         frame,
@@ -12335,6 +12338,7 @@ export function ModelViewer({
       const drag = footprintDrag;
       if (!drag) return;
       footprintDrag = null;
+      footprintDragActiveRef.current = false;
       clearFootprintOutline();
       gestures.release(event, null);
       if (report) onFootprintRef.current?.(footprintGesture(drag, 'end'));
@@ -12343,6 +12347,7 @@ export function ModelViewer({
       const drag = footprintDrag;
       if (!drag) return;
       footprintDrag = null;
+      footprintDragActiveRef.current = false;
       clearFootprintOutline();
       gestures.release(drag.pointerId, null);
     };
@@ -18973,56 +18978,91 @@ export function ModelViewer({
   }, [creationFrame]);
 
   // Something opened over the stage: keep the model where it can be seen.
+  // A request made with nothing to frame (a phone's modeling guide rising
+  // over an empty project) is kept, and honoured once when the first bodies
+  // arrive: the box the guide then asks to be tapped stood under it.
+  // Requests made before this viewer mounted (another project's) are not
+  // its own to replay.
+  const handledClearStageRef = useRef(clearStageRequest);
+  const clearStagePendingRef = useRef(false);
   useEffect(() => {
     const context = contextRef.current;
+    const fresh = clearStageRequest !== handledClearStageRef.current;
+    if (!fresh && !clearStagePendingRef.current) {
+      return;
+    }
     if (!clearStageRequest || !context || !context.hasFitCamera) {
       return;
     }
     // Two frames: whatever opened, and any preview it brought, are laid out.
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => {
-        const targets = [
-          ...context.bodyGroup.children,
-          ...(parameterPreviewController.current?.group.children ?? [])
-        ].filter((child) => child.visible);
-        const reached = new THREE.Box3();
-        for (const object of targets) reached.expandByObject(object);
-        const stage = measureFitFrame(context.renderer.domElement);
-        if (reached.isEmpty() || !stage) {
-          return;
-        }
-        const camera = context.activeCamera;
-        camera.updateMatrixWorld();
-        const corners = Array.from({ length: 8 }, (_, index) =>
-          new THREE.Vector3(
-            index & 1 ? reached.max.x : reached.min.x,
-            index & 2 ? reached.max.y : reached.min.y,
-            index & 4 ? reached.max.z : reached.min.z
-          ).project(camera)
-        );
-        if (cornersWithinFrame(corners, stage)) {
-          return;
-        }
-        const pose = computeFitPose(
-          context.camera,
-          targets,
-          context.viewDirection(),
-          0,
-          stage
-        );
-        context.startCameraTween(
-          pose,
-          () => {
-            if (context.projection === 'orthographic') {
-              context.syncOrthographic(true);
-            }
-          },
-          { ease: viewJumpEase }
-        );
-      });
+    // Marked handled only once they have run: a body change in between
+    // cancels them, and the request must still be there for the next run.
+    let frame = 0;
+    const run = () => {
+      // A hand on a handle or a footprint owns the camera: the request
+      // waits for it to let go, looked at again each frame, so a release
+      // that changes nothing still brings it.
+      if (
+        commandDragRef.current ||
+        moveDragActiveRef.current ||
+        edgeDragActiveRef.current ||
+        offsetDragActiveRef.current ||
+        cylinderRadiusDragActiveRef.current ||
+        footprintDragActiveRef.current
+      ) {
+        frame = requestAnimationFrame(run);
+        return;
+      }
+      handledClearStageRef.current = clearStageRequest;
+      const targets = [
+        ...context.bodyGroup.children,
+        ...(parameterPreviewController.current?.group.children ?? [])
+      ].filter((child) => child.visible);
+      const reached = new THREE.Box3();
+      for (const object of targets) reached.expandByObject(object);
+      if (reached.isEmpty()) {
+        clearStagePendingRef.current = true;
+        return;
+      }
+      clearStagePendingRef.current = false;
+      const stage = measureFitFrame(context.renderer.domElement);
+      if (!stage) {
+        return;
+      }
+      const camera = context.activeCamera;
+      camera.updateMatrixWorld();
+      const corners = Array.from({ length: 8 }, (_, index) =>
+        new THREE.Vector3(
+          index & 1 ? reached.max.x : reached.min.x,
+          index & 2 ? reached.max.y : reached.min.y,
+          index & 4 ? reached.max.z : reached.min.z
+        ).project(camera)
+      );
+      if (cornersWithinFrame(corners, stage)) {
+        return;
+      }
+      const pose = computeFitPose(
+        context.camera,
+        targets,
+        context.viewDirection(),
+        0,
+        stage
+      );
+      context.startCameraTween(
+        pose,
+        () => {
+          if (context.projection === 'orthographic') {
+            context.syncOrthographic(true);
+          }
+        },
+        { ease: viewJumpEase }
+      );
+    };
+    frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(run);
     });
     return () => cancelAnimationFrame(frame);
-  }, [clearStageRequest]);
+  }, [clearStageRequest, bodies]);
   // View requests keep the current zoom and glide the camera to the axis —
   // named standard views and the cube's corner diagonals alike.
   useEffect(() => {

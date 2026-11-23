@@ -39579,6 +39579,9 @@ export function App() {
                 // a command or a sketch runs, and a second empty project
                 // picks up where the first left off (I16).
                 startIndex={panelState.workspaceTourStep}
+                // A phone's guide rising over the model it asks to be tapped
+                // has the model framed clear of it (preview check on #1951).
+                onCoverStage={requestClearStage}
                 onIndexChange={(index) =>
                   setPanelState((current) =>
                     current.workspaceTourStep === index
