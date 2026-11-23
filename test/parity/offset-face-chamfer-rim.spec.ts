@@ -529,6 +529,66 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
       });
     }
 
+    // Review regressions: a nearly flat bevel the guard must still see, a
+    // small loop far from the origin whose winding must survive, and an
+    // offset just inside the band's top that must stay the kernel's.
+    it('flat bevel: refuses the move that spread the body 2000 wide', async () => {
+      const f = await importedFixture('imported-flat-bevel', (kernel) => {
+        const box = kernel.makeBox(X, Y, Z);
+        // 10 across the base, 0.01 up the walls.
+        return kernel.chamferV2(
+          box,
+          edgesWhere(kernel, box, bottomRim),
+          10,
+          0.01
+        );
+      });
+      const candidate = offsetBy(f, -2);
+      for (const derived of [
+        await adapter.previewGeometry(candidate, { deferTopology: true }),
+        await adapter.syncDocument(candidate)
+      ]) {
+        const [refusal] = failures(derived.featureWarnings);
+        expect(refusal, 'the offset is refused').toBeDefined();
+        expect(refusal!.kernelRefusal?.code).toBe(
+          'offset_face_chamfer_rim_not_carried'
+        );
+      }
+    });
+
+    it("far from the origin: keeps a small band's winding", async () => {
+      const f = await importedFixture('imported-far', (kernel) => {
+        const box = kernel.copyAndTransformSolid(
+          kernel.makeBox(0.1, 0.1, Z),
+          Float64Array.of(1, 0, 0, 1e7, 0, 1, 0, 1e7, 0, 0, 1, 0, 0, 0, 0, 1)
+        );
+        return kernel.chamfer(box, edgesWhere(kernel, box, bottomRim), 0.005);
+      });
+      const candidate = offsetBy(f, 0.005);
+      const preview = await adapter.previewGeometry(candidate, {
+        deferTopology: true
+      });
+      expect(failures(preview.featureWarnings)).toEqual([]);
+      const committed = await adapter.syncDocument(candidate);
+      expect(failures(committed.featureWarnings)).toEqual([]);
+      const body = Object.values(committed.bodyRepresentations).at(-1)!;
+      expect(body.bbox.min.z).toBeCloseTo(-0.005, 6);
+    });
+
+    it('just inside the band top: keeps the kernel re-limit', async () => {
+      const f = await importedFixture('imported-tall', (kernel) => {
+        const box = kernel.makeBox(X, Y, 40);
+        return kernel.chamfer(box, edgesWhere(kernel, box, bottomRim), 5);
+      });
+      const candidate = offsetBy(f, -4.9999996);
+      const preview = await adapter.previewGeometry(candidate, {
+        deferTopology: true
+      });
+      expect(failures(preview.featureWarnings)).toEqual([]);
+      const committed = await adapter.syncDocument(candidate);
+      expect(failures(committed.featureWarnings)).toEqual([]);
+    });
+
     it('rounded: leaves the kernel refusal over rounded corners alone', async () => {
       // The kernel refuses this band's move at any distance; refusing is
       // right for a draft, and nothing here can tell it from a chamfer.

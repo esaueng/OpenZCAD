@@ -77,6 +77,8 @@ const point = (v: Vec3): Point => [v.x, v.y, v.z];
 
 /** The tilt that separates a chamfer from a wall (0) or a step (1). */
 const TILT_EPSILON = 1e-6;
+/** Closer to parallel than this, a neighbour is coplanar with the face. */
+const PARALLEL_EPSILON = 1e-12;
 
 export function chamferRimNotCarriedRefusal(
   offset: number,
@@ -150,7 +152,11 @@ function roleOf(kernel: RemusKernel, face: number, normal: Vec3): Role {
     if (!m) return 'other';
     const tilt = dot(m, normal);
     if (Math.abs(tilt) <= ANALYTIC_MATCH_EPSILON) return 'wall';
-    return tilt > TILT_EPSILON && tilt < 1 - TILT_EPSILON ? 'chamfer' : 'other';
+    // Any tilt short of parallel is part of the band: a nearly flat bevel
+    // (10 across, 0.01 up) is still one the kernel's move can extend.
+    return tilt > TILT_EPSILON && tilt < 1 - PARALLEL_EPSILON
+      ? 'chamfer'
+      : 'other';
   }
   if (type === 'cone' || type === 'cylinder') {
     try {
@@ -838,7 +844,15 @@ function capLoops(
   const loops: CapLoop[] = [];
   for (const wire of [record.outer_wire, ...record.inner_wires]) {
     const edges: LoopEdge[] = [];
-    // Twice the area vector: a × b per line, c × (b − a) + r²Δθ·n per arc.
+    // Twice the area vector: a × b per line, c × (b − a) + r²Δθ·n per arc,
+    // all about a point of the loop. Absolute coordinates far from the
+    // origin cancel catastrophically and lose a small loop's winding.
+    const firstUse = arena.wires[wire]!.edges[0];
+    if (!firstUse) return null;
+    const firstEdge = arena.edges[firstUse.edge]!;
+    const origin = vector(
+      arena.vertices[firstUse.forward ? firstEdge.start : firstEdge.end]!.point
+    );
     let area: Vec3 = { x: 0, y: 0, z: 0 };
     for (const use of arena.wires[wire]!.edges) {
       const edge = arena.edges[use.edge]!;
@@ -850,7 +864,7 @@ function capLoops(
       );
       if (edge.curve === 'Line') {
         edges.push({ kind: 'line', a: from, b: to, edge: use.edge });
-        area = add(area, cross(from, to));
+        area = add(area, cross(subtract(from, origin), subtract(to, origin)));
         continue;
       }
       const circle = edge.curve.Circle;
@@ -879,7 +893,7 @@ function capLoops(
       area = add(
         area,
         add(
-          cross(center, subtract(to, from)),
+          cross(subtract(center, origin), subtract(to, from)),
           scale(axis, circle.radius * circle.radius * sweep)
         )
       );
@@ -1115,7 +1129,7 @@ export function guardUncarriedChamferBand(
   // Pushed in this far, a re-limit would run the tilted faces past their
   // walls; only a carry can be right, and a refusal names the limit.
   const limit =
-    offset < 0 && -offset >= top - tolerance
+    offset < 0 && -offset > top - GEOMETRY_EPSILON * Math.max(1, top)
       ? -Math.round(top * 1e9) / 1e9
       : undefined;
   const refuse = (detail: string) =>
