@@ -1,8 +1,4 @@
-/**
- * How much rendering a touch device is asked for (L02 slice 8,
- * docs/plans/ipad-touch-plan-2026-11-05.md). Desktop pointers keep the
- * renderer exactly as tuned; these decisions apply to coarse pointers only.
- */
+/** Viewport sampling and frame budgets for still views and camera navigation. */
 
 /** The key light's shadow map edge, in texels, on a desktop. */
 export const SHADOW_MAP_SIZE = 3072;
@@ -33,9 +29,8 @@ export const MAX_VIEWPORT_PIXEL_RATIO = 2;
  * another display or the page is zoomed; holding the ratio at 2 means a
  * move to a 1× display or a zoom-out stays as smooth as it is today
  * (roughly the memory of 4× MSAA at 1×, more fragment work), rather than
- * turning jagged. For the same reason a supersampled context never lowers
- * its resolution while navigating: below 2 it would have no antialiasing
- * at all, which today's 1.25× navigation with MSAA does not look like.
+ * turning jagged. Slow navigation may temporarily reduce the backing ratio.
+ * The first still frame restores full supersampling.
  *
  * Touch-first devices keep MSAA: they are the ones that rely on the lower
  * navigation ratio to keep a moving view fluid, and their tiled GPUs
@@ -45,7 +40,7 @@ export const MAX_VIEWPORT_PIXEL_RATIO = 2;
 export interface ViewportSampling {
   /** The WebGL context's `antialias` attribute. */
   readonly antialias: boolean;
-  /** Antialiasing comes from a fixed 2× backing store instead of MSAA. */
+  /** Antialiasing comes from a full-resolution 2× backing store instead of MSAA. */
   readonly supersampled: boolean;
 }
 
@@ -115,35 +110,51 @@ export function navigationPixelRatio(
   devicePixelRatio: number,
   frameIntervalMs: number | null
 ): number | null {
-  return frameIntervalMs !== null &&
-    frameIntervalMs > SLOW_FRAME_MS &&
-    devicePixelRatio > NAVIGATION_PIXEL_RATIO
-    ? NAVIGATION_PIXEL_RATIO
-    : null;
+  if (
+    frameIntervalMs === null ||
+    !Number.isFinite(frameIntervalMs) ||
+    frameIntervalMs <= SLOW_FRAME_MS
+  )
+    return null;
+  // Below roughly 11 FPS, render fewer than one sample per CSS pixel.
+  const cap =
+    frameIntervalMs > 4 * SLOW_FRAME_MS ? 0.75 : NAVIGATION_PIXEL_RATIO;
+  return cap < devicePixelRatio ? cap : null;
 }
 
-/**
- * A smoothed frame interval, from frames drawn back to back only: the
- * render loop sleeps when nothing moves, and the gap across a sleep is not
- * a frame's cost.
+/** Two consecutive slow moving intervals at one ratio can lower it.
+ * Grow the backing store again only on the first frame at rest.
  */
-export class FrameIntervalMeter {
-  private last: number | null = null;
-  private average: number | null = null;
+export class NavigationResolution {
+  private lastFrame: number | null = null;
+  private previousInterval: number | null = null;
+  private limitedRatio: number | null = null;
 
-  /** `continuous` is false for the first frame after the loop slept. */
-  sample(now: number, continuous: boolean) {
-    const previous = this.last;
-    this.last = now;
-    if (!continuous || previous === null) return;
-    const interval = now - previous;
-    if (!(interval > 0) || !Number.isFinite(interval)) return;
-    this.average =
-      this.average === null ? interval : this.average * 0.8 + interval * 0.2;
+  reset() {
+    this.lastFrame = null;
+    this.previousInterval = null;
+    this.limitedRatio = null;
   }
 
-  /** Milliseconds per frame while animating, or null before any were seen. */
-  get intervalMs(): number | null {
-    return this.average;
+  ratio(now: number, moving: boolean, fullRatio: number): number {
+    if (!moving) {
+      this.reset();
+      return fullRatio;
+    }
+    const currentRatio = Math.min(fullRatio, this.limitedRatio ?? fullRatio);
+    if (this.lastFrame !== null) {
+      const interval = now - this.lastFrame;
+      const lower = navigationPixelRatio(
+        currentRatio,
+        this.previousInterval === null
+          ? null
+          : Math.min(this.previousInterval, interval)
+      );
+      if (lower !== null) this.limitedRatio = lower;
+      // Measure two new intervals after a resize before reducing it again.
+      this.previousInterval = lower === null ? interval : null;
+    }
+    this.lastFrame = now;
+    return Math.min(fullRatio, this.limitedRatio ?? fullRatio);
   }
 }

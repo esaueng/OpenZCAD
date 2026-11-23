@@ -1025,6 +1025,24 @@ describe('CameraController wheel device detection', () => {
 });
 
 describe('CameraController wheel zoom', () => {
+  it('reports a buttonless pan only when the wheel input is accepted as pan', () => {
+    const onTrackpadPan = vi.fn();
+    const { controller, wheel } = createController(false, undefined, {
+      onTrackpadPan,
+      pointerNavigation: () => 'trackpad'
+    });
+    wheel({ ctrlKey: true });
+    wheel({ deltaX: 4, deltaY: 10, buttons: 1 });
+    expect(onTrackpadPan).not.toHaveBeenCalled();
+    wheel({ deltaX: 4, deltaY: 10 });
+    expect(onTrackpadPan).toHaveBeenCalledOnce();
+    expect(controller.gestureHeld).toBe(false);
+    controller.controls.enablePan = false;
+    wheel({ deltaX: 4, deltaY: 10 });
+    expect(onTrackpadPan).toHaveBeenCalledOnce();
+    controller.dispose();
+  });
+
   it('keeps trackpad pan inert while controls or panning are disabled', () => {
     const { controller, wheel } = createController(false);
     const before = controller.capture();

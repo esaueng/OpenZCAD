@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   displayPixelRatio,
-  FrameIntervalMeter,
+  NavigationResolution,
   MAX_VIEWPORT_PIXEL_RATIO,
   NAVIGATION_PIXEL_RATIO,
   navigationPixelRatio,
@@ -114,31 +114,55 @@ describe('render budget', () => {
   });
 });
 
-describe('FrameIntervalMeter', () => {
-  it('averages back-to-back frames and ignores the gap across a sleep', () => {
-    const meter = new FrameIntervalMeter();
-    expect(meter.intervalMs).toBeNull();
-    meter.sample(0, false);
-    meter.sample(16, true);
-    expect(meter.intervalMs).toBeCloseTo(16, 9);
-    // The loop slept for five seconds: not a frame's cost.
-    meter.sample(5016, false);
-    expect(meter.intervalMs).toBeCloseTo(16, 9);
-    meter.sample(5056, true);
-    expect(meter.intervalMs).toBeCloseTo(16 * 0.8 + 40 * 0.2, 9);
+describe('NavigationResolution', () => {
+  it('keeps idle gaps, isolated slow frames and healthy drags at full resolution', () => {
+    const budget = new NavigationResolution();
+    for (const now of [0, 16, 32, 180, 196, 212]) {
+      expect(budget.ratio(now, true, 2)).toBe(2);
+    }
+    expect(budget.ratio(228, false, 2)).toBe(2);
+    for (const now of [5000, 5016, 5032]) {
+      expect(budget.ratio(now, true, 2)).toBe(2);
+    }
   });
 
-  it('settles on a steady slow rate', () => {
-    const meter = new FrameIntervalMeter();
-    let now = 0;
-    meter.sample(now, false);
-    for (let frame = 0; frame < 60; frame += 1) {
-      now += 33;
-      meter.sample(now, true);
+  it('locks a slow drag at a lower ratio and restores even if the pointer just parks', () => {
+    const budget = new NavigationResolution();
+    expect(budget.ratio(0, true, 2)).toBe(2);
+    expect(budget.ratio(40, true, 2)).toBe(2);
+    expect(budget.ratio(80, true, 2)).toBe(NAVIGATION_PIXEL_RATIO);
+    expect(budget.ratio(96, true, 2)).toBe(NAVIGATION_PIXEL_RATIO);
+    expect(budget.ratio(112, false, 2)).toBe(2);
+    expect(budget.ratio(5000, true, 2)).toBe(2);
+  });
+
+  it('uses a deeper reduction for sustained stalls and never increases a low display ratio', () => {
+    for (const [full, moving] of [
+      [2, 0.75],
+      [1, 0.75],
+      [0.6, 0.6]
+    ] as const) {
+      const budget = new NavigationResolution();
+      budget.ratio(0, true, full);
+      budget.ratio(300, true, full);
+      expect(budget.ratio(600, true, full)).toBe(moving);
+      budget.reset();
+      expect(budget.ratio(900, true, full)).toBe(full);
     }
-    expect(meter.intervalMs).toBeCloseTo(33, 6);
-    expect(navigationPixelRatio(2, meter.intervalMs)).toBe(
-      NAVIGATION_PIXEL_RATIO
-    );
+  });
+
+  it('steps down again only after two severe intervals at the intermediate ratio', () => {
+    const budget = new NavigationResolution();
+    const times = [0, 40, 80, 240, 400, 416, 432];
+    expect(times.map((t) => budget.ratio(t, true, 2))).toEqual([
+      2,
+      2,
+      NAVIGATION_PIXEL_RATIO,
+      NAVIGATION_PIXEL_RATIO,
+      0.75,
+      0.75,
+      0.75
+    ]);
+    expect(budget.ratio(448, false, 2)).toBe(2);
   });
 });
