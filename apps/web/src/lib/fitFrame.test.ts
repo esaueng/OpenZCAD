@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  cornersClearOfStage,
   cornersWithinFrame,
   guideShapesClearStage,
   measureClearStage,
@@ -502,6 +503,51 @@ describe('the modeling guide', () => {
       const { area, canvas } = tabletStage(1024, 768, 500);
       guide(area, 600, 350, 896, 589);
       expect(measureClearStage(canvas)!.rect.bottom).toBe(768);
+    });
+  });
+
+  describe('cornersClearOfStage', () => {
+    // 1440 × 900 with the card at x 72–368, y 600–840: the clear stage is
+    // framed beside it, from x 380.
+    function desk() {
+      const area = document.createElement('div');
+      area.className = 'viewer-area';
+      const canvas = placed(document.createElement('canvas'), 0, 0, 1440, 900);
+      area.append(canvas);
+      document.body.append(area);
+      guide(area, 72, 600, 368, 840);
+      return canvas;
+    }
+    /** The corners of a screen rectangle, in the canvas's NDC. */
+    function box(left: number, top: number, right: number, bottom: number) {
+      const points: ReadonlyArray<readonly [number, number]> = [
+        [left, top],
+        [right, top],
+        [left, bottom],
+        [right, bottom]
+      ];
+      return points.map(([x, y]) => ({
+        x: (x / 1440) * 2 - 1,
+        y: 1 - (y / 900) * 2,
+        z: 0
+      }));
+    }
+
+    it('holds a model above the card though the stage was framed beside it', () => {
+      // Pressing Next reframed this (preview check on #1969).
+      expect(cornersClearOfStage(desk(), box(100, 100, 500, 560))).toBe(true);
+    });
+
+    it('lets a model under the card be reframed', () => {
+      expect(cornersClearOfStage(desk(), box(100, 400, 500, 700))).toBe(false);
+    });
+
+    it('lets a model past the canvas be reframed', () => {
+      expect(cornersClearOfStage(desk(), box(900, 100, 1500, 500))).toBe(false);
+    });
+
+    it('holds a model inside the clear stage', () => {
+      expect(cornersClearOfStage(desk(), box(500, 100, 900, 800))).toBe(true);
     });
   });
 
