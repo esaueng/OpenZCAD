@@ -442,6 +442,22 @@ for (const { width, height } of [
       page.getByRole('group', { name: 'Box command' })
     ).toBeVisible();
     await noticeOverCard();
+    // A notice spoken during the command, over a card that fills the
+    // stage, shows on the stage rather than under the top bar's mode
+    // switch (preview review).
+    const box = page.getByRole('group', { name: 'Box command' });
+    await box.getByRole('button', { name: /^Cancel/ }).tap();
+    await page.keyboard.press('b');
+    await expect(box).toBeVisible();
+    const said = page.locator(
+      '.workspace-toast:not(.hidden) .workspace-toast-body'
+    );
+    await expect(said).toContainText('Box canceled');
+    await expect.poll(() => reachable(said)).toBe(true);
+    const top = (await page.locator('.topbar').boundingBox())!;
+    expect((await said.boundingBox())!.y).toBeGreaterThanOrEqual(
+      top.y + top.height
+    );
     await page.keyboard.press('Escape');
 
     // Opened by hand, it stays open on the next visit.

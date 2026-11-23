@@ -329,12 +329,25 @@
     display: none;
   }
 
+  /* Lifted, a notice stands over the rails it may cross, and never higher
+     than the stage's top: over a card that fills the stage there is no
+     row left, and it stood under the top bar's mode switch (preview
+     review). There it stands over the card's top for its few seconds. */
   .workspace.column-layout
     .viewer-area:has(.workspace-tour)
     :is(.workspace-toast, .activity-lane, .toast) {
+    --notice-least-lift: calc(
+      var(--stage-top) + var(--island-gap) + var(--lane-base) + 44px - 100dvh
+    );
+
+    z-index: calc(var(--z-inspector-float) + 4);
     translate: 0
-      calc(
-        var(--lane-base) - var(--workspace-tour-claim, 0px) - var(--island-gap)
+      max(
+        var(--notice-least-lift),
+        calc(
+          var(--lane-base) - var(--workspace-tour-claim, 0px) -
+            var(--island-gap)
+        )
       );
   }
 
@@ -344,10 +357,18 @@
   .workspace.column-layout
     .viewer-area:has(.workspace-tour):has(.in-place-command)
     :is(.workspace-toast, .activity-lane, .toast) {
+    --notice-least-lift: calc(
+      var(--stage-top) + var(--island-gap) + var(--lane-base) +
+        var(--in-place-command-h, 38px) + 10px + 44px - 100dvh
+    );
+
     translate: 0
-      calc(
-        var(--lane-base) + var(--in-place-command-h, 38px) -
-          var(--workspace-tour-claim, 0px)
+      max(
+        var(--notice-least-lift),
+        calc(
+          var(--lane-base) + var(--in-place-command-h, 38px) -
+            var(--workspace-tour-claim, 0px)
+        )
       );
   }
 }
