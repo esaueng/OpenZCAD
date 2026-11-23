@@ -752,10 +752,13 @@
    history two lines at a time. Only the text area grows; the rest keep their
    own height, and the dialog itself scrolls when a short viewport (a phone
    with its keyboard up) cannot fit the text area's minimum. A phone gives it
-   the screen's height, as Project properties does. */
+   the screen's height, as Project properties does. An on-screen keyboard
+   shrinks only the visual viewport, so the height also gives up
+   --keyboard-inset (HistoryTextDialog measures it) to keep the actions above
+   the keyboard. */
 .history-text-dialog {
   width: min(760px, 100%);
-  height: calc(88dvh - 16px);
+  height: calc(88dvh - 16px - var(--keyboard-inset, 0px));
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
@@ -864,7 +867,10 @@
 
 /* The status keeps a readable width: when it and the buttons do not fit one
    row (a phone, five buttons), it takes a row of its own above them instead
-   of shrinking to a column of single words. Empty, it claims no row. */
+   of shrinking to a column of single words. The buttons wrap as one group
+   (its basis is all of them in a row), so the status never shares a row with
+   only some of them; on a row of its own the group shrinks and wraps its
+   buttons. Empty, the status claims no row. */
 .history-text-actions {
   display: flex;
   flex-wrap: wrap;
@@ -885,13 +891,22 @@
   flex-basis: 0;
 }
 
+.history-text-buttons {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
 @media (max-width: 480px) {
   .modal-backdrop:has(> .history-text-dialog) {
     padding-top: 16px;
   }
 
   .history-text-dialog {
-    height: calc(100dvh - 32px);
+    height: calc(100dvh - 32px - var(--keyboard-inset, 0px));
   }
 }
 

@@ -32,6 +32,7 @@ import {
   type PreviewVerdict
 } from '../lib/keypad';
 import { unitLabel } from '../lib/measurements';
+import { watchKeyboardInset } from '../lib/keyboardInset';
 import { MODEL_PANEL_OBSTACLES } from '../lib/selectionCalloutView';
 import { formatNumber } from '../lib/model';
 import {
@@ -716,25 +717,11 @@ export function NumericKeypad({
     // The phone sheet rides above the on-screen keyboard, which shrinks the
     // visual viewport rather than the layout one; a placed control keeps
     // above it too (keypadFloor reads the visual viewport).
-    const visual = window.visualViewport;
-    const keyboardInset = () => {
-      if (!visual) return;
-      const inset = Math.max(
-        0,
-        window.innerHeight - visual.height - visual.offsetTop
-      );
-      root.style.setProperty('--keyboard-inset', `${Math.round(inset)}px`);
-    };
-    const onVisualResize = () => {
-      keyboardInset();
-      reposition();
-    };
-    keyboardInset();
-    visual?.addEventListener('resize', onVisualResize);
+    const stopKeyboardInset = watchKeyboardInset(root, reposition);
     return () => {
       observer?.disconnect();
       window.removeEventListener('resize', reposition);
-      visual?.removeEventListener('resize', onVisualResize);
+      stopKeyboardInset();
       anchorRef.current = null;
     };
   }, [
@@ -976,7 +963,9 @@ export function NumericKeypad({
         : unitLabel('length', shown);
   /** A document-unit length as the readout shows it, in the display unit. */
   const inShown = (length: number) =>
-    request.unitKind === 'length' ? convertLength(length, units, shown) : length;
+    request.unitKind === 'length'
+      ? convertLength(length, units, shown)
+      : length;
   // A converted or computed value is shown in the display unit, so a value
   // typed in some other unit is never committed unseen — a plain number
   // under another unit's chip included.

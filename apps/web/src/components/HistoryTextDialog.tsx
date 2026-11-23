@@ -9,6 +9,7 @@ import {
 } from '@openzcad/scripting';
 import type { ProjectDocument } from '@openzcad/shared';
 import { useModalFocus } from '../lib/useModalFocus';
+import { useKeyboardInset } from '../lib/keyboardInset';
 import type { PatchSource } from './modelPanels/modelPanelProps';
 
 export interface HistoryTextDialogProps {
@@ -71,6 +72,9 @@ export default function HistoryTextDialog({
   const [status, setStatus] = useState('');
   const [applying, setApplying] = useState(false);
   useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: textRef });
+  // An on-screen keyboard shrinks the visual viewport, not 100dvh; the
+  // dialog's height subtracts it so the actions stay above the keyboard.
+  useKeyboardInset(dialogRef);
 
   const text = draft?.text ?? printed.text;
   const stale = draft !== null && draft.baseVersion !== document.version;
@@ -248,51 +252,55 @@ export default function HistoryTextDialog({
           <span className="history-text-status" role="status">
             {status}
           </span>
-          {editable && (
-            <>
-              <button
-                type="button"
-                className="secondary"
-                disabled={draft === null || applying}
-                onClick={() => {
-                  setDraft(null);
-                  setStatus('');
-                }}
-              >
-                Revert
-              </button>
-              <button
-                type="button"
-                className="secondary"
-                disabled={draft === null || applying}
-                onClick={() => check()}
-              >
-                Check
-              </button>
-              <button
-                type="button"
-                className="primary"
-                disabled={
-                  draft === null || stale || applying || editBlocked !== null
-                }
-                title={editBlocked ?? undefined}
-                onClick={() => void apply()}
-              >
-                Apply
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            className="secondary"
-            disabled={printed.error !== null}
-            onClick={() => void copy()}
-          >
-            Copy
-          </button>
-          <button type="button" className="secondary" onClick={onClose}>
-            Close
-          </button>
+          {/* One group, so when it and the status do not fit one row the
+              status keeps a row of its own above every button. */}
+          <div className="history-text-buttons">
+            {editable && (
+              <>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={draft === null || applying}
+                  onClick={() => {
+                    setDraft(null);
+                    setStatus('');
+                  }}
+                >
+                  Revert
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={draft === null || applying}
+                  onClick={() => check()}
+                >
+                  Check
+                </button>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={
+                    draft === null || stale || applying || editBlocked !== null
+                  }
+                  title={editBlocked ?? undefined}
+                  onClick={() => void apply()}
+                >
+                  Apply
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              className="secondary"
+              disabled={printed.error !== null}
+              onClick={() => void copy()}
+            >
+              Copy
+            </button>
+            <button type="button" className="secondary" onClick={onClose}>
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>
