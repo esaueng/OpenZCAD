@@ -246,3 +246,44 @@ test(
     await expect(dialog).toHaveCount(0);
   }
 );
+
+test(
+  'History as text keeps its draft across the desktop and phone layouts',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await createProject(page, 'Layout switch');
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await revealModelPanel(page, 'History');
+    await modelPanel(page, 'History')
+      .getByRole('button', { name: 'History as text' })
+      .click();
+    const dialog = page.getByRole('dialog', { name: 'History as text' });
+    const text = dialog.getByLabel(/History text, \d+ lines/);
+    const draft = `${await text.inputValue()}# an edit not yet applied\n`;
+    await text.fill(draft);
+
+    // The dock and the phone lane each mount their own History panel, so
+    // the dialog the desktop one opened once closed here and lost the edit.
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 1280, height: 800 }
+    ]) {
+      const label = `${viewport.width}×${viewport.height}`;
+      await page.setViewportSize(viewport);
+      await expect(dialog, label).toBeVisible();
+      await expect(text, label).toHaveValue(draft);
+      await expect(
+        dialog.getByRole('button', { name: 'Revert' }),
+        label
+      ).toBeEnabled();
+    }
+
+    await dialog.getByRole('button', { name: 'Revert' }).click();
+    await dialog.getByRole('button', { name: 'Close' }).click();
+    await expect(dialog).toHaveCount(0);
+  }
+);
