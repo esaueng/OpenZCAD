@@ -92,6 +92,23 @@ const ALLOWANCES: readonly ProseAllowance[] = [
       'sentence changes, the advice falls back to its generic wording.'
   },
   {
+    file: 'exact-offset-face-refusal.ts',
+    fragment: 'non-invariant cone support face',
+    reason:
+      'direct-edit family: the journaled face move throws the combined ' +
+      'rebuild and translation verdict as prose. The detailed twin reports ' +
+      'operation_failed/internal for a blend on a conical support. This ' +
+      'match only classifies an already-refused move.'
+  },
+  {
+    file: 'exact-offset-face-refusal.ts',
+    fragment: 'moving blend reaches fixed rim face',
+    reason:
+      'direct-edit family: that same combined diagnostic is the only place ' +
+      'the pinned kernel identifies a blocking rim when translating a blend. ' +
+      'This match only classifies an already-refused move.'
+  },
+  {
     file: 'exact-offset-face-hole-mouth.ts',
     fragment: 'leaves the outer loop',
     reason:

@@ -113,6 +113,8 @@ const FILLETS_NOT_REBUILT =
  * category sentence.
  */
 const BLEND_RESIZE_SENTENCES: Readonly<Record<string, string>> = {
+  'blend-cluster-reblend-failed':
+    'The adjoining fillets could not be rebuilt at this radius. Try a smaller radius or edit the fillets in History.',
   'unsupported-support-pair':
     "This fillet joins faces that removing or resizing a fillet can't rebuild yet; that works for fillets between flat and cylindrical faces. Edit the fillet in History instead.",
   'band-touches-freeform':

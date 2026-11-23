@@ -5,6 +5,10 @@ import type { RemusMoveFacesRelation } from './remus-lineage';
 import { analyticSurfaceRecord, brepEdgeCircle } from './exact-brep';
 import { revolveRadialProfile } from './exact-cylinder-ops';
 import {
+  OffsetFaceRefusal,
+  roundOffsetLimit
+} from './exact-offset-face-refusal';
+import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
   dot,
@@ -216,9 +220,19 @@ export function tryExactChamferedCylinderCapOffset(
     }
   }));
   if (ends[1]!.shoulder.axial - ends[0]!.shoulder.axial <= GEOMETRY_EPSILON) {
-    throw new Error(
-      'That distance would leave no cylindrical wall between the end faces.'
-    );
+    const reason =
+      'That distance would leave no cylindrical wall between the end faces.';
+    throw new OffsetFaceRefusal({
+      family: 'direct-edit',
+      category: 'invalid_topology',
+      kernelCode: 'offset_face_collapses_chamfered_cylinder_wall',
+      kernelMessage: reason,
+      reason,
+      message: reason,
+      limit: roundOffsetLimit(
+        rod.ends[0].shoulder.axial - rod.ends[1].shoulder.axial
+      )
+    });
   }
   const low = ends[0]!;
   const high = ends[1]!;

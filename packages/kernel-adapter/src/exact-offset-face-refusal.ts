@@ -1,6 +1,5 @@
 /**
- * A face offset the kernel refused because a neighbouring face would
- * collapse, as a typed error.
+ * Specific typed refusals from the journaled face-offset path.
  *
  * Remus re-limits the faces around a moved face, and a face move that would
  * shrink one of them to nothing changes the body's topology, which an
@@ -34,7 +33,7 @@ export class OffsetFaceRefusal extends KernelRefusal {
 }
 
 /** Rounds away binary noise (`6.400000000000002`) without moving the limit. */
-function cleanLength(value: number): number {
+export function roundOffsetLimit(value: number): number {
   return Math.round(value * 1e9) / 1e9;
 }
 
@@ -72,7 +71,7 @@ export function offsetFaceRefusalOf(
       1e-6 * Math.max(1, Math.abs(offset));
   const limit =
     sameMove && Number.isFinite(extent) && extent > 0
-      ? Math.sign(offset) * cleanLength(extent)
+      ? Math.sign(offset) * roundOffsetLimit(extent)
       : undefined;
   const reason =
     limit === undefined
@@ -87,6 +86,55 @@ export function offsetFaceRefusalOf(
     message: `${reason}\n${error.message}`,
     kernelReason: match[1]!.toLowerCase(),
     ...(limit === undefined ? {} : { limit }),
+    cause: error
+  });
+}
+
+/** Causes reported only inside the journaled move's combined blend diagnostic. */
+export function offsetBlendMoveRefusalOf(
+  error: unknown
+): OffsetFaceRefusal | null {
+  if (!(error instanceof Error) || error instanceof KernelRefusal) return null;
+  if (
+    /^resize blend: exact reconstruction refused:.*unsupported analytic support pair: (?:plane x cone|cone x plane)\).*exact prismatic blend translation failed .*non-invariant cone support face/.test(
+      error.message
+    )
+  ) {
+    return blendMoveRefusal(
+      error,
+      'unsupported',
+      'offset_face_conical_blend',
+      'This face meets a fillet on a cone that cannot be rebuilt during an offset. Edit the cone or fillet in History instead.'
+    );
+  }
+  if (
+    /^resize blend: exact reconstruction refused:.*exact prismatic blend translation failed \(offset: move-face would change topology.*moving blend reaches fixed rim face/.test(
+      error.message
+    )
+  ) {
+    return blendMoveRefusal(
+      error,
+      'invalid_topology',
+      'offset_face_blend_reaches_fixed_rim',
+      'The moving fillet would reach another face before completing this offset. Try a smaller offset.'
+    );
+  }
+  return null;
+}
+
+function blendMoveRefusal(
+  error: Error,
+  category: 'unsupported' | 'invalid_topology',
+  kernelCode: string,
+  reason: string
+): OffsetFaceRefusal {
+  return new OffsetFaceRefusal({
+    family: 'direct-edit',
+    category,
+    kernelCode,
+    kernelMessage: error.message,
+    reason,
+    message: `${reason}\n${error.message}`,
     cause: error
   });
 }
