@@ -3273,12 +3273,18 @@ button.command-rail.is-suggested {
    docked panel. PanelDock measures the layer as its stage and the padding
    as the docks' insets; only panels and gaps take the pointer. No z-index
    of its own: the columns, the unpinned panel and the windows each take
-   theirs against the top bar. */
+   theirs against the top bar. Its right padding is the rail band, from the
+   right dock's inner edge to the unpinned panel: the instrument rail and
+   the gaps beside it, and while sketching the relations as well, wherever
+   a media query widens the rails (--lane-end less the panels outside it).
+   The unpinned panel stood one rail in and covered the relations and the
+   readout's Snap over its Close button. */
 .panel-dock-layer {
   position: absolute;
   inset: 0;
   box-sizing: border-box;
   padding-top: var(--stage-top);
+  padding-right: calc(var(--lane-end) - var(--right-panels-w));
   padding-bottom: var(--island-gap);
   pointer-events: none;
 }

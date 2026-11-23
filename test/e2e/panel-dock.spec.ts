@@ -693,6 +693,63 @@ test('a sketch keeps docked and unpinned panels visible and respects manual clos
   await expect(unpinned).toBeVisible();
 });
 
+test('an unpinned panel opened mid-sketch stands clear of the relations and the sketch readout', async ({
+  page
+}) => {
+  // The new-device layout (MODEL_ONLY until a panel opens) at a laptop
+  // window and a narrower one: the relations rail stands a gap left of the
+  // instrument rail while sketching, with the snap and grid readout over
+  // both. The unpinned panel stood one rail in, under both, and the
+  // readout's Snap took the clicks meant for its Close button.
+  await openWorkspace(page, 'Sketch clears unpinned panel', MODEL_ONLY, {
+    width: 1280,
+    height: 800
+  });
+  await page.getByRole('button', { name: /^Sketch \(S\)/ }).click();
+  await page.getByRole('button', { name: 'Top (XY)' }).click();
+  await expect(
+    page.getByRole('toolbar', { name: 'Sketch tools' })
+  ).toBeVisible();
+  const relations = page.getByRole('toolbar', { name: 'Relations' });
+  const readout = page.getByRole('group', { name: 'Viewport readout' });
+  await expect(relations).toBeVisible();
+  await expect(readout).toBeVisible();
+  await railPanelButton(page, 'Parameters').click();
+  const panel = modelPanel(page, 'Parameters');
+  await expect(panel).toHaveClass(/is-unpinned/);
+  const close = panel.getByRole('button', { name: 'Close Parameters' });
+
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 1024, height: 768 }
+  ]) {
+    await page.setViewportSize(viewport);
+    for (const chrome of [
+      relations,
+      readout,
+      page.locator('.instrument-rail')
+    ]) {
+      await expect
+        .poll(() => boxesOverlap(panel, chrome), {
+          message: `the panel at ${viewport.width}px`
+        })
+        .toBe(false);
+    }
+    await expect.poll(() => ownsItsCentre(close)).toBe(true);
+  }
+
+  // Its Close button takes the click, and the rail button still toggles it.
+  await close.click();
+  await expect(panel).toHaveCount(0);
+  await expect(railPanelButton(page, 'Parameters')).toHaveAttribute(
+    'aria-pressed',
+    'false'
+  );
+  await railPanelButton(page, 'Parameters').click();
+  await expect(panel).toBeVisible();
+  await expect.poll(() => ownsItsCentre(close)).toBe(true);
+});
+
 test('a drag on the model keeps the dock and an open unpinned panel where they are', async ({
   page
 }) => {

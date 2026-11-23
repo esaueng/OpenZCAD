@@ -282,6 +282,13 @@ export interface PanelInsets {
   between: number;
   /** A rail's width (`--rail-w`). */
   rail: number;
+  /**
+   * The right rail band: from the right dock's inner edge to the unpinned
+   * panel's, `gap + rail + gap` unless measured. Sketching widens it by the
+   * relations rail beside the instrument rail, which the panel must clear
+   * (the layer's right padding, `--lane-end` less the panels).
+   */
+  railBand?: number;
 }
 
 /** The quiet stage's tokens: a 40px top bar between two 10px gaps. */
@@ -483,6 +490,11 @@ export function resizeColumn(
 
 function insetsOf(stage: PanelStage): PanelInsets {
   return { ...DEFAULT_PANEL_INSETS, ...stage.insets };
+}
+
+/** The right rail band: `gap + rail + gap` unless the stage measured one. */
+function railBandOf(insets: PanelInsets): number {
+  return insets.railBand ?? insets.gap * 2 + insets.rail;
 }
 
 export function columnWidthOf(options: PanelLayoutOptions): number {
@@ -1093,7 +1105,11 @@ export function defaultFloatRect(
   const w = clamp(geometry.columnWidth, FLOAT_MIN_WIDTH, FLOAT_MAX_WIDTH);
   return clampFloatRect(
     {
-      x: geometry.rails.right.x - geometry.insets.gap - w,
+      x:
+        stage.width -
+        geometry.dockWidth.right -
+        railBandOf(geometry.insets) -
+        w,
       y: geometry.dock.top,
       w,
       h: FLOAT_DEFAULT_HEIGHT
@@ -2301,8 +2317,9 @@ export function unpinnedSlotReserves(
   laneMin: number,
   leftDockWidth = 0
 ): boolean {
-  const { rail, gap } = insetsOf(stage);
-  const laneEnd = rail + gap * 2 + dockWidth + slotWidth;
+  const insets = insetsOf(stage);
+  const laneEnd = railBandOf(insets) + dockWidth + slotWidth;
+  const { gap } = insets;
   return stage.width - laneEnd - gap - leftDockWidth >= laneMin;
 }
 
@@ -2616,13 +2633,17 @@ export function computePanelGeometry(
   }
 
   // No docked column to share, or room for a column of its own: the slot
-  // stands beside the right rail's inner edge.
+  // stands beside the right rail's inner edge, past the relations while
+  // sketching (the rail band).
   if (slot && !geometry.panels[slot]) {
     const naturalHeight = stage.naturals?.[slot];
     geometry.panels[slot] = {
       id: slot,
       mode: revealed ? 'revealed' : 'unpinned',
-      x: Math.max(insets.gap, rails.right.x - insets.gap - columnWidth),
+      x: Math.max(
+        insets.gap,
+        stage.width - dockWidth.right - railBandOf(insets) - columnWidth
+      ),
       y: dock.top,
       w: columnWidth,
       h:

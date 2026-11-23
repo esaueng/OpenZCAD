@@ -102,7 +102,8 @@ function sameStage(a: PanelStage | null, b: PanelStage): boolean {
     a.insets?.bottom === b.insets?.bottom &&
     a.insets?.gap === b.insets?.gap &&
     a.insets?.between === b.insets?.between &&
-    a.insets?.rail === b.insets?.rail
+    a.insets?.rail === b.insets?.rail &&
+    a.insets?.railBand === b.insets?.railBand
   );
 }
 
@@ -284,6 +285,9 @@ export function PanelDock({
     const measure = () => {
       const rect = layer.getBoundingClientRect();
       const style = getComputedStyle(layer);
+      // The rail band is the layer's right padding (quiet-stage.css); a
+      // stage without that style keeps the geometry's own gap-rail-gap.
+      const railBand = pixels(style.paddingRight, 0);
       const next: PanelStage = {
         width: Math.round(rect.width),
         height: Math.round(rect.height),
@@ -294,7 +298,8 @@ export function PanelDock({
           bottom: pixels(style.paddingBottom, 0),
           gap: pixels(style.getPropertyValue('--island-gap'), 10),
           between: pixels(style.getPropertyValue('--dock-gap'), 4),
-          rail: pixels(style.getPropertyValue('--rail-w'), 40)
+          rail: pixels(style.getPropertyValue('--rail-w'), 40),
+          ...(railBand > 0 ? { railBand } : {})
         }
       };
       setStage((current) => (sameStage(current, next) ? current : next));

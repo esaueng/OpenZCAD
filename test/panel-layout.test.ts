@@ -3919,6 +3919,53 @@ describe('the unpinned slot beside the right lane', () => {
     expect(unpinnedSlotReserves(stage(721), 0, 306, 330)).toBe(true);
   });
 
+  it('clears a measured rail band, the relations beside the rail while sketching', () => {
+    // At 1280px with no dock the slot ends one rail and two gaps in: 1220.
+    const layout = layoutWith({ unpinned: 'parameters' });
+    const resting = computePanelGeometry(layout, stage(1280));
+    expect(resting.panels.parameters!.x + resting.panels.parameters!.w).toBe(
+      1220
+    );
+    // Sketching, the relations stand a gap left of the rail: 40 * 2 + 10 * 3
+    // = 110px from the edge, and the slot ends left of them (they started
+    // at 1180, under its Close button).
+    const sketching = computePanelGeometry(layout, {
+      ...stage(1280),
+      insets: { ...insets, railBand: 110 }
+    });
+    const slot = sketching.panels.parameters!;
+    expect(slot.x + slot.w).toBe(1170);
+    expect(slot.w).toBe(resting.panels.parameters!.w);
+    // With a right dock, from the dock's inner edge as before.
+    const docked = computePanelGeometry(
+      layoutWith({ right: [['bodies']], unpinned: 'parameters' }),
+      { ...stage(1600), insets: { ...insets, railBand: 110 } }
+    );
+    expect(docked.panels.parameters!.x + docked.panels.parameters!.w).toBe(
+      1600 - docked.dockWidth.right - 110
+    );
+    // The lane's room is judged past the band too.
+    const band = {
+      width: 1062,
+      height: 720,
+      insets: { ...insets, railBand: 110 }
+    };
+    expect(unpinnedSlotReserves(band, 306, 306, 330)).toBe(true);
+    expect(unpinnedSlotReserves({ ...band, width: 1061 }, 306, 306, 330)).toBe(
+      false
+    );
+  });
+
+  it('pops a panel with no rectangle out beside the band, clear of the relations', () => {
+    const layout = layoutWith({});
+    const geometry = computePanelGeometry(layout, {
+      ...stage(1280),
+      insets: { ...insets, railBand: 110 }
+    });
+    const rect = popOutRect(geometry, 'parameters');
+    expect(rect.x + rect.w).toBe(1170);
+  });
+
   it('covers the lane when reserving would squeeze its card', () => {
     expect(unpinnedSlotReserves(stage(1011), 306, 306, 330)).toBe(false);
     // Just past the phone breakpoint a docked column and the slot would have
