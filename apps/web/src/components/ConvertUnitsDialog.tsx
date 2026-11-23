@@ -331,9 +331,17 @@ export function ConvertUnitsDialog({
           Convert stored units
         </h2>
         <p id="convert-units-scope" className="export-dialog-scope">
-          To only see lengths in another unit, use Units in the File menu
-          instead. This rewrites every stored length from {fromName} to the unit
-          you choose. The model keeps its exact size.
+          {phase.kind === 'done' ? (
+            // The stored unit has already changed: the pending-tense intro
+            // would name the new unit as the one being converted from.
+            <>The model kept its exact size; only its stored numbers changed.</>
+          ) : (
+            <>
+              To only see lengths in another unit, use Units in the File menu
+              instead. This rewrites every stored length from {fromName} to the
+              unit you choose. The model keeps its exact size.
+            </>
+          )}
         </p>
         {phase.kind === 'done' ? (
           <p className="convert-units-done" role="status">

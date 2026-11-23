@@ -421,6 +421,12 @@ describe('ConvertUnitsDialog', () => {
     expect(screen.getByRole('status')).toHaveTextContent(
       '“Before unit conversion (mm → in)” was saved first'
     );
+    // Once done, the intro no longer describes a conversion still to come.
+    const scope = document.getElementById('convert-units-scope');
+    expect(scope).toHaveTextContent(
+      'The model kept its exact size; only its stored numbers changed.'
+    );
+    expect(scope).not.toHaveTextContent('This rewrites every stored length');
     await user.click(screen.getByRole('button', { name: 'Done' }));
     expect(onClose).toHaveBeenCalled();
   });
