@@ -71,6 +71,7 @@ import {
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
 import { BrandMark } from './BrandMark';
+import { ChannelTag } from './ChannelTag';
 import { ExternalAnchor } from './ExternalAnchor';
 import { AssistantConnectionSettings } from './AssistantConnectionSettings';
 import { api } from '../lib/api';
@@ -1170,7 +1171,7 @@ export function SettingsPage({
               onClick={onClose}
             >
               <BrandMark compact />
-              OpenZCAD <span className="beta-tag">Beta</span>
+              OpenZCAD <ChannelTag />
             </button>
           </div>
           <nav>

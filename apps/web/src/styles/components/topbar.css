@@ -33,7 +33,7 @@
 
 /* A word in the accent, not a chip: an outlined tag inside the identity
    island was one more box inside a box. */
-.beta-tag {
+.channel-tag {
   display: inline-flex;
   align-items: center;
   min-height: 16px;
@@ -43,6 +43,16 @@
   font-size: var(--fs-mini);
   line-height: 1;
   text-transform: uppercase;
+}
+
+/* Each channel its own hue (releaseChannel.ts): beta keeps the accent,
+   stable reads as released, dev as unreleased. */
+.channel-tag[data-channel='stable'] {
+  color: var(--color-success);
+}
+
+.channel-tag[data-channel='dev'] {
+  color: var(--color-channel-dev);
 }
 
 /* Stored-file count on the File menu: a badge, so it does not read as part

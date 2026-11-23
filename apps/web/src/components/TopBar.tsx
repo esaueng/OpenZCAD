@@ -40,6 +40,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { BrandMark } from './BrandMark';
+import { ChannelTag } from './ChannelTag';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { preloadableSlot } from './PreloadableSlot';
 import { isEncryptedProject } from '../lib/api';
@@ -860,7 +861,7 @@ export function TopBar({
           title="Back to projects"
         >
           <BrandMark compact />
-          OpenZCAD <span className="beta-tag">Beta</span>
+          OpenZCAD <ChannelTag />
         </button>
         <div className="topbar-divider" />
         {breadcrumb}
