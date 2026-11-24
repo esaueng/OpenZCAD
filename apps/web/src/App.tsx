@@ -1040,10 +1040,8 @@ import {
 } from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
-import {
-  scaledCameraPose,
-  useStoredUnitCamera
-} from './hooks/useStoredUnitCamera';
+import { useStoredUnitCamera } from './hooks/useStoredUnitCamera';
+import { scaledSectionView } from './lib/storedUnitView';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
@@ -4226,6 +4224,7 @@ export function App() {
     onCameraChange: updateCameraPose,
     onCameraSettled: persistCameraPose,
     persistSection: persistSectionView,
+    rescale: rescaleProjectView,
     forget: forgetProjectView
   } = useProjectView(doc?.projectId ?? null, (onScreen) =>
     persistedHiddenBodyIds(onScreen, currentBodyIsolation)
@@ -11361,16 +11360,20 @@ export function App() {
       clearSectionOutline();
       restoredSectionRequestTokenRef.current = null;
       pendingSectionRestoreRef.current = normalized.projectId;
-      restoreProjectView(normalized.projectId, {
-        projection: appSettings.viewport.defaultProjection,
-        showGrid: appSettings.viewport.showGrid,
-        displayMode: appSettings.viewport.displayMode,
-        reducedMotion: appSettings.appearance.reducedMotion,
-        zoomToCursor: appSettings.viewport.zoomToCursor,
-        middleDrag: appSettings.viewport.middleDrag,
-        orbitMode: appSettings.viewport.orbitMode,
-        pointerNavigation: appSettings.viewport.pointerNavigation
-      });
+      restoreProjectView(
+        normalized.projectId,
+        {
+          projection: appSettings.viewport.defaultProjection,
+          showGrid: appSettings.viewport.showGrid,
+          displayMode: appSettings.viewport.displayMode,
+          reducedMotion: appSettings.appearance.reducedMotion,
+          zoomToCursor: appSettings.viewport.zoomToCursor,
+          middleDrag: appSettings.viewport.middleDrag,
+          orbitMode: appSettings.viewport.orbitMode,
+          pointerNavigation: appSettings.viewport.pointerNavigation
+        },
+        normalized.units
+      );
     }
     if (rememberProject) {
       rememberActiveProject(
@@ -11526,15 +11529,37 @@ export function App() {
   // I03: a stored-unit conversion (or its undo, redo or checkpoint restore)
   // rescales every number of the model, so the camera follows by the same k
   // and the part stays where it was on screen. Scaling the pose rather than
-  // reframing keeps the user's view, as an edit does.
-  useStoredUnitCamera(doc?.projectId ?? null, doc?.units ?? null, (factor) => {
-    const snapshot = projectViewSnapshot();
-    if (snapshot)
-      requestView({
-        pose: scaledCameraPose(snapshot.camera, factor),
-        projection
-      });
-  });
+  // reframing keeps the user's view, as an edit does. The section cut, the
+  // cut remembered while sectioning is off, and this device's remembered
+  // view and saved views are lengths in the same unit and follow with it.
+  useStoredUnitCamera(
+    doc?.projectId ?? null,
+    doc?.units ?? null,
+    (_factor, from, to) => {
+      const projectId = doc?.projectId;
+      const rescaled = rescaleProjectView(from, to);
+      if (rescaled?.camera) requestView({ pose: rescaled.camera, projection });
+      if (rescaled) {
+        const remembered = rememberedSection.current;
+        if (remembered && !rescaled.sectionView)
+          rememberedSection.current = scaledSectionView(
+            remembered,
+            rescaled.factor
+          );
+        if (rescaled.sectionView && projectId) {
+          // The exact section on screen cut the model in the old unit; ask
+          // for it again once the converted model is rebuilt.
+          clearSectionOutline();
+          restoredSectionRequestTokenRef.current = null;
+          pendingSectionRestoreRef.current = projectId;
+        }
+      }
+      if (projectId)
+        void import('./lib/savedViews').then(({ stampSavedViewUnits }) =>
+          stampSavedViewUnits(projectId, from)
+        );
+    }
+  );
 
   function handleViewportSettled(camera: ViewportCameraState) {
     persistCameraPose(doc?.projectId ?? null, camera);
@@ -14258,6 +14283,7 @@ export function App() {
   const savedViewsControl = doc
     ? {
         projectId: doc.projectId,
+        units: doc.units,
         capture() {
           const snapshot = projectViewSnapshot();
           return snapshot

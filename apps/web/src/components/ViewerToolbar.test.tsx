@@ -10,7 +10,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { ViewerToolbar } from './ViewerToolbar';
 import { TOOLTIP_OPEN_DELAY_MS } from './Tooltip';
 import { UNDO_FLOOR_TRIMMED_REASON } from '../lib/toasts';
-import { saveView } from '../lib/savedViews';
+import {
+  SAVED_VIEWS_STORAGE_KEY,
+  saveView,
+  type SavedView
+} from '../lib/savedViews';
 import type { SectionOutlineState } from '../lib/sectionOutline';
 import type { ViewerSettings } from '@openzcad/viewport';
 
@@ -828,7 +832,13 @@ describe('the standard views flyout', () => {
         onExportSectionDxf={noop}
         sectionOutline={{ kind: 'clipping' }}
         units="mm"
-        savedViews={{ projectId: 'proj_toolbar', capture, onApply, onStatus }}
+        savedViews={{
+          projectId: 'proj_toolbar',
+          units: 'mm',
+          capture,
+          onApply,
+          onStatus
+        }}
       />
     );
     const trigger = screen.getByRole('button', { name: 'Standard views' });
@@ -876,6 +886,74 @@ describe('the standard views flyout', () => {
     );
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(document.activeElement).toBe(trigger);
+    localStorage.clear();
+  });
+
+  it('saves a view in the project unit and applies one saved in another unit rescaled (I03)', () => {
+    const noop = () => undefined;
+    const pose = {
+      camera: {
+        position: [254, 0, 0] as [number, number, number],
+        target: [25.4, 0, 0] as [number, number, number],
+        orthographicZoom: 1
+      },
+      projection: 'perspective' as const,
+      displayMode: 'shaded' as const,
+      sectionView: { plane: 'XY' as const, offset: 12.7 }
+    };
+    // Saved before the project was converted to inches.
+    saveView('proj_units', { ...pose, units: 'mm' }, { id: 'a' });
+    const onApply = vi.fn();
+    const capture = vi.fn(() => pose);
+    render(
+      <ViewerToolbar
+        settings={{ ...settings, sectionView: undefined }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
+        onToggleProjection={noop}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="inch"
+        savedViews={{
+          projectId: 'proj_units',
+          units: 'inch',
+          capture,
+          onApply,
+          onStatus: noop
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Standard views' }));
+    const saved = () =>
+      within(screen.getByRole('group', { name: 'Saved views' }));
+    fireEvent.click(saved().getByRole('button', { name: /Save view/ }));
+    expect(
+      (
+        JSON.parse(localStorage.getItem(SAVED_VIEWS_STORAGE_KEY)!) as Record<
+          string,
+          SavedView[]
+        >
+      ).proj_units?.[1]?.units
+    ).toBe('inch');
+    fireEvent.click(saved().getByRole('button', { name: 'Go to View 1' }));
+    const applied = onApply.mock.calls[0]![0] as SavedView;
+    expect(applied.units).toBe('inch');
+    expect(applied.camera.position[0]).toBeCloseTo(10, 12);
+    expect(applied.camera.target[0]).toBeCloseTo(1, 12);
+    expect(applied.sectionView?.offset).toBeCloseTo(0.5, 12);
     localStorage.clear();
   });
 

@@ -1,10 +1,19 @@
-import { VIEWPORT_FIELD_OF_VIEW_BOUNDS } from '@openzcad/shared';
+import {
+  VIEWPORT_FIELD_OF_VIEW_BOUNDS,
+  type UnitSystem
+} from '@openzcad/shared';
 import type {
   DisplayMode,
   ProjectionMode,
   SectionViewSettings,
   ViewportCameraState
 } from '@openzcad/viewport';
+import {
+  isStoredUnit,
+  scaledCameraPose,
+  scaledSectionView,
+  storedUnitFactor
+} from './storedUnitView';
 
 /**
  * Named camera views for a project, kept on this device beside the remembered
@@ -27,6 +36,13 @@ export interface SavedView {
   xray?: boolean;
   /** Captured camera angle; absent in older saved views. */
   fieldOfView?: number;
+  /**
+   * I03: the project's stored unit when the view was saved; the camera and
+   * section are lengths in it. Absent in views saved before it was
+   * recorded: those are stamped with the unit being left the first time
+   * the project's stored unit changes on this device.
+   */
+  units?: UnitSystem;
   savedAt: number;
 }
 
@@ -115,7 +131,50 @@ function isSavedView(value: unknown): value is SavedView {
     (view.xray === undefined || typeof view.xray === 'boolean') &&
     isFieldOfView(view.fieldOfView) &&
     isFieldOfView(view.camera.fieldOfView) &&
-    isUp(view.camera.up)
+    isUp(view.camera.up) &&
+    (view.units === undefined || isStoredUnit(view.units))
+  );
+}
+
+/**
+ * The view to show in a project stored in `units`: the same view of the
+ * same part, its camera and section rescaled when it was saved in another
+ * unit (the project was converted since). An unstamped view is taken to be
+ * in `units` already.
+ */
+export function savedViewInUnits(
+  view: SavedView,
+  units: UnitSystem
+): SavedView {
+  if (!view.units || view.units === units) return view;
+  const factor = storedUnitFactor(view.units, units);
+  return {
+    ...view,
+    units,
+    camera: scaledCameraPose(view.camera, factor),
+    ...(view.sectionView
+      ? { sectionView: scaledSectionView(view.sectionView, factor) }
+      : {})
+  };
+}
+
+/**
+ * I03: the project's stored unit is changing from `units` on this device.
+ * Views saved before views recorded their unit are in `units`; record it on
+ * them now, so they are rescaled from here on. Views that already name a
+ * unit are left alone. False when the browser refused the write.
+ */
+export function stampSavedViewUnits(
+  projectId: string,
+  units: UnitSystem,
+  storage: StorageLike | null = defaultStorage()
+): boolean {
+  const views = loadSavedViews(projectId, storage);
+  if (!views.some((view) => view.units === undefined)) return true;
+  return write(
+    projectId,
+    views.map((view) => (view.units ? view : { ...view, units })),
+    storage
   );
 }
 

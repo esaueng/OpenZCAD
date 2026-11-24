@@ -245,3 +245,104 @@ describe('remembered views on this device', () => {
     );
   });
 });
+
+describe('I03: the remembered view follows the stored unit', () => {
+  const defaults = {
+    projection: 'perspective' as const,
+    showGrid: true,
+    displayMode: 'shaded-edges' as const,
+    reducedMotion: false,
+    zoomToCursor: true,
+    middleDrag: 'pan' as const,
+    orbitMode: 'free' as const,
+    pointerNavigation: 'auto' as const
+  };
+  const millimetrePose: ViewportCameraState = {
+    position: [254, -254, 127],
+    target: [25.4, 0, 0],
+    orthographicZoom: 2,
+    orthographicHalfHeight: 50.8
+  };
+  const millimetreSection = { plane: 'XY' as const, offset: 12.7 };
+
+  function rememberedInMillimetres(projectId: string) {
+    const first = renderHook(() => useProjectView(projectId));
+    act(() => first.result.current.restore(projectId, defaults, 'mm'));
+    act(() => first.result.current.onCameraSettled(projectId, millimetrePose));
+    act(() =>
+      first.result.current.setSettings((current) => ({
+        ...current,
+        sectionView: millimetreSection
+      }))
+    );
+    act(() => first.result.current.persistSection(millimetreSection));
+    return first;
+  }
+
+  it('stamps the unit and rescales the camera and cut on a conversion and its undo', () => {
+    const view = rememberedInMillimetres('convert-1');
+    expect(workspaceSession.loadProjectView('convert-1')?.units).toBe('mm');
+
+    let rescaled: ReturnType<typeof view.result.current.rescale> = null;
+    act(() => {
+      rescaled = view.result.current.rescale('mm', 'inch');
+    });
+    expect(rescaled!.factor).toBeCloseTo(1 / 25.4, 15);
+    expect(rescaled!.camera?.position[0]).toBeCloseTo(10, 12);
+    expect(rescaled!.sectionView?.offset).toBeCloseTo(0.5, 12);
+    expect(view.result.current.settings.sectionView?.offset).toBeCloseTo(
+      0.5,
+      12
+    );
+    const stored = workspaceSession.loadProjectView('convert-1');
+    expect(stored?.units).toBe('inch');
+    expect(stored?.camera?.position[0]).toBeCloseTo(10, 12);
+    expect(stored?.camera?.orthographicHalfHeight).toBeCloseTo(2, 12);
+    expect(stored?.settings.sectionView?.offset).toBeCloseTo(0.5, 12);
+
+    // Already in inches: a repeated notice changes nothing.
+    act(() => {
+      rescaled = view.result.current.rescale('mm', 'inch');
+    });
+    expect(rescaled).toBeNull();
+
+    // Undo.
+    act(() => {
+      rescaled = view.result.current.rescale('inch', 'mm');
+    });
+    const undone = workspaceSession.loadProjectView('convert-1');
+    expect(undone?.units).toBe('mm');
+    expect(undone?.camera?.position[0]).toBeCloseTo(254, 9);
+    expect(undone?.settings.sectionView?.offset).toBeCloseTo(12.7, 9);
+  });
+
+  it('rescales a view remembered in another unit when the project opens', () => {
+    rememberedInMillimetres('convert-2').unmount();
+    // Converted elsewhere (another tab or device): opened now in inches.
+    const next = renderHook(() => useProjectView('convert-2'));
+    act(() => next.result.current.restore('convert-2', defaults, 'inch'));
+    expect(next.result.current.initialView?.position[0]).toBeCloseTo(10, 12);
+    expect(next.result.current.initialView?.target[0]).toBeCloseTo(1, 12);
+    expect(next.result.current.settings.sectionView?.offset).toBeCloseTo(
+      0.5,
+      12
+    );
+  });
+
+  it('takes a view written before units were recorded to be in the project unit', () => {
+    workspaceSession.saveProjectView('legacy', {
+      camera: millimetrePose,
+      projection: 'perspective',
+      settings: {
+        showGrid: true,
+        displayMode: 'shaded',
+        sectionView: millimetreSection
+      },
+      hiddenBodyIds: []
+    });
+    const view = renderHook(() => useProjectView('legacy'));
+    act(() => view.result.current.restore('legacy', defaults, 'mm'));
+    expect(view.result.current.initialView).toEqual(millimetrePose);
+    expect(view.result.current.settings.sectionView).toEqual(millimetreSection);
+  });
+});

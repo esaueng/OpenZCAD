@@ -7,7 +7,9 @@ import {
   loadSavedViews,
   renameSavedView,
   SAVED_VIEW_NAME_MAX,
-  saveView
+  saveView,
+  savedViewInUnits,
+  stampSavedViewUnits
 } from './savedViews';
 
 function memoryStorage() {
@@ -289,5 +291,78 @@ describe('saved view upkeep', () => {
     expect(loadSavedViews('p1', storage)).toEqual([]);
     expect(loadSavedViews('p2', storage)).toHaveLength(1);
     expect(storage.data.get(SAVED_VIEWS_STORAGE_KEY)).not.toContain('"p1"');
+  });
+});
+
+describe('I03: saved views follow the stored unit', () => {
+  const millimetreView = {
+    camera: {
+      position: [254, 0, 127] as [number, number, number],
+      target: [25.4, 0, 0] as [number, number, number],
+      orthographicZoom: 1.5,
+      orthographicHalfHeight: 50.8
+    },
+    projection: 'orthographic' as const,
+    displayMode: 'shaded' as const,
+    sectionView: { plane: 'YZ' as const, offset: -12.7, flipped: true }
+  };
+
+  it('keeps the unit a view was saved in and rescales it to another', () => {
+    const storage = memoryStorage();
+    saveView('p1', { ...millimetreView, units: 'mm' }, { storage, id: 'a' });
+    const [saved] = loadSavedViews('p1', storage);
+    expect(saved?.units).toBe('mm');
+    expect(savedViewInUnits(saved!, 'mm')).toBe(saved);
+    const inches = savedViewInUnits(saved!, 'inch');
+    expect(inches.units).toBe('inch');
+    expect(inches.camera.position[0]).toBeCloseTo(10, 12);
+    expect(inches.camera.target[0]).toBeCloseTo(1, 12);
+    expect(inches.camera.orthographicHalfHeight).toBeCloseTo(2, 12);
+    expect(inches.camera.orthographicZoom).toBe(1.5);
+    expect(inches.sectionView).toEqual({
+      plane: 'YZ',
+      offset: expect.closeTo(-0.5, 12) as number,
+      flipped: true
+    });
+    // Back again, as an undo shows it.
+    expect(savedViewInUnits(inches, 'mm').camera.position[0]).toBeCloseTo(
+      254,
+      9
+    );
+  });
+
+  it('stamps views saved before units were recorded with the unit being left', () => {
+    const storage = memoryStorage();
+    saveView('p1', millimetreView, { storage, id: 'legacy' });
+    saveView('p1', { ...millimetreView, units: 'cm' }, { storage, id: 'cm' });
+    saveView('p2', millimetreView, { storage, id: 'other' });
+    // Unstamped, a legacy view is taken to be in the project's unit.
+    const [legacy] = loadSavedViews('p1', storage);
+    expect(savedViewInUnits(legacy!, 'inch')).toBe(legacy);
+
+    expect(stampSavedViewUnits('p1', 'mm', storage)).toBe(true);
+    const [stamped, cm] = loadSavedViews('p1', storage);
+    expect(stamped?.units).toBe('mm');
+    expect(cm?.units).toBe('cm');
+    expect(savedViewInUnits(stamped!, 'inch').camera.position[0]).toBeCloseTo(
+      10,
+      12
+    );
+    // Another project's views are untouched.
+    expect(loadSavedViews('p2', storage)[0]?.units).toBeUndefined();
+  });
+
+  it('drops a view naming an unknown unit', () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      SAVED_VIEWS_STORAGE_KEY,
+      JSON.stringify({
+        p1: [
+          { ...millimetreView, id: 'a', name: 'A', savedAt: 1, units: 'ft' },
+          { ...millimetreView, id: 'b', name: 'B', savedAt: 1, units: 'inch' }
+        ]
+      })
+    );
+    expect(loadSavedViews('p1', storage).map((view) => view.id)).toEqual(['b']);
   });
 });

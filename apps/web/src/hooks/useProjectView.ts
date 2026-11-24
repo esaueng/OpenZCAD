@@ -12,6 +12,12 @@ import type {
   ViewerSettings,
   ViewportCameraState
 } from '@openzcad/viewport';
+import type { UnitSystem } from '@openzcad/shared';
+import {
+  scaledCameraPose,
+  scaledSectionView,
+  storedUnitFactor
+} from '../lib/storedUnitView';
 import {
   loadProjectView,
   saveProjectView,
@@ -32,7 +38,7 @@ export interface ProjectViewDefaults {
 
 type ProjectViewSnapshot = Omit<
   ProjectViewState,
-  'camera' | 'hiddenReferences'
+  'camera' | 'hiddenReferences' | 'units'
 > & {
   camera: ViewportCameraState;
 };
@@ -58,14 +64,37 @@ export interface ProjectView {
   setHiddenDatumIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
   hiddenReferenceImageIds: ReadonlySet<string>;
   setHiddenReferenceImageIds: Dispatch<SetStateAction<ReadonlySet<string>>>;
-  /** Applies a project's remembered view, falling back to the defaults. */
-  restore(projectId: string, defaults: ProjectViewDefaults): void;
+  /**
+   * Applies a project's remembered view, falling back to the defaults.
+   * `units` is the project's stored unit: a view remembered in another
+   * unit (converted since) is rescaled to it.
+   */
+  restore(
+    projectId: string,
+    defaults: ProjectViewDefaults,
+    units?: UnitSystem
+  ): void;
   /** The viewport reported a live pose; keep it immediately available. */
   onCameraChange(projectId: string | null, camera: ViewportCameraState): void;
   /** The viewport pose settled; persist the final pose against this project. */
   onCameraSettled(projectId: string | null, camera: ViewportCameraState): void;
   /** Persist a settled cut; intermediate slider frames remain in memory. */
   persistSection(section: SectionViewSettings | undefined): void;
+  /**
+   * I03: the open project's stored unit changed under the view (a
+   * conversion, its undo or redo, a checkpoint restore). Rescales the
+   * remembered camera and section to `to` and persists them, and answers
+   * what changed, or null when the view was already in `to`. `from` is the
+   * unit being left, used when the view has no unit of its own yet.
+   */
+  rescale(
+    from: UnitSystem,
+    to: UnitSystem
+  ): {
+    factor: number;
+    camera: ViewportCameraState | null;
+    sectionView: SectionViewSettings | undefined;
+  } | null;
   apply(view: ProjectViewSnapshot): void;
   snapshot(): ProjectViewSnapshot | null;
   /** Closing a project: drop the remembered pose so the next one refits. */
@@ -120,6 +149,11 @@ export function useProjectView(
    * effect below needs to persist it without re-running on every orbit.
    */
   const cameraRef = useRef<ViewportCameraState | null>(null);
+  /**
+   * The stored unit the camera and section above are in, stamped on every
+   * write; null until a restore names one.
+   */
+  const unitsRef = useRef<UnitSystem | null>(null);
   // A reload can interrupt the controller's damping/settle timer. Keep its
   // latest pose on pagehide too; idle frames still never write storage.
   const flushView = useRef<() => void>(() => {});
@@ -167,8 +201,13 @@ export function useProjectView(
       hiddenReferences: references,
       ...(Object.keys(sketchVisibility).length > 0
         ? { sketchVisibility: { ...sketchVisibility } }
-        : {})
+        : {}),
+      ...unitsStamp()
     });
+  }
+
+  function unitsStamp(): Pick<ProjectViewState, 'units'> {
+    return unitsRef.current ? { units: unitsRef.current } : {};
   }
 
   function persistCurrentView() {
@@ -215,12 +254,20 @@ export function useProjectView(
     setHiddenDatumIds,
     hiddenReferenceImageIds,
     setHiddenReferenceImageIds,
-    restore(id, defaults) {
+    restore(id, defaults, units) {
       const saved = loadProjectView(id);
       savedHiddenReferencesProject.current = saved?.hiddenReferences
         ? id
         : null;
-      const camera = saved?.camera ?? null;
+      unitsRef.current = units ?? null;
+      const factor =
+        saved?.units && units ? storedUnitFactor(saved.units, units) : 1;
+      const savedCamera = saved?.camera ?? null;
+      const camera =
+        savedCamera && factor !== 1
+          ? scaledCameraPose(savedCamera, factor)
+          : savedCamera;
+      const savedSection = saved?.settings.sectionView;
       cameraRef.current = camera;
       setInitialView(camera);
       setProjection(saved?.projection ?? defaults.projection);
@@ -228,6 +275,9 @@ export function useProjectView(
         showGrid: defaults.showGrid,
         displayMode: defaults.displayMode,
         ...saved?.settings,
+        ...(savedSection && factor !== 1
+          ? { sectionView: scaledSectionView(savedSection, factor) }
+          : {}),
         reducedMotion: defaults.reducedMotion,
         zoomToCursor: defaults.zoomToCursor,
         middleDrag: defaults.middleDrag,
@@ -255,6 +305,32 @@ export function useProjectView(
           settings: { ...settings, sectionView }
         });
       }
+    },
+    rescale(from, to) {
+      const factor = storedUnitFactor(unitsRef.current ?? from, to);
+      unitsRef.current = to;
+      if (factor === 1) return null;
+      const camera = cameraRef.current
+        ? scaledCameraPose(cameraRef.current, factor)
+        : null;
+      cameraRef.current = camera;
+      const sectionView = settings.sectionView
+        ? scaledSectionView(settings.sectionView, factor)
+        : undefined;
+      setSettings((current) =>
+        current.sectionView
+          ? {
+              ...current,
+              sectionView: scaledSectionView(current.sectionView, factor)
+            }
+          : current
+      );
+      // The live camera only reports its new pose once the viewport has
+      // moved to it; the remembered one is rewritten now, so a reload in
+      // between cannot bring back the old unit's numbers.
+      if (projectId && camera)
+        persist(projectId, camera, { settings: { ...settings, sectionView } });
+      return { factor, camera, sectionView };
     },
     snapshot() {
       return cameraRef.current
@@ -285,7 +361,8 @@ export function useProjectView(
           hiddenReferences: hiddenReferences(),
           ...(Object.keys(sketches).length > 0
             ? { sketchVisibility: { ...sketches } }
-            : {})
+            : {}),
+          ...unitsStamp()
         });
       }
     },

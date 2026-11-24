@@ -398,6 +398,22 @@ test('a kept measurement and the camera follow the conversion, its undo and a re
   await page.reload();
   await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
   expect((await keptReading(page, 'in')).toFixed(2)).toBe(inches);
+  // This device's remembered view was rewritten in inches too, so the
+  // reload comes back to the same view rather than 25.4 times too far.
+  expect(
+    await page.evaluate(() =>
+      Object.values(
+        (
+          JSON.parse(
+            localStorage.getItem('openzcad-workspace-session:v1') ?? '{}'
+          ) as { views?: Record<string, { units?: string }> }
+        ).views ?? {}
+      ).map((view) => view.units)
+    )
+  ).toEqual(['inch']);
+  await expect
+    .poll(async () => (await cameraDistance(page)) / distance, READY)
+    .toBeCloseTo(1 / 25.4, 3);
   expect(errors).toEqual([]);
 });
 

@@ -1,19 +1,29 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
+import type { UnitSystem } from '@openzcad/shared';
 import {
   MAX_SAVED_VIEWS,
   SAVED_VIEW_NAME_MAX,
   deleteSavedView,
   loadSavedViews,
   renameSavedView,
+  savedViewInUnits,
   saveView,
   type SavedView
 } from '../lib/savedViews';
 
-export type SavedViewInput = Omit<SavedView, 'id' | 'name' | 'savedAt'>;
+export type SavedViewInput = Omit<
+  SavedView,
+  'id' | 'name' | 'savedAt' | 'units'
+>;
 
 export interface SavedViewsSectionProps {
   projectId: string;
+  /**
+   * The project's stored unit: a view is saved in it, and one saved in
+   * another unit is rescaled to it before it is applied.
+   */
+  units: UnitSystem;
   /** The current view to save, or null before the viewport reports one. */
   capture(): SavedViewInput | null;
   onApply(view: SavedView): void;
@@ -28,6 +38,7 @@ export interface SavedViewsSectionProps {
  */
 export function SavedViewsSection({
   projectId,
+  units,
   capture,
   onApply,
   onStatus
@@ -91,13 +102,23 @@ export function SavedViewsSection({
     onStatus(`Renamed ${view.name} to ${saved?.name ?? name.trim()}.`);
   }
 
+  /**
+   * The view as stored now, in the project's unit: the list may predate a
+   * write that recorded the unit the view was saved in.
+   */
+  function appliedView(view: SavedView): SavedView {
+    const stored =
+      loadSavedViews(projectId).find((entry) => entry.id === view.id) ?? view;
+    return savedViewInUnits(stored, units);
+  }
+
   function save() {
     const view = capture();
     if (!view) {
       onStatus('Move the view once, then save it.');
       return;
     }
-    const result = saveView(projectId, view);
+    const result = saveView(projectId, { ...view, units });
     if (!result.ok) {
       onStatus(result.reason);
       return;
@@ -143,7 +164,7 @@ export function SavedViewsSection({
               className="saved-views-apply"
               data-saved-view={view.id}
               aria-label={`Go to ${view.name}`}
-              onClick={() => onApply(view)}
+              onClick={() => onApply(appliedView(view))}
               onDoubleClick={() => setNaming(view.id)}
             >
               {view.name}

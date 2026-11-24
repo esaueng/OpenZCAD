@@ -2,6 +2,11 @@ import { renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { UnitSystem } from '@openzcad/shared';
 import { scaledCameraPose, useStoredUnitCamera } from './useStoredUnitCamera';
+import {
+  isStoredUnit,
+  scaledSectionView,
+  storedUnitFactor
+} from '../lib/storedUnitView';
 
 describe('scaledCameraPose', () => {
   it('scales position, target and the orthographic half-height', () => {
@@ -35,6 +40,28 @@ describe('scaledCameraPose', () => {
   });
 });
 
+describe('scaledSectionView', () => {
+  it('scales the offset and keeps the plane and direction', () => {
+    const section = scaledSectionView(
+      { plane: 'XZ', offset: 25.4, flipped: true },
+      1 / 25.4
+    );
+    expect(section.plane).toBe('XZ');
+    expect(section.offset).toBeCloseTo(1, 12);
+    expect(section.flipped).toBe(true);
+  });
+});
+
+describe('storedUnitFactor and isStoredUnit', () => {
+  it('names k and refuses an unknown unit', () => {
+    expect(storedUnitFactor('cm', 'mm')).toBe(10);
+    expect(storedUnitFactor('inch', 'inch')).toBe(1);
+    expect(isStoredUnit('inch')).toBe(true);
+    expect(isStoredUnit('ft')).toBe(false);
+    expect(isStoredUnit('toString')).toBe(false);
+  });
+});
+
 describe('useStoredUnitCamera', () => {
   function mount(projectId: string | null, units: UnitSystem | null) {
     const onUnitsChanged = vi.fn();
@@ -57,6 +84,9 @@ describe('useStoredUnitCamera', () => {
     expect(onUnitsChanged.mock.calls[1]![0]).toBeCloseTo(25.4, 12);
     rerender({ id: 'p1', unit: 'inch' });
     expect(onUnitsChanged).toHaveBeenCalledTimes(3);
+    // The units travel with k, for stores that record their own unit.
+    expect(onUnitsChanged.mock.calls[0]!.slice(1)).toEqual(['mm', 'inch']);
+    expect(onUnitsChanged.mock.calls[1]!.slice(1)).toEqual(['inch', 'mm']);
   });
 
   it('does nothing for other edits or when another project opens', () => {

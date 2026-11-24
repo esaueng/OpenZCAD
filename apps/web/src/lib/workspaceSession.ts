@@ -4,6 +4,8 @@ import type {
   ViewerSettings,
   ViewportCameraState
 } from '@openzcad/viewport';
+import type { UnitSystem } from '@openzcad/shared';
+import { isStoredUnit } from './storedUnitView';
 
 export type { ViewportCameraState };
 
@@ -37,6 +39,13 @@ export interface ProjectViewState {
   sketchVisibility?: Record<string, boolean>;
   /** Datum and image visibility choices kept on this device. */
   hiddenReferences?: HiddenReferences;
+  /**
+   * I03: the stored unit the camera and section lengths are in. A view
+   * read back in another unit (the project was converted since, here or on
+   * another device) is rescaled before it is shown. Absent from views
+   * written before it, which are taken to be in the project's unit.
+   */
+  units?: UnitSystem;
 }
 
 interface StoredProjectView extends ProjectViewState {
@@ -233,6 +242,7 @@ function parseStoredView(value: unknown): StoredProjectView | null {
     hiddenBodyIds: [...candidate.hiddenBodyIds],
     ...withSketchVisibility(parseSketchVisibility(candidate.sketchVisibility)),
     ...(hiddenReferences ? { hiddenReferences } : {}),
+    ...(isStoredUnit(candidate.units) ? { units: candidate.units } : {}),
     updatedAt: candidate.updatedAt
   };
 }
@@ -429,7 +439,8 @@ export function loadProjectView(
     ...withSketchVisibility(view.sketchVisibility),
     ...(view.hiddenReferences
       ? { hiddenReferences: view.hiddenReferences }
-      : {})
+      : {}),
+    ...(view.units ? { units: view.units } : {})
   };
 }
 
