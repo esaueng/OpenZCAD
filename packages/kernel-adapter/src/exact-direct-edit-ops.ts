@@ -2579,7 +2579,11 @@ export function applyDirectEdit(
           bandGuard?.refusalAtEdge
         );
       } catch (error) {
-        if (error instanceof KernelRefusal) throw error;
+        if (
+          operation.ambiguousRim !== undefined &&
+          error instanceof KernelRefusal
+        )
+          throw error;
         // Pushed outward into another part of the body — the bottom of a
         // window up to its top — the move closes what it runs into, which
         // an in-place move cannot. Where the push is a prism union it is
@@ -2598,6 +2602,7 @@ export function applyDirectEdit(
             return { solid: swept, relation: null };
           }
         }
+        if (error instanceof KernelRefusal) throw error;
         // A neighbour that would collapse is a limit on the value, not an
         // internal failure: say so, and how far the face can go. Any other
         // refusal of the move (a face ringed by a blend loop the pin cannot

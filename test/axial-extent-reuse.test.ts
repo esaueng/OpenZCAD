@@ -206,9 +206,9 @@ describe('qualified axial history reuse', { timeout: 300_000 }, () => {
       const { document } = await longUnion(adapter);
       const next = widthEdit(document, 2);
       let cancelled = false;
-      const native = RemusKernel.prototype.moveFacesJournaled;
+      const native = RemusKernel.prototype.moveFacesPreparedJournaled;
       const journal = vi
-        .spyOn(RemusKernel.prototype, 'moveFacesJournaled')
+        .spyOn(RemusKernel.prototype, 'moveFacesPreparedJournaled')
         .mockImplementationOnce(function (this: RemusKernel, ...args) {
           const result = native.apply(this, args);
           cancelled = true;
@@ -286,7 +286,7 @@ describe('qualified axial history reuse', { timeout: 300_000 }, () => {
       const { document } = await longUnion(adapter);
       const next = widthEdit(document, 2);
       const journal = vi
-        .spyOn(RemusKernel.prototype, 'moveFacesJournaled')
+        .spyOn(RemusKernel.prototype, 'moveFacesPreparedJournaled')
         .mockImplementationOnce(() => {
           throw new Error('injected missing journal');
         });
@@ -363,9 +363,9 @@ describe('qualified axial history reuse', { timeout: 300_000 }, () => {
       const { document } = await longUnion(adapter);
       const next = widthEdit(document, 2);
       let cancelled = false;
-      const native = RemusKernel.prototype.moveFacesJournaled;
+      const native = RemusKernel.prototype.moveFacesPreparedJournaled;
       const journal = vi
-        .spyOn(RemusKernel.prototype, 'moveFacesJournaled')
+        .spyOn(RemusKernel.prototype, 'moveFacesPreparedJournaled')
         .mockImplementationOnce(function (this: RemusKernel, ...args) {
           const result = native.apply(this, args);
           cancelled = true;

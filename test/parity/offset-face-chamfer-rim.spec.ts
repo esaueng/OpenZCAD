@@ -23,14 +23,15 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { commandFactories } from '@openzcad/command-system';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   chamferEdges,
   createProjectDocument,
   directEditBody,
   filletEdges,
-  importStepBody
+  importStepBody,
+  assertStorableDocument
 } from '@openzcad/document-core';
 import { RemusKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -499,6 +500,69 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
         historical.bodyRepresentations[added.bodyId]!.volume - body.volume
       ).toBeCloseTo(2 * X * Y, 5);
     });
+
+    it.each([
+      ['bevel', 52265.05383333333],
+      ['opposite', 52787.80716666669],
+      ['symmetric', 52621.030500000015]
+    ] as const)(
+      'replays Face Distance on an imported bevel (%s)',
+      async (side, historicalVolume) => {
+        const fixture = imported.get('sharp')!;
+        const source = await adapter.syncDocument(fixture.document);
+        const topology = source.bodyRepresentations[fixture.bodyId]!.topology!;
+        const pair = topology.opposingPlanarFacePairs!.find(
+          (p) =>
+            p.faceAHash === fixture.bottom.hash ||
+            p.faceBHash === fixture.bottom.hash
+        )!;
+        const moveFirst =
+          (pair.faceAHash === fixture.bottom.hash) === (side === 'bevel');
+        const manager = new CommandManager(fixture.document);
+        manager.execute(
+          commandFactories.directEditBody({
+            name: 'Face Distance',
+            targetBodyId: fixture.bodyId,
+            operation: {
+              kind: 'set-face-distance',
+              faceHash: pair.faceAHash,
+              oppositeFaceHash: pair.faceBHash,
+              faceReference: pair.faceAReference,
+              oppositeFaceReference: pair.faceBReference,
+              moveMode:
+                side === 'symmetric'
+                  ? 'symmetric'
+                  : moveFirst
+                    ? 'one-sided-first'
+                    : 'one-sided-second',
+              sourceDistance: pair.distance,
+              distance: pair.distance + 2
+            }
+          })
+        );
+        manager.undo();
+        expect(
+          (await adapter.syncDocument(manager.document)).bodyRepresentations[
+            fixture.bodyId
+          ]!.volume
+        ).toBeCloseTo(fixture.volume, 6);
+        manager.redo();
+        const saved = assertStorableDocument(
+          JSON.parse(JSON.stringify(manager.document))
+        );
+        const cold = new RemusKernelAdapter();
+        try {
+          const rebuilt = await cold.syncDocument(saved);
+          expect(rebuilt.warnings).toEqual([]);
+          // Frozen v2026.1.163 result for the 60 × 40 × 20 block with a 0.35 mm bevel.
+          expect(
+            rebuilt.bodyRepresentations[fixture.bodyId]!.volume
+          ).toBeCloseTo(historicalVolume, 6);
+        } finally {
+          cold.dispose();
+        }
+      }
+    );
 
     it('requires a choice for a new Offset Face on an imported band', async () => {
       const candidate = offsetBy(imported.get('sharp')!, 2, 'refuse');

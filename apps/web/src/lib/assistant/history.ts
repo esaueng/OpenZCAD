@@ -262,7 +262,11 @@ export function parseStoredEntry(value: unknown): AssistantEntry | null {
         return {
           kind: 'proposal',
           id: entry.id,
-          proposal: parseCadPatchProposal(entry.proposal),
+          proposal: parseCadPatchProposal(
+            entry.proposal,
+            undefined,
+            'display-history'
+          ),
           readings: parseReadings(entry.readings),
           // A restored proposal no longer has the document snapshot it was
           // generated against. Keep it as history, but never restore actions.

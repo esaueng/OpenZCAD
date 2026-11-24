@@ -5597,6 +5597,14 @@ export function commandsForCadPatch(
             'add_direct_edit cannot target same-proposal topology.'
           );
         }
+        const edit = operation.operation;
+        if (
+          edit.kind === 'offset-face' &&
+          edit.ambiguousRim &&
+          edit.ambiguousRim !== 'refuse'
+        ) {
+          throw new Error('Choose Chamfer or Draft in the Offset Face editor.');
+        }
         return commandFactories.directEditBody({
           name: operation.name,
           targetBodyId: resolveBody(operation.targetBodyId),
