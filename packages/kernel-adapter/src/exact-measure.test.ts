@@ -79,7 +79,7 @@ describe('bore classification during solid measurement', () => {
     diameter: 2
   };
 
-  it('reuses only the identical interior point during a single pass', () => {
+  it('reuses exact interior and exterior axis witnesses within one pass', () => {
     const kernel = new RemusKernel();
     try {
       const classify = vi
@@ -97,11 +97,61 @@ describe('bore classification during solid measurement', () => {
       expect(outside(point)).toBe(false);
       expect(outside(point)).toBe(false);
       expect(outside(point)).toBe(true);
+      expect(outside({ ...point })).toBe(true);
       expect(outside({ ...point, x: 0 })).toBe(false);
       expect(outside({ ...point, x: -0 })).toBe(true);
       expect(boreAxisMeasurement(kernel, 2)({ ...point, x: 0 })).toBe(true);
       expect(boreAxisMeasurement(kernel, 1)({ ...point, x: 0 })).toBe(true);
       expect(classify).toHaveBeenCalledTimes(7);
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it('probes an external wall and an adjacent blind bore without tracing all four bearings', () => {
+    const kernel = new RemusKernel();
+    try {
+      const tool = kernel.copyAndTransformSolid(
+        kernel.makeCylinder(3, 10),
+        Float64Array.of(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 2, 0, 0, 0, 1)
+      );
+      const cup = kernel.cut(kernel.makeCylinder(5, 10), tool);
+      const axis = boreAxisMeasurement(kernel, cup);
+      const probe = vi.spyOn(kernel, 'classifyPoint');
+      const counts: number[] = [];
+      for (const face of kernel.getSolidFaces(cup)) {
+        const geometry = measureFaceGeometry(kernel, face);
+        if (geometry?.surfaceType !== 'cylinder') continue;
+        probe.mockClear();
+        expect(classifyThroughHoleFace(kernel, cup, face, geometry, axis).status).toBe('refused');
+        counts.push(probe.mock.calls.length);
+      }
+      expect(counts.sort((a, b) => a - b)).toEqual([2, 2]);
+    } finally {
+      kernel.free();
+    }
+  });
+
+  it('requires both ends and every material witness even when the face normal points out', () => {
+    const kernel = new RemusKernel();
+    try {
+      vi.spyOn(kernel, 'getSurfaceDomain').mockReturnValue(
+        Float64Array.of(0, 2 * Math.PI, 0, 10)
+      );
+      vi.spyOn(kernel, 'evaluateSurface').mockReturnValue(Float64Array.of(1, 0, 5));
+      vi.spyOn(kernel, 'evaluateSurfaceNormal').mockReturnValue(Float64Array.of(1, 0, 0));
+      let closedTop = true;
+      const probe = vi.spyOn(kernel, 'classifyPoint').mockImplementation(
+        (_solid, x, y, z) => (x !== 0 || y !== 0 || (closedTop && z > 10)) ? 'inside' : 'outside'
+      );
+      const classify = () =>
+        classifyThroughHoleFace(kernel, 1, 42, cylinder, boreAxisMeasurement(kernel, 1));
+      expect(classify().status).toBe('refused');
+      expect(probe).toHaveBeenCalledTimes(7);
+      probe.mockClear();
+      closedTop = false;
+      expect(classify().status).toBe('through-hole');
+      expect(probe).toHaveBeenCalledTimes(7);
     } finally {
       kernel.free();
     }

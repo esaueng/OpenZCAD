@@ -415,41 +415,54 @@ export function classifySolidPoint(
     : 'unknown';
 }
 
-/**
- * Axis test for one immutable solid's measurement pass. Cylindrical patches
- * on a toothed or stepped part can share the same point inside stock. One
- * exact interior witness suffices even with unrelated bores between them.
- */
+/** Reuse one exact interior and one exterior axis witness per immutable solid. */
 export function boreAxisMeasurement(kernel: RemusKernel, solid: number) {
   let interior: Vec3 | undefined;
+  let exterior: Vec3 | undefined;
+  const matches = (point: Vec3, previous: Vec3 | undefined) =>
+    previous !== undefined &&
+    Object.is(point.x, previous.x) &&
+    Object.is(point.y, previous.y) &&
+    Object.is(point.z, previous.z);
+
   return (center: Vec3) => {
-    if (
-      interior &&
-      Object.is(center.x, interior.x) &&
-      Object.is(center.y, interior.y) &&
-      Object.is(center.z, interior.z)
-    ) {
-      return false;
-    }
+    if (matches(center, interior)) return false;
+    if (matches(center, exterior)) return true;
     const result = classifySolidPoint(kernel, solid, center);
     if (result === 'inside') interior = { ...center };
+    if (result === 'outside') exterior = { ...center };
     return result === 'outside';
   };
+}
+
+/** An outward-facing cylinder is likely to fail a radial material witness. */
+function facesAwayFromAxis(
+  kernel: RemusKernel,
+  face: number,
+  domain: number[],
+  center: Vec3
+): boolean {
+  try {
+    const u = domain[0]!;
+    const v = domain[2]! * 0.5 + domain[3]! * 0.5;
+    const point = finiteVec3(Array.from(kernel.evaluateSurface(face, u, v)));
+    const normal = finiteVec3(
+      Array.from(kernel.evaluateSurfaceNormal(face, u, v))
+    );
+    return !!point && !!normal && dot(subtract(point, center), normal) > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Decide whether a cylindrical face is a through-hole: an internal bore that
  * opens at both ends, as opposed to a blind pocket or an external wall.
  *
- * OpenCascade answers the bore/wall half of that question from the face's
- * orientation flag — a hollow tube's outer wall and its bore share the same
- * void axis and the same two open ends, and only the orientation separates
- * them. Remus has no such flag (`getShapeOrientation` documents that every
- * face reports `forward`, and a cylinder's parametric normal points away from
- * the axis whether it walls a bore or a boss), so the same distinction is
- * taken from the material itself: just outside a bore's wall is solid, just
- * outside an outer wall is air. Everything else — full revolution, void
- * along the axis, both ends open — mirrors the OpenCascade classifier.
+ * A hollow tube's bore and its outer wall can share an empty axis and two
+ * open ends. The radial probes distinguish them by measuring material just
+ * outside the cylindrical wall. Publication uses the oriented surface normal
+ * to choose which probes to run first.
  *
  * A case that cannot be settled is refused by name rather than guessed at.
  */
@@ -511,22 +524,26 @@ export function classifyThroughHoleFace(
       'The selected cylindrical face encloses material along its axis, so it is a boss rather than a hole.'
     );
   }
-  if (
+  const endsOpen = () =>
     classifySolidPoint(
       kernel,
       solid,
       subtract(geometry.axisStart, scale(axis, axialProbe))
-    ) !== 'outside' ||
+    ) === 'outside' &&
     classifySolidPoint(
       kernel,
       solid,
       add(geometry.axisEnd, scale(axis, axialProbe))
-    ) !== 'outside'
-  ) {
-    return refuseThroughHole(
+    ) === 'outside';
+  const closedEnd = () =>
+    refuseThroughHole(
       'The selected cylindrical face does not open at both ends, so it is a blind pocket rather than a through-hole.'
     );
-  }
+  // Orientation selects the order of independent publication probes. Only
+  // exact point classifications decide whether this face is a through-hole.
+  const wallFirst =
+    publicationAxisTest && facesAwayFromAxis(kernel, face, domain, center);
+  if (!wallFirst && !endsOpen()) return closedEnd();
 
   // Radial probe: far enough off the wall for the kernel to resolve which side
   // of it the point sits on, and small enough that any real wall still
@@ -571,6 +588,7 @@ export function classifyThroughHoleFace(
     } else if (material === 'outside') outsideCount += 1;
   }
   if (insideCount === 4) {
+    if (wallFirst && !endsOpen()) return closedEnd();
     return { status: 'through-hole' };
   }
   if (outsideCount === 4) {
