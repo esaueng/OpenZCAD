@@ -765,8 +765,12 @@ export const VIEWPORT_RENDER_ORDER = {
    * glass over a floor.
    */
   BACKDROP: -4,
-  GROUND_SHADOW: -3,
-  GRID: -2,
+  GRID: -3,
+  /**
+   * After the grid: its lines are painted on the floor the shadow falls on,
+   * so the shadow darkens them. At a shared order this flipped with the view.
+   */
+  GROUND_SHADOW: -2,
   /** After the grid, whose translucent fragments would wash over them. */
   WORLD_AXES: -1,
   BODY_FACE: 0,

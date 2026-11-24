@@ -189,9 +189,11 @@ function transparentDrawOrder(
 describe('stage layering under translucent bodies', () => {
   it('orders the stage tier below every body', () => {
     const order = VIEWPORT_RENDER_ORDER;
-    expect(order.BACKDROP).toBeLessThan(order.GROUND_SHADOW);
-    expect(order.GROUND_SHADOW).toBeLessThan(order.GRID);
-    expect(order.GRID).toBeLessThan(order.WORLD_AXES);
+    expect(order.BACKDROP).toBeLessThan(order.GRID);
+    // The shadow falls on the floor the grid is painted on, so it darkens
+    // the grid lines inside its footprint from every view.
+    expect(order.GRID).toBeLessThan(order.GROUND_SHADOW);
+    expect(order.GROUND_SHADOW).toBeLessThan(order.WORLD_AXES);
     expect(order.WORLD_AXES).toBeLessThan(order.BODY_FACE);
 
     const backdrop = createGradientBackdrop();
@@ -247,8 +249,8 @@ describe('stage layering under translucent bodies', () => {
       for (const name of stage) {
         expect(order.indexOf(name)).toBeLessThan(housing);
       }
-      expect(order.indexOf('shadow-catcher')).toBeLessThan(
-        order.indexOf('studio-grid')
+      expect(order.indexOf('studio-grid')).toBeLessThan(
+        order.indexOf('shadow-catcher')
       );
       for (const name of order.filter((entry) => entry.startsWith('axis-'))) {
         expect(order.indexOf(name)).toBeGreaterThan(
