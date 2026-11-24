@@ -1,3 +1,4 @@
+import { preparedBodies } from '../../../../packages/viewport/src/render/preparedBody';
 import {
   ProjectionReceiver,
   projectionTransferables
@@ -276,7 +277,11 @@ export interface GeometryWorkerApi {
      * stops at its next feature boundary (a wasm call already under way
      * completes), and its result is discarded either way.
      */
-    options?: { proposeCarry?: boolean; signal?: AbortSignal }
+    options?: {
+      proposeCarry?: boolean;
+      signal?: AbortSignal;
+      prepareBodyId?: BodyId;
+    }
   ): Promise<DerivedState>;
   /** Exact display/validation only; cannot be used as an authoritative commit. */
   previewGeometry(
@@ -284,6 +289,7 @@ export interface GeometryWorkerApi {
     options?: {
       signal?: AbortSignal;
       deferTopology?: boolean;
+      prepareBodyId?: BodyId;
       /** An edit's live preview: see `syncOnce`. */
       proposeCarry?: boolean;
     }
@@ -860,6 +866,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             };
           }
         }
+        if (
+          (message.type === 'sync' && message.ok) ||
+          message.type === 'display-refined'
+        ) {
+          const prepared = message.prepared;
+          const body =
+            prepared && message.derived.bodyRepresentations[prepared.bodyId];
+          if (body && prepared) preparedBodies.set(body, prepared.data);
+        }
         if (message.type === 'projection-delta') {
           recordEditPhase(message, 'received', {
             ...message.packet.metrics,
@@ -1088,8 +1103,15 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
               }
             });
           }
-          if (message.ok) pending.resolve(message.geometry);
-          else
+          if (message.ok) {
+            const prepared = message.prepared;
+            if (prepared) {
+              const body =
+                message.geometry.bodyRepresentations[prepared.bodyId];
+              if (body) preparedBodies.set(body, prepared.data);
+            }
+            pending.resolve(message.geometry);
+          } else
             pending.reject(
               new GeometryWorkerError(message.error, message.refusal)
             );
@@ -1586,6 +1608,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         document: documentForRebuild(document),
         ...(analysis ? { analysis } : {}),
         ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {}),
+        ...(options?.prepareBodyId
+          ? { prepareBodyId: options.prepareBodyId }
+          : {}),
         ...(options?.proposeCarry ? { proposeCarry: true } : {})
       });
       if (!posted.ok)
@@ -1657,6 +1682,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           requestId,
           document: documentForRebuild(document),
           ...(options?.deferTopology ? { deferTopology: true } : {}),
+          ...(options?.prepareBodyId
+            ? { prepareBodyId: options.prepareBodyId }
+            : {}),
           ...(options?.proposeCarry ? { proposeCarry: true } : {})
         });
         const entry = geometryPreviewRequests.current.get(requestId);

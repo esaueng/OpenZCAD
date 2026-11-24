@@ -68,6 +68,32 @@ describe('the offset body ghost', () => {
     ghost.dispose();
   });
 
+  it('culls a covered shell until the exact replacement or a proxy is drawn', () => {
+    const source = body();
+    const ghost = createBodyGhost(source, {
+      faceRange: { triangleStart: 0, triangleCount: 2 }
+    });
+    const shell = ghost.object.getObjectByName('offset-body-ghost-shell')!;
+    const depth = ghost.object.getObjectByName('offset-body-ghost-depth')!;
+    const edges = ghost.object.getObjectByName('offset-body-ghost-edges')!;
+    const rim = ghost.object.getObjectByName('offset-body-ghost-face-outline')!;
+    ghost.veilAddedMaterial(source, true);
+    expect([shell.visible, depth.visible, edges.visible, rim.visible]).toEqual([
+      false,
+      false,
+      false,
+      true
+    ]);
+    ghost.veilAddedMaterial(source);
+    expect(shell.visible).toBe(true);
+    ghost.veilAddedMaterial(source.clone(), true);
+    expect(shell.visible).toBe(true);
+    ghost.setClippingPlane(new THREE.Plane(new THREE.Vector3(1, 0, 0), 0));
+    ghost.veilAddedMaterial(source, true);
+    expect(shell.visible).toBe(true);
+    ghost.dispose();
+  });
+
   it('rims the old face with an outline that still shows on a pulled solid', () => {
     const ghost = createBodyGhost(body(), {
       faceRange: { triangleStart: 0, triangleCount: 2 }
@@ -376,6 +402,64 @@ describe('the offset body ghost', () => {
         live.material.dispose();
       }
     );
+
+    it('submits every triangle that reaches the veil plane and omits distant dense faces', () => {
+      const source = body();
+      const live = new THREE.Mesh(
+        new THREE.BoxGeometry(2.2, 2, 2, 50, 50, 50).translate(0.1, 0, 0),
+        new THREE.MeshStandardMaterial()
+      );
+      const ghost = createBodyGhost(source, {
+        faceRange: { triangleStart: 0, triangleCount: 2 }
+      });
+      expect(ghost.veilAddedMaterial(live)).toBe(true);
+      const depth = ghost.object.getObjectByName(
+        'offset-body-ghost-veil-depth'
+      ) as THREE.Mesh;
+      const fill = ghost.object.getObjectByName(
+        'offset-body-ghost-veil-fill'
+      ) as THREE.Mesh;
+      expect(depth.geometry).toBe(fill.geometry);
+      expect(fill.geometry).not.toBe(live.geometry);
+      const original = live.geometry.index!;
+      const selected = Array.from(fill.geometry.index!.array);
+      expect(selected.length).toBeLessThan(original.count / 2);
+      const position = live.geometry.getAttribute('position');
+      const keep = live.material.clippingPlanes![0]!;
+      const required = new Set<string>();
+      const point = new THREE.Vector3();
+      for (let i = 0; i < original.count; i += 3) {
+        const tri = [
+          original.getX(i),
+          original.getX(i + 1),
+          original.getX(i + 2)
+        ];
+        if (
+          tri.some(
+            (index) =>
+              keep.distanceToPoint(
+                point.fromBufferAttribute(position, index)
+              ) <= 0
+          )
+        )
+          required.add(tri.join(','));
+      }
+      for (let i = 0; i < selected.length; i += 3)
+        required.delete(selected.slice(i, i + 3).join(','));
+      expect(required.size).toBe(0);
+      const replacementNormal = live.geometry.getAttribute('normal').clone();
+      live.geometry.setAttribute('normal', replacementNormal);
+      expect(ghost.veilAddedMaterial(live)).toBe(true);
+      expect(depth.geometry.getAttribute('normal')).toBe(replacementNormal);
+      live.geometry.setDrawRange(0, 3);
+      expect(ghost.veilAddedMaterial(live)).toBe(true);
+      expect(depth.geometry).toBe(live.geometry);
+      ghost.dispose();
+      expect(live.geometry.getAttribute('position')).toBe(position);
+      expect(live.geometry.index).toBe(original);
+      live.geometry.dispose();
+      live.material.dispose();
+    });
 
     it.each([false, true])(
       'rebuilds the cap only when the live position buffer changes (interleaved: %s)',

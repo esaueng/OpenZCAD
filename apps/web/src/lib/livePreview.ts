@@ -141,6 +141,7 @@ export class LivePreview<TDocument, TDerived> {
     derived: TDerived;
   } | null = null;
   private abort: AbortController | null = null;
+  private releasedAbort: AbortController | null = null;
   private slow = false;
   /** Predicted slow: hold rebuilds until the hand rests (`slowSettleMs`). */
   private settle = false;
@@ -349,6 +350,7 @@ export class LivePreview<TDocument, TDerived> {
       }
     } finally {
       const aborted = this.abort?.signal.aborted ?? false;
+      this.releasedAbort = null;
       this.runningPreview = null;
       this.runningGeneration = null;
       this.abort = null;
@@ -386,6 +388,30 @@ export class LivePreview<TDocument, TDerived> {
     }
   }
 
+  /**
+   * Let the caller finish displaying a matching in-flight value after release.
+   * The gesture stops publishing immediately. The release owns the promise.
+   */
+  takeRunning(
+    value: number
+  ): (RunningPreview<TDocument, TDerived> & { cancel: () => void }) | null {
+    const running = this.runningPreview;
+    if (
+      !running ||
+      running.value !== value ||
+      this.runningGeneration !== this.generation ||
+      !this.abort ||
+      this.abort.signal.aborted ||
+      this.options.isCurrent?.(running.document) === false
+    )
+      return null;
+    const controller = this.abort;
+    this.abort = null;
+    this.stop();
+    this.releasedAbort = controller;
+    return { ...running, cancel: () => controller.abort() };
+  }
+
   /** Invalidate work while retaining the displayed result during final validation. */
   stop() {
     this.generation += 1;
@@ -408,6 +434,8 @@ export class LivePreview<TDocument, TDerived> {
    * preview, and re-arms the slow-path guard for the next gesture.
    */
   clear() {
+    this.releasedAbort?.abort();
+    this.releasedAbort = null;
     this.stop();
     if (this.active) {
       this.active = false;

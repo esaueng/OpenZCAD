@@ -1,3 +1,6 @@
+import { denseBodyNeedsPreparation } from './components/viewer/bodyPreparationPolicy';
+import { flushSync } from 'react-dom';
+import { preparedBodies } from '../../../packages/viewport/src/render/preparedBody';
 import {
   CAD_IMPORT_ACCEPT,
   fileAccept,
@@ -2560,6 +2563,12 @@ interface RegionExtrudePreviewCandidate {
  */
 interface ReusableOffsetPreview {
   candidate: OffsetPreviewCandidate;
+  displayInstalled?: true;
+  validation?: {
+    controller: AbortController;
+    lineageDemand: string;
+    derived: Promise<ProjectDocument['derived']>;
+  };
 }
 
 interface OffsetPreviewResult {
@@ -4899,6 +4908,8 @@ export function App() {
      * has since been cleared.
      */
     selectionMovedOn?: boolean;
+    cancelReleasedDisplay?: () => void;
+    restoreOffsetDisplay?: () => void;
   } | null>(null);
 
   /** Whether the selection is still the one a direct edit was checked for. */
@@ -5307,6 +5318,9 @@ export function App() {
   useThumbnailCaptureActivity(
     sharedThumbnailCapture,
     geometryBusy ||
+      (isOperationState(interaction) &&
+        (interaction.phase === 'dragging' ||
+          interaction.phase === 'validating')) ||
       Boolean(doc && geometry.state.phase !== 'ready') ||
       // A released edit's draft display mesh is refined in the background;
       // the idle capture draws the refined one.
@@ -5912,6 +5926,7 @@ export function App() {
       movedOnFromRefusal(refusalSubject, refusalSubjectKey(pending.interaction))
     ) {
       pending.selectionMovedOn = true;
+      pending.cancelReleasedDisplay?.();
     }
     if (
       lastDirectEditFailure &&
@@ -6162,6 +6177,7 @@ export function App() {
         const derived = await geometry.previewGeometry(candidate.document, {
           signal,
           deferTopology: true,
+          prepareBodyId: candidate.bodyId,
           // Built like the release check, so preview and commit agree.
           proposeCarry: true
         });
@@ -6209,10 +6225,13 @@ export function App() {
       minIntervalMs: () =>
         offsetChainedRef.current
           ? OFFSET_SET_CHAIN_PREVIEW_MS
-          : GEOMETRY_PREVIEW_SCHEDULING.minIntervalMs,
+          : reusableOffsetPreviewRef.current?.displayInstalled
+            ? 0
+            : GEOMETRY_PREVIEW_SCHEDULING.minIntervalMs,
       presentationTimeMs: () => previewPresentationMs.current,
       publish: (preview) => {
         if (!preview) {
+          reusableOffsetPreviewRef.current?.validation?.controller.abort();
           reusableOffsetPreviewRef.current = null;
           shownOffsetLaneRef.current = null;
           setPreviewDoc(null);
@@ -6221,7 +6240,9 @@ export function App() {
           return;
         }
         traceFaceDragPublish(preview.document.offset, preview.document);
-        reusableOffsetPreviewRef.current = { candidate: preview.document };
+        reusableOffsetPreviewRef.current?.validation?.controller.abort();
+        const held: ReusableOffsetPreview = { candidate: preview.document };
+        reusableOffsetPreviewRef.current = held;
         // A chained set's coarse whole-chain frame for a value the hand has
         // left would put its leading plane back behind the hand: it still
         // answers for its value, and the display waits for the hand's own.
@@ -6232,12 +6253,55 @@ export function App() {
         if (!handLeft) {
           shownOffsetLaneRef.current = 'full';
           setPreviewDoc(null);
-          setFaceGeometryPreview({
-            ...preview.document,
-            document: preview.document.document,
-            geometry: preview.derived
-          });
-          setRenderedOffsetPreview(preview.document.offset);
+          const show = () => {
+            setFaceGeometryPreview({
+              ...preview.document,
+              document: preview.document.document,
+              geometry: preview.derived
+            });
+            setRenderedOffsetPreview(preview.document.offset);
+          };
+          const body =
+            preview.derived.bodyRepresentations[preview.document.bodyId];
+          // A dense frame is already prepared off-thread. Install it before
+          // yielding to another costly draw of the old solid.
+          if (body && preparedBodies.get(body)?.geometry) {
+            flushSync(show);
+            // The next pending pointer value can enter the geometry worker
+            // immediately while the GPU paints this submitted frame.
+            held.displayInstalled = true;
+            // A held dense frame can use its idle time for the same full
+            // rebuild release would request. Moving the hand cancels it.
+            if (offsetPreviewValueRef.current === preview.document.offset) {
+              stopOffsetRestCheck();
+              offsetRestTimer.current = window.setTimeout(() => {
+                offsetRestTimer.current = null;
+                const candidate = held.candidate;
+                if (
+                  reusableOffsetPreviewRef.current !== held ||
+                  offsetPreviewValueRef.current !== candidate.offset ||
+                  !previewSelectionIsCurrent(candidate)
+                )
+                  return;
+                const controller = new AbortController();
+                const demand = geometry.liveLineageDemand();
+                const derived = syncCandidate(
+                  candidate.document,
+                  undefined,
+                  demand,
+                  { signal: controller.signal, prepareBodyId: candidate.bodyId }
+                );
+                held.validation = {
+                  controller,
+                  lineageDemand: JSON.stringify(demand) ?? '',
+                  derived
+                };
+                void derived.catch(() => {
+                  delete held.validation;
+                });
+              }, OFFSET_FACE_REST_MS);
+            }
+          } else show();
         }
         setLastValidPreview(preview.document.offset);
         setPreviewVerdict({ value: preview.document.offset, status: 'built' });
@@ -6386,7 +6450,14 @@ export function App() {
       offsetRestTimer.current = null;
     }
   }, []);
-  useEffect(() => stopOffsetRestCheck, [stopOffsetRestCheck]);
+  useEffect(
+    () => () => {
+      stopOffsetRestCheck();
+      reusableOffsetPreviewRef.current?.validation?.controller.abort();
+      pendingDirectEditRef.current?.cancelReleasedDisplay?.();
+    },
+    [stopOffsetRestCheck]
+  );
 
   /**
    * Preview and commit resolve the same command choice. Automatic uses exact
@@ -6632,8 +6703,17 @@ export function App() {
     manager: () => managerRef.current,
     // Built with the live lineage demand: the commit then adopts this result
     // as the live one (`adoptValidatedResult`) rather than rebuilding it.
-    derive: (document) =>
-      syncCandidate(document, undefined, geometry.liveLineageDemand()),
+    derive: (document) => {
+      const current = interactionRef.current;
+      return syncCandidate(
+        document,
+        undefined,
+        geometry.liveLineageDemand(),
+        current.mode === 'face' && current.op === 'offset-face'
+          ? { prepareBodyId: current.target.bodyId as BodyId }
+          : undefined
+      );
+    },
     commit: (command, derived) => executeCommand(command, derived),
     onValidationStart: (value) => {
       stopCylinderRadiusRestCheck();
@@ -6641,6 +6721,7 @@ export function App() {
       offsetPreview.stop();
       offsetLeadPreview.stop();
       const document = managerRef.current?.document;
+      pendingDirectEditRef.current?.cancelReleasedDisplay?.();
       pendingDirectEditRef.current = document
         ? {
             document,
@@ -6656,6 +6737,7 @@ export function App() {
       // with its unit, as the card says it. The record keeps the adapter's.
       const shownMessage = shownOffsetLimit(diagnostic).message;
       const pending = pendingDirectEditRef.current;
+      pending?.cancelReleasedDisplay?.();
       pendingDirectEditRef.current = null;
       const current = managerRef.current?.document;
       if (
@@ -6703,6 +6785,7 @@ export function App() {
         !isStaleSelectionError(diagnostic);
       offsetLeadPreview.clear();
       if (retainOffset) {
+        pending?.restoreOffsetDisplay?.();
         offsetPreview.stop();
       } else {
         offsetPreview.clear();
@@ -6742,6 +6825,7 @@ export function App() {
     },
     onCommitted: (bodyId) => {
       const pending = pendingDirectEditRef.current;
+      pending?.cancelReleasedDisplay?.();
       pendingDirectEditRef.current = null;
       if (pending) {
         recordDirectEditOutcome('committed', {
@@ -32440,6 +32524,11 @@ export function App() {
 
   function handleOffsetPreview(offset: number, exactGeometry = true) {
     stopOffsetRestCheck();
+    const held = reusableOffsetPreviewRef.current;
+    if (held?.validation && held.candidate.offset !== offset) {
+      held.validation.controller.abort();
+      delete held.validation;
+    }
     const current = interactionRef.current;
     // The arrow rig is shared: in region mode its value is an extrude height.
     if (current.mode === 'region') {
@@ -33033,6 +33122,11 @@ export function App() {
       !retakenRelease.retake(current.op, current.target)
     )
       return false;
+    const pending = pendingDirectEditRef.current;
+    pending?.cancelReleasedDisplay?.();
+    // A completed release-only frame belongs to the old drag. Recover the
+    // last accepted value before a second release can capture its display.
+    pending?.restoreOffsetDisplay?.();
     pendingDirectEditRef.current = null;
     dispatchInteraction({ type: 'drag-retake' });
     return true;
@@ -33158,6 +33252,18 @@ export function App() {
       previewSelectionIsCurrent(candidate)
         ? candidate
         : null;
+    const sourceBody =
+      managerRef.current?.document.derived.bodyRepresentations[plan.bodyId];
+    const retaken = retakenRelease.take('offset-face');
+    const resumeRelease =
+      exact === undefined && retaken?.submittedValue === offset;
+    const releasedFrame =
+      !resumeRelease &&
+      reuse &&
+      sourceBody &&
+      denseBodyNeedsPreparation(sourceBody)
+        ? offsetPreview.takeRunning(offset)
+        : null;
     offsetPreview.stop();
     // A chained set's lead frame stays on screen until the commit replaces
     // it; it never authors the commit, which replays the whole set.
@@ -33165,8 +33271,7 @@ export function App() {
     offsetPreviewValueRef.current = null;
     // Let go where the set-aside release was, it commits from the rebuild
     // already running for it; anywhere else, the new value replaces it.
-    const retaken = retakenRelease.take('offset-face');
-    if (exact === undefined && retaken?.submittedValue === offset) {
+    if (resumeRelease && retaken) {
       if (!retakenRelease.commit(retaken)) return 'blocked';
       return 'started';
     }
@@ -33184,14 +33289,64 @@ export function App() {
         : reuse
           ? reuse.successMessage
           : plan.successMessage;
+    const held = reusableOffsetPreviewRef.current;
+    const validation =
+      held?.candidate === reuse &&
+      held?.validation?.lineageDemand ===
+        (JSON.stringify(geometry.liveLineageDemand()) ?? '')
+        ? held.validation
+        : undefined;
+    // The release owns this rebuild now. Retiring the gesture must not abort it.
+    if (validation && held) delete held.validation;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
       successMessage,
       offset,
       undefined,
-      reuse ? reuse.validationTargets : plan.validationTargets
+      reuse ? reuse.validationTargets : plan.validationTargets,
+      validation && reuse
+        ? {
+            baseProjectId: reuse.baseProjectId,
+            baseVersion: reuse.baseVersion,
+            derived: validation.derived
+          }
+        : undefined
     );
+    if (releasedFrame) {
+      const release = pendingDirectEditRef.current;
+      if (release) release.cancelReleasedDisplay = releasedFrame.cancel;
+      else releasedFrame.cancel();
+      const candidate = releasedFrame.document;
+      void releasedFrame.result.then(
+        (geometry) => {
+          if (
+            !release ||
+            release !== pendingDirectEditRef.current ||
+            release.selectionMovedOn ||
+            interactionRef.current.mode !== 'face' ||
+            interactionRef.current.phase !== 'validating' ||
+            !previewSelectionIsCurrent(candidate)
+          )
+            return;
+          // The already-requested display can finish under the released handle.
+          // Only executeValidatedDirectEdit can adopt geometry into history.
+          const priorLane = shownOffsetLaneRef.current;
+          release.restoreOffsetDisplay = () => {
+            setFaceGeometryPreview(faceGeometryPreview);
+            setRenderedOffsetPreview(renderedOffsetPreview);
+            shownOffsetLaneRef.current = priorLane;
+          };
+          shownOffsetLaneRef.current = 'full';
+          traceFaceDragPublish(candidate.offset, candidate);
+          flushSync(() => {
+            setFaceGeometryPreview({ ...candidate, geometry });
+            setRenderedOffsetPreview(candidate.offset);
+          });
+        },
+        () => undefined
+      );
+    }
     return 'started';
   }
 

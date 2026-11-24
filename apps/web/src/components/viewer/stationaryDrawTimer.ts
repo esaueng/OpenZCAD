@@ -32,16 +32,18 @@ export class StationaryDrawTimer {
 
   /** Keep automatic full-size fades and camera glides from filling the GPU
    * queue ahead of the user's next gesture. Explicit input can always draw. */
-  submittedFullSize(now: number) {
+  submittedFullSize(now: number, denseEdit = false) {
     if (
-      !this.extension ||
-      !this.model ||
-      (this.samples === 2 && this.fastestMs <= SEVERE_FRAME_MS)
+      !denseEdit &&
+      (!this.extension ||
+        !this.model ||
+        (this.samples === 2 && this.fastestMs <= SEVERE_FRAME_MS))
     )
       return;
     // An external profiler can hold the timer target indefinitely. Bound
     // the provisional pacing when there is still no measurement in flight.
     if (
+      !denseEdit &&
       this.samples < 2 &&
       !this.pending.length &&
       ++this.unmeasuredFullDraws > 8

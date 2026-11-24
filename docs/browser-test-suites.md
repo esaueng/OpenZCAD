@@ -145,7 +145,14 @@ OZ_PERF=1 OZ_PERF_ANGLE=gl STEP_PERF_FILE=/path/to/shapr3d_hammer_holder.step \
 measures pointer-to-preview and release-to-authoritative-frame latency. The
 `width from 30` case shrinks a public filleted-union surrogate to 22.5 mm;
 `long native history` stresses the same path after 25 features. A supplied
-native backup can be selected through `OZ_FACE_DRAG_PROJECT`. Model limitations,
+native backup can be selected through `OZ_FACE_DRAG_PROJECT`. Use
+`OZ_FACE_DRAG_NEAR=x,y,z` to distinguish parallel faces in document coordinates.
+For a quick release set `OZ_FACE_DRAG_IMMEDIATE_RELEASE=1`, the signed distance in
+`OZ_FACE_DRAG_DISTANCE` and the sample count in `OZ_FACE_DRAG_MOVES`. This
+releases at the final pointer sample and records both the displayed body's
+bounds and the subsequent checked history revision. Set `OZ_FACE_DRAG_EXPECT_MAX_Z`
+to read the framebuffer when the solid reaches the expected height. Its trace
+event records the GPU completion time in `detail.gpuCompletedAt`. Model limitations,
 the exact commands and measured diagnosis are in
 [face-drag main-thread work](qa/2026-11-09/face-drag-main-thread.md).
 `two committed face resizes` repeats the recording's R2 filleted-union shape:

@@ -76,8 +76,68 @@ export interface BodyGhost {
    * Does nothing for a dragged face that is not planar.
    * Returns false when the live mesh reaches past the plane but cannot be capped.
    */
-  veilAddedMaterial(live: THREE.Mesh | null): boolean;
+  veilAddedMaterial(
+    live: THREE.Mesh | null,
+    sourcePoseUnchanged?: boolean
+  ): boolean;
   dispose(): void;
+}
+
+/** Index only the triangles the two clipped veil draws could show. The
+ * shader still clips all crossing triangles at the original plane. */
+function beyondGeometry(geometry: THREE.BufferGeometry, plane: THREE.Plane) {
+  const index = geometry.index;
+  const position = geometry.getAttribute('position');
+  const xyz = plainFloat32Positions(position);
+  if (
+    !index ||
+    !xyz ||
+    index.count < 60_000 ||
+    geometry.drawRange.start !== 0 ||
+    geometry.drawRange.count !== Infinity ||
+    geometry.morphAttributes.position?.length
+  )
+    return null;
+  const keep = new Uint8Array(position.count);
+  const { x, y, z } = plane.normal;
+  for (let i = 0; i < position.count; i++) {
+    const ax = x * xyz[3 * i]!,
+      by = y * xyz[3 * i + 1]!,
+      cz = z * xyz[3 * i + 2]!;
+    const margin =
+      1e-4 *
+      (1 +
+        Math.abs(ax) +
+        Math.abs(by) +
+        Math.abs(cz) +
+        Math.abs(plane.constant));
+    // Keep the roundoff band and any nonfinite vertex in the original draw.
+    keep[i] = Number(!(ax + by + cz + plane.constant > margin));
+  }
+  const indices: number[] = [];
+  for (let i = 0; i < index.count; i += 3) {
+    const a = index.getX(i),
+      b = index.getX(i + 1),
+      c = index.getX(i + 2);
+    if (keep[a] || keep[b] || keep[c]) indices.push(a, b, c);
+  }
+  if (indices.length > index.count / 2) return null;
+  const subset = new THREE.BufferGeometry();
+  for (const [name, attribute] of Object.entries(geometry.attributes))
+    if (name === 'position' || name === 'normal')
+      subset.setAttribute(name, attribute);
+  subset.setIndex(indices);
+  subset.boundingSphere = geometry.boundingSphere;
+  // THREE releases every attached attribute on disposal. Only the subset's
+  // index belongs to it. The live body owns its shading and position buffers.
+  return {
+    geometry: subset,
+    dispose() {
+      for (const name of Object.keys(subset.attributes))
+        subset.deleteAttribute(name);
+      subset.dispose();
+    }
+  };
 }
 
 /**
@@ -115,7 +175,16 @@ export function createBodyGhost(
   object.matrixAutoUpdate = false;
   body.updateMatrixWorld(true);
   object.matrix.copy(body.matrixWorld);
-  const geometry = body.geometry.clone();
+  const sourceGeometry = body.geometry;
+  const sourcePosition = sourceGeometry.getAttribute('position');
+  const positionVersion = (position: typeof sourcePosition) =>
+    position instanceof THREE.BufferAttribute
+      ? position.version
+      : position.data.version;
+  const sourceVersion = positionVersion(sourcePosition);
+  const sourceIndex = sourceGeometry.index;
+  const sourceIndexVersion = sourceIndex?.version;
+  const geometry = sourceGeometry.clone();
 
   // Transparent so it sorts after the live body's edges, which then keep
   // their ink where removed material stands in front of them.
@@ -393,6 +462,10 @@ export function createBodyGhost(
     indexVersion: number;
     matrix: THREE.Matrix4;
     cap: THREE.BufferGeometry | null;
+    beyond: ReturnType<typeof beyondGeometry>;
+    normal: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+    drawStart: number;
+    drawCount: number;
   } | null = null;
   function liveCap(live: THREE.Mesh, keep: THREE.Plane) {
     const position = live.geometry.getAttribute('position');
@@ -404,6 +477,9 @@ export function createBodyGhost(
     if (
       capSection &&
       capSection.geometry === live.geometry &&
+      capSection.normal === live.geometry.getAttribute('normal') &&
+      capSection.drawStart === live.geometry.drawRange.start &&
+      capSection.drawCount === live.geometry.drawRange.count &&
       capSection.position === position &&
       capSection.version === version &&
       capSection.index === index &&
@@ -412,12 +488,16 @@ export function createBodyGhost(
     )
       return capSection.cap;
     capSection?.cap?.dispose();
+    capSection?.beyond?.dispose();
+    let beyond: ReturnType<typeof beyondGeometry> = null;
     let cap: THREE.BufferGeometry | null = null;
     try {
       const localPlane = keep
         .clone()
         .applyMatrix4(live.matrixWorld.clone().invert());
       cap = sectionCapGeometry(live.geometry, localPlane);
+      if (cap && live.matrixWorld.equals(object.matrix))
+        beyond = beyondGeometry(live.geometry, localPlane);
       // Veil parts live beside the original body, in its captured frame.
       cap?.applyMatrix4(
         object.matrix.clone().invert().multiply(live.matrixWorld)
@@ -433,11 +513,26 @@ export function createBodyGhost(
       index,
       indexVersion: index?.version ?? 0,
       matrix: live.matrixWorld.clone(),
+      beyond,
+      normal: live.geometry.getAttribute('normal'),
+      drawStart: live.geometry.drawRange.start,
+      drawCount: live.geometry.drawRange.count,
       cap
     };
     return cap;
   }
-  function veilAddedMaterial(live: THREE.Mesh | null) {
+  // Before an exact replacement arrives, the opaque source covers every
+  // front-facing ghost fragment. Keep the old face rim, which has its own
+  // forward depth bias. A viewport proxy can change the pose in a shader.
+  function showShell(visible: boolean) {
+    depth.visible = shell.visible = visible;
+    if (edges) edges.visible = visible;
+  }
+  function veilAddedMaterial(
+    live: THREE.Mesh | null,
+    sourcePoseUnchanged = false
+  ) {
+    showShell(true);
     const liveMaterial = live?.material;
     if (
       !live ||
@@ -456,6 +551,26 @@ export function createBodyGhost(
     // old face, and a cap there would close empty air with a solid face.
     if (!reachesBeyond(live, plane, margin)) {
       unveil();
+      if (
+        sourcePoseUnchanged &&
+        live === body &&
+        live.geometry === sourceGeometry &&
+        live.geometry.getAttribute('position') === sourcePosition &&
+        positionVersion(sourcePosition) === sourceVersion &&
+        live.geometry.drawRange.start === geometry.drawRange.start &&
+        live.geometry.drawRange.count === geometry.drawRange.count &&
+        live.geometry.index === sourceIndex &&
+        sourceIndex?.version === sourceIndexVersion &&
+        live.matrixWorld.equals(object.matrix) &&
+        live.visible &&
+        liveMaterial.visible &&
+        liveMaterial.depthWrite &&
+        !section &&
+        !liveMaterial.clippingPlanes?.length &&
+        liveMaterial.side !== THREE.BackSide
+      ) {
+        showShell(false);
+      }
       return true;
     }
     if (veil && veil.live !== live) unveil();
@@ -535,10 +650,9 @@ export function createBodyGhost(
     }
     // A proxy may swap the body's geometry, and the section pass rewrites
     // the body's planes; keep both current.
-    if (veil.depth.geometry !== live.geometry) {
-      veil.depth.geometry = live.geometry;
-      veil.fill.geometry = live.geometry;
-    }
+    const surface = capSection?.beyond?.geometry ?? live.geometry;
+    veil.depth.geometry = surface;
+    veil.fill.geometry = surface;
     veil.cap.geometry = cap;
     veil.cap.material.copy(liveMaterial);
     // The cap lies on the keep plane; clipping it by that same plane can
@@ -598,6 +712,7 @@ export function createBodyGhost(
     dispose() {
       unveil();
       capSection?.cap?.dispose();
+      capSection?.beyond?.dispose();
       veilDepthMaterial.dispose();
       veilFillMaterial.dispose();
       object.removeFromParent();

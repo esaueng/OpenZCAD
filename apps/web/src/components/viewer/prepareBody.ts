@@ -29,3 +29,16 @@ export function prepareBody(body: GeometryBodyRepresentation): PreparedBody {
       : null
   };
 }
+
+export function preparationTransferables(
+  prepared: readonly PreparedBody[]
+): ArrayBuffer[] {
+  const buffers = new Set<ArrayBuffer>();
+  const collect = (value: unknown) => {
+    if (ArrayBuffer.isView(value)) buffers.add(value.buffer as ArrayBuffer);
+    else if (value && typeof value === 'object')
+      for (const child of Object.values(value)) collect(child);
+  };
+  collect(prepared);
+  return [...buffers];
+}

@@ -13,28 +13,15 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { wrapGroupedMeshing } from './support/grouped-mesh-spy';
 
-/** Counts `tessellateSolidGroupedBinary` calls on every kernel instance. */
-function countTessellations(): { count: () => number; restore: () => void } {
-  const proto = RemusKernel.prototype as unknown as Record<string, unknown>;
-  const original = proto.tessellateSolidGroupedBinary as (
-    ...args: unknown[]
-  ) => unknown;
+function countTessellations() {
   let calls = 0;
-  proto.tessellateSolidGroupedBinary = function (
-    this: unknown,
-    ...args: unknown[]
-  ) {
-    calls += 1;
-    return original.apply(this, args);
-  };
-  return {
-    count: () => calls,
-    restore: () => {
-      proto.tessellateSolidGroupedBinary = original;
-    }
-  };
+  const spy = wrapGroupedMeshing((original, ...args) => {
+    calls++;
+    return original(...args);
+  });
+  return { count: () => calls, restore: spy.mockRestore };
 }
 
 it('drag previews reuse the committed measurement of bodies the edit leaves alone', async () => {

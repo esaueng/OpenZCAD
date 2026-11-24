@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   booleanBodies,
@@ -19,7 +19,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { previewDisplayTessellation } from '../packages/kernel-adapter/src/display-tessellation';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { wrapGroupedMeshing } from './support/grouped-mesh-spy';
 import { filletedUnion } from './support/filleted-union';
 
 /**
@@ -103,27 +103,24 @@ const DRAG_ANGULAR = previewDisplayTessellation({
  * Remus defect behind the display-gap advisory does at some deflections.
  */
 function stubDisplayGaps(gapsAt: 'drag' | 'full') {
-  const original = RemusKernel.prototype.tessellateSolidGroupedBinary;
-  return vi
-    .spyOn(RemusKernel.prototype, 'tessellateSolidGroupedBinary')
-    .mockImplementation(function (this: RemusKernel, ...args) {
-      const mesh = original.apply(this, args);
-      if ((args[2] === DRAG_ANGULAR) !== (gapsAt === 'drag')) return mesh;
-      try {
-        const offsets = mesh.faceOffsets.slice();
-        const last = offsets.length - 1;
-        const indices = mesh.indices.slice(0, offsets[last - 1]);
-        offsets[last] = offsets[last - 1]!;
-        return {
-          positions: mesh.positions.slice(),
-          indices,
-          faceOffsets: offsets,
-          free() {}
-        } as unknown as ReturnType<typeof original>;
-      } finally {
-        mesh.free();
-      }
-    });
+  return wrapGroupedMeshing((original, ...args) => {
+    const mesh = original(...args);
+    if ((args[2] === DRAG_ANGULAR) !== (gapsAt === 'drag')) return mesh;
+    try {
+      const offsets = mesh.faceOffsets.slice();
+      const last = offsets.length - 1;
+      const indices = mesh.indices.slice(0, offsets[last - 1]);
+      offsets[last] = offsets[last - 1]!;
+      return {
+        positions: mesh.positions.slice(),
+        indices,
+        faceOffsets: offsets,
+        free() {}
+      } as unknown as ReturnType<typeof original>;
+    } finally {
+      mesh.free();
+    }
+  });
 }
 
 function withoutClock(derived: DerivedState) {

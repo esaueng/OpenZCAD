@@ -76,15 +76,17 @@ describe('withTerminalResultCheckpoint', () => {
       32
     );
     expect(withTerminalResultCheckpoint(full, 599, 32)).toEqual(full);
-    // 22 features: an appended edit's schedule drops the source (20), which
-    // must then stay the last checkpoint so that edit restores it.
+    // An append can restore the result even when its source leaves the schedule.
     const sparse = tailCheckpointIndices(
       historyCheckpointIndices(22, 32),
       20,
       32
     );
     expect(historyCheckpointIndices(23, 32)).not.toContain(20);
-    expect(withTerminalResultCheckpoint(sparse, 21, 32)).toEqual(sparse);
+    expect(withTerminalResultCheckpoint(sparse, 21, 32)).toEqual([
+      ...sparse,
+      21
+    ]);
     // Nothing to add: no caching, or the result is already the tail.
     expect(withTerminalResultCheckpoint([], 3, 32)).toEqual([]);
     expect(withTerminalResultCheckpoint([0, 1, 3], 3, 32)).toEqual([0, 1, 3]);
@@ -94,6 +96,7 @@ describe('withTerminalResultCheckpoint', () => {
 type CountedMethod =
   | 'extrude'
   | 'tessellateSolidGroupedBinary'
+  | 'tessellateSolidGroupedPositions'
   | 'moveFaces'
   | 'moveFacesJournaled'
   | 'moveFacesJournaledWithQuality'
@@ -174,7 +177,10 @@ async function dragScenario(options: {
       .historyKernel!;
   const limit = options.historyCheckpointLimit ?? 32;
   const extrusions = countCalls('extrude');
-  const tessellations = countCalls('tessellateSolidGroupedBinary');
+  const tessellations = countCalls(
+    'tessellateSolidGroupedBinary',
+    'tessellateSolidGroupedPositions'
+  );
   const moves = countCalls(
     'moveFaces',
     'moveFacesJournaled',
@@ -264,28 +270,35 @@ async function dragScenario(options: {
     ]!.topology!.faces.find((face) => (face.geometry?.normal?.z ?? 0) > 0.99)!;
     const movesBeforeAppend = moves.count();
     const extrusionsBeforeAppend = extrusions.count();
-    const appended = await adapter.previewGeometry(
-      directEditBody(settled, {
-        name: 'Offset again',
-        targetBodyId: edited,
-        operation: {
-          kind: 'offset-face',
-          faceHash: newTop.hash,
-          ...(newTop.reference ? { faceReference: newTop.reference } : {}),
-          sourceSurfaceType: 'plane',
-          sourceArea: newTop.geometry!.area,
-          sourceCenter: newTop.geometry!.center,
-          sourceNormal: newTop.geometry!.normal!,
-          offset: 0.5
-        }
-      }).document,
-      { deferTopology: true }
+    const appendedDocument = directEditBody(settled, {
+      name: 'Offset again',
+      targetBodyId: edited,
+      operation: {
+        kind: 'offset-face',
+        faceHash: newTop.hash,
+        ...(newTop.reference ? { faceReference: newTop.reference } : {}),
+        sourceSurfaceType: 'plane',
+        sourceArea: newTop.geometry!.area,
+        sourceCenter: newTop.geometry!.center,
+        sourceNormal: newTop.geometry!.normal!,
+        offset: 0.5
+      }
+    }).document;
+    const appended = await adapter.previewGeometry(appendedDocument, {
+      deferTopology: true
+    });
+    expect(appended.bodyRepresentations[edited]!.bbox.max.z).toBeCloseTo(
+      nextComplete.bodyRepresentations[edited]!.bbox.max.z + 0.5,
+      9
     );
     expect(appended.warnings).toEqual([]);
     const appendedPreview = {
       moves: moves.count() - movesBeforeAppend,
       extrusions: extrusions.count() - extrusionsBeforeAppend
     };
+    const appendedCommit = await adapter.syncDocument(appendedDocument);
+    expect(appendedCommit.warnings).toEqual([]);
+    const appendedCommitEvent = events.at(-1);
     expect(kernel().checkpointCount()).toBeLessThanOrEqual(limit);
     const fresh = await createExactKernelAdapter({ historyCheckpointLimit: 0 });
     try {
@@ -312,7 +325,8 @@ async function dragScenario(options: {
       nextPreviewReplays,
       nextCommitReplays,
       followUpReplayed,
-      appendedPreview
+      appendedPreview,
+      appendedCommitEvent
     };
   } finally {
     extrusions.restore();
@@ -329,12 +343,13 @@ it('a drag and its commit after a complete sync rebuild nothing but the edit', a
     nextPreviewReplays,
     nextCommitReplays,
     followUpReplayed,
-    appendedPreview
+    appendedPreview,
+    appendedCommitEvent
   } = await dragScenario({});
-  // 22 features is a sparse schedule that drops the source once an edit is
-  // appended, so no result checkpoint is taken: the follow-up sync replays
-  // the edit and the next drag still restores the source, as before.
-  expect(followUpReplayed).toBe(1);
+  // The append coalesces the previous sparse source/result pair. Both the
+  // broadcast and the new drag retain the already checked result.
+  expect(followUpReplayed).toBe(0);
+  expect(appendedCommitEvent).toMatchObject({ restored: 22, replayed: 1 });
   expect(appendedPreview.extrusions).toBe(0);
   // The base sync's last-feature checkpoint is the drag's source.
   expect(rebuiltExtrusions).toEqual([0, 0, 0, 0]);

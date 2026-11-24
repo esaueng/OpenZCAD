@@ -1,3 +1,20 @@
+import type { RemusKernel } from './remus-runtime';
+
+/** The viewport generates its own per-face shading normals. */
+export function groupedDisplayMesh(
+  kernel: RemusKernel,
+  solid: number,
+  linear: number,
+  angular: number
+) {
+  const bindings = kernel as RemusKernel & {
+    tessellateSolidGroupedPositions?: RemusKernel['tessellateSolidGroupedBinary'];
+  };
+  return bindings.tessellateSolidGroupedPositions
+    ? bindings.tessellateSolidGroupedPositions(solid, linear, angular)
+    : kernel.tessellateSolidGroupedBinary(solid, linear, angular);
+}
+
 /** Getters and consume-once outputs both return owned JS arrays. */
 export function ownedMeshPositions<T extends { positions: Float32Array }>(
   mesh: T

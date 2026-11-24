@@ -138,7 +138,8 @@ async function startPage(page: Page, create = true) {
 
 async function armPlanarFace(
   page: Page,
-  normal: { x: number; y: number; z: number }
+  normal: { x: number; y: number; z: number },
+  near?: { x: number; y: number; z: number }
 ): Promise<{ canvas: Locator; handle: Handle }> {
   if (NORMAL_OVERRIDE?.length === 3)
     normal = {
@@ -151,13 +152,16 @@ async function armPlanarFace(
   await expect
     .poll(
       async () => {
-        await canvas.evaluate((element, normal) => {
-          element.dispatchEvent(
-            new CustomEvent('openzcad:e2e-select-planar-face', {
-              detail: { normal }
-            })
-          );
-        }, normal);
+        await canvas.evaluate(
+          (element, detail) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-planar-face', {
+                detail
+              })
+            );
+          },
+          { normal, near }
+        );
         return canvas.getAttribute('data-e2e-handle-x');
       },
       { timeout: 120_000 }
@@ -301,7 +305,8 @@ async function traceDrag(
    * Record every main-thread task from release on, from a Chrome trace: the
    * Long Tasks API omits tasks of 50 ms and under.
    */
-  traceTasks = false
+  traceTasks = false,
+  immediateRelease = false
 ) {
   reach *= REACH_SCALE;
   const box = (await canvas.boundingBox())!;
@@ -326,14 +331,48 @@ async function traceDrag(
     )
   );
   await page.mouse.move(start.x, start.y);
-  await page.evaluate(() => {
+  const expectedMaxZ = process.env.OZ_FACE_DRAG_EXPECT_MAX_Z;
+  await canvas.evaluate((canvas, expectedMaxZ) => {
     const scope = window as typeof window & {
-      __ozFaceDragTrace?: unknown[];
+      __ozFaceDragTrace?: FaceDragTraceEvent[];
       __ozReactCommits?: number;
     };
-    scope.__ozFaceDragTrace = [];
+    const trace: FaceDragTraceEvent[] = [];
+    if (expectedMaxZ !== undefined) {
+      const target = Number(expectedMaxZ);
+      if (!Number.isFinite(target))
+        throw new Error('Expected a finite maximum Z.');
+      const gl = (canvas as HTMLCanvasElement).getContext('webgl2');
+      if (!gl) throw new Error('The solid timing probe needs WebGL2.');
+      const pixel = new Uint8Array(4);
+      // Read the framebuffer once, immediately after the model pass first
+      // draws the requested height. A queued draw alone can run ahead of the GPU.
+      trace.push = (event) => {
+        if (
+          event.kind === 'frame' &&
+          event.detail?.solidMaxZ !== undefined &&
+          Math.abs(event.detail.solidMaxZ - target) < 1e-6
+        ) {
+          gl.readPixels(
+            gl.drawingBufferWidth >> 1,
+            gl.drawingBufferHeight >> 1,
+            1,
+            1,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            pixel
+          );
+          if (gl.isContextLost() || gl.getError() !== gl.NO_ERROR)
+            throw new Error('Could not read back the model pass.');
+          event.detail.gpuCompletedAt = performance.now();
+          trace.push = Array.prototype.push;
+        }
+        return Array.prototype.push.call(trace, event);
+      };
+    }
+    scope.__ozFaceDragTrace = trace;
     scope.__ozReactCommits = 0;
-  });
+  }, expectedMaxZ);
   // OZ_FACE_DRAG_PROFILE=<dir> saves a main-thread CPU profile per case.
   const profiler = process.env.OZ_FACE_DRAG_PROFILE
     ? await page.context().newCDPSession(page)
@@ -360,8 +399,11 @@ async function traceDrag(
     await profiler.send('Profiler.start');
   }
   await page.mouse.down();
-  await canvas.evaluate(
-    async (element, { start, handle, reach, moves, interval, oneWay }) => {
+  const released = await canvas.evaluate(
+    async (
+      element,
+      { start, handle, reach, moves, interval, oneWay, immediateRelease, mark }
+    ) => {
       const pointerId = Number(element.dataset.traceDragPointerId);
       const turn = Math.round(moves * 0.6);
       for (let index = 1; index <= moves; index += 1) {
@@ -383,56 +425,87 @@ async function traceDrag(
             clientY: start.y + handle.dy * handle.pixelsPerUnit * distance
           })
         );
+        if (immediateRelease && index === moves) {
+          const at = performance.mark(mark).startTime;
+          element.dispatchEvent(
+            new PointerEvent('pointerup', {
+              bubbles: true,
+              cancelable: true,
+              pointerType: 'mouse',
+              isPrimary: true,
+              pointerId,
+              buttons: 0,
+              shiftKey: true,
+              clientX: start.x + handle.dx * handle.pixelsPerUnit * distance,
+              clientY: start.y + handle.dy * handle.pixelsPerUnit * distance
+            })
+          );
+          return at;
+        }
         await new Promise((resolve) => setTimeout(resolve, interval));
       }
+      return null;
     },
-    { start, handle, reach, moves: MOVES, interval: MOVE_INTERVAL_MS, oneWay }
+    {
+      start,
+      handle,
+      reach,
+      moves: MOVES,
+      interval: MOVE_INTERVAL_MS,
+      oneWay,
+      immediateRelease,
+      mark: RELEASE_MARK
+    }
   );
   // DOM-dispatched moves do not move the browser's physical cursor. Release
   // from the final sample, or pointerup sees zero travel and cancels the edit.
-  const motionEndedAt = await page.evaluate(() => performance.now());
-  await page.keyboard.down('Shift');
-  const finalDistance = oneWay ? reach : reach / 3;
-  await page.mouse.move(
-    start.x + handle.dx * handle.pixelsPerUnit * finalDistance,
-    start.y + handle.dy * handle.pixelsPerUnit * finalDistance
-  );
-  // Let the last requested value reach the screen before releasing.
-  await page.waitForFunction(
-    () => {
-      const trace = (
-        window as typeof window & { __ozFaceDragTrace: FaceDragTraceEvent[] }
-      ).__ozFaceDragTrace;
-      const last = [...trace].reverse().find((e) => e.kind === 'pointer');
-      const published = trace.filter(
-        (e) => e.kind === 'publish' || e.kind === 'refusal'
-      );
-      const lastSettled = published.at(-1);
-      // A recognized profile drags a client-side proxy and requests no exact
-      // preview until release.
-      if (
-        last !== undefined &&
-        !trace.some((e) => e.kind === 'request') &&
-        performance.now() - last.t > 500
-      )
-        return true;
-      return (
-        last !== undefined &&
-        lastSettled !== undefined &&
-        lastSettled.value === last.value &&
-        trace.some((e) => e.kind === 'frame' && e.t > lastSettled.t)
-      );
-    },
-    undefined,
-    { timeout: 120_000 }
-  );
-  // The mark places release in the trace: its event carries both clocks.
-  const releaseAt = await page.evaluate(
-    (name) => performance.mark(name).startTime,
-    RELEASE_MARK
-  );
-  await page.mouse.up();
-  await page.keyboard.up('Shift');
+  const motionEndedAt =
+    released ?? (await page.evaluate(() => performance.now()));
+  let releaseAt = released;
+  if (releaseAt === null) {
+    await page.keyboard.down('Shift');
+    const finalDistance = oneWay ? reach : reach / 3;
+    await page.mouse.move(
+      start.x + handle.dx * handle.pixelsPerUnit * finalDistance,
+      start.y + handle.dy * handle.pixelsPerUnit * finalDistance
+    );
+    // Let the last requested value reach the screen before releasing.
+    await page.waitForFunction(
+      () => {
+        const trace = (
+          window as typeof window & { __ozFaceDragTrace: FaceDragTraceEvent[] }
+        ).__ozFaceDragTrace;
+        const last = [...trace].reverse().find((e) => e.kind === 'pointer');
+        const published = trace.filter(
+          (e) => e.kind === 'publish' || e.kind === 'refusal'
+        );
+        const lastSettled = published.at(-1);
+        // A recognized profile drags a client-side proxy and requests no exact
+        // preview until release.
+        if (
+          last !== undefined &&
+          !trace.some((e) => e.kind === 'request') &&
+          performance.now() - last.t > 500
+        )
+          return true;
+        return (
+          last !== undefined &&
+          lastSettled !== undefined &&
+          lastSettled.value === last.value &&
+          trace.some((e) => e.kind === 'frame' && e.t > lastSettled.t)
+        );
+      },
+      undefined,
+      { timeout: 120_000 }
+    );
+    // The mark places release in the trace: its event carries both clocks.
+    releaseAt = await page.evaluate(
+      (name) => performance.mark(name).startTime,
+      RELEASE_MARK
+    );
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+  }
   // Disappearance of "Checking" can race its first render. Require an
   // accepted revision and an installed frame, including for proxy previews.
   await expect.poll(revision, { timeout: 120_000 }).toBeGreaterThan(before);
@@ -461,6 +534,7 @@ async function traceDrag(
   );
   const committedFrameAt = await readyFrame.jsonValue();
   await readyFrame.dispose();
+  if (released !== null) await page.mouse.up();
   if (settleSave) {
     // The commit's device save (and any sync) runs after the ready frame.
     // Its serialization is main-thread work the recording showed as hitches.
@@ -552,6 +626,12 @@ async function traceDrag(
     },
     { motionEndedAt, releaseAt, committedFrameAt }
   );
+  if (expectedMaxZ !== undefined) {
+    expect(
+      result.trace.some((event) => event.detail?.gpuCompletedAt !== undefined),
+      'the selected height reached the WebGL framebuffer'
+    ).toBe(true);
+  }
   return { ...result, tasksAfterRelease };
 }
 
@@ -794,7 +874,15 @@ test('traces a supplied project face drag', async ({ page }) => {
   expect(backup.files).toHaveLength(0);
   expect(backup.sources ?? []).toHaveLength(0);
   await openDocument(page, backup.document, 180_000);
-  const { canvas, handle } = await armPlanarFace(page, { x: 0, y: 0, z: 1 });
+  const near = process.env.OZ_FACE_DRAG_NEAR?.split(',').map(Number);
+  if (near && (near.length !== 3 || !near.every(Number.isFinite)))
+    throw new Error('OZ_FACE_DRAG_NEAR requires three finite coordinates.');
+  const immediate = process.env.OZ_FACE_DRAG_IMMEDIATE_RELEASE === '1';
+  const { canvas, handle } = await armPlanarFace(
+    page,
+    { x: 0, y: 0, z: 1 },
+    near ? { x: near[0]!, y: near[1]!, z: near[2]! } : undefined
+  );
   const summary = record(
     'supplied native project',
     {
@@ -804,13 +892,18 @@ test('traces a supplied project face drag', async ({ page }) => {
       page,
       canvas,
       handle,
-      Number(process.env.OZ_FACE_DRAG_DISTANCE ?? 3)
+      Number(process.env.OZ_FACE_DRAG_DISTANCE ?? 3),
+      immediate,
+      false,
+      false,
+      immediate
     )
   );
   expect(summary.pointerEvents).toBeGreaterThan(0);
-  expect(
-    summary.presentedFrames + summary.proxyPresentedFrames
-  ).toBeGreaterThan(0);
+  if (!immediate)
+    expect(
+      summary.presentedFrames + summary.proxyPresentedFrames
+    ).toBeGreaterThan(0);
   expect(summary.releaseToFrameMs).not.toBeNull();
 });
 

@@ -189,12 +189,9 @@ export function tailCheckpointIndices(
  * drag's first frame replays the result checked (only the dragged edit is
  * built display-only), so its release still restores what the drag built.
  *
- * Only where it can never cost a restore: a slot must be free, so a full
- * schedule keeps the source (the next value of the same edit restores it),
- * and the source must stay a stable position once one more feature is
- * appended. Checkpoints form a stack and a sync restores past an unscheduled
- * one only when it is the last, so a source the next schedule drops would
- * otherwise sit under the result and block the restore it used to give. The
+ * A full schedule keeps the source for the next value of the same edit.
+ * If an append drops the source from the schedule, the restore coalesces
+ * the consecutive source/result pair at the checked result. The
  * entry is admitted against the byte budget like any other, and is never
  * preferred over the source when the budget is short.
  */
@@ -206,8 +203,7 @@ export function withTerminalResultCheckpoint(
   const last = indices.at(-1);
   return last === undefined ||
     last >= terminal ||
-    indices.length >= Math.floor(limit) ||
-    !historyCheckpointIndices(terminal + 2, limit).includes(last)
+    indices.length >= Math.floor(limit)
     ? [...indices]
     : [...indices, terminal];
 }
