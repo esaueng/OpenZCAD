@@ -34,6 +34,7 @@ import {
   edgeHandlesByFingerprint,
   edgeWitnessOf,
   faceHandlesByFingerprint,
+  faceResolutionCandidate,
   faceWitnessOf
 } from './exact-witnesses';
 
@@ -49,32 +50,13 @@ export function resolveFeatureFaces(
   }
   const solid = shape.solids[0]!;
   const handles = Array.from(kernel.getSolidFaces(solid));
-  const candidates: TopologyResolutionCandidate[] = handles.map((handle) => {
-    const witness = faceWitnessOf(kernel, handle);
-    const lineageReference = shape.lineage?.faceReferences.get(handle);
-    return {
-      kind: 'face',
-      currentHash: topologyHashOfWitness('face', witness),
-      witnessVersion: 1,
-      witness,
-      ...(lineageReference
-        ? {
-            lineage: {
-              source: 'semantic' as const,
-              identity: {
-                producingFeatureId: lineageReference.producingFeatureId,
-                lineageName: lineageReference.lineageName
-              }
-            }
-          }
-        : {}),
-      value: handle
-    };
-  });
+  const candidates = handles.map((handle) =>
+    faceResolutionCandidate(kernel, handle, shape.lineage?.faceReferences.get(handle))
+  );
   const referenceByHash = new Map(
     references?.map((reference) => [reference.currentHash, reference]) ?? []
   );
-  const legacyHandles = faceHandlesByFingerprint(kernel, solid);
+  let legacyHandles: Map<number, number[]> | undefined;
   const resolved = hashes.map((hash) => {
     const reference = referenceByHash.get(hash);
     if (reference) {
@@ -98,6 +80,7 @@ export function resolveFeatureFaces(
       }
       return resolution.candidate.value;
     }
+    legacyHandles ??= faceHandlesByFingerprint(kernel, solid);
     const matches = legacyHandles.get(hash) ?? [];
     if (matches.length === 0) {
       throw unresolvedReferenceError('face', hash, handles.length);
@@ -183,7 +166,9 @@ export function resolveEdgeModifierEdges(
   repairedReferences: EdgeTopologyReferenceV5[] | null;
 } {
   const handles = Array.from(kernel.getSolidEdges(solid));
-  const legacyHandles = edgeHandlesByFingerprint(kernel, solid);
+  const legacyHandles = references === undefined
+    ? edgeHandlesByFingerprint(kernel, solid)
+    : undefined;
   const requested = [...new Set(hashes)];
 
   // Collapsing a multi-solid body can fuse and post-process its topology. The
@@ -193,7 +178,7 @@ export function resolveEdgeModifierEdges(
   if (shape.solids.length !== 1 && references === undefined) {
     return {
       handles: requested.map((hash) => {
-        const matches = legacyHandles.get(hash) ?? [];
+        const matches = legacyHandles?.get(hash) ?? [];
         if (matches.length === 0) {
           onUnresolvedHash?.();
           throw unresolvedReferenceError('edge', hash, handles.length);
@@ -305,7 +290,7 @@ export function resolveEdgeModifierEdges(
     // A selected hash without a v5 reference is a legacy document edge. Keep
     // its old resolver and diagnostics; a v5 failure above is terminal and
     // never reaches this fallback.
-    const matches = legacyHandles.get(hash) ?? [];
+    const matches = legacyHandles?.get(hash) ?? [];
     if (matches.length > 1) {
       throw ambiguousReferenceError('edge');
     }

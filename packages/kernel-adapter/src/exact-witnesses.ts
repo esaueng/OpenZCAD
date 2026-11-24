@@ -34,7 +34,11 @@ import {
   subtract
 } from './exact-math';
 import { canonicalDirection } from './topology-fingerprint';
-import { topologyHashOfWitness } from './topology-lineage';
+import {
+  topologyHashOfWitness,
+  type FaceTopologyResolutionCandidate,
+  type TopologyLineageIdentity
+} from './topology-lineage';
 import { surfaceTypeOf, syncReadMemoFor } from './exact-sync-memo';
 import { referenceRecaptureHooks } from './reference-recapture-slot';
 
@@ -426,6 +430,36 @@ export function faceWitnessOf(kernel: RemusKernel, face: number): FaceWitnessV1 
     memo.recordFaceWitness(face, witness);
   }
   return witness;
+}
+
+/** Semantic lookup filters by name before it needs any geometric evidence. */
+export function faceResolutionCandidate(
+  kernel: RemusKernel,
+  face: number,
+  reference?: TopologyLineageIdentity
+): FaceTopologyResolutionCandidate {
+  let witness: FaceWitnessV1 | undefined;
+  let hash: number | undefined;
+  return {
+    kind: 'face',
+    witnessVersion: 1,
+    value: face,
+    ...(reference && {
+      lineage: {
+        source: 'semantic',
+        identity: {
+          producingFeatureId: reference.producingFeatureId,
+          lineageName: reference.lineageName
+        }
+      }
+    }),
+    get witness() {
+      return (witness ??= faceWitnessOf(kernel, face));
+    },
+    get currentHash() {
+      return (hash ??= topologyHashOfWitness('face', this.witness));
+    }
+  };
 }
 
 function measureFaceWitness(kernel: RemusKernel, face: number): FaceWitnessV1 {

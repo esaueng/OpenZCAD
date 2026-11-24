@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { toFeatureId, type FaceTopologyReferenceV5 } from '@openzcad/shared';
+import { resolveFeatureFaces } from './exact-reference-resolution';
+import { topologyHashOfWitness } from './topology-lineage';
 
 import { SyncReadMemo, withSyncReadMemo } from './exact-sync-memo';
 import {
   edgeFingerprint,
   edgeSampleOf,
+  faceFingerprint,
   faceWitnessOf,
   legacyEdgeFingerprint
 } from './exact-witnesses';
@@ -77,6 +81,42 @@ describe('face witnesses in a sync memo', () => {
       // Every box edge bounds two faces; each length is read once.
       expect(reads).toBe(kernel.getSolidEdges(box).length);
       expect(memoized).toEqual(cold);
+    } finally {
+      kernel.free();
+    }
+  });
+});
+
+describe('face selection on a named solid', () => {
+  it('measures only the named face and still resolves a mixed legacy selection', () => {
+    const kernel = new RemusKernel();
+    try {
+      const box = kernel.makeBox(30, 20, 8);
+      const faces = Array.from(kernel.getSolidFaces(box));
+      const faceReferences = new Map<number, FaceTopologyReferenceV5>();
+      for (const handle of faces) {
+        const witness = faceWitnessOf(kernel, handle);
+        faceReferences.set(handle, {
+          kind: 'face',
+          producingFeatureId: toFeatureId('box'),
+          lineageName: `box.face.${handle}`,
+          currentHash: topologyHashOfWitness('face', witness),
+          witnessVersion: 1,
+          witness
+        });
+      }
+      const shape = {
+        solids: [box],
+        lineage: { faceReferences, edgeReferences: new Map(), diagnostics: [] }
+      };
+      const named = faceReferences.get(faces[0]!)!;
+      const legacy = faceFingerprint(kernel, faces[1]!);
+      const reads = vi.spyOn(kernel, 'getSurfaceType');
+      expect(resolveFeatureFaces(kernel, shape, [named.currentHash], [named], 'Offset'))
+        .toEqual([faces[0]]);
+      expect(reads.mock.calls).toEqual([[faces[0]]]);
+      expect(resolveFeatureFaces(kernel, shape, [legacy, named.currentHash], [named], 'Offset'))
+        .toEqual([faces[1], faces[0]]);
     } finally {
       kernel.free();
     }

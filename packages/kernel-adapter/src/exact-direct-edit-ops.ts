@@ -65,6 +65,7 @@ import { collapseShape } from './exact-boolean-helpers';
 import { assertDirectEditOperation } from './exact-direct-edit-guards';
 import {
   faceHandlesByFingerprint,
+  faceResolutionCandidate,
   faceWitnessOf,
   registerSolidWitnesses
 } from './exact-witnesses';
@@ -115,7 +116,6 @@ import {
   importedStepLineageName,
   lineageAvailabilityFor,
   resolveTopologyReference,
-  topologyHashOfWitness,
   type TopologyResolutionCandidate
 } from './topology-lineage';
 import {
@@ -230,28 +230,9 @@ function resolveDirectEditFaceInSolids(
   }
   const candidates: TopologyResolutionCandidate[] = solids.flatMap((solid) => {
     registerSolidWitnesses(kernel, solid);
-    return Array.from(kernel.getSolidFaces(solid), (handle) => {
-      const witness = faceWitnessOf(kernel, handle);
-      const lineageReference = lineage?.faceReferences.get(handle);
-      return {
-        kind: 'face' as const,
-        currentHash: topologyHashOfWitness('face', witness),
-        witnessVersion: 1 as const,
-        witness,
-        ...(lineageReference
-          ? {
-              lineage: {
-                source: 'semantic' as const,
-                identity: {
-                  producingFeatureId: lineageReference.producingFeatureId,
-                  lineageName: lineageReference.lineageName
-                }
-              }
-            }
-          : {}),
-        value: handle
-      };
-    });
+    return Array.from(kernel.getSolidFaces(solid), (handle) =>
+      faceResolutionCandidate(kernel, handle, lineage?.faceReferences.get(handle))
+    );
   });
   const resolution = resolveTopologyReference(
     reference,
