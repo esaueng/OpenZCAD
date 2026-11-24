@@ -5,7 +5,12 @@ import {
   adoptAccountCopyLocally,
   stampLegacyViewUnits
 } from './adoptAccountCopy';
-import { loadSavedViews, saveView, savedViewInUnits } from './savedViews';
+import {
+  SAVED_VIEWS_STORAGE_KEY,
+  loadSavedViews,
+  saveView,
+  savedViewInUnits
+} from './savedViews';
 import {
   WORKSPACE_SESSION_STORAGE_KEY,
   loadProjectView,
@@ -183,6 +188,30 @@ describe('adopting an account copy converted elsewhere (I03)', () => {
     }
     expect(stampViewUnits).not.toHaveBeenCalled();
   });
+
+  it.each([WORKSPACE_SESSION_STORAGE_KEY, SAVED_VIEWS_STORAGE_KEY])(
+    'keeps the device copy when %s cannot be read',
+    async (unreadableKey) => {
+      const { device, account } = copies();
+      legacyMillimetreViews(device.projectId);
+      const read = localStorage.getItem.bind(localStorage);
+      localStorage.getItem = (key) => {
+        if (key === unreadableKey) throw new Error('storage unavailable');
+        return read(key);
+      };
+      const saveLocalProject = vi.fn(async () => {});
+      const saveLastSyncedVersion = vi.fn(async () => {});
+      await expect(
+        adoptAccountCopyLocally(account, device, {
+          stampViewUnits: stampLegacyViewUnits,
+          saveLocalProject,
+          saveLastSyncedVersion
+        })
+      ).rejects.toThrow('Could not preserve the saved view units');
+      expect(saveLocalProject).not.toHaveBeenCalled();
+      expect(saveLastSyncedVersion).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('stampProjectViewUnits (I03)', () => {

@@ -253,7 +253,10 @@ function withSketchVisibility(
   return visibility ? { sketchVisibility: { ...visibility } } : {};
 }
 
-function readSession(storage: StorageLike | null): WorkspaceSession {
+function readSession(
+  storage: StorageLike | null,
+  requireReadable = false
+): WorkspaceSession {
   if (!storage) {
     return emptySession();
   }
@@ -290,7 +293,8 @@ function readSession(storage: StorageLike | null): WorkspaceSession {
           : 0,
       views
     };
-  } catch {
+  } catch (error) {
+    if (requireReadable) throw error;
     return emptySession();
   }
 }
@@ -475,14 +479,19 @@ export function stampProjectViewUnits(
   units: UnitSystem,
   storage: StorageLike | null = defaultStorage()
 ): boolean {
-  const session = readSession(storage);
-  const view = session.views[projectId];
-  if (!view || view.units) return true;
-  return writeSession(
-    {
-      ...session,
-      views: { ...session.views, [projectId]: { ...view, units } }
-    },
-    storage
-  );
+  if (!storage) return false;
+  try {
+    const session = readSession(storage, true);
+    const view = session.views[projectId];
+    if (!view || view.units) return true;
+    return writeSession(
+      {
+        ...session,
+        views: { ...session.views, [projectId]: { ...view, units } }
+      },
+      storage
+    );
+  } catch {
+    return false;
+  }
 }

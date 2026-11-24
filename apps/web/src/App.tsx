@@ -8882,7 +8882,8 @@ export function App() {
           await adoptAccountCopyLocally(restoredDocument, rememberedLocal, {
             stampViewUnits: stampLegacyViewUnits,
             saveLocalProject,
-            saveLastSyncedVersion
+            saveLastSyncedVersion,
+            isCurrent
           });
           if (!isCurrent()) {
             return;

@@ -58,14 +58,18 @@ function defaultStorage(): StorageLike | null {
   }
 }
 
-function readAll(storage: StorageLike | null): Record<string, SavedView[]> {
+function readAll(
+  storage: StorageLike | null,
+  requireReadable = false
+): Record<string, SavedView[]> {
   try {
     const raw = storage?.getItem(SAVED_VIEWS_STORAGE_KEY);
     const parsed: unknown = raw ? JSON.parse(raw) : null;
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, SavedView[]>)
       : {};
-  } catch {
+  } catch (error) {
+    if (requireReadable) throw error;
     return {};
   }
 }
@@ -163,25 +167,31 @@ export function savedViewInUnits(
 }
 
 /**
- * I03: records `units` on the project's views saved before views recorded
- * their unit: the unit they are known to be in (the one this device held
- * the project in, or the one a conversion here is leaving), or `'unknown'`.
- * Views that already name a unit, `'unknown'` included, are left alone, so
- * a later, better-sounding guess can never overwrite what was known when
- * they were first seen. False when the browser refused the write.
+ * Records the known unit, or `'unknown'`, on older unstamped project views.
+ * Existing markers are preserved. Returns false when view storage cannot be
+ * read or written.
  */
 export function stampSavedViewUnits(
   projectId: string,
   units: UnitSystem | 'unknown',
   storage: StorageLike | null = defaultStorage()
 ): boolean {
-  const views = loadSavedViews(projectId, storage);
-  if (!views.some((view) => view.units === undefined)) return true;
-  return write(
-    projectId,
-    views.map((view) => (view.units ? view : { ...view, units })),
-    storage
-  );
+  if (!storage) return false;
+  try {
+    const all = readAll(storage, true);
+    const views = all[projectId];
+    if (!Array.isArray(views)) return true;
+    const unstamped = (view: SavedView) =>
+      isSavedView(view) && view.units === undefined;
+    if (!views.some(unstamped)) return true;
+    all[projectId] = views.map((view) =>
+      unstamped(view) ? { ...view, units } : view
+    );
+    storage.setItem(SAVED_VIEWS_STORAGE_KEY, JSON.stringify(all));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function loadSavedViews(
