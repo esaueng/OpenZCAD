@@ -146,6 +146,63 @@ async function storedProject(
   );
 }
 
+async function openSameProject(
+  contender: Page,
+  { projectId, name }: ProjectDocument,
+  holdClaim = false
+) {
+  await stubApi(contender);
+  await contender.route('**/api/session', (route) =>
+    route.fulfill({ json: null })
+  );
+  await contender.addInitScript(
+    ({ projectId, key, holdClaim }) => {
+      sessionStorage.setItem(
+        key,
+        JSON.stringify({
+          version: 1,
+          activeProjectId: projectId,
+          views: {}
+        })
+      );
+      if (!holdClaim) return;
+      // Hold the first ownership answer until the workspace has accepted
+      // an edit and the user tries to leave. The native lock still decides
+      // who owns the project.
+      const request = navigator.locks.request.bind(navigator.locks);
+      let release: () => void = () => undefined;
+      const ready = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const fixtureWindow = window as typeof window & {
+        releaseProjectClaim: () => void;
+      };
+      fixtureWindow.releaseProjectClaim = release;
+      navigator.locks.request = function <T>(
+        lockName: string,
+        options: LockOptions | LockGrantedCallback<T>,
+        callback?: LockGrantedCallback<T>
+      ) {
+        if (!callback)
+          return request(lockName, options as LockGrantedCallback<T>);
+        const settings = options as LockOptions;
+        if (
+          lockName === `openzcad-project:${projectId}` &&
+          settings.ifAvailable
+        ) {
+          return ready.then(() => request(lockName, settings, callback));
+        }
+        return request(lockName, settings, callback);
+      };
+    },
+    { projectId, key: WORKSPACE_SESSION_STORAGE_KEY, holdClaim }
+  );
+  await contender.goto('/');
+  await expect(
+    contender.getByRole('banner').getByText(name, { exact: true })
+  ).toBeVisible({ timeout: 30_000 });
+}
+
 for (const [scenario, title] of [
   [
     'home',
@@ -171,55 +228,7 @@ for (const [scenario, title] of [
       if (shareOwner) {
         await installAnonymousShareRoutes(page.context(), shareOwner.server);
       }
-      await stubApi(contender);
-      await contender.route('**/api/session', (route) =>
-        route.fulfill({ json: null })
-      );
-      await contender.addInitScript(
-        ({ projectId, key }) => {
-          sessionStorage.setItem(
-            key,
-            JSON.stringify({
-              version: 1,
-              activeProjectId: projectId,
-              views: {}
-            })
-          );
-          // Hold the first ownership answer until the workspace has accepted
-          // an edit and the user tries to leave. The native lock still decides
-          // who owns the project.
-          const request = navigator.locks.request.bind(navigator.locks);
-          let release: () => void = () => undefined;
-          const ready = new Promise<void>((resolve) => {
-            release = resolve;
-          });
-          const fixtureWindow = window as typeof window & {
-            releaseProjectClaim: () => void;
-          };
-          fixtureWindow.releaseProjectClaim = release;
-          navigator.locks.request = function <T>(
-            lockName: string,
-            options: LockOptions | LockGrantedCallback<T>,
-            callback?: LockGrantedCallback<T>
-          ) {
-            if (!callback)
-              return request(lockName, options as LockGrantedCallback<T>);
-            const settings = options as LockOptions;
-            if (
-              lockName === `openzcad-project:${projectId}` &&
-              settings.ifAvailable
-            ) {
-              return ready.then(() => request(lockName, settings, callback));
-            }
-            return request(lockName, settings, callback);
-          };
-        },
-        { projectId: original.projectId, key: WORKSPACE_SESSION_STORAGE_KEY }
-      );
-      await contender.goto('/');
-      await expect(
-        contender.getByRole('button', { name: 'Rename project' })
-      ).toContainText(name, { timeout: 30_000 });
+      await openSameProject(contender, original, true);
       await createPrimitiveInPlace(contender, 'sphere');
       await expectBodyCount(contender, 2);
       if (scenario !== 'home') {
@@ -330,6 +339,96 @@ for (const [scenario, title] of [
     }
   });
 }
+
+test('keeps the previous owner’s copy when the storage read on promotion fails', async ({
+  page
+}) => {
+  const name = 'Unreadable handoff';
+  await prepareLocalBox(page, name);
+  const original = (await storedProject(page, name))!;
+  const contender = await page.context().newPage();
+  try {
+    await openSameProject(contender, original);
+    await expect(
+      contender.getByRole('button', { name: /^Box.*open in another tab/ })
+    ).toBeDisabled();
+    await createPrimitiveInPlace(page, 'cylinder');
+    await expect
+      .poll(async () => (await storedProject(page, name))?.featureOrder.length)
+      .toBe(2);
+    const saved = (await storedProject(page, name))!;
+    await contender.evaluate((projectId) => {
+      const get = IDBObjectStore.prototype.get;
+      IDBObjectStore.prototype.get = function (
+        this: IDBObjectStore,
+        key: IDBValidKey | IDBKeyRange
+      ) {
+        if (this.name === 'projects' && key === projectId) {
+          IDBObjectStore.prototype.get = get;
+          throw new DOMException('Test device read failure.', 'UnknownError');
+        }
+        return get.call(this, key);
+      };
+    }, original.projectId);
+    await page.close();
+    await expect(
+      contender.getByText(/Could not read the saved project on this device/)
+    ).toBeVisible();
+    await expectBodyCount(contender, 1);
+    expect((await storedProject(contender, name))?.featureOrder).toEqual(
+      saved.featureOrder
+    );
+    await contender.reload();
+    await expectBodyCount(contender, 2);
+  } finally {
+    await contender.close();
+  }
+});
+
+test('loads a save point added under the same document version when promoted', async ({
+  page
+}) => {
+  const name = 'Same version handoff';
+  await prepareLocalBox(page, name);
+  const original = (await storedProject(page, name))!;
+  const contender = await page.context().newPage();
+  try {
+    await openSameProject(contender, original);
+    await expect(
+      contender.getByRole('button', { name: /^Box.*open in another tab/ })
+    ).toBeDisabled();
+    await page.keyboard.press('ControlOrMeta+Shift+s');
+    const dialog = page.getByRole('dialog', { name: 'Name this save' });
+    const saveName = 'Before handing over';
+    await dialog.getByLabel('Save name').fill(saveName);
+    await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect
+      .poll(
+        async () =>
+          (await storedProject(page, name))?.checkpoints.at(-1)?.reason
+      )
+      .toBe(saveName);
+    expect((await storedProject(page, name))?.version).toBe(original.version);
+    await page.close();
+    await expect(
+      contender.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
+    await expect(
+      contender.getByRole('button', { name: saveName, exact: true })
+    ).toBeVisible();
+    await createPrimitiveInPlace(contender, 'sphere');
+    await expect
+      .poll(
+        async () => (await storedProject(contender, name))?.featureOrder.length
+      )
+      .toBe(2);
+    expect(
+      (await storedProject(contender, name))?.checkpoints.at(-1)?.reason
+    ).toBe(saveName);
+  } finally {
+    await contender.close();
+  }
+});
 
 for (const connectivity of ['online', 'offline edit'] as const) {
   test(`preserves an accepted Sphere through an immediate reload (${connectivity})`, async ({

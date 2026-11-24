@@ -11488,7 +11488,7 @@ export function App() {
   function hydrateDocumentInner(
     nextDocument: ProjectDocument,
     options: HydrateOptions = {}
-  ) {
+  ): boolean {
     let normalized: ProjectDocument;
     try {
       // Every document published here, from any source, is checked first: a
@@ -11517,7 +11517,7 @@ export function App() {
       // the same update-required surface the collaboration path uses rather
       // than showing a quietly incomplete model.
       setStatus(errorMessage(error, 'This project needs a newer OpenZCAD.'));
-      return;
+      return false;
     }
     const restoreView = options.restoreView ?? true;
     const rememberProject = options.rememberProject ?? true;
@@ -11590,7 +11590,7 @@ export function App() {
     ) {
       showAccountEcho(withMatchingLocalDerived(normalized, current));
       setSaveState('saving');
-      return;
+      return true;
     }
     managerRef.current = new CommandManager(
       normalized,
@@ -11638,6 +11638,7 @@ export function App() {
     setSelectedProfiles([]);
     setMoveCommitHold(null);
     setTool(null);
+    return true;
   }
 
   /** Continue from the previous owner's device copy after taking its lock. */
@@ -11659,9 +11660,20 @@ export function App() {
     // refused. Keep it available for recovery, and protect the previous
     // owner's device copy from a late autosave of the same edit.
     if (!sameLocalProjectContent(openedDocumentRef.current, current)) return;
-    if (stored && stored.version !== current.version) {
-      hydrateDocument(stored, { restoreView: false, rememberProject: false });
+    if (!stored || stored.projectId !== current.projectId) {
+      setStatus(
+        'Could not read the saved project on this device. Reopen it to try again.'
+      );
+      return;
     }
+    // The previous owner can add save points without advancing the document
+    // version. Adopt the stored document before enabling edits and autosave.
+    if (
+      !hydrateDocument(stored, { restoreView: false, rememberProject: false })
+    ) {
+      return;
+    }
+    openedDocumentRef.current = managerRef.current.document;
     pendingStoragePromotionRef.current = null;
     projectOpenElsewhereRef.current = false;
     setProjectOpenElsewhere(false);
