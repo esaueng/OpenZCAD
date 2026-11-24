@@ -3722,10 +3722,6 @@ export function ModelViewer({
       overlays: new Map<string, BodyEdgeOverlay>(),
       enabled: false
     };
-    const renderScene = () =>
-      renderer.render(scene, translucentEdgeFrame.camera);
-    const renderFrame = () =>
-      translucentEdges.draw(translucentEdgeFrame, renderScene);
     const interactionShaderWarmup = new InteractionShaderWarmup(
       renderer,
       scene
@@ -14734,6 +14730,10 @@ export function ModelViewer({
       translucentEdgeFrame.overlays = context.edgeOverlaysByBodyId;
       translucentEdgeFrame.enabled =
         !xrayRef.current && displayModeRef.current !== 'wireframe';
+      const renderFrame = () =>
+        translucentEdges.draw(translucentEdgeFrame, () =>
+          renderer.render(scene, context.activeCamera)
+        );
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
       if (firstFrame) {
