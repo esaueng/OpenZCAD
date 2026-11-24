@@ -287,14 +287,20 @@
    reaches. The status row's notices end before the pill.
 
    Under 661px tall the rail, held at the stage's top, reaches down into
-   the row, so the pill stands left of the rail's column. */
+   the row, so the pill stands left of the rail's column.
+
+   It stays on the bar rather than rising with a pick's guidance card, as
+   the row's notices do: risen even one line, it met the open drawer's
+   foot. The card, which stands on the bar, keeps its foot for the pill
+   instead. An in-place command takes the whole row (Box's bar painted over
+   Show), so the pill gives way to it until it ends. */
 @media (pointer: coarse) and (max-width: 520px) and (min-height: 621px) {
   .viewer-area > .panels-hidden-pill.is-on-stage {
     position: absolute;
     right: calc(
       var(--rail-w) + var(--island-gap) * 2 + var(--right-dock-w, 0px)
     );
-    bottom: var(--lane-base);
+    bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
     z-index: calc(var(--z-inspector-float) + 1);
     box-sizing: border-box;
     width: var(--panels-pill-w);
@@ -305,12 +311,31 @@
     line-height: 1.15;
   }
 
-  .workspace.column-layout .viewer-area:has(> .panels-hidden-pill) {
+  .viewer-area:has(.in-place-command) > .panels-hidden-pill.is-on-stage {
+    display: none;
+  }
+
+  .workspace.column-layout .viewer-area {
     --panels-pill-w: 104px;
+  }
+
+  /* Only while the pill shows: View and Tweak have no rail to show it. */
+  .workspace.column-layout
+    .viewer-area:has(> .panels-hidden-pill):has(.instrument-rail):not(
+      :has(.in-place-command)
+    ) {
     --notice-end: calc(
       var(--rail-w) + var(--island-gap) * 3 + var(--right-dock-w, 0px) +
         var(--panels-pill-w)
     );
+  }
+
+  .viewer-area:has(> .panels-hidden-pill):has(.instrument-rail):not(
+      :has(.in-place-command)
+    )
+    .command-bar-lane
+    > .workspace-hint:is(.is-selection, .is-raised) {
+    padding-bottom: calc(var(--status-row-h) + 6px);
   }
 
   /* "Panels" over "hidden", and no dot between the words and Show. */
@@ -337,7 +362,10 @@
     right: calc(var(--island-gap) + var(--right-dock-w, 0px));
   }
 
-  .workspace.column-layout .viewer-area:has(> .panels-hidden-pill) {
+  .workspace.column-layout
+    .viewer-area:has(> .panels-hidden-pill):has(.instrument-rail):not(
+      :has(.in-place-command)
+    ) {
     --notice-end: calc(
       var(--island-gap) * 2 + var(--right-dock-w, 0px) + var(--panels-pill-w)
     );
@@ -346,11 +374,11 @@
 
 /* From 700px tall, where the drawer leaves the rail's column (360px and
    wider), the pill stands in that column alone, the rail's width, its
-   words over Show, and the row is the notices' to the rail. Its 85px fit
+   words over Show, and the row is the notices' to the rail, the card's
+   foot the card's. Its 85px fit
    between the rail's foot and the search bar. */
 @media (pointer: coarse) and (max-width: 520px) and (min-height: 700px) and (min-width: 360px) {
   .viewer-area > .panels-hidden-pill.is-on-stage {
-    bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
     width: var(--rail-w);
     height: auto;
     flex-direction: column;
@@ -360,10 +388,22 @@
     text-align: center;
   }
 
-  .workspace.column-layout .viewer-area:has(> .panels-hidden-pill) {
+  .workspace.column-layout
+    .viewer-area:has(> .panels-hidden-pill):has(.instrument-rail):not(
+      :has(.in-place-command)
+    ) {
     --notice-end: calc(
       var(--rail-w) + var(--island-gap) * 2 + var(--right-dock-w, 0px)
     );
+  }
+
+  /* The card ends before the rail's column: its foot is its own again. */
+  .viewer-area:has(> .panels-hidden-pill):has(.instrument-rail):not(
+      :has(.in-place-command)
+    )
+    .command-bar-lane
+    > .workspace-hint:is(.is-selection, .is-raised) {
+    padding-bottom: 8px;
   }
 
   .viewer-area > .panels-hidden-pill > [role='status'] {

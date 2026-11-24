@@ -1123,6 +1123,64 @@ for (const [width, height] of [
   });
 }
 
+// A pick's guidance card lifts the status row over the bar. The pill rose
+// with it, and with the drawer open even one line of guidance put Show
+// under the drawer's foot; and Box's in-place bar, across the whole row,
+// painted over it while Show kept its place in the tab order.
+for (const [width, height] of [
+  [360, 640],
+  [320, 844]
+] as const) {
+  test(`the panels hidden pill keeps clear of the drawer under a pick’s guidance on a ${width} × ${height} phone`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await stubApi(page, { commandFoldClosed: true });
+    await page.setViewportSize({ width, height });
+    await createProject(page, 'Pill and guidance');
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await page.keyboard.press('Control+\\');
+    const pill = page.locator('.panels-hidden-pill');
+    const show = pill.getByRole('button', { name: 'Show panels' });
+    await expect(pill).toBeVisible();
+
+    // Box's bar takes the row: the pill gives way, out of the tab order
+    // too, and comes back when the command ends.
+    await pressTool(page, /^Box \(B\)/);
+    await expect(
+      page.getByRole('group', { name: 'Box command' })
+    ).toBeVisible();
+    await expect(pill).toBeHidden();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('group', { name: 'Box command' })).toHaveCount(
+      0
+    );
+    await expect(pill).toBeVisible();
+
+    await ensureToolsDrawerOpen(page);
+    const drawer = page.locator('.command-flyout');
+    await expect(drawer).toBeVisible();
+    await expect
+      .poll(
+        async () => (await pickPlanarFace(page, { x: 0, y: 0, z: 1 })) !== null,
+        { timeout: 60_000 }
+      )
+      .toBe(true);
+    const card = page.locator('.workspace-hint.is-selection');
+    await expect(card).toBeVisible();
+    await expect(drawer).toBeVisible();
+    await shot(page, `pill-guidance-${width}x${height}`);
+    await expectPillClear(page, pill);
+    // The card's words end above the pill, which stands on its foot.
+    const pillBox = (await pill.boundingBox())!;
+    const text = (await card.locator('.workspace-hint-text').boundingBox())!;
+    expect(overlap(pillBox, text), 'pill over the guidance').toBe(false);
+    await expect(show).toBeInViewport({ ratio: 1 });
+    await expect.poll(() => reachable(show)).toBe(true);
+  });
+}
+
 /** The Tools drawer as the device remembers it, open or closed. */
 function storedToolsDrawer(page: Page) {
   return page.evaluate(() => {
