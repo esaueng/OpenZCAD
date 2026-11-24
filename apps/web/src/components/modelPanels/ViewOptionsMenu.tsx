@@ -135,11 +135,19 @@ export const ViewOptionsMenu = createViewOptionsMenu();
 
 /**
  * While Hide all is on, what says so and brings the panels back. The
- * layout is kept, so Show returns every panel where it was.
+ * layout is kept, so Show returns every panel where it was. It hangs from
+ * the instrument rail, except on a one-column phone stage (`onStage`),
+ * where it stands at the stage's foot instead (phone-stage.css).
  */
-export function PanelsHiddenPill({ onShow }: { onShow(): void }) {
+export function PanelsHiddenPill({
+  onShow,
+  onStage = false
+}: {
+  onShow(): void;
+  onStage?: boolean;
+}) {
   return (
-    <div className="panels-hidden-pill">
+    <div className={`panels-hidden-pill${onStage ? ' is-on-stage' : ''}`}>
       <span role="status">Panels hidden</span>
       <span aria-hidden="true">·</span>
       <button type="button" aria-label="Show panels" onClick={onShow}>

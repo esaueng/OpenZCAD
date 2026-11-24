@@ -254,9 +254,24 @@ test.describe('picked native detail deletion', { tag: '@ci-smoke' }, () => {
       .toBe(true);
     await expect(dialog).toContainText('Hole rim fillet');
     await dialog.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(page.getByRole('contentinfo')).toContainText(
-      /Cannot remove.*Hole rim fillet/
-    );
+    // The offer below can mount before this read and make the background
+    // inert and aria-hidden, footer included, so read it including hidden.
+    await expect(
+      page.getByRole('contentinfo', { includeHidden: true })
+    ).toContainText(/Cannot remove.*Hole rim fillet/);
+    // The refusal then offers to delete the fillet too, in a modal that
+    // mounts just after the status line and hides the History panel from
+    // the accessibility tree. Waiting on that offer and declining it is what
+    // settles the refusal; reading History before it raced the modal.
+    const cascade = page
+      .getByRole('alertdialog', { name: 'Delete “Hole”?' })
+      .filter({
+        has: page.getByRole('button', { name: 'Delete it too', exact: true })
+      });
+    await expect(cascade).toBeVisible();
+    await expect(cascade).toContainText('Hole rim fillet');
+    await cascade.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(cascade).toHaveCount(0);
     await expect(
       page.getByRole('heading', { name: 'History 3', exact: true })
     ).toBeVisible();

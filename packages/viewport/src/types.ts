@@ -36,6 +36,14 @@ export type ViewRequestTarget =
   | {
       pose: ViewportCameraState;
       projection: ProjectionMode;
+      /**
+       * Lands on the pose at once, cancelling any glide, instead of gliding
+       * to it. For a pose that is the same view as the one on screen in
+       * other numbers (I03: the model was rescaled under the camera), where
+       * every frame of a glide would show, report and persist a pose that
+       * belongs to neither unit.
+       */
+      instant?: boolean;
     };
 
 export type ProjectionMode = 'perspective' | 'orthographic';

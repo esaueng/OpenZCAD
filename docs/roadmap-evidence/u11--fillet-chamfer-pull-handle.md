@@ -1,5 +1,0 @@
----
-row: U11
----
-
-2026-11-22 fillet and chamfer arrows, after the owner's reference recording: the arrow on a selected edge or a picked fillet face is pulled away from the material to grow the blend and follows the hand there (it used to be pushed into an outside corner); a dashed leader runs from the middle of the blend to the arrow; the chip reads the value alone (`R 4 mm`, no `Edit Fillet ·` title) and, while the arrow is dragged, rides the leader tilted to read along it, just past the arrow or back on the leader where a panel or the command bar leaves no room (at rest it stands upright beside the arrow with the Fillet/Chamfer switch and the keypad where they were); the part keeps its own shading during the drag over a frosted ghost of its sharp edges instead of turning mint; and a drag snaps to round values as read at the current zoom (whole millimetres at an ordinary zoom or further out, finer as the part comes closer; Shift stays free). Typed entry, commit, refusal and History are unchanged (`edgeBlendFrame.test.ts`, `rigs.test.ts`, `blendDragStep.test.ts`, `visual-selection-fillet-edit.spec.ts`, `edge-chip-layout.spec.ts`, `command-contract.spec.ts`).

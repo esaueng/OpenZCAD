@@ -398,6 +398,72 @@ test('a kept measurement and the camera follow the conversion, its undo and a re
   await page.reload();
   await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
   expect((await keptReading(page, 'in')).toFixed(2)).toBe(inches);
+  // This device's remembered view was rewritten in inches too, so the
+  // reload comes back to the same view rather than 25.4 times too far.
+  expect(
+    await page.evaluate(() =>
+      Object.values(
+        (
+          JSON.parse(
+            localStorage.getItem('openzcad-workspace-session:v1') ?? '{}'
+          ) as { views?: Record<string, { units?: string }> }
+        ).views ?? {}
+      ).map((view) => view.units)
+    )
+  ).toEqual(['inch']);
+  await expect
+    .poll(async () => (await cameraDistance(page)) / distance, READY)
+    .toBeCloseTo(1 / 25.4, 3);
+  expect(errors).toEqual([]);
+});
+
+test('an undo or a reload straight after converting keeps the same view', async ({
+  page
+}) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await stubApi(page);
+  await page.route('**/api/session', (route) =>
+    route.fulfill({ status: 401, json: { error: 'Not signed in' } })
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Straight after');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'box');
+  await expect(page.getByRole('button', { name: /^Fillet/ })).toBeEnabled(
+    READY
+  );
+  await expect.poll(() => cameraDistance(page)).toBeGreaterThan(0);
+  const distance = await cameraDistance(page);
+  const dialog = await openConversion(page);
+  await dialog.getByRole('button', { name: 'Convert', exact: true }).click();
+  await expect(dialog.getByRole('status')).toContainText(
+    `“${CHECKPOINT}” was saved first`,
+    READY
+  );
+  await dialog.getByRole('button', { name: 'Done' }).click();
+  // No wait for the camera: the undo comes at once. The camera lands on the
+  // converted view in one step, so there is no glide frame for the undo to
+  // scale back by 25.4.
+  await page.keyboard.press('ControlOrMeta+z');
+  await expectShownIn(page, 'Lengths are shown and typed in mm.');
+  await expect
+    .poll(async () => (await cameraDistance(page)) / distance, READY)
+    .toBeCloseTo(1, 4);
+
+  // Redo, then reload as soon as the document is saved.
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await expectShownIn(page, 'Lengths are shown and typed in in.');
+  await expect(page.locator('.save-state')).toHaveClass(SAVED, READY);
+  await page.reload();
+  await expect(page.locator('.viewer-host canvas')).toBeVisible(READY);
+  await expectShownIn(page, 'Lengths are shown and typed in in.');
+
+  await expect
+    .poll(async () => (await cameraDistance(page)) / distance, READY)
+    .toBeCloseTo(1 / 25.4, 3);
   expect(errors).toEqual([]);
 });
 

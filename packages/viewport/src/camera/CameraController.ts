@@ -18,6 +18,7 @@ import {
 } from '../input/bindings';
 import type { OrbitMode, ProjectionMode } from '../types';
 import {
+  readWheelSample,
   WheelGestureClassifier,
   type PointerNavigationMode,
   type WheelDevice
@@ -422,15 +423,9 @@ export class CameraController {
       return;
     }
     const { intent, learned } = this.wheelGesture.classify(
-      {
-        deltaX: event.deltaX,
-        deltaY: event.deltaY,
-        deltaMode: event.deltaMode,
-        ctrlKey: event.ctrlKey,
-        controlKeyHeld: this.controlKeyActive
-      },
+      readWheelSample(event, this.controlKeyActive),
       this.options.pointerNavigation?.() ?? 'auto',
-      performance.now()
+      event.timeStamp ?? performance.now()
     );
     if (learned !== null) {
       this.options.wheelDeviceMemory?.write(learned);
@@ -1701,6 +1696,15 @@ export class CameraController {
     this.holdRecordedUp(state.up);
     this.perspective.lookAt(this.orbit.target);
     this.perspective.updateMatrixWorld(true);
+    // Already orthographic, the controls drive the ortho camera, and
+    // `applyProjection` below changes nothing: seat the ortho camera on the
+    // restored pose before they update, or it keeps its old position under
+    // the new target and frustum. A pose restored without a glide (I03 lands
+    // a rescaled pose at once) tilted and shifted the view.
+    if (this.mode === 'orthographic' && projection === 'orthographic') {
+      this.orthographic.up.copy(this.perspective.up);
+      this.syncOrthographic(false);
+    }
     this.orbit.update();
     if (projection !== 'orthographic') {
       return;

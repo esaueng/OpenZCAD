@@ -216,5 +216,6 @@
   "variable-fillet-vertex-radii.spec.ts": 12,
   "variable-fillet-radius-stations.spec.ts": 12,
   "variable-fillet-ball-corners.spec.ts": 12,
-  "history-text-layout.spec.ts": 16
+  "history-text-layout.spec.ts": 16,
+  "phone-panel-conflicts.spec.ts": 12
 }

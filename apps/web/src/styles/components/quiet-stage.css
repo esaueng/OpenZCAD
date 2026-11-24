@@ -3775,7 +3775,11 @@ button.command-rail.is-suggested {
      workbench ran out of the lane's foot over the search bar, and on a
      360 × 640 phone its last actions and Copy all off the screen. The
      panel yields under it, as it does with no cap. */
-  .viewer-area.has-command .stage-right:has(> .panel-lane-float) {
+  /* The feature card a History row opens takes the lane the same way: held
+     in the panel's 40dvh beside History, its form ran out of the lane's
+     foot, over the search bar and off a 430 × 932 screen with its Apply. */
+  .viewer-area:is(.has-command, .has-inspector)
+    .stage-right:has(> .panel-lane-float) {
     max-height: calc(100% - var(--stage-top) - var(--panel-lane-bottom));
   }
 
@@ -3786,10 +3790,25 @@ button.command-rail.is-suggested {
     min-height: 0;
   }
 
+  /* The lane's height comes from its content here, so the card's own
+     max-height: 100% never resolved and the card kept its full height
+     inside a shrunken float. A column float shrinks the card with it, and
+     its body scrolls between the header and Apply. */
+  .stage-right:has(> .panel-lane-float) > .inspector-float {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   /* The panel gives way first, all the way down: shrinking alongside, it
      kept a third of a 360 × 640 lane and the result list had none. */
-  .viewer-area.has-command .stage-right > .panel-lane-float {
+  .viewer-area:is(.has-command, .has-inspector)
+    .stage-right
+    > .panel-lane-float {
     flex-shrink: 1000;
+  }
+
+  .viewer-area.has-inspector .stage-right > .panel-lane-float {
+    overflow: hidden;
   }
 
   .stage-right > .panel-lane-float {
@@ -4088,11 +4107,20 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 /* Hide all is on: beside the rail, where the panels would be, saying so
-   and offering them back. */
+   and offering them back. (A one-column phone stands it on the stage
+   instead: phone-stage.css.) */
 .instrument-rail > .panels-hidden-pill {
   position: absolute;
   right: calc(100% + var(--island-gap));
   bottom: 0;
+}
+
+/* The stage's copy shows only where the rail does: not in View or Tweak. */
+.viewer-area:not(:has(.instrument-rail)) > .panels-hidden-pill {
+  display: none;
+}
+
+.panels-hidden-pill {
   display: flex;
   align-items: center;
   gap: 6px;

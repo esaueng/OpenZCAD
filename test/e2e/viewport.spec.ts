@@ -2856,11 +2856,22 @@ test('a hover over empty space draws nothing, and a new hover target draws', asy
   await expect.poll(frames).toBeGreaterThan(still);
 });
 
-test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
+test('Auto switches wheel devices @ci-smoke', async ({ page }) => {
   await stubApi(page);
   await page.goto('/');
   await page.getByLabel('Project name').fill('Trackpad Part');
   await page.getByRole('button', { name: 'New project' }).click();
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  await page.getByRole('button', { name: 'Controls', exact: true }).click();
+  const scrollWheel = page.getByRole('radiogroup', { name: 'Scroll wheel' });
+  await scrollWheel.getByRole('radio', { name: 'Mouse wheel' }).check();
+  await scrollWheel
+    .getByRole('radio', { name: 'Detect automatically' })
+    .check();
+  await page
+    .getByRole('button', { name: /Back to workspace|Close settings/ })
+    .first()
+    .click();
   await createPrimitiveInPlace(page, 'box');
   await expect(
     page.locator('.feature-row-main', { hasText: 'Box' })
@@ -2911,17 +2922,12 @@ test('two fingers pan while a wheel notch still zooms', async ({ page }) => {
   const afterPan = await pose();
   expect(distance(afterPan)).toBeCloseTo(distance(beforePan), 3);
 
-  // The swipe proved a trackpad, so vertical motion now pans from here on —
-  // that is the remembered device doing its job, not a regression. A
-  // line-mode delta is the one thing a trackpad cannot produce, so it proves
-  // a wheel again, and the pixel notches that follow zoom once more. The
-  // pause ends the pan burst first: inside one gesture the first intent
-  // holds, whatever the later events prove.
-  await page.waitForTimeout(250);
-  await canvas.dispatchEvent('wheel', { deltaY: 1, deltaMode: 1 });
-  for (let step = 0; step < 3; step += 1) {
-    await canvas.dispatchEvent('wheel', { deltaY: 120, deltaMode: 0 });
-  }
+  // Simulate picking up a pixel-mode wheel after the swipe. There is no
+  // intervening line-mode event to tell Auto that the device changed.
+  await page.waitForTimeout(80);
+  await page.mouse.wheel(0, 100);
+  await page.waitForTimeout(80);
+  await page.mouse.wheel(0, 100);
   await waitForZoomToSettle(canvas);
   expect(Math.abs(distance(await pose()) - distance(afterPan))).toBeGreaterThan(
     0.5

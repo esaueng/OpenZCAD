@@ -1607,7 +1607,7 @@ export function SettingsPage({
               <Group title="Navigation">
                 <SettingRow
                   title="Scroll wheel"
-                  hint="Auto switches to trackpad after a pinch or diagonal swipe."
+                  hint="Auto zooms with a mouse wheel and pans with two fingers. Pinch to zoom."
                 >
                   <Segmented
                     label="Scroll wheel"

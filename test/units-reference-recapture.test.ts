@@ -47,6 +47,12 @@ import {
 } from '../packages/kernel-adapter/src/remus-runtime';
 import { recognizePlanarEmboss } from '../packages/kernel-adapter/src/planar-emboss';
 import { referenceRecaptureHooks } from '../packages/kernel-adapter/src/reference-recapture-slot';
+import {
+  netDistance,
+  recordTessellatedBody,
+  surfaceNetOf,
+  tessellatedFaceDistances
+} from '../packages/kernel-adapter/src/units-reference-recapture';
 import type {
   BlendEdgeOrientation,
   BlendOrientationReport
@@ -57,6 +63,7 @@ import {
   toUserId,
   type BodyId,
   type DerivedState,
+  type EdgeTopology,
   type EdgeTopologyReferenceV5,
   type EdgeWitnessV1,
   type FaceWitnessV1,
@@ -993,7 +1000,8 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
         targetBodyId: BodyId;
         edgeHashes: number[];
         edgeReferences: EdgeTopologyReferenceV5[];
-      }
+      },
+      picked: EdgeTopology
     ) => ProjectDocument
   ): Promise<ProjectDocument> {
     const base = addPrimitiveFeature(
@@ -1009,12 +1017,16 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
     const picked = (built.bodyRepresentations[bodyId]?.topology?.edges ?? [])
       .filter((candidate) => candidate.displayRole !== 'seam')
       .find((candidate) => candidate.reference)!;
-    const document = blend(base, {
-      name: 'Blend',
-      targetBodyId: bodyId,
-      edgeHashes: [picked.hash],
-      edgeReferences: [picked.reference!]
-    });
+    const document = blend(
+      base,
+      {
+        name: 'Blend',
+        targetBodyId: bodyId,
+        edgeHashes: [picked.hash],
+        edgeReferences: [picked.reference!]
+      },
+      picked
+    );
     expect((await buildOnce(document)).warnings).toEqual([]);
     return document;
   }
@@ -1023,6 +1035,33 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
     blendedBox(
       (document, input) =>
         filletEdges(document, { ...input, size: 1, endRadius: 3 }).document
+    );
+  /** Whether the kernel draws `edge` from its witness end 0 to end 1. */
+  const runOf = (edge: EdgeTopology): boolean => {
+    const witness = edge.reference!.witness;
+    if (witness.closed) throw new Error('Expected an open edge.');
+    const far = edge.points.slice(-3);
+    const near = (end: 0 | 1) => {
+      const [x, y, z] = witness.endpoints[end].map((value) => value * 1e-6);
+      return Math.hypot(far[0]! - x!, far[1]! - y!, far[2]! - z!);
+    };
+    return near(1) < near(0);
+  };
+  /** M03 (v151): a radius set at each corner of the edge, not start → end. */
+  const perCornerFillet = () =>
+    blendedBox(
+      (document, input, picked) =>
+        filletEdges(document, {
+          ...input,
+          size: 1,
+          endRadius: 1,
+          radiusLaw: 'linear',
+          vertexRadii: [
+            { edge: 0, end: 0, radius: 1.5 },
+            { edge: 0, end: 1, radius: 3.5 }
+          ],
+          edgeRuns: [runOf(picked)]
+        }).document
     );
   const twoDistanceChamfer = () =>
     blendedBox(
@@ -1088,16 +1127,386 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
     expect(result.ok && result.report.geometry.faces).toBeGreaterThan(0);
   });
 
-  it('passes a variable fillet’s orientation, which the area oracle then refuses', async () => {
-    // Remus fits the variable blend face to a B-spline within a tolerance
-    // that does not scale with the unit, so its area differs between the
-    // two builds well past 1e-6 and the existing oracle refuses it. The
-    // orientation check itself accepts the unreversed edge.
+  it('re-captures a variable fillet, matching its B-spline face by surface and trim', async () => {
+    // The blend face is a B-spline whose area the kernel integrates over a
+    // tessellation at a deflection fixed in model units, so the area itself
+    // differs between the builds (about 0.5% in inches); the surface does
+    // not, and the oracle compares that instead.
     const source = await variableFillet();
     const there = convertDocumentUnits(source, 'inch');
     if (!there.ok) throw new Error('conversion refused');
     const result = await computeConversionReferenceMap(source, there.document);
-    expect(codes(result)).toEqual(['geometry-mismatch Block Body area']);
+    expect(codes(result)).toEqual([]);
+    expect(result.ok && result.report.geometry.sampledFaces).toBe(1);
+  });
+
+  for (const unit of ['inch', 'cm'] as const)
+    it(`re-captures a fillet with a radius at each corner into ${unit}`, async () => {
+      const source = await perCornerFillet();
+      const there = convertDocumentUnits(source, unit);
+      if (!there.ok) throw new Error('conversion refused');
+      const result = await computeConversionReferenceMap(
+        source,
+        there.document
+      );
+      expect(codes(result)).toEqual([]);
+      if (!result.ok) return;
+      expect(result.report.geometry.sampledFaces).toBe(1);
+      expect(result.report.geometry.faces).toBeGreaterThan(1);
+      const converted = (await buildOnce(result.document)).bodyRepresentations;
+      const before = (await buildOnce(source)).bodyRepresentations;
+      const k = result.report.factor;
+      for (const [id, body] of Object.entries(before))
+        expect(converted[id as BodyId]!.volume).toBeCloseTo(
+          body.volume * k ** 3,
+          9
+        );
+    });
+
+  /**
+   * A one-body build whose faces are `[class, area, centre x, exact]` in
+   * millimetres, scaled to `unit` millimetres per unit. A B-spline face
+   * measures a different area in each unit, as the kernel's does.
+   */
+  const tessellatedBody = (
+    unit: number,
+    faces: [string, number, number, boolean][]
+  ): DerivedState =>
+    ({
+      bodyRepresentations: {
+        ['body_a' as BodyId]: {
+          bodyId: 'body_a' as BodyId,
+          name: 'Block',
+          source: 'primitive',
+          mesh: { kind: 'mesh', vertices: [], indices: [] },
+          faceCount: faces.length,
+          color: '#888888',
+          exportableStep: true,
+          consumed: false,
+          volume: 10 * unit ** 3,
+          bbox: {
+            min: { x: 0, y: 0, z: 0 },
+            max: { x: 4 * unit, y: 1 * unit, z: 1 * unit }
+          },
+          topology: {
+            faces: faces.map(([surfaceType, area, center, exact]) => ({
+              hash: 0,
+              topologyId: 'face:0',
+              triangleStart: 0,
+              triangleCount: 0,
+              geometry: {
+                surfaceType,
+                area: (exact || unit === 1 ? area : area * 0.92) * unit ** 2,
+                ...(exact ? { areaProvenance: 'exact' as const } : {}),
+                center: { x: center * unit, y: 0, z: 0 }
+              }
+            })),
+            edges: []
+          }
+        }
+      },
+      exportableBodyIds: ['body_a' as BodyId],
+      warnings: []
+    }) as unknown as DerivedState;
+  const evidenceOf = (rows: [number, [number, number][]][]) =>
+    new Map([
+      ['body_a' as BodyId, new Map(rows.map(([i, row]) => [i, new Map(row)]))]
+    ]);
+
+  it('the geometry oracle matches a tessellated face by its surface, not its area', () => {
+    const faces: [string, number, number, boolean][] = [
+      ['plane', 4, 2, true],
+      ['bspline', 125.46, 1, false]
+    ];
+    const k = 1 / 25.4;
+    const fields = (distance?: number) =>
+      unitConversionGeometryOracle(
+        tessellatedBody(1, faces),
+        tessellatedBody(k, faces),
+        k,
+        distance === undefined ? undefined : evidenceOf([[1, [[1, distance]]]])
+      ).refusals.map((refusal) => refusal.field);
+    // No evidence: refused by name, never compared by area instead.
+    expect(fields()).toEqual(['tessellatedFaces']);
+    expect(fields(1e-14)).toEqual([]);
+    // Past the box's kernel tolerance, both sides of the pair refuse.
+    expect(fields(1e-4)).toEqual(['faces.1', 'convertedFaces.1']);
+    expect(fields(Infinity)).toEqual(['faces.1', 'convertedFaces.1']);
+  });
+
+  it('the geometry oracle refuses two tessellated faces matching one converted face', () => {
+    // Review: two source B-spline faces at one centre, of different areas,
+    // both lying on converted face 1; converted face 2 is left unclaimed.
+    // Their areas no longer tell them apart, so the pairing must be one to
+    // one.
+    const faces: [string, number, number, boolean][] = [
+      ['plane', 4, 2, true],
+      ['bspline', 10, 1, false],
+      ['bspline', 20, 1, false]
+    ];
+    const k = 0.1;
+    const result = unitConversionGeometryOracle(
+      tessellatedBody(1, faces),
+      tessellatedBody(k, faces),
+      k,
+      evidenceOf([
+        [
+          1,
+          [
+            [1, 0],
+            [2, Infinity]
+          ]
+        ],
+        [
+          2,
+          [
+            [1, 0],
+            [2, Infinity]
+          ]
+        ]
+      ])
+    );
+    expect(result.refusals.map((refusal) => refusal.field)).toEqual([
+      'convertedFaces.1',
+      'convertedFaces.2'
+    ]);
+    // Paired one to one, the same faces pass.
+    expect(
+      unitConversionGeometryOracle(
+        tessellatedBody(1, faces),
+        tessellatedBody(k, faces),
+        k,
+        evidenceOf([
+          [
+            1,
+            [
+              [1, 0],
+              [2, Infinity]
+            ]
+          ],
+          [
+            2,
+            [
+              [1, Infinity],
+              [2, 0]
+            ]
+          ]
+        ])
+      ).refusals
+    ).toEqual([]);
+  });
+
+  /**
+   * Kernel-backed: a 40 × 12 × 10 box with one edge filleted `start` →
+   * `end` (and an interior station), built in mm and, scaled, in the
+   * target unit, compared the way the verification build compares them.
+   */
+  function blendDistance(
+    k: number,
+    converted: { start: number; end: number; mid?: number },
+    source: { start: number; end: number; mid?: number } = {
+      start: 1.5,
+      end: 3.5,
+      mid: 2.5
+    }
+  ): number {
+    const build = (
+      kernel: RemusKernel,
+      scale: number,
+      radii: { start: number; end: number; mid?: number }
+    ) => {
+      const box = kernel.makeBox(40 * scale, 12 * scale, 10 * scale);
+      const edge = Array.from(kernel.getSolidEdges(box)).find((candidate) => {
+        const ends = Array.from(kernel.getEdgeVertices(candidate));
+        return [1, 2, 4, 5].every((axis) => Math.abs(ends[axis]!) < 1e-9);
+      })!;
+      return kernel.filletVariable(
+        box,
+        JSON.stringify([
+          {
+            edge,
+            law: 'linear',
+            start: radii.start * scale,
+            end: radii.end * scale,
+            ...(radii.mid === undefined
+              ? {}
+              : { stations: [{ at: 0.5, radius: radii.mid * scale }] })
+          }
+        ])
+      );
+    };
+    const sourceKernel = new RemusKernel();
+    const targetKernel = new RemusKernel();
+    try {
+      const solid = build(sourceKernel, 1, source);
+      const record = recordTessellatedBody(
+        sourceKernel,
+        [solid],
+        Array.from(sourceKernel.getSolidFaces(solid))
+      );
+      if (!record || 'failure' in record) throw new Error('Not recorded.');
+      expect(record.faces.filter((face) => face.tessellated)).toHaveLength(1);
+      const target = build(targetKernel, k, converted);
+      const distances = tessellatedFaceDistances(
+        targetKernel,
+        [target],
+        Array.from(targetKernel.getSolidFaces(target)),
+        record,
+        k
+      );
+      if ('failure' in distances) throw new Error(distances.failure);
+      const [row] = [...distances.values()];
+      expect(row!.size).toBe(1);
+      return [...row!.values()][0]!;
+    } finally {
+      sourceKernel.free();
+      targetKernel.free();
+    }
+  }
+
+  for (const [unit, k] of [
+    ['inch', 1 / 25.4],
+    ['cm', 0.1]
+  ] as const) {
+    it(`the kernel comparison accepts the same blend face built in ${unit}`, () => {
+      // Within the 1e-6 model-unit tolerance; pointToFaceDistance itself
+      // resolves to about 1e-7.
+      expect(blendDistance(k, { start: 1.5, end: 3.5, mid: 2.5 })).toBeLessThan(
+        1e-6
+      );
+    });
+    it(`the kernel comparison refuses one end radius 1% off in ${unit}`, () => {
+      expect(
+        blendDistance(k, { start: 1.5, end: 3.5 * 1.01, mid: 2.5 })
+      ).toBeGreaterThan(1e-4);
+    });
+    it(`the kernel comparison refuses an interior radius 1% off in ${unit}`, () => {
+      // The ends, and so the face's vertices, are unchanged: only the
+      // surface between them differs.
+      expect(
+        blendDistance(k, { start: 1.5, end: 3.5, mid: 2.5 * 1.01 })
+      ).toBeGreaterThan(1e-4);
+    });
+  }
+
+  for (const [method, why] of [
+    ['serializeSolids', 'the source build could not save the body'],
+    [
+      'deserializeSolids',
+      'the verification build could not load the source body'
+    ]
+  ] as const)
+    it(`refuses a fillet whose surfaces cannot be compared (${method} fails)`, async () => {
+      // A body with a B-spline face whose comparison cannot be made refuses
+      // by name; its area is never compared instead (a kernel load limit,
+      // for example).
+      const source = await perCornerFillet();
+      const there = convertDocumentUnits(source, 'inch');
+      if (!there.ok) throw new Error('conversion refused');
+      const prototype = RemusKernel.prototype as unknown as Record<
+        string,
+        unknown
+      >;
+      const original = prototype[method];
+      prototype[method] = () => {
+        throw new Error('load limit');
+      };
+      let result: Awaited<ReturnType<typeof computeConversionReferenceMap>>;
+      try {
+        result = await computeConversionReferenceMap(source, there.document);
+      } finally {
+        prototype[method] = original;
+      }
+      expect(codes(result)).toEqual([
+        'geometry-mismatch Block Body tessellatedFaces'
+      ]);
+      expect(result.ok ? '' : result.refusals[0]!.message).toContain(
+        `${why} (load limit)`
+      );
+    });
+
+  it('bounds rational surfaces by their normalized weights', () => {
+    // Review: a quadratic with poles x = [0, 1, 0] and weights 1e-14 each
+    // has its midpoint at x = 0.5; a middle weight of 9e-13 moves it to
+    // 0.989 while the poles stay put. An absolute weight allowance passed
+    // that; the normalized weights differ by 99%, which refuses.
+    const net = (weights: number[], knotsV = [0, 1]) =>
+      surfaceNetOf({
+        degreeU: 2,
+        degreeV: 1,
+        nbPolesU: 3,
+        nbPolesV: 2,
+        multiplicitiesU: [3, 3],
+        multiplicitiesV: knotsV
+          .map(() => 1)
+          .fill(2, 0, 1)
+          .fill(2, -1),
+        knotsU: [0, 1],
+        knotsV,
+        isPeriodicU: false,
+        isPeriodicV: false,
+        isRational: true,
+        poles: [
+          [
+            [0, 0, 0],
+            [0, 1, 0]
+          ],
+          [
+            [1, 0, 0],
+            [1, 1, 0]
+          ],
+          [
+            [0, 0, 0],
+            [0, 1, 0]
+          ]
+        ],
+        weights: [
+          [weights[0], weights[0]],
+          [weights[1], weights[1]],
+          [weights[2], weights[2]]
+        ]
+      })!;
+    const even = net([1e-14, 1e-14, 1e-14]);
+    expect(netDistance(even, net([1e-14, 9e-13, 1e-14]))).toBe(Infinity);
+    // A uniform scale of every weight is the same surface.
+    expect(netDistance(even, net([3, 3, 3]))).toBe(0);
+    // A small relative change is bounded, by 2δ/(1 − δ) × the pole reach.
+    const nudged = netDistance(even, net([1e-14, 1e-14 * (1 + 1e-9), 1e-14]));
+    expect(nudged).toBeGreaterThan(0);
+    expect(nudged).toBeLessThan(3e-9);
+    // A non-positive weight is not a net the bound holds for.
+    expect(net([1, 0, 1])).toBeNull();
+    // Knots must agree exactly after normalization: an affine change of
+    // parameter is the same surface, any other change refuses.
+    expect(netDistance(net([1, 1, 1], [0, 1]), net([1, 1, 1], [2, 4]))).toBe(0);
+    expect(
+      netDistance(
+        net([1, 1, 1], [0, 0.5, 1]),
+        net([1, 1, 1], [0, 0.5 + 1e-15, 1])
+      )
+    ).toBe(Infinity);
+  });
+
+  it('refuses a converted per-corner fillet with one corner radius 1% off', async () => {
+    const source = await perCornerFillet();
+    const there = convertDocumentUnits(source, 'cm');
+    if (!there.ok) throw new Error('conversion refused');
+    const document = structuredClone(there.document);
+    const node = Object.values(document.nodes).find(
+      (candidate) =>
+        candidate.kind === 'feature' && candidate.data.featureKind === 'fillet'
+    )!;
+    if (node.kind !== 'feature' || node.data.featureKind !== 'fillet')
+      throw new Error('Expected the fillet.');
+    const corner = node.data.vertexRadii![1]!;
+    node.data.vertexRadii![1] = {
+      ...corner,
+      radius:
+        typeof corner.radius === 'number' ? corner.radius * 1.01 : corner.radius
+    };
+    expect(typeof corner.radius).toBe('number');
+    const result = await computeConversionReferenceMap(source, document);
+    expect(codes(result)).toContain('geometry-mismatch Block Body volume');
   });
 
   it('refuses a variable fillet whose edge the converted build runs the other way', async () => {
@@ -1148,6 +1557,7 @@ describe('native blend orientation', { timeout: 180_000 }, () => {
                 geometry: {
                   surfaceType: 'plane',
                   area: area * unit ** 2,
+                  areaProvenance: 'exact',
                   center: { x: 0, y: 5 * unit, z: index * 10 * unit },
                   centroid: {
                     x: (index === 0 ? left : right) * unit,

@@ -4,6 +4,8 @@ import type {
   ViewerSettings,
   ViewportCameraState
 } from '@openzcad/viewport';
+import type { UnitSystem } from '@openzcad/shared';
+import { isStoredUnit } from './storedUnitView';
 
 export type { ViewportCameraState };
 
@@ -37,6 +39,13 @@ export interface ProjectViewState {
   sketchVisibility?: Record<string, boolean>;
   /** Datum and image visibility choices kept on this device. */
   hiddenReferences?: HiddenReferences;
+  /**
+   * I03: the stored unit the camera and section lengths are in. A view
+   * read back in another unit (the project was converted since, here or on
+   * another device) is rescaled before it is shown. Absent from views
+   * written before it, which are taken to be in the project's unit.
+   */
+  units?: UnitSystem;
 }
 
 interface StoredProjectView extends ProjectViewState {
@@ -233,6 +242,7 @@ function parseStoredView(value: unknown): StoredProjectView | null {
     hiddenBodyIds: [...candidate.hiddenBodyIds],
     ...withSketchVisibility(parseSketchVisibility(candidate.sketchVisibility)),
     ...(hiddenReferences ? { hiddenReferences } : {}),
+    ...(isStoredUnit(candidate.units) ? { units: candidate.units } : {}),
     updatedAt: candidate.updatedAt
   };
 }
@@ -243,7 +253,10 @@ function withSketchVisibility(
   return visibility ? { sketchVisibility: { ...visibility } } : {};
 }
 
-function readSession(storage: StorageLike | null): WorkspaceSession {
+function readSession(
+  storage: StorageLike | null,
+  requireReadable = false
+): WorkspaceSession {
   if (!storage) {
     return emptySession();
   }
@@ -280,7 +293,8 @@ function readSession(storage: StorageLike | null): WorkspaceSession {
           : 0,
       views
     };
-  } catch {
+  } catch (error) {
+    if (requireReadable) throw error;
     return emptySession();
   }
 }
@@ -429,7 +443,8 @@ export function loadProjectView(
     ...withSketchVisibility(view.sketchVisibility),
     ...(view.hiddenReferences
       ? { hiddenReferences: view.hiddenReferences }
-      : {})
+      : {}),
+    ...(view.units ? { units: view.units } : {})
   };
 }
 
@@ -449,4 +464,34 @@ export function saveProjectView(
       .slice(-MAX_SAVED_PROJECT_VIEWS)
   );
   return writeSession({ ...session, views: limitedViews }, storage);
+}
+
+/**
+ * I03: this device's remembered view of `projectId` was written in `units`
+ * (the unit the device copy is stored in). Records that on a view written
+ * before views recorded their unit, so it is still read in `units` after the
+ * device copy is replaced by one converted elsewhere. A view that already
+ * names a unit, or no view at all, is left alone; the view keeps its place in
+ * the recency order. False only when the browser refused the write.
+ */
+export function stampProjectViewUnits(
+  projectId: string,
+  units: UnitSystem,
+  storage: StorageLike | null = defaultStorage()
+): boolean {
+  if (!storage) return false;
+  try {
+    const session = readSession(storage, true);
+    const view = session.views[projectId];
+    if (!view || view.units) return true;
+    return writeSession(
+      {
+        ...session,
+        views: { ...session.views, [projectId]: { ...view, units } }
+      },
+      storage
+    );
+  } catch {
+    return false;
+  }
 }

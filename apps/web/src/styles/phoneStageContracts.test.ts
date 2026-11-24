@@ -73,6 +73,19 @@ describe('the phone stage', () => {
     );
   });
 
+  it('stands the Panels hidden pill on the stage where App.tsx renders it there', () => {
+    // App.tsx moves the pill out of the rail under this query; the stage's
+    // copy has no place but the one these rules give it.
+    const app = readFileSync(resolve(stylesDir, '..', 'App.tsx'), 'utf8');
+    expect(app).toContain(
+      'ONE_COLUMN_PHONE_STAGE_MEDIA = `(pointer: coarse) and (max-width: ${PANEL_LANE_REST_MAX_WIDTH}px) and (min-height: 621px)`'
+    );
+    // One of the one-column blocks (the first is the rail's own).
+    expect(css).toMatch(
+      /@media \(pointer: coarse\) and \(max-width: 520px\) and \(min-height: 621px\) \{\s*\.viewer-area > \.panels-hidden-pill\.is-on-stage \{[^}]*position:\s*absolute/
+    );
+  });
+
   it('hides tools only while the toggle that brings them back is closed', () => {
     // Every rule that hides part of the instrument rail is conditioned on
     // the toggle, so nothing can be hidden with no way to reach it.

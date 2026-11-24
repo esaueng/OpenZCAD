@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
+  appendRevision,
   createSavedRevision,
   mergeCollaborationDocuments
 } from '@openzcad/document-core';
@@ -46,6 +47,7 @@ import {
   createEncrypted,
   device,
   makeAccount,
+  reload,
   newServer,
   rows,
   type Account,
@@ -427,6 +429,125 @@ describe('encrypted collaboration room (ADR-024 slice 4-9)', () => {
     expect(
       JSON.stringify(rows(srv, 'SELECT * FROM e2ee_project_revisions'))
     ).not.toContain('Before the holes');
+    // The next room edit still names that save state in its signed map, so
+    // a backup or restore of it opens once it is no longer the head.
+    const later = withBox(named, 'Later box');
+    await a.send(later, named.version);
+    expect(await a.next('ack')).toMatchObject({ version: later.version });
+    expect(
+      (await laptop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(projectId);
+    expect(
+      (await desktop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+  });
+
+  it('checks a named save again before a room edit when its first lookup failed', async () => {
+    const srv = roomServer();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const named = await laptop.store.saveRevision({
+      projectId,
+      reason: 'Before the change',
+      expectedVersion: v1.version,
+      document: v1
+    });
+    const revisionId = named.revisions.at(-1)!.revisionId;
+    const page = reload(srv, laptop);
+    // The account's revision list fails once, as the room opens the head.
+    let failures = 1;
+    page.before = async (path, init) => {
+      if (
+        failures > 0 &&
+        (init.method ?? 'GET') === 'GET' &&
+        new URL(path, 'https://example.com').pathname.endsWith('/revisions')
+      ) {
+        failures--;
+        throw new Error('revisions unavailable');
+      }
+    };
+    const a = await live(srv, page, projectId, 'client_reloaded');
+    const state = await a.next('state');
+    expect(state.document?.version).toBe(named.version);
+    expect(failures).toBe(0);
+    const later = withBox(state.document!, 'After the change');
+    await a.send(later, named.version);
+    expect(await a.next('ack')).toMatchObject({ version: later.version });
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(projectId);
+    expect(
+      (await desktop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+  });
+
+  it('writes a new project while the revision list is down', async () => {
+    const srv = roomServer();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    let asked = 0;
+    laptop.before = async (path, init) => {
+      if (
+        (init.method ?? 'GET') === 'GET' &&
+        new URL(path, 'https://example.com').pathname.endsWith('/revisions')
+      ) {
+        asked++;
+        throw new Error('revisions unavailable');
+      }
+    };
+    // The first save point of a new project is no account save: neither a
+    // room edit nor an account write waits on the revision list for it,
+    // even on a page that met the project through a reload.
+    const page = reload(srv, laptop);
+    page.before = laptop.before;
+    const a = await live(srv, page, projectId, 'client_laptop');
+    await a.next('state');
+    // As the app's commands do, each edit appends its own revision.
+    const next = appendRevision(withBox(v1, 'Room box'), 'Add box');
+    await a.send(next, v1.version);
+    expect(await a.next('ack')).toMatchObject({ version: next.version });
+    const saved = await page.store.saveProjectDocument({
+      projectId,
+      expectedVersion: next.version,
+      document: appendRevision(withBox(next, 'Account box'), 'Add box')
+    });
+    expect(saved.version).toBeGreaterThan(next.version);
+    // Its reads did ask, and failed, without blocking either write.
+    expect(asked).toBeGreaterThan(0);
+  });
+
+  it('keeps an account named save loadable after a reload joins the room and edits', async () => {
+    const srv = roomServer();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const named = await laptop.store.saveRevision({
+      projectId,
+      reason: 'Before the change',
+      expectedVersion: v1.version,
+      document: v1
+    });
+    const revisionId = named.revisions.at(-1)!.revisionId;
+    // Reloaded: the room hands this page the named save as its first head,
+    // whose own body cannot name its own hash in the signed revision map.
+    const page = reload(srv, laptop);
+    const a = await live(srv, page, projectId, 'client_reloaded');
+    const state = await a.next('state');
+    expect(state.document?.version).toBe(named.version);
+    const later = withBox(state.document!, 'After the change');
+    await a.send(later, named.version);
+    expect(await a.next('ack')).toMatchObject({ version: later.version });
+    expect(
+      (await page.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(projectId);
+    expect(
+      (await desktop.store.loadRevision(projectId, revisionId))?.version
+    ).toBe(named.version);
   });
 
   it('opens for the owner and its members, and only while encrypted projects are on', async () => {

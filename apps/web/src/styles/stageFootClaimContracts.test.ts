@@ -59,15 +59,29 @@ describe('the stage’s foot claim', () => {
     // Held at full height inside the 40dvh lane, the measurement workbench
     // ran past the lane's foot and off a 360 × 640 screen (PR review).
     const block = mediaBlock(read('quiet-stage.css'), '(max-width: 520px)');
+    // The feature card a History row opens takes the same lane (#2002).
     expect(block).toMatch(
-      /\.viewer-area\.has-command \.stage-right:has\(> \.panel-lane-float\) \{\s*max-height:\s*calc\(100% - var\(--stage-top\) - var\(--panel-lane-bottom\)\);\s*\}/
+      /\.viewer-area:is\(\.has-command, \.has-inspector\)\s+\.stage-right:has\(> \.panel-lane-float\) \{\s*max-height:\s*calc\(100% - var\(--stage-top\) - var\(--panel-lane-bottom\)\);\s*\}/
     );
     expect(block).toMatch(
       /\.viewer-area\.has-command\s+\.stage-right:has\(> \.panel-lane-float\)\s+> \.command-float \{\s*flex-shrink:\s*1;\s*min-height:\s*0;\s*\}/
     );
     // The panel gives way before the card does.
     expect(block).toMatch(
-      /\.viewer-area\.has-command \.stage-right > \.panel-lane-float \{\s*flex-shrink:\s*1000;\s*\}/
+      /\.viewer-area:is\(\.has-command, \.has-inspector\)\s+\.stage-right\s+> \.panel-lane-float \{\s*flex-shrink:\s*1000;\s*\}/
+    );
+  });
+
+  it('shrinks a phone’s feature card into the lane it shares with a panel', () => {
+    // Its max-height: 100% never resolved in the content-sized lane, and at
+    // 430 × 932 the card ran over the command bar and off the screen (#2002).
+    const block = mediaBlock(read('quiet-stage.css'), '(max-width: 520px)');
+    expect(block).toMatch(
+      /\.stage-right:has\(> \.panel-lane-float\) > \.inspector-float \{\s*flex-direction:\s*column;\s*align-items:\s*stretch;\s*\}/
+    );
+    // The panel it pushes down to nothing draws nothing past its float.
+    expect(block).toMatch(
+      /\.viewer-area\.has-inspector \.stage-right > \.panel-lane-float \{\s*overflow:\s*hidden;\s*\}/
     );
   });
 

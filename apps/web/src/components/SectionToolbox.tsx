@@ -43,6 +43,15 @@ function formatEnd(value: number): string {
 }
 
 /**
+ * The cut position as the field shows it: twelve significant digits, so a
+ * rescaled offset (12.7 mm converted to inches is 0.49999999999999994)
+ * reads 0.5. Display only: the stored offset keeps its full precision.
+ */
+export function formatSectionOffset(value: number): string {
+  return String(Number(value.toPrecision(12)));
+}
+
+/**
  * The slider's step: the smallest round value (1, 2, 2.5 or 5 times a power
  * of ten) giving at most about 200 positions across the model. A step of
  * "any" moved the plane by 1% of the range, to cuts like 17.775 mm (I54).
@@ -163,12 +172,15 @@ export function SectionToolbox({
   const detailId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const [sourceOffset, setSourceOffset] = useState(section.offset);
-  const [draft, setDraft] = useState(String(section.offset));
+  const [draft, setDraft] = useState(formatSectionOffset(section.offset));
   const cancelEdit = useRef(false);
+  // Set by typing in the field: a value typed back to what it shows is
+  // still an edit, and is committed exactly.
+  const edited = useRef(false);
   const pendingSliderOffset = useRef<number | null>(null);
   if (sourceOffset !== section.offset) {
     setSourceOffset(section.offset);
-    setDraft(String(section.offset));
+    setDraft(formatSectionOffset(section.offset));
   }
   const status = describeSectionOutline(outline, units);
   const overlapText = describeSectionOverlap(overlap, units);
@@ -283,13 +295,18 @@ export function SectionToolbox({
   function commitPosition() {
     if (cancelEdit.current) {
       cancelEdit.current = false;
+      edited.current = false;
       return;
     }
+    // Left untouched, the field keeps the stored offset: committing its
+    // rounded text would nudge the cut by the digits it does not show.
+    if (!edited.current) return;
+    edited.current = false;
     const parsed = draft.trim() === '' ? NaN : Number(draft);
     const next = Number.isFinite(parsed)
       ? Math.min(range.max, Math.max(range.min, parsed))
       : section.offset;
-    setDraft(String(next));
+    setDraft(formatSectionOffset(next));
     if (next !== section.offset) {
       onOffset(next);
       // Pass the committed value: React has not rendered the new offset yet.
@@ -417,7 +434,10 @@ export function SectionToolbox({
             step="any"
             disabled={!active}
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              edited.current = true;
+              setDraft(event.target.value);
+            }}
             onBlur={commitPosition}
             onKeyDown={(event) => {
               event.stopPropagation();
@@ -425,7 +445,7 @@ export function SectionToolbox({
               if (event.key === 'Escape') {
                 event.preventDefault();
                 cancelEdit.current = true;
-                setDraft(String(section.offset));
+                setDraft(formatSectionOffset(section.offset));
                 event.currentTarget.blur();
               }
             }}
@@ -481,7 +501,7 @@ export function SectionToolbox({
           onKeyUp={commitSlider}
           onBlur={commitSlider}
           aria-label="Section plane offset"
-          aria-valuetext={`${section.offset} ${units}`}
+          aria-valuetext={`${formatSectionOffset(section.offset)} ${units}`}
         />
         <div className="rail-section-ends" aria-hidden="true">
           <span>{formatEnd(range.min)}</span>
