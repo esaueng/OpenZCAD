@@ -149,14 +149,15 @@ async function storedProject(
 async function openSameProject(
   contender: Page,
   { projectId, name }: ProjectDocument,
-  holdClaim = false
+  holdClaim = false,
+  handoff = false
 ) {
   await stubApi(contender);
   await contender.route('**/api/session', (route) =>
     route.fulfill({ json: null })
   );
   await contender.addInitScript(
-    ({ projectId, key, holdClaim }) => {
+    ({ projectId, key, holdClaim, handoff }) => {
       sessionStorage.setItem(
         key,
         JSON.stringify({
@@ -165,6 +166,10 @@ async function openSameProject(
           views: {}
         })
       );
+      // These cases are about a tab that does not own the project. Without a
+      // channel to the owner a tab cannot ask for it, and keeps waiting
+      // read-only — the state a handoff the owner refuses also leaves.
+      if (!handoff) Reflect.deleteProperty(window, 'BroadcastChannel');
       if (!holdClaim) return;
       // Hold the first ownership answer until the workspace has accepted
       // an edit and the user tries to leave. The native lock still decides
@@ -195,7 +200,7 @@ async function openSameProject(
         return request(lockName, settings, callback);
       };
     },
-    { projectId, key: WORKSPACE_SESSION_STORAGE_KEY, holdClaim }
+    { projectId, key: WORKSPACE_SESSION_STORAGE_KEY, holdClaim, handoff }
   );
   await contender.goto('/');
   await expect(
@@ -370,6 +375,49 @@ for (const [scenario, title] of [
     }
   });
 }
+
+test('carries each tab’s edits and undo history to the tab the user switches to', async ({
+  page
+}) => {
+  const name = 'Tab handoff';
+  await prepareLocalBox(page, name);
+  const original = (await storedProject(page, name))!;
+  const second = await page.context().newPage();
+  try {
+    // Opening the project in a second tab moves editing there.
+    await openSameProject(second, original, false, true);
+    await expect(
+      second.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
+    await expect(
+      page.getByRole('button', { name: /^Box.*open in another tab/ })
+    ).toBeDisabled();
+    await createPrimitiveInPlace(second, 'sphere');
+    await expectBodyCount(second, 2);
+    await expect
+      .poll(
+        async () => (await storedProject(second, name))?.featureOrder.length
+      )
+      .toBe(2);
+    // The first tab shows the second tab's Sphere without a reload.
+    await expectBodyCount(page, 2);
+
+    // Working in the first tab takes editing back, Sphere included, and
+    // undo there reaches the step the other tab made.
+    await page.keyboard.press('Shift');
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
+    await page.keyboard.press('ControlOrMeta+z');
+    await expectBodyCount(page, 1);
+    await expect
+      .poll(async () => (await storedProject(page, name))?.featureOrder.length)
+      .toBe(1);
+    await expectBodyCount(second, 1);
+  } finally {
+    await second.close();
+  }
+});
 
 test('keeps the previous owner’s copy when the storage read on promotion fails', async ({
   page

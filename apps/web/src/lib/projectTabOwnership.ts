@@ -11,10 +11,47 @@
  * keeps writing; a second tab is told it does not own the project so it can
  * open read-only instead of competing. Ownership is not permanent — the lock is
  * released when the owning tab closes, navigates, or closes the project, and
- * the waiting tab is promoted then.
+ * the waiting tab is promoted then. It can also be handed over on request
+ * (`projectTabHandoff.ts`): the owner yields, and the tab that asked — the
+ * one holding the handoff ticket — is the one promoted.
  */
 
 const LOCK_PREFIX = 'openzcad-project:';
+const HANDOFF_TICKET_PREFIX = 'openzcad-project-handoff:';
+
+/**
+ * The lock a tab holds while it asks the owner to hand a project over. The
+ * owner's release grants the project lock to whichever tab queued first,
+ * which need not be the one that asked; a waiting tab granted the project
+ * while another holds this ticket gives it straight back and queues again,
+ * so the asking tab is the one that ends up with it.
+ */
+export function projectHandoffTicketName(projectId: string): string {
+  return `${HANDOFF_TICKET_PREFIX}${projectId}`;
+}
+
+export interface ProjectOwnershipOptions {
+  /** Whether this tab holds the project's handoff ticket right now. */
+  ticketHeldHere?: () => boolean;
+}
+
+/** Whether another tab holds the handoff ticket for `projectId`. */
+async function handoffPendingElsewhere(
+  locks: LockManager,
+  projectId: string,
+  options: ProjectOwnershipOptions
+): Promise<boolean> {
+  if (options.ticketHeldHere?.()) return false;
+  try {
+    return await locks.request(
+      projectHandoffTicketName(projectId),
+      { ifAvailable: true },
+      async (ticket) => ticket === null
+    );
+  } catch {
+    return false;
+  }
+}
 
 export interface ProjectOwnershipClaim {
   /** Whether this tab held the project at the moment the claim resolved. */
@@ -33,6 +70,11 @@ export interface ProjectOwnershipClaim {
    * claim has been released, when there is nothing left to hold.
    */
   retain(): (() => void) | null;
+  /**
+   * Settles once this claim no longer holds or waits for the lock: after
+   * {@link release}, when the next tab can be granted it.
+   */
+  readonly freed: Promise<void>;
 }
 
 /**
@@ -45,7 +87,8 @@ export interface ProjectOwnershipClaim {
  */
 export function claimProjectOwnership(
   projectId: string,
-  onPromoted: () => void
+  onPromoted: () => void,
+  options: ProjectOwnershipOptions = {}
 ): Promise<ProjectOwnershipClaim> {
   const locks = globalThis.navigator?.locks as LockManager | undefined;
   if (!locks) {
@@ -56,7 +99,8 @@ export function claimProjectOwnership(
       heldClaim(
         true,
         () => undefined,
-        () => undefined
+        () => undefined,
+        Promise.resolve()
       )
     );
   }
@@ -75,7 +119,31 @@ export function claimProjectOwnership(
     released = true;
     waiting.abort();
   };
-  const claim = (owned: boolean) => heldClaim(owned, abandon, releaseHeld);
+  let resolveFreed: () => void = () => undefined;
+  const freed = new Promise<void>((resolve) => {
+    resolveFreed = resolve;
+  });
+  const claim = (owned: boolean) =>
+    heldClaim(owned, abandon, releaseHeld, freed);
+  // Granted when the owning tab goes away or yields. A grant made while
+  // another tab holds the handoff ticket belongs to that tab: give it
+  // straight back and queue again behind it.
+  const queueForPromotion = async (): Promise<void> => {
+    for (;;) {
+      let requeue = false;
+      await locks.request(name, { signal: waiting.signal }, async (queued) => {
+        if (released || !queued) return;
+        if (await handoffPendingElsewhere(locks, projectId, options)) {
+          requeue = true;
+          return;
+        }
+        if (released) return;
+        onPromoted();
+        await held;
+      });
+      if (!requeue || released) return;
+    }
+  };
 
   return new Promise<ProjectOwnershipClaim>((resolveClaim) => {
     void locks
@@ -89,23 +157,14 @@ export function claimProjectOwnership(
         // read-only, then queue: this request is granted when the owning tab
         // goes away, which is exactly when taking over is safe.
         resolveClaim(claim(false));
-        await locks.request(
-          name,
-          { signal: waiting.signal },
-          async (queued) => {
-            if (released || !queued) {
-              return;
-            }
-            onPromoted();
-            await held;
-          }
-        );
+        await queueForPromotion();
       })
       .catch(() => {
         // A refused lock request is not a reason to make the project
         // unopenable; fall back to the behaviour of a browser without locks.
         resolveClaim(claim(true));
-      });
+      })
+      .finally(resolveFreed);
   });
 }
 
@@ -117,7 +176,8 @@ export function claimProjectOwnership(
 function heldClaim(
   owned: boolean,
   abandon: () => void,
-  letGo: () => void
+  letGo: () => void,
+  freed: Promise<void>
 ): ProjectOwnershipClaim {
   let released = false;
   let writes = 0;
@@ -126,6 +186,7 @@ function heldClaim(
   };
   return {
     owned,
+    freed,
     release() {
       released = true;
       abandon();
@@ -268,22 +329,33 @@ export interface ProjectStorageTracker {
    * flight keeps the lock until it lands ({@link ProjectStorageOwnership.retain}).
    */
   giveUp(): void;
+  /**
+   * Hands the project to the next tab while staying on it: stops owning at
+   * once (so no new write starts), lets the lock go once every retained
+   * write has landed, then queues again to be promoted later. False, and
+   * nothing changed, when this tab does not own the project.
+   */
+  yieldOwnership(): Promise<boolean>;
 }
 
 /**
  * Claims `projectId` ({@link claimProjectOwnership}) and tracks the answer
- * as a {@link ProjectStorageOwnership}: `onAnswered` runs once the claim
- * resolves, `onPromoted` if this tab takes the project over later. Neither
- * runs after {@link ProjectStorageTracker.giveUp}.
+ * as a {@link ProjectStorageOwnership}: `onAnswered` runs once the first
+ * claim resolves, `onPromoted` each time this tab takes the project over
+ * later (after another tab let it go, or after this one yielded it and got
+ * it back). Neither runs after {@link ProjectStorageTracker.giveUp}.
  */
 export function trackProjectStorage(
   projectId: string,
   handlers: {
     onAnswered(owned: boolean): void;
     onPromoted(): void;
-  }
+  },
+  options: ProjectOwnershipOptions = {}
 ): ProjectStorageTracker {
   let given = false;
+  let yielding = false;
+  let generation = 0;
   let claim: ProjectOwnershipClaim | null = null;
   const ownership: ProjectStorageOwnership = {
     projectId,
@@ -291,19 +363,29 @@ export function trackProjectStorage(
     settled: Promise.resolve(),
     retain: () => (ownership.owned && claim ? claim.retain() : null)
   };
-  ownership.settled = claimProjectOwnership(projectId, () => {
-    if (given) return;
-    ownership.owned = true;
-    handlers.onPromoted();
-  }).then((result) => {
-    if (given) {
-      result.release();
-      return;
-    }
-    claim = result;
-    ownership.owned = result.owned;
-    handlers.onAnswered(result.owned);
-  });
+  const startClaim = (first: boolean): Promise<void> => {
+    const current = ++generation;
+    const live = () => !given && current === generation;
+    return claimProjectOwnership(
+      projectId,
+      () => {
+        if (!live()) return;
+        ownership.owned = true;
+        handlers.onPromoted();
+      },
+      options
+    ).then((result) => {
+      if (!live()) {
+        result.release();
+        return;
+      }
+      claim = result;
+      ownership.owned = result.owned;
+      if (first) handlers.onAnswered(result.owned);
+      else if (result.owned) handlers.onPromoted();
+    });
+  };
+  ownership.settled = startClaim(true);
   return {
     ownership,
     giveUp() {
@@ -311,6 +393,23 @@ export function trackProjectStorage(
       given = true;
       ownership.owned = false;
       claim?.release();
+    },
+    async yieldOwnership() {
+      if (given || yielding || !ownership.owned || !claim) return false;
+      yielding = true;
+      try {
+        ownership.owned = false;
+        const previous = claim;
+        claim = null;
+        previous.release();
+        await previous.freed;
+        if (given) return true;
+        ownership.settled = startClaim(false);
+        await ownership.settled;
+        return true;
+      } finally {
+        yielding = false;
+      }
     }
   };
 }

@@ -620,11 +620,15 @@ import {
 import { rateLimitOf, type RateLimit } from './lib/rateLimit';
 import {
   projectStorageWriteAccess,
-  trackProjectStorage,
   writeLocalProjectUnderClaim,
   writeOwnedProjectStorage,
   type ProjectStorageOwnership
 } from './lib/projectTabOwnership';
+import {
+  browserProjectHandoffTransport,
+  trackProjectEditing,
+  type ProjectEditingTracker
+} from './lib/projectTabHandoff';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { beginEditTrace } from './lib/editTrace';
@@ -2477,6 +2481,21 @@ const PROJECT_MIGRATING_NOTICE =
 /** The lane's one notice for a tab that opened a project another tab owns. */
 const PROJECT_OPEN_ELSEWHERE_NOTICE =
   'Editing is locked: this project is open in another tab.';
+/** Said while editing moves to this tab from the one that had it. */
+const PROJECT_EDITING_MOVING_NOTICE =
+  'Moving editing to this tab — try again in a moment.';
+/** The owner tab was busy (a save, a conversion) and kept the project. */
+const PROJECT_EDITING_DECLINED_NOTICE =
+  'Editing is locked: the other tab is finishing a save. Click here to try again.';
+/** The lane notices a tab that takes the project over can retire. */
+const PROJECT_HANDOFF_NOTICES: ReadonlySet<string> = new Set([
+  PROJECT_OPEN_ELSEWHERE_NOTICE,
+  PROJECT_EDITING_MOVING_NOTICE,
+  PROJECT_EDITING_DECLINED_NOTICE
+]);
+/** Identifies this tab to the others editing the same projects. */
+const PROJECT_TAB_ID =
+  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 /** Said once per session after a selection box that caught nothing. */
 const EMPTY_BOX_SELECT_HINT =
   'Nothing in the box. A plain drag selects bodies — Shift+drag orbits, right-drag pans.';
@@ -5739,6 +5758,15 @@ export function App() {
   const migrationLockedProjectIds = useMigrationLockedProjects();
   const projectOpenElsewhereRef = useRef(projectOpenElsewhere);
   projectOpenElsewhereRef.current = projectOpenElsewhere;
+  /** This tab's claim on the open project, and the way to hand it over. */
+  const projectEditingRef = useRef<ProjectEditingTracker | null>(null);
+  /**
+   * True while this tab, the owner, writes out what it has before handing
+   * the project to another tab: no new edit may start meanwhile.
+   */
+  const projectYieldingRef = useRef(false);
+  /** Set when this tab asked for the project, so its arrival is quiet. */
+  const projectEditingAskedRef = useRef(false);
   /**
    * Settles once this tab knows whether it owns the open project. Claiming is
    * asynchronous and the autosave debounce is not, so without somewhere to wait
@@ -7249,7 +7277,14 @@ export function App() {
       // fence does not hold the push back.
       void (async () => {
         try {
-          await saveLocalProject(remoteDocument);
+          // Only the tab that owns the project writes it here. A following
+          // tab gets this same frame from the room, and the owner's save of
+          // it reaches this tab as a storage announcement.
+          await writeOwnedProjectStorage(
+            readWritableProjectClaim,
+            remoteDocument.projectId,
+            () => saveLocalProject(remoteDocument)
+          );
         } catch {
           setSaveState('offline');
           setStatus(
@@ -7288,10 +7323,17 @@ export function App() {
           accountVersion
         );
       }
-      hydrateDocument(remoteDocument, {
-        restoreView: false,
-        rememberProject: false
-      });
+      if (
+        hydrateDocument(remoteDocument, {
+          restoreView: false,
+          rememberProject: false
+        }) &&
+        projectOpenElsewhereRef.current
+      ) {
+        // A following tab took this from the room, not from an edit of its
+        // own: it still has nothing to keep when it takes the project over.
+        openedDocumentRef.current = managerRef.current?.document ?? null;
+      }
       setStatus(
         projectSharingEnabled
           ? `Applied live revision ${remoteDocument.version} from a collaborator.`
@@ -7338,6 +7380,14 @@ export function App() {
   unitsConversionRoomRef.current = unitsConversionRoom;
   const sharedAccountProjectRef = useRef(sharedAccountProject);
   sharedAccountProjectRef.current = sharedAccountProject;
+  /**
+   * Why this tab may not take the project from the tab editing it: another
+   * member's project answers to the room and its seat, not to this browser's
+   * tabs, so it keeps the one-tab lock.
+   */
+  const projectHandoffBlockedRef = useRef(false);
+  projectHandoffBlockedRef.current =
+    sharedAccountProject || encryptedMemberProject;
   const activeCollaborationLease = Boolean(
     collaboration.lease &&
     collaboration.lease.projectId === doc?.projectId &&
@@ -7407,6 +7457,10 @@ export function App() {
       : openPinProblem === 'unresolved'
         ? 'The switch to end-to-end encryption didn’t finish on this device'
         : null;
+  /** Why the owner cannot hand the project over right now. */
+  const projectYieldBlockedRef = useRef(false);
+  projectYieldBlockedRef.current =
+    projectHandoffBlockedRef.current || Boolean(migrationEditReason);
   // The notices load with the reset dialog; editing is locked (above) and
   // every send refused (`projectWriteGate.ts`) without waiting for them.
   useEffect(() => {
@@ -7873,14 +7927,22 @@ export function App() {
 
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
+    if (projectYieldingRef.current) {
+      setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      return false;
+    }
     if (!reason) {
       return true;
     }
-    setStatus(
-      projectOpenElsewhereRef.current
-        ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : cannotSentence(action, reason)
-    );
+    if (projectOpenElsewhereRef.current) {
+      setStatus(
+        requestEditingHere()
+          ? PROJECT_EDITING_MOVING_NOTICE
+          : PROJECT_OPEN_ELSEWHERE_NOTICE
+      );
+      return false;
+    }
+    setStatus(cannotSentence(action, reason));
     return false;
   }
 
@@ -7893,14 +7955,22 @@ export function App() {
 
   function ensureCanEditParameters(action = 'change this parameter'): boolean {
     const reason = parameterEditDisabledReasonRef.current;
+    if (projectYieldingRef.current) {
+      setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      return false;
+    }
     if (!reason) {
       return true;
     }
-    setStatus(
-      projectOpenElsewhereRef.current
-        ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : cannotSentence(action, reason)
-    );
+    if (projectOpenElsewhereRef.current) {
+      setStatus(
+        requestEditingHere()
+          ? PROJECT_EDITING_MOVING_NOTICE
+          : PROJECT_OPEN_ELSEWHERE_NOTICE
+      );
+      return false;
+    }
+    setStatus(cannotSentence(action, reason));
     return false;
   }
 
@@ -7914,27 +7984,43 @@ export function App() {
    */
   function ensureCanEditDrawings(action = 'edit this drawing'): boolean {
     const reason = drawingEditDisabledReasonRef.current;
+    if (projectYieldingRef.current) {
+      setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      return false;
+    }
     if (!reason) {
       return true;
     }
-    setStatus(
-      projectOpenElsewhereRef.current
-        ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : cannotSentence(action, reason)
-    );
+    if (projectOpenElsewhereRef.current) {
+      setStatus(
+        requestEditingHere()
+          ? PROJECT_EDITING_MOVING_NOTICE
+          : PROJECT_OPEN_ELSEWHERE_NOTICE
+      );
+      return false;
+    }
+    setStatus(cannotSentence(action, reason));
     return false;
   }
 
   function ensureCanEditAssembly(action = 'edit this assembly'): boolean {
     const reason = assemblyEditDisabledReasonRef.current;
+    if (projectYieldingRef.current) {
+      setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      return false;
+    }
     if (!reason) {
       return true;
     }
-    setStatus(
-      projectOpenElsewhereRef.current
-        ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : cannotSentence(action, reason)
-    );
+    if (projectOpenElsewhereRef.current) {
+      setStatus(
+        requestEditingHere()
+          ? PROJECT_EDITING_MOVING_NOTICE
+          : PROJECT_OPEN_ELSEWHERE_NOTICE
+      );
+      return false;
+    }
+    setStatus(cannotSentence(action, reason));
     return false;
   }
 
@@ -8450,13 +8536,96 @@ export function App() {
   ]);
 
   /**
+   * Asks the tab editing the open project to hand it to this one. True when
+   * a request is on its way (or this tab already owns it); false when this
+   * project cannot move between tabs.
+   */
+  function requestEditingHere(): boolean {
+    const tracker = projectEditingRef.current;
+    if (!tracker || projectHandoffBlockedRef.current) return false;
+    if (tracker.ownership.owned) return true;
+    projectEditingAskedRef.current = true;
+    void tracker.requestEditing().then((result) => {
+      if (projectEditingRef.current !== tracker) return;
+      if (result === 'owner') return;
+      projectEditingAskedRef.current = false;
+      if (result === 'declined') {
+        setStatus(PROJECT_EDITING_DECLINED_NOTICE, { sticky: true });
+      } else if (result === 'timeout') {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
+      }
+    });
+    return true;
+  }
+  const requestEditingHereRef = useRef(requestEditingHere);
+  requestEditingHereRef.current = requestEditingHere;
+
+  /**
+   * The owner was asked for the project: stop taking edits, write everything
+   * pending here and to the account, and become a read-only tab. False, with
+   * the tab left editing, when it is busy or a write did not land.
+   */
+  async function prepareProjectYield(): Promise<boolean> {
+    if (
+      projectYieldBlockedRef.current ||
+      projectYieldingRef.current ||
+      // Leaving the project lets it go anyway, once its writes land.
+      navigationPause.departing() !== null
+    ) {
+      return false;
+    }
+    projectYieldingRef.current = true;
+    const resume = () => {
+      projectYieldingRef.current = false;
+    };
+    try {
+      // A drag or an in-place edit in progress would commit after the
+      // project has moved on; drop it, as leaving the project would.
+      cancelDirectManipulationRef.current?.();
+      cancelInPlaceRef.current?.();
+      await flushPendingLocalSaveRef.current();
+      if (localAutosave.dirty) {
+        resume();
+        return false;
+      }
+      // The next owner fences its own account writes on the version this
+      // tab last pushed; let that push land first.
+      await cloudProjectAutosaveRef.current?.flushPending();
+    } catch {
+      resume();
+      return false;
+    }
+    const manager = managerRef.current;
+    if (manager) openedDocumentRef.current = manager.document;
+    projectOpenElsewhereRef.current = true;
+    setProjectOpenElsewhere(true);
+    resume();
+    return true;
+  }
+  const prepareProjectYieldRef = useRef(prepareProjectYield);
+  prepareProjectYieldRef.current = prepareProjectYield;
+
+  /** A yield prepared for will not happen: take edits again. */
+  function cancelProjectYield() {
+    projectYieldingRef.current = false;
+    const tracker = projectEditingRef.current;
+    if (tracker?.ownership.owned) {
+      projectOpenElsewhereRef.current = false;
+      setProjectOpenElsewhere(false);
+    }
+  }
+  const cancelProjectYieldRef = useRef(cancelProjectYield);
+  cancelProjectYieldRef.current = cancelProjectYield;
+
+  /**
    * Exactly one tab writes a project's device storage.
    *
    * Autosave replaces the whole document under one key, so a second tab editing
    * the same project does not merge with the first — it overwrites it, and
    * whichever tab saved last wins with no record that the other's work existed.
-   * The tab that does not hold the project opens read-only instead, and takes
-   * over if the owner goes away.
+   * The tab that does not hold the project follows the owner's saves
+   * read-only, and takes the project over (`projectTabHandoff.ts`) when the
+   * user starts working in it, or when the owner goes away.
    */
   useLayoutEffect(() => {
     const projectId = doc?.projectId ?? null;
@@ -8466,30 +8635,49 @@ export function App() {
       // own share link must not knock their real tab read-only.
       projectOwnershipSettledRef.current = null;
       projectOwnershipRef.current = null;
+      projectEditingRef.current = null;
       setProjectOpenElsewhere(false);
       return;
     }
-    const tracker = trackProjectStorage(projectId, {
-      onPromoted() {
-        const manager = managerRef.current;
-        if (manager?.document.projectId !== projectId) return;
-        pendingStoragePromotionRef.current = ownership;
-        void adoptStoredProject(ownership, manager);
-      },
-      onAnswered(owned) {
-        projectOpenElsewhereRef.current = !owned;
-        setProjectOpenElsewhere(!owned);
-        if (!owned) {
-          // The project is on this device — the other tab is keeping it that
-          // way. Nothing here is unsaved, and nothing here may be saved.
-          setSaveState('local');
-          // Said once, where the eye goes: the rail dims as a whole, and the
-          // reason used to live only in each button's tooltip. Sticky, since
-          // it describes a state the tab stays in until the other tab closes.
-          setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
+    const transport = browserProjectHandoffTransport();
+    const tracker = trackProjectEditing(
+      projectId,
+      {
+        onPromoted() {
+          const manager = managerRef.current;
+          if (manager?.document.projectId !== projectId) return;
+          pendingStoragePromotionRef.current = ownership;
+          void adoptStoredProject(ownership, manager);
+        },
+        onAnswered(owned) {
+          projectOpenElsewhereRef.current = !owned;
+          setProjectOpenElsewhere(!owned);
+          if (!owned) {
+            // The project is on this device — the other tab is keeping it that
+            // way. Nothing here is unsaved, and nothing here may be saved.
+            setSaveState('local');
+            // A tab the user just opened is the one they mean to work in.
+            if (
+              document.visibilityState === 'visible' &&
+              document.hasFocus() &&
+              requestEditingHereRef.current()
+            ) {
+              return;
+            }
+            // Said once, where the eye goes: the rail dims as a whole, and the
+            // reason used to live only in each button's tooltip. Sticky, since
+            // it describes a state the tab stays in until the other tab closes.
+            setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
+          }
+        },
+        prepareYield: () => prepareProjectYieldRef.current(),
+        cancelYield: () => cancelProjectYieldRef.current(),
+        onRemoteSaved() {
+          void mirrorStoredProjectRef.current(ownership);
         }
-      }
-    });
+      },
+      { tabId: PROJECT_TAB_ID, transport }
+    );
     // A device write (autosave, a save point, a conversion's checkpoint)
     // keeps the lock until it lands, so a tab promoted by this cleanup never
     // saves before it.
@@ -8497,18 +8685,45 @@ export function App() {
     const settled = ownership.settled.then(() => undefined);
     projectOwnershipSettledRef.current = settled;
     projectOwnershipRef.current = ownership;
+    projectEditingRef.current = tracker;
     return () => {
       projectOwnershipSettledRef.current = null;
       if (projectOwnershipRef.current === ownership)
         projectOwnershipRef.current = null;
+      if (projectEditingRef.current === tracker)
+        projectEditingRef.current = null;
       if (pendingStoragePromotionRef.current === ownership)
         pendingStoragePromotionRef.current = null;
+      projectYieldingRef.current = false;
+      projectEditingAskedRef.current = false;
       // No edit is taken while a navigation leaves the project (see
       // `navigationPause`), so autosave has written everything by now; a
       // write still in flight keeps the lock until it lands.
       tracker.giveUp();
+      transport?.close();
     };
   }, [doc?.projectId, shareSession, setStatus]);
+
+  // Working in a tab that follows another's edits is asking to edit here:
+  // focusing it, or the first press inside it, moves the project over.
+  useEffect(() => {
+    const ask = () => {
+      if (projectOpenElsewhereRef.current) requestEditingHereRef.current();
+    };
+    const visible = () => {
+      if (document.visibilityState === 'visible' && document.hasFocus()) ask();
+    };
+    window.addEventListener('focus', ask);
+    document.addEventListener('visibilitychange', visible);
+    window.addEventListener('pointerdown', ask, true);
+    window.addEventListener('keydown', ask, true);
+    return () => {
+      window.removeEventListener('focus', ask);
+      document.removeEventListener('visibilitychange', visible);
+      window.removeEventListener('pointerdown', ask, true);
+      window.removeEventListener('keydown', ask, true);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     if (!localSaveDirty) return;
@@ -11776,8 +11991,92 @@ export function App() {
     pendingStoragePromotionRef.current = null;
     projectOpenElsewhereRef.current = false;
     setProjectOpenElsewhere(false);
-    setStatus('This tab can edit the project now.');
+    const asked = projectEditingAskedRef.current;
+    projectEditingAskedRef.current = false;
+    // Asked for by working here: editing simply carries on, with nothing to
+    // announce. Promoted because the other tab went away: say so.
+    if (asked) {
+      setStatusEntry((current) =>
+        PROJECT_HANDOFF_NOTICES.has(current.text)
+          ? retireStatus(current, Date.now())
+          : current
+      );
+    } else {
+      setStatus('This tab can edit the project now.');
+    }
+    // The previous owner pushed its last edits to the account before letting
+    // go; fence this tab's next push on that version, not the one it opened.
+    const controller = cloudProjectAutosaveRef.current;
+    const projectId = stored.projectId;
+    if (controller && controller.syncedVersion !== null) {
+      const synced = await loadLastSyncedVersion(projectId).catch(() => null);
+      if (
+        synced !== null &&
+        synced > (controller.syncedVersion ?? -1) &&
+        projectOwnershipRef.current === ownership &&
+        managerRef.current?.document.projectId === projectId
+      ) {
+        remoteVersionsRef.current.set(projectId, synced);
+        controller.adoptAccountVersion(projectId, synced);
+      }
+    }
   }
+
+  /**
+   * Follows the owner tab's saves while this tab does not own the project:
+   * shows what it stored. Coalesced, so a burst of saves reads storage once
+   * more after the read in flight, and never applies an older read last.
+   */
+  const mirrorReadRef = useRef<{ running: boolean; again: boolean }>({
+    running: false,
+    again: false
+  });
+  async function mirrorStoredProject(ownership: ProjectStorageOwnership) {
+    const reads = mirrorReadRef.current;
+    if (reads.running) {
+      reads.again = true;
+      return;
+    }
+    reads.running = true;
+    try {
+      do {
+        reads.again = false;
+        const stored = await loadLocalProject(ownership.projectId).catch(
+          () => null
+        );
+        const manager = managerRef.current;
+        if (
+          !stored ||
+          !manager ||
+          ownership.owned ||
+          projectOwnershipRef.current !== ownership ||
+          !projectOpenElsewhereRef.current ||
+          manager.document.projectId !== stored.projectId
+        ) {
+          continue;
+        }
+        if (sameLocalProjectContent(manager.document, stored)) continue;
+        // A tab that only ever follows has nothing of its own to lose; one
+        // with an edit the claim refused keeps it for recovery instead.
+        if (
+          !sameLocalProjectContent(openedDocumentRef.current, manager.document)
+        )
+          return;
+        if (
+          hydrateDocument(stored, {
+            restoreView: false,
+            rememberProject: false
+          })
+        ) {
+          openedDocumentRef.current = managerRef.current?.document ?? null;
+        }
+      } while (reads.again);
+    } finally {
+      reads.running = false;
+    }
+  }
+  const mirrorStoredProjectRef = useRef(mirrorStoredProject);
+  mirrorStoredProjectRef.current = mirrorStoredProject;
 
   async function writePendingLocalDocument(
     pending: ProjectDocument
@@ -11826,6 +12125,10 @@ export function App() {
   ): void {
     setLocalSaveFailed(false);
     if (managerRef.current?.document.projectId !== pending.projectId) return;
+    // Tabs following this project re-read it from storage.
+    if (projectOwnershipRef.current?.projectId === pending.projectId) {
+      projectEditingRef.current?.announceSaved();
+    }
     if (accountDocumentUnavailableProjectIdRef.current === pending.projectId) {
       setSaveState('repair');
       return;

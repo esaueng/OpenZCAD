@@ -793,65 +793,61 @@ test('writes a canonical edit without waiting for the autosave debounce', async 
  */
 /**
  * Two tabs autosaving one project write the whole document to the same key, so
- * the slower one lands last and the other tab's work stops existing. The second
- * tab opens read-only instead of competing.
+ * the slower one would land last and the other tab's work would stop existing.
+ * Exactly one tab writes, and that is the tab the user is working in: editing
+ * moves to whichever tab they use, carrying the other tab's saved work with it,
+ * and the tab they left follows along read-only.
  */
-test('opens a project read-only when another tab already has it', async ({
-  page
-}) => {
+test('editing follows the tab the user works in', async ({ page }) => {
   await stubApi(page);
   await createProject(page, 'Two Tabs');
   await expect
     .poll(() => storedProjectNames(page), { timeout: SYNC_BUDGET_MS })
     .toContain('Two Tabs');
 
-  // A second tab restores the same active project on its own. Assert the name
-  // alone, not the rename button: the title is only a button while the tab
-  // still believes it may edit, so once the claim resolves — the very thing
-  // this test is about — the button is gone and the name is plain text. The
-  // button form is a pre-claim frame this used to race, and win.
+  // A second tab restores the same active project on its own, and being the
+  // tab in use, takes editing over.
   const second = await page.context().newPage();
   await stubApi(second);
   await second.goto('/');
   await expect(second.getByRole('banner')).toContainText('Two Tabs');
+  await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled({
+    timeout: SYNC_BUDGET_MS
+  });
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled({
+    timeout: SYNC_BUDGET_MS
+  });
 
+  await renameProject(second, 'Second latest');
+  await expect
+    .poll(() => storedProjectNames(second))
+    .toEqual(['Second latest']);
+  // The tab left behind follows the save without a reload.
+  await expect(page.getByRole('banner')).toContainText('Second latest', {
+    timeout: SYNC_BUDGET_MS
+  });
+
+  // Working in the first tab again brings editing back to it, starting from
+  // the second tab's work rather than its own older copy.
+  await page.keyboard.press('Shift');
+  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled({
+    timeout: SYNC_BUDGET_MS
+  });
   await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled(
     { timeout: SYNC_BUDGET_MS }
   );
-  // The dimmed rail is explained once, in the lane, not only in each
-  // button's tooltip.
-  await expect(
-    second.locator('.workspace-toast-body [role="status"]')
-  ).toContainText('Editing is locked: this project is open in another tab.');
-  // And settles on saying so, rather than leaving up a save that is never
-  // going to happen. Claiming the project is asynchronous, so the indicator
-  // reads as saving until the answer arrives.
-  await expect(
-    second.getByRole('group', { name: 'Workspace status', exact: true })
-  ).toContainText('syncLocal only', { timeout: SYNC_BUDGET_MS });
+  await renameProject(page, 'First latest');
+  await expect.poll(() => storedProjectNames(page)).toEqual(['First latest']);
+  await expect(second.getByRole('banner')).toContainText('First latest', {
+    timeout: SYNC_BUDGET_MS
+  });
 
-  // The tab that owns it keeps editing.
-  await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled();
-  await renameProject(page, 'Owner latest');
-  await expect.poll(() => storedProjectNames(page)).toEqual(['Owner latest']);
-  // The waiting tab still displays its older snapshot. Save must check the
-  // ownership lock before touching the shared device record.
-  await second.keyboard.press('ControlOrMeta+s');
-  await expect(
-    second.locator('.workspace-toast-body [role="status"]')
-  ).toContainText('Editing is locked');
-  await second.waitForTimeout(500);
-  expect(await storedProjectNames(second)).toEqual(['Owner latest']);
-
-  // Handing the project back promotes the tab that was waiting for it.
+  // The tab left behind is promoted the ordinary way when the editor leaves.
   await page.goto('about:blank');
   await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled({
     timeout: SYNC_BUDGET_MS
   });
-  await expect(
-    second.locator('.workspace-toast-body [role="status"]')
-  ).toContainText('Editing this project here now.');
-  await expect(second.getByRole('banner')).toContainText('Owner latest');
+  await expect(second.getByRole('banner')).toContainText('First latest');
   await second.close();
 });
 
