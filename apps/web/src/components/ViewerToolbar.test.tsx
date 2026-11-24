@@ -688,6 +688,59 @@ describe('the section button and its panel', () => {
     expect(onToggleSection).toHaveBeenCalledTimes(3);
   });
 
+  it('rescales the held-off panel when the stored unit changes (I03)', () => {
+    const noop = () => undefined;
+    const props = {
+      projection: 'perspective' as const,
+      canUndo: false,
+      canRedo: false,
+      onUndo: noop,
+      onRedo: noop,
+      onToggleGrid: noop,
+      onFit: noop,
+      onView: noop,
+      onDisplayMode: noop,
+      onToggleXray: noop,
+      onToggleProjection: noop,
+      onToggleSection: noop,
+      onSectionPlane: noop,
+      onSectionOffset: noop,
+      onSectionCommit: noop,
+      onExportSectionDxf: noop,
+      sectionOutline: { kind: 'clipping' } as const
+    };
+    const view = render(
+      <ViewerToolbar
+        {...props}
+        settings={{ ...settings, sectionView: { plane: 'XZ', offset: 12.7 } }}
+        sectionRange={{ min: 0, max: 40 }}
+        units="mm"
+      />
+    );
+    fireEvent.click(screen.getByRole('switch', { name: 'Section cut' }));
+    const off = (units: string) =>
+      view.rerender(
+        <ViewerToolbar
+          {...props}
+          settings={{ ...settings, sectionView: undefined }}
+          sectionRange={null}
+          units={units}
+        />
+      );
+    off('mm');
+    expect(screen.getByLabelText('Cut position')).toHaveValue(12.7);
+    // Converted to inches with the cut off and its panel up.
+    off('inch');
+    expect(screen.getByLabelText('Cut position')).toHaveValue(0.5);
+    const slider = screen.getByLabelText('Section plane offset');
+    expect(Number(slider.getAttribute('max'))).toBeCloseTo(40 / 25.4, 12);
+    expect(slider.getAttribute('aria-valuetext')).toBe('0.5 inch');
+    // Undo.
+    off('mm');
+    expect(screen.getByLabelText('Cut position')).toHaveValue(12.7);
+    expect(Number(slider.getAttribute('max'))).toBeCloseTo(40, 9);
+  });
+
   it('does not carry a held-off panel into another project', () => {
     // ViewerShell keys the bar by project: the last cut belongs to the
     // project it was made in.

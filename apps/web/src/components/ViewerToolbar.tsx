@@ -36,6 +36,11 @@ import { labelWithKey, useKeymap, type Keymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useRovingToolbar } from '../hooks/useRovingToolbar';
+import {
+  isStoredUnit,
+  scaledSectionView,
+  storedUnitFactor
+} from '../lib/storedUnitView';
 import type { TouchModifiers } from './viewer/touchNavigation';
 
 /**
@@ -348,7 +353,7 @@ export function ViewerToolbar({
   const [heldOff, setHeldOff] = useState(false);
   const [lastCut, setLastCut] = useState(
     settings.sectionView && sectionRange
-      ? { section: settings.sectionView, range: sectionRange }
+      ? { section: settings.sectionView, range: sectionRange, units }
       : null
   );
   if (
@@ -356,9 +361,26 @@ export function ViewerToolbar({
     sectionRange &&
     (lastCut?.section !== settings.sectionView ||
       lastCut.range.min !== sectionRange.min ||
-      lastCut.range.max !== sectionRange.max)
+      lastCut.range.max !== sectionRange.max ||
+      lastCut.units !== units)
   ) {
-    setLastCut({ section: settings.sectionView, range: sectionRange });
+    setLastCut({ section: settings.sectionView, range: sectionRange, units });
+  } else if (!settings.sectionView && lastCut && lastCut.units !== units) {
+    // I03: the stored unit changed (a conversion, its undo or redo) while
+    // the held-off panel shows the last cut: its offset and the model's
+    // range along the axis are lengths, rescaled with the model.
+    const factor =
+      isStoredUnit(lastCut.units) && isStoredUnit(units)
+        ? storedUnitFactor(lastCut.units, units)
+        : 1;
+    setLastCut({
+      section: scaledSectionView(lastCut.section, factor),
+      range: {
+        min: lastCut.range.min * factor,
+        max: lastCut.range.max * factor
+      },
+      units
+    });
   }
   const [sectionWasOn, setSectionWasOn] = useState(sectionOn);
   if (sectionWasOn !== sectionOn) {

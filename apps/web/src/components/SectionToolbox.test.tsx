@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   SectionToolbox,
   describeSectionOverlap,
+  formatSectionOffset,
   sectionSliderStep,
   snapSectionOffset
 } from './SectionToolbox';
@@ -194,5 +195,47 @@ describe('overlap inside the cut (M09 display-only slice)', () => {
       'Overlap in this cut: A1 and B1 (about 1 in²); A2 and B2 (about 2 in²); A3 and B3 (about 3 in²), and 2 more. Display evidence from the meshes on screen, not an exact clash check.'
     );
     expect(describeSectionOverlap([], 'mm')).toBeNull();
+  });
+});
+
+describe('I03: a rescaled cut position', () => {
+  it('shows twelve significant digits and keeps the stored offset on blur', () => {
+    // 12.7 mm converted to inches.
+    const offset = 12.7 * (1 / 25.4);
+    expect(offset).not.toBe(0.5);
+    expect(formatSectionOffset(offset)).toBe('0.5');
+    expect(formatSectionOffset(12.7)).toBe('12.7');
+    expect(formatSectionOffset(-2.125)).toBe('-2.125');
+    const onOffset = vi.fn();
+    const onCommit = vi.fn();
+    render(
+      <SectionToolbox
+        section={{ plane: 'XZ', offset }}
+        range={{ min: 0, max: 40 / 25.4 }}
+        outline={{ kind: 'clipping' }}
+        units="inch"
+        onSwitch={vi.fn()}
+        onPlane={vi.fn()}
+        onOffset={onOffset}
+        onCommit={onCommit}
+        onExport={vi.fn()}
+      />
+    );
+    const field = screen.getByLabelText('Cut position');
+    expect(field).toHaveValue(0.5);
+    expect(
+      screen
+        .getByLabelText('Section plane offset')
+        .getAttribute('aria-valuetext')
+    ).toBe('0.5 inch');
+    // Focused and left as shown: the cut stays exactly where it was.
+    fireEvent.focus(field);
+    fireEvent.blur(field);
+    expect(onOffset).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+    // A typed 0.5 is a change, and lands exactly.
+    fireEvent.change(field, { target: { value: '0.25' } });
+    fireEvent.blur(field);
+    expect(onCommit).toHaveBeenCalledWith(0.25);
   });
 });
