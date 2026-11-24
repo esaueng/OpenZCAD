@@ -481,11 +481,12 @@ export function classifyThroughHoleFace(
       `The selected face is a ${geometry.surfaceType} surface, not a cylindrical through-hole.`
     );
   }
+  const { axisStart, axisEnd } = geometry;
   if (
     geometry.radius === undefined ||
     geometry.diameter === undefined ||
-    !geometry.axisStart ||
-    !geometry.axisEnd ||
+    !axisStart ||
+    !axisEnd ||
     geometry.axialLength === undefined
   ) {
     return refuseThroughHole(
@@ -502,7 +503,7 @@ export function classifyThroughHoleFace(
       'The selected face covers only part of its cylinder, so it is not a complete through-hole bore.'
     );
   }
-  const axis = normalized(subtract(geometry.axisEnd, geometry.axisStart));
+  const axis = normalized(subtract(axisEnd, axisStart));
   if (!axis || geometry.axialLength <= GEOMETRY_EPSILON) {
     return refuseThroughHole(
       'The selected cylindrical face has a degenerate axis.'
@@ -515,7 +516,7 @@ export function classifyThroughHoleFace(
     geometry.radius * 0.02,
     geometry.axialLength * 0.01
   );
-  const center = scale(add(geometry.axisStart, geometry.axisEnd), 0.5);
+  const center = scale(add(axisStart, axisEnd), 0.5);
   const openAxis = publicationAxisTest
     ? publicationAxisTest(center)
     : classifySolidPoint(kernel, solid, center) === 'outside';
@@ -528,12 +529,12 @@ export function classifyThroughHoleFace(
     classifySolidPoint(
       kernel,
       solid,
-      subtract(geometry.axisStart, scale(axis, axialProbe))
+      subtract(axisStart, scale(axis, axialProbe))
     ) === 'outside' &&
     classifySolidPoint(
       kernel,
       solid,
-      add(geometry.axisEnd, scale(axis, axialProbe))
+      add(axisEnd, scale(axis, axialProbe))
     ) === 'outside';
   const closedEnd = () =>
     refuseThroughHole(
