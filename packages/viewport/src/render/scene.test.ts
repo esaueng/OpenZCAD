@@ -15,6 +15,7 @@ import {
   fatLineDepthBiasForExtent,
   shouldShowGroundShadow,
   sameBodyPickingTopology,
+  syncBodyShadowCasting,
   sameBodyRenderGeometry,
   updateAxesGizmo,
   updateBodyMaterialOpacity,
@@ -22,6 +23,7 @@ import {
   VIEWPORT_RENDER_ORDER
 } from './scene';
 import { reuseRenderBodies } from './scene';
+import { WebGLRenderList } from 'three/src/renderers/webgl/WebGLRenderLists.js';
 import { applyDisplayMode } from '../scene/objects';
 import { boxFullyInView, VIEW_DIRECTIONS } from '../camera/views';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
@@ -129,6 +131,195 @@ it('renders large mesh references directly from their facet buffers', () => {
   expect(object.material.wireframe).toBe(false);
   object.geometry.dispose();
   object.material.dispose();
+});
+
+/** A closed box body in world space, the way the kernel hands one over. */
+function boxBody(
+  center: THREE.Vector3,
+  size: number,
+  opacity: number
+): BodyRepresentation {
+  const box = new THREE.BoxGeometry(size, size, size).toNonIndexed();
+  box.translate(center.x, center.y, center.z);
+  const vertices = Float32Array.from(box.getAttribute('position').array);
+  box.dispose();
+  return bodyFixture({
+    opacity,
+    mesh: {
+      kind: 'mesh',
+      vertices,
+      indices: Uint32Array.from({ length: vertices.length / 3 }, (_, i) => i)
+    }
+  });
+}
+
+/**
+ * The transparent draw order three.js gives `objects` from `camera`: the
+ * renderer's own render list and sort, fed the projected depth it computes
+ * per object (WebGLRenderer.projectObject).
+ */
+function transparentDrawOrder(
+  objects: THREE.Object3D[],
+  camera: THREE.PerspectiveCamera
+): string[] {
+  camera.updateMatrixWorld();
+  const projScreen = new THREE.Matrix4().multiplyMatrices(
+    camera.projectionMatrix,
+    camera.matrixWorldInverse
+  );
+  // @types/three trails the runtime here: three r186's `push` takes the
+  // camera (for reversed depth) and `sort` takes two comparators.
+  const list = new (
+    WebGLRenderList as unknown as new () => {
+      init(): void;
+      push(
+        object: THREE.Object3D,
+        geometry: THREE.BufferGeometry,
+        material: THREE.Material,
+        groupOrder: number,
+        z: number,
+        group: null,
+        camera: THREE.Camera
+      ): void;
+      sort(opaqueSort: null, transparentSort: null): void;
+      transparent: { object: THREE.Object3D }[];
+    }
+  )();
+  list.init();
+  for (const root of objects) {
+    root.updateMatrixWorld(true);
+    root.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const geometry = object.geometry as THREE.BufferGeometry;
+      if (geometry.boundingSphere === null) geometry.computeBoundingSphere();
+      const center = geometry.boundingSphere!.center;
+      const z = new THREE.Vector4(center.x, center.y, center.z, 1)
+        .applyMatrix4(object.matrixWorld)
+        .applyMatrix4(projScreen).z;
+      list.push(
+        object,
+        geometry,
+        object.material as THREE.Material,
+        0,
+        z,
+        null,
+        camera
+      );
+    });
+  }
+  list.sort(null, null);
+  return list.transparent.map((item) => item.object.name);
+}
+
+describe('stage layering under translucent bodies', () => {
+  it('orders the stage tier below every body', () => {
+    const order = VIEWPORT_RENDER_ORDER;
+    expect(order.BACKDROP).toBeLessThan(order.GRID);
+    // The shadow falls on the floor the grid is painted on, so it darkens
+    // the grid lines inside its footprint from every view.
+    expect(order.GRID).toBeLessThan(order.GROUND_SHADOW);
+    expect(order.GROUND_SHADOW).toBeLessThan(order.WORLD_AXES);
+    expect(order.WORLD_AXES).toBeLessThan(order.BODY_FACE);
+
+    const backdrop = createGradientBackdrop();
+    const grid = createStudioGrid();
+    const shadowCatcher = createShadowCatcher();
+    const axes = createAxesGizmo();
+    expect(backdrop.renderOrder).toBe(order.BACKDROP);
+    expect(shadowCatcher.renderOrder).toBe(order.GROUND_SHADOW);
+    expect(grid.renderOrder).toBe(order.GRID);
+    expect(axes.children.length).toBeGreaterThan(0);
+    for (const axis of axes.children) {
+      expect(axis.renderOrder).toBe(order.WORLD_AXES);
+    }
+  });
+
+  it.each([
+    ['from the far side of the grid', new THREE.Vector3(-120, -40, 30)],
+    ['from the body side', new THREE.Vector3(160, 40, 30)],
+    ['from above', new THREE.Vector3(30, -5, 200)],
+    ['from low, beside the grid centre', new THREE.Vector3(-20, -150, 4)]
+  ])(
+    'draws the grid, ground shadow and axes before a translucent body %s',
+    (_label, position) => {
+      // The housing sits off the orbit target, so which of it and the grid is
+      // nearer the camera flips with the view. Sharing one render order, the
+      // grid used to draw over the housing from one side and not the other.
+      const body = createObjectForBody(
+        boxBody(new THREE.Vector3(30, 0, 10), 20, 0.4)
+      ) as THREE.Mesh;
+      body.name = 'housing';
+      expect((body.material as THREE.Material).transparent).toBe(true);
+      const grid = createStudioGrid();
+      grid.position.set(0, 0, -0.02);
+      const shadowCatcher = createShadowCatcher();
+      const axes = createAxesGizmo();
+      const camera = new THREE.PerspectiveCamera(35, 1.5, 0.1, 5000);
+      camera.position.copy(position);
+      camera.up.set(0, 0, 1);
+      camera.lookAt(0, 0, 0);
+      updateAxesGizmo(axes, camera);
+
+      const order = transparentDrawOrder(
+        [body, grid, shadowCatcher, axes],
+        camera
+      );
+      const housing = order.indexOf('housing');
+      const stage = [
+        'shadow-catcher',
+        'studio-grid',
+        ...axes.children.map((axis) => axis.name)
+      ];
+      expect(stage.every((name) => order.includes(name))).toBe(true);
+      for (const name of stage) {
+        expect(order.indexOf(name)).toBeLessThan(housing);
+      }
+      expect(order.indexOf('studio-grid')).toBeLessThan(
+        order.indexOf('shadow-catcher')
+      );
+      for (const name of order.filter((entry) => entry.startsWith('axis-'))) {
+        expect(order.indexOf(name)).toBeGreaterThan(
+          order.indexOf('studio-grid')
+        );
+      }
+      body.geometry.dispose();
+      (body.material as THREE.Material).dispose();
+    }
+  );
+});
+
+describe('translucent bodies and the ground shadow', () => {
+  it('casts no shadow from a translucent body, in both directions', () => {
+    const solid = createObjectForBody(
+      boxBody(new THREE.Vector3(0, 0, 5), 10, 1)
+    ) as THREE.Mesh;
+    expect(solid.castShadow).toBe(true);
+    const glass = createObjectForBody(
+      boxBody(new THREE.Vector3(0, 0, 5), 10, 0.4)
+    ) as THREE.Mesh;
+    expect(glass.castShadow).toBe(false);
+
+    // A runtime change reports the flip so the frozen map is re-rendered.
+    updateBodyMaterialOpacity(solid.material as THREE.Material, 0.5);
+    expect(syncBodyShadowCasting(solid)).toBe(true);
+    expect(solid.castShadow).toBe(false);
+    expect(syncBodyShadowCasting(solid)).toBe(false);
+
+    updateBodyMaterialOpacity(glass.material as THREE.Material, 1);
+    expect(syncBodyShadowCasting(glass)).toBe(true);
+    expect(glass.castShadow).toBe(true);
+    expect(syncBodyShadowCasting(glass)).toBe(false);
+
+    // An explicit applied opacity wins over a transient material fade.
+    updateBodyMaterialOpacity(glass.material as THREE.Material, 0.35);
+    expect(syncBodyShadowCasting(glass, 1)).toBe(false);
+    expect(glass.castShadow).toBe(true);
+
+    for (const mesh of [solid, glass]) {
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+  });
 });
 
 describe('opacity-only body updates', () => {

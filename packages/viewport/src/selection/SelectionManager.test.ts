@@ -15,12 +15,16 @@ import {
   EDGE_WIREFRAME_COLOR
 } from '../pick/edges';
 import {
+  hoverFilmNeedsDepthOffset,
   REGION_HOVER_OPACITY,
   REGION_SELECTED_OPACITY,
   SelectionManager
 } from './SelectionManager';
 import { easeToward } from '../motion';
-import { VIEWPORT_RENDER_ORDER } from '../render/scene';
+import {
+  VIEWPORT_RENDER_ORDER,
+  updateBodyMaterialOpacity
+} from '../render/scene';
 import { createBodyEdgeOverlay } from '../render/edgeOverlay';
 
 function makeManager(overrides: Partial<{ editable: string[] }> = {}) {
@@ -532,6 +536,70 @@ describe('face hover overlay', () => {
     expect(manager.hoverHiddenFaceMesh.material.opacity).toBeLessThan(
       manager.hoverFaceMesh.material.opacity
     );
+  });
+
+  it('does not pull the film over opaque parts in front of a translucent body', () => {
+    // Measured in headless Chromium: a fillet's silhouette 0.05 units behind
+    // an opaque plate drew 66 plate pixels at the film's full strength with
+    // the slope-scaled offset, none without it. A translucent body writes no
+    // depth of its own for the offset to beat.
+    const { manager, objectsByBodyId, setBodies } = makeManager();
+    const bodyId = toBodyId('body-translucent-face');
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3)
+    );
+    geometry.setAttribute(
+      'normal',
+      new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3)
+    );
+    geometry.setIndex([0, 1, 2]);
+    const material = new THREE.MeshStandardMaterial();
+    const object = new THREE.Mesh(geometry, material);
+    objectsByBodyId.set(bodyId, object);
+    setBodies([
+      {
+        bodyId,
+        topology: {
+          faces: [
+            {
+              topologyId: 'face-a',
+              hash: 101,
+              triangleStart: 0,
+              triangleCount: 1
+            }
+          ],
+          edges: []
+        }
+      } as unknown as BodyRepresentation
+    ]);
+    manager.setHoverFace({ bodyId, kind: 'face', topologyId: 'face-a' });
+    const film = manager.hoverFaceMesh;
+    const draw = () =>
+      film.onBeforeRender(
+        undefined as unknown as THREE.WebGLRenderer,
+        new THREE.Scene(),
+        new THREE.PerspectiveCamera(),
+        film.geometry,
+        film.material,
+        null as unknown as THREE.Group
+      );
+
+    draw();
+    expect(film.parent).toBe(object);
+    expect(film.material.polygonOffset).toBe(true);
+
+    // Made translucent while the face stays hovered (X-ray, appearance).
+    updateBodyMaterialOpacity(material, 0.4);
+    draw();
+    expect(film.material.polygonOffset).toBe(false);
+    expect(hoverFilmNeedsDepthOffset(object)).toBe(false);
+
+    updateBodyMaterialOpacity(material, 1);
+    draw();
+    expect(film.material.polygonOffset).toBe(true);
+    expect(hoverFilmNeedsDepthOffset(null)).toBe(true);
   });
 
   it('cuts the film on and off with nothing left to settle when x-ray is off', () => {

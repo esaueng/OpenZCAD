@@ -59,6 +59,26 @@ type HoverHiddenFaceMesh = THREE.Mesh<
  * cuts on and off in the frame its hover changes; only the x-ray pass eases,
  * so a face hovered or left behind the solid does not flicker through it.
  */
+/**
+ * The visible hover film is pulled toward the camera only to win the depth
+ * test against its own body's faces, which `createBodyMaterial` pushes back
+ * with the same mechanism. A translucent body writes no depth, so there is
+ * nothing of its own to beat — and the offset is slope-scaled: across a
+ * curved face seen near edge-on it moved the film far enough forward to pass
+ * in front of an opaque part just ahead of it, drawing a bright arc over a
+ * faceplate at the visible film's full strength. Without the offset, the
+ * part of the face behind an opaque part is left to the x-ray pass.
+ */
+export function hoverFilmNeedsDepthOffset(
+  host: THREE.Object3D | null
+): boolean {
+  if (!(host instanceof THREE.Mesh)) return true;
+  const material = host.material as THREE.Material | THREE.Material[];
+  return Array.isArray(material)
+    ? material.some((entry) => entry.depthWrite)
+    : material.depthWrite;
+}
+
 class HoverFaceMeshSlot {
   readonly faceMesh: HoverFaceMesh;
   readonly hiddenFaceMesh: HoverHiddenFaceMesh;
@@ -89,6 +109,13 @@ class HoverFaceMeshSlot {
     this.faceMesh.userData.hoverFaceSlot = index;
     this.faceMesh.userData.hoverFaceLayer = 'visible';
     this.faceMesh.raycast = () => undefined;
+    // Read per draw: a body's blending changes while its face stays hovered
+    // (appearance, X-ray, the sketch recede).
+    this.faceMesh.onBeforeRender = () => {
+      this.faceMesh.material.polygonOffset = hoverFilmNeedsDepthOffset(
+        this.faceMesh.parent
+      );
+    };
 
     this.hiddenFaceMesh = new THREE.Mesh(
       new THREE.BufferGeometry(),

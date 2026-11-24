@@ -752,6 +752,27 @@ export function drawFatLineOncePerPixel(material: LineMaterial) {
  * depth-aware line overlays resolve same-location representations by policy.
  */
 export const VIEWPORT_RENDER_ORDER = {
+  /**
+   * The stage tier: everything the model sits on or in front of. Opaque
+   * bodies draw in three.js's opaque pass, which precedes every transparent
+   * object whatever its render order, but a translucent body shares the
+   * transparent list with these decorations. At one shared render order that
+   * list falls back to object distance, so whichever origin the camera was
+   * nearer to drew last: the grid and the ground shadow painted crisply over
+   * a translucent housing from some views and not others, and the axes
+   * (which drew after the grid) always did. Keeping the whole stage below
+   * `BODY_FACE` draws it first, so a translucent body blends over it like
+   * glass over a floor.
+   */
+  BACKDROP: -4,
+  GRID: -3,
+  /**
+   * After the grid: its lines are painted on the floor the shadow falls on,
+   * so the shadow darkens them. At a shared order this flipped with the view.
+   */
+  GROUND_SHADOW: -2,
+  /** After the grid, whose translucent fragments would wash over them. */
+  WORLD_AXES: -1,
   BODY_FACE: 0,
   /**
    * A selected face's own-colour fill. Under the edges, so the rim that
@@ -988,7 +1009,7 @@ export function createObjectForBody(
   }
   mesh.name = body.name;
   mesh.renderOrder = VIEWPORT_RENDER_ORDER.BODY_FACE;
-  mesh.castShadow = true;
+  syncBodyShadowCasting(mesh);
   // CAD solids cast onto the ground plane but do not receive the shadow map.
   // Self-shadowing on long tessellation triangles creates false triangular
   // bands across otherwise planar analytic faces.
@@ -1145,6 +1166,28 @@ function equalProjectionValue(left: unknown, right: unknown): boolean {
   );
 }
 
+/**
+ * Whether a body casts the ground shadow follows its blending: a translucent
+ * body casts none. three.js shadow maps are binary — a 40% housing would
+ * otherwise drop the same full, dark footprint as a solid block — and there is
+ * no partial shadow to fall back to. `opacity` defaults to the material's;
+ * the viewer passes the body's applied opacity instead, so a transient fade
+ * (the sketch recede) does not switch the shadow off. Returns true when the
+ * flag changed, so the caller can thaw the frozen shadow map, which is not
+ * re-rendered on its own.
+ */
+export function syncBodyShadowCasting(
+  mesh: THREE.Mesh,
+  opacity: number = Array.isArray(mesh.material)
+    ? Math.min(...mesh.material.map((entry) => entry.opacity))
+    : mesh.material.opacity
+): boolean {
+  const casts = opacity >= 1;
+  if (mesh.castShadow === casts) return false;
+  mesh.castShadow = casts;
+  return true;
+}
+
 /** Updates body blending without touching geometry or an active drag pose. */
 export function updateBodyMaterialOpacity(
   material: THREE.Material,
@@ -1283,6 +1326,7 @@ export function updateObjectForBody(
   object.name = body.name;
   object.material.color.set(body.color);
   updateBodyMaterialOpacity(object.material, body.opacity ?? 1);
+  syncBodyShadowCasting(object as THREE.Mesh, body.opacity ?? 1);
   releasePreparedBodyGeometry(body);
   return true;
 }
@@ -1410,7 +1454,7 @@ export function createGradientBackdrop(): THREE.Mesh {
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = 'gradient-backdrop';
-  mesh.renderOrder = -1;
+  mesh.renderOrder = VIEWPORT_RENDER_ORDER.BACKDROP;
   mesh.frustumCulled = false;
   mesh.raycast = () => undefined;
   return mesh;
@@ -1526,6 +1570,7 @@ export function createStudioGrid(): THREE.Mesh {
   mesh.position.z = -0.02;
   mesh.scale.set(300, 300, 1);
   mesh.name = 'studio-grid';
+  mesh.renderOrder = VIEWPORT_RENDER_ORDER.GRID;
   mesh.raycast = () => undefined;
   // The quad is repositioned and rescaled per frame; a stale bounding sphere
   // must never cull it out from under the camera.
@@ -1614,8 +1659,9 @@ export function createAxesGizmo(resolution?: FatLineResolution): THREE.Group {
       line.raycast = () => undefined;
       // Draw after the grid plane. Distance sorting puts these quads at their
       // distant midpoints — behind everything — and lets the grid's
-      // translucent fragments wash over them.
-      line.renderOrder = 1;
+      // translucent fragments wash over them. Still under translucent
+      // bodies, so an axis running through a housing shows through its wall.
+      line.renderOrder = VIEWPORT_RENDER_ORDER.WORLD_AXES;
       line.frustumCulled = false;
       line.userData.axisDirection = direction;
       line.name = `axis-${sign > 0 ? '+' : '-'}${'xyz'[axes.indexOf(axis)]}`;
@@ -1742,6 +1788,7 @@ export function createShadowCatcher(): THREE.Mesh {
   );
   mesh.position.z = -0.05;
   mesh.receiveShadow = true;
+  mesh.renderOrder = VIEWPORT_RENDER_ORDER.GROUND_SHADOW;
   mesh.name = 'shadow-catcher';
   mesh.raycast = () => undefined;
   return mesh;
