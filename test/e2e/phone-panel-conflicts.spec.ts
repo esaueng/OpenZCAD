@@ -1025,6 +1025,7 @@ async function expectPillClear(page: Page, pill: Locator) {
   const pillBox = (await pill.boundingBox())!;
   for (const [name, selector] of [
     ['Tools drawer', '.command-flyout'],
+    ['Modeling Guide', '.workspace-tour'],
     ['Tools button', '.command-more-toggle'],
     ['tool rail', '.tool-palette.command-rail'],
     ['instrument rail', '.instrument-rail > .viewer-rail'],
@@ -1393,6 +1394,67 @@ test('the Panel layout menu’s Hide all brings History back clear of the Tools 
     )
     .toBe(true);
 });
+
+for (const [width, height] of [
+  [390, 844],
+  [430, 932]
+] as const) {
+  for (const minimized of [false, true]) {
+    test(`the panels hidden pill clears the ${minimized ? 'minimized' : 'expanded'} Modeling Guide on a ${width} × ${height} phone`, async ({
+      page
+    }) => {
+      test.setTimeout(120_000);
+      await stubApi(page, {
+        workspaceTour: true,
+        panelLayout: null,
+        commandFoldClosed: true
+      });
+      await page.setViewportSize({ width, height });
+      await createProject(page, 'Panels and Modeling Guide');
+
+      const guide = page.getByRole('region', { name: 'Modeling guide' });
+      const minimize = guide.getByRole('button', {
+        name: 'Minimize modeling guide'
+      });
+      const expand = guide.getByRole('button', {
+        name: 'Expand modeling guide'
+      });
+      const drawer = page.locator('.command-flyout');
+      const pill = page.locator('.panels-hidden-pill');
+      const show = pill.getByRole('button', { name: 'Show panels' });
+      const history = modelPanel(page, 'History');
+
+      await expect(minimize).toBeVisible();
+      if (minimized) {
+        await minimize.tap();
+        await expect(expand).toBeVisible();
+      }
+      await railPanelButton(page, 'History').tap();
+      await expect(history).toBeVisible();
+      await ensureToolsDrawerOpen(page);
+      const menu = await panelLayoutMenu(page);
+      await menu
+        .getByRole('menuitemcheckbox', { name: 'Hide all panels' })
+        .tap();
+      await page.keyboard.press('Escape');
+      await expect(menu).toBeHidden();
+      await expect(drawer).toBeVisible();
+      await expect(history).toHaveCount(0);
+      await expect(
+        guide.getByRole('button', {
+          name: minimized ? 'Skip the tour' : 'Next'
+        })
+      ).toBeVisible();
+      await expect(show).toBeInViewport({ ratio: 1 });
+      await expectPillClear(page, pill);
+      await expect.poll(() => reachable(show)).toBe(true);
+      await show.tap();
+      await expect(pill).toHaveCount(0);
+      await expect(history).toBeVisible();
+      await expect(drawer).toHaveCount(0);
+    });
+  }
+}
 
 // A preset turns Hide off so the picked layout shows: picking Review with
 // the panels hidden put History back in the lane, under the drawer.
