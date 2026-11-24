@@ -25,6 +25,14 @@
  * - **Historical read.** A revision is opened only if the pinned head's
  *   signed body maps it to its hash (or it is the head), and never moves
  *   the pin.
+ * - **Recovery read** (`recoverRevision`). A retained save state the
+ *   trusted head's signed map no longer names (one dropped before PR
+ *   #1997) is opened only when the signed log joins it, link by link, to
+ *   the head this page or browser already verified, every link's author,
+ *   editing role and epoch binding holding, and the decrypted document
+ *   naming the requested revision. It reads and never writes: no head is
+ *   read or installed and the pin never moves. Anything else is an
+ *   `EncryptedRevisionRecoveryError` naming why.
  * - A fresh browser (no pin) warns when the head it is offered was signed
  *   well before the account's last recorded activity.
  * - **Content blobs** (slice 4-6). Imported sources, mesh payloads and
@@ -56,6 +64,7 @@
  */
 import {
   AuthorshipError,
+  E2eeError,
   ShareLinkError,
   authorCutoffKey,
   EnvelopeKey,
@@ -310,6 +319,45 @@ export class EncryptedProjectIntegrityError extends ApiError {
   }
 }
 
+/** Why a recovery read refused a save state (`recoverRevision`). */
+export type EncryptedRevisionRecoveryReason =
+  /**
+   * The account no longer keeps the save state, or no longer keeps the
+   * signed history that joins it to the trusted head.
+   */
+  | 'pruned'
+  /** The signed history from the save state does not join the trusted head. */
+  | 'broken-chain'
+  /** A link's signature, author device, editing role or epoch binding failed. */
+  | 'credential'
+  /** What decrypted is not the save state that was asked for. */
+  | 'revision-mismatch'
+  /** This browser has verified no head of the project to check against. */
+  | 'no-trusted-head';
+
+export const E2EE_REVISION_UNRECOVERABLE_CODE = 'E2EE_REVISION_UNRECOVERABLE';
+
+/**
+ * A recovery read's typed refusal. Nothing was opened, and nothing of the
+ * project, its head or this browser's pin changed. It carries no
+ * `e2eeIntegrity` detail: a save state that cannot be proven says nothing
+ * against the current head, so the encryption indicator stays as it was.
+ */
+export class EncryptedRevisionRecoveryError extends ApiError {
+  constructor(
+    readonly reason: EncryptedRevisionRecoveryReason,
+    message: string
+  ) {
+    super(
+      reason === 'pruned' ? 404 : 409,
+      message,
+      E2EE_REVISION_UNRECOVERABLE_CODE,
+      { e2eeRecovery: reason }
+    );
+    this.name = 'EncryptedRevisionRecoveryError';
+  }
+}
+
 /** This device holds no key session, or only reads (decision D4). */
 export const E2EE_KEYS_LOCKED_CODE = 'E2EE_KEYS_LOCKED';
 export const E2EE_READ_ONLY_DEVICE_CODE = 'E2EE_READ_ONLY_DEVICE';
@@ -378,6 +426,17 @@ export interface EncryptedProjectStore {
     projectId: string,
     revisionId: string
   ): Promise<ProjectDocument | null>;
+  /**
+   * A retained save state the trusted head's signed map does not name,
+   * proven instead by the signed log joining it to that head (ADR-024,
+   * historical read). Read only: it never reads or installs a head, writes
+   * nothing and never moves the pin. Refusals are
+   * `EncryptedRevisionRecoveryError`s.
+   */
+  recoverRevision?(
+    projectId: string,
+    revisionId: string
+  ): Promise<ProjectDocument>;
   listRevisions(projectId: string): Promise<ListRevisionsResponse>;
   /** The decrypted name of a project-info envelope, or null if it fails. */
   projectName(record: E2eeProjectEnvelopeRecord): Promise<string | null>;
@@ -610,6 +669,34 @@ function logFailure(error: VersionLogError): EncryptedProjectIntegrityError {
         'fork',
         `This project’s version history does not hold together (${error.message}).`
       );
+  }
+}
+
+/** A recovery read's refusal for what a verification step threw. */
+function recoveryRefusal(error: unknown): unknown {
+  // A log record or envelope that does not even decode.
+  if (error instanceof E2eeError) {
+    return new EncryptedRevisionRecoveryError(
+      'broken-chain',
+      `This save state’s signed history does not decode (${error.message}).`
+    );
+  }
+  // Anything else (a recovery refusal already, a missing key, offline)
+  // stays as it is.
+  if (!(error instanceof EncryptedProjectIntegrityError)) return error;
+  switch (error.reason) {
+    case 'author':
+    case 'authority':
+    case 'epoch':
+      return new EncryptedRevisionRecoveryError('credential', error.message);
+    case 'content':
+    case 'history':
+      return new EncryptedRevisionRecoveryError(
+        'revision-mismatch',
+        error.message
+      );
+    default:
+      return new EncryptedRevisionRecoveryError('broken-chain', error.message);
   }
 }
 
@@ -939,7 +1026,7 @@ export function createEncryptedProjectStore(
     projectId: string,
     first: readonly E2eeVersionLogEntry[],
     more: boolean,
-    head: E2eeVersionLogEntry
+    head: Pick<E2eeVersionLogEntry, 'documentVersion' | 'versionHash'>
   ): Promise<E2eeVersionLogEntry[]> {
     const entries = [...first];
     while (more) {
@@ -985,7 +1072,15 @@ export function createEncryptedProjectStore(
   async function verifyLog(
     projectId: string,
     pinHash: string | null,
-    entries: readonly E2eeVersionLogEntry[]
+    entries: readonly E2eeVersionLogEntry[],
+    options: {
+      /** Check the share-link history (a current-head read). */
+      readonly shareLinks?: boolean;
+      /** Also check every record's epoch binding (a recovery read). */
+      readonly bindings?: boolean;
+      /** How a chain refusal reads, given the window's first index. */
+      readonly logFailure?: (error: VersionLogError, offset: number) => Error;
+    } = {}
   ): Promise<AuthorshipInputs> {
     // One current snapshot for this log and its head. Never retained across
     // reads: a later read must observe device removals and contact changes.
@@ -1055,6 +1150,7 @@ export function createEncryptedProjectStore(
                 unauthorized = entry.documentVersion;
                 return null;
               }
+              if (options.bindings) await requireBinding(header, lists);
               const authorList = lists.find((l) => l.userId === author.userId);
               shareHistory.set(entry.versionHash, {
                 header,
@@ -1096,12 +1192,17 @@ export function createEncryptedProjectStore(
             `Version ${unlisted} of this project was signed by someone without an editing role in its epoch.`
           );
         }
-        if (error instanceof VersionLogError) throw logFailure(error);
+        if (error instanceof VersionLogError) {
+          throw options.logFailure
+            ? options.logFailure(error, start)
+            : logFailure(error);
+        }
         throw error;
       }
       if (end >= entries.length) break;
       start = end - 1;
     }
+    if (options.shareLinks === false) return { deviceLists: lists, cutoffs };
     // The signed prefix makes the entire link set visible in the retained
     // log, including overwritten autosaves. A fresh reader needs an owner
     // baseline; a trusted version pin can resume an already checked chain.
@@ -1397,6 +1498,198 @@ export function createEncryptedProjectStore(
     document: state.document,
     shareLinks: state.shareLinks
   });
+
+  /**
+   * The recovery read (ADR-024, historical read: "accepted when it is the
+   * pinned head or one of its ancestors, proven by walking the hash chain
+   * back from the pinned head"). For a retained save state the trusted
+   * head's signed map lost before PR #1997. Every one of these must hold:
+   *
+   * - the trusted head is this browser's pin or, while it names none, this
+   *   page's verified head; neither is read from the account nor moved here;
+   * - the account's log runs from the save state's own record up to that
+   *   head with every record naming the one before it;
+   * - every record's signature is a certified, unrevoked (or in-cutoff)
+   *   member device's, which held an editing leaf in its own epoch, and its
+   *   epoch binding matches that epoch's authenticator;
+   * - the save state's envelope is that first record, verifies the same way
+   *   and decrypts to a document of this project whose newest revision is
+   *   the requested one, with the save point naming it taken at that very
+   *   version (so a later autosave carrying it is refused).
+   *
+   * No document write route, `readHead`, `installHead` or pin advance is
+   * reached, so the project, its head and the pin are as they were whatever
+   * the outcome. (Opening an older epoch's key may catch this device's MLS
+   * session up, as every encrypted read does.) Each refusal names its
+   * reason.
+   */
+  async function recoverRevision(
+    projectId: string,
+    revisionId: string
+  ): Promise<ProjectDocument> {
+    const refuse = (
+      reason: EncryptedRevisionRecoveryReason,
+      message: string
+    ): never => {
+      throw new EncryptedRevisionRecoveryError(reason, message);
+    };
+    const known = heads.get(projectId);
+    // The durable pin is what this browser trusts across its tabs; this
+    // page's head stands in only while no pin names a head.
+    const pin = await pins.read(userId, projectId);
+    const anchor = pin?.headHash
+      ? { version: pin.documentVersion, hash: pin.headHash }
+      : known
+        ? { version: known.version, hash: known.hash }
+        : null;
+    if (!anchor) {
+      return refuse(
+        'no-trusted-head',
+        'Open this project first, so this browser has a verified version to check the save state against.'
+      );
+    }
+    const found = await api.revision(projectId, revisionId);
+    if (!found) {
+      return refuse('pruned', 'Your account no longer keeps this save state.');
+    }
+    const { metadata, envelope } = found;
+    const claimed = metadata.version.versionHash;
+    const claimedVersion = metadata.version.documentVersion;
+    if (metadata.revisionId !== revisionId) {
+      return refuse(
+        'revision-mismatch',
+        'The account sent another save state than the one asked for.'
+      );
+    }
+    // A map that does name it is the stronger proof, and it must agree.
+    const signed = known?.revisionHashes.get(revisionId);
+    if (signed && toHex(signed) !== claimed) {
+      return refuse(
+        'revision-mismatch',
+        'The account sent another version than this project’s signed history names for this save state.'
+      );
+    }
+    if (claimedVersion > anchor.version) {
+      return refuse(
+        'broken-chain',
+        'This save state is newer than the version of the project this browser trusts. Open the project again, then retry.'
+      );
+    }
+    const broken = (detail: string) =>
+      new EncryptedRevisionRecoveryError(
+        'broken-chain',
+        `This save state’s signed history does not join the version this browser trusts (${detail}).`
+      );
+    const pruned = () =>
+      new EncryptedRevisionRecoveryError(
+        'pruned',
+        'Your account no longer keeps the signed history that joins this save state to the current version, so it cannot be proven part of this project.'
+      );
+    let entries: E2eeVersionLogEntry[];
+    try {
+      const first = await api.versions(
+        projectId,
+        claimedVersion,
+        anchor.version
+      );
+      entries = await collectLog(projectId, first.log, first.more, {
+        documentVersion: anchor.version,
+        versionHash: anchor.hash
+      });
+    } catch (error) {
+      if (
+        error instanceof VersionHistoryPageChanged ||
+        error instanceof EncryptedProjectIntegrityError
+      ) {
+        throw broken(error.message);
+      }
+      throw error;
+    }
+    const start = entries[0]!;
+    if (start.documentVersion !== claimedVersion) throw pruned();
+    if (start.versionHash !== claimed) {
+      throw broken('the log holds another version at this save state');
+    }
+    let authorship: AuthorshipInputs;
+    try {
+      authorship = await verifyLog(projectId, claimed, entries, {
+        shareLinks: false,
+        bindings: true,
+        logFailure: (error, offset) => {
+          const at = offset + (error.index ?? 0);
+          if (
+            error.reason === 'signer-unknown' ||
+            error.reason === 'signature-invalid'
+          ) {
+            return new EncryptedRevisionRecoveryError(
+              'credential',
+              `Version ${entries[at]?.documentVersion ?? '?'} between this save state and the current version is not signed by a member’s device (${error.message}).`
+            );
+          }
+          // A record that names a parent the log skips: the versions
+          // between were pruned (decision D6), not proven tampered.
+          if (
+            error.reason === 'previous-hash-mismatch' &&
+            at > 0 &&
+            (entries[at]?.documentVersion ?? 0) >
+              (entries[at - 1]?.documentVersion ?? 0) + 1
+          ) {
+            return pruned();
+          }
+          return broken(error.message);
+        }
+      });
+    } catch (error) {
+      throw recoveryRefusal(asApiError(error));
+    }
+    try {
+      const author = await authorOf(
+        projectId,
+        envelope,
+        bytes(metadata.version.signature),
+        authorship
+      );
+      const hash = toHex(author.versionHash);
+      if (
+        hash !== claimed ||
+        author.header.kind !== 'document' ||
+        author.header.projectId !== projectId ||
+        author.header.documentVersion !== claimedVersion
+      ) {
+        throw broken(
+          'the save state the account sent is not the one its log names'
+        );
+      }
+      await requireAuthority(projectId, author, authorship.deviceLists);
+      await requireBinding(author.header, authorship.deviceLists);
+      const { document } = await openDocument(
+        projectId,
+        author.header,
+        hash,
+        metadata.version.wrappedVersionKey,
+        envelope
+      );
+      // The save point itself, not a later version that still carries it:
+      // its own signed record names the version it was taken at.
+      if (
+        document.revisions.at(-1)?.revisionId !== revisionId ||
+        !document.checkpoints.some(
+          (checkpoint) =>
+            checkpoint.revisionId === revisionId &&
+            checkpoint.documentVersion === document.version
+        )
+      ) {
+        throw new EncryptedRevisionRecoveryError(
+          'revision-mismatch',
+          'The version the account sent decrypts to another save state than the one asked for.'
+        );
+      }
+      // A recovery read never moves the pin and installs no head.
+      return opened(projectId, document);
+    } catch (error) {
+      throw recoveryRefusal(asApiError(error));
+    }
+  }
 
   /** Reads, verifies and pins the current head (ADR-024, current head). */
   async function readHead(projectId: string): Promise<HeadState> {
@@ -2975,6 +3268,8 @@ export function createEncryptedProjectStore(
       // A historical read never moves the pin.
       return opened(projectId, document);
     }),
+
+    recoverRevision: guarded(recoverRevision),
 
     listRevisions: guarded(async (projectId) => {
       const { revisions, maxRevisions } = await api.revisions(projectId);

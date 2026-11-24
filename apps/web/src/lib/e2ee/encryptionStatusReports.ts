@@ -152,6 +152,18 @@ export function reportingEncryptedProjectStore(
       ),
     loadRevision: (projectId, revisionId) =>
       checked(() => store.loadRevision(projectId, revisionId), projectId),
+    // A recovery read's refusals carry no integrity reason: one that cannot
+    // be proven says nothing against the head, so only a locked key session
+    // reports.
+    ...(store.recoverRevision
+      ? {
+          recoverRevision: (projectId: string, revisionId: string) =>
+            checked(
+              () => store.recoverRevision!(projectId, revisionId),
+              projectId
+            )
+        }
+      : {}),
     listRevisions: (projectId) =>
       checked(() => store.listRevisions(projectId), projectId),
     projectName: (record) => active(() => store.projectName(record)),

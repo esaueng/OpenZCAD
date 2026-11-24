@@ -3526,6 +3526,12 @@ export function App() {
     projectId: string;
     checkpoint: ProjectCheckpoint;
     document: ProjectDocument;
+    /**
+     * Proven by the encrypted project's signed history rather than its
+     * head's map (ADR-024 recovery read): looked at and branched, never
+     * restored over the project.
+     */
+    recovered?: boolean;
   } | null>(null);
   /** L03: the save point the compare dialog starts from. */
   const [comparingSave, setComparingSave] = useState<ProjectCheckpoint | null>(
@@ -3535,6 +3541,7 @@ export function App() {
   const [savePreviewAction, setSavePreviewAction] = useState<{
     kind: 'restore' | 'branch';
     checkpoint: ProjectCheckpoint;
+    recovered?: boolean;
   } | null>(null);
   /** L08 commenter link: the name its visitor signs comments with. */
   const [commentVisitorName, setCommentVisitorName] = useState('');
@@ -7610,10 +7617,10 @@ export function App() {
   // meets the project's own guards rather than the preview's.
   useEffect(() => {
     if (!savePreviewAction || savePreviewActive) return;
-    const { kind, checkpoint } = savePreviewAction;
+    const { kind, checkpoint, recovered } = savePreviewAction;
     setSavePreviewAction(null);
     if (kind === 'restore') void handleRestoreSaveState(checkpoint);
-    else void handleBranchSaveState(checkpoint);
+    else void handleBranchSaveState(checkpoint, recovered === true);
     // The handlers are this render's, which see the lock lifted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savePreviewAction, savePreviewActive]);
@@ -17653,6 +17660,11 @@ export function App() {
        * Duplicate passes nothing and records nothing.
        */
       branchReason?: string;
+      /**
+       * The save state was opened by an encrypted recovery read: the branch
+       * reads it the same way, since its head's map does not name it.
+       */
+      recovered?: boolean;
     } = {}
   ): Promise<string | null> {
     setBusy(true);
@@ -17689,7 +17701,19 @@ export function App() {
             },
             session.userId,
             projects.map((summary) => summary.name),
-            api,
+            options.recovered && saveState
+              ? {
+                  // The recovery read checks the save state against the
+                  // head this browser already trusts; reading the current
+                  // head first would move the source's pin, so the open
+                  // document stands in for it.
+                  loadProject: async (projectId: string) =>
+                    openDocument?.projectId === projectId
+                      ? openDocument
+                      : api.loadProject(projectId),
+                  loadRevision: api.recoverRevision
+                }
+              : api,
             (document) => cacheCopyPictures(document, loadSourceBlob, sha256Hex)
           );
           if (!request) {
@@ -17919,12 +17943,53 @@ export function App() {
   }
 
   /**
+   * {@link loadSaveStateDocument} for a preview, which alone may recover an
+   * encrypted save state its head's signed map no longer names (one dropped
+   * before PR #1997): the account read refuses it as outside the trusted
+   * history, and the recovery read proves it by the signed history joining
+   * it to the head this browser verified instead (ADR-024). Both only read.
+   * A recovery refusal rejects with its reason, for the preview to say.
+   */
+  async function loadPreviewSaveState(
+    projectId: string,
+    checkpoint: ProjectCheckpoint
+  ): Promise<{ document: ProjectDocument; recovered: boolean } | null> {
+    const local = await loadLocalSaveState(
+      projectId,
+      checkpoint.checkpointId
+    ).catch(() => null);
+    if (local) return { document: local, recovered: false };
+    if (!session || !cloudProjectIds.has(projectId)) return null;
+    try {
+      const document = await api.loadRevision(projectId, checkpoint.revisionId);
+      return document ? { document, recovered: false } : null;
+    } catch (error) {
+      if (
+        !(error instanceof ApiError) ||
+        error.details?.e2eeIntegrity !== 'history'
+      ) {
+        return null;
+      }
+    }
+    setStatus(
+      `Checking “${checkpointLabel(checkpoint)}” against this project’s signed history…`
+    );
+    return {
+      document: await api.recoverRevision(projectId, checkpoint.revisionId),
+      recovered: true
+    };
+  }
+
+  /**
    * L03 read-only preview: builds a save state exactly and shows it in the
    * viewport in place of the project, behind a notice offering Restore,
    * Branch and Close. Nothing is written: the project, its undo history and
    * its save points are untouched, and editing is refused until it closes.
    * An encrypted project's account copy is read as a historical read
    * (ADR-024): only from the history this browser trusts, never moving it.
+   * A save state that history's head no longer maps is recovered when its
+   * signed history proves it (`loadPreviewSaveState`), and then offers
+   * Branch and Close only: it is never restored over the project.
    */
   async function handlePreviewSaveState(checkpoint: ProjectCheckpoint) {
     const manager = managerRef.current;
@@ -17932,16 +17997,14 @@ export function App() {
     if (!manager || !current || shareSessionRef.current) return;
     setBusy(true);
     try {
-      const snapshot = await loadSaveStateDocument(
-        current.projectId,
-        checkpoint
-      );
-      if (!snapshot) {
+      const loaded = await loadPreviewSaveState(current.projectId, checkpoint);
+      if (!loaded) {
         setStatus(
           'That save state is no longer stored on this device or in your account.'
         );
         return;
       }
+      const { document: snapshot, recovered } = loaded;
       const label = checkpointLabel(checkpoint);
       setStatus(`Building “${label}” for preview…`);
       const derived = await geometry.syncOnce(snapshot);
@@ -17964,9 +18027,14 @@ export function App() {
       setSavePreview({
         projectId: current.projectId,
         checkpoint,
-        document: shown
+        document: shown,
+        ...(recovered ? { recovered: true } : {})
       });
-      setStatus(`Previewing “${label}”. Editing is off until you close it.`);
+      setStatus(
+        recovered
+          ? `Previewing “${label}”, recovered from this project’s signed history. Branch it to keep a copy; the project is unchanged.`
+          : `Previewing “${label}”. Editing is off until you close it.`
+      );
     } catch (error) {
       setStatus(errorMessage(error, 'Could not preview that save state.'));
     } finally {
@@ -18158,7 +18226,10 @@ export function App() {
   }
 
   /** Branches the open project's save state into a project of its own. */
-  async function handleBranchSaveState(checkpoint: ProjectCheckpoint) {
+  async function handleBranchSaveState(
+    checkpoint: ProjectCheckpoint,
+    recovered = false
+  ) {
     const current = managerRef.current?.document;
     if (!current) {
       return;
@@ -18166,7 +18237,11 @@ export function App() {
     const project =
       projects.find((summary) => summary.projectId === current.projectId) ??
       summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION);
-    await handleDuplicateProject(project, checkpoint);
+    await handleDuplicateProject(
+      project,
+      checkpoint,
+      recovered ? { recovered: true } : {}
+    );
   }
 
   /** Destroys projects in both stores. There is no undo past this point. */
@@ -40929,8 +41004,10 @@ export function App() {
                       savePreview.document.derived.bodyRepresentations
                     ).filter((body) => !body.consumed).length
                   }
+                  recovered={savePreview.recovered === true}
                   {...(seatEditDisabledReason === null &&
-                  buildModeDisabledReason === null
+                  buildModeDisabledReason === null &&
+                  !savePreview.recovered
                     ? {
                         onRestore: () => {
                           setSavePreviewAction({
@@ -40944,7 +41021,8 @@ export function App() {
                   onBranch={() => {
                     setSavePreviewAction({
                       kind: 'branch',
-                      checkpoint: savePreview.checkpoint
+                      checkpoint: savePreview.checkpoint,
+                      ...(savePreview.recovered ? { recovered: true } : {})
                     });
                     closeSavePreview(false);
                   }}
