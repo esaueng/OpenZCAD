@@ -67,7 +67,8 @@ function openTab(
     onPromoted: vi.fn(),
     prepareYield: vi.fn(() => prepare.answer()),
     cancelYield: vi.fn(),
-    onRemoteSaved: vi.fn()
+    onRemoteSaved: vi.fn(),
+    onTakenOver: vi.fn()
   };
   const tracker = trackProjectEditing('project_a', handlers, {
     tabId: id,
@@ -446,4 +447,73 @@ describe('project tab handoff', () => {
     );
     expect(isProjectHandoffMessage(null)).toBe(false);
   });
+
+  it('takes editing from an owner that never answers', async () => {
+    withLockManager();
+    const bus = new FakeBus();
+    // The owner has no channel: it never hears the request.
+    const a = openTab(bus, 'a', { transport: noChannel() });
+    const b = openTab(bus, 'b', { timeoutMs: 20 });
+    await answered(a);
+    await answered(b);
+    await expect(b.tracker.requestEditing()).resolves.toBe('timeout');
+
+    await expect(b.tracker.takeOverEditing()).resolves.toBe(true);
+
+    expect(b.tracker.ownership.owned).toBe(true);
+    expect(b.handlers.onPromoted).toHaveBeenCalledTimes(1);
+    expect(a.handlers.prepareYield).not.toHaveBeenCalled();
+    // The owner learns from the lock, with no channel to tell it.
+    await vi.waitFor(() =>
+      expect(a.handlers.onTakenOver).toHaveBeenCalledTimes(1)
+    );
+    expect(a.tracker.ownership.owned).toBe(false);
+    a.tracker.giveUp();
+    b.tracker.giveUp();
+  });
+
+  it('lets the tab it was taken from ask for it back', async () => {
+    withLockManager();
+    const bus = new FakeBus();
+    const a = openTab(bus, 'a');
+    const b = openTab(bus, 'b');
+    await answered(a);
+    await answered(b);
+    await b.tracker.takeOverEditing();
+    await vi.waitFor(() =>
+      expect(a.handlers.onTakenOver).toHaveBeenCalledTimes(1)
+    );
+
+    await expect(a.tracker.requestEditing()).resolves.toBe('owner');
+
+    expect(a.tracker.ownership.owned).toBe(true);
+    expect(a.handlers.onPromoted).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(b.tracker.ownership.owned).toBe(false));
+    a.tracker.giveUp();
+    b.tracker.giveUp();
+  });
+
+  it('takes nothing once the tab has left the project', async () => {
+    withLockManager();
+    const bus = new FakeBus();
+    const a = openTab(bus, 'a');
+    const b = openTab(bus, 'b');
+    await answered(a);
+    await answered(b);
+    b.tracker.giveUp();
+
+    await expect(b.tracker.takeOverEditing()).resolves.toBe(false);
+    expect(a.tracker.ownership.owned).toBe(true);
+    expect(a.handlers.onTakenOver).not.toHaveBeenCalled();
+    a.tracker.giveUp();
+  });
 });
+
+/** A tab whose browser has no channel (or never reads it). */
+function noChannel(): ProjectHandoffTransport {
+  return {
+    post: () => undefined,
+    subscribe: () => () => undefined,
+    close: () => undefined
+  };
+}

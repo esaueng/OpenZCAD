@@ -15,7 +15,12 @@
  *
  * A request is only ever answered by the owner, and never forced: an owner
  * that does not answer in time (a frozen tab) keeps the project, because a
- * write it still has queued could land on top of the new owner's.
+ * write it still has queued could land on top of the new owner's. Only the
+ * user can force it ({@link ProjectEditingTracker.takeOverEditing}), once
+ * told that what the other tab has not saved is lost. A tab that loses the
+ * project that way hears of it from the lock itself (`onTakenOver`), with
+ * or without a channel; a build from before handoff cannot, and keeps
+ * acting as the owner until it is closed.
  */
 
 import {
@@ -130,12 +135,25 @@ export interface ProjectEditingHandlers {
   cancelYield(): void;
   /** Another tab saved this project; a tab that does not own it re-reads. */
   onRemoteSaved(): void;
+  /**
+   * Another tab took the project from this one without asking. Ownership
+   * is already false, so no write starts; stop editing, and keep what was
+   * not saved apart from the project. This tab follows the new owner once
+   * what it returns settles.
+   */
+  onTakenOver?(): unknown;
 }
 
 export interface ProjectEditingTracker {
   readonly ownership: ProjectStorageOwnership;
   /** Asks the owner for the project. Concurrent calls share one request. */
   requestEditing(): Promise<ProjectEditingRequestResult>;
+  /**
+   * Takes the project from an owner that does not answer, without its
+   * consent: whatever that tab has not saved is lost. True once this tab
+   * owns it (promoted through `onPromoted`, as for a handoff).
+   */
+  takeOverEditing(): Promise<boolean>;
   /** Tells the other tabs this one has saved the project. */
   announceSaved(): void;
   /** Leaves the project: releases the claim and stops listening. */
@@ -186,7 +204,8 @@ export function trackProjectEditing(
       onPromoted: () => {
         handlers.onPromoted();
         waiting?.settle('owner');
-      }
+      },
+      onLost: () => handlers.onTakenOver?.()
     },
     { ticketHeldHere: () => holdsTicket }
   );
@@ -290,6 +309,10 @@ export function trackProjectEditing(
         inFlight = null;
       });
       return inFlight;
+    },
+    takeOverEditing() {
+      if (given || !locks) return Promise.resolve(false);
+      return storage.takeOver();
     },
     announceSaved() {
       if (given || !ownership.owned) return;

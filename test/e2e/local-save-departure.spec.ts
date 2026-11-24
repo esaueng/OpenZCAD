@@ -461,6 +461,167 @@ test('says how to edit here when the tab editing the project never answers', asy
   }
 });
 
+/**
+ * Opens `original` in a second tab of `owner`'s context, asks the owner for
+ * it, and — the owner never answering — takes editing over from it.
+ */
+async function takeOverFromSilentOwner(
+  owner: Page,
+  original: ProjectDocument
+): Promise<Page> {
+  const second = await owner.context().newPage();
+  await openSameProject(second, original, false, true);
+  const status = second.locator('.workspace-toast-body [role="status"]');
+  await second
+    .getByRole('button', { name: /^Box.*open in another tab/ })
+    .click({ force: true });
+  await expect(status).toContainText('Reload or close it to edit here.', {
+    timeout: 15_000
+  });
+  await second
+    .getByRole('button', { name: 'Take over editing', exact: true })
+    .click();
+  const confirm = second.getByRole('alertdialog', {
+    name: 'Take over editing in this tab?'
+  });
+  await expect(confirm).toContainText(
+    "any edits it hasn't saved yet will be lost"
+  );
+  await confirm
+    .getByRole('button', { name: 'Take over editing', exact: true })
+    .click();
+  await expect(confirm).toHaveCount(0);
+  await expect(second.getByRole('button', { name: /^Box \(B\)/ })).toBeEnabled({
+    timeout: SAVE_BUDGET_MS
+  });
+  return second;
+}
+
+test('takes over editing from a tab that never answers', async ({ page }) => {
+  // The owner listens on no channel, as a tab loaded before tabs could hand
+  // editing over: only taking the project from it lets this tab edit.
+  await page.addInitScript(() =>
+    Reflect.deleteProperty(window, 'BroadcastChannel')
+  );
+  const name = 'Taken over';
+  await prepareLocalBox(page, name);
+  const original = (await storedProject(page, name))!;
+  const second = await takeOverFromSilentOwner(page, original);
+  try {
+    await expect(
+      second.locator('.workspace-toast-body [role="status"]')
+    ).not.toContainText('Reload or close it');
+    await createPrimitiveInPlace(second, 'sphere');
+    await expectBodyCount(second, 2);
+    await expect
+      .poll(
+        async () => (await storedProject(second, name))?.featureOrder.length
+      )
+      .toBe(2);
+    // The owner runs this build: it hears of the takeover from its lock,
+    // with no channel, and stops editing.
+    await expect(
+      page.locator('.workspace-toast-body [role="status"]')
+    ).toContainText('Another tab took over editing.');
+    await expect(
+      page.getByRole('button', { name: /^Box.*open in another tab/ })
+    ).toBeDisabled();
+  } finally {
+    await second.close();
+  }
+});
+
+test('keeps an unsaved edit apart when another tab takes the project over', async ({
+  page
+}) => {
+  await page.addInitScript(() =>
+    Reflect.deleteProperty(window, 'BroadcastChannel')
+  );
+  const name = 'Taken with an edit';
+  await prepareLocalBox(page, name);
+  const original = (await storedProject(page, name))!;
+  // The owner's next device save of the project fails, so its Sphere is
+  // still unsaved when the project is taken from it.
+  await page.evaluate((projectId) => {
+    const put = IDBObjectStore.prototype.put;
+    const fixtureWindow = window as typeof window & {
+      restoreProjectWrites: () => void;
+    };
+    fixtureWindow.restoreProjectWrites = () => {
+      IDBObjectStore.prototype.put = put;
+    };
+    IDBObjectStore.prototype.put = function (
+      this: IDBObjectStore,
+      value: unknown,
+      key?: IDBValidKey
+    ) {
+      if (
+        this.name === 'projects' &&
+        (value as ProjectDocument).projectId === projectId
+      ) {
+        throw new DOMException(
+          'Test device storage is full.',
+          'QuotaExceededError'
+        );
+      }
+      return key === undefined
+        ? put.call(this, value)
+        : put.call(this, value, key);
+    };
+  }, original.projectId);
+  await createPrimitiveInPlace(page, 'sphere');
+  await expectBodyCount(page, 2);
+  expect((await storedProject(page, name))?.featureOrder).toEqual(
+    original.featureOrder
+  );
+
+  const second = await takeOverFromSilentOwner(page, original);
+  try {
+    await expectBodyCount(second, 1);
+    await createPrimitiveInPlace(second, 'cylinder');
+    await expect
+      .poll(
+        async () => (await storedProject(second, name))?.featureOrder.length
+      )
+      .toBe(2);
+    const taken = (await storedProject(second, name))!.featureOrder;
+
+    // The previous owner stops editing, and its Sphere becomes a project
+    // of its own rather than landing on the new owner's copy.
+    await expect(
+      page.locator('.workspace-toast-body [role="status"]')
+    ).toContainText('Another tab took over editing.');
+    await expect(
+      page.getByRole('button', { name: /^Box.*open in another tab/ })
+    ).toBeDisabled();
+    const recoveryName = `${name} (copy)`;
+    await expect
+      .poll(
+        async () =>
+          (await storedProject(page, recoveryName))?.featureOrder.length,
+        { timeout: SAVE_BUDGET_MS }
+      )
+      .toBe(2);
+    const recovery = (await storedProject(page, recoveryName))!;
+    expect(recovery.projectId).not.toBe(original.projectId);
+    expect(recovery.featureOrder[0]).toBe(original.featureOrder[0]);
+    expect(recovery.featureOrder[1]).not.toBe(taken[1]);
+
+    // With its device writes working again, it still writes nothing to
+    // the project: the new owner's copy stands.
+    await page.evaluate(() =>
+      (
+        window as typeof window & { restoreProjectWrites: () => void }
+      ).restoreProjectWrites()
+    );
+    await page.keyboard.press('Shift');
+    await page.waitForTimeout(1_500);
+    expect((await storedProject(second, name))?.featureOrder).toEqual(taken);
+  } finally {
+    await second.close();
+  }
+});
+
 test('keeps the previous owner’s copy when the storage read on promotion fails', async ({
   page
 }) => {
