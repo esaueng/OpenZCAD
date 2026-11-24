@@ -28,15 +28,46 @@ cells. This plan adds that layer without replacing anything that exists.
 These were read from the screen recordings and the Activity log at roughly one
 frame per second. They are leads to confirm, not confirmed defects.
 
-| ID  | Observation                                                                                                                                                                                                         | Status                                                                                                                                                                       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| O1  | Dragging the bottom face to −14 mm showed the moved outline, then "Checking the exact result…", then **Not built** and **Edit not applied**. The value chip kept −14 mm with a warning.                             | Capture with **Save reproduction**; record the **Why?** text. A preview that draws a result the exact check refuses is a U02 finding.                                        |
-| O2  | The Activity log shows "Offset face by −18 mm" applied about a minute earlier, then undone. If −18 mm and −14 mm target the same face from the same state, a larger move succeeded where a smaller one was refused. | Unconfirmed: the model state between the two may differ. Test it as a paired authored scenario (see [Triage](#triage)); Save reproduction cannot capture the successful leg. |
-| O3  | An earlier offset was refused with "The conical end would collapse at that distance. Try a smaller offset." (kernel: conical cap reaches or crosses its support apex).                                              | Correct behaviour: typed refusal, model kept. Pin it with the distance at which it starts.                                                                                   |
-| O4  | Notice: "this selection has no stable name, so it may need re-picking if earlier steps change."                                                                                                                     | Stable-identity risk (WS5). Chains must show that upstream edits either keep the reference resolving or produce a typed re-pick refusal, never a wrong face.                 |
+| ID  | Observation                                                                                                                                                                                                         | Status                                                                                                                                                                                                                                      |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| O1  | Dragging the bottom face to −14 mm showed the moved outline, then "Checking the exact result…", then **Not built** and **Edit not applied**. The value chip kept −14 mm with a warning.                             | −14 mm still refuses on the twin, now with a typed reason (see [P0 results](#p0-results-2026-11-24)). Capture with **Save reproduction**; record the **Why?** text. A preview that draws a result the exact check refuses is a U02 finding. |
+| O2  | The Activity log shows "Offset face by −18 mm" applied about a minute earlier, then undone. If −18 mm and −14 mm target the same face from the same state, a larger move succeeded where a smaller one was refused. | Not reproduced on current `main` from one starting revision: monotonic on the twin and on a deeper plate (see [P0 results](#p0-results-2026-11-24)). The recorded state between the two moves is still unknown.                             |
+| O3  | An earlier offset was refused with "The conical end would collapse at that distance. Try a smaller offset." (kernel: conical cap reaches or crosses its support apex).                                              | Correct behaviour: typed refusal, model kept. Pin it with the distance at which it starts.                                                                                                                                                  |
+| O4  | Notice: "this selection has no stable name, so it may need re-picking if earlier steps change."                                                                                                                     | Stable-identity risk (WS5). Chains must show that upstream edits either keep the reference resolving or produce a typed re-pick refusal, never a wrong face.                                                                                |
 
 The session's Activity log also counted one error and eighteen warnings.
 Exporting it with the interaction log helps reproduce O1 and O2 locally; the export is not committed (see [Privacy of captures](#privacy-of-captures)).
+
+## P0 results (2026-11-24)
+
+Measured on `main` at `fce92abe` with
+`test/direct-edit-corpus/recorded-bottom-offsets.test.ts`. That test uses the
+authored Part A from `reference-parts.ts`, not the recorded session. Each
+revision moves its one bottom face −14 mm and −18 mm. Every leg that builds
+is checked for face position, footprint, the six base-chamfer cones, the
+unmoved top faces, face census, and volume against the plate section × distance. Each
+built leg is also checked as a strict STEP solid with a closed mesh and by cold replay.
+
+| Starting revision                               | −14 mm                                                           | −18 mm                                                           | Monotonic |
+| ----------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | --------- |
+| Twin: 12 mm plate, recorded census (limit 9 mm) | Refused, typed `offset_face_chamfer_rim_not_carried`             | Refused, the same                                                | Yes       |
+| Deep: 30 mm plate, 42 mm post (limit 27 mm)     | Builds: bottom at z = 14, same footprint, ΔV = −14 × 1590.58 mm³ | Builds: bottom at z = 18, same footprint, ΔV = −18 × 1590.58 mm³ | Yes       |
+
+- Both refusals keep the document and the body unchanged and show the pinned
+  sentence, not the generic one. Two seeded single-step chains
+  (`A/o2-bottom-14/1`, `A/o2-bottom-18/1`) hold them under the chain oracles
+  and match the existing `chamfer-rim` chain pin.
+- On the twin, the chamfer-carry refusal starts at −7 mm, 2 mm before the 9 mm
+  geometric limit. −6.9 mm builds. The ladder's 4.5 mm and 8.9 mm cells sit on
+  either side of it, so only 8.9 mm appears as a pinned departure. The deep
+  plate builds at −7 mm. This is a K10 lead, not yet a pinned cell.
+- At −14 mm and −18 mm the twin's sentence suggests removing the chamfer and
+  offsetting again. Both moves are past the plate's own 9 mm limit, so that
+  advice cannot work there. This is a U02 wording lead.
+- O2 still needs the recorded state. The twin matches the recorded census,
+  not its dimensions or the edits that came before the two moves. To settle
+  O2, use **Save reproduction** on the −14 mm refusal in the app and keep the
+  file private until the [privacy review](#privacy-of-captures).
 
 ## What already exists
 
@@ -65,12 +96,12 @@ the recorded part in the app and written into the scenario as its expected
 census; if the authored twin differs, the authored part is wrong. The capture
 itself stays local (see [Privacy of captures](#privacy-of-captures)).
 
-| Part | Construction                                                                                                                                  | Why                                                                                     |
-| ---- | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Part | Construction                                                                                                                               | Why                                                                                                    |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
 | A    | Box united with a cylindrical post at a base corner. Fillet the junction, post cap and opposite corner, then chamfer the bottom perimeter. | The recorded base chamfer produces six conical faces. The junction includes two fitted B-spline faces. |
-| B    | Box with all edges filleted.                                                                                                                  | Blends meeting at corners; overlaps existing authored scenarios as a control.           |
-| C    | Plate with a cylindrical boss, fillet at the boss root.                                                                                       | Offsets that push a planar face through a blend into a cylinder.                        |
-| D    | Cylinder with chamfered caps.                                                                                                                 | Cap offsets bounded by a chamfer instead of a blend.                                    |
+| B    | Box with all edges filleted.                                                                                                               | Blends meeting at corners; overlaps existing authored scenarios as a control.                          |
+| C    | Plate with a cylindrical boss, fillet at the boss root.                                                                                    | Offsets that push a planar face through a blend into a cylinder.                                       |
+| D    | Cylinder with chamfered caps.                                                                                                              | Cap offsets bounded by a chamfer instead of a blend.                                                   |
 
 ## Operations and face classes
 

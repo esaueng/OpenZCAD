@@ -4,6 +4,10 @@ import type { RemusMoveFacesRelation } from './remus-lineage';
 import { faceFingerprint } from './exact-witnesses';
 import { surfaceTypeOf } from './exact-sync-memo';
 import {
+  OffsetFaceRefusal,
+  roundOffsetLimit
+} from './exact-offset-face-refusal';
+import {
   ANALYTIC_MATCH_EPSILON,
   GEOMETRY_EPSILON,
   add,
@@ -296,10 +300,23 @@ function moveEnd(
     fixed.axial >= shoulder.axial - tolerance
   )
     return false;
-  if (shoulder.axial + offset - fixed.axial <= GEOMETRY_EPSILON)
-    throw new Error(
-      'That distance would leave no cylindrical wall before the shoulder.'
-    );
+  if (shoulder.axial + offset - fixed.axial <= GEOMETRY_EPSILON) {
+    // The same refusal as a plain chamfered cylinder's end consuming its
+    // wall (exact-chamfered-cylinder.ts), typed with the same code so the
+    // ledgers and analytics bucket both; the limit is the offset, signed
+    // like it, at which the wall before the shoulder reaches zero length.
+    const reason =
+      'That distance would leave no cylindrical wall before the shoulder.';
+    throw new OffsetFaceRefusal({
+      family: 'direct-edit',
+      category: 'invalid_topology',
+      kernelCode: 'offset_face_collapses_chamfered_cylinder_wall',
+      kernelMessage: reason,
+      reason,
+      message: reason,
+      limit: roundOffsetLimit(fixed.axial - shoulder.axial)
+    });
+  }
   for (const [band, rings] of [
     [cone!, coneRims],
     [wall!, wallRims]
