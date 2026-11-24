@@ -21,8 +21,20 @@ type FaceWithGeometry = Pick<
   'triangleStart' | 'triangleCount'
 > & { geometry?: FaceGeometry };
 
-/** Unoriented surface normal; see {@link VertexSurfaceNormal}. */
-type SurfaceNormal = VertexSurfaceNormal;
+/**
+ * Unoriented surface normal at a vertex: `ON` with `out` written, `OFF` when
+ * the vertex is not on the measured surface, `SINGULAR` when it is on the
+ * surface where the normal is undefined (a cone's apex).
+ */
+const OFF = 0;
+const ON = 1;
+const SINGULAR = 2;
+type SurfaceNormal = (
+  x: number,
+  y: number,
+  z: number,
+  out: Float64Array
+) => typeof OFF | typeof ON | typeof SINGULAR;
 
 /**
  * How far a vertex may sit from the exact surface and still take its normal:
@@ -79,13 +91,13 @@ function surfaceNormalOf(geometry: FaceGeometry): SurfaceNormal | null {
         const ry = qy - h * ay;
         const rz = qz - h * az;
         const rho = Math.sqrt(rx * rx + ry * ry + rz * rz);
-        if (!(rho > 0)) return false;
+        if (!(rho > 0)) return OFF;
         if (Math.abs(rho - radius) > onSurfaceTolerance(radius, x, y, z))
-          return false;
+          return OFF;
         out[0] = rx / rho;
         out[1] = ry / rho;
         out[2] = rz / rho;
-        return true;
+        return ON;
       };
     }
     case 'cone': {
@@ -111,15 +123,20 @@ function surfaceNormalOf(geometry: FaceGeometry): SurfaceNormal | null {
         const ry = qy - h * ay;
         const rz = qz - h * az;
         const rho = Math.sqrt(rx * rx + ry * ry + rz * rz);
-        if (!(rho > 0) || h === 0) return false;
+        if (
+          Math.sqrt(qx * qx + qy * qy + qz * qz) <=
+          Math.max(1e-9, onSurfaceTolerance(0, x, y, z))
+        )
+          return SINGULAR;
+        if (!(rho > 0) || h === 0) return OFF;
         // Distance from the point to the nappe on its side of the apex.
         const distance = Math.abs(rho * cos - Math.abs(h) * sin);
-        if (distance > onSurfaceTolerance(rho, x, y, z)) return false;
+        if (distance > onSurfaceTolerance(rho, x, y, z)) return OFF;
         const side = h > 0 ? 1 : -1;
         out[0] = (rx / rho) * cos - side * ax * sin;
         out[1] = (ry / rho) * cos - side * ay * sin;
         out[2] = (rz / rho) * cos - side * az * sin;
-        return true;
+        return ON;
       };
     }
     case 'torus': {
@@ -151,23 +168,23 @@ function surfaceNormalOf(geometry: FaceGeometry): SurfaceNormal | null {
         const ry = qy - h * ay;
         const rz = qz - h * az;
         const rho = Math.sqrt(rx * rx + ry * ry + rz * rz);
-        if (!(rho > 0)) return false;
+        if (!(rho > 0)) return OFF;
         // From the nearest point of the spine circle to the vertex.
         const scale = majorRadius / rho;
         const wx = qx - rx * scale;
         const wy = qy - ry * scale;
         const wz = qz - rz * scale;
         const tube = Math.sqrt(wx * wx + wy * wy + wz * wz);
-        if (!(tube > 0)) return false;
+        if (!(tube > 0)) return OFF;
         if (
           Math.abs(tube - minorRadius) >
           onSurfaceTolerance(minorRadius, x, y, z)
         )
-          return false;
+          return OFF;
         out[0] = wx / tube;
         out[1] = wy / tube;
         out[2] = wz / tube;
-        return true;
+        return ON;
       };
     }
     default:
@@ -216,14 +233,35 @@ export function analyticFaceNormals(
       const i0 = indices[triangle * 3]!;
       const i1 = indices[triangle * 3 + 1]!;
       const i2 = indices[triangle * 3 + 2]!;
-      if (i0 >= vertexCount || i1 >= vertexCount || i2 >= vertexCount) continue;
+      if (i0 >= vertexCount || i1 >= vertexCount || i2 >= vertexCount)
+        return null;
       const p0 = i0 * 3;
       const p1 = i1 * 3;
       const p2 = i2 * 3;
+      // Every vertex must lie on the measured surface: a measurement that
+      // fits only part of the face (one moved since it was measured, say)
+      // would leave exact and facet normals side by side on it.
+      let sample = -1;
+      for (const p of [p0, p1, p2]) {
+        const fit = normalAt(
+          positions[p]!,
+          positions[p + 1]!,
+          positions[p + 2]!,
+          scratch
+        );
+        if (fit === OFF) return null;
+        if (fit === ON && sample < 0) sample = p;
+      }
+      if (sample < 0) continue;
+      normalAt(
+        positions[sample]!,
+        positions[sample + 1]!,
+        positions[sample + 2]!,
+        scratch
+      );
       const x = positions[p0]!;
       const y = positions[p0 + 1]!;
       const z = positions[p0 + 2]!;
-      if (!normalAt(x, y, z, scratch)) continue;
       const ax = positions[p1]! - x;
       const ay = positions[p1 + 1]! - y;
       const az = positions[p1 + 2]! - z;
@@ -243,13 +281,54 @@ export function analyticFaceNormals(
     // Facets of one face on its exact surface all face the same way; a
     // split verdict means the geometry does not describe this mesh.
     if (Math.min(agree, disagree) > 0.01 * total) return null;
-    if (agree > disagree) return normalAt;
+    if (agree > disagree)
+      return (x, y, z, out) => normalAt(x, y, z, out) === ON;
     return (x, y, z, out) => {
-      if (!normalAt(x, y, z, out)) return false;
+      if (normalAt(x, y, z, out) !== ON) return false;
       out[0] = -out[0]!;
       out[1] = -out[1]!;
       out[2] = -out[2]!;
       return true;
     };
   });
+}
+
+/**
+ * The face measurements {@link analyticFaceNormals} reads, as one comparable
+ * value: two bodies with the same mesh and face ranges shade identically
+ * exactly when these agree.
+ */
+export function analyticShadingKey(
+  faces: ReadonlyArray<{ geometry?: FaceGeometry }> | undefined
+): string {
+  if (!faces) return '';
+  const parts: string[] = [];
+  faces.forEach((face, index) => {
+    const g = face.geometry;
+    if (
+      !g ||
+      (g.surfaceType !== 'cylinder' &&
+        g.surfaceType !== 'cone' &&
+        g.surfaceType !== 'torus')
+    )
+      return;
+    const v = (p: { x: number; y: number; z: number } | undefined) =>
+      p ? `${p.x},${p.y},${p.z}` : '';
+    parts.push(
+      [
+        index,
+        g.surfaceType,
+        g.radius,
+        v(g.axisStart),
+        v(g.axisEnd),
+        v(g.apex),
+        v(g.axis),
+        g.halfAngle,
+        v(g.torusCenter),
+        g.majorRadius,
+        g.minorRadius
+      ].join(';')
+    );
+  });
+  return parts.join('|');
 }

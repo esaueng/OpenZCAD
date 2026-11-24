@@ -8,6 +8,7 @@ import {
 import {
   createObjectForBody,
   prepareBodyGeometry,
+  sameBodyRenderGeometry,
   updateObjectForBody
 } from './scene';
 import { disposeObject } from '../scene/objects';
@@ -142,6 +143,28 @@ describe('exact shading normals on analytic faces', () => {
     const stale = prepareBodyGeometry(sliverCylinder({ radius: RADIUS + 1 }));
     const facets = prepareBodyGeometry(sliverCylinder());
     expect(Array.from(stale.normals)).toEqual(Array.from(facets.normals));
+  });
+
+  it('keeps facet normals when the measurement fits only part of the face', () => {
+    // The old axis, moved sideways by one radius: the measured cylinder
+    // still passes through two generators of the mesh.
+    const moved = prepareBodyGeometry(
+      sliverCylinder({
+        axisStart: { x: RADIUS, y: 0, z: 0 },
+        axisEnd: { x: RADIUS, y: 0, z: HEIGHT }
+      })
+    );
+    const facets = prepareBodyGeometry(sliverCylinder());
+    expect(Array.from(moved.normals)).toEqual(Array.from(facets.normals));
+  });
+
+  it('treats a measurement change as a render change', () => {
+    expect(sameBodyRenderGeometry(sliverCylinder(), sliverCylinder({}))).toBe(
+      false
+    );
+    expect(sameBodyRenderGeometry(sliverCylinder({}), sliverCylinder({}))).toBe(
+      true
+    );
   });
 
   it('keeps the exact normals when a reused body is updated in place', () => {

@@ -19,7 +19,7 @@ import { COPLANAR_DEPTH_ATTRIBUTE, withCoplanarDepth } from './coplanarBodies';
 import { STUDIO_RIG } from './studio';
 import { withBodyAmbientOcclusion } from './ambientOcclusion';
 import { tangentFacePairs } from './tangentEdges';
-import { analyticFaceNormals } from './analyticNormals';
+import { analyticFaceNormals, analyticShadingKey } from './analyticNormals';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
@@ -129,6 +129,9 @@ function takeStagedPlate(mesh: MeshGeometry, topology?: BodyTopology) {
     !sameMeshBuffer(x.vertices, mesh.vertices)
   )
     return null;
+  // The plate was smoothed from facets alone; a body whose faces carry exact
+  // surface normals is built afresh so it shades as it will on every rebuild.
+  if (analyticShadingKey(topology.faces) !== '') return null;
   clearTimeout(stagedTimer);
   stagedPlate = null;
   return x.geometry;
@@ -1060,6 +1063,8 @@ export function sameBodyRenderGeometry(
   return (
     previous.meshReference === next.meshReference &&
     equalProjectionValue(previous.mesh, next.mesh) &&
+    analyticShadingKey(previous.topology?.faces) ===
+      analyticShadingKey(next.topology?.faces) &&
     equalProjectionValue(
       previous.topology?.faces.flatMap((face) => [
         face.triangleStart,
@@ -1243,8 +1248,9 @@ export function updateObjectForBody(
         normalAt &&
         normalAt(vertices[at]!, vertices[at + 1]!, vertices[at + 2]!, exact)
       ) {
-        // `weight` carries 1/|n| for the facet's unnormalized normal.
-        const angle = weight * area;
+        // The corner angle itself, as a fresh build weights it; `weight`
+        // also divides by |n| and vanishes on a zero-area triangle.
+        const angle = Math.atan2(area, cornerDot);
         sums[target] = sums[target]! + exact[0]! * angle;
         sums[target + 1] = sums[target + 1]! + exact[1]! * angle;
         sums[target + 2] = sums[target + 2]! + exact[2]! * angle;
