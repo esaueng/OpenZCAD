@@ -1314,3 +1314,60 @@ test('panels shown during a face drag leave the Tools drawer to come back', asyn
   await expect(drawer).toBeVisible();
   expect(await storedToolsDrawer(page)).toBe(true);
 });
+
+// The feature card a History row opens on a phone shares the lane with
+// History, capped at 40dvh. The card kept its full height in its share
+// and ran down over the search bar and off the screen, Apply with it: at
+// 430 × 932 its Position fields stood under the bar. It takes the lane up
+// to the top islands now, History giving way, and its body scrolls. Closed,
+// by its Close or by Escape, it gives History its lane back.
+for (const [width, height] of [
+  [430, 932],
+  [390, 844]
+] as const) {
+  test(
+    `a feature card from History stays clear of the command bar on a ${width} × ${height} phone`,
+    width === 430 ? { tag: '@ci-smoke' } : {},
+    async ({ page }) => {
+      test.setTimeout(150_000);
+      await openBracket(page, width, height);
+      await railPanelButton(page, 'History').tap();
+      const history = modelPanel(page, 'History');
+      await expect(history).toBeVisible();
+      const row = history
+        .locator('.feature-row-main[title^="Base plate"]')
+        .first();
+      const card = page.getByRole('region', { name: 'Feature inspector' });
+      const bar = page.locator('.command-bar-lane');
+
+      await row.tap();
+      await expect(card).toBeVisible();
+      await waitForSurfacesToSettle(page, ['.stage-right']);
+      await shot(page, `feature-card-${width}x${height}`);
+      const barTop = (await bar.boundingBox())!.y;
+      const box = (await card.boundingBox())!;
+      expect(box.y + box.height).toBeLessThanOrEqual(barTop + 0.5);
+      // Its Apply, at the foot of the form, is a press away inside the card.
+      const apply = card.getByRole('button', { name: 'Apply', exact: true });
+      await apply.scrollIntoViewIfNeeded();
+      await expectOnScreen(page, apply);
+      const after = (await apply.boundingBox())!;
+      expect(after.y + after.height).toBeLessThanOrEqual(barTop + 0.5);
+      await expect.poll(() => reachable(apply)).toBe(true);
+
+      // Closed, History has its lane back, and a row opens the card again.
+      await card.getByRole('button', { name: 'Close panel' }).tap();
+      await expect(card).toHaveCount(0);
+      await expect(history).toBeVisible();
+      await expect(row).toBeInViewport();
+      await expect.poll(() => reachable(row)).toBe(true);
+      await row.tap();
+      await expect(card).toBeVisible();
+      // Escape closes it the same way.
+      await page.keyboard.press('Escape');
+      await expect(card).toHaveCount(0);
+      await expect(history).toBeVisible();
+      await expect.poll(() => reachable(row)).toBe(true);
+    }
+  );
+}
