@@ -302,7 +302,10 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
                 const bytes = await readFile(
                   join(repoRoot, 'packages/geometry/assets/fonts', file)
                 );
-                return [file, createHash('sha256').update(bytes).digest('hex')];
+                return [
+                  file,
+                  createHash('sha256').update(bytes).digest('hex')
+                ] as const;
               })
             )
           )

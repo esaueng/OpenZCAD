@@ -1,6 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { stubApi } from './openzcad-fixtures';
+import type {
+  GeometryWorkerResult,
+  GeometryWorkerState
+} from '../../apps/web/src/worker/geometryWorker';
 import type { BodyId } from '@openzcad/shared';
 import type { ProjectionPacket } from '../../apps/web/src/lib/projectionStream';
 import { KERNEL_SESSION_DATABASE_NAME } from '../../apps/web/src/lib/kernelSessionStore';
@@ -31,38 +35,44 @@ async function observe(page: Page) {
         super(...args);
         const bodies = new Map<string, ProjectionPacket['changes'][BodyId]>();
         let complete: ProjectionPacket | undefined;
-        this.addEventListener('message', ({ data }) => {
-          if (data?.type === 'projection-delta' && !data.transient) {
-            const packet: ProjectionPacket = data.packet;
-            if (packet.base === null) bodies.clear();
-            for (const id of packet.removed) bodies.delete(id);
-            for (const [id, change] of Object.entries(packet.changes)) {
-              bodies.set(id, {
-                ...change,
-                mesh: change.mesh ?? bodies.get(id)?.mesh,
-                topology: change.replaceTopology
-                  ? change.topology
-                  : bodies.get(id)?.topology
-              });
+        this.addEventListener(
+          'message',
+          ({
+            data
+          }: MessageEvent<GeometryWorkerResult | GeometryWorkerState>) => {
+            if (data?.type === 'projection-delta' && !data.transient) {
+              const packet: ProjectionPacket = data.packet;
+              if (packet.base === null) bodies.clear();
+              for (const id of packet.removed) bodies.delete(id);
+              for (const [id, change] of Object.entries(packet.changes)) {
+                bodies.set(id, {
+                  ...change,
+                  mesh: change.mesh ?? bodies.get(id)?.mesh,
+                  topology: change.replaceTopology
+                    ? change.topology
+                    : bodies.get(id)?.topology
+                });
+              }
+              if (!('analysis' in packet.state) && bodies.size)
+                complete = packet;
             }
-            if (!('analysis' in packet.state) && bodies.size) complete = packet;
+            if (
+              complete &&
+              data?.type === 'state' &&
+              !data.requestId &&
+              !data.stale &&
+              data.phase === 'ready' &&
+              data.projectId === complete.projectId
+            ) {
+              window.__projectOpen = {
+                readyAt: performance.timeOrigin + performance.now(),
+                packet: complete,
+                bodies: new Map(bodies)
+              };
+              complete = undefined;
+            }
           }
-          if (
-            complete &&
-            data?.type === 'state' &&
-            !data.requestId &&
-            !data.stale &&
-            data.phase === 'ready' &&
-            data.projectId === complete.projectId
-          ) {
-            window.__projectOpen = {
-              readyAt: performance.timeOrigin + performance.now(),
-              packet: complete,
-              bodies: new Map(bodies)
-            };
-            complete = undefined;
-          }
-        });
+        );
       }
     };
   });
@@ -177,7 +187,10 @@ test('cold and cached project-card open through completed exact generation', asy
       new Promise<void>((resolve, reject) => {
         const request = indexedDB.deleteDatabase(name);
         request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
+        request.onerror = () =>
+          reject(
+            request.error ?? new Error('Could not clear the derived session.')
+          );
       }),
     KERNEL_SESSION_DATABASE_NAME
   );
@@ -190,10 +203,7 @@ test('cold and cached project-card open through completed exact generation', asy
     const next = new URL(secondOrigin);
     expect(next.hostname).toBe('127.0.0.1');
     const first = new URL(page.url()).origin;
-    const commit = await page.evaluate(
-      async () =>
-        (await (await fetch('/build-meta.json')).json()).commit as string
-    );
+    const commit = await readBuildCommit(page);
     await page.context().route(
       (url) => url.origin === first && !url.pathname.startsWith('/api/'),
       async (route) => {
@@ -206,10 +216,7 @@ test('cold and cached project-card open through completed exact generation', asy
         });
       }
     );
-    const nextCommit = await page.evaluate(
-      async () =>
-        (await (await fetch('/build-meta.json')).json()).commit as string
-    );
+    const nextCommit = await readBuildCommit(page);
     expect(nextCommit).not.toBe(commit);
   }
   const warm = await openFromLibrary(page, input.document.name);
@@ -240,6 +247,26 @@ test('cold and cached project-card open through completed exact generation', asy
   );
 });
 
+function readBuildCommit(page: Page) {
+  return page.evaluate(async () => {
+    const response = await fetch('/build-meta.json');
+    const metadata: unknown = await response.json();
+    if (
+      !response.ok ||
+      !metadata ||
+      typeof metadata !== 'object' ||
+      !('commit' in metadata) ||
+      typeof metadata.commit !== 'string' ||
+      !/^[0-9a-f]{40}$/.test(metadata.commit)
+    ) {
+      throw new Error(
+        'Expected a release build with an identified source commit.'
+      );
+    }
+    return metadata.commit;
+  });
+}
+
 async function waitForCapture(page: Page) {
   await expect
     .poll(
@@ -249,7 +276,10 @@ async function waitForCapture(page: Page) {
             return false;
           return new Promise<boolean>((resolve, reject) => {
             const open = indexedDB.open(name);
-            open.onerror = () => reject(open.error);
+            open.onerror = () =>
+              reject(
+                open.error ?? new Error('Could not open the session database.')
+              );
             open.onsuccess = () => {
               const db = open.result;
               const read = db
@@ -262,7 +292,9 @@ async function waitForCapture(page: Page) {
               };
               read.onerror = () => {
                 db.close();
-                reject(read.error);
+                reject(
+                  read.error ?? new Error('Could not count stored sessions.')
+                );
               };
             };
           });
