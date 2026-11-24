@@ -167,13 +167,12 @@ describe('AI modeling command translation', () => {
     ) {
       throw new Error('Expected the offset proposal fixture.');
     }
+    const offset = direct.operation;
     for (const ambiguousRim of ['draft', 'chamfer'] as const) {
       expect(() =>
         commandsForCadPatch(baseline, {
           ...proposal,
-          operations: [
-            { ...direct, operation: { ...direct.operation, ambiguousRim } }
-          ]
+          operations: [{ ...direct, operation: { ...offset, ambiguousRim } }]
         })
       ).toThrow('Choose Chamfer or Draft');
     }
