@@ -192,6 +192,7 @@
   "touch-targets.spec.ts": 22,
   "transform-copy.spec.ts": 10,
   "transform-pivot.spec.ts": 10,
+  "tweak-link-without-history.spec.ts": 8,
   "u11-slotted-plate.spec.ts": 30,
   "upside-down-view-reload.spec.ts": 7,
   "view-cube-orbit-tooltip.spec.ts": 6,

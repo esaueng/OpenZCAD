@@ -339,7 +339,7 @@ export function tweakableShareDocument(
     bodyRepresentations: {},
     exportableBodyIds: [],
     warnings: [],
-    updatedAt: new Date(0).toISOString()
+    updatedAt: RECIPE_UPDATED_AT
   };
   const root = document.nodes[document.rootNodeId];
   if (root?.kind !== 'project') throw new Error('The project node is missing.');
@@ -395,9 +395,21 @@ const TWEAKABLE_DOCUMENT_KEYS = new Set([
   'displayUnits'
 ]);
 
+/** A feature that holds an imported file, however its fields name it. */
 function isImportedFeature(node: ProjectDocument['nodes'][string]): boolean {
-  return node.kind === 'feature' && node.featureKind.startsWith('imported-');
+  if (node.kind !== 'feature') return false;
+  const data = (node.data ?? {}) as unknown as Record<string, unknown>;
+  return (
+    node.featureKind.startsWith('imported-') ||
+    (typeof data.featureKind === 'string' &&
+      data.featureKind.startsWith('imported-')) ||
+    'stepText' in data ||
+    'meshPayload' in data
+  );
 }
+
+/** The edit time a recipe carries in place of the owner's. */
+const RECIPE_UPDATED_AT = new Date(0).toISOString();
 
 const DERIVED_KEYS = new Set([
   'bodyRepresentations',
@@ -438,7 +450,8 @@ export function tweakableShareDocumentProblem(
     !onlyKeys(document.derived, DERIVED_KEYS) ||
     !emptyRecord(document.derived.bodyRepresentations) ||
     !emptyList(document.derived.exportableBodyIds) ||
-    !emptyList(document.derived.warnings)
+    !emptyList(document.derived.warnings) ||
+    document.derived.updatedAt !== RECIPE_UPDATED_AT
   )
     return 'It carries the owner\u2019s rebuild results.';
   if (document.featureOrder.length === 0) return 'It has no feature.';

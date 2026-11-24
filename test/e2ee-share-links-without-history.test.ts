@@ -794,6 +794,22 @@ describe(
       expect(outcome.failed).toMatchObject([{ shareId: link.shareId }]);
       expect(outcome.failed[0]!.reason).toMatch(/Update the link/);
       expect(stored(srv, link.shareId).signer_device_id).toBe('other_laptop');
+      // An Update, as that message says, still recovers the link: a model
+      // the owner's devices do not vouch for holds it to solids only.
+      const asked: boolean[] = [];
+      await updateFrozenShareLink(
+        laptop.shareLinks,
+        projectId,
+        link.shareId,
+        async (parameters) => {
+          asked.push(parameters);
+          return frozenOf(document, 'Owner’s plate');
+        }
+      );
+      expect(asked).toEqual([false]);
+      expect(
+        featureNames((await visitor(srv).open(link.url))!.document)
+      ).toEqual(['Owner’s plate']);
     });
 
     it('does not let a republication undo an Update that landed first', async () => {

@@ -1388,8 +1388,9 @@ export async function updateFrozenShareLink(
 /**
  * Whether the model a `frozen` link serves now carries its parameters
  * (`tweakableShareDocument`), read back from its owner-signed snapshot; null
- * when the link has no model yet. A model that is there but cannot be read
- * throws: guessing would let an Update change what the link shares.
+ * when the link has no model the owner's devices vouch for. A model that
+ * cannot be fetched throws: guessing would let an Update change what the
+ * link shares.
  */
 async function frozenLinkSharesParameters(
   ctx: ShareLinksContext,
@@ -1412,12 +1413,22 @@ async function frozenLinkSharesParameters(
     record,
     link.keyEpoch
   );
-  const { document } = await storedFrozenDocument(ctx, projectId, {
-    shareId: link.shareId,
-    shareKey,
-    authors: ownDeviceKeyHashes(ctx)
-  });
-  return isTweakableWithoutHistory(document);
+  try {
+    const { document } = await storedFrozenDocument(ctx, projectId, {
+      shareId: link.shareId,
+      shareKey,
+      authors: ownDeviceKeyHashes(ctx)
+    });
+    return isTweakableWithoutHistory(document);
+  } catch (error) {
+    // A model the owner's devices no longer vouch for (published by a
+    // removed device, or unverifiable) is no model: the link is held to
+    // solids, which an Update can still publish. Anything else, such as a
+    // failed request, stops the Update rather than guess.
+    if (error instanceof ShareLinksError && error.code === 'frozen-model')
+      return null;
+    throw error;
+  }
 }
 
 /**

@@ -325,6 +325,21 @@ describe('tweakableShareDocument', () => {
       }
     ],
     [
+      'an imported file named only in its data',
+      (document) => {
+        const feature = listNodesByKind(document, 'feature')[0]!;
+        const data = feature.data as unknown as Record<string, unknown>;
+        data.featureKind = 'imported-step';
+        data.stepText = "ISO-10303-21;\nFILE_NAME('customer-x');";
+      }
+    ],
+    [
+      'the owner\u2019s edit time',
+      (document) => {
+        document.derived.updatedAt = '2026-11-20T10:00:00.000Z';
+      }
+    ],
+    [
       'a rebuild warning',
       (document) => {
         document.derived.warnings = ['Secret boss failed.'];
