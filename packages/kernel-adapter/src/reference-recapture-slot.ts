@@ -20,7 +20,9 @@
  */
 import type { SketchProfile } from '@openzcad/geometry';
 import type { BlendOrientationReport } from './blend-orientation';
+import type { RemusKernel } from './remus-runtime';
 import type {
+  BodyId,
   EdgeWitnessV1,
   FaceWitnessV1,
   SketchRegionProfileReference,
@@ -67,6 +69,19 @@ export interface ReferenceRecaptureHooks {
    * edge-modifier build (`blend-orientation.ts`) once its edges resolve.
    */
   noteBlendOrientation?(report: BlendOrientationReport): void;
+  /**
+   * A measured body's solids and its face handles in `topology.faces`
+   * order, reported by the exact measurement while its kernel still holds
+   * them. The geometry oracle compares the faces whose area is a
+   * tessellation estimate, which cannot be compared across units by area
+   * (`units-reference-recapture.ts`).
+   */
+  noteBodyFaces?(
+    bodyId: BodyId,
+    kernel: RemusKernel,
+    solids: readonly number[],
+    faces: readonly number[]
+  ): void;
 }
 
 let claimed = false;

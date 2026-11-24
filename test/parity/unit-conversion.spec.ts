@@ -120,13 +120,13 @@ const EXPECTED: Record<string, Record<Target, Outcome>> = {
   'import:pattern-boolean-with-import': BOTH('ok'),
   'import:shell-on-import': BOTH('ok'),
   // Known kernel refusal: the imported plate's four B-spline faces measure
-  // area and volume by tessellation at an absolute deflection in model
-  // units (plan §4), so the same surfaces measure differently at another
-  // scale: volume by about 7.5e-6 and area by about 0.8% (inch), beyond
-  // oracle 2's 1e-6. The geometry is the same; the measurement is not
-  // scale-invariant, and the oracle fails closed.
+  // volume by tessellation at an absolute deflection in model units (plan
+  // §4), so the same surfaces measure differently at another scale, by
+  // about 7.5e-6, beyond oracle 2's 1e-6. The geometry is the same; the
+  // measurement is not scale-invariant, and the oracle fails closed. Their
+  // areas (about 0.8% apart in inches) no longer refuse: oracle 2 compares
+  // tessellated faces by sampled surface points instead.
   'import:boolean-on-nurbs-import': BOTH([
-    'phase 4 geometry-mismatch: Imported plate area',
     'phase 4 geometry-mismatch: Imported plate volume'
   ])
 };

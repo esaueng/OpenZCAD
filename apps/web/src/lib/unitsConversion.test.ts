@@ -70,7 +70,14 @@ function preparedFor(document: ProjectDocument): PreparedUnitsConversion {
     references: {
       factor: 1 / 25.4,
       sites: { topology: 0, hash: 0, profileId: 0, edgeEnd: 0 },
-      geometry: { bodies: 1, volumes: 1, areas: 1, datums: 0, faces: 0 },
+      geometry: {
+        bodies: 1,
+        volumes: 1,
+        areas: 1,
+        datums: 0,
+        faces: 0,
+        sampledFaces: 0
+      },
       timings: { source: 0, translate: 0, verify: 0 }
     },
     undo: estimateUnitsConvertUndo(document, payload, USER)
