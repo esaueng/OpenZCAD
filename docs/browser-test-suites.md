@@ -186,7 +186,7 @@ times a cold project-card open, then times reopening after capture.
 ```bash
 OPENZCAD_BUILD_COMMIT=$(git rev-parse HEAD) OZ_PERF=1 \
   OZ_PERF_PROJECT=/absolute/path/to/project.openzcad \
-  pnpm exec playwright test perf-project-open --workers=1 --repeat-each=3
+  pnpm exec playwright test perf-project-open --grep 'cold and cached' --workers=1 --repeat-each=3
 ```
 
 The timer runs from the project-card click through receipt of the complete
@@ -197,3 +197,16 @@ loopback preview (e.g. `http://127.0.0.1:4174`) built with a different
 app commit, the same geometry code and the same `VITE_E2E=1
 VITE_E2E_FULL_RENDER=1` flags. It loads the second build while retaining
 the test context's IndexedDB. Keep private project files outside the checkout.
+
+To time generation on the first import of a project with feature history, run
+the cold-import case in fresh Chromium contexts. It reports the time from
+selecting the file to the first exact model frame and to the first frame ready
+for input. Compare median input-ready times across matching builds and check
+the reported app and kernel commits, build digest, replay count and geometry
+digest across runs. Set `OPENZCAD_BUILD_COMMIT` to require the expected app commit.
+
+```bash
+OPENZCAD_BUILD_COMMIT=$(git rev-parse HEAD) OZ_PERF=1 \
+  OZ_PERF_PROJECT=/absolute/path/to/project.openzcad \
+  pnpm exec playwright test perf-project-open --grep 'cold import' --workers=1 --repeat-each=3
+```
