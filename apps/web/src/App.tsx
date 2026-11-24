@@ -2488,11 +2488,15 @@ const PROJECT_EDITING_MOVING_NOTICE =
 /** The owner tab was busy (a save, a conversion) and kept the project. */
 const PROJECT_EDITING_DECLINED_NOTICE =
   'Editing is locked: the other tab is finishing a save. Click here to try again.';
+/** The lane's notice in a tab that handed editing to another tab. */
+const PROJECT_EDITING_MOVED_NOTICE =
+  'Editing moved to another tab. Click here to edit in this tab.';
 /** The lane notices a tab that takes the project over can retire. */
 const PROJECT_HANDOFF_NOTICES: ReadonlySet<string> = new Set([
   PROJECT_OPEN_ELSEWHERE_NOTICE,
   PROJECT_EDITING_MOVING_NOTICE,
-  PROJECT_EDITING_DECLINED_NOTICE
+  PROJECT_EDITING_DECLINED_NOTICE,
+  PROJECT_EDITING_MOVED_NOTICE
 ]);
 /** Identifies this tab to the others editing the same projects. */
 const PROJECT_TAB_ID =
@@ -8646,6 +8650,9 @@ export function App() {
     }
     projectOpenElsewhereRef.current = true;
     setProjectOpenElsewhere(true);
+    // Said where the eye goes, as for a tab that opened read-only: the
+    // dimmed rail alone does not say why, or how to edit here again.
+    setStatus(PROJECT_EDITING_MOVED_NOTICE, { sticky: true });
     resume();
     return true;
   }
@@ -8659,6 +8666,11 @@ export function App() {
     if (tracker?.ownership.owned) {
       projectOpenElsewhereRef.current = false;
       setProjectOpenElsewhere(false);
+      setStatusEntry((current) =>
+        current.text === PROJECT_EDITING_MOVED_NOTICE
+          ? retireStatus(current, Date.now())
+          : current
+      );
     }
   }
   const cancelProjectYieldRef = useRef(cancelProjectYield);

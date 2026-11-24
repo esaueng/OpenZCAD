@@ -817,6 +817,10 @@ test('editing follows the tab the user works in', async ({ page }) => {
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeDisabled({
     timeout: SYNC_BUDGET_MS
   });
+  // The tab that handed editing over says so, and how to take it back.
+  await expect(
+    page.locator('.workspace-toast-body [role="status"]')
+  ).toContainText('Editing moved to another tab.');
 
   await renameProject(second, 'Second latest');
   await expect
