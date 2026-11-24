@@ -17576,7 +17576,14 @@ export function App() {
             projects.map((summary) => summary.name),
             options.recovered && saveState
               ? {
-                  loadProject: api.loadProject,
+                  // The recovery read checks the save state against the
+                  // head this browser already trusts; reading the current
+                  // head first would move the source's pin, so the open
+                  // document stands in for it.
+                  loadProject: async (projectId: string) =>
+                    openDocument?.projectId === projectId
+                      ? openDocument
+                      : api.loadProject(projectId),
                   loadRevision: api.recoverRevision
                 }
               : api,

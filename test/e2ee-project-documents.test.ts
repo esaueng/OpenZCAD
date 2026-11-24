@@ -3566,6 +3566,43 @@ describe('recovering a save state the signed map lost (ADR-024 historical read)'
     expect(await page.pins.read(OWNER, projectId)).toEqual(pin);
   });
 
+  it('refuses a later version that still carries the save state as its newest revision', async () => {
+    const { srv, page, projectId, revisionId, current } = await lostSaveState();
+    // The head is a signed descendant whose newest revision and save points
+    // still name the save state, but it is not the save state itself.
+    expect(current.revisions.at(-1)!.revisionId).toBe(revisionId);
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_revisions SET document_version = ?, version_hash = ?
+         WHERE project_id = ? AND revision_id = ?`
+      )
+      .run(
+        current.version,
+        hashAt(srv, projectId, current.version),
+        projectId,
+        revisionId
+      );
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'revision-mismatch'
+    );
+  });
+
+  it('refuses a link whose record does not decode', async () => {
+    const { srv, page, projectId, named, revisionId } = await lostSaveState();
+    srv.db.exec('DROP TRIGGER e2ee_project_version_immutable');
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_versions SET signature = '!' || substr(signature, 2)
+         WHERE project_id = ? AND document_version = ?`
+      )
+      .run(projectId, named.version + 1);
+    await recoveryRefusal(
+      page.store.recoverRevision!(projectId, revisionId),
+      'broken-chain'
+    );
+  });
+
   it('refuses a save state its head does map, when the account sends another version', async () => {
     const srv = server();
     const laptop = device(srv, owner, 'owner_laptop');

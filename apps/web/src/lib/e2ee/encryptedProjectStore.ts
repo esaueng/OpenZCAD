@@ -64,6 +64,7 @@
  */
 import {
   AuthorshipError,
+  E2eeError,
   ShareLinkError,
   authorCutoffKey,
   EnvelopeKey,
@@ -673,6 +674,13 @@ function logFailure(error: VersionLogError): EncryptedProjectIntegrityError {
 
 /** A recovery read's refusal for what a verification step threw. */
 function recoveryRefusal(error: unknown): unknown {
+  // A log record or envelope that does not even decode.
+  if (error instanceof E2eeError) {
+    return new EncryptedRevisionRecoveryError(
+      'broken-chain',
+      `This save state’s signed history does not decode (${error.message}).`
+    );
+  }
   // Anything else (a recovery refusal already, a missing key, offline)
   // stays as it is.
   if (!(error instanceof EncryptedProjectIntegrityError)) return error;
@@ -1497,20 +1505,23 @@ export function createEncryptedProjectStore(
    * back from the pinned head"). For a retained save state the trusted
    * head's signed map lost before PR #1997. Every one of these must hold:
    *
-   * - the trusted head is this page's verified head or, without one, this
-   *   browser's pin; neither is read from the account nor moved here;
+   * - the trusted head is this browser's pin or, while it names none, this
+   *   page's verified head; neither is read from the account nor moved here;
    * - the account's log runs from the save state's own record up to that
    *   head with every record naming the one before it;
    * - every record's signature is a certified, unrevoked (or in-cutoff)
    *   member device's, which held an editing leaf in its own epoch, and its
    *   epoch binding matches that epoch's authenticator;
    * - the save state's envelope is that first record, verifies the same way
-   *   and decrypts to a document of this project whose newest revision, and
-   *   one of its save points, is the requested revision.
+   *   and decrypts to a document of this project whose newest revision is
+   *   the requested one, with the save point naming it taken at that very
+   *   version (so a later autosave carrying it is refused).
    *
-   * It only reads: no write route, `readHead`, `installHead` or pin
-   * advance is reached, so the project, its head and the pin are as they
-   * were whatever the outcome. Each refusal names its reason.
+   * No document write route, `readHead`, `installHead` or pin advance is
+   * reached, so the project, its head and the pin are as they were whatever
+   * the outcome. (Opening an older epoch's key may catch this device's MLS
+   * session up, as every encrypted read does.) Each refusal names its
+   * reason.
    */
   async function recoverRevision(
     projectId: string,
@@ -1523,11 +1534,13 @@ export function createEncryptedProjectStore(
       throw new EncryptedRevisionRecoveryError(reason, message);
     };
     const known = heads.get(projectId);
-    const pin = known ? null : await pins.read(userId, projectId);
-    const anchor = known
-      ? { version: known.version, hash: known.hash }
-      : pin?.headHash
-        ? { version: pin.documentVersion, hash: pin.headHash }
+    // The durable pin is what this browser trusts across its tabs; this
+    // page's head stands in only while no pin names a head.
+    const pin = await pins.read(userId, projectId);
+    const anchor = pin?.headHash
+      ? { version: pin.documentVersion, hash: pin.headHash }
+      : known
+        ? { version: known.version, hash: known.hash }
         : null;
     if (!anchor) {
       return refuse(
@@ -1656,10 +1669,14 @@ export function createEncryptedProjectStore(
         metadata.version.wrappedVersionKey,
         envelope
       );
+      // The save point itself, not a later version that still carries it:
+      // its own signed record names the version it was taken at.
       if (
         document.revisions.at(-1)?.revisionId !== revisionId ||
         !document.checkpoints.some(
-          (checkpoint) => checkpoint.revisionId === revisionId
+          (checkpoint) =>
+            checkpoint.revisionId === revisionId &&
+            checkpoint.documentVersion === document.version
         )
       ) {
         throw new EncryptedRevisionRecoveryError(
