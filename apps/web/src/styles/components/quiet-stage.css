@@ -4107,11 +4107,20 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 /* Hide all is on: beside the rail, where the panels would be, saying so
-   and offering them back. */
+   and offering them back. (A one-column phone stands it on the stage
+   instead: phone-stage.css.) */
 .instrument-rail > .panels-hidden-pill {
   position: absolute;
   right: calc(100% + var(--island-gap));
   bottom: 0;
+}
+
+/* The stage's copy shows only where the rail does: not in View or Tweak. */
+.viewer-area:not(:has(.instrument-rail)) > .panels-hidden-pill {
+  display: none;
+}
+
+.panels-hidden-pill {
   display: flex;
   align-items: center;
   gap: 6px;
