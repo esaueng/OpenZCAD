@@ -272,6 +272,8 @@ import {
   withoutDerivedProjection,
   initiallyHiddenBodyIds,
   isSharedWithoutHistory,
+  isTweakableWithoutHistory,
+  tweakableShareDocument,
   type ExtrudeInput,
   type StaleDirectEditFaceRepair,
   unitsConvertCheckpointName,
@@ -7500,10 +7502,15 @@ export function App() {
   const sharedWithoutHistory = Boolean(
     shareSession && doc && isSharedWithoutHistory(doc)
   );
+  // L08: a link without history may still be tweaked when the owner shared
+  // the model with its parameters; the owner-made document says which.
+  const sharedParameters = Boolean(
+    sharedWithoutHistory && doc && isTweakableWithoutHistory(doc)
+  );
   const tweakModeDisabledReason = shareSession
-    ? sharedWithoutHistory
+    ? sharedWithoutHistory && !sharedParameters
       ? 'The owner shared this model without its history, so it has no parameters to change'
-      : shareLinkViewOnly
+      : shareLinkViewOnly && !sharedParameters
         ? 'This link is view only — Make a copy to change its parameters'
         : null
     : buildModeDisabledReason;
@@ -7529,7 +7536,8 @@ export function App() {
     ? panelState.workspaceMode === 'drawing' &&
       drawingModeDisabledReason === null
       ? 'drawing'
-      : panelState.workspaceMode === 'view' || shareLinkViewOnly
+      : panelState.workspaceMode === 'view' ||
+          (shareLinkViewOnly && !sharedParameters)
         ? 'view'
         : 'tweak'
     : buildModeDisabledReason !== null
@@ -17144,11 +17152,13 @@ export function App() {
         });
         setStatus(
           `${
-            isSharedWithoutHistory(opening.document)
-              ? `Opened shared model ${shared.name} · view only. The owner shared it without its history. Make a copy to build on it.`
-              : shared.mode === 'view'
-                ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
-                : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
+            isTweakableWithoutHistory(opening.document)
+              ? `Opened shared model ${shared.name} · adjust its parameters and export. The owner shared it without its history. Make a copy to keep it.`
+              : isSharedWithoutHistory(opening.document)
+                ? `Opened shared model ${shared.name} · view only. The owner shared it without its history. Make a copy to build on it.`
+                : shared.mode === 'view'
+                  ? `Opened shared model ${shared.name} · view only. Make a copy to build on it.`
+                  : `Opened shared model ${shared.name} · adjust its parameters and export. Make a copy to build on it.`
           }${opening.note ? ` ${opening.note}` : ''}`
         );
       } catch (error) {
@@ -17207,8 +17217,21 @@ export function App() {
       const finishBusy = startNavigationBusy();
       let copied: ProjectSummary | null = null;
       try {
+        // L08: a Tweak link without history carries the recipe so the
+        // visitor can tweak it, but the copy keeps the solids only, as
+        // tweaked here, so Build never shows how the model was built.
+        const copySource = isTweakableWithoutHistory(source)
+          ? await (
+              await import('./lib/frozenShareModel')
+            ).freezeModelForSharing(
+              source,
+              geometryRef.current,
+              persistedHiddenBodyIds(localHiddenBodyIds, currentBodyIsolation)
+            )
+          : source;
+        if (!isCurrent()) return;
         const copy = await saveShareLinkCopy(
-          source,
+          copySource,
           shareLinkCopyName(
             source.name,
             projects.map((summary) => summary.name)
@@ -39367,7 +39390,7 @@ export function App() {
           shareSession={
             shareSession
               ? {
-                  mode: shareSession.mode,
+                  mode: sharedParameters ? 'tweak' : shareSession.mode,
                   ...(sharedWithoutHistory ? { withoutHistory: true } : {}),
                   onMakeCopy: requestShareCopy
                 }
@@ -41981,6 +42004,7 @@ export function App() {
           {shareCopyChoice && (
             <SharedLinkCopyDialog
               withoutHistory={sharedWithoutHistory}
+              parameters={sharedParameters}
               accountEncrypts={shareCopyChoice.accountEncrypts}
               error={shareCopyChoice.error}
               onRetry={requestShareCopy}
@@ -42266,24 +42290,25 @@ export function App() {
                   setSharingOpen(false);
                   void handleGoHome();
                 }}
-                onFreezeModel={async () => {
+                onFreezeModel={async (options) => {
                   // L08: a link without history shares the model as this
                   // tab shows it now, saved or not.
                   const current = managerRef.current?.document;
                   if (!current)
                     throw new Error('Open the project before sharing it.');
-                  const { freezeModelForSharing } =
-                    await import('./lib/frozenShareModel');
                   // The bodies the owner hid start hidden for the visitor
                   // too; a temporary isolation is not a choice to hide.
-                  return freezeModelForSharing(
-                    current,
-                    geometry,
-                    persistedHiddenBodyIds(
-                      localHiddenBodyIds,
-                      currentBodyIsolation
-                    )
+                  const hidden = persistedHiddenBodyIds(
+                    localHiddenBodyIds,
+                    currentBodyIsolation
                   );
+                  // A Tweak link shares the recipe, without the feature
+                  // list's names, save states or undo history.
+                  if (options?.parameters)
+                    return tweakableShareDocument(current, hidden);
+                  const { freezeModelForSharing } =
+                    await import('./lib/frozenShareModel');
+                  return freezeModelForSharing(current, geometry, hidden);
                 }}
                 onClose={() => setSharingOpen(false)}
               />

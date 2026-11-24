@@ -102,6 +102,7 @@ import {
 import {
   assertStorableDocument,
   frozenShareDocumentProblem,
+  isTweakableWithoutHistory,
   sharedProjectSnapshotDocument
 } from '@openzcad/document-core';
 import {
@@ -1329,9 +1330,14 @@ export async function updateFrozenShareLink(
   ctx: ShareLinksContext,
   projectId: string,
   shareId: string,
-  frozenDocument: ProjectDocument
+  /**
+   * The current model, frozen; or how to freeze it, told whether the link
+   * shares the model's parameters (as the model it serves now does: the
+   * grant says only `frozen`, and the owner-signed model says which).
+   */
+  frozenDocument:
+    ProjectDocument | ((parameters: boolean) => Promise<ProjectDocument>)
 ): Promise<void> {
-  const frozen = frozenSnapshotDocument(frozenDocument, projectId);
   await workLock(ctx, projectId, async () => {
     const head = await ctx.store.shareHead(projectId);
     await requireOwner(ctx, projectId, head.keyEpoch);
@@ -1342,6 +1348,28 @@ export async function updateFrozenShareLink(
       throw new ShareLinksError(
         'link-not-found',
         'This link shares the project with its history; it has no model to update.'
+      );
+    // The kind of model the link shares never changes: a view-only link is
+    // never given the recipe, nor a tweakable one stripped of it. A link with
+    // no model yet is held to the narrower kind, solids only.
+    const parameters =
+      (await frozenLinkSharesParameters(ctx, projectId, {
+        shareId,
+        shareKeyHash: link.shareKeyHash,
+        keyEpoch: head.keyEpoch
+      })) ?? false;
+    const frozen = frozenSnapshotDocument(
+      typeof frozenDocument === 'function'
+        ? await frozenDocument(parameters)
+        : frozenDocument,
+      projectId
+    );
+    if (isTweakableWithoutHistory(frozen) !== parameters)
+      throw new ShareLinksError(
+        'frozen-model',
+        parameters
+          ? 'This link shares the model\u2019s parameters; update it with them.'
+          : 'This link shares the finished solids only; update it with them.'
       );
     const outcome = await publishShareSnapshots(ctx, projectId, head, {
       only: [shareId],
@@ -1355,6 +1383,73 @@ export async function updateFrozenShareLink(
           'The link could not be updated. Try again.'
       );
   });
+}
+
+/**
+ * Whether the model a `frozen` link serves now carries its parameters
+ * (`tweakableShareDocument`), read back from its owner-signed snapshot; null
+ * when the link has no model the owner's devices vouch for. A model that
+ * cannot be fetched throws: guessing would let an Update change what the
+ * link shares.
+ */
+async function frozenLinkSharesParameters(
+  ctx: ShareLinksContext,
+  projectId: string,
+  link: {
+    readonly shareId: string;
+    readonly shareKeyHash: Uint8Array;
+    readonly keyEpoch: number;
+  }
+): Promise<boolean | null> {
+  const record = (await ctx.api.list(projectId)).links.find(
+    (entry) => entry.shareId === link.shareId
+  );
+  if (!record?.snapshot) return null;
+  const shareKey = await shareKeyFor(
+    ctx,
+    projectId,
+    link.shareId,
+    link.shareKeyHash,
+    record,
+    link.keyEpoch
+  );
+  try {
+    const { document } = await storedFrozenDocument(ctx, projectId, {
+      shareId: link.shareId,
+      shareKey,
+      authors: ownDeviceKeyHashes(ctx)
+    });
+    return isTweakableWithoutHistory(document);
+  } catch (error) {
+    // A model the owner's devices no longer vouch for (published by a
+    // removed device, or unverifiable) is no model: the link is held to
+    // solids, which an Update can still publish. Anything else, such as a
+    // failed request, stops the Update rather than guess.
+    if (error instanceof ShareLinksError && error.code === 'frozen-model')
+      return null;
+    throw error;
+  }
+}
+
+/**
+ * Whether the `frozen` link `shareId` serves the model with its parameters,
+ * for its owner's card; null when the link or its model cannot be read.
+ */
+export async function frozenShareLinkSharesParameters(
+  ctx: ShareLinksContext,
+  projectId: string,
+  shareId: string
+): Promise<boolean | null> {
+  const head = await ctx.store.shareHead(projectId);
+  const link = head.shareLinks?.links.find(
+    (entry) => entry.shareId === shareId
+  );
+  if (link?.mode !== 'frozen') return null;
+  return frozenLinkSharesParameters(ctx, projectId, {
+    shareId,
+    shareKeyHash: link.shareKeyHash,
+    keyEpoch: head.keyEpoch
+  }).catch(() => null);
 }
 
 class ShareGrantAlreadyWritten extends Error {}

@@ -5,6 +5,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  addPrimitiveFeature,
   assertStorableDocument,
   createProjectDocument,
   duplicateProjectDocument,
@@ -14,7 +15,11 @@ import {
   initiallyHiddenBodyIds,
   isSharedWithoutHistory,
   listNodesByKind,
+  isTweakableWithoutHistory,
+  setParameter,
   sharedProjectSnapshotDocument,
+  tweakableShareDocument,
+  tweakableShareDocumentProblem,
   withoutSharedHistoryMark
 } from './index';
 
@@ -230,5 +235,151 @@ describe('a copy of a model shared without history', () => {
       stepText: STEP
     }).document;
     expect(withoutSharedHistoryMark(withImport)).toBe(withImport);
+  });
+});
+
+describe('tweakableShareDocument', () => {
+  /** An owner's parametric model, with names, a warning and a past. */
+  function recipeSource(): ProjectDocument {
+    let document = setParameter(createProjectDocument('Bracket', owner), {
+      name: 'width',
+      expression: '20'
+    });
+    document = addPrimitiveFeature(document, {
+      name: 'Secret boss',
+      primitiveKind: 'box',
+      dimensions: { width: 'width', height: 10, depth: 4 }
+    });
+    return {
+      ...document,
+      commandLog: [{ kind: 'secret' } as never],
+      editHistory: { undo: [], redo: [] } as never,
+      derived: {
+        ...document.derived,
+        warnings: ['Secret boss could not be filleted.']
+      }
+    };
+  }
+
+  it('keeps the recipe, without its history or the names it was built with', () => {
+    const source = recipeSource();
+    const [body] = listNodesByKind(source, 'body');
+    const document = tweakableShareDocument(source, new Set([body!.bodyId]));
+    expect(isSharedWithoutHistory(document)).toBe(true);
+    expect(isTweakableWithoutHistory(document)).toBe(true);
+    expect(document.revisions).toEqual([]);
+    expect(document.commandLog).toEqual([]);
+    expect(document.editHistory).toBeUndefined();
+    expect(document.derived.warnings).toEqual([]);
+    expect(document.ownerUserId).toBe('user_shared');
+    expect(document.parameterOrder).toHaveLength(1);
+    expect(
+      listNodesByKind(document, 'feature').map((node) => node.name)
+    ).toEqual(['Feature 1']);
+    expect(initiallyHiddenBodyIds(document)).toEqual([body!.bodyId]);
+    // Bodies keep their names; nothing else says "Secret boss".
+    const nodes = Object.values(document.nodes).filter(
+      (node) => node.kind !== 'body'
+    );
+    expect(JSON.stringify({ ...document, nodes })).not.toContain('Secret');
+    expect(tweakableShareDocumentProblem(document)).toBeNull();
+    // The Worker's one check accepts it as a model without history.
+    expect(frozenShareDocumentProblem(document)).toBeNull();
+    expect(
+      frozenShareDocumentProblem(
+        sharedProjectSnapshotDocument(
+          assertStorableDocument(JSON.parse(JSON.stringify(document)))
+        )
+      )
+    ).toBeNull();
+  });
+
+  it('refuses a model built on an imported file, inline or stored', () => {
+    const inline = importStepBody(recipeSource(), {
+      name: 'Plate',
+      artifactId: 'artifact_local_1',
+      sourceName: 'customer-x.step',
+      stepText: "ISO-10303-21;\nHEADER;\nFILE_NAME('customer-x');\n"
+    }).document;
+    expect(() => tweakableShareDocument(inline)).toThrow(/imported file/);
+    const stored = structuredClone(inline);
+    const feature = listNodesByKind(stored, 'feature').at(-1)!;
+    const data = feature.data as unknown as Record<string, unknown>;
+    delete data.stepText;
+    data.stepSourceRef = { marker: 'openzcad-source-ref' };
+    expect(() => tweakableShareDocument(stored)).toThrow(/imported file/);
+  });
+
+  it.each<[string, (document: ProjectDocument) => void]>([
+    [
+      'a feature name',
+      (document) => {
+        listNodesByKind(document, 'feature')[0]!.name = 'Secret boss';
+      }
+    ],
+    [
+      'an imported file',
+      (document) => {
+        const feature = listNodesByKind(document, 'feature')[0]!;
+        (feature as { featureKind: string }).featureKind = 'imported-step';
+      }
+    ],
+    [
+      'an imported file named only in its data',
+      (document) => {
+        const feature = listNodesByKind(document, 'feature')[0]!;
+        const data = feature.data as unknown as Record<string, unknown>;
+        data.featureKind = 'imported-step';
+        data.stepText = "ISO-10303-21;\nFILE_NAME('customer-x');";
+      }
+    ],
+    [
+      'the owner\u2019s edit time',
+      (document) => {
+        document.derived.updatedAt = '2026-11-20T10:00:00.000Z';
+      }
+    ],
+    [
+      'a rebuild warning',
+      (document) => {
+        document.derived.warnings = ['Secret boss failed.'];
+      }
+    ],
+    [
+      'its owner',
+      (document) => {
+        document.ownerUserId = owner;
+      }
+    ],
+    [
+      'a save state',
+      (document) => {
+        document.revisions = [{ revisionId: 'rev_1' } as never];
+      }
+    ],
+    [
+      'undo history',
+      (document) => {
+        document.editHistory = { undo: [], redo: [] } as never;
+      }
+    ],
+    [
+      'drawings',
+      (document) => {
+        document.drawings = { sheets: [] };
+      }
+    ]
+  ])('refuses %s', (_label, change) => {
+    const document = tweakableShareDocument(recipeSource());
+    change(document);
+    expect(frozenShareDocumentProblem(document)).not.toBeNull();
+  });
+
+  it('copies as an ordinary project, without either mark', () => {
+    const copy = withoutSharedHistoryMark(
+      tweakableShareDocument(recipeSource())
+    );
+    expect(isSharedWithoutHistory(copy)).toBe(false);
+    expect(isTweakableWithoutHistory(copy)).toBe(false);
   });
 });

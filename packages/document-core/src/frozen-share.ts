@@ -26,6 +26,13 @@ export const SHARED_WITHOUT_HISTORY_METADATA_KEY =
   'sharedWithoutHistory' as const;
 
 /**
+ * On the project node, beside {@link SHARED_WITHOUT_HISTORY_METADATA_KEY}:
+ * the model is shared with its parameters, for a visitor to tweak, rather
+ * than as imported solids (`tweakableShareDocument`).
+ */
+export const SHARED_PARAMETERS_METADATA_KEY = 'sharedParameters' as const;
+
+/**
  * On a body of a frozen model: the owner had it hidden when sharing, so a
  * visitor's view (and the first view of their copy) starts with it hidden.
  * Visibility is otherwise this device's view state, never the document's;
@@ -117,8 +124,11 @@ export function withoutSharedHistoryMark(
 ): ProjectDocument {
   const root = document.nodes[document.rootNodeId];
   if (!root || !isSharedWithoutHistory(document)) return document;
-  const { [SHARED_WITHOUT_HISTORY_METADATA_KEY]: _mark, ...metadata } =
-    root.metadata ?? {};
+  const {
+    [SHARED_WITHOUT_HISTORY_METADATA_KEY]: _mark,
+    [SHARED_PARAMETERS_METADATA_KEY]: _parameters,
+    ...metadata
+  } = root.metadata ?? {};
   const { metadata: _metadata, ...bare } = root;
   return {
     ...document,
@@ -226,6 +236,8 @@ function emptyRecord(value: unknown): boolean {
 export function frozenShareDocumentProblem(
   document: ProjectDocument
 ): string | null {
+  if (isTweakableWithoutHistory(document))
+    return tweakableShareDocumentProblem(document);
   if (!onlyKeys(document, DOCUMENT_KEYS))
     return 'It carries more than the finished model.';
   if (!isSharedWithoutHistory(document))
@@ -277,5 +289,178 @@ export function frozenShareDocumentProblem(
   }
   if (features === 0 || features !== document.featureOrder.length)
     return 'It has no solid body.';
+  return null;
+}
+
+/**
+ * A link without history that may be tweaked serves the model's recipe, as
+ * a tweak needs it rebuilt in the visitor's browser: its features, sketches
+ * and parameters, but no save state, undo history or command log (the share
+ * projection already drops those), no import source, drawing or reference
+ * picture, and no name a feature or sketch was given. The visitor sees the
+ * parameters and the bodies, never the feature list, and a copy they make
+ * keeps the solids only (`frozenShareDocument`).
+ *
+ * Unlike the imported solids of a view-only link, the recipe is in the
+ * visitor's browser: this hides how the model was built from the page, it
+ * does not keep it from someone who reads the document itself.
+ */
+export function tweakableShareDocument(
+  source: ProjectDocument,
+  /** The bodies the owner hid: shared, but starting hidden. */
+  hiddenBodyIds: ReadonlySet<string> = new Set()
+): ProjectDocument {
+  const {
+    drawings: _drawings,
+    shareLinkSheetIds: _sheets,
+    ...shared
+  } = sharedProjectSnapshotDocument(source);
+  const document: ProjectDocument = structuredClone({
+    ...shared,
+    shaprImports: {},
+    shaprImportOrder: []
+  });
+  if (document.featureOrder.length === 0)
+    throw new Error('This model has no feature to share.');
+  // An imported file is its own source: its text names the file, its
+  // author and the system that wrote it, and a stored one is not served to
+  // such a link at all. A model built on one shares view only.
+  if (
+    !emptyRecord(document.assets) ||
+    carriesStoredSource(document.nodes) ||
+    Object.values(document.nodes).some(isImportedFeature)
+  )
+    throw new Error(
+      'This model uses an imported file, which a link without history cannot carry with its parameters. Share it view only, or include history.'
+    );
+  // Rebuild warnings name features as the owner named them, and the time
+  // says when the owner last worked on it: the visitor's rebuild says its own.
+  document.derived = {
+    bodyRepresentations: {},
+    exportableBodyIds: [],
+    warnings: [],
+    updatedAt: RECIPE_UPDATED_AT
+  };
+  const root = document.nodes[document.rootNodeId];
+  if (root?.kind !== 'project') throw new Error('The project node is missing.');
+  root.metadata = {
+    ...root.metadata,
+    [SHARED_WITHOUT_HISTORY_METADATA_KEY]: true,
+    [SHARED_PARAMETERS_METADATA_KEY]: true
+  };
+  // The names an owner gave say how the model was built; the visitor gets
+  // numbered ones, in model order.
+  document.featureOrder.forEach((featureId, index) => {
+    const node = Object.values(document.nodes).find(
+      (entry) => entry.kind === 'feature' && entry.featureId === featureId
+    );
+    if (node?.kind === 'feature') node.name = `Feature ${index + 1}`;
+  });
+  for (const node of Object.values(document.nodes))
+    if (node.kind === 'body') {
+      const { [BODY_INITIALLY_HIDDEN_METADATA_KEY]: _mark, ...metadata } =
+        node.metadata ?? {};
+      if (hiddenBodyIds.has(node.bodyId))
+        metadata[BODY_INITIALLY_HIDDEN_METADATA_KEY] = true;
+      if (Object.keys(metadata).length) node.metadata = metadata;
+      else delete node.metadata;
+    }
+  document.sketchOrder.forEach((sketchId, index) => {
+    const node = Object.values(document.nodes).find(
+      (entry) => entry.kind === 'sketch' && entry.sketchId === sketchId
+    );
+    if (node) node.name = `Sketch ${index + 1}`;
+  });
+  return document;
+}
+
+/** Whether `document` is a model shared without history, for tweaking. */
+export function isTweakableWithoutHistory(
+  document: Pick<ProjectDocument, 'nodes' | 'rootNodeId'>
+): boolean {
+  const metadata = document.nodes[document.rootNodeId]?.metadata;
+  return (
+    metadata?.[SHARED_WITHOUT_HISTORY_METADATA_KEY] === true &&
+    metadata[SHARED_PARAMETERS_METADATA_KEY] === true
+  );
+}
+
+const TWEAKABLE_DOCUMENT_KEYS = new Set([
+  ...DOCUMENT_KEYS,
+  'objectFolders',
+  'pmi',
+  'assembly',
+  'printClearance',
+  'configurations',
+  'displayUnits'
+]);
+
+/** A feature that holds an imported file, however its fields name it. */
+function isImportedFeature(node: ProjectDocument['nodes'][string]): boolean {
+  if (node.kind !== 'feature') return false;
+  const data = (node.data ?? {}) as unknown as Record<string, unknown>;
+  return (
+    node.featureKind.startsWith('imported-') ||
+    (typeof data.featureKind === 'string' &&
+      data.featureKind.startsWith('imported-')) ||
+    'stepText' in data ||
+    'meshPayload' in data
+  );
+}
+
+/** The edit time a recipe carries in place of the owner's. */
+const RECIPE_UPDATED_AT = new Date(0).toISOString();
+
+const DERIVED_KEYS = new Set([
+  'bodyRepresentations',
+  'exportableBodyIds',
+  'warnings',
+  'updatedAt'
+]);
+
+function carriesStoredSource(nodes: ProjectDocument['nodes']): boolean {
+  const text = JSON.stringify(nodes);
+  return text.includes('"stepSourceRef"') || text.includes('"meshPayloadRef"');
+}
+
+/**
+ * Why `document` may not be served by a tweakable link without history, or
+ * null when it is a recipe `tweakableShareDocument` could have built: no
+ * history, owner, import source or owner-given feature or sketch name.
+ */
+export function tweakableShareDocumentProblem(
+  document: ProjectDocument
+): string | null {
+  if (!onlyKeys(document, TWEAKABLE_DOCUMENT_KEYS))
+    return 'It carries more than the model and its parameters.';
+  if (!isTweakableWithoutHistory(document))
+    return 'It is not marked as shared without history.';
+  if (document.ownerUserId !== 'user_shared') return 'It names its owner.';
+  if (
+    !emptyList(document.revisions) ||
+    !emptyList(document.checkpoints) ||
+    !emptyList(document.commandLog) ||
+    !emptyList(document.shaprImportOrder) ||
+    !emptyRecord(document.shaprImports)
+  )
+    return 'It carries history.';
+  if (!emptyRecord(document.assets) || carriesStoredSource(document.nodes))
+    return 'It carries an import source.';
+  if (
+    !onlyKeys(document.derived, DERIVED_KEYS) ||
+    !emptyRecord(document.derived.bodyRepresentations) ||
+    !emptyList(document.derived.exportableBodyIds) ||
+    !emptyList(document.derived.warnings) ||
+    document.derived.updatedAt !== RECIPE_UPDATED_AT
+  )
+    return 'It carries the owner\u2019s rebuild results.';
+  if (document.featureOrder.length === 0) return 'It has no feature.';
+  for (const node of Object.values(document.nodes)) {
+    if (isImportedFeature(node)) return 'It carries an imported file.';
+    if (node.kind === 'feature' && !/^Feature \d+$/.test(node.name))
+      return 'It names how the model was built.';
+    if (node.kind === 'sketch' && !/^Sketch \d+$/.test(node.name))
+      return 'It names how the model was built.';
+  }
   return null;
 }

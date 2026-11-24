@@ -140,7 +140,10 @@ export function createProjectShareLinkClient(
       const created = (await response.json()) as CreateProjectShareLinkResponse;
       // A server that does not know the option would have minted a link to
       // the live project. Never hand that link out as one without history.
-      if (frozenDocument && created.shareLink.history !== false) {
+      if (
+        frozenDocument &&
+        (created.shareLink.history !== false || created.shareLink.mode !== mode)
+      ) {
         await this.revokeProjectShareLink(
           projectId,
           created.shareLink.shareLinkId

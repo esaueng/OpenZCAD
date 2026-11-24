@@ -6,12 +6,16 @@ import {
   isShareLinkHistoryReady
 } from '@openzcad/cloudflare-adapters';
 import {
+  addPrimitiveFeature,
   createProjectDocument,
   frozenShareDocument,
   frozenShareDocumentProblem,
   importStepBody,
+  isTweakableWithoutHistory,
   listNodesByKind,
-  sharedProjectSnapshotDocument
+  setParameter,
+  sharedProjectSnapshotDocument,
+  tweakableShareDocument
 } from '@openzcad/document-core';
 import {
   EncryptedProjectSharingError,
@@ -56,6 +60,27 @@ function ownerProject(): ProjectDocument {
     commandLog: [{ type: SECRET } as never],
     revisions: [{ ...base.revisions[0]!, reason: SECRET }]
   };
+}
+
+/**
+ * The recipe of a parametric model of the owner's project: a feature named
+ * `${SECRET} boss` on a `width` parameter. Recipes carry no imported file.
+ */
+function recipeOf(document: ProjectDocument): ProjectDocument {
+  let model = createProjectDocument(document.name, document.ownerUserId);
+  model.projectId = document.projectId;
+  model = setParameter(model, { name: 'width', expression: '20' });
+  model = addPrimitiveFeature(model, {
+    name: `${SECRET} boss`,
+    primitiveKind: 'box',
+    dimensions: { width: 'width', height: 10, depth: 4 }
+  });
+  for (const node of Object.values(model.nodes))
+    if (node.kind === 'body') node.name = 'Plate';
+  return tweakableShareDocument({
+    ...model,
+    commandLog: [{ type: SECRET } as never]
+  });
 }
 
 function frozenOf(document: ProjectDocument, bodyName = 'Plate') {
@@ -186,21 +211,96 @@ describe.each([
     ).toMatchObject({ history: false, label: 'For the supplier' });
   });
 
-  it('forces view even when asked for tweak', async () => {
+  it('holds the mode to the model: view for solids, tweak for parameters', async () => {
     const { service, document } = await setup();
-    const created = await service.createProjectShareLink(
-      document.ownerUserId,
-      document.projectId,
-      {
+    // Imported solids have nothing to tweak.
+    await expect(
+      service.createProjectShareLink(document.ownerUserId, document.projectId, {
         shareLinkId: 'share_f',
         mode: 'tweak',
         tokenHash: await hashFrozenShareLinkToken(token('f')),
         createdAt: now(),
         frozenDocument: frozenOf(document)
+      })
+    ).rejects.toThrow(ProjectSharingError);
+    // The recipe, without its history or names, makes a tweak link.
+    const created = await service.createProjectShareLink(
+      document.ownerUserId,
+      document.projectId,
+      {
+        shareLinkId: 'share_t',
+        mode: 'tweak',
+        tokenHash: await hashFrozenShareLinkToken(token('t')),
+        createdAt: now(),
+        frozenDocument: recipeOf(document)
       }
     );
-    expect(created.mode).toBe('view');
+    expect(created).toMatchObject({ mode: 'tweak', history: false });
+    const shared = await visit(service, 't');
+    expect(shared).toMatchObject({ mode: 'tweak', history: false });
+    expect(isTweakableWithoutHistory(shared!.document)).toBe(true);
+    expect(
+      listNodesByKind(shared!.document, 'feature').map((node) => node.name)
+    ).toEqual(['Feature 1']);
+    // Bodies keep their names, as a view-only link's solids do; nothing of
+    // how the model was built, its file names or its history goes with them.
+    expect(JSON.stringify(shared)).not.toContain(SECRET);
+    // Nor asked for view.
+    await expect(
+      service.createProjectShareLink(document.ownerUserId, document.projectId, {
+        shareLinkId: 'share_v',
+        mode: 'view',
+        tokenHash: await hashFrozenShareLinkToken(token('v')),
+        createdAt: now(),
+        frozenDocument: recipeOf(document)
+      })
+    ).rejects.toThrow(ProjectSharingError);
+  });
+
+  it('never changes what kind of model a link without history shares', async () => {
+    const { service, document } = await setup();
+    await frozenLink(service, document, 'share_f', 'f');
+    await expect(
+      service.updateProjectShareLinkSnapshot(
+        document.ownerUserId,
+        document.projectId,
+        'share_f',
+        recipeOf(document),
+        now()
+      )
+    ).rejects.toThrow(ProjectSharingError);
     expect((await visit(service, 'f'))?.mode).toBe('view');
+    await service.createProjectShareLink(
+      document.ownerUserId,
+      document.projectId,
+      {
+        shareLinkId: 'share_t',
+        mode: 'tweak',
+        tokenHash: await hashFrozenShareLinkToken(token('t')),
+        createdAt: now(),
+        frozenDocument: recipeOf(document)
+      }
+    );
+    await expect(
+      service.updateProjectShareLinkSnapshot(
+        document.ownerUserId,
+        document.projectId,
+        'share_t',
+        frozenOf(document),
+        now()
+      )
+    ).rejects.toThrow(ProjectSharingError);
+    expect(
+      (
+        await service.updateProjectShareLinkSnapshot(
+          document.ownerUserId,
+          document.projectId,
+          'share_t',
+          recipeOf(document),
+          now()
+        )
+      ).mode
+    ).toBe('tweak');
   });
 
   it('refuses to store the project itself as the frozen model', async () => {
