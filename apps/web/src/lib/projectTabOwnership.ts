@@ -240,32 +240,34 @@ export async function writeOwnedProjectStorage(
 
 /**
  * {@link writeOwnedProjectStorage} for autosave, saying why nothing was
- * written: `false` when another tab held the project when this one opened
- * it (what is stored is that tab's copy, and this read-only tab has nothing
- * of its own to save), `'refused'` when this tab no longer holds it (it let
- * the claim go, or the claim is for another project), so the work it meant
- * to save is not on this device.
+ * written: `false` only for the `untouched` document as the workspace
+ * opened it, while another tab holds the project (what is stored is that
+ * tab's copy, and this read-only tab has nothing of its own to save).
+ * Anything else not written is `'refused'`: an edit made before the claim
+ * was answered, or a write after this tab let the claim go, is work that
+ * is not on this device.
  */
 export async function writeLocalProjectUnderClaim(
   read: () => ProjectStorageOwnership | null | undefined,
   projectId: string,
-  write: () => Promise<void>
+  write: () => Promise<void>,
+  untouched: boolean
 ): Promise<boolean | 'refused'> {
   if (await writeOwnedProjectStorage(read, projectId, write)) return true;
   const claim = read();
-  return claim?.projectId === projectId && !claim.owned ? false : 'refused';
+  return untouched && claim?.projectId === projectId && !claim.owned
+    ? false
+    : 'refused';
 }
 
 /** A project's storage claim as the workspace holds it while it is open. */
 export interface ProjectStorageTracker {
   readonly ownership: ProjectStorageOwnership;
   /**
-   * Lets the claim go as the workspace leaves the project. With `drain`
-   * (the writes still on their way to this project's storage), a held
-   * claim stays this tab's, lock included, until `drain` settles: those
-   * writes land, and only then can another tab take the project over.
+   * Lets the claim go as the workspace leaves the project. A write still in
+   * flight keeps the lock until it lands ({@link ProjectStorageOwnership.retain}).
    */
-  giveUp(drain?: () => Promise<unknown>): void;
+  giveUp(): void;
 }
 
 /**
@@ -304,21 +306,11 @@ export function trackProjectStorage(
   });
   return {
     ownership,
-    giveUp(drain) {
+    giveUp() {
       if (given) return;
       given = true;
-      const held = claim;
-      if (!drain || !ownership.owned || !held) {
-        ownership.owned = false;
-        held?.release();
-        return;
-      }
-      void drain()
-        .catch(() => undefined)
-        .finally(() => {
-          ownership.owned = false;
-          held.release();
-        });
+      ownership.owned = false;
+      claim?.release();
     }
   };
 }

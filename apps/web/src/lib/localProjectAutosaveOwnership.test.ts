@@ -2,12 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
+  departureFlush,
   LocalProjectAutosave,
-  LocalProjectSaveRefusedError
+  LocalProjectSaveRefusedError,
+  sameLocalProjectContent
 } from './localProjectAutosave';
 import {
   claimProjectOwnership,
   writeLocalProjectUnderClaim,
+  trackProjectStorage,
   writeOwnedProjectStorage,
   type ProjectStorageOwnership
 } from './projectTabOwnership';
@@ -61,12 +64,19 @@ function deviceStore() {
 /** A tab's autosave, writing as App's `writePendingLocalDocument` does. */
 function tabAutosave(
   read: () => ProjectStorageOwnership | null,
-  save: (document: ProjectDocument) => Promise<void>
+  save: (document: ProjectDocument) => Promise<void>,
+  /** The document as the workspace opened it. */
+  opened: ProjectDocument | null = null
 ) {
   const onSaved = vi.fn();
   const onError = vi.fn();
   const write = vi.fn((document: ProjectDocument) =>
-    writeLocalProjectUnderClaim(read, document.projectId, () => save(document))
+    writeLocalProjectUnderClaim(
+      read,
+      document.projectId,
+      () => save(document),
+      sameLocalProjectContent(opened, document)
+    )
   );
   const autosave = new LocalProjectAutosave({
     write,
@@ -121,38 +131,6 @@ describe('autosave under the project storage claim', () => {
     second.giveUp();
   });
 
-  it('keeps an edit queued behind the in-flight write when the workspace leaves', async () => {
-    // Home flushes, then awaits the account while the workspace stays open:
-    // two edits land, and the first is still being written when Home
-    // closes the project. The second must be saved, not dropped, and only
-    // then is the project handed on.
-    withLockManager();
-    const store = deviceStore();
-    const first = await workspaceStorageClaim(baseDocument.projectId);
-    const promoted = vi.fn();
-    const other = await claimProjectOwnership(baseDocument.projectId, promoted);
-
-    const tab = tabAutosave(first.read, store.save);
-    store.hold();
-    void tab.save(documentAt(2));
-    await vi.waitFor(() => expect(store.started).toHaveLength(1));
-    tab.autosave.enqueue(documentAt(3));
-    expect(tab.autosave.dirty).toBe(true);
-
-    // App's cleanup: autosave is dirty, so the claim is held for its drain.
-    first.giveUp(() => tab.autosave.flush());
-    await tick();
-    expect(promoted).not.toHaveBeenCalled();
-
-    store.land();
-    await vi.waitFor(() => expect(promoted).toHaveBeenCalledTimes(1));
-    expect(store.started.map((document) => document.version)).toEqual([2, 3]);
-    expect(store.stored.get(baseDocument.projectId)?.version).toBe(3);
-    expect(tab.autosave.dirty).toBe(false);
-    expect(tab.onError).not.toHaveBeenCalled();
-    other.release();
-  });
-
   it('refuses an autosave after the claim is given up, keeping the work unsaved', async () => {
     withLockManager();
     const store = deviceStore();
@@ -189,7 +167,7 @@ describe('autosave under the project storage claim', () => {
     expect(reader.ownership.owned).toBe(false);
 
     // The read-only tab has nothing of its own to save: not kept dirty.
-    const readOnly = tabAutosave(reader.read, store.save);
+    const readOnly = tabAutosave(reader.read, store.save, documentAt(2));
     await readOnly.save(documentAt(2));
     await expect(readOnly.write.mock.results[0]!.value).resolves.toBe(false);
     expect(readOnly.autosave.dirty).toBe(false);
@@ -203,6 +181,38 @@ describe('autosave under the project storage claim', () => {
     ).rejects.toBeInstanceOf(LocalProjectSaveRefusedError);
     expect(store.started).toEqual([]);
     reader.giveUp();
+    owner.giveUp();
+  });
+
+  it('keeps an edit made before a delayed claim answer refuses the tab', async () => {
+    withLockManager();
+    const store = deviceStore();
+    const owner = await workspaceStorageClaim(baseDocument.projectId);
+    // The second tab opens, and is not yet told that the project is taken.
+    const tracker = trackProjectStorage(baseDocument.projectId, {
+      onAnswered: () => undefined,
+      onPromoted: () => undefined
+    });
+    const opened = documentAt(2);
+    const tab = tabAutosave(() => tracker.ownership, store.save, opened);
+    const saving = tab.save(opened);
+    // Still editable while the answer is pending: the user edits.
+    tab.autosave.enqueue(documentAt(3));
+    await expect(saving).rejects.toBeInstanceOf(LocalProjectSaveRefusedError);
+    expect(tracker.ownership.owned).toBe(false);
+    // The edit is refused, not dropped as the opening snapshot would be,
+    // and kept unsaved.
+    expect(tab.write).toHaveBeenLastCalledWith(documentAt(3));
+    await expect(tab.write.mock.results.at(-1)!.value).resolves.toBe('refused');
+    expect(store.started).toEqual([]);
+    expect(tab.autosave.dirty).toBe(true);
+    // Leaving is not held on an edit this tab can never write; closing the
+    // page still warns (dirty).
+    const onRefused = vi.fn();
+    await departureFlush(tab.autosave.flush(), onRefused);
+    expect(onRefused).toHaveBeenCalledTimes(1);
+    expect(tab.autosave.dirty).toBe(true);
+    tracker.giveUp();
     owner.giveUp();
   });
 

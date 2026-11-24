@@ -2,6 +2,7 @@ import { describe, expect, it, vi, type Mock } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
+  departureFlush,
   LocalProjectAutosave,
   LocalProjectSaveError,
   LocalProjectSaveRefusedError,
@@ -367,6 +368,31 @@ describe('local save departure safety', () => {
       1, 2
     ]);
     expect(queue.dirty).toBe(false);
+  });
+
+  it('lets a departure through a refused write, reporting it and keeping it dirty', async () => {
+    const { queue } = harness(vi.fn(async () => 'refused' as const));
+    queue.enqueue(documentAt(1));
+    const onRefused = vi.fn();
+    const leave = vi.fn();
+    await departureFlush(queue.flush(), onRefused).then(leave);
+    expect(onRefused).toHaveBeenCalledWith(
+      expect.any(LocalProjectSaveRefusedError)
+    );
+    expect(leave).toHaveBeenCalled();
+    expect(queue.dirty).toBe(true);
+  });
+
+  it('still holds a departure on a failed device write', async () => {
+    const { queue } = harness(
+      vi.fn(async () => {
+        throw new Error('Storage full');
+      })
+    );
+    queue.enqueue(documentAt(1));
+    const onRefused = vi.fn();
+    await expect(departureFlush(queue.flush(), onRefused)).rejects.toThrow();
+    expect(onRefused).not.toHaveBeenCalled();
   });
 
   it('does not announce a saved document when ownership refuses the write', async () => {

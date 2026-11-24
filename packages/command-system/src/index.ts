@@ -6501,6 +6501,15 @@ function applyRollbackPlacement(
 }
 
 export class CommandManager {
+  /**
+   * Runs before every edit this manager commits (`execute`, transactions,
+   * undo and redo, document edits, save-point renames, share-link sheets);
+   * throwing refuses the edit with the document unchanged. The workspace
+   * pauses edits with it while it leaves a project. Rebuild bookkeeping
+   * (`commitDerivedState`, `normalize`) is not an edit and does not ask.
+   */
+  editGuard: (() => void) | null = null;
+
   constructor(
     public document: ProjectDocument,
     /** Whose undo history this manager records (the owner by default). */
@@ -6660,6 +6669,7 @@ export class CommandManager {
   }
 
   execute(command: AnyCommand): ProjectDocument {
+    this.editGuard?.();
     assertCommandIdentifiers(serializedLeaves(command), this.document);
     command.validate(this.document);
     const previous = this.document;
@@ -6741,6 +6751,7 @@ export class CommandManager {
    * no undo entry. See `setShareLinkSheets`.
    */
   setShareLinkSheets(sheetIds: readonly string[]): ProjectDocument {
+    this.editGuard?.();
     const next = setShareLinkSheets(this.document, sheetIds);
     if (next === this.document) return this.document;
     assertDocumentTextBudget(next);
@@ -6753,6 +6764,7 @@ export class CommandManager {
    * undo never rewinds the save-point list. See `renameCheckpoint`.
    */
   renameCheckpoint(checkpointId: string, name: string): ProjectDocument {
+    this.editGuard?.();
     const next = renameCheckpoint(this.document, checkpointId, name);
     if (next === this.document) return this.document;
     assertDocumentTextBudget(next);
@@ -6768,6 +6780,7 @@ export class CommandManager {
   }
 
   private moveHistory(direction: 'undo' | 'redo'): ProjectDocument {
+    this.editGuard?.();
     const history = this.history;
     const entry =
       history?.entries[
@@ -6799,6 +6812,7 @@ export class CommandManager {
   }
 
   runTransaction(label: string, commands: AnyCommand[]): ProjectDocument {
+    this.editGuard?.();
     const previous = this.document;
     let next = this.document;
     const serialized: SerializedCommand[] = [];
@@ -6847,6 +6861,7 @@ export class CommandManager {
    * names the step for undo alone.
    */
   applyDocumentEdit(next: ProjectDocument, label: string): ProjectDocument {
+    this.editGuard?.();
     if (next === this.document) {
       return this.document;
     }

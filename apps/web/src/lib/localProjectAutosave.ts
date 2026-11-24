@@ -142,3 +142,22 @@ export class LocalProjectAutosave {
     }
   }
 }
+
+/**
+ * A departure barrier over `flush`: rejects for a failed device write, as
+ * `flush` does, but lets a refused one through after `onRefused`. A refused
+ * snapshot can never be written by this tab (another tab holds the project,
+ * or this one gave it up), so holding every later navigation on it would
+ * strand the workspace; it stays dirty, so closing the page still warns.
+ */
+export async function departureFlush(
+  flush: Promise<void>,
+  onRefused: (error: LocalProjectSaveRefusedError) => void
+): Promise<void> {
+  try {
+    await flush;
+  } catch (error) {
+    if (!(error instanceof LocalProjectSaveRefusedError)) throw error;
+    onRefused(error);
+  }
+}
