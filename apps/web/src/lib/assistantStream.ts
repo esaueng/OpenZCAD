@@ -236,6 +236,50 @@ export async function loadAssistantStatus(
   return normalizeAssistantStatus(await response.json());
 }
 
+const GENERIC_STREAM_FAILURE_MESSAGE =
+  'The modeling assistant could not complete the proposal.';
+
+/**
+ * Fixed, client-owned text for the failure codes the Worker (or a
+ * Responses-compatible provider) names. Only the code is read: provider
+ * error text may echo prompt content and is never shown.
+ */
+const STREAM_FAILURE_MESSAGES: Readonly<Record<string, string>> = {
+  invalid_contract:
+    'The AI provider returned an invalid CAD reply. Try again or choose another model in Settings.',
+  empty_reply:
+    'The AI provider finished without a reply. Try again, lower the reasoning effort, or choose another model in Settings.',
+  rate_limit_exceeded:
+    "The AI provider's rate or spending limit was reached. Check provider usage and billing, or try again later.",
+  server_error: 'The AI provider is temporarily unavailable. Try again later.'
+};
+
+/** Mirrors `UNVERIFIED_STREAM_EVENT` in the Worker's stream gate. */
+const UNVERIFIED_REPLY_MESSAGE = 'The assistant reply could not be verified.';
+
+function streamFailureMessage(
+  event: Record<string, unknown>,
+  failure: Record<string, unknown>
+): string {
+  const error =
+    failure.error &&
+    typeof failure.error === 'object' &&
+    !Array.isArray(failure.error)
+      ? (failure.error as Record<string, unknown>)
+      : undefined;
+  const code = error?.code ?? failure.code;
+  if (code !== undefined) {
+    return typeof code === 'string' &&
+      Object.hasOwn(STREAM_FAILURE_MESSAGES, code)
+      ? STREAM_FAILURE_MESSAGES[code]!
+      : GENERIC_STREAM_FAILURE_MESSAGE;
+  }
+  // The gate's own event carries no code; a coded event is the provider's.
+  return event.type === 'error' && event.message === UNVERIFIED_REPLY_MESSAGE
+    ? `${UNVERIFIED_REPLY_MESSAGE} It was discarded; try again.`
+    : GENERIC_STREAM_FAILURE_MESSAGE;
+}
+
 export function readAssistantEvent(
   event: unknown,
   currentText: string,
@@ -319,7 +363,7 @@ export function readAssistantEvent(
       value.type === 'response.incomplete' || response?.status === 'incomplete'
         ? 'AI_OUTPUT_INCOMPLETE'
         : 'AI_PROVIDER_STREAM_ERROR',
-      'The modeling assistant could not complete the proposal.',
+      streamFailureMessage(value, failure),
       requestId
     );
   }

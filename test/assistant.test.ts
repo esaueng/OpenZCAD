@@ -168,6 +168,74 @@ describe('assistant integration', () => {
     expect(completed).toEqual({ text: output, done: true });
   });
 
+  it('names known stream failures without showing provider text', () => {
+    const failureMessage = (event: unknown) => {
+      try {
+        readAssistantEvent(event, '');
+      } catch (error) {
+        return (error as Error).message;
+      }
+      throw new Error('expected the event to fail');
+    };
+
+    expect(
+      failureMessage({
+        type: 'response.failed',
+        response: {
+          status: 'failed',
+          error: { code: 'invalid_contract', message: 'ignored' }
+        }
+      })
+    ).toBe(
+      'The AI provider returned an invalid CAD reply. Try again or choose another model in Settings.'
+    );
+    expect(
+      failureMessage({
+        type: 'response.done',
+        response: { status: 'failed', error: { code: 'empty_reply' } }
+      })
+    ).toContain('finished without a reply');
+    expect(
+      failureMessage({
+        type: 'error',
+        message: 'The assistant reply could not be verified.'
+      })
+    ).toBe(
+      'The assistant reply could not be verified. It was discarded; try again.'
+    );
+    expect(
+      failureMessage({
+        type: 'error',
+        code: 'rate_limit_exceeded',
+        message: 'quota for user prompt <secret>'
+      })
+    ).not.toContain('secret');
+    expect(
+      failureMessage({
+        type: 'error',
+        code: 'server_error',
+        message: 'The assistant reply could not be verified.'
+      })
+    ).toBe('The AI provider is temporarily unavailable. Try again later.');
+    for (const event of [
+      { type: 'response.failed', response: { status: 'failed' } },
+      {
+        type: 'error',
+        code: 'unknown_provider_code',
+        message: 'The assistant reply could not be verified.'
+      },
+      { type: 'error', message: 'provider text <secret>' },
+      {
+        type: 'response.failed',
+        response: { status: 'failed', error: { code: 'toString' } }
+      }
+    ]) {
+      expect(failureMessage(event)).toBe(
+        'The modeling assistant could not complete the proposal.'
+      );
+    }
+  });
+
   it('rejects malformed SSE frames as a protocol failure', async () => {
     expect(parseAssistantEventData('{not-json')).toBeNull();
     vi.stubGlobal(
@@ -1613,6 +1681,61 @@ describe('assistant integration', () => {
       });
     }
   );
+
+  it('names a chat fallback that finishes without reply text', async () => {
+    const fetchMock = vi
+      .fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+        Response.json({
+          choices: [{ finish_reason: 'stop', message: { content: null } }]
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json({ error: { code: 404 } }, { status: 404 })
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {
+      OPENROUTER_API_KEY: 'test-key',
+      AI_MODEL: 'nvidia/nemotron-3.5-super-vl:free'
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const events = (await response.text())
+      .split('\n\n')
+      .map((block) => parseAssistantEventData(block.replace(/^data: /, '')))
+      .filter((parsed) => parsed !== null)
+      .map((parsed) => parsed.event);
+    const terminal = events.at(-1);
+    expect(terminal).toMatchObject({
+      type: 'response.done',
+      response: { status: 'failed', error: { code: 'empty_reply' } }
+    });
+    expect(() => readAssistantEvent(terminal, '')).toThrow(
+      'The AI provider finished without a reply.'
+    );
+  });
+
+  it('keeps an undecodable chat fallback body generic', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn(async () => new Response('{not json', { status: 200 }))
+        .mockResolvedValueOnce(
+          Response.json({ error: { code: 404 } }, { status: 404 })
+        )
+    );
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const response = await streamAssistantProposal(input, {
+      OPENROUTER_API_KEY: 'test-key',
+      AI_MODEL: 'nvidia/nemotron-3.5-super-vl:free'
+    });
+    const wire = await response.text();
+    expect(wire).toContain('"status":"failed"');
+    expect(wire).not.toContain('empty_reply');
+  });
 
   it('keeps free MiniMax and its zero price cap with JSON mode and the exact prompt schema', async () => {
     const output = JSON.stringify({
