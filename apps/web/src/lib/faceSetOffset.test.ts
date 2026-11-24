@@ -276,6 +276,7 @@ describe('face set offset', () => {
       operation(buildOffsetFaceSetLead({ ...input, offset: -2.00049 }))
     ).toEqual({
       kind: 'offset-face',
+      ambiguousRim: 'refuse',
       faceHash: 3,
       sourceSurfaceType: 'plane',
       sourceArea: 200,
@@ -371,6 +372,7 @@ describe('face set offset', () => {
     )?.operation;
     expect(operation).toEqual({
       kind: 'offset-faces',
+      ambiguousRim: 'refuse',
       faceHash: 2,
       sourceSurfaceType: 'plane',
       sourceArea: 300,
