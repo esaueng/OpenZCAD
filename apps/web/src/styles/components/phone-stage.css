@@ -338,6 +338,17 @@
     padding-bottom: calc(var(--status-row-h) + 6px);
   }
 
+  /* A sketch gives its status and activity rows the stage's width
+     (quiet-stage.css), past --notice-end: "Sketching on the XY plane" lay
+     across Show and took its tap. They end before the pill too. */
+  .workspace.column-layout:has(.sketch-rail)
+    .viewer-area:has(> .panels-hidden-pill):has(.instrument-rail):not(
+      :has(.in-place-command)
+    )
+    :is(.workspace-toast, .activity-lane) {
+    right: var(--notice-end);
+  }
+
   /* "Panels" over "hidden", and no dot between the words and Show. */
   .viewer-area > .panels-hidden-pill > [role='status'] {
     width: min-content;

@@ -1028,6 +1028,10 @@ async function expectPillClear(page: Page, pill: Locator) {
     ['Tools button', '.command-more-toggle'],
     ['tool rail', '.tool-palette.command-rail'],
     ['instrument rail', '.instrument-rail > .viewer-rail'],
+    ['sketch relations', '.instrument-rail > .sketch-relations'],
+    ['sketch rail', '.sketch-rail'],
+    ['status row', '.workspace-toast:not(.hidden) .workspace-toast-body'],
+    ['activity row', '.activity-lane > *'],
     ['cube', '.viewer-rail-stack'],
     ['search bar', '.command-bar-row']
   ] as const) {
@@ -1178,6 +1182,40 @@ for (const [width, height] of [
     expect(overlap(pillBox, text), 'pill over the guidance').toBe(false);
     await expect(show).toBeInViewport({ ratio: 1 });
     await expect.poll(() => reachable(show)).toBe(true);
+  });
+}
+
+// A sketch gives the status row the stage's width: "Sketching on the XY
+// plane" lay across Show at 390 × 844 and a tap there opened the activity
+// log instead of the panels.
+for (const [width, height] of [
+  [390, 844],
+  [360, 640]
+] as const) {
+  test(`the panels hidden pill keeps clear of a sketch’s status on a ${width} × ${height} phone`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    await stubApi(page, { commandFoldClosed: true });
+    await page.setViewportSize({ width, height });
+    await createProject(page, 'Pill and sketch');
+    await page.keyboard.press('Control+\\');
+    const pill = page.locator('.panels-hidden-pill');
+    const show = pill.getByRole('button', { name: 'Show panels' });
+    await expect(pill).toBeVisible();
+    await pressTool(page, /^Sketch \(S\)/);
+    await page.getByRole('button', { name: 'Top (XY)' }).tap();
+    await expect(page.locator('.sketch-rail')).toBeVisible();
+    await expect(
+      page.locator('.workspace-toast:not(.hidden) .workspace-toast-body')
+    ).toContainText('Sketching on the XY plane');
+    await shot(page, `pill-sketch-${width}x${height}`);
+    await expect(pill).toBeVisible();
+    await expectPillClear(page, pill);
+    await expect(show).toBeInViewport({ ratio: 1 });
+    await expect.poll(() => reachable(show)).toBe(true);
+    await show.tap();
+    await expect(pill).toHaveCount(0);
   });
 }
 
