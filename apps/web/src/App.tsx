@@ -613,7 +613,10 @@ import {
 import { rateLimitOf, type RateLimit } from './lib/rateLimit';
 import {
   claimProjectOwnership,
-  type ProjectOwnershipClaim
+  projectStorageWriteAccess,
+  writeOwnedProjectStorage,
+  type ProjectOwnershipClaim,
+  type ProjectStorageOwnership
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
@@ -2194,7 +2197,6 @@ import {
   CONVERT_UNIT_WORDS,
   unitsConvertCopyBranchReason,
   unitsConversionCollaborationRefusal,
-  type ProjectStorageOwnership,
   type UnitsConversionCollaborationState
 } from './lib/unitsConversion';
 import type {
@@ -5633,8 +5635,9 @@ export function App() {
   const projectOwnershipSettledRef = useRef<Promise<void> | null>(null);
   /**
    * The same claim, naming its project and whether it is held: a write that
-   * must not land on the wrong project's storage (a stored-unit conversion's
-   * checkpoint) checks both, not just that some claim settled.
+   * must not land on the wrong project's storage (autosave, a save point, a
+   * stored-unit conversion's checkpoint) checks both, not just that some
+   * claim settled, and holds the claim's lock until the write lands.
    */
   const projectOwnershipRef = useRef<ProjectStorageOwnership | null>(null);
   const [localSaveDirty, setLocalSaveDirty] = useState(false);
@@ -8226,8 +8229,9 @@ export function App() {
       projectId,
       owned: false,
       settled: Promise.resolve(),
-      // A conversion's checkpoint write keeps the lock until it lands, so a
-      // tab promoted by this cleanup never saves before it (I03).
+      // A device write (autosave, a save point, a conversion's checkpoint)
+      // keeps the lock until it lands, so a tab promoted by this cleanup
+      // never saves before it.
       retain: () => (ownership.owned && claim ? claim.retain() : null)
     };
     const settled = claimProjectOwnership(projectId, () => {
@@ -11465,16 +11469,22 @@ export function App() {
     }
     // The first save can start before the claim has been answered. Writing on
     // the strength of not having heard "no" yet is the overwrite this is here
-    // to prevent, so wait for the answer rather than assume it.
-    await projectOwnershipSettledRef.current;
-    if (projectOpenElsewhereRef.current) {
-      // Another tab owns this project's storage. Its copy is the one being
-      // kept up to date; writing here would land on top of it.
+    // to prevent, so wait for the answer rather than assume it. The claim's
+    // lock is then held until the write lands: a tab that takes the project
+    // over when this one leaves it must not save before this write does, or
+    // this late write would land on top of its newer save.
+    const written = await writeOwnedProjectStorage(
+      () => projectOwnershipRef.current,
+      pending.projectId,
+      () => saveLocalProject(pending)
+    );
+    if (!written) {
+      // Another tab owns this project's storage (or this tab has let its
+      // claim go). Its copy is the one being kept up to date; writing here
+      // would land on top of it.
       setSaveState('local');
-      return false;
     }
-    await saveLocalProject(pending);
-    return true;
+    return written;
   }
 
   function localDocumentSaved(
@@ -18813,16 +18823,28 @@ export function App() {
         }
         return;
       }
-      await projectOwnershipSettledRef.current;
+      // Held, like autosave, through the device write: a tab that takes the
+      // project over meanwhile saves only after this write has landed.
+      const access = await projectStorageWriteAccess(
+        () => projectOwnershipRef.current,
+        savingManager.document.projectId
+      );
       if (
+        !access ||
         !isCurrentProject() ||
         projectOpenElsewhereRef.current ||
         !ensureCanSave()
-      )
+      ) {
+        access?.release();
         return;
-      savingDocument = savingManager.document;
-      setSaveState('saving');
-      await saveLocalProject(savingDocument);
+      }
+      try {
+        savingDocument = savingManager.document;
+        setSaveState('saving');
+        await saveLocalProject(savingDocument);
+      } finally {
+        access.release();
+      }
       savedOnDevice = true;
       if (!isCurrentProject()) {
         return;

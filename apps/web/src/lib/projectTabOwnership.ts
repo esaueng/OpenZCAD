@@ -144,3 +144,89 @@ function heldClaim(
     }
   };
 }
+
+/**
+ * This tab's claim on a project's device storage, as the workspace tracks
+ * it over {@link claimProjectOwnership}: exactly one tab writes a project
+ * there.
+ */
+export interface ProjectStorageOwnership {
+  projectId: string;
+  /** Settles once the claim has been answered. */
+  settled: Promise<unknown>;
+  /**
+   * True once this tab holds the project; false while waiting, refused, or
+   * once the workspace has let the claim go.
+   */
+  owned: boolean;
+  /**
+   * Keeps the claim's lock held through one write (see
+   * {@link ProjectOwnershipClaim.retain}): the returned function lets go.
+   * Null when there is no held claim to keep.
+   */
+  retain(): (() => void) | null;
+}
+
+/**
+ * Write access to a project's device storage, confirmed for one write. The
+ * claim's lock stays held until {@link release}, so another tab cannot take
+ * the project while the write is in flight; {@link held} says,
+ * synchronously, whether the claim confirmed is still this tab's.
+ */
+export interface ProjectStorageWriteAccess {
+  /** Still the same claim, for the same project, still owned. */
+  held(): boolean;
+  /** Lets go of the lock hold; safe to call more than once. */
+  release(): void;
+}
+
+/**
+ * Waits for this tab's storage claim on `projectId` and grants write access
+ * only once it is confirmed held: a write must not land on a copy another
+ * tab owns (and may have saved newer work to). A claim for another project,
+ * or none at all, refuses (null) rather than waits. The access holds the
+ * claim's lock until released, so a navigation that gives the project up
+ * mid-write hands it on only once the write has landed.
+ *
+ * The local store has no version stamp to guard a write with, so this hold
+ * is what keeps a late write from landing on top of the next owner's save.
+ */
+export async function projectStorageWriteAccess(
+  read: () => ProjectStorageOwnership | null | undefined,
+  projectId: string
+): Promise<ProjectStorageWriteAccess | null> {
+  const claim = read();
+  if (!claim || claim.projectId !== projectId) return null;
+  await claim.settled;
+  const held = () => {
+    const current = read();
+    return (
+      current === claim && current.projectId === projectId && current.owned
+    );
+  };
+  if (!held()) return null;
+  const letGo = claim.retain();
+  if (!letGo) return null;
+  return { held, release: letGo };
+}
+
+/**
+ * Runs `write` under {@link projectStorageWriteAccess}: true once it has
+ * landed with the claim held throughout its start, false (nothing written)
+ * when this tab does not hold `projectId`. The lock is kept until the write
+ * settles, failed writes included; a failure is rethrown.
+ */
+export async function writeOwnedProjectStorage(
+  read: () => ProjectStorageOwnership | null | undefined,
+  projectId: string,
+  write: () => Promise<void>
+): Promise<boolean> {
+  const access = await projectStorageWriteAccess(read, projectId);
+  if (!access) return false;
+  try {
+    await write();
+  } finally {
+    access.release();
+  }
+  return true;
+}
