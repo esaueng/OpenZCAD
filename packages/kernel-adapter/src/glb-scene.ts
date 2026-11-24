@@ -3,19 +3,19 @@
  *
  * glTF defines its linear unit as the metre and its up axis as +Y, with +Z
  * the front; the model space here is millimetres with +Z up and -Y the front.
- * The pinned translators ignore both: the writer emits the millimetre, Z-up
- * numbers with a bare `{ mesh: 0 }` node, so a 65 mm part arrived in every
- * glTF viewer as 65 m lying on its back, and the reader merges every mesh in
- * the file and drops the scene graph, so a file's own node transforms (its
- * scale, its placement) never reached the import.
+ * The pinned writer ignores both: it emits the millimetre, Z-up numbers with
+ * a bare `{ mesh: 0 }` node, so a 65 mm part arrived in every glTF viewer as
+ * 65 m lying on its back. The pinned reader (Remus 2026.1.161 and later)
+ * applies the selected scene's node transforms itself and returns glTF
+ * space, so the import only changes metres +Y up into millimetres +Z up.
  *
  * Both directions go through the node graph rather than the vertex data: the
  * export keeps the translator's millimetre tessellation and wraps the scene in
  * one root node that scales by 1/1000 and turns Z-up into Y-up, which every
- * reader that honours glTF composes back to metres; the import reads the
- * scene's world transform and composes it with the inverse, so a file written
- * here comes back exactly, and one written in metres by any other tool comes
- * in at its real size and the right way up.
+ * reader that honours glTF composes back to metres; the import applies only
+ * the inverse of glTF's unit and axis convention to the reader's placed
+ * vertices, so a file written here comes back exactly, and one written in
+ * metres by any other tool comes in at its real size and the right way up.
  */
 
 /** Millimetres per glTF unit. */
@@ -209,13 +209,12 @@ function sameMatrix(a: Matrix4, b: Matrix4): boolean {
  * Where a GLB places its geometry, in model millimetres, as the twelve-number
  * row-major placement the 3MF path already applies.
  *
- * The pinned reader merges every mesh in the file into one solid and drops
- * the scene graph, so the import can honour one world transform, not one per
- * mesh: a file whose meshes are each shown once, all under the same
- * transform (the shape every single-object export has, this app's included),
- * imports at its stated size and place. A file that shows a mesh twice, or
- * places its meshes differently, is refused by name rather than imported with
- * its layout collapsed.
+ * The pinned reader places the scene's mesh instances itself and merges them
+ * into one solid, so the placement returned here is glTF's unit and axis
+ * convention alone. The scene walk still refuses, by name, the layouts the
+ * import accepted only under the earlier merged reader (a mesh shown twice,
+ * meshes placed differently, meshes the scene hides), so this change does not
+ * widen what imports.
  */
 export function glbPlacement(data: Uint8Array): readonly number[] {
   const { json } = readGlb(data);
@@ -280,7 +279,11 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
       );
     }
   }
-  const m = multiply(GLTF_TO_MODEL, world);
+  // Remus 2026.1.161 and later place each mesh instance by the selected
+  // scene's world transform while reading, so the vertices arrive in glTF
+  // space already; composing `world` here again would apply it twice. The
+  // walk above still runs for its refusals.
+  const m = GLTF_TO_MODEL;
   return [
     m[0]!,
     m[1]!,

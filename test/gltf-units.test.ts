@@ -378,17 +378,26 @@ describe('GLB import placement', () => {
     expect(apply(t, [0, 0, 1]).map((v) => v + 0)).toEqual([0, -1000, 0]);
   });
 
-  it('honours the scene’s own scale and placement', () => {
-    const t = glbPlacement(
-      withScene((json) => {
-        json.nodes[0]!.translation = [0.5, 0, 0];
-        json.nodes.push({ children: [0], scale: [0.01, 0.01, 0.01] });
-        json.scenes[0]!.nodes = [json.nodes.length - 1];
-      })
+  it('honours the scene’s own scale and placement exactly once', async () => {
+    const centimetres = withScene((json) => {
+      json.nodes[0]!.translation = [0.5, 0, 0];
+      json.nodes.push({ children: [0], scale: [0.01, 0.01, 0.01] });
+      json.scenes[0]!.nodes = [json.nodes.length - 1];
+    });
+    // The reader places the instance; the adapter adds only the unit and axis.
+    expect(glbPlacement(centimetres)).toEqual(
+      glbPlacement(withScene(() => {}))
     );
-    // A centimetre file: 1 unit is 10 mm, placed 0.5 units along +X.
-    expect(apply(t, [0, 0, 0])[0]).toBeCloseTo(5, 9);
-    expect(apply(t, [1, 0, 0])[0]).toBeCloseTo(15, 9);
+    const xs = async (glb: Uint8Array) =>
+      (await importMeshFile('glb', glb, 'mm')).vertices.filter(
+        (_v, index) => index % 3 === 0
+      );
+    const plain = await xs(withScene(() => {}));
+    const scaled = await xs(centimetres);
+    // A centimetre file: 1 unit is 10 mm, placed 0.5 units along +X, so a
+    // plain-metre x of 1000·u mm becomes 10·u + 5 mm.
+    expect(Math.min(...scaled)).toBeCloseTo(Math.min(...plain) / 100 + 5, 6);
+    expect(Math.max(...scaled)).toBeCloseTo(Math.max(...plain) / 100 + 5, 6);
   });
 
   it('refuses what the merged reader cannot honour, by name', () => {
