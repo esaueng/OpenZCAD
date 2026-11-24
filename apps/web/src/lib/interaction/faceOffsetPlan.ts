@@ -89,6 +89,7 @@ export interface FaceOffsetPlanInput {
   offset: number;
   /** A typed expression to keep live in the document instead of the number. */
   exact?: ParamValue;
+  ambiguousRim?: 'chamfer' | 'draft';
   /** Explicitly chosen local face extrusion. */
   localOnly?: boolean;
 }
@@ -482,6 +483,7 @@ export function planFaceOffset(
       targetBodyId: bodyId,
       operation: {
         kind: 'offset-face',
+        ...(input.ambiguousRim ? { ambiguousRim: input.ambiguousRim } : {}),
         faceHash,
         ...(face.reference ? { faceReference: face.reference } : {}),
         sourceSurfaceType: 'plane',

@@ -16,6 +16,7 @@ import {
 } from './preview-face-geometry-cache';
 
 import { resizeCylindricalFaceTyped } from './exact-direct-edit-refusal';
+import { KernelRefusal } from './kernel-refusal';
 import { AdapterRefusal } from './adapter-refusal';
 import {
   kernelRefusalCategoryOf,
@@ -310,7 +311,8 @@ function offsetCompoundFace(
   operation: Extract<DirectEditOperation, { kind: 'offset-face' }>,
   scope: Record<string, number>,
   onAdvisory: ((message: string) => void) | undefined,
-  chamferSetbacks: readonly ChamferSetback[]
+  chamferSetbacks: readonly ChamferSetback[],
+  chamferInput?: readonly number[]
 ): ExactShape {
   if (operation.faceReference && !target.lineage) {
     throw new Error(
@@ -343,7 +345,8 @@ function offsetCompoundFace(
     undefined,
     false,
     onAdvisory,
-    chamferSetbacks
+    chamferSetbacks,
+    chamferInput
   );
   const solids = target.solids.flatMap((solid, index) =>
     index === ownerIndex ? edited.solids : [solid]
@@ -1946,14 +1949,18 @@ function offsetFaces(
         offset,
         // A drag prepares the source's selection; a chain's later steps
         // move faces of solids the preparation never saw.
-        deferOutputLineage && groups.length === 1
+        deferOutputLineage &&
+          groups.length === 1 &&
+          operation.ambiguousRim === 'refuse'
           ? preparedFaceMove(kernel, body, faces)
           : null,
         // Exact only: a set never takes the sampled cap join a single
         // offset may disclose and keep; the kernel's exact refusal stands.
-        false
+        false,
+        operation.ambiguousRim ?? 'legacyReplay'
       );
     } catch (error) {
+      if (error instanceof KernelRefusal) throw error;
       if (step > 0) {
         throw offsetSetStepRefused(
           Math.min(...group.map((entry) => entry.label)),
@@ -2268,7 +2275,8 @@ export function applyDirectEdit(
   deferOutputLineage = false,
   onAdvisory?: (message: string) => void,
   /** Setbacks of the chamfers before this edit; see exact-chamfer-rim-carry. */
-  chamferSetbacks: readonly ChamferSetback[] = []
+  chamferSetbacks: readonly ChamferSetback[] = [],
+  chamferInput?: readonly number[]
 ): ExactShape {
   assertDirectEditOperation(operation);
   if (operation.kind === 'offset-face' && target.solids.length > 1) {
@@ -2278,7 +2286,8 @@ export function applyDirectEdit(
       operation,
       scope,
       onAdvisory,
-      chamferSetbacks
+      chamferSetbacks,
+      chamferInput
     );
   }
   if (operation.kind === 'offset-faces' && target.solids.length > 1) {
@@ -2581,10 +2590,15 @@ export function applyDirectEdit(
           solid,
           faces,
           offset,
-          deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null,
-          true
+          deferOutputLineage && operation.ambiguousRim === 'refuse'
+            ? preparedFaceMove(kernel, solid, faces)
+            : null,
+          true,
+          operation.ambiguousRim ?? 'legacyReplay',
+          bandGuard?.refusalAtEdge
         );
       } catch (error) {
+        if (error instanceof KernelRefusal) throw error;
         // Pushed outward into another part of the body — the bottom of a
         // window up to its top — the move closes what it runs into, which
         // an in-place move cannot. Where the push is a prism union it is
@@ -2626,7 +2640,16 @@ export function applyDirectEdit(
           tryExactLocalChamferCapOffset(kernel, solid, face, offset) ??
           // A cap ringed by a chamfer the kernel's move would extend or
           // refuse instead of carrying (see exact-chamfer-rim-carry.ts).
-          tryCarryChamferRim(kernel, solid, face, offset, chamferSetbacks))
+          (operation.ambiguousRim === undefined || chamferInput?.length
+            ? tryCarryChamferRim(
+                kernel,
+                solid,
+                face,
+                offset,
+                chamferSetbacks,
+                chamferInput
+              )
+            : null))
         : { solid: analytic, relation: null };
     // A chamfer-shaped band with no chamfer in the history (an import) may
     // be a draft, so it keeps the kernel's re-limiting move; what is wrong
@@ -2644,7 +2667,7 @@ export function applyDirectEdit(
     }
     // The sweep past a collision builds a prism, not a re-limit; the guard
     // reads the re-limit's failures.
-    if (!sweptPastCollision) bandGuard?.(output);
+    if (!sweptPastCollision) bandGuard?.validate(output);
     // The kernel validates a stretched hole chamfer as a clean solid, so it
     // is checked here: every hole-mouth rim must still be on the moved face,
     // about its own axis, at its own radius. The exact cap paths and the

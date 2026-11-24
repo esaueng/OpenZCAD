@@ -559,15 +559,19 @@ export function NumericKeypad({
     evaluation.value === undefined
       ? undefined
       : normalize(evaluation.value, value, entryUnit);
+  const offsetExpression = (raw: string) =>
+    request.totalBaseline === undefined
+      ? raw
+      : (request.totalSense ?? 1) === 1
+        ? `(${raw}) - ${request.totalBaseline}`
+        : `${request.totalBaseline} - (${raw})`;
   const normalizedRaw =
     evaluation.normalizedRaw === undefined
       ? undefined
-      : request.totalBaseline === undefined
-        ? evaluation.normalizedRaw
-        : evaluation.isExpression
-          ? (request.totalSense ?? 1) === 1
-            ? `(${evaluation.normalizedRaw}) - ${request.totalBaseline}`
-            : `${request.totalBaseline} - (${evaluation.normalizedRaw})`
+      : evaluation.isExpression
+        ? offsetExpression(evaluation.normalizedRaw)
+        : request.totalBaseline === undefined
+          ? evaluation.normalizedRaw
           : String(normalizedValue);
 
   /** Hands a value to the live preview and waits for its verdict. */
@@ -839,12 +843,8 @@ export function NumericKeypad({
     const result = evaluateEntry(next, entryUnit, nextMode);
     if (result.ok && result.value !== undefined) {
       const previewed = normalize(result.value, next, entryUnit);
-      if (
-        result.isExpression &&
-        request.totalBaseline === undefined &&
-        result.normalizedRaw !== undefined
-      ) {
-        preview(previewed, result.normalizedRaw);
+      if (result.isExpression && result.normalizedRaw !== undefined) {
+        preview(previewed, offsetExpression(result.normalizedRaw));
       } else {
         preview(previewed);
       }

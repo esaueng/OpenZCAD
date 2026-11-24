@@ -1,3 +1,4 @@
+import { RimChoiceActions } from './RimChoiceActions';
 import type { ReactNode } from 'react';
 import { Anchor } from 'lucide-react';
 import type { OperationPhase, ToolCardModel } from '../lib/interaction/machine';
@@ -52,6 +53,7 @@ interface ToolCardProps {
    * release the model on screen is already that value; this keeps it rather
    * than sending the hand back to find it.
    */
+  onChooseRim?: (choice: 'chamfer' | 'draft') => void;
   keepLastValid?: { label: string; keep(): void };
   selectAllEdges?: { count: number; select(): void };
   /**
@@ -79,6 +81,7 @@ export function ToolCard({
   onViewDetails,
   onSaveReproduction,
   keepLastValid,
+  onChooseRim,
   selectAllEdges,
   verbs = [],
   onVerb,
@@ -157,6 +160,12 @@ export function ToolCard({
                   Edit {model.error.culprit.featureName}
                 </button>
               ) : null}
+              {onChooseRim && model.error.code === 'ambiguous_rim_chamfer' && (
+                <RimChoiceActions
+                  choose={onChooseRim}
+                  className="tool-card-recovery"
+                />
+              )}
               {keepLastValid ? (
                 <button
                   type="button"

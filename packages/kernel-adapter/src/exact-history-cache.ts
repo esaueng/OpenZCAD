@@ -488,6 +488,7 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
       ...(shape.rectangularStock !== undefined
         ? { rectangularStock: shape.rectangularStock }
         : {}),
+      ...(shape.chamferSource ? { chamferSource: shape.chamferSource } : {}),
       ...(shape.sweepSource ? { sweepSource: shape.sweepSource } : {}),
       ...(shape.nativeVertices
         ? {

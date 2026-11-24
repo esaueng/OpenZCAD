@@ -1,5 +1,10 @@
-import type { FaceDistanceMoveMode, Vector3 } from '@openzcad/shared';
+import type {
+  FaceDistanceMoveMode,
+  OffsetRimPolicy,
+  Vector3
+} from '@openzcad/shared';
 
+import { KernelRefusal } from './kernel-refusal';
 import type { RemusKernel } from './remus-runtime';
 import { readFacePlaneFrame } from './exact-face-plane-frame';
 import { DIRECT_EDIT_TOLERANCE, dot, normalized } from './exact-math';
@@ -186,7 +191,9 @@ export function journaledMove(
   faces: Uint32Array,
   distance: number,
   prepared: PreparedFaceMove | null = null,
-  allowCapReconstruction = false
+  allowCapReconstruction = false,
+  rimPolicy?: OffsetRimPolicy | 'legacyReplay',
+  rimEdgeRefusal?: (edge: number, detail: string) => Error | null
 ): {
   solid: number;
   relation: RemusMoveFacesRelation | null;
@@ -208,19 +215,38 @@ export function journaledMove(
     allowCapReconstruction &&
     typeof qualityKernel.moveFacesJournaledWithQuality === 'function';
   let payload: string;
+  const withRimOptions = rimPolicy !== undefined && rimPolicy !== 'refuse';
   try {
-    payload = withQuality
-      ? prepared?.moveJournaledWithQuality
-        ? prepared.moveJournaledWithQuality(distance, 256)
-        : qualityKernel.moveFacesJournaledWithQuality(
-            solid,
-            faces,
-            distance,
-            256
-          )
-      : prepared
-        ? prepared.moveJournaled(distance)
-        : kernel.moveFacesJournaled(solid, faces, distance);
+    if (withRimOptions) {
+      // Use the saved reading from the start. Newer recognition can also
+      // return a valid but different body, or refuse a mixed bore/rim before
+      // it reaches the ordinary ambiguous-band diagnostic.
+      const handle = kernel.prepareMoveFacesWithOptions(
+        solid,
+        faces,
+        JSON.stringify({ ambiguousRim: rimPolicy })
+      );
+      try {
+        payload = withQuality
+          ? kernel.moveFacesPreparedJournaledWithQuality(handle, distance, 256)
+          : kernel.moveFacesPreparedJournaled(handle, distance);
+      } finally {
+        kernel.releasePreparedMove(handle);
+      }
+    } else {
+      payload = withQuality
+        ? prepared?.moveJournaledWithQuality
+          ? prepared.moveJournaledWithQuality(distance, 256)
+          : qualityKernel.moveFacesJournaledWithQuality(
+              solid,
+              faces,
+              distance,
+              256
+            )
+        : prepared
+          ? prepared.moveJournaled(distance)
+          : kernel.moveFacesJournaled(solid, faces, distance);
+    }
   } catch (error) {
     if (withQuality && prepared) {
       releasePreparedFaceMove(kernel);
@@ -230,9 +256,61 @@ export function journaledMove(
         faces,
         distance,
         null,
-        allowCapReconstruction
+        allowCapReconstruction,
+        rimPolicy,
+        rimEdgeRefusal
       );
     }
+    if (
+      rimPolicy &&
+      (rimPolicy === 'refuse' || rimEdgeRefusal) &&
+      error instanceof Error
+    ) {
+      // Journaled calls throw plain Errors. Ask the detailed binding for the
+      // typed refusal on the same selection. A successful diagnostic probe
+      // must never install an alternative solid or affect replay history.
+      const checkpoint = kernel.checkpoint();
+      try {
+        const result = kernel.moveFacesDetailedWithOptions(
+          solid,
+          faces,
+          distance,
+          JSON.stringify({ ambiguousRim: rimPolicy })
+        );
+        if (result.status === 'error') {
+          if (
+            rimPolicy === 'refuse' &&
+            result.details.kernelCode === 'ambiguous_rim_chamfer'
+          ) {
+            const message =
+              'Choose whether this rim should move as a chamfer or extend as a draft.';
+            throw new KernelRefusal({
+              family: 'direct-edit',
+              category: 'unsupported',
+              kernelCode: 'ambiguous_rim_chamfer',
+              kernelMessage: error.message,
+              message,
+              reason: message,
+              cause: error
+            });
+          }
+          if (
+            result.details.kernelCode === 'topology_change' &&
+            typeof result.details.edge === 'number'
+          ) {
+            const refusal = rimEdgeRefusal?.(
+              result.details.edge,
+              error.message
+            );
+            if (refusal) throw refusal;
+          }
+        }
+      } finally {
+        kernel.restore(checkpoint);
+        kernel.discardCheckpoint(checkpoint);
+      }
+    }
+    if (withRimOptions) throw error;
     if (withQuality) throw error;
     const moved = kernel.moveFaces(solid, faces, distance);
     if (prepared) releasePreparedFaceMove(kernel);
@@ -274,7 +352,7 @@ export function journaledMove(
       }
     }
   } catch (error) {
-    if (withQuality) {
+    if (withQuality || withRimOptions) {
       throw error;
     }
     const moved = kernel.moveFaces(solid, faces, distance);

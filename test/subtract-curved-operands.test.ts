@@ -56,21 +56,10 @@ const REFERENCE = JSON.parse(fixture('reference.json')) as Record<
 type Outcome =
   { kind: 'cut' } | { kind: 'refused'; family: string; code: string };
 
-/**
- * What each recipe does on the pinned Remus build, and whether its visible
- * bodies export to STEP. An export regex pins a kernel STEP defect the
- * export reports by name (see the PR for #1242): it fails loudly and never
- * writes a wrong body, and the day it passes this table must say so.
- */
-const EXPECTED: Record<string, { outcome: Outcome; exportFailure?: RegExp }> = {
-  // The issue's primary recipe. Remus 2026.1.135 cuts it correctly; the
-  // cut's fitted intersection edges miss their vertices by up to 4.9e-7
-  // under a 1e-7 edge tolerance, which the STEP writer's arena check
-  // refuses.
+/** Each cut and refused operand set must survive a STEP round-trip. */
+const EXPECTED: Record<string, { outcome: Outcome }> = {
   'revolve-sweep': {
-    outcome: { kind: 'cut' },
-    exportFailure:
-      /arena edge \d+: start residual .* exceeds effective tolerance/
+    outcome: { kind: 'cut' }
   },
   'revolve-trimmed-nurbs': {
     outcome: {
@@ -227,59 +216,52 @@ describe('Subtract of overlapping curved STEP bodies (#1242)', () => {
         );
         expect(reloaded.exportableBodyIds).toEqual(committed.exportableBodyIds);
 
-        const exporting = fresh.exportStep(
+        const step = await fresh.exportStep(
           reloadedDocument,
           reloadedDocument.bodyOrder
         );
-        if (expected.exportFailure) {
-          await expect(exporting).rejects.toThrow(expected.exportFailure);
-        } else {
-          // Independent STEP check: the export re-imported into a fresh
-          // kernel holds the reference volumes, and the witness lies in the
-          // target only when the Subtract was refused.
-          const step = await exporting;
-          const io = await loadRemusTranslators();
-          const kernel = new RemusKernel();
-          try {
-            const solids = [
-              ...kernel.deserializeSolids(
-                io.importStep(new TextEncoder().encode(step))
-              )
-            ];
-            const volumes = solids
-              .map((solid) => kernel.volume(solid, 0.01))
-              .sort((a, b) => a - b);
-            const expectedVolumes = (
-              expected.outcome.kind === 'cut'
-                ? [recipe.cutVolume]
-                : [recipe.targetVolume, recipe.toolVolume]
-            ).sort((a, b) => a - b);
-            expect(volumes).toHaveLength(expectedVolumes.length);
-            volumes.forEach((volume, index) =>
-              expectVolume(volume, expectedVolumes[index]!)
-            );
-            const inside = solids.filter((solid) => {
-              const mesh = kernel.tessellateSolid(solid, 0.01);
-              try {
-                return (
-                  meshWindingNumber(
-                    {
-                      positions: mesh.positions.slice(),
-                      indices: mesh.indices.slice()
-                    },
-                    recipe.witness
-                  ) > 0.5
-                );
-              } finally {
-                mesh.free();
-              }
-            });
-            expect(inside).toHaveLength(
-              expected.outcome.kind === 'cut' ? 0 : 2
-            );
-          } finally {
-            kernel.free();
-          }
+        // Independent STEP check: the export re-imported into a fresh
+        // kernel holds the reference volumes, and the witness lies in the
+        // target only when the Subtract was refused.
+        const io = await loadRemusTranslators();
+        const kernel = new RemusKernel();
+        try {
+          const solids = [
+            ...kernel.deserializeSolids(
+              io.importStep(new TextEncoder().encode(step))
+            )
+          ];
+          const volumes = solids
+            .map((solid) => kernel.volume(solid, 0.01))
+            .sort((a, b) => a - b);
+          const expectedVolumes = (
+            expected.outcome.kind === 'cut'
+              ? [recipe.cutVolume]
+              : [recipe.targetVolume, recipe.toolVolume]
+          ).sort((a, b) => a - b);
+          expect(volumes).toHaveLength(expectedVolumes.length);
+          volumes.forEach((volume, index) =>
+            expectVolume(volume, expectedVolumes[index]!)
+          );
+          const inside = solids.filter((solid) => {
+            const mesh = kernel.tessellateSolid(solid, 0.01);
+            try {
+              return (
+                meshWindingNumber(
+                  {
+                    positions: mesh.positions.slice(),
+                    indices: mesh.indices.slice()
+                  },
+                  recipe.witness
+                ) > 0.5
+              );
+            } finally {
+              mesh.free();
+            }
+          });
+          expect(inside).toHaveLength(expected.outcome.kind === 'cut' ? 0 : 2);
+        } finally {
+          kernel.free();
         }
       } finally {
         fresh.dispose();

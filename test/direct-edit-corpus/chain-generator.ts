@@ -57,7 +57,11 @@ import {
 } from '../support/combination-matrix';
 import type { LedgerRunner } from '../support/combination-matrix-suite';
 import { faceCensus } from './ladder-oracles';
-import { CAP_JOIN_PINS, CHAIN_REFUSAL_PINS } from './pins';
+import {
+  CAP_JOIN_PINS,
+  CHAIN_REFUSAL_PINS,
+  RECORDED_BOTTOM_CHAIN_PIN
+} from './pins';
 import {
   checkConstructionAccuracy,
   referencePart,
@@ -1811,7 +1815,12 @@ export async function runChainDetailed(
         }
         // Every refusal a chain reaches is a measurement: it must match a pin
         // by kernel taxonomy and the literal user sentence, with an owner.
-        const pin = CHAIN_REFUSAL_PINS.find(
+        const pins = RECORDED_BOTTOM_CHAIN_PIN.at.includes(
+          `${cell.id}#${stepIndex}`
+        )
+          ? [RECORDED_BOTTOM_CHAIN_PIN]
+          : CHAIN_REFUSAL_PINS;
+        const pin = pins.find(
           (entry) =>
             entry.family === kr.family &&
             entry.category === kr.category &&

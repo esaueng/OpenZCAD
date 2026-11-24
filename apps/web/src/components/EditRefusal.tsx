@@ -1,3 +1,4 @@
+import { RimChoiceActions } from './RimChoiceActions';
 import { useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import type { SelectionCalloutOperation } from '../lib/selectionCallout';
@@ -135,6 +136,13 @@ export function EditRefusal({
             {`Try ${formatNumber(trySize)} ${unitLabel}`.trim()}
           </button>
         )}
+        {operation.onChooseRim &&
+          operation.error?.code === 'ambiguous_rim_chamfer' && (
+            <RimChoiceActions
+              choose={operation.onChooseRim}
+              className="edit-refusal-action"
+            />
+          )}
         {operation.keepLastValidLabel && (
           <button
             type="button"

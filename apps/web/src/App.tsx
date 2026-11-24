@@ -4880,6 +4880,12 @@ export function App() {
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
   const offsetPreviewValueRef = useRef<number | null>(null);
+  const submittedOffsetExpression = useRef<{
+    document: ProjectDocument;
+    key: string;
+    value: number;
+    exact: ParamValue;
+  } | null>(null);
   const reusableOffsetPreviewRef = useRef<ReusableOffsetPreview | null>(null);
   /**
    * True once a gesture's rebuilds became too slow to keep previewing. The
@@ -32956,7 +32962,8 @@ export function App() {
   function buildOffsetEditPlan(
     offset: number,
     exact?: ParamValue,
-    baseDocument?: ProjectDocument
+    baseDocument?: ProjectDocument,
+    ambiguousRim?: 'chamfer' | 'draft'
   ): OffsetEditPlan | null {
     const current = interactionRef.current;
     const base = baseDocument ?? managerRef.current?.document;
@@ -32975,7 +32982,8 @@ export function App() {
         face: { topologyId: target.topologyId, hash: target.hash },
         members: target.offsetFaceSet,
         offset,
-        ...(exact === undefined ? {} : { exact })
+        ...(exact === undefined ? {} : { exact }),
+        ...(ambiguousRim ? { ambiguousRim } : {})
       });
       return command
         ? {
@@ -33014,7 +33022,8 @@ export function App() {
       faceHash: target.hash,
       offset,
       localOnly: target.localFaceOffset || sampledShoulder,
-      ...(exact === undefined ? {} : { exact })
+      ...(exact === undefined ? {} : { exact }),
+      ...(ambiguousRim ? { ambiguousRim } : {})
     });
     if (
       !plan ||
@@ -33144,6 +33153,7 @@ export function App() {
     exact?: ParamValue,
     options?: {
       keepingLastValid?: boolean;
+      ambiguousRim?: 'chamfer' | 'draft';
       /** The Total the chip read at release, when it read one. */
       total?: number;
     }
@@ -33168,6 +33178,10 @@ export function App() {
     ) {
       return 'blocked';
     }
+    const rimChoice = options?.ambiguousRim;
+    if (rimChoice && current.error?.code !== 'ambiguous_rim_chamfer')
+      return 'blocked';
+    if (!rimChoice) rememberOffsetExpression(offset, exact);
     if (!requireDisplayedGeometryComplete()) {
       return 'blocked';
     }
@@ -33177,6 +33191,7 @@ export function App() {
     if (
       holdsRefusal(current) &&
       !options?.keepingLastValid &&
+      !rimChoice &&
       // A chained set's coarse lane can still hold an older value's refusal
       // when the hand lets go elsewhere: validation judges that value.
       !(current.target.offsetFaceSet && current.lastValue !== offset)
@@ -33188,7 +33203,7 @@ export function App() {
       );
       return retaking ? 'blocked' : 'refused';
     }
-    const plan = buildOffsetEditPlan(offset, exact);
+    const plan = buildOffsetEditPlan(offset, exact, undefined, rimChoice);
     notePlanEdit(interactionRef.current, plan);
     if (!plan) {
       setStatus('Exact face measurements are unavailable for this offset.');
@@ -33209,8 +33224,9 @@ export function App() {
       managerRef.current?.document.derived.bodyRepresentations[plan.bodyId];
     const retaken = retakenRelease.take('offset-face');
     const resumeRelease =
-      exact === undefined && retaken?.submittedValue === offset;
+      exact === undefined && !rimChoice && retaken?.submittedValue === offset;
     const releasedFrame =
+      !rimChoice &&
       !resumeRelease &&
       exact === undefined &&
       sourceBody &&
@@ -33225,6 +33241,7 @@ export function App() {
           : reusableOffsetPreviewRef.current?.candidate
         : undefined);
     const reuse =
+      !rimChoice &&
       candidate &&
       candidate.offset === offset &&
       previewSelectionIsCurrent(candidate)
@@ -33657,7 +33674,41 @@ export function App() {
     'operation',
     calloutOperationModel?.error
   );
+  function rememberOffsetExpression(value: number, exact?: ParamValue) {
+    const base = managerRef.current?.document;
+    const key = faceOffsetPlanKey(interactionRef.current);
+    submittedOffsetExpression.current =
+      base && key && exact !== undefined
+        ? { document: base, key, value, exact }
+        : null;
+  }
+  function chooseOffsetRim(choice: 'chamfer' | 'draft') {
+    const current = interactionRef.current;
+    if (
+      current.mode !== 'face' ||
+      current.op !== 'offset-face' ||
+      current.error?.code !== 'ambiguous_rim_chamfer' ||
+      current.lastValue === null
+    )
+      return;
+    const saved = submittedOffsetExpression.current;
+    const exact =
+      saved &&
+      saved.document === managerRef.current?.document &&
+      saved.key === faceOffsetPlanKey(current) &&
+      saved.value === current.lastValue
+        ? saved.exact
+        : undefined;
+    const outcome = handleOffsetCommit(current.lastValue, exact, {
+      ambiguousRim: choice
+    });
+    if (outcome === 'started' && keypadRef.current?.kind === 'offset') {
+      setKeypad(null);
+      dispatchInteraction({ type: 'keypad-close' });
+    }
+  }
   const calloutOperationActions = {
+    onChooseRim: chooseOffsetRim,
     onEditCulprit: handleEditCulpritFeature,
     onViewDetails: openActivityLog,
     onSaveReproduction: calloutSaveReproduction,
@@ -33713,6 +33764,7 @@ export function App() {
         ...(saveReady
           ? { onSaveReproduction: () => handlers().onSaveReproduction?.() }
           : {}),
+        onChooseRim: (choice) => handlers().onChooseRim(choice),
         onKeepLastValid: () => handlers().onKeepLastValid(),
         onSelectAllEdges: () => handlers().onSelectAllEdges()
       }
@@ -39148,6 +39200,7 @@ export function App() {
         {...(toolCardSaveReproduction
           ? { onSaveReproduction: toolCardSaveReproduction }
           : {})}
+        onChooseRim={chooseOffsetRim}
         {...(keepLastValid ? { keepLastValid } : {})}
         // Never up in sketch mode (the column header names the
         // sketch), so a close is always a clear.
@@ -40494,6 +40547,7 @@ export function App() {
                         if (keypad.kind === 'offset') {
                           // The exact worker can build while the viewport prepares
                           // the local deformation for the same typed value.
+                          rememberOffsetExpression(value, raw);
                           handleOffsetPreview(value);
                           offsetSetterRef.current?.(value);
                           return;

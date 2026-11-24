@@ -2560,6 +2560,12 @@ const directEditOperationSchema = {
         sourceArea: { type: 'number', exclusiveMinimum: 0 },
         sourceCenter: numberVectorSchema,
         sourceNormal: numberVectorSchema,
+        ambiguousRim: {
+          type: 'string',
+          enum: ['refuse', 'chamfer', 'draft'],
+          description:
+            'Use refuse unless the user explicitly selected chamfer or draft for an ambiguous rim.'
+        },
         offset: scalarSchema
       },
       required: [
@@ -2570,6 +2576,7 @@ const directEditOperationSchema = {
         'sourceArea',
         'sourceCenter',
         'sourceNormal',
+        'ambiguousRim',
         'offset'
       ]
     },
@@ -5166,6 +5173,10 @@ export function parseCadPatchProposal(
               edit.sourceAxisEnd === undefined) ||
               commonAxis)) ||
           (edit.kind === 'offset-face' &&
+            (edit.ambiguousRim === undefined ||
+              ['refuse', 'chamfer', 'draft'].some(
+                (choice) => choice === edit.ambiguousRim
+              )) &&
             edit.sourceSurfaceType === 'plane' &&
             typeof edit.sourceArea === 'number' &&
             edit.sourceArea > 0 &&

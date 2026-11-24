@@ -266,6 +266,7 @@ export interface OffsetFacesInput {
   offset: number;
   /** A typed expression to keep live in the document instead of the number. */
   exact?: ParamValue;
+  ambiguousRim?: 'chamfer' | 'draft';
 }
 
 /**
@@ -300,6 +301,7 @@ export function buildOffsetFaces(input: OffsetFacesInput): AnyCommand | null {
     targetBodyId: input.bodyId,
     operation: {
       kind: 'offset-faces',
+      ...(input.ambiguousRim ? { ambiguousRim: input.ambiguousRim } : {}),
       ...firstSnapshot,
       offset: input.exact ?? Math.round(input.offset * 1000) / 1000,
       additionalFaces

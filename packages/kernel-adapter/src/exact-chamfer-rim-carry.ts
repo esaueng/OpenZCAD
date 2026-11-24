@@ -56,6 +56,8 @@ import {
 } from './exact-offset-face-refusal';
 import { KernelRefusal } from './kernel-refusal';
 import { surfaceTypeOf } from './exact-sync-memo';
+import { curvedCarrierKey } from './exact-curved-carrier';
+import { readFacePlaneFrame } from './exact-face-plane-frame';
 import type { RemusKernel } from './remus-runtime';
 import type { RemusMoveFacesRelation } from './remus-lineage';
 
@@ -743,7 +745,8 @@ export function tryCarryChamferRim(
   face: number,
   offset: number,
   /** The setbacks of the chamfers in this edit's history. */
-  setbacks: readonly ChamferSetback[]
+  setbacks: readonly ChamferSetback[],
+  sourceSolids?: readonly number[]
 ): { solid: number; relation: RemusMoveFacesRelation } | null {
   if (
     setbacks.length === 0 ||
@@ -755,7 +758,44 @@ export function tryCarryChamferRim(
   }
   const normal = finiteVec3(Array.from(kernel.getFaceNormal(face)));
   if (!normal) return null;
-  if (chamferBand(kernel, solid, face, normal, setbacks) === null) return null;
+  const band = chamferBand(kernel, solid, face, normal, setbacks);
+  if (band === null) return null;
+  if (sourceSolids) {
+    // A distinct parallel bevel on the source did not produce this band.
+    // A source patch on the same support leaves its origin ambiguous.
+    const sources = sourceSolids.flatMap((s) =>
+      Array.from(kernel.getSolidFaces(s))
+    );
+    if (
+      band.some((f) => {
+        const type = surfaceTypeOf(kernel, f);
+        const candidates = sources.filter(
+          (other) => surfaceTypeOf(kernel, other) === type
+        );
+        if (type === 'cone') {
+          const key = curvedCarrierKey(kernel, f);
+          return candidates.some((other) => {
+            const otherKey = curvedCarrierKey(kernel, other);
+            return !key || !otherKey || key === otherKey;
+          });
+        }
+        const plane = readFacePlaneFrame(kernel, f);
+        return candidates.some((other) => {
+          const source = readFacePlaneFrame(kernel, other);
+          return (
+            !plane.normal ||
+            !source.normal ||
+            (Math.abs(Math.abs(dot(plane.normal, source.normal)) - 1) <=
+              ANALYTIC_MATCH_EPSILON &&
+              Math.abs(
+                dot(plane.normal, subtract(plane.center, source.center))
+              ) <= ANALYTIC_MATCH_EPSILON)
+          );
+        });
+      })
+    )
+      return null;
+  }
   let carried: { solid: number; relation: RemusMoveFacesRelation } | null;
   try {
     carried = editNativeArena(kernel, solid, face, (probe, arena, cap) =>
@@ -1112,7 +1152,10 @@ export function guardUncarriedChamferBand(
   solid: number,
   face: number,
   offset: number
-): ((output: number) => void) | null {
+): {
+  validate(output: number): void;
+  refusalAtEdge(edge: number, detail: string): OffsetFaceRefusal | null;
+} | null {
   if (
     !Number.isFinite(offset) ||
     Math.abs(offset) <= GEOMETRY_EPSILON ||
@@ -1206,7 +1249,7 @@ export function guardUncarriedChamferBand(
     throw refuse('the face could not be read exactly');
   }
   const sent = add(capPoint, scale(normal, offset));
-  return (output: number) => {
+  const validate = (output: number) => {
     const box = kernel.boundingBox(output);
     for (let i = 0; i < 3; i++) {
       if (
@@ -1244,6 +1287,18 @@ export function guardUncarriedChamferBand(
               ? null
               : arcsFault(loops, arcs, normal, offset, tolerance)));
       if (fault !== null) throw refuse(fault);
+    }
+  };
+  return {
+    validate,
+    refusalAtEdge(edge, detail) {
+      // Curved supports can fail to intersect for reasons unrelated to
+      // the planar edge inversion that this guard can identify.
+      if (band.some((f) => surfaceTypeOf(kernel, f) !== 'plane')) return null;
+      return capEdges.includes(edge) ||
+        band.some((f) => uniqueEdges(kernel, f).includes(edge))
+        ? refuse(detail)
+        : null;
     }
   };
 }

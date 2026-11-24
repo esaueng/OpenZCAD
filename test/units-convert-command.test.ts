@@ -421,8 +421,11 @@ describe('re-capture refusals on the review screen', () => {
 describe('units.convert schema gate', () => {
   const older = UNITS_CONVERT_SCHEMA_VERSION - 1;
 
-  it('is the current schema', () => {
-    expect(UNITS_CONVERT_SCHEMA_VERSION).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+  it('preserves the v154 format and accepts it on current documents', () => {
+    expect(UNITS_CONVERT_SCHEMA_VERSION).toBe(154);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(
+      UNITS_CONVERT_SCHEMA_VERSION
+    );
   });
 
   it('refuses the command on an older schema, in execute and in authoring', async () => {

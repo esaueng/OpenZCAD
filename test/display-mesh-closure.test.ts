@@ -13,7 +13,7 @@ import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
 } from '../packages/kernel-adapter/src/boolean-result-validation';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import * as meshOutput from '../packages/kernel-adapter/src/owned-mesh-output';
 
 // Unit cube, outward-wound, sharing its eight corner indices.
 const CUBE_POSITIONS = [
@@ -249,11 +249,11 @@ describe('open display mesh advisory', { timeout: 120_000 }, () => {
   it('flags a valid solid whose kernel tessellation has holes', async () => {
     // Reproduces the Remus defect behind the filleted-union glitch: a valid
     // B-rep whose grouped tessellation leaves a face's triangles out.
-    const original = RemusKernel.prototype.tessellateSolidGroupedBinary;
+    const original = meshOutput.groupedDisplayMesh;
     const spy = vi
-      .spyOn(RemusKernel.prototype, 'tessellateSolidGroupedBinary')
-      .mockImplementation(function (this: RemusKernel, ...args) {
-        const mesh = original.apply(this, args);
+      .spyOn(meshOutput, 'groupedDisplayMesh')
+      .mockImplementation((...args) => {
+        const mesh = original(...args);
         try {
           const positions = mesh.positions.slice();
           const offsets = mesh.faceOffsets.slice();
