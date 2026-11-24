@@ -39,10 +39,12 @@ export interface SavedView {
   /**
    * I03: the project's stored unit when the view was saved; the camera and
    * section are lengths in it. Absent in views saved before it was
-   * recorded: those are stamped with the unit being left the first time
-   * the project's stored unit changes on this device.
+   * recorded: those are stamped when the project next opens or converts
+   * here, with the unit they are known to be in, or `'unknown'` when that
+   * cannot be told (converted elsewhere, or no history to rule it out). An
+   * unknown view is shown as saved and never stamped later.
    */
-  units?: UnitSystem;
+  units?: UnitSystem | 'unknown';
   savedAt: number;
 }
 
@@ -132,7 +134,9 @@ function isSavedView(value: unknown): value is SavedView {
     isFieldOfView(view.fieldOfView) &&
     isFieldOfView(view.camera.fieldOfView) &&
     isUp(view.camera.up) &&
-    (view.units === undefined || isStoredUnit(view.units))
+    (view.units === undefined ||
+      view.units === 'unknown' ||
+      isStoredUnit(view.units))
   );
 }
 
@@ -146,7 +150,7 @@ export function savedViewInUnits(
   view: SavedView,
   units: UnitSystem
 ): SavedView {
-  if (!view.units || view.units === units) return view;
+  if (!isStoredUnit(view.units) || view.units === units) return view;
   const factor = storedUnitFactor(view.units, units);
   return {
     ...view,
@@ -159,14 +163,16 @@ export function savedViewInUnits(
 }
 
 /**
- * I03: the project's stored unit is changing from `units` on this device.
- * Views saved before views recorded their unit are in `units`; record it on
- * them now, so they are rescaled from here on. Views that already name a
- * unit are left alone. False when the browser refused the write.
+ * I03: records `units` on the project's views saved before views recorded
+ * their unit: the unit they are known to be in (the one this device held
+ * the project in, or the one a conversion here is leaving), or `'unknown'`.
+ * Views that already name a unit, `'unknown'` included, are left alone, so
+ * a later, better-sounding guess can never overwrite what was known when
+ * they were first seen. False when the browser refused the write.
  */
 export function stampSavedViewUnits(
   projectId: string,
-  units: UnitSystem,
+  units: UnitSystem | 'unknown',
   storage: StorageLike | null = defaultStorage()
 ): boolean {
   const views = loadSavedViews(projectId, storage);

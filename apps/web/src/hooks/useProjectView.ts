@@ -74,13 +74,18 @@ export interface ProjectView {
    * `'unknown'` says the project has been converted but this device cannot
    * tell which unit such a view is in: its camera and section are dropped
    * (the project refits) rather than shown at the wrong scale.
+   *
+   * A restore of the project already on screen in another unit (an account
+   * refresh bringing in a conversion made elsewhere) keeps the view on
+   * screen, rescaled, and answers the pose the live camera must land on:
+   * the viewer reads `initialView` only when it mounts. Null otherwise.
    */
   restore(
     projectId: string,
     defaults: ProjectViewDefaults,
     units?: UnitSystem,
     legacyUnits?: UnitSystem | 'unknown'
-  ): void;
+  ): { pose: ViewportCameraState; projection: ProjectionMode } | null;
   /** The viewport reported a live pose; keep it immediately available. */
   onCameraChange(projectId: string | null, camera: ViewportCameraState): void;
   /** The viewport pose settled; persist the final pose against this project. */
@@ -161,6 +166,8 @@ export function useProjectView(
    * write; null until a restore names one.
    */
   const unitsRef = useRef<UnitSystem | null>(null);
+  /** The project the last restore was for. */
+  const restoredProjectRef = useRef<string | null>(null);
   // A reload can interrupt the controller's damping/settle timer. Keep its
   // latest pose on pagehide too; idle frames still never write storage.
   const flushView = useRef<() => void>(() => {});
@@ -262,6 +269,10 @@ export function useProjectView(
     hiddenReferenceImageIds,
     setHiddenReferenceImageIds,
     restore(id, defaults, units, legacyUnits) {
+      const shownUnits =
+        restoredProjectRef.current === id ? unitsRef.current : null;
+      const shownCamera = cameraRef.current;
+      restoredProjectRef.current = id;
       const saved = loadProjectView(id);
       savedHiddenReferencesProject.current = saved?.hiddenReferences
         ? id
@@ -282,9 +293,16 @@ export function useProjectView(
       const savedSection = saved?.settings.sectionView;
       const { sectionView: _unknownScale, ...savedSettings } =
         saved?.settings ?? {};
-      cameraRef.current = camera;
-      setInitialView(camera);
-      setProjection(saved?.projection ?? defaults.projection);
+      // The same project, now in another unit: the view on screen stays,
+      // rescaled, rather than jumping to whatever was last stored.
+      const refreshed =
+        shownUnits && units && shownUnits !== units && shownCamera
+          ? scaledCameraPose(shownCamera, storedUnitFactor(shownUnits, units))
+          : null;
+      const projection = saved?.projection ?? defaults.projection;
+      cameraRef.current = refreshed ?? camera;
+      setInitialView(refreshed ?? camera);
+      setProjection(projection);
       setSettings({
         showGrid: defaults.showGrid,
         displayMode: defaults.displayMode,
@@ -302,6 +320,25 @@ export function useProjectView(
       setSketchVisibility(saved?.sketchVisibility ?? NO_SKETCH_VISIBILITY);
       setHiddenDatumIds(new Set(saved?.hiddenReferences?.datumIds));
       setHiddenReferenceImageIds(new Set(saved?.hiddenReferences?.imageIds));
+      // A view written before views recorded their unit is rewritten now,
+      // read or dropped and stamped, so a later open (after a newer copy is
+      // cached here) cannot read it in another unit.
+      if (saved && !saved.units && units) {
+        const { sectionView: _legacy, ...unitFree } = saved.settings;
+        const sectionView =
+          ambiguous || !savedSection
+            ? undefined
+            : factor !== 1
+              ? scaledSectionView(savedSection, factor)
+              : savedSection;
+        saveProjectView(id, {
+          ...saved,
+          camera,
+          settings: { ...unitFree, ...(sectionView ? { sectionView } : {}) },
+          units
+        });
+      }
+      return refreshed ? { pose: refreshed, projection } : null;
     },
     onCameraChange(_id, camera) {
       cameraRef.current = camera;
@@ -381,6 +418,7 @@ export function useProjectView(
       }
     },
     forget() {
+      restoredProjectRef.current = null;
       cameraRef.current = null;
       setInitialView(null);
     }

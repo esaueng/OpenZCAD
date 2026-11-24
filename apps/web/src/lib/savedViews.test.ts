@@ -366,3 +366,18 @@ describe('I03: saved views follow the stored unit', () => {
     expect(loadSavedViews('p1', storage).map((view) => view.id)).toEqual(['b']);
   });
 });
+
+describe('I03: a saved view whose unit cannot be told', () => {
+  it('is marked unknown, shown as saved, and never stamped later', () => {
+    const storage = memoryStorage();
+    saveView('p1', pose(254), { storage, id: 'legacy' });
+    // First open: converted elsewhere, nothing known here.
+    expect(stampSavedViewUnits('p1', 'unknown', storage)).toBe(true);
+    const [marked] = loadSavedViews('p1', storage);
+    expect(marked?.units).toBe('unknown');
+    expect(savedViewInUnits(marked!, 'inch')).toBe(marked);
+    // A later open, after the inch copy was cached here, would offer inch.
+    stampSavedViewUnits('p1', 'inch', storage);
+    expect(loadSavedViews('p1', storage)[0]?.units).toBe('unknown');
+  });
+});

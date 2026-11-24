@@ -299,6 +299,10 @@ test('restores each duplicated project’s own exact section with shared body ID
                   sectionView: { plane: 'XY', offset: 5 }
                 },
                 hiddenBodyIds: [],
+                // Written by this device in the project's unit; a view with
+                // no unit, on a project opened from the account with no log
+                // to rule out a conversion, is dropped (I03).
+                units: 'mm',
                 updatedAt: Date.now()
               }
             ])

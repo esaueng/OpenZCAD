@@ -239,3 +239,27 @@ describe('I03: a rescaled cut position', () => {
     expect(onCommit).toHaveBeenCalledWith(0.25);
   });
 });
+
+describe('I03: an edit typed back to the shown value', () => {
+  it('is committed, exactly', () => {
+    const onCommit = vi.fn();
+    render(
+      <SectionToolbox
+        section={{ plane: 'XZ', offset: 12.7 * (1 / 25.4) }}
+        range={{ min: 0, max: 2 }}
+        outline={{ kind: 'clipping' }}
+        units="inch"
+        onSwitch={vi.fn()}
+        onPlane={vi.fn()}
+        onOffset={vi.fn()}
+        onCommit={onCommit}
+        onExport={vi.fn()}
+      />
+    );
+    const field = screen.getByLabelText('Cut position');
+    fireEvent.change(field, { target: { value: '0.6' } });
+    fireEvent.change(field, { target: { value: '0.5' } });
+    fireEvent.blur(field);
+    expect(onCommit).toHaveBeenCalledWith(0.5);
+  });
+});

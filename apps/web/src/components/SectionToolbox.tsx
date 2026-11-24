@@ -174,6 +174,9 @@ export function SectionToolbox({
   const [sourceOffset, setSourceOffset] = useState(section.offset);
   const [draft, setDraft] = useState(formatSectionOffset(section.offset));
   const cancelEdit = useRef(false);
+  // Set by typing in the field: a value typed back to what it shows is
+  // still an edit, and is committed exactly.
+  const edited = useRef(false);
   const pendingSliderOffset = useRef<number | null>(null);
   if (sourceOffset !== section.offset) {
     setSourceOffset(section.offset);
@@ -292,11 +295,13 @@ export function SectionToolbox({
   function commitPosition() {
     if (cancelEdit.current) {
       cancelEdit.current = false;
+      edited.current = false;
       return;
     }
-    // Left as shown, the field keeps the stored offset: committing its
+    // Left untouched, the field keeps the stored offset: committing its
     // rounded text would nudge the cut by the digits it does not show.
-    if (draft === formatSectionOffset(section.offset)) return;
+    if (!edited.current) return;
+    edited.current = false;
     const parsed = draft.trim() === '' ? NaN : Number(draft);
     const next = Number.isFinite(parsed)
       ? Math.min(range.max, Math.max(range.min, parsed))
@@ -429,7 +434,10 @@ export function SectionToolbox({
             step="any"
             disabled={!active}
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => {
+              edited.current = true;
+              setDraft(event.target.value);
+            }}
             onBlur={commitPosition}
             onKeyDown={(event) => {
               event.stopPropagation();

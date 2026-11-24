@@ -4,6 +4,7 @@ import type { UnitSystem } from '@openzcad/shared';
 import { scaledCameraPose, useStoredUnitCamera } from './useStoredUnitCamera';
 import {
   isStoredUnit,
+  legacyViewUnits,
   scaledSectionView,
   storedUnitFactor
 } from '../lib/storedUnitView';
@@ -96,5 +97,58 @@ describe('useStoredUnitCamera', () => {
     rerender({ id: null, unit: null });
     rerender({ id: 'p1', unit: 'cm' });
     expect(onUnitsChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe('legacyViewUnits', () => {
+  const log = [{ kind: 'sketch.add' }];
+  it('uses the unit this device last held the project in', () => {
+    expect(
+      legacyViewUnits({
+        previousUnits: 'mm',
+        units: 'inch',
+        commandLog: [],
+        historyAvailable: false
+      })
+    ).toBe('mm');
+  });
+
+  it('cannot tell without history: a share, an empty log or a conversion', () => {
+    // A share link serves the model without its log or its conversion.
+    expect(
+      legacyViewUnits({
+        previousUnits: undefined,
+        units: 'inch',
+        commandLog: log,
+        historyAvailable: false
+      })
+    ).toBe('unknown');
+    expect(
+      legacyViewUnits({
+        previousUnits: undefined,
+        units: 'inch',
+        commandLog: [],
+        historyAvailable: true
+      })
+    ).toBe('unknown');
+    expect(
+      legacyViewUnits({
+        previousUnits: undefined,
+        units: 'inch',
+        commandLog: [...log, { kind: 'units.convert' }],
+        historyAvailable: true
+      })
+    ).toBe('unknown');
+  });
+
+  it('is the project unit when its whole history shows no conversion', () => {
+    expect(
+      legacyViewUnits({
+        previousUnits: undefined,
+        units: 'cm',
+        commandLog: log,
+        historyAvailable: true
+      })
+    ).toBe('cm');
   });
 });

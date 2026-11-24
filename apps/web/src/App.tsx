@@ -271,7 +271,6 @@ import {
   type ExtrudeInput,
   type StaleDirectEditFaceRepair,
   unitsConvertCheckpointName,
-  UNITS_CONVERT_COMMAND_KIND,
   type ConvertibleUnit
 } from '@openzcad/document-core';
 import {
@@ -1042,7 +1041,7 @@ import {
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
 import { useStoredUnitCamera } from './hooks/useStoredUnitCamera';
-import { scaledSectionView } from './lib/storedUnitView';
+import { legacyViewUnits, scaledSectionView } from './lib/storedUnitView';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
@@ -11382,24 +11381,27 @@ export function App() {
       const previousUnits =
         options.previousUnits ??
         (open?.projectId === normalized.projectId ? open.units : undefined);
-      // With no unit known here, a project whose log shows a conversion may
-      // have older view state in either unit: it is dropped, not guessed.
-      const legacyUnits =
-        previousUnits ??
-        (normalized.commandLog.some(
-          (command) => command.kind === UNITS_CONVERT_COMMAND_KIND
+      // With no unit known here, a project that may have been converted (a
+      // conversion in its log, or no log to rule one out) has older view
+      // state in either unit: it is dropped, not guessed.
+      const legacyUnits = legacyViewUnits({
+        previousUnits,
+        units: normalized.units,
+        commandLog: normalized.commandLog,
+        historyAvailable: !(
+          shareSessionRef.current || isSharedWithoutHistory(normalized)
         )
-          ? ('unknown' as const)
-          : undefined);
-      // Saved views written before they recorded their unit are in the unit
-      // this device last held the project in; record it before any is shown.
-      if (previousUnits) {
+      });
+      // Saved views written before they recorded their unit are recorded in
+      // that unit now, before any is shown, or marked as unknown so a later
+      // open (after the newer copy is cached here) cannot stamp them.
+      {
         const projectId = normalized.projectId;
         void import('./lib/savedViews').then(({ stampSavedViewUnits }) =>
-          stampSavedViewUnits(projectId, previousUnits)
+          stampSavedViewUnits(projectId, legacyUnits)
         );
       }
-      restoreProjectView(
+      const refreshed = restoreProjectView(
         normalized.projectId,
         {
           projection: appSettings.viewport.defaultProjection,
@@ -11414,6 +11416,16 @@ export function App() {
         normalized.units,
         legacyUnits
       );
+      // The project on screen, now in another unit (an account refresh of a
+      // conversion made elsewhere): the mounted viewer does not reread its
+      // initial view, so the live camera lands on the rescaled pose here.
+      // The unit-change hook then finds the view already in this unit.
+      if (refreshed)
+        requestView({
+          pose: refreshed.pose,
+          projection: refreshed.projection,
+          instant: true
+        });
     }
     if (rememberProject) {
       rememberActiveProject(
@@ -11575,8 +11587,14 @@ export function App() {
   useStoredUnitCamera(
     doc?.projectId ?? null,
     doc?.units ?? null,
-    (_factor, from, to) => {
+    (factor, from, to) => {
       const projectId = doc?.projectId;
+      // The cut kept for switching sectioning back on follows the model it
+      // was on, whichever path brought the new unit (a refresh restores the
+      // view before this runs). A live cut replaces it after this effect.
+      const remembered = rememberedSection.current;
+      if (remembered)
+        rememberedSection.current = scaledSectionView(remembered, factor);
       const rescaled = rescaleProjectView(from, to);
       // At once, not a glide: the model was rescaled in one step, and a
       // glide's frames would be reported, persisted and rescaled again by an
@@ -11584,12 +11602,6 @@ export function App() {
       if (rescaled?.camera)
         requestView({ pose: rescaled.camera, projection, instant: true });
       if (rescaled) {
-        const remembered = rememberedSection.current;
-        if (remembered && !rescaled.sectionView)
-          rememberedSection.current = scaledSectionView(
-            remembered,
-            rescaled.factor
-          );
         if (rescaled.sectionView && projectId) {
           // The exact section on screen cut the model in the old unit; ask
           // for it again once the converted model is rebuilt.
@@ -16436,7 +16448,10 @@ export function App() {
       const existing = await loadLocalProject(definition.projectId);
       if (!isCurrent()) return;
       if (existing) {
-        hydrateDocument(existing, { activeProjectSince });
+        hydrateDocument(existing, {
+          activeProjectSince,
+          previousUnits: existing.units
+        });
         if (definition.initialWorkspace)
           setWorkspaceMode(definition.initialWorkspace);
         setStatus(`Opened ${existing.name}.`);
@@ -16553,7 +16568,10 @@ export function App() {
           : null;
         setCloudAvailable(false);
         setArtifacts([]);
-        hydrateDocument(localDocument, { activeProjectSince });
+        hydrateDocument(localDocument, {
+          activeProjectSince,
+          previousUnits: localDocument.units
+        });
         if (!needsRepair) accountUnreachableProjectIdRef.current = projectId;
         setSaveState(needsRepair ? 'repair' : 'offline');
         setStatus(
