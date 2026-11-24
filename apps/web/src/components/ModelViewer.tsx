@@ -204,6 +204,7 @@ import {
   createObjectForBody,
   applyCoplanarBodyDepthSlots,
   updateObjectForBody,
+  syncBodyShadowCasting,
   updateBodyMaterialOpacity,
   sameBodyProjection,
   sameBodyRenderGeometry,
@@ -15441,6 +15442,9 @@ export function ModelViewer({
       }
     }
     const edgeResolution = context.fatLineResolution();
+    // A body crossing full opacity starts or stops casting the ground
+    // shadow, which the frozen map shows only once it is re-rendered.
+    let shadowCastersChanged = false;
 
     for (const body of bodies) {
       let object = context.objectsByBodyId.get(body.bodyId);
@@ -15543,6 +15547,10 @@ export function ModelViewer({
           updateBodyMaterialOpacity(mesh.material, faceOpacity);
           mesh.userData.appliedOpacity = faceOpacity;
         }
+        // Follows the applied opacity (appearance, X-ray, assembly dimming),
+        // not the sketch recede, which fades bodies only while sketching.
+        if (syncBodyShadowCasting(mesh, faceOpacity))
+          shadowCastersChanged = true;
         const baseEmissive = isSelected ? SELECTION_EMISSIVE : 0x000000;
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
@@ -15552,7 +15560,6 @@ export function ModelViewer({
         if (bodiesChanged) {
           mesh.userData.bodyId = body.bodyId;
           mesh.userData.topology = body.topology;
-          mesh.castShadow = true;
           mesh.receiveShadow = false;
         }
       });
@@ -15991,6 +15998,8 @@ export function ModelViewer({
       }
       // Bodies are the only dynamic shadow casters; camera and selection-only
       // frames reuse this map until geometry or the light rig changes again.
+      context.refreshShadowMap();
+    } else if (shadowCastersChanged) {
       context.refreshShadowMap();
     }
     if (bodiesChanged) context.renderedBodies = bodies;
