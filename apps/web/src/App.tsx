@@ -560,8 +560,10 @@ import {
 import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
   LocalProjectAutosave,
+  departureFlush,
   sameLocalProjectContent,
-  type LocalProjectAutosaveOptions
+  type LocalProjectAutosaveOptions,
+  type LocalProjectWriteResult
 } from './lib/localProjectAutosave';
 // Shapr3D migration loads on the gesture that picks a .shapr + STEP pair.
 import type { ShaprPairInspection } from './lib/shaprImportWorkerClient';
@@ -612,8 +614,11 @@ import {
 } from './lib/libraryRefresh';
 import { rateLimitOf, type RateLimit } from './lib/rateLimit';
 import {
-  claimProjectOwnership,
-  type ProjectOwnershipClaim
+  projectStorageWriteAccess,
+  trackProjectStorage,
+  writeLocalProjectUnderClaim,
+  writeOwnedProjectStorage,
+  type ProjectStorageOwnership
 } from './lib/projectTabOwnership';
 
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
@@ -2189,13 +2194,16 @@ import {
   offsetRefusalInTotal
 } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
+import {
+  NavigationEditPause,
+  type ProjectNavigation
+} from './lib/navigationEditPause';
 import { collaborationClientId } from './lib/collaborationProtocol';
 import { copyLineageNote, withCopyBranchPoint } from './lib/copyBranchPoint';
 import {
   CONVERT_UNIT_WORDS,
   unitsConvertCopyBranchReason,
   unitsConversionCollaborationRefusal,
-  type ProjectStorageOwnership,
   type UnitsConversionCollaborationState
 } from './lib/unitsConversion';
 import type {
@@ -3056,8 +3064,23 @@ export function App() {
     },
     []
   );
+  /**
+   * Edits to the open project pause from a navigation's start until it
+   * ends or another project is open: an edit made while it awaits the
+   * account would be autosaved after this tab gave the project up.
+   */
+  const [, setNavigationPauseVersion] = useState(0);
+  const [navigationPause] = useState(
+    () =>
+      new NavigationEditPause(() =>
+        setNavigationPauseVersion((version) => version + 1)
+      )
+  );
+  /** Ends `isCurrent`'s pause, when it is a {@link ProjectNavigation}. */
+  const endProjectNavigation = (isCurrent: () => boolean) =>
+    (isCurrent as Partial<ProjectNavigation>).end?.();
   const beginProjectNavigation = useCallback(
-    (clearShareFragment = true) => {
+    (clearShareFragment = true): ProjectNavigation => {
       cancelNavigationBusy();
       if (clearShareFragment) clearProjectShareFragment();
       const navigation = ++fragmentNavigationRef.current;
@@ -3068,9 +3091,13 @@ export function App() {
       shareOpenAttemptRef.current = null;
       setPendingShareToken(null);
       setSharePage(null);
-      return () => fragmentNavigationRef.current === navigation;
+      // Every navigation must end its pause: callers run in try/finally.
+      const end = navigationPause.begin(managerRef.current);
+      return Object.assign(() => fragmentNavigationRef.current === navigation, {
+        end
+      });
     },
-    [cancelNavigationBusy]
+    [cancelNavigationBusy, navigationPause]
   );
   const restoreShareSessionFragment = useCallback(() => {
     const active = shareSessionRef.current;
@@ -3095,7 +3122,7 @@ export function App() {
       }
       if (isEncryptedInvitationHash(window.location.hash)) {
         if (captureEncryptedInvitationLink()) {
-          beginProjectNavigation(false);
+          beginProjectNavigation(false).end();
           updateSettingsViewState({ open: true, activeSection: 'encryption' });
           setSettingsOpen(true);
         }
@@ -5662,10 +5689,16 @@ export function App() {
   const projectOwnershipSettledRef = useRef<Promise<void> | null>(null);
   /**
    * The same claim, naming its project and whether it is held: a write that
-   * must not land on the wrong project's storage (a stored-unit conversion's
-   * checkpoint) checks both, not just that some claim settled.
+   * must not land on the wrong project's storage (autosave, a save point, a
+   * stored-unit conversion's checkpoint) checks both, not just that some
+   * claim settled, and holds the claim's lock until the write lands.
    */
   const projectOwnershipRef = useRef<ProjectStorageOwnership | null>(null);
+  /**
+   * The document as this workspace opened it: the one autosave snapshot a
+   * read-only tab may drop as having nothing of its own to save.
+   */
+  const openedDocumentRef = useRef<ProjectDocument | null>(null);
   const [localSaveDirty, setLocalSaveDirty] = useState(false);
   const [localSaveFailed, setLocalSaveFailed] = useState(false);
   const localSaveCallbacksRef = useRef<LocalProjectAutosaveOptions>({
@@ -5696,8 +5729,13 @@ export function App() {
       window.clearTimeout(localSaveTimeoutRef.current);
       localSaveTimeoutRef.current = null;
     }
-    return localAutosave.flush();
-  }, [localAutosave]);
+    // An edit this tab may not write (another tab holds the project) is
+    // reported, not waited on: it can never land, and every navigation
+    // would stall behind it.
+    return departureFlush(localAutosave.flush(), (refused) =>
+      setStatus(refused.message)
+    );
+  }, [localAutosave, setStatus]);
   flushPendingLocalSaveRef.current = flushPendingLocalSave;
   // Encrypting an existing project (ADR-024 Phase 7, slice 7-2) first
   // saves this page's pending edits to it, here and to the account.
@@ -7501,12 +7539,13 @@ export function App() {
     previewDoc === savePreview.document &&
     savePreview.projectId === doc?.projectId;
   const projectEditDisabledReason =
-    !projectOpenElsewhere && !shareSession && migrationEditReason
+    navigationPause.reasonFor(managerRef.current) ??
+    (!projectOpenElsewhere && !shareSession && migrationEditReason
       ? migrationEditReason
       : (seatEditDisabledReason ??
         (savePreviewActive
           ? 'A saved version is open for preview — close it to edit'
-          : null));
+          : null)));
   // View mode joins the same guard every other modeling edit uses. Project
   // rename has its own mode-aware guard below because it is workspace metadata:
   // owners may change it from either mode, while editors remain Build-only.
@@ -8249,54 +8288,42 @@ export function App() {
       setProjectOpenElsewhere(false);
       return;
     }
-    let cancelled = false;
-    let claim: ProjectOwnershipClaim | null = null;
-    const ownership: ProjectStorageOwnership = {
-      projectId,
-      owned: false,
-      settled: Promise.resolve(),
-      // A conversion's checkpoint write keeps the lock until it lands, so a
-      // tab promoted by this cleanup never saves before it (I03).
-      retain: () => (ownership.owned && claim ? claim.retain() : null)
-    };
-    const settled = claimProjectOwnership(projectId, () => {
-      if (cancelled) {
-        return;
-      }
-      ownership.owned = true;
-      projectOpenElsewhereRef.current = false;
-      setProjectOpenElsewhere(false);
-      setStatus('This tab can edit the project now.');
-      void adoptStoredProject(projectId);
-    }).then((result) => {
-      if (cancelled) {
-        result.release();
-        return;
-      }
-      claim = result;
-      ownership.owned = result.owned;
-      projectOpenElsewhereRef.current = !result.owned;
-      setProjectOpenElsewhere(!result.owned);
-      if (!result.owned) {
-        // The project is on this device — the other tab is keeping it that
-        // way. Nothing here is unsaved, and nothing here may be saved.
-        setSaveState('local');
-        // Said once, where the eye goes: the rail dims as a whole, and the
-        // reason used to live only in each button's tooltip. Sticky, since
-        // it describes a state the tab stays in until the other tab closes.
-        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
+    const tracker = trackProjectStorage(projectId, {
+      onPromoted() {
+        projectOpenElsewhereRef.current = false;
+        setProjectOpenElsewhere(false);
+        setStatus('This tab can edit the project now.');
+        void adoptStoredProject(projectId);
+      },
+      onAnswered(owned) {
+        projectOpenElsewhereRef.current = !owned;
+        setProjectOpenElsewhere(!owned);
+        if (!owned) {
+          // The project is on this device — the other tab is keeping it that
+          // way. Nothing here is unsaved, and nothing here may be saved.
+          setSaveState('local');
+          // Said once, where the eye goes: the rail dims as a whole, and the
+          // reason used to live only in each button's tooltip. Sticky, since
+          // it describes a state the tab stays in until the other tab closes.
+          setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
+        }
       }
     });
+    // A device write (autosave, a save point, a conversion's checkpoint)
+    // keeps the lock until it lands, so a tab promoted by this cleanup never
+    // saves before it.
+    const { ownership } = tracker;
+    const settled = ownership.settled.then(() => undefined);
     projectOwnershipSettledRef.current = settled;
-    ownership.settled = settled;
     projectOwnershipRef.current = ownership;
     return () => {
-      cancelled = true;
-      ownership.owned = false;
       projectOwnershipSettledRef.current = null;
       if (projectOwnershipRef.current === ownership)
         projectOwnershipRef.current = null;
-      claim?.release();
+      // No edit is taken while a navigation leaves the project (see
+      // `navigationPause`), so autosave has written everything by now; a
+      // write still in flight keeps the lock until it lands.
+      tracker.giveUp();
     };
   }, [doc?.projectId, shareSession, setStatus]);
 
@@ -11477,6 +11504,8 @@ export function App() {
       normalized,
       session?.userId ?? normalized.ownerUserId
     );
+    navigationPause.guard(managerRef.current);
+    openedDocumentRef.current = normalized;
     setLatestLocalAppend((append) =>
       retainLocalHistoryAppend(append, normalized)
     );
@@ -11541,7 +11570,7 @@ export function App() {
 
   async function writePendingLocalDocument(
     pending: ProjectDocument
-  ): Promise<boolean> {
+  ): Promise<LocalProjectWriteResult> {
     if (shareSessionRef.current) {
       // Belt to the autosave effect's braces: a shared-link document must
       // never reach this device's project store under the owner's id.
@@ -11549,16 +11578,24 @@ export function App() {
     }
     // The first save can start before the claim has been answered. Writing on
     // the strength of not having heard "no" yet is the overwrite this is here
-    // to prevent, so wait for the answer rather than assume it.
-    await projectOwnershipSettledRef.current;
-    if (projectOpenElsewhereRef.current) {
-      // Another tab owns this project's storage. Its copy is the one being
-      // kept up to date; writing here would land on top of it.
+    // to prevent, so wait for the answer rather than assume it. The claim's
+    // lock is then held until the write lands: a tab that takes the project
+    // over when this one leaves it must not save before this write does, or
+    // this late write would land on top of its newer save.
+    const written = await writeLocalProjectUnderClaim(
+      () => projectOwnershipRef.current,
+      pending.projectId,
+      () => saveLocalProject(pending),
+      sameLocalProjectContent(openedDocumentRef.current, pending)
+    );
+    if (written !== true) {
+      // Another tab owns this project's storage, or this tab has let its
+      // claim go. That copy is the one being kept up to date; writing here
+      // would land on top of it. A refused write keeps this tab's work
+      // queued and dirty, so leaving the page still warns about it.
       setSaveState('local');
-      return false;
     }
-    await saveLocalProject(pending);
-    return true;
+    return written;
   }
 
   function localDocumentSaved(
@@ -16044,96 +16081,103 @@ export function App() {
   ): Promise<boolean> {
     let opened = false;
     const isCurrent = beginProjectNavigation();
-    const activeProjectSince = snapshotActiveProject();
-    setAssistantCollapsed(true);
-    const finishBusy = startNavigationBusy(name, true);
-    // Load the viewport while the account creates the project. No document
-    // or keys are speculated, and a failed warm-up leaves render recovery intact.
-    void loadWhenOnline(() => LazyViewerShell.preload()).catch(() => undefined);
-    async function createLocal(userId: UserId, message?: string) {
-      const localDocument = createProjectDocument(name, userId, units);
-      await saveLocalProject(localDocument);
-      if (!isCurrent()) return;
-      hydrateDocument(localDocument, { activeProjectSince });
-      opened = true;
-      setProjects((current) => [
-        summarizeLocalDocument(localDocument),
-        ...current
-      ]);
-      setCloudAvailable(false);
-      setStatus(message ?? `Created ${localDocument.name} locally.`);
-    }
     try {
-      await flushPendingLocalSave();
-    } catch {
-      // This is a failed device save, not a cloud-create failure. Do not enter
-      // the offline fallback and replace the unsaved project on screen.
-      finishBusy();
-      return false;
-    }
-    try {
-      if (!isCurrent()) return false;
-      if (!session) {
-        // The document effect's flush lands on 'local' once the device write
-        // is done; forcing it here would show "Local only" for a frame and
-        // then the spinner the effect reports anyway.
-        await createLocal(localUserId);
-        return opened;
+      const activeProjectSince = snapshotActiveProject();
+      setAssistantCollapsed(true);
+      const finishBusy = startNavigationBusy(name, true);
+      // Load the viewport while the account creates the project. No document
+      // or keys are speculated, and a failed warm-up leaves render recovery intact.
+      void loadWhenOnline(() => LazyViewerShell.preload()).catch(
+        () => undefined
+      );
+      async function createLocal(userId: UserId, message?: string) {
+        const localDocument = createProjectDocument(name, userId, units);
+        await saveLocalProject(localDocument);
+        if (!isCurrent()) return;
+        hydrateDocument(localDocument, { activeProjectSince });
+        opened = true;
+        setProjects((current) => [
+          summarizeLocalDocument(localDocument),
+          ...current
+        ]);
+        setCloudAvailable(false);
+        setStatus(message ?? `Created ${localDocument.name} locally.`);
       }
-      // The browser builds the new document and the account stores it as
-      // sent (ADR-024 Phase 1). The route trims the name it compares with.
-      const response = await api.createProject({
-        name: name.trim(),
-        units,
-        initialDocument: withoutDerivedProjection(
-          createProjectDocument(name.trim(), session.userId, units)
-        )
-      });
-      await saveLocalProject(response.document);
-      remoteVersionsRef.current.set(
-        response.document.projectId,
-        response.document.version
-      );
-      await saveLastSyncedVersion(
-        response.document.projectId,
-        response.document.version
-      );
-      if (!isCurrent()) return false;
-      setCloudAvailable(true);
-      setCloudProjectIds((current) =>
-        new Set(current).add(response.document.projectId)
-      );
-      hydrateDocument(response.document, { activeProjectSince });
-      opened = true;
-      setProjects((current) => [response.project, ...current]);
-      setStatus(`Created ${response.project.name}.`);
-      return true;
-    } catch (error) {
-      if (!isCurrent()) return false;
-      // A refused request is not an unreachable one. Falling back to local mode
-      // on a validation failure would persist exactly the project the server
-      // just rejected, so surface it and let the user correct the input.
-      if (
-        error instanceof ApiError &&
-        error.isClientError &&
-        error.status !== 401
-      ) {
-        setCloudAvailable(true);
-        setStatus(errorMessage(error, 'Could not create the project.'));
+      try {
+        await flushPendingLocalSave();
+      } catch {
+        // This is a failed device save, not a cloud-create failure. Do not enter
+        // the offline fallback and replace the unsaved project on screen.
+        finishBusy();
         return false;
       }
-      const sessionExpired = error instanceof ApiError && error.status === 401;
-      if (sessionExpired) {
-        remoteVersionsRef.current.clear();
-        endCloudSettingsSession();
+      try {
+        if (!isCurrent()) return false;
+        if (!session) {
+          // The document effect's flush lands on 'local' once the device write
+          // is done; forcing it here would show "Local only" for a frame and
+          // then the spinner the effect reports anyway.
+          await createLocal(localUserId);
+          return opened;
+        }
+        // The browser builds the new document and the account stores it as
+        // sent (ADR-024 Phase 1). The route trims the name it compares with.
+        const response = await api.createProject({
+          name: name.trim(),
+          units,
+          initialDocument: withoutDerivedProjection(
+            createProjectDocument(name.trim(), session.userId, units)
+          )
+        });
+        await saveLocalProject(response.document);
+        remoteVersionsRef.current.set(
+          response.document.projectId,
+          response.document.version
+        );
+        await saveLastSyncedVersion(
+          response.document.projectId,
+          response.document.version
+        );
+        if (!isCurrent()) return false;
+        setCloudAvailable(true);
+        setCloudProjectIds((current) =>
+          new Set(current).add(response.document.projectId)
+        );
+        hydrateDocument(response.document, { activeProjectSince });
+        opened = true;
+        setProjects((current) => [response.project, ...current]);
+        setStatus(`Created ${response.project.name}.`);
+        return true;
+      } catch (error) {
+        if (!isCurrent()) return false;
+        // A refused request is not an unreachable one. Falling back to local mode
+        // on a validation failure would persist exactly the project the server
+        // just rejected, so surface it and let the user correct the input.
+        if (
+          error instanceof ApiError &&
+          error.isClientError &&
+          error.status !== 401
+        ) {
+          setCloudAvailable(true);
+          setStatus(errorMessage(error, 'Could not create the project.'));
+          return false;
+        }
+        const sessionExpired =
+          error instanceof ApiError && error.status === 401;
+        if (sessionExpired) {
+          remoteVersionsRef.current.clear();
+          endCloudSettingsSession();
+        }
+        await createLocal(
+          sessionExpired ? localUserId : (session?.userId ?? localUserId),
+          `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
+        );
+        return opened;
+      } finally {
+        finishBusy();
       }
-      await createLocal(
-        sessionExpired ? localUserId : (session?.userId ?? localUserId),
-        `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
-      );
-      return opened;
     } finally {
-      finishBusy();
+      isCurrent.end();
     }
   }
 
@@ -16466,55 +16510,61 @@ export function App() {
 
   async function handleOpenDemo(definition: DemoDefinition) {
     const isCurrent = beginProjectNavigation();
-    const activeProjectSince = snapshotActiveProject();
-    const finishBusy = startNavigationBusy();
     try {
-      await flushPendingLocalSave();
-      const existing = await loadLocalProject(definition.projectId);
-      if (!isCurrent()) return;
-      if (existing) {
-        hydrateDocument(existing, {
-          activeProjectSince,
-          previousUnits: existing.units
-        });
+      const activeProjectSince = snapshotActiveProject();
+      const finishBusy = startNavigationBusy();
+      try {
+        await flushPendingLocalSave();
+        const existing = await loadLocalProject(definition.projectId);
+        if (!isCurrent()) return;
+        if (existing) {
+          hydrateDocument(existing, {
+            activeProjectSince,
+            previousUnits: existing.units
+          });
+          if (definition.initialWorkspace)
+            setWorkspaceMode(definition.initialWorkspace);
+          setStatus(`Opened ${existing.name}.`);
+          return;
+        }
+        setStatus(`Building ${definition.name}…`);
+        // The builders are only reachable from here, and only for a demo that
+        // has not been seeded yet — the branch above returns for every later
+        // open. Fetching them now keeps them out of first paint.
+        const { buildDemoSeed } = await import('./lib/demos');
+        const { document, saveStates } = await buildDemoSeed(
+          definition,
+          session?.userId ?? localUserId,
+          (candidate) => geometry.syncOnce(candidate)
+        );
+        // Every revision the launcher promises is stored as a save state, so
+        // Rev A and Rev B can be restored rather than listed as "not stored".
+        await saveLocalSaveStates(saveStates);
+        await saveLocalProject(document);
+        if (!isCurrent()) return;
+        hydrateDocument(document, { activeProjectSince });
         if (definition.initialWorkspace)
           setWorkspaceMode(definition.initialWorkspace);
-        setStatus(`Opened ${existing.name}.`);
-        return;
+        setCloudAvailable(false);
+        setProjects((current) => [
+          summarizeLocalDocument(document),
+          ...current.filter(
+            (project) => project.projectId !== document.projectId
+          )
+        ]);
+        setStatus(
+          definition.revisions.length > 0
+            ? 'Demo ready · Try Tweak to change a value'
+            : `${definition.name} ready — explore its parts and pivot in Assemble.`
+        );
+      } catch (error) {
+        if (isCurrent())
+          setStatus(errorMessage(error, 'Failed to build the demo.'));
+      } finally {
+        finishBusy();
       }
-      setStatus(`Building ${definition.name}…`);
-      // The builders are only reachable from here, and only for a demo that
-      // has not been seeded yet — the branch above returns for every later
-      // open. Fetching them now keeps them out of first paint.
-      const { buildDemoSeed } = await import('./lib/demos');
-      const { document, saveStates } = await buildDemoSeed(
-        definition,
-        session?.userId ?? localUserId,
-        (candidate) => geometry.syncOnce(candidate)
-      );
-      // Every revision the launcher promises is stored as a save state, so
-      // Rev A and Rev B can be restored rather than listed as "not stored".
-      await saveLocalSaveStates(saveStates);
-      await saveLocalProject(document);
-      if (!isCurrent()) return;
-      hydrateDocument(document, { activeProjectSince });
-      if (definition.initialWorkspace)
-        setWorkspaceMode(definition.initialWorkspace);
-      setCloudAvailable(false);
-      setProjects((current) => [
-        summarizeLocalDocument(document),
-        ...current.filter((project) => project.projectId !== document.projectId)
-      ]);
-      setStatus(
-        definition.revisions.length > 0
-          ? 'Demo ready · Try Tweak to change a value'
-          : `${definition.name} ready — explore its parts and pivot in Assemble.`
-      );
-    } catch (error) {
-      if (isCurrent())
-        setStatus(errorMessage(error, 'Failed to build the demo.'));
     } finally {
-      finishBusy();
+      isCurrent.end();
     }
   }
 
@@ -16522,173 +16572,181 @@ export function App() {
     projectId: string,
     isCurrent: () => boolean = beginProjectNavigation()
   ) {
-    // A project the account stores in a format this build cannot open
-    // (ADR-024 Phase 4) is not loaded at all, nor its device copy opened.
-    const listed = projects.find((project) => project.projectId === projectId);
-    if (listed && projectNeedsUpdate(listed)) {
-      if (isCurrent()) setStatus(PROJECT_FORMAT_UNSUPPORTED_MESSAGE);
-      return;
-    }
-    const activeProjectSince = snapshotActiveProject();
-    const finishBusy = startNavigationBusy(listed?.name ?? 'project');
-    // Load the viewport while the saved copies are checked, as creating a
-    // project does; the two loader phases otherwise ran one after the other.
-    void loadWhenOnline(() => LazyViewerShell.preload()).catch(() => undefined);
     try {
-      await flushPendingLocalSave();
-      if (!isCurrent()) return;
-      const draining = cloudProjectAutosaveRef.current?.flushPending();
-      if (!accountSavePendingRef.current) await draining;
-      if (!isCurrent()) return;
-      await sharedThumbnailCapture.flush();
-      if (!isCurrent()) return;
-      sharedThumbnailCapture.discard();
-      const localDocumentPromise = loadLocalProject(projectId);
-      const lastSyncedVersionPromise = loadLastSyncedVersion(projectId);
-      const [localDocument, remoteResult, lastSyncedVersion] =
-        await Promise.all([
-          localDocumentPromise,
-          session
-            ? Promise.all([
-                localDocumentPromise,
-                lastSyncedVersionPromise
-              ]).then(([localDocument, baseline]) =>
-                loadAccountProjectResult(projectId, {
-                  localDocument,
-                  previouslySynced:
-                    baseline !== null || cloudProjectIds.has(projectId),
-                  accountProjects: {
-                    remoteReached: accountProjectListReached,
-                    cloudProjectIds
-                  }
-                })
-              )
-            : Promise.resolve<AccountProjectLoadResult>({
-                document: null
-              }),
-          lastSyncedVersionPromise
-        ]);
-      const remoteDocument = remoteResult.document;
-      if (!isCurrent()) return;
-      if (isProjectFormatUnsupportedError(remoteResult.error)) {
-        // The account would refuse every save of a device copy too.
-        setStatus(remoteResult.error.message);
-        return;
-      }
-      // A project this device holds alone is not in the account, and the
-      // account says so with a 404. That is the ordinary answer, not an
-      // outage: reading it as one opened every device project with "The
-      // account copy is currently unreachable" and an Offline save state,
-      // right beside the Save to my account chip that fixes it.
-      const notInAccount =
-        remoteResult.error instanceof ApiError &&
-        remoteResult.error.status === 404 &&
-        !cloudProjectIds.has(projectId);
-      if (remoteResult.error && localDocument && !notInAccount) {
-        const needsRepair = isProjectDocumentUnavailableError(
-          remoteResult.error
-        );
-        accountDocumentUnavailableProjectIdRef.current = needsRepair
-          ? projectId
-          : null;
-        setCloudAvailable(false);
-        setArtifacts([]);
-        hydrateDocument(localDocument, {
-          activeProjectSince,
-          previousUnits: localDocument.units
-        });
-        if (!needsRepair) accountUnreachableProjectIdRef.current = projectId;
-        setSaveState(needsRepair ? 'repair' : 'offline');
-        setStatus(
-          needsRepair
-            ? `Opened ${localDocument.name}. The account copy needs repair; your work remains saved on this device.`
-            : `Opened ${localDocument.name}. The account copy is currently unreachable; your work remains saved on this device.`
-        );
-        return;
-      }
-      if (remoteResult.error && !localDocument) {
-        throw remoteResult.error instanceof Error
-          ? remoteResult.error
-          : new Error('The account project could not be loaded.');
-      }
-      const outcome = chooseProjectDocument(
-        localDocument,
-        remoteDocument,
-        lastSyncedVersion
+      // A project the account stores in a format this build cannot open
+      // (ADR-024 Phase 4) is not loaded at all, nor its device copy opened.
+      const listed = projects.find(
+        (project) => project.projectId === projectId
       );
-      if (outcome.choice === 'none') {
-        throw new Error('Project not found locally or in the beta API.');
+      if (listed && projectNeedsUpdate(listed)) {
+        if (isCurrent()) setStatus(PROJECT_FORMAT_UNSUPPORTED_MESSAGE);
+        return;
       }
-      const commitAccountState = () => {
-        accountDocumentUnavailableProjectIdRef.current = null;
-        setCloudAvailable(Boolean(remoteDocument));
-        setArtifacts([]);
-        if (remoteDocument) {
-          remoteVersionsRef.current.set(
-            remoteDocument.projectId,
-            remoteDocument.version
-          );
+      const activeProjectSince = snapshotActiveProject();
+      const finishBusy = startNavigationBusy(listed?.name ?? 'project');
+      // Load the viewport while the saved copies are checked, as creating a
+      // project does; the two loader phases otherwise ran one after the other.
+      void loadWhenOnline(() => LazyViewerShell.preload()).catch(
+        () => undefined
+      );
+      try {
+        await flushPendingLocalSave();
+        if (!isCurrent()) return;
+        const draining = cloudProjectAutosaveRef.current?.flushPending();
+        if (!accountSavePendingRef.current) await draining;
+        if (!isCurrent()) return;
+        await sharedThumbnailCapture.flush();
+        if (!isCurrent()) return;
+        sharedThumbnailCapture.discard();
+        const localDocumentPromise = loadLocalProject(projectId);
+        const lastSyncedVersionPromise = loadLastSyncedVersion(projectId);
+        const [localDocument, remoteResult, lastSyncedVersion] =
+          await Promise.all([
+            localDocumentPromise,
+            session
+              ? Promise.all([
+                  localDocumentPromise,
+                  lastSyncedVersionPromise
+                ]).then(([localDocument, baseline]) =>
+                  loadAccountProjectResult(projectId, {
+                    localDocument,
+                    previouslySynced:
+                      baseline !== null || cloudProjectIds.has(projectId),
+                    accountProjects: {
+                      remoteReached: accountProjectListReached,
+                      cloudProjectIds
+                    }
+                  })
+                )
+              : Promise.resolve<AccountProjectLoadResult>({
+                  document: null
+                }),
+            lastSyncedVersionPromise
+          ]);
+        const remoteDocument = remoteResult.document;
+        if (!isCurrent()) return;
+        if (isProjectFormatUnsupportedError(remoteResult.error)) {
+          // The account would refuse every save of a device copy too.
+          setStatus(remoteResult.error.message);
+          return;
         }
-      };
-      if (outcome.choice === 'diverged') {
-        commitAccountState();
-        // Both copies moved since this device last agreed with the account.
-        // Open the local one — it is the work in front of the user — and ask
-        // rather than discarding either side.
-        hydrateDocument(outcome.local, { activeProjectSince });
-        cloudProjectAutosaveRef.current?.haltForConflict(
-          outcome.local.projectId
+        // A project this device holds alone is not in the account, and the
+        // account says so with a 404. That is the ordinary answer, not an
+        // outage: reading it as one opened every device project with "The
+        // account copy is currently unreachable" and an Offline save state,
+        // right beside the Save to my account chip that fixes it.
+        const notInAccount =
+          remoteResult.error instanceof ApiError &&
+          remoteResult.error.status === 404 &&
+          !cloudProjectIds.has(projectId);
+        if (remoteResult.error && localDocument && !notInAccount) {
+          const needsRepair = isProjectDocumentUnavailableError(
+            remoteResult.error
+          );
+          accountDocumentUnavailableProjectIdRef.current = needsRepair
+            ? projectId
+            : null;
+          setCloudAvailable(false);
+          setArtifacts([]);
+          hydrateDocument(localDocument, {
+            activeProjectSince,
+            previousUnits: localDocument.units
+          });
+          if (!needsRepair) accountUnreachableProjectIdRef.current = projectId;
+          setSaveState(needsRepair ? 'repair' : 'offline');
+          setStatus(
+            needsRepair
+              ? `Opened ${localDocument.name}. The account copy needs repair; your work remains saved on this device.`
+              : `Opened ${localDocument.name}. The account copy is currently unreachable; your work remains saved on this device.`
+          );
+          return;
+        }
+        if (remoteResult.error && !localDocument) {
+          throw remoteResult.error instanceof Error
+            ? remoteResult.error
+            : new Error('The account project could not be loaded.');
+        }
+        const outcome = chooseProjectDocument(
+          localDocument,
+          remoteDocument,
+          lastSyncedVersion
         );
-        setAccountConflict(
-          conflictFromDocuments(outcome.local, outcome.remote, 'account')
-        );
-        setSaveState('conflict');
-        setStatus(
-          `${outcome.local.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
-        );
-        return;
-      }
-      let viewUnitsUnknown = false;
-      const openedDocument =
-        outcome.choice === 'remote' && localDocument
-          ? withLocalDerived(outcome.document, localDocument)
-          : outcome.document;
-      if (outcome.choice === 'remote') {
-        // I03: as at startup, stamp legacy view state with the device copy's
-        // unit before the account copy replaces it.
-        await adoptAccountCopyLocally(openedDocument, localDocument, {
-          stampViewUnits: stampLegacyViewUnits,
-          saveLocalProject,
-          saveLastSyncedVersion,
-          isCurrent,
-          viewUnitsUnknown: () => {
-            viewUnitsUnknown = true;
+        if (outcome.choice === 'none') {
+          throw new Error('Project not found locally or in the beta API.');
+        }
+        const commitAccountState = () => {
+          accountDocumentUnavailableProjectIdRef.current = null;
+          setCloudAvailable(Boolean(remoteDocument));
+          setArtifacts([]);
+          if (remoteDocument) {
+            remoteVersionsRef.current.set(
+              remoteDocument.projectId,
+              remoteDocument.version
+            );
           }
+        };
+        if (outcome.choice === 'diverged') {
+          commitAccountState();
+          // Both copies moved since this device last agreed with the account.
+          // Open the local one — it is the work in front of the user — and ask
+          // rather than discarding either side.
+          hydrateDocument(outcome.local, { activeProjectSince });
+          cloudProjectAutosaveRef.current?.haltForConflict(
+            outcome.local.projectId
+          );
+          setAccountConflict(
+            conflictFromDocuments(outcome.local, outcome.remote, 'account')
+          );
+          setSaveState('conflict');
+          setStatus(
+            `${outcome.local.name} changed here and in your account. Nothing has been discarded — choose which to keep.`
+          );
+          return;
+        }
+        let viewUnitsUnknown = false;
+        const openedDocument =
+          outcome.choice === 'remote' && localDocument
+            ? withLocalDerived(outcome.document, localDocument)
+            : outcome.document;
+        if (outcome.choice === 'remote') {
+          // I03: as at startup, stamp legacy view state with the device copy's
+          // unit before the account copy replaces it.
+          await adoptAccountCopyLocally(openedDocument, localDocument, {
+            stampViewUnits: stampLegacyViewUnits,
+            saveLocalProject,
+            saveLastSyncedVersion,
+            isCurrent,
+            viewUnitsUnknown: () => {
+              viewUnitsUnknown = true;
+            }
+          });
+        }
+        if (!isCurrent()) return;
+        commitAccountState();
+        hydrateDocument(openedDocument, {
+          activeProjectSince,
+          ...(viewUnitsUnknown
+            ? { previousUnits: 'unknown' as const }
+            : localDocument
+              ? { previousUnits: localDocument.units }
+              : {})
         });
-      }
-      if (!isCurrent()) return;
-      commitAccountState();
-      hydrateDocument(openedDocument, {
-        activeProjectSince,
-        ...(viewUnitsUnknown
-          ? { previousUnits: 'unknown' as const }
-          : localDocument
-            ? { previousUnits: localDocument.units }
-            : {})
-      });
-      setStatus(
-        (outcome.choice === 'local' && remoteDocument
-          ? `Opened newer local edits for ${openedDocument.name}.`
-          : `Opened ${openedDocument.name}.`) +
-          (viewUnitsUnknown ? VIEW_UNITS_UNKNOWN_NOTE : '')
-      );
-    } catch (error) {
-      if (isCurrent()) {
-        setStatus(errorMessage(error, 'Failed to open project.'));
-        offerPinReset(error, projectId, listed?.name ?? null);
+        setStatus(
+          (outcome.choice === 'local' && remoteDocument
+            ? `Opened newer local edits for ${openedDocument.name}.`
+            : `Opened ${openedDocument.name}.`) +
+            (viewUnitsUnknown ? VIEW_UNITS_UNKNOWN_NOTE : '')
+        );
+      } catch (error) {
+        if (isCurrent()) {
+          setStatus(errorMessage(error, 'Failed to open project.'));
+          offerPinReset(error, projectId, listed?.name ?? null);
+        }
+      } finally {
+        finishBusy();
       }
     } finally {
-      finishBusy();
+      endProjectNavigation(isCurrent);
     }
   }
 
@@ -16918,47 +16976,51 @@ export function App() {
     }
     const activeProjectSince = snapshotActiveProject();
     const isCurrent = beginProjectNavigation(false);
-    const finishBusy = startNavigationBusy();
-    let copied: ProjectSummary | null = null;
     try {
-      const copy = await saveShareLinkCopy(
-        source,
-        shareLinkCopyName(
-          source.name,
-          projects.map((summary) => summary.name)
-        ),
-        session?.userId ?? localUserId
-      );
-      if (!isCurrent()) return;
-      setShareSession(null);
-      shareSessionRef.current = null;
-      clearProjectShareFragment();
-      const summary = summarizeLocalDocument(
-        copy,
-        DEFAULT_PROJECT_ORGANIZATION
-      );
-      setProjects((current) =>
-        [...current, summary].sort(compareProjectSummaries)
-      );
-      hydrateDocument(copy, { activeProjectSince });
-      handleWorkspaceMode('build');
-      setStatus(
-        `${copy.name} is yours now — saved on this device. Build mode is open.`
-      );
-      copied = summary;
-    } catch (error) {
-      if (isCurrent())
-        setStatus(errorMessage(error, 'Could not copy the shared model.'));
+      const finishBusy = startNavigationBusy();
+      let copied: ProjectSummary | null = null;
+      try {
+        const copy = await saveShareLinkCopy(
+          source,
+          shareLinkCopyName(
+            source.name,
+            projects.map((summary) => summary.name)
+          ),
+          session?.userId ?? localUserId
+        );
+        if (!isCurrent()) return;
+        setShareSession(null);
+        shareSessionRef.current = null;
+        clearProjectShareFragment();
+        const summary = summarizeLocalDocument(
+          copy,
+          DEFAULT_PROJECT_ORGANIZATION
+        );
+        setProjects((current) =>
+          [...current, summary].sort(compareProjectSummaries)
+        );
+        hydrateDocument(copy, { activeProjectSince });
+        handleWorkspaceMode('build');
+        setStatus(
+          `${copy.name} is yours now — saved on this device. Build mode is open.`
+        );
+        copied = summary;
+      } catch (error) {
+        if (isCurrent())
+          setStatus(errorMessage(error, 'Could not copy the shared model.'));
+      } finally {
+        finishBusy();
+      }
+      // Into the visitor's account (an encrypted link's choice, slice 5-11):
+      // the device copy above is saved as any device project is, encrypted
+      // under the visitor's keys when the account encrypts new projects
+      // (decision D2, slice 4-8's adoption) and as an ordinary project
+      // otherwise. A failure leaves the device copy, with the reason.
+      if (copied && destination === 'account' && isCurrent()) {
+        await handleSaveToAccount(copied);
+      }
     } finally {
-      finishBusy();
-    }
-    // Into the visitor's account (an encrypted link's choice, slice 5-11):
-    // the device copy above is saved as any device project is, encrypted
-    // under the visitor's keys when the account encrypts new projects
-    // (decision D2, slice 4-8's adoption) and as an ordinary project
-    // otherwise. A failure leaves the device copy, with the reason.
-    if (copied && destination === 'account' && isCurrent()) {
-      await handleSaveToAccount(copied);
+      isCurrent.end();
     }
   }
 
@@ -17071,7 +17133,7 @@ export function App() {
   ]);
 
   function dismissProjectInvitation() {
-    beginProjectNavigation();
+    beginProjectNavigation().end();
     restoreShareSessionFragment();
     setStatus('Invitation dismissed.');
     closeSettings();
@@ -17081,80 +17143,84 @@ export function App() {
     isCurrent: () => boolean = beginProjectNavigation()
   ) {
     try {
-      await flushPendingLocalSave();
-    } catch {
-      // Keep the failed document open, with its export/retry guidance. Opening
-      // another project would otherwise replace the only unsaved snapshot.
-      return;
-    }
-    if (!isCurrent()) return;
-    const draining = cloudProjectAutosaveRef.current?.flushPending();
-    // A manual checkpoint now shares the account queue. The device is safe;
-    // navigation need not wait for its network response. Its continuation is
-    // guarded by the originating manager, and closing discards stale mirrors.
-    if (!accountSavePendingRef.current) await draining;
-    if (!isCurrent()) return;
-    // The card is written before the shelf that shows it is listed. Then
-    // forgotten: a project trashed from that shelf must not get its record
-    // written back by a later flush.
-    await sharedThumbnailCapture.flush();
-    if (!isCurrent()) return;
-    sharedThumbnailCapture.discard();
-    if (shareSessionRef.current) {
-      // Leaving the shared session drops it: the shelf that follows is this
-      // device's own projects, and the link in the URL has been consumed.
-      setShareSession(null);
-      shareSessionRef.current = null;
-      clearProjectShareFragment();
-    }
-    clearActiveProject();
-    forgetProjectView();
-    managerRef.current = null;
-    forgetCompleteCommit();
-    clearAutoFrame();
-    setDoc(null);
-    // A workspace notice speaks about the model just closed, and its action
-    // (an Undo above all) has no document left to act on. The library shares
-    // the toast slot, so one left standing was carried onto the shelf and,
-    // remounted there, started its lifetime over.
-    setToast(null);
-    setArtifacts([]);
-    setSelectedFeatureNode(null);
-    setSelectedTopology(null);
-    setSelectedEdges([]);
-    setSelectedBodyIds([]);
-    setSelectedSketchProfileId(null);
-    setSelectedProfiles([]);
-    setTool(null);
-    // An account the last listing missed is being asked again: the shelf says
-    // so instead of "Account unavailable" over this device's projects alone.
-    const listingPending = Boolean(
-      sessionRef.current && !accountProjectListReached
-    );
-    if (listingPending) setAccountListingPending(true);
-    try {
-      // The flush above just started this project's card upload. The shelf
-      // already shows the card; the listing behind it is read once the upload
-      // settles, so it names that card rather than the one it replaced.
-      await settleThumbnailUploads();
+      try {
+        await flushPendingLocalSave();
+      } catch {
+        // Keep the failed document open, with its export/retry guidance. Opening
+        // another project would otherwise replace the only unsaved snapshot.
+        return;
+      }
       if (!isCurrent()) return;
-      const listed = await loadProjectSummaries(
-        sessionRef.current?.userId ?? null
+      const draining = cloudProjectAutosaveRef.current?.flushPending();
+      // A manual checkpoint now shares the account queue. The device is safe;
+      // navigation need not wait for its network response. Its continuation is
+      // guarded by the originating manager, and closing discards stale mirrors.
+      if (!accountSavePendingRef.current) await draining;
+      if (!isCurrent()) return;
+      // The card is written before the shelf that shows it is listed. Then
+      // forgotten: a project trashed from that shelf must not get its record
+      // written back by a later flush.
+      await sharedThumbnailCapture.flush();
+      if (!isCurrent()) return;
+      sharedThumbnailCapture.discard();
+      if (shareSessionRef.current) {
+        // Leaving the shared session drops it: the shelf that follows is this
+        // device's own projects, and the link in the URL has been consumed.
+        setShareSession(null);
+        shareSessionRef.current = null;
+        clearProjectShareFragment();
+      }
+      clearActiveProject();
+      forgetProjectView();
+      managerRef.current = null;
+      forgetCompleteCommit();
+      clearAutoFrame();
+      setDoc(null);
+      // A workspace notice speaks about the model just closed, and its action
+      // (an Undo above all) has no document left to act on. The library shares
+      // the toast slot, so one left standing was carried onto the shelf and,
+      // remounted there, started its lifetime over.
+      setToast(null);
+      setArtifacts([]);
+      setSelectedFeatureNode(null);
+      setSelectedTopology(null);
+      setSelectedEdges([]);
+      setSelectedBodyIds([]);
+      setSelectedSketchProfileId(null);
+      setSelectedProfiles([]);
+      setTool(null);
+      // An account the last listing missed is being asked again: the shelf says
+      // so instead of "Account unavailable" over this device's projects alone.
+      const listingPending = Boolean(
+        sessionRef.current && !accountProjectListReached
       );
-      if (!isCurrent()) return;
-      setProjects(listed.projects);
-      setCloudProjectIds(listed.cloudProjectIds);
-      setAccountProjectListReached(listed.remoteReached);
-      setCloudAvailable(listed.remoteReached);
-      // The shelf heading counts the parts and the cloud card says whether
-      // the account answered, so a listing leaves the status line empty.
-      setStatus('');
-    } catch (error) {
-      if (isCurrent()) {
-        setStatus(errorMessage(error, 'Failed to refresh projects.'));
+      if (listingPending) setAccountListingPending(true);
+      try {
+        // The flush above just started this project's card upload. The shelf
+        // already shows the card; the listing behind it is read once the upload
+        // settles, so it names that card rather than the one it replaced.
+        await settleThumbnailUploads();
+        if (!isCurrent()) return;
+        const listed = await loadProjectSummaries(
+          sessionRef.current?.userId ?? null
+        );
+        if (!isCurrent()) return;
+        setProjects(listed.projects);
+        setCloudProjectIds(listed.cloudProjectIds);
+        setAccountProjectListReached(listed.remoteReached);
+        setCloudAvailable(listed.remoteReached);
+        // The shelf heading counts the parts and the cloud card says whether
+        // the account answered, so a listing leaves the status line empty.
+        setStatus('');
+      } catch (error) {
+        if (isCurrent()) {
+          setStatus(errorMessage(error, 'Failed to refresh projects.'));
+        }
+      } finally {
+        if (listingPending) setAccountListingPending(false);
       }
     } finally {
-      if (listingPending) setAccountListingPending(false);
+      endProjectNavigation(isCurrent);
     }
   }
   leaveShareSessionRef.current = handleGoHome;
@@ -18946,6 +19012,15 @@ export function App() {
     const isCurrentProject = () =>
       managerRef.current === savingManager &&
       cloudProjectAutosaveRef.current === savingController;
+    // Every device write below holds this project's claim until it lands,
+    // as autosave's does; false (nothing written) once this tab no longer
+    // holds the project, so another tab's newer save is never overwritten.
+    const saveOwned = (document: ProjectDocument) =>
+      writeOwnedProjectStorage(
+        () => projectOwnershipRef.current,
+        document.projectId,
+        () => saveLocalProject(document)
+      );
     if (shareSessionRef.current) {
       setStatus(
         'This is a shared link session — Make a copy to keep the model.'
@@ -19011,16 +19086,28 @@ export function App() {
         }
         return;
       }
-      await projectOwnershipSettledRef.current;
+      // Held, like autosave, through the device write: a tab that takes the
+      // project over meanwhile saves only after this write has landed.
+      const access = await projectStorageWriteAccess(
+        () => projectOwnershipRef.current,
+        savingManager.document.projectId
+      );
       if (
+        !access ||
         !isCurrentProject() ||
         projectOpenElsewhereRef.current ||
         !ensureCanSave()
-      )
+      ) {
+        access?.release();
         return;
-      savingDocument = savingManager.document;
-      setSaveState('saving');
-      await saveLocalProject(savingDocument);
+      }
+      try {
+        savingDocument = savingManager.document;
+        setSaveState('saving');
+        await saveLocalProject(savingDocument);
+      } finally {
+        access.release();
+      }
       savedOnDevice = true;
       if (!isCurrentProject()) {
         return;
@@ -19048,7 +19135,7 @@ export function App() {
           author
         );
         showAccountEcho(savingDocument);
-        await saveLocalProject(savingDocument);
+        if (!(await saveOwned(savingDocument))) return;
         if (isCurrentProject())
           setStatus(
             'Made a save point on this device · sharing through the room.'
@@ -19061,7 +19148,7 @@ export function App() {
         !cloudProjectIds.has(savingDocument.projectId)
       ) {
         const marked = createSavePoint(savingDocument, reason, author);
-        await saveLocalProject(marked);
+        if (!(await saveOwned(marked))) return;
         if (!isCurrentProject()) return;
         if (savingManager.document.version === savingDocument.version) {
           savingManager.document = marked;
@@ -19108,7 +19195,7 @@ export function App() {
         // a name the user had just typed.
         const marked = createSavePoint(savingDocument, reason, author);
         if (savingManager.document.version === savingDocument.version) {
-          await saveLocalProject(marked);
+          if (!(await saveOwned(marked))) return;
           if (!isCurrentProject()) {
             return;
           }
@@ -19144,7 +19231,7 @@ export function App() {
         document: ProjectDocument;
       }) => {
         savingDocument = input.document;
-        await saveLocalProject(savingDocument);
+        if (!(await saveOwned(savingDocument))) return null;
         if (!readDocument() || !isCurrentProject()) return null;
         accountWriteStarted = true;
         // Minted here rather than by the API so the save point records its
@@ -19219,7 +19306,7 @@ export function App() {
         return;
       }
       const restored = withLocalDerived(saved, savingManager.document);
-      await saveLocalProject(restored);
+      if (!(await saveOwned(restored))) return;
       // Navigation or another edit can also happen during the device write.
       if (!isCurrentProject()) {
         return;
@@ -19230,7 +19317,7 @@ export function App() {
       }
       setCloudAvailable(true);
       if (savingManager.document.version !== savingDocument.version) {
-        await saveLocalProject(savingManager.document);
+        await saveOwned(savingManager.document);
       }
       setStatus(sourceWarning ?? 'Made a save point.');
     } catch (error) {
@@ -20822,79 +20909,86 @@ export function App() {
   async function handleImportProject(file: File) {
     if (projectTransferRef.current) return;
     const isCurrent = beginProjectNavigation(shareSessionRef.current === null);
-    projectTransferRef.current = true;
-    setProjectTransferBusy(true);
-    const finishBusy = startNavigationBusy();
-    const origin = managerRef.current;
-    const activeProjectSince = snapshotActiveProject();
-    const sink = createImportProgressSink();
-    let opened = false;
-    sink.start({
-      kind: 'restore',
-      fileName: file.name,
-      cancellable: false,
-      phases: ['reading', 'saving']
-    });
-    sink.update({ phase: 'reading', fraction: null });
     try {
-      const { restoreProjectInWorker } =
-        await import('./lib/projectBackupWorkerClient');
-      const backup = await restoreProjectInWorker(
-        file,
-        session?.userId ?? localUserId
-      );
-      sink.update({ phase: 'saving', fraction: null });
-      await saveImportedProject(backup);
-      if (isCurrent() && managerRef.current === origin) {
-        await flushPendingLocalSave();
-        if (isCurrent() && managerRef.current === origin) {
-          setShareSession(null);
-          shareSessionRef.current = null;
-          clearProjectShareFragment();
-          setCloudAvailable(false);
-          setSaveState('local');
-          setSharingOpen(false);
-          hydrateDocument(backup.document, { activeProjectSince });
-          opened = true;
-          handleWorkspaceMode('build');
-        }
-      }
-      setProjects((current) =>
-        [
-          ...current,
-          summarizeLocalDocument(backup.document, DEFAULT_PROJECT_ORGANIZATION)
-        ].sort(compareProjectSummaries)
-      );
-      if (isCurrent())
-        setStatus(
-          `Imported ${backup.document.name} as a separate local project.`
-        );
-      sink.finish({
-        tone: 'ok',
-        message: opened
-          ? `opened as ${backup.document.name}`
-          : 'saved on this device',
-        landed: opened
+      projectTransferRef.current = true;
+      setProjectTransferBusy(true);
+      const finishBusy = startNavigationBusy();
+      const origin = managerRef.current;
+      const activeProjectSince = snapshotActiveProject();
+      const sink = createImportProgressSink();
+      let opened = false;
+      sink.start({
+        kind: 'restore',
+        fileName: file.name,
+        cancellable: false,
+        phases: ['reading', 'saving']
       });
-    } catch (error) {
-      trackDetail('error_import');
-      // A STEP or STL picked through "All files" used to fail with the JSON
-      // parser's words; say what the file is and where it goes instead.
-      const plain = await describeProjectImportFailure(error, file);
-      if (isCurrent()) {
-        setStatus(
-          `Project import failed. ${plain.message}`,
-          plain.detail ? { detail: plain.detail } : {}
+      sink.update({ phase: 'reading', fraction: null });
+      try {
+        const { restoreProjectInWorker } =
+          await import('./lib/projectBackupWorkerClient');
+        const backup = await restoreProjectInWorker(
+          file,
+          session?.userId ?? localUserId
         );
-        if (onStartScreenRef.current) {
-          announce(plain.message, undefined, { tone: 'warning' });
+        sink.update({ phase: 'saving', fraction: null });
+        await saveImportedProject(backup);
+        if (isCurrent() && managerRef.current === origin) {
+          await flushPendingLocalSave();
+          if (isCurrent() && managerRef.current === origin) {
+            setShareSession(null);
+            shareSessionRef.current = null;
+            clearProjectShareFragment();
+            setCloudAvailable(false);
+            setSaveState('local');
+            setSharingOpen(false);
+            hydrateDocument(backup.document, { activeProjectSince });
+            opened = true;
+            handleWorkspaceMode('build');
+          }
         }
+        setProjects((current) =>
+          [
+            ...current,
+            summarizeLocalDocument(
+              backup.document,
+              DEFAULT_PROJECT_ORGANIZATION
+            )
+          ].sort(compareProjectSummaries)
+        );
+        if (isCurrent())
+          setStatus(
+            `Imported ${backup.document.name} as a separate local project.`
+          );
+        sink.finish({
+          tone: 'ok',
+          message: opened
+            ? `opened as ${backup.document.name}`
+            : 'saved on this device',
+          landed: opened
+        });
+      } catch (error) {
+        trackDetail('error_import');
+        // A STEP or STL picked through "All files" used to fail with the JSON
+        // parser's words; say what the file is and where it goes instead.
+        const plain = await describeProjectImportFailure(error, file);
+        if (isCurrent()) {
+          setStatus(
+            `Project import failed. ${plain.message}`,
+            plain.detail ? { detail: plain.detail } : {}
+          );
+          if (onStartScreenRef.current) {
+            announce(plain.message, undefined, { tone: 'warning' });
+          }
+        }
+        sink.finish({ tone: 'error', message: plain.message });
+      } finally {
+        projectTransferRef.current = false;
+        setProjectTransferBusy(false);
+        finishBusy();
       }
-      sink.finish({ tone: 'error', message: plain.message });
     } finally {
-      projectTransferRef.current = false;
-      setProjectTransferBusy(false);
-      finishBusy();
+      isCurrent.end();
     }
   }
 
@@ -36771,7 +36865,7 @@ export function App() {
             : 'Back to projects'
         }
         onBack={() => {
-          beginProjectNavigation();
+          beginProjectNavigation().end();
           setStatus('');
         }}
       />
@@ -36797,7 +36891,7 @@ export function App() {
       onReturnToModel={
         doc
           ? () => {
-              beginProjectNavigation();
+              beginProjectNavigation().end();
               restoreShareSessionFragment();
             }
           : undefined

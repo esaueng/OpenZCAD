@@ -20,6 +20,7 @@ import {
 import { loadLocalSaveState, saveLocalProject } from './localProjectStore';
 import { claimProjectOwnership } from './projectTabOwnership';
 import { withLockManager } from '../test/fakeLockManager';
+import { workspaceStorageClaim } from '../test/workspaceStorageClaim';
 import {
   commitUnitsConversion,
   unitsConversionCollaborationRefusal,
@@ -634,34 +635,6 @@ describe('unitsConversionWriteAccess', () => {
 });
 
 describe('commitUnitsConversion: the storage claim is held until the command runs', () => {
-  /** The workspace's claim record, as App builds it over a real claim. */
-  async function workspaceClaim(projectId: string) {
-    let given: Awaited<ReturnType<typeof claimProjectOwnership>> | null = null;
-    const ownership: ProjectStorageOwnership = {
-      projectId,
-      owned: false,
-      settled: Promise.resolve(),
-      retain: () => (ownership.owned && given ? given.retain() : null)
-    };
-    ownership.settled = claimProjectOwnership(projectId, () => undefined).then(
-      (result) => {
-        given = result;
-        ownership.owned = result.owned;
-      }
-    );
-    let current: ProjectStorageOwnership | null = ownership;
-    await ownership.settled;
-    return {
-      read: () => current,
-      /** What App's cleanup does when the tab leaves the project. */
-      giveUp() {
-        ownership.owned = false;
-        current = null;
-        given?.release();
-      }
-    };
-  }
-
   it('refuses, writing nothing, when the claim is given up after it was confirmed', async () => {
     const source = boxDocument();
     const manager = new CommandManager(source, USER);
@@ -696,7 +669,7 @@ describe('commitUnitsConversion: the storage claim is held until the command run
     withLockManager();
     const source = boxDocument();
     const manager = new CommandManager(source, USER);
-    const tab = await workspaceClaim(source.projectId);
+    const tab = await workspaceStorageClaim(source.projectId);
     // A second tab waiting for the project, as one opened beside it is.
     const promoted = vi.fn();
     const other = await claimProjectOwnership(source.projectId, promoted);
@@ -746,7 +719,7 @@ describe('commitUnitsConversion: the storage claim is held until the command run
     withLockManager();
     const source = boxDocument();
     const manager = new CommandManager(source, USER);
-    const tab = await workspaceClaim(source.projectId);
+    const tab = await workspaceStorageClaim(source.projectId);
     const { persistence } = recordingPersistence(manager);
     const result = await commitUnitsConversion(
       () => manager,

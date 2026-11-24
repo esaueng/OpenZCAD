@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
+  departureFlush,
   LocalProjectAutosave,
   LocalProjectSaveError,
-  sameLocalProjectContent
+  LocalProjectSaveRefusedError,
+  sameLocalProjectContent,
+  type LocalProjectWriteResult
 } from './localProjectAutosave';
 import { errorMessage } from './errors';
 import {
@@ -31,7 +34,11 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
-function harness(write = vi.fn(async (_document: ProjectDocument) => true)) {
+function harness(
+  write: Mock<
+    (document: ProjectDocument) => Promise<LocalProjectWriteResult>
+  > = vi.fn(async (_document: ProjectDocument) => true)
+) {
   const onSaved =
     vi.fn<(document: ProjectDocument, newerQueued: boolean) => void>();
   const onError = vi.fn<(error: unknown) => void>();
@@ -317,6 +324,76 @@ describe('local save departure safety', () => {
       expect(queue.dirty).toBe(true);
     }
   );
+
+  it('keeps work this tab no longer holds the project for dirty and queued, rejecting the barrier', async () => {
+    const write = vi
+      .fn<(document: ProjectDocument) => Promise<LocalProjectWriteResult>>()
+      .mockResolvedValueOnce('refused')
+      .mockResolvedValueOnce(true);
+    const { queue, onSaved, onError } = harness(write);
+    const document = documentAt(1);
+    queue.enqueue(document);
+    const openDifferentProject = vi.fn();
+    await expect(
+      queue.flush().then(openDifferentProject)
+    ).rejects.toBeInstanceOf(LocalProjectSaveRefusedError);
+    expect(openDifferentProject).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    // Not a storage failure: no device-error guidance.
+    expect(onError).not.toHaveBeenCalled();
+    expect(queue.dirty).toBe(true);
+    // Kept, so a write that holds the project again saves it.
+    await queue.flush();
+    expect(write).toHaveBeenLastCalledWith(document);
+    expect(onSaved).toHaveBeenCalledWith(document, false);
+    expect(queue.dirty).toBe(false);
+  });
+
+  it('never reparks a refused old snapshot over a newer queued edit', async () => {
+    let refuse!: (result: LocalProjectWriteResult) => void;
+    const write = vi
+      .fn<(document: ProjectDocument) => Promise<LocalProjectWriteResult>>()
+      .mockReturnValueOnce(new Promise((resolve) => (refuse = resolve)))
+      .mockResolvedValueOnce(true);
+    const { queue } = harness(write);
+    queue.enqueue(documentAt(1));
+    const flush = queue.flush();
+    await Promise.resolve();
+    queue.enqueue(documentAt(2));
+    refuse('refused');
+    await expect(flush).rejects.toBeInstanceOf(LocalProjectSaveRefusedError);
+    expect(queue.dirty).toBe(true);
+    await queue.flush();
+    expect(write.mock.calls.map(([document]) => document.version)).toEqual([
+      1, 2
+    ]);
+    expect(queue.dirty).toBe(false);
+  });
+
+  it('lets a departure through a refused write, reporting it and keeping it dirty', async () => {
+    const { queue } = harness(vi.fn(async () => 'refused' as const));
+    queue.enqueue(documentAt(1));
+    const onRefused = vi.fn();
+    const leave = vi.fn();
+    await departureFlush(queue.flush(), onRefused).then(leave);
+    expect(onRefused).toHaveBeenCalledWith(
+      expect.any(LocalProjectSaveRefusedError)
+    );
+    expect(leave).toHaveBeenCalled();
+    expect(queue.dirty).toBe(true);
+  });
+
+  it('still holds a departure on a failed device write', async () => {
+    const { queue } = harness(
+      vi.fn(async () => {
+        throw new Error('Storage full');
+      })
+    );
+    queue.enqueue(documentAt(1));
+    const onRefused = vi.fn();
+    await expect(departureFlush(queue.flush(), onRefused)).rejects.toThrow();
+    expect(onRefused).not.toHaveBeenCalled();
+  });
 
   it('does not announce a saved document when ownership refuses the write', async () => {
     const { queue, onSaved } = harness(vi.fn(async () => false));

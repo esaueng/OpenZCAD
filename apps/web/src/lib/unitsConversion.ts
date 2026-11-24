@@ -21,6 +21,11 @@ import type {
 } from '@openzcad/shared';
 import { saveLocalProject, saveLocalSaveStates } from './localProjectStore';
 import type { CollaborationStatus } from './useCollaboration';
+import {
+  projectStorageWriteAccess,
+  type ProjectStorageOwnership,
+  type ProjectStorageWriteAccess
+} from './projectTabOwnership';
 
 /**
  * I03 stored-unit conversion, phase 5 (plan §5.1–§5.3): applying a prepared
@@ -137,39 +142,16 @@ export function unitsConversionCollaborationRefusal(
   return null;
 }
 
-/**
- * This tab's claim on a project's device storage, as the workspace tracks
- * it (`claimProjectOwnership`): exactly one tab writes a project there.
- */
-export interface ProjectStorageOwnership {
-  projectId: string;
-  /** Settles once the claim has been answered. */
-  settled: Promise<unknown>;
-  /**
-   * True once this tab holds the project; false while waiting, refused, or
-   * once the workspace has let the claim go.
-   */
-  owned: boolean;
-  /**
-   * Keeps the claim's lock held through one write (see
-   * `ProjectOwnershipClaim.retain`): the returned function lets go. Null
-   * when there is no held claim to keep.
-   */
-  retain(): (() => void) | null;
-}
+export type { ProjectStorageOwnership };
 
 /**
- * Write access to a project's device storage, confirmed for one conversion.
- * The claim's lock stays held until {@link release}, so another tab cannot
- * take the project while the checkpoint write is in flight; {@link held}
- * says, synchronously, whether the claim confirmed is still this tab's.
+ * Write access to a project's device storage, confirmed for one conversion
+ * ({@link ProjectStorageWriteAccess}): the claim's lock stays held until
+ * `release`, so another tab cannot take the project while the checkpoint
+ * write is in flight.
  */
-export interface UnitsConversionWriteAccess {
+export interface UnitsConversionWriteAccess extends ProjectStorageWriteAccess {
   readonly kind: 'write-access';
-  /** Still the same claim, for the same project, still owned. */
-  held(): boolean;
-  /** Lets go of the lock hold; safe to call more than once. */
-  release(): void;
 }
 
 function isWriteAccess(
@@ -179,38 +161,24 @@ function isWriteAccess(
 }
 
 /**
- * Waits for this tab's storage claim on `projectId` and refuses unless it
- * is confirmed held: the conversion's checkpoint write must not land on a
- * copy another tab owns (and may have saved newer work to), the overwrite
- * autosave waits for the same answer to avoid. A claim still for another
- * project, or none at all, refuses rather than waits. Granted access holds
- * the claim's lock until released, so a navigation that gives the project
- * up mid-write hands it on only once the write has landed.
+ * {@link projectStorageWriteAccess} for the conversion's checkpoint write,
+ * refusing (`second-tab`, with `message`) when this tab does not hold the
+ * project: the same claim, wait and lock hold autosave writes under.
  */
 export async function unitsConversionWriteAccess(
   read: () => ProjectStorageOwnership | null | undefined,
   projectId: string,
   message: string
 ): Promise<UnitsConvertRefusal | UnitsConversionWriteAccess> {
-  const refusal: UnitsConvertRefusal = {
-    stage: 'collaboration',
-    code: 'second-tab',
-    subject: 'document',
-    message
-  };
-  const claim = read();
-  if (!claim || claim.projectId !== projectId) return refusal;
-  await claim.settled;
-  const held = () => {
-    const current = read();
-    return (
-      current === claim && current.projectId === projectId && current.owned
-    );
-  };
-  if (!held()) return refusal;
-  const letGo = claim.retain();
-  if (!letGo) return refusal;
-  return { kind: 'write-access', held, release: letGo };
+  const access = await projectStorageWriteAccess(read, projectId);
+  if (!access)
+    return {
+      stage: 'collaboration',
+      code: 'second-tab',
+      subject: 'document',
+      message
+    };
+  return { kind: 'write-access', held: access.held, release: access.release };
 }
 
 /** Where the safety checkpoint is written; the device store by default. */

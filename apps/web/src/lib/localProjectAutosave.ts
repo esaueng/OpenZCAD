@@ -10,6 +10,20 @@ export class LocalProjectSaveError extends Error {
   }
 }
 
+/**
+ * A device write this tab refused because it no longer holds the project
+ * (`write` answered `'refused'`). The work stays queued and dirty: it is
+ * not on this device, so an awaited flush must not be taken as durable.
+ */
+export class LocalProjectSaveRefusedError extends Error {
+  constructor() {
+    super(
+      'This tab no longer holds the project, so its latest edits were not saved on this device.'
+    );
+    this.name = 'LocalProjectSaveRefusedError';
+  }
+}
+
 /** Derived rebuilds retain the canonical fields' references. Include history,
  * checkpoints, ownership and version here, even when geometry is unchanged. */
 export function sameLocalProjectContent(
@@ -30,9 +44,15 @@ export function sameLocalProjectContent(
   );
 }
 
+/**
+ * True: written. False: not this tab's to write (a read-only tab, a shared
+ * link), so there is nothing of its own to keep. `'refused'`: this tab
+ * meant to save it but no longer holds the project, so the work is kept.
+ */
+export type LocalProjectWriteResult = boolean | 'refused';
+
 export interface LocalProjectAutosaveOptions {
-  /** False means this tab is not allowed to persist the document. */
-  write(document: ProjectDocument): Promise<boolean>;
+  write(document: ProjectDocument): Promise<LocalProjectWriteResult>;
   /** Emitted only when canonical work becomes durable; newerQueued excludes cache writes. */
   onSaved(document: ProjectDocument, newerQueued: boolean): void;
   onError(error: unknown): void;
@@ -81,16 +101,21 @@ export class LocalProjectAutosave {
         const snapshot = this.queued;
         const { document, revision } = snapshot;
         this.queued = null;
+        let refused = false;
         try {
           const saved = await this.options.write(document);
-          const canonicalWrite = revision !== this.savedRevision;
-          const wasDirty = this.dirty;
-          this.savedRevision = revision;
-          if (this.dirty !== wasDirty) this.options.onDirtyChange(this.dirty);
-          // Cache refreshes are durable too, but they do not acknowledge a
-          // new edit or change the workspace's storage status.
-          if (saved && canonicalWrite)
-            this.options.onSaved(document, this.dirty);
+          if (saved === 'refused') {
+            refused = true;
+          } else {
+            const canonicalWrite = revision !== this.savedRevision;
+            const wasDirty = this.dirty;
+            this.savedRevision = revision;
+            if (this.dirty !== wasDirty) this.options.onDirtyChange(this.dirty);
+            // Cache refreshes are durable too, but they do not acknowledge a
+            // new edit or change the workspace's storage status.
+            if (saved && canonicalWrite)
+              this.options.onSaved(document, this.dirty);
+          }
         } catch (error) {
           // A later snapshot already includes this edit. Never repark the old
           // one over it, and never drop the only copy on a failed device write.
@@ -103,9 +128,36 @@ export class LocalProjectAutosave {
           // identity transfer too. It must not release ownership after failure.
           throw new LocalProjectSaveError(error);
         }
+        if (refused) {
+          // Not written, and no longer this tab's to write: kept (never over
+          // a newer snapshot) and dirty, so departure sees unsaved work and
+          // a write that holds the project again can still save it.
+          this.queued ??= snapshot;
+          if (!this.dirty) return;
+          throw new LocalProjectSaveRefusedError();
+        }
       }
     } finally {
       this.inFlight = null;
     }
+  }
+}
+
+/**
+ * A departure barrier over `flush`: rejects for a failed device write, as
+ * `flush` does, but lets a refused one through after `onRefused`. A refused
+ * snapshot can never be written by this tab (another tab holds the project,
+ * or this one gave it up), so holding every later navigation on it would
+ * strand the workspace; it stays dirty, so closing the page still warns.
+ */
+export async function departureFlush(
+  flush: Promise<void>,
+  onRefused: (error: LocalProjectSaveRefusedError) => void
+): Promise<void> {
+  try {
+    await flush;
+  } catch (error) {
+    if (!(error instanceof LocalProjectSaveRefusedError)) throw error;
+    onRefused(error);
   }
 }
