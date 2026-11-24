@@ -275,37 +275,103 @@
   }
 }
 
-/* Hide all's "Panels hidden · Show" pill hangs beside the rail's foot,
-   where the panels would be. On a one-column phone stage that is where the
-   Tools drawer opens, and the drawer covered it: at 390 × 844 only the "w"
-   of Show was left, and a tap on the pill opened a tool. Here it hangs
-   under the rail instead, as wide as the rail, its words over a 44px Show,
-   clear of the drawer, the cube in its corner and the search bar. */
+/* Hide all's "Panels hidden · Show" pill hangs beside the instrument
+   rail's foot, where the panels would be. On a one-column phone stage
+   that is where the Tools drawer opens, and the drawer covered it: at
+   390 × 844 only the "w" of Show was left, and a tap there opened a tool.
+   Here the pill leaves the rail for the stage (App.tsx renders it there:
+   the rail's transform would place it by the rail) and stands at its
+   foot, in the status row over the search bar: under the cube and the
+   drawer's foot at any phone size. The drawer stands over the rail's
+   column itself under 360px, so the row is the one place it never
+   reaches. The status row's notices end before the pill.
+
+   Under 661px tall the rail, held at the stage's top, reaches down into
+   the row, so the pill stands left of the rail's column. */
 @media (pointer: coarse) and (max-width: 520px) and (min-height: 621px) {
-  .instrument-rail > .panels-hidden-pill {
-    top: calc(100% + var(--island-gap));
-    /* The rail's outer edge: `right` counts from inside its border. */
-    right: -1px;
-    bottom: auto;
+  .viewer-area > .panels-hidden-pill.is-on-stage {
+    position: absolute;
+    right: calc(
+      var(--rail-w) + var(--island-gap) * 2 + var(--right-dock-w, 0px)
+    );
+    bottom: var(--lane-base);
+    z-index: calc(var(--z-inspector-float) + 1);
     box-sizing: border-box;
+    width: var(--panels-pill-w);
+    height: calc(var(--status-row-h) - 2px);
+    padding: 1px 1px 1px 8px;
+    justify-content: space-between;
+    white-space: normal;
+    line-height: 1.15;
+  }
+
+  .workspace.column-layout .viewer-area:has(> .panels-hidden-pill) {
+    --panels-pill-w: 104px;
+    --notice-end: calc(
+      var(--rail-w) + var(--island-gap) * 3 + var(--right-dock-w, 0px) +
+        var(--panels-pill-w)
+    );
+  }
+
+  /* "Panels" over "hidden", and no dot between the words and Show. */
+  .viewer-area > .panels-hidden-pill > [role='status'] {
+    width: min-content;
+  }
+
+  .viewer-area > .panels-hidden-pill > [aria-hidden='true'] {
+    display: none;
+  }
+
+  /* A finger's 44px. */
+  .viewer-area > .panels-hidden-pill > button {
+    min-width: 44px;
+    height: 44px;
+  }
+}
+
+/* From 661px the rail's foot is clear of the row (at most 429px from the
+   112px stage top, or lifted clear of the cube's corner from 753px), so
+   the pill ends at the rail's edge and the notices keep more of the row. */
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 661px) {
+  .viewer-area > .panels-hidden-pill.is-on-stage {
+    right: calc(var(--island-gap) + var(--right-dock-w, 0px));
+  }
+
+  .workspace.column-layout .viewer-area:has(> .panels-hidden-pill) {
+    --notice-end: calc(
+      var(--island-gap) * 2 + var(--right-dock-w, 0px) + var(--panels-pill-w)
+    );
+  }
+}
+
+/* From 700px tall, where the drawer leaves the rail's column (360px and
+   wider), the pill stands in that column alone, the rail's width, its
+   words over Show, and the row is the notices' to the rail. Its 85px fit
+   between the rail's foot and the search bar. */
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 700px) and (min-width: 360px) {
+  .viewer-area > .panels-hidden-pill.is-on-stage {
+    bottom: calc(var(--island-gap) + var(--command-bar-h) + 8px);
     width: var(--rail-w);
+    height: auto;
     flex-direction: column;
     gap: 2px;
     /* 3px a side leaves Show the 44px a finger needs inside the border. */
     padding: 4px 3px;
-    white-space: normal;
     text-align: center;
-    line-height: 1.2;
   }
 
-  /* The separating dot: the words and Show stand one over the other. */
-  .panels-hidden-pill > [aria-hidden='true'] {
-    display: none;
+  .workspace.column-layout .viewer-area:has(> .panels-hidden-pill) {
+    --notice-end: calc(
+      var(--rail-w) + var(--island-gap) * 2 + var(--right-dock-w, 0px)
+    );
   }
 
-  .instrument-rail > .panels-hidden-pill > button {
+  .viewer-area > .panels-hidden-pill > [role='status'] {
+    width: auto;
+  }
+
+  .viewer-area > .panels-hidden-pill > button {
     width: 100%;
-    height: 44px;
     padding: 0;
   }
 }

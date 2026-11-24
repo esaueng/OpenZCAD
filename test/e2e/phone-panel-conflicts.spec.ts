@@ -1020,67 +1020,106 @@ function overlap(
   return x > 0.5 && y > 0.5;
 }
 
+/** The pill clear of every named surface that is showing. */
+async function expectPillClear(page: Page, pill: Locator) {
+  const pillBox = (await pill.boundingBox())!;
+  for (const [name, selector] of [
+    ['Tools drawer', '.command-flyout'],
+    ['Tools button', '.command-more-toggle'],
+    ['tool rail', '.tool-palette.command-rail'],
+    ['instrument rail', '.instrument-rail > .viewer-rail'],
+    ['cube', '.viewer-rail-stack'],
+    ['search bar', '.command-bar-row']
+  ] as const) {
+    for (const other of await page.locator(selector).all()) {
+      if (!(await other.isVisible())) continue;
+      const box = (await other.boundingBox())!;
+      expect(overlap(pillBox, box), `pill over ${name}`).toBe(false);
+    }
+  }
+}
+
 // Hide all's "Panels hidden · Show" pill hung beside the instrument rail's
 // foot, where the panels would be, and on a phone that is where the Tools
 // drawer opens: the drawer covered it (only the "w" of Show was left at
-// 390 × 844), and a tap there opened a tool instead of the panels.
+// 390 × 844), and a tap there opened a tool instead of the panels. Hung
+// under the rail instead it covered the search bar's end on a short phone,
+// and the drawer still reached it at 320px, where it stands over the rail.
 for (const [width, height] of [
+  [320, 844],
+  [360, 640],
+  [360, 621],
   [390, 844],
   [430, 932]
 ] as const) {
   test(`the panels hidden pill stays clear of the Tools drawer on a ${width} × ${height} phone`, async ({
     page
   }) => {
-    test.setTimeout(90_000);
-    // The suite's baseline leaves the drawer open.
-    await stubApi(page);
+    test.setTimeout(120_000);
+    // The drawer starts closed: at 320px it stands over the rail's panel
+    // buttons, and History is brought up first.
+    await stubApi(page, { commandFoldClosed: true });
     await page.setViewportSize({ width, height });
     await createProject(page, 'Pill and drawer');
     const drawer = page.locator('.command-flyout');
     const toggle = page.locator('.command-more-toggle');
+    const closeDrawer = page.getByRole('button', {
+      name: 'Close tools drawer'
+    });
+    // History in the lane, then the drawer opened again over it.
+    await railPanelButton(page, 'History').tap();
+    const history = modelPanel(page, 'History');
+    await expect(history).toBeVisible();
+    await expect(drawer).toHaveCount(0);
+    await toggle.tap();
     await expect(drawer).toBeVisible();
+
     await page.keyboard.press('Control+\\');
+    await expect(history).toHaveCount(0);
     const pill = page.locator('.panels-hidden-pill');
     const show = pill.getByRole('button', { name: 'Show panels' });
     await expect(pill).toBeVisible();
+    await expect(drawer).toBeVisible();
     await shot(page, `pill-${width}x${height}`);
-
-    const pillBox = (await pill.boundingBox())!;
-    for (const [name, other] of [
-      ['Tools drawer', drawer],
-      ['Tools button', toggle],
-      ['tool rail', page.locator('.tool-palette.command-rail')],
-      ['cube', page.locator('.viewer-rail-stack')],
-      ['search bar', page.locator('.command-bar-row')]
-    ] as const) {
-      const box = (await other.boundingBox())!;
-      expect(overlap(pillBox, box), `pill over ${name}`).toBe(false);
-    }
+    await expectPillClear(page, pill);
     await expect(show).toBeInViewport({ ratio: 1 });
-    await expect.poll(() => reachable(show)).toBe(true);
-    await expect.poll(() => reachable(toggle)).toBe(true);
-    await expect
-      .poll(() =>
-        reachable(page.getByRole('button', { name: 'Close tools drawer' }))
-      )
-      .toBe(true);
     // A 44 px target for a finger, as the rails' are.
     const showBox = (await show.boundingBox())!;
     expect(showBox.width).toBeGreaterThanOrEqual(44);
     expect(showBox.height).toBeGreaterThanOrEqual(44);
+    for (const control of [show, toggle, closeDrawer, promptField(page)]) {
+      await expect
+        .poll(() => reachable(control), { message: String(control) })
+        .toBe(true);
+    }
 
-    // With the drawer closed it keeps clear of the Tools button too.
-    await page.getByRole('button', { name: 'Close tools drawer' }).tap();
+    // Closed, and with the view tools opened out, it keeps clear as well.
+    await closeDrawer.tap();
     await expect(drawer).toHaveCount(0);
-    expect(
-      overlap((await pill.boundingBox())!, (await toggle.boundingBox())!)
-    ).toBe(false);
+    await expectPillClear(page, pill);
     await expect.poll(() => reachable(show)).toBe(true);
+    const more = page.getByRole('button', { name: 'More view tools' });
+    await more.tap();
+    await expect(more).toHaveAttribute('aria-expanded', 'true');
+    await expectPillClear(page, pill);
+    await expect.poll(() => reachable(show)).toBe(true);
+    await expect.poll(() => reachable(more)).toBe(true);
+    await more.tap();
+    await expect(more).toHaveAttribute('aria-expanded', 'false');
 
-    // And its tap is the pill's own: the panels come back.
+    // Its tap, with the drawer open again, is the pill's own: History comes
+    // back where it was, and the drawer gives way to it.
+    await toggle.tap();
+    await expect(drawer).toBeVisible();
     await show.tap();
     await expect(pill).toHaveCount(0);
+    await expect(history).toBeVisible();
     await expect(drawer).toHaveCount(0);
+    await expect
+      .poll(() =>
+        reachable(history.getByRole('button', { name: 'Close History' }))
+      )
+      .toBe(true);
   });
 }
 

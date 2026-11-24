@@ -1615,6 +1615,9 @@ const MEASUREMENT_SHEET_MEDIA = '(max-width: 620px)';
 /** Where View's parts list stands over the middle of the model. */
 const PHONE_PARTS_LIST_MEDIA = `(max-width: ${PANEL_LANE_REST_MAX_WIDTH}px)`;
 const SHORT_PHONE_STAGE_MEDIA = `(pointer: coarse) and (max-width: ${PANEL_LANE_REST_MAX_WIDTH}px) and (min-height: 541px) and (max-height: 620px)`;
+// phone-stage.css's one-column rails, where the Tools drawer opens over the
+// stage beside the instrument rail.
+const ONE_COLUMN_PHONE_STAGE_MEDIA = `(pointer: coarse) and (max-width: ${PANEL_LANE_REST_MAX_WIDTH}px) and (min-height: 621px)`;
 const ROOM_SETTLE_TIMEOUT_MS = 5000;
 
 const LazyProjectConflictDialog = lazyWithStaleChunkNotice(() =>
@@ -19115,6 +19118,9 @@ export function App() {
   const phoneStage = useMediaQuery(PHONE_PARTS_LIST_MEDIA);
   // phone-stage.css's 541–620 px band, where the rails keep two columns.
   const shortPhoneStage = useMediaQuery(SHORT_PHONE_STAGE_MEDIA);
+  // There the "Panels hidden" pill leaves the rail, whose foot the drawer
+  // covers, for the stage's foot (phone-stage.css).
+  const oneColumnPhoneStage = useMediaQuery(ONE_COLUMN_PHONE_STAGE_MEDIA);
   const phonePartsShown =
     phoneStage &&
     viewMode &&
@@ -39135,7 +39141,7 @@ export function App() {
                     }
                   />
                 </div>
-                {panelLayout.options.hidden && (
+                {panelLayout.options.hidden && !oneColumnPhoneStage && (
                   <PanelsHiddenPill
                     onShow={() =>
                       presentPanelChange(
@@ -40688,6 +40694,17 @@ export function App() {
           {/* File metadata joins initial preparation independently of the
               model's frame-ready signal, so neither waits on the other. */}
           {artifactsProjectId !== doc.projectId && <WorkspacePending />}
+          {panelLayout.options.hidden && oneColumnPhoneStage && (
+            <PanelsHiddenPill
+              onStage
+              onShow={() =>
+                presentPanelChange(
+                  (current) => setOption(current, 'hidden', false),
+                  null
+                )
+              }
+            />
+          )}
           {/* The same lane as the status toast, and in front of it: while a
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
