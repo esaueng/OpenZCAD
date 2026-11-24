@@ -261,9 +261,6 @@ function streamFailureMessage(
   event: Record<string, unknown>,
   failure: Record<string, unknown>
 ): string {
-  if (event.type === 'error' && event.message === UNVERIFIED_REPLY_MESSAGE) {
-    return `${UNVERIFIED_REPLY_MESSAGE} It was discarded; try again.`;
-  }
   const error =
     failure.error &&
     typeof failure.error === 'object' &&
@@ -271,12 +268,16 @@ function streamFailureMessage(
       ? (failure.error as Record<string, unknown>)
       : undefined;
   const code = error?.code ?? failure.code;
-  return (
-    (typeof code === 'string' &&
-      Object.hasOwn(STREAM_FAILURE_MESSAGES, code) &&
-      STREAM_FAILURE_MESSAGES[code]) ||
-    GENERIC_STREAM_FAILURE_MESSAGE
-  );
+  if (code !== undefined) {
+    return typeof code === 'string' &&
+      Object.hasOwn(STREAM_FAILURE_MESSAGES, code)
+      ? STREAM_FAILURE_MESSAGES[code]!
+      : GENERIC_STREAM_FAILURE_MESSAGE;
+  }
+  // The gate's own event carries no code; a coded event is the provider's.
+  return event.type === 'error' && event.message === UNVERIFIED_REPLY_MESSAGE
+    ? `${UNVERIFIED_REPLY_MESSAGE} It was discarded; try again.`
+    : GENERIC_STREAM_FAILURE_MESSAGE;
 }
 
 export function readAssistantEvent(
