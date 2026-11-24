@@ -275,6 +275,41 @@
   }
 }
 
+/* Hide all's "Panels hidden · Show" pill hangs beside the rail's foot,
+   where the panels would be. On a one-column phone stage that is where the
+   Tools drawer opens, and the drawer covered it: at 390 × 844 only the "w"
+   of Show was left, and a tap on the pill opened a tool. Here it hangs
+   under the rail instead, as wide as the rail, its words over a 44px Show,
+   clear of the drawer, the cube in its corner and the search bar. */
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 621px) {
+  .instrument-rail > .panels-hidden-pill {
+    top: calc(100% + var(--island-gap));
+    /* The rail's outer edge: `right` counts from inside its border. */
+    right: -1px;
+    bottom: auto;
+    box-sizing: border-box;
+    width: var(--rail-w);
+    flex-direction: column;
+    gap: 2px;
+    /* 3px a side leaves Show the 44px a finger needs inside the border. */
+    padding: 4px 3px;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.2;
+  }
+
+  /* The separating dot: the words and Show stand one over the other. */
+  .panels-hidden-pill > [aria-hidden='true'] {
+    display: none;
+  }
+
+  .instrument-rail > .panels-hidden-pill > button {
+    width: 100%;
+    height: 44px;
+    padding: 0;
+  }
+}
+
 /* 541–620px keeps two columns, and folded the instrument rail there ends
    above the cube's corner, so the cube stays in it: stepped left past two
    104px rails it stood on the tool rail at 320px wide. Opened, the rail

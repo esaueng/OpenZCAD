@@ -1010,6 +1010,80 @@ for (const [width, height] of [
   });
 }
 
+/** Whether two boxes share more than a hairline of area. */
+function overlap(
+  a: { x: number; y: number; width: number; height: number },
+  b: { x: number; y: number; width: number; height: number }
+) {
+  const x = Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x);
+  const y = Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y);
+  return x > 0.5 && y > 0.5;
+}
+
+// Hide all's "Panels hidden · Show" pill hung beside the instrument rail's
+// foot, where the panels would be, and on a phone that is where the Tools
+// drawer opens: the drawer covered it (only the "w" of Show was left at
+// 390 × 844), and a tap there opened a tool instead of the panels.
+for (const [width, height] of [
+  [390, 844],
+  [430, 932]
+] as const) {
+  test(`the panels hidden pill stays clear of the Tools drawer on a ${width} × ${height} phone`, async ({
+    page
+  }) => {
+    test.setTimeout(90_000);
+    // The suite's baseline leaves the drawer open.
+    await stubApi(page);
+    await page.setViewportSize({ width, height });
+    await createProject(page, 'Pill and drawer');
+    const drawer = page.locator('.command-flyout');
+    const toggle = page.locator('.command-more-toggle');
+    await expect(drawer).toBeVisible();
+    await page.keyboard.press('Control+\\');
+    const pill = page.locator('.panels-hidden-pill');
+    const show = pill.getByRole('button', { name: 'Show panels' });
+    await expect(pill).toBeVisible();
+    await shot(page, `pill-${width}x${height}`);
+
+    const pillBox = (await pill.boundingBox())!;
+    for (const [name, other] of [
+      ['Tools drawer', drawer],
+      ['Tools button', toggle],
+      ['tool rail', page.locator('.tool-palette.command-rail')],
+      ['cube', page.locator('.viewer-rail-stack')],
+      ['search bar', page.locator('.command-bar-row')]
+    ] as const) {
+      const box = (await other.boundingBox())!;
+      expect(overlap(pillBox, box), `pill over ${name}`).toBe(false);
+    }
+    await expect(show).toBeInViewport({ ratio: 1 });
+    await expect.poll(() => reachable(show)).toBe(true);
+    await expect.poll(() => reachable(toggle)).toBe(true);
+    await expect
+      .poll(() =>
+        reachable(page.getByRole('button', { name: 'Close tools drawer' }))
+      )
+      .toBe(true);
+    // A 44 px target for a finger, as the rails' are.
+    const showBox = (await show.boundingBox())!;
+    expect(showBox.width).toBeGreaterThanOrEqual(44);
+    expect(showBox.height).toBeGreaterThanOrEqual(44);
+
+    // With the drawer closed it keeps clear of the Tools button too.
+    await page.getByRole('button', { name: 'Close tools drawer' }).tap();
+    await expect(drawer).toHaveCount(0);
+    expect(
+      overlap((await pill.boundingBox())!, (await toggle.boundingBox())!)
+    ).toBe(false);
+    await expect.poll(() => reachable(show)).toBe(true);
+
+    // And its tap is the pill's own: the panels come back.
+    await show.tap();
+    await expect(pill).toHaveCount(0);
+    await expect(drawer).toHaveCount(0);
+  });
+}
+
 /** The Tools drawer as the device remembers it, open or closed. */
 function storedToolsDrawer(page: Page) {
   return page.evaluate(() => {
