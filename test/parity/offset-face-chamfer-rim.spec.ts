@@ -31,7 +31,7 @@ import {
   directEditBody,
   filletEdges,
   importStepBody,
-  normalizeDocument
+  assertStorableDocument
 } from '@openzcad/document-core';
 import { RemusKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
@@ -547,7 +547,7 @@ describe('offset face ringed by a chamfer', { timeout: 300_000 }, () => {
           ]!.volume
         ).toBeCloseTo(fixture.volume, 6);
         manager.redo();
-        const saved = normalizeDocument(
+        const saved = assertStorableDocument(
           JSON.parse(JSON.stringify(manager.document))
         );
         const cold = new RemusKernelAdapter();
