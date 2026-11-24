@@ -646,6 +646,56 @@ const DEPTH_BIASED_LINE_VERTEX_SHADER = (() => {
 })();
 
 const CLIPPING_FRAGMENT_INCLUDE = '#include <clipping_planes_fragment>';
+const FRAGMENT_MAIN_ANCHOR = 'void main() {';
+const FRAGMENT_OUTPUT_ANCHOR =
+  'gl_FragColor = vec4( diffuseColor.rgb, alpha );';
+
+/**
+ * How a fat line splits against its translucent body's own faces (#2018);
+ * see `translucentEdges.ts`. `Off` is every line that is not a translucent
+ * body's resting ink, and every render the prepass was not made for.
+ */
+export const FAT_LINE_SELF_OCCLUSION = {
+  OFF: 0,
+  /** Drops the fragments the body's own faces hide. */
+  UNHIDDEN: 1,
+  /** Keeps only those: the faint twin that draws them. */
+  HIDDEN: 2
+} as const;
+export type FatLineSelfOcclusionMode =
+  (typeof FAT_LINE_SELF_OCCLUSION)[keyof typeof FAT_LINE_SELF_OCCLUSION];
+
+/**
+ * A translucent body's own front depth, rendered for the frame about to be
+ * drawn: which body (`owner`, encoded in red and green) is nearest at each
+ * pixel, and its depth. `screen` is 1 / the drawing buffer size.
+ */
+export interface FatLineSelfOcclusion {
+  ownerMap: THREE.Texture;
+  depthMap: THREE.Texture;
+  screen: THREE.Vector2;
+  owner: number;
+}
+
+const SELF_OCCLUSION_PARS = /* glsl */ `
+uniform float selfOcclusionMode;
+uniform float selfOcclusionOwner;
+uniform sampler2D selfOcclusionOwnerMap;
+uniform sampler2D selfOcclusionDepth;
+uniform vec2 selfOcclusionScreen;
+`;
+
+// After every derivative the stroke takes: a discard may not precede them.
+const SELF_OCCLUSION_APPLY = /* glsl */ `
+if ( selfOcclusionMode > 0.5 ) {
+  vec2 selfUv = gl_FragCoord.xy * selfOcclusionScreen;
+  vec4 selfId = texture2D( selfOcclusionOwnerMap, selfUv );
+  float selfOwner = floor( selfId.r * 255.0 + 0.5 ) + 256.0 * floor( selfId.g * 255.0 + 0.5 );
+  bool selfHidden = abs( selfOwner - selfOcclusionOwner ) < 0.5 &&
+    gl_FragCoord.z > texture2D( selfOcclusionDepth, selfUv ).r;
+  if ( selfHidden == ( selfOcclusionMode < 1.5 ) ) discard;
+}
+`;
 
 /**
  * LineMaterial's fragment shader with a hard section-plane clip.
@@ -661,19 +711,32 @@ const CLIPPING_FRAGMENT_INCLUDE = '#include <clipping_planes_fragment>';
  */
 const HARD_CLIPPED_LINE_FRAGMENT_SHADER = (() => {
   const source = new LineMaterial().fragmentShader;
-  if (!source.includes(CLIPPING_FRAGMENT_INCLUDE)) {
-    throw new Error('LineMaterial shader changed: clipping include missing.');
+  if (
+    !source.includes(CLIPPING_FRAGMENT_INCLUDE) ||
+    !source.includes(FRAGMENT_MAIN_ANCHOR) ||
+    !source.includes(FRAGMENT_OUTPUT_ANCHOR)
+  ) {
+    throw new Error('LineMaterial shader changed: fragment anchors missing.');
   }
-  return source.replace(
-    CLIPPING_FRAGMENT_INCLUDE,
-    `#ifdef ALPHA_TO_COVERAGE
+  return source
+    .replace(
+      FRAGMENT_MAIN_ANCHOR,
+      `${SELF_OCCLUSION_PARS}\n${FRAGMENT_MAIN_ANCHOR}`
+    )
+    .replace(
+      FRAGMENT_OUTPUT_ANCHOR,
+      `${SELF_OCCLUSION_APPLY}\n${FRAGMENT_OUTPUT_ANCHOR}`
+    )
+    .replace(
+      CLIPPING_FRAGMENT_INCLUDE,
+      `#ifdef ALPHA_TO_COVERAGE
 				#undef ALPHA_TO_COVERAGE
 				${CLIPPING_FRAGMENT_INCLUDE}
 				#define ALPHA_TO_COVERAGE
 			#else
 				${CLIPPING_FRAGMENT_INCLUDE}
 			#endif`
-  );
+    );
 })();
 
 /** Standard sharp-edge ink on native one-pixel segments during navigation. */
@@ -734,14 +797,24 @@ export function nativeEdgeMaterial(
  */
 export const TRANSLUCENT_LINE_STENCIL = 2;
 
+/**
+ * The same, for a translucent body's faint self-hidden edges (#2018). Their
+ * own bit: they draw at `BODY_EDGE`, before the highlight tiers' x-ray twins,
+ * and a shared bit would let a faint rim drop a hidden selection's samples.
+ */
+export const SELF_HIDDEN_LINE_STENCIL = 4;
+
 /** Makes a translucent fat line blend once per pixel instead of per segment. */
-export function drawFatLineOncePerPixel(material: LineMaterial) {
+export function drawFatLineOncePerPixel(
+  material: LineMaterial,
+  bit: number = TRANSLUCENT_LINE_STENCIL
+) {
   material.alphaToCoverage = false;
   material.stencilWrite = true;
-  material.stencilRef = TRANSLUCENT_LINE_STENCIL;
+  material.stencilRef = bit;
   material.stencilFunc = THREE.NotEqualStencilFunc;
-  material.stencilFuncMask = TRANSLUCENT_LINE_STENCIL;
-  material.stencilWriteMask = TRANSLUCENT_LINE_STENCIL;
+  material.stencilFuncMask = bit;
+  material.stencilWriteMask = bit;
   material.stencilZPass = THREE.ReplaceStencilOp;
 }
 
@@ -817,11 +890,39 @@ export function createFatLineMaterial(options: FatLineOptions): LineMaterial {
   material.vertexShader = DEPTH_BIASED_LINE_VERTEX_SHADER;
   material.fragmentShader = HARD_CLIPPED_LINE_FRAGMENT_SHADER;
   material.uniforms.depthBias = { value: Math.max(options.depthBias ?? 0, 0) };
+  material.uniforms.selfOcclusionMode = { value: FAT_LINE_SELF_OCCLUSION.OFF };
+  material.uniforms.selfOcclusionOwner = { value: 0 };
+  material.uniforms.selfOcclusionOwnerMap = { value: null };
+  material.uniforms.selfOcclusionDepth = { value: null };
+  material.uniforms.selfOcclusionScreen = { value: new THREE.Vector2(1, 1) };
   material.resolution.set(
     Math.max(options.resolution?.width ?? 1, 1),
     Math.max(options.resolution?.height ?? 1, 1)
   );
   return material;
+}
+
+/**
+ * Points a fat line's self-occlusion at this frame's prepass, or turns it off
+ * (`binding` null or `mode` OFF). Uniform writes only: no recompile, and the
+ * navigation stand-in, which shares the uniforms, follows.
+ */
+export function setFatLineSelfOcclusion(
+  material: LineMaterial,
+  binding: FatLineSelfOcclusion | null,
+  mode: FatLineSelfOcclusionMode
+) {
+  const uniforms = material.uniforms;
+  const active = binding !== null && mode !== FAT_LINE_SELF_OCCLUSION.OFF;
+  uniforms.selfOcclusionMode!.value = active
+    ? mode
+    : FAT_LINE_SELF_OCCLUSION.OFF;
+  uniforms.selfOcclusionOwner!.value = active ? binding.owner : 0;
+  uniforms.selfOcclusionOwnerMap!.value = active ? binding.ownerMap : null;
+  uniforms.selfOcclusionDepth!.value = active ? binding.depthMap : null;
+  if (active) {
+    (uniforms.selfOcclusionScreen!.value as THREE.Vector2).copy(binding.screen);
+  }
 }
 
 /**

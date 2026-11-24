@@ -35,8 +35,12 @@ import type { DisplayMode } from '../types';
 import {
   createFatLineSegments,
   drawFatLineOncePerPixel,
+  FAT_LINE_SELF_OCCLUSION,
   fatLineDepthBiasForExtent,
   type FatLineResolution,
+  type FatLineSelfOcclusion,
+  SELF_HIDDEN_LINE_STENCIL,
+  setFatLineSelfOcclusion,
   VIEWPORT_RENDER_ORDER
 } from './scene';
 
@@ -84,6 +88,12 @@ const FACE_BOUNDARY_SELECTED_COLOR = SELECTION_SEMANTICS.selected.boundary;
 const FACE_BOUNDARY_SELECTED_WIDTH = SELECTION_SEMANTICS.selected.boundaryWidth;
 const BODY_SELECTED_EDGE_WIDTH = SELECTION_SEMANTICS.selected.bodyEdgeWidth;
 const HIDDEN_EDGE_OPACITY = 0.34;
+/**
+ * A translucent body's own hidden resting edges, relative to their ink: the
+ * x-ray hidden-edge strength, so behind its own glass an edge reads the way a
+ * hidden highlight does (#2018; see `translucentEdges.ts`).
+ */
+export const SELF_HIDDEN_EDGE_OPACITY = HIDDEN_EDGE_OPACITY;
 const TANGENT_EDGE_OPACITY = SELECTION_SEMANTICS.idle.tangentEdgeOpacity;
 
 /**
@@ -387,6 +397,18 @@ export class BodyEdgeOverlay extends THREE.Group {
   private readonly depthBias: number;
   /** The running in-place drag preview's move, or null at rest. */
   private deformation: HighlightDeformation | null = null;
+  /**
+   * The faint twins of the resting batches, in `restingLines` order, built
+   * the first time the body is drawn translucent. They share the batches'
+   * geometry and draw only the fragments the body's own faces hide.
+   */
+  private selfHiddenTwins: LineSegments2[] | null = null;
+  /**
+   * The resting batches' own geometry, as built. The navigation stand-in
+   * swaps a batch's geometry for a frame, and a twin first made inside that
+   * frame must not keep the stand-in's.
+   */
+  private readonly restingGeometries: readonly THREE.BufferGeometry[];
 
   /**
    * @param body Its `mesh`, when given, is what tells tangent edges from
@@ -612,6 +634,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       beginPreviewDeformation: (velocityAt) => this.deformHighlights(velocityAt)
     });
     this.applyIdleStyle();
+    this.restingGeometries = this.restingLines().map((line) => line.geometry);
     this.add(
       this.idleEdges,
       this.idleTangentEdges,
@@ -960,13 +983,99 @@ export class BodyEdgeOverlay extends THREE.Group {
     return entry.positions.map((value, i) => value + delta * velocity[i]!);
   }
 
+  /** Whether any resting batch draws this frame (the shaded view has none). */
+  get restingInkVisible(): boolean {
+    for (const line of this.restingLines()) {
+      if (line.visible && line.material.visible) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Splits the resting ink against this body's own translucent faces for one
+   * frame (see `translucentEdges.ts`): fragments the faces hide move to a
+   * faint twin, the rest draw as before. `null` puts every batch back.
+   * Uniform and style writes only; nothing is rebuilt or recompiled.
+   */
+  setSelfOcclusion(binding: FatLineSelfOcclusion | null) {
+    const lines = this.restingLines();
+    if (binding === null) {
+      for (const line of lines) {
+        setFatLineSelfOcclusion(
+          line.material,
+          null,
+          FAT_LINE_SELF_OCCLUSION.OFF
+        );
+      }
+      for (const twin of this.selfHiddenTwins ?? []) twin.visible = false;
+      return;
+    }
+    const twins = this.ensureSelfHiddenTwins();
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index]!;
+      const twin = twins[index]!;
+      const source = line.material;
+      const drawn = line.visible && source.visible;
+      setFatLineSelfOcclusion(
+        source,
+        drawn ? binding : null,
+        FAT_LINE_SELF_OCCLUSION.UNHIDDEN
+      );
+      twin.visible = drawn;
+      if (!drawn) continue;
+      // Restyled each frame it draws, so it follows every idle style change
+      // (display mode, tangent style, a selected body's outline) for free.
+      const material = twin.material;
+      material.color.copy(source.color);
+      material.linewidth = source.linewidth;
+      material.opacity = source.opacity * SELF_HIDDEN_EDGE_OPACITY;
+      material.resolution.copy(source.resolution);
+      material.clippingPlanes = source.clippingPlanes;
+      setFatLineSelfOcclusion(
+        material,
+        binding,
+        FAT_LINE_SELF_OCCLUSION.HIDDEN
+      );
+    }
+  }
+
+  private ensureSelfHiddenTwins(): LineSegments2[] {
+    if (this.selfHiddenTwins) return this.selfHiddenTwins;
+    this.selfHiddenTwins = this.restingLines().map((line, index) => {
+      const twin = createFatLineSegments(EMPTY_SEGMENT, {
+        color: line.material.color,
+        linewidth: line.material.linewidth,
+        opacity: line.material.opacity * SELF_HIDDEN_EDGE_OPACITY,
+        depthBias: this.depthBias
+      });
+      // Its own one-segment geometry is dropped for the batch's: the twin
+      // draws the same segments, including a silhouette's per-view repack.
+      twin.geometry.dispose();
+      twin.geometry = this.restingGeometries[index] as typeof line.geometry;
+      // Translucent, so each pixel blends once (see drawFatLineOncePerPixel),
+      // on a bit of its own so it never drops a highlight's x-ray twin.
+      drawFatLineOncePerPixel(twin.material, SELF_HIDDEN_LINE_STENCIL);
+      twin.name = `${line.name}-self-hidden`;
+      twin.renderOrder = line.renderOrder;
+      twin.visible = false;
+      twin.userData = { bodyId: this.bodyId, edgeOverlay: true };
+      // The batch it shadows is what picking resolves.
+      twin.raycast = () => undefined;
+      this.add(twin);
+      return twin;
+    });
+    return this.selfHiddenTwins;
+  }
+
+  private restingLinesCache: readonly LineSegments2[] | null = null;
+
   /** The batches drawn at rest: sharp, tangent and outline. */
-  private restingLines(): LineSegments2[] {
-    return [
+  private restingLines(): readonly LineSegments2[] {
+    return (this.restingLinesCache ??= [
       this.idleEdges,
       this.idleTangentEdges,
       ...(this.silhouetteEdges ? [this.silhouetteEdges] : [])
-    ];
+    ]);
   }
 
   /**
@@ -1047,7 +1156,8 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.selectedHiddenEdges,
       this.selectedFaceBoundaryEdges,
       this.selectedFaceBoundaryHiddenEdges,
-      ...(this.seamEdges ? [this.seamEdges] : [])
+      ...(this.seamEdges ? [this.seamEdges] : []),
+      ...(this.selfHiddenTwins ?? [])
     ]) {
       line.material.resolution.set(
         Math.max(resolution.width, 1),
