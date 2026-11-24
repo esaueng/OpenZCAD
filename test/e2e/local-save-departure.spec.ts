@@ -404,16 +404,58 @@ test('carries each tab’s edits and undo history to the tab the user switches t
 
     // Working in the first tab takes editing back, Sphere included, and
     // undo there reaches the step the other tab made.
+    await expect(
+      page.locator('.workspace-toast-body [role="status"]')
+    ).toContainText('Editing moved to another tab.');
     await page.keyboard.press('Shift');
     await expect(
       page.getByRole('button', { name: /^Box \(B\)/ })
     ).toBeEnabled();
+    // The tab editing again no longer says editing moved away.
+    await expect(page.getByText('Editing moved to another tab.')).toHaveCount(
+      0
+    );
     await page.keyboard.press('ControlOrMeta+z');
     await expectBodyCount(page, 1);
     await expect
       .poll(async () => (await storedProject(page, name))?.featureOrder.length)
       .toBe(1);
     await expectBodyCount(second, 1);
+  } finally {
+    await second.close();
+  }
+});
+
+test('says how to edit here when the tab editing the project never answers', async ({
+  page
+}) => {
+  // A tab loaded before tabs could hand editing over listens on no channel:
+  // it keeps the project, and the tab asking for it must say what to do.
+  await page.addInitScript(() =>
+    Reflect.deleteProperty(window, 'BroadcastChannel')
+  );
+  const name = 'Unanswered handoff';
+  await prepareLocalBox(page, name);
+  const original = (await storedProject(page, name))!;
+  const second = await page.context().newPage();
+  try {
+    await openSameProject(second, original, false, true);
+    const status = second.locator('.workspace-toast-body [role="status"]');
+    // Pressing a disabled tool asks again, and says so while it waits.
+    await second
+      .getByRole('button', { name: /^Box.*open in another tab/ })
+      .click({ force: true });
+    await expect(status).toContainText('Moving editing to this tab');
+    await expect(status).toContainText('Reload or close it to edit here.', {
+      timeout: 15_000
+    });
+    await expect(
+      second.getByRole('button', { name: /^Box.*open in another tab/ })
+    ).toBeDisabled();
+    // The tab that kept the project still edits it.
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeEnabled();
   } finally {
     await second.close();
   }

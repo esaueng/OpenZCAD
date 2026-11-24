@@ -2488,6 +2488,13 @@ const PROJECT_EDITING_MOVING_NOTICE =
 /** The owner tab was busy (a save, a conversion) and kept the project. */
 const PROJECT_EDITING_DECLINED_NOTICE =
   'Editing is locked: the other tab is finishing a save. Click here to try again.';
+/**
+ * The tab editing the project never answered: it is frozen, or it loaded
+ * before tabs could hand editing over. Neither ever will, and taking the
+ * project anyway could lose a write it still has queued.
+ */
+const PROJECT_EDITING_UNANSWERED_NOTICE =
+  "Editing is locked: the other tab isn't responding. Reload or close it to edit here.";
 /** The lane's notice in a tab that handed editing to another tab. */
 const PROJECT_EDITING_MOVED_NOTICE =
   'Editing moved to another tab. Click here to edit in this tab.';
@@ -2496,8 +2503,21 @@ const PROJECT_HANDOFF_NOTICES: ReadonlySet<string> = new Set([
   PROJECT_OPEN_ELSEWHERE_NOTICE,
   PROJECT_EDITING_MOVING_NOTICE,
   PROJECT_EDITING_DECLINED_NOTICE,
+  PROJECT_EDITING_UNANSWERED_NOTICE,
   PROJECT_EDITING_MOVED_NOTICE
 ]);
+/**
+ * Takes a handoff notice off the lane. They are sticky, and `retireStatus`
+ * leaves sticky text alone, so this clears it outright.
+ */
+function clearHandoffNotice(
+  current: StatusEntry,
+  notices: ReadonlySet<string> = PROJECT_HANDOFF_NOTICES
+): StatusEntry {
+  return notices.has(current.text) && current.at !== 0
+    ? { ...current, sticky: false, at: 0 }
+    : current;
+}
 /** Identifies this tab to the others editing the same projects. */
 const PROJECT_TAB_ID =
   globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
@@ -7962,11 +7982,9 @@ export function App() {
       return true;
     }
     if (projectOpenElsewhereRef.current) {
-      setStatus(
-        requestEditingHere()
-          ? PROJECT_EDITING_MOVING_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE
-      );
+      if (!requestEditingHere(true)) {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      }
       return false;
     }
     setStatus(cannotSentence(action, reason));
@@ -7990,11 +8008,9 @@ export function App() {
       return true;
     }
     if (projectOpenElsewhereRef.current) {
-      setStatus(
-        requestEditingHere()
-          ? PROJECT_EDITING_MOVING_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE
-      );
+      if (!requestEditingHere(true)) {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      }
       return false;
     }
     setStatus(cannotSentence(action, reason));
@@ -8019,11 +8035,9 @@ export function App() {
       return true;
     }
     if (projectOpenElsewhereRef.current) {
-      setStatus(
-        requestEditingHere()
-          ? PROJECT_EDITING_MOVING_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE
-      );
+      if (!requestEditingHere(true)) {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      }
       return false;
     }
     setStatus(cannotSentence(action, reason));
@@ -8040,11 +8054,9 @@ export function App() {
       return true;
     }
     if (projectOpenElsewhereRef.current) {
-      setStatus(
-        requestEditingHere()
-          ? PROJECT_EDITING_MOVING_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE
-      );
+      if (!requestEditingHere(true)) {
+        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      }
       return false;
     }
     setStatus(cannotSentence(action, reason));
@@ -8571,20 +8583,32 @@ export function App() {
    * a request is on its way (or this tab already owns it); false when this
    * project cannot move between tabs.
    */
-  function requestEditingHere(): boolean {
+  function requestEditingHere(announce = false): boolean {
     const tracker = projectEditingRef.current;
     if (!tracker || projectHandoffBlockedRef.current) return false;
-    if (tracker.ownership.owned) return true;
-    projectEditingAskedRef.current = true;
+    const owned = tracker.ownership.owned;
+    projectEditingAskedRef.current = !owned;
+    // The user tried to act here: say the wait is the handoff, and keep
+    // saying it until the owner answers, which replaces it.
+    if (announce && !owned) {
+      setStatus(PROJECT_EDITING_MOVING_NOTICE, { sticky: true });
+    }
     void tracker.requestEditing().then((result) => {
       if (projectEditingRef.current !== tracker) return;
-      if (result === 'owner') return;
+      if (result === 'owner') {
+        // Promotion clears the notice; an answer from a tab that already
+        // owned the project has no promotion to do it.
+        setStatusEntry((current) => clearHandoffNotice(current));
+        return;
+      }
       projectEditingAskedRef.current = false;
       if (!projectOpenElsewhereRef.current) return;
       setStatus(
         result === 'declined'
           ? PROJECT_EDITING_DECLINED_NOTICE
-          : PROJECT_OPEN_ELSEWHERE_NOTICE,
+          : result === 'timeout'
+            ? PROJECT_EDITING_UNANSWERED_NOTICE
+            : PROJECT_OPEN_ELSEWHERE_NOTICE,
         { sticky: true }
       );
     });
@@ -8667,9 +8691,7 @@ export function App() {
       projectOpenElsewhereRef.current = false;
       setProjectOpenElsewhere(false);
       setStatusEntry((current) =>
-        current.text === PROJECT_EDITING_MOVED_NOTICE
-          ? retireStatus(current, Date.now())
-          : current
+        clearHandoffNotice(current, new Set([PROJECT_EDITING_MOVED_NOTICE]))
       );
     }
   }
@@ -8766,21 +8788,29 @@ export function App() {
   // Working in a tab that follows another's edits is asking to edit here:
   // focusing it, or the first press inside it, moves the project over.
   useEffect(() => {
-    const ask = () => {
-      if (projectOpenElsewhereRef.current) requestEditingHereRef.current();
+    const ask = (announce: boolean) => {
+      if (projectOpenElsewhereRef.current) {
+        requestEditingHereRef.current(announce);
+      }
     };
+    // Only a press is the user trying to act (a disabled tool takes no
+    // click of its own); arriving in the tab moves editing quietly.
+    const focused = () => ask(false);
+    const pressed = () => ask(true);
     const visible = () => {
-      if (document.visibilityState === 'visible' && document.hasFocus()) ask();
+      if (document.visibilityState === 'visible' && document.hasFocus()) {
+        ask(false);
+      }
     };
-    window.addEventListener('focus', ask);
+    window.addEventListener('focus', focused);
     document.addEventListener('visibilitychange', visible);
-    window.addEventListener('pointerdown', ask, true);
-    window.addEventListener('keydown', ask, true);
+    window.addEventListener('pointerdown', pressed, true);
+    window.addEventListener('keydown', pressed, true);
     return () => {
-      window.removeEventListener('focus', ask);
+      window.removeEventListener('focus', focused);
       document.removeEventListener('visibilitychange', visible);
-      window.removeEventListener('pointerdown', ask, true);
-      window.removeEventListener('keydown', ask, true);
+      window.removeEventListener('pointerdown', pressed, true);
+      window.removeEventListener('keydown', pressed, true);
     };
   }, []);
 
@@ -12061,11 +12091,7 @@ export function App() {
     // Asked for by working here: editing simply carries on, with nothing to
     // announce. Promoted because the other tab went away: say so.
     if (asked) {
-      setStatusEntry((current) =>
-        PROJECT_HANDOFF_NOTICES.has(current.text)
-          ? retireStatus(current, Date.now())
-          : current
-      );
+      setStatusEntry((current) => clearHandoffNotice(current));
     } else {
       setStatus('This tab can edit the project now.');
     }
