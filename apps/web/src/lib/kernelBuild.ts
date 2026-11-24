@@ -43,7 +43,10 @@ export function resolveKernelBuild(env: KernelBuildEnv): KernelBuild {
   };
 }
 
-export const KERNEL_BUILD: KernelBuild = resolveKernelBuild(import.meta.env);
+export const KERNEL_BUILD: KernelBuild = resolveKernelBuild({
+  OZ_REMUS_VERSION: import.meta.env.OZ_REMUS_VERSION,
+  OZ_REMUS_COMMIT: import.meta.env.OZ_REMUS_COMMIT
+});
 
 /** Whether a paired release identity is at least 2026.1.`release`. Unknown and
  * prerelease identities answer false.

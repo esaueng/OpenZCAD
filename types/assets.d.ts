@@ -22,6 +22,7 @@ interface ImportMetaEnv {
   readonly OZ_PERF?: string;
   /** The app version, `YYYY.RELEASE.PATCH` (scripts/app-version.mjs). */
   readonly OZ_APP_VERSION: string;
+  readonly OZ_FONT_DIGESTS?: Readonly<Record<string, string>> | null;
   readonly OZ_BUILD_COMMIT: string;
   readonly OZ_REMUS_VERSION: string;
   readonly OZ_REMUS_COMMIT: string;

@@ -10,7 +10,7 @@
  *   with collaborators, identity transfers — can see it. Only the geometry
  *   worker reads and writes it; deleting a project deletes its session.
  * - Each record names the exact document content and the exact build that
- *   wrote it (app commit, Remus package version and commit, kernel snapshot
+ *   wrote it (geometry worker build, Remus package version and commit, kernel snapshot
  *   identity). Anything else is a miss, and the worker replays.
  * - It is bounded: one session per project, at most
  *   {@link MAX_KERNEL_SESSION_BYTES} each and {@link MAX_KERNEL_SESSIONS} /
@@ -73,19 +73,22 @@ interface KernelSessionRecord {
 }
 
 /**
- * Everything that must match for a stored session to be offered: this app
- * build (the adapter's builders), the Remus package (its version and the
- * commit it was built from) and the snapshot identity of the kernel itself.
+ * A stored session requires the same content-addressed geometry worker,
+ * including lazy dependencies and project fonts, the same Remus package
+ * version and commit, and the same kernel snapshot identity.
  * Null when any part is unknown: such a build never stores or offers one.
  */
 export function kernelSessionIdentity(parts: {
-  appCommit: string | undefined;
+  workerPath: string | undefined;
   remusVersion: string | undefined;
   remusCommit: string | undefined;
   kernelBuildId: string | null;
 }): string | null {
+  const worker = parts.workerPath?.match(
+    /(?:^|\/)(geometryWorker-[\w-]{21}\.js)$/
+  )?.[1];
   const values = [
-    parts.appCommit,
+    worker,
     parts.remusVersion,
     parts.remusCommit,
     parts.kernelBuildId

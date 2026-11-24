@@ -28,7 +28,7 @@ import {
 } from './localProjectStore';
 
 const IDENTITY = kernelSessionIdentity({
-  appCommit: 'app-commit',
+  workerPath: '/assets/geometryWorker-abcdefghijklmnopqrstu.js',
   remusVersion: '2026.1.134',
   remusCommit: 'remus-commit',
   kernelBuildId: 'remus-wasm 2026.1.0 / snapshot format 1'
@@ -66,17 +66,39 @@ beforeEach(() => {
 });
 
 describe('kernelSessionIdentity', () => {
+  it('invalidates a changed worker even when Remus is unchanged', () => {
+    const parts = {
+      remusVersion: '2026.1.134',
+      remusCommit: 'remus-commit',
+      kernelBuildId: 'remus-wasm 2026.1.0 / snapshot format 1'
+    };
+    expect(
+      kernelSessionIdentity({
+        ...parts,
+        workerPath: '/assets/geometryWorker-abcdefghijklmnopqrstV.js'
+      })
+    ).not.toEqual(IDENTITY);
+    expect(
+      kernelSessionIdentity({
+        ...parts,
+        workerPath: '/desktop/assets/geometryWorker-abcdefghijklmnopqrstu.js'
+      })
+    ).toEqual(IDENTITY);
+  });
+
   it('names every part of the build, or nothing', () => {
     expect(IDENTITY).toContain('2026.1.134');
     for (const missing of [
-      { appCommit: undefined },
+      { workerPath: undefined },
+      { workerPath: '/src/geometryWorker.ts' },
+      { workerPath: '/assets/geometryWorker.js' },
       { remusVersion: 'unknown' },
       { remusCommit: '' },
       { kernelBuildId: null }
     ])
       expect(
         kernelSessionIdentity({
-          appCommit: 'a',
+          workerPath: '/assets/geometryWorker-abcdefghijklmnopqrstu.js',
           remusVersion: 'b',
           remusCommit: 'c',
           kernelBuildId: 'd',

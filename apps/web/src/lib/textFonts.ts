@@ -55,7 +55,11 @@ async function fontLibrary(): Promise<FontLibrary> {
     .finally(() => clearTimeout(timeout))
     .then(({ FontLibrary, fetchFontDataSource }) => {
       const created = new FontLibrary(
-        fetchFontDataSource(fetch, FONT_PRELOAD_BUDGET_MS)
+        fetchFontDataSource(
+          fetch,
+          FONT_PRELOAD_BUDGET_MS,
+          import.meta.env.OZ_FONT_DIGESTS
+        )
       );
       setTextFontProvider((family, style) => created.peek(family, style));
       return created;
