@@ -223,10 +223,102 @@ export async function writeOwnedProjectStorage(
 ): Promise<boolean> {
   const access = await projectStorageWriteAccess(read, projectId);
   if (!access) return false;
+  // The grant reached this continuation a microtask after it was checked;
+  // the workspace may have let the claim go in between. Checked again with
+  // nothing awaited before the write starts.
+  if (!access.held()) {
+    access.release();
+    return false;
+  }
   try {
     await write();
   } finally {
     access.release();
   }
   return true;
+}
+
+/**
+ * {@link writeOwnedProjectStorage} for autosave, saying why nothing was
+ * written: `false` when another tab held the project when this one opened
+ * it (what is stored is that tab's copy, and this read-only tab has nothing
+ * of its own to save), `'refused'` when this tab no longer holds it (it let
+ * the claim go, or the claim is for another project), so the work it meant
+ * to save is not on this device.
+ */
+export async function writeLocalProjectUnderClaim(
+  read: () => ProjectStorageOwnership | null | undefined,
+  projectId: string,
+  write: () => Promise<void>
+): Promise<boolean | 'refused'> {
+  if (await writeOwnedProjectStorage(read, projectId, write)) return true;
+  const claim = read();
+  return claim?.projectId === projectId && !claim.owned ? false : 'refused';
+}
+
+/** A project's storage claim as the workspace holds it while it is open. */
+export interface ProjectStorageTracker {
+  readonly ownership: ProjectStorageOwnership;
+  /**
+   * Lets the claim go as the workspace leaves the project. With `drain`
+   * (the writes still on their way to this project's storage), a held
+   * claim stays this tab's, lock included, until `drain` settles: those
+   * writes land, and only then can another tab take the project over.
+   */
+  giveUp(drain?: () => Promise<unknown>): void;
+}
+
+/**
+ * Claims `projectId` ({@link claimProjectOwnership}) and tracks the answer
+ * as a {@link ProjectStorageOwnership}: `onAnswered` runs once the claim
+ * resolves, `onPromoted` if this tab takes the project over later. Neither
+ * runs after {@link ProjectStorageTracker.giveUp}.
+ */
+export function trackProjectStorage(
+  projectId: string,
+  handlers: {
+    onAnswered(owned: boolean): void;
+    onPromoted(): void;
+  }
+): ProjectStorageTracker {
+  let given = false;
+  let claim: ProjectOwnershipClaim | null = null;
+  const ownership: ProjectStorageOwnership = {
+    projectId,
+    owned: false,
+    settled: Promise.resolve(),
+    retain: () => (ownership.owned && claim ? claim.retain() : null)
+  };
+  ownership.settled = claimProjectOwnership(projectId, () => {
+    if (given) return;
+    ownership.owned = true;
+    handlers.onPromoted();
+  }).then((result) => {
+    if (given) {
+      result.release();
+      return;
+    }
+    claim = result;
+    ownership.owned = result.owned;
+    handlers.onAnswered(result.owned);
+  });
+  return {
+    ownership,
+    giveUp(drain) {
+      if (given) return;
+      given = true;
+      const held = claim;
+      if (!drain || !ownership.owned || !held) {
+        ownership.owned = false;
+        held?.release();
+        return;
+      }
+      void drain()
+        .catch(() => undefined)
+        .finally(() => {
+          ownership.owned = false;
+          held.release();
+        });
+    }
+  };
 }

@@ -561,7 +561,8 @@ import { localAutosaveFailedStatus } from './lib/localAutosaveFailure';
 import {
   LocalProjectAutosave,
   sameLocalProjectContent,
-  type LocalProjectAutosaveOptions
+  type LocalProjectAutosaveOptions,
+  type LocalProjectWriteResult
 } from './lib/localProjectAutosave';
 // Shapr3D migration loads on the gesture that picks a .shapr + STEP pair.
 import type { ShaprPairInspection } from './lib/shaprImportWorkerClient';
@@ -612,10 +613,10 @@ import {
 } from './lib/libraryRefresh';
 import { rateLimitOf, type RateLimit } from './lib/rateLimit';
 import {
-  claimProjectOwnership,
   projectStorageWriteAccess,
+  trackProjectStorage,
+  writeLocalProjectUnderClaim,
   writeOwnedProjectStorage,
-  type ProjectOwnershipClaim,
   type ProjectStorageOwnership
 } from './lib/projectTabOwnership';
 
@@ -5640,6 +5641,24 @@ export function App() {
    * claim settled, and holds the claim's lock until the write lands.
    */
   const projectOwnershipRef = useRef<ProjectStorageOwnership | null>(null);
+  /**
+   * Claims the workspace has left but still holds until autosave drains the
+   * edits it had for them (see the claim effect's cleanup).
+   */
+  const departingOwnershipsRef = useRef(new Set<ProjectStorageOwnership>());
+  /**
+   * The claim a device write for `projectId` goes under: one being held for
+   * autosave's drain, else the open project's.
+   */
+  const storageOwnershipFor = useCallback(
+    (projectId: string): ProjectStorageOwnership | null => {
+      for (const departing of departingOwnershipsRef.current)
+        if (departing.projectId === projectId && departing.owned)
+          return departing;
+      return projectOwnershipRef.current;
+    },
+    []
+  );
   const [localSaveDirty, setLocalSaveDirty] = useState(false);
   const [localSaveFailed, setLocalSaveFailed] = useState(false);
   const localSaveCallbacksRef = useRef<LocalProjectAutosaveOptions>({
@@ -8223,57 +8242,53 @@ export function App() {
       setProjectOpenElsewhere(false);
       return;
     }
-    let cancelled = false;
-    let claim: ProjectOwnershipClaim | null = null;
-    const ownership: ProjectStorageOwnership = {
-      projectId,
-      owned: false,
-      settled: Promise.resolve(),
-      // A device write (autosave, a save point, a conversion's checkpoint)
-      // keeps the lock until it lands, so a tab promoted by this cleanup
-      // never saves before it.
-      retain: () => (ownership.owned && claim ? claim.retain() : null)
-    };
-    const settled = claimProjectOwnership(projectId, () => {
-      if (cancelled) {
-        return;
-      }
-      ownership.owned = true;
-      projectOpenElsewhereRef.current = false;
-      setProjectOpenElsewhere(false);
-      setStatus('This tab can edit the project now.');
-      void adoptStoredProject(projectId);
-    }).then((result) => {
-      if (cancelled) {
-        result.release();
-        return;
-      }
-      claim = result;
-      ownership.owned = result.owned;
-      projectOpenElsewhereRef.current = !result.owned;
-      setProjectOpenElsewhere(!result.owned);
-      if (!result.owned) {
-        // The project is on this device — the other tab is keeping it that
-        // way. Nothing here is unsaved, and nothing here may be saved.
-        setSaveState('local');
-        // Said once, where the eye goes: the rail dims as a whole, and the
-        // reason used to live only in each button's tooltip. Sticky, since
-        // it describes a state the tab stays in until the other tab closes.
-        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
+    const tracker = trackProjectStorage(projectId, {
+      onPromoted() {
+        projectOpenElsewhereRef.current = false;
+        setProjectOpenElsewhere(false);
+        setStatus('This tab can edit the project now.');
+        void adoptStoredProject(projectId);
+      },
+      onAnswered(owned) {
+        projectOpenElsewhereRef.current = !owned;
+        setProjectOpenElsewhere(!owned);
+        if (!owned) {
+          // The project is on this device — the other tab is keeping it that
+          // way. Nothing here is unsaved, and nothing here may be saved.
+          setSaveState('local');
+          // Said once, where the eye goes: the rail dims as a whole, and the
+          // reason used to live only in each button's tooltip. Sticky, since
+          // it describes a state the tab stays in until the other tab closes.
+          setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
+        }
       }
     });
+    // A device write (autosave, a save point, a conversion's checkpoint)
+    // keeps the lock until it lands, so a tab promoted by this cleanup never
+    // saves before it.
+    const { ownership } = tracker;
+    const departing = departingOwnershipsRef.current;
+    const settled = ownership.settled.then(() => undefined);
     projectOwnershipSettledRef.current = settled;
-    ownership.settled = settled;
     projectOwnershipRef.current = ownership;
     return () => {
-      cancelled = true;
-      ownership.owned = false;
       projectOwnershipSettledRef.current = null;
       if (projectOwnershipRef.current === ownership)
         projectOwnershipRef.current = null;
-      claim?.release();
+      if (!localAutosave.dirty || !ownership.owned) {
+        tracker.giveUp();
+        return;
+      }
+      // Leaving with edits still on their way to this project's storage
+      // (made while a departure awaited the account, say): the claim stays
+      // this tab's until autosave has written them, so they are saved
+      // rather than refused, and another tab takes over only after.
+      departing.add(ownership);
+      tracker.giveUp(() =>
+        localAutosave.flush().finally(() => departing.delete(ownership))
+      );
     };
-  }, [doc?.projectId, shareSession, setStatus]);
+  }, [doc?.projectId, shareSession, setStatus, localAutosave]);
 
   useLayoutEffect(() => {
     if (!localSaveDirty) return;
@@ -11461,7 +11476,7 @@ export function App() {
 
   async function writePendingLocalDocument(
     pending: ProjectDocument
-  ): Promise<boolean> {
+  ): Promise<LocalProjectWriteResult> {
     if (shareSessionRef.current) {
       // Belt to the autosave effect's braces: a shared-link document must
       // never reach this device's project store under the owner's id.
@@ -11473,15 +11488,16 @@ export function App() {
     // lock is then held until the write lands: a tab that takes the project
     // over when this one leaves it must not save before this write does, or
     // this late write would land on top of its newer save.
-    const written = await writeOwnedProjectStorage(
-      () => projectOwnershipRef.current,
+    const written = await writeLocalProjectUnderClaim(
+      () => storageOwnershipFor(pending.projectId),
       pending.projectId,
       () => saveLocalProject(pending)
     );
-    if (!written) {
-      // Another tab owns this project's storage (or this tab has let its
-      // claim go). Its copy is the one being kept up to date; writing here
-      // would land on top of it.
+    if (written !== true) {
+      // Another tab owns this project's storage, or this tab has let its
+      // claim go. That copy is the one being kept up to date; writing here
+      // would land on top of it. A refused write keeps this tab's work
+      // queued and dirty, so leaving the page still warns about it.
       setSaveState('local');
     }
     return written;
@@ -18758,6 +18774,15 @@ export function App() {
     const isCurrentProject = () =>
       managerRef.current === savingManager &&
       cloudProjectAutosaveRef.current === savingController;
+    // Every device write below holds this project's claim until it lands,
+    // as autosave's does; false (nothing written) once this tab no longer
+    // holds the project, so another tab's newer save is never overwritten.
+    const saveOwned = (document: ProjectDocument) =>
+      writeOwnedProjectStorage(
+        () => projectOwnershipRef.current,
+        document.projectId,
+        () => saveLocalProject(document)
+      );
     if (shareSessionRef.current) {
       setStatus(
         'This is a shared link session — Make a copy to keep the model.'
@@ -18872,7 +18897,7 @@ export function App() {
           author
         );
         showAccountEcho(savingDocument);
-        await saveLocalProject(savingDocument);
+        if (!(await saveOwned(savingDocument))) return;
         if (isCurrentProject())
           setStatus(
             'Made a save point on this device · sharing through the room.'
@@ -18885,7 +18910,7 @@ export function App() {
         !cloudProjectIds.has(savingDocument.projectId)
       ) {
         const marked = createSavePoint(savingDocument, reason, author);
-        await saveLocalProject(marked);
+        if (!(await saveOwned(marked))) return;
         if (!isCurrentProject()) return;
         if (savingManager.document.version === savingDocument.version) {
           savingManager.document = marked;
@@ -18932,7 +18957,7 @@ export function App() {
         // a name the user had just typed.
         const marked = createSavePoint(savingDocument, reason, author);
         if (savingManager.document.version === savingDocument.version) {
-          await saveLocalProject(marked);
+          if (!(await saveOwned(marked))) return;
           if (!isCurrentProject()) {
             return;
           }
@@ -18968,7 +18993,7 @@ export function App() {
         document: ProjectDocument;
       }) => {
         savingDocument = input.document;
-        await saveLocalProject(savingDocument);
+        if (!(await saveOwned(savingDocument))) return null;
         if (!readDocument() || !isCurrentProject()) return null;
         accountWriteStarted = true;
         // Minted here rather than by the API so the save point records its
@@ -19043,7 +19068,7 @@ export function App() {
         return;
       }
       const restored = withLocalDerived(saved, savingManager.document);
-      await saveLocalProject(restored);
+      if (!(await saveOwned(restored))) return;
       // Navigation or another edit can also happen during the device write.
       if (!isCurrentProject()) {
         return;
@@ -19054,7 +19079,7 @@ export function App() {
       }
       setCloudAvailable(true);
       if (savingManager.document.version !== savingDocument.version) {
-        await saveLocalProject(savingManager.document);
+        await saveOwned(savingManager.document);
       }
       setStatus(sourceWarning ?? 'Made a save point.');
     } catch (error) {
