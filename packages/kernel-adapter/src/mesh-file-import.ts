@@ -11,7 +11,7 @@ import {
 import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 import { importMeshSolid } from './exact-shape-utils';
-import { glbPlacement } from './glb-scene';
+import { glbPlacement, glbWithIdentityNodes } from './glb-scene';
 import {
   applyThreeMfTransform,
   readThreeMfPackage,
@@ -108,7 +108,13 @@ export async function importMeshFile(
         : format === 'obj'
           ? io.importObj(data, policy.maxInputBytes, policy.maxEntities)
           : format === 'glb'
-            ? io.importGlb(data, policy.maxInputBytes, policy.maxEntities)
+            ? io.importGlb(
+                // The reader welds what it places; hand it the meshes as
+                // authored and place them once, below, after the weld.
+                glbWithIdentityNodes(data),
+                policy.maxInputBytes,
+                policy.maxEntities
+              )
             : io.importPly(data, policy.maxInputBytes, policy.maxEntities);
   } catch (error) {
     // The translator's own refusals name the budget that stopped it ("import
@@ -294,6 +300,11 @@ function tessellatePlacements(
           facets.positions[index + 1]!,
           facets.positions[index + 2]!
         );
+        if (!point.every(Number.isFinite)) {
+          throw new Error(
+            'This file places a vertex beyond the range a number can hold.'
+          );
+        }
         vertices.push(point[0], point[1], point[2]);
       }
     } else {

@@ -4,13 +4,15 @@ import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type BodyId } from '@openzcad/shared';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import type * as ResultAcceptance from '../packages/kernel-adapter/src/result-acceptance';
 
 /**
  * Issue #1242: the kernel's point classifier misplaced the overlap of all
  * four recipes, so a cut-acceptance gate built on it alone accepted the
- * unchanged target. Blind that classifier search here: the Subtract must
- * still refuse the sweep/sweep cut, from the tessellated witness.
+ * unchanged target. Reproduce the obsolete kernel's unchanged result and
+ * blind the classifier. Subtract must still refuse from the tessellated
+ * witness when the intersection cannot provide a volume measurement.
  */
 vi.mock(
   '../packages/kernel-adapter/src/result-acceptance',
@@ -29,6 +31,21 @@ const fixture = (name: string) =>
 it('refuses a kept overlap the point classifier cannot see', async () => {
   const adapter = await createExactKernelAdapter();
   try {
+    const intersect = vi.spyOn(RemusKernel.prototype, 'intersectDetailed');
+    intersect.mockReturnValue({
+      status: 'error',
+      category: 'nonconvergence',
+      code: 'overlap_not_measured',
+      details: {},
+      value: null
+    });
+    const cut = vi.spyOn(RemusKernel.prototype, 'booleanWithCancellation');
+    cut.mockImplementation(function (this: RemusKernel, _operation, target) {
+      return {
+        status: 'completed',
+        result: { solid: this.copySolid(target), quality: 'exact' }
+      };
+    });
     const manager = new CommandManager(
       createProjectDocument('Blind classifier', toUserId('user_1242'))
     );
@@ -54,6 +71,14 @@ it('refuses a kept overlap the point classifier cannot see', async () => {
       })
     );
     const derived = await adapter.syncDocument(manager.document);
+    expect(intersect).toHaveBeenCalled();
+    expect(cut).toHaveBeenCalledWith(
+      'cut',
+      expect.any(Number),
+      expect.any(Number),
+      expect.anything(),
+      true
+    );
     const failures = (derived.featureWarnings ?? []).filter(
       (warning) => warning.featureName === 'Subtract'
     );
@@ -69,6 +94,7 @@ it('refuses a kept overlap the point classifier cannot see', async () => {
       [result, tool].sort()
     );
   } finally {
+    vi.restoreAllMocks();
     adapter.dispose();
   }
 }, 120_000);

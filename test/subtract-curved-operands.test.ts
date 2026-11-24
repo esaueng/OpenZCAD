@@ -79,17 +79,13 @@ const EXPECTED: Record<string, { outcome: Outcome; exportFailure?: RegExp }> = {
       code: 'exact_only_unattainable'
     }
   },
-  // The kernel reports this cut as built and returns an open body with no
-  // tool faces; the result-acceptance gate refuses it. Up to Remus
-  // 2026.1.158 the swept target could not be re-exported (its cap circles
-  // imported with a zero-length (π, π) NURBS pcurve); from 2026.1.159 both
-  // bodies export and re-import at their reference volumes.
+  // Remus 2026.1.160 produced an open body that the result-acceptance
+  // gate refused with cut_kept_tool_material. Remus #1974 preserves the
+  // section lens during shell assembly. The 2026.1.163 cut matches the
+  // OCCT volume and excludes the overlap witness after reload and STEP
+  // round-trip.
   'sweep-sweep': {
-    outcome: {
-      kind: 'refused',
-      family: 'validation',
-      code: 'cut_kept_tool_material'
-    }
+    outcome: { kind: 'cut' }
   },
   'sweep-loft': {
     outcome: {

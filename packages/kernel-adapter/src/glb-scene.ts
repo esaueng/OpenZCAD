@@ -3,19 +3,24 @@
  *
  * glTF defines its linear unit as the metre and its up axis as +Y, with +Z
  * the front; the model space here is millimetres with +Z up and -Y the front.
- * The pinned translators ignore both: the writer emits the millimetre, Z-up
- * numbers with a bare `{ mesh: 0 }` node, so a 65 mm part arrived in every
- * glTF viewer as 65 m lying on its back, and the reader merges every mesh in
- * the file and drops the scene graph, so a file's own node transforms (its
- * scale, its placement) never reached the import.
+ * The pinned writer ignores both: it emits the millimetre, Z-up numbers with
+ * a bare `{ mesh: 0 }` node, so a 65 mm part arrived in every glTF viewer as
+ * 65 m lying on its back. The pinned reader (Remus 2026.1.161 and later)
+ * places the selected scene's mesh instances itself, but welds the placed
+ * vertices at its fixed 1e-7 tolerance, and places a scene-less file's meshes
+ * at identity even when its parentless nodes carry a transform. So the import
+ * hands the reader the file with every node transform at identity, so it
+ * reads and welds each mesh in the units it was authored in, exactly as the
+ * reader did before it placed instances, and applies the scene's one world
+ * transform here afterwards.
  *
  * Both directions go through the node graph rather than the vertex data: the
  * export keeps the translator's millimetre tessellation and wraps the scene in
  * one root node that scales by 1/1000 and turns Z-up into Y-up, which every
  * reader that honours glTF composes back to metres; the import reads the
  * scene's world transform and composes it with the inverse, so a file written
- * here comes back exactly, and one written in metres by any other tool comes
- * in at its real size and the right way up.
+ * here comes back exactly, and one written in
+ * metres by any other tool comes in at its real size and the right way up.
  */
 
 /** Millimetres per glTF unit. */
@@ -31,7 +36,8 @@ export const GLTF_ROOT_NAME = 'OpenZCAD millimetres, Z up';
 const Z_UP_TO_Y_UP: readonly number[] = [-Math.SQRT1_2, 0, 0, Math.SQRT1_2];
 
 interface GlbChunks {
-  readonly json: GltfJson;
+  readonly version: number;
+  readonly jsonBytes: Uint8Array;
   /** Everything after the JSON chunk, byte for byte (the BIN chunk). */
   readonly rest: Uint8Array;
 }
@@ -54,7 +60,7 @@ interface GltfJson {
   [key: string]: unknown;
 }
 
-function readGlb(data: Uint8Array): GlbChunks {
+function readGlbChunks(data: Uint8Array): GlbChunks {
   if (data.byteLength < 20) {
     throw new Error('This file is too short to be a GLB.');
   }
@@ -69,10 +75,25 @@ function readGlb(data: Uint8Array): GlbChunks {
   ) {
     throw new Error('This GLB has no readable JSON chunk.');
   }
-  const json = JSON.parse(
-    new TextDecoder().decode(data.subarray(20, 20 + jsonLength))
-  ) as GltfJson;
-  return { json, rest: data.subarray(20 + jsonLength) };
+  const end = 20 + jsonLength;
+  return {
+    version: view.getUint32(4, true),
+    jsonBytes: data.subarray(20, end),
+    rest: data.subarray(end)
+  };
+}
+
+function decodeGlbJson(jsonBytes: Uint8Array): string {
+  return new TextDecoder('utf-8', {
+    fatal: true,
+    ignoreBOM: true
+  }).decode(jsonBytes);
+}
+
+function readGlb(data: Uint8Array) {
+  const { jsonBytes, rest } = readGlbChunks(data);
+  const json = JSON.parse(decodeGlbJson(jsonBytes)) as GltfJson;
+  return { json, rest };
 }
 
 function writeGlb(json: GltfJson, rest: Uint8Array): Uint8Array<ArrayBuffer> {
@@ -149,16 +170,61 @@ function multiply(a: Matrix4, b: Matrix4): Matrix4 {
   return out;
 }
 
-function localMatrix(node: GltfNode): Matrix4 {
-  if (node.matrix) {
-    if (node.matrix.length !== 16) {
-      throw new Error('This GLB has a node matrix that is not 16 numbers.');
-    }
-    return [...node.matrix];
+/** A node property as `length` finite numbers, or a refusal naming it. */
+function nodeNumbers(value: unknown, length: number, what: string): number[] {
+  if (
+    !Array.isArray(value) ||
+    value.length !== length ||
+    !value.every((entry) => typeof entry === 'number' && Number.isFinite(entry))
+  ) {
+    throw new Error(
+      `This GLB has a node ${what} that is not ${length} numbers.`
+    );
   }
-  const [tx, ty, tz] = node.translation ?? [0, 0, 0];
-  const [x, y, z, w] = node.rotation ?? [0, 0, 0, 1];
-  const [sx, sy, sz] = node.scale ?? [1, 1, 1];
+  return value as number[];
+}
+
+/**
+ * A node's local transform. The reader never sees these (the import hands it
+ * identity nodes), so the checks it made on them are made here instead: an
+ * affine matrix alone, finite numbers, and a unit quaternion within the
+ * reader's 1e-4, normalised as the reader normalises it.
+ */
+function localMatrix(node: GltfNode): Matrix4 {
+  if (node.matrix != null) {
+    const m = nodeNumbers(node.matrix, 16, 'matrix');
+    if (
+      node.translation != null ||
+      node.rotation != null ||
+      node.scale != null ||
+      m[3] !== 0 ||
+      m[7] !== 0 ||
+      m[11] !== 0 ||
+      m[15] !== 1
+    ) {
+      throw new Error(
+        'This GLB has a node matrix that is not an affine placement.'
+      );
+    }
+    return [...m];
+  }
+  const [tx, ty, tz] =
+    node.translation == null
+      ? [0, 0, 0]
+      : nodeNumbers(node.translation, 3, 'translation');
+  const quaternion =
+    node.rotation == null
+      ? [0, 0, 0, 1]
+      : nodeNumbers(node.rotation, 4, 'rotation');
+  const norm = Math.hypot(...quaternion);
+  if (Math.abs(norm - 1) > 1e-4) {
+    throw new Error(
+      'This GLB has a node rotation that is not a unit quaternion.'
+    );
+  }
+  const [x, y, z, w] = quaternion.map((value) => value / norm);
+  const [sx, sy, sz] =
+    node.scale == null ? [1, 1, 1] : nodeNumbers(node.scale, 3, 'scale');
   // T · R · S, the order glTF defines.
   return [
     (1 - 2 * (y! * y! + z! * z!)) * sx!,
@@ -205,17 +271,36 @@ function sameMatrix(a: Matrix4, b: Matrix4): boolean {
   return a.every((value, index) => Math.abs(value - b[index]!) <= 1e-9 * scale);
 }
 
+function requireInvertiblePlacement(world: Matrix4): void {
+  const determinant =
+    world[0]! * (world[5]! * world[10]! - world[9]! * world[6]!) -
+    world[4]! * (world[1]! * world[10]! - world[9]! * world[2]!) +
+    world[8]! * (world[1]! * world[6]! - world[5]! * world[2]!);
+  if (
+    !world.every(Number.isFinite) ||
+    !Number.isFinite(determinant) ||
+    determinant === 0
+  ) {
+    throw new Error(
+      'This GLB places its meshes with a transform that flattens them or ' +
+        'cannot be represented, so there is no shape to import.'
+    );
+  }
+}
+
 /**
  * Where a GLB places its geometry, in model millimetres, as the twelve-number
  * row-major placement the 3MF path already applies.
  *
- * The pinned reader merges every mesh in the file into one solid and drops
- * the scene graph, so the import can honour one world transform, not one per
- * mesh: a file whose meshes are each shown once, all under the same
- * transform (the shape every single-object export has, this app's included),
- * imports at its stated size and place. A file that shows a mesh twice, or
- * places its meshes differently, is refused by name rather than imported with
- * its layout collapsed.
+ * The reader is handed {@link glbWithIdentityNodes}, so it merges every mesh
+ * at the place it was authored and the import can honour one world transform,
+ * not one per mesh: a file whose meshes are each shown once, all under the
+ * same transform (the shape every single-object export has, this app's
+ * included), imports at its stated size and place. The scene is the declared
+ * one, else the first, else (a file with no scenes) every parentless node. A
+ * file that shows a mesh twice, places its meshes differently, hides some, or
+ * places them with a transform that cannot be inverted is refused by name
+ * rather than imported with its layout collapsed.
  */
 export function glbPlacement(data: Uint8Array): readonly number[] {
   const { json } = readGlb(data);
@@ -249,6 +334,7 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
             'as separate meshes, or as one merged mesh.'
         );
       }
+      requireInvertiblePlacement(world);
       placed.set(node.mesh, [world]);
     }
     const children = node.children ?? [];
@@ -295,6 +381,129 @@ export function glbPlacement(data: Uint8Array): readonly number[] {
     m[13]!,
     m[14]!
   ];
+}
+
+const NODE_TRANSFORM_LENGTHS = new Map([
+  ['matrix', 16],
+  ['translation', 3],
+  ['rotation', 4],
+  ['scale', 3]
+]);
+
+/** End of an array of the required length, or -1 for the reader to validate. */
+function transformArrayEnd(
+  source: string,
+  start: number,
+  length: number
+): number {
+  const entry =
+    /[ \t\n\r]*(-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)[ \t\n\r]*([,\]])/y;
+  entry.lastIndex = start + 1;
+  for (let index = 0; index < length; index += 1) {
+    const match = entry.exec(source);
+    const separator = index === length - 1 ? ']' : ',';
+    if (
+      !match ||
+      match[2] !== separator ||
+      !Number.isFinite(Number(match[1]))
+    ) {
+      return -1;
+    }
+  }
+  return entry.lastIndex;
+}
+
+/** Locate transform arrays without materializing the document before Remus. */
+function identityNodeJson(source: string): string | null {
+  const tokens = /"[^"\\]*(?:\\[\s\S][^"\\]*)*"|[{}[\]]/g;
+  const arrayProperty = /[ \t\n\r]*:[ \t\n\r]*\[/y;
+  const parts: string[] = [];
+  let copiedThrough = 0;
+  let depth = 0;
+  let nodesArrayStart = -1;
+  let insideNodes = false;
+
+  for (const { 0: token, index } of source.matchAll(tokens)) {
+    if (token === '[' || token === '{') {
+      if (depth === 1 && index === nodesArrayStart) insideNodes = true;
+      depth += 1;
+    } else if (token === ']' || token === '}') {
+      depth -= 1;
+      if (depth === 1 && insideNodes) break;
+    } else if (depth === 1 || (insideNodes && depth === 3)) {
+      arrayProperty.lastIndex = index + token.length;
+      if (!arrayProperty.test(source)) continue;
+      const start = arrayProperty.lastIndex - 1;
+      const name = JSON.parse(token) as string;
+      if (depth === 1) {
+        if (name === 'nodes') nodesArrayStart = start;
+        continue;
+      }
+      const length = NODE_TRANSFORM_LENGTHS.get(name);
+      if (length === undefined) continue;
+      const end = transformArrayEnd(source, start, length);
+      if (end < 0) continue;
+
+      // Null is the reader's default transform. Keep the key and its byte
+      // width so duplicate fields and the rest of the file reach it intact.
+      parts.push(
+        source.slice(copiedThrough, start),
+        'null'.padEnd(end - start)
+      );
+      copiedThrough = end;
+    }
+  }
+  if (parts.length === 0) return null;
+  parts.push(source.slice(copiedThrough));
+  return parts.join('');
+}
+
+/**
+ * The GLB the reader is handed: the same file with each numeric node transform
+ * reset to identity, so each mesh is read, and its vertices welded, in
+ * the units it was authored in. {@link glbPlacement} then applies the
+ * scene's one world transform to the result, so the transform is applied
+ * once and after welding, which keeps the reader's fixed 1e-7 weld relative to
+ * the authored geometry rather than to wherever a scene scale puts it.
+ *
+ * Only numeric transform values change. The reader still parses the original
+ * header, property names, all other values, and BIN chunk. A file this cannot
+ * read as a version-2 GLB is returned unchanged, for the reader's own named
+ * refusal. A second JSON chunk is
+ * refused here: the reader takes the last JSON chunk and this the first, so
+ * the two would otherwise disagree about what the scene is.
+ */
+export function glbWithIdentityNodes(data: Uint8Array): Uint8Array {
+  let chunks: GlbChunks;
+  try {
+    chunks = readGlbChunks(data);
+  } catch {
+    return data;
+  }
+  const { version, jsonBytes, rest } = chunks;
+  if (version !== 2) return data;
+  const trailing = new DataView(rest.buffer, rest.byteOffset, rest.byteLength);
+  for (let offset = 0; offset + 8 <= rest.byteLength;) {
+    const length = trailing.getUint32(offset, true);
+    if (trailing.getUint32(offset + 4, true) === CHUNK_JSON) {
+      throw new Error('This GLB has more than one JSON chunk.');
+    }
+    offset += 8 + length;
+  }
+  let identitySource: string | null;
+  try {
+    identitySource = identityNodeJson(decodeGlbJson(jsonBytes));
+  } catch {
+    // Leave invalid UTF-8 or JSON tokens to the reader's diagnostics.
+    return data;
+  }
+  if (identitySource === null) return data;
+  const identityGlb = new Uint8Array(data);
+  new TextEncoder().encodeInto(
+    identitySource,
+    identityGlb.subarray(20, data.length - rest.length)
+  );
+  return identityGlb;
 }
 
 /** One body's GLB from the translator, with what to call and colour it. */
