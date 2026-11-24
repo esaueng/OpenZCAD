@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { stubApi } from './openzcad-fixtures';
 import type {
@@ -96,7 +97,11 @@ async function result(page: Page) {
           id,
           consumed: body.metadata.consumed,
           bbox: body.metadata.bbox,
-          faces: body.topology?.faces.map((f) => f.hash),
+          faces: body.topology?.faces.map((f) => [
+            f.hash,
+            f.triangleStart,
+            f.triangleCount
+          ]),
           edges: body.topology?.edges.map((e) => e.hash),
           positions:
             body.mesh && (await digest(body.mesh.vertices.slice().buffer)),
@@ -156,6 +161,88 @@ async function openFromLibrary(page: Page, name: string) {
   expect(started).toBeDefined();
   return { ...ready, ms: ready.readyAt - started! };
 }
+
+test('cold import through the first input-ready model frame', async ({
+  page
+}) => {
+  test.setTimeout(360_000);
+  await stubApi(page);
+  await observe(page);
+  await page.goto('/');
+  const response = await page.request.get('/build-meta.json');
+  expect(response.ok()).toBe(true);
+  const stamp = await response.body();
+  const metadata = JSON.parse(stamp.toString('utf8')) as {
+    commit: string;
+    remus: { commit: string };
+  };
+  expect(metadata.commit).toMatch(/^[a-f0-9]{40}$/);
+  expect(metadata.remus.commit).toMatch(/^[a-f0-9]{40}$/);
+  if (process.env.OPENZCAD_BUILD_COMMIT) {
+    expect(metadata.commit).toBe(process.env.OPENZCAD_BUILD_COMMIT);
+  }
+
+  await page
+    .getByRole('button', { name: 'Import project', exact: true })
+    .click();
+  const input = page.getByLabel('Import project backup');
+  await input.evaluate((element) => {
+    element.addEventListener(
+      'change',
+      () => performance.mark('probe:import-start'),
+      {
+        capture: true,
+        once: true
+      }
+    );
+  });
+  await input.setInputFiles(process.env.OZ_PERF_PROJECT!);
+  const timing = await page.waitForFunction(
+    () => {
+      const start =
+        performance.getEntriesByName('probe:import-start')[0]?.startTime;
+      if (start === undefined) return;
+      const sinceStart = (name: string) =>
+        performance
+          .getEntriesByName(name)
+          .find((mark) => mark.startTime >= start)?.startTime;
+      const visible = sinceStart('oz:model-visible');
+      const ready = sinceStart('oz:input-ready');
+      if (visible !== undefined && ready !== undefined && ready >= visible) {
+        return { modelVisibleMs: visible - start, inputReadyMs: ready - start };
+      }
+    },
+    undefined,
+    { timeout: 300_000 }
+  );
+  // Hash the completed publication after the measured frame has been presented.
+  const {
+    geometryDigest,
+    triangles,
+    faces,
+    restored,
+    replayed,
+    workerMs,
+    warnings
+  } = await result(page);
+  expect(triangles).toBeGreaterThan(0);
+  expect(restored).toBe(0);
+  expect(replayed).toBeGreaterThan(0);
+  console.log(
+    JSON.stringify({
+      ...(await timing.jsonValue()),
+      appCommit: metadata.commit,
+      remusCommit: metadata.remus.commit,
+      buildDigest: createHash('sha256').update(stamp).digest('hex'),
+      workerMs,
+      replayed,
+      faces,
+      triangles,
+      geometryDigest,
+      warnings: warnings.length
+    })
+  );
+});
 
 // OZ_PERF=1 OZ_PERF_PROJECT=/path/to/project.openzcad pnpm exec playwright
 // test perf-project-open --workers=1 --repeat-each=3
