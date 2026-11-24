@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { claimProjectOwnership } from './projectTabOwnership';
+import {
+  claimProjectOwnership,
+  writeUnclaimedProjectStorage
+} from './projectTabOwnership';
 import { withLockManager } from '../test/fakeLockManager';
 
 afterEach(() => {
@@ -112,5 +115,50 @@ describe('project tab ownership', () => {
 
     expect(claim.owned).toBe(true);
     claim.release();
+  });
+});
+
+describe('writes made before a tab claims the project', () => {
+  it('leaves the device copy alone while another tab owns the project', async () => {
+    withLockManager();
+    const owner = await claimProjectOwnership('project_a', () => undefined);
+    const write = vi.fn(() => Promise.resolve());
+
+    await expect(
+      writeUnclaimedProjectStorage('project_a', write)
+    ).resolves.toBe(false);
+
+    expect(write).not.toHaveBeenCalled();
+    owner.release();
+  });
+
+  it('writes an unclaimed project and holds it off from a claim meanwhile', async () => {
+    withLockManager();
+    let finish: () => void = () => undefined;
+    const write = writeUnclaimedProjectStorage(
+      'project_a',
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    await Promise.resolve();
+
+    const claim = await claimProjectOwnership('project_a', () => undefined);
+    expect(claim.owned).toBe(false);
+
+    finish();
+    await expect(write).resolves.toBe(true);
+    claim.release();
+  });
+
+  it('writes without the lock API', async () => {
+    vi.stubGlobal('navigator', {});
+    const write = vi.fn(() => Promise.resolve());
+
+    await expect(
+      writeUnclaimedProjectStorage('project_a', write)
+    ).resolves.toBe(true);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });

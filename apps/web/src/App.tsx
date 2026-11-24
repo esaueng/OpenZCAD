@@ -621,6 +621,7 @@ import { rateLimitOf, type RateLimit } from './lib/rateLimit';
 import {
   projectStorageWriteAccess,
   writeLocalProjectUnderClaim,
+  writeUnclaimedProjectStorage,
   writeOwnedProjectStorage,
   type ProjectStorageOwnership
 } from './lib/projectTabOwnership';
@@ -5790,6 +5791,28 @@ export function App() {
     const claim = projectOwnershipRef.current;
     return claim === pendingStoragePromotionRef.current ? null : claim;
   }, []);
+  /**
+   * Writes an account copy adopted while a project opens. This tab has not
+   * claimed the project yet; another tab that holds it keeps the device copy
+   * current, and may already have saved past this copy, so it is left alone
+   * (false) and that tab's copy is what this one follows.
+   */
+  const saveAccountCopyUnlessOwnedElsewhere = useCallback(
+    (document: ProjectDocument): Promise<boolean> => {
+      const claim = projectOwnershipRef.current;
+      if (claim?.projectId === document.projectId) {
+        return writeOwnedProjectStorage(
+          readWritableProjectClaim,
+          document.projectId,
+          () => saveLocalProject(document)
+        );
+      }
+      return writeUnclaimedProjectStorage(document.projectId, () =>
+        saveLocalProject(document)
+      );
+    },
+    [readWritableProjectClaim]
+  );
   const saveWorkspaceThumbnail = useCallback(
     async (
       projectId: string,
@@ -8042,6 +8065,10 @@ export function App() {
   }
 
   function ensureCanRenameProject(): boolean {
+    if (projectYieldingRef.current) {
+      setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE);
+      return false;
+    }
     const reason = projectRenameDisabledReasonRef.current;
     if (!reason) {
       return true;
@@ -8549,11 +8576,13 @@ export function App() {
       if (projectEditingRef.current !== tracker) return;
       if (result === 'owner') return;
       projectEditingAskedRef.current = false;
-      if (result === 'declined') {
-        setStatus(PROJECT_EDITING_DECLINED_NOTICE, { sticky: true });
-      } else if (result === 'timeout') {
-        setStatus(PROJECT_OPEN_ELSEWHERE_NOTICE, { sticky: true });
-      }
+      if (!projectOpenElsewhereRef.current) return;
+      setStatus(
+        result === 'declined'
+          ? PROJECT_EDITING_DECLINED_NOTICE
+          : PROJECT_OPEN_ELSEWHERE_NOTICE,
+        { sticky: true }
+      );
     });
     return true;
   }
@@ -8570,7 +8599,10 @@ export function App() {
       projectYieldBlockedRef.current ||
       projectYieldingRef.current ||
       // Leaving the project lets it go anyway, once its writes land.
-      navigationPause.departing() !== null
+      navigationPause.departing() !== null ||
+      // A save point writes the account and then this device: handing over
+      // between the two would leave the next owner without it.
+      accountSavePendingRef.current
     ) {
       return false;
     }
@@ -8591,12 +8623,27 @@ export function App() {
       // The next owner fences its own account writes on the version this
       // tab last pushed; let that push land first.
       await cloudProjectAutosaveRef.current?.flushPending();
+      // An edit that slipped past the guards while those writes ran (one
+      // without a guard of its own) is not in storage yet: keep editing
+      // here rather than hand over a copy without it.
+      if (localAutosave.dirty) {
+        resume();
+        return false;
+      }
     } catch {
       resume();
       return false;
     }
     const manager = managerRef.current;
     if (manager) openedDocumentRef.current = manager.document;
+    // An account push that could not go (offline, autosave off) is the next
+    // owner's to send, from the same stored document: a tab that no longer
+    // owns the project must not write it to the account later.
+    const controller = cloudProjectAutosaveRef.current;
+    const syncedVersion = controller?.syncedVersion ?? null;
+    if (controller?.hasPendingChanges && manager && syncedVersion !== null) {
+      controller.adoptAccountVersion(manager.document.projectId, syncedVersion);
+    }
     projectOpenElsewhereRef.current = true;
     setProjectOpenElsewhere(true);
     resume();
@@ -9327,7 +9374,7 @@ export function App() {
           // before the account copy (perhaps converted elsewhere) replaces it.
           await adoptAccountCopyLocally(restoredDocument, rememberedLocal, {
             stampViewUnits: stampLegacyViewUnits,
-            saveLocalProject,
+            saveLocalProject: saveAccountCopyUnlessOwnedElsewhere,
             saveLastSyncedVersion,
             isCurrent,
             viewUnitsUnknown: () => {
@@ -11963,13 +12010,19 @@ export function App() {
     const stored = await loadLocalProject(ownership.projectId).catch(
       () => null
     );
+    // The manager may have been replaced meanwhile (a room document
+    // hydrated while storage was read); still this project, it is the one
+    // to continue from. Returning would leave the lock held by a tab that
+    // stays read-only.
+    const live = managerRef.current;
     if (
       projectOwnershipRef.current !== ownership ||
-      managerRef.current !== manager
+      !live ||
+      live.document.projectId !== manager.document.projectId
     ) {
       return;
     }
-    const current = manager.document;
+    const current = live.document;
     // This tab may have accepted an edit before its original claim was
     // refused. Keep it available for recovery, and protect the previous
     // owner's device copy from a late autosave of the same edit.
@@ -11987,7 +12040,7 @@ export function App() {
     ) {
       return;
     }
-    openedDocumentRef.current = managerRef.current.document;
+    openedDocumentRef.current = managerRef.current?.document ?? null;
     pendingStoragePromotionRef.current = null;
     projectOpenElsewhereRef.current = false;
     setProjectOpenElsewhere(false);
@@ -12018,6 +12071,18 @@ export function App() {
       ) {
         remoteVersionsRef.current.set(projectId, synced);
         controller.adoptAccountVersion(projectId, synced);
+      }
+      // Whatever the previous owner could not push yet goes up from here.
+      const current = managerRef.current?.document;
+      if (
+        current?.projectId === projectId &&
+        projectOwnershipRef.current === ownership &&
+        !controller.holdsDocument(current) &&
+        !sharedAccountProjectRef.current &&
+        // An encrypted project's room writes the account itself.
+        !isEncryptedProject(projectId)
+      ) {
+        controller.schedule(current);
       }
     }
   }
@@ -17239,7 +17304,7 @@ export function App() {
           // unit before the account copy replaces it.
           await adoptAccountCopyLocally(openedDocument, localDocument, {
             stampViewUnits: stampLegacyViewUnits,
-            saveLocalProject,
+            saveLocalProject: saveAccountCopyUnlessOwnedElsewhere,
             saveLastSyncedVersion,
             isCurrent,
             viewUnitsUnknown: () => {

@@ -413,3 +413,31 @@ export function trackProjectStorage(
     }
   };
 }
+
+/**
+ * Runs `write` only while no tab holds `projectId`: false, nothing written,
+ * when one does. For writes made before this tab has claimed the project (an
+ * account copy adopted while it opens), which must not land on the device
+ * copy the owning tab is keeping current. The lock is held through the write,
+ * so no tab can claim the project and save under it meanwhile. Without the
+ * lock API it writes, as every tab owns its projects there.
+ */
+export async function writeUnclaimedProjectStorage(
+  projectId: string,
+  write: () => Promise<void>
+): Promise<boolean> {
+  const locks = globalThis.navigator?.locks as LockManager | undefined;
+  if (!locks) {
+    await write();
+    return true;
+  }
+  return locks.request(
+    `${LOCK_PREFIX}${projectId}`,
+    { ifAvailable: true },
+    async (lock) => {
+      if (!lock) return false;
+      await write();
+      return true;
+    }
+  );
+}

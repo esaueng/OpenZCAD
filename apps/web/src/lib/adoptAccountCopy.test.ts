@@ -211,6 +211,20 @@ describe('adopting an account copy converted elsewhere (I03)', () => {
     expect(stampViewUnits).not.toHaveBeenCalled();
   });
 
+  it('keeps the sync baseline when another tab owns the device copy', async () => {
+    const { account } = copies();
+    const saveLastSyncedVersion = vi.fn(async () => {});
+    await expect(
+      adoptAccountCopyLocally(account, null, {
+        stampViewUnits: async () => true,
+        // Not written: another tab holds the project and keeps its copy.
+        saveLocalProject: async () => false,
+        saveLastSyncedVersion
+      })
+    ).resolves.toBe(true);
+    expect(saveLastSyncedVersion).not.toHaveBeenCalled();
+  });
+
   it.each([WORKSPACE_SESSION_STORAGE_KEY, SAVED_VIEWS_STORAGE_KEY])(
     'still adopts the copy when %s cannot be read',
     async (unreadableKey) => {
