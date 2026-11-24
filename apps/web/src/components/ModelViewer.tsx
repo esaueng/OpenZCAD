@@ -3716,6 +3716,16 @@ export function ModelViewer({
     // behind its glass (#2018; viewport render/translucentEdges.ts). No
     // pass and no target while no body is translucent.
     const translucentEdges = new TranslucentEdgeDepth(renderer);
+    // Reused every frame: the loop only re-points its camera and gate.
+    const translucentEdgeFrame = {
+      camera: null as unknown as THREE.Camera,
+      overlays: new Map<string, BodyEdgeOverlay>(),
+      enabled: false
+    };
+    const renderScene = () =>
+      renderer.render(scene, translucentEdgeFrame.camera);
+    const renderFrame = () =>
+      translucentEdges.draw(translucentEdgeFrame, renderScene);
     const interactionShaderWarmup = new InteractionShaderWarmup(
       renderer,
       scene
@@ -14720,15 +14730,10 @@ export function ModelViewer({
         );
       }
       let renderStarted = performance.now();
-      const translucentEdgeFrame = {
-        camera: context.activeCamera,
-        overlays: context.edgeOverlaysByBodyId.values(),
-        enabled: !xrayRef.current && displayModeRef.current !== 'wireframe'
-      };
-      const renderFrame = () =>
-        translucentEdges.draw(translucentEdgeFrame, () =>
-          renderer.render(scene, context.activeCamera)
-        );
+      translucentEdgeFrame.camera = context.activeCamera;
+      translucentEdgeFrame.overlays = context.edgeOverlaysByBodyId;
+      translucentEdgeFrame.enabled =
+        !xrayRef.current && displayModeRef.current !== 'wireframe';
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
       if (firstFrame) {

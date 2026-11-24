@@ -321,6 +321,71 @@ describe('TranslucentEdgeDepth', () => {
     });
   });
 
+  it("keeps the batch's own geometry when first made mid-navigation", () => {
+    // withNavigationEdges swaps the sharp batch's geometry for one frame.
+    const depth = new TranslucentEdgeDepth(fakeRenderer().renderer);
+    const housing = installed('housing', 0.35);
+    const own = housing.overlay.idleEdges.geometry;
+    const standIn = new THREE.BufferGeometry();
+    (housing.overlay.idleEdges as { geometry: unknown }).geometry = standIn;
+    depth.draw({ camera, overlays: [housing.overlay], enabled: true }, () => {
+      expect(twins(housing.overlay)[0]!.geometry).toBe(own);
+    });
+  });
+
+  it("marks its own stencil bit, not the highlight twins'", () => {
+    const depth = new TranslucentEdgeDepth(fakeRenderer().renderer);
+    const housing = installed('housing', 0.35);
+    housing.overlay.setSelected([
+      {
+        kind: 'edge',
+        bodyId: toBodyId('housing'),
+        topologyId: 'housing-inner-0'
+      }
+    ]);
+    depth.draw({ camera, overlays: [housing.overlay], enabled: true }, () => {
+      const twin = twins(housing.overlay)[0]!.material;
+      const hidden = housing.overlay.selectedHiddenEdges.material;
+      expect(twin.stencilWriteMask & hidden.stencilFuncMask).toBe(0);
+      expect(twin.stencilWriteMask & hidden.stencilWriteMask).toBe(0);
+    });
+  });
+
+  it('disposes the proxy of a body no longer translucent', () => {
+    const fake = fakeRenderer();
+    const depth = new TranslucentEdgeDepth(fake.renderer);
+    const a = installed('a', 0.5);
+    const b = installed('b', 0.5);
+    depth.draw(
+      { camera, overlays: [a.overlay, b.overlay], enabled: true },
+      () => undefined
+    );
+    const proxyMaterials = fake.rendered[0]!.meshes.map(
+      (mesh) => mesh.material as THREE.Material
+    );
+    const disposed = proxyMaterials.map((material) => {
+      const spy = vi.fn();
+      material.addEventListener('dispose', spy);
+      return spy;
+    });
+    updateBodyMaterialOpacity(b.mesh.material, 1);
+    b.mesh.userData.appliedOpacity = 1;
+    depth.draw(
+      { camera, overlays: [a.overlay, b.overlay], enabled: true },
+      () => undefined
+    );
+    expect(fake.rendered[1]!.meshes[0]!.material).toBe(proxyMaterials[0]);
+    expect(disposed[0]).not.toHaveBeenCalled();
+    expect(disposed[1]).toHaveBeenCalledTimes(1);
+    updateBodyMaterialOpacity(a.mesh.material, 1);
+    a.mesh.userData.appliedOpacity = 1;
+    depth.draw(
+      { camera, overlays: new Map([['a', a.overlay]]), enabled: true },
+      () => undefined
+    );
+    expect(disposed[0]).toHaveBeenCalledTimes(1);
+  });
+
   it('caps the prepass in pixels', () => {
     expect(translucentEdgeDepthSize(800, 600)).toEqual({
       width: 800,

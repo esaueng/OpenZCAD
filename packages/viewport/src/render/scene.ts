@@ -797,14 +797,24 @@ export function nativeEdgeMaterial(
  */
 export const TRANSLUCENT_LINE_STENCIL = 2;
 
+/**
+ * The same, for a translucent body's faint self-hidden edges (#2018). Their
+ * own bit: they draw at `BODY_EDGE`, before the highlight tiers' x-ray twins,
+ * and a shared bit would let a faint rim drop a hidden selection's samples.
+ */
+export const SELF_HIDDEN_LINE_STENCIL = 4;
+
 /** Makes a translucent fat line blend once per pixel instead of per segment. */
-export function drawFatLineOncePerPixel(material: LineMaterial) {
+export function drawFatLineOncePerPixel(
+  material: LineMaterial,
+  bit: number = TRANSLUCENT_LINE_STENCIL
+) {
   material.alphaToCoverage = false;
   material.stencilWrite = true;
-  material.stencilRef = TRANSLUCENT_LINE_STENCIL;
+  material.stencilRef = bit;
   material.stencilFunc = THREE.NotEqualStencilFunc;
-  material.stencilFuncMask = TRANSLUCENT_LINE_STENCIL;
-  material.stencilWriteMask = TRANSLUCENT_LINE_STENCIL;
+  material.stencilFuncMask = bit;
+  material.stencilWriteMask = bit;
   material.stencilZPass = THREE.ReplaceStencilOp;
 }
 

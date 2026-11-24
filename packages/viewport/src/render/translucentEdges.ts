@@ -104,9 +104,14 @@ interface Proxy {
   material: THREE.ShaderMaterial;
 }
 
+/** A Map of overlays or an array: walked with `forEach`, which allocates nothing. */
+export interface TranslucentEdgeOverlays {
+  forEach(callback: (overlay: BodyEdgeOverlay) => void): void;
+}
+
 export interface TranslucentEdgeFrame {
   camera: THREE.Camera;
-  overlays: Iterable<BodyEdgeOverlay>;
+  overlays: TranslucentEdgeOverlays;
   /** False in X-ray and wireframe, where the display already decides. */
   enabled: boolean;
 }
@@ -115,7 +120,18 @@ export interface TranslucentEdgeFrame {
 export class TranslucentEdgeDepth {
   private target: THREE.WebGLRenderTarget | null = null;
   private readonly scene = new THREE.Scene();
-  private readonly proxies = new WeakMap<THREE.Mesh, Proxy>();
+  /**
+   * One per translucent body drawn. A body no longer drawn translucent (or
+   * replaced) loses its proxy at the next prepass, so three's material cache
+   * does not keep one per edit.
+   */
+  private readonly proxies = new Map<THREE.Mesh, Proxy>();
+  private readonly collect = (overlay: BodyEdgeOverlay) => {
+    const host = translucentEdgeHost(overlay);
+    if (!host) return;
+    this.active.push(overlay);
+    this.hosts.push(host);
+  };
   private readonly active: BodyEdgeOverlay[] = [];
   private readonly hosts: THREE.Mesh[] = [];
   private readonly clearColor = new THREE.Color();
@@ -141,16 +157,10 @@ export class TranslucentEdgeDepth {
     const hosts = this.hosts;
     active.length = 0;
     hosts.length = 0;
-    if (frame.enabled) {
-      for (const overlay of frame.overlays) {
-        const host = translucentEdgeHost(overlay);
-        if (!host) continue;
-        active.push(overlay);
-        hosts.push(host);
-      }
-    }
+    if (frame.enabled) frame.overlays.forEach(this.collect);
     this.lastActiveCount = active.length;
     if (active.length === 0) {
+      if (this.proxies.size > 0) this.pruneProxies();
       draw();
       return;
     }
@@ -250,6 +260,7 @@ export class TranslucentEdgeDepth {
     for (let index = 0; index < this.hosts.length; index += 1) {
       scene.add(this.proxyFor(this.hosts[index]!, index + 1));
     }
+    this.pruneProxies();
     const previousTarget = renderer.getRenderTarget();
     const previousAutoClear = renderer.autoClear;
     const previousClearAlpha = renderer.getClearAlpha();
@@ -267,8 +278,20 @@ export class TranslucentEdgeDepth {
     return binding;
   }
 
+  /** Drops the proxies of bodies not in this frame's prepass scene. */
+  private pruneProxies() {
+    this.proxies.forEach(this.pruneProxy);
+  }
+
+  private readonly pruneProxy = (proxy: Proxy, host: THREE.Mesh) => {
+    if (proxy.mesh.parent === this.scene) return;
+    proxy.material.dispose();
+    this.proxies.delete(host);
+  };
+
   dispose() {
     this.scene.clear();
+    this.pruneProxies();
     this.target?.depthTexture?.dispose();
     this.target?.dispose();
     this.target = null;

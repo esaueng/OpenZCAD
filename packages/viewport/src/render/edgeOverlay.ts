@@ -39,6 +39,7 @@ import {
   fatLineDepthBiasForExtent,
   type FatLineResolution,
   type FatLineSelfOcclusion,
+  SELF_HIDDEN_LINE_STENCIL,
   setFatLineSelfOcclusion,
   VIEWPORT_RENDER_ORDER
 } from './scene';
@@ -402,6 +403,12 @@ export class BodyEdgeOverlay extends THREE.Group {
    * geometry and draw only the fragments the body's own faces hide.
    */
   private selfHiddenTwins: LineSegments2[] | null = null;
+  /**
+   * The resting batches' own geometry, as built. The navigation stand-in
+   * swaps a batch's geometry for a frame, and a twin first made inside that
+   * frame must not keep the stand-in's.
+   */
+  private readonly restingGeometries: readonly THREE.BufferGeometry[];
 
   /**
    * @param body Its `mesh`, when given, is what tells tangent edges from
@@ -627,6 +634,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       beginPreviewDeformation: (velocityAt) => this.deformHighlights(velocityAt)
     });
     this.applyIdleStyle();
+    this.restingGeometries = this.restingLines().map((line) => line.geometry);
     this.add(
       this.idleEdges,
       this.idleTangentEdges,
@@ -1033,7 +1041,7 @@ export class BodyEdgeOverlay extends THREE.Group {
 
   private ensureSelfHiddenTwins(): LineSegments2[] {
     if (this.selfHiddenTwins) return this.selfHiddenTwins;
-    this.selfHiddenTwins = this.restingLines().map((line) => {
+    this.selfHiddenTwins = this.restingLines().map((line, index) => {
       const twin = createFatLineSegments(EMPTY_SEGMENT, {
         color: line.material.color,
         linewidth: line.material.linewidth,
@@ -1043,9 +1051,10 @@ export class BodyEdgeOverlay extends THREE.Group {
       // Its own one-segment geometry is dropped for the batch's: the twin
       // draws the same segments, including a silhouette's per-view repack.
       twin.geometry.dispose();
-      twin.geometry = line.geometry;
-      // Translucent, so each pixel blends once (see drawFatLineOncePerPixel).
-      drawFatLineOncePerPixel(twin.material);
+      twin.geometry = this.restingGeometries[index] as typeof line.geometry;
+      // Translucent, so each pixel blends once (see drawFatLineOncePerPixel),
+      // on a bit of its own so it never drops a highlight's x-ray twin.
+      drawFatLineOncePerPixel(twin.material, SELF_HIDDEN_LINE_STENCIL);
       twin.name = `${line.name}-self-hidden`;
       twin.renderOrder = line.renderOrder;
       twin.visible = false;
