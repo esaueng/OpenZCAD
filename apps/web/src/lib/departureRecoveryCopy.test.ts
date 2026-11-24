@@ -371,12 +371,18 @@ describe('a departure that cannot write its project keeps a recovery copy', () =
     const tracker = openBeforeTheAnswer(a);
     let failNext = true;
     const saves: string[] = [];
+    const encryptedCopies = new Set<string>();
+    let encryptionRequired = false;
     const tab = workspace(a, () => tracker.ownership, {
       host: departureRecoveryHost({
         existingNames: () => [],
         ownerUserId: () => USER,
-        carryEncryption: () => undefined,
+        carryEncryption: (sourceId, copyId) => {
+          expect(sourceId).toBe(a.projectId);
+          if (encryptionRequired) encryptedCopies.add(copyId);
+        },
         save: async (copy) => {
+          expect(encryptedCopies.has(copy.projectId)).toBe(encryptionRequired);
           saves.push(copy.projectId);
           if (failNext) {
             failNext = false;
@@ -403,10 +409,13 @@ describe('a departure that cannot write its project keeps a recovery copy', () =
     expect(tab.autosave.dirty).toBe(true);
     expect(tab.manager.document).toBe(edited);
     expect(await loadLocalProject(saves[0]!)).toBeNull();
+    expect(encryptedCopies.size).toBe(0);
     // Editing resumes once the navigation has ended.
     expect(tab.pause.reasonFor(tab.manager)).toBeNull();
 
-    // Leaving again: the same copy, one project.
+    // The owner enables encryption before the second attempt. Keep the same
+    // copy ID and record the new policy before retrying the device write.
+    encryptionRequired = true;
     const again = tab.pause.begin(tab.manager);
     await tab.depart();
     again();
@@ -414,6 +423,7 @@ describe('a departure that cannot write its project keeps a recovery copy', () =
     const [copy, source] = tab.kept.mock.calls[0]!;
     expect(source).toBe(edited);
     expect(copy.projectId).toBe(saves[0]);
+    expect(encryptedCopies).toEqual(new Set([copy.projectId]));
     expect(featuresOf(await loadLocalProject(copy.projectId))).toEqual(
       featuresOf(edited)
     );

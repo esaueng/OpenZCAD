@@ -1,6 +1,10 @@
 import type { Dialog, Page, Request } from '@playwright/test';
 import type { ProjectDocument } from '@openzcad/shared';
 import {
+  installAnonymousShareRoutes,
+  ownerWithShareLink
+} from './encrypted-share-links-fixtures';
+import {
   WORKSPACE_SESSION_STORAGE_KEY,
   createPrimitiveInPlace,
   createProject,
@@ -142,15 +146,31 @@ async function storedProject(
   );
 }
 
-test(
-  'keeps a recovery copy before leaving when another tab owns the project',
-  { tag: '@ci-smoke' },
-  async ({ page }) => {
+for (const [scenario, title] of [
+  [
+    'home',
+    'keeps a recovery copy before leaving when another tab owns the project'
+  ],
+  [
+    'promotion',
+    'preserves both edits after the previous owner saves and closes'
+  ],
+  [
+    'encrypted-share',
+    'returns to the project when recovery fails while opening an encrypted link'
+  ]
+] as const) {
+  test(title, async ({ browser, page }) => {
+    const shareOwner =
+      scenario === 'encrypted-share' ? await ownerWithShareLink(browser) : null;
     const name = 'Claim recovery';
     await prepareLocalBox(page, name);
     const original = (await storedProject(page, name))!;
     const contender = await page.context().newPage();
     try {
+      if (shareOwner) {
+        await installAnonymousShareRoutes(page.context(), shareOwner.server);
+      }
       await stubApi(contender);
       await contender.route('**/api/session', (route) =>
         route.fulfill({ json: null })
@@ -202,7 +222,43 @@ test(
       ).toContainText(name, { timeout: 30_000 });
       await createPrimitiveInPlace(contender, 'sphere');
       await expectBodyCount(contender, 2);
-      await contender.getByTitle('Back to projects', { exact: true }).click();
+      if (scenario !== 'home') {
+        await contender.evaluate((recoveryName) => {
+          const put = IDBObjectStore.prototype.put;
+          const fixtureWindow = window as typeof window & {
+            restoreRecoveryWrites: () => void;
+          };
+          fixtureWindow.restoreRecoveryWrites = () => {
+            IDBObjectStore.prototype.put = put;
+          };
+          IDBObjectStore.prototype.put = function (
+            this: IDBObjectStore,
+            value: unknown,
+            key?: IDBValidKey
+          ) {
+            if (
+              this.name === 'projects' &&
+              (value as ProjectDocument).name === recoveryName
+            ) {
+              throw new DOMException(
+                'Test device storage is full.',
+                'QuotaExceededError'
+              );
+            }
+            return key === undefined
+              ? put.call(this, value)
+              : put.call(this, value, key);
+          };
+        }, `${name} (copy)`);
+      }
+      const home = contender.getByTitle('Back to projects', { exact: true });
+      if (shareOwner) {
+        await contender.evaluate((hash) => {
+          window.location.hash = hash;
+        }, new URL(shareOwner.link).hash);
+      } else {
+        await home.click();
+      }
       await expect(
         contender.getByRole('button', { name: 'New project', exact: true })
       ).toHaveCount(0);
@@ -211,6 +267,45 @@ test(
           window as typeof window & { releaseProjectClaim: () => void }
         ).releaseProjectClaim()
       );
+      let ownerVersion = original.featureOrder;
+      if (scenario !== 'home') {
+        await expect(
+          contender.getByText(/Export it, or try again\./)
+        ).toBeVisible({ timeout: SAVE_BUDGET_MS });
+        await expectBoxAndSphere(contender);
+        if (shareOwner) {
+          expect(new URL(contender.url()).hash).toBe('');
+          await expect(
+            contender.getByRole('main', { name: 'Shared model' })
+          ).toHaveCount(0);
+        }
+      }
+      if (scenario === 'promotion') {
+        await createPrimitiveInPlace(page, 'cylinder');
+        await expect
+          .poll(
+            async () => (await storedProject(page, name))?.featureOrder.length
+          )
+          .toBe(2);
+        ownerVersion = (await storedProject(page, name))!.featureOrder;
+        await page.close();
+        await expect
+          .poll(() =>
+            contender.evaluate(async (lockName) => {
+              const { held } = await navigator.locks.query();
+              return held?.some((lock) => lock.name === lockName) ?? false;
+            }, `openzcad-project:${original.projectId}`)
+          )
+          .toBe(true);
+      }
+      if (scenario !== 'home') {
+        await contender.evaluate(() =>
+          (
+            window as typeof window & { restoreRecoveryWrites: () => void }
+          ).restoreRecoveryWrites()
+        );
+        await home.click();
+      }
       await expect(
         contender.getByRole('button', { name: 'New project', exact: true })
       ).toBeVisible({ timeout: SAVE_BUDGET_MS });
@@ -222,14 +317,19 @@ test(
       expect(recovery?.projectId).toBeTruthy();
       expect(recovery?.projectId).not.toBe(original.projectId);
       expect(recovery?.featureOrder).toHaveLength(2);
-      expect((await storedProject(page, name))?.featureOrder).toEqual(
-        original.featureOrder
+      expect(recovery?.featureOrder[0]).toBe(original.featureOrder[0]);
+      if (scenario === 'promotion') {
+        expect(recovery?.featureOrder[1]).not.toBe(ownerVersion[1]);
+      }
+      expect((await storedProject(contender, name))?.featureOrder).toEqual(
+        ownerVersion
       );
     } finally {
       await contender.close();
+      await shareOwner?.context.close();
     }
-  }
-);
+  });
+}
 
 for (const connectivity of ['online', 'offline edit'] as const) {
   test(`preserves an accepted Sphere through an immediate reload (${connectivity})`, async ({

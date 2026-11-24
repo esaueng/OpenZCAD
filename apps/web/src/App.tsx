@@ -2199,6 +2199,7 @@ import {
 } from './lib/navigationEditPause';
 import {
   DepartureRecoveryCopies,
+  DepartureRecoveryCopyError,
   departureBarrier,
   departureRecoveryHost,
   type DepartureRecoveryHost
@@ -5733,6 +5734,11 @@ export function App() {
    * claim settled, and holds the claim's lock until the write lands.
    */
   const projectOwnershipRef = useRef<ProjectStorageOwnership | null>(null);
+  // A promoted tab must compare its in-memory edits with what it opened
+  // before it can write to the storage it just acquired.
+  const pendingStoragePromotionRef = useRef<ProjectStorageOwnership | null>(
+    null
+  );
   /**
    * The document as this workspace opened it: the one autosave snapshot a
    * read-only tab may drop as having nothing of its own to save.
@@ -5794,7 +5800,7 @@ export function App() {
         mergeProjectSummaries([summarizeLocalDocument(copy)], current)
       );
       void seedCopyThumbnail(source, copy);
-      const message = `${source.name} is open in another tab, so your latest edits to it were kept as a separate project, ${copy.name}.`;
+      const message = `Your latest edits to ${source.name} were kept as a separate project, ${copy.name}.`;
       setStatus(message);
       departureNoticeRef.current.pending = message;
     }
@@ -8374,10 +8380,10 @@ export function App() {
     }
     const tracker = trackProjectStorage(projectId, {
       onPromoted() {
-        projectOpenElsewhereRef.current = false;
-        setProjectOpenElsewhere(false);
-        setStatus('This tab can edit the project now.');
-        void adoptStoredProject(projectId);
+        const manager = managerRef.current;
+        if (manager?.document.projectId !== projectId) return;
+        pendingStoragePromotionRef.current = ownership;
+        void adoptStoredProject(ownership, manager);
       },
       onAnswered(owned) {
         projectOpenElsewhereRef.current = !owned;
@@ -8404,6 +8410,8 @@ export function App() {
       projectOwnershipSettledRef.current = null;
       if (projectOwnershipRef.current === ownership)
         projectOwnershipRef.current = null;
+      if (pendingStoragePromotionRef.current === ownership)
+        pendingStoragePromotionRef.current = null;
       // No edit is taken while a navigation leaves the project (see
       // `navigationPause`), so autosave has written everything by now; a
       // write still in flight keeps the lock until it lands.
@@ -11632,24 +11640,32 @@ export function App() {
     setTool(null);
   }
 
-  /**
-   * Picks up a project this tab had open read-only, once the tab that owned it
-   * has gone. A read-only tab has no edits of its own to weigh, so whatever is
-   * stored is unambiguously the version to continue from.
-   */
-  async function adoptStoredProject(projectId: string) {
-    const stored = await loadLocalProject(projectId).catch(() => null);
-    const current = managerRef.current?.document;
+  /** Continue from the previous owner's device copy after taking its lock. */
+  async function adoptStoredProject(
+    ownership: ProjectStorageOwnership,
+    manager: CommandManager
+  ) {
+    const stored = await loadLocalProject(ownership.projectId).catch(
+      () => null
+    );
     if (
-      !stored ||
-      !current ||
-      stored.projectId !== current.projectId ||
-      stored.version === current.version
+      projectOwnershipRef.current !== ownership ||
+      managerRef.current !== manager
     ) {
       return;
     }
-    hydrateDocument(stored, { restoreView: false, rememberProject: false });
-    setStatus('Editing this project here now.');
+    const current = manager.document;
+    // This tab may have accepted an edit before its original claim was
+    // refused. Keep it available for recovery, and protect the previous
+    // owner's device copy from a late autosave of the same edit.
+    if (!sameLocalProjectContent(openedDocumentRef.current, current)) return;
+    if (stored && stored.version !== current.version) {
+      hydrateDocument(stored, { restoreView: false, rememberProject: false });
+    }
+    pendingStoragePromotionRef.current = null;
+    projectOpenElsewhereRef.current = false;
+    setProjectOpenElsewhere(false);
+    setStatus('This tab can edit the project now.');
   }
 
   async function writePendingLocalDocument(
@@ -11666,12 +11682,26 @@ export function App() {
     // lock is then held until the write lands: a tab that takes the project
     // over when this one leaves it must not save before this write does, or
     // this late write would land on top of its newer save.
+    const untouched = sameLocalProjectContent(
+      openedDocumentRef.current,
+      pending
+    );
     const written = await writeLocalProjectUnderClaim(
-      () => projectOwnershipRef.current,
+      () => {
+        const claim = projectOwnershipRef.current;
+        return claim === pendingStoragePromotionRef.current ? null : claim;
+      },
       pending.projectId,
       () => saveLocalProject(pending),
-      sameLocalProjectContent(openedDocumentRef.current, pending)
+      untouched
     );
+    if (
+      written === 'refused' &&
+      untouched &&
+      pendingStoragePromotionRef.current?.projectId === pending.projectId
+    ) {
+      return false;
+    }
     if (written !== true) {
       // Another tab owns this project's storage, or this tab has let its
       // claim go. That copy is the one being kept up to date; writing here
@@ -17029,6 +17059,13 @@ export function App() {
         );
       } catch (error) {
         if (isCurrent()) {
+          if (error instanceof DepartureRecoveryCopyError) {
+            clearProjectShareFragment();
+            setPendingShareToken(null);
+            setSharePage(null);
+            setStatus(error.message);
+            return;
+          }
           setSharePage({
             phase: 'error',
             title: 'We couldn’t open this shared model',

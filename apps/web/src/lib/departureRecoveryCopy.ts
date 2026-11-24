@@ -29,7 +29,7 @@ export interface DepartureRecoveryHost {
    */
   build(source: ProjectDocument): Promise<ProjectDocument>;
   /** Writes the copy durably to this device. Idempotent for one copy. */
-  save(copy: ProjectDocument): Promise<void>;
+  save(copy: ProjectDocument, source: ProjectDocument): Promise<void>;
 }
 
 /**
@@ -38,7 +38,8 @@ export interface DepartureRecoveryHost {
  * history kept, named apart from the shelf ("(copy)"). A copy of a project
  * this device keeps encrypted stays encrypted, recorded before the copy is
  * written (`carryEncryption` throws when it cannot be, and nothing is
- * written). Read at build time, so the names and owner are current.
+ * written). Check the requirement again on retries. Read names and ownership
+ * when building the copy.
  */
 export function departureRecoveryHost(options: {
   existingNames(): Iterable<string>;
@@ -47,16 +48,12 @@ export function departureRecoveryHost(options: {
   save(copy: ProjectDocument): Promise<void>;
 }): DepartureRecoveryHost {
   return {
-    async build(source) {
-      const copy = await localConflictCopy(
-        source,
-        options.existingNames(),
-        options.ownerUserId()
-      );
+    build: (source) =>
+      localConflictCopy(source, options.existingNames(), options.ownerUserId()),
+    save(copy, source) {
       options.carryEncryption(source.projectId, copy.projectId);
-      return copy;
-    },
-    save: (copy) => options.save(copy)
+      return options.save(copy);
+    }
   };
 }
 
@@ -92,7 +89,7 @@ export class DepartureRecoveryCopies {
     const kept = entry;
     kept.durable ??= (async () => {
       kept.copy ??= await host.build(source);
-      await host.save(kept.copy);
+      await host.save(kept.copy, source);
       return kept.copy;
     })().catch((error: unknown) => {
       // Not durable: the next departure tries again, with the same copy.
