@@ -9,6 +9,7 @@ import {
   sameMeshBuffer,
   type GeometryBodyRepresentation,
   type BodyTopology,
+  type FaceGeometry,
   type MeshGeometry
 } from '@openzcad/shared';
 import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
@@ -18,6 +19,7 @@ import { COPLANAR_DEPTH_ATTRIBUTE, withCoplanarDepth } from './coplanarBodies';
 import { STUDIO_RIG } from './studio';
 import { withBodyAmbientOcclusion } from './ambientOcclusion';
 import { tangentFacePairs } from './tangentEdges';
+import { analyticFaceNormals } from './analyticNormals';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
@@ -144,7 +146,9 @@ function takeStagedPlate(mesh: MeshGeometry, topology?: BodyTopology) {
  */
 function geometryFromMesh(
   mesh: MeshGeometry,
-  topology?: { faces: FaceRange[] },
+  topology?: {
+    faces: ReadonlyArray<FaceRange & { geometry?: FaceGeometry }>;
+  },
   onTangentPairs?: (pairs: ReturnType<typeof tangentFacePairs>) => void
 ): THREE.BufferGeometry {
   const sourcePositions = mesh.vertices;
@@ -389,10 +393,33 @@ function geometryFromMesh(
   }
   const groupCount = renderSources.length;
   const sums = new Float64Array(groupCount * 3);
+  // Exact surface normals where the face's analytic surface defines them;
+  // see `analyticFaceNormals` for the sliver strips this keeps out.
+  const surfaceNormals =
+    completeTopology && topology
+      ? analyticFaceNormals(mesh, topology.faces)
+      : null;
+  const exact = new Float64Array(3);
   for (let corner = 0; corner < cornerCount; corner += 1) {
     const group = groupOfCorner[corner]! * 3;
     const face = (corner - (corner % 3)) | 0;
     const angle = cornerAngles[corner]!;
+    const normalAt = surfaceNormals?.[topologyFaceByTriangle[face / 3]!];
+    const source = sourceIndices[corner]! * 3;
+    if (
+      normalAt &&
+      normalAt(
+        sourcePositions[source]!,
+        sourcePositions[source + 1]!,
+        sourcePositions[source + 2]!,
+        exact
+      )
+    ) {
+      sums[group] = sums[group]! + exact[0]! * angle;
+      sums[group + 1] = sums[group + 1]! + exact[1]! * angle;
+      sums[group + 2] = sums[group + 2]! + exact[2]! * angle;
+      continue;
+    }
     sums[group] = sums[group]! + faceNormals[face]! * angle;
     sums[group + 1] = sums[group + 1]! + faceNormals[face + 1]! * angle;
     sums[group + 2] = sums[group + 2]! + faceNormals[face + 2]! * angle;
@@ -1174,7 +1201,19 @@ export function updateObjectForBody(
       vertices[sourceIndex + 2]!
     );
   }
+  const surfaceNormals = analyticFaceNormals(source, body.topology.faces);
+  const faceOfTriangle = new Int32Array(source.indices.length / 3).fill(-1);
+  body.topology.faces.forEach((face, index) => {
+    const end = Math.min(
+      faceOfTriangle.length,
+      Math.ceil(face.triangleStart + face.triangleCount)
+    );
+    for (let t = Math.max(0, Math.floor(face.triangleStart)); t < end; t += 1)
+      faceOfTriangle[t] = index;
+  });
+  const exact = new Float64Array(3);
   for (let i = 0; i < source.indices.length; i += 3) {
+    const normalAt = surfaceNormals[faceOfTriangle[i / 3]!];
     const a = source.indices[i]! * 3;
     const b = source.indices[i + 1]! * 3;
     const c = source.indices[i + 2]! * 3;
@@ -1199,6 +1238,18 @@ export function updateObjectForBody(
             : vx * vx + vy * vy + vz * vz - dot;
       const weight = Math.atan2(area, cornerDot) / divisor;
       const target = renderIndices.getX(i + corner) * 3;
+      const at = corner === 0 ? a : corner === 1 ? b : c;
+      if (
+        normalAt &&
+        normalAt(vertices[at]!, vertices[at + 1]!, vertices[at + 2]!, exact)
+      ) {
+        // `weight` carries 1/|n| for the facet's unnormalized normal.
+        const angle = weight * area;
+        sums[target] = sums[target]! + exact[0]! * angle;
+        sums[target + 1] = sums[target + 1]! + exact[1]! * angle;
+        sums[target + 2] = sums[target + 2]! + exact[2]! * angle;
+        continue;
+      }
       sums[target] = sums[target]! + nx * weight;
       sums[target + 1] = sums[target + 1]! + ny * weight;
       sums[target + 2] = sums[target + 2]! + nz * weight;
