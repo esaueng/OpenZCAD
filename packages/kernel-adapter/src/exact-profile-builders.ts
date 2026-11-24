@@ -1,4 +1,5 @@
 import type { RemusKernel } from './remus-runtime';
+import { AdapterRefusal } from './adapter-refusal';
 import { KernelRefusal } from './kernel-refusal';
 import { operationErrorCategory } from './remus-operation-refusal';
 import {
@@ -998,9 +999,19 @@ export function buildPrimitive(
         dimension('depth')
       );
       break;
-    case 'cylinder':
-      solid = kernel.makeCylinder(dimension('radius'), dimension('height'));
+    case 'cylinder': {
+      const radius = dimension('radius');
+      const height = dimension('height');
+      if (radius <= 0 || height <= 0) {
+        const size = radius <= 0 ? 'radius' : 'height';
+        throw new AdapterRefusal(
+          'cylinder_dimension_not_positive',
+          `The ${size} must be greater than zero.`
+        );
+      }
+      solid = kernel.makeCylinder(radius, height);
       break;
+    }
     case 'sphere':
       solid = kernel.makeSphere(dimension('radius'), CURVE_SEGMENTS);
       break;

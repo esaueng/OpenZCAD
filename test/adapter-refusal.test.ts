@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { toFeatureId } from '@openzcad/shared';
+import { toFeatureId, toUserId } from '@openzcad/shared';
+import {
+  addPrimitiveFeature,
+  createProjectDocument
+} from '@openzcad/document-core';
+import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import {
   ADAPTER_REFUSALS,
   AdapterRefusal,
@@ -109,6 +114,39 @@ describe('adapter-raised refusals are typed', () => {
       category: 'invalid_input',
       code: 'union_disconnected'
     });
+  });
+});
+
+describe('cylinder primitive dimension validation', () => {
+  it.each([
+    [{ radius: 5, height: 0 }, 'height'],
+    [{ radius: 5, height: -3 }, 'height'],
+    [{ radius: 0, height: 5 }, 'radius'],
+    [{ radius: -3, height: 5 }, 'radius']
+  ])('reports a typed refusal for %j', async (dimensions, size) => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const derived = await adapter.syncDocument(
+        addPrimitiveFeature(
+          createProjectDocument('Cylinder', toUserId('user_test')),
+          { name: 'Post', primitiveKind: 'cylinder', dimensions }
+        )
+      );
+      const [warning] = derived.featureWarnings ?? [];
+      expect(warning).toMatchObject({
+        kind: 'build-failed',
+        kernelRefusal: {
+          family: 'validation',
+          category: 'invalid_input',
+          code: 'cylinder_dimension_not_positive'
+        }
+      });
+      expect(
+        plainRefusal(warning!.message, warning!.kernelRefusal).message
+      ).toBe(`Feature "Post": The ${size} must be greater than zero.`);
+    } finally {
+      adapter.dispose();
+    }
   });
 });
 
