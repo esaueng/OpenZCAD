@@ -11540,11 +11540,7 @@ export function App() {
     persistCameraPose(doc?.projectId ?? null, camera);
   }
 
-  /**
-   * Auto-detection only ever flips on a diagonal swipe, a pinch, or a
-   * line-mode wheel, so this is rare; it names the setting because a
-   * misread device is otherwise invisible to fix.
-   */
+  /** Point to the override when Auto recognizes a different device. */
   function handleWheelDeviceLearned(device: WheelDevice) {
     setStatus(
       device === 'trackpad'

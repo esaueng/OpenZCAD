@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   WHEEL_BURST_GAP_MS,
+  readWheelSample,
   WheelGestureClassifier,
   wheelDeviceEvidence,
   wheelIntent,
@@ -66,6 +67,27 @@ describe('wheel intent', () => {
 });
 
 describe('wheel device evidence', () => {
+  it('reads the unit before either axis can trigger Firefox line-to-pixel compatibility', () => {
+    let checked = false;
+    const event = {
+      get deltaMode() {
+        checked = true;
+        return 1;
+      },
+      get deltaX() {
+        expect(checked).toBe(true);
+        return 0;
+      },
+      get deltaY() {
+        expect(checked).toBe(true);
+        return 3;
+      }
+    };
+    expect(readWheelSample(event as WheelEvent)).toMatchObject({
+      deltaMode: 1,
+      deltaY: 3
+    });
+  });
   it('trusts only what one device cannot produce', () => {
     expect(wheelDeviceEvidence(sample({ deltaY: 3, deltaMode: 1 }))).toBe(
       'mouse'
@@ -126,20 +148,19 @@ describe('wheel gesture classifier', () => {
     expect(classifier.learnedDevice).toBeNull();
   });
 
-  it('learns a trackpad from a diagonal swipe and applies it next gesture', () => {
+  it('corrects an ambiguous vertical opener as soon as the swipe goes diagonal', () => {
     const classifier = new WheelGestureClassifier();
     const first = classifier.classify(sample({ deltaY: 5 }), 'auto', 0);
     expect(first).toEqual({ intent: 'zoom', learned: null });
-    // Off-axis mid-swipe: the burst keeps its intent, the device is noted.
+    // Off-axis mid-swipe resolves the ambiguous opener.
     const second = classifier.classify(
       sample({ deltaX: 1, deltaY: 6 }),
       'auto',
       frame
     );
-    expect(second).toEqual({ intent: 'zoom', learned: 'trackpad' });
-    // Later in the same burst, still zoom, and no repeated report.
+    expect(second).toEqual({ intent: 'pan', learned: 'trackpad' });
     const third = classifier.classify(sample({ deltaY: 9 }), 'auto', 2 * frame);
-    expect(third).toEqual({ intent: 'zoom', learned: null });
+    expect(third).toEqual({ intent: 'pan', learned: null });
     // The next gesture starts as a trackpad's.
     const next = classifier.classify(
       sample({ deltaY: 5 }),
@@ -164,6 +185,167 @@ describe('wheel gesture classifier', () => {
       WHEEL_BURST_GAP_MS + 1
     );
     expect(swipe.intent).toBe('pan');
+  });
+
+  it('recovers a pixel wheel from trackpad memory on its native tick', () => {
+    const classifier = new WheelGestureClassifier({ device: 'trackpad' });
+    expect(
+      classifier.classify(sample({ deltaY: 100, wheelDeltaY: -120 }), 'auto', 0)
+    ).toEqual({ intent: 'zoom', learned: 'mouse' });
+  });
+
+  it('accepts a distinct native detent even inside a swipe burst', () => {
+    const classifier = new WheelGestureClassifier();
+    classifier.classify(sample({ deltaX: 2, deltaY: 4 }), 'auto', 0);
+    expect(
+      classifier.classify(
+        sample({ deltaY: 100, wheelDeltaY: -120 }),
+        'auto',
+        frame
+      )
+    ).toEqual({ intent: 'zoom', learned: 'mouse' });
+  });
+
+  it.each([
+    [1.25, -96],
+    [2, -60],
+    [1.75, -68]
+  ])(
+    'keeps scaled mouse detents zooming at DPR %s',
+    (pixelRatio, wheelDeltaY) => {
+      const classifier = new WheelGestureClassifier({ device: 'trackpad' });
+      const intents = [3.2, 4.8, 7.2].map(
+        (deltaY, index) =>
+          classifier.classify(
+            sample({ deltaY, wheelDeltaY, pixelRatio }),
+            'auto',
+            index * frame
+          ).intent
+      );
+      expect(intents).toEqual(['zoom', 'zoom', 'zoom']);
+      expect(classifier.learnedDevice).toBe('mouse');
+    }
+  );
+
+  it('accepts repeated coarse pixel notches after a brief break in finger motion', () => {
+    const classifier = new WheelGestureClassifier();
+    classifier.classify(sample({ deltaX: 2, deltaY: 4 }), 'auto', 0);
+    expect(
+      classifier.classify(sample({ deltaY: 100 }), 'auto', 50).intent
+    ).toBe('pan');
+    expect(classifier.classify(sample({ deltaY: 100 }), 'auto', 100)).toEqual({
+      intent: 'zoom',
+      learned: 'mouse'
+    });
+  });
+
+  it('recognizes repeated coarse notches when the browser omits ticks', () => {
+    const classifier = new WheelGestureClassifier({ device: 'trackpad' });
+    classifier.classify(sample({ deltaY: -120 }), 'auto', 0);
+    expect(classifier.classify(sample({ deltaY: 120 }), 'auto', 350)).toEqual({
+      intent: 'zoom',
+      learned: 'mouse'
+    });
+  });
+
+  it('recognizes evenly spaced Firefox pixel notches with derived legacy ticks', () => {
+    const classifier = new WheelGestureClassifier({ device: 'trackpad' });
+    const notch = sample({ deltaY: 100, wheelDeltaY: -300 });
+    expect(classifier.classify(notch, 'auto', 0)).toEqual({
+      intent: 'pan',
+      learned: null
+    });
+    expect(classifier.classify(notch, 'auto', 90)).toEqual({
+      intent: 'zoom',
+      learned: 'mouse'
+    });
+  });
+
+  it('keeps a notch-sized swipe opener and its tail panning', () => {
+    const classifier = new WheelGestureClassifier({ device: 'trackpad' });
+    expect(classifier.classify(sample({ deltaY: 100 }), 'auto', 0).intent).toBe(
+      'pan'
+    );
+    expect(classifier.classify(sample({ deltaY: 81 }), 'auto', frame)).toEqual({
+      intent: 'pan',
+      learned: null
+    });
+  });
+
+  it('learns a straight, whole-pixel precision stream with proportional ticks', () => {
+    const classifier = new WheelGestureClassifier();
+    const intents = [1, 3, 5, 8, 21, 100, 100, 12].map(
+      (deltaY, index) =>
+        classifier.classify(
+          sample({ deltaY, wheelDeltaY: -3 * deltaY }),
+          'auto',
+          index * frame
+        ).intent
+    );
+    expect(intents).toEqual([
+      'zoom',
+      'zoom',
+      'zoom',
+      'pan',
+      'pan',
+      'pan',
+      'pan',
+      'pan'
+    ]);
+  });
+
+  it.each([undefined, -360, -120])(
+    'keeps repeated 120px swipe peaks at frame cadence panning (ticks %s)',
+    (wheelDeltaY) => {
+      const classifier = new WheelGestureClassifier({ device: 'trackpad' });
+      for (const [index, deltaY] of [120, 120, 80].entries()) {
+        const result = classifier.classify(
+          sample({
+            deltaY,
+            wheelDeltaY: deltaY === 120 ? wheelDeltaY : undefined
+          }),
+          'auto',
+          index * frame
+        );
+        expect(result).toEqual({ intent: 'pan', learned: null });
+      }
+    }
+  );
+
+  it('recognizes a straight precision swipe and keeps its fast peak and tail panning', () => {
+    const classifier = new WheelGestureClassifier({ device: 'mouse' });
+    classifier.classify(sample({ deltaY: 1.25 }), 'auto', 0);
+    expect(
+      classifier.classify(sample({ deltaY: 4.75 }), 'auto', frame)
+    ).toEqual({ intent: 'pan', learned: 'trackpad' });
+    for (const [index, deltaY] of [40, 100, 100, 120, 120, 40, 2].entries()) {
+      expect(
+        classifier.classify(
+          sample({ deltaY, wheelDeltaY: -3 * deltaY }),
+          'auto',
+          (index + 2) * frame
+        )
+      ).toEqual({ intent: 'pan', learned: null });
+    }
+  });
+
+  it('recognizes a straight momentum scroll even when every delta is integral', () => {
+    const classifier = new WheelGestureClassifier({ device: 'mouse' });
+    expect(
+      classifier.classify(
+        sample({ deltaY: 40, wheelDeltaY: -120, momentum: true }),
+        'auto',
+        0
+      )
+    ).toEqual({ intent: 'pan', learned: 'trackpad' });
+  });
+
+  it('honors line-mode evidence inside an active pan', () => {
+    const classifier = new WheelGestureClassifier();
+    classifier.classify(sample({ deltaX: 3, deltaY: 4 }), 'auto', 0);
+    expect(
+      classifier.classify(sample({ deltaY: 3, deltaMode: 1 }), 'auto', frame)
+    ).toEqual({ intent: 'zoom', learned: 'mouse' });
   });
 
   it('lets a line-mode wheel take a remembered trackpad back', () => {

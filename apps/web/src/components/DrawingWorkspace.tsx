@@ -130,6 +130,7 @@ import {
   hasDraftDisplay
 } from '@openzcad/shared';
 import {
+  readWheelSample,
   WheelGestureClassifier,
   type PointerNavigationMode
 } from '@openzcad/viewport/wheel-gesture';
@@ -3862,12 +3863,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       device: readWheelDeviceMemory()
     });
     const { intent, learned } = wheelClassifier.current.classify(
-      {
-        deltaX: event.deltaX,
-        deltaY: event.deltaY,
-        deltaMode: event.deltaMode,
-        ctrlKey: event.ctrlKey
-      },
+      readWheelSample(event),
       props.pointerNavigation ?? 'auto',
       event.timeStamp
     );

@@ -1,29 +1,8 @@
-/**
- * What a wheel event means.
- *
- * A mouse wheel and a trackpad both arrive as `wheel`, and the browser does
- * not say which one moved. CAD navigation needs them to mean different
- * things: a wheel notch zooms, two fingers on a trackpad pan, and a pinch
- * zooms. Getting that wrong in either direction is bad — a trackpad user who
- * cannot pan is stuck, and a mouse user whose wheel pans has lost zoom
- * entirely — so the classification is explicit, and overridable.
- *
- * No single event can tell the devices apart. macOS applies scroll
- * acceleration to a mouse wheel, so a slow notch reaches the page as a
- * handful of pixel-mode events as small as a finger produces, and the legacy
- * `wheelDeltaY` notch multiple that identifies a mouse on Windows collapses
- * onto the trackpad relation there too. What a mouse can never produce is
- * motion on both axes at once, or a pinch. Those two signals are the only
- * ones trusted, and each one is remembered: auto mode zooms on the wheel
- * until a diagonal swipe or a pinch proves a trackpad, and pans on vertical
- * motion from then on.
- */
-
 export type WheelIntent = 'zoom' | 'pan';
 
 export type PointerNavigationMode = 'auto' | 'mouse' | 'trackpad';
 
-/** The pointing device a wheel event has proved, when it proves one. */
+/** Device used for otherwise ambiguous vertical pixel deltas. */
 export type WheelDevice = 'mouse' | 'trackpad';
 
 export interface WheelSample {
@@ -38,6 +17,29 @@ export interface WheelSample {
    * event without it is a pinch; with it, a mouse user zooming faster.
    */
   controlKeyHeld?: boolean;
+  /** Legacy wheel ticks when exposed by the browser. */
+  wheelDeltaY?: number;
+  /** Chromium can expose legacy wheel ticks divided by this scale. */
+  pixelRatio?: number;
+  /** True on an inertial scroll when the browser exposes its phase. */
+  momentum?: boolean;
+}
+
+/** Read the unit first: Firefox can otherwise convert a line wheel to pixels. */
+export function readWheelSample(
+  event: WheelEvent & { wheelDeltaY?: number; momentum?: boolean },
+  controlKeyHeld?: boolean
+): WheelSample {
+  return {
+    deltaMode: event.deltaMode,
+    deltaX: event.deltaX,
+    deltaY: event.deltaY,
+    ctrlKey: event.ctrlKey,
+    wheelDeltaY: event.wheelDeltaY,
+    pixelRatio: event.view?.devicePixelRatio ?? globalThis.devicePixelRatio,
+    momentum: event.momentum,
+    controlKeyHeld
+  };
 }
 
 /**
@@ -47,14 +49,7 @@ export interface WheelSample {
  */
 export const WHEEL_BURST_GAP_MS = 200;
 
-/**
- * What one event proves about the device, or null when it proves nothing.
- *
- * Line and page deltas come only from a wheel. Motion on both axes at once
- * comes only from a finger — a tilt wheel scrolls sideways, but never while
- * the main wheel turns, so a horizontal-only event proves nothing. A pinch
- * is a ctrl-flagged event while no Control key is down.
- */
+/** Device clues available without comparing successive events. */
 export function wheelDeviceEvidence(sample: WheelSample): WheelDevice | null {
   if (sample.deltaMode !== 0) {
     return 'mouse';
@@ -62,28 +57,13 @@ export function wheelDeviceEvidence(sample: WheelSample): WheelDevice | null {
   if (sample.ctrlKey) {
     return sample.controlKeyHeld === false ? 'trackpad' : null;
   }
-  if (sample.deltaX !== 0 && sample.deltaY !== 0) {
+  if (sample.momentum || (sample.deltaX !== 0 && sample.deltaY !== 0)) {
     return 'trackpad';
   }
   return null;
 }
 
-/**
- * Classifies one wheel event on its own.
- *
- * A pinch is unambiguous: the browser sets `ctrlKey` for it whether or not
- * the key is down, and it always means zoom. An explicit preference settles
- * everything else. In auto mode the rules run from most to least certain:
- *
- * 1. line or page deltas — only a wheel reports those;
- * 2. any horizontal component — a wheel's tilt is a scroll, not a zoom;
- * 3. a device already proved to be a trackpad pans on vertical motion;
- * 4. everything else is a wheel notch.
- *
- * Rule 4 is the deliberate default: a vertical-only pixel delta of any size
- * is what an accelerated mouse wheel produces, and a trackpad proves itself
- * within a swipe or two through rule 3's memory.
- */
+/** Resolve a packet using the preference and any known device. */
 export function wheelIntent(
   sample: WheelSample,
   mode: PointerNavigationMode = 'auto',
@@ -114,20 +94,17 @@ export interface WheelClassification {
 }
 
 /**
- * Classifies wheel events one gesture at a time.
- *
- * The first event of a gesture decides its intent and every event inside
- * the same burst keeps it, so a gesture never zooms on its fast events and
- * pans on its slow ones. Evidence is still gathered from every event: a
- * diagonal swipe seen mid-gesture does not change that gesture, but the next
- * one starts as a trackpad's. A pinch is never held to a burst — it is
- * always a zoom, and it ends whatever gesture was running.
+ * Accelerated wheels and straight swipes can send identical vertical pixels.
+ * Keep the current gesture's intent until stronger evidence resolves it.
  */
 export class WheelGestureClassifier {
   private device: WheelDevice | null;
   private readonly burstGapMs: number;
   private burstIntent: WheelIntent | null = null;
   private burstLastAt = Number.NEGATIVE_INFINITY;
+  private notchCandidate = 0;
+  private fineDelta = 0;
+  private fineSteps = 0;
 
   constructor(
     options: { device?: WheelDevice | null; burstGapMs?: number } = {}
@@ -136,9 +113,65 @@ export class WheelGestureClassifier {
     this.burstGapMs = options.burstGapMs ?? WHEEL_BURST_GAP_MS;
   }
 
-  /** The device proved so far, from a prior session or this one. */
   get learnedDevice(): WheelDevice | null {
     return this.device;
+  }
+
+  /**
+   * Pixel deltas overlap. Look for a pattern at the beginning of a wheel
+   * gesture so repeated large values at the peak of a swipe stay a pan.
+   */
+  private verticalEvidence(
+    sample: WheelSample,
+    continuing: boolean,
+    gap: number
+  ): WheelDevice | null {
+    const size = Math.abs(sample.deltaY);
+    const ticks = sample.wheelDeltaY ?? 0;
+    // A legacy detent is 120 units. Precise scrolling can hit 120 too:
+    // Firefox and macOS may derive the legacy value from 3x the pixel delta.
+    const proportional = ticks !== 0 && Math.abs(ticks + 3 * sample.deltaY) < 1;
+    const scale = sample.pixelRatio ?? 1;
+    const scaledDetents = Math.round((Math.abs(ticks) * scale) / 120);
+    const scaledNotch =
+      scaledDetents > 0 &&
+      Math.trunc((scaledDetents * 120) / scale) === Math.abs(ticks);
+    const nativeNotch =
+      ticks !== 0 &&
+      (ticks % 120 === 0 || scaledNotch) &&
+      Math.sign(ticks) === -Math.sign(sample.deltaY) &&
+      !proportional &&
+      ticks !== -sample.deltaY;
+    const repeats = size !== 0 && size === this.notchCandidate;
+    // A handoff can happen inside the burst timeout. Use the same cadence
+    // to start a notch sequence and confirm it on a subsequent event.
+    const spacedNotch = gap >= 40;
+    const checkingNotch =
+      !continuing || repeats || (this.burstIntent === 'pan' && spacedNotch);
+    this.notchCandidate =
+      checkingNotch && size >= 40 && Number.isInteger(size) ? size : 0;
+    if (nativeNotch || (repeats && spacedNotch && gap <= 1500)) {
+      this.fineSteps = 0;
+      return 'mouse';
+    }
+
+    // Finger motion often begins with changing, fine steps about one frame
+    // apart. With whole pixels require a longer run and a proportional tick
+    // signal. Size or frequency alone also describes an accelerated wheel.
+    const fine = size > 0 && size < 16;
+    const changing =
+      continuing && gap <= 32 && this.fineSteps > 0 && this.fineDelta !== size;
+    this.fineSteps = fine ? (changing ? this.fineSteps + 1 : 1) : 0;
+    const fractionalPair =
+      !Number.isInteger(this.fineDelta) && !Number.isInteger(size);
+    this.fineDelta = size;
+    if (
+      this.fineSteps >= 2 &&
+      (fractionalPair || (proportional && this.fineSteps >= 4))
+    ) {
+      return 'trackpad';
+    }
+    return null;
   }
 
   classify(
@@ -146,30 +179,29 @@ export class WheelGestureClassifier {
     mode: PointerNavigationMode,
     now: number
   ): WheelClassification {
-    let learned: WheelDevice | null = null;
-    // Memory only serves auto mode; an explicit preference has already
-    // answered the question and must not report a device it ignores.
-    if (mode === 'auto') {
-      const evidence = wheelDeviceEvidence(sample);
-      if (evidence !== null && evidence !== this.device) {
-        this.device = evidence;
-        learned = evidence;
-      }
-    }
-    if (sample.ctrlKey) {
-      this.burstIntent = null;
-      return { intent: 'zoom', learned };
-    }
+    const gap = now - this.burstLastAt;
     const continuing =
-      this.burstIntent !== null && now - this.burstLastAt <= this.burstGapMs;
+      this.burstIntent !== null && gap >= 0 && gap <= this.burstGapMs;
     this.burstLastAt = now;
-    if (mode !== 'auto') {
-      // An explicit preference cannot flip mid-gesture, so a burst is moot;
-      // keep the clock honest without holding a stale auto decision.
+    let evidence = mode === 'auto' ? wheelDeviceEvidence(sample) : null;
+    if (
+      mode === 'auto' &&
+      !evidence &&
+      !sample.ctrlKey &&
+      sample.deltaX === 0
+    ) {
+      evidence = this.verticalEvidence(sample, continuing, gap);
+    } else {
+      this.notchCandidate = 0;
+      this.fineSteps = 0;
+    }
+    const learned = evidence !== this.device ? evidence : null;
+    if (learned) this.device = learned;
+    if (mode !== 'auto' || sample.ctrlKey) {
       this.burstIntent = null;
       return { intent: wheelIntent(sample, mode), learned };
     }
-    if (!continuing) {
+    if (!continuing || evidence || sample.deltaX !== 0) {
       this.burstIntent = wheelIntent(sample, mode, this.device);
     }
     return { intent: this.burstIntent ?? 'zoom', learned };
