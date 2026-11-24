@@ -74,7 +74,8 @@ export function scaledSectionView(
  * `'unknown'` state is never read as, or stamped with, a guessed unit.
  */
 export function legacyViewUnits(input: {
-  previousUnits: UnitSystem | undefined;
+  /** `'unknown'` when it could not be recorded before the copy changed. */
+  previousUnits: UnitSystem | 'unknown' | undefined;
   units: UnitSystem;
   commandLog: readonly { kind: string }[];
   /** False for a share without history, whose log was stripped. */

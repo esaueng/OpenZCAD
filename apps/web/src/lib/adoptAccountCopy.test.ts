@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { legacyViewUnits } from './storedUnitView';
 import {
   adoptAccountCopyLocally,
   stampLegacyViewUnits
@@ -158,21 +159,42 @@ describe('adopting an account copy converted elsewhere (I03)', () => {
     expect(saveLocalProject).toHaveBeenCalledWith(account);
   });
 
-  it('keeps the device copy when an existing view cannot be stamped', async () => {
+  it('still adopts the copy when the stamp is refused, with the legacy unit unknown', async () => {
+    // Private mode or a full quota: the browser refuses the marker write.
     const { device, account } = copies();
+    legacyMillimetreViews(device.projectId);
     const saveLocalProject = vi.fn(async () => {});
     const saveLastSyncedVersion = vi.fn(async () => {});
+    const viewUnitsUnknown = vi.fn();
     await expect(
       adoptAccountCopyLocally(account, device, {
         stampViewUnits: async () => false,
         saveLocalProject,
-        saveLastSyncedVersion
+        saveLastSyncedVersion,
+        viewUnitsUnknown
       })
-    ).rejects.toThrow(
-      'Could not preserve the saved view units on this device.'
+    ).resolves.toBe(true);
+    expect(saveLocalProject).toHaveBeenCalledWith(account);
+    expect(saveLastSyncedVersion).toHaveBeenCalledWith(
+      account.projectId,
+      account.version
     );
-    expect(saveLocalProject).not.toHaveBeenCalled();
-    expect(saveLastSyncedVersion).not.toHaveBeenCalled();
+    expect(viewUnitsUnknown).toHaveBeenCalledWith(device.projectId);
+    // The open is told the unit is unknown: the legacy view is not read in
+    // inches. The remembered camera and cut are dropped (`useProjectView`),
+    // and the saved view, still unstamped, is shown as saved, unscaled.
+    expect(
+      legacyViewUnits({
+        previousUnits: 'unknown',
+        units: account.units,
+        commandLog: [{ kind: 'sketch.add' }],
+        historyAvailable: true
+      })
+    ).toBe('unknown');
+    const [view] = loadSavedViews(device.projectId);
+    expect(view?.units).toBeUndefined();
+    expect(savedViewInUnits(view!, 'inch')).toBe(view);
+    expect(loadProjectView(device.projectId)?.units).toBeUndefined();
   });
 
   it('stamps nothing without a device copy of the same project', async () => {
@@ -190,7 +212,7 @@ describe('adopting an account copy converted elsewhere (I03)', () => {
   });
 
   it.each([WORKSPACE_SESSION_STORAGE_KEY, SAVED_VIEWS_STORAGE_KEY])(
-    'keeps the device copy when %s cannot be read',
+    'still adopts the copy when %s cannot be read',
     async (unreadableKey) => {
       const { device, account } = copies();
       legacyMillimetreViews(device.projectId);
@@ -201,15 +223,18 @@ describe('adopting an account copy converted elsewhere (I03)', () => {
       };
       const saveLocalProject = vi.fn(async () => {});
       const saveLastSyncedVersion = vi.fn(async () => {});
+      const viewUnitsUnknown = vi.fn();
       await expect(
         adoptAccountCopyLocally(account, device, {
           stampViewUnits: stampLegacyViewUnits,
           saveLocalProject,
-          saveLastSyncedVersion
+          saveLastSyncedVersion,
+          viewUnitsUnknown
         })
-      ).rejects.toThrow('Could not preserve the saved view units');
-      expect(saveLocalProject).not.toHaveBeenCalled();
-      expect(saveLastSyncedVersion).not.toHaveBeenCalled();
+      ).resolves.toBe(true);
+      expect(saveLocalProject).toHaveBeenCalledWith(account);
+      expect(saveLastSyncedVersion).toHaveBeenCalled();
+      expect(viewUnitsUnknown).toHaveBeenCalledWith(device.projectId);
     }
   );
 });

@@ -2575,8 +2575,16 @@ interface HydrateOptions {
    * taken to be in this unit. Defaults to the open document's unit when it
    * is the same project.
    */
-  previousUnits?: UnitSystem;
+  previousUnits?: UnitSystem | 'unknown';
 }
+
+/**
+ * I03: the open's status note when the browser refused to record the unit
+ * of this device's older view state before a converted account copy
+ * replaced the device copy.
+ */
+const VIEW_UNITS_UNKNOWN_NOTE =
+  ' This browser could not keep the unit of its remembered view, so that view was reset.';
 
 /**
  * The sealed shelf (ADR-024 amendment 2026-11-14), loaded on first use so
@@ -8855,6 +8863,9 @@ export function App() {
         const accountDocumentLoadFailed = Boolean(
           accountMayOwnStartupProject && rememberedRemoteResult.error
         );
+        // Set when the browser refused to record the unit of this device's
+        // older view state before the account copy replaced the device copy.
+        let startupViewUnitsUnknown = false;
         const restoredOutcome = chooseProjectDocument(
           rememberedLocal,
           rememberedRemote,
@@ -8883,7 +8894,10 @@ export function App() {
             stampViewUnits: stampLegacyViewUnits,
             saveLocalProject,
             saveLastSyncedVersion,
-            isCurrent
+            isCurrent,
+            viewUnitsUnknown: () => {
+              startupViewUnitsUnknown = true;
+            }
           });
           if (!isCurrent()) {
             return;
@@ -8982,9 +8996,11 @@ export function App() {
         if (startupProjectId && restoredDocument) {
           hydrateDocument(restoredDocument, {
             activeProjectSince: startupPointer,
-            ...(rememberedLocal?.projectId === restoredDocument.projectId
-              ? { previousUnits: rememberedLocal.units }
-              : {})
+            ...(startupViewUnitsUnknown
+              ? { previousUnits: 'unknown' as const }
+              : rememberedLocal?.projectId === restoredDocument.projectId
+                ? { previousUnits: rememberedLocal.units }
+                : {})
           });
           if (accountDocumentNeedsRepair) {
             setSaveState('repair');
@@ -9023,7 +9039,9 @@ export function App() {
             );
             return;
           }
-          setStatus(`Reopened ${restoredDocument.name}.`);
+          setStatus(
+            `Reopened ${restoredDocument.name}.${startupViewUnitsUnknown ? VIEW_UNITS_UNKNOWN_NOTE : ''}`
+          );
           return;
         }
         if (startupProjectId) {
@@ -16624,6 +16642,7 @@ export function App() {
         );
         return;
       }
+      let viewUnitsUnknown = false;
       const openedDocument =
         outcome.choice === 'remote' && localDocument
           ? withLocalDerived(outcome.document, localDocument)
@@ -16635,19 +16654,27 @@ export function App() {
           stampViewUnits: stampLegacyViewUnits,
           saveLocalProject,
           saveLastSyncedVersion,
-          isCurrent
+          isCurrent,
+          viewUnitsUnknown: () => {
+            viewUnitsUnknown = true;
+          }
         });
       }
       if (!isCurrent()) return;
       commitAccountState();
       hydrateDocument(openedDocument, {
         activeProjectSince,
-        ...(localDocument ? { previousUnits: localDocument.units } : {})
+        ...(viewUnitsUnknown
+          ? { previousUnits: 'unknown' as const }
+          : localDocument
+            ? { previousUnits: localDocument.units }
+            : {})
       });
       setStatus(
-        outcome.choice === 'local' && remoteDocument
+        (outcome.choice === 'local' && remoteDocument
           ? `Opened newer local edits for ${openedDocument.name}.`
-          : `Opened ${openedDocument.name}.`
+          : `Opened ${openedDocument.name}.`) +
+          (viewUnitsUnknown ? VIEW_UNITS_UNKNOWN_NOTE : '')
       );
     } catch (error) {
       if (isCurrent()) {

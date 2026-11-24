@@ -26,6 +26,12 @@ export interface AdoptAccountCopySteps {
   saveLastSyncedVersion(projectId: string, version: number): Promise<unknown>;
   /** Checked between writes; a stale load stops before the next one. */
   isCurrent?(): boolean;
+  /**
+   * The browser refused to record the replaced copy's unit on the legacy
+   * view state (private mode, a full quota). The account copy is adopted
+   * anyway; the caller opens it with that view state's unit unknown.
+   */
+  viewUnitsUnknown?(projectId: string): void;
 }
 
 /**
@@ -35,6 +41,11 @@ export interface AdoptAccountCopySteps {
  * the steps leaves either the old copy beside unstamped views (stamped again
  * on the retry) or stamped views beside the new copy — never unstamped views
  * beside a copy in another unit. False when `isCurrent` stopped it.
+ *
+ * A refused stamp never blocks the open: the account copy is still adopted
+ * and `viewUnitsUnknown` is told, so the legacy view state is treated as in
+ * an unknown unit (dropped, or shown unscaled) rather than read in the new
+ * one.
  */
 export async function adoptAccountCopyLocally(
   adopted: ProjectDocument,
@@ -52,11 +63,7 @@ export async function adoptAccountCopyLocally(
       replaced.units
     );
     if (!isCurrent()) return false;
-    if (!stamped) {
-      throw new Error(
-        'Could not preserve the saved view units on this device.'
-      );
-    }
+    if (!stamped) steps.viewUnitsUnknown?.(replaced.projectId);
   }
   await steps.saveLocalProject(adopted);
   if (!isCurrent()) return false;
