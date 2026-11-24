@@ -1,3 +1,4 @@
+import { denseBodyNeedsPreparation } from './viewer/bodyPreparationPolicy';
 import type * as AnalysisOverlayTypes from '@openzcad/viewport/analysis-overlay';
 import type { ParameterVisualPreview } from '../lib/parameterVisualPreview';
 import {
@@ -4756,9 +4757,14 @@ export function ModelViewer({
       // Selection rebuilds its overlays with each preview body, so this
       // runs every frame the ghost is up.
       hideHighlightsUnderGhost(body ?? undefined);
-      const live = offsetDrag ? body : null;
       return offsetGhost.veilAddedMaterial(
-        live instanceof THREE.Mesh ? live : null
+        body instanceof THREE.Mesh ? body : null,
+        context.renderedBodies?.length === 1 &&
+          !offsetBodyProxy &&
+          !xrayRef.current &&
+          displayModeRef.current !== 'wireframe' &&
+          !sectionViewRef.current,
+        offsetDrag ? 'dragging' : 'released'
       );
     }
     offsetGhostClearRef.current = clearOffsetGhost;
@@ -14218,7 +14224,29 @@ export function ModelViewer({
       loopWasAnimating = false;
     };
     document.addEventListener('visibilitychange', resetAnimationContinuity);
+    function denseOffsetDrag() {
+      return (
+        offsetDrag !== null &&
+        !offsetBodyProxy &&
+        context.renderedBodies?.some(
+          (body) =>
+            body.bodyId === offsetHandleRef.current?.bodyId &&
+            denseBodyNeedsPreparation(body)
+        ) === true
+      );
+    }
     function animate(now: number) {
+      // A sequence of full draws of a dense thread can queue seconds of old
+      // handle positions ahead of the next exact mesh. Continue feeding the
+      // geometry worker with the latest input while the previous draw finishes.
+      if (denseOffsetDrag() && stationaryDraws.waitingForFullSize()) {
+        const move = pendingDragEvent;
+        pendingDragEvent = null;
+        dragAppliedThisFrame = false;
+        if (move) applyPointerMove(move);
+        animationFrame = window.requestAnimationFrame(animate);
+        return;
+      }
       if (automaticFrame && stationaryDraws.waitingForFullSize()) {
         // Apply the pointer hit immediately. Only a changed highlight requests
         // a draw and preempts the wait for an automatic fade or camera glide.
@@ -14747,6 +14775,16 @@ export function ModelViewer({
         ms: performance.now() - frameStarted,
         detail: {
           presented: pendingTracedFrameRef.current ? 1 : 0,
+          ...(import.meta.env.OZ_PERF === '1' &&
+          pendingTracedFrameRef.current &&
+          context.renderedBodies?.length === 1 &&
+          context.renderedBodies[0]?.bbox
+            ? {
+                solidMaxX: context.renderedBodies[0].bbox.max.x,
+                solidMaxY: context.renderedBodies[0].bbox.max.y,
+                solidMaxZ: context.renderedBodies[0].bbox.max.z
+              }
+            : {}),
           renderMs: performance.now() - renderStarted
         }
       });
@@ -14859,7 +14897,7 @@ export function ModelViewer({
       loopWasAnimating = sceneAnimating || occlusionFading;
       loopOnlyFading = occlusionFading && !sceneAnimating;
       if (ratio === fullPixelRatio) {
-        stationaryDraws.submittedFullSize(performance.now());
+        stationaryDraws.submittedFullSize(performance.now(), denseOffsetDrag());
       }
       if (loopWasAnimating) {
         requestRender();

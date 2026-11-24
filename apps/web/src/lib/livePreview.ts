@@ -141,6 +141,7 @@ export class LivePreview<TDocument, TDerived> {
     derived: TDerived;
   } | null = null;
   private abort: AbortController | null = null;
+  private releasedAbort: AbortController | null = null;
   private slow = false;
   /** Predicted slow: hold rebuilds until the hand rests (`slowSettleMs`). */
   private settle = false;
@@ -386,6 +387,52 @@ export class LivePreview<TDocument, TDerived> {
     }
   }
 
+  /**
+   * Release owns the display for the last requested value. If that value
+   * is queued behind an older one, retire the older work and submit the
+   * final display before the caller queues its authoritative history check.
+   */
+  takeRequested(
+    value: number
+  ): (RunningPreview<TDocument, TDerived> & { cancel: () => void }) | null {
+    let running = this.runningPreview;
+    let controller = this.abort;
+    if (
+      running?.value === value &&
+      this.runningGeneration === this.generation &&
+      controller &&
+      !controller.signal.aborted &&
+      this.options.isCurrent?.(running.document) !== false
+    ) {
+      this.abort = null;
+      this.stop();
+    } else {
+      if (this.pending?.value !== value) return null;
+      this.stop();
+      try {
+        const document = this.options.build(value);
+        if (!document || this.options.isCurrent?.(document) === false)
+          return null;
+        controller = new AbortController();
+        running = {
+          value,
+          document,
+          result: this.options.derive(document, controller.signal)
+        };
+      } catch {
+        // Release still owns the normal checked rebuild when a preview fails.
+        return null;
+      }
+    }
+    const owner = controller;
+    this.releasedAbort = owner;
+    const retire = () => {
+      if (this.releasedAbort === owner) this.releasedAbort = null;
+    };
+    void running.result.then(retire, retire);
+    return { ...running, cancel: () => owner.abort() };
+  }
+
   /** Invalidate work while retaining the displayed result during final validation. */
   stop() {
     this.generation += 1;
@@ -408,6 +455,8 @@ export class LivePreview<TDocument, TDerived> {
    * preview, and re-arms the slow-path guard for the next gesture.
    */
   clear() {
+    this.releasedAbort?.abort();
+    this.releasedAbort = null;
     this.stop();
     if (this.active) {
       this.active = false;

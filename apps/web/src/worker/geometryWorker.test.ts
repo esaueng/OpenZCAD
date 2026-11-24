@@ -226,6 +226,43 @@ describe('geometry worker rebuild coordination', () => {
     await new Promise((resolve) => setTimeout(resolve, 180));
     expect(refineEditPreview).toHaveBeenCalledOnce();
   });
+  it('prepares a checked dense body on owned buffers and keeps the cached solid intact', async () => {
+    const document = boxDocument('Dense checked edit');
+    const bodyId = document.bodyOrder[0]!;
+    const full = releasedBody(bodyId, 'checked');
+    const body = full.bodyRepresentations[bodyId]!;
+    body.mesh.indices = Uint32Array.from({ length: 60_003 }, (_, i) => i % 3);
+    const { scope } = await installWorker(vi.fn(async () => full));
+    post(scope, {
+      type: 'sync',
+      document,
+      requestId: 'checked',
+      prepareBodyId: bodyId,
+      topologyEncoding: 'json-v2'
+    });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(([m]) => m.type === 'sync' && m.ok)
+      ).toBe(true)
+    );
+    const [message, options] = scope.postMessage.mock.calls.find(
+      ([m]) => m.type === 'sync' && m.ok
+    )!;
+    if (message.type !== 'sync' || !message.ok)
+      throw new Error('Missing checked result');
+    expect(message.prepared?.bodyId).toBe(bodyId);
+    expect(message.prepared?.data.geometry?.indices.length).toBe(
+      body.mesh.indices.length
+    );
+    expect(new Set(options?.transfer).size).toBe(options?.transfer?.length);
+    const received = structuredClone(message, options);
+    expect(received.derived.bodyRepresentations[bodyId]!.mesh.indices).toEqual(
+      body.mesh.indices
+    );
+    expect(body.mesh.vertices.length).toBe(9);
+    expect(body.mesh.indices.length).toBe(60_003);
+  });
+
   it('reuses full validation for a selection demand and its idle echo without a boolean', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Demand cache', toUserId('user')),

@@ -12,7 +12,7 @@ import {
   displayTessellationForExtents,
   previewDisplayTessellation
 } from '../packages/kernel-adapter/src/display-tessellation';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
+import { wrapGroupedMeshing } from './support/grouped-mesh-spy';
 
 /**
  * A face offset nudges the body's bounding box, and the nominal display
@@ -26,16 +26,9 @@ describe('display deflection held across a small edit', () => {
   const deflections: number[] = [];
 
   beforeAll(async () => {
-    const underlying = RemusKernel.prototype.tessellateSolidGroupedBinary;
-    vi.spyOn(
-      RemusKernel.prototype,
-      'tessellateSolidGroupedBinary'
-    ).mockImplementation(function (
-      this: RemusKernel,
-      ...args: Parameters<RemusKernel['tessellateSolidGroupedBinary']>
-    ) {
+    wrapGroupedMeshing((underlying, ...args) => {
       deflections.push(args[1]);
-      return underlying.apply(this, args);
+      return underlying(...args);
     });
     adapter = await createExactKernelAdapter();
   }, 60_000);
@@ -154,16 +147,9 @@ describe('held display deflections are pruned with the body', () => {
 describe('the union gate meshes at the held deflection', () => {
   it('retains a projection measurement reuses after a small operand edit', async () => {
     const calls: { solid: number; linear: number }[] = [];
-    const underlying = RemusKernel.prototype.tessellateSolidGroupedBinary;
-    vi.spyOn(
-      RemusKernel.prototype,
-      'tessellateSolidGroupedBinary'
-    ).mockImplementation(function (
-      this: RemusKernel,
-      ...args: Parameters<RemusKernel['tessellateSolidGroupedBinary']>
-    ) {
+    wrapGroupedMeshing((underlying, ...args) => {
       calls.push({ solid: args[0], linear: args[1] });
-      return underlying.apply(this, args);
+      return underlying(...args);
     });
     const adapter = await createExactKernelAdapter();
     try {
@@ -255,16 +241,10 @@ describe('the union gate meshes at the held deflection', () => {
 describe('a face drag meshes its frames at the drag tessellation', () => {
   it('commits the resting frame as a draft and keeps full quality for its refinement and the held value', async () => {
     const calls: { linear: number; angular: number }[] = [];
-    const underlying = RemusKernel.prototype.tessellateSolidGroupedBinary;
-    const spy = vi
-      .spyOn(RemusKernel.prototype, 'tessellateSolidGroupedBinary')
-      .mockImplementation(function (
-        this: RemusKernel,
-        ...args: Parameters<RemusKernel['tessellateSolidGroupedBinary']>
-      ) {
-        calls.push({ linear: args[1], angular: args[2] ?? Number.NaN });
-        return underlying.apply(this, args);
-      });
+    const spy = wrapGroupedMeshing((underlying, ...args) => {
+      calls.push({ linear: args[1], angular: args[2] ?? Number.NaN });
+      return underlying(...args);
+    });
     const adapter = await createExactKernelAdapter();
     try {
       const manager = new CommandManager(

@@ -1,3 +1,5 @@
+import type { PreparedBody } from '../../../../packages/viewport/src/render/preparedBody';
+import { denseBodyNeedsPreparation } from '../components/viewer/bodyPreparationPolicy';
 import { BODY_PREPARATION_TRIANGLES } from '../components/viewer/bodyPreparationPolicy';
 import {
   ProjectionSender,
@@ -118,6 +120,30 @@ export type GeometryBinaryExportFormat = Extract<
   'stl-binary' | '3mf' | 'obj' | 'glb' | 'ply'
 >;
 
+type PreparedDisplay = { bodyId: BodyId; data: PreparedBody };
+
+async function prepareDisplay(
+  geometry: Pick<GeometryReadyState, 'bodyRepresentations'>,
+  bodyId: BodyId | undefined,
+  transfer: Set<ArrayBuffer>,
+  retired: () => boolean
+): Promise<PreparedDisplay | undefined> {
+  const body = bodyId && geometry.bodyRepresentations[bodyId];
+  if (!body || body.consumed || !denseBodyNeedsPreparation(body)) return;
+  // A failed preparation still has the viewport's normal fallback. Collect
+  // transferables from caller-owned data only, never from the result cache.
+  try {
+    const { prepareBody, preparationTransferables } =
+      await import('../components/viewer/prepareBody');
+    if (retired()) return;
+    const data = prepareBody(body);
+    for (const buffer of preparationTransferables([data])) transfer.add(buffer);
+    return { bodyId: body.bodyId, data };
+  } catch {
+    return;
+  }
+}
+
 export type GeometryWorkerRequest =
   | {
       /**
@@ -147,12 +173,14 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       requestId: string;
       deferTopology?: boolean;
+      prepareBodyId?: BodyId;
       profile?: boolean;
       /** An edit's preview may propose carrying a hash-only selection. */
       proposeCarry?: boolean;
     }
   | {
       type: 'sync';
+      prepareBodyId?: BodyId;
       document: ProjectDocument;
       requestId?: string;
       /** Optional reply encoding; older clients keep structured-clone topology. */
@@ -463,6 +491,7 @@ export type GeometrySyncResult =
       requestId?: string;
       transient?: boolean;
       derived: ProjectDocument['derived'];
+      prepared?: PreparedDisplay;
       /** Topology placeholders are decoded before this result is adopted. */
       topologyJson?: TopologyPayload;
       topologyUndefined?: TopologyJson;
@@ -696,6 +725,7 @@ export type GeometryWorkerResult =
       ok: true;
       requestId: string;
       geometry: GeometryReadyState;
+      prepared?: PreparedDisplay;
       /** Worker-side durations, for drag tracing. */
       timings?: {
         queueMs: number;
@@ -732,6 +762,7 @@ export type GeometryWorkerResult =
        * display mesh, face triangle ranges and mesh-tightened box.
        */
       type: 'display-refined';
+      prepared?: PreparedDisplay;
       projectId: ProjectId;
       version: number;
       /** `geometryContentKey` of the document this result was built for. */
@@ -1269,20 +1300,29 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       // epoch. A release runs a full sync against its actual candidate.
       lastExactSyncKey = null;
       lastExactSyncEpoch = null;
+      const kernelMs = performance.now() - kernelStartedMs;
+      const transfer = new Set(derivedMeshTransferables(geometry));
+      const prepared = request.prepareBodyId
+        ? await prepareDisplay(geometry, request.prepareBodyId, transfer, () =>
+            cancelledRequests.has(request.requestId)
+          )
+        : undefined;
+      if (cancelledRequests.has(request.requestId)) return;
       post(
         {
           type: 'preview-geometry',
           ok: true,
           requestId: request.requestId,
           geometry,
+          ...(prepared ? { prepared } : {}),
           timings: {
             queueMs,
-            kernelMs: performance.now() - kernelStartedMs,
+            kernelMs,
             yields,
             yieldMs
           }
         },
-        derivedMeshTransferables(geometry)
+        [...transfer]
       );
       post(stateFor('ready', request, { stale: false }));
       if (
@@ -2000,8 +2040,24 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       // retained measurements: transfer a copy, made here rather than on the
       // receiving main thread.
       const meshCopy = copyDerivedMeshBuffers(result.derived);
+      const transfer = new Set(derivedMeshTransferables(meshCopy));
+      const requestId = request.requestId;
+      const retired = () =>
+        cancelledRequests.has(requestId) ||
+        !broadcastGate.isCurrent(job.broadcastToken);
+      const prepared =
+        request.type === 'sync' && request.prepareBodyId
+          ? await prepareDisplay(
+              meshCopy,
+              request.prepareBodyId,
+              transfer,
+              retired
+            )
+          : undefined;
+      if (retired()) return;
       const owned = {
         ...result,
+        ...(prepared ? { prepared } : {}),
         ...(request.type === 'sync' &&
         (request.topologyEncoding === 'json-v1' ||
           request.topologyEncoding === 'json-v2' ||
@@ -2009,7 +2065,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
           ? topologyTransport.pack(meshCopy, request.topologyEncoding)
           : { derived: meshCopy })
       };
-      post(owned, derivedMeshTransferables(owned.derived));
+      post(owned, [...transfer]);
     } else {
       const encodingStartedMs = performance.now();
       const packet = projectionSender.encode(
@@ -2485,29 +2541,46 @@ async function refineCommittedDisplay(
       }
     );
     if (retired()) return true;
-    pendingDisplayRefinements = pendingDisplayRefinements.filter(
-      (entry) => entry !== pending
-    );
+    const remove = () => {
+      pendingDisplayRefinements = pendingDisplayRefinements.filter(
+        (entry) => entry !== pending
+      );
+    };
     if (
       hasDraftDisplay(refined) ||
       !broadcastGate.isCurrent(pending.broadcastToken)
-    )
+    ) {
+      remove();
       return true;
+    }
     // Body buffers are shared with the result cache and the adapter's
     // retained measurements (see `cloneDerivedSharingBodyGeometry`):
     // transfer a copy, never them.
     const derived = structuredClone(
       rebindSketchGeometryForContent(document, refined, contentKey)
     );
+    const transfer = new Set(derivedMeshTransferables(derived));
+    const prepared = sync.prepareBodyId
+      ? await prepareDisplay(
+          derived,
+          sync.prepareBodyId,
+          transfer,
+          () => retired() || !broadcastGate.isCurrent(pending.broadcastToken)
+        )
+      : undefined;
+    if (retired()) return true;
+    remove();
+    if (!broadcastGate.isCurrent(pending.broadcastToken)) return true;
     self.postMessage(
       {
         type: 'display-refined',
+        ...(prepared ? { prepared } : {}),
         projectId: document.projectId,
         version: document.version,
         contentKey,
         derived
       } satisfies GeometryWorkerResult,
-      { transfer: derivedMeshTransferables(derived) }
+      { transfer: [...transfer] }
     );
     if (
       pending.captureWhenRefined &&

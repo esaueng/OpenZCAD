@@ -10,6 +10,7 @@ import {
 import { tightenBoundsToMesh, refineBoundsAtSplineFaces } from './exact-bounds';
 import { surfaceTypeOf } from './exact-sync-memo';
 import {
+  groupedDisplayMesh,
   ownedMeshPositions,
   ownedMeshIndices,
   ownedMeshFaceOffsets
@@ -78,7 +79,8 @@ export function projectShapeMesh(
     );
     const mesh =
       retained ??
-      kernel.tessellateSolidGroupedBinary(
+      groupedDisplayMesh(
+        kernel,
         solid,
         tess.linearDeflection,
         tess.angularDeflection
@@ -136,7 +138,8 @@ export function projectShapeMesh(
             boundsFaces,
             tess.linearDeflection,
             (deflection) => {
-              const fine = kernel.tessellateSolidGroupedBinary(
+              const fine = groupedDisplayMesh(
+                kernel,
                 solid,
                 deflection,
                 tess.angularDeflection

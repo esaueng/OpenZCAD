@@ -97,6 +97,116 @@ describe('coalescing', () => {
     preview.clear();
   });
 
+  it('hands a live matching frame to a release without publishing it into the next gesture', async () => {
+    const frame = deferred();
+    const signals: AbortSignal[] = [];
+    const publish = vi.fn();
+    let current = false;
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (doc, signal) => {
+        signals.push(signal);
+        return doc.value === 1 ? frame.promise : Promise.resolve('next');
+      },
+      publish,
+      isCurrent: () => current
+    });
+    preview.request(1);
+    expect(preview.takeRequested(1)).toBeNull();
+    current = true;
+    expect(preview.takeRequested(2)).toBeNull();
+    const released = preview.takeRequested(1);
+    expect(released?.document.value).toBe(1);
+    expect(preview.takeRequested(1)).toBeNull();
+    preview.stop();
+    preview.request(2);
+    expect(signals[0]?.aborted).toBe(false);
+    frame.resolve('released');
+    await expect(released!.result).resolves.toBe('released');
+    await settle();
+    expect(publish.mock.calls).toEqual([
+      [{ document: { value: 2 }, derived: 'next' }]
+    ]);
+  });
+
+  it('lets a retaken release cancel its display and start the next pointer value', async () => {
+    const publish = vi.fn();
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (doc, signal) =>
+        doc.value === 1
+          ? new Promise((_resolve, reject) => {
+              signal.addEventListener(
+                'abort',
+                () => reject(new Error('cancelled')),
+                { once: true }
+              );
+            })
+          : Promise.resolve('next'),
+      publish
+    });
+    preview.request(1);
+    const release = preview.takeRequested(1)!;
+    release.cancel();
+    preview.request(2);
+    await expect(release.result).rejects.toThrow('cancelled');
+    await settle();
+    expect(publish.mock.calls).toEqual([
+      [{ document: { value: 2 }, derived: 'next' }]
+    ]);
+  });
+
+  it('cancels a released display when its project or selection clears', async () => {
+    const frame = deferred();
+    let signal: AbortSignal | undefined;
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (_doc, abortSignal) => {
+        signal = abortSignal;
+        return frame.promise;
+      },
+      publish: vi.fn()
+    });
+    preview.request(1);
+    const released = preview.takeRequested(1);
+    expect(released).not.toBeNull();
+    preview.clear();
+    expect(signal?.aborted).toBe(true);
+    frame.resolve('obsolete');
+    await settle();
+  });
+
+  it('takes the queued release value before the old pointer frame settles', async () => {
+    const old = deferred();
+    const latest = deferred();
+    const signals: AbortSignal[] = [];
+    const publish = vi.fn();
+    const preview = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: (doc, signal) => {
+        signals.push(signal);
+        return doc.value === 1 ? old.promise : latest.promise;
+      },
+      publish,
+      publishIntermediate: true
+    });
+    preview.request(1);
+    preview.request(2);
+    const release = preview.takeRequested(2)!;
+    expect(release.document.value).toBe(2);
+    expect(signals[0]!.aborted).toBe(true);
+    expect(signals[1]!.aborted).toBe(false);
+    old.resolve('obsolete');
+    await settle();
+    preview.clear();
+    expect(signals[1]!.aborted).toBe(true);
+    latest.resolve('released');
+    await expect(release.result).resolves.toBe('released');
+    expect(publish).not.toHaveBeenCalledWith(
+      expect.objectContaining({ derived: 'obsolete' })
+    );
+  });
+
   it('aborts an in-flight geometry frame on release without publishing a late result', async () => {
     const frame = deferred();
     let signal: AbortSignal | undefined;

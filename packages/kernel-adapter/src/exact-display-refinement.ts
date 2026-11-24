@@ -25,6 +25,7 @@ import {
 } from './display-tessellation';
 import { refineBoundsAtSplineFaces, tightenBoundsToMesh } from './exact-bounds';
 import {
+  groupedDisplayMesh,
   ownedMeshFaceOffsets,
   ownedMeshIndices,
   ownedMeshPositions
@@ -79,7 +80,8 @@ export function publishedSolidBounds(
     surfaceTypes.map((surfaceType) => ({ surfaceType })),
     tessellation.linearDeflection,
     (deflection) => {
-      const fine = kernel.tessellateSolidGroupedBinary(
+      const fine = groupedDisplayMesh(
+        kernel,
         solid,
         deflection,
         tessellation.angularDeflection
@@ -126,7 +128,8 @@ export function refineDraftDisplay<T extends Omit<MeasuredShape, 'volume'>>(
       bounds,
       measured.displayLinearDeflections?.[solidIndex]
     );
-    const mesh = kernel.tessellateSolidGroupedBinary(
+    const mesh = groupedDisplayMesh(
+      kernel,
       solid,
       tessellation.linearDeflection,
       tessellation.angularDeflection

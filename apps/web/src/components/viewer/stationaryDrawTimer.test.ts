@@ -133,6 +133,25 @@ describe('stationary scene GPU measurements', () => {
     expect(t.backlogMs(110)).toBeNull();
   });
 
+  it('bounds an explicit dense edit to one outstanding frame without GPU timer queries', () => {
+    const { gl, timer } = context();
+    gl.getExtension.mockReturnValue(null);
+    const t = timer();
+    t.read({});
+    t.submittedFullSize(0);
+    expect(gl.fenceSync).not.toHaveBeenCalled();
+    t.submittedFullSize(10, true);
+    t.submittedFullSize(20, true);
+    expect(gl.fenceSync).toHaveBeenCalledTimes(1);
+    expect(t.waitingForFullSize()).toBe(true);
+    gl.clientWaitSync.mockReturnValueOnce(8);
+    expect(t.waitingForFullSize()).toBe(false);
+    t.submittedFullSize(30, true);
+    expect(gl.fenceSync).toHaveBeenCalledTimes(2);
+    t.reset();
+    expect(gl.deleteSync).toHaveBeenCalledTimes(2);
+  });
+
   it('remeasures zooms across the severe threshold and a projection switch', () => {
     const { queries, timer } = context();
     const t = timer(),

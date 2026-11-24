@@ -427,6 +427,7 @@ export {
   type PersistedHistorySession
 } from './exact-session-snapshot';
 import {
+  groupedDisplayMesh,
   ownedMeshPositions,
   ownedMeshIndices,
   ownedMeshFaceOffsets
@@ -2803,6 +2804,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // last retained checkpoint; it is restored and then discarded, so the
       // checkpoints this replay takes stay aligned with the schedule.
       let staleTail = false;
+      let supersededSource = -1;
       for (let index = 0; index < this.historyCheckpoints.length; index += 1) {
         const entry = this.historyCheckpoints[index]!;
         const from =
@@ -2853,13 +2855,23 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           }
         }
         if (!checkpointIndexSet.has(entry.featureIndex)) {
-          if (index === this.historyCheckpoints.length - 1) {
+          const next = this.historyCheckpoints[index + 1];
+          const terminalPair =
+            index === this.historyCheckpoints.length - 2 &&
+            next?.featureIndex === entry.featureIndex + 1 &&
+            checkpointIndexSet.has(next.featureIndex);
+          if (terminalPair || !next) {
             prefix = index;
             prefixUsesIdleView = needsIdleView;
             staleTail = true;
           }
+          if (terminalPair) {
+            supersededSource = index;
+            continue;
+          }
           break;
         }
+        staleTail = false;
         prefix = index;
         prefixUsesIdleView = needsIdleView;
       }
@@ -2881,7 +2893,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       const restoredFeatures =
         prefix >= 0 ? this.historyCheckpoints[prefix]!.featureIndex + 1 : 0;
+      const coalescePair = supersededSource >= 0 && prefix > supersededSource;
       reusePrimitiveTail =
+        !coalescePair &&
         !forceFreshLineageReplay &&
         this.primitiveBuildCache.canReuseTail(
           features,
@@ -2893,7 +2907,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           const restoredEntry =
             prefix >= 0 ? this.historyCheckpoints[prefix]! : undefined;
           // Checkpoints from here on are dropped; a stale tail drops itself.
-          const kept = staleTail ? prefix : prefix + 1;
+          const kept = coalescePair
+            ? supersededSource
+            : staleTail
+              ? prefix
+              : prefix + 1;
           if (reusePrimitiveTail) {
             // Preserve independent tail handles. Dropping checkpoints frees
             // snapshots without rolling the current topology back.
@@ -2904,14 +2922,49 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             }
           } else {
             kernel.restore(restoredEntry!.checkpointId);
-            if (staleTail)
-              kernel.discardCheckpoint(restoredEntry!.checkpointId);
+            if (coalescePair || staleTail)
+              kernel.discardCheckpoint(
+                this.historyCheckpoints[kept]!.checkpointId
+              );
             this.primitiveBuildCache.restoredThrough(restoredFeatures - 1);
           }
           for (const entry of this.historyCheckpoints.slice(kept)) {
             this.historyCheckpointOwners.delete(entry.checkpointId);
           }
+          // Restoring the checked result selected its arena. Discarding the
+          // source and result releases both snapshots without changing that
+          // arena. Capture it once, with the digest span of both entries.
+          const oldSource = coalescePair
+            ? this.historyCheckpoints[kept]
+            : undefined;
           this.historyCheckpoints = this.historyCheckpoints.slice(0, kept);
+          const replacementMemory = oldSource && checkpointMemoryStats(kernel);
+          if (
+            oldSource &&
+            restoredEntry &&
+            (!replacementMemory ||
+              replacementMemory.nextMutationEstimatedBytes +
+                this.historyLineageMetadataBytes +
+                (restoredEntry.lineageMetadataBytes ?? 0) <=
+                (this.options.historyCheckpointEstimatedBytes ??
+                  MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES))
+          ) {
+            const checkpointId = kernel.checkpoint();
+            if (
+              !isCheckpointHandle(checkpointId) ||
+              this.historyCheckpointOwners.has(checkpointId)
+            )
+              throw new HistoryCacheIntegrityError(
+                'Invalid replacement checkpoint.'
+              );
+            const replacement = {
+              ...restoredEntry,
+              checkpointId,
+              digests: [...oldSource.digests, ...restoredEntry.digests]
+            };
+            this.historyCheckpoints.push(replacement);
+            this.historyCheckpointOwners.set(checkpointId, replacement);
+          }
           if (kernel.checkpointCount() !== this.historyCheckpoints.length) {
             throw new HistoryCacheIntegrityError(
               'History restore did not truncate checkpoints.'
@@ -3665,7 +3718,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           meshTessellation.angularDeflection
         ) ??
         takePatternMesh(kernel, solid, meshTessellation) ??
-        kernel.tessellateSolidGroupedBinary(
+        groupedDisplayMesh(
+          kernel,
           solid,
           meshTessellation.linearDeflection,
           meshTessellation.angularDeflection

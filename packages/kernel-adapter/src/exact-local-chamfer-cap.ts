@@ -434,7 +434,10 @@ export function tryExactLocalChamferCapOffset(
   if (
     !Number.isFinite(offset) ||
     Math.abs(offset) <= GEOMETRY_EPSILON ||
-    surfaceTypeOf(kernel, face) !== 'plane'
+    surfaceTypeOf(kernel, face) !== 'plane' ||
+    // moveEnd requires one outer rim. A hole through the cap already
+    // rules it out before cloning and validating the full solid.
+    kernel.getFaceWires(face).length !== 1
   )
     return null;
   const selectedEdges = new Set(kernel.getFaceEdges(face));
